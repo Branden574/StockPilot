@@ -17,12 +17,18 @@
  *   - Two runs are only compared as equals when they were taken the same way.
  */
 import type { ImageClass } from './image-class';
-import { bootstrapPercentileDelta, deltaPercent, summarize, type Summary } from './stats';
+import {
+  bootstrapPercentileDelta,
+  deltaPercent,
+  summarize,
+  summarizeWithUnfinished,
+  type Summary,
+} from './stats';
 
 /** Bump when the SHAPE of results.json changes. */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 /** Bump when WHAT A NUMBER MEANS changes (a marker, a clock, a floor). Runs with different values are not comparable. */
-export const HARNESS_VERSION = '2026-09-20.3';
+export const HARNESS_VERSION = '2026-09-20.4';
 
 export interface ImageRecord {
   order: number;
@@ -59,6 +65,7 @@ export interface ImageRecord {
     contentLength: number | null;
     hasEtag: boolean;
     wireBytes: number | null;
+    cache: 'memory' | 'disk' | 'revalidated' | 'network' | null;
   } | null;
 }
 
@@ -208,6 +215,14 @@ export interface RowSpec {
   unit: Unit;
   group: Group;
   pick: (s: Sample) => number | null;
+  /** `right`: a TIME row. A sample that never finished is slower than every value present and is ranked last. */
+  censored?: 'right';
+  /**
+   * For a finished iteration with no value: did this metric fail to finish
+   * (photos still loading or broken), or was there simply nothing to measure
+   * (no photos on screen)? Only the first is ranked as "did not finish".
+   */
+  unfinishedWhen?: (s: Sample) => boolean;
   /** Absent = no budget frozen yet. */
   budget?: Budget;
 }
@@ -221,6 +236,8 @@ const CLICK: Budget = { p75: 75, p95: 150, source: BRIEF };
 const ZERO: Budget = { p75: 0, p95: 0, source: `${BRIEF}: no regression` };
 
 const useful = (s: Sample) => s.usefulPaintMs;
+const photosUnfinished = (s: Sample) =>
+  Boolean(s.photos && (s.photos.unfinishedCount > 0 || s.photos.failedCount > 0));
 const feedback = (s: Sample) => s.feedbackPaintMs;
 const kb = (bytes: number | null | undefined) => (typeof bytes === 'number' ? bytes / 1024 : null);
 const prefetches = (route: string) => (s: Sample) =>
@@ -241,6 +258,7 @@ export const ROWS: RowSpec[] = [
     title: 'Dashboard → Inventory',
     scenario: 'dashboard-to-inventory',
     unit: 'ms',
+    censored: 'right',
     pick: useful,
     budget: WARM_NAV,
   },
@@ -250,6 +268,7 @@ export const ROWS: RowSpec[] = [
     title: 'Dashboard → Orders',
     scenario: 'dashboard-to-orders',
     unit: 'ms',
+    censored: 'right',
     pick: useful,
     budget: WARM_NAV,
   },
@@ -259,6 +278,7 @@ export const ROWS: RowSpec[] = [
     title: 'Inventory → Item',
     scenario: 'inventory-to-item',
     unit: 'ms',
+    censored: 'right',
     pick: useful,
     budget: WARM_NAV,
   },
@@ -268,6 +288,8 @@ export const ROWS: RowSpec[] = [
     title: 'Inventory first-row photos (warm browser cache)',
     scenario: 'dashboard-to-inventory',
     unit: 'ms',
+    censored: 'right',
+    unfinishedWhen: photosUnfinished,
     pick: (s) => s.photos?.firstDoneMs ?? null,
   },
   {
@@ -276,6 +298,8 @@ export const ROWS: RowSpec[] = [
     title: 'Inventory all visible photos (warm browser cache)',
     scenario: 'dashboard-to-inventory',
     unit: 'ms',
+    censored: 'right',
+    unfinishedWhen: photosUnfinished,
     pick: (s) => s.photos?.allVisibleDoneMs ?? null,
   },
   {
@@ -284,6 +308,7 @@ export const ROWS: RowSpec[] = [
     title: 'Hard-load Inventory (warm browser cache)',
     scenario: 'hard-load-inventory',
     unit: 'ms',
+    censored: 'right',
     pick: useful,
   },
 
@@ -331,6 +356,7 @@ export const ROWS: RowSpec[] = [
     title: 'Orders → Order',
     scenario: 'orders-to-order',
     unit: 'ms',
+    censored: 'right',
     pick: useful,
     budget: WARM_NAV,
   },
@@ -340,6 +366,7 @@ export const ROWS: RowSpec[] = [
     title: 'Dashboard → Books',
     scenario: 'dashboard-to-books',
     unit: 'ms',
+    censored: 'right',
     pick: useful,
     budget: WARM_NAV,
   },
@@ -349,6 +376,7 @@ export const ROWS: RowSpec[] = [
     title: 'Inventory revisit within 90 s',
     scenario: 'inventory-revisit',
     unit: 'ms',
+    censored: 'right',
     pick: useful,
     budget: WARM_NAV,
   },
@@ -358,6 +386,7 @@ export const ROWS: RowSpec[] = [
     title: 'Orders → New order (storefront)',
     scenario: 'orders-to-storefront',
     unit: 'ms',
+    censored: 'right',
     pick: useful,
     budget: WARM_NAV,
   },
@@ -459,6 +488,8 @@ export const ROWS: RowSpec[] = [
     title: 'Books all visible photos (warm browser cache)',
     scenario: 'dashboard-to-books',
     unit: 'ms',
+    censored: 'right',
+    unfinishedWhen: photosUnfinished,
     pick: (s) => s.photos?.allVisibleDoneMs ?? null,
   },
   {
@@ -467,6 +498,8 @@ export const ROWS: RowSpec[] = [
     title: 'Inventory first-row photos: bytes in hand (no floor)',
     scenario: 'dashboard-to-inventory',
     unit: 'ms',
+    censored: 'right',
+    unfinishedWhen: photosUnfinished,
     pick: (s) => s.photos?.firstBytesReadyMs ?? null,
   },
   {
@@ -475,6 +508,8 @@ export const ROWS: RowSpec[] = [
     title: 'Storefront first cards: photos (warm browser cache)',
     scenario: 'orders-to-storefront',
     unit: 'ms',
+    censored: 'right',
+    unfinishedWhen: photosUnfinished,
     pick: (s) => s.photos?.firstDoneMs ?? null,
   },
   {
@@ -483,6 +518,8 @@ export const ROWS: RowSpec[] = [
     title: 'Storefront all visible photos (warm browser cache)',
     scenario: 'orders-to-storefront',
     unit: 'ms',
+    censored: 'right',
+    unfinishedWhen: photosUnfinished,
     pick: (s) => s.photos?.allVisibleDoneMs ?? null,
   },
 
@@ -526,6 +563,8 @@ export const ROWS: RowSpec[] = [
     title: 'Hard-load Inventory: all visible photos (warm browser cache)',
     scenario: 'hard-load-inventory',
     unit: 'ms',
+    censored: 'right',
+    unfinishedWhen: photosUnfinished,
     pick: (s) => s.photos?.allVisibleDoneMs ?? null,
   },
   {
@@ -534,6 +573,7 @@ export const ROWS: RowSpec[] = [
     title: 'Hard-load storefront',
     scenario: 'hard-load-storefront',
     unit: 'ms',
+    censored: 'right',
     pick: useful,
   },
   {
@@ -542,6 +582,8 @@ export const ROWS: RowSpec[] = [
     title: 'Hard-load storefront: all visible photos (warm browser cache)',
     scenario: 'hard-load-storefront',
     unit: 'ms',
+    censored: 'right',
+    unfinishedWhen: photosUnfinished,
     pick: (s) => s.photos?.allVisibleDoneMs ?? null,
   },
 
@@ -551,6 +593,7 @@ export const ROWS: RowSpec[] = [
     title: 'Dashboard → Inventory, first visit (empty browser cache, warm server)',
     scenario: 'dashboard-to-inventory-cold-browser',
     unit: 'ms',
+    censored: 'right',
     pick: useful,
   },
   {
@@ -559,6 +602,8 @@ export const ROWS: RowSpec[] = [
     title: 'Empty browser cache: first-row photos',
     scenario: 'dashboard-to-inventory-cold-browser',
     unit: 'ms',
+    censored: 'right',
+    unfinishedWhen: photosUnfinished,
     pick: (s) => s.photos?.firstDoneMs ?? null,
   },
   {
@@ -567,6 +612,8 @@ export const ROWS: RowSpec[] = [
     title: 'Empty browser cache: all visible photos',
     scenario: 'dashboard-to-inventory-cold-browser',
     unit: 'ms',
+    censored: 'right',
+    unfinishedWhen: photosUnfinished,
     pick: (s) => s.photos?.allVisibleDoneMs ?? null,
   },
   {
@@ -583,6 +630,7 @@ export const ROWS: RowSpec[] = [
     title: 'Hard-load Inventory, first visit (empty browser cache, warm server)',
     scenario: 'hard-load-inventory-cold-browser',
     unit: 'ms',
+    censored: 'right',
     pick: useful,
   },
   {
@@ -591,6 +639,8 @@ export const ROWS: RowSpec[] = [
     title: 'Hard-load storefront, empty browser cache: all visible photos',
     scenario: 'hard-load-storefront-cold-browser',
     unit: 'ms',
+    censored: 'right',
+    unfinishedWhen: photosUnfinished,
     pick: (s) => s.photos?.allVisibleDoneMs ?? null,
   },
 
@@ -748,10 +798,23 @@ export interface RowResult {
   failed: number;
   /** Iterations that finished but had no value for THIS metric. */
   noValue: number;
+  /**
+   * Samples that never finished and are RANKED LAST in this row's percentiles
+   * (time rows only): timed-out / crashed iterations plus samples with no value.
+   */
+  unfinished: number;
+  /** Failed iterations that are NOT "did not finish" (a missing link, a harness error): these void the row. */
+  otherFailures: number;
+  /** For the noise check: finished values, plus the give-up time for each unfinished sample (a lower bound). */
   values: number[];
   /** Which element(s) counted as click feedback, most common first. */
   detectors: string;
 }
+
+/** Failure codes that mean "the person never got the content", as opposed to "the harness could not run". */
+const DID_NOT_FINISH = new Set(['timeout:useful', 'error-screen', 'page-crashed']);
+/** On rows that are not times, this share of failed iterations is tolerated (and stated). */
+const TOLERATED_FAILURE_SHARE = 0.05;
 
 /** A selector is long and unreadable in a table; name what it matched. */
 function detectorName(by: string | null): string {
@@ -762,6 +825,31 @@ function detectorName(by: string | null): string {
     : by.includes('nav-progress')
       ? 'progress bar'
       : 'other';
+}
+
+/**
+ * A results file is only read by the code that understands its shape. An older
+ * file is REFUSED with one sentence, never half-read into "not measured" cells
+ * that would look like a run with no data.
+ */
+export function parseRunFile(raw: unknown, name: string): RunFile {
+  const file = raw as Partial<RunFile> | null;
+  const version = file?.meta?.schemaVersion;
+  if (
+    !file ||
+    typeof file !== 'object' ||
+    !file.meta ||
+    !Array.isArray(file.samples) ||
+    !Array.isArray(file.scenarios)
+  ) {
+    throw new Error(`The ${name} file is not a performance results file.`);
+  }
+  if (version !== SCHEMA_VERSION) {
+    throw new Error(
+      `NOT COMPARABLE: the ${name} run was written by results schema v${version ?? 1} (harness ${file.meta.harnessVersion ?? 'unknown'}); this tool reads v${SCHEMA_VERSION}. Re-take that run with the current harness.`,
+    );
+  }
+  return file as RunFile;
 }
 
 export function summarizeRun(run: RunFile, rows: RowSpec[] = ROWS): RowResult[] {
@@ -776,14 +864,26 @@ export function summarizeRun(run: RunFile, rows: RowSpec[] = ROWS): RowResult[] 
         return null;
       }
     });
-    const values = picked.filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+    const finished = picked.filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+    const failures = timed.filter((s) => !s.ok);
+    const didNotFinish = failures.filter((s) => DID_NOT_FINISH.has(s.error ?? '')).length;
+    // On a time row, "never finished" is the slowest outcome and is ranked as
+    // such. On any other row (a count, a byte total) it is simply missing.
+    const timeRow = spec.censored === 'right';
+    const pending = ok.filter(
+      (sample, i) => typeof picked[i] !== 'number' && (spec.unfinishedWhen?.(sample) ?? false),
+    ).length;
+    const unfinished = timeRow ? didNotFinish + pending : 0;
+    const giveUp = run.meta?.usefulTimeoutMs ?? 30_000;
     return {
       spec,
-      summary: summarize(values),
+      summary: timeRow ? summarizeWithUnfinished(finished, unfinished) : summarize(finished),
       attempted: timed.length,
-      failed: timed.length - ok.length,
-      noValue: ok.length - values.length,
-      values,
+      failed: failures.length,
+      noValue: ok.length - finished.length,
+      unfinished,
+      otherFailures: failures.length - (timeRow ? didNotFinish : 0),
+      values: [...finished, ...new Array<number>(unfinished).fill(giveUp)],
       detectors: [...new Set(ok.map((s) => detectorName(s.feedbackBy)).filter((d) => d !== ''))]
         .sort()
         .join(' + '),
@@ -794,6 +894,7 @@ export function summarizeRun(run: RunFile, rows: RowSpec[] = ROWS): RowResult[] 
 const NOT_MEASURED = 'not measured';
 
 export function formatValue(value: number | null | undefined, unit: Unit): string {
+  if (value === Number.POSITIVE_INFINITY) return 'did not finish';
   if (typeof value !== 'number' || !Number.isFinite(value)) return NOT_MEASURED;
   if (unit === 'score') return value.toFixed(3);
   if (unit === 'count') return String(Math.round(value));
@@ -806,18 +907,40 @@ function formatBudget(budget: Budget | undefined, unit: Unit): string {
   return `${side(budget.p75)} / ${side(budget.p95)}`;
 }
 
+/** Below this many samples a budget verdict would be a guess. */
+const MIN_SAMPLES_TO_JUDGE = 8;
+
+/**
+ * When a row's failures stop it from being judged at all. On a time row the
+ * "did not finish" samples are already ranked last, so only OTHER failures (a
+ * missing link, a harness error) void it. On any other row a few missing samples
+ * are tolerated and said out loud; more than that, and the row is not judged.
+ */
+function voidedBy(row: RowResult): string | null {
+  if (row.otherFailures === 0) return null;
+  const share = row.attempted === 0 ? 1 : row.otherFailures / row.attempted;
+  if (row.spec.censored !== 'right' && share <= TOLERATED_FAILURE_SHARE) return null;
+  return `${row.otherFailures} of ${row.attempted} iterations failed`;
+}
+
 export function verdict(row: RowResult): string {
-  const { summary, spec, failed, attempted } = row;
+  const { summary, spec } = row;
   if (!summary) return NOT_MEASURED;
-  // A timeout is the slowest possible result. Judging the survivors alone
-  // would reward a change for breaking its slowest cases.
-  if (failed > 0) return `not judged: ${failed} of ${attempted} iterations failed`;
+  // A timeout is the slowest possible result. On time rows it is ranked last
+  // (so it can push a percentile to "did not finish"); it is never dropped.
+  const voided = voidedBy(row);
+  if (voided) return `not judged: ${voided}`;
   if (!spec.budget) return 'no budget set';
+  if (summary.n < MIN_SAMPLES_TO_JUDGE) return `too few samples to judge (n=${summary.n})`;
   const over =
     (spec.budget.p75 !== undefined && summary.p75 > spec.budget.p75) ||
     (spec.budget.p95 !== undefined && summary.p95 > spec.budget.p95);
-  const base = over ? 'OVER budget' : 'within budget';
-  return summary.n < 20 ? `${base} (n=${summary.n}: p95 is the slowest sample)` : base;
+  if (over) return 'OVER budget';
+  // Nearest-rank p95 of a small sample is the second-slowest value or so: it
+  // UNDERSTATES the true tail. "Within" is then a statement about this sample.
+  return spec.budget.p95 !== undefined && summary.n < 60
+    ? `within budget in this sample (n=${summary.n} cannot confirm a p95 budget)`
+    : 'within budget';
 }
 
 const KIND_LABEL: Record<RunMeta['kind'], string> = {
@@ -1022,7 +1145,7 @@ export function buildRunReport(run: RunFile): {
 } {
   const rows = summarizeRun(run);
   const rotation = rotationWithinRun(run);
-  const failures = run.samples.filter((s) => !s.ok);
+  const failures = run.samples.filter((s) => !s.ok && !s.warmup);
   const notes = ['dashboard-to-inventory', 'hard-load-inventory', 'orders-to-storefront']
     .map((id) => floorNote(run, id))
     .filter((n): n is string => n !== null);
@@ -1080,6 +1203,7 @@ export function buildRunReport(run: RunFile): {
           group: r.spec.group,
           budget: r.spec.budget ?? null,
           series: [{ name: run.meta.label, summary: r.summary }],
+          warnings: [chartWarning(r)],
         })),
     ),
     rows,
@@ -1096,12 +1220,26 @@ export interface ComparisonRow {
   deltaP75: number | null;
   deltaP95: number | null;
   /** 95% interval of the p75 change, from a seeded bootstrap. A derived statistic, not an observation. */
-  noise: { low: number; high: number; distinguishable: boolean } | null;
+  noise: { low: number; high: number; distinguishable: boolean; shareAbove: number } | null;
   result: string;
+  /** How far this row moved between two runs of the SAME build (absolute %), when an A/A pair was supplied. */
+  drift: { p75: number | null; p95: number | null } | null;
 }
 
 /** The owner's regression trigger is ">10% worse"; the same bar is used for "improved". */
 const MATERIAL_PERCENT = 10;
+
+/** A "candidate" needs this share of resampled differences on the worse side. 0.5 would be a coin toss. */
+const CANDIDATE_SHARE = 0.8;
+
+type Movement =
+  | 'flat'
+  | 'better'
+  | 'worse'
+  | 'better-in-noise'
+  | 'worse-candidate'
+  | 'worse-in-noise'
+  | 'unproven';
 
 function judge(
   spec: RowSpec,
@@ -1125,12 +1263,15 @@ function judge(
       result: `not comparable: click feedback was detected by ${before.detectors || 'nothing'} before and ${after.detectors || 'nothing'} after`,
     };
   }
-  if (before.failed > 0 || after.failed > 0) {
+  const voidedBefore = voidedBy(before);
+  const voidedAfter = voidedBy(after);
+  if (voidedBefore || voidedAfter) {
     return {
       ...base,
-      result: `not comparable: ${before.failed} of ${before.attempted} before and ${after.failed} of ${after.attempted} after iterations failed`,
+      result: `not comparable: ${voidedBefore ?? 'no failures'} before, ${voidedAfter ?? 'no failures'} after`,
     };
   }
+
   // A change counts when it clears the instrument's resolution AND 10%. From a
   // zero baseline a percentage does not exist, so resolution alone decides.
   const moved = (from: number, to: number, direction: 1 | -1) => {
@@ -1138,57 +1279,107 @@ function judge(
     if (change < resolution) return false;
     return from === 0 ? true : (change / from) * 100 >= MATERIAL_PERCENT;
   };
-  const worse = moved(b.p75, a.p75, 1) || moved(b.p95, a.p95, 1);
-  const better = moved(b.p75, a.p75, -1) && !moved(b.p95, a.p95, 1);
-  if (!worse && !better) {
+  // p75 and p95 are judged SEPARATELY, each against its own bootstrap, so a
+  // proven p75 improvement is never relabelled by an unproven wobble in the tail.
+  const movement = (p: 75 | 95, from: number, to: number): Movement => {
+    const worse = moved(from, to, 1);
+    const better = moved(from, to, -1);
+    if (!worse && !better) return 'flat';
+    const check = p === 75 ? noise : bootstrapPercentileDelta(before.values, after.values, 95);
+    if (check === null) return 'unproven';
+    if (check.distinguishable) return worse ? 'worse' : 'better';
+    if (worse) return check.shareAbove >= CANDIDATE_SHARE ? 'worse-candidate' : 'worse-in-noise';
+    return 'better-in-noise';
+  };
+  const m75 = movement(75, b.p75, a.p75);
+  const m95 = movement(95, b.p95, a.p95);
+  const pct = (d: number | null) => (d === null ? '' : ` ${d > 0 ? '+' : ''}${Math.round(d)}%`);
+
+  let result: string;
+  const dnf = (v: number) => v === Number.POSITIVE_INFINITY;
+  if (dnf(a.p75) || dnf(a.p95) || dnf(b.p75) || dnf(b.p95)) {
+    // No percentage exists against "did not finish"; say which side it is on.
+    const worseNow = (dnf(a.p75) && !dnf(b.p75)) || (dnf(a.p95) && !dnf(b.p95));
+    const betterNow = (dnf(b.p75) && !dnf(a.p75)) || (dnf(b.p95) && !dnf(a.p95));
+    result = worseNow
+      ? `regressed: ${after.unfinished} of ${after.attempted} samples did not finish (${before.unfinished} of ${before.attempted} before)`
+      : betterNow
+        ? `improved: ${after.unfinished} of ${after.attempted} samples did not finish, down from ${before.unfinished} of ${before.attempted}`
+        : `both runs have a percentile that did not finish (${before.unfinished} and ${after.unfinished} samples)`;
+  } else if (m75 === 'worse') result = 'regressed';
+  else if (m95 === 'worse')
+    result = m75 === 'better' ? 'regressed (p95), although p75 improved' : 'regressed (p95)';
+  else if (m75 === 'unproven' || m95 === 'unproven')
+    result = `too few samples to judge (n=${b.n} / ${a.n})`;
+  else if (m75 === 'better') {
+    // A slower tail is never hidden behind a proven p75 improvement, even when
+    // the sample is too small to call it.
+    if (m95 === 'worse-candidate')
+      result = `p75 improved; p95${pct(deltaP95)} is a regression candidate (inside the noise): re-measure the tail`;
+    else if (m95 === 'worse-in-noise')
+      result = `p75 improved; p95${pct(deltaP95)} is inside the noise, which n=${b.n} / ${a.n} cannot judge`;
+    else result = 'improved';
+  } else if (m75 === 'worse-candidate' || m95 === 'worse-candidate') {
+    const which = m75 === 'worse-candidate' ? `p75${pct(deltaP75)}` : `p95${pct(deltaP95)}`;
+    result = `regression candidate (${which}): likely but inside the noise at n=${b.n} / ${a.n}, re-measure with more samples`;
+  } else if (m75 !== 'flat' || m95 !== 'flat') result = 'not distinguishable from noise';
+  else {
     // "No change" is only as strong as the samples. If the interval is wider
     // than the 10% bar, a real change of that size could be hiding in it.
-    // (Differences below the instrument's resolution are not a hidden change,
-    // however large they look in percent.)
+    // (Differences below the instrument's resolution are not a hidden change.)
     const widest = noise ? Math.max(Math.abs(noise.low), Math.abs(noise.high)) : 0;
     const reach = noise && b.p75 > 0 && widest >= resolution ? (widest / b.p75) * 100 : null;
-    return {
-      ...base,
-      result:
-        reach !== null && reach > MATERIAL_PERCENT
-          ? `no change detected (cannot exclude ±${Math.round(reach)}%: more samples needed)`
-          : 'no material change',
-    };
+    result =
+      reach !== null && reach > MATERIAL_PERCENT
+        ? `no change detected (cannot exclude ±${Math.round(reach)}%: more samples needed)`
+        : 'no material change';
   }
-  if (noise === null)
-    return {
-      ...base,
-      result: `${worse ? 'regressed' : 'improved'}? too few samples to rule out noise (n=${b.n} / ${a.n})`,
-    };
-  // A p95-only regression is judged on the tail, where the p75 interval says nothing.
-  const tailOnly = worse && !moved(b.p75, a.p75, 1);
-  const check = tailOnly ? bootstrapPercentileDelta(before.values, after.values, 95) : noise;
-  if (check && !check.distinguishable) {
-    // Deliberately lopsided. An apparent IMPROVEMENT inside the noise is not
-    // claimed. An apparent REGRESSION inside the noise is still raised, as a
-    // candidate to re-measure: the owner's trigger is "p95 worse by 10%", and a
-    // slow tail is exactly what twenty samples cannot prove or dismiss.
-    return {
-      ...base,
-      result: worse
-        ? `regression candidate${tailOnly ? ' (p95)' : ''}: inside the noise at n=${b.n} / ${a.n}, re-measure with more samples`
-        : 'not distinguishable from noise',
-    };
+  // A percentile can look fine while a navigation that used to finish now hangs
+  // once in forty. That is never left out of the verdict.
+  if (before.unfinished > 0 || after.unfinished > 0) {
+    result += `; did not finish: ${before.unfinished} of ${before.attempted} before, ${after.unfinished} of ${after.attempted} after`;
   }
-  return { ...base, result: worse ? (tailOnly ? 'regressed (p95)' : 'regressed') : 'improved' };
+  return { ...base, result };
 }
 
+/**
+ * `drift` is an A/A pair: two runs of one build. The bootstrap only knows the
+ * scatter INSIDE a run; it cannot know that the same build measured half an hour
+ * later answers 30% slower on one route because the server moved. The A/A pair
+ * measures exactly that, per row, and a change no bigger than it is not a change.
+ */
 export function compareRuns(
   before: RunFile,
   after: RunFile,
   rows: RowSpec[] = ROWS,
+  drift?: { a: RunFile; b: RunFile },
 ): ComparisonRow[] {
   const b = summarizeRun(before, rows);
   const a = summarizeRun(after, rows);
+  const aa = drift ? compareRuns(drift.a, drift.b, rows) : null;
   return rows.map((spec, i) => {
     const bRow = b[i] as RowResult;
     const aRow = a[i] as RowResult;
-    return { spec, before: bRow, after: aRow, ...judge(spec, bRow, aRow) };
+    const judged = judge(spec, bRow, aRow);
+    const moved = aa?.[i];
+    const floor = moved
+      ? {
+          p75: moved.deltaP75 === null ? null : Math.abs(moved.deltaP75),
+          p95: moved.deltaP95 === null ? null : Math.abs(moved.deltaP95),
+        }
+      : null;
+    let result = judged.result;
+    const claims =
+      /^(improved|regressed|p75 improved)/.test(result) && !/did not finish \(/.test(result);
+    if (floor && claims) {
+      const onTail = result.startsWith('regressed (p95)');
+      const delta = onTail ? judged.deltaP95 : judged.deltaP75;
+      const limit = onTail ? floor.p95 : floor.p75;
+      if (delta !== null && limit !== null && Math.abs(delta) <= limit) {
+        result = `inside run-to-run drift: with NO change, this row's ${onTail ? 'p95' : 'p75'} moved ${limit.toFixed(1)}% between two runs of one build (was: ${judged.result})`;
+      }
+    }
+    return { spec, before: bRow, after: aRow, ...judged, result, drift: floor };
   });
 }
 
@@ -1233,7 +1424,7 @@ export function environmentMismatches(
   if (before.rttMs !== null && after.rttMs !== null) {
     const slower = Math.max(before.rttMs, after.rttMs);
     const faster = Math.min(before.rttMs, after.rttMs);
-    if (slower - faster > 20 && slower > faster * 1.25)
+    if (slower - faster > 10 && slower > faster * 1.15)
       hard.push(
         `measured round trip: before ${Math.round(before.rttMs)} ms, after ${Math.round(after.rttMs)} ms`,
       );
@@ -1245,6 +1436,8 @@ export function environmentMismatches(
     ['after', after],
   ] as const) {
     if (meta.buildAtStart !== meta.buildAtEnd) hard.push(`the ${name} run spans two builds`);
+    if (meta.serverState === 'not controlled')
+      soft.push(`server state was not controlled on the ${name} run`);
     // Two unverified roles are equal to each other and prove nothing.
     if (meta.role === null) hard.push(`the ${name} run's account role was not verified`);
   }
@@ -1254,8 +1447,9 @@ export function environmentMismatches(
 export function buildComparisonReport(
   before: RunFile,
   after: RunFile,
+  drift?: { a: RunFile; b: RunFile },
 ): { markdown: string; chartSvg: string; rows: ComparisonRow[] } {
-  const rows = compareRuns(before, after);
+  const rows = compareRuns(before, after, ROWS, drift);
   const { hard, soft } = environmentMismatches(before.meta, after.meta);
   for (const id of ['dataset-rows', 'dataset-photos']) {
     const fact = rows.find((r) => r.spec.id === id);
@@ -1275,6 +1469,7 @@ export function buildComparisonReport(
     deltaP95,
     noise,
     result,
+    drift: floor,
   }: ComparisonRow) => {
     const cell = (v: number | undefined) => formatValue(v, spec.unit);
     const pct = (d: number | null, from: number | undefined, to: number | undefined) =>
@@ -1285,10 +1480,14 @@ export function buildComparisonReport(
           : NOT_MEASURED;
     const n = (r: RowResult) =>
       `${r.summary?.n ?? 0}${r.failed > 0 ? ` (${r.failed} failed)` : ''}`;
+    const driftCell = (f: ComparisonRow['drift']) =>
+      f === null
+        ? 'no A/A pair given'
+        : `${f.p75 === null ? 'n/a' : `±${f.p75.toFixed(1)}%`} / ${f.p95 === null ? 'n/a' : `±${f.p95.toFixed(1)}%`}`;
     const interval = noise
       ? `${formatValue(noise.low, spec.unit)} to ${formatValue(noise.high, spec.unit)}`
       : 'n too small';
-    return `| ${spec.title} | ${n(b)} | ${cell(b.summary?.p50)} | ${cell(b.summary?.p75)} | ${cell(b.summary?.p95)} | ${n(a)} | ${cell(a.summary?.p50)} | ${cell(a.summary?.p75)} | ${cell(a.summary?.p95)} | ${pct(deltaP75, b.summary?.p75, a.summary?.p75)} | ${pct(deltaP95, b.summary?.p95, a.summary?.p95)} | ${interval} | ${result} |`;
+    return `| ${spec.title} | ${n(b)} | ${cell(b.summary?.p50)} | ${cell(b.summary?.p75)} | ${cell(b.summary?.p95)} | ${n(a)} | ${cell(a.summary?.p50)} | ${cell(a.summary?.p75)} | ${cell(a.summary?.p95)} | ${pct(deltaP75, b.summary?.p75, a.summary?.p75)} | ${pct(deltaP95, b.summary?.p95, a.summary?.p95)} | ${interval} | ${driftCell(floor)} | ${result} |`;
   };
   const lines = [
     `# Before / after: ${before.meta.label} → ${after.meta.label}`,
@@ -1312,11 +1511,14 @@ export function buildComparisonReport(
     '## After',
     metaBlock(after.meta),
     '',
-    '| Scenario | Before n | Before p50 | Before p75 | Before p95 | After n | After p50 | After p75 | After p95 | Delta p75 | Delta p95 | 95% interval of the p75 change | Result |',
-    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |',
+    '| Scenario | Before n | Before p50 | Before p75 | Before p95 | After n | After p50 | After p75 | After p95 | Delta p75 | Delta p95 | 95% interval of the p75 change | Same-build drift (p75 / p95) | Result |',
+    '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |',
     ...rows.map(line),
     '',
     `- "improved" / "regressed" need a change of at least ${MATERIAL_PERCENT}% that is also larger than the instrument's resolution (one frame for times) AND larger than the two runs' own scatter. A p95 that gets ${MATERIAL_PERCENT}% worse is a regression even if p75 improved.`,
+    drift
+      ? `- "Same-build drift" is how far each row moved between two runs of ONE build (${drift.a.meta.label} → ${drift.b.meta.label}). A change no larger than that is reported as drift, whatever the bootstrap says: the bootstrap only knows the scatter inside a run, not that the same server answers differently half an hour later.`
+      : '- No A/A pair was supplied (PERF_DRIFT_A / PERF_DRIFT_B), so run-to-run drift is NOT accounted for below. On 2026-09-20 two runs of one build, 30 minutes apart, moved several rows by 15 to 30%. Treat any verdict here as provisional until it is checked against an A/A pair.',
     '- The interval is a DERIVED statistic (seeded bootstrap, 2000 resamples of the raw samples in both files). Every other cell is a raw observation. An interval that contains 0 means the runs cannot be told apart at this sample size.',
     '- An apparent improvement inside the noise is not claimed. An apparent regression inside the noise is still raised as a "regression candidate" to re-measure, because a slow tail is what twenty samples can neither prove nor dismiss.',
     '- A row where any iteration failed is "not comparable": a timeout is the slowest result there is, and dropping it would flatter the run that broke.',
@@ -1357,8 +1559,17 @@ export function buildComparisonReport(
 // ---------------------------------------------------------------------------
 // Chart
 
+/** Why a row is not judged, or what its bar is hiding, in a few words for the chart. */
+function chartWarning(row: RowResult): string {
+  const voided = voidedBy(row);
+  if (voided) return `${voided}: not judged`;
+  return row.unfinished > 0 ? `${row.unfinished} of ${row.attempted} did not finish` : '';
+}
+
 interface ChartRow {
   title: string;
+  /** Why the table refuses to judge this row, per series. Empty = judged normally. */
+  warnings?: string[];
   group: Group;
   budget: Budget | null;
   series: Array<{ name: string; summary: Summary | null }>;
@@ -1400,7 +1611,10 @@ function chart(title: string, rows: ChartRow[]): string {
     const panel = rows.filter((r) => r.group === group);
     const max = Math.max(
       1,
-      ...panel.flatMap((r) => [...r.series.map((s) => s.summary?.p95 ?? 0), r.budget?.p75 ?? 0]),
+      ...panel.flatMap((r) => [
+        ...r.series.map((s) => (s.summary && Number.isFinite(s.summary.p95) ? s.summary.p95 : 0)),
+        r.budget?.p75 ?? 0,
+      ]),
     );
     const x = (v: number) => left + (Math.min(v, max) / max) * plot;
     parts.push(
@@ -1424,8 +1638,21 @@ function chart(title: string, rows: ChartRow[]): string {
           );
           return;
         }
+        const warning = row.warnings?.[i] ?? '';
+        if (!Number.isFinite(s.p75)) {
+          // p75 itself did not finish: there is no length to draw.
+          parts.push(
+            `<text x="${left + 4}" y="${top + barH / 2}" dominant-baseline="middle" font-size="11" fill="#b45309">${esc(series.name)}: p75 did not finish (${esc(warning || `n=${s.n}`)})</text>`,
+          );
+          return;
+        }
+        // A row with failed or never-finished samples is drawn HOLLOW, in a
+        // warning colour: its survivors are the fast ones, and a solid bar
+        // would make a broken run look quick.
         parts.push(
-          `<rect x="${left}" y="${top}" width="${Math.max(1, x(s.p75) - left).toFixed(1)}" height="${barH}" rx="2" fill="${colors[i % colors.length]}"/>`,
+          warning.endsWith('not judged')
+            ? `<rect x="${left}" y="${top}" width="${Math.max(1, x(s.p75) - left).toFixed(1)}" height="${barH}" rx="2" fill="none" stroke="#b45309" stroke-width="1.5" stroke-dasharray="4 2"/>`
+            : `<rect x="${left}" y="${top}" width="${Math.max(1, x(s.p75) - left).toFixed(1)}" height="${barH}" rx="2" fill="${colors[i % colors.length]}"/>`,
         );
         parts.push(
           `<line x1="${x(s.p50).toFixed(1)}" x2="${x(s.p95).toFixed(1)}" y1="${top + barH / 2}" y2="${top + barH / 2}" stroke="#0f172a" stroke-width="1.5"/>`,
@@ -1434,7 +1661,7 @@ function chart(title: string, rows: ChartRow[]): string {
           `<line x1="${x(s.p95).toFixed(1)}" x2="${x(s.p95).toFixed(1)}" y1="${top + 2}" y2="${top + barH - 2}" stroke="#0f172a" stroke-width="1.5"/>`,
         );
         parts.push(
-          `<text x="${left + plot + 8}" y="${top + barH / 2}" dominant-baseline="middle" font-size="11" fill="#334155">p75 ${Math.round(s.p75)} ms, p95 ${Math.round(s.p95)} ms, n=${s.n}</text>`,
+          `<text x="${left + plot + 8}" y="${top + barH / 2}" dominant-baseline="middle" font-size="11" fill="#334155">p75 ${Math.round(s.p75)} ms, p95 ${Number.isFinite(s.p95) ? `${Math.round(s.p95)} ms` : 'did not finish'}, n=${s.n}${warning ? ` — ${esc(warning)}` : ''}</text>`,
         );
       });
       if (row.budget?.p75 !== undefined) {

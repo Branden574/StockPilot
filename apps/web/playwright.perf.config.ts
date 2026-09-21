@@ -22,6 +22,9 @@ import { defineConfig, devices } from '@playwright/test';
  * See tests/perf/README.md for sign-in modes, scenarios and output.
  */
 process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1';
+// One identity per `pnpm perf`. Workers inherit it, so a worker that restarts
+// after a timed-out scenario keeps writing into the same results folder.
+process.env.PERF_RUN_ID ??= new Date().toISOString();
 
 const BROWSERS = {
   chromium: devices['Desktop Chrome'],

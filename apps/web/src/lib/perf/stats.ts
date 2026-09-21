@@ -62,6 +62,33 @@ export function summarize(samples: ReadonlyArray<number | null | undefined>): Su
   };
 }
 
+/**
+ * Percentiles over samples of which some NEVER FINISHED (a navigation that
+ * timed out, a photo set that did not complete). "Did not finish" is slower than
+ * every sample that did, so those rank last, as +Infinity. A percentile that
+ * lands on one is Infinity, which the report prints as "did not finish": still
+ * no number is invented, and one timeout in forty no longer voids the row (it
+ * simply sits above p95) while ten in forty drags p75 into "did not finish".
+ */
+export function summarizeWithUnfinished(
+  finished: ReadonlyArray<number | null | undefined>,
+  unfinished: number,
+): Summary | null {
+  const finite = finiteAscending(finished);
+  if (finite.length === 0 && unfinished === 0) return null;
+  const ranked = [...finite, ...new Array<number>(unfinished).fill(Number.POSITIVE_INFINITY)];
+  const at = (p: number): number => percentile(ranked, p) as number;
+  return {
+    n: ranked.length,
+    dropped: finished.length - finite.length,
+    min: ranked[0] as number,
+    p50: at(50),
+    p75: at(75),
+    p95: at(95),
+    max: ranked[ranked.length - 1] as number,
+  };
+}
+
 /** Change from `before` to `after` as a signed percentage, or null when either side is missing or `before` is 0. */
 export function deltaPercent(before: number | null | undefined, after: number | null | undefined) {
   if (typeof before !== 'number' || typeof after !== 'number') return null;
@@ -87,6 +114,8 @@ export interface NoiseCheck {
   high: number;
   /** False when the interval spans 0: the two runs cannot be told apart at this sample size. */
   distinguishable: boolean;
+  /** Share of resampled differences above 0 (the after run slower / larger). 0.5 is a coin toss. */
+  shareAbove: number;
   resamples: number;
 }
 
@@ -123,5 +152,6 @@ export function bootstrapPercentileDelta(
   deltas.sort((x, y) => x - y);
   const low = percentile(deltas, 2.5) as number;
   const high = percentile(deltas, 97.5) as number;
-  return { low, high, distinguishable: low > 0 || high < 0, resamples };
+  const shareAbove = deltas.filter((d) => d > 0).length / resamples;
+  return { low, high, distinguishable: low > 0 || high < 0, shareAbove, resamples };
 }

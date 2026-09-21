@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -7,6 +7,7 @@ import { test, type BrowserContext, type Page } from '@playwright/test';
 import {
   buildRunReport,
   HARNESS_VERSION,
+  parseRunFile,
   SCHEMA_VERSION,
   type ImageRecord,
   type PhotoSample,
@@ -19,6 +20,7 @@ import { fingerprintKey, NetworkLog } from './network-log';
 import { authStatePath, identityPath, isLoopback, resultsRoot, roleLabel } from './paths';
 import { toRouteTemplate } from '../../src/lib/perf/route-template';
 import {
+  ERROR_SCREEN,
   FEEDBACK_SELECTORS,
   SCENARIOS,
   type ClickStep,
@@ -89,7 +91,9 @@ if (!(NETWORK in NETWORK_PROFILES))
   throw new Error(`PERF_NETWORK must be one of ${Object.keys(NETWORK_PROFILES).join(', ')}`);
 
 const samples: Sample[] = [];
-const startedAt = new Date().toISOString();
+// Set once by playwright.perf.config.ts in the runner process and inherited by
+// every worker, so a worker that restarts continues the SAME results folder.
+const startedAt = process.env.PERF_RUN_ID ?? new Date().toISOString();
 
 /** A failure that says what kind it was and nothing else: Playwright's own messages quote URLs and selectors. */
 class PerfFailure extends Error {
@@ -101,7 +105,13 @@ async function step<T>(code: string, run: () => Promise<T>): Promise<T> {
   try {
     return await run();
   } catch (error) {
-    throw error instanceof PerfFailure ? error : new PerfFailure(code);
+    if (error instanceof PerfFailure) throw error;
+    // Only a real timeout keeps the step's own code. A crashed page or a closed
+    // context must not be filed as "the content was slow".
+    const name = error instanceof Error ? error.name : '';
+    throw new PerfFailure(
+      name === 'TimeoutError' ? code : `error:${code.replace(/^timeout:/, '')}`,
+    );
   }
 }
 
@@ -112,6 +122,7 @@ function arm(marker: Marker, fromNavigationStart = false): ArmConfig {
     usefulSelector: marker.selector,
     usefulHrefPattern: marker.hrefPattern,
     shellSelector: marker.shell,
+    errorSelector: ERROR_SCREEN,
     fromNavigationStart,
   };
 }
@@ -258,9 +269,6 @@ async function iterate(
   const log = await NetworkLog.attach(page, browserName);
   const profile = NETWORK_PROFILES[NETWORK];
   if (profile || CPU_SLOWDOWN > 1) {
-    // Emulation goes through the DevTools protocol, which only Chromium speaks.
-    if (browserName !== 'chromium')
-      throw new Error('PERF_NETWORK / PERF_CPU throttling needs PERF_BROWSER=chromium.');
     const cdp = await context.newCDPSession(page);
     if (profile) await cdp.send('Network.emulateNetworkConditions', { offline: false, ...profile });
     if (CPU_SLOWDOWN > 1) await cdp.send('Emulation.setCPUThrottlingRate', { rate: CPU_SLOWDOWN });
@@ -277,6 +285,10 @@ async function iterate(
   page.on('pageerror', (error) => {
     consoleErrors += 1;
     if (HYDRATION.test(String(error?.message ?? ''))) hydrationErrors += 1;
+  });
+  let crashed = false;
+  page.on('crash', () => {
+    crashed = true;
   });
   try {
     const hardLoad = scenario.kind === 'hard-load';
@@ -341,6 +353,7 @@ async function iterate(
       closesAt,
     );
 
+    if (result.errorScreen) throw new PerfFailure('error-screen');
     const origin = hardLoad ? 0 : (result.clickAt as number);
     const nonNegative = (at: number | null) => (at === null ? null : Math.max(0, at - origin));
     // The network window opens at the CLICK on the page's clock, converted to
@@ -387,6 +400,8 @@ async function iterate(
         photos: collected ? photoSample(collected, log, origin, usefulPaintMs) : null,
       },
     };
+  } catch (error) {
+    throw crashed ? new PerfFailure('page-crashed') : error;
   } finally {
     await log.detach();
     await page.close().catch(() => {});
@@ -445,8 +460,10 @@ async function roundTrip(baseURL: string): Promise<number | null> {
   for (let i = 0; i < 8; i++) {
     const t0 = performance.now();
     try {
-      await (await fetch(new URL('/api/version', baseURL), { cache: 'no-store' })).arrayBuffer();
-      if (i > 0) times.push(performance.now() - t0); // the first one pays for the TLS handshake
+      const res = await fetch(new URL('/api/version', baseURL), { cache: 'no-store' });
+      await res.arrayBuffer();
+      // A bot challenge or a 5xx is not the network's round trip.
+      if (res.ok && i > 0) times.push(performance.now() - t0); // the first one pays for the TLS handshake
     } catch {
       /* counted as missing */
     }
@@ -533,11 +550,34 @@ async function flush(
     `${startedAt.replace(/[:.]/g, '-')}-${run.meta.label}-${browserName}`,
   );
   mkdirSync(dir, { recursive: true });
-  const report = buildRunReport(run);
-  writeFileSync(path.join(dir, 'results.json'), JSON.stringify(run, null, 2));
-  writeFileSync(path.join(dir, 'summary.md'), report.markdown);
-  writeFileSync(path.join(dir, 'chart.svg'), report.chartSvg);
-  lastReport = `\nperf results: ${dir}\n\n${report.markdown}`;
+  const file = path.join(dir, 'results.json');
+  // A worker restart (after a scenario timed out) starts with empty memory. Keep
+  // what the earlier worker of THIS run already saved for other scenarios.
+  if (existsSync(file)) {
+    try {
+      const earlier = parseRunFile(JSON.parse(readFileSync(file, 'utf8')), 'earlier');
+      const mine = new Set(samples.map((s) => s.scenario));
+      run.samples = [...earlier.samples.filter((s) => !mine.has(s.scenario)), ...samples];
+      run.meta.buildAtStart = earlier.meta.buildAtStart;
+    } catch {
+      /* unreadable or older shape: this worker's samples stand alone */
+    }
+  }
+  // Raw samples go to disk BEFORE the report is built: a bug in the report must
+  // never cost a production run its data.
+  writeFileSync(file, JSON.stringify(run, null, 2));
+  try {
+    const report = buildRunReport(run);
+    writeFileSync(path.join(dir, 'summary.md'), report.markdown);
+    writeFileSync(path.join(dir, 'chart.svg'), report.chartSvg);
+    lastReport = `\nperf results: ${dir}\n\n${report.markdown}`;
+  } catch {
+    writeFileSync(
+      path.join(dir, 'summary.md'),
+      'The report could not be built. The raw samples are safe in results.json.\n',
+    );
+    lastReport = `\nperf results: ${dir} (report failed; raw samples saved)`;
+  }
 }
 
 for (const scenario of SCENARIOS) {
@@ -545,6 +585,12 @@ for (const scenario of SCENARIOS) {
 
   test(scenario.title, async ({ browser, browserName }, testInfo) => {
     const baseURL = testInfo.project.use.baseURL ?? '';
+    // Emulation goes through the DevTools protocol, which only Chromium speaks.
+    // Checked HERE, once, so a misconfigured run stops with a sentence instead
+    // of recording forty opaque failures.
+    if ((NETWORK_PROFILES[NETWORK] || CPU_SLOWDOWN > 1) && browserName !== 'chromium') {
+      throw new Error('PERF_NETWORK / PERF_CPU throttling needs PERF_BROWSER=chromium.');
+    }
     if (!process.env.PERF_DATASET) {
       throw new Error(
         'Set PERF_DATASET to describe the data being measured (for example "Demo Co, 29 list rows, 33 photos"). It cannot be added to a result afterwards.',
@@ -582,7 +628,32 @@ for (const scenario of SCENARIOS) {
           };
         }
         samples.push({ scenario: scenario.id, iteration: i, warmup: i === 0, at, ...sample });
+
+        // The same failure three times running (a missing link, an account that
+        // cannot see the page) will not fix itself: stop, and say so, instead of
+        // spending 30 s x 40 iterations recording it.
+        const mine = samples.filter((s) => s.scenario === scenario.id);
+        const code = mine[0]?.error;
+        if (i === 2 && code && mine.every((s) => !s.ok && s.error === code)) {
+          for (let rest = i + 1; rest <= count; rest++) {
+            samples.push({
+              scenario: scenario.id,
+              iteration: rest,
+              warmup: false,
+              at,
+              ...FAILED,
+              error: `not-attempted:${code}`,
+            });
+          }
+          break;
+        }
       }
+      // Cookies the app refreshed during the scenario go back to disk, so the
+      // next scenario does not start from a session that has since been rotated.
+      await context
+        .storageState({ path: authStatePath() })
+        .then(() => chmodSync(authStatePath(), 0o600))
+        .catch(() => {});
     } finally {
       await context.close().catch(() => {});
       // Written after EVERY scenario: a later crash restarts the worker and

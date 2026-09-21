@@ -42,6 +42,11 @@ the machine (tests, builds, other agents) while a run is in progress.
 2. Make the change, deploy it to the same kind of target, run again with the
    same variables, and compare against the baseline.
 
+3. Pass the A/A pair to the comparison (`PERF_DRIFT_A`, `PERF_DRIFT_B`). Two runs
+   of one build, half an hour apart, have been seen to move server-bound rows by
+   15 to 30% with no change at all. A change no larger than its row's same-build
+   drift is reported as drift, whatever the statistics inside one run say.
+
 At 20 samples a row can only prove a large change, and a p95-only regression can
 only be raised as a candidate. Use `PERF_ITERATIONS=40` or more for runs that
 will judge a pull request.
@@ -114,9 +119,14 @@ Each run writes `perf-results/<time>-<label>-<browser>/`:
 Rules the report keeps:
 
 - A cell is a measurement or it says `not measured`. Nothing is estimated.
-- Every row shows `n / attempted`, `failed` and `no value`. A row with a failed
-  iteration gets no budget verdict and no improved/regressed label: a timeout is
-  the slowest result there is, and dropping it would flatter the run that broke.
+- A navigation that timed out, crashed or landed on the error screen, and a photo
+  set that never completed, DID NOT FINISH. On time rows those samples are ranked
+  last (slower than everything that finished): one in forty sits above p95, ten in
+  forty push p75 to `did not finish`. They are never dropped, and any comparison
+  says how many there were on each side. A failure of the harness itself (a link
+  that is not there) is different: it voids a time row, and on other rows up to 5%
+  is tolerated and stated.
+- Every row shows `n / attempted`, `failed` and `no value`.
 - Percentiles are nearest-rank: every cell is a value that was observed. With
   fewer than 20 samples, p95 is simply the slowest sample, and the row says so.
 - The first sample of each scenario is reported apart, with a note on whether it

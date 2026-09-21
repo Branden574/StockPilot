@@ -20,6 +20,13 @@ export const FEEDBACK_SELECTORS = [
   'div[aria-hidden="true"].pointer-events-none.fixed.inset-x-0.top-0 > div[class*="nav-progress-climb"]',
 ];
 
+/**
+ * The dashboard error boundary (app/(dashboard)/error.tsx): a warning icon next
+ * to a heading. It has an <h1> too, so a heading marker alone would record a
+ * crashed page as a fast success.
+ */
+export const ERROR_SCREEN = 'svg.text-destructive + div > h1';
+
 export interface Marker {
   /** Regex source for the pathname. */
   path: string;
@@ -72,10 +79,12 @@ const ORDER_ROWS: Marker = {
   selector: 'main a[href]',
   hrefPattern: `^/dashboard/orders/${UUID}(\\?|$)`,
 };
-const OVERVIEW: Marker = { path: '^/dashboard$', selector: 'main h1' };
+// The overview's greeting is the only <h1> with the display face.
+const OVERVIEW: Marker = { path: '^/dashboard$', selector: 'main h1.font-display' };
 const ITEM_DETAIL: Marker = {
   path: `^/dashboard/inventory/${UUID}$`,
-  selector: 'main h1',
+  // The item name sits in the detail page's sticky header.
+  selector: 'main div.sticky h1',
   shell: DASHBOARD_SKELETON,
 };
 const ORDER_DETAIL: Marker = {

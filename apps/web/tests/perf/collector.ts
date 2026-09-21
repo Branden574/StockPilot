@@ -36,6 +36,8 @@ export interface ArmConfig {
   /** Real-content marker. With `hrefPattern`, the match must be a link whose href fits it. */
   usefulSelector: string;
   usefulHrefPattern?: string;
+  /** The app's error screen. If it shows up, the iteration FAILED, however fast its heading appeared. */
+  errorSelector?: string;
   /** The route's loading skeleton, to time "click -> loading shell". Optional. */
   shellSelector?: string;
   /** Hard loads have no click: time from navigation start instead. */
@@ -103,6 +105,8 @@ export interface PageResult {
   unsupported: string[];
   /** How long the pointer had been on the clicked link: the head start intent warming really got. */
   hoverLead: number | null;
+  /** The error boundary was on screen at some point after the click. */
+  errorScreen: boolean;
   /** Rows in the first table of <main>: a measured fact about the dataset. */
   listRows: number | null;
   pathname: string;
@@ -136,6 +140,8 @@ function collector(fingerprintKeyHex: string): void {
     shellAt: null,
     shellPaintAt: null,
     shellBefore: new WeakSet<Element>(),
+    errorScreen: false,
+    blurSeen: new WeakMap<Element, boolean>(),
     lcp: null,
     shifts: [] as Array<{ t: number; v: number }>,
     longTasks: [] as Array<{ t: number; d: number }>,
@@ -171,6 +177,14 @@ function collector(fingerprintKeyHex: string): void {
     if (state.config === null) state.config = cfg;
     const started = cfg.fromNavigationStart ? 0 : state.clickAt;
     if (started === null) return;
+    // The error boundary has a heading too. Seeing it ends the wait, as a failure.
+    if (
+      !state.errorScreen &&
+      cfg.errorSelector &&
+      visible(document.querySelector(cfg.errorSelector))
+    ) {
+      state.errorScreen = true;
+    }
     // Done: stop querying, so the instrument costs the page nothing afterwards.
     if (state.usefulAt !== null && (state.feedbackAt !== null || cfg.fromNavigationStart)) return;
     const onTarget = new RegExp(cfg.targetPath).test(location.pathname);
@@ -217,6 +231,14 @@ function collector(fingerprintKeyHex: string): void {
   };
 
   const watchImage = (img: HTMLImageElement) => {
+    // next/image clears its blur placeholder once the photo has loaded, so it
+    // has to be noted the moment the element appears, not when it is described.
+    if (!state.blurSeen.has(img)) {
+      state.blurSeen.set(
+        img,
+        /url\(/.test(img.style.backgroundImage ?? '') || img.getAttribute('data-nimg') === 'blur',
+      );
+    }
     if (state.imgLoads.has(img) || img.complete) return;
     img.addEventListener('load', () => state.imgLoads.set(img, performance.now()), { once: true });
   };
@@ -323,6 +345,7 @@ function collector(fingerprintKeyHex: string): void {
       state.usefulAt = state.usefulPaintAt = null;
       state.shellAt = state.shellPaintAt = null;
       state.shellBefore = new WeakSet<Element>();
+      state.errorScreen = false;
       if (config.shellSelector) {
         for (const el of Array.from(document.querySelectorAll(config.shellSelector)))
           state.shellBefore.add(el);
@@ -331,7 +354,8 @@ function collector(fingerprintKeyHex: string): void {
 
     isUseful(): boolean {
       check();
-      return state.usefulAt !== null && state.usefulPaintAt !== null;
+      // An error screen also ends the wait; result() says which it was.
+      return state.errorScreen || (state.usefulAt !== null && state.usefulPaintAt !== null);
     },
 
     result(settleUntil: number | null) {
@@ -379,6 +403,7 @@ function collector(fingerprintKeyHex: string): void {
               .reduce((sum: number, t: any) => sum + Math.max(0, t.d - 50), 0)
           : null,
         unsupported: wanted.filter((type) => !has(type)),
+        errorScreen: state.errorScreen,
         listRows: table ? table.querySelectorAll(':scope > tr').length : null,
         pathname: location.pathname,
       };
@@ -478,7 +503,8 @@ function collector(fingerprintKeyHex: string): void {
           devicePixelRatio: devicePixelRatio,
           loading: img.loading,
           fetchPriority: img.getAttribute('fetchpriority'),
-          hasBlurPlaceholder: /url\(/.test(img.style.backgroundImage ?? ''),
+          hasBlurPlaceholder:
+            state.blurSeen.get(img) ?? /url\(/.test(img.style.backgroundImage ?? ''),
           complete: img.complete,
           failed: img.complete && img.naturalWidth === 0,
           loadAt: state.imgLoads.get(img) ?? null,

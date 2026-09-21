@@ -33,8 +33,10 @@ export interface ImageDelivery {
   contentType: string | null;
   contentLength: number | null;
   hasEtag: boolean;
-  /** Bytes on the wire (headers + body). 0 for a browser-cache hit. */
+  /** Bytes on the wire (headers + body), from the DevTools protocol. Chromium only; null elsewhere. */
   wireBytes: number | null;
+  /** How the browser got it. Chromium only; null elsewhere. */
+  cache: 'memory' | 'disk' | 'revalidated' | 'network' | null;
 }
 
 export type NetworkSummary = NetworkSample;
@@ -159,7 +161,10 @@ export class NetworkLog {
         const began = request.timing().startTime;
         if (began > 0) entry.startedAt = began;
         const sizes = await request.sizes().catch(() => null);
-        const wire = sizes ? sizes.responseHeadersSize + sizes.responseBodySize : null;
+        const wire =
+          sizes && browserName === 'chromium'
+            ? sizes.responseHeadersSize + sizes.responseBodySize
+            : null;
         entry.wireBytes = wire;
         if (entry.kind === 'rsc' || entry.kind === 'document') {
           await recordPageFetch(request, entry, wire);
@@ -171,9 +176,11 @@ export class NetworkLog {
         const headers = await response.allHeaders();
         const length = Number(headers['content-length']);
         const fp = fingerprint(request.url());
+        const known = log.images.get(fp);
         log.images.set(fp, {
           status: response.status(),
-          servedFromBrowserCache: log.images.get(fp)?.servedFromBrowserCache ?? null,
+          servedFromBrowserCache: known?.servedFromBrowserCache ?? null,
+          cache: known?.cache ?? null,
           cacheControl: headers['cache-control'] ?? null,
           age: headers['age'] ?? null,
           cfCacheStatus: headers['cf-cache-status'] ?? null,
@@ -181,7 +188,9 @@ export class NetworkLog {
           contentType: headers['content-type'] ?? null,
           contentLength: Number.isFinite(length) ? length : null,
           hasEtag: Boolean(headers['etag']),
-          wireBytes: wire,
+          // Only the protocol's byte count is trusted: other engines report a
+          // body size even for a cache hit.
+          wireBytes: known?.wireBytes ?? null,
         });
       })().catch(() => {});
     });
@@ -217,17 +226,40 @@ export class NetworkLog {
         // raising Playwright's own `request` event.
         if (!log.imageStartedAt.has(fp)) log.imageStartedAt.set(fp, Date.now());
       });
-      const markCached = (requestId: string, cached: boolean) => {
+      // Four different answers to "did this photo cost the network anything?":
+      //   memory / disk : served by the browser alone (a true cache hit)
+      //   revalidated   : the browser HAD the bytes but had to ask (304). One
+      //                   round trip per photo, which is what a missing or
+      //                   short Cache-Control costs. Playwright reports these
+      //                   as plain 200s; only the protocol shows the 304.
+      //   network       : downloaded
+      const mark = (requestId: string, update: Partial<ImageDelivery>) => {
         const fp = byRequestId.get(requestId);
         if (!fp) return;
-        const current = log.images.get(fp);
-        if (current) current.servedFromBrowserCache = current.servedFromBrowserCache || cached;
-        else log.images.set(fp, { ...EMPTY_DELIVERY, servedFromBrowserCache: cached });
+        log.images.set(fp, { ...(log.images.get(fp) ?? EMPTY_DELIVERY), ...update });
       };
-      cdp.on('Network.requestServedFromCache', (e) => markCached(e.requestId, true));
-      cdp.on('Network.responseReceived', (e) =>
-        markCached(e.requestId, Boolean(e.response.fromDiskCache || e.response.fromPrefetchCache)),
+      cdp.on('Network.requestServedFromCache', (e) =>
+        mark(e.requestId, { cache: 'memory', servedFromBrowserCache: true }),
       );
+      cdp.on('Network.responseReceived', (e) => {
+        if (e.response.fromDiskCache || e.response.fromPrefetchCache)
+          mark(e.requestId, { cache: 'disk', servedFromBrowserCache: true });
+      });
+      cdp.on('Network.responseReceivedExtraInfo', (e) => {
+        if (e.statusCode === 304)
+          mark(e.requestId, { cache: 'revalidated', servedFromBrowserCache: false });
+      });
+      cdp.on('Network.loadingFinished', (e) => {
+        const fp = byRequestId.get(e.requestId);
+        if (!fp) return;
+        const current = log.images.get(fp) ?? EMPTY_DELIVERY;
+        log.images.set(fp, {
+          ...current,
+          wireBytes: e.encodedDataLength,
+          cache: current.cache ?? 'network',
+          servedFromBrowserCache: current.servedFromBrowserCache ?? false,
+        });
+      });
     }
     return log;
   }
@@ -304,7 +336,7 @@ export class NetworkLog {
           known.length === 0 ? null : known.filter((d) => d.servedFromBrowserCache).length,
         notFromCache:
           known.length === 0 ? null : known.filter((d) => !d.servedFromBrowserCache).length,
-        revalidated: deliveries.filter((d) => d.status === 304).length,
+        revalidated: deliveries.filter((d) => d.cache === 'revalidated').length,
         wireBytes: imageBytes.length === 0 ? null : imageBytes.reduce((sum, b) => sum + b, 0),
       },
     };
@@ -339,4 +371,5 @@ const EMPTY_DELIVERY: ImageDelivery = {
   contentLength: null,
   hasEtag: false,
   wireBytes: null,
+  cache: null,
 };

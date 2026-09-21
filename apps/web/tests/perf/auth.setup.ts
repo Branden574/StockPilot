@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { test as setup } from '@playwright/test';
@@ -66,8 +66,12 @@ setup('sign in', async ({ page, baseURL }) => {
   const authDir = path.dirname(authStatePath());
   if (existsSync(authDir)) {
     for (const name of readdirSync(authDir)) {
-      if (name.endsWith('.json') && !name.endsWith('.identity.json'))
-        await endSavedSession(path.join(authDir, name));
+      if (!name.endsWith('.json') || name.endsWith('.identity.json')) continue;
+      const file = path.join(authDir, name);
+      // This role's own leftover, or anything abandoned for hours. Another
+      // role's FRESH file may be a run in progress and is left alone.
+      const abandoned = Date.now() - statSync(file).mtimeMs > 3 * 60 * 60 * 1000;
+      if (file === authStatePath() || abandoned) await endSavedSession(file);
     }
   }
 
@@ -141,7 +145,12 @@ setup('sign in', async ({ page, baseURL }) => {
   }
 
   try {
-    await page.waitForURL(/\/dashboard/, { timeout: 30_000 });
+    await page.waitForURL(
+      (url) => url.pathname === '/dashboard' || url.pathname.startsWith('/dashboard/'),
+      {
+        timeout: 30_000,
+      },
+    );
   } catch {
     const stoppedOn = toRouteTemplate(page.url());
     await page.goto('about:blank').catch(() => {});

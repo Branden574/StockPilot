@@ -7,6 +7,7 @@ import {
   environmentMismatches,
   formatValue,
   HARNESS_VERSION,
+  parseRunFile,
   rotationBetweenRuns,
   rotationWithinRun,
   SCHEMA_VERSION,
@@ -124,17 +125,53 @@ describe('summarizeRun', () => {
     });
   });
 
-  it('keeps a failed iteration out of the numbers even when it carries a value, and counts it', () => {
+  it('ranks a navigation that never finished LAST instead of dropping it, and never uses a value it carried', () => {
     const file = run('before', [9000, 400, 500, 600, 700]);
-    file.samples[2] = sample('dashboard-to-inventory', 2, 30000, {
+    file.samples[2] = sample('dashboard-to-inventory', 2, 12, {
       ok: false,
       error: 'timeout:useful',
     });
     const out = row(file, 'nav-inventory');
-    expect(out).toMatchObject({ attempted: 4, failed: 1, noValue: 0 });
-    expect(out.summary).toMatchObject({ n: 3, max: 700 });
+    expect(out).toMatchObject({ attempted: 4, failed: 1, unfinished: 1, otherFailures: 0 });
+    // 400, 600, 700, then "did not finish": p75 is the 3rd, p95 the 4th.
+    expect(out.summary).toMatchObject({ n: 4, min: 400, p75: 700, p95: Number.POSITIVE_INFINITY });
   });
 
+  it('does NOT rank a harness failure as slow: a missing link is not a slow page', () => {
+    const file = run('before', [9000, 400, 500, 600, 700]);
+    file.samples[2] = sample('dashboard-to-inventory', 2, null, {
+      ok: false,
+      error: 'link-missing',
+    });
+    expect(row(file, 'nav-inventory')).toMatchObject({
+      failed: 1,
+      unfinished: 0,
+      otherFailures: 1,
+      summary: { n: 3, max: 700 },
+    });
+  });
+
+  it('treats "no photos on screen" as nothing to measure, and "photos still loading" as not finished', () => {
+    const photos = (extra: object) =>
+      ({
+        allVisibleDoneMs: null,
+        firstDoneMs: null,
+        visibleCount: 0,
+        unfinishedCount: 0,
+        failedCount: 0,
+        images: [],
+        ...extra,
+      }) as never;
+    const none = run('none', [0, 500, 500]);
+    none.samples.forEach((x) => (x.photos = photos({})));
+    expect(row(none, 'photos-all')).toMatchObject({ summary: null, unfinished: 0, noValue: 2 });
+    const stuck = run('stuck', [0, 500, 500]);
+    stuck.samples.forEach((x) => (x.photos = photos({ visibleCount: 8, unfinishedCount: 2 })));
+    expect(row(stuck, 'photos-all')).toMatchObject({
+      unfinished: 2,
+      summary: { p50: Number.POSITIVE_INFINITY },
+    });
+  });
   it('separates "finished without this metric" from "failed"', () => {
     const file = run('before', [9000, 400, null, 600]);
     expect(row(file, 'nav-inventory')).toMatchObject({ attempted: 3, failed: 0, noValue: 1 });
@@ -174,11 +211,11 @@ describe('summarizeRun', () => {
 });
 
 describe('formatValue', () => {
-  it('prints "not measured" for anything that is not a real number', () => {
-    for (const v of [null, undefined, Number.NaN, Number.POSITIVE_INFINITY])
+  it('prints "not measured" for a missing value and "did not finish" for an unfinished one', () => {
+    for (const v of [null, undefined, Number.NaN])
       expect(formatValue(v, 'ms')).toBe('not measured');
+    expect(formatValue(Number.POSITIVE_INFINITY, 'ms')).toBe('did not finish');
   });
-
   it('formats by unit', () => {
     expect(formatValue(745.4, 'ms')).toBe('745 ms');
     expect(formatValue(0.0481, 'score')).toBe('0.048');
@@ -188,43 +225,105 @@ describe('formatValue', () => {
 });
 
 describe('verdict', () => {
-  it('judges BOTH p75 and p95, and says when p95 is only the slowest sample', () => {
-    expect(verdict(row(run('ok', [0, ...range(100, 480, 20)]), 'nav-inventory'))).toBe(
-      'within budget',
-    );
+  const QUALIFIED = 'within budget in this sample (n=20 cannot confirm a p95 budget)';
+
+  it('judges BOTH p75 and p95', () => {
+    expect(verdict(row(run('ok', [0, ...range(100, 480, 20)]), 'nav-inventory'))).toBe(QUALIFIED);
     expect(verdict(row(run('slow', [0, ...range(600, 980, 20)]), 'nav-inventory'))).toBe(
       'OVER budget',
     );
-    // p75 fine, one spike over the p95 budget: still over.
-    expect(verdict(row(run('spiky', [0, 100, 100, 100, 1500]), 'nav-inventory'))).toBe(
-      'OVER budget (n=4: p95 is the slowest sample)',
+    // p75 fine, the slowest samples over the p95 budget: still over.
+    expect(
+      verdict(row(run('spiky', [0, ...Array(18).fill(100), 1500, 1500]), 'nav-inventory')),
+    ).toBe('OVER budget');
+  });
+
+  it('says a small sample cannot CONFIRM a p95 budget, and stops saying it at n=60', () => {
+    expect(verdict(row(run('n20', [0, ...Array(20).fill(100)]), 'nav-inventory'))).toBe(QUALIFIED);
+    expect(verdict(row(run('n60', [0, ...Array(60).fill(100)]), 'nav-inventory'))).toBe(
+      'within budget',
     );
+  });
+
+  it('will not judge a handful of samples at all', () => {
     expect(verdict(row(run('few', [0, 100, 200, 300]), 'nav-inventory'))).toBe(
-      'within budget (n=3: p95 is the slowest sample)',
+      'too few samples to judge (n=3)',
+    );
+    expect(verdict(row(run('seven', [0, ...Array(7).fill(100)]), 'nav-inventory'))).toBe(
+      'too few samples to judge (n=7)',
+    );
+    expect(verdict(row(run('eight', [0, ...Array(8).fill(100)]), 'nav-inventory'))).toMatch(
+      /^within budget/,
     );
   });
 
   it('treats a value exactly on the budget as within it', () => {
-    expect(verdict(row(run('edge', [0, ...Array(20).fill(500)]), 'nav-inventory'))).toBe(
-      'within budget',
-    );
-  });
-
-  it('refuses to judge a row whose iterations failed: a timeout is the slowest result there is', () => {
-    const file = run('broken', [0, ...Array(20).fill(100)]);
-    file.samples[5] = sample('dashboard-to-inventory', 5, null, {
-      ok: false,
-      error: 'timeout:useful',
-    });
-    expect(verdict(row(file, 'nav-inventory'))).toBe('not judged: 1 of 20 iterations failed');
+    expect(verdict(row(run('edge', [0, ...Array(20).fill(500)]), 'nav-inventory'))).toBe(QUALIFIED);
   });
 
   it('judges only the side of a budget the owner actually set', () => {
-    const file = run('lcp', [1, 1, 1, 1], {}, 'hard-load-inventory');
+    const file = run('lcp', [1, ...Array(10).fill(1)], {}, 'hard-load-inventory');
     file.samples.forEach((s) => (s.lcpMs = 2400));
+    // No p95 budget exists for LCP, so there is nothing for a small sample to fail to confirm.
     expect(buildRunReport(file).markdown).toMatch(
-      /Hard-load Inventory: LCP .*\| 2500 ms \/ none \| within budget/,
+      /Hard-load Inventory: LCP .*\| 2500 ms \/ none \| within budget \|/,
     );
+  });
+
+  it('lets unfinished photo sets drag the percentiles to "did not finish"', () => {
+    const file = run('photos', [0, ...Array(10).fill(500)]);
+    file.samples.forEach(
+      (x, i) =>
+        (x.photos = {
+          allVisibleDoneMs: i === 3 ? null : 500,
+          visibleCount: 8,
+          unfinishedCount: i === 3 ? 1 : 0,
+          failedCount: 0,
+          images: [],
+        } as never),
+    );
+    const out = row(file, 'photos-all');
+    expect(out).toMatchObject({
+      unfinished: 1,
+      summary: { n: 10, p75: 500, p95: Number.POSITIVE_INFINITY },
+    });
+    expect(buildRunReport(file).markdown).toMatch(
+      /Inventory all visible photos \(warm browser cache\) \| 10 \/ 10 \| 0 \| 1 \| 500 ms \| 500 ms \| did not finish/,
+    );
+  });
+  it('judges a row WITH its timeouts: one in twenty sits above p95, three in twenty break the p95 budget', () => {
+    const withTimeouts = (count: number) => {
+      const file = run('t', [0, ...Array(20).fill(100)]);
+      for (let i = 1; i <= count; i++)
+        file.samples[i] = sample('dashboard-to-inventory', i, null, {
+          ok: false,
+          error: 'timeout:useful',
+        });
+      return verdict(row(file, 'nav-inventory'));
+    };
+    expect(withTimeouts(1)).toMatch(/^within budget/);
+    expect(withTimeouts(3)).toBe('OVER budget');
+  });
+
+  it('refuses to judge a time row when the HARNESS failed, and tolerates a stray failure on a count row', () => {
+    const file = run('broken', [0, ...Array(20).fill(100)]);
+    file.samples[5] = sample('dashboard-to-inventory', 5, null, {
+      ok: false,
+      error: 'link-missing',
+    });
+    file.samples.forEach(
+      (x) =>
+        (x.network = { total: 52, prefetchRoutes: {}, counts: {}, bytes: {}, images: {} } as never),
+    );
+    expect(verdict(row(file, 'nav-inventory'))).toBe('not judged: 1 of 20 iterations failed');
+    // 1 of 20 is within the 5% tolerated on a row that is not a time.
+    expect(verdict(row(file, 'req-inventory'))).toBe('no budget set');
+    for (let i = 6; i <= 8; i++)
+      file.samples[i] = sample('dashboard-to-inventory', i, null, {
+        ok: false,
+        error: 'link-missing',
+      });
+    expect(verdict(row(file, 'req-inventory'))).toBe('not judged: 4 of 20 iterations failed');
   });
 });
 
@@ -302,6 +401,34 @@ describe('buildRunReport', () => {
     expect(width).toBeGreaterThan(80);
   });
 
+  it('draws a row it refuses to judge HOLLOW and says why, so a broken run cannot look fast', () => {
+    const file = run('broken', [0, ...Array(20).fill(320)]);
+    for (let i = 1; i <= 15; i++)
+      file.samples[i] = sample('dashboard-to-inventory', i, null, {
+        ok: false,
+        error: 'link-missing',
+      });
+    const svg = buildRunReport(file).chartSvg;
+    const afterLabel = svg.slice(svg.indexOf('>Dashboard → Inventory<'));
+    expect(afterLabel.slice(0, 900)).toMatch(/fill="none" stroke="#b45309"/);
+    expect(afterLabel.slice(0, 1400)).toContain('15 of 20 iterations failed: not judged');
+    // A healthy row keeps its solid bar.
+    expect(buildRunReport(run('fine', [0, ...Array(20).fill(320)])).chartSvg).not.toContain(
+      'stroke="#b45309"',
+    );
+  });
+
+  it('writes "did not finish" instead of drawing a bar when p75 itself never finished', () => {
+    const file = run('hung', [0, ...Array(20).fill(320)]);
+    for (let i = 1; i <= 8; i++)
+      file.samples[i] = sample('dashboard-to-inventory', i, null, {
+        ok: false,
+        error: 'timeout:useful',
+      });
+    const svg = buildRunReport(file).chartSvg;
+    expect(svg).toContain('p75 did not finish (8 of 20 did not finish)');
+    expect(svg).not.toMatch(/NaN|Infinity/);
+  });
   it('escapes text it puts into the SVG', () => {
     expect(buildRunReport(run('<script>&"', [1, 2])).chartSvg).not.toContain('<script>');
   });
@@ -322,9 +449,11 @@ describe('compareRuns', () => {
   it('flags a p95 that got 10% worse even when p75 improved (the owner trigger)', () => {
     const before = run('b', [0, ...Array(18).fill(800), 900, 900]);
     const after = run('a', [0, ...Array(18).fill(600), 1500, 1500]);
-    // Never "improved". With 2 slow samples in 20 the tail cannot be proven, so
-    // it is raised as a candidate to re-measure rather than asserted or dropped.
-    expect(compared(before, after).result).toMatch(/^regression candidate \(p95\)/);
+    // Never a bare "improved". With 2 slow samples in 20 the tail cannot be
+    // proven either way, so it is printed beside the p75 verdict, not hidden.
+    expect(compared(before, after).result).toBe(
+      'p75 improved; p95 +67% is inside the noise, which n=20 / 20 cannot judge',
+    );
     // With enough samples for the tail to be unmistakable, it is asserted:
     // p75 still IMPROVES here (800 → 600), and the verdict is still "regressed".
     const bigBefore = run('b', [0, ...Array(36).fill(800), ...Array(4).fill(900)]);
@@ -372,17 +501,27 @@ describe('compareRuns', () => {
     );
   });
 
-  it('refuses a verdict when either side had failures, and says how many', () => {
+  it('never hides a new hang behind a better percentile', () => {
     const after = run('a', tight(500));
     after.samples[3] = sample('dashboard-to-inventory', 3, null, {
       ok: false,
       error: 'timeout:useful',
     });
     expect(compared(run('b', tight(800)), after).result).toBe(
-      'not comparable: 0 of 20 before and 1 of 20 after iterations failed',
+      'improved; did not finish: 0 of 20 before, 1 of 20 after',
     );
   });
 
+  it('refuses a verdict when the harness itself failed on either side, and says how many', () => {
+    const after = run('a', tight(500));
+    after.samples[3] = sample('dashboard-to-inventory', 3, null, {
+      ok: false,
+      error: 'link-missing',
+    });
+    expect(compared(run('b', tight(800)), after).result).toBe(
+      'not comparable: no failures before, 1 of 20 iterations failed after',
+    );
+  });
   it('refuses to compute anything when one side was not measured, whichever side', () => {
     expect(compared(run('b', tight(800)), run('a', []))).toMatchObject({
       deltaP75: null,
@@ -394,6 +533,56 @@ describe('compareRuns', () => {
     });
   });
 
+  it('does not claim an improvement that sits inside the noise', () => {
+    const wideBefore = [
+      0, 300, 320, 350, 380, 420, 470, 520, 580, 650, 720, 800, 880, 960, 1050, 1150, 1260, 1380,
+      1500, 1700, 2000,
+    ];
+    const wideAfter = [
+      0, 310, 330, 340, 390, 400, 440, 500, 560, 600, 690, 740, 790, 850, 900, 1000, 1240, 1400,
+      1490, 1710, 1990,
+    ];
+    const out = compared(run('b', wideBefore), run('a', wideAfter));
+    expect(out.deltaP75).toBeLessThanOrEqual(-10);
+    expect(out.noise?.distinguishable).toBe(false);
+    expect(out.result).toBe('not distinguishable from noise');
+  });
+
+  it('raises a regression CANDIDATE only when most resamples agree, not on a coin toss', () => {
+    const base = [0, ...range(500, 690, 10)];
+    const likelyWorse = [0, ...range(500, 690, 10).map((v, i) => (i % 3 === 0 ? v + 40 : v + 95))];
+    const out = compared(run('b', base), run('a', likelyWorse));
+    expect(out.noise!.shareAbove).toBeGreaterThanOrEqual(0.8);
+    expect(out.result).toMatch(/^(regressed|regression candidate \(p75)/);
+    // A/A on a noisy page must not raise one.
+    const noisy = [
+      0, 656, 660, 677, 677, 695, 698, 703, 708, 715, 731, 740, 740, 756, 795, 819, 848, 935, 1022,
+      2334, 4071,
+    ];
+    expect(compared(run('b', noisy), run('a', noisy)).result).not.toMatch(
+      /candidate|regressed|improved/,
+    );
+  });
+
+  it('calls it a regression when photo sets stop finishing, however fast the ones that did finish were', () => {
+    const photos = (done: number | null) =>
+      ({
+        firstDoneMs: done,
+        allVisibleDoneMs: done,
+        visibleCount: 8,
+        unfinishedCount: done === null ? 3 : 0,
+        failedCount: 0,
+        flooredCount: 0,
+        images: [],
+      }) as never;
+    const before = run('b', [0, ...Array(20).fill(900)]);
+    before.samples.forEach((x) => (x.photos = photos(900)));
+    const after = run('a', [0, ...Array(20).fill(400)]);
+    after.samples.forEach((x, i) => (x.photos = photos(i % 4 === 0 ? null : 400)));
+    expect(compared(before, after, 'photos-all').result).toBe(
+      'regressed: 5 of 20 samples did not finish (0 of 20 before); did not finish: 0 of 20 before, 5 of 20 after',
+    );
+  });
   it('does not call a wide interval "no change": it says what it cannot exclude', () => {
     const noisy = [
       0, 400, 420, 450, 480, 500, 520, 560, 600, 640, 700, 760, 820, 900, 980, 1050, 1150, 1300,
@@ -428,6 +617,60 @@ describe('compareRuns', () => {
       .markdown.split('\n')
       .find((l) => l.startsWith('| Dashboard → Inventory |'))!;
     expect(line).toMatch(/^\| Dashboard → Inventory \| 20 \| .* \| 10 \|/);
+  });
+});
+
+describe('same-build drift', () => {
+  const tight = (base: number) => [9000, ...range(base, base + 38, 2)];
+
+  it('does not call a change a result when the same build moved that row just as far on its own', () => {
+    // The A/A pair moved 800 -> 640 with no change at all (-20%).
+    const drift = { a: run('A', tight(800)), b: run('B', tight(640)) };
+    const claimed = compareRuns(
+      run('before', tight(800)),
+      run('after', tight(680)),
+      undefined,
+      drift,
+    ).find((r) => r.spec.id === 'nav-inventory')!;
+    expect(claimed.deltaP75).toBeLessThan(-10);
+    expect(claimed.deltaP75).toBeGreaterThan(-20);
+    expect(claimed.result).toMatch(
+      /^inside run-to-run drift: with NO change, this row's p75 moved \d+\.\d% .*\(was: improved\)/,
+    );
+    // The same change against a quiet A/A pair stands.
+    const quiet = { a: run('A', tight(800)), b: run('B', tight(804)) };
+    expect(
+      compareRuns(run('before', tight(800)), run('after', tight(680)), undefined, quiet).find(
+        (r) => r.spec.id === 'nav-inventory',
+      )!.result,
+    ).toBe('improved');
+  });
+
+  it('never downgrades "did not finish": a hang is not drift', () => {
+    const drift = { a: run('A', tight(800)), b: run('B', tight(400)) };
+    const after = run('after', tight(800));
+    for (let i = 1; i <= 8; i++)
+      after.samples[i] = sample('dashboard-to-inventory', i, null, {
+        ok: false,
+        error: 'timeout:useful',
+      });
+    expect(
+      compareRuns(run('before', tight(800)), after, undefined, drift).find(
+        (r) => r.spec.id === 'nav-inventory',
+      )!.result,
+    ).toMatch(/^regressed: 8 of 20 samples did not finish/);
+  });
+
+  it('says so in the report when no A/A pair was given', () => {
+    expect(buildComparisonReport(run('b', tight(800)), run('a', tight(500))).markdown).toContain(
+      'No A/A pair was supplied',
+    );
+    const withPair = buildComparisonReport(run('b', tight(800)), run('a', tight(500)), {
+      a: run('A', tight(800)),
+      b: run('B', tight(790)),
+    });
+    expect(withPair.markdown).toContain('"Same-build drift" is how far each row moved');
+    expect(withPair.markdown).toMatch(/\| ±1\.\d% \/ ±1\.\d% \| improved \|/);
   });
 });
 
@@ -510,6 +753,31 @@ describe('environment parity', () => {
     const aa = buildComparisonReport(run('before', [1, 2, 3]), run('again', [1, 2, 3]));
     expect(aa.markdown).toContain('Same environment on both sides');
     expect(aa.markdown).toContain('This is an A/A comparison');
+  });
+});
+
+describe('parseRunFile', () => {
+  it('accepts a file of the current shape', () => {
+    const file = run('ok', [0, 1, 2]);
+    expect(parseRunFile(JSON.parse(JSON.stringify(file)), 'before').meta.label).toBe('ok');
+  });
+
+  it('refuses a file written by an older harness in one clear sentence, instead of half-reading it', () => {
+    const v1 = { meta: { label: 'before-prA', build: 'abc' }, scenarios: [], samples: [] };
+    expect(() => parseRunFile(v1, 'before')).toThrow(
+      /NOT COMPARABLE: the before run was written by results schema v1 .* Re-take that run/,
+    );
+    expect(() =>
+      parseRunFile(
+        { ...run('x', [0, 1]), meta: { ...META, schemaVersion: SCHEMA_VERSION - 1 } },
+        'after',
+      ),
+    ).toThrow(/the after run/);
+  });
+
+  it('refuses something that is not a results file', () => {
+    for (const junk of [null, 'text', {}, { meta: {} }])
+      expect(() => parseRunFile(junk, 'before')).toThrow(/not a performance results file/);
   });
 });
 
