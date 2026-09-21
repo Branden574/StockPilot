@@ -16,8 +16,12 @@
  * support and falls back to the main-thread path when unavailable.
  *
  * The sizes and qualities come from `image-variants.config.ts`, the same
- * module the main-thread path imports. The import is RELATIVE on purpose: it
- * is the form the bundler is documented to follow into a worker chunk.
+ * module the main-thread path imports. The import is RELATIVE on purpose: that
+ * form was verified to be bundled into the worker's chunk by a Next 16 /
+ * Turbopack production build, and to run, in a real browser (2026-09-20). An
+ * aliased (`@/…`) import was not tested. A worker whose import fails does so
+ * SILENTLY (uploads fall back to the main thread), so re-check the built worker
+ * chunk whenever this import changes.
  */
 
 import { IMAGE_VARIANTS, VARIANT_MIME, fitWithin } from './image-variants.config';

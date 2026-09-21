@@ -16,10 +16,11 @@ describe('image variant settings', () => {
   it('keep the list thumbnail at 200 px, the size every stored thumbnail has', () => {
     expect(
       IMAGE_VARIANTS.thumb,
-      'The thumb is drawn in 28 px cells and a 400 px one weighs 2.1x as much (measured, see ' +
-        'image-variants.config.ts). If this changes, change with it: both backfill tools ' +
-        '(THUMB_SIZE), the export tiers in lib/exports/export-images.ts, the Perf Lab dataset ' +
-        '(scripts/perf-lab/images.mjs) and the before/after byte measurement in the PR.',
+      'The item-photo thumb is drawn in 28 px cells and a 400 px one weighs 2.1x as much ' +
+        '(measured, see image-variants.config.ts, which also names the one larger consumer). If ' +
+        'this changes, change with it: both backfill tools (THUMB_SIZE), the export tiers in ' +
+        'lib/exports/export-images.ts, any benchmark dataset that copies these settings, and the ' +
+        'before/after byte measurement in the pull request.',
     ).toEqual({ maxDimension: 200, quality: 0.8 });
   });
 });

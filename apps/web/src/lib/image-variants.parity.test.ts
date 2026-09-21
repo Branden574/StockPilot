@@ -24,23 +24,27 @@
  *          expression must keep the exact shape the bundler recognises, and the
  *          two backfill tools must agree with the shared thumbnail size.
  *
- * MUTATION-PROVEN. A guard that cannot fail is not a guard, so four mutations
- * were run against this file and image-variants.config.test.ts before they
- * shipped (43 tests in all); each was reverted after:
- *   1. `thumb.maxDimension` 200 -> 400 in the config -> 14 failures: the literal
- *      pin, 8 of the 10 ARM 1 rows (the two 150 x 100 rows cannot move: nothing
- *      is enlarged), the "never larger than 200 px" check, the three
- *      worker-failure fallbacks, and the backfill agreement.
- *   2. A private `const THUMB_DIMENSION = 400;` put back into the worker and
- *      used for the thumb -> 6 failures: the four worker rows and the 200 px
- *      check, while every fallback row stays green (the guard discriminates),
- *      and ARM 3 names the number.
- *   3. The worker's import swapped for an inline copy of the constants that
- *      still AGREES -> ARM 1 and ARM 2 stay green, ARM 3 fails twice. That is
- *      the fork this file exists to catch on the day it is made, not the day it
- *      diverges.
- *   4. The worker URL hoisted into a variable -> only the Worker-expression
- *      test fails.
+ * MUTATION-PROVEN. A guard that cannot fail is not a guard, so twelve mutations
+ * were run against this file and image-variants.config.test.ts (46 tests in
+ * all); each was reverted after. The first four were the author's; the rest
+ * SURVIVED the first version of this file and were found by review:
+ *    1. `thumb.maxDimension` 200 -> 400 in the config -> 15 failures.
+ *    2. A private `const THUMB_DIMENSION = 400;` in the worker, used for the
+ *       thumb -> 6 failures, worker rows only (the guard discriminates).
+ *    3. The worker's import swapped for an inline copy that still AGREES ->
+ *       ARM 1 and 2 stay green, ARM 3 fails twice. That is the fork this file
+ *       exists to catch on the day it is made, not the day it diverges.
+ *    4. The worker URL hoisted into a variable, the old line left behind as a
+ *       comment -> the Worker-expression test fails.
+ *    5. The worker returns the MASTER blob as the thumbnail -> 1 failure.
+ *    6. The fallback returns a null thumbnail -> 1 failure.
+ *    7. HEIC transcode quality read from the wrong config key -> 1 failure.
+ *    8. The HEIC transcode skipped -> 2 failures.
+ *    9. The worker's hand-written base64 drops the high bit -> 2 failures.
+ *   10. A private `fitWithin` in the worker that truncates instead of rounding
+ *       -> 3 failures (two sizes, and the import check).
+ *   11. A private number spelled 0x280 / 6_40 -> ARM 3 names both.
+ *   12. The worker draws the bitmap unscaled -> 5 failures.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -72,16 +76,23 @@ const QUALITY_TO_VARIANT: Record<string, 'master' | 'thumb' | 'lqip'> = {
   '0.5': 'lqip',
 };
 
+/** Non-uniform, with bytes above 0x7f: an encoder that ignored the bytes could not reproduce it. */
+const fakeBytes = (size: number) =>
+  Uint8Array.from({ length: size }, (_, i) => (i * 37 + 11) & 0xff);
+
 function makeRecorder(scenario: Scenario) {
   const requests: CanvasRequest[] = [];
+  /** drawImage arguments after the image: [dx, dy, dWidth, dHeight]. */
+  const draws: number[][] = [];
   const close = vi.fn();
   const encoded = (req: CanvasRequest): Blob => {
     const variant = QUALITY_TO_VARIANT[String(req.quality)] ?? 'master';
     const size = scenario.bytes?.[variant] ?? 12;
-    return new Blob([new Uint8Array(size)], { type: req.type });
+    return new Blob([fakeBytes(size)], { type: req.type });
   };
-  const createImageBitmap = vi.fn(async () => ({ ...scenario.source, close }));
-  return { requests, close, encoded, createImageBitmap };
+  const createImageBitmap = vi.fn(async (_source: Blob) => ({ ...scenario.source, close }));
+  const context = { drawImage: (_image: unknown, ...rest: number[]) => void draws.push(rest) };
+  return { requests, draws, close, encoded, createImageBitmap, context };
 }
 
 function sourceFile(bytes = 1000, name = 'IMG_0001.JPG'): File {
@@ -108,7 +119,7 @@ async function runWorkerPath(scenario: Scenario, file = sourceFile()) {
       readonly height: number,
     ) {}
     getContext() {
-      return { drawImage: () => undefined };
+      return rec.context;
     }
     async convertToBlob(opts: { type?: string; quality?: number }) {
       const req = { w: this.width, h: this.height, type: opts.type, quality: opts.quality };
@@ -152,7 +163,7 @@ async function runMainThreadPath(
       return {
         width: 0,
         height: 0,
-        getContext: () => ({ drawImage: () => undefined }),
+        getContext: () => rec.context,
         toBlob(cb: (b: Blob | null) => void, type?: string, quality?: number) {
           const req = { w: this.width, h: this.height, type, quality };
           rec.requests.push(req);
@@ -239,12 +250,15 @@ describe('ARM 1: the worker and the fallback request identical variants', () => 
   it.each(TABLE)('worker: $name', async ({ source, expected }) => {
     const run = await runWorkerPath({ source: { width: source[0], height: source[1] } });
     expect(run.requests).toEqual(expected);
+    // The WHOLE bitmap is scaled into each canvas: no crop, no offset, nothing left undrawn.
+    expect(run.draws).toEqual(expected.map((r) => [0, 0, r.w, r.h]));
     expect(run.reply).toMatchObject({ ok: true });
   });
 
   it.each(TABLE)('fallback: $name', async ({ source, expected }) => {
     const run = await runMainThreadPath({ source: { width: source[0], height: source[1] } });
     expect(run.requests).toEqual(expected);
+    expect(run.draws).toEqual(expected.map((r) => [0, 0, r.w, r.h]));
   });
 
   it('no thumbnail request is larger than 200 px on either path', async () => {
@@ -285,6 +299,20 @@ describe('ARM 2: the same rules on both paths', () => {
     }
   });
 
+  it('each path hands back the THUMBNAIL encode as the thumbnail (not the master, not nothing)', async () => {
+    const bytes = { master: 500, thumb: 77, lqip: 40 };
+    const worker = await runWorkerPath({ source, bytes });
+    const fallback = await runMainThreadPath({ source, bytes });
+    const thumbs = [
+      (worker.reply as { thumbBlob: Blob | null }).thumbBlob,
+      fallback.result.thumbBlob,
+    ];
+    for (const thumb of thumbs) {
+      expect(thumb?.size).toBe(77);
+      expect(thumb?.type).toBe('image/webp');
+    }
+  });
+
   it('a WebP master that is NOT smaller is discarded and the original file is kept', async () => {
     const file = sourceFile(1000);
     for (const size of [1000, 5000]) {
@@ -316,19 +344,21 @@ describe('ARM 2: the same rules on both paths', () => {
   });
 
   it('both paths produce the same placeholder text for the same bytes', async () => {
-    const worker = await runWorkerPath({ source, bytes: { lqip: 40 } });
-    const fallback = await runMainThreadPath({ source, bytes: { lqip: 40 } });
-    expect((worker.reply as { lqip: string }).lqip).toBe(fallback.result.lqip);
+    // LITERAL: bytes 0b 30 55 7a 9f c4 e9 0e. The worker builds its base64 by
+    // hand, so this is the test that would notice it mangling a byte above 0x7f.
+    const worker = await runWorkerPath({ source, bytes: { lqip: 8 } });
+    const fallback = await runMainThreadPath({ source, bytes: { lqip: 8 } });
+    expect((worker.reply as { lqip: string }).lqip).toBe('data:image/webp;base64,CzBVep/E6Q4=');
+    expect(fallback.result.lqip).toBe('data:image/webp;base64,CzBVep/E6Q4=');
   });
 
   it('an undecodable file: the worker reports failure, the fallback uploads the original untouched', async () => {
     const file = sourceFile();
-    const scenario = { source };
-    const worker = await runWorkerPath(scenario, file).catch(() => null);
-    expect(worker).not.toBeNull();
+    const failingDecode = () =>
+      vi.fn(async () => {
+        throw new Error('The source image could not be decoded.');
+      });
 
-    // Same modules, but the decode throws.
-    vi.unstubAllGlobals();
     vi.resetModules();
     const posted: WorkerReply[] = [];
     const fakeSelf = {
@@ -336,27 +366,62 @@ describe('ARM 2: the same rules on both paths', () => {
       postMessage: (m: WorkerReply) => posted.push(m),
       btoa: globalThis.btoa,
     };
+    const workerDecode = failingDecode();
     vi.stubGlobal('self', fakeSelf);
-    vi.stubGlobal('createImageBitmap', async () => {
-      throw new Error('The source image could not be decoded.');
-    });
+    vi.stubGlobal('createImageBitmap', workerDecode);
     await import('./image-variants.worker');
     await fakeSelf.onmessage!({ data: { file } });
-    expect(posted[0]).toEqual({ ok: false, message: 'The source image could not be decoded.' });
+    expect(workerDecode).toHaveBeenCalledTimes(1);
+    expect(posted).toEqual([{ ok: false, message: 'The source image could not be decoded.' }]);
 
     vi.unstubAllGlobals();
     vi.resetModules();
     vi.stubGlobal('window', {});
     vi.stubGlobal('Worker', undefined);
-    vi.stubGlobal('createImageBitmap', async () => {
-      throw new Error('The source image could not be decoded.');
-    });
+    const mainDecode = failingDecode();
+    vi.stubGlobal('createImageBitmap', mainDecode);
     const { compressImageVariants } = await import('./image-variants');
     expect(await compressImageVariants(file)).toEqual({
       master: file,
       thumbBlob: null,
       lqip: null,
     });
+    // Reached the decode: not the early "no window" return.
+    expect(mainDecode).toHaveBeenCalledTimes(1);
+  });
+
+  it('a HEIC photo is turned into JPEG at quality 0.92 BEFORE the variants are made', async () => {
+    const heic = new File([fakeBytes(900)], 'IMG_1.HEIC', { type: 'image/heic', lastModified: 42 });
+    const jpeg = new Blob([fakeBytes(700)], { type: 'image/jpeg' });
+    const heic2any = vi.fn(async () => jpeg);
+    vi.doMock('heic2any', () => ({ default: heic2any }));
+    try {
+      const run = await runMainThreadPath({ source }, heic);
+      // LITERALS: the options object is what decides every iPhone HEIC upload's quality.
+      expect(heic2any).toHaveBeenCalledTimes(1);
+      expect(heic2any).toHaveBeenCalledWith({ blob: heic, toType: 'image/jpeg', quality: 0.92 });
+      const decoded = run.createImageBitmap.mock.calls[0]![0] as File;
+      expect(decoded.name).toBe('IMG_1.jpg');
+      expect(decoded.type).toBe('image/jpeg');
+      expect(decoded.size).toBe(700);
+      expect(decoded.lastModified).toBe(42);
+      expect(run.requests).toEqual(TABLE[0]!.expected);
+    } finally {
+      vi.doUnmock('heic2any');
+    }
+  });
+
+  it('a file that only LOOKS like HEIC by its name is transcoded too, and an ordinary JPEG is not', async () => {
+    const heic2any = vi.fn(async () => new Blob([fakeBytes(10)], { type: 'image/jpeg' }));
+    vi.doMock('heic2any', () => ({ default: heic2any }));
+    try {
+      await runMainThreadPath({ source }, new File([fakeBytes(9)], 'scan.heif', { type: '' }));
+      expect(heic2any).toHaveBeenCalledTimes(1);
+      await runMainThreadPath({ source }, sourceFile());
+      expect(heic2any).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock('heic2any');
+    }
   });
 });
 
@@ -442,20 +507,29 @@ const LIB = path.resolve(__dirname);
 const WEB = path.resolve(__dirname, '..', '..');
 const read = (file: string) => readFileSync(file, 'utf8');
 
-/** Code only: comments, strings, template literals and regex literals removed. */
-function codeOnly(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1 ')
-    .replace(/`(?:\\.|[^`\\])*`/g, '``')
-    .replace(/'(?:\\.|[^'\\])*'/g, "''")
-    .replace(/"(?:\\.|[^"\\])*"/g, '""')
-    .replace(/\/(?![*/\s])(?:\\.|\[(?:\\.|[^\]\\])*\]|[^/\\\n])+\/[a-z]*/g, ' ');
-}
+/**
+ * ONE left-to-right pass, so whichever token starts first wins: a `//` inside a
+ * string is a string, a quote inside a comment is a comment. (Separate passes
+ * let a string containing a comment opener hide the code after it.) The regex
+ * branch only counts after an operator or an opening bracket, so a division is
+ * not read as a regex. Known limit: a template literal nested inside another.
+ */
+const TOKEN =
+  /\/\*[\s\S]*?\*\/|\/\/[^\n]*|`(?:\\[\s\S]|[^`\\])*`|'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|(?<=(?:^|[=(,:;!&|?{}[+\-*%<>~^])\s*)\/(?![*/])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n])+\/[a-z]*/gm;
 
-/** Every numeric literal other than 0 and 1 (loop counters and indexes). */
+/** Code only: comments, strings, template literals and regex literals removed. */
+const codeOnly = (source: string) => source.replace(TOKEN, ' ');
+
+/** Comments removed, strings kept: for guards that must read a string in the code. */
+const stripComments = (source: string) =>
+  source.replace(TOKEN, (m) => (m.startsWith('/*') || m.startsWith('//') ? ' ' : m));
+
+/**
+ * Every token that STARTS like a number, other than 0 and 1 (loop counters and
+ * indexes). Deliberately greedy, so 2_000, 2e2, 0xc8, .8 and 200n are all seen.
+ */
 function ownNumbers(source: string): string[] {
-  return (codeOnly(source).match(/(?<![\w$.])\d+(?:\.\d+)?(?![\w$])/g) ?? []).filter(
+  return (codeOnly(source).match(/(?<![\w$])(?:\.\d|\d)[\w.]*/g) ?? []).filter(
     (n) => n !== '0' && n !== '1',
   );
 }
@@ -469,6 +543,24 @@ describe('ARM 3: DRIFT GUARD on the source', () => {
       ownNumbers("// was 200, now 400\nconst s = 'w=640'; for (let i = 0; i < n; i++) {}"),
     ).toEqual([]);
     expect(ownNumbers('/* Safari 16.4 */ const re = /\\d{3}/; x[0]!')).toEqual([]);
+    // Every way JavaScript can spell a number.
+    expect(ownNumbers('a = 2_000; b = 2e2; c = 0xc8; d = .8; e = 200n;')).toEqual([
+      '2_000',
+      '2e2',
+      '0xc8',
+      '.8',
+      '200n',
+    ]);
+    // A comment opener or a quote inside a string must not hide the code after it.
+    expect(ownNumbers("const u = 'http://x'; const T = 400;")).toEqual(['400']);
+    expect(ownNumbers('const s = "/*"; const T = 400; /* x */')).toEqual(['400']);
+    expect(
+      ownNumbers("const s = '//'; const T = 640;\nconst q = 'it\\'s'; const U = 320;"),
+    ).toEqual(['640', '320']);
+    // A division is not a regex.
+    expect(ownNumbers('const r = w / 2 / h;')).toEqual(['2']);
+    expect(stripComments("// new Worker(x)\nconst s = 'kept'; /* gone */")).toContain("'kept'");
+    expect(stripComments("// new Worker(x)\nconst s = 'kept';")).not.toContain('new Worker');
   });
 
   it.each(FILES)('%s carries no size or quality of its own', (file) => {
@@ -480,10 +572,18 @@ describe('ARM 3: DRIFT GUARD on the source', () => {
     ).toEqual([]);
   });
 
-  it.each(FILES)('%s imports the shared module by its relative path', (file) => {
-    expect(read(path.join(LIB, file))).toMatch(
-      /import \{[^}]*\bIMAGE_VARIANTS\b[^}]*\} from '\.\/image-variants\.config';/,
-    );
+  it.each(FILES)('%s takes the settings AND fitWithin from the shared module', (file) => {
+    const source = stripComments(read(path.join(LIB, file)));
+    const imported =
+      /import \{([^}]*)\} from '\.\/image-variants\.config';/.exec(source)?.[1] ?? '';
+    for (const name of ['IMAGE_VARIANTS', 'VARIANT_MIME', 'fitWithin']) {
+      expect(
+        imported.split(',').map((part) => part.trim()),
+        `${file} must import ${name}`,
+      ).toContain(name);
+    }
+    // No private copy of the sizing arithmetic either.
+    expect(codeOnly(source)).not.toMatch(/\bfunction fitWithin\b|\bfitWithin\s*=|Math\.round/);
   });
 
   it('the shared module is inert: no imports, no DOM, no worker globals', () => {
@@ -497,7 +597,8 @@ describe('ARM 3: DRIFT GUARD on the source', () => {
     // bundler BUILD the worker and its imports. Hoist the URL into a variable
     // and it ships the raw .ts file instead, whose import cannot resolve; the
     // upload then silently runs on the main thread for everyone.
-    expect(read(path.join(LIB, 'image-variants.ts'))).toMatch(
+    // Comments are stripped first: a commented-out copy must not satisfy this.
+    expect(stripComments(read(path.join(LIB, 'image-variants.ts')))).toMatch(
       /new Worker\(\s*new URL\('\.\/image-variants\.worker\.ts', import\.meta\.url\),\s*\{\s*type: 'module',?\s*\},?\s*\)/,
     );
   });
@@ -508,7 +609,7 @@ describe('ARM 3: DRIFT GUARD on the source', () => {
       path.join(WEB, 'src', 'app', 'api', 'admin', 'backfill-item-thumbs', 'route.ts'),
     ];
     for (const tool of tools) {
-      const match = /\bconst THUMB_SIZE = (\d+);/.exec(read(tool));
+      const match = /\bconst THUMB_SIZE = (\d+);/.exec(stripComments(read(tool)));
       expect(match, `${tool}: THUMB_SIZE declaration not found (was it renamed?)`).not.toBeNull();
       expect(Number(match![1]), `${tool} disagrees with image-variants.config.ts`).toBe(
         IMAGE_VARIANTS.thumb.maxDimension,

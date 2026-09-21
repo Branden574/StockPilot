@@ -452,8 +452,11 @@ n=40, 0 failed) and compared with run B, with run A → run B as the drift pair.
 
 - **Nothing a person does got slower on the client.** Click → visible response
   32 ms → 31 ms (p75); requests per Inventory navigation 52 → 52; layout shift
-  0.048 → 0.048; no long tasks; 0 console and hydration errors; script downloaded
-  on an empty browser cache 571 KB → 577 KB (p75, +1.1%).
+  0.048 → 0.048; 0 console and hydration errors; script downloaded on an empty
+  browser cache 571 KB → 577 KB (p75, +1.1%). No sample of any Inventory, Orders,
+  Books or storefront scenario recorded a long task. Inventory → Item did, in 9
+  of 40 samples, against 3 of 40 in run A and 13 of 40 in run B: present before
+  the marks existed, and no worse with them.
 - Books, Orders, Item, Order and the storefront: no material change, or not
   distinguishable from noise.
 - **One row is open: Dashboard → Inventory.** p75 746 ms (run A) and 732 ms
@@ -470,15 +473,21 @@ n=40, 0 failed) and compared with run B, with run A → run B as the drift pair.
   | after   |  159 / 216 |             597 / 704 |      749 / 797 |             160 / 186 |
   | recheck |  145 / 198 |             610 / 724 |      729 / 810 |             116 / 181 |
 
-  The extra time is on the SERVER side of the navigation (the page-data stream
-  ends 54 to 82 ms later at p50 and 102 to 132 ms later at p75); the client's
-  share got shorter, not longer.
-  No server file on that path changed between the two builds
-  (`git diff ef38e3a6 64ef4d3f`: no loader, service, action or proxy; the Inventory
-  page changed only in its empty-list branch), and the post-deploy run on the
+  The extra time is BEFORE the last byte of the page-data stream arrives (server
+  or network: the stream ends 54 to 82 ms later at p50 and 102 to 132 ms later at
+  p75); the client's share got shorter, not longer. No server file on that path
+  changed between the two builds (`git diff ef38e3a6 64ef4d3f`: no loader, service,
+  action or proxy; the Inventory page changed only in its empty-list branch).
+  Books, Orders and Item did not move. Neither did the two other rows that load
+  the Inventory route on this build: with an empty browser cache the same
+  navigation's stream ended at 627 / 641 ms (p50 / p75, n=10) against 680 / 726 in
+  run A and 731 / 821 in run B, and hard-load Inventory was 814 ms (p75) against
+  861 and 1018. So the movement is specific to the WARM Dashboard → Inventory row,
+  which is also the first scenario of every run. (The post-deploy run on the
   intermediate build, which contains neither the marks nor the progress-bar fix,
-  already showed the later stream. Books, Orders and Item did not move, so it is
-  specific to Inventory. **The cause is not established.** Two things differ besides
+  showed a later stream too, but it began two minutes after a deploy, so a cold
+  server explains that equally well; it does not separate the build from the
+  deploys.) **The cause is not established.** Two things differ besides
   the build: the hour (16:10 against 18:30 to 19:05 local) and three deploys in the
   65 minutes before the run (it was labelled `steady` 24 minutes after the last
   one). To settle it: repeat `PERF_SCENARIOS=dashboard-to-inventory` at the hour of
