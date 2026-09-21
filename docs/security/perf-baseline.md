@@ -151,8 +151,8 @@ is that caps are disclosed rather than silent, and this is the worked example.
 
 ## 2. The warm-cache machinery
 
-Three independent paths keep the caches warm, and they exist because a deploy
-rotates the loader cache keys:
+Two independent paths keep the caches warm, and they exist because a deploy
+rotates the loader cache keys (there were three until 2026-09-21, see below):
 
 1. **`.github/workflows/prewarm-on-deploy.yml`** — fires on
    `deployment_status` success in Production, calls
@@ -161,12 +161,24 @@ rotates the loader cache keys:
    instead of the first human.
 2. **A Vercel cron every 30 minutes** — `apps/web/vercel.json`, path
    `/api/cron/prewarm-orders-catalog`, schedule `*/30 * * * *`.
-3. **Boot self-warm** — `apps/web/src/instrumentation.ts`, production only, always
-   with `?scope=hot`. The `scope=hot` parameter is mandatory: a deploy cold-starts
-   K instances simultaneously, and K concurrent full sweeps would be a thundering
-   herd against Supabase.
+3. ~~**Boot self-warm**~~ — `apps/web/src/instrumentation.ts`, **removed
+   2026-09-21**. Every new server instance called the prewarm route with
+   `?scope=hot`. Measured in production from Supabase's gateway log (the route's
+   first query names both hot organizations at once, which nothing else does):
+   **1,300 runs in 24 hours, 48 of them scheduled.** In a quiet-system test (one
+   visit every two minutes, nine visits checked) a new instance started on EVERY
+   visit. Of the 198 Supabase calls counted in the eleven seconds around one Demo
+   Co visit, 70 were service-role queries for the OTHER hot organization, which
+   that visitor has nothing to do with, in the same seconds as the visitor's own
+   page (and 75 more service-role queries for Demo Co itself, an unseparated mix
+   of the page's own cache refills and the self-warm's). The idea behind it was that a fresh
+   instance serves lapsed caches. It does not: the Data Cache is shared by all
+   instances, so only a deploy (new keys) and time (the TTL) make it cold, and
+   paths 1 and 2 cover both. What the visitor's page needs, the visitor's own
+   request loads anyway. **Never warm caches from a request path or from
+   instance start-up**: that is load added at exactly the moment a person waits.
 
-**If you change a cached loader, check all three still make sense.** A new cache tag
+**If you change a cached loader, check both still make sense.** A new cache tag
 that the prewarm route does not warm is a new cold path for the first human after
 every deploy.
 

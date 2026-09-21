@@ -35,8 +35,7 @@ const SWEEP_DEADLINE_MS = 50_000;
  * + charters) AND the Items/Books default-view caches so the first
  * human after a deploy lands on warm caches instead of the cold
  * sign-storm path — perf plan P3. Hit by the Vercel cron (every 30
- * min), the GH Action deploy hook, and the instrumentation.ts boot
- * self-warm.
+ * min) and the GH Action deploy hook.
  *
  * SCOPE (two tiers):
  *   • KNOWN-HOT orgs (org-sweep.ts) keep the full treatment: orders-new
@@ -49,14 +48,20 @@ const SWEEP_DEADLINE_MS = 50_000;
  *     cold-visit killer: before this sweep a first visit to any
  *     non-hot org paid ~4.8s of cold loaders at 50k-item scale.
  *
- * CALLER TIERING (`?scope=hot`): the broad-sweep tier is for the two
- * SINGLETON callers only — the every-30-min Vercel cron and the
- * post-deploy GH Action (no query param → full sweep). The
- * instrumentation.ts boot self-warm instead passes `?scope=hot`, which
- * warms ONLY the known-hot tier and never even enumerates orgs: a
- * deploy cold-starts K instances at once, and K concurrent full sweeps
- * (~50 orgs × ~1s of duplicated cold Supabase loads each) would be a
- * thundering herd for caches the cron/deploy-hook already warm.
+ * CALLER TIERING (`?scope=hot`): both callers today are SINGLETONS — the
+ * every-30-min Vercel cron and the post-deploy GH Action — and send no
+ * query param (full sweep). `?scope=hot` warms ONLY the known-hot tier
+ * and never enumerates orgs. It was the boot self-warm's tier
+ * (src/instrumentation.ts), REMOVED 2026-09-21: every new server instance
+ * fired it: 1,300 runs in 24 hours against 48 scheduled ones, and after
+ * a quiet spell each re-ran the hot tier (70 service-role queries for the
+ * OTHER hot org alone, measured) AT THE MOMENT the visitor who caused the
+ * instance was waiting on the same 15-connection database API.
+ * The Data Cache is shared by every instance, so a NEW instance does not
+ * have colder caches than an old one; only a deploy (new keys) and time
+ * (TTL) make them cold, and the two singleton callers cover both. Kept
+ * as a parameter for manual use. Do NOT call this route from a request
+ * path or from instance start-up again.
  *
  * Per-org/per-pair failures are isolated: one bad org logs and the
  * sweep continues (prewarmInventoryList additionally captures per-view
