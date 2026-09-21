@@ -6,12 +6,17 @@ import { createClient } from '@/lib/supabase/server';
 import { SESSION_HEADER_USER_EMAIL, SESSION_HEADER_USER_ID } from '@/lib/supabase/middleware';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
 import {
+  bundleMembership,
+  loadRequestContextBundle,
+  type RequestContextBundle,
+} from '@/lib/auth/request-context-bundle';
+import {
   assertAccountActiveOrRedirect,
   resolveAccountStatus,
   type AccountStatusRow,
 } from '@/lib/auth/account-status';
 
-import type { Permission, Role } from '@stockpilot/core';
+import { effectivePermissions, type Permission, type Role } from '@stockpilot/core';
 
 export interface ServerSession {
   userId: string;
@@ -55,6 +60,13 @@ interface LoadedContext {
   orgId: string | null;
   orgName: string | null;
   memberships: SessionMembership[];
+  /**
+   * The bundle this context was resolved from, or null when the legacy reads
+   * ran. THREADED to the permission resolver instead of asking again: React
+   * `cache()` does not memoize inside a Server Action, so a second ask there
+   * would be a second round trip AND a second snapshot of the database.
+   */
+  bundle: RequestContextBundle | null;
 }
 
 function pickOrgName(
@@ -66,26 +78,13 @@ function pickOrgName(
 }
 
 /**
- * Loads user, profile, active membership, and active org name in
- * **one** parallel-pair Supabase round trip. The user id comes from a
- * request header set by the proxy after session verification
- * (auth.getClaims() local JWT verify, auth.getUser() fallback — see
- * lib/supabase/middleware.ts).
- *
- * Wrapped in React.cache() so every consumer in the same render shares
- * one fetch — layout, page, and every service. Layouts no longer need
- * their own membership query.
+ * The legacy shape of the first wave: two parallel PostgREST reads. Kept as the
+ * fallback for `loadRequestContextBundle()` returning null.
  */
-const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
-  const h = await headers();
-  const userId = h.get(SESSION_HEADER_USER_ID);
-  if (!userId) {
-    return { session: null, orgRole: null, orgId: null, orgName: null, memberships: [] };
-  }
-
-  const email = h.get(SESSION_HEADER_USER_EMAIL) ?? '';
-  const supabase = await createClient();
-
+function loadProfileAndMemberships(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+) {
   // Memberships are fetched WITHOUT a limit(1) on purpose (perf plan
   // 2026-07-02 P1e): the old shape grabbed ONE arbitrary membership and,
   // whenever it wasn't the user's default org, issued a SECOND sequential
@@ -93,7 +92,7 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
   // every dashboard render. A user's accepted memberships are a handful of
   // tiny rows; fetching them all and picking in JS costs the same single
   // round-trip for everyone.
-  const [profileRes, membersRes] = await Promise.all([
+  return Promise.all([
     supabase
       .from('user_profiles')
       // disabled_at rides this EXISTING select for free — the row is already
@@ -111,19 +110,82 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
       // therefore permission-floor) semantics are identical.
       .select('organization_id, role, organizations:organization_id (id, name, logo_url)')
       .eq('user_id', userId)
-      .not('accepted_at', 'is', null),
+      .not('accepted_at', 'is', null)
+      // Same order as get_request_context() (0355). See the note in the loader.
+      .order('created_at', { ascending: true })
+      .order('organization_id', { ascending: true }),
   ]);
+}
 
-  const profile = profileRes.data as
-    | {
-        id: string;
-        email: string;
-        full_name: string | null;
-        avatar_url: string | null;
-        default_organization_id: string | null;
-        disabled_at: string | null;
-      }
-    | null;
+/**
+ * Loads user, profile, active membership, and active org name in
+ * **one** parallel-pair Supabase round trip. The user id comes from a
+ * request header set by the proxy after session verification
+ * (auth.getClaims() local JWT verify, auth.getUser() fallback — see
+ * lib/supabase/middleware.ts).
+ *
+ * Wrapped in React.cache() so every consumer in the same render shares
+ * one fetch — layout, page, and every service. Layouts no longer need
+ * their own membership query.
+ */
+const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
+  const h = await headers();
+  const userId = h.get(SESSION_HEADER_USER_ID);
+  if (!userId) {
+    return {
+      session: null,
+      orgRole: null,
+      orgId: null,
+      orgName: null,
+      memberships: [],
+      bundle: null,
+    };
+  }
+
+  const email = h.get(SESSION_HEADER_USER_EMAIL) ?? '';
+  const supabase = await createClient();
+
+  // ONE ROUND TRIP WHEN IT CAN BE (migration 0355). `get_request_context()`
+  // returns these two reads, and the five that used to follow them, in a single
+  // call evaluated under the same row level security. It hands this function
+  // the SAME rows in the SAME shape, so everything below (the account-status
+  // gate, the org-from-membership rule, the switcher list) is untouched. null
+  // means "resolve this request the old way", and the two reads below run.
+  // Both sources list memberships OLDEST FIRST (created_at, then organization
+  // id), and so do the other two resolvers (api-context pickActiveMembership,
+  // actions/auth resolveDefaultOrgAndRole). The order only matters to a user
+  // with several organizations and no valid default, and for that user every
+  // path must land on the SAME organization: the page and the cookie-authed
+  // /api calls it makes, and a request that fell back to the legacy reads.
+  const bundle = await loadRequestContextBundle();
+  const [profileRes, membersRes] = bundle
+    ? [
+        { data: bundle.profile, error: null },
+        {
+          data: bundle.memberships.map((m) => ({
+            organization_id: m.organization_id,
+            role: m.role,
+            organizations: m.organization
+              ? {
+                  id: m.organization.id,
+                  name: m.organization.name,
+                  logo_url: m.organization.logo_url,
+                }
+              : null,
+          })),
+          error: null,
+        },
+      ]
+    : await loadProfileAndMemberships(supabase, userId);
+
+  const profile = profileRes.data as {
+    id: string;
+    email: string;
+    full_name: string | null;
+    avatar_url: string | null;
+    default_organization_id: string | null;
+    disabled_at: string | null;
+  } | null;
 
   // Account-status gate (install point 1 of 3). This covers every RSC page and
   // every org-scoped Server Action, inherited by all ~128 requireOrgContext and
@@ -204,6 +266,7 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
     orgId: memberRow?.organization_id ?? null,
     orgName: memberRow ? pickOrgName(memberRow.organizations) : null,
     memberships,
+    bundle,
   };
 });
 
@@ -229,7 +292,7 @@ export const requireSession = cache(async (): Promise<ServerSession> => {
 });
 
 export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContext> => {
-  const { session, orgRole, orgId: defaultOrgId, orgName } = await loadSessionAndContext();
+  const { session, orgRole, orgId: defaultOrgId, orgName, bundle } = await loadSessionAndContext();
   if (!session) redirect('/signin');
 
   // ═══ THE ORG MUST COME FROM A MEMBERSHIP, NEVER FROM A PREFERENCE ═══
@@ -250,6 +313,21 @@ export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContex
   if (!targetOrgId) redirect('/onboarding');
 
   if (orgId && orgId !== defaultOrgId) {
+    // The bundle already holds EVERY accepted membership of this user, so an
+    // explicit org is answered from it: present means member (with that role),
+    // absent means not a member, which is the same redirect the read below ends
+    // in. Only without a bundle does the legacy membership read run.
+    if (bundle) {
+      const held = bundleMembership(bundle, orgId);
+      if (!held) redirect('/onboarding');
+      return {
+        ...session,
+        organizationId: orgId,
+        organizationName: held.organization?.name ?? 'Workspace',
+        role: held.role,
+        permissions: await resolvePermissions(bundle, orgId, session.userId, held.role),
+      };
+    }
     const supabase = await createClient();
     const { data: member } = await supabase
       .from('organization_members')
@@ -273,12 +351,40 @@ export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContex
 
   if (!orgRole) redirect('/onboarding');
 
-  const supabase = await createClient();
   return {
     ...session,
     organizationId: targetOrgId,
     organizationName: orgName ?? 'Workspace',
     role: orgRole,
-    permissions: await loadEffectivePermissions(supabase, targetOrgId, session.userId, orgRole),
+    permissions: await resolvePermissions(bundle, targetOrgId, session.userId, orgRole),
   };
 });
+
+/**
+ * Effective permissions = static role defaults + the organization's overrides
+ * for that role + this user's overrides.
+ *
+ * From the bundle when it holds this organization WITH THIS ROLE: the override
+ * rows are the same rows `loadEffectivePermissions` selects, read in the same
+ * round trip as the membership they belong to, and fed to the same
+ * `effectivePermissions`. Owner is never overridable, in either path. Any
+ * disagreement (no bundle, organization not in it, a different role) goes to the
+ * legacy loader, which keeps its own failure behaviour.
+ */
+async function resolvePermissions(
+  bundle: RequestContextBundle | null,
+  organizationId: string,
+  userId: string,
+  role: Role,
+): Promise<Set<Permission>> {
+  // The SAME bundle the role came from: one snapshot, so the role and the
+  // overrides that modify it can never be from two different moments.
+  const held = bundleMembership(bundle, organizationId);
+  if (held && held.role === role) {
+    return role === 'owner'
+      ? effectivePermissions('owner')
+      : effectivePermissions(role, held.role_overrides, held.user_overrides);
+  }
+  const supabase = await createClient();
+  return loadEffectivePermissions(supabase, organizationId, userId, role);
+}
