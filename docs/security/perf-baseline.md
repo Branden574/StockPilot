@@ -167,7 +167,7 @@ rotates the loader cache keys (there were three until 2026-09-21, see below):
    first query names both hot organizations at once, which nothing else does):
    **1,300 runs in 24 hours, 48 of them scheduled.** In a quiet-system test (one
    visit every two minutes, nine visits checked) a new instance started on EVERY
-   visit. Of the 198 Supabase calls counted in the eleven seconds around one Demo
+   visit. Of the 200 Supabase calls counted in the eleven seconds around one Demo
    Co visit, 70 were service-role queries for the OTHER hot organization, which
    that visitor has nothing to do with, in the same seconds as the visitor's own
    page (and 75 more service-role queries for Demo Co itself, an unseparated mix
