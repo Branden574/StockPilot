@@ -67,8 +67,14 @@ export async function loadFrequentlyOrdered(
       catalog,
     ]);
     if (top.error) {
-      // The code only: a message can quote request details.
-      console.warn('[frequently-ordered] top-SKUs call failed:', top.error.code ?? 'unknown');
+      // A SHORT LABEL ONLY: a message can quote request details. `code` is the
+      // database's own SQLSTATE for a refusal, but the client sets it to the
+      // EMPTY STRING for a transport fault (timeout, DNS, reset, abort) and
+      // leaves it undefined for a gateway error with a non-JSON body — so `??`
+      // alone logged a blank, and the most likely production fault was the one
+      // that said least. `status` is 0 for a transport fault.
+      const why = top.error.code || (top.status === 0 ? 'network' : `http-${top.status}`);
+      console.warn('[frequently-ordered] top-SKUs call failed:', why);
       return [];
     }
     const photoByItem = new Map(bundle.items.map((item) => [item.id, item.imageUrl]));

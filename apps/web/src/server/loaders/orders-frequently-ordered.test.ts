@@ -115,6 +115,32 @@ describe('loadFrequentlyOrdered', () => {
       expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain('secret detail');
     });
 
+    it('names a transport fault "network" rather than logging a blank', async () => {
+      // What postgrest-js really resolves when the fetch fails: it does NOT
+      // throw, and `code` is the empty string.
+      rpcMock.mockResolvedValue({
+        data: null,
+        error: { message: 'TypeError: fetch failed', details: '', hint: '', code: '' },
+        status: 0,
+      });
+      await expect(loadFrequentlyOrdered(WAREHOUSE, CATALOG())).resolves.toEqual([]);
+      const logged = JSON.stringify(vi.mocked(console.warn).mock.calls);
+      expect(logged).toContain('network');
+      expect(logged).not.toContain('fetch failed');
+    });
+
+    it('names a gateway error by its status, not "network"', async () => {
+      rpcMock.mockResolvedValue({
+        data: null,
+        error: { message: '<html>502</html>' },
+        status: 502,
+      });
+      await expect(loadFrequentlyOrdered(WAREHOUSE, CATALOG())).resolves.toEqual([]);
+      const logged = JSON.stringify(vi.mocked(console.warn).mock.calls);
+      expect(logged).toContain('http-502');
+      expect(logged).not.toContain('html');
+    });
+
     it('no session client', async () => {
       createClientMock.mockRejectedValue(new Error('cookies unavailable'));
       await expect(loadFrequentlyOrdered(WAREHOUSE, CATALOG())).resolves.toEqual([]);
