@@ -9,8 +9,10 @@ import { effectiveModules } from '@/lib/modules/effective-modules';
 import { accountIsDisabledOrThrow, loadAccountStatus } from '@/lib/auth/account-status';
 import type { ServiceContext } from '@/server/services/context';
 
-import type { Role, Database, ModuleId } from '@stockpilot/core';
-import { isAdminRole } from '@stockpilot/core';
+import { parseRequestContextBundle } from '@/lib/auth/request-context-bundle';
+
+import type { Role, Database, ModuleId, Permission } from '@stockpilot/core';
+import { effectivePermissions, isAdminRole } from '@stockpilot/core';
 
 /**
  * Mirror of resolveMfaState() in context.ts but parameterized over an
@@ -56,7 +58,6 @@ export function sessionIdFromJwt(token: string): string | null {
 }
 
 async function resolveApiMfaState(
-
   supabase: any,
   organizationId: string,
   role: Role,
@@ -71,20 +72,44 @@ async function resolveApiMfaState(
   // session the bearer client doesn't have). null = couldn't read → fail closed.
   bearerAal?: 'aal1' | 'aal2' | null,
 ): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean }> {
-  let mfaRequired = false;
-  let mfaSatisfied = false;
+  let policy: MfaPolicy;
   try {
     const { data: org } = await supabase
       .from('organizations')
       .select('mfa_policy')
       .eq('id', organizationId)
       .maybeSingle();
-    const policy =
-      (org?.mfa_policy as 'optional' | 'admins_required' | 'all_required' | undefined) ??
-      'optional';
+    policy = (org?.mfa_policy as MfaPolicy | undefined) ?? 'optional';
+  } catch (err) {
+    // Fail CLOSED — assume MFA is required and unsatisfied. A flaky
+    // org lookup must NOT silently let an admin bypass MFA on the
+    // bearer/API path either. Mirrors resolveMfaState() in
+    // services/context.ts for parity between cookie and bearer flows.
+    console.error('[resolveApiMfaState] failed:', err);
+    return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: hasVerifiedFactor };
+  }
+  return mfaFromPolicy(supabase, policy, role, hasVerifiedFactor, bearerAal);
+}
+
+type MfaPolicy = 'optional' | 'admins_required' | 'all_required';
+
+/**
+ * The MFA decision once the org's policy is known. Split out of
+ * resolveApiMfaState so the one-round-trip path below can hand the policy
+ * straight over: it already came back with the membership.
+ */
+async function mfaFromPolicy(
+  supabase: any,
+  policy: MfaPolicy,
+  role: Role,
+  hasVerifiedFactor: boolean,
+  bearerAal?: 'aal1' | 'aal2' | null,
+): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean }> {
+  let mfaRequired = false;
+  let mfaSatisfied = false;
+  try {
     const policyRequired =
-      policy === 'all_required' ||
-      (policy === 'admins_required' && isAdminRole(role));
+      policy === 'all_required' || (policy === 'admins_required' && isAdminRole(role));
     // ENROLLMENT ESCALATES (HI-6): mirrors resolveMfaState() in
     // services/context.ts — a verified factor must be satisfied even under
     // an 'optional' policy, or a stolen password alone reaches the API at
@@ -113,6 +138,111 @@ async function resolveApiMfaState(
 }
 
 /**
+ * The whole request context in ONE round trip, for both API paths.
+ *
+ * WHY. `/api/**` is deliberately outside the proxy matcher (src/proxy.ts: "API
+ * routes always handle their own auth"), so the verified-identity header the
+ * page path keys its bundle on is never set here and
+ * `loadRequestContextBundle()` returns null. The API builder therefore kept
+ * doing what the page path stopped doing in migration 0355: seven to nine
+ * separate reads, in serial waves, on every call. Measured locally on a
+ * dashboard load, `/api/v1/me/releases` alone cost 11 Supabase calls — three
+ * `user_profiles`, two `organizations`, one each of `auth/user`,
+ * `organization_members` and `organization_modules`, plus the release query's
+ * own two.
+ *
+ * This asks `get_request_context()` (0355) with the caller's OWN client, so the
+ * same row level security decides the answer on both paths, and the strict
+ * parser refuses anything it does not recognise.
+ *
+ * WHAT IT IS NOT. Not a cache: evaluated per request, so a revoked permission
+ * or a disabled account bites on the next call exactly as before. Not a policy:
+ * every gate below (membership, account status, MFA, modules, permissions) is
+ * the same rule applied to the same rows from a different source.
+ *
+ * `null` means "resolve this request the old way", and the legacy reads keep
+ * every fail-closed rule they have. That covers a deploy ahead of its
+ * migration, a failed or unrecognised answer, a profile row the caller cannot
+ * read (whose "unreadable" status must stay a 5xx, not a silent "active"), and
+ * an organization row hidden by row level security (whose MFA policy and comp
+ * flag must never be guessed).
+ */
+type ApiBundleResolution =
+  /** Use the legacy reads. */
+  | null
+  /** The bundle answered, and the answer is "no": 401, exactly as the legacy path would. */
+  | { ok: false }
+  | {
+      ok: true;
+      organizationId: string;
+      role: Role;
+      mfaPolicy: MfaPolicy;
+      enabledModules: Set<ModuleId>;
+      permissions: Set<Permission>;
+    };
+
+async function resolveApiContextFromBundle(
+  supabase: any,
+  userId: string,
+  requestedOrgId: string | null,
+): Promise<ApiBundleResolution> {
+  if (process.env.REQUEST_CONTEXT_RPC === 'off') return null;
+  try {
+    // GET: PostgREST runs a STABLE function in a read-only transaction.
+    const { data, error } = await supabase.rpc('get_request_context', undefined, { get: true });
+    if (error) {
+      // Codes only: never the message, which can quote request details.
+      console.warn('[api-context] rpc failed, using the legacy reads:', error.code || 'unknown');
+      return null;
+    }
+    const bundle = parseRequestContextBundle(data, userId);
+    // A profile the caller cannot read is NOT "active": the legacy path turns
+    // that into a 5xx through accountIsDisabledOrThrow, and it must keep doing so.
+    if (!bundle?.profile) return null;
+    if (bundle.profile.disabled_at !== null) return { ok: false };
+
+    // The same three-step choice pickActiveMembership makes, against the same
+    // accepted-memberships-only set, already ordered oldest first by 0355.
+    const held = requestedOrgId
+      ? (bundle.memberships.find((m) => m.organization_id === requestedOrgId) ?? null)
+      : (bundle.memberships.find(
+          (m) => m.organization_id === bundle.profile?.default_organization_id,
+        ) ??
+        bundle.memberships[0] ??
+        null);
+    // A requested organization the caller is not an accepted member of is a
+    // refusal, not a fallback — the legacy path returns null for it too.
+    if (!held) return { ok: false };
+    // No organization row means row level security hid it. Its `mfa_policy`
+    // would silently become 'optional' and its comp flag false, so neither is
+    // guessed here: the legacy reads run and fail closed on their own terms.
+    if (!held.organization) return null;
+
+    return {
+      ok: true,
+      organizationId: held.organization_id,
+      role: held.role,
+      mfaPolicy: held.organization.mfa_policy ?? 'optional',
+      enabledModules: effectiveModules(
+        held.enabled_modules.map((module_id) => ({ module_id })),
+        held.organization.all_modules_comp,
+      ),
+      // The SAME bundle the role came from, so a role and the overrides that
+      // modify it can never be read from two different moments. Owner is never
+      // overridable, exactly as resolvePermissions() has it on the page path.
+      permissions:
+        held.role === 'owner'
+          ? effectivePermissions('owner')
+          : effectivePermissions(held.role, held.role_overrides, held.user_overrides),
+    };
+  } catch {
+    // A fixed string, never the error: it can quote request details.
+    console.warn('[api-context] bundle call threw, using the legacy reads');
+    return null;
+  }
+}
+
+/**
  * True when a GoTrue user object carries at least one VERIFIED factor.
  * `getUser()` returns the user's factors inline, so this costs nothing
  * beyond the validation call both withApiContext paths already make.
@@ -131,7 +261,6 @@ function userHasVerifiedFactor(user: { factors?: Array<{ status?: string }> | nu
  * enabled by assertModuleEnabled even if absent from this set.
  */
 async function resolveApiEnabledModules(
-
   supabase: any,
   organizationId: string,
 ): Promise<Set<ModuleId>> {
@@ -179,7 +308,6 @@ async function resolveApiEnabledModules(
  *   3. Last resort: any active membership.
  */
 async function pickActiveMembership(
-   
   supabase: any,
   userId: string,
   requestedOrgId: string | null,
@@ -201,8 +329,7 @@ async function pickActiveMembership(
     .eq('id', userId)
     .maybeSingle();
   const defaultOrgId =
-    (profile as { default_organization_id: string | null } | null)?.default_organization_id ??
-    null;
+    (profile as { default_organization_id: string | null } | null)?.default_organization_id ?? null;
   if (defaultOrgId) {
     const { data } = await supabase
       .from('organization_members')
@@ -267,6 +394,31 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
       },
     );
     const requestedOrgId = req?.headers.get('x-organization-id') ?? null;
+
+    // One round trip for membership, account status, MFA policy, modules and
+    // permissions. Falls through to the reads below whenever it cannot answer.
+    const fast = await resolveApiContextFromBundle(supabase, userRes.user.id, requestedOrgId);
+    if (fast) {
+      if (!fast.ok) return null;
+      return {
+        organizationId: fast.organizationId,
+        userId: userRes.user.id,
+        role: fast.role,
+        permissions: fast.permissions,
+        supabase,
+        ...(await mfaFromPolicy(
+          supabase,
+          fast.mfaPolicy,
+          fast.role,
+          userHasVerifiedFactor(userRes.user),
+          // The bearer client has no stored session, so read AAL from the token
+          // itself (already verified above by adminAuth.auth.getUser(bearer)).
+          aalFromJwt(bearer),
+        )),
+        enabledModules: fast.enabledModules,
+      };
+    }
+
     // Status and membership in parallel. The status read is NOT free on this
     // path: pickActiveMembership returns before touching user_profiles whenever
     // an org header is present, which is every mobile request. Issuing both at
@@ -348,6 +500,24 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
   if (!user) return null;
 
   const requestedOrgId = req?.headers.get('x-organization-id') ?? null;
+
+  // Same one round trip as the bearer branch above.
+  const fast = await resolveApiContextFromBundle(supabase, user.id, requestedOrgId);
+  if (fast) {
+    if (!fast.ok) return null;
+    return {
+      organizationId: fast.organizationId,
+      userId: user.id,
+      role: fast.role,
+      permissions: fast.permissions,
+      supabase,
+      // No bearer AAL on this path: the cookie client reads its own assurance
+      // level, exactly as it did before.
+      ...(await mfaFromPolicy(supabase, fast.mfaPolicy, fast.role, userHasVerifiedFactor(user))),
+      enabledModules: fast.enabledModules,
+    };
+  }
+
   // Same parallel shape as the bearer branch above — a disabled account is
   // refused with the same uniform null (401) an anonymous caller gets.
   const [member, status] = await Promise.all([
@@ -363,10 +533,7 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
     member.role as Role,
     userHasVerifiedFactor(user),
   );
-  const enabledModules = await resolveApiEnabledModules(
-    supabase,
-    member.organization_id as string,
-  );
+  const enabledModules = await resolveApiEnabledModules(supabase, member.organization_id as string);
   const permissions = await loadEffectivePermissions(
     supabase,
     member.organization_id as string,
