@@ -17,34 +17,19 @@
  * photo) and the item-form staged-image flow (photos uploaded
  * alongside item creation) so both paths populate the same
  * thumb_path + lqip columns on item_images.
+ *
+ * The sizes and qualities are NOT in this file. They live in
+ * `image-variants.config.ts`, which the worker imports too, so the two paths
+ * cannot disagree again (they did from 2026-07-01 to 2026-09: this file said
+ * 400px for the thumb, the worker said 200px, and the worker is what runs).
  */
 
-const MAX_DIMENSION = 2048;
-// 400 (was 200, bumped 2026-07-01): the order picker / public portal render
-// these thumbs in ~170-300 CSS px retina cells, where a 200px source upscales
-// 2-4x and reads blurry. Pre-generating at 400 keeps thumbnails STATIC files
-// (never resize-on-demand — an attempt at on-demand master transforms caused
-// multi-second stalls and was reverted the same day). Applies to NEW uploads;
-// existing 200px thumbs keep working.
-const THUMB_DIMENSION = 400;
-const LQIP_DIMENSION = 16;
-const WEBP_QUALITY = 0.85;
-const THUMB_QUALITY = 0.8;
-const LQIP_QUALITY = 0.5;
-const LQIP_MAX_CHARS = 2000;
+import { IMAGE_VARIANTS, VARIANT_MIME, fitWithin } from './image-variants.config';
 
 export interface ImageVariants {
   master: File;
   thumbBlob: Blob | null;
   lqip: string | null;
-}
-
-function fitWithin(width: number, height: number, maxDim: number) {
-  if (width <= maxDim && height <= maxDim) return { w: width, h: height };
-  if (width >= height) {
-    return { w: maxDim, h: Math.round((height * maxDim) / width) };
-  }
-  return { h: maxDim, w: Math.round((width * maxDim) / height) };
 }
 
 async function bitmapToWebpBlob(
@@ -60,7 +45,7 @@ async function bitmapToWebpBlob(
   if (!ctx) return null;
   ctx.drawImage(bitmap, 0, 0, w, h);
   return new Promise<Blob | null>((resolve) => {
-    canvas.toBlob((b) => resolve(b), 'image/webp', quality);
+    canvas.toBlob((b) => resolve(b), VARIANT_MIME, quality);
   });
 }
 
@@ -99,10 +84,9 @@ function compressInWorker(file: File): Promise<ImageVariants | null> {
   return new Promise<ImageVariants | null>((resolve) => {
     let worker: Worker;
     try {
-      worker = new Worker(
-        new URL('./image-variants.worker.ts', import.meta.url),
-        { type: 'module' },
-      );
+      worker = new Worker(new URL('./image-variants.worker.ts', import.meta.url), {
+        type: 'module',
+      });
     } catch {
       resolve(null);
       return;
@@ -154,25 +138,26 @@ async function compressOnMainThread(file: File): Promise<ImageVariants> {
     return { master: file, thumbBlob: null, lqip: null };
   }
   try {
-    const masterBlob = await bitmapToWebpBlob(bitmap, MAX_DIMENSION, WEBP_QUALITY);
+    const { master: masterSpec, thumb: thumbSpec, lqip: lqipSpec } = IMAGE_VARIANTS;
+    const masterBlob = await bitmapToWebpBlob(bitmap, masterSpec.maxDimension, masterSpec.quality);
     let master: File;
     if (masterBlob && masterBlob.size < file.size) {
       const baseName = file.name.replace(/\.[^.]+$/, '') || 'image';
       master = new File([masterBlob], `${baseName}.webp`, {
-        type: 'image/webp',
+        type: VARIANT_MIME,
         lastModified: file.lastModified,
       });
     } else {
       master = file;
     }
 
-    const thumbBlob = await bitmapToWebpBlob(bitmap, THUMB_DIMENSION, THUMB_QUALITY);
-    const lqipBlob = await bitmapToWebpBlob(bitmap, LQIP_DIMENSION, LQIP_QUALITY);
+    const thumbBlob = await bitmapToWebpBlob(bitmap, thumbSpec.maxDimension, thumbSpec.quality);
+    const lqipBlob = await bitmapToWebpBlob(bitmap, lqipSpec.maxDimension, lqipSpec.quality);
     const lqip = lqipBlob ? await blobToDataUrl(lqipBlob) : null;
     return {
       master,
       thumbBlob,
-      lqip: lqip && lqip.length <= LQIP_MAX_CHARS ? lqip : null,
+      lqip: lqip && lqip.length <= lqipSpec.maxChars ? lqip : null,
     };
   } finally {
     bitmap.close();
@@ -201,7 +186,11 @@ async function transcodeHeicToJpeg(file: File): Promise<File> {
   // bundle — only iPhone-Safari users actually need it, and only on
   // first HEIC upload of the session.
   const { default: heic2any } = await import('heic2any');
-  const result = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.92 });
+  const result = await heic2any({
+    blob: file,
+    toType: 'image/jpeg',
+    quality: IMAGE_VARIANTS.heicTranscodeQuality,
+  });
   const blob = Array.isArray(result) ? result[0]! : result;
   const baseName = file.name.replace(/\.[^.]+$/, '') || 'image';
   return new File([blob], `${baseName}.jpg`, {

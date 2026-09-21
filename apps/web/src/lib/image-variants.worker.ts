@@ -14,23 +14,13 @@
  * Requires Worker + OffscreenCanvas + createImageBitmap, all of which
  * exist in Chrome 69+, Firefox 105+, Safari 16.4+. The caller checks
  * support and falls back to the main-thread path when unavailable.
+ *
+ * The sizes and qualities come from `image-variants.config.ts`, the same
+ * module the main-thread path imports. The import is RELATIVE on purpose: it
+ * is the form the bundler is documented to follow into a worker chunk.
  */
 
-const MAX_DIMENSION = 2048;
-const THUMB_DIMENSION = 200;
-const LQIP_DIMENSION = 16;
-const WEBP_QUALITY = 0.85;
-const THUMB_QUALITY = 0.8;
-const LQIP_QUALITY = 0.5;
-const LQIP_MAX_CHARS = 2000;
-
-function fitWithin(width: number, height: number, maxDim: number) {
-  if (width <= maxDim && height <= maxDim) return { w: width, h: height };
-  if (width >= height) {
-    return { w: maxDim, h: Math.round((height * maxDim) / width) };
-  }
-  return { h: maxDim, w: Math.round((width * maxDim) / height) };
-}
+import { IMAGE_VARIANTS, VARIANT_MIME, fitWithin } from './image-variants.config';
 
 async function bitmapToWebpBlob(
   bitmap: ImageBitmap,
@@ -43,7 +33,7 @@ async function bitmapToWebpBlob(
   if (!ctx) return null;
   ctx.drawImage(bitmap, 0, 0, w, h);
   try {
-    return await canvas.convertToBlob({ type: 'image/webp', quality });
+    return await canvas.convertToBlob({ type: VARIANT_MIME, quality });
   } catch {
     return null;
   }
@@ -80,25 +70,26 @@ self.onmessage = async (e: MessageEvent<{ file: File }>) => {
     return;
   }
   try {
-    const masterBlob = await bitmapToWebpBlob(bitmap, MAX_DIMENSION, WEBP_QUALITY);
+    const { master: masterSpec, thumb: thumbSpec, lqip: lqipSpec } = IMAGE_VARIANTS;
+    const masterBlob = await bitmapToWebpBlob(bitmap, masterSpec.maxDimension, masterSpec.quality);
     let master: File;
     if (masterBlob && masterBlob.size < file.size) {
       const baseName = file.name.replace(/\.[^.]+$/, '') || 'image';
       master = new File([masterBlob], `${baseName}.webp`, {
-        type: 'image/webp',
+        type: VARIANT_MIME,
         lastModified: file.lastModified,
       });
     } else {
       master = file;
     }
-    const thumbBlob = await bitmapToWebpBlob(bitmap, THUMB_DIMENSION, THUMB_QUALITY);
-    const lqipBlob = await bitmapToWebpBlob(bitmap, LQIP_DIMENSION, LQIP_QUALITY);
+    const thumbBlob = await bitmapToWebpBlob(bitmap, thumbSpec.maxDimension, thumbSpec.quality);
+    const lqipBlob = await bitmapToWebpBlob(bitmap, lqipSpec.maxDimension, lqipSpec.quality);
     const lqip = lqipBlob ? await blobToDataUrl(lqipBlob) : null;
     self.postMessage({
       ok: true,
       master,
       thumbBlob,
-      lqip: lqip && lqip.length <= LQIP_MAX_CHARS ? lqip : null,
+      lqip: lqip && lqip.length <= lqipSpec.maxChars ? lqip : null,
     });
   } catch (err) {
     self.postMessage({

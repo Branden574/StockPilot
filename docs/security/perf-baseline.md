@@ -444,6 +444,57 @@ started about two minutes later with `PERF_SERVER_STATE=post-deploy`
   baseline (Orders → Order p95 930 ms against 613 ms in run B). `perf:compare` labels that
   comparison NOT FAIR, correctly: the server state differs.
 
+**What the measurement code itself costs (measured 2026-09-21T01:30Z).** PR A
+(#209) put the navigation marks, the vitals reporter and the image diagnostics
+into the app, so the same 12 scenarios were run again on the build that contains
+them (`25095eb094f3`, `perf-results/2026-09-21T01-30-10-594Z-after-prA-chromium`,
+n=40, 0 failed) and compared with run B, with run A → run B as the drift pair.
+
+- **Nothing a person does got slower on the client.** Click → visible response
+  32 ms → 31 ms (p75); requests per Inventory navigation 52 → 52; layout shift
+  0.048 → 0.048; no long tasks; 0 console and hydration errors; script downloaded
+  on an empty browser cache 571 KB → 577 KB (p75, +1.1%).
+- Books, Orders, Item, Order and the storefront: no material change, or not
+  distinguishable from noise.
+- **One row is open: Dashboard → Inventory.** p75 746 ms (run A) and 732 ms
+  (run B) became 797 ms, and 810 ms in a repeat of that one scenario half an hour
+  later (`perf-results/2026-09-21T02-01-24-759Z-after-prA-recheck-chromium`). The
+  comparison's verdict is "no change detected (cannot exclude ±18%)", but the row
+  moved only 1.9% between runs A and B, and it reproduced. Broken down per sample
+  (p50 / p75, ms from the click):
+
+  | Run     | First byte | Page-data stream ends | Useful content | Wait after the stream |
+  | ------- | ---------: | --------------------: | -------------: | --------------------: |
+  | A       |  137 / 154 |             543 / 592 |      715 / 746 |             182 / 211 |
+  | B       |  141 / 182 |             528 / 602 |      700 / 732 |             171 / 208 |
+  | after   |  159 / 216 |             597 / 704 |      749 / 797 |             160 / 186 |
+  | recheck |  145 / 198 |             610 / 724 |      729 / 810 |             116 / 181 |
+
+  The extra time is on the SERVER side of the navigation (the page-data stream
+  ends 54 to 82 ms later at p50 and 102 to 132 ms later at p75); the client's
+  share got shorter, not longer.
+  No server file on that path changed between the two builds
+  (`git diff ef38e3a6 64ef4d3f`: no loader, service, action or proxy; the Inventory
+  page changed only in its empty-list branch), and the post-deploy run on the
+  intermediate build, which contains neither the marks nor the progress-bar fix,
+  already showed the later stream. Books, Orders and Item did not move, so it is
+  specific to Inventory. **The cause is not established.** Two things differ besides
+  the build: the hour (16:10 against 18:30 to 19:05 local) and three deploys in the
+  65 minutes before the run (it was labelled `steady` 24 minutes after the last
+  one). To settle it: repeat `PERF_SCENARIOS=dashboard-to-inventory` at the hour of
+  run A on the same build; if it is still near 800 ms, bisect the three commits
+  with local production builds. Earlier production deployments cannot be measured
+  directly: Deployment Protection covers every URL except the custom domains, and
+  that is a security setting this program does not touch.
+
+- The comparison called hard-load Inventory "improved" against run B (1018 ms →
+  814 ms, p75). Against run A it is 861 ms → 814 ms, inside that row's drift.
+  Nothing in PR A can make a hard load faster, so no improvement is claimed.
+
+Two rules follow. One A/A pair is a floor for a row's drift, not a ceiling: judge
+a row against BOTH baseline runs. And leave at least two hours after the last
+deploy before labelling a run `steady`.
+
 **What this baseline cannot say.** Anything about photo loading at customer
 scale (Demo Co's storefront photos are about 220 px for a 468 px need, which is
 not what a customer has); any role other than admin; any browser other than
