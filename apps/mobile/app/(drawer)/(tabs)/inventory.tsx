@@ -52,7 +52,7 @@ import { Thumb } from '@/components/ui/thumb';
 import { countSelection, useIsPicked } from '@/lib/use-count-selection';
 import { TRAILING_COLUMN_MAX_WIDTH, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { listStatusPredicate, stockPill, stockPillFor } from '@/lib/expected-items';
-import { signItemImages, THUMB_TRANSFORM } from '@/lib/image-cache';
+import { signListThumbnails } from '@/lib/image-cache';
 import {
   buildGroupUnits,
   buildGroupedRows,
@@ -633,22 +633,31 @@ export default function Inventory() {
     void (async () => {
       const { data: imgs } = await supabase
         .from('item_images')
-        .select('item_id, storage_path, is_primary, sort_order')
+        .select('item_id, storage_path, thumb_path, is_primary, sort_order')
         .in('item_id', unresolvedIds)
         .order('is_primary', { ascending: false })
         .order('sort_order', { ascending: true });
-      const byItem = new Map<string, string>();
-      for (const row of (imgs ?? []) as Array<{ item_id: string; storage_path: string }>) {
-        if (!byItem.has(row.item_id)) byItem.set(row.item_id, row.storage_path);
+      const byItem = new Map<string, { storage_path: string; thumb_path: string | null }>();
+      for (const row of (imgs ?? []) as Array<{
+        item_id: string;
+        storage_path: string;
+        thumb_path: string | null;
+      }>) {
+        if (!byItem.has(row.item_id)) {
+          byItem.set(row.item_id, { storage_path: row.storage_path, thumb_path: row.thumb_path });
+        }
       }
-      // Sign list thumbnails through the 200x200 transform preset, not the
-      // full-resolution original. Web/PO-imported product + book-cover images
-      // can be multi-megapixel; decoding originals into bitmaps for a 56px row
-      // balloons resident image memory (jetsam risk on older iPhones) and
-      // causes scroll decode jank. The transform serves ~12KB.
-      const paths = Array.from(byItem.values());
+      // Never the full-resolution original: web/PO-imported product and
+      // book-cover images can be multi-megapixel, and decoding originals into
+      // bitmaps for a 56px row balloons resident image memory (jetsam risk on
+      // older iPhones) and causes scroll decode jank. The STORED ~200px
+      // thumbnail is used when the photo has one (one batched signing request,
+      // no per-photo transform bill); the on-demand transform only covers
+      // photos without a thumbnail. See signListThumbnails.
       const urlByPath =
-        paths.length > 0 ? await signItemImages(paths, THUMB_TRANSFORM) : new Map<string, string>();
+        byItem.size > 0
+          ? await signListThumbnails(Array.from(byItem.values()))
+          : new Map<string, string>();
       if (cancelled) return;
       setImages((prev) => {
         const next = new Map(prev);
@@ -656,7 +665,7 @@ export default function Inventory() {
           const p = byItem.get(id);
           // null records "resolved, no photo" so a photoless item is asked
           // about exactly once.
-          next.set(id, (p ? urlByPath.get(p) : null) ?? null);
+          next.set(id, (p ? urlByPath.get(p.storage_path) : null) ?? null);
         }
         return next;
       });

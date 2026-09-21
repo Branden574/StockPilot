@@ -45,7 +45,9 @@ export async function GET(
     }
 
     // PDF image pipeline (the version that actually works):
-    //   1. primaryImagesForPdfRendering — small (~200px) signed URLs
+    //   1. primaryImagesForServerDecoding — PLAIN signed URLs of the stored
+    //      ~200px thumbnail. No Supabase image transform: step 2 converts WebP
+    //      to JPEG locally, and each distinct photo transformed is billed.
     //   2. prefetchImagesAsDataUris — pre-fetches each URL server-side
     //      and converts to a base64 data URI
     //
@@ -74,7 +76,7 @@ export async function GET(
       );
     }
     const imagesSvc = new ItemImagesService(ctx);
-    const urlByItem = await imagesSvc.primaryImagesForPdfRendering(itemIds, 200);
+    const urlByItem = await imagesSvc.primaryImagesForServerDecoding(itemIds, 200);
     const dataUriByItem = await prefetchImagesAsDataUris(urlByItem.entries());
     const imageUrlByItemId = new Map<string, string>();
     for (const [itemId, dataUri] of dataUriByItem) {

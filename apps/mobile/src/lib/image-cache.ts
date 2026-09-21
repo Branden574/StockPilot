@@ -114,7 +114,50 @@ export async function signItemImages(
   return out;
 }
 
-/** Convenience preset for list-row thumbnails. */
+/**
+ * List-row photo URLs, keyed by the photo's `storage_path`.
+ *
+ * A photo uploaded on the web already has a ~200 px thumbnail stored next to it
+ * (`thumb_path`). This signs THOSE, all in one batched request, and asks
+ * Supabase to resize on demand only for the photos that have no thumbnail
+ * (mobile uploads, a handful of old rows).
+ *
+ * Why it matters: the lists used to ask for an on-demand 200 x 200 transform of
+ * the MASTER for every row. Supabase bills each distinct photo transformed in a
+ * month (100 included, then $5 per 1,000), so browsing the catalog once billed
+ * nearly every photo in it, and each row needed its own signing request because
+ * the batched endpoint cannot take a transform. The stored thumbnail is the
+ * same size, free, and signs in one request.
+ *
+ * A thumbnail that fails to sign falls back to the transform, so a row is never
+ * left without a picture it could have had.
+ */
+export async function signListThumbnails(
+  photos: ReadonlyArray<{ storage_path: string; thumb_path?: string | null }>,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const masterByThumb = new Map<string, string>();
+  const needTransform: string[] = [];
+  for (const p of photos) {
+    if (p.thumb_path) masterByThumb.set(p.thumb_path, p.storage_path);
+    else needTransform.push(p.storage_path);
+  }
+  if (masterByThumb.size > 0) {
+    const signed = await signItemImages(Array.from(masterByThumb.keys()));
+    for (const [thumbPath, master] of masterByThumb) {
+      const url = signed.get(thumbPath);
+      if (url) out.set(master, url);
+      else needTransform.push(master);
+    }
+  }
+  if (needTransform.length > 0) {
+    const transformed = await signItemImages(needTransform, THUMB_TRANSFORM);
+    for (const [master, url] of transformed) out.set(master, url);
+  }
+  return out;
+}
+
+/** Fallback preset for list rows whose photo has no stored thumbnail. */
 export const THUMB_TRANSFORM: ImageTransform = {
   width: 200,
   height: 200,
