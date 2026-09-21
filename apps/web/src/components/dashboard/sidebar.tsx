@@ -8,6 +8,7 @@ import { navForRole, type NavSection } from '@/components/dashboard/nav';
 import { NavLinkPending } from '@/components/dashboard/nav-link-pending';
 import { OrgSwitcher } from '@/components/dashboard/org-switcher';
 import { IconMark } from '@/components/ui/icon-mark';
+import { markNavigationIntent } from '@/lib/perf/marks';
 import { cn } from '@/lib/utils';
 
 import {
@@ -94,9 +95,16 @@ export function Sidebar({
     .slice(0, 2)
     .join('');
 
+  // `intent` is for the performance mark only (lib/perf/marks.ts): hover, focus
+  // and pointer-down are a PERSON signalling where they are about to go. The
+  // staggered top-5 warm-up below calls this too, and passes false, because a
+  // timer is not intent: marking it would credit every early click on those
+  // routes with a head start nobody's pointer gave it.
   const warmRoute = React.useCallback(
-    (href: string) => {
-      if (href !== pathname) router.prefetch(href);
+    (href: string, intent = true) => {
+      if (href === pathname) return;
+      if (intent) markNavigationIntent(href);
+      router.prefetch(href);
     },
     [pathname, router],
   );
@@ -135,7 +143,7 @@ export function Sidebar({
   // route change so a navigation mid-burst can't fire stale prefetches.
   React.useEffect(() => {
     const timers = TOP_ROUTES.filter((href) => href !== pathname).map((href, i) =>
-      setTimeout(() => warmRoute(href), i * 150),
+      setTimeout(() => warmRoute(href, false), i * 150),
     );
     return () => {
       for (const t of timers) clearTimeout(t);

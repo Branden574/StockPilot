@@ -2,6 +2,9 @@
 
 import { Loader2 } from 'lucide-react';
 import { useLinkStatus } from 'next/link';
+import { useEffect } from 'react';
+
+import { markNavigationFeedback } from '@/lib/perf/marks';
 
 /**
  * Tiny client component rendered as a child of a `<Link>`. Uses
@@ -22,11 +25,31 @@ import { useLinkStatus } from 'next/link';
  */
 export function NavLinkPending() {
   const { pending } = useLinkStatus();
+  // Performance mark only (lib/perf/marks.ts): the spinner is click FEEDBACK.
+  // Same effect + DOUBLE requestAnimationFrame shape as NavProgressBar (the
+  // reasoning lives there): the first callback runs BEFORE the frame that
+  // paints the spinner, the second at the start of the frame after it, so the
+  // mark lands once the spinner has been on screen. One frame late at worst,
+  // never early, and the same convention as the external harness
+  // (tests/perf/collector.ts). The two components are timed alike, and
+  // whichever gets its painted frame first is the one recorded.
+  //
+  // BOTH handles are cancelled on cleanup: `pending` can drop between the two
+  // frames (a warm route renders at once), and an inner frame left armed would
+  // stamp feedback for a spinner that is no longer there.
+  useEffect(() => {
+    if (!pending) return;
+    let inner: number | null = null;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => markNavigationFeedback());
+    });
+    return () => {
+      cancelAnimationFrame(outer);
+      if (inner !== null) cancelAnimationFrame(inner);
+    };
+  }, [pending]);
   if (!pending) return null;
   return (
-    <Loader2
-      aria-hidden="true"
-      className="text-muted-foreground h-3 w-3 shrink-0 animate-spin"
-    />
+    <Loader2 aria-hidden="true" className="text-muted-foreground h-3 w-3 shrink-0 animate-spin" />
   );
 }

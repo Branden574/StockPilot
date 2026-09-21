@@ -3,6 +3,8 @@
 import { usePathname } from 'next/navigation';
 import * as React from 'react';
 
+import { markNavigationClick, markNavigationFeedback } from '@/lib/perf/marks';
+
 /**
  * Global top progress bar that responds to every in-app navigation.
  * Covers links the sidebar's per-link NavLinkPending indicator can't
@@ -62,6 +64,11 @@ export function NavProgressBar() {
         return;
       }
       if (nextPath === window.location.pathname) return;
+      // Performance mark only (lib/perf/marks.ts): this listener is the one
+      // place that sees EVERY accepted in-app link click, at click time. The
+      // event's own timeStamp is passed so a busy main thread's input delay
+      // counts against the navigation instead of vanishing.
+      markNavigationClick(nextPath, e.timeStamp);
       startPathRef.current = window.location.pathname;
       setPhase('climbing');
       if (failsafeRef.current) clearTimeout(failsafeRef.current);
@@ -76,6 +83,33 @@ export function NavProgressBar() {
     document.addEventListener('click', onClick, { capture: true });
     return () => document.removeEventListener('click', onClick, { capture: true });
   }, []);
+
+  // Performance mark only: "the click was acknowledged". The effect runs once
+  // the bar is in the DOM, and then waits a DOUBLE requestAnimationFrame. The
+  // first callback runs at the START of the frame that will paint the bar,
+  // before anything is on screen; the second runs at the start of the frame
+  // after it, by which time the bar has been painted. One frame late at worst,
+  // never early: a budget check must err toward the slower number, and a
+  // single rAF would stamp feedback the person had not seen yet. The external
+  // harness (tests/perf/collector.ts, `nextFrame`) uses the same convention,
+  // so the in-app number and the harness number mean the same thing.
+  //
+  // BOTH handles are cancelled on cleanup: the phase can leave 'climbing'
+  // between the two frames (a cached route commits at once), and an inner
+  // frame left armed would stamp feedback for a bar that is already gone.
+  // First feedback wins, so when a sidebar link's spinner (NavLinkPending)
+  // got there earlier this call is ignored.
+  React.useEffect(() => {
+    if (phase !== 'climbing') return;
+    let inner: number | null = null;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => markNavigationFeedback());
+    });
+    return () => {
+      cancelAnimationFrame(outer);
+      if (inner !== null) cancelAnimationFrame(inner);
+    };
+  }, [phase]);
 
   React.useEffect(() => {
     if (phase === 'climbing' && startPathRef.current !== pathname) {

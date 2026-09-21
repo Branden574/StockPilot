@@ -8,6 +8,7 @@ import { KeyboardShortcutsProvider } from '@/components/dashboard/keyboard-short
 import { navForRole } from '@/components/dashboard/nav';
 import { NavProgressBar } from '@/components/dashboard/nav-progress-bar';
 import { OrderStatusConfigProvider } from '@/components/orders/order-status-config-provider';
+import { ImageDiagnostics } from '@/components/perf/image-diagnostics';
 import { PermissionsRealtime } from '@/components/realtime/permissions-realtime';
 import { SessionRevocationListener } from '@/components/realtime/session-revocation-listener';
 import { Sidebar } from '@/components/dashboard/sidebar';
@@ -201,6 +202,11 @@ export function DashboardShell({
           covers links the per-link useLinkStatus indicator can't see
           (topbar, dashboard cards, table rows, breadcrumbs, etc). */}
       <NavProgressBar />
+      {/* Photo-loading diagnostics for real users: image load failures and
+          per-route load timings, reduced to a CLASS ("thumbnail via the
+          optimizer") before anything is kept. Never a URL. Dashboard only,
+          by living here. Renders nothing. */}
+      <ImageDiagnostics />
       {/* Live permission updates: refreshes the dashboard (nav re-gates,
           section layouts re-evaluate) the instant an admin changes this
           user's access. Renders nothing. */}

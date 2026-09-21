@@ -5,6 +5,7 @@ import { useEffect } from 'react';
 import type { ReactNode } from 'react';
 
 import { env } from '@/lib/env.client';
+import { scrubPerfEvent } from '@/lib/perf/scrub';
 import { isSharePath } from '@/lib/share-paths';
 
 /**
@@ -63,6 +64,13 @@ export function PostHogProvider({ children }: { children: ReactNode }) {
         // signed-in user — anonymous visitors stay anonymous, which keeps the
         // billable person count tied to real users.
         person_profiles: 'identified_only',
+        // Performance events (`perf_*`) carry route TEMPLATES only. The SDK
+        // decorates every event with `$current_url`, `$pathname`, referrers
+        // and titles, which on /dashboard/inventory/<id>?q=<search> name an
+        // item and quote a search term; this hook rewrites or removes them on
+        // `perf_*` events and returns every other event untouched. Pure, tiny,
+        // and imports nothing from posthog-js at runtime — see lib/perf/scrub.ts.
+        before_send: scrubPerfEvent,
       });
     });
     return () => {

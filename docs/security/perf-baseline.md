@@ -1,4 +1,5 @@
-<!-- Provenance: compiled 2026-08-10. Every number below is quoted from a file in
+<!-- Provenance: compiled 2026-08-10; section 6 and the edits to sections 0, 3.5
+     and 5 added 2026-09-20 from a measured run (see section 6 for its conditions). Every number below is quoted from a file in
      this repository with its path, and is a MEASUREMENT SOMEONE RECORDED AT A
      POINT IN TIME, not a live figure and not a target. Nothing here was
      re-measured while writing this document. Thresholds quoted from load-tests/
@@ -25,6 +26,10 @@ Read this before quoting anything below.
   in this repository.**
 - **There are no Lighthouse scores.** `BLUEPRINT.md` states a Lighthouse
   aspiration; no Lighthouse tooling is installed.
+- **There IS now a browser-measured baseline** (2026-09-20, section 6), taken
+  with the committed harness in `apps/web/tests/perf` (`pnpm perf`). It is a
+  PRODUCTION SYNTHETIC measurement: a scripted, signed-in browser against the
+  live site. It is not field data from real users, and it is not a CI gate.
 - **No `Server-Timing` header is emitted.** The instrumentation hook exists
   (`apps/web/src/server/services/context.ts`, gated on `DEBUG_CONTEXT_TIMING`) but
   nothing serves the header.
@@ -242,12 +247,26 @@ system that requires no setup.
 
 ### 3.5 Front-end, authenticated, in a browser
 
-There is no committed script for this — the "Playwright speed sweep" cited in the
-inventory page comment was an ad-hoc manual sweep on 2026-05-21. To reproduce:
-sign in, open DevTools with the network tab recording, hard-load the surface, then
-soft-navigate between tabs. Record TTFB, transferred bytes and time to a
-route-true skeleton. Do it before and after the change, on the same account and the
-same data.
+```bash
+cd apps/web
+PERF_BASE_URL=https://stockpilotusa.com PERF_USER_EMAIL=<qa account> \
+PERF_SUPABASE_URL=https://<ref>.supabase.co PERF_ENV_FILE=.env.local \
+PERF_ROLE=admin PERF_DATASET="<what is being measured>" PERF_SERVER_STATE=steady \
+PERF_ITERATIONS=40 PERF_LABEL=before-my-change pnpm perf
+
+PERF_BEFORE=perf-results/<before> PERF_AFTER=perf-results/<after> pnpm perf:compare
+```
+
+`apps/web/tests/perf/README.md` is the manual. The rules that matter here:
+
+- It measures the site from OUTSIDE, so a "before" number needs no deploy.
+- Take the baseline twice on the same build and compare the two (an A/A
+  comparison) before judging any change: that is the harness's own noise.
+- Do not run tests, builds or other heavy work on the machine during a run.
+- A result file holds timings, image CLASSES and keyed hashes. Never a photo URL
+  (they are 30-day bearer credentials), an item name, a SKU or an email.
+- It signs in with an admin-minted one-time link, so no password is typed or
+  stored. The saved session is signed out and deleted when the run ends.
 
 ## 4. Where security and performance actually collide
 
@@ -271,14 +290,161 @@ it is a security change and needs the invariant test to agree with it.
 
 In value order.
 
-1. **Fill in `load-tests/README.md`'s capacity table** from one real run. It turns
-   this document into a measured baseline.
-2. **Emit `Server-Timing`** from the existing context hook so per-layer cost is
+1. **A benchmark dataset.** Demo Co has 33 small photos; the largest customer has 443. A separate "Perf Lab" organization, shaped like that customer's measured
+   photo distribution and holding one account per role, is the precondition for
+   any verdict on photo loading and for the role matrix. Seeding it in production
+   needs the owner's explicit go.
+2. **Fill in `load-tests/README.md`'s capacity table** from one real run.
+3. **Emit `Server-Timing`** from the existing context hook so per-layer cost is
    observable in production without a log-scraping session.
-3. **Record a browser-measured before/after** for the four do-not-regress surfaces,
-   authenticated, and commit the numbers with their date and data shape. A dated
-   number is worth far more than an undated one.
-4. **Decide whether any of this becomes a CI gate.** Probably not the k6 suite —
-   the egress cost is the stated reason it is not one — but a cheap check on
-   transferred bytes for the inventory list would catch the specific regression
-   that took that page to 3 MB.
+4. **Runs in the other server states** (`PERF_SERVER_STATE=post-deploy`,
+   `post-idle`): the owner's post-deploy budget (useful content p95 2000 ms)
+   cannot be judged from a warm server, and section 6 does not try to.
+5. **WebKit and Firefox runs**, the public catalog, back/forward and the mobile
+   drawer: listed as not yet measured in the harness README.
+6. **Decide whether any of this becomes a CI gate.** Not before the harness has
+   shown stable A/A comparisons over several days.
+
+## 6. Browser-measured baseline, 2026-09-20
+
+**Conditions.** Production synthetic. `stockpilotusa.com`, build `03f6577e3785`
+(built 2026-09-18). Harness `2026-09-20.4`. Chromium 153, 1440x900, DPR 2, no
+throttling, measured round trip to the site 112 ms, Apple M3 Pro. Signed in as
+the QA admin (role verified by the server) in Demo Co: 29 rows in the Items list,
+8 photos on screen, 33 photos in the org. Server warm (`steady`). 40 timed
+samples per scenario (10 for the empty-browser-cache scenarios), one separate
+warm-up each, **0 failed iterations**. Results folder:
+`perf-results/2026-09-20T23-10-02-584Z-baseline-A-chromium` (gitignored; the
+numbers below are copied from its `summary.md`).
+
+Percentiles are nearest-rank, so every cell is a value that was observed.
+
+| Scenario                                          |    p50 |     p75 |     p95 | Owner budget (p75 / p95) | Result |
+| ------------------------------------------------- | -----: | ------: | ------: | ------------------------ | ------ |
+| Dashboard → Inventory                             | 715 ms |  746 ms |  880 ms | 500 / 1000 ms            | over   |
+| Dashboard → Orders                                | 447 ms |  546 ms |  764 ms | 500 / 1000 ms            | over   |
+| Inventory → Item                                  | 666 ms |  723 ms |  897 ms | 500 / 1000 ms            | over   |
+| Inventory first-row photos (warm browser cache)   | 715 ms |  746 ms |  880 ms | none yet                 |        |
+| Inventory all visible photos (warm browser cache) | 715 ms |  746 ms |  880 ms | none yet                 |        |
+| Hard-load Inventory (warm browser cache)          | 780 ms |  861 ms | 1085 ms | none yet                 |        |
+| Orders → Order                                    | 530 ms |  612 ms |  781 ms | 500 / 1000 ms            | over   |
+| Dashboard → Books                                 | 729 ms |  793 ms |  881 ms | 500 / 1000 ms            | over   |
+| Orders → New order (storefront)                   | 396 ms |  420 ms |  703 ms | 500 / 1000 ms            | within |
+| Inventory revisit within 90 s                     |  51 ms |   52 ms |   54 ms | 500 / 1000 ms            | within |
+| Click → visible response (sidebar)                |  31 ms |   32 ms |   33 ms | 75 / 150 ms              | within |
+| Click → visible response (item row)               |  45 ms |   49 ms |   56 ms | 75 / 150 ms              | within |
+| Page-data fetch, request → first byte (Inventory) | 131 ms |  145 ms |  240 ms | 300 / 600 ms             | within |
+| Page-data fetch, request → first byte (Orders)    | 131 ms |  189 ms |  241 ms | 300 / 600 ms             | within |
+| Page-data fetch, request → first byte (Item)      | 149 ms |  165 ms |  200 ms | 300 / 600 ms             | within |
+| Hard-load Inventory: LCP                          | 488 ms |  748 ms | 1044 ms | 2500 ms (p75)            | within |
+| Hard-load Inventory: layout shift (sum)           |  0.048 |   0.048 |   0.048 | 0.1 (p75)                | within |
+| Dashboard → Inventory, empty browser cache        | 796 ms |  881 ms | 1212 ms | none (warm server)       |        |
+| Hard-load Inventory, empty browser cache          | 987 ms | 1231 ms | 2330 ms | none (warm server)       |        |
+
+The two photo rows equal the navigation row on purpose: in 40 of 40 samples
+every visible photo had its bytes before the rows painted, so a photo became
+visible when its row did. Count a change there once, not three times. With an
+empty browser cache the photos finish 85 to 130 ms after the rows.
+
+**Where the time goes (p50, same run).**
+
+| Navigation            | Skeleton visible | Page data: first byte | Page data: stream ends | Content visible |
+| --------------------- | ---------------: | --------------------: | ---------------------: | --------------: |
+| Dashboard → Inventory |            47 ms |                138 ms |                 545 ms |          716 ms |
+| Dashboard → Books     |            46 ms |                144 ms |                 523 ms |          730 ms |
+| Dashboard → Orders    |            46 ms |                142 ms |                 431 ms |          447 ms |
+| Inventory → Item      |           184 ms |                158 ms |                 646 ms |          673 ms |
+| Orders → Order        |            78 ms |                152 ms |                 564 ms |          531 ms |
+| Orders → storefront   |            79 ms |                145 ms |                 350 ms |          397 ms |
+
+What this says, and what it does not:
+
+- The click is acknowledged in 31 ms and the server's first byte arrives in about
+  140 ms. Neither is the problem, and neither control on the hot path (session
+  verification, RLS) is what the budgets are missing by.
+- On Orders and Item the page-data STREAM is the long pole: content appears
+  within about 30 ms of the stream ending. The work is server-side data time
+  after the first byte.
+- On Inventory and Books the rows appear 170 to 200 ms AFTER the last byte has
+  arrived, with zero long-task time. That is a client-side wait, not a server
+  one. The leading hypothesis is React's throttled reveal of a nested Suspense
+  boundary (route skeleton, then page chrome, then the table). It is a
+  hypothesis until a change moves the number.
+- Item rows show their skeleton at 184 ms against 47 ms for sidebar links: the
+  list does not warm detail routes and the detail route has no skeleton of its own.
+
+**Other measured facts from the same run.**
+
+- One navigation to Inventory makes 52 requests. A hard load of Inventory fires
+  20 background route prefetches.
+- The Orders list prefetches 14 order-detail routes on every view. The owner's
+  rule is none; the navigation those prefetches serve (Orders → Order) is measured
+  above so that removing them can be judged on what it costs.
+- Every view of a page with a guided tour calls the `getTourStateAction` server
+  action, tour finished or not (about 450 ms, measured separately on 2026-09-18).
+- Item photos are fetched through signed URLs whose responses carry NO
+  `Cache-Control` header. The browser still reuses them (heuristic freshness from
+  `Last-Modified`): 0 of the warm-view photos went to the network and 0 were
+  revalidated. The missing header costs a freshly uploaded photo, not an old one.
+- Empty browser cache, hard-load Inventory: 571 KB of script, 482 KB of images.
+  Warm: 59 KB on the wire.
+- 0 broken photos, 0 failed page-data fetches, 0 hydration errors, 0 console errors.
+
+**How much the same build moves on its own (A/A).** The baseline was taken twice,
+30 minutes apart, on the same build, same machine, same everything (run B:
+`perf-results/2026-09-20T23-39-31-817Z-baseline-B-chromium`). p75, run A then run B:
+
+| Row                                      |   Run A |   Run B | Moved |
+| ---------------------------------------- | ------: | ------: | ----: |
+| Dashboard → Inventory                    |  746 ms |  732 ms |   -2% |
+| Dashboard → Books                        |  793 ms |  812 ms |   +2% |
+| Inventory → Item                         |  723 ms |  748 ms |   +4% |
+| Orders → Order                           |  612 ms |  561 ms |   -8% |
+| Orders → storefront                      |  420 ms |  454 ms |   +8% |
+| Dashboard → Orders                       |  546 ms |  480 ms |  -12% |
+| Hard-load Inventory (warm browser cache) |  861 ms | 1018 ms |  +18% |
+| Hard-load Inventory: LCP                 |  748 ms |  868 ms |  +16% |
+| Page-data first byte (Inventory)         |  145 ms |  174 ms |  +20% |
+| Page-data first byte (Item)              |  165 ms |  217 ms |  +32% |
+| Click → loading skeleton (Item)          |  200 ms |  261 ms |  +31% |
+| Hard-load Inventory, empty browser cache | 1231 ms | 1546 ms |  +26% |
+| Click → visible response (sidebar)       |   32 ms |   32 ms |    0% |
+
+Nothing changed between those runs, so every one of those movements is drift:
+the server answering differently half an hour later. Two consequences:
+
+- A change smaller than its row's drift is not a result. `perf:compare` takes the
+  A/A pair (`PERF_DRIFT_A`, `PERF_DRIFT_B`) and reports such a change as drift.
+  The main navigation rows hold to a few percent; anything that rides on server
+  first byte, hard loads and the empty-cache rows needs a change of 20 to 30%
+  before it can be believed from one run a side. Take two runs a side for those.
+- In run B, ONE of 40 Dashboard → Inventory navigations showed no rows within
+  30 seconds (2026-09-20T23:42:09Z, code `timeout:useful`). It is ranked as the
+  slowest sample, not dropped. One in forty is an anecdote, not a rate, but it is
+  the kind of event a person remembers as "the app hung", and the harness now
+  counts them so a rate can be established.
+
+**What a deploy does (measured 2026-09-21T00:27Z).** Build `ab202032e32c` (a
+two-file privacy fix that did not touch image code) went live, and a run was
+started about two minutes later with `PERF_SERVER_STATE=post-deploy`
+(`perf-results/2026-09-21T00-29-36-893Z-post-deploy-chromium`, n=20).
+
+- **Signed photo URLs did NOT rotate.** 18 signed photos were seen both before and
+  after the deploy; all 18 kept the same signed URL. The Phase 1 audit's claim
+  that "every deploy rotates every photo URL" does not hold for an ordinary
+  deploy. It stays open only for a deploy that edits the signing module
+  (`server/services/item-images.ts`) or changes how that module compiles; repeat
+  this check on the first such deploy.
+- **First request after the deploy** (one observation each, not a percentile):
+  Dashboard → Inventory 1260 ms (page-data first byte 498 ms), Inventory → Item
+  914 ms, Orders → Order 830 ms, hard-load storefront 1010 ms. All inside the
+  owner's post-deploy limit of 2000 ms. One deploy is one sample; the limit is a
+  p95 and needs several.
+- In the fifteen minutes after the deploy the tail was slower than the warm
+  baseline (Orders → Order p95 930 ms against 613 ms in run B). `perf:compare` labels that
+  comparison NOT FAIR, correctly: the server state differs.
+
+**What this baseline cannot say.** Anything about photo loading at customer
+scale (Demo Co's storefront photos are about 220 px for a 468 px need, which is
+not what a customer has); any role other than admin; any browser other than
+Chromium; a cold server. Those are items 1, 4 and 5 of section 5.

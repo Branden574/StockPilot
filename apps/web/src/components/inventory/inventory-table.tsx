@@ -19,6 +19,7 @@ import * as React from 'react';
 
 import { BulkActions } from '@/components/inventory/bulk-actions';
 import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
+import { usePerfUseful } from '@/components/perf/perf-useful';
 import { ExportBuilderDialog } from './export-builder/export-builder-dialog';
 import { GENERIC_CHARTER_LABEL } from '@/lib/charter-display';
 import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
@@ -642,6 +643,16 @@ export function InventoryTable({
   expectedCount = 0,
   productGroupUnits,
 }: InventoryTableProps) {
+  // Performance marker (lib/perf/marks.ts): "the list is useful". A mount-only
+  // effect, so it fires when the INITIAL rows render — the fast 30-row
+  // server-mode payload on the default view — and NOT again when the streamed
+  // instant dataset is adopted below: adoption is a state change on this same
+  // mounted instance, never a remount. First rows first is what the person
+  // waits for, so it is what gets timed. Covers Items and Books (the books
+  // table is this component); their zero-result EmptyStates carry their own
+  // marker in the page files, because this component does not render then.
+  usePerfUseful();
+
   // ── Streamed-dataset adoption (React 19 use()) ──────────────────────
   // The default manager+ view mounts in server mode over the fast 30-row
   // payload while the FULL instant dataset arrives as `instantPromise` —

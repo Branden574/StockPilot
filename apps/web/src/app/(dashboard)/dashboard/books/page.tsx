@@ -12,6 +12,7 @@ import { RefreshBookPricesButton } from '@/components/inventory/refresh-book-pri
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { BooksInventoryTable } from '@/components/books/books-inventory-table';
+import { PerfUseful } from '@/components/perf/perf-useful';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { Button } from '@/components/ui/button';
@@ -309,7 +310,9 @@ async function BooksTableSection({
       lifecycleStatus,
       canCreate,
     });
-    if (emptyState) return emptyState;
+    // A zero-result view is a FINISHED page, so it carries the performance
+    // marker itself. With rows, BooksInventoryTable -> InventoryTable carries it.
+    if (emptyState) return <PerfUseful>{emptyState}</PerfUseful>;
     return (
       <BooksInventoryTable
         items={instantItems}
@@ -540,7 +543,8 @@ async function BooksTableSection({
     lifecycleStatus,
     canCreate,
   });
-  if (emptyState) return emptyState;
+  // Same as the instant branch: the zero-result view carries its own marker.
+  if (emptyState) return <PerfUseful>{emptyState}</PerfUseful>;
 
   return (
     <BooksInventoryTable

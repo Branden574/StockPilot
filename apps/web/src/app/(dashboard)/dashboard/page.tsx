@@ -45,6 +45,7 @@ import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { ScopedWarehouseNotice } from '@/components/dashboard/scoped-warehouse-notice';
 import { createClient } from '@/lib/supabase/server';
 import { PageTour } from '@/components/onboarding/page-tour';
+import { PerfUseful } from '@/components/perf/perf-useful';
 import { DASHBOARD_TOUR } from '@/lib/onboarding/tours';
 import { DEMO_ORG_ID, DemoScenarios } from '@/components/onboarding/demo-scenarios';
 
@@ -606,5 +607,13 @@ async function DashboardBody({
     DASHBOARD_WIDGETS.map((w) => w.id),
   );
 
-  return <>{renderDashboardWidgets(widgetIds, widgetProps)}</>;
+  return (
+    <>
+      {renderDashboardWidgets(widgetIds, widgetProps)}
+      {/* Performance marker: mounts WITH the widgets, inside the Suspense
+          boundary, once the data fan-out above has resolved. The greeting
+          shell and DashboardBodySkeleton never render it. */}
+      <PerfUseful />
+    </>
+  );
 }

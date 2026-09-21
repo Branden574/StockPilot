@@ -9,6 +9,7 @@ import {
   MovementsInstantTable,
   type MovementDisplayRow,
 } from '@/components/movements/movements-instant-table';
+import { PerfUseful } from '@/components/perf/perf-useful';
 import { Pagination } from '@/components/ui/pagination';
 import {
   Table,
@@ -209,6 +210,11 @@ export default async function MovementsPage({
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
+      {/* Performance marker. No Suspense split on this page: the ledger rows
+          (instant or server mode) are awaited above, so this markup only
+          exists once they are in hand. loading.tsx is the skeleton and never
+          renders this; every empty state below is a finished page and counts. */}
+      <PerfUseful />
       <div className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Stock movements</h1>
         <p className="mt-1 text-sm text-muted-foreground">
