@@ -24,12 +24,35 @@
  * chunk whenever this import changes.
  */
 
-import { IMAGE_VARIANTS, VARIANT_MIME, fitWithin } from './image-variants.config';
+import {
+  IMAGE_VARIANTS,
+  VARIANT_MIME,
+  fitWithin,
+  variantFileName,
+  variantMimeFor,
+} from './image-variants.config';
 
-async function bitmapToWebpBlob(
+/**
+ * Can this engine encode WebP from a canvas? A 1 x 1 probe, because the only
+ * way to know is to ask: WebKit answers a WebP request with a PNG instead of
+ * failing. A probe that cannot run at all changes nothing (WebP is assumed).
+ */
+async function canEncodeWebp(): Promise<boolean> {
+  try {
+    const probe = new OffscreenCanvas(1, 1);
+    if (!probe.getContext('2d')) return true;
+    const blob = await probe.convertToBlob({ type: VARIANT_MIME });
+    return blob.type === VARIANT_MIME;
+  } catch {
+    return true;
+  }
+}
+
+async function bitmapToBlob(
   bitmap: ImageBitmap,
   maxDim: number,
   quality: number,
+  mime: string,
 ): Promise<Blob | null> {
   const { w, h } = fitWithin(bitmap.width, bitmap.height, maxDim);
   const canvas = new OffscreenCanvas(w, h);
@@ -37,7 +60,7 @@ async function bitmapToWebpBlob(
   if (!ctx) return null;
   ctx.drawImage(bitmap, 0, 0, w, h);
   try {
-    return await canvas.convertToBlob({ type: VARIANT_MIME, quality });
+    return await canvas.convertToBlob({ type: mime, quality });
   } catch {
     return null;
   }
@@ -75,19 +98,25 @@ self.onmessage = async (e: MessageEvent<{ file: File }>) => {
   }
   try {
     const { master: masterSpec, thumb: thumbSpec, lqip: lqipSpec } = IMAGE_VARIANTS;
-    const masterBlob = await bitmapToWebpBlob(bitmap, masterSpec.maxDimension, masterSpec.quality);
+    const mime = variantMimeFor(file.type, await canEncodeWebp());
+    const masterBlob = await bitmapToBlob(
+      bitmap,
+      masterSpec.maxDimension,
+      masterSpec.quality,
+      mime,
+    );
     let master: File;
     if (masterBlob && masterBlob.size < file.size) {
-      const baseName = file.name.replace(/\.[^.]+$/, '') || 'image';
-      master = new File([masterBlob], `${baseName}.webp`, {
-        type: VARIANT_MIME,
+      // Named and typed after what the encoder RETURNED, not what it was asked for.
+      master = new File([masterBlob], variantFileName(file.name, masterBlob.type), {
+        type: masterBlob.type || VARIANT_MIME,
         lastModified: file.lastModified,
       });
     } else {
       master = file;
     }
-    const thumbBlob = await bitmapToWebpBlob(bitmap, thumbSpec.maxDimension, thumbSpec.quality);
-    const lqipBlob = await bitmapToWebpBlob(bitmap, lqipSpec.maxDimension, lqipSpec.quality);
+    const thumbBlob = await bitmapToBlob(bitmap, thumbSpec.maxDimension, thumbSpec.quality, mime);
+    const lqipBlob = await bitmapToBlob(bitmap, lqipSpec.maxDimension, lqipSpec.quality, mime);
     const lqip = lqipBlob ? await blobToDataUrl(lqipBlob) : null;
     self.postMessage({
       ok: true,

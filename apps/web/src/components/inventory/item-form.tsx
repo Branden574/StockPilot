@@ -46,6 +46,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { capture } from '@/lib/analytics';
 import { CRATE_COLORS, GRADES } from '@/lib/book-storage';
 import { compressImageVariants } from '@/lib/image-variants';
+import { VARIANT_MIME } from '@/lib/image-variants.config';
 import { resolveListReturnHref } from '@/lib/last-list-url';
 import { useUnsavedWork } from '@/lib/unsaved-work';
 import { generateSku, cn } from '@/lib/utils';
@@ -946,7 +947,10 @@ export function ItemForm({
             ? uploadWithProgress({
                 url: presign.data.thumbSignedUrl,
                 body: thumbBlob,
-                contentType: 'image/webp',
+                // The blob's OWN type: the canvas decides what these bytes are
+                // (WebP; JPEG or PNG on Safari). Labelling them by hand is how
+                // PNG thumbnails were stored as image/webp.
+                contentType: thumbBlob.type || VARIANT_MIME,
                 headers: { 'x-upsert': 'true' },
               })
             : Promise.resolve(null),

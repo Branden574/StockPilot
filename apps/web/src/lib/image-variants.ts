@@ -4,7 +4,7 @@
  *
  *   • master    — full image capped at 2048px in WebP. Typical 2–10×
  *                 byte reduction from phone-camera JPEGs. Falls back
- *                 to the original file when WebP output is larger.
+ *                 to the original file when the re-encode is larger.
  *   • thumbBlob — 200px WebP for list-row thumbnails. null when
  *                 transcoding fails (very old browser, exotic source).
  *   • lqip      — 16px WebP encoded as a base64 data URL for use as
@@ -12,6 +12,12 @@
  *                 DB constraint from migration 0122; oversize values
  *                 are returned as null so the row renders without a
  *                 blur placeholder.
+ *
+ * "WebP" above means: WebP where the browser can encode it. WebKit cannot,
+ * and answers a WebP request with a PNG; there a camera photo (JPEG, HEIC)
+ * becomes JPEG instead, and any other source still comes back as PNG (see
+ * `variantMimeFor`). So the `.webp` in a thumbnail's path is a historical name,
+ * not a format: read `blob.type`, the Content-Type, or the magic bytes.
  *
  * Shared by the item-detail image uploader (replacing an in-flight
  * photo) and the item-form staged-image flow (photos uploaded
@@ -24,7 +30,13 @@
  * 400px for the thumb, the worker said 200px, and the worker is what runs).
  */
 
-import { IMAGE_VARIANTS, VARIANT_MIME, fitWithin } from './image-variants.config';
+import {
+  IMAGE_VARIANTS,
+  VARIANT_MIME,
+  fitWithin,
+  variantFileName,
+  variantMimeFor,
+} from './image-variants.config';
 
 export interface ImageVariants {
   master: File;
@@ -32,10 +44,31 @@ export interface ImageVariants {
   lqip: string | null;
 }
 
-async function bitmapToWebpBlob(
+/**
+ * Can this engine encode WebP from a canvas? A 1 x 1 probe, because the only
+ * way to know is to ask: WebKit answers a WebP request with a PNG instead of
+ * failing. A probe that cannot run at all changes nothing (WebP is assumed).
+ * Same probe as the worker's, on the main-thread canvas.
+ */
+function canEncodeWebp(): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    try {
+      const probe = document.createElement('canvas');
+      probe.width = 1;
+      probe.height = 1;
+      if (!probe.getContext('2d')) return resolve(true);
+      probe.toBlob((blob) => resolve(blob ? blob.type === VARIANT_MIME : true), VARIANT_MIME);
+    } catch {
+      resolve(true);
+    }
+  });
+}
+
+async function bitmapToBlob(
   bitmap: ImageBitmap,
   maxDim: number,
   quality: number,
+  mime: string,
 ): Promise<Blob | null> {
   const { w, h } = fitWithin(bitmap.width, bitmap.height, maxDim);
   const canvas = document.createElement('canvas');
@@ -45,7 +78,7 @@ async function bitmapToWebpBlob(
   if (!ctx) return null;
   ctx.drawImage(bitmap, 0, 0, w, h);
   return new Promise<Blob | null>((resolve) => {
-    canvas.toBlob((b) => resolve(b), VARIANT_MIME, quality);
+    canvas.toBlob((b) => resolve(b), mime, quality);
   });
 }
 
@@ -139,20 +172,26 @@ async function compressOnMainThread(file: File): Promise<ImageVariants> {
   }
   try {
     const { master: masterSpec, thumb: thumbSpec, lqip: lqipSpec } = IMAGE_VARIANTS;
-    const masterBlob = await bitmapToWebpBlob(bitmap, masterSpec.maxDimension, masterSpec.quality);
+    const mime = variantMimeFor(file.type, await canEncodeWebp());
+    const masterBlob = await bitmapToBlob(
+      bitmap,
+      masterSpec.maxDimension,
+      masterSpec.quality,
+      mime,
+    );
     let master: File;
     if (masterBlob && masterBlob.size < file.size) {
-      const baseName = file.name.replace(/\.[^.]+$/, '') || 'image';
-      master = new File([masterBlob], `${baseName}.webp`, {
-        type: VARIANT_MIME,
+      // Named and typed after what the encoder RETURNED, not what it was asked for.
+      master = new File([masterBlob], variantFileName(file.name, masterBlob.type), {
+        type: masterBlob.type || VARIANT_MIME,
         lastModified: file.lastModified,
       });
     } else {
       master = file;
     }
 
-    const thumbBlob = await bitmapToWebpBlob(bitmap, thumbSpec.maxDimension, thumbSpec.quality);
-    const lqipBlob = await bitmapToWebpBlob(bitmap, lqipSpec.maxDimension, lqipSpec.quality);
+    const thumbBlob = await bitmapToBlob(bitmap, thumbSpec.maxDimension, thumbSpec.quality, mime);
+    const lqipBlob = await bitmapToBlob(bitmap, lqipSpec.maxDimension, lqipSpec.quality, mime);
     const lqip = lqipBlob ? await blobToDataUrl(lqipBlob) : null;
     return {
       master,
@@ -209,11 +248,12 @@ export async function compressImageVariants(file: File): Promise<ImageVariants> 
     try {
       source = await transcodeHeicToJpeg(file);
     } catch {
-      // heic2any failure (typically very old browser without
-      // WebAssembly) — let the downstream path try the original
-      // file, which will fail decode and return the unmodified file
-      // as `master` with no thumb/lqip. That at least preserves the
-      // upload instead of dropping it on the floor.
+      // heic2any failure (a very old browser without WebAssembly, or a
+      // HEIC newer than its bundled decoder) — let the downstream path
+      // try the original file. Most engines cannot decode it, so the
+      // unmodified file comes back as `master` with no thumb/lqip, which
+      // at least preserves the upload. WebKit CAN decode HEIC natively;
+      // `variantMimeFor` treats it as the camera photo it is.
     }
   }
   // Worker path: keeps the UI thread free during a 300-600ms encode.

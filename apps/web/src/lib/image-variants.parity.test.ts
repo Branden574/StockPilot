@@ -11,7 +11,7 @@
  * and nothing failed for eleven weeks because both paths "work".
  *
  * The sizes now live once, in `image-variants.config.ts`. This file keeps it
- * that way, in three arms:
+ * that way, in four arms:
  *
  *   ARM 1  runs BOTH paths against recording fakes of the canvas and compares
  *          what each one asked the canvas for with LITERAL expectations. (An
@@ -23,10 +23,14 @@
  *          must import the shared module, the `new Worker(new URL(…))`
  *          expression must keep the exact shape the bundler recognises, and the
  *          two backfill tools must agree with the shared thumbnail size.
+ *   ARM 4  an engine that cannot encode WebP (WebKit answers a WebP request
+ *          with a PNG): a camera photo becomes JPEG on both paths, anything
+ *          that may be transparent does not, what comes back is labelled as
+ *          what it is, and a probe that cannot run changes nothing.
  *
- * MUTATION-PROVEN. A guard that cannot fail is not a guard, so twelve mutations
- * were run against this file and image-variants.config.test.ts (46 tests in
- * all); each was reverted after. The first four were the author's; the rest
+ * MUTATION-PROVEN. A guard that cannot fail is not a guard, so twenty-four
+ * mutations were run against this file and image-variants.config.test.ts (71
+ * tests in all); each was reverted after. The first four were the author's; the rest
  * SURVIVED the first version of this file and were found by review:
  *    1. `thumb.maxDimension` 200 -> 400 in the config -> 15 failures.
  *    2. A private `const THUMB_DIMENSION = 400;` in the worker, used for the
@@ -45,6 +49,18 @@
  *       -> 3 failures (two sizes, and the import check).
  *   11. A private number spelled 0x280 / 6_40 -> ARM 3 names both.
  *   12. The worker draws the bitmap unscaled -> 5 failures.
+ *  For ARM 4 (13-18 the author's, 19-24 survivors found by review):
+ *   13. JPEG asked for whatever the source is -> the three "may be
+ *       transparent" sources fail, and the config table.
+ *   14. The worker never probes -> 2 failures.
+ *   15. The fallback's probe inverted -> 16 failures.
+ *   16. A re-encoded master always named .webp -> 10 failures.
+ *   17. The master typed as ASKED instead of as returned -> 3 failures.
+ *   18. The fallback's thumbnail still asked for as WebP -> 2 failures.
+ *   19-23. Each of the five "the probe could not run" branches flipped to mean
+ *       "cannot encode WebP" (main thread: null blob, no context, throw;
+ *       worker: no context, throw) -> 1 failure each.
+ *   24. HEIC / HEIF dropped from the camera formats -> 2 failures.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -68,6 +84,14 @@ interface Scenario {
   source: { width: number; height: number };
   /** Encoded size the fake canvas answers with, per variant. */
   bytes?: { master?: number; thumb?: number; lqip?: number };
+  /**
+   * 'webp' (default): the canvas returns what it was asked for, as Chromium
+   * and Firefox do. 'png-only': asked for image/webp it answers with a PNG and
+   * says so only in `blob.type`, as WebKit does; JPEG it can write.
+   */
+  engine?: 'webp' | 'png-only';
+  /** Make the 1 x 1 "can you encode WebP?" probe fail in one of the ways a real canvas can. */
+  brokenProbe?: 'throws' | 'null-blob' | 'no-context';
 }
 
 const QUALITY_TO_VARIANT: Record<string, 'master' | 'thumb' | 'lqip'> = {
@@ -84,19 +108,28 @@ function makeRecorder(scenario: Scenario) {
   const requests: CanvasRequest[] = [];
   /** drawImage arguments after the image: [dx, dy, dWidth, dHeight]. */
   const draws: number[][] = [];
+  /** The 1 x 1 "can you encode WebP?" probes, kept apart from the variant requests. */
+  const probes: CanvasRequest[] = [];
   const close = vi.fn();
   const encoded = (req: CanvasRequest): Blob => {
     const variant = QUALITY_TO_VARIANT[String(req.quality)] ?? 'master';
     const size = scenario.bytes?.[variant] ?? 12;
-    return new Blob([fakeBytes(size)], { type: req.type });
+    const answeredType =
+      scenario.engine === 'png-only' && req.type === 'image/webp' ? 'image/png' : req.type;
+    return new Blob([fakeBytes(size)], { type: answeredType });
+  };
+  const record = (req: CanvasRequest): Blob => {
+    const isProbe = req.w === 1 && req.h === 1 && req.quality === undefined;
+    (isProbe ? probes : requests).push(req);
+    return encoded(req);
   };
   const createImageBitmap = vi.fn(async (_source: Blob) => ({ ...scenario.source, close }));
   const context = { drawImage: (_image: unknown, ...rest: number[]) => void draws.push(rest) };
-  return { requests, draws, close, encoded, createImageBitmap, context };
+  return { requests, probes, draws, close, record, createImageBitmap, context };
 }
 
-function sourceFile(bytes = 1000, name = 'IMG_0001.JPG'): File {
-  return new File([new Uint8Array(bytes)], name, { type: 'image/jpeg', lastModified: 1_700_000 });
+function sourceFile(bytes = 1000, name = 'IMG_0001.JPG', type = 'image/jpeg'): File {
+  return new File([new Uint8Array(bytes)], name, { type, lastModified: 1_700_000 });
 }
 
 type WorkerReply =
@@ -118,13 +151,21 @@ async function runWorkerPath(scenario: Scenario, file = sourceFile()) {
       readonly width: number,
       readonly height: number,
     ) {}
+    private get isProbe() {
+      return this.width === 1 && this.height === 1;
+    }
     getContext() {
+      if (this.isProbe && scenario.brokenProbe === 'no-context') return null;
       return rec.context;
     }
     async convertToBlob(opts: { type?: string; quality?: number }) {
-      const req = { w: this.width, h: this.height, type: opts.type, quality: opts.quality };
-      rec.requests.push(req);
-      return rec.encoded(req);
+      if (this.isProbe && scenario.brokenProbe === 'throws') throw new Error('InvalidStateError');
+      return rec.record({
+        w: this.width,
+        h: this.height,
+        type: opts.type,
+        quality: opts.quality,
+      });
     }
   }
 
@@ -163,11 +204,15 @@ async function runMainThreadPath(
       return {
         width: 0,
         height: 0,
-        getContext: () => rec.context,
+        getContext() {
+          const isProbe = this.width === 1 && this.height === 1;
+          return isProbe && scenario.brokenProbe === 'no-context' ? null : rec.context;
+        },
         toBlob(cb: (b: Blob | null) => void, type?: string, quality?: number) {
-          const req = { w: this.width, h: this.height, type, quality };
-          rec.requests.push(req);
-          cb(rec.encoded(req));
+          const isProbe = this.width === 1 && this.height === 1;
+          if (isProbe && scenario.brokenProbe === 'throws') throw new Error('SecurityError');
+          if (isProbe && scenario.brokenProbe === 'null-blob') return cb(null);
+          cb(rec.record({ w: this.width, h: this.height, type, quality }));
         },
       };
     },
@@ -500,6 +545,145 @@ describe('ARM 2: when the worker cannot do the job, the fallback does the SAME j
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ARM 4: an engine that cannot encode WebP (WebKit: every Safari, all of iOS)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const JPEG = 'image/jpeg';
+
+describe('ARM 4: a browser that answers a WebP request with a PNG', () => {
+  const source = { width: 4032, height: 3024 };
+  /** LITERALS: the same three files, asked for as JPEG. */
+  const asJpeg: CanvasRequest[] = [
+    { w: 2048, h: 1536, type: JPEG, quality: 0.85 },
+    { w: 200, h: 150, type: JPEG, quality: 0.8 },
+    { w: 16, h: 12, type: JPEG, quality: 0.5 },
+  ];
+  const probe: CanvasRequest = { w: 1, h: 1, type: MIME, quality: undefined };
+
+  it('both paths ask ONCE, with a 1 x 1 canvas, before encoding anything', async () => {
+    for (const engine of ['webp', 'png-only'] as const) {
+      expect((await runWorkerPath({ source, engine })).probes).toEqual([probe]);
+      expect((await runMainThreadPath({ source, engine })).probes).toEqual([probe]);
+    }
+  });
+
+  it('a JPEG photo becomes JPEG variants on both paths: never a PNG, never the uncapped original', async () => {
+    const file = sourceFile(9000, 'IMG_0001.JPG');
+    const bytes = { master: 500, thumb: 77, lqip: 8 };
+    const worker = await runWorkerPath({ source, engine: 'png-only', bytes }, file);
+    const fallback = await runMainThreadPath({ source, engine: 'png-only', bytes }, file);
+    expect(worker.requests).toEqual(asJpeg);
+    expect(fallback.requests).toEqual(asJpeg);
+
+    const results = [
+      worker.reply as { master: File; thumbBlob: Blob | null; lqip: string | null },
+      fallback.result,
+    ];
+    for (const { master, thumbBlob, lqip } of results) {
+      expect(master.name).toBe('IMG_0001.jpg');
+      expect(master.type).toBe(JPEG);
+      expect(master.size).toBe(500);
+      expect(master.lastModified).toBe(1_700_000);
+      expect(thumbBlob?.type).toBe(JPEG);
+      expect(thumbBlob?.size).toBe(77);
+      expect(lqip).toBe('data:image/jpeg;base64,CzBVep/E6Q4=');
+    }
+  });
+
+  it('a HEIC photo takes the same route: it is a JPEG by the time the variants are made', async () => {
+    const heic = new File([fakeBytes(9000)], 'IMG_2.HEIC', { type: 'image/heic' });
+    const heic2any = vi.fn(async () => new Blob([fakeBytes(8000)], { type: JPEG }));
+    vi.doMock('heic2any', () => ({ default: heic2any }));
+    try {
+      const run = await runMainThreadPath({ source, engine: 'png-only' }, heic);
+      expect(run.requests).toEqual(asJpeg);
+      expect(run.result.master.name).toBe('IMG_2.jpg');
+    } finally {
+      vi.doUnmock('heic2any');
+    }
+  });
+
+  it('a JPEG re-encode that is NOT smaller still leaves the original in place', async () => {
+    const file = sourceFile(400);
+    const bytes = { master: 500 };
+    const worker = await runWorkerPath({ source, engine: 'png-only', bytes }, file);
+    const fallback = await runMainThreadPath({ source, engine: 'png-only', bytes }, file);
+    expect((worker.reply as { master: File }).master).toBe(file);
+    expect(fallback.result.master).toBe(file);
+  });
+
+  it.each([
+    ['image/png', 'logo.png'],
+    ['image/webp', 'cutout.webp'],
+    ['image/avif', 'render.avif'],
+  ])('a %s source may be transparent, so it is NOT turned into JPEG', async (type, name) => {
+    const file = sourceFile(9000, name, type);
+    const bytes = { master: 500, thumb: 77 };
+    const worker = await runWorkerPath({ source, engine: 'png-only', bytes }, file);
+    const fallback = await runMainThreadPath({ source, engine: 'png-only', bytes }, file);
+    // Asked for WebP as before ...
+    expect(worker.requests).toEqual(TABLE[0]!.expected);
+    expect(fallback.requests).toEqual(TABLE[0]!.expected);
+    const results = [worker.reply as { master: File; thumbBlob: Blob | null }, fallback.result];
+    for (const { master, thumbBlob } of results) {
+      // ... but the PNG that comes back is LABELLED as the PNG it is.
+      expect(master.name).toBe(name.replace(/\.[a-z]+$/, '.png'));
+      expect(master.type).toBe('image/png');
+      expect(thumbBlob?.type).toBe('image/png');
+    }
+  });
+
+  it('a HEIC that WebKit decoded itself (the heic2any transcode failed) is a camera photo too', async () => {
+    const heic = new File([fakeBytes(9000)], 'IMG_3.HEIC', { type: 'image/heic' });
+    const heic2any = vi.fn(async () => {
+      throw new Error('ERR_LIBHEIF format not supported');
+    });
+    vi.doMock('heic2any', () => ({ default: heic2any }));
+    try {
+      const run = await runMainThreadPath({ source, engine: 'png-only' }, heic);
+      expect(heic2any).toHaveBeenCalledTimes(1);
+      expect(run.requests).toEqual(asJpeg);
+      expect(run.result.master.name).toBe('IMG_3.jpg');
+      expect(run.result.thumbBlob?.type).toBe(JPEG);
+    } finally {
+      vi.doUnmock('heic2any');
+    }
+    // The worker sees the same file type: it must make the same choice.
+    const worker = await runWorkerPath({ source, engine: 'png-only' }, heic);
+    expect(worker.requests).toEqual(asJpeg);
+  });
+
+  it('an engine that CAN encode WebP is asked for WebP whatever the source is', async () => {
+    for (const type of [JPEG, 'image/png']) {
+      const file = sourceFile(9000, 'photo.bin', type);
+      expect((await runWorkerPath({ source }, file)).requests).toEqual(TABLE[0]!.expected);
+      expect((await runMainThreadPath({ source }, file)).requests).toEqual(TABLE[0]!.expected);
+    }
+  });
+
+  // A probe that cannot RUN says nothing about the engine, so nothing changes:
+  // WebP is asked for, as before this fallback existed. The engine here is
+  // 'png-only' on purpose: a probe failure misread as "cannot encode WebP"
+  // would show up as JPEG requests.
+  it.each(['throws', 'no-context'] as const)(
+    'worker: a probe that fails (%s) changes nothing, WebP is assumed',
+    async (brokenProbe) => {
+      const run = await runWorkerPath({ source, engine: 'png-only', brokenProbe });
+      expect(run.requests).toEqual(TABLE[0]!.expected);
+      expect(run.reply).toMatchObject({ ok: true });
+    },
+  );
+
+  it.each(['throws', 'null-blob', 'no-context'] as const)(
+    'fallback: a probe that fails (%s) changes nothing, WebP is assumed',
+    async (brokenProbe) => {
+      const run = await runMainThreadPath({ source, engine: 'png-only', brokenProbe });
+      expect(run.requests).toEqual(TABLE[0]!.expected);
+    },
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ARM 3: the source
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -576,7 +760,13 @@ describe('ARM 3: DRIFT GUARD on the source', () => {
     const source = stripComments(read(path.join(LIB, file)));
     const imported =
       /import \{([^}]*)\} from '\.\/image-variants\.config';/.exec(source)?.[1] ?? '';
-    for (const name of ['IMAGE_VARIANTS', 'VARIANT_MIME', 'fitWithin']) {
+    for (const name of [
+      'IMAGE_VARIANTS',
+      'VARIANT_MIME',
+      'fitWithin',
+      'variantFileName',
+      'variantMimeFor',
+    ]) {
       expect(
         imported.split(',').map((part) => part.trim()),
         `${file} must import ${name}`,
@@ -601,6 +791,26 @@ describe('ARM 3: DRIFT GUARD on the source', () => {
     expect(stripComments(read(path.join(LIB, 'image-variants.ts')))).toMatch(
       /new Worker\(\s*new URL\('\.\/image-variants\.worker\.ts', import\.meta\.url\),\s*\{\s*type: 'module',?\s*\},?\s*\)/,
     );
+  });
+
+  it('no uploader labels the thumbnail image/webp by hand: the label comes from the blob', () => {
+    // The canvas decides what the bytes are (WebP, or JPEG / PNG on WebKit). A
+    // hard-coded 'image/webp' is how PNG thumbnails were stored as WebP.
+    const uploaders = [
+      path.join(WEB, 'src', 'components', 'inventory', 'image-uploader.tsx'),
+      path.join(WEB, 'src', 'components', 'inventory', 'item-form.tsx'),
+      path.join(WEB, 'src', 'components', 'maintenance', 'maintenance-photos-panel.tsx'),
+    ];
+    for (const file of uploaders) {
+      const source = stripComments(read(file));
+      expect(source, `${path.basename(file)} hard-codes the thumbnail's content type`).not.toMatch(
+        /(?:contentType|'Content-Type')\s*:\s*'image\/webp'/,
+      );
+      // Pinned to the PROPERTY, so a hand-written label elsewhere cannot satisfy it.
+      expect(source, `${path.basename(file)} must send the thumbnail blob's own type`).toMatch(
+        /(?:contentType|'Content-Type')\s*:\s*(?:variants\.)?thumbBlob\.type\b/,
+      );
+    }
   });
 
   it('both backfill tools make thumbnails of the shared size', () => {

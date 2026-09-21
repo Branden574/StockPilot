@@ -23,6 +23,7 @@ const ImageLightbox = dynamic(
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { compressImageVariants } from '@/lib/image-variants';
+import { VARIANT_MIME } from '@/lib/image-variants.config';
 import {
   createImageUploadAction,
   recordImageAction,
@@ -156,7 +157,10 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
             ? uploadWithProgress({
                 url: presign.data.thumbSignedUrl,
                 body: thumbBlob,
-                contentType: 'image/webp',
+                // The blob's OWN type: the canvas decides what these bytes are
+                // (WebP; JPEG or PNG on Safari). Labelling them by hand is how
+                // PNG thumbnails were stored as image/webp.
+                contentType: thumbBlob.type || VARIANT_MIME,
                 headers: { 'x-upsert': 'true' },
               })
             : Promise.resolve(null),
