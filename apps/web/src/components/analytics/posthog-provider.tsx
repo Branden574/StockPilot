@@ -9,17 +9,18 @@ import { isSharePath } from '@/lib/share-paths';
 
 /**
  * PostHog bootstrap. Mounted at the app root so pageviews + autocapture
- * cover every route — EXCEPT the public share surfaces under `/m/` and
- * `/r/` (fix wave I6). Those URLs carry a raw, unauthenticated credential
- * IN THE PATH ITSELF, and PostHog's pageview/autocapture ships
- * `window.location.href` verbatim to a third-party vendor — that would
- * leak the token (GC 27: never log a share token or signed URL).
- * `NEXT_PUBLIC_POSTHOG_KEY` is unset in both env files as of this fix wave,
- * so none of this fires today — but it is exactly one env var away from
- * going live, with no code change that would catch it at that point, so
- * the guard is on the PATH, not on the key staying empty forever.
+ * cover every route — EXCEPT the routes whose PATH is itself a credential
+ * (`/m/`, `/r/`, `/i/`, `/invite/`, `/orders/sign/`, `/returns/request/`; the
+ * list lives in lib/share-paths.ts). PostHog's pageview/autocapture ships
+ * `window.location.href` verbatim to a third-party vendor, which would hand
+ * the token over (GC 27: never log a share token or signed URL).
  *
- * INERT BY DEFAULT: when `NEXT_PUBLIC_POSTHOG_KEY` is empty we never import or
+ * THIS IS LIVE: `NEXT_PUBLIC_POSTHOG_KEY` is set for production and preview
+ * (verified 2026-09-18), so the guard below is what stands between those
+ * tokens and the vendor. The guard is on the PATH, never on the key being
+ * empty.
+ *
+ * INERT WITHOUT A KEY: when `NEXT_PUBLIC_POSTHOG_KEY` is empty we never import or
  * init posthog-js, so there is no network traffic, no errors, and the ~200KB
  * lib never enters any bundle. The owner can light analytics up later just by
  * setting the env var — no code change.

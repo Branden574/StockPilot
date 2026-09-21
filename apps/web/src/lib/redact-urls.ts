@@ -26,20 +26,10 @@
  * because an unreadable alert feed is its own outage.
  */
 
-/**
- * Path prefixes whose NEXT segment is a bearer credential. Kept in sync with
- * the route folders under `apps/web/src/app` that take a `[token]` param,
- * plus Supabase's own storage-signing and auth-verify paths.
- */
-const CREDENTIAL_PATH_PREFIXES: ReadonlyArray<string> = [
-  'm',
-  'r',
-  'i',
-  'invite',
-  'returns/request',
-  'orders/sign',
-];
+import { CREDENTIAL_PATH_PREFIXES } from './share-paths';
 
+// The credential-bearing route prefixes live in ONE place (share-paths.ts), so
+// the analytics/error-beacon guard and this redactor can never disagree again.
 const REDACTED = '[redacted]';
 
 /**
@@ -77,11 +67,7 @@ function redactOneUrl(raw: string): string {
   const hadQuery = qAt !== -1 && qAt < withoutHash.length - 1;
 
   const redactedPath = redactCredentialSegments(beforeQuery);
-  return (
-    redactedPath +
-    (hadQuery ? `?${REDACTED}` : '') +
-    (hadHash ? `#${REDACTED}` : '')
-  );
+  return redactedPath + (hadQuery ? `?${REDACTED}` : '') + (hadHash ? `#${REDACTED}` : '');
 }
 
 /**
