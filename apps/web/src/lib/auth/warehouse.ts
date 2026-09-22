@@ -71,8 +71,8 @@ export interface WarehouseAccess {
  *     NOT the 0280 all-warehouses flag. The service callers already treat
  *     that shape as "sees nothing" (assertWarehouseAccess and
  *     forcedWarehouseId throw ForbiddenError; list/count readers return
- *     empty). The mobile snapshot, which drops its warehouse filters on an
- *     empty id list, refuses on `unreadable` before building any query. Row
+ *     empty). The mobile snapshot refuses on `unreadable` before building
+ *     any query, because its empty answer would be acted on (see above). Row
  *     level security still enforces underneath either way.
  *   • owner / admin / manager: hasAllAccess stays true, because the ROLE is
  *     the whole rule for them (isManagerOrAbove, below) and the warehouses

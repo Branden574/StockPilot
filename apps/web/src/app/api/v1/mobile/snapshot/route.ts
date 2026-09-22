@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { isManagerOrAbove } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { getWarehouseAccess, type WarehouseAccess } from '@/lib/auth/warehouse';
 import { buildWarehouseScope } from '@/lib/warehouse-scope';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -68,6 +69,34 @@ function unwrap<T>(s: Settled<T>): T {
   return s.value;
 }
 
+/**
+ * What a warehouse-scoped read answers, without being sent, for a caller
+ * narrowed to NO warehouse. Only `data` and `error` are ever read from a
+ * result in this route.
+ */
+const NO_ROWS = { data: [] as never[], error: null };
+
+/**
+ * A warehouse-scoped read: sent, or, when the caller is narrowed to no
+ * warehouse, answered with NO_ROWS and never sent (a PostgREST builder sends
+ * its request only when awaited, and this never awaits it).
+ */
+function scopedRead<T>(
+  narrowedToNothing: boolean,
+  read: PromiseLike<T>,
+): Promise<Settled<T | typeof NO_ROWS>> {
+  return settle<T | typeof NO_ROWS>(narrowedToNothing ? Promise.resolve(NO_ROWS) : read);
+}
+
+/**
+ * The access this route builds its filters from for manager-and-above: every
+ * warehouse, by role. The id list is never read when hasAllAccess is true.
+ */
+const ROLE_GRANTS_ALL: Pick<WarehouseAccess, 'hasAllAccess' | 'readableIds'> = {
+  hasAllAccess: true,
+  readableIds: [],
+};
+
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
@@ -110,6 +139,8 @@ export const GET = handler;
  * Scope:
  *   • Warehouses + items + POs are filtered to the user's warehouse access.
  *   • Cycle counts include all in_progress counts in scope.
+ *   • A scoped (staff/viewer) user with NO readable warehouse gets none of
+ *     the four above: narrowed to nothing, never unfiltered.
  *   • Bundles: org-wide active bundles. Mobile only reads them for
  *     distribution; cross-warehouse phantom math happens server-side.
  *
@@ -144,23 +175,33 @@ async function snapshotGET(req: NextRequest) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
 
-  // getWarehouseAccess internally uses the cookie-bound supabase client
-  // for its warehouses lookup, but bearer-authenticated requests from
-  // the mobile app have no cookies. Run the lookup through ctx.supabase
-  // (the bearer-bound client) instead so RLS sees the right auth.uid().
-  // For manager+ roles the role check alone determines hasAllAccess, so
-  // even if the readableIds list is empty for a bearer request, the
-  // downstream filters skip warehouse pinning correctly.
+  // Manager-and-above see every warehouse because of their ROLE, and the
+  // lookup is not made for them. getWarehouseAccess answers hasAllAccess =
+  // true for them on the same isManagerOrAbove(role) test whatever its
+  // `warehouses` list read returns (lib/auth/warehouse.ts), and this route
+  // never reads a manager's id list: every warehouse filter below is skipped
+  // for an all-access caller, and warehouseScope names come from this
+  // route's own warehouses read. Asking anyway cost a manager one more read
+  // per sync (on a Bearer ctx it is a direct `warehouses` query) and a way to
+  // fail: a failed list read turned into a 500 for a caller whose access
+  // never depended on it.
+  //
+  // Staff and viewer (the 0280 all-warehouses flag included) are decided by
+  // their own assignment rows, so for them the lookup runs, through
+  // ctx.supabase (the Bearer-bound client: the cookie client is anon on a
+  // cookie-less request and would see zero assignment rows).
   //
   // Sent BEFORE the rate-limit verdict and read AFTER it, so the two round
   // trips overlap instead of queueing: measured 2026-09-22, a call through
   // our servers can stall 1-8 s at Supabase's entry point, and this route
   // used to pay for its ~11 calls one after another. This is the only read a
-  // refused request can cause, and it is the cheap one (an id list, or the
-  // caller's own assignment rows); none of it reaches the response of a
-  // refused request. Held as a settled value so a failure is handled, and
-  // reported, only when the request is actually served, exactly as before.
-  const accessP = settle((async () => getWarehouseAccess(ctx))());
+  // refused request can cause, and it is the cheap one (the caller's own
+  // assignment rows); none of it reaches the response of a refused request.
+  // Held as a settled value so a failure is handled, and reported, only when
+  // the request is actually served, exactly as before.
+  const accessP = isManagerOrAbove(ctx.role)
+    ? null
+    : settle((async () => getWarehouseAccess(ctx))());
 
   // Per-user throttle: this is the mobile app's full/delta sync. 30/min easily
   // covers pull-to-refresh + foreground delta syncs while capping a tight loop
@@ -188,8 +229,9 @@ async function snapshotGET(req: NextRequest) {
       ? new Date(sinceRaw).toISOString()
       : null;
 
-  // An access lookup that threw, or that answered from a failed read, is a
-  // REFUSAL: no data read is built, and the phone keeps what it has.
+  // For staff and viewer, an access lookup that threw, or that answered from
+  // a failed read, is a REFUSAL: no data read is built, and the phone keeps
+  // what it has.
   //
   // This used to fall back to hasAllAccess: true ("RLS still gates"). That
   // dropped every warehouse filter below for a staff or viewer caller, so the
@@ -205,19 +247,39 @@ async function snapshotGET(req: NextRequest) {
   // this route already answers 500 `internal_error` with a `query` tag, and
   // pullSnapshot treats any non-2xx as "keep the cache, retry on the next
   // tick". Same contract, same report tag as before.
-  const accessResult = await accessP;
-  if (!accessResult.ok || accessResult.value.unreadable) {
-    const err = accessResult.ok ? new Error('warehouse access unreadable') : accessResult.reason;
-    void reportError(err instanceof Error ? err : new Error(String(err)), {
-      tag: 'mobile.snapshot.warehouse_access',
-      organizationId: ctx.organizationId,
-    });
-    return NextResponse.json(
-      { error: 'internal_error', query: 'warehouse_access' },
-      { status: 500 },
-    );
+  let access: Pick<WarehouseAccess, 'hasAllAccess' | 'readableIds'> = ROLE_GRANTS_ALL;
+  if (accessP) {
+    const accessResult = await accessP;
+    if (!accessResult.ok || accessResult.value.unreadable) {
+      const err = accessResult.ok ? new Error('warehouse access unreadable') : accessResult.reason;
+      void reportError(err instanceof Error ? err : new Error(String(err)), {
+        tag: 'mobile.snapshot.warehouse_access',
+        organizationId: ctx.organizationId,
+      });
+      return NextResponse.json(
+        { error: 'internal_error', query: 'warehouse_access' },
+        { status: 500 },
+      );
+    }
+    access = accessResult.value;
   }
-  const access = accessResult.value;
+
+  // The warehouses every warehouse-scoped read below is narrowed to: null for
+  // an all-access caller (no narrowing), otherwise exactly the readable ids.
+  // Narrowing is decided by whether this is null, NEVER by its length. The
+  // filters used to be guarded by `!hasAllAccess && readableIds.length`, so a
+  // scoped member whose lookup succeeded but found no assignment got no
+  // filter at all: every warehouse, item, PO and count that row level
+  // security let through, and a phone that cached them. A scoped caller with
+  // no readable warehouse is narrowed to nothing, and gets nothing.
+  const scopeIds: string[] | null = access.hasAllAccess ? null : access.readableIds;
+  // Narrowed to nothing: the four warehouse-scoped reads answer NO_ROWS and
+  // are never sent (scopedRead). Not sent as `.in(col, [])` either: nothing
+  // about the answer should rest on how PostgREST reads an empty list, and it
+  // saves four round trips. The org-wide reads (bundles, and the two removal
+  // reads) run as usual, so a delta pull still reports every item that
+  // changed since its cursor as removed.
+  const seesNoWarehouse = scopeIds !== null && scopeIds.length === 0;
   // Taken before any read below is sent, so the next delta's cursor can only
   // overlap this pull, never leave a gap after it.
   const serverTime = new Date().toISOString();
@@ -247,10 +309,8 @@ async function snapshotGET(req: NextRequest) {
   // immutable — `.in()` returns a NEW builder, so the result must be
   // reassigned or the warehouse-access filter is silently dropped (a
   // restricted user would otherwise receive the org's full warehouse list).
-  if (!access.hasAllAccess && access.readableIds.length) {
-    whQ = whQ.in('id', access.readableIds);
-  }
-  const warehousesP = settle(whQ);
+  if (scopeIds) whQ = whQ.in('id', scopeIds);
+  const warehousesP = scopedRead(seesNoWarehouse, whQ);
 
   // ── Items ───────────────────────────────────────────────────────
   // `is_bundle` is NOT NULL DEFAULT false on every row (see migration
@@ -264,7 +324,7 @@ async function snapshotGET(req: NextRequest) {
   // inventories. Use fetchAllRows to page through all matching rows.
   // Stable order on `id` guarantees pages don't overlap or skip rows
   // when records are written between page fetches.
-  const itemsP = fetchAllRows<{
+  type ItemRow = {
     id: string;
     sku: string | null;
     name: string;
@@ -275,33 +335,34 @@ async function snapshotGET(req: NextRequest) {
     item_type: string;
     is_bundle: boolean;
     updated_at: string;
-  }>((from, to) => {
-    let q = ctx.supabase
-      .from('inventory_items')
-      .select(
-        `id, sku, name, barcode, quantity_on_hand, unit_cost, warehouse_id,
-         item_type, is_bundle, updated_at`,
-      )
-      .eq('organization_id', ctx.organizationId)
-      .is('deleted_at', null)
-      .eq('status', 'active')
-      .eq('is_bundle', false)
-      .order('id', { ascending: true })
-      .range(from, to);
-    if (!access.hasAllAccess && access.readableIds.length) {
-      q = q.in('warehouse_id', access.readableIds);
-    }
-    if (since) q = q.gte('updated_at', since);
-    return q;
-  }).then(
-    (rows) => ({ rows, err: null }),
-    // Any failure, returned or thrown, is reported as the items read: the
-    // same catch-all this read has always had.
-    (err: unknown) => ({
-      rows: null,
-      err: { message: err instanceof Error ? err.message : String(err) },
-    }),
-  );
+  };
+  const itemsP = seesNoWarehouse
+    ? Promise.resolve({ rows: [] as ItemRow[], err: null })
+    : fetchAllRows<ItemRow>((from, to) => {
+        let q = ctx.supabase
+          .from('inventory_items')
+          .select(
+            `id, sku, name, barcode, quantity_on_hand, unit_cost, warehouse_id,
+             item_type, is_bundle, updated_at`,
+          )
+          .eq('organization_id', ctx.organizationId)
+          .is('deleted_at', null)
+          .eq('status', 'active')
+          .eq('is_bundle', false)
+          .order('id', { ascending: true })
+          .range(from, to);
+        if (scopeIds) q = q.in('warehouse_id', scopeIds);
+        if (since) q = q.gte('updated_at', since);
+        return q;
+      }).then(
+        (rows) => ({ rows, err: null }),
+        // Any failure, returned or thrown, is reported as the items read: the
+        // same catch-all this read has always had.
+        (err: unknown) => ({
+          rows: null,
+          err: { message: err instanceof Error ? err.message : String(err) },
+        }),
+      );
 
   // ── Open POs (and their lines) ──────────────────────────────────
   // purchase_orders ships through a destination_location_id pointer
@@ -309,7 +370,7 @@ async function snapshotGET(req: NextRequest) {
   // canonical PO service uses an embedded join — same here. Use !inner
   // only when filtering, otherwise we'd drop POs whose destination is
   // null.
-  const destEmbed = !access.hasAllAccess && access.readableIds.length
+  const destEmbed = scopeIds
     ? 'destination:locations!destination_location_id!inner (warehouse_id)'
     : 'destination:locations!destination_location_id (warehouse_id)';
   let poQ = ctx.supabase
@@ -325,11 +386,9 @@ async function snapshotGET(req: NextRequest) {
     .in('status', ['ordered', 'partially_received', 'draft'])
     .order('updated_at', { ascending: false })
     .limit(200);
-  if (!access.hasAllAccess && access.readableIds.length) {
-    poQ = poQ.in('destination.warehouse_id', access.readableIds);
-  }
+  if (scopeIds) poQ = poQ.in('destination.warehouse_id', scopeIds);
   if (since) poQ = poQ.gte('updated_at', since);
-  const posP = settle(poQ);
+  const posP = scopedRead(seesNoWarehouse, poQ);
 
   // ── Open cycle counts (and their lines) ─────────────────────────
   let ccQ = ctx.supabase
@@ -344,12 +403,13 @@ async function snapshotGET(req: NextRequest) {
     .eq('status', 'in_progress')
     .order('started_at', { ascending: false })
     .limit(50);
-  if (!access.hasAllAccess && access.readableIds.length) {
-    ccQ = ccQ.or(
-      `warehouse_id.is.null,warehouse_id.in.(${access.readableIds.join(',')})`,
-    );
+  if (scopeIds) {
+    ccQ = ccQ.or(`warehouse_id.is.null,warehouse_id.in.(${scopeIds.join(',')})`);
   }
-  const countsP = settle(ccQ);
+  // Narrowed to nothing answers no counts at all, the null-warehouse ones
+  // included: the web's CycleCountsService.list() returns [] for a scoped
+  // caller with no warehouse, and the phone should not list more than it.
+  const countsP = scopedRead(seesNoWarehouse, ccQ);
 
   // ── Bundles ─────────────────────────────────────────────────────
   // Embedded joins to two relations (bundle_components AND the phantom
@@ -552,10 +612,9 @@ async function snapshotGET(req: NextRequest) {
     permissions: Array.from(ctx.permissions ?? []),
     // Warehouse scoping for the caller — drives the mobile Items screen's
     // scoped-view banner (web parity with ScopedWarehouseNotice). Reuses the
-    // access decision computed above; the pure builder narrows the (possibly
-    // unfiltered — see whQ's zero-assignment edge) warehouse rows to the
-    // caller's readable set, so a scoped user with no assignments reports []
-    // rather than the org's full list.
+    // access decision computed above; the pure builder also narrows the
+    // warehouse rows to the caller's readable set, so a scoped user with no
+    // assignments reports [] (and the banner says so) on either account.
     warehouseScope: buildWarehouseScope(
       access,
       (warehouses ?? []).map((w) => ({ id: w.id as string, name: w.name as string })),

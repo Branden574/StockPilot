@@ -263,11 +263,11 @@ const SCOPED_ACCESS = {
   primaryWarehouseId: 'wh1',
 };
 
-function mockContext(respond: Responder) {
+function mockContext(respond: Responder, role = 'staff') {
   vi.mocked(withApiContext).mockResolvedValue({
     organizationId: 'org-1',
     userId: 'u-1',
-    role: 'staff',
+    role,
     permissions: new Set(['inventory.read', 'purchasing.read']),
     enabledModules: new Set(['inventory', 'purchasing', 'bundles']),
     mfaRequired: false,
@@ -468,14 +468,15 @@ describe('rate limit and authentication still deny', () => {
 /**
  * This route used to catch a thrown access lookup as hasAllAccess: true,
  * which dropped every warehouse filter for a staff or viewer caller and told
- * the phone it could see every warehouse. A lookup that threw, or that
- * answered from a read that failed (getWarehouseAccess marks that answer
- * `unreadable`), now gets the route's failed-read answer instead: a 500 with a
- * `query` tag and NO data read built. A 500 rather than an empty 200 because
- * the phone acts on a 200 (a full pull deletes every cached item it was not
- * sent), and keeps its cache on any non-2xx.
+ * the phone it could see every warehouse. For staff and viewer, a lookup that
+ * threw, or that answered from a read that failed (getWarehouseAccess marks
+ * that answer `unreadable`), now gets the route's failed-read answer instead:
+ * a 500 with a `query` tag and NO data read built. A 500 rather than an empty
+ * 200 because the phone acts on a 200 (a full pull deletes every cached item
+ * it was not sent), and keeps its cache on any non-2xx. Manager-and-above are
+ * decided by role and never make the lookup (next describe).
  */
-describe('a warehouse access lookup that failed is refused, never widened', () => {
+describe('a staff or viewer access lookup that failed is refused, never widened', () => {
   const REFUSAL = { error: 'internal_error', query: 'warehouse_access' };
 
   async function expectRefused(qs: string) {
@@ -492,44 +493,39 @@ describe('a warehouse access lookup that failed is refused, never widened', () =
   }
 
   it.each([
-    ['a full pull', ''],
-    ['a delta pull', `?since=${SINCE}`],
-  ])('a THROWN lookup refuses %s', async (_label, qs) => {
+    ['staff', 'a full pull', ''],
+    ['staff', 'a delta pull', `?since=${SINCE}`],
+    ['viewer', 'a full pull', ''],
+    ['viewer', 'a delta pull', `?since=${SINCE}`],
+  ])('a THROWN lookup refuses %s: %s', async (role, _label, qs) => {
     vi.mocked(getWarehouseAccess).mockRejectedValue(new Error('assignments unreadable'));
-    mockContext(respondFor());
+    mockContext(respondFor(), role);
     await expectRefused(qs);
     const reported = vi.mocked(reportError).mock.calls[0]?.[0] as Error;
     expect(reported.message).toBe('assignments unreadable');
   });
 
   it.each([
-    [
-      'staff whose assignments could not be read',
-      {
+    ['staff', false],
+    ['viewer', false],
+    // The 0280 all-warehouses flag reaches hasAllAccess only through a
+    // readable membership row; an unreadable answer is refused whatever it
+    // carries, so a failed read can never be served as "every warehouse".
+    ['staff', true],
+  ])(
+    'an answer built from a failed read refuses %s (hasAllAccess: %s)',
+    async (role, hasAllAccess) => {
+      vi.mocked(getWarehouseAccess).mockResolvedValue({
         readableIds: [],
         writableIds: [],
-        hasAllAccess: false,
+        hasAllAccess,
         primaryWarehouseId: null,
         unreadable: true,
-      },
-    ],
-    [
-      // hasAllAccess by role, but its list read failed: still refused, so a
-      // degraded answer is never served for anyone.
-      'a manager whose warehouses list could not be read',
-      {
-        readableIds: [],
-        writableIds: [],
-        hasAllAccess: true,
-        primaryWarehouseId: null,
-        unreadable: true,
-      },
-    ],
-  ])('an answer built from a failed read refuses: %s', async (_label, access) => {
-    vi.mocked(getWarehouseAccess).mockResolvedValue(access as never);
-    mockContext(respondFor());
-    await expectRefused('');
-  });
+      } as never);
+      mockContext(respondFor(), role);
+      await expectRefused('');
+    },
+  );
 
   it('the refusal still waits for the rate-limit verdict: a limited caller gets its 429, unreported', async () => {
     vi.mocked(checkRateLimit).mockResolvedValue({
@@ -564,6 +560,139 @@ describe('a warehouse access lookup that failed is refused, never widened', () =
       'warehouse_id',
       ['wh1', 'wh2'],
     ]);
+  });
+});
+
+// ── 2c. Manager-and-above: the role decides ─────────────────────────────
+
+/**
+ * getWarehouseAccess answers hasAllAccess = true for owner, admin and manager
+ * on their role alone, and this route never reads their id list. It used to
+ * ask anyway, so a failed `warehouses` list read answered a manager 500 (after
+ * the lookup started failing closed). The route no longer makes the lookup
+ * for them: their sync cannot fail on it, and costs one read less.
+ */
+describe('manager-and-above are served by role, whatever the lookup would do', () => {
+  const MANAGERS = ['owner', 'admin', 'manager'];
+  const LOOKUP_FAILURES: Array<[string, () => void]> = [
+    [
+      'throws',
+      () => vi.mocked(getWarehouseAccess).mockRejectedValue(new Error('warehouses unreadable')),
+    ],
+    [
+      'answers unreadable',
+      () =>
+        vi.mocked(getWarehouseAccess).mockResolvedValue({
+          readableIds: [],
+          writableIds: [],
+          hasAllAccess: true,
+          primaryWarehouseId: null,
+          unreadable: true,
+        } as never),
+    ],
+  ];
+
+  for (const role of MANAGERS) {
+    for (const [label, arrange] of LOOKUP_FAILURES) {
+      it(`${role}: a lookup that ${label} does not stop the sync`, async () => {
+        arrange();
+        mockContext(respondFor(), role);
+
+        const res = await GET(request(`?since=${SINCE}`));
+
+        expect(res.status).toBe(200);
+        expect(getWarehouseAccess).not.toHaveBeenCalled();
+        expect(reportError).not.toHaveBeenCalled();
+        const body = (await res.json()) as Record<string, unknown>;
+        expect(body.warehouseScope).toEqual({
+          hasAllAccess: true,
+          warehouseNames: ['Main', 'Overflow'],
+        });
+        expect((body.items as unknown[]).length).toBe(2);
+        // Every warehouse, unfiltered: no warehouse filter on any read.
+        const byKind = (k: string) => queries.find((q) => kindOf(q) === k)!;
+        expect(byKind('warehouses').calls.some((c) => c.method === 'in')).toBe(false);
+        expect(byKind('items').calls.some((c) => c.method === 'in')).toBe(false);
+        expect(byKind('pos').calls.some((c) => c.args[0] === 'destination.warehouse_id')).toBe(
+          false,
+        );
+        expect(norm(byKind('pos').select)).not.toContain('!inner');
+        expect(byKind('cycle_counts').calls.some((c) => c.method === 'or')).toBe(false);
+      });
+    }
+  }
+
+  it('staff still make the lookup (the rows decide for them)', async () => {
+    mockContext(respondFor(), 'staff');
+    await GET(request());
+    expect(getWarehouseAccess).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── 2d. A scoped member with no readable warehouse gets none ────────────
+
+/**
+ * The filters used to be guarded by `!hasAllAccess && readableIds.length`, so
+ * a staff or viewer whose lookup SUCCEEDED but found no assignment got no
+ * warehouse filter at all: every warehouse, item, PO and count row level
+ * security let through, cached on the phone. Narrowing is now decided by
+ * hasAllAccess alone; narrowed to nothing, the four warehouse-scoped reads
+ * answer empty and are never sent.
+ */
+describe('a scoped member with no readable warehouse gets no warehouse-scoped data', () => {
+  const NONE = {
+    readableIds: [],
+    writableIds: [],
+    hasAllAccess: false,
+    primaryWarehouseId: null,
+  };
+  const SCOPED_READS = ['warehouses', 'items', 'pos', 'cycle_counts'];
+
+  it.each(['staff', 'viewer'])(
+    '%s: empty lists, and not one of those reads is sent',
+    async (role) => {
+      vi.mocked(getWarehouseAccess).mockResolvedValue(NONE as never);
+      mockContext(respondFor(), role);
+
+      const res = await GET(request(`?since=${SINCE}`));
+
+      expect(res.status).toBe(200);
+      expect(reportError).not.toHaveBeenCalled();
+      expect(queries.filter((q) => SCOPED_READS.includes(kindOf(q)) && q.started)).toEqual([]);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body.warehouses).toEqual([]);
+      expect(body.items).toEqual([]);
+      expect(body.openPOs).toEqual([]);
+      expect(body.openCycleCounts).toEqual([]);
+      expect(body.warehouseScope).toEqual({ hasAllAccess: false, warehouseNames: [] });
+      // The org-wide reads still run: bundles as always, and every item that
+      // changed since the cursor is reported as removed (none was delivered).
+      expect((body.bundles as unknown[]).length).toBe(2);
+      expect(body.removedItemIds).toEqual(['i-1', 'i-2', 'i-gone']);
+      expect(body.activeBundleIds).toEqual(['b-1', 'b-2', 'b-3']);
+    },
+  );
+
+  it('a full pull is empty too (the phone sweeps what it held)', async () => {
+    vi.mocked(getWarehouseAccess).mockResolvedValue(NONE as never);
+    mockContext(respondFor());
+    const res = await GET(request());
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(res.status).toBe(200);
+    expect(body.items).toEqual([]);
+    expect(body.warehouses).toEqual([]);
+    expect(queries.filter((q) => SCOPED_READS.includes(kindOf(q)) && q.started)).toEqual([]);
+  });
+
+  it('an all-warehouses member (0280) with no assignment row is NOT narrowed: hasAllAccess decides, not the list', async () => {
+    vi.mocked(getWarehouseAccess).mockResolvedValue({ ...NONE, hasAllAccess: true } as never);
+    mockContext(respondFor());
+    const res = await GET(request());
+    const body = (await res.json()) as Record<string, unknown>;
+    expect((body.items as unknown[]).length).toBe(2);
+    expect(
+      queries.find((q) => kindOf(q) === 'warehouses')!.calls.some((c) => c.method === 'in'),
+    ).toBe(false);
   });
 });
 
