@@ -9,7 +9,6 @@ import { dataTag, untrustedDeep, untrustedTag } from './untrusted';
 import { env } from '@/lib/env';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { safeFetch, SsrfBlockedError } from '@/lib/ssrf-guard';
-import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { assertPermission, type ServiceContext } from '@/server/services/context';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { BooksImportService } from '@/server/services/books-import';
@@ -1028,7 +1027,9 @@ const adjustStockTool: ToolExecutor = {
       movementType,
       reason,
     });
-    revalidateInventoryList(ctx.organizationId);
+    // No invalidation here: InventoryService.adjustStock makes it, and this
+    // tool runs inside the chat route's streamed body, where only the route's
+    // runStreamedStockWrites scope can make one take effect.
     // Re-fetch the item so the model can echo the new on-hand back.
     const updated = (await svc.get(itemId)) as Record<string, unknown>;
     return {
@@ -1189,7 +1190,7 @@ const executeBulkBookImportTool: ToolExecutor = {
       defaultQuantity: Number.isFinite(defaultQuantity) ? defaultQuantity : 1,
       skipDuplicates: true,
     });
-    revalidateInventoryList(ctx.organizationId);
+    // BooksImportService.execute invalidates the Items/Books cache itself.
     return result;
   },
 };
