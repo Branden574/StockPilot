@@ -412,7 +412,7 @@ async function BooksTableSection({
       const [categories, locations, suppliers, tags, charters] = await Promise.all([
         categoriesSvc.list(),
         locationsSvc.list({ sitesOnly: true }),
-        suppliersSvc.list(),
+        suppliersSvc.listForLookups(),
         tagsSvc.list(),
         chartersSvc.list(),
       ]);

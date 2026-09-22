@@ -252,10 +252,18 @@ export function assertAnyPermission(ctx: ServiceContext, permissions: readonly P
   throw new ServiceError('forbidden', `Missing permission: ${permissions.join(' or ')}`);
 }
 
-export function assertModuleEnabled(ctx: ServiceContext, moduleId: ModuleId): void {
-  if (ctx.enabledModules.has(moduleId)) return;
+/** Is `moduleId` on for this context? The one rule both helpers below apply. */
+export function isModuleEnabled(
+  ctx: Pick<ServiceContext, 'enabledModules'>,
+  moduleId: ModuleId,
+): boolean {
+  if (ctx.enabledModules.has(moduleId)) return true;
   // Core modules are never gated — always available even if a row is missing.
-  if (MODULE_REGISTRY[moduleId]?.tier === 'core') return;
+  return MODULE_REGISTRY[moduleId]?.tier === 'core';
+}
+
+export function assertModuleEnabled(ctx: ServiceContext, moduleId: ModuleId): void {
+  if (isModuleEnabled(ctx, moduleId)) return;
   throw new ServiceError('module_disabled', `Module not enabled for this organization: ${moduleId}`);
 }
 

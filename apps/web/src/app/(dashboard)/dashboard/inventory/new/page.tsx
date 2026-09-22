@@ -80,7 +80,7 @@ export default async function NewItemPage() {
   ] = await Promise.all([
     categoriesSvc.list(),
     locationsSvc.list({ sitesOnly: true }),
-    suppliersSvc.list(),
+    suppliersSvc.listForLookups(),
     tagsSvc.list(),
     warehousesSvc.listNames(),
     chartersSvc.list(),

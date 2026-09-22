@@ -98,7 +98,7 @@ export default async function EditBookPage({
   ] = await Promise.all([
     categoriesSvc.list(),
     locationsSvc.list({ sitesOnly: true }),
-    suppliersSvc.list(),
+    suppliersSvc.listForLookups(),
     tagsSvc.list(),
     tagsSvc.listForItem(id),
     warehousesSvc.listNames(),

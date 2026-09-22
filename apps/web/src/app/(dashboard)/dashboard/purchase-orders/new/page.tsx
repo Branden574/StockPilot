@@ -37,7 +37,7 @@ export default async function NewPoPage() {
     // even though books are demonstrably purchasable. The picker's server
     // search sends the same set, so the two can never disagree.
     inventorySvc.list({ limit: 1000, expected: 'any', itemTypes: purchaseOrderItemTypes() }),
-    suppliersSvc.list(),
+    suppliersSvc.listForLookups(),
     locationsSvc.list({ sitesOnly: true }),
     chartersSvc.list(),
   ]);

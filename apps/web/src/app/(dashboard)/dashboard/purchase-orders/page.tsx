@@ -136,7 +136,7 @@ export default async function PurchaseOrdersPage({
     // Stats + suppliers first — stats.totalCount decides instant vs server.
     const [rawStats, suppliers] = await Promise.all([
       poSvc.listStats({ warehouseId: warehouseFilter ?? undefined }),
-      supplierSvc.list(),
+      supplierSvc.listForLookups(),
     ]);
     stats = rawStats;
     instant = rawStats.totalCount <= PO_INSTANT_CAP;

@@ -69,7 +69,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
       if (e instanceof ServiceError && e.code === 'not_found') notFound();
       throw e;
     }),
-    suppliersSvc.list(),
+    suppliersSvc.listForLookups(),
     // UNFILTERED, deliberately. This list is not a picker — it exists only to
     // look the PO's own `destination_location_id` back up (below) so the page
     // can read its name and derive the receiving warehouse. With

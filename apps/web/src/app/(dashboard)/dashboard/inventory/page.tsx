@@ -614,7 +614,7 @@ async function InventoryTableSection({
       const [categories, locations, suppliers, tags, charters] = await Promise.all([
         tagged('categoriesSvc.list', categoriesSvc.list()),
         tagged('locationsSvc.list', locationsSvc.list({ sitesOnly: true })),
-        tagged('suppliersSvc.list', suppliersSvc.list()),
+        tagged('suppliersSvc.list', suppliersSvc.listForLookups()),
         tagged('tagsSvc.list', tagsSvc.list()),
         tagged('chartersSvc.list', chartersSvc.list()),
       ]);

@@ -3,7 +3,14 @@ import 'server-only';
 import { z } from 'zod';
 
 import { audit } from './audit';
-import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import {
+  assertModuleEnabled,
+  assertPermission,
+  isModuleEnabled,
+  ServiceError,
+  withContext,
+  type ServiceContext,
+} from './context';
 
 export const createSupplierSchema = z.object({
   name: z.string().min(1).max(120).trim(),
@@ -31,6 +38,28 @@ export class SuppliersService {
    * vs. archived view is a binary toggle — there's no combined "show all"
    * mode.
    */
+  /**
+   * Active suppliers for a PICKER, FILTER or LABEL on a page that is not
+   * itself about suppliers (item forms, the Items and Books filters, purchase
+   * orders, rentals). Returns [] when the Suppliers module is off, where
+   * `list()` throws.
+   *
+   * WHY. Suppliers is an optional module. Fourteen pages loaded their supplier
+   * dropdown with `list()`, so switching the module off turned every one of
+   * them into "Something broke loading this page". Measured on production on
+   * 2026-09-22 in an organization with Suppliers off: Items, Books and
+   * Rentals -> Items crashed for a member of staff (admins read the Items
+   * lookups from a cache that already returned [] here). An empty picker is
+   * the right answer for a module the organization does not use.
+   *
+   * NOT A WIDENING: off still means no supplier rows. The Suppliers screens
+   * and the API keep `list()`, which refuses.
+   */
+  async listForLookups() {
+    if (!isModuleEnabled(this.ctx, 'suppliers')) return [];
+    return this.list();
+  }
+
   async list(opts: { includeArchived?: boolean } = {}) {
     assertModuleEnabled(this.ctx, 'suppliers');
     let query = this.ctx.supabase

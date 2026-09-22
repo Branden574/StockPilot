@@ -189,7 +189,7 @@ export async function GET(
         }
       | null = null;
     if (supplierId) {
-      const all = await suppliersSvc.list();
+      const all = await suppliersSvc.listForLookups();
       const found = all.find((s) => (s.id as string) === supplierId);
       if (found) {
         supplier = {

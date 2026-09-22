@@ -72,7 +72,7 @@ export default async function NewRentalItemPage() {
   ] = await Promise.all([
     categoriesSvc.list(),
     locationsSvc.list({ sitesOnly: true }),
-    suppliersSvc.list(),
+    suppliersSvc.listForLookups(),
     tagsSvc.list(),
     warehousesSvc.listNames(),
     chartersSvc.list(),
