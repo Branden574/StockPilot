@@ -303,25 +303,40 @@ export async function loadChartersForWarehouse(
  * see the broader item list for ≤60s). This only scopes the picker
  * payload — RLS still governs every read/write the user actually
  * performs, and order submission re-validates server-side.
+ *
+ * A FAILED READ THROWS. supabase-js resolves a failed query as
+ * `{ data: null, error }`, and this used to read that as "no grants", i.e.
+ * 'ALL': a restricted viewer got the unrestricted catalog, and the answer was
+ * cached for 60 s and then served stale while revalidating. unstable_cache
+ * stores nothing when the callback throws, so the storefront fails closed for
+ * this request (the page's error state) and the next request asks again.
  */
 const loadAccessibleCategoryKeyCached = unstable_cache(
   async (organizationId: string, userId: string): Promise<string> => {
     const admin = createAdminClient();
-    const { data: member } = await admin
+    const { data: member, error: memberError } = await admin
       .from('organization_members')
       .select('role')
       .eq('user_id', userId)
       .eq('organization_id', organizationId)
       .maybeSingle();
+    if (memberError) {
+      throw new Error(`[orders-new] catalog access: membership read failed: ${memberError.message}`);
+    }
     const role = (member as { role?: string } | null)?.role;
     if (!role) return 'NONE';
     if (role !== 'viewer') return 'ALL';
 
-    const { data: rows } = await admin
+    const { data: rows, error: rowsError } = await admin
       .from('user_category_assignments')
       .select('category_id')
       .eq('user_id', userId)
       .eq('organization_id', organizationId);
+    if (rowsError) {
+      throw new Error(
+        `[orders-new] catalog access: category grants read failed: ${rowsError.message}`,
+      );
+    }
     const ids = ((rows ?? []) as Array<{ category_id: string }>)
       .map((r) => r.category_id)
       .sort();

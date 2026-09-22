@@ -79,3 +79,49 @@ describe('loadCatalogItems — expected-items exclusion (mig 0277)', () => {
     expect(eqCalls).toContainEqual(['warehouse_id', 'wh-1']);
   });
 });
+
+// A failed access read must never widen the catalog. supabase-js RESOLVES a
+// failed query as { data: null, error }; the loader used to read that as "no
+// category grants" (key 'ALL', the unrestricted catalog) and cache it. It now
+// throws, which unstable_cache does not store, and no catalog is read.
+describe('loadCatalogItems — access reads fail closed', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('throws when the category-grant read fails for a viewer, and reads no items', async () => {
+    const stub = makeSupabaseStub({
+      'organization_members.select': { data: [{ role: 'viewer' }], error: null },
+      'user_category_assignments.select': {
+        data: null,
+        error: { message: 'canceling statement due to statement timeout' },
+      },
+      'inventory_items.select': {
+        data: [{ id: 'i-any', name: 'Any', sku: 'S', quantity_on_hand: 1 }],
+        error: null,
+      },
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+
+    await expect(loadCatalogItems('org-1', 'wh-1', 'viewer-1')).rejects.toThrow(
+      /category grants read failed/,
+    );
+    expect(stub.fromCalls).not.toContain('inventory_items');
+  });
+
+  it('throws when the membership read fails, and reads no items', async () => {
+    const stub = makeSupabaseStub({
+      'organization_members.select': { data: null, error: { message: 'fetch failed' } },
+      'inventory_items.select': {
+        data: [{ id: 'i-any', name: 'Any', sku: 'S', quantity_on_hand: 1 }],
+        error: null,
+      },
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+
+    await expect(loadCatalogItems('org-1', 'wh-1', 'viewer-1')).rejects.toThrow(
+      /membership read failed/,
+    );
+    expect(stub.fromCalls).not.toContain('inventory_items');
+  });
+});
