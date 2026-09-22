@@ -14,6 +14,8 @@ import { parseRequestContextBundle } from '@/lib/auth/request-context-bundle';
 import type { Role, Database, ModuleId, Permission } from '@stockpilot/core';
 import { effectivePermissions, isAdminRole } from '@stockpilot/core';
 
+import { enforcedMfaPolicy, type MfaPolicy } from '@/lib/auth/mfa-policy';
+
 /**
  * Mirror of resolveMfaState() in context.ts but parameterized over an
  * arbitrary Supabase client (cookie-bound or bearer-bound). Both auth
@@ -92,10 +94,12 @@ async function resolveApiMfaState(
     // resolveMfaState's catch fails closed) and what the sibling read in this
     // same file already does ("an unreadable flag grants NOTHING").
     //
-    // NOT the same as zero rows: `maybeSingle()` reports no row as
-    // `{ data: null, error: null }`, which stays 'optional' exactly as before.
+    // Zero rows is not an error: `maybeSingle()` reports it as
+    // `{ data: null, error: null }`. It means row level security hid the row
+    // from this member, and since 2026-09-22 that is held to the STRICTEST
+    // policy instead of 'optional' (lib/auth/mfa-policy.ts).
     if (error) throw new Error(`mfa_policy unreadable: ${error.code || 'unknown'}`);
-    policy = (org?.mfa_policy as MfaPolicy | undefined) ?? 'optional';
+    policy = enforcedMfaPolicy(org);
   } catch (err) {
     // Fail CLOSED — assume MFA is required and unsatisfied. A flaky
     // org lookup must NOT silently let an admin bypass MFA on the
@@ -106,8 +110,6 @@ async function resolveApiMfaState(
   }
   return mfaFromPolicy(supabase, policy, role, hasVerifiedFactor, bearerAal);
 }
-
-type MfaPolicy = 'optional' | 'admins_required' | 'all_required';
 
 /**
  * The MFA decision once the org's policy is known. Split out of
@@ -247,22 +249,16 @@ async function resolveApiContextFromBundle(
     // refusal, not a fallback — the legacy path returns null for it too.
     if (!held) return { ok: false };
     // No organization row means row level security hid it from a member, which
-    // should not happen. Hand it to the legacy reads rather than invent an MFA
-    // policy and a comp flag here.
-    //
-    // HONESTLY: this buys consistency, not safety. `resolveApiMfaState` reads
-    // the same hidden row, gets null, and falls back to 'optional' itself — so
-    // both paths end up equally permissive for a member whose organization row
-    // is unreadable. That pre-dates this change and is left alone here rather
-    // than tightened invisibly inside a performance change; tightening it would
-    // lock out anyone it currently serves, and belongs in its own PR.
+    // should not happen. Hand it to the legacy reads rather than invent a comp
+    // flag here. They hold the session to the STRICTEST MFA policy, not
+    // 'optional', so this fallback is no more permissive than this path.
     if (!held.organization) return null;
 
     return {
       ok: true,
       organizationId: held.organization_id,
       role: held.role,
-      mfaPolicy: held.organization.mfa_policy ?? 'optional',
+      mfaPolicy: enforcedMfaPolicy(held.organization),
       enabledModules: effectiveModules(
         held.enabled_modules.map((module_id) => ({ module_id })),
         held.organization.all_modules_comp,

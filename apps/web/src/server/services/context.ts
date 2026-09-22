@@ -2,6 +2,7 @@ import 'server-only';
 
 import { cache } from 'react';
 
+import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { requireOrgContext } from '@/lib/auth/session';
 import { PLACEMENT_KINDS, PLACEMENT_TYPES, SYSTEM_KINDS } from '@/lib/locations/groups';
 import {
@@ -78,12 +79,9 @@ async function resolveMfaState(
     // dashboard layout via this request-cached helper — reuse it instead of
     // issuing a second `organizations` SELECT for the same row.
     const org = await getOrgRowForRequest(organizationId);
-    const policy = (org?.mfa_policy as
-      | 'optional'
-      | 'admins_required'
-      | 'all_required'
-      | null
-      | undefined) ?? 'optional';
+    // A row this member cannot read is held to the STRICTEST policy, never
+    // 'optional' (see lib/auth/mfa-policy.ts). A read ERROR already threw above.
+    const policy = enforcedMfaPolicy(org);
     const policyRequired =
       policy === 'all_required' ||
       (policy === 'admins_required' && isAdminRole(role));

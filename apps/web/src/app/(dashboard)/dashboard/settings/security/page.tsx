@@ -9,6 +9,7 @@ import { MfaRecoveryCodes } from '@/components/settings/mfa-recovery-codes';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { sessionIdFromJwt } from '@/lib/auth/api-context';
+import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 import { getMfaRecoveryCodeStatus } from '@/server/actions/mfa-recovery';
@@ -54,7 +55,11 @@ export default async function SecuritySettingsPage({
       friendlyName: f.friendly_name ?? null,
     }));
 
-  const policy = (orgRow.data?.mfa_policy as Policy | undefined) ?? 'optional';
+  // Same rule as the gates that send people here and the action behind the
+  // Remove button: a row this member cannot read is held to the strictest
+  // policy (lib/auth/mfa-policy.ts), so the page never says "optional" while
+  // the layout is demanding enrollment.
+  const policy: Policy = enforcedMfaPolicy(orgRow.data);
   const isAdmin = ctx.role === 'owner' || ctx.role === 'admin';
   const policyRequired =
     policy === 'all_required' || (policy === 'admins_required' && isAdmin);

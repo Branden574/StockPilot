@@ -16,6 +16,7 @@ import {
   getOrgRowForRequest,
   getWarehousesForRequest,
 } from '@/lib/dashboard/request-cache';
+import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { createClient } from '@/lib/supabase/server';
@@ -130,9 +131,9 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // Chrome, no MFA enrolled). The banner is always visible above the
   // page content until the user enrolls; can't loop, can't throttle,
   // and behaves the same across browsers.
-  const policy =
-    (orgRow?.mfa_policy as 'optional' | 'admins_required' | 'all_required' | undefined) ??
-    'optional';
+  // An org row this member cannot read is held to the strictest policy, not
+  // 'optional' (lib/auth/mfa-policy.ts).
+  const policy = enforcedMfaPolicy(orgRow);
   const isAdmin = ctx.role === 'owner' || ctx.role === 'admin';
   const mfaRequired = policy === 'all_required' || (policy === 'admins_required' && isAdmin);
   const hasVerifiedFactor = mfaFactors.some((f) => f.status === 'verified');
