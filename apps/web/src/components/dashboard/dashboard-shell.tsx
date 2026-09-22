@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 
-import { CommandPalette } from '@/components/dashboard/command-palette';
+import { CommandPaletteLauncher } from '@/components/dashboard/command-palette-launcher';
 import { EdgeSwipeOpener } from '@/components/dashboard/edge-swipe-opener';
 import { KeyboardShortcutsProvider } from '@/components/dashboard/keyboard-shortcuts';
 import { navForRole } from '@/components/dashboard/nav';
@@ -32,7 +32,6 @@ interface DashboardShellProps {
   fullName: string | null;
   avatarUrl: string | null;
   userId: string;
-  initialUnreadNotifications: number;
   organizationId: string;
   organizationName: string;
   organizationLogoUrl?: string | null;
@@ -77,7 +76,6 @@ export function DashboardShell({
   fullName,
   avatarUrl,
   userId,
-  initialUnreadNotifications,
   organizationId,
   organizationName,
   organizationLogoUrl,
@@ -249,7 +247,6 @@ export function DashboardShell({
           organizationName={organizationName}
           userId={userId}
           organizationId={organizationId}
-          initialUnreadNotifications={initialUnreadNotifications}
           isPlatformAdmin={isPlatformAdmin}
           onToggleSidebar={handleToggleSidebar}
           sidebarHidden={desktopSidebarHidden}
@@ -311,7 +308,9 @@ export function DashboardShell({
       )}
 
       <UpdateCenter userId={userId} organizationId={organizationId} />
-      <CommandPalette />
+      {/* Holds only the ⌘K listener; the palette's code arrives on the first
+          press or when the browser goes idle, off the hydration path. */}
+      <CommandPaletteLauncher />
       <KeyboardShortcutsProvider />
     </div>
   );

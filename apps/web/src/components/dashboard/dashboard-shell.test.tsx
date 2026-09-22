@@ -16,7 +16,9 @@ vi.mock('@/components/ui/sheet', () => ({
   SheetContent: () => null,
   SheetTitle: () => null,
 }));
-vi.mock('@/components/dashboard/command-palette', () => ({ CommandPalette: () => null }));
+vi.mock('@/components/dashboard/command-palette-launcher', () => ({
+  CommandPaletteLauncher: () => null,
+}));
 vi.mock('@/components/dashboard/edge-swipe-opener', () => ({ EdgeSwipeOpener: () => null }));
 vi.mock('@/components/dashboard/nav-progress-bar', () => ({ NavProgressBar: () => null }));
 vi.mock('@/components/updates/update-center', () => ({ UpdateCenter: () => null }));
@@ -41,7 +43,6 @@ const baseProps = {
   fullName: 'Test User',
   avatarUrl: null,
   userId: 'u1',
-  initialUnreadNotifications: 0,
   organizationId: 'o1',
   organizationName: 'Org',
   memberships: [],

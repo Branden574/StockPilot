@@ -67,13 +67,20 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // factors go through request-cached helpers so the dashboard page (or
   // any other page in this layout) reuses the same fetch instead of
   // re-issuing the same Supabase queries in its own Promise.all.
+  //
+  // Only what the first byte truly needs belongs in this wave. 3-5% of our
+  // server's Supabase calls stall 1-8 s on weekday daytimes (logs,
+  // 2026-09-22), and the wave waits for its slowest member, so every extra
+  // call is one more chance to hold every dashboard page. The bell's unread
+  // count used to be one; the bell now reads it in the browser after mount,
+  // as it already did to replace this seed with the exact total
+  // (notification-bell.tsx).
   const [
     access,
     activeWarehouseId,
     orgRow,
     mfaFactors,
     sessionMemberships,
-    unreadRes,
     warehousesList,
     enabledModuleSet,
   ] = await Promise.all([
@@ -87,12 +94,6 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     // filters (accepted only), same rows, now with logo_url widened into
     // the shared select.
     getSessionMemberships(),
-    supabase
-      .from('notifications')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', ctx.userId)
-      .eq('organization_id', ctx.organizationId)
-      .is('read_at', null),
     getWarehousesForRequest(ctx.organizationId),
     // Request-cached: shares ONE organization_modules round-trip with
     // withContext() in the same render. The helper logs + fails closed
@@ -100,7 +101,6 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     // inline query did.
     getModulesForRequest(ctx.organizationId),
   ]);
-  const initialUnreadNotifications = unreadRes.count ?? 0;
 
   // Module IDs enabled for this org, serialized as plain strings so the
   // client DashboardShell/Sidebar can reconstruct a Set across the RSC
@@ -199,7 +199,6 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         fullName={ctx.fullName}
         avatarUrl={ctx.avatarUrl}
         userId={ctx.userId}
-        initialUnreadNotifications={initialUnreadNotifications}
         organizationId={ctx.organizationId}
         organizationName={ctx.organizationName}
         organizationLogoUrl={orgRow?.logo_url ?? null}

@@ -13,10 +13,8 @@ interface Props {
   userId: string;
   /** Active workspace — the bell only counts/toasts THIS org's rows. A user
       in multiple orgs otherwise sees other workspaces' notifications bleed
-      into the badge + toasts (the server-rendered initial count is already
-      org-scoped; the client refetch must match it). */
+      into the badge + toasts (and their links navigate into the wrong org). */
   organizationId: string;
-  initialUnread: number;
 }
 
 /**
@@ -37,10 +35,17 @@ interface Props {
  * and reopening the dashboard tab resets it, which is fine — the user
  * has already seen those toasts.
  */
-export function NotificationBell({ userId, organizationId, initialUnread }: Props) {
+export function NotificationBell({ userId, organizationId }: Props) {
   const router = useRouter();
   const pathname = usePathname();
-  const [count, setCount] = React.useState(initialUnread);
+  // No badge until the first read below lands (on mount). The count used to be
+  // seeded by a head count in (dashboard)/layout.tsx, which held every hard
+  // load and every router.refresh() of the dashboard until it returned, and
+  // 3-5% of our server's Supabase calls stall 1-8 s on weekday daytimes (logs,
+  // 2026-09-22). That seed was only ever shown until this same mount read
+  // replaced it, and the read carries the exact total, so the badge it settles
+  // on is unchanged.
+  const [count, setCount] = React.useState(0);
   const supabaseRef = React.useRef<ReturnType<typeof createClient> | null>(null);
   if (supabaseRef.current === null) {
     try {
@@ -92,7 +97,7 @@ export function NotificationBell({ userId, organizationId, initialUnread }: Prop
       // Badge = the EXACT unread total, not the size of this page.
       //
       // SP-117: this used to be `setCount(data.length)` off a LIMIT 20 query.
-      // The server-rendered seed in (dashboard)/layout.tsx is a real
+      // The server-rendered seed (then in (dashboard)/layout.tsx) was a real
       // `count: 'exact', head: true` head count, so a user with 35 unread
       // watched the badge drop 35 -> 20 the moment the first client refetch
       // landed (the pathname effect runs it on mount), and the `99+` label
