@@ -53,9 +53,9 @@ export async function loadCountingUnits(
  *
  * SAME COST POSTURE as the per-id form: an org without the `sports` module pays
  * nothing at all. The module set is on the request-cached ServiceContext, so the
- * gate is a Set lookup with no round trip — deliberately NOT `checkModuleAccess`,
- * which would add a `module_enabled` RPC to the hottest page in the app for
- * every org, including the ones this must cost nothing. Uncached, like the
+ * gate is a Set lookup with no round trip (`checkModuleAccess` reads the same
+ * request-cached set since it stopped calling the `module_enabled` RPC; either
+ * way the hottest page in the app pays nothing for the gate). Uncached, like the
  * instant branch's call, so it can never serve a stale unit; one column-only
  * read for a sports org.
  *
