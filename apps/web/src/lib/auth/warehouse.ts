@@ -127,14 +127,26 @@ export const getWarehouseAccess = cache(async (ctx?: WarehouseCtxLike): Promise<
  * Throws a forbidden error if the user can't access the given warehouse for
  * the requested operation. Use at the top of every service method that takes
  * a warehouse_id from request input.
+ *
+ * `started` is `getWarehouseAccess(ctx)` for this SAME ctx, begun by a caller
+ * that did not yet know the warehouse id: InventoryService.get() starts it
+ * alongside the item-row read so the two trips to Supabase overlap instead of
+ * queueing (production logs 2026-09-22: 3-5% of calls stall 1-8 s at the
+ * gateway, and a stall in a chain delays every level behind it). Passing it
+ * in, rather than calling this again after the row arrives, is what keeps it
+ * ONE read where React's request cache is not active (route handlers). It
+ * changes when the access list is read, never what is decided from it: the
+ * rules below are applied to it unchanged, and a rejection still rejects here.
+ * Never pass anything but that helper's own result for the same ctx.
  */
 export async function assertWarehouseAccess(
   warehouseId: string,
   op: 'read' | 'write' = 'read',
   ctx?: WarehouseCtxLike,
+  started?: Promise<WarehouseAccess>,
 ): Promise<void> {
   const c = ctx ?? (await requireOrgContext());
-  const access = await getWarehouseAccess(c);
+  const access = await (started ?? getWarehouseAccess(c));
 
   if (op === 'write' && c.role === 'viewer') {
     throw new ForbiddenError('Read-only auditor cannot perform write operations.');

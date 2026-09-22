@@ -74,6 +74,7 @@ describe('ActivityService.forItem', () => {
             notes: null,
             created_at: '2025-01-01T00:00:00.000Z',
             user_id: 'u1',
+            actor: { id: 'u1', full_name: 'Alice', email: 'a@x.com' },
           },
           {
             id: 'm-new',
@@ -96,12 +97,9 @@ describe('ActivityService.forItem', () => {
             metadata: { reason: 'rename' },
             created_at: '2025-02-01T00:00:00.000Z',
             user_id: 'u1',
+            actor: { id: 'u1', full_name: 'Alice', email: 'a@x.com' },
           },
         ],
-        error: null,
-      },
-      'user_profiles.select': {
-        data: [{ id: 'u1', full_name: 'Alice', email: 'a@x.com' }],
         error: null,
       },
     });
@@ -178,7 +176,11 @@ describe('ActivityService.forItem', () => {
     expect(events[0]!.actorEmail).toBeNull();
   });
 
-  it('looks up user_profiles via in() with the merged set of user_ids', async () => {
+  // The actor used to be a THIRD, serial trip: collect every user_id from both
+  // queries, then `user_profiles.in('id', ids)`. Production logs of the item
+  // page (2026-09-22) showed it as its own level in the render's chain. It is
+  // now embedded in both base selects (FK user_id -> user_profiles, 0002).
+  it('reads the actor WITH both base rows: an embed in each select, and no user_profiles query at all', async () => {
     const stub = makeSupabaseStub({
       'stock_movements.select': {
         data: [
@@ -191,6 +193,7 @@ describe('ActivityService.forItem', () => {
             notes: null,
             created_at: '2025-01-01T00:00:00.000Z',
             user_id: 'u1',
+            actor: { id: 'u1', full_name: 'Alice', email: 'a@x.com' },
           },
         ],
         error: null,
@@ -203,29 +206,26 @@ describe('ActivityService.forItem', () => {
             metadata: {},
             created_at: '2025-01-02T00:00:00.000Z',
             user_id: 'u2',
+            actor: { id: 'u2', full_name: null, email: 'b@x.com' },
           },
-        ],
-        error: null,
-      },
-      'user_profiles.select': {
-        data: [
-          { id: 'u1', full_name: 'Alice', email: 'a@x.com' },
-          { id: 'u2', full_name: null, email: 'b@x.com' },
         ],
         error: null,
       },
     });
     const svc = makeService(stub.client);
 
-    await svc.forItem('item-1');
+    const events = await svc.forItem('item-1');
 
-    const chain = stub.chains.get('user_profiles.select') ?? [];
-    const args = stub.chainArgs.get('user_profiles.select') ?? [];
-    const inIdx = chain.indexOf('in');
-    expect(inIdx).toBeGreaterThan(-1);
-    expect(args[inIdx]![0]).toBe('id');
-    // Order is not guaranteed (Set iteration), so compare as sorted lists.
-    expect([...(args[inIdx]![1] as string[])].sort()).toEqual(['u1', 'u2']);
+    expect(stub.fromCalls).not.toContain('user_profiles');
+    const embed = 'actor:user_profiles!user_id (id, full_name, email)';
+    const movementSelect = (stub.chainArgs.get('stock_movements.select') ?? [])[0]![0] as string;
+    const auditSelect = (stub.chainArgs.get('audit_logs.select') ?? [])[0]![0] as string;
+    expect(movementSelect).toContain(embed);
+    expect(auditSelect).toContain(embed);
+    expect(events.map((e) => [e.id, e.actor, e.actorEmail])).toEqual([
+      ['a:a1', 'b@x.com', 'b@x.com'],
+      ['m:m1', 'Alice', 'a@x.com'],
+    ]);
   });
 
   it('skips the user_profiles lookup entirely when no user_ids are present', async () => {
@@ -252,15 +252,12 @@ describe('ActivityService.forItem', () => {
             notes: null,
             created_at: '2025-01-01T00:00:00.000Z',
             user_id: 'u1',
+            actor: { id: 'u1', full_name: null, email: 'who@x.com' },
           },
         ],
         error: null,
       },
       'audit_logs.select': { data: [], error: null },
-      'user_profiles.select': {
-        data: [{ id: 'u1', full_name: null, email: 'who@x.com' }],
-        error: null,
-      },
     });
     const svc = makeService(stub.client);
 
@@ -269,7 +266,7 @@ describe('ActivityService.forItem', () => {
     expect(events[0]!.actorEmail).toBe('who@x.com');
   });
 
-  it('"Unknown" when user_id has no matching profile row', async () => {
+  it('"Unknown" when user_id has no matching profile row (the embed is null: RLS-hidden or deleted)', async () => {
     const stub = makeSupabaseStub({
       'stock_movements.select': {
         data: [
@@ -282,18 +279,109 @@ describe('ActivityService.forItem', () => {
             notes: null,
             created_at: '2025-01-01T00:00:00.000Z',
             user_id: 'ghost',
+            actor: null,
           },
         ],
         error: null,
       },
       'audit_logs.select': { data: [], error: null },
-      'user_profiles.select': { data: [], error: null },
     });
     const svc = makeService(stub.client);
 
     const events = await svc.forItem('item-1');
     expect(events[0]!.actor).toBe('Unknown');
     expect(events[0]!.actorEmail).toBeNull();
+  });
+
+  // Parity with the separate lookup the embed replaced. `oldActor` below is that
+  // code, verbatim: a Map built from `user_profiles.in('id', ids)` rows, then
+  // "System" / map hit / "Unknown". Every profile shape the feed can meet is run
+  // through both, on movement AND audit rows, and the names must not differ by
+  // a byte. That includes the odd ones: an empty full_name falls through to
+  // email, a whitespace-only one trims to '' (it is truthy before the trim), and
+  // a profile the caller's RLS hides arrives as a null embed where the old
+  // lookup simply had no row.
+  it('attributes every row exactly as the separate user_profiles lookup did', async () => {
+    const profiles: Record<string, { full_name: string | null; email: string | null } | null> = {
+      u1: { full_name: 'Alice', email: 'a@x.com' },
+      u2: { full_name: null, email: 'b@x.com' },
+      u3: { full_name: '', email: 'c@x.com' },
+      u4: { full_name: '  Dee Lee  ', email: 'd@x.com' },
+      u5: { full_name: null, email: null },
+      u6: { full_name: '   ', email: 'e@x.com' },
+      hidden: null,
+    };
+    const uids: Array<string | null> = [...Object.keys(profiles), null];
+
+    function oldActor(uid: string | null): { name: string; email: string | null } {
+      const map = new Map<string, { name: string; email: string | null }>();
+      for (const [id, p] of Object.entries(profiles)) {
+        if (!p) continue; // RLS-hidden: the old in() query returned no row for it
+        map.set(id, {
+          name: (p.full_name || p.email || 'Unknown').trim(),
+          email: p.email ?? null,
+        });
+      }
+      if (!uid) return { name: 'System', email: null };
+      return map.get(uid) ?? { name: 'Unknown', email: null };
+    }
+
+    const embedFor = (uid: string | null, i: number) => {
+      if (!uid || !profiles[uid]) return null;
+      const row = { id: uid, ...profiles[uid] };
+      // PostgREST can return a to-one embed as a one-element array; both shapes
+      // must read the same.
+      return i % 2 === 0 ? row : [row];
+    };
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: uids.map((uid, i) => ({
+          id: `m${i}`,
+          movement_type: 'adjust',
+          quantity_change: 1,
+          new_quantity: 1,
+          reason: null,
+          notes: null,
+          created_at: `2025-01-0${i + 1}T00:00:00.000Z`,
+          user_id: uid,
+          actor: embedFor(uid, i),
+        })),
+        error: null,
+      },
+      'audit_logs.select': {
+        data: uids.map((uid, i) => ({
+          id: `a${i}`,
+          event: 'item.updated',
+          metadata: {},
+          created_at: `2025-02-0${i + 1}T00:00:00.000Z`,
+          user_id: uid,
+          actor: embedFor(uid, i + 1),
+        })),
+        error: null,
+      },
+    });
+    const svc = makeService(stub.client);
+
+    const events = await svc.forItem('item-1', 30);
+    expect(events).toHaveLength(uids.length * 2);
+    for (const [i, uid] of uids.entries()) {
+      const expected = oldActor(uid);
+      for (const id of [`m:m${i}`, `a:a${i}`]) {
+        const e = events.find((ev) => ev.id === id)!;
+        expect({ id, actor: e.actor, email: e.actorEmail }).toEqual({
+          id,
+          actor: expected.name,
+          email: expected.email,
+        });
+      }
+    }
+    // The concrete answers, so a change to the oracle cannot hide a change to both.
+    expect(oldActor('u3').name).toBe('c@x.com');
+    expect(oldActor('u4').name).toBe('Dee Lee');
+    expect(oldActor('u5').name).toBe('Unknown');
+    expect(oldActor('u6').name).toBe('');
+    expect(oldActor('hidden')).toEqual({ name: 'Unknown', email: null });
+    expect(oldActor(null)).toEqual({ name: 'System', email: null });
   });
 
   it('passes the FULL requested limit to movements and a separate (smaller) limit to audit', async () => {
