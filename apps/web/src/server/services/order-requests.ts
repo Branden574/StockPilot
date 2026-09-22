@@ -1888,12 +1888,19 @@ export class OrderRequestsService {
     // path explicitly. Managers themselves are unaffected: the RPC's
     // own role check still permits any non-terminal cancel.
     if (this.ctx.role !== 'owner' && this.ctx.role !== 'admin' && this.ctx.role !== 'manager') {
-      const { data: row } = await this.ctx.supabase
+      const { data: row, error: rowErr } = await this.ctx.supabase
         .from('order_requests')
         .select('status, requester_user_id')
         .eq('organization_id', this.ctx.organizationId)
         .eq('id', id)
         .maybeSingle();
+      // This read DECIDES whether the requester may cancel, and the RPC does
+      // not repeat the rule (it accepts any owner-or-manager cancel of a
+      // non-terminal order). With the error discarded, a failed read left
+      // `row` null, skipped the rule, and let a requester cancel their order
+      // after approval: releasing its reservations, or restocking units out
+      // from under the picker who claimed it. Deny.
+      if (rowErr) throw new ServiceError('internal_error', rowErr.message);
       if (
         row &&
         (row as { requester_user_id: string | null }).requester_user_id === this.ctx.userId

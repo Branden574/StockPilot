@@ -117,6 +117,22 @@ describe('OrderRequestsService.cancel — requester self-cancel window', () => {
     expect(stub.fromCalls).not.toContain('order_requests');
   });
 
+  it('DENIES when the ownership/status read fails, without reaching the RPC', async () => {
+    // The read is the only enforcement of the window. A discarded error used
+    // to leave `row` null and skip the rule entirely (fail-open).
+    const stub = makeSupabaseStub({
+      'order_requests.select.maybeSingle': {
+        data: null,
+        error: { message: 'canceling statement due to statement timeout' },
+      },
+      ...OK_RPC,
+    });
+    await expect(svc(stub).cancel('ord-1', null)).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+    expect(stub.rpcCalls).toHaveLength(0);
+  });
+
   it("does not apply the window to a staff member cancelling SOMEONE ELSE's order (the RPC decides)", async () => {
     const stub = makeSupabaseStub({
       'order_requests.select.maybeSingle': {
