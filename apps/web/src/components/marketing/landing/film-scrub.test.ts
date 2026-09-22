@@ -5,8 +5,16 @@ import path from 'node:path';
 
 import { mountFilm, type FrameSet } from './film';
 
-/** The engine's own source, for the one invariant that cannot be seen from outside. */
+/** The engine's own source, for the invariants that cannot be seen from outside. */
 const filmSource = () => readFileSync(path.join(__dirname, 'film.ts'), 'utf8');
+/** Read from the engine rather than restated here, so the two cannot drift apart. */
+const constant = (name: string): number => {
+  const found = new RegExp(`const ${name} = (\\d+);`).exec(filmSource());
+  if (!found) throw new Error(`${name} not found in film.ts`);
+  return Number(found[1]);
+};
+const FLICK_STRIDE = constant('FLICK_STRIDE');
+const FLICK_STRIDE_MIN = constant('FLICK_STRIDE_MIN');
 
 /**
  * The scrub itself: does the picture follow the scroll, and does the film arrive
@@ -24,8 +32,12 @@ const SET: FrameSet = {
   count: COUNT,
   poster: '/poster.jpg',
 };
-/** Long enough that the loader's bands are narrower than the film. */
-const LONG = 400;
+/**
+ * Long enough that the loader's bands (24 either side dense, 120 at half
+ * density) are a small fraction of it — at 400 they covered most of the film
+ * and the far-end assertions were down to a handful of frames.
+ */
+const LONG = 1200;
 const LONG_SET: FrameSet = {
   segments: [{ dir: '/film', from: 1, count: LONG }],
   count: LONG,
@@ -226,15 +238,65 @@ describe('the film loads around the visitor, not in full', () => {
     const asked = new Set(made.map(indexOf));
     // Everything within the near band of the top is there...
     for (let i = 0; i <= 24; i++) expect(asked.has(i), `frame ${i}`).toBe(true);
-    // ...and the far end has only the coarse spread, one frame in 24, plus the
-    // very last frame.
-    const farEnd = [...asked].filter((i) => i > 300);
+    // ...and the far end has only the coarse spread — one in 24 at first, never
+    // denser than one in 6 however long the visitor stays — plus the last frame.
+    const farEnd = [...asked].filter((i) => i > LONG * 0.75);
     expect(farEnd.length).toBeGreaterThan(0);
     for (const i of farEnd) {
-      expect(i % 24 === 0 || i === LONG - 1, `frame ${i} at the far end`).toBe(true);
+      expect(i % 6 === 0 || i === LONG - 1, `frame ${i} at the far end`).toBe(true);
     }
     // In total, a fraction of the film rather than all of it.
     expect(asked.size).toBeLessThan(LONG / 2);
+    f.film.destroy();
+  });
+
+  it('spends idle time refining the coarse band, and stops at the floor', async () => {
+    // What a visitor runs into when they outrun the dense bands is the coarse
+    // one, so the loop refines it while there is nothing else to fetch rather
+    // than sitting idle. Measured on the deployed site before this: 296 of 347
+    // off-target paints during a brisk cold scroll came from that band.
+    const f = mount(10000, 0, LONG_SET);
+    for (let i = 0; i < 40; i++) await flush();
+    await new Promise((r) => setTimeout(r, 900));
+    for (let i = 0; i < 40; i++) await flush();
+    const asked = new Set(made.map(indexOf));
+    const far = [...asked].filter((i) => i > LONG * 0.75 && i !== LONG - 1);
+    // Refined past the opening stride...
+    expect(
+      far.some((i) => i % FLICK_STRIDE !== 0),
+      'the band was refined',
+    ).toBe(true);
+    // ...and stopped at the floor, so the film is still never loaded in full.
+    for (const i of far) expect(i % FLICK_STRIDE_MIN, `frame ${i} at the far end`).toBe(0);
+    f.film.destroy();
+  });
+
+  it('refines outwards from the visitor, not from the start of the film', async () => {
+    // Entering half way down: what they might scroll into next is refined
+    // before the far ends, so the improvement lands where they are.
+    const f = mount(10000, 0.5, LONG_SET);
+    const here = Math.round(0.5 * (LONG - 1));
+    for (let i = 0; i < 40; i++) await flush();
+    await new Promise((r) => setTimeout(r, 900));
+    for (let i = 0; i < 40; i++) await flush();
+    // The LAST refinement stage only — on the floor's grid but not the one
+    // before it — and further out than the mid band. Those can have come from
+    // nowhere else, and they are a single pass: refinement restarts from the
+    // visitor at each stride, so taking two stages together would zig-zag by
+    // design.
+    const outer = made
+      .map(indexOf)
+      .filter((i) => i % (FLICK_STRIDE_MIN * 2) === FLICK_STRIDE_MIN && Math.abs(i - here) > 120)
+      .map((i) => Math.abs(i - here));
+    expect(outer.length).toBeGreaterThan(6);
+    // Strictly outwards: each one is at least as far as the one before. Index
+    // order would zig-zag across the playhead instead (a frame below it, then
+    // one above, then one further below), which an average would not notice.
+    for (let i = 1; i < outer.length; i++) {
+      expect(outer[i] as number, `fetch ${i} of ${outer.length}`).toBeGreaterThanOrEqual(
+        outer[i - 1] as number,
+      );
+    }
     f.film.destroy();
   });
 
@@ -279,7 +341,7 @@ describe('the film loads around the visitor, not in full', () => {
     for (let i = 0; i < 40; i++) await flush();
     await new Promise((r) => setTimeout(r, 300));
     const before = new Set(made.map(indexOf));
-    const target = 300;
+    const target = Math.round(LONG * 0.75);
     expect(before.has(target + 1)).toBe(false);
     f.scrollTo(target / (LONG - 1));
     // REAL time: once its bands are full the loop idles, so following a scroll
