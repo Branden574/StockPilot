@@ -456,8 +456,18 @@ export function mountFilm(opts: FilmOptions): FilmHandle {
   const NEAR_BAND = 24;
   const MID_BAND = 120;
   const FLICK_STRIDE = 24;
-  /** Frames queued per round of the loop, so a fast scroll re-aims quickly. */
-  const BATCH = 24;
+  /**
+   * Frames queued per round of the loop.
+   *
+   * ONE WAVE, not more. The loop reads the playhead, queues a batch, then waits
+   * for the whole batch; everything in it was aimed at where the visitor WAS
+   * when it was queued. A batch several waves deep meant the loader chased a
+   * stale position and a brisk scroll stayed a step behind for the rest of the
+   * film — measured on the deployed site as up to 17 frames of 786 on a fast
+   * first scroll. At one wave the aim is refreshed as often as the connection
+   * allows.
+   */
+  const BATCH = IN_FLIGHT;
   /** How often the loop looks again once the bands around the visitor are full. */
   const IDLE_RECHECK_MS = 150;
 
@@ -489,15 +499,23 @@ export function mountFilm(opts: FilmOptions): FilmHandle {
       return;
     }
 
-    // Where the visitor IS, first and at full density: every frame here is one
-    // they are about to scrub through.
-    await loadAll(missingNear(playhead(), NEAR_BAND, 1, Number.POSITIVE_INFINITY));
+    // A TIGHT seed where the visitor is — enough to scrub immediately, not so
+    // much that an early flick has to wait for it. Widening the near band to 24
+    // before the coarse spread ran would have made a flick in the first moments
+    // paint an opening-chapter frame for five times as long as it used to; the
+    // loop below fills the rest of the band a moment later.
+    await loadAll(missingNear(playhead(), 4, 1, Number.POSITIVE_INFINITY));
 
     // Then the coarse spread over the whole film, so a flick anywhere lands
     // near a decoded frame instead of on nothing.
     if (destroyed) return;
     const flick: number[] = [];
     for (let i = 0; i < COUNT; i += FLICK_STRIDE) flick.push(i);
+    // The last frame explicitly: COUNT is rarely a multiple of the stride, so
+    // the tail (up to 23 frames on the desktop set — the whole closing shot)
+    // would otherwise have no coarse coverage at all, and a flick to the very
+    // end of the page would land on whatever the previous multiple was.
+    if (flick[flick.length - 1] !== COUNT - 1) flick.push(COUNT - 1);
     await loadAll(flick);
 
     // Then follow the visitor. This runs until the film is unmounted; when
@@ -573,6 +591,12 @@ export function mountFilm(opts: FilmOptions): FilmHandle {
       window.removeEventListener('scroll', onScrollHidden);
       window.removeEventListener('resize', resize);
       document.removeEventListener('visibilitychange', onVisible);
+      // NOTE: up to IN_FLIGHT load() promises are left unsettled here, because
+      // clearing a source may fire neither onload nor onerror, so the follow
+      // loop stays suspended rather than returning. That is deliberate and not
+      // a leak: nothing outside this closure references the loop's promise
+      // chain once the film is unmounted, so the whole graph — suspended frame
+      // included — is unreachable and collectable as a cycle.
       for (let i = 0; i < COUNT; i++) {
         const img = frames[i];
         if (img) {

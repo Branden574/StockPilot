@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { mountFilm, type FrameSet } from './film';
+
+/** The engine's own source, for the one invariant that cannot be seen from outside. */
+const filmSource = () => readFileSync(path.join(__dirname, 'film.ts'), 'utf8');
 
 /**
  * The scrub itself: does the picture follow the scroll, and does the film arrive
@@ -220,12 +226,51 @@ describe('the film loads around the visitor, not in full', () => {
     const asked = new Set(made.map(indexOf));
     // Everything within the near band of the top is there...
     for (let i = 0; i <= 24; i++) expect(asked.has(i), `frame ${i}`).toBe(true);
-    // ...and the far end has only the coarse spread, one frame in 24.
+    // ...and the far end has only the coarse spread, one frame in 24, plus the
+    // very last frame.
     const farEnd = [...asked].filter((i) => i > 300);
     expect(farEnd.length).toBeGreaterThan(0);
-    for (const i of farEnd) expect(i % 24, `frame ${i} at the far end`).toBe(0);
+    for (const i of farEnd) {
+      expect(i % 24 === 0 || i === LONG - 1, `frame ${i} at the far end`).toBe(true);
+    }
     // In total, a fraction of the film rather than all of it.
     expect(asked.size).toBeLessThan(LONG / 2);
+    f.film.destroy();
+  });
+
+  it('covers the LAST frame in the coarse spread, whatever the film length', async () => {
+    // COUNT is rarely a multiple of the stride, so a plain `i += stride` walk
+    // leaves the tail — the whole closing shot on the desktop set — with no
+    // coarse coverage, and a flick to the very end lands on the last multiple.
+    const f = mount(10000, 0, LONG_SET);
+    for (let i = 0; i < 40; i++) await flush();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(made.map(indexOf)).toContain(LONG - 1);
+    f.film.destroy();
+  });
+
+  it('queues no more than ONE wave before re-reading the playhead', async () => {
+    // Everything in a batch was aimed at where the playhead WAS when the batch
+    // was queued, and the loop waits for the whole batch. A batch several waves
+    // deep therefore chases a stale position, which on the deployed site was a
+    // brisk scroll staying a step behind for the rest of the film. This is read
+    // from the SOURCE because the depth is invisible from outside: with a stub
+    // that resolves instantly, a batch of any size completes before the visitor
+    // can move.
+    const source = filmSource();
+    expect(source).toMatch(/const BATCH = IN_FLIGHT;/);
+    expect(source).not.toMatch(/const BATCH = \d/);
+  });
+
+  it('gets the coarse spread out before widening the band around the visitor', async () => {
+    const f = mount(10000, 0, LONG_SET);
+    for (let i = 0; i < 30; i++) await flush();
+    // Among the first requests there is already something far away. Seeding the
+    // full 24-frame band first would delay the spread by five times as many
+    // files, and a flick in those moments paints an opening-chapter frame.
+    const far = made.map(indexOf).findIndex((i) => i > 100);
+    expect(far, 'a far frame is requested early').toBeGreaterThanOrEqual(0);
+    expect(far).toBeLessThan(12);
     f.film.destroy();
   });
 
