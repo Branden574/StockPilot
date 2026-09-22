@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   belongsToInventoryView,
+  browseListFor,
   inventoryDefaultLifecycle,
   inventoryViewPredicate,
+  isRentalItemRow,
+  rentalItemsPredicate,
 } from './list-visibility';
 
 /**
@@ -67,3 +70,47 @@ describe('the rows that drifted between the two platforms', () => {
     expect(belongsToInventoryView({ item_type: null, is_rental: false }, 'items')).toBe(false);
   });
 });
+
+describe('every item has exactly one place to be browsed', () => {
+  // The invariant behind "if it exists on web it exists on mobile": for every
+  // product and book, the three lists partition the inventory. Mobile used to
+  // have only two of them, so its Items tab quietly doubled as the third.
+  it('rentals get their own list, of every type', () => {
+    expect(rentalItemsPredicate).toEqual({ itemType: null, isRental: true });
+    expect(isRentalItemRow({ is_rental: true })).toBe(true);
+    expect(isRentalItemRow({ is_rental: false })).toBe(false);
+    expect(isRentalItemRow({ is_rental: null })).toBe(false);
+    expect(isRentalItemRow({})).toBe(false);
+  });
+
+  it.each([
+    [{ item_type: 'product', is_rental: false }, 'items'],
+    [{ item_type: 'product', is_rental: true }, 'rentals'],
+    [{ item_type: 'book', is_rental: false }, 'books'],
+    [{ item_type: 'book', is_rental: true }, 'rentals'],
+    [{ item_type: 'product', is_rental: null }, 'items'],
+  ] as const)('%o is browsed on %s', (row, list) => {
+    expect(browseListFor(row)).toBe(list);
+  });
+
+  it('no product or book is on two lists, and none is on none', () => {
+    for (const item_type of ['product', 'book']) {
+      for (const is_rental of [true, false, null]) {
+        const row = { item_type, is_rental };
+        const on = [
+          belongsToInventoryView(row, 'items'),
+          belongsToInventoryView(row, 'books'),
+          isRentalItemRow(row),
+        ].filter(Boolean).length;
+        expect(on, JSON.stringify(row)).toBe(1);
+      }
+    }
+  });
+
+  it('an item type no tab knows is on NO list — say so rather than guess', () => {
+    expect(browseListFor({ item_type: 'asset', is_rental: false })).toBeNull();
+    // ...unless it is a rental, which the Rentals list takes whatever its type.
+    expect(browseListFor({ item_type: 'asset', is_rental: true })).toBe('rentals');
+  });
+});
+

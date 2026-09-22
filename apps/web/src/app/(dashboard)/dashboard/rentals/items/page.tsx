@@ -6,7 +6,7 @@ import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { InventoryTable } from '@/components/inventory/inventory-table';
 import { Button } from '@/components/ui/button';
-import { can } from '@stockpilot/core';
+import { can, isRentalItemRow } from '@stockpilot/core';
 import { CategoriesService } from '@/server/services/categories';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
@@ -91,12 +91,12 @@ export default async function RentalItemsPage({
   const categoryIds = parseIdList(params.cat);
   const locationIds = parseIdList(params.loc);
 
-  // Defense-in-depth: load with includeRentals=true (to bypass the default
-  // is_rental=false filter) then additionally filter client-side to is_rental=true.
-  // The InventoryService list() method with includeRentals=true returns ALL items
-  // (both regular and rental). We then filter to only rental items here.
-  // This double-filter ensures rental items are shown even if the
-  // includeRentals flag is removed from the service for any reason.
+  // The database returns ONLY rentals (`rentalsOnly`), so a page is 50
+  // rentals and `total` counts rentals. This used to ask for every item
+  // (`includeRentals`) and keep the rentals among the first 50, which hid
+  // every rental that was not among the 50 most recently updated items —
+  // see the `rentalsOnly` doc in InventoryService. Any type: a rental can be
+  // a product or a book (the shared `rentalItemsPredicate`).
   const inventory = await inventorySvc.list({
     q: params.q,
     status: lifecycleStatus,
@@ -108,14 +108,15 @@ export default async function RentalItemsPage({
     sort,
     limit: PAGE_SIZE,
     offset: (page - 1) * PAGE_SIZE,
-    includeRentals: true,
+    rentalsOnly: true,
   });
 
-  // Defense-in-depth filter: only show is_rental=true items
+  // Belt and braces: the query already guarantees this, and a row that is
+  // not a rental must never render on the rentals page.
   const rentalItems = inventory.items.filter(
-    (i) => (i as { is_rental?: boolean }).is_rental === true,
+    (i) => isRentalItemRow(i as { is_rental?: boolean | null }),
   );
-  const rentalTotal = rentalItems.length; // approximate; pagination is over all items
+  const rentalTotal = inventory.total;
 
   const [categories, locations, suppliers, tags] = await Promise.all([
     categoriesSvc.list(),

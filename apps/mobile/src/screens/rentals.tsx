@@ -1,14 +1,25 @@
+import { inventoryDefaultLifecycle, rentalItemsPredicate } from '@stockpilot/core';
 import { useRouter } from 'expo-router';
-import { PackageOpen, Plus } from 'lucide-react-native';
+import { Boxes, PackageOpen, Plus } from 'lucide-react-native';
 import * as React from 'react';
 import { Linking, Pressable, View } from 'react-native';
 
 import { Card } from '@/components/ui/card';
+import { Chip } from '@/components/ui/chip';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
+import { Thumb } from '@/components/ui/thumb';
 import { Body, Mono } from '@/components/ui/text';
 import { showWriteCta } from '@/lib/cta-gating';
+import { signListThumbnails } from '@/lib/image-cache';
+import {
+  RENTAL_ITEMS_LIMIT,
+  buildRentalItemRows,
+  rentalItemsEyebrow,
+  type RentalItemRow,
+  type RentalItemSource,
+} from '@/lib/rental-items';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
@@ -35,7 +46,22 @@ interface RentalRow {
  * tab-bar content inset comes from DataListScreen, which reads
  * BottomTabBarHeightContext and pads only when rendered inside the tabs
  * navigator — the drawer rendering is unchanged. Extracted verbatim.
+ *
+ * TWO VIEWS, like web's Rentals tabs: Checkouts (the `rentals` table) and
+ * Items (the rental inventory, see lib/rental-items.ts). Items is fetched the
+ * first time it is opened, not on every visit to the screen.
  */
+type RentalsView = 'checkouts' | 'items';
+
+interface RentalItemsState {
+  /** The org it was fetched for: a switch of organization makes it stale. */
+  orgId: string;
+  rows: RentalItemRow[];
+  total: number | null;
+  images: Map<string, string>;
+  failed: boolean;
+}
+
 export default function RentalsScreen() {
   const router = useRouter();
   // New-rental is a WRITE — hidden for rentals:read-only viewers (cosmetic;
@@ -47,6 +73,8 @@ export default function RentalsScreen() {
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [now, setNow] = React.useState(() => Date.now());
+  const [view, setView] = React.useState<RentalsView>('checkouts');
+  const [items, setItems] = React.useState<RentalItemsState | null>(null);
 
   const load = React.useCallback(async () => {
     if (!orgId) return;
@@ -84,15 +112,138 @@ export default function RentalsScreen() {
     setLoading(false);
   }, [orgId]);
 
+  // The rental inventory. Same rule as web's Rentals -> Items: the shared
+  // rental predicate, the default lifecycle (active, not awaiting a first
+  // receipt), every warehouse, most recently updated first. Errors are BOUND:
+  // an unreadable list must say so, never pose as "no rental items".
+  const loadItems = React.useCallback(async () => {
+    if (!orgId) return;
+    const { data, error, count } = await supabase
+      .from('inventory_items')
+      .select('id, name, sku, quantity_on_hand', { count: 'exact' })
+      .eq('organization_id', orgId)
+      .eq('is_rental', rentalItemsPredicate.isRental)
+      .eq('status', inventoryDefaultLifecycle.status)
+      .eq('awaiting_first_receipt', inventoryDefaultLifecycle.awaitingFirstReceipt)
+      .is('deleted_at', null)
+      .order('updated_at', { ascending: false })
+      .order('id', { ascending: true })
+      .limit(RENTAL_ITEMS_LIMIT);
+    if (error) {
+      setItems({ orgId, rows: [], total: null, images: new Map(), failed: true });
+      return;
+    }
+    const sources = (data ?? []) as RentalItemSource[];
+    const ids = sources.map((r) => r.id);
+    // Out on rental = open reservations; the photo is the primary one. Both
+    // are best effort: without them the list is still right about what exists.
+    const [reservations, photos] = ids.length
+      ? await Promise.all([
+          supabase
+            .from('stock_reservations')
+            .select('item_id, quantity')
+            .eq('organization_id', orgId)
+            .in('item_id', ids)
+            .is('released_at', null),
+          supabase
+            .from('item_images')
+            .select('item_id, storage_path, thumb_path, is_primary, sort_order')
+            .in('item_id', ids)
+            .order('is_primary', { ascending: false })
+            .order('sort_order', { ascending: true }),
+        ])
+      : [{ data: [] }, { data: [] }];
+    const firstPhoto = new Map<string, { storage_path: string; thumb_path: string | null }>();
+    for (const p of (photos.data ?? []) as {
+      item_id: string;
+      storage_path: string;
+      thumb_path: string | null;
+    }[]) {
+      if (!firstPhoto.has(p.item_id)) {
+        firstPhoto.set(p.item_id, { storage_path: p.storage_path, thumb_path: p.thumb_path });
+      }
+    }
+    // The stored ~200px thumbnail where there is one, never the master (see
+    // signListThumbnails and the Items tab).
+    let signed = new Map<string, string>();
+    try {
+      signed = firstPhoto.size ? await signListThumbnails(Array.from(firstPhoto.values())) : signed;
+    } catch {
+      // A glyph instead of a photo; the row itself is still true.
+    }
+    const images = new Map<string, string>();
+    for (const [itemId, photo] of firstPhoto) {
+      const url = signed.get(photo.storage_path);
+      if (url) images.set(itemId, url);
+    }
+    setItems({
+      orgId,
+      rows: buildRentalItemRows(
+        sources,
+        (reservations.data ?? []) as { item_id: string; quantity: number | null }[],
+      ),
+      total: count ?? null,
+      images,
+      failed: false,
+    });
+  }, [orgId]);
+
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await except the deliberate pre-await clock snapshot (setNow, documented in load); the effect synchronizes with the server
     void load();
   }, [load]);
 
+  // Rows fetched for another organization are not this one's rental items.
+  const current = items && items.orgId === orgId ? items : null;
+
+  // First open of the Items view fetches it; after that pull-to-refresh does.
+  React.useEffect(() => {
+    if (view !== 'items' || current !== null) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-open: every set in loadItems is post-await; the effect synchronizes with the server
+    void loadItems();
+  }, [view, current, loadItems]);
+
   async function refresh() {
     setRefreshing(true);
-    await load();
+    await (view === 'items' ? loadItems() : load());
     setRefreshing(false);
+  }
+
+  const viewSwitch = (
+    <View style={{ flexDirection: 'row', gap: 8 }}>
+      <Chip label="Checkouts" active={view === 'checkouts'} onPress={() => setView('checkouts')} />
+      <Chip label="Items" active={view === 'items'} onPress={() => setView('items')} />
+    </View>
+  );
+
+  if (view === 'items') {
+    return (
+      <DataListScreen<RentalItemRow>
+        eyebrow={current ? rentalItemsEyebrow(current.rows.length, current.total) : 'RENTALS · ITEMS'}
+        title="Rental"
+        italic="items."
+        header={viewSwitch}
+        emptyTitle={current?.failed ? 'Could not load rental items.' : 'No rental items yet.'}
+        emptyBody={
+          current?.failed
+            ? 'Check your connection and pull down to try again.'
+            : 'Rental items are the canopies, supplies and equipment staff check out. Add them on the web under Rentals.'
+        }
+        emptyIcon={Boxes}
+        data={current?.rows ?? []}
+        loading={current === null}
+        refreshing={refreshing}
+        onRefresh={refresh}
+        keyExtractor={(r) => r.id}
+        renderItem={(r) => (
+          <RentalItemCard
+            item={r}
+            imageUrl={current?.images.get(r.id) ?? null}
+            onPress={() => router.push(`/item/${r.id}`)}
+          />
+        )}
+      />
+    );
   }
 
   const out = rows.filter((r) => r.status === 'out').length;
@@ -105,6 +256,7 @@ export default function RentalsScreen() {
       eyebrow={`RENTALS · ${out} OUT${overdue > 0 ? ` · ${overdue} OVERDUE` : ''}`}
       title="Rental"
       italic="checkouts."
+      header={viewSwitch}
       emptyTitle="No rentals yet."
       emptyBody="Check out reusable assets (canopies, supplies, equipment) on the web. Track returns and overdue items here."
       emptyIcon={PackageOpen}
@@ -163,3 +315,50 @@ function RentalCard({ rental, now }: { rental: RentalRow; now: number }) {
     </Pressable>
   );
 }
+
+function RentalItemCard({
+  item,
+  imageUrl,
+  onPress,
+}: {
+  item: RentalItemRow;
+  imageUrl: string | null;
+  onPress: () => void;
+}) {
+  const { c } = useTheme();
+  const pill = item.overReserved ? (
+    <Pill status="crit">OVER-LENT</Pill>
+  ) : item.onHand <= 0 ? (
+    <Pill status="crit">NONE</Pill>
+  ) : item.available <= 0 ? (
+    <Pill status="warn">ALL OUT</Pill>
+  ) : (
+    <Pill status="ok">{`${item.available} FREE`}</Pill>
+  );
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+    >
+      <Card padding={14}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <Thumb size={48} icon={Boxes} imageUrl={imageUrl} recyclingKey={item.id} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
+              {item.name}
+            </Body>
+            <Mono size={11} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 4 }}>
+              {item.sku ?? 'No SKU'}
+              {' · '}
+              {item.onHand} on hand
+              {item.reserved > 0 ? ` · ${item.reserved} out` : ''}
+            </Mono>
+          </View>
+          {pill}
+        </View>
+      </Card>
+    </Pressable>
+  );
+}
+

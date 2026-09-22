@@ -37,6 +37,7 @@ export function DataListScreen<T>({
   refreshing,
   onRefresh,
   trailing,
+  header,
   ItemSeparator,
 }: {
   eyebrow: string;
@@ -52,6 +53,9 @@ export function DataListScreen<T>({
   refreshing?: boolean;
   onRefresh?: () => void;
   trailing?: React.ReactNode;
+  /** Controls under the title (a view switch, say). Stays put while the list
+   *  scrolls and while it loads, so switching never makes it jump. */
+  header?: React.ReactNode;
   ItemSeparator?: React.ComponentType<unknown>;
 }) {
   const { c } = useTheme();
@@ -100,6 +104,7 @@ export function DataListScreen<T>({
               title
             )}
           </Display>
+          {header ? <View style={{ marginTop: 14 }}>{header}</View> : null}
         </View>
       </SafeAreaView>
 
