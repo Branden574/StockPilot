@@ -2,7 +2,10 @@ import { act, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const pathnameRef = { value: '/dashboard/inventory' };
-vi.mock('next/navigation', () => ({ usePathname: () => pathnameRef.value }));
+vi.mock('next/navigation', () => ({
+  usePathname: () => pathnameRef.value,
+  useSearchParams: () => new URLSearchParams(),
+}));
 
 import { NavProgressBar } from './nav-progress-bar';
 
