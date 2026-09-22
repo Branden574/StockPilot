@@ -494,13 +494,44 @@ describe('an unreadable MFA policy denies, it does not default to optional', () 
     expect(ctx?.mfaSatisfied).toBe(false);
   });
 
-  it('still treats NO ROW as optional: an absent row is an answer, not a fault', async () => {
-    // maybeSingle() reports zero rows as { data: null, error: null }.
+  it('holds a HIDDEN row to the strictest policy, never optional', async () => {
+    // maybeSingle() reports zero rows as { data: null, error: null }. The
+    // column is NOT NULL, so no row means row level security hid it from this
+    // session. Until 2026-09-22 that became 'optional' and switched MFA off.
     world.memberships = [{ organization_id: ORG_A, role: 'staff' }];
     world.hideOrganization = true;
-    const ctx = await legacyOnly(cookie());
-    expect(ctx?.mfaRequired).toBe(false);
-    expect(ctx?.mfaSatisfied).toBe(true);
+    world.aal = 'aal1';
+    for (const req of [cookie(), bearer()]) {
+      const ctx = await legacyOnly(req);
+      expect(ctx?.mfaRequired).toBe(true);
+      expect(ctx?.mfaSatisfied).toBe(false);
+    }
+  });
+
+  it('a session already at AAL2 still passes a hidden row: strict, not a lockout', async () => {
+    world.memberships = [{ organization_id: ORG_A, role: 'staff' }];
+    world.hideOrganization = true;
+    world.verifiedFactor = true;
+    world.aal = 'aal2';
+    for (const req of [cookie(), bearer()]) {
+      const ctx = await legacyOnly(req);
+      expect(ctx?.mfaRequired).toBe(true);
+      expect(ctx?.mfaSatisfied).toBe(true);
+    }
+  });
+
+  it('the one-round-trip path hands a hidden row to the legacy reads, which hold it as strictly', async () => {
+    world.memberships = [{ organization_id: ORG_A, role: 'staff', hideOrganization: true }];
+    world.hideOrganization = true;
+    world.aal = 'aal1';
+    for (const req of [cookie(), bearer()]) {
+      world.calls = [];
+      const ctx = await withApiContext(req);
+      expect(world.calls).toContain('rpc:get_request_context');
+      expect(world.calls).toContain('table:organizations');
+      expect(ctx?.mfaRequired).toBe(true);
+      expect(ctx?.mfaSatisfied).toBe(false);
+    }
   });
 });
 

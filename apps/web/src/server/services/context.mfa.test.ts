@@ -95,6 +95,8 @@ function arrange(opts: {
   aal: 'aal1' | 'aal2';
   role?: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer';
   orgRowThrows?: boolean;
+  /** getOrgRowForRequest answers null: row level security hid the row. */
+  orgRowHidden?: boolean;
 }): string {
   const organizationId = `org-${++orgSeq}`;
   aalLevel = opts.aal;
@@ -112,6 +114,7 @@ function arrange(opts: {
   });
   vi.mocked(getOrgRowForRequest).mockImplementation(async () => {
     if (opts.orgRowThrows) throw new Error('org lookup failed');
+    if (opts.orgRowHidden) return null;
     return orgRow(opts.policy);
   });
   vi.mocked(getMfaFactorsForRequest).mockResolvedValue(
@@ -216,6 +219,25 @@ describe('withContext / resolveMfaState — fail-closed MFA gate', () => {
     const ctx = await withContext();
     expect(ctx.mfaRequired).toBe(true);
     expect(ctx.mfaSatisfied).toBe(false);
+  });
+
+  // (f) The row came back EMPTY, not failed: row level security hid it from
+  // this session (mfa_policy is NOT NULL, so there is no other way to get
+  // nothing). Until 2026-09-22 that resolved to 'optional' and switched the
+  // gate off. It is now held to the strictest policy, even for a role that
+  // 'admins_required' would exempt.
+  it('(f) org row HIDDEN + unenrolled staff -> required=true, satisfied=false (strictest, not optional)', async () => {
+    arrange({ policy: 'optional', verifiedFactor: false, aal: 'aal1', role: 'staff', orgRowHidden: true });
+    const ctx = await withContext();
+    expect(ctx.mfaRequired).toBe(true);
+    expect(ctx.mfaSatisfied).toBe(false);
+  });
+
+  it('(f2) org row HIDDEN + enrolled + AAL2 -> required=true, satisfied=true (strict, not a lockout)', async () => {
+    arrange({ policy: 'optional', verifiedFactor: true, aal: 'aal2', role: 'staff', orgRowHidden: true });
+    const ctx = await withContext();
+    expect(ctx.mfaRequired).toBe(true);
+    expect(ctx.mfaSatisfied).toBe(true);
   });
 
   it('(e) org lookup throws -> required=true, satisfied=false (fail CLOSED)', async () => {

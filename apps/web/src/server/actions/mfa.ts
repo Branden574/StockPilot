@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { audit } from '@/server/services/audit';
 import { assertCurrentAal2, ServiceError, withContext } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
+import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { reportError } from '@/lib/error-reporter';
@@ -177,12 +178,19 @@ export async function unenrollFactorAction(input: {
 
     // Block disabling if the user's org policy requires MFA.
     const ctx = await requireOrgContext();
-    const { data: orgRow } = await supabase
+    const { data: orgRow, error: orgError } = await supabase
       .from('organizations')
       .select('mfa_policy')
       .eq('id', ctx.organizationId)
       .maybeSingle();
-    const policy = (orgRow?.mfa_policy as string | undefined) ?? 'optional';
+    // An unreadable policy must not permit removing the factor. The read
+    // ERROR was ignored until 2026-09-22 (postgrest-js returns it, it does not
+    // throw), so a timeout landed on 'optional' and allowed the unenroll under
+    // a policy that forbids it. Zero rows is held to the strictest policy.
+    if (orgError) {
+      return err('internal_error', 'Could not check your organization\'s MFA policy. Try again.');
+    }
+    const policy = enforcedMfaPolicy(orgRow);
     const role = ctx.role;
     const required =
       policy === 'all_required' ||
