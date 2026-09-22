@@ -4,10 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * I1 (fix wave 2, security review sibling of C1's cross-org attach fix):
  * this HOST computes `canReportProblem` from `can(ctx, 'maintenance_requests
- * :submit')` (item-detail.tsx:276) and `maintenanceRequestsEnabled` from a
- * sync-gated `checkModuleAccess('maintenance_requests')` call
- * (item-detail.tsx:330-332), then wires them into `ReportProblemButton`'s
- * `canSubmit` / `moduleEnabled` props (item-detail.tsx:446-450).
+ * :submit')` and `maintenanceRequestsEnabled` from the permission AND
+ * `isModuleEnabled(ctx, 'maintenance_requests')` (a module_enabled RPC through
+ * `checkModuleAccess` until the 2026-09-22 item-page latency fix; see the
+ * module-source block at the end of this file), then wires them into
+ * `ReportProblemButton`'s `canSubmit` / `moduleEnabled` props.
  * `ReportProblemButton`'s OWN unit tests (report-problem-button.test.tsx)
  * only prove the component obeys whatever two booleans it is handed —
  * nothing proves this HOST derives or wires them correctly. A prop SWAP
@@ -62,7 +63,13 @@ vi.mock('@/components/dashboard/charts/cost-trend-island', () => ({ CostTrendIsl
 vi.mock('@/components/inventory/item-detail-tabs', () => ({ ItemDetailTabs: () => null }));
 vi.mock('@/components/inventory/item-serials-panel', () => ({ ItemSerialsPanel: () => null }));
 vi.mock('@/components/inventory/public-visibility-control', () => ({ PublicVisibilityControl: () => null }));
-vi.mock('@/components/inventory/market-price-panel', () => ({ MarketPricePanel: () => null }));
+const marketPricePanelProps = vi.fn();
+vi.mock('@/components/inventory/market-price-panel', () => ({
+  MarketPricePanel: (props: Record<string, unknown>) => {
+    marketPricePanelProps(props);
+    return null;
+  },
+}));
 vi.mock('@/components/inventory/stock-status-badge', () => ({ StockStatusBadge: () => null }));
 vi.mock('@/components/inventory/stock-adjust-dialog', () => ({ StockAdjustDialog: () => null }));
 vi.mock('@/components/inventory/stock-transfer-dialog', () => ({ StockTransferDialog: () => null }));
@@ -83,30 +90,46 @@ const ctxHolder = vi.hoisted(() => ({
   current: {
     role: 'staff' as 'owner' | 'admin' | 'manager' | 'staff' | 'viewer',
     permissions: new Set<string>(),
+    // `ctx.enabledModules`: the organization's modules as withContext() resolved
+    // them (the ACCESS rule: enabled rows, or the all-modules comp).
+    enabledModules: new Set<string>(),
   },
 }));
-const checkModuleAccessMock = vi.fn();
+// The module answer used to be a module_enabled RPC per module, through this
+// helper. It must not be consulted any more: the render already holds the
+// answer in ctx. Kept as a spy so a regression back to it fails loudly.
+const checkModuleAccessMock = vi.fn(async (..._args: unknown[]) => ({
+  enabled: true,
+  canManage: false,
+}));
 
-vi.mock('@/server/services/context', () => ({
-  ServiceError: class ServiceError extends Error {
-    constructor(
-      public code: string,
-      message: string,
-    ) {
-      super(message);
-      this.name = 'ServiceError';
-    }
-  },
-  withContext: vi.fn(async () => ({
-    organizationId: 'org-1',
-    userId: 'u1',
-    role: ctxHolder.current.role,
-    permissions: ctxHolder.current.permissions,
-    mfaRequired: false,
-    mfaSatisfied: true,
-    supabase: {},
-  })),
-}));
+vi.mock('@/server/services/context', async (importOriginal) => {
+  // The REAL `isModuleEnabled` (not a stand-in): these tests are about the
+  // component handing it the right ctx and module id.
+  const actual = await importOriginal<typeof import('@/server/services/context')>();
+  return {
+    ServiceError: class ServiceError extends Error {
+      constructor(
+        public code: string,
+        message: string,
+      ) {
+        super(message);
+        this.name = 'ServiceError';
+      }
+    },
+    isModuleEnabled: actual.isModuleEnabled,
+    withContext: vi.fn(async () => ({
+      organizationId: 'org-1',
+      userId: 'u1',
+      role: ctxHolder.current.role,
+      permissions: ctxHolder.current.permissions,
+      mfaRequired: false,
+      mfaSatisfied: true,
+      enabledModules: ctxHolder.current.enabledModules,
+      supabase: {},
+    })),
+  };
+});
 
 vi.mock('@/lib/modules/module-gate', () => ({
   checkModuleAccess: (...args: unknown[]) => checkModuleAccessMock(...args),
@@ -145,9 +168,10 @@ vi.mock('@/server/services/locations', () => ({
   LocationsService: { forCurrentUser: vi.fn(async () => ({ list: vi.fn(async () => []) })) },
 }));
 
+const latestObservation = vi.fn(async (..._args: unknown[]) => ({ id: 'obs-1', price: 12.5 }));
 vi.mock('@/server/services/price-tracking', () => ({
   PriceTrackingService: {
-    forCurrentUser: vi.fn(async () => ({ getLatestObservation: vi.fn(async () => null) })),
+    forCurrentUser: vi.fn(async () => ({ getLatestObservation: latestObservation })),
   },
 }));
 
@@ -233,7 +257,12 @@ function itemFixture(overrides: Record<string, unknown> = {}) {
 function setPermissions(hasMaintenanceSubmit: boolean) {
   const perms = new Set<string>();
   if (hasMaintenanceSubmit) perms.add('maintenance_requests:submit');
-  ctxHolder.current = { role: 'staff', permissions: perms };
+  ctxHolder.current = { ...ctxHolder.current, role: 'staff', permissions: perms };
+}
+
+/** The organization's enabled modules, as withContext() would hand them over. */
+function setModules(...ids: string[]) {
+  ctxHolder.current = { ...ctxHolder.current, enabledModules: new Set(ids) };
 }
 
 async function renderItemDetail() {
@@ -247,20 +276,15 @@ beforeEach(() => {
   inventoryGet.mockResolvedValue(itemFixture());
   inventoryPlacements.mockResolvedValue([]);
   setPermissions(true);
-  // price_tracking OFF throughout (irrelevant to this file, and would add a
-  // second checkModuleAccess call this file doesn't need to reason about);
-  // maintenance_requests controlled per test.
-  checkModuleAccessMock.mockImplementation(async (moduleId: string) =>
-    moduleId === 'maintenance_requests' ? { enabled: true, canManage: false } : { enabled: false, canManage: false },
-  );
+  // price_tracking OFF unless a test turns it on; maintenance_requests
+  // controlled per test.
+  setModules('maintenance_requests');
 });
 
 describe('ItemDetail host — ReportProblemButton gating (I1, fix wave 2)', () => {
   it('permission GRANTED + module ENABLED -> canSubmit=true, moduleEnabled=true, prefill.itemId=this item', async () => {
     setPermissions(true);
-    checkModuleAccessMock.mockImplementation(async (moduleId: string) =>
-      moduleId === 'maintenance_requests' ? { enabled: true, canManage: false } : { enabled: false, canManage: false },
-    );
+    setModules('maintenance_requests');
     await renderItemDetail();
     expect(reportProblemButtonProps).toHaveBeenCalledWith(
       expect.objectContaining({ canSubmit: true, moduleEnabled: true, prefill: { itemId: ITEM_ID } }),
@@ -269,40 +293,88 @@ describe('ItemDetail host — ReportProblemButton gating (I1, fix wave 2)', () =
 
   it('permission GRANTED + module DISABLED -> canSubmit=true, moduleEnabled=false (SWAP GUARD: a props swap here would report canSubmit=false, moduleEnabled=true — the opposite of this assertion)', async () => {
     setPermissions(true);
-    checkModuleAccessMock.mockImplementation(async () => ({ enabled: false, canManage: false }));
+    setModules();
     await renderItemDetail();
     expect(reportProblemButtonProps).toHaveBeenCalledWith(
       expect.objectContaining({ canSubmit: true, moduleEnabled: false }),
     );
   });
 
-  it('permission DENIED + module ENABLED -> canSubmit=false, moduleEnabled=false — the sync-gate-first short circuit never calls checkModuleAccess for maintenance_requests at all (SWAP GUARD: a swap would report canSubmit=false, moduleEnabled=true here)', async () => {
+  it('permission DENIED + module ENABLED -> canSubmit=false, moduleEnabled=false — permission first: an enabled module is not reported to a viewer who cannot submit (SWAP GUARD: a swap would report canSubmit=false, moduleEnabled=true here)', async () => {
     setPermissions(false);
-    checkModuleAccessMock.mockImplementation(async (moduleId: string) =>
-      moduleId === 'maintenance_requests' ? { enabled: true, canManage: false } : { enabled: false, canManage: false },
-    );
+    setModules('maintenance_requests');
     await renderItemDetail();
     expect(reportProblemButtonProps).toHaveBeenCalledWith(
       expect.objectContaining({ canSubmit: false, moduleEnabled: false }),
     );
-    expect(checkModuleAccessMock).not.toHaveBeenCalledWith('maintenance_requests');
   });
 
   it('permission DENIED + module DISABLED -> canSubmit=false, moduleEnabled=false', async () => {
     setPermissions(false);
-    checkModuleAccessMock.mockImplementation(async () => ({ enabled: false, canManage: false }));
+    setModules();
     await renderItemDetail();
     expect(reportProblemButtonProps).toHaveBeenCalledWith(
       expect.objectContaining({ canSubmit: false, moduleEnabled: false }),
     );
   });
 
-  it('queries checkModuleAccess with the maintenance_requests module id — proves moduleEnabled is sourced from the MODULE check, not reused from the permission check', async () => {
+  it('moduleEnabled follows the maintenance_requests MODULE, not the permission and not another module', async () => {
     setPermissions(true);
-    checkModuleAccessMock.mockImplementation(async (moduleId: string) =>
-      moduleId === 'maintenance_requests' ? { enabled: true, canManage: false } : { enabled: false, canManage: false },
-    );
+    // Another optional module on, maintenance_requests off: must read false.
+    setModules('price_tracking');
     await renderItemDetail();
-    expect(checkModuleAccessMock).toHaveBeenCalledWith('maintenance_requests');
+    expect(reportProblemButtonProps).toHaveBeenCalledWith(
+      expect.objectContaining({ canSubmit: true, moduleEnabled: false }),
+    );
+  });
+});
+
+/**
+ * The module answers come from `ctx.enabledModules`, the set withContext()
+ * already resolved for this request with the ACCESS rule (lib/modules/
+ * effective-modules: an enabled organization_modules row, or the all-modules
+ * comp). That is what module_enabled() answers since migration 0354 for a
+ * member's own organization, and it is the set the sidebar renders from. What
+ * changed is the cost: production logs (2026-09-22) showed the two
+ * module_enabled RPCs as two more serial levels of this page.
+ */
+describe('ItemDetail host — module flags come from ctx.enabledModules (no module_enabled round trip)', () => {
+  const ISBN = '9780306406157';
+
+  it('never consults checkModuleAccess (the per-module RPC), whatever the permissions and modules', async () => {
+    setPermissions(true);
+    setModules('maintenance_requests', 'price_tracking');
+    inventoryGet.mockResolvedValue(itemFixture({ barcode: ISBN, item_type: 'book' }));
+    await renderItemDetail();
+    expect(checkModuleAccessMock).not.toHaveBeenCalled();
+  });
+
+  it('price_tracking ON in ctx + an ISBN barcode -> the market price panel renders with the latest observation', async () => {
+    setModules('price_tracking');
+    inventoryGet.mockResolvedValue(itemFixture({ barcode: ISBN, item_type: 'book' }));
+    await renderItemDetail();
+    expect(latestObservation).toHaveBeenCalledWith(ITEM_ID);
+    expect(marketPricePanelProps).toHaveBeenCalledWith(
+      expect.objectContaining({ initial: { id: 'obs-1', price: 12.5 } }),
+    );
+  });
+
+  it('price_tracking OFF in ctx -> no panel and no observation read, even for an ISBN', async () => {
+    setModules('maintenance_requests');
+    inventoryGet.mockResolvedValue(itemFixture({ barcode: ISBN, item_type: 'book' }));
+    await renderItemDetail();
+    expect(latestObservation).not.toHaveBeenCalled();
+    expect(marketPricePanelProps).not.toHaveBeenCalled();
+  });
+
+  it('a core-only module set (what a failed modules read resolves to) turns both optional modules off', async () => {
+    setPermissions(true);
+    setModules();
+    inventoryGet.mockResolvedValue(itemFixture({ barcode: ISBN, item_type: 'book' }));
+    await renderItemDetail();
+    expect(marketPricePanelProps).not.toHaveBeenCalled();
+    expect(reportProblemButtonProps).toHaveBeenCalledWith(
+      expect.objectContaining({ moduleEnabled: false }),
+    );
   });
 });

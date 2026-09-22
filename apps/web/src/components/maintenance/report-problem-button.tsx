@@ -15,8 +15,8 @@ export interface ReportProblemPrefill {
 }
 
 interface ReportProblemButtonProps {
-  /** module_enabled('maintenance_requests') for the caller's org — the same
-   *  RPC checkModuleAccess() wraps and the nav entry's own gate. An org
+  /** checkModuleAccess('maintenance_requests') for the caller's org — the same
+   *  access rule as SQL module_enabled() and the nav entry's own gate. An org
    *  where the module is off must never see a dead affordance. */
   moduleEnabled: boolean;
   /** can(ctx, 'maintenance_requests:submit') — the same registry permission

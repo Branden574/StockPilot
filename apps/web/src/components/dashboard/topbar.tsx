@@ -25,7 +25,6 @@ interface TopbarProps {
   userId: string;
   /** Active org — scopes the notification bell to this workspace. */
   organizationId: string;
-  initialUnreadNotifications: number;
   isPlatformAdmin?: boolean;
   onToggleSidebar?: () => void;
   /** Desktop sidebar visibility, for the toggle button's label. */
@@ -52,7 +51,6 @@ export function Topbar({
   organizationName,
   userId,
   organizationId,
-  initialUnreadNotifications,
   isPlatformAdmin,
   onToggleSidebar,
   sidebarHidden = false,
@@ -129,11 +127,7 @@ export function Topbar({
         </span>
       </button>
 
-      <NotificationBell
-        userId={userId}
-        organizationId={organizationId}
-        initialUnread={initialUnreadNotifications}
-      />
+      <NotificationBell userId={userId} organizationId={organizationId} />
 
       <WhatsNewButton />
 

@@ -70,19 +70,18 @@ describe('GET /api/reports/item-cost-history/xlsx — formula guard', () => {
     'neutralizes a supplier name starting with %j',
     async (lead) => {
       const hostile = `${lead}HYPERLINK("http://evil.test","click")`;
-      vi.mocked(ReportsService).mockImplementation(
-        () =>
-          ({
-            itemCostHistory: async () => ({
-              series: [
-                {
-                  supplierName: hostile,
-                  points: [{ date: '2026-08-01', source: 'receipt', unitCost: 12 }],
-                },
-              ],
-            }),
-          }) as never,
-      );
+      vi.mocked(ReportsService).mockImplementation(function () {
+        return {
+          itemCostHistory: async () => ({
+            series: [
+              {
+                supplierName: hostile,
+                points: [{ date: '2026-08-01', source: 'receipt', unitCost: 12 }],
+              },
+            ],
+          }),
+        } as never;
+      });
 
       const res = await GET(request());
       expect(res.status).toBe(200);
@@ -100,19 +99,18 @@ describe('GET /api/reports/item-cost-history/xlsx — formula guard', () => {
   );
 
   it('leaves an ordinary supplier name untouched and keeps unit cost numeric', async () => {
-    vi.mocked(ReportsService).mockImplementation(
-      () =>
-        ({
-          itemCostHistory: async () => ({
-            series: [
-              {
-                supplierName: 'Acme Supply',
-                points: [{ date: '2026-08-01', source: 'po', unitCost: 12.5 }],
-              },
-            ],
-          }),
-        }) as never,
-    );
+    vi.mocked(ReportsService).mockImplementation(function () {
+      return {
+        itemCostHistory: async () => ({
+          series: [
+            {
+              supplierName: 'Acme Supply',
+              points: [{ date: '2026-08-01', source: 'po', unitCost: 12.5 }],
+            },
+          ],
+        }),
+      } as never;
+    });
 
     const res = await GET(request());
     const cells = await firstDataRow(res);

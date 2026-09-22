@@ -18,9 +18,9 @@ const shareLocation = vi.fn();
 beforeEach(() => {
   vi.clearAllMocks();
   shareLocation.mockReset();
-  vi.mocked(DeliveryTrackingService).mockImplementation(
-    () => ({ shareLocation }) as unknown as InstanceType<typeof DeliveryTrackingService>,
-  );
+  vi.mocked(DeliveryTrackingService).mockImplementation(function () {
+    return { shareLocation } as unknown as InstanceType<typeof DeliveryTrackingService>;
+  });
 });
 
 function req(body: unknown) {

@@ -56,7 +56,7 @@ describe('safeRedirectPath — off-origin destinations are refused', () => {
 });
 
 describe('safeRedirectPath — absent values', () => {
-  it.each([null, undefined, ''])('falls back for %p', (value) => {
+  it.each([null, undefined, ''])('falls back for %s', (value) => {
     expect(safeRedirectPath(value)).toBe(DEFAULT_APP_PATH);
   });
 

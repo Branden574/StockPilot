@@ -27,6 +27,13 @@ type WarehouseCtxLike = {
    * look unassigned. Callers with a ctx.supabase always get it used.
    */
   supabase?: SupabaseClientLike;
+  /**
+   * Set only by withContext() (see ServiceContext.cookieClient): the request's
+   * own cookie-bound client. When `supabase` IS this client, the caller's auth
+   * and the request cache's auth are the same session, so the request-cached
+   * reads answer for it.
+   */
+  cookieClient?: SupabaseClientLike;
 };
 
 /** Minimal structural client type — avoids coupling to generated DB generics. */
@@ -63,6 +70,12 @@ export const getWarehouseAccess = cache(async (ctx?: WarehouseCtxLike): Promise<
   // never does).
   const callerClient = ctx?.supabase;
   const supabase = callerClient ?? (await createClient());
+  // On the request's own cookie session: no ctx (the requireOrgContext fallback
+  // above), or a withContext() ctx whose client is the cookie client it made.
+  // Compared by IDENTITY, not a flag, so a context rebuilt around another
+  // client (Bearer, service role) can never borrow the cookie session's answer.
+  const onRequestCookieClient =
+    !callerClient || (ctx?.cookieClient !== undefined && ctx.cookieClient === callerClient);
 
   if (isManagerOrAbove(c.role as Role)) {
     // Rank 8 (query hygiene): shares the dashboard layout's request-cached
@@ -70,8 +83,16 @@ export const getWarehouseAccess = cache(async (ctx?: WarehouseCtxLike): Promise<
     // copy of the same query in the same render — but ONLY when we're on the
     // cookie client the request cache uses. A ctx-supplied client (Bearer)
     // queries directly so the ids reflect the caller's real auth.
-    const readableIds = callerClient
-      ? (
+    //
+    // Every withContext() ctx carries a client, so from 2026-07-20 (a6a5e10b)
+    // until this change every one of them took the direct query: one extra
+    // `warehouses` read on top of the layout's, ~436 a day, on the page's
+    // critical path. A withContext() ctx is the cookie session, so it shares
+    // the layout's read again; the rule that decides hasAllAccess (role, and
+    // nothing else) is untouched.
+    const readableIds = onRequestCookieClient
+      ? (await getWarehousesForRequest(c.organizationId)).map((w) => w.id)
+      : (
           (
             await supabase
               .from('warehouses')
@@ -80,8 +101,7 @@ export const getWarehouseAccess = cache(async (ctx?: WarehouseCtxLike): Promise<
               .neq('status', 'archived')
               .order('name', { ascending: true })
           ).data ?? []
-        ).map((w: { id: string }) => w.id)
-      : (await getWarehousesForRequest(c.organizationId)).map((w) => w.id);
+        ).map((w: { id: string }) => w.id);
     return {
       readableIds,
       writableIds: readableIds,
@@ -127,14 +147,26 @@ export const getWarehouseAccess = cache(async (ctx?: WarehouseCtxLike): Promise<
  * Throws a forbidden error if the user can't access the given warehouse for
  * the requested operation. Use at the top of every service method that takes
  * a warehouse_id from request input.
+ *
+ * `started` is `getWarehouseAccess(ctx)` for this SAME ctx, begun by a caller
+ * that did not yet know the warehouse id: InventoryService.get() starts it
+ * alongside the item-row read so the two trips to Supabase overlap instead of
+ * queueing (production logs 2026-09-22: 3-5% of calls stall 1-8 s at the
+ * gateway, and a stall in a chain delays every level behind it). Passing it
+ * in, rather than calling this again after the row arrives, is what keeps it
+ * ONE read where React's request cache is not active (route handlers). It
+ * changes when the access list is read, never what is decided from it: the
+ * rules below are applied to it unchanged, and a rejection still rejects here.
+ * Never pass anything but that helper's own result for the same ctx.
  */
 export async function assertWarehouseAccess(
   warehouseId: string,
   op: 'read' | 'write' = 'read',
   ctx?: WarehouseCtxLike,
+  started?: Promise<WarehouseAccess>,
 ): Promise<void> {
   const c = ctx ?? (await requireOrgContext());
-  const access = await getWarehouseAccess(c);
+  const access = await (started ?? getWarehouseAccess(c));
 
   if (op === 'write' && c.role === 'viewer') {
     throw new ForbiddenError('Read-only auditor cannot perform write operations.');

@@ -15,9 +15,9 @@ const get = vi.fn();
 beforeEach(() => {
   vi.clearAllMocks();
   get.mockReset();
-  vi.mocked(OrderRequestsService).mockImplementation(
-    () => ({ get }) as unknown as InstanceType<typeof OrderRequestsService>,
-  );
+  vi.mocked(OrderRequestsService).mockImplementation(function () {
+    return { get } as unknown as InstanceType<typeof OrderRequestsService>;
+  });
 });
 
 const ORDER = '11111111-1111-1111-1111-111111111111';

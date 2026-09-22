@@ -56,9 +56,9 @@ function validBody(extra: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   add.mockReset();
-  vi.mocked(PoAttachmentsService).mockImplementation(
-    () => ({ add }) as unknown as InstanceType<typeof PoAttachmentsService>,
-  );
+  vi.mocked(PoAttachmentsService).mockImplementation(function () {
+    return { add } as unknown as InstanceType<typeof PoAttachmentsService>;
+  });
 });
 
 describe('POST /api/v1/purchase-orders/[id]/attachments', () => {

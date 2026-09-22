@@ -141,10 +141,12 @@ describe('GET /api/cycle-counts/[id]/pdf — group fields gated on the sports mo
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(exportRateLimited).mockResolvedValue(null as never);
-    vi.mocked(CycleCountsService).mockImplementation(
-      () => ({ get: async () => ({ header: header(), lines: [groupedLine()] }) }) as never,
-    );
-    vi.mocked(WarehousesService).mockImplementation(() => ({ list: async () => [] }) as never);
+    vi.mocked(CycleCountsService).mockImplementation(function () {
+      return { get: async () => ({ header: header(), lines: [groupedLine()] }) } as never;
+    });
+    vi.mocked(WarehousesService).mockImplementation(function () {
+      return { list: async () => [] } as never;
+    });
   });
 
   it('a module-off org never sees groupId — the sheet renders flat, not "Product group"', async () => {
@@ -164,13 +166,12 @@ describe('GET /api/cycle-counts/[id]/pdf — group fields gated on the sports mo
   it('a sports-enabled org resolves the real group name and id', async () => {
     const withSports = new Set<ModuleId>([...DEFAULT_MODULE_IDS, 'sports']);
     vi.mocked(withApiContext).mockResolvedValue(ctxWith(withSports) as never);
-    vi.mocked(ProductGroupsService).mockImplementation(
-      () =>
-        ({
-          displayByIds: async () =>
-            new Map([['grp-1', { name: 'Pegasus 41', countingUnit: 'pair', sizeOrder: {} }]]),
-        }) as never,
-    );
+    vi.mocked(ProductGroupsService).mockImplementation(function () {
+      return {
+        displayByIds: async () =>
+          new Map([['grp-1', { name: 'Pegasus 41', countingUnit: 'pair', sizeOrder: {} }]]),
+      } as never;
+    });
 
     const res = await GET(req(), await paramsFor('cc-1'));
 

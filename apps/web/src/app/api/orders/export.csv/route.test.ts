@@ -67,9 +67,9 @@ const SAMPLE_ROW: OrderExportRow = {
 
 function stubExportRows(rows: OrderExportRow[], total?: number) {
   const exportRows = vi.fn(async () => ({ rows, total: total ?? rows.length }));
-  vi.mocked(OrderRequestsService).mockImplementationOnce(
-    () => ({ exportRows }) as unknown as InstanceType<typeof OrderRequestsService>,
-  );
+  vi.mocked(OrderRequestsService).mockImplementationOnce(function () {
+    return { exportRows } as unknown as InstanceType<typeof OrderRequestsService>;
+  });
   return exportRows;
 }
 
@@ -202,9 +202,9 @@ describe('GET /api/orders/export.csv', () => {
     const exportRows = vi.fn(async () => {
       throw new ServiceError('module_disabled', 'Orders module off');
     });
-    vi.mocked(OrderRequestsService).mockImplementationOnce(
-      () => ({ exportRows }) as unknown as InstanceType<typeof OrderRequestsService>,
-    );
+    vi.mocked(OrderRequestsService).mockImplementationOnce(function () {
+      return { exportRows } as unknown as InstanceType<typeof OrderRequestsService>;
+    });
 
     const res = await GET(buildRequest());
     expect(res.status).toBe(403);

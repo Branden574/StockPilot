@@ -83,7 +83,9 @@ beforeEach(() => {
     duplicateOf: null,
     lowConfidenceLines: 0,
   }));
-  vi.mocked(PoImportsService).mockImplementation(() => ({ createFromScan }) as never);
+  vi.mocked(PoImportsService).mockImplementation(function () {
+    return { createFromScan } as never;
+  });
 });
 
 describe('the transport hazard this contract is shaped around', () => {

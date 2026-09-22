@@ -48,9 +48,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   issueLink.mockReset();
   revoke.mockReset();
-  vi.mocked(MaintenanceShareLinksService).mockImplementation(
-    () => ({ issueLink, revoke }) as unknown as InstanceType<typeof MaintenanceShareLinksService>,
-  );
+  vi.mocked(MaintenanceShareLinksService).mockImplementation(function () {
+    return { issueLink, revoke } as unknown as InstanceType<typeof MaintenanceShareLinksService>;
+  });
 });
 
 describe('POST /api/v1/maintenance-requests/[id]/share-link', () => {

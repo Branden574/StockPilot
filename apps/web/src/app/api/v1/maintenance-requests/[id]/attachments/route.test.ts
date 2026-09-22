@@ -55,9 +55,9 @@ function params(id: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   createUploadUrl.mockReset();
-  vi.mocked(MaintenanceAttachmentsService).mockImplementation(
-    () => ({ createUploadUrl }) as unknown as InstanceType<typeof MaintenanceAttachmentsService>,
-  );
+  vi.mocked(MaintenanceAttachmentsService).mockImplementation(function () {
+    return { createUploadUrl } as unknown as InstanceType<typeof MaintenanceAttachmentsService>;
+  });
 });
 
 describe('POST /api/v1/maintenance-requests/[id]/attachments (mint)', () => {

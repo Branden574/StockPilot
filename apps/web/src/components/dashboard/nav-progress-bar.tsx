@@ -1,6 +1,6 @@
 'use client';
 
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 
 import { markNavigationClick, markNavigationFeedback } from '@/lib/perf/marks';
@@ -19,9 +19,27 @@ import { markNavigationClick, markNavigationFeedback } from '@/lib/perf/marks';
  *     the classic NProgress feel — we don't actually know how long
  *     the RSC fetch will take, so the asymptotic crawl signals "still
  *     working" without lying about completion).
- *   • Completes when usePathname() reports a new path OR when 8s of
- *     guard time has elapsed without a path change (failsafe so a
+ *   • Completes when the location (path AND query) moves OR when 8s of
+ *     guard time has elapsed without it moving (failsafe so a
  *     prevented/cancelled nav doesn't leave the bar stuck).
+ *
+ * Query-only navigations (the item page's Movements/Activity tabs, ?page=,
+ * filter chips) get the bar too. They used to be skipped as "in-page", but a
+ * query change re-renders the page on the server like any other navigation:
+ * the owner's tab clicks (2026-09-22) showed nothing for 3.6-6.6 s. Two
+ * differences from a path change, both deliberate:
+ *   • The bar starts one task after the click, and only if the URL has not
+ *     already moved by then. The Inventory table's instant mode answers its
+ *     ?page= and view-chip clicks IN PLACE, with a synchronous
+ *     history.pushState inside the click handler; starting at once would
+ *     flash a loading bar over a change that took no time at all.
+ *   • No performance mark. The marks time click -> useful content, and
+ *     "useful" fires when a page's content MOUNTS. A query change does not
+ *     remount the page (Next keys a page's React tree without its query:
+ *     layout-router.js `createRouterCacheKey(activeSegment, true)`), so the
+ *     click would never be closed, and the next un-clicked arrival on the
+ *     same route (Back, a router.push from search) would close it with a
+ *     made-up duration.
  *
  * Safe by construction:
  *   • Only ever triggers a CSS animation on a 2px-tall div. No data
@@ -33,13 +51,32 @@ import { markNavigationClick, markNavigationFeedback } from '@/lib/perf/marks';
  */
 export function NavProgressBar() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const currentKey = locationKey(pathname, searchParams?.toString() ?? '');
   const [phase, setPhase] = React.useState<'idle' | 'climbing' | 'completing'>('idle');
-  const startPathRef = React.useRef<string | null>(null);
+  const startKeyRef = React.useRef<string | null>(null);
+  // True while the bar climbs for a click that markNavigationClick recorded.
+  // Only such a click gets a feedback mark (see the frames effect below).
+  const measuredRef = React.useRef(false);
   const failsafeRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deferredStartRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   React.useEffect(() => {
     function isModifiedClick(e: MouseEvent): boolean {
       return e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0;
+    }
+
+    function start(fromKey: string) {
+      startKeyRef.current = fromKey;
+      setPhase('climbing');
+      if (failsafeRef.current) clearTimeout(failsafeRef.current);
+      failsafeRef.current = setTimeout(() => {
+        // 8s no-completion guard: cancel quietly. Real navs that take
+        // longer are unusual enough that we'd rather hide the bar than
+        // pretend it's still loading.
+        measuredRef.current = false;
+        setPhase('idle');
+      }, 8000);
     }
 
     function onClick(e: MouseEvent) {
@@ -56,32 +93,47 @@ export function NavProgressBar() {
       if (!href) return;
       // Only intercept same-origin app routes. Skip hash links + protocol links.
       if (href.startsWith('#') || /^[a-z]+:/i.test(href)) return;
-      // Skip in-page nav to the same path (no progress bar needed).
-      let nextPath: string;
+      let next: URL;
       try {
-        nextPath = new URL(a.href, window.location.origin).pathname;
+        next = new URL(a.href, window.location.origin);
       } catch {
         return;
       }
-      if (nextPath === window.location.pathname) return;
+      const fromKey = locationKey(window.location.pathname, window.location.search);
+      // The page already on screen, path AND query: not a navigation.
+      if (locationKey(next.pathname, next.search) === fromKey) return;
+      if (deferredStartRef.current) {
+        clearTimeout(deferredStartRef.current);
+        deferredStartRef.current = null;
+      }
+
+      if (next.pathname === window.location.pathname) {
+        // Query-only: see "Query-only navigations" above. By the time this
+        // task runs every click handler has returned, so an in-place history
+        // update has already moved the URL and there is nothing to wait for.
+        deferredStartRef.current = setTimeout(() => {
+          deferredStartRef.current = null;
+          if (locationKey(window.location.pathname, window.location.search) !== fromKey) return;
+          start(fromKey);
+        }, 0);
+        return;
+      }
+
       // Performance mark only (lib/perf/marks.ts): this listener is the one
       // place that sees EVERY accepted in-app link click, at click time. The
       // event's own timeStamp is passed so a busy main thread's input delay
       // counts against the navigation instead of vanishing.
-      markNavigationClick(nextPath, e.timeStamp);
-      startPathRef.current = window.location.pathname;
-      setPhase('climbing');
-      if (failsafeRef.current) clearTimeout(failsafeRef.current);
-      failsafeRef.current = setTimeout(() => {
-        // 8s no-completion guard: cancel quietly. Real navs that take
-        // longer are unusual enough that we'd rather hide the bar than
-        // pretend it's still loading.
-        setPhase('idle');
-      }, 8000);
+      markNavigationClick(next.pathname, e.timeStamp);
+      measuredRef.current = true;
+      start(fromKey);
     }
 
     document.addEventListener('click', onClick, { capture: true });
-    return () => document.removeEventListener('click', onClick, { capture: true });
+    return () => {
+      document.removeEventListener('click', onClick, { capture: true });
+      if (deferredStartRef.current) clearTimeout(deferredStartRef.current);
+      if (failsafeRef.current) clearTimeout(failsafeRef.current);
+    };
   }, []);
 
   // Performance mark only: "the click was acknowledged". The effect runs once
@@ -99,8 +151,13 @@ export function NavProgressBar() {
   // frame left armed would stamp feedback for a bar that is already gone.
   // First feedback wins, so when a sidebar link's spinner (NavLinkPending)
   // got there earlier this call is ignored.
+  //
+  // A bar started by a query-only click marked no click, so it marks no
+  // feedback either: the navigation marks.ts has in flight would be an older
+  // one, and this bar is not feedback for it.
   React.useEffect(() => {
     if (phase !== 'climbing') return;
+    if (!measuredRef.current) return;
     let inner: number | null = null;
     const outer = requestAnimationFrame(() => {
       inner = requestAnimationFrame(() => markNavigationFeedback());
@@ -112,12 +169,13 @@ export function NavProgressBar() {
   }, [phase]);
 
   React.useEffect(() => {
-    if (phase === 'climbing' && startPathRef.current !== pathname) {
-      // Navigation completed — pathname changed.
+    if (phase === 'climbing' && startKeyRef.current !== currentKey) {
+      // Navigation completed — the path or the query changed.
+      measuredRef.current = false;
       setPhase('completing');
       if (failsafeRef.current) clearTimeout(failsafeRef.current);
     }
-  }, [pathname, phase]);
+  }, [currentKey, phase]);
 
   // The fade-out gets an effect of its OWN, keyed on `phase` alone.
   //
@@ -149,4 +207,14 @@ export function NavProgressBar() {
       />
     </div>
   );
+}
+
+/**
+ * Path plus query, the query re-serialized so two spellings of the same
+ * params (`%20` and `+`) compare equal. No hash: a hash change is not a
+ * navigation.
+ */
+function locationKey(pathname: string, search: string): string {
+  const query = new URLSearchParams(search).toString();
+  return query ? `${pathname}?${query}` : pathname;
 }

@@ -2,7 +2,13 @@
   "extends": "@stockpilot/config/tsconfig",
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": "./src"
+    "rootDir": "./src",
+    // Node's type declarations, declared on purpose. Core's source uses the
+    // runtime globals fetch / Request / URL / URLSearchParams, and its tests
+    // use node:fs, node:url and import.meta.url. Until Vitest 4 these types
+    // arrived by accident through vitest's own .d.ts files (vitest-dev/vitest
+    // #5481, #6141); Vitest 4 stopped leaking them, so they are named here.
+    "types": ["node"]
   },
   "include": ["src/**/*"]
 }

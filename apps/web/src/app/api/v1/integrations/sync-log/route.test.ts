@@ -61,9 +61,9 @@ describe('GET /api/v1/integrations/sync-log', () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
     const payload = { rows: [{ id: VALID_ID, topic: 'bill', status: 'dead' }] };
     const listFailedSyncs = vi.fn(async () => payload);
-    vi.mocked(ConnectionsService).mockImplementationOnce(
-      () => ({ listFailedSyncs }) as unknown as InstanceType<typeof ConnectionsService>,
-    );
+    vi.mocked(ConnectionsService).mockImplementationOnce(function () {
+      return { listFailedSyncs } as unknown as InstanceType<typeof ConnectionsService>;
+    });
 
     const res = await GET(listRequest());
 
@@ -77,9 +77,9 @@ describe('GET /api/v1/integrations/sync-log', () => {
     const listFailedSyncs = vi.fn(async () => {
       throw new ServiceError('forbidden', 'Missing permission: integrations:manage');
     });
-    vi.mocked(ConnectionsService).mockImplementationOnce(
-      () => ({ listFailedSyncs }) as unknown as InstanceType<typeof ConnectionsService>,
-    );
+    vi.mocked(ConnectionsService).mockImplementationOnce(function () {
+      return { listFailedSyncs } as unknown as InstanceType<typeof ConnectionsService>;
+    });
 
     const res = await GET(listRequest());
     expect(res.status).toBe(403);
@@ -91,9 +91,9 @@ describe('GET /api/v1/integrations/sync-log', () => {
     const listFailedSyncs = vi.fn(async () => {
       throw new ServiceError('module_disabled', 'Module not enabled');
     });
-    vi.mocked(ConnectionsService).mockImplementationOnce(
-      () => ({ listFailedSyncs }) as unknown as InstanceType<typeof ConnectionsService>,
-    );
+    vi.mocked(ConnectionsService).mockImplementationOnce(function () {
+      return { listFailedSyncs } as unknown as InstanceType<typeof ConnectionsService>;
+    });
 
     const res = await GET(listRequest());
     expect(res.status).toBe(403);
@@ -122,9 +122,9 @@ describe('POST /api/v1/integrations/sync-log/[id]/replay', () => {
   it('replays a failed row and returns 200 { ok: true }', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
     const replaySync = vi.fn(async () => undefined);
-    vi.mocked(ConnectionsService).mockImplementationOnce(
-      () => ({ replaySync }) as unknown as InstanceType<typeof ConnectionsService>,
-    );
+    vi.mocked(ConnectionsService).mockImplementationOnce(function () {
+      return { replaySync } as unknown as InstanceType<typeof ConnectionsService>;
+    });
 
     const { req, ctx } = replayRequest(VALID_ID);
     const res = await POST(req, ctx);
@@ -139,9 +139,9 @@ describe('POST /api/v1/integrations/sync-log/[id]/replay', () => {
     const replaySync = vi.fn(async () => {
       throw new ServiceError('forbidden', 'Missing permission: integrations:manage');
     });
-    vi.mocked(ConnectionsService).mockImplementationOnce(
-      () => ({ replaySync }) as unknown as InstanceType<typeof ConnectionsService>,
-    );
+    vi.mocked(ConnectionsService).mockImplementationOnce(function () {
+      return { replaySync } as unknown as InstanceType<typeof ConnectionsService>;
+    });
 
     const { req, ctx } = replayRequest(VALID_ID);
     const res = await POST(req, ctx);
@@ -154,9 +154,9 @@ describe('POST /api/v1/integrations/sync-log/[id]/replay', () => {
     const replaySync = vi.fn(async () => {
       throw new ServiceError('not_found', 'No replayable failed sync was found for that id.');
     });
-    vi.mocked(ConnectionsService).mockImplementationOnce(
-      () => ({ replaySync }) as unknown as InstanceType<typeof ConnectionsService>,
-    );
+    vi.mocked(ConnectionsService).mockImplementationOnce(function () {
+      return { replaySync } as unknown as InstanceType<typeof ConnectionsService>;
+    });
 
     const { req, ctx } = replayRequest(VALID_ID);
     const res = await POST(req, ctx);

@@ -156,9 +156,9 @@ const SCAN_HEADER = {
 
 function stubGet(header: PoImportRow, lines: PoImportLineRow[]) {
   const get = vi.fn(async () => ({ header, lines }));
-  vi.mocked(PoImportsService).mockImplementationOnce(
-    () => ({ get }) as unknown as InstanceType<typeof PoImportsService>,
-  );
+  vi.mocked(PoImportsService).mockImplementationOnce(function () {
+    return { get } as unknown as InstanceType<typeof PoImportsService>;
+  });
   return get;
 }
 
@@ -211,9 +211,9 @@ describe('GET /api/po-imports/[id]/export.csv', () => {
     const get = vi.fn(async () => {
       throw new ServiceError('not_found', 'PO import not found');
     });
-    vi.mocked(PoImportsService).mockImplementationOnce(
-      () => ({ get }) as unknown as InstanceType<typeof PoImportsService>,
-    );
+    vi.mocked(PoImportsService).mockImplementationOnce(function () {
+      return { get } as unknown as InstanceType<typeof PoImportsService>;
+    });
     const res = await GET(buildRequest(), buildParams());
     expect(res.status).toBe(404);
   });

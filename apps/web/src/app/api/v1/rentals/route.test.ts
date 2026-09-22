@@ -58,9 +58,9 @@ function buildRequest(body: unknown) {
 
 function mockCreate(impl: () => Promise<{ id: string }>) {
   const create = vi.fn(impl);
-  vi.mocked(RentalsService).mockImplementationOnce(
-    () => ({ create }) as unknown as InstanceType<typeof RentalsService>,
-  );
+  vi.mocked(RentalsService).mockImplementationOnce(function () {
+    return { create } as unknown as InstanceType<typeof RentalsService>;
+  });
   return create;
 }
 

@@ -65,7 +65,9 @@ vi.mock('@/server/services/recurring-pos', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/server/services/recurring-pos')>();
   return {
     ...actual,
-    RecurringPoTemplatesService: vi.fn(() => mockServiceInstance),
+    RecurringPoTemplatesService: vi.fn(function () {
+      return mockServiceInstance;
+    }),
   };
 });
 

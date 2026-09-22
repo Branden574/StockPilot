@@ -134,10 +134,9 @@ describe('POST /api/v1/items/sized-variants', () => {
       ],
       placementFailed: null,
     }));
-    vi.mocked(InventoryService).mockImplementationOnce(
-      () =>
-        ({ bulkCreateSizedVariants }) as unknown as InstanceType<typeof InventoryService>,
-    );
+    vi.mocked(InventoryService).mockImplementationOnce(function () {
+      return { bulkCreateSizedVariants } as unknown as InstanceType<typeof InventoryService>;
+    });
 
     const res = await POST(buildRequest(VALID_BODY));
 
@@ -168,10 +167,9 @@ describe('POST /api/v1/items/sized-variants', () => {
       rows: [{ id: 'v-1', name: 'n', sku: 's' }],
       placementFailed: { rackName: '28-A', count: 1 },
     }));
-    vi.mocked(InventoryService).mockImplementationOnce(
-      () =>
-        ({ bulkCreateSizedVariants }) as unknown as InstanceType<typeof InventoryService>,
-    );
+    vi.mocked(InventoryService).mockImplementationOnce(function () {
+      return { bulkCreateSizedVariants } as unknown as InstanceType<typeof InventoryService>;
+    });
 
     const res = await POST(buildRequest(VALID_BODY));
 
@@ -192,10 +190,9 @@ describe('POST /api/v1/items/sized-variants', () => {
       seen.push(input);
       return { rows: [{ id: 'v-1', name: 'n', sku: 's' }], placementFailed: null };
     });
-    vi.mocked(InventoryService).mockImplementationOnce(
-      () =>
-        ({ bulkCreateSizedVariants }) as unknown as InstanceType<typeof InventoryService>,
-    );
+    vi.mocked(InventoryService).mockImplementationOnce(function () {
+      return { bulkCreateSizedVariants } as unknown as InstanceType<typeof InventoryService>;
+    });
 
     await POST(
       buildRequest({
@@ -215,10 +212,9 @@ describe('POST /api/v1/items/sized-variants', () => {
     const bulkCreateSizedVariants = vi.fn(async () => {
       throw new ServiceError('forbidden', 'Missing permission: items:create');
     });
-    vi.mocked(InventoryService).mockImplementationOnce(
-      () =>
-        ({ bulkCreateSizedVariants }) as unknown as InstanceType<typeof InventoryService>,
-    );
+    vi.mocked(InventoryService).mockImplementationOnce(function () {
+      return { bulkCreateSizedVariants } as unknown as InstanceType<typeof InventoryService>;
+    });
 
     const res = await POST(buildRequest(VALID_BODY));
     expect(res.status).toBe(403);
@@ -234,10 +230,9 @@ describe('POST /api/v1/items/sized-variants', () => {
         { code: 'SHOE_SIZE_REQUIRED' },
       );
     });
-    vi.mocked(InventoryService).mockImplementationOnce(
-      () =>
-        ({ bulkCreateSizedVariants }) as unknown as InstanceType<typeof InventoryService>,
-    );
+    vi.mocked(InventoryService).mockImplementationOnce(function () {
+      return { bulkCreateSizedVariants } as unknown as InstanceType<typeof InventoryService>;
+    });
 
     const res = await POST(buildRequest(VALID_BODY));
     expect(res.status).toBe(400);
@@ -249,10 +244,9 @@ describe('POST /api/v1/items/sized-variants', () => {
     const bulkCreateSizedVariants = vi.fn(async () => {
       throw new Error('boom');
     });
-    vi.mocked(InventoryService).mockImplementationOnce(
-      () =>
-        ({ bulkCreateSizedVariants }) as unknown as InstanceType<typeof InventoryService>,
-    );
+    vi.mocked(InventoryService).mockImplementationOnce(function () {
+      return { bulkCreateSizedVariants } as unknown as InstanceType<typeof InventoryService>;
+    });
 
     const res = await POST(buildRequest(VALID_BODY));
     expect(res.status).toBe(500);

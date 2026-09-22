@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { forgetTourState } from '@/lib/onboarding/tour-state-cache';
 import { createClient } from '@/lib/supabase/client';
 
 /**
@@ -55,6 +56,8 @@ export function SessionRevocationListener({ userId }: { userId: string }) {
           (Array.isArray(p.sessionIds) && !!mine && p.sessionIds.includes(mine)) ||
           ('keepId' in p && !!mine && p.keepId !== mine);
         if (!targeted) return;
+        // Per-person state kept for the browser session goes with the session.
+        forgetTourState();
         // scope:'local' clears ONLY this browser. The authoritative server-side
         // revoke already happened (the broadcaster deleted our auth.sessions
         // row); a default global signOut here would cascade and revoke the

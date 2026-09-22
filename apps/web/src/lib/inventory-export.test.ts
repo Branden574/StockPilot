@@ -8,22 +8,34 @@ const warehousesList = vi.fn();
 const chartersList = vi.fn();
 
 vi.mock('@/server/services/inventory', () => ({
-  InventoryService: vi.fn().mockImplementation(() => ({ list: listMock })),
+  InventoryService: vi.fn().mockImplementation(function () {
+    return { list: listMock };
+  }),
 }));
 vi.mock('@/server/services/categories', () => ({
-  CategoriesService: vi.fn().mockImplementation(() => ({ list: categoriesList })),
+  CategoriesService: vi.fn().mockImplementation(function () {
+    return { list: categoriesList };
+  }),
 }));
 vi.mock('@/server/services/locations', () => ({
-  LocationsService: vi.fn().mockImplementation(() => ({ list: locationsList })),
+  LocationsService: vi.fn().mockImplementation(function () {
+    return { list: locationsList };
+  }),
 }));
 vi.mock('@/server/services/suppliers', () => ({
-  SuppliersService: vi.fn().mockImplementation(() => ({ list: suppliersList })),
+  SuppliersService: vi.fn().mockImplementation(function () {
+    return { list: suppliersList };
+  }),
 }));
 vi.mock('@/server/services/warehouses', () => ({
-  WarehousesService: vi.fn().mockImplementation(() => ({ list: warehousesList })),
+  WarehousesService: vi.fn().mockImplementation(function () {
+    return { list: warehousesList };
+  }),
 }));
 vi.mock('@/server/services/charters', () => ({
-  ChartersService: vi.fn().mockImplementation(() => ({ list: chartersList })),
+  ChartersService: vi.fn().mockImplementation(function () {
+    return { list: chartersList };
+  }),
 }));
 
 import { InventoryService } from '@/server/services/inventory';
@@ -64,12 +76,24 @@ const sampleItem = {
 };
 
 beforeEach(() => {
-  vi.mocked(InventoryService).mockImplementation(() => ({ list: listMock }) as never);
-  vi.mocked(CategoriesService).mockImplementation(() => ({ list: categoriesList }) as never);
-  vi.mocked(LocationsService).mockImplementation(() => ({ list: locationsList }) as never);
-  vi.mocked(SuppliersService).mockImplementation(() => ({ list: suppliersList }) as never);
-  vi.mocked(WarehousesService).mockImplementation(() => ({ list: warehousesList }) as never);
-  vi.mocked(ChartersService).mockImplementation(() => ({ list: chartersList }) as never);
+  vi.mocked(InventoryService).mockImplementation(function () {
+    return { list: listMock } as never;
+  });
+  vi.mocked(CategoriesService).mockImplementation(function () {
+    return { list: categoriesList } as never;
+  });
+  vi.mocked(LocationsService).mockImplementation(function () {
+    return { list: locationsList } as never;
+  });
+  vi.mocked(SuppliersService).mockImplementation(function () {
+    return { list: suppliersList } as never;
+  });
+  vi.mocked(WarehousesService).mockImplementation(function () {
+    return { list: warehousesList } as never;
+  });
+  vi.mocked(ChartersService).mockImplementation(function () {
+    return { list: chartersList } as never;
+  });
   listMock.mockReset();
   categoriesList.mockReset();
   locationsList.mockReset();

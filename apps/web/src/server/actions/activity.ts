@@ -10,7 +10,7 @@ import {
   type ActivityCursor,
   type ActivityEvent,
 } from '@/server/services/activity';
-import { ServiceError } from '@/server/services/context';
+import { ServiceError, withContext } from '@/server/services/context';
 import { LocationsService } from '@/server/services/locations';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
@@ -108,15 +108,23 @@ export async function loadOlderItemActivityAction(input: {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   }
   try {
-    // ActivityService.forCurrentUser() / LocationsService.forCurrentUser()
-    // both resolve via withContext() — the SAME org/permission-scoped,
+    // ONE withContext() for both services — the SAME org/permission-scoped,
     // user-authed context the item-detail page itself renders under.
     // Never a raw admin client: every underlying query stays org-scoped
     // (`.eq('organization_id', ctx.organizationId)`) and RLS-enforced
     // (audit_logs' manager+ SELECT policy applies exactly as it does on
     // first render), so an itemId from another org simply yields empty
     // results rather than leaking rows.
-    const activitySvc = await ActivityService.forCurrentUser();
+    //
+    // ONCE, not per service: React cache() does not memoize inside a Server
+    // Action, so each `forCurrentUser()` built the whole context again (the
+    // request-context RPC, the GoTrue factor read and the rest) before the
+    // location names could load. That was a second serial round of Supabase
+    // calls behind "Load older" on the Movements and Activity tabs, each one
+    // a fresh chance at the 1 to 8 s entry-point stall measured on
+    // 2026-09-22.
+    const ctx = await withContext();
+    const activitySvc = new ActivityService(ctx);
     const events = await activitySvc.forItem(parsed.data.itemId, ITEM_ACTIVITY_PAGE_SIZE, {
       before: parsed.data.before,
     });
@@ -133,7 +141,7 @@ export async function loadOlderItemActivityAction(input: {
     }
     let locationNames: Record<string, string> = {};
     if (referencedLocationIds.size > 0) {
-      const locationsSvc = await LocationsService.forCurrentUser();
+      const locationsSvc = new LocationsService(ctx);
       const locations = await locationsSvc.list();
       locationNames = Object.fromEntries(
         locations

@@ -50,9 +50,9 @@ function validBody(extra: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   add.mockReset();
-  vi.mocked(OrderAttachmentsService).mockImplementation(
-    () => ({ add }) as unknown as InstanceType<typeof OrderAttachmentsService>,
-  );
+  vi.mocked(OrderAttachmentsService).mockImplementation(function () {
+    return { add } as unknown as InstanceType<typeof OrderAttachmentsService>;
+  });
 });
 
 describe('POST /api/v1/orders/[id]/attachments', () => {

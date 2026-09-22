@@ -51,9 +51,9 @@ function validBody(extra: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   finalize.mockReset();
-  vi.mocked(MaintenanceAttachmentsService).mockImplementation(
-    () => ({ finalize }) as unknown as InstanceType<typeof MaintenanceAttachmentsService>,
-  );
+  vi.mocked(MaintenanceAttachmentsService).mockImplementation(function () {
+    return { finalize } as unknown as InstanceType<typeof MaintenanceAttachmentsService>;
+  });
 });
 
 describe('POST /api/v1/maintenance-requests/[id]/attachments/finalize', () => {

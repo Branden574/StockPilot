@@ -45,9 +45,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   list.mockReset();
   create.mockReset();
-  vi.mocked(MaintenanceRequestsService).mockImplementation(
-    () => ({ list, create }) as unknown as InstanceType<typeof MaintenanceRequestsService>,
-  );
+  vi.mocked(MaintenanceRequestsService).mockImplementation(function () {
+    return { list, create } as unknown as InstanceType<typeof MaintenanceRequestsService>;
+  });
 });
 
 describe('GET /api/v1/maintenance-requests', () => {

@@ -42,9 +42,9 @@ function params(id: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   recordDraftOpened.mockReset();
-  vi.mocked(MaintenanceRequestsService).mockImplementation(
-    () => ({ recordDraftOpened }) as unknown as InstanceType<typeof MaintenanceRequestsService>,
-  );
+  vi.mocked(MaintenanceRequestsService).mockImplementation(function () {
+    return { recordDraftOpened } as unknown as InstanceType<typeof MaintenanceRequestsService>;
+  });
 });
 
 describe('POST /api/v1/maintenance-requests/[id]/draft-opened', () => {

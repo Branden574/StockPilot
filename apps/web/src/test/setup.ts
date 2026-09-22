@@ -48,7 +48,36 @@ if (typeof window !== 'undefined') {
 }
 
 // Reset module mocks + DOM between tests so suites stay isolated.
+//
+// THIS IS THE ONLY GLOBAL MOCK RESET FOR ~1,700 vi.mock SITES. Every file in
+// the web suite leans on it: a vi.fn() set up in a vi.mock factory, given a
+// mockResolvedValue in one test, must be back to its factory implementation
+// with zero recorded calls by the next test.
+//
+// WHY TWO CALLS (the Vitest 4 upgrade, 2026-09):
+// On Vitest 3, vi.restoreAllMocks() alone did all of that. It walked every
+// mock ever created and called mockRestore() on it, and mockRestore() was
+// mockReset() plus putting a vi.spyOn() property back
+// (@vitest/spy 3.2.7: `stub.mockRestore = () => { stub.mockReset();
+// state.restore(); }`). So one call cleared calls/results, dropped
+// mockImplementation / mockReturnValue / the *Once queues, sent a
+// vi.fn(impl) back to `impl`, and un-patched every vi.spyOn.
+//
+// Vitest 4 split that apart. vi.restoreAllMocks() now ONLY puts vi.spyOn
+// properties back (@vitest/spy 4.1.11: `for (const restore of MOCK_RESTORE)
+// restore();`) and leaves every mock's calls and implementation alone; the
+// migration guide says it "no longer resets the state of spies and only
+// restores spies created manually with vi.spyOn". Left as the single call,
+// 62 web tests in 18 files failed on the upgrade, on call counts and on
+// mockResolvedValue overrides leaking from one test into the next.
+//
+// vi.resetAllMocks() is the other half: mockReset() on every registered mock,
+// which clears state and sets the implementation back to what the mock was
+// created with (vi.fn(impl) -> impl, vi.fn() / automock -> undefined, vi.spyOn
+// -> call-through). Both together give each test the isolation it had on
+// Vitest 3. Do NOT reduce this to one call.
 afterEach(() => {
   cleanup();
+  vi.resetAllMocks();
   vi.restoreAllMocks();
 });
