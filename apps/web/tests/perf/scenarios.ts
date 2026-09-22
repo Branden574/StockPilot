@@ -35,6 +35,12 @@ export interface Marker {
   shell?: string;
   /** When set, `selector` must match a link whose href fits this regex source. */
   hrefPattern?: string;
+  /** Regex source the query string must also match (?tab=, ?page=, ?sort=). */
+  search?: string;
+  /** Only a node that was not on the page when the step was armed counts (a change within one page). */
+  freshOnly?: boolean;
+  /** The marker's table row must contain this text (a search result). */
+  rowText?: string;
 }
 
 export interface ClickStep {
@@ -42,6 +48,15 @@ export interface ClickStep {
   selector: string;
   hrefPattern?: string;
   arrives: Marker;
+  /**
+   * How the step is made. `click` (default); `back` / `forward` (the browser's
+   * history buttons, `selector` unused); `fill` (types `text` into `selector`
+   * in one input event).
+   */
+  via?: 'click' | 'back' | 'forward' | 'fill';
+  text?: string;
+  /** Unmeasured clicks first, e.g. opening the menu the measured click picks from. */
+  setup?: string[];
 }
 
 export interface Scenario {
@@ -64,6 +79,14 @@ export interface Scenario {
   photos?: { scope: string; first: number; settledWhenGone?: string };
   /** A fresh browser profile per iteration: empty HTTP cache, the true first visit. */
   coldBrowserCache?: boolean;
+  /** Overrides PERF_HOVER_MS for this scenario. 0 = the pointer lands and clicks at once. */
+  hoverMs?: number;
+  /** Overrides PERF_SETTLE_MS. 0 = click as soon as the start page shows content (quick click). */
+  settleMs?: number;
+  /** Rest after the prelude, before the measured step (the revisit after the router cache expired). */
+  restBeforeMs?: number;
+  /** Overrides PERF_ITERATIONS: for scenarios that take minutes per sample. The report shows n. */
+  iterations?: number;
 }
 
 const INVENTORY_ROWS: Marker = {
@@ -112,6 +135,29 @@ const STOREFRONT: Marker = {
   path: '^/dashboard/orders/new$',
   selector: '.sf-card, .sf-row, .sf-feat-card',
   shell: '.sf-sk',
+};
+
+// Inventory rows that were NOT on the page before the step: the list after a
+// change within the page (next page, sort, filter, search). The query-string
+// check keeps a half-applied change from counting.
+const inventoryRowsWhere = (search?: string, rowText?: string): Marker => ({
+  ...INVENTORY_ROWS,
+  ...(search ? { search } : {}),
+  ...(rowText ? { rowText } : {}),
+  freshOnly: true,
+});
+// The item page's tab panel. It is rendered on the server WITH its data (no
+// client fetch, no inner skeleton), so its presence is the tab's real content,
+// a filled feed or its empty state.
+const itemTab = (tab: 'movements' | 'activity'): Marker => ({
+  path: ITEM_DETAIL.path,
+  search: `(^|[?&])tab=${tab}(&|$)`,
+  selector: `#item-detail-panel-${tab}`,
+});
+const OPEN_FIRST_ITEM: ClickStep = {
+  selector: 'main table tbody tr a[href]',
+  hrefPattern: INVENTORY_ROWS.hrefPattern,
+  arrives: ITEM_DETAIL,
 };
 
 export const SCENARIOS: Scenario[] = [
@@ -197,6 +243,129 @@ export const SCENARIOS: Scenario[] = [
     startReady: { path: '^/dashboard/orders$', selector: 'main h1' },
     click: { selector: 'main a[href="/dashboard/orders/new"]', arrives: STOREFRONT },
     photos: STOREFRONT_PHOTOS,
+  },
+  {
+    // The owner's 10 s report (2026-09-22). A tab is a query-only navigation.
+    id: 'item-movements-tab',
+    title: 'Item → Movements tab',
+    kind: 'soft-navigation',
+    start: '/dashboard/inventory',
+    startReady: INVENTORY_ROWS,
+    prelude: [OPEN_FIRST_ITEM],
+    click: { selector: '#item-detail-tab-movements', arrives: itemTab('movements') },
+  },
+  {
+    id: 'item-activity-tab',
+    title: 'Item → Activity tab',
+    kind: 'soft-navigation',
+    start: '/dashboard/inventory',
+    startReady: INVENTORY_ROWS,
+    prelude: [OPEN_FIRST_ITEM],
+    click: { selector: '#item-detail-tab-activity', arrives: itemTab('activity') },
+  },
+  {
+    // The browser's Back button, from an item to the list it was opened from.
+    id: 'back-item-to-inventory',
+    title: 'Back: Item → Inventory',
+    kind: 'soft-navigation',
+    start: '/dashboard/inventory',
+    startReady: INVENTORY_ROWS,
+    prelude: [OPEN_FIRST_ITEM],
+    click: { selector: '', via: 'back', arrives: INVENTORY_ROWS },
+  },
+  {
+    id: 'forward-inventory-to-item',
+    title: 'Forward: Inventory → Item',
+    kind: 'soft-navigation',
+    start: '/dashboard/inventory',
+    startReady: INVENTORY_ROWS,
+    prelude: [OPEN_FIRST_ITEM, { selector: '', via: 'back', arrives: INVENTORY_ROWS }],
+    click: { selector: '', via: 'forward', arrives: ITEM_DETAIL },
+  },
+  {
+    id: 'inventory-next-page',
+    title: 'Inventory → next page',
+    kind: 'soft-navigation',
+    start: '/dashboard/inventory',
+    startReady: INVENTORY_ROWS,
+    click: {
+      selector: 'main a:has-text("Next →")',
+      arrives: inventoryRowsWhere('(^|[?&])page=2(&|$)'),
+    },
+  },
+  {
+    id: 'inventory-search',
+    title: 'Inventory search (typed)',
+    kind: 'soft-navigation',
+    start: '/dashboard/inventory',
+    startReady: INVENTORY_ROWS,
+    click: {
+      selector: 'main input[aria-label="Search items"]',
+      via: 'fill',
+      text: 'deluxe',
+      arrives: inventoryRowsWhere(undefined, 'deluxe'),
+    },
+  },
+  {
+    id: 'inventory-sort',
+    title: 'Inventory sort (Name Z → A)',
+    kind: 'soft-navigation',
+    start: '/dashboard/inventory',
+    startReady: INVENTORY_ROWS,
+    click: {
+      setup: ['main button[aria-label^="Sort by"]'],
+      selector: 'button:has-text("Name (Z → A)")',
+      arrives: inventoryRowsWhere('(^|[?&])sort=name_desc(&|$)'),
+    },
+  },
+  {
+    id: 'inventory-filter',
+    title: 'Inventory filter (first category)',
+    kind: 'soft-navigation',
+    start: '/dashboard/inventory',
+    startReady: INVENTORY_ROWS,
+    click: {
+      setup: ['main button[aria-label="Filter by Category"]'],
+      // The popover (Radix: role=dialog) the setup click opened.
+      selector: '[role="dialog"] button[role="checkbox"]',
+      // Not the URL: the filter control applies at once and writes the URL
+      // after a 300 ms debounce (use-instant-filters.ts), so the rows are the
+      // user's answer.
+      arrives: inventoryRowsWhere(),
+    },
+  },
+  {
+    // No hover warning at all: the pointer lands on the link and clicks.
+    id: 'dashboard-to-inventory-no-hover',
+    title: 'Dashboard → Inventory, no hover',
+    kind: 'soft-navigation',
+    start: '/dashboard',
+    startReady: OVERVIEW,
+    hoverMs: 0,
+    click: { selector: 'aside a[href="/dashboard/inventory"]', arrives: INVENTORY_ROWS },
+  },
+  {
+    // Clicked the moment the dashboard shows content, before its own
+    // warm-ups and late chunks are done.
+    id: 'dashboard-to-inventory-quick',
+    title: 'Dashboard → Inventory, quick click after load',
+    kind: 'soft-navigation',
+    start: '/dashboard',
+    startReady: OVERVIEW,
+    settleMs: 0,
+    click: { selector: 'aside a[href="/dashboard/inventory"]', arrives: INVENTORY_ROWS },
+  },
+  {
+    // After the 90 s client router cache has expired: a real server trip.
+    id: 'inventory-revisit-after-90s',
+    title: 'Inventory revisit after 95 s',
+    kind: 'soft-navigation',
+    start: '/dashboard/inventory',
+    startReady: INVENTORY_ROWS,
+    prelude: [{ selector: 'aside a[href="/dashboard"]', arrives: OVERVIEW }],
+    restBeforeMs: 95_000,
+    iterations: 8,
+    click: { selector: 'aside a[href="/dashboard/inventory"]', arrives: INVENTORY_ROWS },
   },
   {
     id: 'hard-load-inventory',

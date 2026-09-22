@@ -29,7 +29,7 @@ import {
 /** Bump when the SHAPE of results.json changes. */
 export const SCHEMA_VERSION = 5;
 /** Bump when WHAT A NUMBER MEANS changes (a marker, a clock, a floor). Runs with different values are not comparable. */
-export const HARNESS_VERSION = '2026-09-21.1';
+export const HARNESS_VERSION = '2026-09-22.1';
 
 export interface ImageRecord {
   order: number;
@@ -150,6 +150,8 @@ export interface Sample {
   /** Page-data fetch on the page's own clock, from the click. */
   rscRequestStartMs: number | null;
   rscFirstByteMs: number | null;
+  /** The whole page-data stream in hand, from the click. Absent in runs before harness 2026-09-22.1. */
+  rscCompleteMs?: number | null;
   ttfbMs: number | null;
   fcpMs: number | null;
   lcpMs: number | null;
@@ -255,6 +257,124 @@ const rscWait = (s: Sample) =>
     : s.rscFirstByteMs - s.rscRequestStartMs;
 const shell = (s: Sample) => s.shellPaintMs;
 const allPrefetches = (s: Sample) => (s.network ? (s.network.counts['rsc-prefetch'] ?? 0) : null);
+
+/**
+ * Harness 2026-09-22.1 (navigation recovery brief): the interactions inside and
+ * between pages. Each gets its content time, its click feedback where there is
+ * a click, and its requests, so a change is never judged on one number.
+ */
+function INTERACTION_ROWS(): RowSpec[] {
+  const items: Array<{ scenario: string; title: string; feedback: boolean }> = [
+    { scenario: 'item-movements-tab', title: 'Item → Movements tab', feedback: true },
+    { scenario: 'item-activity-tab', title: 'Item → Activity tab', feedback: true },
+    { scenario: 'back-item-to-inventory', title: 'Back: Item → Inventory', feedback: false },
+    { scenario: 'forward-inventory-to-item', title: 'Forward: Inventory → Item', feedback: false },
+    { scenario: 'inventory-next-page', title: 'Inventory → next page', feedback: true },
+    { scenario: 'inventory-search', title: 'Inventory search (typed)', feedback: false },
+    { scenario: 'inventory-sort', title: 'Inventory sort (Name Z → A)', feedback: true },
+    { scenario: 'inventory-filter', title: 'Inventory filter (first category)', feedback: true },
+    {
+      scenario: 'dashboard-to-inventory-no-hover',
+      title: 'Dashboard → Inventory, no hover',
+      feedback: true,
+    },
+    {
+      scenario: 'dashboard-to-inventory-quick',
+      title: 'Dashboard → Inventory, quick click after load',
+      feedback: true,
+    },
+    {
+      scenario: 'inventory-revisit-after-90s',
+      title: 'Inventory revisit after 95 s',
+      feedback: true,
+    },
+  ];
+  return items.flatMap(({ scenario, title, feedback: withFeedback }) => [
+    {
+      id: `nav-${scenario}`,
+      group: 'navigation' as const,
+      title,
+      scenario,
+      unit: 'ms' as const,
+      censored: 'right' as const,
+      pick: useful,
+      budget: WARM_NAV,
+    },
+    ...(withFeedback
+      ? [
+          {
+            id: `click-${scenario}`,
+            group: 'click' as const,
+            title: `Click → visible response (${title})`,
+            scenario,
+            unit: 'ms' as const,
+            pick: feedback,
+            budget: CLICK,
+          },
+        ]
+      : []),
+    {
+      id: `requests-${scenario}`,
+      group: 'network' as const,
+      title: `Requests, step → content + 1 s (${title})`,
+      scenario,
+      unit: 'count' as const,
+      pick: (s: Sample) => s.network?.total ?? null,
+    },
+  ]);
+}
+
+/**
+ * When the page-data stream was COMPLETE, from the click: the server's whole
+ * render plus the trip. Beside "useful", it tells a slow server (stream ends
+ * late) from a page held back on the client (stream done, content still not
+ * shown: React's reveal throttle, a nested fallback, client work).
+ */
+function STREAM_ROWS(): RowSpec[] {
+  const items: Array<[string, string]> = [
+    ['dashboard-to-inventory', 'Inventory'],
+    ['dashboard-to-books', 'Books'],
+    ['dashboard-to-orders', 'Orders'],
+    ['inventory-to-item', 'Item'],
+    ['orders-to-order', 'Order'],
+    ['orders-to-storefront', 'storefront'],
+    ['item-movements-tab', 'Movements tab'],
+    ['item-activity-tab', 'Activity tab'],
+    ['inventory-revisit-after-90s', 'Inventory after 95 s'],
+  ];
+  return items.flatMap(([scenario, label]) => [
+    {
+      id: `stream-done-${scenario}`,
+      group: 'navigation' as const,
+      title: `Click → page-data stream complete (${label})`,
+      scenario,
+      unit: 'ms' as const,
+      pick: (s: Sample) => s.rscCompleteMs ?? null,
+    },
+    {
+      id: `held-${scenario}`,
+      group: 'navigation' as const,
+      title: `Content shown after the stream completed, gap (${label}; negative = shown while still streaming)`,
+      scenario,
+      unit: 'ms' as const,
+      pick: (s: Sample) =>
+        s.usefulPaintMs === null || s.rscCompleteMs == null ? null : s.usefulPaintMs - s.rscCompleteMs,
+    },
+    // Inventory and Item already have their skeleton rows above.
+    ...(scenario === 'dashboard-to-inventory' || scenario === 'inventory-to-item'
+      ? []
+      : [
+          {
+            id: `shell-${scenario}`,
+            group: 'navigation' as const,
+            title: `Click → loading skeleton visible (${label})`,
+            scenario,
+            unit: 'ms' as const,
+            pick: shell,
+          },
+        ]),
+  ]);
+}
 
 /** The first six are the owner's required table, in the owner's order. */
 export const ROWS: RowSpec[] = [
@@ -793,6 +913,8 @@ export const ROWS: RowSpec[] = [
     unit: 'count',
     pick: (s) => s.consoleErrors,
   },
+  ...INTERACTION_ROWS(),
+  ...STREAM_ROWS(),
 ];
 
 export interface RowResult {
