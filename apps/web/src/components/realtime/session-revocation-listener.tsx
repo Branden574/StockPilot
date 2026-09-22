@@ -7,6 +7,8 @@ import { toast } from 'sonner';
 import { forgetTourState } from '@/lib/onboarding/tour-state-cache';
 import { createClient } from '@/lib/supabase/client';
 
+import { sessionIdFromAccessToken } from './session-id-from-token';
+
 /**
  * Listens for a "you've been signed out" broadcast targeting THIS device and, if
  * matched, signs out + redirects to /signin live. Mirrors PermissionsRealtime.
@@ -35,18 +37,9 @@ export function SessionRevocationListener({ userId }: { userId: string }) {
       const {
         data: { session },
       } = await supabase!.auth.getSession();
-      // session_id claim identifies our own auth.sessions row.
-      const token = session?.access_token;
-      if (token) {
-        try {
-          const payload = JSON.parse(
-            Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8'),
-          ) as { session_id?: string };
-          mySessionIdRef.current = payload.session_id ?? null;
-        } catch {
-          mySessionIdRef.current = null;
-        }
-      }
+      // session_id claim identifies our own auth.sessions row. Used ONLY to
+      // match a broadcast to this tab, never to authorize anything.
+      mySessionIdRef.current = sessionIdFromAccessToken(session?.access_token);
       if (cancelled) return;
       channel = supabase!.channel(`user:${userId}:sessions`);
       channel.on('broadcast', { event: 'revoked' }, ({ payload }) => {
