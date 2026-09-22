@@ -32,10 +32,10 @@
     "@commitlint/config-conventional": "^19.8.1",
     "husky": "^9.1.7",
     "lint-staged": "^15.5.2",
-    "prettier": "^3.9.6",
+    "prettier": "^3.9.8",
     "prettier-plugin-tailwindcss": "^0.8.1",
     "supabase": "^2.117.0",
-    "turbo": "^2.10.13",
+    "turbo": "^2.11.2",
     "typescript": "^5.9.3"
   },
   "lint-staged": {
