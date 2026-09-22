@@ -135,18 +135,24 @@ export const getMfaFactorsForRequest = cache(async (): Promise<MfaFactor[]> => {
 
 /**
  * Enabled `organization_modules` for the org, as a Set of module ids.
- * Request-cached so the dashboard layout AND `withContext()` (in
- * `server/services/context.ts`) share ONE `organization_modules` round-trip
- * per render instead of each issuing its own identical query.
+ * Request-cached so the dashboard layout, `withContext()` (in
+ * `server/services/context.ts`) AND every page's `checkModuleAccess()` gate
+ * (lib/modules/module-gate) share ONE answer per render instead of each
+ * issuing its own identical query (the gate used to make a `module_enabled`
+ * RPC per call).
  *
  * Fail behaviour matches both prior call sites: on a query error this
  * returns an EMPTY set (logged). Callers treat an empty set as "core-only"
- * — `assertModuleEnabled` still lets core modules through via the registry,
- * while optional/premium modules are denied. So an error fails CLOSED for
- * optional modules and never widens entitlements. NOTE: this helper does NOT
- * throw; a thrown error from the underlying client would propagate to the
- * caller exactly as the inline query would have (it never threw before, and
- * the Supabase client surfaces failures as `{ error }`, not exceptions).
+ * — `assertModuleEnabled` and `checkModuleAccess` still let core modules
+ * through via the registry, while optional/premium modules are denied. So an
+ * error fails CLOSED for optional modules and never widens entitlements.
+ * The page gate relies on this: do not make an unreadable row set come back
+ * as anything but "no rows". NOTE: the rows read itself does not throw (the
+ * Supabase client surfaces failures as `{ error }`, not exceptions), but on
+ * the legacy path the comp flag comes from getOrgRowForRequest, which THROWS
+ * on a read error because it also feeds the MFA gate. That rejection reaches
+ * the caller: the layout shows its error screen, and checkModuleAccess
+ * catches it and denies.
  */
 export const getModulesForRequest = cache(
   async (organizationId: string): Promise<Set<ModuleId>> => {

@@ -109,14 +109,20 @@ export default async function BooksPage({
 }: {
   searchParams: Promise<BooksSearchParams>;
 }) {
-  const moduleAccess = await checkModuleAccess('books');
+  // Both gates read the one request-cached module set (no round trip of their
+  // own). They used to be two module_enabled RPCs awaited one after the other
+  // before the header, two serial chances at a 1-8 s Supabase stall (3-5% of
+  // calls on weekday daytimes, measured 2026-09-22). Asked together, so even a
+  // slow set read is waited for once.
+  // Phase 6: price_tracking gates the bulk price-refresh action. When OFF, the
+  // button never renders and the page is identical to before.
+  const [moduleAccess, { enabled: priceTrackingEnabled }] = await Promise.all([
+    checkModuleAccess('books'),
+    checkModuleAccess('price_tracking'),
+  ]);
   if (!moduleAccess.enabled) {
     return <ModuleNotEnabled moduleId="books" canManage={moduleAccess.canManage} />;
   }
-  // Phase 6: gate the bulk price-refresh action on the optional
-  // price_tracking module. When OFF, the button never renders and the
-  // page is identical to before.
-  const { enabled: priceTrackingEnabled } = await checkModuleAccess('price_tracking');
   const params = await searchParams;
 
   const lifecycleStatus =
