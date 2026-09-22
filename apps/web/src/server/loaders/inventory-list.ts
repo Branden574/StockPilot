@@ -155,13 +155,21 @@ export function revalidateInventoryList(organizationId: string): void {
  * invalidates its cached list views. NEVER throws — the write already
  * succeeded, and a failed invalidation only means up to 60s of
  * staleness, which must not turn a successful action into an error.
+ *
+ * Resolves true only when the tag really was invalidated. Write actions can
+ * ignore it; the realtime watcher cannot (revalidateInventoryViewAction):
+ * inside a Server Action, an invalidation is also what makes Next re-render
+ * the current page into the action's response, so false means "nothing will
+ * refresh unless you do it yourself".
  */
-export async function revalidateInventoryListForCurrentOrg(): Promise<void> {
+export async function revalidateInventoryListForCurrentOrg(): Promise<boolean> {
   try {
     const { organizationId } = await withContext();
     revalidateInventoryList(organizationId);
+    return true;
   } catch (err) {
     console.warn('[inventory-list] revalidate skipped:', err);
+    return false;
   }
 }
 

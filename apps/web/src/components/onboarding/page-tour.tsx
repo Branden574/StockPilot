@@ -4,11 +4,9 @@ import { Sparkles, X } from 'lucide-react';
 import * as React from 'react';
 import { createPortal } from 'react-dom';
 
+import { useSessionUserId } from '@/components/dashboard/session-user';
 import { Button } from '@/components/ui/button';
-import {
-  getTourStateAction,
-  recordTourOutcomeAction,
-} from '@/lib/onboarding/actions';
+import { readTourState, recordTourOutcome } from '@/lib/onboarding/tour-state-cache';
 import type { TourDefinition, TourStep } from '@/lib/onboarding/types';
 import { setActiveTour } from '@/lib/onboarding/tour-broadcast';
 import { capture } from '@/lib/analytics';
@@ -104,14 +102,18 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
   const targetRef = React.useRef<Element | null>(null);
   const stepIndexRef = React.useRef(0);
   const goToSeq = React.useRef(0);
+  const userId = useSessionUserId();
 
   React.useEffect(() => setMounted(true), []);
 
   // Offer once per version: neither completed nor dismissed at >= version.
+  // The state is read once per browser session per user, not per page view
+  // (lib/onboarding/tour-state-cache.ts). An unreadable state offers nothing
+  // this time; it is not kept, so the next page view asks again.
   React.useEffect(() => {
     let cancelled = false;
-    void getTourStateAction().then((state) => {
-      if (cancelled) return;
+    void readTourState(userId).then((state) => {
+      if (cancelled || !state) return;
       const done = state.completed[tour.id];
       const waved = state.dismissed[tour.id];
       const seen =
@@ -123,7 +125,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
     return () => {
       cancelled = true;
     };
-  }, [tour.id, tour.version]);
+  }, [tour.id, tour.version, userId]);
 
   const finish = React.useCallback(
     (outcome: 'completed' | 'dismissed') => {
@@ -131,7 +133,7 @@ export function PageTour({ tour }: { tour: TourDefinition }) {
       setStepIndex(0);
       setRect(null);
       capture(`tour_${outcome}`, { tourId: tour.id, version: tour.version, exitStep: stepIndexRef.current });
-      void recordTourOutcomeAction({ tourId: tour.id, version: tour.version, outcome });
+      void recordTourOutcome({ tourId: tour.id, version: tour.version, outcome });
     },
     [tour.id, tour.version],
   );

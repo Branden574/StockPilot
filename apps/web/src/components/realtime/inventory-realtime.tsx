@@ -74,9 +74,19 @@ const REALTIME_SKIP_PREFIXES = [
 
 /**
  * Subscribes to org-scoped postgres_changes on the requested tables and
- * triggers `router.refresh()` (debounced) so RSC pages re-fetch with
- * fresh data. The actual data fetching remains in server components —
- * this just nudges Next.js to re-run them.
+ * re-renders the current page (throttled) so RSC pages re-fetch with fresh
+ * data. The actual data fetching remains in server components — this just
+ * nudges Next.js to re-run them.
+ *
+ * ONE render per refresh. The nudge is revalidateInventoryViewAction, whose
+ * invalidation already makes Next re-render the page into the action's
+ * response (see the comment on that action). This used to follow every
+ * action with router.refresh() as well, so each event rendered the page
+ * twice. Measured 2026-09-22 18:46:24Z: one rpc/adjust_stock by another user
+ * re-rendered the owner's Inventory tab 5 times in ~1.3 s, each render a
+ * fresh set of serial Supabase calls, and each one wiping the client router
+ * cache (the slow Back). router.refresh() is now only the fallback for when
+ * the action did not invalidate (it failed, or resolved false).
  *
  * RLS applies to realtime subscriptions, so events for rows the user
  * can't read are filtered out by Postgres before they reach the client.
@@ -100,10 +110,10 @@ export function InventoryRealtime({
     () => REALTIME_SKIP_PREFIXES.some((p) => pathname?.startsWith(p)),
     [pathname],
   );
-  // Leading-edge throttle: the FIRST event fires router.refresh()
-  // immediately so single inserts (e.g. mobile → web) feel instant;
-  // subsequent events within the throttle window collapse into one
-  // trailing refresh so bulk imports don't trigger N refreshes.
+  // Leading-edge throttle: the FIRST event refreshes immediately so single
+  // inserts (e.g. mobile → web) feel instant; subsequent events within the
+  // throttle window collapse into one trailing refresh so bulk imports don't
+  // trigger N refreshes.
   //
   // Previously this was a 750ms trailing debounce, which meant every
   // single insert paid the full 750ms before the UI updated — the
@@ -134,36 +144,95 @@ export function InventoryRealtime({
       if (cancelled) return;
       const channel = supabase.channel(`org:${organizationId}:inventory`);
 
-      // Bust this org's cached default list view BEFORE refreshing, so the
-      // RSC re-fetch can never read the ≤60s inventory-list cache entry.
-      // Web writes already invalidate it server-side; this covers writes
-      // that bypass this server entirely (mobile direct-to-Supabase, SQL)
-      // — the change event reaches watching browsers either way, and the
-      // watcher invalidates on the writer's behalf. If the action call
-      // fails, refresh anyway: the TTL still bounds staleness at 60s.
-      function refreshWithFreshCache() {
-        void revalidateInventoryViewAction()
-          .catch(() => {
-            /* noop — TTL bounds staleness */
-          })
-          .finally(() => router.refresh());
+      // Per-subscription refresh state.
+      //   inFlight / rerun: ONE refresh at a time. Calls from our servers to
+      //     Supabase stall 1-8 s at its entry point on 3-5% of weekday-daytime
+      //     calls (logs, 2026-09-22), and the Next router runs Server Actions
+      //     and refreshes strictly one after another (app-router-instance.js
+      //     dispatchAction: "add the action to the end of the queue"). So
+      //     during a stall a burst of events queued one full page render per
+      //     throttle window, and the person's own saves waited behind all of
+      //     them. An event that lands while a refresh is running earns exactly
+      //     one more refresh after it (that render may have read the database
+      //     before the change the event reports).
+      //   dirtyWhileHidden: a hidden tab does no server work. Nobody is
+      //     looking at it, and each render is a full set of serial Supabase
+      //     calls. It remembers that something changed and refreshes exactly
+      //     once, the moment it is visible again (the same leading-edge
+      //     refresh a visible tab gets for a new event).
+      let inFlight = false;
+      let rerun = false;
+      let dirtyWhileHidden = false;
+      const isHidden = () => document.visibilityState === 'hidden';
+
+      // Bust this org's cached default list view, which also re-renders this
+      // page (the action's response carries the new render). Web writes
+      // already invalidate it server-side; this covers writes that bypass
+      // this server entirely (mobile direct-to-Supabase, SQL) — the change
+      // event reaches watching browsers either way, and the watcher
+      // invalidates on the writer's behalf. If the action fails or did not
+      // invalidate, no render is coming, so refresh ourselves: the TTL still
+      // bounds the cached list's staleness at 60s.
+      async function refreshNow() {
+        if (cancelled) return;
+        if (isHidden()) {
+          dirtyWhileHidden = true;
+          return;
+        }
+        if (inFlight) {
+          rerun = true;
+          return;
+        }
+        inFlight = true;
+        lastRefreshRef.current = Date.now();
+        let revalidated = false;
+        try {
+          revalidated = (await revalidateInventoryViewAction()) === true;
+        } catch {
+          revalidated = false;
+        }
+        inFlight = false;
+        if (cancelled) return;
+        if (!revalidated) {
+          if (isHidden()) dirtyWhileHidden = true;
+          else router.refresh();
+        }
+        if (rerun) {
+          rerun = false;
+          nudge();
+        }
+      }
+
+      function startRefresh() {
+        refreshNow().catch((err: unknown) => {
+          console.warn('[realtime] refresh failed', err);
+        });
       }
 
       function nudge() {
-        const now = Date.now();
-        const since = now - lastRefreshRef.current;
+        if (isHidden()) {
+          dirtyWhileHidden = true;
+          return;
+        }
+        const since = Date.now() - lastRefreshRef.current;
         if (since >= THROTTLE_MS) {
-          lastRefreshRef.current = now;
-          refreshWithFreshCache();
+          startRefresh();
           return;
         }
         if (pendingRef.current) return;
         pendingRef.current = setTimeout(() => {
           pendingRef.current = null;
-          lastRefreshRef.current = Date.now();
-          refreshWithFreshCache();
+          startRefresh();
         }, THROTTLE_MS - since);
       }
+
+      function onVisibilityChange() {
+        if (isHidden() || !dirtyWhileHidden) return;
+        dirtyWhileHidden = false;
+        startRefresh();
+      }
+      document.addEventListener('visibilitychange', onVisibilityChange);
+      cleanup.push(() => document.removeEventListener('visibilitychange', onVisibilityChange));
 
       // Rebuilt from the key so the effect closes over nothing whose
       // identity churns per render.

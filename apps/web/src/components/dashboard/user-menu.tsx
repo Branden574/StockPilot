@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { reset as resetAnalytics } from '@/lib/analytics';
+import { forgetTourState } from '@/lib/onboarding/tour-state-cache';
 import { signOutAction } from '@/server/actions/auth';
 
 interface UserMenuProps {
@@ -105,6 +106,9 @@ export function UserMenu({
               // Clear the PostHog identity before tearing down the session.
               // No-op when analytics is unconfigured.
               resetAnalytics();
+              // And this person's tour state, kept for the browser session
+              // (sign-out is a soft navigation, so module state survives it).
+              forgetTourState();
               await signOutAction();
               router.refresh();
             }}
