@@ -2,7 +2,12 @@ import 'server-only';
 
 import { cache } from 'react';
 
-import { bundleMembership, loadRequestContextBundle } from '@/lib/auth/request-context-bundle';
+import {
+  bundleMembership,
+  loadRequestContextBundle,
+  modulesFromMembership,
+  orgRowFromMembership,
+} from '@/lib/auth/request-context-bundle';
 import { effectiveModules } from '@/lib/modules/effective-modules';
 import { createClient } from '@/lib/supabase/server';
 
@@ -61,20 +66,10 @@ export const getOrgRowForRequest = cache(async (organizationId: string): Promise
   // (migration 0355): the same columns, read under the same RLS, in the round
   // trip that resolved the membership. Anything else (no bundle, not a
   // member, row hidden) takes the read below, errors and all.
-  const held = bundleMembership(await loadRequestContextBundle(), organizationId);
-  if (held?.organization) {
-    const o = held.organization;
-    return {
-      terminology: o.terminology,
-      mfa_policy: o.mfa_policy,
-      logo_url: o.logo_url,
-      timezone: o.timezone,
-      nav_overrides: o.nav_overrides,
-      dashboard_layout: o.dashboard_layout,
-      order_status_config: o.order_status_config,
-      all_modules_comp: o.all_modules_comp,
-    };
-  }
+  const fromBundle = orgRowFromMembership(
+    bundleMembership(await loadRequestContextBundle(), organizationId),
+  );
+  if (fromBundle) return fromBundle;
   const supabase = await createClient();
   const { data, error } = await supabase
     .from('organizations')
@@ -159,13 +154,10 @@ export const getModulesForRequest = cache(
     // Same source as getOrgRowForRequest above: the enabled module ids and the
     // comp flag came back with the membership. The rule that turns them into
     // the effective set is the SAME function either way.
-    const held = bundleMembership(await loadRequestContextBundle(), organizationId);
-    if (held?.organization) {
-      return effectiveModules(
-        held.enabled_modules.map((module_id) => ({ module_id })),
-        held.organization.all_modules_comp,
-      );
-    }
+    const fromBundle = modulesFromMembership(
+      bundleMembership(await loadRequestContextBundle(), organizationId),
+    );
+    if (fromBundle) return fromBundle;
     const supabase = await createClient();
     const { data, error } = await supabase
       .from('organization_modules')

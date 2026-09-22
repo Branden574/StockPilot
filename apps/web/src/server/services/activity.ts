@@ -423,7 +423,9 @@ async function resolveReferenceLabels(
 }
 
 export class ActivityService {
-  private constructor(private ctx: ServiceContext) {}
+  /** Public so an action that already holds a context builds on it; see
+   *  loadOlderItemActivityAction for why that matters inside an action. */
+  constructor(private ctx: ServiceContext) {}
 
   static async forCurrentUser() {
     return new ActivityService(await withContext());

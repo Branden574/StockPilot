@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { bundleMembership, parseRequestContextBundle } from './request-context-bundle';
+import { NON_CORE_MODULE_IDS } from '@/lib/modules/effective-modules';
+
+import {
+  bundleMembership,
+  heldMembership,
+  holdMembership,
+  modulesFromMembership,
+  orgRowFromMembership,
+  parseRequestContextBundle,
+} from './request-context-bundle';
 
 /**
  * Authorization is built from this answer, so the parser is STRICT: anything it
@@ -153,6 +162,78 @@ describe('parseRequestContextBundle', () => {
     expect(bundle?.memberships[0]?.organization).toBeNull();
     expect(bundleMembership(bundle, 'org-Z')).toBeNull();
     expect(bundleMembership(null, ORG)).toBeNull();
+  });
+});
+
+// ── the membership carried on the context it produced ───────────────────────
+//
+// withContext() reads the org row and modules from the membership that resolved
+// requireOrgContext() instead of asking get_request_context() twice more (a
+// Server Action does not memoize). These pin what may and may not travel.
+
+describe('holdMembership / heldMembership', () => {
+  const held = () => parseRequestContextBundle(good(), USER)!.memberships[0]!;
+  const ctxFor = (organizationId: string, role: string) =>
+    ({ organizationId, role }) as { organizationId: string; role: 'manager' };
+
+  it('hands back the membership for the organization and role the context carries', () => {
+    const m = held();
+    const ctx = holdMembership(ctxFor(ORG, 'manager'), m);
+    expect(heldMembership(ctx)).toBe(m);
+  });
+
+  it('refuses a membership for another organization or another role', () => {
+    expect(heldMembership(holdMembership(ctxFor('org-B', 'manager'), held()))).toBeNull();
+    expect(heldMembership(holdMembership(ctxFor(ORG, 'admin'), held()))).toBeNull();
+  });
+
+  it('attaches nothing for a null membership (the legacy reads ran)', () => {
+    const ctx = holdMembership(ctxFor(ORG, 'manager'), null);
+    expect(heldMembership(ctx)).toBeNull();
+    expect(Object.getOwnPropertySymbols(ctx)).toEqual([]);
+  });
+
+  it('never travels in a copy or a serialization of the context', () => {
+    const ctx = holdMembership(ctxFor(ORG, 'manager'), held());
+    // A spread (what a page does to pass the context along) drops it...
+    expect(heldMembership({ ...ctx })).toBeNull();
+    // ...and so does anything that serializes it toward a client component.
+    expect(JSON.stringify(ctx)).toBe(JSON.stringify({ organizationId: ORG, role: 'manager' }));
+    expect(Object.keys(ctx)).toEqual(['organizationId', 'role']);
+  });
+});
+
+describe('orgRowFromMembership / modulesFromMembership', () => {
+  it('read the organization row and the effective module set off the membership', () => {
+    const m = parseRequestContextBundle(good(), USER)!.memberships[0]!;
+    expect(orgRowFromMembership(m)).toEqual({
+      terminology: { item: 'Asset' },
+      mfa_policy: 'admins_required',
+      logo_url: null,
+      timezone: 'America/Los_Angeles',
+      nav_overrides: null,
+      dashboard_layout: null,
+      order_status_config: null,
+      all_modules_comp: false,
+    });
+    expect([...modulesFromMembership(m)!].sort()).toEqual(['books', 'orders']);
+  });
+
+  it('a comped organization gets every non-core module, through the one rule', () => {
+    const b = good();
+    b.memberships[0]!.organization.all_modules_comp = true;
+    const m = parseRequestContextBundle(b, USER)!.memberships[0]!;
+    for (const id of NON_CORE_MODULE_IDS) expect(modulesFromMembership(m)!.has(id)).toBe(true);
+  });
+
+  it('answer null when RLS hid the organization, so the caller takes the legacy read', () => {
+    const hidden = good();
+    (hidden.memberships[0] as Record<string, unknown>).organization = null;
+    const m = parseRequestContextBundle(hidden, USER)!.memberships[0]!;
+    expect(orgRowFromMembership(m)).toBeNull();
+    expect(modulesFromMembership(m)).toBeNull();
+    expect(orgRowFromMembership(null)).toBeNull();
+    expect(modulesFromMembership(null)).toBeNull();
   });
 });
 

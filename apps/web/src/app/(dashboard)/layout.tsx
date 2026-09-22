@@ -45,6 +45,16 @@ export const metadata: Metadata = {
 };
 
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
+  // STARTED BEFORE THE CONTEXT RESOLVES, for the same reason as in
+  // withContext(): the factor list is a GoTrue round trip that needs nothing
+  // from the org context, and waiting for get_request_context() first put two
+  // Supabase calls in series ahead of every dashboard render. Request-cached,
+  // so the page's withContext() shares this very read. The rejection is
+  // observed at creation because requireOrgContext() below can redirect and
+  // leave it behind; the Promise.all further down awaits the SAME promise, so
+  // an unreadable list still fails this layout closed (error screen, #229).
+  const mfaFactorsRead = getMfaFactorsForRequest();
+  mfaFactorsRead.catch(() => {});
   // Cached: this resolves with the same data the page will use in the
   // same render — zero extra DB round trips beyond the page's own.
   const ctx = await requireOrgContext();
@@ -80,7 +90,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     getWarehouseAccess(),
     getActiveWarehouseFilter(),
     getOrgRowForRequest(ctx.organizationId),
-    getMfaFactorsForRequest(),
+    mfaFactorsRead,
     // Rank 8 (query hygiene): derived from loadSessionAndContext's single
     // membership query (requireOrgContext above already resolved it in this
     // render) instead of a THIRD organization_members round trip. Same
