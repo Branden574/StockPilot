@@ -144,10 +144,14 @@ describe('GET /api/search', () => {
     expect(supChain).not.toContain('in');
   });
 
-  it('does not call .in() when warehouse-scoped user has zero readableIds', async () => {
+  it('a warehouse-scoped user who can read NO warehouse gets no items and no POs (fail closed)', async () => {
+    // It used to DROP the filter here and lean on row level security alone.
     const stub = makeSupabaseStub({
-      'inventory_items.select': { data: [], error: null },
-      'purchase_orders.select': { data: [], error: null },
+      'inventory_items.select': {
+        data: [{ id: 'i-1', name: 'Widget', sku: 'W-1', quantity_on_hand: 1, warehouse_id: 'wh-1' }],
+        error: null,
+      },
+      'purchase_orders.select': { data: [{ id: 'po-1', po_number: 'PO-FOO-1', status: 'open' }], error: null },
       'suppliers.select': { data: [], error: null },
     });
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub.client));
@@ -160,8 +164,60 @@ describe('GET /api/search', () => {
 
     const res = await GET(new Request('https://test.local/api/search?q=foo'));
     expect(res.status).toBe(200);
-    const itemsChain = stub.chains.get('inventory_items.select') ?? [];
-    expect(itemsChain).not.toContain('in');
+    const body = await res.json();
+    expect(body.items).toEqual([]);
+    expect(body.purchaseOrders).toEqual([]);
+  });
+
+  it('POs reach a warehouse through their destination — purchase_orders has no warehouse_id column', async () => {
+    // Every PO search failed in Postgres from 2026-05 to 2026-09-22 because
+    // this route asked purchase_orders for a column it does not have.
+    const all = makeSupabaseStub({
+      'inventory_items.select': { data: [], error: null },
+      'purchase_orders.select': { data: [], error: null },
+      'suppliers.select': { data: [], error: null },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(all.client));
+    vi.mocked(getWarehouseAccess).mockResolvedValueOnce(ALL_ACCESS);
+    await GET(new Request('https://test.local/api/search?q=foo'));
+    const allSelect = String((all.chainArgs.get('purchase_orders.select') ?? [])[0]?.[0]);
+    expect(allSelect).not.toMatch(/(^|,\s*)warehouse_id/);
+
+    const scoped = makeSupabaseStub({
+      'inventory_items.select': { data: [], error: null },
+      'purchase_orders.select': { data: [], error: null },
+      'suppliers.select': { data: [], error: null },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(scoped.client));
+    vi.mocked(getWarehouseAccess).mockResolvedValueOnce({
+      readableIds: ['wh-9'],
+      writableIds: ['wh-9'],
+      hasAllAccess: false,
+      primaryWarehouseId: 'wh-9',
+    });
+    await GET(new Request('https://test.local/api/search?q=foo'));
+    const poArgs = scoped.chainArgs.get('purchase_orders.select') ?? [];
+    const select = String(poArgs[0]?.[0]);
+    expect(select).not.toMatch(/(^|,\s*)warehouse_id/);
+    expect(select).toContain('destination:locations!destination_location_id!inner (warehouse_id)');
+    expect(poArgs.find((a) => a[0] === 'destination.warehouse_id')?.[1]).toEqual(['wh-9']);
+    expect(poArgs.find((a) => a[0] === 'warehouse_id')).toBeUndefined();
+  });
+
+  it('a failed group is logged with its code, and still comes back empty', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [], error: null },
+      'purchase_orders.select': { data: null, error: { code: '42703', message: 'column does not exist' } },
+      'suppliers.select': { data: [], error: null },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub.client));
+    vi.mocked(getWarehouseAccess).mockResolvedValueOnce(ALL_ACCESS);
+    const res = await GET(new Request('https://test.local/api/search?q=foo'));
+    expect((await res.json()).purchaseOrders).toEqual([]);
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).toContain('purchaseOrders query failed: 42703');
+    expect(logged).not.toContain('column does not exist');
   });
 
   it('strips % , ( ) characters from the query input', async () => {
