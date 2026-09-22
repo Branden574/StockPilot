@@ -240,10 +240,22 @@ async function DashboardBody({
   // both blocks merged, the page now blocks only on the slowest query
   // in the union instead of slowest-of-block-1 + slowest-of-block-2.
   // Measured: cut /dashboard FCP from ~3.7s to ~1.5s on warm cache.
+  //
+  // The two reads that used to run AFTER it, one after the other, live in it
+  // now: the onboarding dismissal (user_profiles), and the low-stock
+  // sparklines, which start the moment the low-stock rows land instead of
+  // after everything else has returned. Three serial levels became one plus a
+  // short chain. Each level was one more chance to wait: 3-5% of our server's
+  // Supabase calls stall 1-8 s on weekday daytimes (logs, 2026-09-22).
   const supabase = await createClient();
+  const lowStockRows = getLowStockItems(5, { warehouseId: warehouseFilter ?? undefined });
   const [
     summary,
     lowStock,
+    // Real 14-day qty trends for the low-stock table sparklines. Replaces the
+    // synthetic Math.sin curve every row used to show. One small query
+    // bucketed in TS, run only when there are low-stock rows to chart.
+    lowStockTrends,
     recentMovements,
     metrics,
     actions,
@@ -267,9 +279,16 @@ async function DashboardBody({
     warehousesList,
     mfaFactors,
     orgRow,
+    // Cross-device dismissal of the Getting-started panel (mig 0257).
+    profileRes,
   ] = await Promise.all([
     getDashboardSummary({ warehouseId: warehouseFilter ?? undefined }),
-    getLowStockItems(5, { warehouseId: warehouseFilter ?? undefined }),
+    lowStockRows,
+    lowStockRows.then((rows) =>
+      rows.length > 0
+        ? getItemTrends(rows.map((r) => ({ id: r.id, quantityOnHand: r.quantity_on_hand })))
+        : new Map<string, { qtySeries: number[]; moveSeries: number[] }>(),
+    ),
     MovementsService.forCurrentUser().then((svc) =>
       svc.list({ limit: 6, warehouseId: warehouseFilter ?? undefined }),
     ),
@@ -308,6 +327,11 @@ async function DashboardBody({
     getWarehousesForRequest(ctx.organizationId),
     getMfaFactorsForRequest(),
     getOrgRowForRequest(ctx.organizationId),
+    supabase
+      .from('user_profiles')
+      .select('onboarding_dismissed_at, full_name')
+      .eq('id', ctx.userId)
+      .maybeSingle(),
   ]);
   const warehouseCount = warehousesList.length;
   const teamCount = teamCountRes.count ?? 0;
@@ -349,25 +373,11 @@ async function DashboardBody({
   ];
   // Cross-device dismissal (mig 0257): treat dismissed exactly like complete
   // — the animated Getting-started panel never returns once waved away.
-  const { data: profileRow } = await supabase
-    .from('user_profiles')
-    .select('onboarding_dismissed_at, full_name')
-    .eq('id', ctx.userId)
-    .maybeSingle();
+  const profileRow = profileRes.data;
   const checklistDismissed = Boolean(
     (profileRow as { onboarding_dismissed_at?: string | null } | null)?.onboarding_dismissed_at,
   );
   const checklistComplete = checklistDismissed || checklistSteps.every((s) => s.done);
-
-  // Real 14-day qty trends for the low-stock table sparklines. Replaces the
-  // synthetic Math.sin curve every row used to show. One small query
-  // bucketed in TS — runs only when there are low-stock rows to chart.
-  const lowStockTrends =
-    lowStock.length > 0
-      ? await getItemTrends(
-          lowStock.map((r) => ({ id: r.id, quantityOnHand: r.quantity_on_hand })),
-        )
-      : new Map<string, { qtySeries: number[]; moveSeries: number[] }>();
 
   // Real 30-day series for the StatCards. Replaces the synthetic sin-wave
   // valueSeries and the hardcoded sparkline arrays that used to live here.

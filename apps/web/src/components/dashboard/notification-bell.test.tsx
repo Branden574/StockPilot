@@ -16,16 +16,22 @@ vi.mock('@/lib/notifications/live-toast', () => ({
 // Chainable supabase stub. Records every .eq() filter so the test can assert
 // the query is scoped to BOTH the user and the active org.
 const eqCalls: Array<[string, string]> = [];
+const isCalls: Array<[string, unknown]> = [];
+const selectOptions: Array<{ count?: string; head?: boolean } | undefined> = [];
 let unreadRows: Array<Record<string, unknown>> = [];
 // Total matching rows behind the LIMIT. PostgREST only reports this when the
 // caller asks for it via `.select(cols, { count: 'exact' })`, so the stub
 // mirrors that: no request, no count — exactly like the real client.
 let unreadTotal: number | null = null;
+// When set, every read waits for it: lets a test look at the bell BEFORE its
+// first read has landed.
+let readGate: Promise<void> | null = null;
 
 function makeBuilder() {
   let countRequested = false;
   const builder = {
     select: (_cols?: string, options?: { count?: string; head?: boolean }) => {
+      selectOptions.push(options);
       if (options?.count === 'exact') countRequested = true;
       return builder;
     },
@@ -33,14 +39,19 @@ function makeBuilder() {
       eqCalls.push([col, val]);
       return builder;
     },
-    is: () => builder,
+    is: (col: string, val: unknown) => {
+      isCalls.push([col, val]);
+      return builder;
+    },
     order: () => builder,
-    limit: () =>
-      Promise.resolve({
+    limit: async () => {
+      if (readGate) await readGate;
+      return {
         data: unreadRows,
         error: null,
         count: countRequested ? unreadTotal : null,
-      }),
+      };
+    },
   };
   return builder;
 }
@@ -64,8 +75,11 @@ vi.mock('@/lib/supabase/client', () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   eqCalls.length = 0;
+  isCalls.length = 0;
+  selectOptions.length = 0;
   unreadRows = [];
   unreadTotal = null;
+  readGate = null;
 });
 
 describe('NotificationBell', () => {
@@ -78,7 +92,7 @@ describe('NotificationBell', () => {
       { id: 'n2', type: 'order', title: 'Order 2', body: null, link: null, created_at: 'x' },
     ];
     render(
-      <NotificationBell userId="u1" organizationId="org-1" initialUnread={0} />,
+      <NotificationBell userId="u1" organizationId="org-1" />,
     );
     await waitFor(() => {
       expect(eqCalls).toContainEqual(['user_id', 'u1']);
@@ -106,11 +120,10 @@ describe('NotificationBell', () => {
       created_at: 'x',
     }));
     unreadTotal = 35;
-    // initialUnread starts at 0 on purpose: the badge can only read 35 if the
-    // CLIENT refetch produced it, so this can't pass on the server-seeded
-    // value alone (that would make the test a tautology).
+    // The bell starts at 0 (no server seed since 2026-09-22), so the badge can
+    // only read 35 if the CLIENT refetch produced it.
     render(
-      <NotificationBell userId="u1" organizationId="org-1" initialUnread={0} />,
+      <NotificationBell userId="u1" organizationId="org-1" />,
     );
     await waitFor(() => {
       expect(
@@ -135,7 +148,7 @@ describe('NotificationBell', () => {
     }));
     unreadTotal = 140;
     render(
-      <NotificationBell userId="u1" organizationId="org-1" initialUnread={0} />,
+      <NotificationBell userId="u1" organizationId="org-1" />,
     );
     await waitFor(() => {
       expect(screen.getByText('99+')).toBeInTheDocument();
@@ -143,12 +156,43 @@ describe('NotificationBell', () => {
     expect(screen.queryByText('20')).not.toBeInTheDocument();
   });
 
+  // 2026-09-22: (dashboard)/layout.tsx no longer seeds the badge with a head
+  // count it awaited before first byte; the bell's own mount read is the only
+  // source. It must count exactly what that head count did (this user, this
+  // org, unread, exact total), and show nothing rather than a guess until then.
+  it('reads its own count on mount: no badge until the read lands, then the exact unread total', async () => {
+    let openGate!: () => void;
+    readGate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    unreadRows = [
+      { id: 'n1', type: 'order', title: 'Order', body: null, link: null, created_at: 'x' },
+    ];
+    unreadTotal = 7;
+    render(<NotificationBell userId="u1" organizationId="org-1" />);
+
+    await waitFor(() => expect(selectOptions.length).toBeGreaterThan(0));
+    expect(screen.getByLabelText('Notifications')).toBeInTheDocument();
+    expect(screen.queryByText('0')).not.toBeInTheDocument();
+
+    openGate();
+    await waitFor(() => {
+      expect(screen.getByLabelText('Notifications (7 unread)')).toBeInTheDocument();
+    });
+    // The same predicate and the same total the layout's
+    // `select('id', { count: 'exact', head: true })` used to compute.
+    expect(selectOptions.every((o) => o?.count === 'exact')).toBe(true);
+    expect(eqCalls).toContainEqual(['user_id', 'u1']);
+    expect(eqCalls).toContainEqual(['organization_id', 'org-1']);
+    expect(isCalls).toContainEqual(['read_at', null]);
+  });
+
   it('does not toast rows that were already unread on first mount', async () => {
     unreadRows = [
       { id: 'n1', type: 'order', title: 'Old news', body: null, link: null, created_at: 'x' },
     ];
     render(
-      <NotificationBell userId="u1" organizationId="org-1" initialUnread={1} />,
+      <NotificationBell userId="u1" organizationId="org-1" />,
     );
     await waitFor(() => {
       expect(eqCalls.length).toBeGreaterThan(0);

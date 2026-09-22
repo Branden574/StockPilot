@@ -73,9 +73,20 @@ const ACTION_COMMANDS: PaletteCommand[] = [
   { id: 'act-new-cycle-count', label: 'New cycle count', href: '/dashboard/cycle-counts/new', Icon: Plus, keywords: 'create add count audit' },
 ];
 
-export function CommandPalette() {
+export interface CommandPaletteProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+/**
+ * The palette itself, loaded on demand. It is controlled: the open state and
+ * the ⌘K / Ctrl+K listener live in CommandPaletteLauncher, which ships in the
+ * dashboard's first bundle and fetches THIS module (cmdk and everything below)
+ * on the first open or when the browser goes idle. A listener registered in
+ * here could not hear a press made before this module arrived.
+ */
+export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const router = useRouter();
-  const [open, setOpen] = React.useState(false);
   const [value, setValue] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   const [results, setResults] = React.useState<SearchResult>({
@@ -84,28 +95,6 @@ export function CommandPalette() {
     suppliers: [],
     warehouses: [],
   });
-
-  // ⌘K / Ctrl+K toggle. Skip when an input/textarea is focused so users
-  // typing into a form don't get hijacked.
-  React.useEffect(() => {
-    function down(e: KeyboardEvent) {
-      const isMod = e.metaKey || e.ctrlKey;
-      if (isMod && e.key.toLowerCase() === 'k') {
-        const tag = (document.activeElement?.tagName ?? '').toLowerCase();
-        if (tag === 'input' || tag === 'textarea') {
-          // Allow ⌘K from the topbar search button (active focus there is fine)
-          // but never steal from real text inputs.
-          if ((document.activeElement as HTMLElement)?.dataset.cmdk !== 'true') {
-            return;
-          }
-        }
-        e.preventDefault();
-        setOpen((o) => !o);
-      }
-    }
-    window.addEventListener('keydown', down);
-    return () => window.removeEventListener('keydown', down);
-  }, []);
 
   // Debounced search. < 2 chars = nav-only mode.
   React.useEffect(() => {
@@ -145,7 +134,7 @@ export function CommandPalette() {
   }, [value]);
 
   function go(href: string) {
-    setOpen(false);
+    onOpenChange(false);
     setValue('');
     router.push(href);
   }
@@ -158,7 +147,7 @@ export function CommandPalette() {
       results.warehouses.length > 0);
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className="overflow-hidden p-0 sm:max-w-[640px]"
         aria-describedby={undefined}
