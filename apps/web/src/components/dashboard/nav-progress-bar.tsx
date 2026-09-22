@@ -49,7 +49,27 @@ import { markNavigationClick, markNavigationFeedback } from '@/lib/perf/marks';
  *   • Failsafe timer makes it impossible for the bar to remain
  *     visible after a real navigation completes.
  */
-export function NavProgressBar() {
+/**
+ * How long a path-changing navigation may keep the page being left on screen
+ * before the shell swaps it for a skeleton (PendingRouteSkeleton). Below it, a
+ * fast navigation goes straight from the old page to the new one, with the
+ * progress bar as its acknowledgement (painted ~30 ms after the click).
+ */
+export const SLOW_NAVIGATION_MS = 400;
+
+export interface SlowNavigation {
+  /** The pathname the navigation left. The skeleton shows only while this is still the URL. */
+  from: string;
+  /** The pathname it is going to (chooses the skeleton). */
+  target: string;
+}
+
+export function NavProgressBar({
+  onSlowNavigation,
+}: {
+  /** Called with the navigation once it has waited SLOW_NAVIGATION_MS, and with null when it ends. */
+  onSlowNavigation?: (nav: SlowNavigation | null) => void;
+} = {}) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const currentKey = locationKey(pathname, searchParams?.toString() ?? '');
@@ -60,10 +80,21 @@ export function NavProgressBar() {
   const measuredRef = React.useRef(false);
   const failsafeRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const deferredStartRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const slowTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onSlowRef = React.useRef(onSlowNavigation);
+  onSlowRef.current = onSlowNavigation;
 
   React.useEffect(() => {
     function isModifiedClick(e: MouseEvent): boolean {
       return e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0;
+    }
+
+    function endSlow() {
+      if (slowTimerRef.current) {
+        clearTimeout(slowTimerRef.current);
+        slowTimerRef.current = null;
+      }
+      onSlowRef.current?.(null);
     }
 
     function start(fromKey: string) {
@@ -126,6 +157,18 @@ export function NavProgressBar() {
       markNavigationClick(next.pathname, e.timeStamp);
       measuredRef.current = true;
       start(fromKey);
+      // A path change that has not landed after SLOW_NAVIGATION_MS gets the
+      // shell's skeleton. Only while the URL is still the one it left: a
+      // route with its own loading.tsx commits its fallback (and the URL)
+      // early, and never reaches this.
+      endSlow();
+      const from = window.location.pathname;
+      const target = next.pathname;
+      slowTimerRef.current = setTimeout(() => {
+        slowTimerRef.current = null;
+        if (window.location.pathname !== from) return;
+        onSlowRef.current?.({ from, target });
+      }, SLOW_NAVIGATION_MS);
     }
 
     document.addEventListener('click', onClick, { capture: true });
@@ -133,8 +176,20 @@ export function NavProgressBar() {
       document.removeEventListener('click', onClick, { capture: true });
       if (deferredStartRef.current) clearTimeout(deferredStartRef.current);
       if (failsafeRef.current) clearTimeout(failsafeRef.current);
+      if (slowTimerRef.current) clearTimeout(slowTimerRef.current);
     };
   }, []);
+
+  // The skeleton ends when the navigation does: the URL moved, the failsafe
+  // gave up, or the bar went idle for any other reason.
+  React.useEffect(() => {
+    if (phase === 'climbing') return;
+    if (slowTimerRef.current) {
+      clearTimeout(slowTimerRef.current);
+      slowTimerRef.current = null;
+    }
+    onSlowRef.current?.(null);
+  }, [phase]);
 
   // Performance mark only: "the click was acknowledged". The effect runs once
   // the bar is in the DOM, and then waits a DOUBLE requestAnimationFrame. The

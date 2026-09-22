@@ -6,7 +6,8 @@ import { CommandPaletteLauncher } from '@/components/dashboard/command-palette-l
 import { EdgeSwipeOpener } from '@/components/dashboard/edge-swipe-opener';
 import { KeyboardShortcutsProvider } from '@/components/dashboard/keyboard-shortcuts';
 import { navForRole } from '@/components/dashboard/nav';
-import { NavProgressBar } from '@/components/dashboard/nav-progress-bar';
+import { NavProgressBar, type SlowNavigation } from '@/components/dashboard/nav-progress-bar';
+import { PendingRouteFrame } from '@/components/dashboard/pending-route-skeleton';
 import { SessionUserProvider } from '@/components/dashboard/session-user';
 import { OrderStatusConfigProvider } from '@/components/orders/order-status-config-provider';
 import { ImageDiagnostics } from '@/components/perf/image-diagnostics';
@@ -94,6 +95,8 @@ export function DashboardShell({
   initialSidebarHidden = false,
 }: DashboardShellProps) {
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
+  // A navigation still waiting after SLOW_NAVIGATION_MS (PendingRouteFrame).
+  const [slowNavigation, setSlowNavigation] = React.useState<SlowNavigation | null>(null);
   const [desktopSidebarHidden, setDesktopSidebarHidden] =
     React.useState(initialSidebarHidden);
 
@@ -209,7 +212,7 @@ export function DashboardShell({
       {/* Top progress bar — fires at click time on every internal nav,
           covers links the per-link useLinkStatus indicator can't see
           (topbar, dashboard cards, table rows, breadcrumbs, etc). */}
-      <NavProgressBar />
+      <NavProgressBar onSlowNavigation={setSlowNavigation} />
       {/* Photo-loading diagnostics for real users: image load failures and
           per-route load timings, reduced to a CLASS ("thumbnail via the
           optimizer") before anything is kept. Never a URL. Dashboard only,
@@ -277,9 +280,11 @@ export function DashboardShell({
           className="bg-card flex-1 overflow-y-auto focus:outline-none"
         >
           <div className="min-h-full">
-            <OrderStatusConfigProvider config={orderStatusConfig}>
-              <SessionUserProvider userId={userId}>{children}</SessionUserProvider>
-            </OrderStatusConfigProvider>
+            <PendingRouteFrame slowNavigation={slowNavigation}>
+              <OrderStatusConfigProvider config={orderStatusConfig}>
+                <SessionUserProvider userId={userId}>{children}</SessionUserProvider>
+              </OrderStatusConfigProvider>
+            </PendingRouteFrame>
           </div>
         </main>
       </div>
