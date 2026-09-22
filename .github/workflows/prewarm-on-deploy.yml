@@ -1,18 +1,26 @@
 # Post-deploy prewarm (cold-start plan rank 1, 2026-07-06).
 #
-# WHY: every production deploy rotates the unstable_cache keys for the five
-# inventory loaders (and can rotate the orders-catalog + item-image caches via
-# chunk concatenation), so for up to 30 minutes — until the */30 cron runs —
-# the FIRST human on /dashboard/inventory, /dashboard/books, or
-# /dashboard/orders/new pays the full cold loader wave (~1.5-2.5s). This job
-# makes a robot pay it instead, ~30-90s after the deploy goes READY.
+# WHY: unstable_cache keys embed the compiled source of their callbacks, so a
+# deploy that changes how the inventory loaders (or the orders-catalog and
+# item-image helpers) COMPILE rotates their keys, and the first human on
+# /dashboard/inventory, /dashboard/books or /dashboard/orders/new would pay the
+# cold loader wave (~1.5-2.5s). This job makes a robot pay it instead, ~30-90s
+# after the deploy goes READY.
+#
+# NOT every deploy rotates them: measured 2026-09-21 on an ordinary deploy,
+# 18 of 18 signed photo URLs kept their keys. It still runs on every deploy,
+# because a framework or build change can rotate keys without touching a
+# loader file, and one run costs ~170 service-role calls. What it no longer
+# does is overlap: 2026-09-22 had 7 production deploys in 2.5 hours and each
+# fired a full run. The concurrency group below cancels a run that a newer
+# deploy has already superseded (only the latest deploy's keys matter).
 #
 # HOW: the Vercel GitHub integration creates GitHub Deployment objects and
 # posts `deployment_status` events. On state=success for the Production
 # environment we curl the existing secret-gated prewarm route (the route's own
 # comment says it is intended for exactly this trigger). The route is
-# idempotent — warming an already-warm cache is a cheap no-op — so the 3x
-# retry is safe.
+# idempotent, so the 3x retry is safe. It is NOT cheap: a warm cache still
+# refreshes stale entries in the background, ~170 calls a run.
 #
 # SETUP (owner action, one-time): add repo secret BACKFILL_ADMIN_SECRET with
 # the same value as the Vercel env var of the same name. Without it the job
@@ -28,6 +36,11 @@ on:
   deployment_status:
 
 permissions: {}
+
+# One run at a time; a newer production deploy cancels the older run.
+concurrency:
+  group: prewarm-on-deploy
+  cancel-in-progress: true
 
 jobs:
   prewarm:
