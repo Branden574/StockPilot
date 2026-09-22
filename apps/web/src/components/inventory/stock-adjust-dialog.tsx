@@ -1,7 +1,6 @@
 'use client';
 
 import { Loader2, Minus, Plus } from 'lucide-react';
-import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
@@ -46,7 +45,6 @@ const REASON_PRESETS: Array<{ type: MovementType; label: string; sign: 1 | -1 }>
 ];
 
 export function StockAdjustDialog({ itemId, itemName, currentQuantity, trigger }: StockAdjustDialogProps) {
-  const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [movementType, setMovementType] = React.useState<MovementType>('add');
   const [quantity, setQuantity] = React.useState('1');
@@ -87,7 +85,12 @@ export function StockAdjustDialog({ itemId, itemName, currentQuantity, trigger }
     setQuantity('1');
     setReason('');
     setNotes('');
-    router.refresh();
+    // No router.refresh() here. adjustStockAction revalidates paths, and a
+    // Server Action that revalidated carries the re-rendered current page in
+    // its own response (Next 16 action-handler: page rendering is skipped only
+    // when nothing was revalidated), which the router applies as part of this
+    // same action. A refresh on top rendered the whole page a second time,
+    // queued behind any other router work.
   }
 
   return (
