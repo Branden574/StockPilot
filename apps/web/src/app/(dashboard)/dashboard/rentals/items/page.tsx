@@ -121,7 +121,7 @@ export default async function RentalItemsPage({
   const [categories, locations, suppliers, tags] = await Promise.all([
     categoriesSvc.list(),
     locationsSvc.list({ sitesOnly: true }),
-    suppliersSvc.list(),
+    suppliersSvc.listForLookups(),
     tagsSvc.list(),
   ]);
 

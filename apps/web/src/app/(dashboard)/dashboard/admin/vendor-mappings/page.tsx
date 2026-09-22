@@ -9,7 +9,7 @@ export default async function VendorMappingsPage() {
   const supabase = await createClient();
 
   const [suppliers, items, mappingsRes] = await Promise.all([
-    (await SuppliersService.forCurrentUser()).list(),
+    (await SuppliersService.forCurrentUser()).listForLookups(),
     // expected:'any' (mig 0277): vendor mappings are receiving-adjacent —
     // a vendor SKU must be mappable to an item still awaiting its first
     // receipt so the next PO upload resolves to it instead of creating a

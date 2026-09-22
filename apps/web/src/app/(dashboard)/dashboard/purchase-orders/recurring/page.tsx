@@ -69,7 +69,7 @@ export default async function RecurringPosPage() {
     // one-off PO can. Without it list() falls back to `item_type = 'product'`
     // and books are invisible here too.
     inventorySvc.list({ limit: 1000, expected: 'any', itemTypes: purchaseOrderItemTypes() }),
-    suppliersSvc.list(),
+    suppliersSvc.listForLookups(),
     locationsSvc.list({ sitesOnly: true }),
   ]);
 

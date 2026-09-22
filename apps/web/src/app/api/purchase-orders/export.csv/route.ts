@@ -65,7 +65,7 @@ export async function GET(request: Request) {
 
     const [rawPos, suppliers] = await Promise.all([
       poSvc.list({ warehouseId: warehouseFilter }),
-      supplierSvc.list(),
+      supplierSvc.listForLookups(),
     ]);
     const pos = rawPos as unknown as PoRow[];
     const supplierMap = new Map(suppliers.map((s) => [s.id as string, s.name as string]));

@@ -36,7 +36,7 @@ vi.mock('@/server/services/inventory', () => ({
   InventoryService: { forCurrentUser: vi.fn(async () => ({ list: inventoryList })) },
 }));
 vi.mock('@/server/services/suppliers', () => ({
-  SuppliersService: { forCurrentUser: vi.fn(async () => ({ list: suppliersList })) },
+  SuppliersService: { forCurrentUser: vi.fn(async () => ({ listForLookups: suppliersList })) },
 }));
 vi.mock('@/server/services/locations', () => ({
   LocationsService: { forCurrentUser: vi.fn(async () => ({ list: locationsList })) },

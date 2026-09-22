@@ -31,7 +31,7 @@ export default async function PoImportDetailPage({
 
   const [suppliers, warehouses, items, charters, locations, categories, resolutions] =
     await Promise.all([
-      (await SuppliersService.forCurrentUser()).list(),
+      (await SuppliersService.forCurrentUser()).listForLookups(),
       (await WarehousesService.forCurrentUser()).listNames(),
       // Uncapped lean listing — list({ limit: 500 }) silently truncated the
       // match dropdown for >500-item orgs.

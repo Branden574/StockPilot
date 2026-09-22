@@ -58,7 +58,7 @@ export default async function EditPoPage({ params }: { params: Promise<{ id: str
     // to nothing — the line renders blank even though it carries a real
     // itemId. The picker's server search sends the same set.
     inventorySvc.list({ limit: 1000, expected: 'any', itemTypes: purchaseOrderItemTypes() }),
-    suppliersSvc.list(),
+    suppliersSvc.listForLookups(),
     locationsSvc.list({ sitesOnly: true }),
     chartersSvc.list(),
   ]);
