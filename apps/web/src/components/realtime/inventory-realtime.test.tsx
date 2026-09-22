@@ -23,7 +23,7 @@ const h = vi.hoisted(() => ({
   pathname: { value: '/dashboard/inventory' },
   channel: vi.fn(),
   removeChannel: vi.fn(),
-  handlers: [] as Array<() => void>,
+  handlers: [] as Array<(payload?: unknown) => void>,
   subscribe: vi.fn(),
   authUnsub: vi.fn(),
 }));
@@ -41,7 +41,7 @@ vi.mock('@/lib/supabase/client', () => ({
     channel: (...args: unknown[]) => {
       h.channel(...args);
       const ch: Record<string, unknown> = {
-        on: (_evt: string, _cfg: unknown, cb: () => void) => {
+        on: (_evt: string, _cfg: unknown, cb: (payload?: unknown) => void) => {
           h.handlers.push(cb);
           return ch;
         },
@@ -266,6 +266,80 @@ describe('InventoryRealtime refreshes', () => {
     setVisibility('visible');
     await vi.advanceTimersByTimeAsync(0);
     expect(h.revalidate).toHaveBeenCalledTimes(2);
+  });
+
+  it('one transaction, two events (item UPDATE + movement INSERT, same commit): ONE refresh', async () => {
+    const nudge = await mountAndGetNudge();
+    const onMovement = h.handlers[1]!;
+    vi.useFakeTimers();
+
+    // adjust_stock: both events carry the transaction's commit_timestamp and
+    // arrive together (lab check 2026-09-22).
+    nudge({ commit_timestamp: '2026-09-22T23:28:42.875Z' });
+    onMovement({ commit_timestamp: '2026-09-22T23:28:42.875Z' });
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  it('a NEW transaction that lands while a refresh runs still earns its one rerun', async () => {
+    let finish!: (v: boolean) => void;
+    h.revalidate.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const nudge = await mountAndGetNudge();
+    const onMovement = h.handlers[1]!;
+    vi.useFakeTimers();
+
+    nudge({ commit_timestamp: 't1' });
+    onMovement({ commit_timestamp: 't1' });
+    // t2 committed after the running refresh started: it may not have read it.
+    nudge({ commit_timestamp: 't2' });
+    onMovement({ commit_timestamp: 't2' });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+
+    finish(true);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.revalidate).toHaveBeenCalledTimes(2);
+
+    // Late echoes of either transaction add nothing.
+    nudge({ commit_timestamp: 't1' });
+    onMovement({ commit_timestamp: 't2' });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.revalidate).toHaveBeenCalledTimes(2);
+  });
+
+  it('an event without a commit timestamp is never dropped', async () => {
+    const nudge = await mountAndGetNudge();
+    vi.useFakeTimers();
+
+    nudge({ commit_timestamp: 't1' });
+    await vi.advanceTimersByTimeAsync(1000);
+    nudge({});
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(h.revalidate).toHaveBeenCalledTimes(2);
+  });
+
+  it('a hidden tab that saw one transaction refreshes once on return, and its late echo adds nothing', async () => {
+    const nudge = await mountAndGetNudge();
+    const onMovement = h.handlers[1]!;
+    vi.useFakeTimers();
+
+    setVisibility('hidden');
+    nudge({ commit_timestamp: 't1' });
+    setVisibility('visible');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+
+    onMovement({ commit_timestamp: 't1' });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
   });
 
   it('one refresh at a time: a burst during a slow (stalled) refresh earns exactly ONE more, after it', async () => {
