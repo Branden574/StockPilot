@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * The Books page's server chain before rows: the two module checks run
  * together, the books gate still answers before any book is read, and the
  * table's reads start in the same Promise.all as the header (the racks RPC),
- * not after it. Same reasoning as the Items page (inventory/page.chain.test):
+ * not after it. The service context (whose GoTrue factors read every later
+ * read waits on) starts beside the gate, not after it: it reads no book. Same reasoning as the Items page (inventory/page.chain.test):
  * calls to Supabase stall 1-8 s on 3-5% of weekday calls (logs, 2026-09-22),
  * and a stall anywhere in a serial chain stalls the page.
  */
@@ -38,6 +39,7 @@ const h = vi.hoisted(() => ({
 const m = vi.hoisted(() => ({
   checkModuleAccess: vi.fn(),
   requireOrgContext: vi.fn(),
+  withContext: vi.fn(),
   listDistinctRacks: vi.fn(),
   savedViewsList: vi.fn(),
   loadInventoryList: vi.fn(),
@@ -85,6 +87,7 @@ vi.mock('@/components/books/books-inventory-table', () => ({
 }));
 
 vi.mock('@/lib/auth/session', () => ({ requireOrgContext: m.requireOrgContext }));
+vi.mock('@/server/services/context', () => ({ withContext: m.withContext }));
 vi.mock('@/lib/nav-labels', () => ({ effectiveNavLabel: vi.fn(async () => 'Books') }));
 vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilter: vi.fn(async () => null) }));
 
@@ -182,6 +185,9 @@ beforeEach(() => {
   m.requireOrgContext.mockImplementation(() =>
     logged('ctx', async () => ({ organizationId: 'org-1', userId: 'u-1', role: h.role })),
   );
+  m.withContext.mockImplementation(() =>
+    logged('withContext', async () => ({ organizationId: 'org-1', userId: 'u-1', role: h.role })),
+  );
   m.listDistinctRacks.mockImplementation(() =>
     logged('racks', async () => (h.racksGate ? h.racksGate : ['B-1'])),
   );
@@ -237,6 +243,34 @@ describe('Books page: server chain before rows', () => {
     books.resolve();
     render(await page);
     expect(m.tableProps).toHaveBeenCalledTimes(1);
+  });
+
+  it('the service context starts beside the books gate, before it answers', async () => {
+    const books = deferred<void>();
+    h.booksGate = books.promise;
+
+    const page = callPage();
+    await flush();
+    // Started while the gate is still open: GoTrue's factors read no longer
+    // waits for the gate's own round trip.
+    expect(events).toContain('withContext:start');
+    expect(events).not.toContain('module:books:end');
+
+    books.resolve();
+    render(await page);
+    expect(m.tableProps).toHaveBeenCalledTimes(1);
+  });
+
+  it('a context that fails while the gate says no is observed, and the page is the not-enabled screen', async () => {
+    h.booksEnabled = false;
+    m.withContext.mockImplementation(() => logged('withContext', async () => {
+      throw new Error('context read failed');
+    }));
+
+    render(await callPage());
+    await flush();
+    expect(m.notEnabledProps).toHaveBeenCalledWith(expect.objectContaining({ moduleId: 'books' }));
+    expect(unhandled).toEqual([]);
   });
 
   it('nothing is read until the books gate answers, and nothing at all when it says no', async () => {
