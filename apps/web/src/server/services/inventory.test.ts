@@ -35,9 +35,13 @@ vi.mock('./audit', () => ({
   audit: vi.fn(async () => undefined),
 }));
 
-import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib/auth/warehouse';
 import { audit } from './audit';
-import { InventoryService, mapMovementTypeToAuditEvent } from './inventory';
+import {
+  ADJUST_WAREHOUSE_WRITE_REFUSED,
+  InventoryService,
+  mapMovementTypeToAuditEvent,
+} from './inventory';
 import { ServiceError } from './context';
 
 beforeEach(() => {
@@ -773,6 +777,73 @@ describe('InventoryService.adjustStock — draw-down mode + placed-stock error m
       code: 'validation_error',
       message: 'Insufficient stock for this adjustment',
     });
+  });
+});
+
+describe('InventoryService.adjustStock — warehouse write refusal is a ServiceError', () => {
+  const ITEM = {
+    id: 'itm-1',
+    organization_id: 'org-test',
+    warehouse_id: 'wh-b',
+    status: 'active',
+    quantity_on_hand: 4,
+    reorder_point: 0,
+    name: 'Clipboard',
+    sku: 'CB-1',
+  };
+
+  // assertWarehouseAccess throws ForbiddenError, which no caller's error
+  // mapping recognised: the /api/v1 adjust and remove-stock routes answered
+  // 500 and the web action "Something went wrong". The phone reads a 5xx as
+  // "may or may not have been saved". It must arrive as a 'forbidden'
+  // ServiceError (403 via serviceErrorStatus), before the RPC runs.
+  it("refuses with 'forbidden' and the fixed sentence, and never reaches the RPC", async () => {
+    vi.mocked(assertWarehouseAccess).mockImplementation(async (_wh, op) => {
+      if (op === 'write') {
+        throw new ForbiddenError('User does not have write access to warehouse wh-b.');
+      }
+    });
+    try {
+      const stub = makeSupabaseStub({
+        'inventory_items.select': { data: ITEM, error: null },
+        'item_stock_levels.select': { data: [], error: null },
+        'rpc:adjust_stock': { data: { quantity_on_hand: 5, reorder_point: 0 }, error: null },
+      });
+      const svc = new InventoryService(makeServiceContext(stub.client));
+
+      const p = svc.adjustStock({ itemId: 'itm-1', quantityChange: 1, movementType: 'add' });
+
+      await expect(p).rejects.toBeInstanceOf(ServiceError);
+      await expect(p).rejects.toMatchObject({
+        code: 'forbidden',
+        message: ADJUST_WAREHOUSE_WRITE_REFUSED,
+      });
+      expect(stub.rpcCalls.find((c) => c.name === 'adjust_stock')).toBeUndefined();
+      expect(audit).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(assertWarehouseAccess).mockReset();
+    }
+  });
+
+  it('passes any other failure of the access check through unchanged', async () => {
+    const boom = new Error('warehouse access read failed');
+    vi.mocked(assertWarehouseAccess).mockImplementation(async (_wh, op) => {
+      if (op === 'write') throw boom;
+    });
+    try {
+      const stub = makeSupabaseStub({
+        'inventory_items.select': { data: ITEM, error: null },
+        'item_stock_levels.select': { data: [], error: null },
+      });
+      const svc = new InventoryService(makeServiceContext(stub.client));
+
+      await expect(
+        svc.adjustStock({ itemId: 'itm-1', quantityChange: -1, movementType: 'remove' }),
+      ).rejects.toBe(boom);
+      expect(stub.rpcCalls.find((c) => c.name === 'adjust_stock')).toBeUndefined();
+    } finally {
+      vi.mocked(assertWarehouseAccess).mockReset();
+    }
   });
 });
 

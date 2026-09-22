@@ -256,6 +256,15 @@ function buildItemSearchClause(rawQ: string, isbnVariants?: string[]): string | 
 // number than the bulk path.
 const RACK_PLACE_CONCURRENCY = 20;
 
+/**
+ * adjustStock's refusal when the item sits in a warehouse the caller cannot
+ * write to. Shown verbatim on the phone (the /api/v1 adjust route forwards
+ * ServiceError messages), so it is a sentence, not the ForbiddenError text,
+ * which carries the warehouse uuid.
+ */
+export const ADJUST_WAREHOUSE_WRITE_REFUSED =
+  "You do not have write access to this item's warehouse.";
+
 // Model B — "one product = one SKU": these are the SHARED product columns.
 // Editing any of them on ONE placement (inventory_items row) of a SKU must
 // fan out the same value to every OTHER non-deleted row sharing that item's
@@ -4951,7 +4960,24 @@ export class InventoryService {
       );
     }
     const wh = (item as { warehouse_id?: string | null }).warehouse_id ?? null;
-    if (wh) await assertWarehouseAccess(wh, 'write', this.ctx);
+    if (wh) {
+      // assertWarehouseAccess throws ForbiddenError, which is not a
+      // ServiceError: every caller's error mapping (the /api/v1 adjust and
+      // remove-stock routes, the web actions' toResult) sent it down the
+      // unknown-error path, so a user outside the item's warehouse got a 500 /
+      // "Something went wrong". On the phone a 5xx means "may or may not have
+      // been saved", which invites a second tap on a write that was refused
+      // before anything ran. It is an authorization refusal: say so, as a 403.
+      // The message names no warehouse id (the raw one carries the uuid).
+      try {
+        await assertWarehouseAccess(wh, 'write', this.ctx);
+      } catch (e) {
+        if (e instanceof ForbiddenError) {
+          throw new ServiceError('forbidden', ADJUST_WAREHOUSE_WRITE_REFUSED);
+        }
+        throw e;
+      }
+    }
 
     // A manual ADD with no explicit location must NOT land in Staging: the
     // adjust_stock RPC routes a null positive delta there (Staging is only for

@@ -2,10 +2,11 @@ import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { assertPermission, mfaGateError, ServiceError } from '@/server/services/context';
-import { InventoryService } from '@/server/services/inventory';
+import { ADJUST_WAREHOUSE_WRITE_REFUSED, InventoryService } from '@/server/services/inventory';
 
 import { POST } from './route';
 
@@ -179,6 +180,47 @@ describe('POST /api/v1/items/[id]/adjust', () => {
     expect(status).toBe(403);
     expect(body.error).toBe('forbidden');
     expect(body.details).toEqual({ reason: 'aal2_required' });
+  });
+
+  // A user outside the item's warehouse is refused BEFORE the write runs. The
+  // warehouse helper throws ForbiddenError (not a ServiceError), which used to
+  // fall through to the 500 branch; the phone reads any 5xx as "may or may not
+  // have been saved", so a refusal looked like a possible write and invited a
+  // second tap.
+  it('answers a warehouse-write refusal as 403, never 500', async () => {
+    const WAREHOUSE = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+    vi.spyOn(InventoryService.prototype, 'adjustStock').mockRejectedValue(
+      new ForbiddenError(`User does not have write access to warehouse ${WAREHOUSE}.`),
+    );
+
+    const { status, body } = await post({ quantityChange: 1 });
+
+    expect(status).toBe(403);
+    expect(body.error).toBe('forbidden');
+    expect(body.message).toBe(ADJUST_WAREHOUSE_WRITE_REFUSED);
+    // The raw helper message names the warehouse; the phone shows `message`.
+    expect(JSON.stringify(body)).not.toContain(WAREHOUSE);
+    // A refusal is an answer, not an incident, and nothing was written.
+    expect(reportError).not.toHaveBeenCalled();
+    expect(revalidateInventoryList).not.toHaveBeenCalled();
+  });
+
+  it("answers the service's own warehouse refusal (a ServiceError) as 403 with its sentence", async () => {
+    vi.spyOn(InventoryService.prototype, 'adjustStock').mockRejectedValue(
+      new ServiceError('forbidden', ADJUST_WAREHOUSE_WRITE_REFUSED),
+    );
+
+    const { status, body } = await post({ quantityChange: -1 });
+
+    expect(status).toBe(403);
+    expect(body).toMatchObject({ error: 'forbidden', message: ADJUST_WAREHOUSE_WRITE_REFUSED });
+  });
+
+  it('bounds how long the write can run after the phone gave up (maxDuration is pinned)', async () => {
+    // The phone's "Not confirmed" window (UNCONFIRMED_SETTLE_MS, 90 s) is
+    // derived from this bound; the project default would be 300 s.
+    const mod = await import('./route');
+    expect(mod.maxDuration).toBe(30);
   });
 
   it('never forwards details on an internal_error (raw DB text stays server-side)', async () => {

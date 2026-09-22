@@ -2,25 +2,45 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { assertPermission, ServiceError, serviceErrorStatus } from '@/server/services/context';
-import { InventoryService } from '@/server/services/inventory';
+import { ADJUST_WAREHOUSE_WRITE_REFUSED, InventoryService } from '@/server/services/inventory';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+/**
+ * A HARD END to the window in which this write can still commit.
+ *
+ * The project runs Fluid compute with a 300 s default function timeout
+ * (Vercel project settings, read 2026-09-22), and no vercel.json glob covers
+ * this path, so without this line a stalled request could run, and commit, for
+ * up to five minutes after the phone gave up on it at api()'s 20 s timeout.
+ * The phone treats such an outcome as UNCONFIRMED and keeps the on-hand
+ * labelled until either a read shows the change or the write can no longer
+ * land (UNCONFIRMED_SETTLE_MS in apps/mobile/src/lib/unconfirmed-stock.ts).
+ * That second bound is only honest if this one exists: 30 s here, plus the
+ * database's own 8 s statement_timeout for the authenticated role (pg_roles,
+ * read 2026-09-22), plus queueing ahead of it. 30 s is past the phone's own
+ * 20 s wait (DEFAULT_TIMEOUT_MS in apps/mobile/src/lib/api.ts), so the server
+ * never cuts off a request the phone is still waiting for.
+ */
+export const maxDuration = 30;
 
 /**
  * Mobile QUICK ADJUST — the REST parity for the web stock adjustment
  * (InventoryService.adjustStock, reached from the item page / adjust dialog).
  *
- * Why this route exists at all (added 2026-09-05): the phone's scan tab and item
- * screen called the `adjust_stock` RPC DIRECTLY with a null location. That is
- * the exact hole the sibling remove-stock route's header warns about — "Mobile
- * MUST go through the service, or a member without stock:adjust could remove
- * stock by calling the RPC directly" — and it was live on the quick-adjust
- * buttons. Four things went wrong on that path, all fixed by routing here:
+ * Why this route exists at all: the phone called the `adjust_stock` RPC
+ * DIRECTLY with a null location — the scan tab until 2026-09-05, when this
+ * route was added for it, and the item screen's -5/-1/+1/+5 buttons and
+ * "Adjust with reason" sheet until 2026-09-22. That is the exact hole the
+ * sibling remove-stock route's header warns about — "Mobile MUST go through the
+ * service, or a member without stock:adjust could remove stock by calling the
+ * RPC directly" — and it was live on the quick-adjust buttons. Four things went
+ * wrong on that path, all fixed by routing here:
  *
  *   1. PERMISSION. The RPC checks only `has_org_role(org, 'staff')` (0327) and
  *      the stock_movements write policy is ADDITIVE (`has_org_role(...,'staff')
@@ -159,6 +179,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           ...(e.code !== 'internal_error' && e.details ? { details: e.details } : {}),
         },
         { status: serviceErrorStatus(e.code) },
+      );
+    }
+    // The warehouse helpers throw ForbiddenError, not ServiceError. adjustStock
+    // converts its own warehouse refusal, but any ForbiddenError that still
+    // reaches here is an authorization refusal decided BEFORE the write, and
+    // must never become a 500: the phone reads a 5xx as "may or may not have
+    // been saved" and the operator taps again. Its raw message names the
+    // warehouse uuid, so the phone gets the fixed sentence instead.
+    if (e instanceof ForbiddenError) {
+      return NextResponse.json(
+        { error: 'forbidden', message: ADJUST_WAREHOUSE_WRITE_REFUSED },
+        { status: 403 },
       );
     }
     void reportError(e, { tag: 'api.v1.items.adjust' });
