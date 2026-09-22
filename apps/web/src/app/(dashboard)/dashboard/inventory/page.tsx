@@ -13,10 +13,7 @@ import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown'
 import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { Button } from '@/components/ui/button';
 import { can } from '@stockpilot/core';
-import {
-  deriveInstantView,
-  instantStateFromPageParams,
-} from '@/lib/inventory/instant-mode';
+import { deriveInstantView, instantStateFromPageParams } from '@/lib/inventory/instant-mode';
 import {
   ALL_WAREHOUSES_KEY,
   canUseSharedInventoryCaches,
@@ -38,21 +35,19 @@ import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
 import { SavedViewsService } from '@/server/services/saved-views';
-import {
-  loadCountingUnits,
-  loadCountingUnitsForOrg,
-} from '@/server/services/size-run-display';
+import { loadCountingUnits, loadCountingUnitsForOrg } from '@/server/services/size-run-display';
 import { SuppliersService } from '@/server/services/suppliers';
 import { TagsService } from '@/server/services/tags';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
-import { getWarehousesForRequest,
-  getModulesForRequest,
-} from '@/lib/dashboard/request-cache';
+import { getWarehousesForRequest, getModulesForRequest } from '@/lib/dashboard/request-cache';
 import { effectiveNavLabel } from '@/lib/nav-labels';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { buildWarehouseScope, scopedWarehouseMessage } from '@/lib/warehouse-scope';
 import { ScopedWarehouseNotice } from '@/components/dashboard/scoped-warehouse-notice';
+import { ClearWarehouseFilterButton } from '@/components/inventory/clear-warehouse-filter-button';
+import { createClient } from '@/lib/supabase/server';
+import { inventoryViewPredicate, type InventoryListView } from '@stockpilot/core';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { TourSampleItem } from '@/components/onboarding/tour-sample-item';
 import { ITEMS_PAGE_TOUR } from '@/lib/onboarding/tours';
@@ -168,9 +163,7 @@ export default async function InventoryPage({
   const [sessionCtx, heading, racks] = await Promise.all([
     requireOrgContext(),
     effectiveNavLabel('/dashboard/inventory', 'Inventory'),
-    InventoryService.forCurrentUser().then((svc) =>
-      svc.listDistinctRacks({ scope: rackScope }),
-    ),
+    InventoryService.forCurrentUser().then((svc) => svc.listDistinctRacks({ scope: rackScope })),
   ]);
 
   // Gate the create / import buttons on `items:create`. Viewers (read-
@@ -221,7 +214,11 @@ export default async function InventoryPage({
 
       <div className="mt-8">
         <Suspense fallback={<TableBodySkeleton rows={10} />}>
-          <InventoryTableSection params={params} lifecycleStatus={lifecycleStatus} itemType={itemType} />
+          <InventoryTableSection
+            params={params}
+            lifecycleStatus={lifecycleStatus}
+            itemType={itemType}
+          />
         </Suspense>
       </div>
     </div>
@@ -333,6 +330,18 @@ async function InventoryTableSection({
           await getWarehousesForRequest(sessionCtx.organizationId),
         ),
       );
+  // The name of the warehouse the VIEW is narrowed to, when the visitor chose
+  // one. `scopedNote` above covers the other case — a staff/viewer whose ACCESS
+  // is narrowed — and is null for anyone with all access, which is exactly the
+  // person who can set this filter and then forget it: the cookie lives a year
+  // and is per browser, so a phone on "All warehouses" and a laptop on one
+  // warehouse disagree about what inventory exists, silently. That is how an
+  // item that is the only one in its warehouse goes missing from the web.
+  const filteredWarehouseName = warehouseFilter
+    ? ((await getWarehousesForRequest(sessionCtx.organizationId)).find(
+        (w) => w.id === warehouseFilter,
+      )?.name ?? null)
+    : null;
 
   // Saved views are strictly per-user — they never enter the shared
   // cache. Kick the query off now so it overlaps either data path.
@@ -486,6 +495,14 @@ async function InventoryTableSection({
       lifecycleStatus,
       canCreate,
       scopedNote,
+      filteredWarehouseName,
+      // Instant mode holds the WHOLE dataset for this warehouse only, so the
+      // count of matches elsewhere comes from the server, and only when the
+      // filtered view is empty.
+      otherWarehouseMatches:
+        derived.total === 0 && filteredWarehouseName
+          ? await countMatchesInOtherWarehouses(sessionCtx.organizationId, params, 'items')
+          : 0,
     });
     // A zero-result view is a FINISHED page, so it carries the performance
     // marker itself (the table, which carries it otherwise, never mounts here).
@@ -703,8 +720,7 @@ async function InventoryTableSection({
       tagged('inventorySvc.placementBreakdown', inventorySvc.placementBreakdown(itemIdList)),
     ]);
     const itemsWithImages = inventory.items.map((i) => {
-      const cf = (i as { custom_fields?: Record<string, unknown> | null })
-        .custom_fields;
+      const cf = (i as { custom_fields?: Record<string, unknown> | null }).custom_fields;
       const cfThumb =
         cf && typeof cf === 'object' && typeof cf.thumbnail_url === 'string'
           ? (cf.thumbnail_url as string)
@@ -768,13 +784,9 @@ async function InventoryTableSection({
   });
 
   const lookups = {
-    categories: new Map(
-      data.categories.map((c) => [c.id, { name: c.name, color: c.color }]),
-    ),
+    categories: new Map(data.categories.map((c) => [c.id, { name: c.name, color: c.color }])),
     locations: new Map(data.locations.map((l) => [l.id, { name: l.name }])),
-    charters: new Map(
-      data.charters.map((c) => [c.id, { name: c.name, code: c.code }]),
-    ),
+    charters: new Map(data.charters.map((c) => [c.id, { name: c.name, code: c.code }])),
   };
 
   const emptyState = inventoryEmptyState({
@@ -783,6 +795,11 @@ async function InventoryTableSection({
     lifecycleStatus,
     canCreate,
     scopedNote,
+    filteredWarehouseName,
+    otherWarehouseMatches:
+      data.total === 0 && filteredWarehouseName
+        ? await countMatchesInOtherWarehouses(sessionCtx.organizationId, params, 'items')
+        : 0,
   });
   // Same as the instant branch: the zero-result view carries its own marker.
   if (emptyState) return <PerfUseful>{emptyState}</PerfUseful>;
@@ -799,10 +816,7 @@ async function InventoryTableSection({
   // explicitly so the prop is inert.
   const instantPromise =
     isDefaultView && useSharedCaches && itemType === 'product'
-      ? buildInstantAdoptedPayload(
-          sessionCtx.organizationId,
-          warehouseFilter ?? ALL_WAREHOUSES_KEY,
-        )
+      ? buildInstantAdoptedPayload(sessionCtx.organizationId, warehouseFilter ?? ALL_WAREHOUSES_KEY)
       : undefined;
 
   // WHOLE-DATASET counting units, exactly like the instant branch above — by
@@ -855,12 +869,56 @@ async function InventoryTableSection({
  * local derivation's (same semantics by the instant-mode parity
  * contract). Returns null when the table should render.
  */
+/**
+ * How many rows the CURRENT query matches once the warehouse filter is lifted.
+ *
+ * Runs only when the filtered view came back empty, so it costs one HEAD count
+ * on a path that was already rendering nothing. Deliberately the USER-authed
+ * client, not the service role the cached loaders use: this number is shown to
+ * a person, so row level security decides what it may count — warehouse
+ * assignments and category restrictions included. A scoped user therefore never
+ * sees "3 items match elsewhere" for rows they could not open.
+ */
+async function countMatchesInOtherWarehouses(
+  organizationId: string,
+  params: InventorySearchParams,
+  view: InventoryListView,
+): Promise<number> {
+  try {
+    const { itemType, isRental } = inventoryViewPredicate(view);
+    const supabase = await createClient();
+    let q = supabase
+      .from('inventory_items')
+      .select('id', { count: 'exact', head: true })
+      .eq('organization_id', organizationId)
+      .is('deleted_at', null)
+      .eq('status', 'active')
+      .eq('item_type', itemType)
+      .eq('is_rental', isRental)
+      .eq('awaiting_first_receipt', false);
+    const term = params.q?.trim();
+    if (term) {
+      const safe = term.replace(/[%,()]/g, ' ').trim();
+      if (safe) q = q.or(`name.ilike.*${safe}*,sku.ilike.*${safe}*,barcode.ilike.*${safe}*`);
+    }
+    const { count, error } = await q;
+    // A failed count must not turn into "0 elsewhere", which would read as a
+    // confident "it is nowhere" — fall through to the ordinary empty state.
+    if (error) return 0;
+    return count ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 function inventoryEmptyState({
   total,
   params,
   lifecycleStatus,
   canCreate,
   scopedNote,
+  filteredWarehouseName,
+  otherWarehouseMatches,
 }: {
   total: number;
   params: InventorySearchParams;
@@ -870,8 +928,28 @@ function inventoryEmptyState({
    *  roles) — appended to every zero-result description so a scoped user
    *  never mistakes "narrowed to your warehouse" for "the org is empty". */
   scopedNote?: string | null;
+  /** The warehouse this VIEW is filtered to, when the visitor chose one. */
+  filteredWarehouseName?: string | null;
+  /** How many rows the same query matches in the OTHER warehouses. */
+  otherWarehouseMatches?: number;
 }) {
   if (total !== 0) return null;
+  // BEFORE every other branch: if the only reason this view is empty is the
+  // warehouse filter, say so and offer the way out. Without this the page says
+  // "no items match" while the item sits in another warehouse, and the phone —
+  // which keeps its own warehouse scope — still lists it. The two platforms
+  // then disagree with nothing on screen to explain why.
+  if (filteredWarehouseName && (otherWarehouseMatches ?? 0) > 0) {
+    const n = otherWarehouseMatches as number;
+    return (
+      <EmptyState
+        icon={Boxes}
+        title={`Nothing here in ${filteredWarehouseName}`}
+        description={`${n === 1 ? '1 item matches' : `${n} items match`} in your other warehouses. This view is filtered to ${filteredWarehouseName}.`}
+        action={<ClearWarehouseFilterButton label="Search all warehouses" />}
+      />
+    );
+  }
   // Append the warehouse-scoping explanation (when present) to whichever
   // branch fires — one place, so no branch can forget it.
   const withScope = (description: string): string =>

@@ -27,11 +27,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useBottomTabBarHeight } from 'expo-router/js-tabs';
 
-import {
-  formatPlacementLabel,
-  resolvePlacement,
-  type RackHoldingLike,
-} from '@stockpilot/core';
+import { formatPlacementLabel, resolvePlacement, type RackHoldingLike } from '@stockpilot/core';
 
 import {
   ActiveFilterPill,
@@ -76,6 +72,7 @@ import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
+import { inventoryViewPredicate } from '@stockpilot/core';
 
 interface BookRow {
   id: string;
@@ -154,6 +151,9 @@ const BOOK_COLUMNS = `id, name, sku, barcode, quantity_on_hand, reorder_point, s
            category_id, primary_location_id, charter_id, warehouse_id, updated_at, auto_archived,
            awaiting_first_receipt`;
 
+/** One definition of the Books tab, shared with the web list. */
+const BOOKS_VIEW = inventoryViewPredicate('books');
+
 export default function BooksScreen() {
   const router = useRouter();
   // Org + warehouse both come from the workspace switcher so they stay in
@@ -213,9 +213,7 @@ export default function BooksScreen() {
   // capped at POSTGREST_MAX_ROWS), because without `locations.kind` the card
   // cannot tell a book that has moved into a crate from one still on its rack,
   // and prints the departed rack. See placement-resolution.ts.
-  const [holdings, setHoldings] = React.useState<ReadonlyMap<string, RackHoldingLike[]>>(
-    new Map(),
-  );
+  const [holdings, setHoldings] = React.useState<ReadonlyMap<string, RackHoldingLike[]>>(new Map());
   const listRef = React.useRef<FlatList<BookGroupedRow> | null>(null);
   const [bookCategories, setBookCategories] = React.useState<FilterOption[]>([]);
   const [locations, setLocations] = React.useState<FilterOption[]>([]);
@@ -320,7 +318,8 @@ export default function BooksScreen() {
           .from('inventory_items')
           .select(columns, opts)
           .eq('organization_id', orgId)
-          .eq('item_type', 'book')
+          .eq('item_type', BOOKS_VIEW.itemType)
+          .eq('is_rental', BOOKS_VIEW.isRental)
           .eq('awaiting_first_receipt', pred.awaitingFirstReceipt)
           .is('deleted_at', null);
         if (pred.lifecycle) {
@@ -393,9 +392,7 @@ export default function BooksScreen() {
       if (isLow) {
         bookRows = bookRows.filter(
           (r) =>
-            r.reorder_point > 0
-            && r.quantity_on_hand <= r.reorder_point
-            && r.quantity_on_hand > 0,
+            r.reorder_point > 0 && r.quantity_on_hand <= r.reorder_point && r.quantity_on_hand > 0,
         );
       }
 
@@ -539,8 +536,8 @@ export default function BooksScreen() {
         customFields: b.custom_fields,
         holdings: holdings.get(b.id),
       });
-      const charter = b.charter_id ? charterMap.get(b.charter_id) ?? null : null;
-      const loc = b.primary_location_id ? locationMap.get(b.primary_location_id) ?? null : null;
+      const charter = b.charter_id ? (charterMap.get(b.charter_id) ?? null) : null;
+      const loc = b.primary_location_id ? (locationMap.get(b.primary_location_id) ?? null) : null;
       switch (res.source) {
         case 'holdings':
           return formatPlacementLabel(res);
@@ -571,7 +568,7 @@ export default function BooksScreen() {
   // population, so adopting it would make the eyebrow and the paginator quote
   // different totals on one screen.
   const datasetRowCount =
-    truncated && filter.status !== 'low' ? serverRowCount ?? rows.length : rows.length;
+    truncated && filter.status !== 'low' ? (serverRowCount ?? rows.length) : rows.length;
 
   // Thumbnails are resolved for the PAGE's rows only. The set read can return
   // up to 1000 rows and signing a transformed URL costs one request per path
@@ -755,12 +752,7 @@ export default function BooksScreen() {
         </View>
 
         <View style={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 }}>
-          <View
-            style={[
-              styles.searchBox,
-              { backgroundColor: c.card, borderColor: c.hair },
-            ]}
-          >
+          <View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair }]}>
             <Search size={16} color={c.ink4} strokeWidth={1.4} />
             <TextInput
               value={q}
@@ -772,10 +764,7 @@ export default function BooksScreen() {
               autoFocus={false}
               returnKeyType="search"
               onSubmitEditing={() => Keyboard.dismiss()}
-              style={[
-                styles.searchInput,
-                { color: c.ink, fontFamily: FONT.displayRegular },
-              ]}
+              style={[styles.searchInput, { color: c.ink, fontFamily: FONT.displayRegular }]}
             />
             <FilterButton onPress={() => setSheetOpen(true)} count={filterCount} />
             <Pressable
@@ -813,8 +802,14 @@ export default function BooksScreen() {
           ref={listRef}
           data={groupedRows}
           keyExtractor={groupedKeyExtractor}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: tabBarHeight + 24, gap: 10 }}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
+          contentContainerStyle={{
+            paddingHorizontal: 20,
+            paddingBottom: tabBarHeight + 24,
+            gap: 10,
+          }}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />
+          }
           ListEmptyComponent={
             <View style={styles.empty}>
               <Display size={18}>No books match.</Display>
@@ -885,9 +880,9 @@ const BookCard = React.memo(function BookCard({
   const { c } = useTheme();
   const picked = useIsPicked(book.id);
   const author =
-    (book.custom_fields?.book_author as string | undefined)
-    ?? (book.custom_fields?.author as string | undefined)
-    ?? null;
+    (book.custom_fields?.book_author as string | undefined) ??
+    (book.custom_fields?.author as string | undefined) ??
+    null;
   const isbn = book.barcode ?? (book.custom_fields?.isbn as string | undefined) ?? null;
   // ONE precedence ladder with the collapsed header above it (expected →
   // lifecycle → stock), so a header reading ARCHIVED can never sit over rows
@@ -911,18 +906,36 @@ const BookCard = React.memo(function BookCard({
                 {book.name}
               </Body>
               {author ? (
-                <Mono size={11.5} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 4 }}>
+                <Mono
+                  size={11.5}
+                  tracking={0.04}
+                  color={c.ink4}
+                  numberOfLines={1}
+                  style={{ marginTop: 4 }}
+                >
                   {author}
                 </Mono>
               ) : null}
               {isbn ? (
-                <Mono size={11} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 2 }}>
+                <Mono
+                  size={11}
+                  tracking={0.04}
+                  color={c.ink4}
+                  numberOfLines={1}
+                  style={{ marginTop: 2 }}
+                >
                   {isbn}
                   {book.grade ? ` · Grade ${book.grade}` : ''}
                 </Mono>
               ) : null}
               {placementLabel ? (
-                <Mono size={11} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 2 }}>
+                <Mono
+                  size={11}
+                  tracking={0.04}
+                  color={c.ink4}
+                  numberOfLines={1}
+                  style={{ marginTop: 2 }}
+                >
                   {placementLabel}
                 </Mono>
               ) : null}
@@ -1038,7 +1051,13 @@ const BookGroupHeaderCard = React.memo(function BookGroupHeaderCard({
               <Body size={15.5} color={c.ink} style={{ fontFamily: FONT.display }}>
                 {name}
               </Body>
-              <Mono size={11} tracking={0.04} color={c.ink4} numberOfLines={1} style={{ marginTop: 4 }}>
+              <Mono
+                size={11}
+                tracking={0.04}
+                color={c.ink4}
+                numberOfLines={1}
+                style={{ marginTop: 4 }}
+              >
                 {placements}
               </Mono>
             </View>

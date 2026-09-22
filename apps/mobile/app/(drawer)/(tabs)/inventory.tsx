@@ -65,11 +65,7 @@ import {
   readIsComplete,
 } from '@/lib/inventory-paging';
 import { supabase } from '@/lib/supabase';
-import {
-  countingUnitLabel,
-  groupRollupLabel,
-  type CountingUnit,
-} from '@stockpilot/core';
+import { countingUnitLabel, groupRollupLabel, type CountingUnit } from '@stockpilot/core';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useWarehouseScope, warehouseScopeMessage } from '@/lib/warehouse-scope';
@@ -77,6 +73,7 @@ import { useWorkspace } from '@/lib/use-workspace';
 import { MobileTour } from '@/components/onboarding/mobile-tour';
 import { useTourActive, useTourTarget } from '@/lib/tour-targets';
 import { MOBILE_INVENTORY_TOUR } from '@/lib/onboarding';
+import { inventoryViewPredicate } from '@stockpilot/core';
 
 interface Item {
   id: string;
@@ -154,6 +151,9 @@ const ITEM_COLUMNS = `id, name, sku, quantity_on_hand, reorder_point, status, ca
            awaiting_first_receipt, group_id, variant_size,
            category:categories!category_id (name),
            product_group:product_groups!group_id (default_counting_unit)`;
+
+/** One definition of the Items tab, shared with the web list. */
+const ITEMS_VIEW = inventoryViewPredicate('items');
 
 export default function Inventory() {
   const router = useRouter();
@@ -290,12 +290,7 @@ export default function Inventory() {
   }, []);
 
   const load = React.useCallback(
-    async (
-      orgIdParam: string,
-      query: string,
-      f: FilterState,
-      warehouseScopeId: string | null,
-    ) => {
+    async (orgIdParam: string, query: string, f: FilterState, warehouseScopeId: string | null) => {
       const sortMap: Record<typeof f.sort, { col: string; asc: boolean }> = {
         updated_desc: { col: 'updated_at', asc: false },
         name_asc: { col: 'name', asc: true },
@@ -356,9 +351,13 @@ export default function Inventory() {
           .select(columns, opts)
           .eq('organization_id', orgIdParam)
           .eq('awaiting_first_receipt', pred.awaitingFirstReceipt)
-          // Match web: the Items tab is products only. Books live on
-          // their own tab; mixing them was masking the per-tab counts.
-          .neq('item_type', 'book')
+          // WHAT BELONGS ON THIS TAB comes from @stockpilot/core, the same
+          // definition the web list uses. This used to be `.neq('item_type',
+          // 'book')` with no rental filter, which listed rentals web did not:
+          // measured on production, two rental items were on this tab and
+          // absent from web's. A new item_type would have drifted the same way.
+          .eq('item_type', ITEMS_VIEW.itemType)
+          .eq('is_rental', ITEMS_VIEW.isRental)
           .is('deleted_at', null);
         if (pred.lifecycle) {
           r = r.eq('status', pred.lifecycle);
@@ -614,7 +613,7 @@ export default function Inventory() {
   // prints for the same screen. There the rows in hand are the only figure that
   // describes the population actually rendered.
   const datasetRowCount =
-    truncated && filter.status !== 'low' ? serverRowCount ?? items.length : items.length;
+    truncated && filter.status !== 'low' ? (serverRowCount ?? items.length) : items.length;
 
   // Thumbnails are resolved for the PAGE's rows only. The set read can return
   // up to 1000 rows and signing a transformed URL costs one request per path
@@ -754,11 +753,7 @@ export default function Inventory() {
         />
       );
       // First visible row doubles as the tour's "tap an item" spotlight.
-      return index === 0 ? (
-        <TourRowAnchor>{itemRow}</TourRowAnchor>
-      ) : (
-        itemRow
-      );
+      return index === 0 ? <TourRowAnchor>{itemRow}</TourRowAnchor> : itemRow;
     },
     [
       groupedRows.length,
@@ -1027,11 +1022,7 @@ const GroupHeaderRow = React.memo(function GroupHeaderRow({
         {/* Dynamic Type: unbounded. The row is paddingVertical-based, so it
             grows for free — any line ceiling here is pure loss, and the name
             is content (plan §3), not chrome. */}
-        <Mono
-          color={c.ink}
-          size={15.5}
-          style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}
-        >
+        <Mono color={c.ink} size={15.5} style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}>
           {baseName}
         </Mono>
         <Mono size={11} color={c.ink4} tracking={0.04} style={{ marginTop: 4 }}>
@@ -1124,9 +1115,7 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
         strokeWidth={2}
         style={{ transform: [{ rotate: expanded ? '90deg' : '0deg' }] }}
       />
-      <View
-        style={stacked ? rowStyles.bodyStacked : [rowStyles.bodyRow, rowStyles.bodyRowTight]}
-      >
+      <View style={stacked ? rowStyles.bodyStacked : [rowStyles.bodyRow, rowStyles.bodyRowTight]}>
         <View style={stacked ? rowStyles.nameColStacked : rowStyles.nameCol}>
           {/* Dynamic Type: unbounded, like the placement rows this header
               expands to and like the size-run header above. The row is
@@ -1225,7 +1214,13 @@ const ItemRow = React.memo(function ItemRow({
             >
               {item.name}
             </Mono>
-            <Mono size={11} color={c.ink4} tracking={0.04} numberOfLines={1} style={{ marginTop: 4 }}>
+            <Mono
+              size={11}
+              color={c.ink4}
+              tracking={0.04}
+              numberOfLines={1}
+              style={{ marginTop: 4 }}
+            >
               {placementLabel ?? item.sku}
             </Mono>
           </View>
@@ -1432,7 +1427,13 @@ function SampleItemRow() {
               >
                 Acer Chromebook 511
               </Mono>
-              <Mono size={11} color={c.ink4} tracking={0.04} numberOfLines={1} style={{ marginTop: 4 }}>
+              <Mono
+                size={11}
+                color={c.ink4}
+                tracking={0.04}
+                numberOfLines={1}
+                style={{ marginTop: 4 }}
+              >
                 SAMPLE-001 · example item
               </Mono>
             </View>
