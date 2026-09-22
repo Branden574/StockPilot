@@ -14,9 +14,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * answered yet, and pins:
  *   1. every read that needs only the item id is already running before the
  *      row answers;
- *   2. the reads that need a field off the row (category, supplier, updated-by
- *      profile, signed photo URLs) start only after it answers, and start
- *      together with the rest rather than after them;
+ *   2. the reads that need a field off the row (category, supplier, signed
+ *      photo URLs) start only after it answers, and start together with the
+ *      rest rather than after them; the updated-by profile comes WITH the row;
+ *   2b. a Movements or Activity tab (a query-only navigation that re-renders
+ *      this whole page) makes none of the reads only the Overview panel shows,
+ *      so none of them can slow or fail the tab;
  *   3. a not-found (which is also what a forbidden warehouse becomes, inside
  *      InventoryService.get) is still notFound(), nothing read early is used,
  *      no dependent read is made, and no early read can surface as an
@@ -137,6 +140,9 @@ const control: {
   locations: async () => [],
 };
 
+/** Arguments `InventoryService.get` was called with, per call. */
+const getCalls: unknown[][] = [];
+
 const signedUrls = vi.fn(async (paths: unknown) => {
   started.push('signedUrls');
   return new Map((paths as string[]).map((p) => [p, `https://signed/${p}`]));
@@ -145,7 +151,10 @@ const signedUrls = vi.fn(async (paths: unknown) => {
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: {
     forCurrentUser: vi.fn(async () => ({
-      get: rec('get', () => control.get()),
+      get: rec('get', (...args: unknown[]) => {
+        getCalls.push(args);
+        return control.get();
+      }),
       placements: rec('placements', async () => []),
       reservedQuantityByItemIds: rec('reserved', () => control.reserved()),
     })),
@@ -254,6 +263,8 @@ function itemRow(overrides: Record<string, unknown> = {}) {
     unplaced_quantity: 0,
     updated_by: 'u-editor',
     updated_at: '2026-09-20T12:00:00.000Z',
+    // What InventoryService.get(id, { withUpdater: true }) embeds.
+    updater: { full_name: 'Dana Editor', email: 'dana@example.com' },
     ...overrides,
   };
 }
@@ -270,19 +281,14 @@ function deferred<T>() {
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-/** The reads that need nothing but the item id (Movements tab open). */
-const ID_ONLY_READS = [
-  'placements',
-  'reserved',
-  'activity',
-  'images',
-  'locations',
-  'costHistory',
-  'customFields',
-  'serials',
-];
-/** The reads that need a field off the item row. */
-const ROW_KEYED_READS = ['table:categories', 'table:suppliers', 'table:user_profiles', 'signedUrls'];
+/** Reads only the Overview panel shows. A Movements or Activity render makes none of them. */
+const OVERVIEW_ONLY_READS = ['reserved', 'images', 'costHistory', 'customFields', 'serials'];
+/** The reads that need nothing but the item id, on a Movements or Activity tab. */
+const TAB_ID_ONLY_READS = ['placements', 'activity', 'locations'];
+/** The reads that need nothing but the item id, on Overview. */
+const OVERVIEW_ID_ONLY_READS = ['placements', 'locations', ...OVERVIEW_ONLY_READS];
+/** The reads that need a field off the item row (Overview only). */
+const ROW_KEYED_READS = ['table:categories', 'table:suppliers', 'signedUrls'];
 
 let unhandled: unknown[] = [];
 const onUnhandled = (reason: unknown) => {
@@ -292,6 +298,7 @@ const onUnhandled = (reason: unknown) => {
 beforeEach(() => {
   vi.clearAllMocks();
   started.length = 0;
+  getCalls.length = 0;
   unhandled = [];
   process.on('unhandledRejection', onUnhandled);
   control.get = async () => itemRow();
@@ -300,7 +307,6 @@ beforeEach(() => {
   for (const k of Object.keys(tableAnswers)) delete tableAnswers[k];
   tableAnswers.categories = { id: 'cat-1', name: 'HVAC', color: null, public_visibility: 'public' };
   tableAnswers.suppliers = { id: 'sup-1', name: 'Acme Supply' };
-  tableAnswers.user_profiles = { full_name: 'Dana Editor', email: 'dana@example.com' };
 });
 
 afterEach(() => {
@@ -308,7 +314,7 @@ afterEach(() => {
 });
 
 describe('ItemDetail: reads start by what they need, not one after another', () => {
-  it('every id-only read is already running before the item row answers; no row-keyed read is', async () => {
+  it('a tab: every read it needs is running before the row answers, and no Overview-only read ever starts', async () => {
     const row = deferred<unknown>();
     control.get = () => row.promise;
 
@@ -321,16 +327,69 @@ describe('ItemDetail: reads start by what they need, not one after another', () 
     await flush();
 
     expect(started).toContain('get');
-    for (const read of ID_ONLY_READS) expect(started).toContain(read);
+    for (const read of TAB_ID_ONLY_READS) expect(started).toContain(read);
+
+    row.resolve(itemRow());
+    render(await rendering);
+
+    for (const read of [...OVERVIEW_ONLY_READS, ...ROW_KEYED_READS]) {
+      expect(started).not.toContain(read);
+    }
+    // The footer's editor came with the row: no read of its own.
+    expect(getCalls).toEqual([[ITEM_ID, { withUpdater: true }]]);
+    expect(started).not.toContain('table:user_profiles');
+    expect(screen.getByText(/Last updated by Dana Editor/)).toBeTruthy();
+    // One module answer source, and it is not a round trip.
+    expect(checkModuleAccess).not.toHaveBeenCalled();
+  });
+
+  it('Overview: every id-only read is running before the row answers; no row-keyed read is', async () => {
+    const row = deferred<unknown>();
+    control.get = () => row.promise;
+
+    const rendering = ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back' });
+    await flush();
+
+    expect(started).toContain('get');
+    for (const read of OVERVIEW_ID_ONLY_READS) expect(started).toContain(read);
     for (const read of ROW_KEYED_READS) expect(started).not.toContain(read);
 
     row.resolve(itemRow());
     render(await rendering);
 
     for (const read of ROW_KEYED_READS) expect(started).toContain(read);
+    expect(started).not.toContain('table:user_profiles');
     expect(screen.getByText(/Last updated by Dana Editor/)).toBeTruthy();
-    // One module answer source, and it is not a round trip.
-    expect(checkModuleAccess).not.toHaveBeenCalled();
+  });
+
+  it('a tab cannot be failed by a read only Overview shows, because it never makes one', async () => {
+    control.reserved = async () => {
+      throw new Error('reservations read failed');
+    };
+    render(
+      await ItemDetail({
+        id: ITEM_ID,
+        backHref: '/dashboard/inventory',
+        backLabel: 'Back',
+        tab: 'activity',
+      }),
+    );
+    expect(screen.getByText(/Last updated by Dana Editor/)).toBeTruthy();
+    await flush();
+    expect(unhandled).toEqual([]);
+  });
+
+  it('an editor profile the caller may not see (embed null) leaves the footer without a name', async () => {
+    control.get = async () => itemRow({ updater: null });
+    render(
+      await ItemDetail({
+        id: ITEM_ID,
+        backHref: '/dashboard/inventory',
+        backLabel: 'Back',
+        tab: 'movements',
+      }),
+    );
+    expect(screen.queryByText(/Last updated by/)).toBeNull();
   });
 
   it('the Overview tab renders what the row-keyed reads returned (category, supplier, editor)', async () => {
@@ -343,17 +402,12 @@ describe('ItemDetail: reads start by what they need, not one after another', () 
   });
 
   it('the row-keyed reads start as soon as the row answers, while slower id-only reads are still in flight', async () => {
-    // The location list is the slow one this time. The updated-by profile used
-    // to be read only after EVERYTHING had arrived; it must not wait for it.
+    // The location list is the slow one this time. The row-keyed reads used
+    // to start only after EVERYTHING had arrived; they must not wait for it.
     const slowLocations = deferred<unknown[]>();
     control.locations = () => slowLocations.promise;
 
-    const rendering = ItemDetail({
-      id: ITEM_ID,
-      backHref: '/dashboard/inventory',
-      backLabel: 'Back',
-      tab: 'activity',
-    });
+    const rendering = ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back' });
     await flush();
     await flush();
 
@@ -403,7 +457,7 @@ describe('ItemDetail: reads start by what they need, not one after another', () 
     expect(unhandled).toEqual([]);
   });
 
-  it('an early read that fails AFTER the row is found still fails the page, as it always did', async () => {
+  it('on Overview, an early read that fails AFTER the row is found still fails the page, as it always did', async () => {
     control.reserved = async () => {
       throw new Error('reservations read failed');
     };

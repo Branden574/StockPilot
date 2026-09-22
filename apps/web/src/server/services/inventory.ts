@@ -1757,7 +1757,15 @@ export class InventoryService {
     };
   }
 
-  async get(id: string) {
+  /**
+   * `withUpdater` embeds the profile of the user who last updated the row
+   * (`updater: { full_name, email } | null`) in the SAME request, for the item
+   * page's "last updated by" footer, which otherwise read it in a level of its
+   * own after the row. Same RLS as that read: a profile the caller may not see
+   * comes back null. The hint names the column because inventory_items has
+   * three foreign keys to user_profiles (created_by, updated_by, deleted_by).
+   */
+  async get(id: string, opts: { withUpdater?: boolean } = {}) {
     // THREE reads, started together. They used to run one after another (the
     // item row, then the caller's warehouse access, then the Staging/Unplaced
     // holdings), and production logs of the item page (2026-09-22) showed what
@@ -1773,7 +1781,7 @@ export class InventoryService {
     const rowRead = Promise.resolve(
       this.ctx.supabase
         .from('inventory_items')
-        .select('*')
+        .select(opts.withUpdater ? '*, updater:user_profiles!updated_by (full_name, email)' : '*')
         .eq('organization_id', this.ctx.organizationId)
         .eq('id', id)
         .is('deleted_at', null)
