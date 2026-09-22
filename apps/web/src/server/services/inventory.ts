@@ -1748,39 +1748,65 @@ export class InventoryService {
   }
 
   async get(id: string) {
-    const { data, error } = await this.ctx.supabase
-      .from('inventory_items')
-      .select('*')
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id)
-      .is('deleted_at', null)
-      .maybeSingle();
+    // THREE reads, started together. They used to run one after another (the
+    // item row, then the caller's warehouse access, then the Staging/Unplaced
+    // holdings), and production logs of the item page (2026-09-22) showed what
+    // that costs: 3-5% of calls from Vercel to Supabase stall 1-8 s at the
+    // gateway, and in a chain each level adds its own round trip and every
+    // stall delays everything queued behind it. None of the three needs
+    // another's answer to be ASKED, only to be USED: the access list and the
+    // holdings are consulted strictly after the row has been found and cleared
+    // below, and are simply dropped when it is not.
+    //
+    // A PostgREST builder is lazy (the request leaves when `.then` is called),
+    // so Promise.resolve is what actually starts the two table reads now.
+    const rowRead = Promise.resolve(
+      this.ctx.supabase
+        .from('inventory_items')
+        .select('*')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', id)
+        .is('deleted_at', null)
+        .maybeSingle(),
+    );
+    // Pass our own ctx so the helper doesn't fall back to
+    // requireOrgContext() — that path redirects to /signin and inside an
+    // API route the redirect throws NEXT_REDIRECT, surfacing as a 500
+    // (which broke the Print Label endpoint until this was fixed).
+    const accessRead = getWarehouseAccess(this.ctx);
+    const holdingsRead = Promise.resolve(
+      this.ctx.supabase
+        .from('item_stock_levels')
+        .select('quantity, locations!inner(kind)')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('item_id', id)
+        .in('locations.kind', ['staging', 'unplaced']),
+    );
+    // Both are abandoned, unawaited, when the row is missing, unreadable or
+    // forbidden: mark their rejections observed so one can never surface as
+    // an unhandled rejection (which takes the whole function down).
+    accessRead.catch(() => {});
+    holdingsRead.catch(() => {});
+
+    const { data, error } = await rowRead;
     if (error) throw new ServiceError('internal_error', error.message);
     if (!data) throw new ServiceError('not_found', 'Item not found');
 
     // Re-check warehouse access on the loaded row in case RLS was bypassed
     // (e.g. service-role contexts). For warehouse-scoped users this enforces
-    // their assignment list.
-    //
-    // Pass our own ctx so the helper doesn't fall back to
-    // requireOrgContext() — that path redirects to /signin and inside an
-    // API route the redirect throws NEXT_REDIRECT, surfacing as a 500
-    // (which broke the Print Label endpoint until this was fixed).
+    // their assignment list. Same rule as always, applied to the access read
+    // started above; a denial is reported as not_found, and nothing read in
+    // parallel (the holdings) is returned.
     const wh = (data as { warehouse_id?: string | null }).warehouse_id ?? null;
     if (wh) {
       try {
-        await assertWarehouseAccess(wh, 'read', this.ctx);
+        await assertWarehouseAccess(wh, 'read', this.ctx, accessRead);
       } catch (e) {
         if (e instanceof ForbiddenError) throw new ServiceError('not_found', 'Item not found');
         throw e;
       }
     }
-    const { data: holdingRows } = await this.ctx.supabase
-      .from('item_stock_levels')
-      .select('quantity, locations!inner(kind)')
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('item_id', id)
-      .in('locations.kind', ['staging', 'unplaced']);
+    const { data: holdingRows } = await holdingsRead;
     let staged = 0;
     let unplaced = 0;
     // `locations` is a to-one embed → object at runtime; cast via unknown

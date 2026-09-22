@@ -196,6 +196,44 @@ const MOVEMENT_SHADOWED_AUDIT_EVENTS: readonly string[] = [
 const LIFECYCLE_REASON_MOVEMENTS: readonly string[] = ['item_archived', 'item_deleted'];
 
 /**
+ * Who did it, read WITH the row instead of after it. `forItem` used to collect
+ * every user_id from both queries and then ask `user_profiles` for them in a
+ * third, serial trip (`.in('id', …)`). Production logs of the item page's
+ * Movements/Activity tabs (2026-09-22) show that trip as its own level in the
+ * render's chain, and any call can stall 1-8 s at Supabase's gateway, so it
+ * was one more chance for a 10-second tab. Both tables carry the foreign key
+ * `user_id -> user_profiles(id)` (0002_inventory.sql, never altered since), and
+ * MovementsService.list and InventoryService.itemHistory already embed it
+ * exactly like this. The embedded profile is read under the caller's RLS just
+ * as the separate lookup was, so the same profiles are visible and the same
+ * names come out (see `actorOf`).
+ */
+const ACTOR_EMBED = 'actor:user_profiles!user_id (id, full_name, email)';
+
+type EmbeddedActor = { full_name?: string | null; email?: string | null } | null;
+
+/**
+ * The display attribution for one row: "System" when the row has no user,
+ * "Unknown" when it names a user whose profile the caller cannot see (or that
+ * no longer exists), otherwise full name, falling back to email. Byte-for-byte
+ * the mapping the separate profile lookup applied. A to-one embed arrives as an
+ * object, but PostgREST can hand back a one-element array when it cannot prove
+ * the relationship is to-one, so both shapes are read (as audit-log.ts does).
+ */
+function actorOf(
+  uid: string | null,
+  embedded: EmbeddedActor | EmbeddedActor[] | undefined,
+): { name: string; email: string | null } {
+  if (!uid) return { name: 'System', email: null };
+  const p = Array.isArray(embedded) ? (embedded[0] ?? null) : (embedded ?? null);
+  if (!p) return { name: 'Unknown', email: null };
+  return {
+    name: (p.full_name || p.email || 'Unknown').trim(),
+    email: p.email ?? null,
+  };
+}
+
+/**
  * Movement/Activity P4 Task 2: the audit half of `forItem`'s per-kind cap —
  * `auditLimit = ceil(limit / 2)`. Pulled out to its own function (was an
  * inline expression in `forItem`) so the "Load older" pagination surfaces
@@ -434,7 +472,7 @@ export class ActivityService {
     let movementsQuery = this.ctx.supabase
       .from('stock_movements')
       .select(
-        'id, movement_type, quantity_change, previous_quantity, new_quantity, moved_quantity, from_location_id, to_location_id, reason, reference_type, reference_id, notes, created_at, user_id',
+        `id, movement_type, quantity_change, previous_quantity, new_quantity, moved_quantity, from_location_id, to_location_id, reason, reference_type, reference_id, notes, created_at, user_id, ${ACTOR_EMBED}`,
       )
       .eq('organization_id', this.ctx.organizationId)
       .eq('item_id', itemId);
@@ -456,7 +494,7 @@ export class ActivityService {
 
     let auditQuery = this.ctx.supabase
       .from('audit_logs')
-      .select('id, event, metadata, created_at, user_id')
+      .select(`id, event, metadata, created_at, user_id, ${ACTOR_EMBED}`)
       .eq('organization_id', this.ctx.organizationId)
       // Extracted-text equality so Postgres can use the
       // audit_logs_org_entity_created_idx expression index added in
@@ -506,19 +544,9 @@ export class ActivityService {
       .filter((a) => !MOVEMENT_SHADOWED_AUDIT_EVENTS.includes(a.event as string))
       .slice(0, auditLimit);
 
-    const userIds = new Set<string>();
-    for (const m of movementRows) {
-      const uid = m.user_id as string | null;
-      if (uid) userIds.add(uid);
-    }
-    for (const a of auditRows) {
-      const uid = a.user_id as string | null;
-      if (uid) userIds.add(uid);
-    }
-
     // Pre-0231 receipt rows (reason='receipt_line', notes=receipt uuid):
     // resolve to PO numbers in one extra query so the feed reads 'PO {n}'
-    // instead of the internal label. Runs alongside the profile lookup.
+    // instead of the internal label. Runs alongside the reference labels.
     const receiptIdsPromise = resolveReceiptPoNumbers(
       this.ctx,
       collectReceiptLineIds(
@@ -553,29 +581,11 @@ export class ActivityService {
     }
     const referenceLabelsPromise = resolveReferenceLabels(this.ctx, idsByType);
 
-    const profiles = new Map<string, { name: string; email: string | null }>();
-    if (userIds.size > 0) {
-      const { data } = await this.ctx.supabase
-        .from('user_profiles')
-        .select('id, full_name, email')
-        .in('id', Array.from(userIds));
-      for (const p of data ?? []) {
-        profiles.set(p.id as string, {
-          name: ((p.full_name as string | null) || (p.email as string | null) || 'Unknown').trim(),
-          email: (p.email as string | null) ?? null,
-        });
-      }
-    }
     const poNumberByReceipt = await receiptIdsPromise;
     const referenceLabelById = await referenceLabelsPromise;
 
-    function actor(uid: string | null): { name: string; email: string | null } {
-      if (!uid) return { name: 'System', email: null };
-      return profiles.get(uid) ?? { name: 'Unknown', email: null };
-    }
-
     const movementEvents: ActivityEvent[] = movementRows.map((m) => {
-      const a = actor(m.user_id as string | null);
+      const a = actorOf(m.user_id as string | null, m.actor);
       const rawReason = (m.reason as string | null) ?? null;
       const rawNotes = (m.notes as string | null) ?? null;
       const isReceiptLine = rawReason === 'receipt_line';
@@ -640,7 +650,7 @@ export class ActivityService {
     });
 
     const auditEvents: ActivityEvent[] = auditRows.map((row) => {
-      const a = actor(row.user_id as string | null);
+      const a = actorOf(row.user_id as string | null, row.actor);
       const meta = (row.metadata as Record<string, unknown> | null) ?? {};
       const reason = (meta.reason as string | null) ?? null;
       return {

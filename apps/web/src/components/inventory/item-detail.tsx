@@ -42,7 +42,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { ActivityService, auditLimitFor, type ActivityEvent } from '@/server/services/activity';
-import { ServiceError, withContext } from '@/server/services/context';
+import { isModuleEnabled, ServiceError, withContext } from '@/server/services/context';
 import { CustomFieldsService } from '@/server/services/custom-fields';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
@@ -57,7 +57,6 @@ import { ReportsService } from '@/server/services/reports';
 import { SerialsService } from '@/server/services/serials';
 import { WarehousesService } from '@/server/services/warehouses';
 import { ITEM_ACTIVITY_PAGE_SIZE, nextActivityCursor } from '@/lib/activity-pagination';
-import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
@@ -116,74 +115,201 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
       CustomFieldsService.forCurrentUser(),
     ]);
 
+  // ── Reads, grouped by what they NEED ─────────────────────────────────
+  // Production logs (2026-09-22, Movements/Activity renders of this page)
+  // showed about ten Supabase levels in SERIES: request context, the item row,
+  // its warehouse access, its holdings, then this fan-out, then the actor
+  // lookup inside the activity feed, then the updated-by profile, then two
+  // module_enabled RPCs. Postgres answered every one quickly; the time was the
+  // gateway, where 3-5% of calls from Vercel stall 1-8 s on weekday daytimes.
+  // Renders that met a stall took 6.6 s and 3.6 s against 0.53-0.65 s healthy.
+  // In a chain every level pays its own round trip and every stall adds to the
+  // next; in parallel they overlap, and a call that is not made cannot stall.
+  // So the page now waits on three levels and makes up to three fewer calls
+  // (the actor lookup and both RPCs): the context above, then everything that
+  // needs only this item's id (the item row among them), then the few reads
+  // that need a field OFF the row. The activity feed's own reference-label
+  // lookups (only when its rows carry references) overlap that third level.
+  //
+  // Starting the id-only reads before the row is known changes nothing about
+  // WHO may see WHAT. Every one runs on the caller's own RLS client, and none
+  // of their results is used until `inventorySvc.get` has returned the row,
+  // which is where not-found and the warehouse-access check live: when it
+  // throws, the page is notFound() (or the error) and those results are
+  // dropped unread. The dependent reads further down (category, supplier,
+  // profile, signed photo URLs, market price) only start after it returns.
+  const itemRead = inventorySvc.get(id);
+  const serialsSvc = new SerialsService(ctx);
+  const locationsRead = locationsSvc.list();
+  // Per-location stock levels for the transfer dialog — keeps the dialog's
+  // source list accurate after mig 0192 moved stock out of primary_location_id.
+  const holdingsRead = inventorySvc.placements(id);
+  // Deferred to the Movements/Activity tabs: ActivityService.forItem runs
+  // two base queries plus batched lookups (receipt→PO, reference labels) —
+  // real cost the Overview tab was paying on every load even though it never
+  // renders the feed. Mirrors mobile's item/[id].tsx, which only calls
+  // loadMovements() when its Movements tab is active.
+  const activityRead =
+    activeTab === 'movements' || activeTab === 'activity'
+      ? activitySvc.forItem(id, ITEM_ACTIVITY_PAGE_SIZE)
+      : Promise.resolve<ActivityEvent[]>([]);
+  const imageRowsRead = imagesSvc.list(id);
+  // Per-supplier unit-cost trend from our own PO + receipt data, rendered as a
+  // lazy Recharts island so the server shell never imports Recharts.
+  const costHistoryRead = reportsSvc.itemCostHistory(id);
+  // Org's ACTIVE item custom field definitions — used to render the
+  // defined extra fields with their human labels (not raw jsonb keys).
+  const customFieldDefsRead = customFieldsSvc.listDefinitions('item');
+  // First page of registered serials (+ total). Fail-closed read: an
+  // empty page on error, so the panel degrades instead of the page.
+  const serialsPageRead = serialsSvc.list(id, { page: 1 });
+  // RESERVED, through the accessor that already owns this truth. The audit
+  // found `stock_reservations` live since mig 0073 and read by the orders
+  // catalog, rentals and auto-archive — but nowhere an operator could see
+  // the three numbers together. Reusing reservedQuantityByItemIds rather
+  // than querying here is the point: availability is derived from two
+  // existing facts, and a second query is how the two drift.
+  const reservedRead = inventorySvc.reservedQuantityByItemIds([id]);
+  // When the item row is missing or forbidden, notFound() throws before any
+  // of these is awaited. Mark every rejection observed first, so a read that
+  // fails in that window can never become an unhandled rejection (which takes
+  // the whole function down) instead of the not-found page.
+  for (const read of [
+    locationsRead,
+    holdingsRead,
+    activityRead,
+    imageRowsRead,
+    costHistoryRead,
+    customFieldDefsRead,
+    serialsPageRead,
+    reservedRead,
+  ]) {
+    read.catch(() => {});
+  }
+
   let item;
   try {
-    item = await inventorySvc.get(id);
+    item = await itemRead;
   } catch (e) {
     if (e instanceof ServiceError && e.code === 'not_found') notFound();
     throw e;
   }
 
+  // ── Reads keyed by the row ─────────────────────────────────────────────
   // Targeted by-id fetches for the single category + supplier this item
   // belongs to (used only by .find() lookups below). Locations stays as a
-  // full list because the StockTransferDialog needs every location for
-  // its destination dropdown. Activity + image rows are unrelated and
-  // fan out alongside.
+  // full list (above) because the StockTransferDialog needs every location
+  // for its destination dropdown.
   const categoryIdForFetch = (item.category_id as string | null) ?? null;
   const supplierIdForFetch = (item.supplier_id as string | null) ?? null;
-  const serialsSvc = new SerialsService(ctx);
-  const [categoryRow, supplierRow, locations, holdings, activity, imageRows, costHistory, customFieldDefs, serialsPage, reservedByItem] =
-    await Promise.all([
-      categoryIdForFetch
-        ? ctx.supabase
-            .from('categories')
-            .select('id, name, color, public_visibility')
-            .eq('organization_id', ctx.organizationId)
-            .eq('id', categoryIdForFetch)
-            .maybeSingle()
-            .then((r) => r.data)
-        : Promise.resolve(null),
-      supplierIdForFetch
-        ? ctx.supabase
-            .from('suppliers')
-            .select('id, name')
-            .eq('organization_id', ctx.organizationId)
-            .eq('id', supplierIdForFetch)
-            .maybeSingle()
-            .then((r) => r.data)
-        : Promise.resolve(null),
-      locationsSvc.list(),
-      // Per-location stock levels for the transfer dialog — keeps the dialog's
-      // source list accurate after mig 0192 moved stock out of primary_location_id.
-      inventorySvc.placements(id),
-      // Deferred to the Movements/Activity tabs: ActivityService.forItem runs
-      // two base queries plus several batched lookups (profiles, receipt→PO,
-      // reference labels) — real cost the Overview tab was paying on every
-      // load even though it never renders the feed. Mirrors mobile's
-      // item/[id].tsx, which only calls loadMovements() when its Movements
-      // tab is active.
-      activeTab === 'movements' || activeTab === 'activity'
-        ? activitySvc.forItem(id, ITEM_ACTIVITY_PAGE_SIZE)
-        : Promise.resolve<ActivityEvent[]>([]),
-      imagesSvc.list(id),
-      // Per-supplier unit-cost trend from our own PO + receipt data. Fanned
-      // out alongside the other detail fetches; rendered as a lazy Recharts
-      // island so the server shell never imports Recharts.
-      reportsSvc.itemCostHistory(id),
-      // Org's ACTIVE item custom field definitions — used to render the
-      // defined extra fields with their human labels (not raw jsonb keys).
-      customFieldsSvc.listDefinitions('item'),
-      // First page of registered serials (+ total). Fail-closed read: an
-      // empty page on error, so the panel degrades instead of the page.
-      serialsSvc.list(id, { page: 1 }),
-      // RESERVED, through the accessor that already owns this truth. The audit
-      // found `stock_reservations` live since mig 0073 and read by the orders
-      // catalog, rentals and auto-archive — but nowhere an operator could see
-      // the three numbers together. Reusing reservedQuantityByItemIds rather
-      // than querying here is the point: availability is derived from two
-      // existing facts, and a second query is how the two drift.
-      inventorySvc.reservedQuantityByItemIds([id]),
-    ]);
+  // Last-updated-by footer: the user who last touched the row (if any). RLS
+  // lets org members read user_profiles within their org. It used to be read
+  // on its own after everything else had arrived, one more serial level.
+  const updatedById = (item as { updated_by?: string | null }).updated_by ?? null;
+  const canEditItem = can(ctx, 'items:update');
+  // Serial numbers panel: shown for serial-tracked items, or any item that
+  // already has registry rows (e.g. serials were captured before tracking was
+  // switched off). 'serial_optional' (0295) joins 'serial' here: the item may
+  // legitimately carry serials for only part of its quantity, and the panel
+  // is the only place staff can see or add them.
+  const serialsPanelShown = (serialTotal: number) =>
+    ['serial', 'serial_optional'].includes(
+      (item as { tracking_type?: string | null }).tracking_type ?? 'none',
+    ) || serialTotal > 0;
+
+  // ── Market price panel (Phase 6) ───────────────────────────────────
+  // Fully gated + isolated: only loads/renders when the optional
+  // `price_tracking` module is enabled AND the item is a book with an
+  // ISBN-ish barcode. The latest observation read is wrapped in .catch
+  // so a transient read failure never breaks the detail page. When the
+  // module is off, both `priceTrackingEnabled` is false and `marketPriceObs`
+  // stays null, so nothing renders and behavior is identical to before.
+  //
+  // The module answer comes from the context this render already holds.
+  // `ctx.enabledModules` is the ACCESS rule of lib/modules/effective-modules
+  // (an enabled organization_modules row, or the all-modules comp), which is
+  // exactly what module_enabled() answers since migration 0354 for a member's
+  // own organization, and it is what the sidebar already shows. It used to
+  // cost two module_enabled RPCs here, each one more serial trip. On a failed
+  // modules read the set holds core modules only, so the answer fails closed
+  // exactly as the RPC's did.
+  const itemBarcode = (item.barcode as string | null) ?? null;
+  const priceTrackingEnabled = isModuleEnabled(ctx, 'price_tracking');
+  const showMarketPrice = priceTrackingEnabled && isLikelyIsbn(itemBarcode);
+
+  const [
+    categoryRow,
+    supplierRow,
+    updatedByProfile,
+    locations,
+    holdings,
+    activity,
+    images,
+    costHistory,
+    customFieldDefs,
+    serialsPage,
+    reservedByItem,
+    serialWarehouses,
+    marketPriceObs,
+  ] = await Promise.all([
+    categoryIdForFetch
+      ? ctx.supabase
+          .from('categories')
+          .select('id, name, color, public_visibility')
+          .eq('organization_id', ctx.organizationId)
+          .eq('id', categoryIdForFetch)
+          .maybeSingle()
+          .then((r) => r.data)
+      : Promise.resolve(null),
+    supplierIdForFetch
+      ? ctx.supabase
+          .from('suppliers')
+          .select('id, name')
+          .eq('organization_id', ctx.organizationId)
+          .eq('id', supplierIdForFetch)
+          .maybeSingle()
+          .then((r) => r.data)
+      : Promise.resolve(null),
+    updatedById
+      ? ctx.supabase
+          .from('user_profiles')
+          .select('full_name, email')
+          .eq('id', updatedById)
+          .maybeSingle()
+          .then((r) => r.data as { full_name?: string | null; email?: string | null } | null)
+      : Promise.resolve(null),
+    locationsRead,
+    holdingsRead,
+    activityRead,
+    // Photo URLs are signed only once the row has cleared its access check
+    // (this runs after `get` returned), never for an item the caller may not
+    // see. The rows themselves were read alongside the item.
+    imageRowsRead.then(async (imageRows) => {
+      const signed = await imagesSvc.signedUrls(imageRows.map((r) => r.storage_path as string));
+      return imageRows.map((r) => ({
+        id: r.id as string,
+        url: signed.get(r.storage_path as string) ?? '',
+        isPrimary: Boolean(r.is_primary),
+      }));
+    }),
+    costHistoryRead,
+    customFieldDefsRead,
+    serialsPageRead,
+    reservedRead,
+    // Warehouse names (for the serials Add dialog's destination select) load
+    // only when the panel renders AND the user can edit — a dropdown-weight
+    // query, skipped entirely on non-serial items.
+    serialsPageRead.then((page) =>
+      serialsPanelShown(page.total) && canEditItem
+        ? new WarehousesService(ctx).listNames().catch(() => [])
+        : [],
+    ),
+    showMarketPrice
+      ? PriceTrackingService.forCurrentUser()
+          .then((s) => s.getLatestObservation(item.id as string))
+          .catch(() => null)
+      : Promise.resolve(null),
+  ]);
 
   // Resolve the org's defined custom fields against this item's stored
   // custom_fields. Only fields with a stored, non-empty value are shown so the
@@ -208,12 +334,6 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
       return { def: d, display };
     })
     .filter((f) => f.display !== null);
-  const signed = await imagesSvc.signedUrls(imageRows.map((r) => r.storage_path as string));
-  const images = imageRows.map((r) => ({
-    id: r.id as string,
-    url: signed.get(r.storage_path as string) ?? '',
-    isPrimary: Boolean(r.is_primary),
-  }));
 
   const category = categoryRow ?? null;
   const location = locations.find((l) => l.id === item.primary_location_id);
@@ -222,21 +342,10 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   const value = (item.quantity_on_hand as number) * (item.unit_cost as number);
 
   // ── Last-updated-by footer ──────────────────────────────────────────
-  // Resolve the user who last touched the row (if any). RLS lets org
-  // members read user_profiles within their org, so this single lookup
-  // is safe and cheap.
-  const updatedById = (item as { updated_by?: string | null }).updated_by ?? null;
+  // The profile was read with the other row-keyed reads above.
   const updatedAt = (item as { updated_at?: string | null }).updated_at ?? null;
-  let updatedByName: string | null = null;
-  if (updatedById) {
-    const { data } = await ctx.supabase
-      .from('user_profiles')
-      .select('full_name, email')
-      .eq('id', updatedById)
-      .maybeSingle();
-    const row = data as { full_name?: string | null; email?: string | null } | null;
-    updatedByName = (row?.full_name?.trim() || row?.email?.trim()) ?? null;
-  }
+  const updatedByName: string | null =
+    (updatedByProfile?.full_name?.trim() || updatedByProfile?.email?.trim()) ?? null;
 
   // Filter for the Movements tab — kind === 'movement' from the unified
   // ActivityService feed is exactly the stock_movements rows.
@@ -277,17 +386,20 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // Permission gates for the sticky-header action row. Viewers see the
   // detail page (read-only) but no Edit / Adjust / Transfer buttons.
   // Server-layer assertPermission still throws if a request somehow
-  // bypasses this — these flags just hide the UI surfaces.
-  const canEditItem = can(ctx, 'items:update');
+  // bypasses this — these flags just hide the UI surfaces. `canEditItem` is
+  // derived above, where the serials panel's warehouse read needs it.
   const canDuplicateItem = can(ctx, 'items:create');
   const canAdjustStock = can(ctx, 'stock:adjust');
   const canTransferStock = can(ctx, 'stock:transfer');
-  // "Report a problem" launch point (Task 17, master brief §8) — same
-  // sync-gate-first shape as priceTrackingEnabled below: the module RPC is
-  // only paid for a viewer who could actually use the button. This route
+  // "Report a problem" launch point (Task 17, master brief §8). Permission
+  // first, then the module: a viewer who could not use the button is
+  // reported the module as off. The module answer is `ctx.enabledModules`,
+  // like price_tracking above (it used to be a module_enabled RPC). This route
   // covers items, books, AND rental-items (all three wrapping pages render
   // this same ItemDetail), so the button always prefills relatedItemId.
   const canReportProblem = can(ctx, 'maintenance_requests:submit');
+  const maintenanceRequestsEnabled =
+    canReportProblem && isModuleEnabled(ctx, 'maintenance_requests');
   // Add/edit the free-text note on a movement row in the Movements/Activity
   // feed (managers+, or anyone granted the FULLY_GRANTABLE permission). The
   // server action + SECURITY DEFINER RPC re-gate; this only shows the affordance.
@@ -317,41 +429,8 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
     (item as { public_display_name?: string | null }).public_display_name?.trim() || null;
 
   // ── Serial numbers panel ───────────────────────────────────────────
-  // Shown for serial-tracked items, or any item that already has registry
-  // rows (e.g. serials were captured before tracking was switched off).
-  // Warehouse names (for the Add dialog's destination select) load only
-  // when the panel renders AND the user can edit — a dropdown-weight
-  // query, skipped entirely on non-serial items.
-  // 'serial_optional' (0295) joins 'serial' here: the item may legitimately
-  // carry serials for only part of its quantity, and the panel is the only
-  // place staff can see or add them.
-  const showSerialsPanel =
-    ['serial', 'serial_optional'].includes(
-      (item as { tracking_type?: string | null }).tracking_type ?? 'none',
-    ) || serialsPage.total > 0;
-  const serialWarehouses =
-    showSerialsPanel && canEditItem
-      ? await new WarehousesService(ctx).listNames().catch(() => [])
-      : [];
-
-  // ── Market price panel (Phase 6) ───────────────────────────────────
-  // Fully gated + isolated: only loads/renders when the optional
-  // `price_tracking` module is enabled AND the item is a book with an
-  // ISBN-ish barcode. The latest observation read is wrapped in .catch
-  // so a transient read failure never breaks the detail page. When the
-  // module is off, both `priceTrackingEnabled` is false and `marketPriceObs`
-  // stays null, so nothing renders and behavior is identical to before.
-  const itemBarcode = (item.barcode as string | null) ?? null;
-  const { enabled: priceTrackingEnabled } = await checkModuleAccess('price_tracking');
-  const showMarketPrice = priceTrackingEnabled && isLikelyIsbn(itemBarcode);
-  const { enabled: maintenanceRequestsEnabled } = canReportProblem
-    ? await checkModuleAccess('maintenance_requests')
-    : { enabled: false };
-  const marketPriceObs = showMarketPrice
-    ? await PriceTrackingService.forCurrentUser()
-        .then((s) => s.getLatestObservation(item.id as string))
-        .catch(() => null)
-    : null;
+  // (rule and warehouse-name read: see `serialsPanelShown` above)
+  const showSerialsPanel = serialsPanelShown(serialsPage.total);
 
   return (
     <div className="container mx-auto max-w-5xl px-4 pb-6 sm:px-6 sm:pb-8">

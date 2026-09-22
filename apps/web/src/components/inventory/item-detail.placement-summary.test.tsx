@@ -68,30 +68,33 @@ vi.mock('@/components/maintenance/report-problem-button', () => ({
   ReportProblemButton: () => null,
 }));
 
-vi.mock('@/server/services/context', () => ({
-  ServiceError: class ServiceError extends Error {
-    constructor(
-      public code: string,
-      message: string,
-    ) {
-      super(message);
-      this.name = 'ServiceError';
-    }
-  },
-  withContext: vi.fn(async () => ({
-    organizationId: 'org-1',
-    userId: 'u1',
-    role: 'staff' as const,
-    permissions: new Set<string>(),
-    mfaRequired: false,
-    mfaSatisfied: true,
-    supabase: {},
-  })),
-}));
-
-vi.mock('@/lib/modules/module-gate', () => ({
-  checkModuleAccess: vi.fn(async () => ({ enabled: false, canManage: false })),
-}));
+vi.mock('@/server/services/context', async (importOriginal) => {
+  // The REAL module rule, so the price_tracking panel stays off exactly as a
+  // core-only organization would see it.
+  const actual = await importOriginal<typeof import('@/server/services/context')>();
+  return {
+    ServiceError: class ServiceError extends Error {
+      constructor(
+        public code: string,
+        message: string,
+      ) {
+        super(message);
+        this.name = 'ServiceError';
+      }
+    },
+    isModuleEnabled: actual.isModuleEnabled,
+    withContext: vi.fn(async () => ({
+      organizationId: 'org-1',
+      userId: 'u1',
+      role: 'staff' as const,
+      permissions: new Set<string>(),
+      mfaRequired: false,
+      mfaSatisfied: true,
+      enabledModules: new Set<string>(),
+      supabase: {},
+    })),
+  };
+});
 
 const inventoryGet = vi.fn();
 const inventoryPlacements = vi.fn(async () => [] as unknown[]);
