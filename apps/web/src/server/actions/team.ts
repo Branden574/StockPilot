@@ -354,7 +354,11 @@ export async function transferOwnershipAction(input: {
 
     // AAL2 step-up. If caller has any verified factor, they must have
     // completed the MFA challenge this session.
-    const { data: factorsData } = await ctx.supabase.auth.mfa.listFactors();
+    const { data: factorsData, error: factorsError } = await ctx.supabase.auth.mfa.listFactors();
+    // Unreadable is not "not enrolled": refuse rather than skip the step-up.
+    if (factorsError) {
+      return err('internal_error', 'Could not check your two-factor status. Please try again.');
+    }
     const hasVerifiedFactor = (factorsData?.totp ?? []).some(
       (f) => f.status === 'verified',
     );

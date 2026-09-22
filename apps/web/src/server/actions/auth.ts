@@ -616,7 +616,11 @@ export async function changePasswordAction(
   // For MFA-enabled accounts, Supabase requires AAL2 on the SSR session
   // to update the password. Surface a clearer error than the generic
   // updateUser() one if the user's session somehow isn't at AAL2.
-  const { data: factorsData } = await supabase.auth.mfa.listFactors();
+  const { data: factorsData, error: factorsError } = await supabase.auth.mfa.listFactors();
+  // Unreadable is not "not enrolled": refuse rather than skip the AAL2 check.
+  if (factorsError) {
+    return err('internal_error', 'Could not check your two-factor status. Please try again.');
+  }
   const hasVerifiedMfa = (factorsData?.totp ?? []).some(
     (f) => f.status === 'verified',
   );

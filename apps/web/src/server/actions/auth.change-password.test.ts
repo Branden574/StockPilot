@@ -160,6 +160,14 @@ describe('changePasswordAction — account status', () => {
     expect(updateUser).not.toHaveBeenCalled();
   });
 
+  it('refuses when the factor list cannot be read, instead of skipping the AAL2 check', async () => {
+    listFactors.mockResolvedValue({ data: null, error: { name: 'AuthRetryableFetchError', message: 'x' } });
+    const res = await changePasswordAction(INPUT);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe('internal_error');
+    expect(updateUser).not.toHaveBeenCalled();
+  });
+
   it('still lets an ACTIVE account change its password', async () => {
     const res = await changePasswordAction(INPUT);
 

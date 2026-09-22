@@ -87,6 +87,16 @@ describe('requestEmailChangeAction — identity funnel', () => {
     expect(requestEmailChange).not.toHaveBeenCalled();
   });
 
+  it('fails CLOSED when the factor list cannot be read — never as "not enrolled"', async () => {
+    // auth-js RESOLVES a GoTrue failure as { data: null, error }. Reading that
+    // as "no verified factor" dropped the step-up an enrolled account needs.
+    listFactors.mockResolvedValue({ data: null, error: { name: 'AuthRetryableFetchError', message: 'x' } });
+    const res = await requestEmailChangeAction(INPUT);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe('internal_error');
+    expect(requestEmailChange).not.toHaveBeenCalled();
+  });
+
   it('passes the session MFA posture to the service (enrolled + AAL2)', async () => {
     listFactors.mockResolvedValue({ data: { totp: [{ status: 'verified' }] } });
     getAuthenticatorAssuranceLevel.mockResolvedValue({ data: { currentLevel: 'aal2' } });

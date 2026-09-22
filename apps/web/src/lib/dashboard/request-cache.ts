@@ -113,9 +113,23 @@ export interface MfaFactor {
   status: string;
 }
 
+/**
+ * The signed-in user's MFA factors. THROWS when they cannot be read.
+ *
+ * `listFactors()` goes through GoTrue (`getUser`), and auth-js RESOLVES a
+ * failure as `{ data: null, error }` rather than throwing. This used to read
+ * that as `[]`: "no verified factor". An enrolled user then skipped the
+ * dashboard layout's AAL2 gate, and `resolveMfaState` skipped the
+ * enrollment escalation (HI-6), under an 'optional' policy, for as long as
+ * GoTrue was failing. An unreadable authorization input must deny, so this
+ * throws: `resolveMfaState` catches and fails closed (MFA required, not
+ * satisfied), and the layout shows its error screen rather than a
+ * dashboard without its gate. Same contract as getOrgRowForRequest above.
+ */
 export const getMfaFactorsForRequest = cache(async (): Promise<MfaFactor[]> => {
   const supabase = await createClient();
   const res = await supabase.auth.mfa.listFactors();
+  if (res.error) throw new Error(`getMfaFactorsForRequest: ${res.error.name || 'unreadable'}`);
   return (res.data?.all ?? []) as MfaFactor[];
 });
 
