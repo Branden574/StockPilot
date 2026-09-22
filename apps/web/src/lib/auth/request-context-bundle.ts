@@ -3,10 +3,12 @@ import 'server-only';
 import { cache } from 'react';
 import { headers } from 'next/headers';
 
+import type { OrgRow } from '@/lib/dashboard/request-cache';
+import { effectiveModules } from '@/lib/modules/effective-modules';
 import { SESSION_HEADER_USER_ID } from '@/lib/supabase/middleware';
 import { createClient } from '@/lib/supabase/server';
 
-import type { PermissionOverride, Role } from '@stockpilot/core';
+import type { ModuleId, PermissionOverride, Role } from '@stockpilot/core';
 
 /**
  * The request context in ONE Supabase round trip (`get_request_context()`,
@@ -243,4 +245,82 @@ export function bundleMembership(
   organizationId: string,
 ): BundleMembership | null {
   return bundle?.memberships.find((m) => m.organization_id === organizationId) ?? null;
+}
+
+/**
+ * The organization settings row (`OrgRow`) a membership carries, or null when
+ * the caller's RLS hid the organization (the caller then takes the legacy read,
+ * which is where "hidden" and "failed" are told apart). The ONE conversion: the
+ * request-cached readers and `withContext()` both use it, so the two can never
+ * disagree about what the bundle said.
+ */
+export function orgRowFromMembership(held: BundleMembership | null): OrgRow | null {
+  const o = held?.organization;
+  if (!o) return null;
+  return {
+    terminology: o.terminology,
+    mfa_policy: o.mfa_policy,
+    logo_url: o.logo_url,
+    timezone: o.timezone,
+    nav_overrides: o.nav_overrides,
+    dashboard_layout: o.dashboard_layout,
+    order_status_config: o.order_status_config,
+    all_modules_comp: o.all_modules_comp,
+  };
+}
+
+/**
+ * The effective module set a membership carries, through the same
+ * `effectiveModules` rule every resolver uses. null under the same condition as
+ * `orgRowFromMembership`: without the organization row there is no comp flag,
+ * and a module set built without it would be a guess.
+ */
+export function modulesFromMembership(held: BundleMembership | null): Set<ModuleId> | null {
+  if (!held?.organization) return null;
+  return effectiveModules(
+    held.enabled_modules.map((module_id) => ({ module_id })),
+    held.organization.all_modules_comp,
+  );
+}
+
+// ─── Carrying the membership on the context it produced ─────────────────────
+//
+// WHY. `cache()` does not memoize inside a Server Action (see "Not a cache"
+// above), so every request-cached helper an action reaches asks
+// get_request_context() AGAIN. `withContext()` reached three of them
+// (requireOrgContext, getOrgRowForRequest, getModulesForRequest): three RPCs
+// per action, each its own snapshot, and each a fresh chance at the 1 to 8 s
+// stall measured at Supabase's entry point on 2026-09-22 (3 to 5% of weekday
+// calls). The membership that answered requireOrgContext() already holds the
+// org row and the modules, so it travels on the OrgContext it produced and
+// withContext() reads them from there.
+//
+// A symbol, not a field, and not enumerable: an OrgContext is a plain object
+// every page and layout holds, and this row (override lists, module ids) must
+// never be serialized into a client component's props by a page that passes the
+// context along. A spread or copy of the context drops it, and a context without
+// it takes the request-cached readers exactly as before, so losing it is only
+// slower, never wrong. Nothing here outlives the object it is attached to: it
+// is not a cache, and no other request can reach it.
+const HELD_MEMBERSHIP = Symbol('stockpilot.heldMembership');
+
+/** Attaches the membership `ctx` was resolved from. A null membership attaches nothing. */
+export function holdMembership<T extends object>(ctx: T, held: BundleMembership | null): T {
+  if (held) {
+    Object.defineProperty(ctx, HELD_MEMBERSHIP, { value: held, enumerable: false });
+  }
+  return ctx;
+}
+
+/**
+ * The membership `ctx` was resolved from, ONLY when it is for the organization
+ * and role `ctx` carries. Anything else (none attached, a context rebuilt for
+ * another organization, a role that disagrees) returns null, and the caller asks
+ * the database as it always did.
+ */
+export function heldMembership(ctx: { organizationId: string; role: Role }): BundleMembership | null {
+  const held = (ctx as { [HELD_MEMBERSHIP]?: BundleMembership })[HELD_MEMBERSHIP];
+  if (!held) return null;
+  if (held.organization_id !== ctx.organizationId || held.role !== ctx.role) return null;
+  return held;
 }

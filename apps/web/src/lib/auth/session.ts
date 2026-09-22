@@ -7,6 +7,7 @@ import { SESSION_HEADER_USER_EMAIL, SESSION_HEADER_USER_ID } from '@/lib/supabas
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
 import {
   bundleMembership,
+  holdMembership,
   loadRequestContextBundle,
   type RequestContextBundle,
 } from '@/lib/auth/request-context-bundle';
@@ -320,13 +321,18 @@ export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContex
     if (bundle) {
       const held = bundleMembership(bundle, orgId);
       if (!held) redirect('/onboarding');
-      return {
-        ...session,
-        organizationId: orgId,
-        organizationName: held.organization?.name ?? 'Workspace',
-        role: held.role,
-        permissions: await resolvePermissions(bundle, orgId, session.userId, held.role),
-      };
+      // Carried on the context so withContext() takes the org row and modules
+      // from this same membership instead of asking again (see holdMembership).
+      return holdMembership(
+        {
+          ...session,
+          organizationId: orgId,
+          organizationName: held.organization?.name ?? 'Workspace',
+          role: held.role,
+          permissions: await resolvePermissions(bundle, orgId, session.userId, held.role),
+        },
+        held,
+      );
     }
     const supabase = await createClient();
     const { data: member } = await supabase
@@ -351,13 +357,18 @@ export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContex
 
   if (!orgRole) redirect('/onboarding');
 
-  return {
-    ...session,
-    organizationId: targetOrgId,
-    organizationName: orgName ?? 'Workspace',
-    role: orgRole,
-    permissions: await resolvePermissions(bundle, targetOrgId, session.userId, orgRole),
-  };
+  // Legacy reads (no bundle) attach nothing, and withContext() then reads the
+  // org row and modules the way it always has.
+  return holdMembership(
+    {
+      ...session,
+      organizationId: targetOrgId,
+      organizationName: orgName ?? 'Workspace',
+      role: orgRole,
+      permissions: await resolvePermissions(bundle, targetOrgId, session.userId, orgRole),
+    },
+    bundleMembership(bundle, targetOrgId),
+  );
 });
 
 /**

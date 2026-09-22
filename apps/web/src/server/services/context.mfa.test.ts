@@ -258,6 +258,133 @@ describe('withContext / resolveMfaState — fail-closed MFA gate', () => {
   });
 });
 
+/**
+ * The GoTrue factor read OVERLAPS the org-context read (2026-09-22). It used to
+ * start only after get_request_context() answered, which put two Supabase calls
+ * in series ahead of every page and action. Overlapping them must not cost the
+ * fail-closed outcome, and the early start must never leave a rejection nobody
+ * observes (requireOrgContext can redirect and abandon it).
+ */
+describe('withContext — the factor read starts before the context resolves', () => {
+  /** requireOrgContext stays PENDING until the test releases it. */
+  function holdContext(organizationId: string, role: 'admin' | 'staff' = 'admin') {
+    let release!: () => void;
+    let fail!: (e: Error) => void;
+    vi.mocked(requireOrgContext).mockImplementation(
+      () =>
+        new Promise((resolve, reject) => {
+          release = () =>
+            resolve({
+              userId: 'u-1',
+              email: 'u@example.com',
+              fullName: null,
+              avatarUrl: null,
+              defaultOrganizationId: organizationId,
+              organizationId,
+              organizationName: 'Acme',
+              role,
+            });
+          fail = reject;
+        }),
+    );
+    return { release: () => release(), fail: (e: Error) => fail(e) };
+  }
+
+  /**
+   * A factor read that fails, returned in a form the mock itself does not
+   * observe. Under vi.fn, tinyspy attaches its own handlers to any Promise a
+   * mock returns (mock.settledResults), which would hide exactly the unobserved
+   * rejection these tests look for. A bare thenable is left alone, so the only
+   * promise in play is the one withContext() makes from it.
+   */
+  function failedFactorRead(message: string): Promise<never> {
+    const thenable = {
+      then: (ok?: (v: never) => unknown, fail?: (e: unknown) => unknown) =>
+        Promise.reject(new Error(message)).then(ok, fail),
+    };
+    return thenable as unknown as Promise<never>;
+  }
+
+  /** Collects rejections Node reports as unhandled while `run` executes. */
+  async function unhandledDuring(run: () => Promise<void>): Promise<unknown[]> {
+    const seen: unknown[] = [];
+    const onUnhandled = (reason: unknown) => seen.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      await run();
+      // Node reports an unhandled rejection after the microtask queue drains.
+      await new Promise((r) => setTimeout(r, 10));
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+    return seen;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    aalCalls = 0;
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('the factor read is already in flight while requireOrgContext() is still pending', async () => {
+    const organizationId = arrange({ policy: 'optional', verifiedFactor: false, aal: 'aal1' });
+    const context = holdContext(organizationId);
+    const pending = withContext();
+    await Promise.resolve();
+    expect(requireOrgContext).toHaveBeenCalledTimes(1);
+    // Started BEFORE the context answered, not after it.
+    expect(getMfaFactorsForRequest).toHaveBeenCalledTimes(1);
+    context.release();
+    const ctx = await pending;
+    // The SAME read fed the gate: no second GoTrue call once the context was in
+    // hand (cache() would not have deduped one inside a Server Action).
+    expect(getMfaFactorsForRequest).toHaveBeenCalledTimes(1);
+    expect(ctx.mfaRequired).toBe(false);
+    expect(ctx.mfaSatisfied).toBe(true);
+  });
+
+  it('a factor read that FAILS before the context resolves still fails closed, even at AAL2, and nothing is left unhandled', async () => {
+    const organizationId = arrange({ policy: 'optional', verifiedFactor: true, aal: 'aal2' });
+    vi.mocked(getMfaFactorsForRequest).mockImplementation(() =>
+      failedFactorRead('getMfaFactorsForRequest: AuthRetryableFetchError'),
+    );
+    const context = holdContext(organizationId);
+    let ctx: Awaited<ReturnType<typeof withContext>> | null = null;
+    const unhandled = await unhandledDuring(async () => {
+      const pending = withContext();
+      // Let the rejection settle while the context is still pending: the moment
+      // an unobserved early promise would be reported.
+      await new Promise((r) => setTimeout(r, 10));
+      context.release();
+      ctx = await pending;
+    });
+    expect(unhandled).toEqual([]);
+    expect(ctx!.mfaRequired).toBe(true);
+    expect(ctx!.mfaSatisfied).toBe(false);
+    expect(ctx!.mfaEnrolled).toBe(false);
+    // Fail-closed without spending the AAL round trip on an unknown enrollment.
+    expect(aalCalls).toBe(0);
+  });
+
+  it('a context that REDIRECTS leaves the abandoned factor read observed, not unhandled', async () => {
+    const organizationId = arrange({ policy: 'optional', verifiedFactor: false, aal: 'aal1' });
+    vi.mocked(getMfaFactorsForRequest).mockImplementation(() =>
+      failedFactorRead('getMfaFactorsForRequest: AuthSessionMissingError'),
+    );
+    const context = holdContext(organizationId);
+    let thrown: unknown = null;
+    const unhandled = await unhandledDuring(async () => {
+      const pending = withContext();
+      context.fail(new Error('NEXT_REDIRECT:/signin'));
+      await pending.catch((e) => {
+        thrown = e;
+      });
+    });
+    expect((thrown as Error | null)?.message).toBe('NEXT_REDIRECT:/signin');
+    expect(unhandled).toEqual([]);
+  });
+});
+
 describe('assertPermission — MFA gate error shape', () => {
   it('ENROLLED + unsatisfied throws reason=aal2_required (the shape useStepUp consumes)', async () => {
     arrange({ policy: 'optional', verifiedFactor: true, aal: 'aal1' });

@@ -3,12 +3,19 @@ import 'server-only';
 import { cache } from 'react';
 
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
+import {
+  heldMembership,
+  modulesFromMembership,
+  orgRowFromMembership,
+} from '@/lib/auth/request-context-bundle';
 import { requireOrgContext } from '@/lib/auth/session';
 import { PLACEMENT_KINDS, PLACEMENT_TYPES, SYSTEM_KINDS } from '@/lib/locations/groups';
 import {
   getMfaFactorsForRequest,
   getModulesForRequest,
   getOrgRowForRequest,
+  type MfaFactor,
+  type OrgRow,
 } from '@/lib/dashboard/request-cache';
 import { createClient } from '@/lib/supabase/server';
 
@@ -67,18 +74,39 @@ export interface ServiceContext {
    * enabled even if absent.
    */
   enabledModules: Set<ModuleId>;
+  /**
+   * Set by `withContext()` alone: the cookie-bound client it created for this
+   * request, i.e. the same session the request-cached readers in
+   * lib/dashboard/request-cache query with. `getWarehouseAccess` shares those
+   * cached reads only while `supabase` IS this client. A Bearer, service-role
+   * or synthetic context never sets it and keeps querying with its own client,
+   * because the cookie client is anon on a cookie-less request (the 2026-07-20
+   * fix, a6a5e10b: every warehouse-scoped mobile user read as unassigned).
+   */
+  cookieClient?: Awaited<ReturnType<typeof createClient>>;
 }
 
+/**
+ * The MFA gate inputs, taken as reads the caller has ALREADY STARTED.
+ *
+ * `factorsRead` is a promise rather than a call on purpose. React `cache()` does
+ * not memoize inside a Server Action or a Route Handler, so calling
+ * getMfaFactorsForRequest() here again would be a second GoTrue round trip, not
+ * the one withContext() started before the org context resolved. Both reads are
+ * awaited inside the try: either one failing lands in the catch and fails closed.
+ */
 async function resolveMfaState(
   supabase: Awaited<ReturnType<typeof createClient>>,
-  organizationId: string,
   role: Role,
+  readOrgRow: () => OrgRow | null | Promise<OrgRow | null>,
+  factorsRead: Promise<MfaFactor[]>,
 ): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean }> {
   try {
-    // DEDUPE: the org row (incl. mfa_policy) was already fetched by the
-    // dashboard layout via this request-cached helper — reuse it instead of
-    // issuing a second `organizations` SELECT for the same row.
-    const org = await getOrgRowForRequest(organizationId);
+    // The org row (incl. mfa_policy) comes from the membership that resolved the
+    // context when it can, else from the request-cached helper the dashboard
+    // layout shares. The factor list has been in flight since before the
+    // context resolved (see withContext).
+    const [org, factors] = await Promise.all([readOrgRow(), factorsRead]);
     // A row this member cannot read is held to the STRICTEST policy, never
     // 'optional' (see lib/auth/mfa-policy.ts). A read ERROR already threw above.
     const policy = enforcedMfaPolicy(org);
@@ -89,9 +117,8 @@ async function resolveMfaState(
     // satisfy it regardless of org policy. Without this, org policy alone
     // drove enforcement, so an attacker holding only the password of a
     // TOTP-enrolled user signed in at AAL1 untouched under the default
-    // 'optional' policy. The factor list is request-cached (the layout
-    // already loaded it), so this adds no round-trip.
-    const factors = await getMfaFactorsForRequest();
+    // 'optional' policy. An UNREADABLE list rejects (getMfaFactorsForRequest
+    // throws, #229) and lands in the catch below: never "not enrolled".
     const hasVerifiedFactor = factors.some((f) => f.status === 'verified');
     const mfaRequired = policyRequired || hasVerifiedFactor;
     if (!mfaRequired) {
@@ -114,8 +141,8 @@ async function resolveMfaState(
     };
   } catch (err) {
     // Fail CLOSED — assume MFA is required and unsatisfied. A flaky
-    // org lookup must NOT silently let an admin bypass MFA. The user
-    // sees a clear "MFA required" error instead of silent bypass;
+    // org lookup or factor list must NOT silently let an admin bypass MFA.
+    // The user sees a clear "MFA required" error instead of silent bypass;
     // matches enterprise expectations from the org MFA policy.
     console.error('[resolveMfaState] failed:', err);
     return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false };
@@ -124,17 +151,47 @@ async function resolveMfaState(
 
 export const withContext = cache(async (): Promise<ServiceContext> => {
   const startMs = performance.now();
+  // STARTED BEFORE THE CONTEXT RESOLVES. The factor list is a GoTrue
+  // /auth/v1/user round trip that needs nothing from the org context, and it
+  // used to wait for get_request_context() to answer first: two Supabase
+  // calls in series on every page and action. Calls from Vercel to Supabase
+  // stall for 1 to 8 s at Supabase's entry point on 3 to 5% of weekday calls
+  // (logs, 2026-09-22; Postgres itself is fast). In series a request waited
+  // for the SUM of the two calls, stalls included; overlapped it waits for the
+  // slower one.
+  //
+  // The rejection is observed HERE, at creation: requireOrgContext() can
+  // redirect (signed out, disabled, no organization) and leave this promise
+  // behind, and an unobserved rejection would surface as an unhandled one.
+  // Observing it does not swallow it: resolveMfaState awaits the SAME promise
+  // and fails closed on it. Promise.resolve() because a stubbed reader need
+  // not return a promise.
+  const factorsRead = Promise.resolve(getMfaFactorsForRequest());
+  factorsRead.catch(() => {});
   const ctx = await requireOrgContext();
   const supabase = await createClient();
+  // ONE get_request_context() PER ACTION. The membership that just resolved
+  // the context already holds the org row and the module set. Asking the
+  // request-cached helpers instead re-ran the RPC twice more inside every
+  // Server Action (cache() does not memoize there): three RPCs and three
+  // snapshots per action. Same rows, same snapshot, same rules: the helpers
+  // below use the SAME conversions, and they still answer whenever the
+  // membership is not held (legacy reads, a hidden organization row).
+  const held = heldMembership(ctx);
   // PARALLELIZE: the MFA-state resolution and the enabled-modules read are
   // independent. Run them concurrently instead of sequentially. The modules
-  // read goes through the request-cached `getModulesForRequest` so the
-  // dashboard layout and `withContext` share ONE `organization_modules`
+  // read, when not held, goes through the request-cached `getModulesForRequest`
+  // so the dashboard layout and `withContext` share ONE `organization_modules`
   // round-trip per render (it also absorbs/logs query errors, returning an
   // empty set = core-only nav, never a wider entitlement than the org has).
   const [{ mfaRequired, mfaSatisfied, mfaEnrolled }, enabledModules] = await Promise.all([
-    resolveMfaState(supabase, ctx.organizationId, ctx.role),
-    getModulesForRequest(ctx.organizationId),
+    resolveMfaState(
+      supabase,
+      ctx.role,
+      () => orgRowFromMembership(held) ?? getOrgRowForRequest(ctx.organizationId),
+      factorsRead,
+    ),
+    modulesFromMembership(held) ?? getModulesForRequest(ctx.organizationId),
   ]);
   logContextTiming('withContext', startMs);
   return {
@@ -147,6 +204,7 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
     mfaSatisfied,
     mfaEnrolled,
     enabledModules,
+    cookieClient: supabase,
   };
 });
 

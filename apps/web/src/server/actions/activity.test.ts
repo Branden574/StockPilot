@@ -38,6 +38,8 @@ vi.mock('@/server/services/context', async () => {
   };
 });
 
+import { withContext } from '@/server/services/context';
+
 import { loadOlderItemActivityAction } from './activity';
 
 const ITEM_ID = '11111111-1111-1111-1111-111111111111';
@@ -316,6 +318,28 @@ describe('loadOlderItemActivityAction', () => {
       expect(result.data.events).toHaveLength(1);
       expect(result.data.events[0]!.id).toBe('m:m-tx');
     }
+  });
+
+  // React cache() does not memoize inside a Server Action, so every
+  // withContext() call here is a full context build: the request-context RPC,
+  // the GoTrue factor read and the rest. The events and the location names
+  // must share ONE, or "Load older" pays for two serial builds (2026-09-22).
+  it('builds the request context ONCE for both the events and the location names', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [movementRow({ id: 'm-tx', movement_type: 'transfer', from_location_id: 'loc-a' })],
+        error: null,
+      },
+      'audit_logs.select': { data: [], error: null },
+      'locations.select': { data: [{ id: 'loc-a', name: 'Rack A1' }], error: null },
+    });
+    stubHolder.stub = stub;
+
+    const result = await loadOlderItemActivityAction({ itemId: ITEM_ID, before: BEFORE });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.locationNames).toEqual({ 'loc-a': 'Rack A1' });
+    expect(stub.fromCalls).toContain('locations');
+    expect(withContext).toHaveBeenCalledTimes(1);
   });
 
   it('skips the locations query entirely when no returned event references a location', async () => {
