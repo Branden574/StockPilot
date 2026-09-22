@@ -39,10 +39,18 @@ import { SuppliersService } from '@/server/services/suppliers';
 import { TagsService } from '@/server/services/tags';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
-import { getWarehousesForRequest, getModulesForRequest } from '@/lib/dashboard/request-cache';
+import {
+  getWarehousesForRequest,
+  getModulesForRequest,
+  readWarehousesForRequest,
+} from '@/lib/dashboard/request-cache';
 import { effectiveNavLabel } from '@/lib/nav-labels';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
-import { buildWarehouseScope, scopedWarehouseMessage } from '@/lib/warehouse-scope';
+import {
+  buildWarehouseScope,
+  scopedWarehouseMessage,
+  type WarehouseScope,
+} from '@/lib/warehouse-scope';
 import { ScopedWarehouseNotice } from '@/components/dashboard/scoped-warehouse-notice';
 import { ClearWarehouseFilterButton } from '@/components/inventory/clear-warehouse-filter-button';
 import { createClient } from '@/lib/supabase/server';
@@ -343,24 +351,21 @@ async function inventoryTableSection({
   // zero-result empty state (mirrors the header's ScopedWarehouseNotice).
   // Manager-and-above are all-access by role — getWarehouseAccess answers
   // hasAllAccess = true for them on this SAME isManagerOrAbove test
-  // (lib/auth/warehouse.ts) — so their note is null without the warehouse
+  // (lib/auth/warehouse.ts) — so their scope is null without the warehouse
   // read this used to await in front of every row read. Staff/viewer (the
   // 0280 all-warehouses flag included) resolve it exactly as before, but
-  // alongside the data path: only an empty state reads it.
-  const scopedNotePromise: Promise<string | null> = isManagerOrAbove(sessionCtx.role as Role)
+  // alongside the data path: only an empty state reads it. The scope, not
+  // just its line, reaches the empty state, so a lookup that FAILED can be
+  // told apart from one that found no warehouse (see inventoryEmptyState).
+  const scopePromise: Promise<WarehouseScope | null> = isManagerOrAbove(sessionCtx.role as Role)
     ? Promise.resolve(null)
-    : getWarehouseAccess().then(async (warehouseAccess) =>
-        warehouseAccess.hasAllAccess
-          ? null
-          : scopedWarehouseMessage(
-              buildWarehouseScope(
-                warehouseAccess,
-                await getWarehousesForRequest(sessionCtx.organizationId),
-              ),
-            ),
-      );
+    : getWarehouseAccess().then(async (warehouseAccess) => {
+        if (warehouseAccess.hasAllAccess) return null;
+        const names = await readWarehousesForRequest(sessionCtx.organizationId);
+        return buildWarehouseScope(warehouseAccess, names.failed ? null : names.rows);
+      });
   // Observed now for the same reason as savedViewsPromise.
-  scopedNotePromise.catch(() => {});
+  scopePromise.catch(() => {});
   // The name of the warehouse the VIEW is narrowed to, when the visitor chose
   // one. The scoped note above covers the other case — a staff/viewer whose ACCESS
   // is narrowed — and is null for anyone with all access, which is exactly the
@@ -508,7 +513,7 @@ async function inventoryTableSection({
   }
 
   if (instantData) {
-    const [savedViews, scopedNote] = await Promise.all([savedViewsPromise, scopedNotePromise]);
+    const [savedViews, scope] = await Promise.all([savedViewsPromise, scopePromise]);
     const { items: instantItems, lookups } = instantData;
     // Sports counting units for whatever groups this dataset touches — ONE
     // batched, module-gated lookup that costs an org with no grouped rows
@@ -530,7 +535,7 @@ async function inventoryTableSection({
       params,
       lifecycleStatus,
       canCreate,
-      scopedNote,
+      scope,
       filteredWarehouseName,
       // Instant mode holds the WHOLE dataset for this warehouse only, so the
       // count of matches elsewhere comes from the server, and only when the
@@ -785,7 +790,7 @@ async function inventoryTableSection({
     };
   }
 
-  const [savedViews, scopedNote] = await Promise.all([savedViewsPromise, scopedNotePromise]);
+  const [savedViews, scope] = await Promise.all([savedViewsPromise, scopePromise]);
   const itemsWithImages = data.items;
   const placementMap = data.placementMap;
 
@@ -830,7 +835,7 @@ async function inventoryTableSection({
     params,
     lifecycleStatus,
     canCreate,
-    scopedNote,
+    scope,
     filteredWarehouseName,
     otherWarehouseMatches:
       data.total === 0 && filteredWarehouseName
@@ -954,7 +959,7 @@ function inventoryEmptyState({
   params,
   lifecycleStatus,
   canCreate,
-  scopedNote,
+  scope,
   filteredWarehouseName,
   otherWarehouseMatches,
 }: {
@@ -962,17 +967,32 @@ function inventoryEmptyState({
   params: InventorySearchParams;
   lifecycleStatus: 'archived' | 'discontinued' | 'all' | 'active';
   canCreate: boolean;
-  /** Warehouse-scoping explanation for staff/viewer (null for all-access
-   *  roles) — appended to every zero-result description so a scoped user
-   *  never mistakes "narrowed to your warehouse" for "the org is empty". */
-  scopedNote?: string | null;
+  /** Warehouse scope for staff/viewer (null for all-access roles). Its line
+   *  is appended to every zero-result description so a scoped user never
+   *  mistakes "narrowed to your warehouse" for "the org is empty". */
+  scope?: WarehouseScope | null;
   /** The warehouse this VIEW is filtered to, when the visitor chose one. */
   filteredWarehouseName?: string | null;
   /** How many rows the same query matches in the OTHER warehouses. */
   otherWarehouseMatches?: number;
 }) {
   if (total !== 0) return null;
-  // BEFORE every other branch: if the only reason this view is empty is the
+  // FIRST: the warehouse access lookup failed. The list is empty BECAUSE of
+  // that (a scoped user with an unreadable answer is narrowed to nothing), so
+  // "No items yet" and "no assigned warehouses" would both be false, and the
+  // second sends the staffer to an admin to fix access that is fine. What
+  // helps is to say it did not load and that a reload retries it.
+  if (scope?.unreadable) {
+    return (
+      <EmptyState
+        icon={Boxes}
+        title="Couldn't load your warehouse access"
+        description="Your items can't be listed without it. Refresh the page to try again."
+      />
+    );
+  }
+  const scopedNote = scope ? scopedWarehouseMessage(scope) : null;
+  // Next, before every other branch: if the only reason this view is empty is the
   // warehouse filter, say so and offer the way out. Without this the page says
   // "no items match" while the item sits in another warehouse, and the phone —
   // which keeps its own warehouse scope — still lists it. The two platforms
