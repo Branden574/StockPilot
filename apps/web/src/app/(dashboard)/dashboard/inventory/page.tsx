@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import { Suspense } from 'react';
 import { Boxes } from 'lucide-react';
 import Link from 'next/link';
 
@@ -10,7 +9,6 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { InventoryTable, type InstantAdoptedPayload } from '@/components/inventory/inventory-table';
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
-import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { Button } from '@/components/ui/button';
 import { can } from '@stockpilot/core';
 import { deriveInstantView, instantStateFromPageParams } from '@/lib/inventory/instant-mode';
@@ -150,9 +148,9 @@ export default async function InventoryPage({
 
   // Chrome-only dependencies: the request-cached auth context (fast — the
   // dashboard layout already resolved it) gates the create/import buttons,
-  // and the rack list feeds the toolbar dropdown. Both are needed to paint
-  // the toolbar synchronously; the heavy item list + trends + images stream
-  // behind <Suspense> below. The heading inherits a per-org nav rename
+  // and the rack list feeds the toolbar dropdown. The item list + trends +
+  // images render in InventoryTableSection below, in the SAME reveal (see the
+  // ONE REVEAL note). The heading inherits a per-org nav rename
   // (Settings → Navigation) off the request-cached org row — no extra fetch.
   //
   // The racks RPC is CHAINED INSIDE the Promise.all (not awaited after it):
@@ -212,14 +210,23 @@ export default async function InventoryPage({
         </div>
       </div>
 
+      {/* ONE REVEAL. The table used to sit in its own <Suspense> under
+          loading.tsx, so React revealed twice: skeleton -> header with an inner
+          table skeleton -> rows. React holds each Suspense reveal until 300 ms
+          after the previous one (react-dom-client FALLBACK_THROTTLE_MS), so
+          rows could not appear before ~skeleton + 600 ms however fast the
+          server was: measured minimum 631-663 ms on Dashboard -> Inventory vs
+          345-379 ms on Orders, which reveals once. loading.tsx's
+          TablePageSkeleton already draws this header and table, so the page
+          now streams as one reveal. Do not re-add a Suspense with a visible
+          fallback here (the dataset adopter's fallback={null} boundary
+          inside the table is fine: it draws nothing). */}
       <div className="mt-8">
-        <Suspense fallback={<TableBodySkeleton rows={10} />}>
-          <InventoryTableSection
-            params={params}
-            lifecycleStatus={lifecycleStatus}
-            itemType={itemType}
-          />
-        </Suspense>
+        <InventoryTableSection
+          params={params}
+          lifecycleStatus={lifecycleStatus}
+          itemType={itemType}
+        />
       </div>
     </div>
   );
