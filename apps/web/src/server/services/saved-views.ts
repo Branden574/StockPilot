@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { isManagerOrAbove, type Role } from '@stockpilot/core';
 
 import { ServiceError, withContext, type ServiceContext } from './context';
 
@@ -122,7 +123,18 @@ export class SavedViewsService {
     // manager, applied by a warehouse-scoped staff). Drop those so the
     // chip never appears for someone who can't use it. Own views are
     // always kept — the user picked their own warehouse.
-    const access = await getWarehouseAccess(this.ctx);
+    //
+    // Manager-and-above skip the access lookup: getWarehouseAccess answers
+    // hasAllAccess = true for them on the SAME isManagerOrAbove(role) test
+    // (lib/auth/warehouse.ts) whatever its read returns, so the filter below
+    // kept every view for them anyway. Called with this ctx, that lookup is a
+    // direct `warehouses` read (a ctx-supplied client bypasses the request
+    // cache), issued only AFTER the saved_views read above: a second serial
+    // Supabase call in front of the Items/Books table on every render.
+    // Staff/viewer (the 0280 all-warehouses flag included) keep the lookup.
+    const access = isManagerOrAbove(this.ctx.role as Role)
+      ? null
+      : await getWarehouseAccess(this.ctx);
     return (data ?? [])
       .map((row) => {
         const r = row as {
@@ -150,6 +162,7 @@ export class SavedViewsService {
         if (v.ownerId === this.ctx.userId) return true;
         const wh = v.state.warehouseId;
         if (!wh) return true;
+        if (!access) return true; // manager-and-above: all access, see above
         return access.hasAllAccess || access.readableIds.includes(wh);
       });
   }
