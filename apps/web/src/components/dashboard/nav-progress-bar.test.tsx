@@ -13,13 +13,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * first frame, not yet" is an exact assertion and not a race.
  */
 
-const { pathnameRef, markNavigationClick, markNavigationFeedback } = vi.hoisted(() => ({
+const { pathnameRef, searchRef, markNavigationClick, markNavigationFeedback } = vi.hoisted(() => ({
   pathnameRef: { value: '/dashboard' },
+  searchRef: { value: '' },
   markNavigationClick: vi.fn(),
   markNavigationFeedback: vi.fn(),
 }));
 
-vi.mock('next/navigation', () => ({ usePathname: () => pathnameRef.value }));
+vi.mock('next/navigation', () => ({
+  usePathname: () => pathnameRef.value,
+  useSearchParams: () => new URLSearchParams(searchRef.value),
+}));
 vi.mock('@/lib/perf/marks', () => ({ markNavigationClick, markNavigationFeedback }));
 
 import { NavProgressBar } from './nav-progress-bar';
@@ -57,6 +61,7 @@ beforeEach(() => {
   frames = new Map();
   nextHandle = 1;
   pathnameRef.value = '/dashboard';
+  searchRef.value = '';
   window.history.replaceState(null, '', '/dashboard');
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
     const handle = nextHandle;
@@ -177,5 +182,115 @@ describe('<NavProgressBar /> performance marks', () => {
     frame();
     // marks.ts keeps the first feedback per click; this component asks once per bar.
     expect(markNavigationFeedback).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Query-only navigations (owner report 2026-09-22: an item tab click showed
+ * nothing for 3.6-6.6 s, because the bar skipped every same-PATH click). The
+ * bar now covers them, one task after the click and only if the URL has not
+ * moved by then (the Inventory table's instant mode answers some of these in
+ * place), and without performance marks (a query change never remounts the
+ * page's content, so no "useful" mark would ever close the click).
+ */
+describe('<NavProgressBar /> query-only navigations', () => {
+  const ITEM = '/dashboard/inventory/abc';
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    pathnameRef.value = ITEM;
+    window.history.replaceState(null, '', ITEM);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Runs the task queued by the click (the deferred start). */
+  function nextTask(): void {
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+  }
+
+  function climbing(): boolean {
+    return bar()?.firstElementChild?.className.includes('nav-progress-climb') ?? false;
+  }
+
+  it('starts the bar for a query-only change (an item tab) and completes it when the query moves', () => {
+    const { rerender } = render(<NavProgressBar />);
+    fireEvent.click(link(`${ITEM}?tab=movements`));
+    nextTask();
+    expect(climbing()).toBe(true);
+
+    // The server answered: the router commits the new query.
+    window.history.replaceState(null, '', `${ITEM}?tab=movements`);
+    searchRef.value = 'tab=movements';
+    rerender(<NavProgressBar />);
+    expect(bar()?.firstElementChild?.className).toContain('nav-progress-complete');
+  });
+
+  it('marks neither a click nor feedback for it', () => {
+    render(<NavProgressBar />);
+    fireEvent.click(link(`${ITEM}?tab=activity`));
+    nextTask();
+    expect(climbing()).toBe(true);
+    expect(frames.size).toBe(0);
+    frame();
+    frame();
+    expect(markNavigationClick).not.toHaveBeenCalled();
+    expect(markNavigationFeedback).not.toHaveBeenCalled();
+  });
+
+  it('shows no bar when the click was answered in place (instant mode pushState in the click handler)', () => {
+    render(<NavProgressBar />);
+    const a = link(`${ITEM}?page=2`);
+    a.addEventListener('click', () => window.history.pushState(null, '', `${ITEM}?page=2`));
+    fireEvent.click(a);
+    nextTask();
+    expect(bar()).toBeNull();
+  });
+
+  it.each([
+    ['the exact URL on screen (the selected tab)', '?tab=movements', '?tab=movements'],
+    ['the same params spelled differently', '?q=acme+widget', '?q=acme%20widget'],
+  ])('does nothing for a link to %s', (_label, onScreen, href) => {
+    window.history.replaceState(null, '', `${ITEM}${onScreen}`);
+    searchRef.value = onScreen.slice(1);
+    render(<NavProgressBar />);
+    fireEvent.click(link(`${ITEM}${href}`));
+    nextTask();
+    expect(bar()).toBeNull();
+  });
+
+  it('a path click right after a query-only click wins: it is marked and starts the bar at once', () => {
+    render(<NavProgressBar />);
+    fireEvent.click(link(`${ITEM}?tab=movements`));
+    fireEvent.click(link('/dashboard/orders'));
+    expect(climbing()).toBe(true);
+    expect(markNavigationClick).toHaveBeenCalledTimes(1);
+    expect(markNavigationClick.mock.calls[0]?.[0]).toBe('/dashboard/orders');
+    nextTask();
+    frame();
+    frame();
+    expect(markNavigationFeedback).toHaveBeenCalledTimes(1);
+  });
+
+  it('still gives up after 8 s when a query-only navigation never lands', () => {
+    render(<NavProgressBar />);
+    fireEvent.click(link(`${ITEM}?tab=movements`));
+    nextTask();
+    expect(climbing()).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(8001);
+    });
+    expect(bar()).toBeNull();
+  });
+
+  it('a deferred start never fires after the bar has unmounted', () => {
+    const view = render(<NavProgressBar />);
+    fireEvent.click(link(`${ITEM}?tab=movements`));
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
