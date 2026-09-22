@@ -11,6 +11,7 @@ vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => makeSupabaseSt
 
 import { OrderRequestsService } from './order-requests';
 import { audit } from './audit';
+import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 /**
  * SP-050 — the M7 requester self-cancel rule had NO test at any layer.
@@ -116,6 +117,22 @@ describe('OrderRequestsService.cancel — requester self-cancel window', () => {
     expect(stub.fromCalls).not.toContain('order_requests');
   });
 
+  it('DENIES when the ownership/status read fails, without reaching the RPC', async () => {
+    // The read is the only enforcement of the window. A discarded error used
+    // to leave `row` null and skip the rule entirely (fail-open).
+    const stub = makeSupabaseStub({
+      'order_requests.select.maybeSingle': {
+        data: null,
+        error: { message: 'canceling statement due to statement timeout' },
+      },
+      ...OK_RPC,
+    });
+    await expect(svc(stub).cancel('ord-1', null)).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+    expect(stub.rpcCalls).toHaveLength(0);
+  });
+
   it("does not apply the window to a staff member cancelling SOMEONE ELSE's order (the RPC decides)", async () => {
     const stub = makeSupabaseStub({
       'order_requests.select.maybeSingle': {
@@ -149,6 +166,26 @@ describe('OrderRequestsService.cancel — requester self-cancel window', () => {
       }),
       expect.anything(),
     );
+  });
+});
+
+describe('OrderRequestsService.cancel — Items/Books cache', () => {
+  // cancel_order_request restocks a drawn batch. The AI cancelOrder tool calls
+  // this method with no invalidation of its own, so the service must.
+  it('invalidates the org list cache once the RPC committed', async () => {
+    const stub = makeSupabaseStub({ ...OK_RPC });
+    await svc(stub, { role: 'manager', userId: 'mgr-1' }).cancel('ord-1', null);
+    expect(invalidateInventoryListAfterWrite).toHaveBeenCalledWith('org-test', 'order.cancel');
+  });
+
+  it('does not invalidate when the RPC refused (nothing restocked)', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:cancel_order_request': { data: null, error: { message: 'invalid_status_transition' } },
+    });
+    await expect(
+      svc(stub, { role: 'manager', userId: 'mgr-1' }).cancel('ord-1', null),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+    expect(invalidateInventoryListAfterWrite).not.toHaveBeenCalled();
   });
 });
 

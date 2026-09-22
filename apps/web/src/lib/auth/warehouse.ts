@@ -4,7 +4,7 @@ import { cache } from 'react';
 
 import { createClient } from '@/lib/supabase/server';
 import { requireOrgContext } from '@/lib/auth/session';
-import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
+import { readWarehousesForRequest } from '@/lib/dashboard/request-cache';
 import { isManagerOrAbove, isWarehouseScoped, type Role } from '@stockpilot/core';
 
 /**
@@ -50,6 +50,45 @@ export interface WarehouseAccess {
   hasAllAccess: boolean;
   /** Default warehouse to scope queries to (first assignment, if any). */
   primaryWarehouseId: string | null;
+  /**
+   * Present (always `true`) only when a read this answer is built from came
+   * back with an error. The fields above then hold the narrowest answer the
+   * role allows (see accessWhenUnreadable), and a caller that must not act on
+   * a degraded answer at all (the mobile snapshot, whose full pull deletes
+   * every cached row it is not sent) refuses on it. A surface that explains
+   * the scope (ScopedWarehouseNotice, the Items empty state) says the access
+   * could not be loaded rather than "no assigned warehouses". Absent on every
+   * answer built from reads that succeeded, so success answers are unchanged.
+   */
+  unreadable?: true;
+}
+
+/**
+ * What a failed read resolves to. supabase-js RESOLVES a failed query as
+ * `{ data: null, error }` rather than throwing, and this helper used to read
+ * that as `data ?? []`: indistinguishable from a real "no rows". An access
+ * decision built on a read that did not happen must deny, not guess:
+ *
+ *   • staff / viewer: no readable and no writable warehouse, no primary, and
+ *     NOT the 0280 all-warehouses flag. The service callers already treat
+ *     that shape as "sees nothing" (assertWarehouseAccess and
+ *     forcedWarehouseId throw ForbiddenError; list/count readers return
+ *     empty). The mobile snapshot refuses on `unreadable` before building
+ *     any query, because its empty answer would be acted on (see above). Row
+ *     level security still enforces underneath either way.
+ *   • owner / admin / manager: hasAllAccess stays true, because the ROLE is
+ *     the whole rule for them (isManagerOrAbove, below) and the warehouses
+ *     list never fed it. The list itself is empty rather than guessed, so a
+ *     failed list read can only ever mean "no ids", never "these ids".
+ */
+function accessWhenUnreadable(role: Role): WarehouseAccess {
+  return {
+    readableIds: [],
+    writableIds: [],
+    hasAllAccess: isManagerOrAbove(role),
+    primaryWarehouseId: null,
+    unreadable: true,
+  };
 }
 
 /**
@@ -61,6 +100,9 @@ export interface WarehouseAccess {
  *     to support UIs that need a concrete list, but enforcement is by role).
  *   • staff   → readable + writable = assigned warehouses
  *   • viewer  → readable = assigned warehouses, writable = []
+ *   • any read below that returns an error → accessWhenUnreadable(role).
+ *     A read that THROWS rejects this promise, which every caller already
+ *     treats as a failure (none of them turns a rejection into access).
  */
 export const getWarehouseAccess = cache(async (ctx?: WarehouseCtxLike): Promise<WarehouseAccess> => {
   const c = ctx ?? (await requireOrgContext());
@@ -90,18 +132,27 @@ export const getWarehouseAccess = cache(async (ctx?: WarehouseCtxLike): Promise<
     // critical path. A withContext() ctx is the cookie session, so it shares
     // the layout's read again; the rule that decides hasAllAccess (role, and
     // nothing else) is untouched.
-    const readableIds = onRequestCookieClient
-      ? (await getWarehousesForRequest(c.organizationId)).map((w) => w.id)
-      : (
-          (
-            await supabase
-              .from('warehouses')
-              .select('id')
-              .eq('organization_id', c.organizationId)
-              .neq('status', 'archived')
-              .order('name', { ascending: true })
-          ).data ?? []
-        ).map((w: { id: string }) => w.id);
+    //
+    // Both branches keep the read's error: a failed list is reported as
+    // unreadable (empty ids, hasAllAccess still by role), never as a list.
+    let readableIds: string[];
+    if (onRequestCookieClient) {
+      const read = await readWarehousesForRequest(c.organizationId);
+      if (read.failed) return accessWhenUnreadable(c.role as Role);
+      readableIds = read.rows.map((w) => w.id);
+    } else {
+      const { data, error } = await supabase
+        .from('warehouses')
+        .select('id')
+        .eq('organization_id', c.organizationId)
+        .neq('status', 'archived')
+        .order('name', { ascending: true });
+      if (error) {
+        console.error('[getWarehouseAccess] warehouses read failed:', error.message);
+        return accessWhenUnreadable(c.role as Role);
+      }
+      readableIds = ((data ?? []) as Array<{ id: string }>).map((w) => w.id);
+    }
     return {
       readableIds,
       writableIds: readableIds,
@@ -114,7 +165,10 @@ export const getWarehouseAccess = cache(async (ctx?: WarehouseCtxLike): Promise<
   // which means "every warehouse incl. future ones" — surfaced as
   // hasAllAccess so scoped-view banners don't misdescribe these users; their
   // assignment ROWS still exist and still drive RLS).
-  const [{ data: assignments }, { data: membership }] = await Promise.all([
+  const [
+    { data: assignments, error: assignmentsError },
+    { data: membership, error: membershipError },
+  ] = await Promise.all([
     supabase
       .from('user_warehouse_assignments')
       .select('warehouse_id, is_primary')
@@ -128,6 +182,27 @@ export const getWarehouseAccess = cache(async (ctx?: WarehouseCtxLike): Promise<
       .eq('user_id', c.userId)
       .maybeSingle(),
   ]);
+
+  // EITHER read failing denies the whole answer, not just its half: the rules
+  // above are defined over both reads, and an answer assembled from one of
+  // them is not an answer those rules ever give. (A failed assignments read
+  // used to look like "no assignments"; a failed membership read like "flag
+  // off". Both happened to be narrow; neither was the user's real access.)
+  if (assignmentsError || membershipError) {
+    if (assignmentsError) {
+      console.error(
+        '[getWarehouseAccess] user_warehouse_assignments read failed:',
+        assignmentsError.message,
+      );
+    }
+    if (membershipError) {
+      console.error(
+        '[getWarehouseAccess] organization_members read failed:',
+        membershipError.message,
+      );
+    }
+    return accessWhenUnreadable(c.role as Role);
+  }
 
   const readableIds = (assignments ?? []).map((a: { warehouse_id: string }) => a.warehouse_id);
   const writableIds = c.role === 'viewer' ? [] : readableIds;

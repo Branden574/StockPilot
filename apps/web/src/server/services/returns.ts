@@ -21,6 +21,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 /**
  * Returns / RMA service (Phase A foundation).
@@ -916,6 +917,8 @@ export class RMAService {
         throw new ServiceError('forbidden', 'A return line references an item from another org.');
       throw new ServiceError('internal_error', msg);
     }
+    // process_return_disposition restocked or scrapped every line.
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'return.close');
 
     const updated = data as ReturnRow;
 

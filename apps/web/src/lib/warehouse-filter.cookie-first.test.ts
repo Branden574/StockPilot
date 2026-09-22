@@ -32,7 +32,15 @@ vi.mock('@/lib/supabase/server', () => ({
 }));
 
 const getWarehousesForRequest = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/dashboard/request-cache', () => ({ getWarehousesForRequest }));
+vi.mock('@/lib/dashboard/request-cache', () => ({
+  getWarehousesForRequest,
+  // getWarehouseAccess reads the same cached list together with its outcome;
+  // answered from the list mock so every assertion on that mock still holds.
+  readWarehousesForRequest: async (organizationId: string) => ({
+    rows: await getWarehousesForRequest(organizationId),
+    failed: false,
+  }),
+}));
 
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 

@@ -41,6 +41,10 @@ const h = vi.hoisted(() => ({
   filter: null as string | null,
   savedViewsError: null as null | Error,
   listTotal: 2,
+  /** Overrides the staff/viewer access answer (null: the default one). */
+  access: null as null | Record<string, unknown>,
+  /** Makes the request-cached warehouse NAME read report a failure. */
+  namesFailed: false,
 }));
 
 const m = vi.hoisted(() => ({
@@ -105,6 +109,12 @@ vi.mock('@/lib/warehouse-filter', () => ({
 vi.mock('@/lib/auth/warehouse', () => ({ getWarehouseAccess: m.getWarehouseAccess }));
 vi.mock('@/lib/dashboard/request-cache', () => ({
   getWarehousesForRequest: m.getWarehousesForRequest,
+  // The same cached read with its outcome kept; answered from the list mock
+  // so every assertion on that mock still holds.
+  readWarehousesForRequest: async (organizationId: string) =>
+    h.namesFailed
+      ? { rows: [], failed: true }
+      : { rows: await m.getWarehousesForRequest(organizationId), failed: false },
   getModulesForRequest: vi.fn(async () => new Set(['orders'])),
 }));
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }));
@@ -203,6 +213,8 @@ beforeEach(() => {
   h.filter = null;
   h.savedViewsError = null;
   h.listTotal = 2;
+  h.access = null;
+  h.namesFailed = false;
 
   m.requireOrgContext.mockImplementation(() =>
     logged('ctx', async () => {
@@ -249,12 +261,16 @@ beforeEach(() => {
     })),
   );
   m.getWarehouseAccess.mockImplementation(() =>
-    logged('access', async () => ({
-      hasAllAccess: ['owner', 'admin', 'manager'].includes(h.role),
-      readableIds: ['wh-1'],
-      writableIds: ['wh-1'],
-      primaryWarehouseId: 'wh-1',
-    })),
+    logged(
+      'access',
+      async () =>
+        h.access ?? {
+          hasAllAccess: ['owner', 'admin', 'manager'].includes(h.role),
+          readableIds: ['wh-1'],
+          writableIds: ['wh-1'],
+          primaryWarehouseId: 'wh-1',
+        },
+    ),
   );
   m.getWarehousesForRequest.mockImplementation(() =>
     logged('warehouses', async () => [{ id: 'wh-1', name: 'North' }]),
@@ -361,6 +377,55 @@ describe('Items page: the table starts with the header, not after it', () => {
     expect(m.getWarehouseAccess).toHaveBeenCalled();
     expect(m.emptyStateProps).toHaveBeenCalledTimes(1);
     expect(m.emptyStateProps.mock.calls[0]![0].description).toContain("You're viewing North only.");
+  });
+
+  describe('staff empty state: a lookup that FAILED is never "no assigned warehouses"', () => {
+    const emptyState = () =>
+      m.emptyStateProps.mock.calls[0]![0] as { title: string; description: string };
+
+    it('unreadable access: says it could not load, and a reload retries', async () => {
+      h.role = 'staff';
+      h.listTotal = 0;
+      h.access = {
+        readableIds: [],
+        writableIds: [],
+        hasAllAccess: false,
+        primaryWarehouseId: null,
+        unreadable: true,
+      };
+      render(await callPage());
+      expect(m.emptyStateProps).toHaveBeenCalledTimes(1);
+      expect(emptyState().title).toBe("Couldn't load your warehouse access");
+      expect(emptyState().description).toBe(
+        "Your items can't be listed without it. Refresh the page to try again.",
+      );
+      expect(emptyState().description).not.toContain('no assigned warehouses');
+    });
+
+    it('a lookup that succeeded and found none still says "no assigned warehouses"', async () => {
+      h.role = 'staff';
+      h.listTotal = 0;
+      h.access = {
+        readableIds: [],
+        writableIds: [],
+        hasAllAccess: false,
+        primaryWarehouseId: null,
+      };
+      render(await callPage());
+      expect(emptyState().title).toBe('No items yet');
+      expect(emptyState().description).toContain('You have no assigned warehouses.');
+    });
+
+    it('a failed NAME read, for a staffer who has a warehouse, names none and claims none', async () => {
+      h.role = 'staff';
+      h.listTotal = 0;
+      h.namesFailed = true;
+      render(await callPage());
+      expect(emptyState().description).toContain(
+        "You're viewing only the warehouses assigned to you.",
+      );
+      expect(emptyState().description).not.toContain('no assigned warehouses');
+    });
   });
 
   it('first rows first: the page resolves while the instant dataset is still loading, and the dataset starts after the rows', async () => {

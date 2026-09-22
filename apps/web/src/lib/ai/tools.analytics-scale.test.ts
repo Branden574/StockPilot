@@ -57,7 +57,6 @@ vi.mock('@/server/services/forecasting', () => ({
   suggestReorderPoint: vi.fn(),
 }));
 vi.mock('@/lib/books/lookup', () => ({ lookupIsbn: vi.fn() }));
-vi.mock('@/server/loaders/inventory-list', () => ({ revalidateInventoryList: vi.fn() }));
 vi.mock('@/lib/env', () => ({
   env: {
     GEMINI_API_KEY: 'test-key',

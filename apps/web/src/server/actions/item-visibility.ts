@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { audit } from '@/server/services/audit';
 import { assertPermission, ServiceError, withContext } from '@/server/services/context';
+import { invalidateInventoryListAfterWrite } from '@/server/services/lib/inventory-list-cache';
 import { publicCatalogTag } from '@/server/services/public-links';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
@@ -152,6 +153,10 @@ export async function setItemPublicVisibilityAction(
       .maybeSingle();
     if (writeErr) throw new ServiceError('internal_error', writeErr.message);
     if (!updated) throw new ServiceError('not_found', 'Item not found');
+    // tg_inventory_items_set_updated_at bumps updated_at on this row (only an
+    // embedding/search_vector write is exempt, 0242 as restated in 0303), and
+    // updated_at is the Items list's default sort key and a rendered column.
+    invalidateInventoryListAfterWrite(ctx.organizationId, 'item.public_visibility');
 
     await audit(
       {
@@ -237,6 +242,10 @@ export async function setItemPublicDisplayAction(
       .maybeSingle();
     if (writeErr) throw new ServiceError('internal_error', writeErr.message);
     if (!updated) throw new ServiceError('not_found', 'Item not found');
+    // tg_inventory_items_set_updated_at bumps updated_at on this row (only an
+    // embedding/search_vector write is exempt, 0242 as restated in 0303), and
+    // updated_at is the Items list's default sort key and a rendered column.
+    invalidateInventoryListAfterWrite(ctx.organizationId, 'item.public_display');
 
     await audit(
       {
@@ -314,6 +323,10 @@ export async function bulkSetItemPublicVisibilityAction(
     if (writeErr) throw new ServiceError('internal_error', writeErr.message);
     const updated = ((updatedRows ?? []) as Array<{ id: string }>).length;
     if (updated === 0) throw new ServiceError('not_found', 'One or more items were not found.');
+    // tg_inventory_items_set_updated_at bumps updated_at on this row (only an
+    // embedding/search_vector write is exempt, 0242 as restated in 0303), and
+    // updated_at is the Items list's default sort key and a rendered column.
+    invalidateInventoryListAfterWrite(ctx.organizationId, 'item.public_visibility.bulk');
 
     await audit(
       {

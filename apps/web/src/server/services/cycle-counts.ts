@@ -7,6 +7,7 @@ import { reportError } from '@/lib/error-reporter';
 
 import { audit } from './audit';
 import { dispatchEvent } from './integration-events';
+import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { fetchAllRows } from './lib/paginate';
 import {
   assertModuleEnabled,
@@ -1606,6 +1607,12 @@ export class CycleCountsService {
       // and cycle_count_location_out_of_scope (0342/0343).
       throw mapPostCycleCountError(error.message);
     }
+    // The RPC has committed the variance adjustments. The Items/Books views
+    // must drop their cached quantities here, not in a caller: the phone posts
+    // through /api/v1/cycle-counts/[id]/post, which never invalidated, so a
+    // count posted on the floor left the web Items list showing pre-count
+    // quantities to every manager for up to the 60s TTL.
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'cycle_count.post');
     await audit(
       {
         event: 'cycle_count.posted',

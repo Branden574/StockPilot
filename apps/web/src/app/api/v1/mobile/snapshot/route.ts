@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { isManagerOrAbove } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { getWarehouseAccess, type WarehouseAccess } from '@/lib/auth/warehouse';
 import { buildWarehouseScope } from '@/lib/warehouse-scope';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -48,6 +49,54 @@ function dbError(
   );
 }
 
+/**
+ * A read's outcome held as a value, so a read that is still in flight (or has
+ * already failed) can never become an unhandled rejection while the route
+ * walks the results in order. `unwrap` re-throws a rejection at the exact
+ * point the serial route would have thrown it.
+ */
+type Settled<T> = { ok: true; value: T } | { ok: false; reason: unknown };
+
+function settle<T>(p: PromiseLike<T>): Promise<Settled<T>> {
+  return Promise.resolve(p).then(
+    (value): Settled<T> => ({ ok: true, value }),
+    (reason: unknown): Settled<T> => ({ ok: false, reason }),
+  );
+}
+
+function unwrap<T>(s: Settled<T>): T {
+  if (!s.ok) throw s.reason;
+  return s.value;
+}
+
+/**
+ * What a warehouse-scoped read answers, without being sent, for a caller
+ * narrowed to NO warehouse. Only `data` and `error` are ever read from a
+ * result in this route.
+ */
+const NO_ROWS = { data: [] as never[], error: null };
+
+/**
+ * A warehouse-scoped read: sent, or, when the caller is narrowed to no
+ * warehouse, answered with NO_ROWS and never sent (a PostgREST builder sends
+ * its request only when awaited, and this never awaits it).
+ */
+function scopedRead<T>(
+  narrowedToNothing: boolean,
+  read: PromiseLike<T>,
+): Promise<Settled<T | typeof NO_ROWS>> {
+  return settle<T | typeof NO_ROWS>(narrowedToNothing ? Promise.resolve(NO_ROWS) : read);
+}
+
+/**
+ * The access this route builds its filters from for manager-and-above: every
+ * warehouse, by role. The id list is never read when hasAllAccess is true.
+ */
+const ROLE_GRANTS_ALL: Pick<WarehouseAccess, 'hasAllAccess' | 'readableIds'> = {
+  hasAllAccess: true,
+  readableIds: [],
+};
+
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
@@ -90,6 +139,8 @@ export const GET = handler;
  * Scope:
  *   • Warehouses + items + POs are filtered to the user's warehouse access.
  *   • Cycle counts include all in_progress counts in scope.
+ *   • A scoped (staff/viewer) user with NO readable warehouse gets none of
+ *     the four above: narrowed to nothing, never unfiltered.
  *   • Bundles: org-wide active bundles. Mobile only reads them for
  *     distribution; cross-warehouse phantom math happens server-side.
  *
@@ -124,9 +175,44 @@ async function snapshotGET(req: NextRequest) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
 
+  // Manager-and-above see every warehouse because of their ROLE, and the
+  // lookup is not made for them. getWarehouseAccess answers hasAllAccess =
+  // true for them on the same isManagerOrAbove(role) test whatever its
+  // `warehouses` list read returns (lib/auth/warehouse.ts), and this route
+  // never reads a manager's id list: every warehouse filter below is skipped
+  // for an all-access caller, and warehouseScope names come from this
+  // route's own warehouses read. Asking anyway cost a manager one more read
+  // per sync (on a Bearer ctx it is a direct `warehouses` query) and a way to
+  // fail: a failed list read turned into a 500 for a caller whose access
+  // never depended on it.
+  //
+  // Staff and viewer (the 0280 all-warehouses flag included) are decided by
+  // their own assignment rows, so for them the lookup runs, through
+  // ctx.supabase (the Bearer-bound client: the cookie client is anon on a
+  // cookie-less request and would see zero assignment rows).
+  //
+  // Sent BEFORE the rate-limit verdict and read AFTER it, so the two round
+  // trips overlap instead of queueing: measured 2026-09-22, a call through
+  // our servers can stall 1-8 s at Supabase's entry point, and this route
+  // used to pay for its ~11 calls one after another. This is the only read a
+  // refused request can cause, and it is the cheap one (the caller's own
+  // assignment rows); none of it reaches the response of a refused request.
+  // Held as a settled value so a failure is handled, and reported, only when
+  // the request is actually served, exactly as before.
+  const accessP = isManagerOrAbove(ctx.role)
+    ? null
+    : settle((async () => getWarehouseAccess(ctx))());
+
   // Per-user throttle: this is the mobile app's full/delta sync. 30/min easily
   // covers pull-to-refresh + foreground delta syncs while capping a tight loop
   // (the heaviest authenticated query path). Fail-open.
+  //
+  // It cannot start any earlier than this. Its key is the VERIFIED user id,
+  // which exists only once withApiContext has validated the token; keying it
+  // on an unverified token's `sub` would let anyone holding a forged token
+  // spend a real user's budget and stop that user's phone from syncing. And
+  // no data read below starts until this says yes: the heavy reads are what
+  // the limit exists to cap.
   const rl = await checkRateLimit(`mobile-snapshot:user:${ctx.userId}`, 30, 60_000);
   if (!rl.allowed) {
     const retryAfter = Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000));
@@ -143,27 +229,75 @@ async function snapshotGET(req: NextRequest) {
       ? new Date(sinceRaw).toISOString()
       : null;
 
-  // getWarehouseAccess internally uses the cookie-bound supabase client
-  // for its warehouses lookup, but bearer-authenticated requests from
-  // the mobile app have no cookies. Run the lookup through ctx.supabase
-  // (the bearer-bound client) instead so RLS sees the right auth.uid().
-  // For manager+ roles the role check alone determines hasAllAccess, so
-  // even if the readableIds list is empty for a bearer request, the
-  // downstream filters skip warehouse pinning correctly.
-  let access: Awaited<ReturnType<typeof getWarehouseAccess>>;
-  try {
-    access = await getWarehouseAccess(ctx);
-  } catch (err) {
-    void reportError(
-      err instanceof Error ? err : new Error(String(err)),
-      { tag: 'mobile.snapshot.warehouse_access', organizationId: ctx.organizationId },
-    );
-    // Fall back to org-wide access. This is the same posture a manager
-    // would get anyway, and the per-table queries are still RLS-gated
-    // by ctx.supabase, so we're not bypassing security here.
-    access = { readableIds: [], writableIds: [], hasAllAccess: true, primaryWarehouseId: null };
+  // For staff and viewer, an access lookup that threw, or that answered from
+  // a failed read, is a REFUSAL: no data read is built, and the phone keeps
+  // what it has.
+  //
+  // This used to fall back to hasAllAccess: true ("RLS still gates"). That
+  // dropped every warehouse filter below for a staff or viewer caller, so the
+  // response was bounded by row level security alone, and it told the phone
+  // "every warehouse" in warehouseScope. An authorization input that could
+  // not be read must deny, never widen.
+  //
+  // Why a 500 and not an empty "no warehouses" 200: a 200 is an instruction
+  // the phone acts on. On a full pull sync.ts sweeps every cached item the
+  // response did not carry (STALE_ITEMS_SWEEP_SQL), so an empty answer to a
+  // transient read failure would wipe a staffer's offline inventory, and the
+  // banner would tell them they have no warehouses. Every other failed read in
+  // this route already answers 500 `internal_error` with a `query` tag, and
+  // pullSnapshot treats any non-2xx as "keep the cache, retry on the next
+  // tick". Same contract, same report tag as before.
+  let access: Pick<WarehouseAccess, 'hasAllAccess' | 'readableIds'> = ROLE_GRANTS_ALL;
+  if (accessP) {
+    const accessResult = await accessP;
+    if (!accessResult.ok || accessResult.value.unreadable) {
+      const err = accessResult.ok ? new Error('warehouse access unreadable') : accessResult.reason;
+      void reportError(err instanceof Error ? err : new Error(String(err)), {
+        tag: 'mobile.snapshot.warehouse_access',
+        organizationId: ctx.organizationId,
+      });
+      return NextResponse.json(
+        { error: 'internal_error', query: 'warehouse_access' },
+        { status: 500 },
+      );
+    }
+    access = accessResult.value;
   }
+
+  // The warehouses every warehouse-scoped read below is narrowed to: null for
+  // an all-access caller (no narrowing), otherwise exactly the readable ids.
+  // Narrowing is decided by whether this is null, NEVER by its length. The
+  // filters used to be guarded by `!hasAllAccess && readableIds.length`, so a
+  // scoped member whose lookup succeeded but found no assignment got no
+  // filter at all: every warehouse, item, PO and count that row level
+  // security let through, and a phone that cached them. A scoped caller with
+  // no readable warehouse is narrowed to nothing, and gets nothing.
+  const scopeIds: string[] | null = access.hasAllAccess ? null : access.readableIds;
+  // Narrowed to nothing: the four warehouse-scoped reads answer NO_ROWS and
+  // are never sent (scopedRead). Not sent as `.in(col, [])` either: nothing
+  // about the answer should rest on how PostgREST reads an empty list, and it
+  // saves four round trips. The org-wide reads (bundles, and the two removal
+  // reads) run as usual, so a delta pull still reports every item that
+  // changed since its cursor as removed.
+  const seesNoWarehouse = scopeIds !== null && scopeIds.length === 0;
+  // Taken before any read below is sent, so the next delta's cursor can only
+  // overlap this pull, never leave a gap after it.
   const serverTime = new Date().toISOString();
+
+  // ── Every read goes out at once ─────────────────────────────────
+  // Measured 2026-09-22: these ran one after another, so a stall at
+  // Supabase's entry point on ANY of them was added to the phone's wait
+  // (bundles alone took 3779 ms inside one user's snapshot at 18:45:23Z).
+  // None of them depends on another, except the bundle components and
+  // phantoms, which need the bundle ids and so chain behind the bundles read
+  // without holding up anything else. The snapshot now costs its slowest
+  // read instead of the sum of all of them.
+  //
+  // Every read is still built on ctx.supabase (the caller's own client, under
+  // their row level security) with exactly the filters it had. The RESULTS
+  // are checked in the old order further down, so a failure answers with the
+  // same response and the same single report it always did: the first read,
+  // in that order, that came back with an error or threw.
 
   // ── Warehouses ──────────────────────────────────────────────────
   let whQ = ctx.supabase
@@ -175,11 +309,8 @@ async function snapshotGET(req: NextRequest) {
   // immutable — `.in()` returns a NEW builder, so the result must be
   // reassigned or the warehouse-access filter is silently dropped (a
   // restricted user would otherwise receive the org's full warehouse list).
-  if (!access.hasAllAccess && access.readableIds.length) {
-    whQ = whQ.in('id', access.readableIds);
-  }
-  const { data: warehouses, error: whErr } = await whQ;
-  if (whErr) return dbError(ctx, 'warehouses', whErr);
+  if (scopeIds) whQ = whQ.in('id', scopeIds);
+  const warehousesP = scopedRead(seesNoWarehouse, whQ);
 
   // ── Items ───────────────────────────────────────────────────────
   // `is_bundle` is NOT NULL DEFAULT false on every row (see migration
@@ -193,8 +324,7 @@ async function snapshotGET(req: NextRequest) {
   // inventories. Use fetchAllRows to page through all matching rows.
   // Stable order on `id` guarantees pages don't overlap or skip rows
   // when records are written between page fetches.
-  let itemFetchErr: { message?: string; code?: string; details?: string; hint?: string } | null = null;
-  const items = await fetchAllRows<{
+  type ItemRow = {
     id: string;
     sku: string | null;
     name: string;
@@ -205,31 +335,34 @@ async function snapshotGET(req: NextRequest) {
     item_type: string;
     is_bundle: boolean;
     updated_at: string;
-  }>((from, to) => {
-    let q = ctx.supabase
-      .from('inventory_items')
-      .select(
-        `id, sku, name, barcode, quantity_on_hand, unit_cost, warehouse_id,
-         item_type, is_bundle, updated_at`,
-      )
-      .eq('organization_id', ctx.organizationId)
-      .is('deleted_at', null)
-      .eq('status', 'active')
-      .eq('is_bundle', false)
-      .order('id', { ascending: true })
-      .range(from, to);
-    if (!access.hasAllAccess && access.readableIds.length) {
-      q = q.in('warehouse_id', access.readableIds);
-    }
-    if (since) q = q.gte('updated_at', since);
-    return q;
-  }).catch((err: unknown) => {
-    itemFetchErr = err instanceof Error
-      ? { message: err.message }
-      : { message: String(err) };
-    return null;
-  });
-  if (itemFetchErr) return dbError(ctx, 'items', itemFetchErr);
+  };
+  const itemsP = seesNoWarehouse
+    ? Promise.resolve({ rows: [] as ItemRow[], err: null })
+    : fetchAllRows<ItemRow>((from, to) => {
+        let q = ctx.supabase
+          .from('inventory_items')
+          .select(
+            `id, sku, name, barcode, quantity_on_hand, unit_cost, warehouse_id,
+             item_type, is_bundle, updated_at`,
+          )
+          .eq('organization_id', ctx.organizationId)
+          .is('deleted_at', null)
+          .eq('status', 'active')
+          .eq('is_bundle', false)
+          .order('id', { ascending: true })
+          .range(from, to);
+        if (scopeIds) q = q.in('warehouse_id', scopeIds);
+        if (since) q = q.gte('updated_at', since);
+        return q;
+      }).then(
+        (rows) => ({ rows, err: null }),
+        // Any failure, returned or thrown, is reported as the items read: the
+        // same catch-all this read has always had.
+        (err: unknown) => ({
+          rows: null,
+          err: { message: err instanceof Error ? err.message : String(err) },
+        }),
+      );
 
   // ── Open POs (and their lines) ──────────────────────────────────
   // purchase_orders ships through a destination_location_id pointer
@@ -237,7 +370,7 @@ async function snapshotGET(req: NextRequest) {
   // canonical PO service uses an embedded join — same here. Use !inner
   // only when filtering, otherwise we'd drop POs whose destination is
   // null.
-  const destEmbed = !access.hasAllAccess && access.readableIds.length
+  const destEmbed = scopeIds
     ? 'destination:locations!destination_location_id!inner (warehouse_id)'
     : 'destination:locations!destination_location_id (warehouse_id)';
   let poQ = ctx.supabase
@@ -253,12 +386,9 @@ async function snapshotGET(req: NextRequest) {
     .in('status', ['ordered', 'partially_received', 'draft'])
     .order('updated_at', { ascending: false })
     .limit(200);
-  if (!access.hasAllAccess && access.readableIds.length) {
-    poQ = poQ.in('destination.warehouse_id', access.readableIds);
-  }
+  if (scopeIds) poQ = poQ.in('destination.warehouse_id', scopeIds);
   if (since) poQ = poQ.gte('updated_at', since);
-  const { data: pos, error: poErr } = await poQ;
-  if (poErr) return dbError(ctx, 'pos', poErr);
+  const posP = scopedRead(seesNoWarehouse, poQ);
 
   // ── Open cycle counts (and their lines) ─────────────────────────
   let ccQ = ctx.supabase
@@ -273,13 +403,13 @@ async function snapshotGET(req: NextRequest) {
     .eq('status', 'in_progress')
     .order('started_at', { ascending: false })
     .limit(50);
-  if (!access.hasAllAccess && access.readableIds.length) {
-    ccQ = ccQ.or(
-      `warehouse_id.is.null,warehouse_id.in.(${access.readableIds.join(',')})`,
-    );
+  if (scopeIds) {
+    ccQ = ccQ.or(`warehouse_id.is.null,warehouse_id.in.(${scopeIds.join(',')})`);
   }
-  const { data: counts, error: ccErr } = await ccQ;
-  if (ccErr) return dbError(ctx, 'cycle_counts', ccErr);
+  // Narrowed to nothing answers no counts at all, the null-warehouse ones
+  // included: the web's CycleCountsService.list() returns [] for a scoped
+  // caller with no warehouse, and the phone should not list more than it.
+  const countsP = scopedRead(seesNoWarehouse, ccQ);
 
   // ── Bundles ─────────────────────────────────────────────────────
   // Embedded joins to two relations (bundle_components AND the phantom
@@ -297,28 +427,94 @@ async function snapshotGET(req: NextRequest) {
     .is('archived_at', null)
     .order('name', { ascending: true });
   if (since) bQ = bQ.gte('updated_at', since);
-  const { data: bundles, error: bErr } = await bQ;
-  if (bErr) return dbError(ctx, 'bundles', bErr);
+  const bundlesP = settle(
+    (async () => {
+      const bundlesRes = await bQ;
+      // A failed bundles read never sends the two follow-ups, as before.
+      if (bundlesRes.error) return { ok: false as const, error: bundlesRes.error };
 
-  const bundleIds = (bundles ?? []).map((b) => b.id as string);
-  const phantomIds = (bundles ?? [])
-    .map((b) => b.phantom_item_id as string | null)
-    .filter((v): v is string => Boolean(v));
+      const bundleIds = (bundlesRes.data ?? []).map((b) => b.id as string);
+      const phantomIds = (bundlesRes.data ?? [])
+        .map((b) => b.phantom_item_id as string | null)
+        .filter((v): v is string => Boolean(v));
 
-  const [componentsRes, phantomsRes] = await Promise.all([
-    bundleIds.length > 0
-      ? ctx.supabase
-          .from('bundle_components')
-          .select('bundle_id, item_id, quantity, is_optional')
-          .in('bundle_id', bundleIds)
-      : Promise.resolve({ data: [], error: null }),
-    phantomIds.length > 0
-      ? ctx.supabase
-          .from('inventory_items')
-          .select('id, quantity_on_hand, warehouse_id')
-          .in('id', phantomIds)
-      : Promise.resolve({ data: [], error: null }),
-  ]);
+      const [componentsRes, phantomsRes] = await Promise.all([
+        bundleIds.length > 0
+          ? ctx.supabase
+              .from('bundle_components')
+              .select('bundle_id, item_id, quantity, is_optional')
+              .in('bundle_id', bundleIds)
+          : Promise.resolve({ data: [], error: null }),
+        phantomIds.length > 0
+          ? ctx.supabase
+              .from('inventory_items')
+              .select('id, quantity_on_hand, warehouse_id')
+              .in('id', phantomIds)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+      return { ok: true as const, bundles: bundlesRes.data, componentsRes, phantomsRes };
+    })(),
+  );
+
+  // ── Removal reads: sent now, read after the payload ─────────────
+  // What they are for, and why each is shaped the way it is, is noted where
+  // their results are read below.
+  //
+  // (a) Every non-bundle item id that changed since the cursor. Delta pulls
+  // only. Sending it alongside the items read, instead of after every other
+  // read, also narrows the window in which a row edited between the two
+  // reads is reported as removed (it heals on the next pull either way).
+  const changedItemsP = since
+    ? settle(
+        fetchAllRows<{ id: string }>((from, to) =>
+          ctx.supabase
+            .from('inventory_items')
+            .select('id')
+            .eq('organization_id', ctx.organizationId)
+            // is_bundle rows are a different species (a bundle's phantom
+            // stock row), excluded from `items` structurally rather than by
+            // lifecycle — they were never delivered, so reporting them as
+            // "removed" would be pure payload noise on every sync tick.
+            .eq('is_bundle', false)
+            .gte('updated_at', since)
+            .order('id', { ascending: true })
+            .range(from, to),
+        ),
+      )
+    : null;
+  // (b) The org's COMPLETE active-bundle id set, independent of `since`.
+  // Paged through fetchAllRows because a single .select() is silently
+  // clamped to PostgREST's max_rows (1000) and a truncated list would wipe
+  // live bundles.
+  const activeBundleRowsP = settle(
+    fetchAllRows<{ id: string }>((from, to) =>
+      ctx.supabase
+        .from('bundles')
+        .select('id')
+        .eq('organization_id', ctx.organizationId)
+        .eq('is_active', true)
+        .is('archived_at', null)
+        .order('id', { ascending: true })
+        .range(from, to),
+    ),
+  );
+
+  // ── Results, in the serial route's order ────────────────────────
+  const { data: warehouses, error: whErr } = unwrap(await warehousesP);
+  if (whErr) return dbError(ctx, 'warehouses', whErr);
+
+  const { rows: items, err: itemFetchErr } = await itemsP;
+  if (itemFetchErr) return dbError(ctx, 'items', itemFetchErr);
+
+  const { data: pos, error: poErr } = unwrap(await posP);
+  if (poErr) return dbError(ctx, 'pos', poErr);
+
+  const { data: counts, error: ccErr } = unwrap(await countsP);
+  if (ccErr) return dbError(ctx, 'cycle_counts', ccErr);
+
+  const bundleReads = unwrap(await bundlesP);
+  if (!bundleReads.ok) return dbError(ctx, 'bundles', bundleReads.error);
+  const { bundles, componentsRes, phantomsRes } = bundleReads;
   if (componentsRes.error) return dbError(ctx, 'bundle_components', componentsRes.error);
   if (phantomsRes.error) return dbError(ctx, 'bundle_phantoms', phantomsRes.error);
 
@@ -354,80 +550,53 @@ async function snapshotGET(req: NextRequest) {
   // Both reads FAIL CLOSED by omitting their field: the client treats an
   // absent list as "no instruction" (today's behaviour), whereas a short or
   // empty list built from a failed read would delete rows the phone should
-  // still hold. Run together — neither depends on the other.
-  const [removedItemIds, activeBundleIds] = await Promise.all([
-    // (a) Items that left scope since the cursor. Delta pulls ONLY: without
-    // `since` this would enumerate every item the org ever archived, and a
-    // full pull is already reconciled client-side by sweeping the rows it
-    // did not receive.
-    //
-    // Deliberately NOT expressed as the inverse predicate in PostgREST
-    // (`.neq('status','active')` drops NULL status, `.not('deleted_at',
-    // 'is',null)` is another NULL trap — recurring bug pattern #23). Instead
-    // ask for the ids of EVERY non-bundle row that changed since the cursor
-    // and subtract the ones the payload above actually delivered: whatever
-    // the in-scope query filters on, changed-but-not-delivered means "no
-    // longer in scope", and the two sets can never drift apart.
-    //
-    // Residual gap, on purpose: a row that left the caller's RLS visibility
-    // entirely (moved to an unreadable warehouse, or into a hidden category)
-    // is invisible to this read too, so it is not reported. Closing that
-    // needs a service-role read; the full-pull sweep still catches it.
-    (async (): Promise<string[] | undefined> => {
-      if (!since) return undefined;
+  // still hold. Their failures are reported here and only here, so a pull
+  // that already failed above still reports once, as it always did.
+  //
+  // (a) Items that left scope since the cursor. Delta pulls ONLY: without
+  // `since` this would enumerate every item the org ever archived, and a
+  // full pull is already reconciled client-side by sweeping the rows it
+  // did not receive.
+  //
+  // Deliberately NOT expressed as the inverse predicate in PostgREST
+  // (`.neq('status','active')` drops NULL status, `.not('deleted_at',
+  // 'is',null)` is another NULL trap — recurring bug pattern #23). Instead
+  // ask for the ids of EVERY non-bundle row that changed since the cursor
+  // and subtract the ones the payload above actually delivered: whatever
+  // the in-scope query filters on, changed-but-not-delivered means "no
+  // longer in scope", and the two sets can never drift apart.
+  //
+  // Residual gap, on purpose: a row that left the caller's RLS visibility
+  // entirely (moved to an unreadable warehouse, or into a hidden category)
+  // is invisible to this read too, so it is not reported. Closing that
+  // needs a service-role read; the full-pull sweep still catches it.
+  let removedItemIds: string[] | undefined;
+  if (changedItemsP) {
+    const changed = await changedItemsP;
+    if (changed.ok) {
       const delivered = new Set((items ?? []).map((i) => i.id));
-      try {
-        const changed = await fetchAllRows<{ id: string }>((from, to) =>
-          ctx.supabase
-            .from('inventory_items')
-            .select('id')
-            .eq('organization_id', ctx.organizationId)
-            // is_bundle rows are a different species (a bundle's phantom
-            // stock row), excluded from `items` structurally rather than by
-            // lifecycle — they were never delivered, so reporting them as
-            // "removed" would be pure payload noise on every sync tick.
-            .eq('is_bundle', false)
-            .gte('updated_at', since)
-            .order('id', { ascending: true })
-            .range(from, to),
-        );
-        return changed.map((r) => r.id).filter((id) => !delivered.has(id));
-      } catch (err) {
-        void reportError(err instanceof Error ? err : new Error(String(err)), {
-          tag: 'mobile.snapshot.removed_items',
-          organizationId: ctx.organizationId,
-        });
-        return undefined;
-      }
-    })(),
-    // (b) The org's COMPLETE active-bundle id set, independent of `since`.
-    // The client treats it as authoritative and deletes any cached bundle
-    // absent from it, so it MUST be complete: paged through fetchAllRows
-    // because a single .select() is silently clamped to PostgREST's
-    // max_rows (1000) and a truncated list would wipe live bundles.
-    (async (): Promise<string[] | undefined> => {
-      try {
-        const rows = await fetchAllRows<{ id: string }>((from, to) =>
-          ctx.supabase
-            .from('bundles')
-            .select('id')
-            .eq('organization_id', ctx.organizationId)
-            .eq('is_active', true)
-            .is('archived_at', null)
-            .order('id', { ascending: true })
-            .range(from, to),
-        );
-        return rows.map((r) => r.id);
-      } catch (err) {
-        void reportError(err instanceof Error ? err : new Error(String(err)), {
-          tag: 'mobile.snapshot.active_bundle_ids',
-          organizationId: ctx.organizationId,
-        });
-        return undefined;
-      }
-    })(),
-  ]);
-
+      removedItemIds = changed.value.map((r) => r.id).filter((id) => !delivered.has(id));
+    } else {
+      const err = changed.reason;
+      void reportError(err instanceof Error ? err : new Error(String(err)), {
+        tag: 'mobile.snapshot.removed_items',
+        organizationId: ctx.organizationId,
+      });
+    }
+  }
+  // (b) The client treats this set as authoritative and deletes any cached
+  // bundle absent from it, so it MUST be complete — hence the paging above.
+  let activeBundleIds: string[] | undefined;
+  const activeBundleRows = await activeBundleRowsP;
+  if (activeBundleRows.ok) {
+    activeBundleIds = activeBundleRows.value.map((r) => r.id);
+  } else {
+    const err = activeBundleRows.reason;
+    void reportError(err instanceof Error ? err : new Error(String(err)), {
+      tag: 'mobile.snapshot.active_bundle_ids',
+      organizationId: ctx.organizationId,
+    });
+  }
   return NextResponse.json({
     serverTime,
     since,
@@ -443,10 +612,9 @@ async function snapshotGET(req: NextRequest) {
     permissions: Array.from(ctx.permissions ?? []),
     // Warehouse scoping for the caller — drives the mobile Items screen's
     // scoped-view banner (web parity with ScopedWarehouseNotice). Reuses the
-    // access decision computed above; the pure builder narrows the (possibly
-    // unfiltered — see whQ's zero-assignment edge) warehouse rows to the
-    // caller's readable set, so a scoped user with no assignments reports []
-    // rather than the org's full list.
+    // access decision computed above; the pure builder also narrows the
+    // warehouse rows to the caller's readable set, so a scoped user with no
+    // assignments reports [] (and the banner says so) on either account.
     warehouseScope: buildWarehouseScope(
       access,
       (warehouses ?? []).map((w) => ({ id: w.id as string, name: w.name as string })),

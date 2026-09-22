@@ -47,7 +47,6 @@ vi.mock('@/server/services/forecasting', () => ({
   suggestReorderPoint: vi.fn(),
 }));
 vi.mock('@/lib/books/lookup', () => ({ lookupIsbn: vi.fn() }));
-vi.mock('@/server/loaders/inventory-list', () => ({ revalidateInventoryList: vi.fn() }));
 
 import { TOOL_CATALOG } from './tools';
 

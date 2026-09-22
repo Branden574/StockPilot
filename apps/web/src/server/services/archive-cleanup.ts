@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { audit } from './audit';
 import { ServiceError, type ServiceContext } from './context';
+import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 // ---------------------------------------------------------------------------
 // Opt-in, per-org automatic cleanup of long-archived inventory items. The
@@ -89,6 +90,10 @@ export async function purgeExpiredArchivedItems(
   if (updErr) throw new ServiceError('internal_error', updErr.message);
 
   const deleted = (deletedRows ?? []) as Array<{ id: string; name: string }>;
+  if (deleted.length > 0) {
+    // Deleted rows leave the Archived view and the instant dataset.
+    invalidateInventoryListAfterWrite(ctx.organizationId, 'item.purge_archived');
+  }
   for (const item of deleted) {
     await audit(
       {

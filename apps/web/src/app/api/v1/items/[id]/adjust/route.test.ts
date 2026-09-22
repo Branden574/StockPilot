@@ -2,8 +2,11 @@ import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { assertPermission, ServiceError } from '@/server/services/context';
-import { InventoryService } from '@/server/services/inventory';
+import { ForbiddenError } from '@/lib/auth/warehouse';
+import { reportError } from '@/lib/error-reporter';
+import { revalidateInventoryList } from '@/server/loaders/inventory-list';
+import { assertPermission, mfaGateError, ServiceError } from '@/server/services/context';
+import { ADJUST_WAREHOUSE_WRITE_REFUSED, InventoryService } from '@/server/services/inventory';
 
 import { POST } from './route';
 
@@ -119,6 +122,119 @@ describe('POST /api/v1/items/[id]/adjust', () => {
     expect(status).toBe(400);
     expect(body.error).toBe('validation_error');
     expect(body.message).toMatch(/does not cover that quantity/);
+  });
+
+  it('invalidates the org Items cache after the write lands', async () => {
+    vi.spyOn(InventoryService.prototype, 'adjustStock').mockResolvedValue({
+      id: ITEM_ID,
+      quantity_on_hand: 7,
+    } as never);
+
+    const { status } = await post({ quantityChange: 1 });
+
+    expect(status).toBe(200);
+    expect(revalidateInventoryList).toHaveBeenCalledWith('org-1');
+  });
+
+  // The phone's whole item screen now writes through this route. The movement
+  // has committed before the invalidation runs, so an invalidation that throws
+  // must not become a 500: the operator would be told the +1 failed, tap again,
+  // and move the stock twice.
+  it('answers 200 with the new total when the cache invalidation throws', async () => {
+    vi.spyOn(InventoryService.prototype, 'adjustStock').mockResolvedValue({
+      id: ITEM_ID,
+      quantity_on_hand: 7,
+    } as never);
+    const boom = new Error('revalidateTag unavailable');
+    vi.mocked(revalidateInventoryList).mockImplementationOnce(() => {
+      throw boom;
+    });
+
+    const { status, body } = await post({ quantityChange: 1 });
+
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.quantityOnHand).toBe(7);
+    expect(reportError).toHaveBeenCalledWith(boom, { tag: 'api.v1.items.adjust.revalidate' });
+  });
+
+  it('never invalidates when the write itself was refused', async () => {
+    vi.spyOn(InventoryService.prototype, 'adjustStock').mockRejectedValue(
+      new ServiceError('validation_error', 'Insufficient stock for this adjustment'),
+    );
+
+    await post({ quantityChange: -1 });
+
+    expect(revalidateInventoryList).not.toHaveBeenCalled();
+  });
+
+  // Both an MFA step-up refusal and a missing permission are 403 'forbidden';
+  // only `details.reason` tells the phone which one to explain.
+  it('forwards the MFA gate reason so the phone can say "sign in again"', async () => {
+    vi.mocked(assertPermission).mockImplementationOnce(() => {
+      throw mfaGateError({ mfaEnrolled: true });
+    });
+
+    const { status, body } = await post({ quantityChange: 1 });
+
+    expect(status).toBe(403);
+    expect(body.error).toBe('forbidden');
+    expect(body.details).toEqual({ reason: 'aal2_required' });
+  });
+
+  // A user outside the item's warehouse is refused BEFORE the write runs. The
+  // warehouse helper throws ForbiddenError (not a ServiceError), which used to
+  // fall through to the 500 branch; the phone reads any 5xx as "may or may not
+  // have been saved", so a refusal looked like a possible write and invited a
+  // second tap.
+  it('answers a warehouse-write refusal as 403, never 500', async () => {
+    const WAREHOUSE = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+    vi.spyOn(InventoryService.prototype, 'adjustStock').mockRejectedValue(
+      new ForbiddenError(`User does not have write access to warehouse ${WAREHOUSE}.`),
+    );
+
+    const { status, body } = await post({ quantityChange: 1 });
+
+    expect(status).toBe(403);
+    expect(body.error).toBe('forbidden');
+    expect(body.message).toBe(ADJUST_WAREHOUSE_WRITE_REFUSED);
+    // The raw helper message names the warehouse; the phone shows `message`.
+    expect(JSON.stringify(body)).not.toContain(WAREHOUSE);
+    // A refusal is an answer, not an incident, and nothing was written.
+    expect(reportError).not.toHaveBeenCalled();
+    expect(revalidateInventoryList).not.toHaveBeenCalled();
+  });
+
+  it("answers the service's own warehouse refusal (a ServiceError) as 403 with its sentence", async () => {
+    vi.spyOn(InventoryService.prototype, 'adjustStock').mockRejectedValue(
+      new ServiceError('forbidden', ADJUST_WAREHOUSE_WRITE_REFUSED),
+    );
+
+    const { status, body } = await post({ quantityChange: -1 });
+
+    expect(status).toBe(403);
+    expect(body).toMatchObject({ error: 'forbidden', message: ADJUST_WAREHOUSE_WRITE_REFUSED });
+  });
+
+  it('bounds how long the write can run after the phone gave up (maxDuration is pinned)', async () => {
+    // The phone's "Not confirmed" window (UNCONFIRMED_SETTLE_MS, 90 s) is
+    // derived from this bound; the project default would be 300 s.
+    const mod = await import('./route');
+    expect(mod.maxDuration).toBe(30);
+  });
+
+  it('never forwards details on an internal_error (raw DB text stays server-side)', async () => {
+    vi.spyOn(InventoryService.prototype, 'adjustStock').mockRejectedValue(
+      new ServiceError('internal_error', 'relation "stock_movements" violates policy', {
+        table: 'stock_movements',
+      }),
+    );
+
+    const { status, body } = await post({ quantityChange: 1 });
+
+    expect(status).toBe(500);
+    expect(body.details).toBeUndefined();
+    expect(JSON.stringify(body)).not.toMatch(/stock_movements/);
   });
 
   it('rejects a zero delta — a no-op adjustment would still write a movement row', async () => {

@@ -91,17 +91,46 @@ export interface DashboardWarehouse {
   name: string;
 }
 
-export const getWarehousesForRequest = cache(
-  async (organizationId: string): Promise<DashboardWarehouse[]> => {
+/**
+ * The org's non-archived warehouses AND whether the read succeeded.
+ *
+ * getWarehouseAccess (lib/auth/warehouse.ts) shares this read with the
+ * dashboard layout, and it must be able to tell "the org has no warehouses"
+ * from "the read failed": supabase-js RESOLVES a failed query as `{ data:
+ * null, error }`, which the list-only helper below turns into `[]`. That is fine
+ * for a picker and wrong for an access answer, so the outcome travels with
+ * the rows here. One cached read serves both helpers.
+ */
+export interface WarehousesRead {
+  rows: DashboardWarehouse[];
+  failed: boolean;
+}
+
+export const readWarehousesForRequest = cache(
+  async (organizationId: string): Promise<WarehousesRead> => {
     const supabase = await createClient();
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('warehouses')
       .select('id, name')
       .eq('organization_id', organizationId)
       .neq('status', 'archived')
       .order('name', { ascending: true });
-    return (data ?? []) as DashboardWarehouse[];
+    if (error) {
+      console.error('[readWarehousesForRequest] warehouses query failed:', error.message);
+      return { rows: [], failed: true };
+    }
+    return { rows: (data ?? []) as DashboardWarehouse[], failed: false };
   },
+);
+
+/**
+ * The warehouse list for pickers and switchers: `[]` when the read failed,
+ * exactly as before. Anything that DECIDES access from this list reads
+ * readWarehousesForRequest instead, so a failure cannot pass for an answer.
+ */
+export const getWarehousesForRequest = cache(
+  async (organizationId: string): Promise<DashboardWarehouse[]> =>
+    (await readWarehousesForRequest(organizationId)).rows,
 );
 
 export interface MfaFactor {

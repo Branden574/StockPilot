@@ -72,6 +72,7 @@ import {
 } from '@stockpilot/core';
 
 import { assertModuleEnabled, assertPermission, assertPlanLimit, ServiceError, withContext, type PlanLimitSlot, type ServiceContext } from './context';
+import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { fetchAllRows } from './lib/paginate';
 import { audit, type AuditEvent } from './audit';
 import { dispatchEvent } from './integration-events';
@@ -254,6 +255,15 @@ function buildItemSearchClause(rawQ: string, isbnVariants?: string[]): string | 
 // as one named constant so the create path cannot silently drift to a different
 // number than the bulk path.
 const RACK_PLACE_CONCURRENCY = 20;
+
+/**
+ * adjustStock's refusal when the item sits in a warehouse the caller cannot
+ * write to. Shown verbatim on the phone (the /api/v1 adjust route forwards
+ * ServiceError messages), so it is a sentence, not the ForbiddenError text,
+ * which carries the warehouse uuid.
+ */
+export const ADJUST_WAREHOUSE_WRITE_REFUSED =
+  "You do not have write access to this item's warehouse.";
 
 // Model B — "one product = one SKU": these are the SHARED product columns.
 // Editing any of them on ONE placement (inventory_items row) of a SKU must
@@ -2286,6 +2296,9 @@ export class InventoryService {
       }
       throw new ServiceError('internal_error', error.message);
     }
+    // Right after the insert, before the opening movement and auto-place can
+    // throw: the row exists from here on whatever happens next.
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.create');
 
     if (input.quantityOnHand && input.quantityOnHand > 0) {
       // The result USED TO BE DISCARDED — no destructuring at all — so an
@@ -2515,6 +2528,8 @@ export class InventoryService {
       }
       throw new ServiceError('internal_error', rpcErr.message);
     }
+    // duplicate_inventory_item inserted the copy (and its opening movement).
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.duplicate');
 
     // Recompute the identity 0299 cleared. `buildVariantKey` lives in
     // packages/core and is the ONE place a key is built, so the recompute reads
@@ -2621,7 +2636,12 @@ export class InventoryService {
       .update({ variant_key: variantKey })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', itemId);
-    if (updErr) console.warn('[recomputeVariantKey] update failed', updErr.message);
+    if (updErr) {
+      console.warn('[recomputeVariantKey] update failed', updErr.message);
+      return;
+    }
+    // variant_key is a list column and the write bumps updated_at.
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.recompute_variant_key');
   }
 
   /**
@@ -3015,6 +3035,9 @@ export class InventoryService {
       }
       throw new ServiceError('internal_error', error.message);
     }
+    // Before the opening movements and the size-run auto-place, either of
+    // which can throw after the variants already exist.
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.bulk_create_sized');
 
     const inserted = (data ?? []) as Array<{
       id: string;
@@ -3245,6 +3268,9 @@ export class InventoryService {
     // .update().eq() is FAIL-OPEN under RLS: no error, no row (pattern #2). A
     // partial compensation is still a broken ledger, so it counts as a failure.
     const compensated = ((zeroed ?? []) as Array<{ id: string }>).length;
+    // Every exit below throws; the zeroed quantities must not be served from
+    // the cache as the opening stock that was just rolled back.
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.compensate_opening_stock');
 
     // (c) PROVE the placements are gone. Both writes above are filtered updates,
     // so "no error" is not evidence that anything was matched — and the level
@@ -3465,6 +3491,7 @@ export class InventoryService {
       }
       throw new ServiceError('internal_error', error.message);
     }
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.bulk_create');
 
     const createdIds = (inserted ?? []).map((r: { id: string }) => r.id);
 
@@ -3804,6 +3831,10 @@ export class InventoryService {
       }
       throw new ServiceError('internal_error', error.message);
     }
+    // The target row committed; the sibling fan-out below can still throw.
+    // The AI applyReorderPoint tool calls this with no invalidation of its own,
+    // so a changed reorder point left the cached low-stock badge wrong.
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.update');
 
     // Model B: fan out shared product fields to every OTHER placement of
     // this SKU. Keyed on the ORIGINAL sku (captured above, before the patch)
@@ -4286,6 +4317,7 @@ export class InventoryService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.archive');
 
     // Movement/Activity P3 Task 1: archiving an item deliberately PRESERVES
     // quantity_on_hand (no stock physically moves), so no stock_movements
@@ -4499,6 +4531,8 @@ export class InventoryService {
         },
       );
       if (error) throw new ServiceError('internal_error', error.message);
+      // The rack label committed; the stock placement below is best-effort.
+      invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.bulk_set_rack');
       const ok = typeof updatedCount === 'number' ? updatedCount : 0;
       // Emit a per-item audit row for the set_rack mutation. We don't
       // know which of `allowedIds` survived RLS, so this slightly
@@ -4777,6 +4811,7 @@ export class InventoryService {
       .eq('organization_id', this.ctx.organizationId)
       .in('id', allowedIds);
     if (error) throw new ServiceError('internal_error', error.message);
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, `item.bulk_${input.op.kind}`);
 
     // Emit one audit row per affected item so the per-item history
     // surfaces in the "View history" link on the Recovery page and in
@@ -4824,6 +4859,7 @@ export class InventoryService {
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     if (error) throw new ServiceError('internal_error', error.message);
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.soft_delete');
 
     // Movement/Activity P3 Task 1: same rationale as archive() — soft-delete
     // deliberately PRESERVES quantity_on_hand, so no stock_movements row is
@@ -4924,7 +4960,24 @@ export class InventoryService {
       );
     }
     const wh = (item as { warehouse_id?: string | null }).warehouse_id ?? null;
-    if (wh) await assertWarehouseAccess(wh, 'write', this.ctx);
+    if (wh) {
+      // assertWarehouseAccess throws ForbiddenError, which is not a
+      // ServiceError: every caller's error mapping (the /api/v1 adjust and
+      // remove-stock routes, the web actions' toResult) sent it down the
+      // unknown-error path, so a user outside the item's warehouse got a 500 /
+      // "Something went wrong". On the phone a 5xx means "may or may not have
+      // been saved", which invites a second tap on a write that was refused
+      // before anything ran. It is an authorization refusal: say so, as a 403.
+      // The message names no warehouse id (the raw one carries the uuid).
+      try {
+        await assertWarehouseAccess(wh, 'write', this.ctx);
+      } catch (e) {
+        if (e instanceof ForbiddenError) {
+          throw new ServiceError('forbidden', ADJUST_WAREHOUSE_WRITE_REFUSED);
+        }
+        throw e;
+      }
+    }
 
     // A manual ADD with no explicit location must NOT land in Staging: the
     // adjust_stock RPC routes a null positive delta there (Staging is only for
@@ -4973,6 +5026,7 @@ export class InventoryService {
       }
       throw new ServiceError('internal_error', error.message);
     }
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'stock.adjust');
     // adjust_stock is atomic and RETURNS the authoritative updated row (see
     // 0004_phase2_helpers.sql — `returns public.inventory_items`). Derive the
     // new qty from that returned row, not the pre-RPC read, so concurrent
@@ -5250,6 +5304,9 @@ export class InventoryService {
       }
       throw new ServiceError('internal_error', error.message);
     }
+    // A transfer keeps quantity_on_hand but moves the holding, and the list's
+    // Staged/Unplaced/Placed columns and rack chips are derived from holdings.
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'stock.transfer');
 
     // Capture-gap fix (Task 1d): same rationale as adjustStock above — this
     // event is suppressed from the item feed (Task 2) since the movement
@@ -5386,6 +5443,8 @@ export class InventoryService {
         console.warn('[placement] crate label stamp failed (stock still placed):', error.message);
       } else if (data === 0) {
         console.warn('[placement] crate label stamp matched no rows (stock still placed)');
+      } else {
+        invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.stamp_placement_bin');
       }
       return;
     }
@@ -5403,7 +5462,9 @@ export class InventoryService {
     });
     if (error) {
       console.warn('[placement] bin_location stamp failed (stock still placed):', error.message);
+      return;
     }
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.stamp_placement_bin');
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -6449,6 +6510,12 @@ export class InventoryService {
           p_rack_row: batch.rackRow,
         },
       );
+      // Any error-free call may have rewritten rows, including a short count
+      // the report below treats as failed: book_crate_* / rack keys live in
+      // custom_fields, which the list rows carry, and the write bumps updated_at.
+      if (!rpcError) {
+        invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.sync_book_crate');
+      }
       // FAIL-CLOSED ON THE REPORT, not on the stock (recurring pattern #2: a
       // write whose affected-row count is never checked fails open). The RPC
       // returns its real row count, so 0 rows means the summary did NOT change

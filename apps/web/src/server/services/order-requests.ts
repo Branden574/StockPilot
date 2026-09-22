@@ -32,6 +32,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
 
@@ -1887,12 +1888,19 @@ export class OrderRequestsService {
     // path explicitly. Managers themselves are unaffected: the RPC's
     // own role check still permits any non-terminal cancel.
     if (this.ctx.role !== 'owner' && this.ctx.role !== 'admin' && this.ctx.role !== 'manager') {
-      const { data: row } = await this.ctx.supabase
+      const { data: row, error: rowErr } = await this.ctx.supabase
         .from('order_requests')
         .select('status, requester_user_id')
         .eq('organization_id', this.ctx.organizationId)
         .eq('id', id)
         .maybeSingle();
+      // This read DECIDES whether the requester may cancel, and the RPC does
+      // not repeat the rule (it accepts any owner-or-manager cancel of a
+      // non-terminal order). With the error discarded, a failed read left
+      // `row` null, skipped the rule, and let a requester cancel their order
+      // after approval: releasing its reservations, or restocking units out
+      // from under the picker who claimed it. Deny.
+      if (rowErr) throw new ServiceError('internal_error', rowErr.message);
       if (
         row &&
         (row as { requester_user_id: string | null }).requester_user_id === this.ctx.userId
@@ -1926,6 +1934,10 @@ export class OrderRequestsService {
         throw new ServiceError('validation_error', 'This request can no longer be cancelled');
       throw new ServiceError('internal_error', msg);
     }
+    // cancel_order_request restocks a picked-but-undelivered batch through
+    // adjust_stock. The AI cancelOrder tool reaches this method with no
+    // invalidation of its own, so the Items list kept the drawn-down quantity.
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'order.cancel');
     const row = data as OrderRequestRow;
     // Live tracking: drop any driver GPS point once the order is cancelled
     // (best-effort — the public endpoint already gates on in_transit).
@@ -2295,6 +2307,8 @@ export class OrderRequestsService {
         throw new ServiceError('forbidden', 'Not allowed to complete picking on this order.');
       throw new ServiceError('internal_error', 'Could not complete picking.');
     }
+    // complete_picking draws the picked batch off the shelf (adjust_stock).
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'order.complete_picking');
     const row = data as OrderRequestRow;
     await audit(
       { event: 'order.picking_complete', entityType: 'order_request', entityId: id },
@@ -2390,6 +2404,12 @@ export class OrderRequestsService {
       // an internal-configuration failure, not something the caller can fix.
       throw new ServiceError('internal_error', 'Could not reopen picking.');
     }
+    // reopen_picking gives complete_picking's draw back to the shelf through
+    // adjust_stock. The web reopenPickingAction only revalidated the order
+    // pages (the v1 transition route did invalidate), so after a manager
+    // reopened an order on the web the Items list kept showing the picked
+    // units as gone for up to the 60s TTL.
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'order.reopen_picking');
     const row = data as OrderRequestRow;
     await audit(
       {

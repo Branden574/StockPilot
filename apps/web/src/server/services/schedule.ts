@@ -10,6 +10,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 import type {
   CreateScheduleEventInput,
@@ -498,7 +499,16 @@ export class ScheduleService {
               p_notes: 'Auto-distributed on event completion',
             },
           );
-          if (distErr) {
+          if (!distErr) {
+            // distribute_bundle drew every component off the shelf. The only
+            // caller, updateScheduleEventAction, revalidates the schedule pages
+            // alone, so completing an event left the Items list showing the
+            // pre-distribution quantities for up to the 60s TTL.
+            invalidateInventoryListAfterWrite(
+              this.ctx.organizationId,
+              'schedule.distribute_bundle',
+            );
+          } else {
             // 23505 = unique_violation. The unique partial index on
             // bundle_distributions(schedule_event_id) is the source
             // of truth — if it trips, somebody else already
