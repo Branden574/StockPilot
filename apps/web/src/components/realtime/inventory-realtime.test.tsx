@@ -295,6 +295,71 @@ describe('InventoryRealtime refreshes', () => {
     expect(h.refresh).not.toHaveBeenCalled();
   });
 
+  it('a refresh that never settles does not stop live updates: after 15 s the lock is released', async () => {
+    // A navigation discards the pending router action but not our promise, and
+    // a fetch can hang (half-open connection after a laptop wakes). The old
+    // one-action-per-event code recovered from that by itself; the lock must too.
+    h.revalidate.mockImplementationOnce(() => new Promise<boolean>(() => {}));
+    const nudge = await mountAndGetNudge();
+    vi.useFakeTimers();
+
+    nudge(); // starts the refresh that will never settle
+    await vi.advanceTimersByTimeAsync(5_000);
+    nudge(); // during the stall: only remembered
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+    expect(h.refresh).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(10_000); // watchdog: 15 s after the start
+    // No render is coming from the stalled action, so we refresh ourselves,
+    // and the event remembered during the stall is honoured.
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(h.revalidate).toHaveBeenCalledTimes(2);
+
+    // Live updates still work afterwards.
+    await vi.advanceTimersByTimeAsync(1_000);
+    nudge();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(h.revalidate).toHaveBeenCalledTimes(3);
+  });
+
+  it('a late answer from an abandoned refresh changes nothing', async () => {
+    let finishLate!: (v: boolean) => void;
+    h.revalidate.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishLate = resolve;
+        }),
+    );
+    let finishSecond!: (v: boolean) => void;
+    h.revalidate.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishSecond = resolve;
+        }),
+    );
+    const nudge = await mountAndGetNudge();
+    vi.useFakeTimers();
+
+    nudge();
+    await vi.advanceTimersByTimeAsync(15_000); // abandoned; router.refresh fallback
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    nudge(); // second refresh starts and holds the lock
+    await vi.advanceTimersByTimeAsync(300);
+    expect(h.revalidate).toHaveBeenCalledTimes(2);
+
+    finishLate(true); // the abandoned one answers now: must not release the lock
+    await vi.advanceTimersByTimeAsync(0);
+    nudge();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(h.revalidate).toHaveBeenCalledTimes(2); // still one at a time
+
+    finishSecond(true);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(h.revalidate).toHaveBeenCalledTimes(3); // the remembered event runs
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+  });
+
   it('stops listening for visibility once unmounted', async () => {
     const { unmount } = render(<InventoryRealtime organizationId="org-1" />);
     await waitFor(() => expect(h.handlers.length).toBe(5));

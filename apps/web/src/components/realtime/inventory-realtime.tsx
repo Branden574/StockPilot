@@ -93,6 +93,25 @@ const REALTIME_SKIP_PREFIXES = [
  */
 const THROTTLE_MS = 250;
 
+/**
+ * How long a refresh may hold the one-at-a-time lock before we stop waiting.
+ *
+ * The lock is our own flag, released when the Server Action's promise
+ * settles, and that promise settles only when its fetch does. A navigation
+ * DISCARDS the pending router action (app-router-instance.js dispatchAction:
+ * "Mark the pending action as discarded ... and start the navigation action
+ * immediately") but does not settle our promise, and a fetch can hang for the
+ * function's maxDuration, or indefinitely on a half-open connection after a
+ * laptop wakes. Without a limit, every later event would only set `rerun` and
+ * live updates would stop on every page until that fetch gave up; the old
+ * one-action-per-event code recovered on its own. After this long we release
+ * the lock and fall back to router.refresh(). If the stalled action is still
+ * queued, that refresh waits behind it (only navigations jump the queue), so
+ * this is never worse than before; if a navigation discarded it, the refresh
+ * runs at once. A late answer from the abandoned action is ignored.
+ */
+const ACTION_WATCHDOG_MS = 15_000;
+
 export function InventoryRealtime({
   organizationId,
   tables = DEFAULT_TABLES,
@@ -185,12 +204,21 @@ export function InventoryRealtime({
         }
         inFlight = true;
         lastRefreshRef.current = Date.now();
-        let revalidated = false;
-        try {
-          revalidated = (await revalidateInventoryViewAction()) === true;
-        } catch {
-          revalidated = false;
-        }
+        let watchdog: ReturnType<typeof setTimeout> | undefined;
+        // false on failure, on "did not invalidate" and on the watchdog: in
+        // all three no re-render is coming from the action, so we refresh.
+        // The race continues exactly once, so an abandoned action's late
+        // answer resolves a promise nobody awaits and cannot touch the lock.
+        const revalidated = await Promise.race([
+          revalidateInventoryViewAction().then(
+            (r) => r === true,
+            () => false,
+          ),
+          new Promise<false>((resolve) => {
+            watchdog = setTimeout(() => resolve(false), ACTION_WATCHDOG_MS);
+          }),
+        ]);
+        if (watchdog) clearTimeout(watchdog);
         inFlight = false;
         if (cancelled) return;
         if (!revalidated) {

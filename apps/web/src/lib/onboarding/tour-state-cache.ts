@@ -1,3 +1,10 @@
+'use client';
+
+// BROWSER-ONLY, enforced: the cache below is module state. In the browser that
+// is one person's session; imported by server code it would be one cache for
+// every request on the instance, i.e. one person's tour state served to
+// another. 'use client' makes a server import receive client references that
+// throw when called, instead of silently sharing state.
 import {
   getTourStateAction,
   recordTourOutcomeAction,
