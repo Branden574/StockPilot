@@ -410,13 +410,21 @@ export interface ItemListFilters {
   updatedSince?: string;
   updatedUntil?: string;
   /**
-   * Include rental items in the result. Default false — every regular
-   * inventory surface (/dashboard/inventory, /dashboard/books, the
-   * order picker, AI search, reports) should leave this off so
-   * circulating assets (canopies, supplies) don't show up alongside
-   * sellable items. /dashboard/rentals/items passes true.
+   * List ONLY rental items (`is_rental = true`). Default false, which lists
+   * only non-rentals — every regular inventory surface (/dashboard/inventory,
+   * /dashboard/books, the order picker, AI search, reports) leaves this off so
+   * circulating assets (canopies, supplies) don't show up alongside sellable
+   * items. /dashboard/rentals/items passes true.
+   *
+   * It is a filter IN THE QUERY, not an opt-out of one. Until 2026-09-22 this
+   * was `includeRentals`, which only dropped the `is_rental = false` filter:
+   * the rentals page then fetched the first 50 of EVERY item and kept the
+   * rentals among them. In an organization with 404 active items and two
+   * rentals, updated 76th and 160th most recently, page one held neither, so
+   * the page said "No rental items yet" and drew no page links — the rentals
+   * could not be reached on web at all.
    */
-  includeRentals?: boolean;
+  rentalsOnly?: boolean;
   /**
    * When true, restricts to rows the system auto-archived on zero stock
    * (`inventory_items.auto_archived = true`, migration 0266) — backs the
@@ -1035,13 +1043,12 @@ export class InventoryService {
     // Rentals (circulating assets like canopies) are a separate
     // inventory class. Every regular surface (this list method is
     // used by /dashboard/inventory, /dashboard/books, the orders
-    // picker, AI search, etc.) leaves includeRentals undefined,
-    // which means is_rental=false — rental items never leak in.
-    // Only /dashboard/rentals/items explicitly opts in by passing
-    // includeRentals: true.
-    if (!filters.includeRentals) {
-      query = query.eq('is_rental', false);
-    }
+    // picker, AI search, etc.) leaves rentalsOnly undefined, which
+    // means is_rental=false — rental items never leak in. Only
+    // /dashboard/rentals/items passes rentalsOnly: true, and gets
+    // ONLY rentals, so its page size and total count rentals.
+    // `is_rental` is NOT NULL (0131), so the equality is total.
+    query = query.eq('is_rental', filters.rentalsOnly === true);
 
     if (filters.createdSince) query = query.gte('created_at', filters.createdSince);
     if (filters.createdUntil) query = query.lt('created_at', filters.createdUntil);
@@ -1144,9 +1151,7 @@ export class InventoryService {
       if (filters.excludeBundles) {
         sumQuery = sumQuery.or('is_bundle.is.null,is_bundle.eq.false');
       }
-      if (!filters.includeRentals) {
-        sumQuery = sumQuery.eq('is_rental', false);
-      }
+      sumQuery = sumQuery.eq('is_rental', filters.rentalsOnly === true);
       if (filters.createdSince) sumQuery = sumQuery.gte('created_at', filters.createdSince);
       if (filters.createdUntil) sumQuery = sumQuery.lt('created_at', filters.createdUntil);
       if (filters.updatedSince) sumQuery = sumQuery.gte('updated_at', filters.updatedSince);

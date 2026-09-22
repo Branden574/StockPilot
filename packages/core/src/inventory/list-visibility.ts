@@ -77,3 +77,46 @@ export function belongsToInventoryView(
   const want = inventoryViewPredicate(view);
   return row.item_type === want.itemType && row.is_rental !== true;
 }
+
+/**
+ * RENTAL ITEMS — the third list, and the one mobile was missing.
+ *
+ * Rentals are their own inventory class: web lists them on Rentals -> Items
+ * (any `item_type`, `is_rental = true`), and the Items and Books tabs above
+ * exclude them. Until 2026-09-22 mobile had no rental-items list at all — its
+ * Rentals screen lists checkouts (the `rentals` table) — so its Items tab,
+ * which forgot the rental filter, was by accident the only place a phone could
+ * browse rental items. Giving the Items tab the right filter therefore needed
+ * this list to exist first, or rental items would have vanished from mobile.
+ */
+export interface RentalItemsPredicate {
+  /** Every type: a rental can be a product, a book, anything. */
+  itemType: null;
+  isRental: true;
+}
+
+export const rentalItemsPredicate: RentalItemsPredicate = { itemType: null, isRental: true };
+
+/** Does a row belong on the Rental Items list? */
+export function isRentalItemRow(row: { is_rental?: boolean | null }): boolean {
+  return row.is_rental === true;
+}
+
+/**
+ * Which list a row is browsed on. Every product and every book lands on EXACTLY
+ * one — that is the invariant that makes "exists on web, exists on mobile" hold
+ * for the rows both clients can read. `null` means no list shows it, which is
+ * only possible for an item type neither tab knows.
+ */
+export type InventoryBrowseList = InventoryListView | 'rentals';
+
+export function browseListFor(row: {
+  item_type?: string | null;
+  is_rental?: boolean | null;
+}): InventoryBrowseList | null {
+  if (isRentalItemRow(row)) return 'rentals';
+  if (belongsToInventoryView(row, 'items')) return 'items';
+  if (belongsToInventoryView(row, 'books')) return 'books';
+  return null;
+}
+
