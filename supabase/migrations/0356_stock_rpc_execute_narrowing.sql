@@ -1,0 +1,66 @@
+-- 0356_stock_rpc_execute_narrowing.sql
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Close post_shipment_shipped(uuid) to every anonymous and signed-in caller.
+-- It writes the stock ledger and nothing legitimate has called it since the
+-- Shipments feature was removed in May 2026.
+--
+-- WHAT THE LIVE CATALOG SAYS (read-only catalog queries, 2026-09-22):
+--   proacl    = {=X/postgres, postgres=X, anon=X, authenticated=X, service_role=X}
+--   prosecdef = false (SECURITY INVOKER), search_path pinned, body
+--               identical to 0073 (its last CREATE OR REPLACE).
+--   So any signed-in user, and anon (by its own grant and through PUBLIC),
+--   can reach it at POST /rest/v1/rpc/post_shipment_shipped, outside every
+--   server route.
+--
+-- WHAT IT DOES WHEN CALLED: locks a shipments row, refuses anything but
+-- status 'draft', gates on has_org_role(org, 'manager'), then runs
+-- adjust_stock(item, -qty_shipped, 'transfer', null, 'Shipment <WO#>') for
+-- every shipment_lines row, tries to release the linked order's
+-- stock_reservations, and flips the shipment to 'shipped'.
+--
+-- WHY NO LEGITIMATE CALLER EXISTS:
+--   * Commit 98c65656 (2026-05-21, "remove deprecated shipments feature
+--     end-to-end") deleted ShipmentsService.markShipped, its only caller,
+--     after 0114 had already made the surface read-only. On 2026-09-22 there
+--     is no reference in apps/web, apps/mobile or packages.
+--   * The live catalog has no SQL function, RLS policy or cron job that
+--     references it (prosrc, pg_policies and cron.job scanned the same day).
+--   * The live table holds 9 shipments (2 cancelled, 3 shipped, 4 delivered)
+--     and none in 'draft'. The last shipments write, and the last
+--     'Shipment ...' stock movement, were both on 2026-05-15. Every real
+--     shipment therefore fails the draft check: no call any flow could make
+--     today succeeds.
+--
+-- WHY IT STILL MATTERS: the one way left to make it write is to INSERT a
+-- draft shipment and its lines through PostgREST first (0067 granted DML on
+-- both tables to authenticated and the manager write policies still stand),
+-- then call this RPC. No app performs that sequence, so any such call is
+-- someone driving the database directly, into code nobody has maintained
+-- since 0073. Evidence it is unmaintained: its 0073 reservation release
+-- updates nothing for a signed-in caller, because stock_reservations_no_update
+-- (USING false) hides every row from authenticated, so the "released" holds
+-- silently stay held.
+--
+-- WHAT THIS CHANGES: EXECUTE is revoked from public, anon and authenticated,
+-- and restated for service_role, the 0329 Group 3c idiom for orphaned RPCs
+-- (generate_sku, log_audit). The body, the owner and the deprecated tables
+-- are untouched, and historical shipment rows stay readable. service_role
+-- keeps EXECUTE only as the ops path. It cannot post a shipment either: under
+-- service_role auth.uid() is null, has_org_role returns false, and the body
+-- raises 'forbidden'. If the RPC is ever wired back into an app, grant it
+-- deliberately and give it a pgTAP test first.
+--
+-- pgTAP asserts the closed grants through the catalog only
+-- (supabase/tests/0356_stock_rpc_execute_narrowing.test.sql). Calling a
+-- function the caller lacks EXECUTE on, under a supautils hint role,
+-- segfaulted Postgres images before 17.6.1.155, and CI may still pin one.
+--
+-- Idempotent: REVOKE of an absent privilege and GRANT of a held one are
+-- no-ops.
+--
+-- ROLLBACK (manual, for reference; do not ship):
+--   grant execute on function public.post_shipment_shipped(uuid) to authenticated;
+-- ─────────────────────────────────────────────────────────────────────────────
+
+revoke execute on function public.post_shipment_shipped(uuid) from public, anon, authenticated;
+grant  execute on function public.post_shipment_shipped(uuid) to service_role;
