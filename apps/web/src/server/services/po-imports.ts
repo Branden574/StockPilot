@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import { audit } from './audit';
 import { InventoryService } from './inventory';
+import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import {
   VendorItemMappingsService,
 } from './vendor-item-mappings';
@@ -1544,6 +1545,10 @@ export class PoImportsService {
               .select('id')
               .maybeSingle();
             if (rcErr) throw new ServiceError('internal_error', rcErr.message);
+            // A later line can still throw; invalidate as soon as the first
+            // re-charter commits (Next expires the tag at request end, so this
+            // one call also covers the rest of approve's writes).
+            invalidateInventoryListAfterWrite(this.ctx.organizationId, 'po_import.approve');
           } else {
             // Pre-existing item under a different charter → create a qty-0
             // sibling under the selected charter (receiving posts the stock).
@@ -1596,6 +1601,11 @@ export class PoImportsService {
             .update({ status: 'archived', deleted_at: new Date().toISOString() })
             .eq('organization_id', this.ctx.organizationId)
             .eq('id', oid);
+        }
+        if (orphanIds.length > 0) {
+          // The orphans were Expected rows: the instant dataset and the
+          // Expected-chip count both carry them until this is invalidated.
+          invalidateInventoryListAfterWrite(this.ctx.organizationId, 'po_import.approve');
         }
         if (remap.size > 0) {
           for (const l of inventoryLines) {
@@ -1804,6 +1814,10 @@ export class PoImportsService {
         .update({ created_from_purchase_order_id: po.id as string })
         .eq('organization_id', this.ctx.organizationId)
         .in('id', createdItemIds);
+      // No list view reads this column, but every inventory_items UPDATE
+      // bumps updated_at (tg_inventory_items_set_updated_at, 0242 only spares
+      // embedding/search_vector), and updated_at is the default sort key.
+      invalidateInventoryListAfterWrite(this.ctx.organizationId, 'po_import.approve');
     }
 
     // Link the import to the PO it produced. status/approved_at/approved_by
@@ -2373,6 +2387,11 @@ export class PoImportsService {
         .in('id', toArchive.map((c) => c.id))
         .eq('status', 'active') // race guard
         .select('id, name');
+      // Unconditional: `flipped` is null both when nothing matched and when
+      // the update errored, and an errored response does not prove nothing
+      // committed. cancelPoImportAction and the v1 cancel route revalidated
+      // only the import pages, so these rows stayed in the cached views.
+      invalidateInventoryListAfterWrite(this.ctx.organizationId, 'po_import.cancel');
       for (const item of (flipped ?? []) as Array<{ id: string; name: string }>) {
         await audit(
           {

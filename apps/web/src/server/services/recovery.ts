@@ -7,6 +7,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 // Tags are hard-deleted (no deleted_at column in the schema), so they
 // can't be recovered — exclude from this surface. The other four
@@ -135,6 +136,10 @@ export class RecoveryService {
     // Fail closed: a 0-row update means the row is gone or wasn't deleted —
     // don't audit a restore that didn't happen.
     if (!row) throw new ServiceError('not_found', 'Record not found or not deleted.');
+    // Every RecoveryEntity feeds the cached Items/Books payload: an item comes
+    // back into the rows, and categories/locations/suppliers are its cached
+    // lookup tables under the same tag.
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, `recovery.restore.${entity}`);
     void audit(
       {
         event: 'recovery.restored',

@@ -6,6 +6,7 @@ import type { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import { ServiceError, type ServiceContext } from './context';
+import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { createNotification } from './notifications';
 
 // ---------------------------------------------------------------------------
@@ -162,6 +163,10 @@ export async function archiveExpiredZeroStockItems(
     .select('id, name');
   if (updErr) throw new ServiceError('internal_error', updErr.message);
   const archived = (done ?? []) as Array<{ id: string; name: string }>;
+  if (archived.length > 0) {
+    // Archived rows leave the default (active) view.
+    invalidateInventoryListAfterWrite(ctx.organizationId, 'item.auto_archive');
+  }
 
   for (const item of archived) {
     await audit(

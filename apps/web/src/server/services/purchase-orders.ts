@@ -14,6 +14,7 @@ import {
   type AutoReorderCandidate,
   type AutoReorderSettings,
 } from './auto-reorder';
+import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { fetchAllRows } from './lib/paginate';
 import { audit } from './audit';
 import { dispatchEvent } from './integration-events';
@@ -725,6 +726,10 @@ export class PurchaseOrdersService {
           organizationId: this.ctx.organizationId,
         });
       }
+      // The stamp bumps updated_at (tg_inventory_items_set_updated_at), the
+      // default view's sort key. The items themselves came from
+      // InventoryService.create, which already invalidated.
+      invalidateInventoryListAfterWrite(this.ctx.organizationId, 'po.create');
     }
 
     void audit(
@@ -942,6 +947,8 @@ export class PurchaseOrdersService {
           organizationId: this.ctx.organizationId,
         });
       }
+      // Same updated_at bump as the create() stamp.
+      invalidateInventoryListAfterWrite(this.ctx.organizationId, 'po.update');
     }
 
     void audit(
@@ -1283,6 +1290,8 @@ export class PurchaseOrdersService {
         });
         return;
       }
+      // Archived rows leave the default view.
+      invalidateInventoryListAfterWrite(this.ctx.organizationId, 'po.cancel.archive_custom_items');
 
       await Promise.all(
         ((flippedRows ?? []) as Array<{ id: string; name: string }>).map((item) =>

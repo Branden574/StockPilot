@@ -12,6 +12,7 @@ import { generateSku } from '@/lib/utils';
 import { PLANS, isUnlimited, type PlanId } from '@stockpilot/core';
 
 import { assertPermission, ServiceError, type ServiceContext } from './context';
+import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 // Hosts the book-lookup pipeline ever returns thumbnails from. Anything
 // else gets rejected by rehostCover() — a poisoned upstream API
@@ -647,6 +648,8 @@ export class BooksImportService {
 
     const inserted = (insertedRaw ?? []) as Array<{ id: string; barcode: string }>;
     result.created = inserted.length;
+    // Before the opening movements, whose failure path throws.
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'books.import');
 
     // Batch stock_movements for rows with a positive starting quantity.
     if (defaultQty > 0 && inserted.length > 0) {
@@ -784,6 +787,8 @@ export class BooksImportService {
       .in('id', stockedIds)
       .select('id');
     const compensated = ((zeroed ?? []) as Array<{ id: string }>).length;
+    // Every exit below throws; see InventoryService.compensateOpeningStockOrThrow.
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'books.compensate_opening_stock');
 
     // (c) PROVE the placements are gone. Both writes above are filtered updates,
     // so "no error" is not evidence anything was matched — and the level write

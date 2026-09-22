@@ -6,6 +6,7 @@ import { reportError } from '@/lib/error-reporter';
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { dispatchEvent } from './integration-events';
+import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { fetchAllRows } from './lib/paginate';
 
 import type {
@@ -280,6 +281,8 @@ export class ReceivingService {
       }
       throw new ServiceError('internal_error', error.message);
     }
+    // post_receipt_v2 put the accepted units into stock (adjust_stock).
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'receipt.post');
 
     const receipt = data as unknown as ReceiptRow;
     const totalAccepted = input.lines.reduce((s, l) => s + l.qtyAccepted, 0);
@@ -415,6 +418,8 @@ export class ReceivingService {
         });
         return;
       }
+      // An archived row coming back to 'active' re-enters the default view.
+      invalidateInventoryListAfterWrite(this.ctx.organizationId, 'receipt.auto_unarchive');
 
       // One audit row per item THIS call actually flipped — iterate the
       // UPDATE's returned rows, not the earlier SELECT. The
@@ -480,6 +485,8 @@ export class ReceivingService {
       }
       throw new ServiceError('internal_error', error.message);
     }
+    // reverse_receipt takes the received units back out (adjust_stock).
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'receipt.reverse');
 
     const reversal = data as unknown as ReceiptRow;
     await audit(

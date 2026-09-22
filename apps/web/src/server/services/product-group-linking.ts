@@ -18,6 +18,7 @@ import {
   ServiceError,
   type ServiceContext,
 } from './context';
+import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import type { ProductGroupsService } from './product-groups';
 
 /**
@@ -446,6 +447,9 @@ export async function linkFamily(
         'One of the selected items could not be updated. Nothing further was linked.',
       );
     }
+    // Per row, because a later row can refuse after this one committed.
+    // group_id / variant_* are list columns.
+    invalidateInventoryListAfterWrite(ctx.organizationId, 'sports.link_family');
     linked += 1;
 
     // One event per item, carrying who / before / after / why. A grouping that
@@ -672,6 +676,7 @@ export async function unlinkItems(
         'One of the selected items could not be updated. Nothing further was unlinked.',
       );
     }
+    invalidateInventoryListAfterWrite(ctx.organizationId, 'sports.unlink_items');
     unlinked += 1;
 
     void audit(

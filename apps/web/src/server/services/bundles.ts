@@ -10,6 +10,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 export interface BundleRow {
   id: string;
@@ -647,6 +648,8 @@ export class BundlesService {
       }
       throw new ServiceError('internal_error', msg);
     }
+    // assemble_bundle drew the components and credited the kit's phantom item.
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'bundle.assemble');
 
     const row = Array.isArray(data) ? data[0] : data;
     await audit(
@@ -704,6 +707,8 @@ export class BundlesService {
       }
       throw new ServiceError('internal_error', msg);
     }
+    // distribute_bundle drew every component off the shelf.
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'bundle.distribute');
     await audit(
       {
         event: 'bundle.distributed',

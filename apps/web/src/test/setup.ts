@@ -14,6 +14,19 @@ vi.mock('@/server/services/audit', () => ({
   audit: vi.fn(async () => undefined),
 }));
 
+// Same reason, same shape: every service stock write now calls
+// invalidateInventoryListAfterWrite, whose real revalidateTag throws outside a
+// Next request scope ("static generation store missing") and is then logged —
+// one console.warn per write in every service test. Only that never-throwing
+// wrapper is stubbed; inventoryListTag / revalidateInventoryList stay real so
+// the loader's own tests (which mock next/cache) still exercise them. A test
+// that asserts on the invalidation imports this vi.fn and inspects it, or
+// declares its own vi.mock of the module to run the real wrapper.
+vi.mock('@/server/services/lib/inventory-list-cache', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/lib/inventory-list-cache')>()),
+  invalidateInventoryListAfterWrite: vi.fn(),
+}));
+
 // Most React tests use happy-dom via the environmentMatchGlobs in vitest.config.
 // Only land DOM-flavoured polyfills when a window exists.
 if (typeof window !== 'undefined') {
