@@ -192,16 +192,18 @@ describe('inventoryListTag / revalidateInventoryList', () => {
       organizationId: 'org-2',
     } as Awaited<ReturnType<typeof withContext>>);
 
-    await revalidateInventoryListForCurrentOrg();
+    await expect(revalidateInventoryListForCurrentOrg()).resolves.toBe(true);
 
     expect(revalidateTag).toHaveBeenCalledWith('inventory-list-org-2', { expire: 0 });
   });
 
-  it('current-org helper never throws (a failed invalidation must not fail the write)', async () => {
+  it('current-org helper never throws (a failed invalidation must not fail the write), and says it did not invalidate', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.mocked(withContext).mockRejectedValue(new Error('no request scope'));
 
-    await expect(revalidateInventoryListForCurrentOrg()).resolves.toBeUndefined();
+    // false, not undefined: the realtime watcher refreshes the page itself
+    // when nothing was invalidated (components/realtime/inventory-realtime.tsx).
+    await expect(revalidateInventoryListForCurrentOrg()).resolves.toBe(false);
 
     expect(revalidateTag).not.toHaveBeenCalled();
     warn.mockRestore();

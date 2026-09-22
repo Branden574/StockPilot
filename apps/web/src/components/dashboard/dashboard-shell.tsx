@@ -7,6 +7,7 @@ import { EdgeSwipeOpener } from '@/components/dashboard/edge-swipe-opener';
 import { KeyboardShortcutsProvider } from '@/components/dashboard/keyboard-shortcuts';
 import { navForRole } from '@/components/dashboard/nav';
 import { NavProgressBar } from '@/components/dashboard/nav-progress-bar';
+import { SessionUserProvider } from '@/components/dashboard/session-user';
 import { OrderStatusConfigProvider } from '@/components/orders/order-status-config-provider';
 import { ImageDiagnostics } from '@/components/perf/image-diagnostics';
 import { PermissionsRealtime } from '@/components/realtime/permissions-realtime';
@@ -23,6 +24,7 @@ import { Topbar } from '@/components/dashboard/topbar';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { UpdateCenter } from '@/components/updates/update-center';
 import { identify } from '@/lib/analytics';
+import { forgetTourState } from '@/lib/onboarding/tour-state-cache';
 
 import type { ModuleId, NavOverrides, Permission, Role } from '@stockpilot/core';
 
@@ -159,6 +161,14 @@ export function DashboardShell({
     identify(userId, { email, organization_id: organizationId });
   }, [userId, email, organizationId]);
 
+  // The tour state is kept for the browser session, keyed by user
+  // (lib/onboarding/tour-state-cache.ts). When this shell renders for a
+  // different person (a sign-in as someone else in another tab reaches this
+  // one on its next navigation), drop the previous person's copy at once.
+  React.useEffect(() => {
+    forgetTourState(userId);
+  }, [userId]);
+
   // Pin the body to exactly viewport-height-without-overflow. We used to
   // do this with `overflow-hidden + h-dvh`, but on iOS Safari that
   // broke keyboard-dismiss flow: the inner <main> stayed scrolled to
@@ -271,7 +281,7 @@ export function DashboardShell({
         >
           <div className="min-h-full">
             <OrderStatusConfigProvider config={orderStatusConfig}>
-              {children}
+              <SessionUserProvider userId={userId}>{children}</SessionUserProvider>
             </OrderStatusConfigProvider>
           </div>
         </main>
