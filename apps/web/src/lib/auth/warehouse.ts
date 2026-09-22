@@ -55,8 +55,10 @@ export interface WarehouseAccess {
    * back with an error. The fields above then hold the narrowest answer the
    * role allows (see accessWhenUnreadable), and a caller that must not act on
    * a degraded answer at all (the mobile snapshot, whose full pull deletes
-   * every cached row it is not sent) refuses on it. Absent on every answer
-   * built from reads that succeeded, so success answers are unchanged.
+   * every cached row it is not sent) refuses on it. A surface that explains
+   * the scope (ScopedWarehouseNotice, the Items empty state) says the access
+   * could not be loaded rather than "no assigned warehouses". Absent on every
+   * answer built from reads that succeeded, so success answers are unchanged.
    */
   unreadable?: true;
 }

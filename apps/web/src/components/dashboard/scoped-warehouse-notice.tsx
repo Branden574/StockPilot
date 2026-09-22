@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
-import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
+import { readWarehousesForRequest } from '@/lib/dashboard/request-cache';
 import { requireOrgContext } from '@/lib/auth/session';
 import { buildWarehouseScope, scopedWarehouseMessage } from '@/lib/warehouse-scope';
 import { isManagerOrAbove, type Role } from '@stockpilot/core';
@@ -22,16 +22,24 @@ import { isManagerOrAbove, type Role } from '@stockpilot/core';
  *
  * For them, `getWarehouseAccess()` stays no-arg — the SAME memo key the
  * dashboard layout uses at layout.tsx:80; passing a ctx would fork
- * React.cache's per-args memo and re-query — and `getWarehousesForRequest` is
- * request-cached too.
+ * React.cache's per-args memo and re-query — and `readWarehousesForRequest` is
+ * the request-cached list the layout reads, with its outcome kept.
+ *
+ * A read that FAILED is said so, never shown as "no assigned warehouses": that
+ * line sends a staffer to an admin to fix access that is fine, when the fix is
+ * to reload. An unreadable access answer gets the "couldn't load" line; a
+ * failed name list, for someone who does have warehouses, gets a line that
+ * names none (buildWarehouseScope).
  */
 export async function ScopedWarehouseNotice({ className }: { className?: string }) {
   const ctx = await requireOrgContext();
   if (isManagerOrAbove(ctx.role as Role)) return null;
   const access = await getWarehouseAccess();
   if (access.hasAllAccess) return null;
-  const warehouses = await getWarehousesForRequest(ctx.organizationId);
-  const message = scopedWarehouseMessage(buildWarehouseScope(access, warehouses));
+  const names = await readWarehousesForRequest(ctx.organizationId);
+  const message = scopedWarehouseMessage(
+    buildWarehouseScope(access, names.failed ? null : names.rows),
+  );
   if (!message) return null;
   return <p className={className ?? 'text-muted-foreground mt-1 text-xs'}>{message}</p>;
 }
