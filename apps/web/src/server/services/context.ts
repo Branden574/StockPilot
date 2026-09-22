@@ -166,6 +166,14 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
   // Observing it does not swallow it: resolveMfaState awaits the SAME promise
   // and fails closed on it. Promise.resolve() because a stubbed reader need
   // not return a promise.
+  //
+  // KNOWN, INTENDED SIDE EFFECT: this GoTrue read now runs even for a request
+  // that requireOrgContext() is about to redirect (signed out, disabled). For
+  // a REVOKED session auth-js turns GoTrue's session_not_found into
+  // AuthSessionMissingError and removes the local session, so in an action or
+  // route handler a disabled user's auth cookies can be cleared a moment
+  // earlier than before. That only signs out a session that is already dead;
+  // it is not a regression.
   const factorsRead = Promise.resolve(getMfaFactorsForRequest());
   factorsRead.catch(() => {});
   const ctx = await requireOrgContext();
