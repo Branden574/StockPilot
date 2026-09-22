@@ -115,7 +115,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     // The adjustment changes the on-hand total shown in the cached Items/Books
     // views — refresh the org cache, same as every other stock write.
-    revalidateInventoryList(ctx.organizationId);
+    //
+    // The stock movement has COMMITTED by this line. An invalidation that
+    // threw used to fall into the catch below and answer 500, telling the
+    // phone its adjustment failed when it had not: the operator taps again
+    // and the stock moves twice. Since 2026-09-22 the iPhone item screen's
+    // +/-1, +/-5 and "Adjust with reason" all land here (they called the RPC
+    // directly before), so this is the write path for every manual phone
+    // adjustment. A missed invalidation costs at most the 60 s list-cache
+    // window; a false failure costs a double count. Report it, never fail.
+    try {
+      revalidateInventoryList(ctx.organizationId);
+    } catch (err) {
+      void reportError(err, { tag: 'api.v1.items.adjust.revalidate' });
+    }
 
     // adjust_stock is atomic and RETURNS the authoritative row, so the phone can
     // render the true new quantity instead of its own optimistic arithmetic
@@ -134,7 +147,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // through verbatim; only a genuinely unknown failure becomes a 500.
     if (e instanceof ServiceError) {
       return NextResponse.json(
-        { error: e.code, message: e.message },
+        {
+          error: e.code,
+          message: e.message,
+          // `details` is app-authored for every code except internal_error
+          // (whose detail is raw DB text, S13) — the same rule the transfer
+          // route applies. It is what carries `reason: 'aal2_required'` from
+          // the MFA gate (mfaGateError), which the phone needs to tell "sign in
+          // again with your authenticator" apart from "you lack stock:adjust";
+          // both are a 403 'forbidden' and only this field differs.
+          ...(e.code !== 'internal_error' && e.details ? { details: e.details } : {}),
+        },
         { status: serviceErrorStatus(e.code) },
       );
     }
