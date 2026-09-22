@@ -78,7 +78,15 @@ import 'server-only';
 
 import { revalidateTag, unstable_cache } from 'next/cache';
 
-import { can, isManagerOrAbove, type Permission, type RackHoldingLike, type Role } from '@stockpilot/core';
+import { inventoryViewPredicate } from '@stockpilot/core';
+
+import {
+  can,
+  isManagerOrAbove,
+  type Permission,
+  type RackHoldingLike,
+  type Role,
+} from '@stockpilot/core';
 
 import { INSTANT_MODE_MAX_ROWS } from '@/lib/inventory/instant-mode';
 import { isSiteLocation } from '@/lib/locations/groups';
@@ -490,7 +498,9 @@ async function loadInventoryRowsUncached(
   view: InventoryListView,
 ): Promise<InventoryListRowsPayload> {
   const admin = createAdminClient();
-  const itemType = view === 'books' ? 'book' : 'product';
+  // The SAME definition mobile's tabs use (@stockpilot/core): products or
+  // books, never rentals. Restated in neither place.
+  const { itemType, isRental } = inventoryViewPredicate(view);
   const warehouseId = warehouseKey === ALL_WAREHOUSES_KEY ? null : warehouseKey;
 
   // Default-view filters, mirroring InventoryService.list() with no
@@ -505,7 +515,7 @@ async function loadInventoryRowsUncached(
     .is('deleted_at', null)
     .eq('status', 'active')
     .eq('item_type', itemType)
-    .eq('is_rental', false)
+    .eq('is_rental', isRental)
     .eq('awaiting_first_receipt', false)
     .order('updated_at', { ascending: false })
     .order('id', { ascending: true })
@@ -524,7 +534,7 @@ async function loadInventoryRowsUncached(
     .eq('organization_id', organizationId)
     .is('deleted_at', null)
     .eq('item_type', itemType)
-    .eq('is_rental', false)
+    .eq('is_rental', isRental)
     .eq('awaiting_first_receipt', true);
   if (warehouseId) expectedQuery = expectedQuery.eq('warehouse_id', warehouseId);
 
@@ -810,7 +820,9 @@ async function loadInventoryDatasetUncached(
   view: InventoryListView,
 ): Promise<InventoryDatasetPayload> {
   const admin = createAdminClient();
-  const itemType = view === 'books' ? 'book' : 'product';
+  // The SAME definition mobile's tabs use (@stockpilot/core): products or
+  // books, never rentals. Restated in neither place.
+  const { itemType, isRental } = inventoryViewPredicate(view);
   const warehouseId = warehouseKey === ALL_WAREHOUSES_KEY ? null : warehouseKey;
 
   // The dataset filter = list()'s filter axes that are CONSTANT for the
@@ -830,7 +842,7 @@ async function loadInventoryDatasetUncached(
     .eq('organization_id', organizationId)
     .is('deleted_at', null)
     .eq('item_type', itemType)
-    .eq('is_rental', false);
+    .eq('is_rental', isRental);
   if (warehouseId) countQuery = countQuery.eq('warehouse_id', warehouseId);
   const countRes = await countQuery;
   if (countRes.error) {
@@ -849,7 +861,7 @@ async function loadInventoryDatasetUncached(
         .eq('organization_id', organizationId)
         .is('deleted_at', null)
         .eq('item_type', itemType)
-        .eq('is_rental', false);
+        .eq('is_rental', isRental);
       if (warehouseId) q = q.eq('warehouse_id', warehouseId);
       return q.order('id', { ascending: true }).range(from, to) as unknown as PromiseLike<{
         data: RawItemRow[] | null;
@@ -875,38 +887,42 @@ async function loadInventoryDatasetUncached(
   const idList = rows.map((r) => r.id);
   const ids = new Set(idList);
   const [levelsAll, imagesAll] = await Promise.all([
-    fetchRowsForItemIdChunks<HoldingLevelRow>(idList, (chunk) => (from, to) =>
-      admin
-        .from('item_stock_levels')
-        .select('item_id, location_id, quantity, locations!inner(name, kind)')
-        .eq('organization_id', organizationId)
-        .in('item_id', chunk)
-        .gt('quantity', 0)
-        .order('id', { ascending: true })
-        // The to-one `locations` embed types as an array in generated
-        // PostgREST types but is a single object at runtime — same
-        // cast convention as the loaders above and placements().
-        .range(from, to) as unknown as PromiseLike<{
-        data: HoldingLevelRow[] | null;
-        error: { message: string } | null;
-      }>,
+    fetchRowsForItemIdChunks<HoldingLevelRow>(
+      idList,
+      (chunk) => (from, to) =>
+        admin
+          .from('item_stock_levels')
+          .select('item_id, location_id, quantity, locations!inner(name, kind)')
+          .eq('organization_id', organizationId)
+          .in('item_id', chunk)
+          .gt('quantity', 0)
+          .order('id', { ascending: true })
+          // The to-one `locations` embed types as an array in generated
+          // PostgREST types but is a single object at runtime — same
+          // cast convention as the loaders above and placements().
+          .range(from, to) as unknown as PromiseLike<{
+          data: HoldingLevelRow[] | null;
+          error: { message: string } | null;
+        }>,
     ),
-    fetchRowsForItemIdChunks<PrimaryImageRow>(idList, (chunk) => (from, to) =>
-      admin
-        .from('item_images')
-        .select('item_id, storage_path, thumb_path, lqip, is_primary, sort_order')
-        .eq('organization_id', organizationId)
-        .in('item_id', chunk)
-        // Same pick order as the paged loader (primary first, then
-        // sort_order) + the id tiebreak fetchAllRows needs for a total
-        // order across pages.
-        .order('is_primary', { ascending: false })
-        .order('sort_order', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to) as unknown as PromiseLike<{
-        data: PrimaryImageRow[] | null;
-        error: { message: string } | null;
-      }>,
+    fetchRowsForItemIdChunks<PrimaryImageRow>(
+      idList,
+      (chunk) => (from, to) =>
+        admin
+          .from('item_images')
+          .select('item_id, storage_path, thumb_path, lqip, is_primary, sort_order')
+          .eq('organization_id', organizationId)
+          .in('item_id', chunk)
+          // Same pick order as the paged loader (primary first, then
+          // sort_order) + the id tiebreak fetchAllRows needs for a total
+          // order across pages.
+          .order('is_primary', { ascending: false })
+          .order('sort_order', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{
+          data: PrimaryImageRow[] | null;
+          error: { message: string } | null;
+        }>,
     ),
   ]);
 
@@ -970,9 +986,7 @@ async function fetchRowsForItemIdChunks<Row>(
  *   tags       → TagsService.list()                   (name ASC)
  *   charters   → ChartersService.list()               (status=active, name ASC)
  */
-export async function loadInventoryLookups(
-  organizationId: string,
-): Promise<InventoryListLookups> {
+export async function loadInventoryLookups(organizationId: string): Promise<InventoryListLookups> {
   const cached = unstable_cache(loadInventoryLookupsUncached, ['inventory-lookups-v1'], {
     revalidate: LIST_TTL_SEC,
     tags: [inventoryListTag(organizationId)],
@@ -980,9 +994,7 @@ export async function loadInventoryLookups(
   return cached(organizationId);
 }
 
-async function loadInventoryLookupsUncached(
-  organizationId: string,
-): Promise<InventoryListLookups> {
+async function loadInventoryLookupsUncached(organizationId: string): Promise<InventoryListLookups> {
   const admin = createAdminClient();
   const [categoriesRes, locationsRes, suppliers, tagsRes, chartersRes] = await Promise.all([
     admin
@@ -1072,7 +1084,11 @@ async function loadInventoryValueOnHandUncached(
   view: InventoryListView,
 ): Promise<number> {
   const admin = createAdminClient();
-  const itemType = view === 'books' ? 'book' : 'product';
+  // Only the type is needed here: the RPC below carries the rest of the view
+  // predicate (is_rental = false included) in SQL, so migration 0227 is a THIRD
+  // copy of the rule that @stockpilot/core owns for the two clients. Changing
+  // the shared definition means changing that function too.
+  const { itemType } = inventoryViewPredicate(view);
   const warehouseId = warehouseKey === ALL_WAREHOUSES_KEY ? null : warehouseKey;
 
   // ONE SQL aggregate round trip (scale-audit rank 6, migration 0227)
@@ -1130,9 +1146,7 @@ async function loadInventoryValueOnHandUncached(
  * orphans the v1 entries deliberately (one cheap recompute per org,
  * covered by the prewarm cron) instead of mixing provenances in one key.
  */
-export async function loadInventoryTrendBuckets(
-  organizationId: string,
-): Promise<ItemTrendBuckets> {
+export async function loadInventoryTrendBuckets(organizationId: string): Promise<ItemTrendBuckets> {
   const cached = unstable_cache(loadInventoryTrendBucketsUncached, ['inventory-trend-buckets-v2'], {
     revalidate: LIST_TTL_SEC,
     tags: [inventoryListTag(organizationId)],
@@ -1238,8 +1252,10 @@ export async function resolveInventoryListImages(
     const { image_storage_path, image_thumb_path, image_lqip, ...rest } = r;
     const cf = rest.custom_fields;
     const cfThumb =
-      cf && typeof cf === 'object' && typeof (cf as { thumbnail_url?: unknown }).thumbnail_url === 'string'
-        ? ((cf as { thumbnail_url: string }).thumbnail_url)
+      cf &&
+      typeof cf === 'object' &&
+      typeof (cf as { thumbnail_url?: unknown }).thumbnail_url === 'string'
+        ? (cf as { thumbnail_url: string }).thumbnail_url
         : null;
     if (diet && image_thumb_path) {
       const thumbUrl = urlByPath.get(image_thumb_path) ?? null;
@@ -1295,11 +1311,7 @@ async function loadSuppliersIfEnabled(
       .eq('organization_id', organizationId)
       .eq('module_id', 'suppliers')
       .maybeSingle(),
-    admin
-      .from('organizations')
-      .select('all_modules_comp')
-      .eq('id', organizationId)
-      .maybeSingle(),
+    admin.from('organizations').select('all_modules_comp').eq('id', organizationId).maybeSingle(),
   ]);
   // FAIL CLOSED on read errors: throw so a failed pass is never cached
   // (the page falls back to the live path for this request).

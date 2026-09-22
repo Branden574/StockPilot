@@ -26,6 +26,12 @@ export interface EmptyStateProps {
     href: string;
   };
   /**
+   * An action that is NOT a navigation — a button that runs something and stays
+   * on the page. Used where the way out of an empty state is clearing a stored
+   * preference rather than going somewhere. Rendered instead of `cta`.
+   */
+  action?: React.ReactNode;
+  /**
    * `sm` is for empty states tucked inside a smaller card (~200px tall),
    * `md` is for full-page empty states (~360px tall). Defaults to `md`.
    */
@@ -38,6 +44,7 @@ export function EmptyState({
   icon: Icon,
   title,
   description,
+  action,
   cta,
   size = 'md',
   className,
@@ -46,25 +53,25 @@ export function EmptyState({
   return (
     <div
       className={cn(
-        'flex w-full flex-col items-center justify-center rounded-xl border border-dashed bg-card/40 text-center',
+        'bg-card/40 flex w-full flex-col items-center justify-center rounded-xl border border-dashed text-center',
         isSm ? 'min-h-[200px] gap-2 px-4 py-8' : 'min-h-[360px] gap-3 px-6 py-16',
         className,
       )}
     >
       <div
         className={cn(
-          'flex items-center justify-center rounded-full bg-muted/50 text-muted-foreground',
+          'bg-muted/50 text-muted-foreground flex items-center justify-center rounded-full',
           isSm ? 'p-2' : 'p-3',
         )}
         aria-hidden="true"
       >
         <Icon className={isSm ? 'h-4 w-4' : 'h-5 w-5'} />
       </div>
-      <h3 className={cn('font-medium text-foreground', isSm ? 'text-sm' : 'text-base')}>
-        {title}
-      </h3>
-      <p className="max-w-md text-sm text-muted-foreground">{description}</p>
-      {cta ? (
+      <h3 className={cn('text-foreground font-medium', isSm ? 'text-sm' : 'text-base')}>{title}</h3>
+      <p className="text-muted-foreground max-w-md text-sm">{description}</p>
+      {action ? (
+        <div className={isSm ? 'mt-1' : 'mt-3'}>{action}</div>
+      ) : cta ? (
         <div className={isSm ? 'mt-1' : 'mt-3'}>
           <Button asChild variant="gradient" size={isSm ? 'sm' : 'default'}>
             <Link href={cta.href}>{cta.label}</Link>
