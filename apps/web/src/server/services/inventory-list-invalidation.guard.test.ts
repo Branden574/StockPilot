@@ -53,6 +53,11 @@
  * WRONG, and say why; a method that merely "is always called by something
  * that already invalidates" does not qualify — that is exactly how the five
  * gaps above were left behind.
+ *
+ * A call being PRESENT is not enough: the second half of this file covers
+ * stock written outside services (web and phone) and the call shapes Next
+ * records but never acts on (streamed bodies, dropped promises, after(),
+ * render). The AI chat route's write tools were such a case.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -185,7 +190,15 @@ function builderVerb(fromCall: ts.CallExpression): string | null {
   return ts.isPropertyAccessExpression(parent) ? parent.name.text : null;
 }
 
-function analyze(node: ts.Node, key: string, sf: ts.SourceFile): MemberFacts {
+type StockRpcTest = (rpcName: string) => boolean;
+const isListedStockRpc: StockRpcTest = (n) => n in STOCK_RPCS;
+
+function analyze(
+  node: ts.Node,
+  key: string,
+  sf: ts.SourceFile,
+  isStockRpc: StockRpcTest = isListedStockRpc,
+): MemberFacts {
   const facts: MemberFacts = {
     key,
     writes: [],
@@ -204,7 +217,7 @@ function analyze(node: ts.Node, key: string, sf: ts.SourceFile): MemberFacts {
         if (method === 'rpc') {
           const name = literalArg(n);
           if (name === null) facts.dynamicWrites.push(`rpc@${where(n)}`);
-          else if (name in STOCK_RPCS) facts.writes.push(`rpc:${name}`);
+          else if (isStockRpc(name)) facts.writes.push(`rpc:${name}`);
         }
         if (method === 'from' && !isNonTableFrom(callee.expression)) {
           const table = literalArg(n);
@@ -232,9 +245,23 @@ function memberName(name: ts.PropertyName | undefined, sf: ts.SourceFile): strin
   return name ? name.getText(sf) : 'constructor';
 }
 
+function parse(fileName: string, source: string): ts.SourceFile {
+  return ts.createSourceFile(
+    fileName,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+}
+
 /** Scan one file's source. Exported shape is exercised by the self-tests. */
-function scanSource(fileName: string, source: string): FileFacts {
-  const sf = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+function scanSource(
+  fileName: string,
+  source: string,
+  isStockRpc: StockRpcTest = isListedStockRpc,
+): FileFacts {
+  const sf = parse(fileName, source);
   const members: MemberFacts[] = [];
   let importsHelper = false;
   for (const st of sf.statements) {
@@ -252,23 +279,23 @@ function scanSource(fileName: string, source: string): FileFacts {
     } else if (ts.isClassDeclaration(st)) {
       const cls = st.name?.text ?? '<anonymous class>';
       for (const m of st.members) {
-        members.push(analyze(m, `${fileName}#${cls}.${memberName(m.name, sf)}`, sf));
+        members.push(analyze(m, `${fileName}#${cls}.${memberName(m.name, sf)}`, sf, isStockRpc));
       }
     } else if (ts.isFunctionDeclaration(st)) {
-      members.push(analyze(st, `${fileName}#${st.name?.text ?? '<default>'}`, sf));
+      members.push(analyze(st, `${fileName}#${st.name?.text ?? '<default>'}`, sf, isStockRpc));
     } else if (ts.isVariableStatement(st)) {
       for (const d of st.declarationList.declarations) {
         const base = `${fileName}#${d.name.getText(sf)}`;
         const init = d.initializer ? unwrap(d.initializer) : undefined;
         if (init && ts.isObjectLiteralExpression(init)) {
           for (const p of init.properties)
-            members.push(analyze(p, `${base}.${memberName(p.name, sf)}`, sf));
+            members.push(analyze(p, `${base}.${memberName(p.name, sf)}`, sf, isStockRpc));
         } else {
-          members.push(analyze(d, base, sf));
+          members.push(analyze(d, base, sf, isStockRpc));
         }
       }
     } else {
-      members.push(analyze(st, `${fileName}#<top-level>`, sf));
+      members.push(analyze(st, `${fileName}#<top-level>`, sf, isStockRpc));
     }
   }
   return { members, importsHelper };
@@ -338,6 +365,18 @@ function classifyFunctions(migrations: Array<{ file: string; sql: string }>): Ma
     }
   }
   return writes;
+}
+
+let stockWritersMemo: Map<string, boolean> | null = null;
+/** classifyFunctions over the real migrations, read once per file run. */
+function migrationStockWriters(): Map<string, boolean> {
+  stockWritersMemo ??= classifyFunctions(
+    readdirSync(MIGRATIONS_DIR)
+      .filter((f) => f.endsWith('.sql'))
+      .sort()
+      .map((file) => ({ file, sql: readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8') })),
+  );
+  return stockWritersMemo;
 }
 
 /* ─────────────────────────── the machinery ─────────────────────────── */
@@ -539,11 +578,7 @@ describe('every service stock write invalidates the Items/Books list cache', () 
   });
 
   describe('STOCK_RPCS agrees with the migrations', () => {
-    const migrations = readdirSync(MIGRATIONS_DIR)
-      .filter((f) => f.endsWith('.sql'))
-      .sort()
-      .map((file) => ({ file, sql: readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8') }));
-    const writesStock = classifyFunctions(migrations);
+    const writesStock = migrationStockWriters();
 
     const calledRpcs = new Set<string>();
     for (const file of files) {
@@ -582,5 +617,562 @@ describe('every service stock write invalidates the Items/Books list cache', () 
         .sort();
       expect(stale).toEqual([]);
     });
+  });
+});
+
+/* ═══════════════════ outside the services tree, and context ═══════════════════
+ *
+ * The guard above proves every SERVICE write CALLS the invalidation. Two holes
+ * remained, and the AI chat route fell into the second:
+ *
+ *  A. Stock written OUTSIDE services: server actions, route handlers, lib/
+ *     helpers, and the phone (apps/mobile talks to Postgres directly for some
+ *     screens). Scanned below with the same AST rules, against every RPC whose
+ *     latest migration writes stock (not just STOCK_RPCS). Each writer
+ *     invalidates, or is listed with the reason it cannot change what the
+ *     Items/Books lists render, or is a KNOWN GAP with its remediation.
+ *
+ *  B. A call that is PRESENT but that Next never acts on. revalidateTag only
+ *     records a tag on the request's work store; Next sends it to the cache at
+ *     fixed points (the Server Action's end, a Route Handler's return, the
+ *     after() flush) and never afterwards. Proven in
+ *     lib/inventory-list-cache.test.ts through Next's real App Route module.
+ *     Statically detectable shapes, each checked below:
+ *       - code inside a streamed body (new ReadableStream / TransformStream)
+ *         that reaches the helper without runStreamedStockWrites around it,
+ *         or that records a tag directly (revalidateTag / revalidatePath /
+ *         updateTag) where no such scope exists;
+ *       - a stock-writing service call that is not awaited (`void svc.x()`,
+ *         a bare statement): it can finish after the request did;
+ *       - a stock-writing service call inside after() or defer(): Next's
+ *         after() flush drops a tag the request already recorded (same tag and
+ *         profile), which a request that wrote stock before has;
+ *       - a stock-writing service call during render (app pages/layouts,
+ *         server/loaders, components) or inside unstable_cache: revalidateTag
+ *         throws there (revalidate.js: "during render", E7 / E306) and the
+ *         never-throwing wrapper can only log it.
+ *     Route handlers, crons and server actions that AWAIT the write before
+ *     returning are the effective shape and need nothing more.
+ *
+ * NOT SCANNED, deliberately: apps/web/scripts (seed / perf-lab operator
+ * scripts). They run outside any request, against seed and perf orgs, so
+ * there is no Next cache to reach; a list they touch expires on its own
+ * within LIST_TTL_SEC (60 s, loaders/inventory-list.ts).
+ */
+
+const APPS_DIR = path.resolve(__dirname, '../../../..');
+const WEB_SRC = path.join(APPS_DIR, 'web/src');
+const OUTSIDE_ROOTS = ['web/src', 'mobile/app', 'mobile/src'];
+const HELPER_FILE = path.join(WEB_SRC, 'server/services/lib/inventory-list-cache.ts');
+const STREAM_SCOPE = 'runStreamedStockWrites';
+
+/**
+ * Writers outside services that do NOT invalidate because the write cannot
+ * change anything the cached Items/Books views render. Keys are relative to
+ * apps/. Self-checking: an entry that stops writing, or starts invalidating,
+ * fails.
+ */
+const OUTSIDE_ALLOWLIST: Record<string, string> = {
+  'web/src/app/api/v1/movements/[id]/note/route.ts#PATCH':
+    'edit_movement_note writes stock_movements.notes only (0307); the lists read movements only as quantity_change + created_at for the 14-day trend (services/lib/item-trends.ts)',
+  'web/src/server/actions/movements.ts#editMovementNoteAction':
+    'edit_movement_note writes stock_movements.notes only (0307); the lists never read movement notes',
+  'web/src/lib/ai/embeddings.ts#embedInventoryItem':
+    'writes inventory_items.embedding only; tg_inventory_items_set_updated_at (0242, restated 0303) keeps updated_at for an embedding-only change and no list column reads embedding',
+  'web/src/lib/ai/embeddings.ts#embedItemsBatch':
+    'writes inventory_items.embedding only; same trigger exemption as embedInventoryItem',
+};
+
+/**
+ * Writers outside services that DO leave the cached views stale and are not
+ * fixed yet. Listed so the gap is visible and a new one cannot join it
+ * silently. Self-checking like the allowlist.
+ */
+const OUTSIDE_KNOWN_GAPS: Record<string, string> = {
+  'mobile/app/item/[id].tsx#ItemDetail':
+    'the phone item screen (quick +/-1/5 buttons and the Adjust sheet) calls the raw adjust_stock RPC straight to Postgres: no Next request exists to expire the web cache, so web lists show the pre-adjust quantity for up to LIST_TTL_SEC (60 s). Remediation: route it through POST /api/v1/items/[id]/adjust (InventoryService.adjustStock), which invalidates and also enforces stock:adjust server-side (the RPC checks only the staff role)',
+};
+
+/** Outside members that store a stock-table builder in a variable but only
+ *  ever read through it. */
+const OUTSIDE_ESCAPED_READS: Record<string, string> = {
+  'mobile/src/lib/category-counts.ts#countItemsByCategory':
+    "`client.from('inventory_items') as CategoryCountsTable` is only .select()ed (category tallies)",
+};
+
+/**
+ * Files that build a streamed body and reach the helper module, yet need no
+ * runStreamedStockWrites, with why. Empty: the only streamed body today is
+ * /api/ai/chat, and it uses the scope.
+ */
+const STREAM_ALLOWLIST: Record<string, string> = {};
+
+function walkFiles(dir: string, out: string[] = []): string[] {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
+    const abs = path.join(dir, e.name);
+    if (e.isDirectory()) walkFiles(abs, out);
+    else if (/\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name) && !e.name.endsWith('.d.ts'))
+      out.push(abs);
+  }
+  return out;
+}
+
+/** Every non-test TS file under the outside roots, relative to apps/. */
+function outsideFiles(): string[] {
+  return OUTSIDE_ROOTS.flatMap((r) => walkFiles(path.join(APPS_DIR, r)))
+    .map((abs) => path.relative(APPS_DIR, abs).split(path.sep).join('/'))
+    .filter(
+      (rel) => !rel.startsWith('web/src/server/services/') && !rel.startsWith('web/src/test/'),
+    )
+    .sort();
+}
+
+/** Resolve an app import (`@/x` or relative) to an absolute .ts/.tsx path. */
+function resolveImport(fromAbs: string, spec: string): string | null {
+  let base: string;
+  if (spec.startsWith('@/')) base = path.join(WEB_SRC, spec.slice(2));
+  else if (spec.startsWith('.')) base = path.resolve(path.dirname(fromAbs), spec);
+  else return null;
+  for (const c of [
+    `${base}.ts`,
+    `${base}.tsx`,
+    path.join(base, 'index.ts'),
+    path.join(base, 'index.tsx'),
+  ]) {
+    try {
+      readFileSync(c);
+      return c;
+    } catch {
+      /* try the next shape */
+    }
+  }
+  return null;
+}
+
+interface ImportFacts {
+  spec: string;
+  resolved: string | null;
+  /** local name → imported name */
+  names: Map<string, string>;
+  typeOnly: boolean;
+}
+
+function importsOf(fromAbs: string, sf: ts.SourceFile): ImportFacts[] {
+  const out: ImportFacts[] = [];
+  const visit = (n: ts.Node): void => {
+    let spec: string | null = null;
+    let typeOnly = false;
+    const names = new Map<string, string>();
+    if (ts.isImportDeclaration(n)) {
+      spec = (n.moduleSpecifier as ts.StringLiteral).text;
+      typeOnly = !!n.importClause?.isTypeOnly;
+      const nb = n.importClause?.namedBindings;
+      if (nb && ts.isNamedImports(nb))
+        for (const e of nb.elements)
+          if (!e.isTypeOnly) names.set(e.name.text, (e.propertyName ?? e.name).text);
+    } else if (ts.isExportDeclaration(n) && n.moduleSpecifier) {
+      spec = (n.moduleSpecifier as ts.StringLiteral).text;
+      typeOnly = n.isTypeOnly;
+    } else if (
+      ts.isCallExpression(n) &&
+      n.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      n.arguments[0] &&
+      ts.isStringLiteral(n.arguments[0])
+    ) {
+      spec = n.arguments[0].text;
+    }
+    if (spec !== null) out.push({ spec, resolved: resolveImport(fromAbs, spec), names, typeOnly });
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+const TAG_RECORDERS = new Set(['revalidateTag', 'revalidatePath', 'updateTag', 'refresh']);
+
+/** Every module the file can load at runtime (static + dynamic imports). */
+function reachableFrom(startAbs: string): Set<string> {
+  const seen = new Set<string>();
+  const queue = [startAbs];
+  while (queue.length > 0) {
+    const f = queue.pop()!;
+    if (seen.has(f)) continue;
+    seen.add(f);
+    for (const i of importsOf(f, parse(f, readFileSync(f, 'utf8'))))
+      if (i.resolved && !i.typeOnly) queue.push(i.resolved);
+  }
+  return seen;
+}
+
+/** Service callables that write stock and invalidate, from the scan above. */
+function invalidatingCallables(members: MemberFacts[]) {
+  const byClass = new Map<string, Set<string>>();
+  const fns = new Set<string>();
+  for (const m of members) {
+    if (!m.invalidates) continue;
+    const local = m.key.slice(m.key.indexOf('#') + 1);
+    if (local.startsWith('<')) continue;
+    const dot = local.indexOf('.');
+    if (dot < 0) fns.add(local);
+    else {
+      const cls = local.slice(0, dot);
+      if (!byClass.has(cls)) byClass.set(cls, new Set());
+      byClass.get(cls)!.add(local.slice(dot + 1));
+    }
+  }
+  return { byClass, fns };
+}
+
+/** `new C(…)`, `C.forCurrentUser(…)`, optionally awaited / parenthesised. */
+function constructedClass(expr: ts.Node | undefined): string | null {
+  if (!expr) return null;
+  let e = unwrap(expr);
+  while (ts.isAwaitExpression(e)) e = unwrap(e.expression);
+  if (ts.isNewExpression(e) && ts.isIdentifier(e.expression)) return e.expression.text;
+  if (
+    ts.isCallExpression(e) &&
+    ts.isPropertyAccessExpression(e.expression) &&
+    ts.isIdentifier(e.expression.expression) &&
+    /^for[A-Z]/.test(e.expression.name.text)
+  )
+    return e.expression.expression.text;
+  return null;
+}
+
+interface StockCall {
+  where: string;
+  call: ts.CallExpression;
+  label: string;
+}
+
+/**
+ * Calls in `sf` to an invalidating service callable. The receiver of a
+ * method call is traced through `new C()`, `C.forCurrentUser()`, a variable
+ * initialised from either, or `this` inside class C. Name-based within the
+ * file, which over-reports rather than under-reports.
+ */
+function stockCalls(
+  rel: string,
+  sf: ts.SourceFile,
+  callables: ReturnType<typeof invalidatingCallables>,
+  importedFns: Set<string>,
+): StockCall[] {
+  const varClass = new Map<string, string>();
+  const collectVars = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name)) {
+      const c = constructedClass(n.initializer);
+      if (c) varClass.set(n.name.text, c);
+    }
+    ts.forEachChild(n, collectVars);
+  };
+  collectVars(sf);
+  const out: StockCall[] = [];
+  const visit = (n: ts.Node, cls: string | null): void => {
+    const nextCls = ts.isClassDeclaration(n) && n.name ? n.name.text : cls;
+    if (ts.isCallExpression(n)) {
+      const callee = unwrap(n.expression);
+      let label: string | null = null;
+      if (ts.isIdentifier(callee) && importedFns.has(callee.text)) label = callee.text;
+      if (ts.isPropertyAccessExpression(callee)) {
+        const recv = unwrap(callee.expression);
+        const c =
+          recv.kind === ts.SyntaxKind.ThisKeyword
+            ? cls
+            : ts.isIdentifier(recv)
+              ? (varClass.get(recv.text) ?? null)
+              : constructedClass(recv);
+        if (c && callables.byClass.get(c)?.has(callee.name.text))
+          label = `${c}.${callee.name.text}`;
+      }
+      if (label) {
+        const line = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+        out.push({ where: `${rel}:${line}`, call: n, label });
+      }
+    }
+    ts.forEachChild(n, (c) => visit(c, nextCls));
+  };
+  visit(sf, null);
+  return out;
+}
+
+/** The call's promise is dropped: `void x()` or `x();` as a statement, also
+ *  through .then/.catch/.finally chains. */
+function isFloating(call: ts.CallExpression): boolean {
+  let n: ts.Node = call;
+  for (;;) {
+    const p = n.parent;
+    if (ts.isParenthesizedExpression(p) || ts.isAsExpression(p) || ts.isNonNullExpression(p)) {
+      n = p;
+      continue;
+    }
+    if (
+      ts.isPropertyAccessExpression(p) &&
+      ['then', 'catch', 'finally'].includes(p.name.text) &&
+      ts.isCallExpression(p.parent) &&
+      p.parent.expression === p
+    ) {
+      n = p.parent;
+      continue;
+    }
+    return ts.isVoidExpression(p) || ts.isExpressionStatement(p);
+  }
+}
+
+/** Name of the nearest enclosing call whose callback argument holds `node`,
+ *  when that call is one of `names`. */
+function insideCallbackOf(node: ts.Node, names: Set<string>): string | null {
+  for (let n: ts.Node | undefined = node.parent; n; n = n.parent) {
+    if (ts.isCallExpression(n)) {
+      const callee = unwrap(n.expression);
+      const name = ts.isIdentifier(callee)
+        ? callee.text
+        : ts.isPropertyAccessExpression(callee)
+          ? callee.name.text
+          : null;
+      if (
+        name &&
+        names.has(name) &&
+        n.arguments.some((a) => node.pos >= a.pos && node.end <= a.end)
+      )
+        return name;
+    }
+  }
+  return null;
+}
+
+/** Files that run during a render: Next page files, loaders, components. */
+const RENDER_FILE =
+  /^web\/src\/(app\/.*\/(page|layout|template|default|not-found|error|loading)\.tsx?|server\/loaders\/.*|components\/.*)$/;
+
+describe('the outside-services scan machinery', () => {
+  const callables = {
+    byClass: new Map([['InventoryService', new Set(['adjustStock'])]]),
+    fns: new Set(['linkFamily']),
+  };
+  const calls = (src: string) => {
+    const sf = parse('x.ts', src);
+    return stockCalls('x.ts', sf, callables, new Set(['linkFamily']));
+  };
+
+  it('traces receivers through new, forCurrentUser, variables and this', () => {
+    const found = calls(`
+      async function a(ctx) { await new InventoryService(ctx).adjustStock({}); }
+      async function b() { const svc = await InventoryService.forCurrentUser(); await svc.adjustStock({}); }
+      async function c(ctx) { await linkFamily({}, {}); }
+      async function d(ctx) { const other = new OtherService(ctx); await other.adjustStock({}); }
+      class InventoryService { async x() { await this.adjustStock({}); } }
+    `);
+    expect(found.map((f) => f.label)).toEqual([
+      'InventoryService.adjustStock',
+      'InventoryService.adjustStock',
+      'linkFamily',
+      'InventoryService.adjustStock',
+    ]);
+  });
+
+  it('tells awaited calls from dropped ones', () => {
+    const found = calls(`
+      async function a(ctx) {
+        const svc = new InventoryService(ctx);
+        await svc.adjustStock({});
+        void svc.adjustStock({});
+        svc.adjustStock({}).catch(() => {});
+        return svc.adjustStock({});
+      }
+    `);
+    expect(found.map((f) => isFloating(f.call))).toEqual([false, true, true, false]);
+  });
+
+  it('finds calls inside after()/defer() and unstable_cache callbacks', () => {
+    const found = calls(`
+      async function a(ctx) {
+        const svc = new InventoryService(ctx);
+        after(() => svc.adjustStock({}));
+        defer(async () => { await svc.adjustStock({}); });
+        const load = unstable_cache(async () => svc.adjustStock({}), ['k']);
+        await svc.adjustStock({});
+      }
+    `);
+    const names = new Set(['after', 'defer', 'unstable_cache']);
+    expect(found.map((f) => insideCallbackOf(f.call, names))).toEqual([
+      'after',
+      'defer',
+      'unstable_cache',
+      null,
+    ]);
+  });
+
+  it('classifies render files', () => {
+    expect(RENDER_FILE.test('web/src/app/(dashboard)/dashboard/inventory/page.tsx')).toBe(true);
+    expect(RENDER_FILE.test('web/src/server/loaders/inventory-list.ts')).toBe(true);
+    expect(RENDER_FILE.test('web/src/components/inventory/item-detail.tsx')).toBe(true);
+    expect(RENDER_FILE.test('web/src/app/api/v1/items/route.ts')).toBe(false);
+    expect(RENDER_FILE.test('web/src/server/actions/inventory.ts')).toBe(false);
+  });
+});
+
+describe('stock writes outside services, and invalidations Next would drop', () => {
+  const writers = migrationStockWriters();
+  const isStockRpc: StockRpcTest = (n) => writers.get(n) === true;
+  const files = outsideFiles();
+  const scanned = files.map((rel) => ({
+    rel,
+    ...scanSource(rel, readFileSync(path.join(APPS_DIR, rel), 'utf8'), isStockRpc),
+  }));
+  const members = scanned.flatMap((f) => f.members);
+
+  const serviceMembers = serviceFiles(SERVICES_DIR).flatMap(
+    (file) => scanSource(file, readFileSync(path.join(SERVICES_DIR, file), 'utf8')).members,
+  );
+  const callables = invalidatingCallables(serviceMembers);
+
+  /** Per web file: its source, and the invalidating callables it imports. */
+  const webSources = [
+    ...files.filter((r) => r.startsWith('web/')),
+    ...serviceFiles(SERVICES_DIR).map((f) => `web/src/server/services/${f}`),
+  ].map((rel) => {
+    const abs = path.join(APPS_DIR, rel);
+    const sf = parse(rel, readFileSync(abs, 'utf8'));
+    const importedFns = new Set<string>();
+    for (const i of importsOf(abs, sf)) {
+      if (!i.resolved?.startsWith(SERVICES_DIR)) continue;
+      for (const [local, imported] of i.names)
+        if (callables.fns.has(imported)) importedFns.add(local);
+    }
+    return { rel, abs, sf, calls: stockCalls(rel, sf, callables, importedFns) };
+  });
+
+  it('scans the phone and the web outside services (sanity: known writers are found)', () => {
+    const keys = new Set(members.filter((m) => m.writes.length > 0).map((m) => m.key));
+    for (const k of [
+      'web/src/server/actions/item-visibility.ts#setItemPublicVisibilityAction',
+      'web/src/lib/ai/embeddings.ts#embedItemsBatch',
+      'mobile/app/item/[id].tsx#ItemDetail',
+    ]) {
+      expect(keys, k).toContain(k);
+    }
+    expect(callables.byClass.get('OrderRequestsService')).toContain('cancel');
+    expect(callables.byClass.get('InventoryService')).toContain('update');
+  });
+
+  it('every stock write outside services invalidates, or is listed with why it may not', () => {
+    const missing = members
+      .filter(
+        (m) =>
+          m.writes.length > 0 &&
+          !m.invalidates &&
+          !(m.key in OUTSIDE_ALLOWLIST) &&
+          !(m.key in OUTSIDE_KNOWN_GAPS),
+      )
+      .map((m) => `${m.key}  [${m.writes.join(', ')}]`);
+    expect(missing, 'call invalidateInventoryListAfterWrite after the write commits').toEqual([]);
+  });
+
+  it('allowlist and known-gap entries are live: each still writes and still does not invalidate', () => {
+    const stale = [...Object.keys(OUTSIDE_ALLOWLIST), ...Object.keys(OUTSIDE_KNOWN_GAPS)].filter(
+      (k) => !members.some((m) => m.key === k && m.writes.length > 0 && !m.invalidates),
+    );
+    expect(stale).toEqual([]);
+  });
+
+  it('no stock-table builder escapes outside services, and no unclassified dynamic write', () => {
+    const escaped = members
+      .filter((m) => m.escapedBuilders.length > 0 && !(m.key in OUTSIDE_ESCAPED_READS))
+      .flatMap((m) => m.escapedBuilders);
+    expect(escaped).toEqual([]);
+    const staleReads = Object.keys(OUTSIDE_ESCAPED_READS).filter(
+      (k) => !members.some((m) => m.key === k && m.escapedBuilders.length > 0),
+    );
+    expect(staleReads).toEqual([]);
+    expect(members.flatMap((m) => m.dynamicWrites)).toEqual([]);
+  });
+
+  it('every outside file that calls the helper imports the real one', () => {
+    const bad = scanned
+      .filter((f) => f.members.some((m) => m.invalidates) && !f.importsHelper)
+      .map((f) => f.rel);
+    expect(bad).toEqual([]);
+  });
+
+  it('a streamed body that can reach a stock write runs it inside runStreamedStockWrites', () => {
+    const offenders: string[] = [];
+    for (const { rel, abs, sf } of webSources) {
+      const streams: ts.NewExpression[] = [];
+      const find = (n: ts.Node): void => {
+        if (
+          ts.isNewExpression(n) &&
+          ts.isIdentifier(n.expression) &&
+          (n.expression.text === 'ReadableStream' || n.expression.text === 'TransformStream')
+        )
+          streams.push(n);
+        ts.forEachChild(n, find);
+      };
+      find(sf);
+      if (streams.length === 0 || rel in STREAM_ALLOWLIST) continue;
+      if (!reachableFrom(abs).has(HELPER_FILE)) continue;
+      const scopeImported = importsOf(abs, sf).some(
+        (i) => i.resolved === HELPER_FILE && i.names.get(STREAM_SCOPE) === STREAM_SCOPE,
+      );
+      for (const s of streams) {
+        let wrapped = false;
+        const look = (n: ts.Node): void => {
+          if (
+            ts.isCallExpression(n) &&
+            ts.isIdentifier(n.expression) &&
+            n.expression.text === STREAM_SCOPE
+          )
+            wrapped = true;
+          ts.forEachChild(n, look);
+        };
+        for (const a of s.arguments ?? []) look(a);
+        if (!wrapped || !scopeImported)
+          offenders.push(`${rel}:${sf.getLineAndCharacterOfPosition(s.getStart(sf)).line + 1}`);
+      }
+    }
+    expect(offenders, 'wrap the stream body in runStreamedStockWrites').toEqual([]);
+  });
+
+  it('nothing a streamed body can reach records a cache tag outside the helper', () => {
+    const offenders: string[] = [];
+    for (const { rel, abs, sf } of webSources) {
+      if (!/new (ReadableStream|TransformStream)\b/.test(sf.text) || rel in STREAM_ALLOWLIST)
+        continue;
+      for (const f of reachableFrom(abs)) {
+        if (f === HELPER_FILE) continue;
+        for (const i of importsOf(f, parse(f, readFileSync(f, 'utf8'))))
+          if (i.spec === 'next/cache' && [...i.names.values()].some((n) => TAG_RECORDERS.has(n)))
+            offenders.push(`${rel} -> ${path.relative(WEB_SRC, f)}`);
+      }
+    }
+    // Such a tag is recorded after the handler returned and never sent.
+    expect(offenders).toEqual([]);
+  });
+
+  it('no stock-writing service call is left un-awaited', () => {
+    const floating = webSources.flatMap(({ calls }) =>
+      calls.filter((c) => isFloating(c.call)).map((c) => `${c.where} ${c.label}`),
+    );
+    expect(floating, 'await it: a dropped promise can finish after the request').toEqual([]);
+  });
+
+  it('no stock-writing service call runs inside after() or defer()', () => {
+    const tails = webSources.flatMap(({ calls }) =>
+      calls
+        .filter((c) => insideCallbackOf(c.call, new Set(['after', 'defer'])))
+        .map((c) => `${c.where} ${c.label}`),
+    );
+    expect(tails, 'after() drops a tag the request already recorded').toEqual([]);
+  });
+
+  it('no stock-writing service call runs during a render or inside unstable_cache', () => {
+    const bad = webSources.flatMap(({ rel, calls }) =>
+      calls
+        .filter(
+          (c) => RENDER_FILE.test(rel) || insideCallbackOf(c.call, new Set(['unstable_cache'])),
+        )
+        .map((c) => `${c.where} ${c.label}`),
+    );
+    expect(bad, 'revalidateTag throws during render and in unstable_cache').toEqual([]);
   });
 });
