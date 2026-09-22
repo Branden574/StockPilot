@@ -9,8 +9,11 @@ vi.mock('./audit', () => ({ audit: _mockAudit }));
 vi.mock('@/lib/po-parser', () => ({ parsePoFile: vi.fn() }));
 vi.mock('@/lib/po-scan/extract', () => ({ extractPoFromMedia: vi.fn(), SCAN_MODEL_NAME: 'mock' }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn() }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 
 const mockAudit = _mockAudit;
+
+import { reportError } from '@/lib/error-reporter';
 
 import { ServiceError } from './context';
 import { PoImportsService } from './po-imports';
@@ -83,6 +86,77 @@ describe('PoImportsService.cancel — cleanup of auto-created items (Fix #2)', (
         (c) => (c as unknown as [{ event?: string }])[0]?.event === 'po_import.canceled',
       ),
     ).toBe(true);
+  });
+
+  it('archives NOTHING when the keep-check read fails, and still cancels', async () => {
+    // Same items as above, but the purchase_order_items read errors. Before
+    // the fix `poLines` came back null, the keep set stayed empty and BOTH
+    // items were archived, including item-B that an ordered PO still expects.
+    const stub = makeSupabaseStub({
+      'po_imports.update': { data: { id: IMPORT_ID }, error: null },
+      'po_import_lines.select': {
+        data: [{ item_id: 'item-A' }, { item_id: 'item-B' }],
+        error: null,
+      },
+      'inventory_items.select': {
+        data: [
+          { id: 'item-A', name: 'Created A' },
+          { id: 'item-B', name: 'Created B' },
+        ],
+        error: null,
+      },
+      'purchase_order_items.select': {
+        data: null,
+        error: { message: 'canceling statement due to statement timeout' },
+      },
+      'inventory_items.update': {
+        data: [
+          { id: 'item-A', name: 'Created A' },
+          { id: 'item-B', name: 'Created B' },
+        ],
+        error: null,
+      },
+    });
+    const svc = new PoImportsService(makeServiceContext(stub.client) as never);
+
+    await svc.cancel(IMPORT_ID);
+
+    expect(stub.chainsAll.get('inventory_items.update')).toBeUndefined();
+    expect(
+      mockAudit.mock.calls.some(
+        (c) => (c as unknown as [{ event?: string }])[0]?.event === 'inventory.item.archived',
+      ),
+    ).toBe(false);
+    expect(vi.mocked(reportError)).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'canceling statement due to statement timeout' }),
+      expect.objectContaining({ tag: 'po_import.cancel.archive_created_items.keep_check' }),
+    );
+    // Best-effort cleanup: the cancel itself still completed and was audited.
+    expect(
+      mockAudit.mock.calls.some(
+        (c) => (c as unknown as [{ event?: string }])[0]?.event === 'po_import.canceled',
+      ),
+    ).toBe(true);
+  });
+
+  it('archives nothing, and reports, when the created-lines or candidate read fails', async () => {
+    for (const failing of ['po_import_lines.select', 'inventory_items.select'] as const) {
+      vi.mocked(reportError).mockClear();
+      const stub = makeSupabaseStub({
+        'po_imports.update': { data: { id: IMPORT_ID }, error: null },
+        'po_import_lines.select': { data: [{ item_id: 'item-A' }], error: null },
+        'inventory_items.select': { data: [{ id: 'item-A', name: 'Created A' }], error: null },
+        'purchase_order_items.select': { data: [], error: null },
+        'inventory_items.update': { data: [{ id: 'item-A', name: 'Created A' }], error: null },
+        [failing]: { data: null, error: { message: 'boom' } },
+      });
+      const svc = new PoImportsService(makeServiceContext(stub.client) as never);
+
+      await svc.cancel(IMPORT_ID);
+
+      expect(stub.chainsAll.get('inventory_items.update'), failing).toBeUndefined();
+      expect(vi.mocked(reportError), failing).toHaveBeenCalledTimes(1);
+    }
   });
 
   it('archives nothing when the import created no items (only linked existing ones)', async () => {

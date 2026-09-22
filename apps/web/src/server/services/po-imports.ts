@@ -2334,15 +2334,31 @@ export class PoImportsService {
    * created_from marker on). Only touches items the import created, never
    * pre-existing items the user linked. Reversible (archive, not delete) and
    * best-effort — never fails the cancel.
+   *
+   * Every read here decides what gets archived, so an unreadable one archives
+   * NOTHING (reported, cancel still succeeds). The keep-check matters most: its
+   * error used to be discarded, so a failed read (statement timeout, pooler
+   * hiccup) looked like "no live PO references these items" and archived items
+   * an open PO still expects, dropping them from the Items list until a receipt
+   * auto-unarchives them (ReceivingService.maybeAutoUnarchive) or someone
+   * restores them by hand. Leaving an unused item active costs nothing; a
+   * manual archive can still take it.
    */
   private async archiveImportCreatedItems(importId: string): Promise<void> {
+    const skip = (step: string, message: string) => {
+      void reportError(new Error(message), {
+        tag: `po_import.cancel.archive_created_items.${step}`,
+        organizationId: this.ctx.organizationId,
+      });
+    };
     try {
-      const { data: lines } = await this.ctx.supabase
+      const { data: lines, error: linesErr } = await this.ctx.supabase
         .from('po_import_lines')
         .select('item_id')
         .eq('po_import_id', importId)
         .eq('item_created', true)
         .not('item_id', 'is', null);
+      if (linesErr) return skip('lines', linesErr.message);
       const ids = Array.from(
         new Set(
           ((lines ?? []) as Array<{ item_id: string | null }>)
@@ -2352,7 +2368,7 @@ export class PoImportsService {
       );
       if (ids.length === 0) return;
 
-      const { data: candidates } = await this.ctx.supabase
+      const { data: candidates, error: candErr } = await this.ctx.supabase
         .from('inventory_items')
         .select('id, name')
         .eq('organization_id', this.ctx.organizationId)
@@ -2360,17 +2376,21 @@ export class PoImportsService {
         .eq('status', 'active')
         .eq('quantity_on_hand', 0)
         .is('deleted_at', null);
+      if (candErr) return skip('candidates', candErr.message);
       const cand = (candidates ?? []) as Array<{ id: string; name: string }>;
       if (cand.length === 0) return;
 
       // Keep any item still referenced by a non-cancelled PO (it may yet receive
       // stock there). The just-cancelled import has no PO, so nothing to exclude
       // on that account.
-      const { data: poLines } = await this.ctx.supabase
+      const { data: poLines, error: keepErr } = await this.ctx.supabase
         .from('purchase_order_items')
         .select('item_id, po:purchase_orders!inner(status)')
         .eq('organization_id', this.ctx.organizationId) // defense-in-depth: keep the keep-check single-org
         .in('item_id', cand.map((c) => c.id));
+      // Unreadable keep-check: we cannot tell which items a live PO still
+      // needs, so archive none of them (see the doc comment).
+      if (keepErr) return skip('keep_check', keepErr.message);
       const keep = new Set<string>();
       for (const row of (poLines ?? []) as Array<Record<string, unknown>>) {
         const poField = row.po as { status?: string } | { status?: string }[] | null;
@@ -2380,7 +2400,7 @@ export class PoImportsService {
       const toArchive = cand.filter((c) => !keep.has(c.id));
       if (toArchive.length === 0) return;
 
-      const { data: flipped } = await this.ctx.supabase
+      const { data: flipped, error: archiveErr } = await this.ctx.supabase
         .from('inventory_items')
         .update({ status: 'archived' })
         .eq('organization_id', this.ctx.organizationId)
@@ -2392,6 +2412,7 @@ export class PoImportsService {
       // committed. cancelPoImportAction and the v1 cancel route revalidated
       // only the import pages, so these rows stayed in the cached views.
       invalidateInventoryListAfterWrite(this.ctx.organizationId, 'po_import.cancel');
+      if (archiveErr) return skip('archive', archiveErr.message);
       for (const item of (flipped ?? []) as Array<{ id: string; name: string }>) {
         await audit(
           {

@@ -1259,11 +1259,23 @@ export class PurchaseOrdersService {
       // on any line — qoh=0 then just means it was consumed) OR it's still on a
       // non-cancelled PO (this PO is already 'cancelled' here, so it's excluded
       // — and such an item may yet receive stock + auto-unarchive there).
-      const { data: poLines } = await this.ctx.supabase
+      const { data: poLines, error: keepErr } = await this.ctx.supabase
         .from('purchase_order_items')
         .select('item_id, quantity_received, po:purchase_orders!inner(status)')
         .eq('organization_id', this.ctx.organizationId) // defense-in-depth: keep the keep-check single-org
         .in('item_id', candIds);
+      // An unreadable keep-check archives NOTHING. Its error used to be
+      // discarded, so a failed read (statement timeout, pooler hiccup) looked
+      // like "never received, on no live PO" and archived items with real
+      // receipt history, or ones another open PO still expects, off the Items
+      // list. Leaving an unused item active costs nothing.
+      if (keepErr) {
+        void reportError(new Error(keepErr.message), {
+          tag: 'po.cancel.archive_custom_items.keep_check',
+          organizationId: this.ctx.organizationId,
+        });
+        return;
+      }
       const keep = new Set<string>();
       for (const row of (poLines ?? []) as Array<Record<string, unknown>>) {
         const itemId = row.item_id as string;
