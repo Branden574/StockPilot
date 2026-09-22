@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
-const { createAdminClientMock } = vi.hoisted(() => ({
+const { createAdminClientMock, createClientMock } = vi.hoisted(() => ({
   createAdminClientMock: vi.fn(),
+  createClientMock: vi.fn(),
 }));
 
 vi.mock('next/cache', () => ({
@@ -15,7 +16,32 @@ vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: createAdminClientMock,
 }));
 
-import { loadCatalogItems } from './orders-new-catalog';
+// The caller's OWN cookie client: the catalog scope is read through it, so the
+// policy helpers see the caller's auth.uid().
+vi.mock('@/lib/supabase/server', () => ({
+  createClient: createClientMock,
+}));
+
+import {
+  FULL_CATALOG_SCOPE_KEY,
+  loadCatalogItems,
+  resolveCatalogScopeKey,
+  type CatalogViewer,
+} from './orders-new-catalog';
+
+const ORG = '00000000-0000-4000-8000-00000000000a';
+const WH = '00000000-0000-4000-8000-0000000000b1';
+const WH2 = '00000000-0000-4000-8000-0000000000b2';
+const CHARTER_A = '00000000-0000-4000-8000-0000000000c1';
+const CHARTER_B = '00000000-0000-4000-8000-0000000000c2';
+const CAT_X = '00000000-0000-4000-8000-0000000000d1';
+const CAT_Y = '00000000-0000-4000-8000-0000000000d2';
+
+const viewer = (role: CatalogViewer['role']): CatalogViewer => ({
+  organizationId: ORG,
+  userId: 'user-1',
+  role,
+});
 
 // Expected-items visibility (mig 0277): the storefront/new-order catalog
 // loader must exclude items awaiting their first receipt AT THE QUERY —
@@ -29,8 +55,6 @@ describe('loadCatalogItems — expected-items exclusion (mig 0277)', () => {
 
   it('applies eq(awaiting_first_receipt, false) alongside the existing active/non-rental predicates', async () => {
     const stub = makeSupabaseStub({
-      // accessKey resolution: non-viewer role → 'ALL' (no category filter).
-      'organization_members.select': { data: [{ role: 'admin' }], error: null },
       'inventory_items.select': {
         data: [
           {
@@ -58,7 +82,11 @@ describe('loadCatalogItems — expected-items exclusion (mig 0277)', () => {
     });
     createAdminClientMock.mockReturnValue(stub.client);
 
-    const items = await loadCatalogItems('org-1', 'wh-1', 'user-1');
+    // An admin's scope is the full one by role: no scope read at all.
+    const items = await loadCatalogItems(
+      { organizationId: 'org-1', userId: 'user-1', role: 'admin' },
+      'wh-1',
+    );
 
     // The unflagged (established, even zero-stock) item still lists.
     expect(items.map((i) => i.id)).toEqual(['i-1']);
@@ -80,48 +108,310 @@ describe('loadCatalogItems — expected-items exclusion (mig 0277)', () => {
   });
 });
 
-// A failed access read must never widen the catalog. supabase-js RESOLVES a
-// failed query as { data: null, error }; the loader used to read that as "no
-// category grants" (key 'ALL', the unrestricted catalog) and cache it. It now
-// throws, which unstable_cache does not store, and no catalog is read.
-describe('loadCatalogItems — access reads fail closed', () => {
+/* ---- the catalog never holds a row RLS would hide from the caller ---- */
+
+interface Row {
+  id: string;
+  organization_id: string;
+  warehouse_id: string;
+  charter_id: string | null;
+  category_id: string | null;
+}
+
+function item(id: string, warehouse: string, charter: string | null, category: string | null): Row {
+  return {
+    id,
+    organization_id: ORG,
+    warehouse_id: warehouse,
+    charter_id: charter,
+    category_id: category,
+  };
+}
+
+// One warehouse holding generic stock and two charters' stock, across two
+// categories and "no category". WH2 is another warehouse of the same org.
+const ROWS: Row[] = [
+  item('g-x', WH, null, CAT_X),
+  item('g-y', WH, null, CAT_Y),
+  item('g-none', WH, null, null),
+  item('a-x', WH, CHARTER_A, CAT_X),
+  item('a-y', WH, CHARTER_A, CAT_Y),
+  item('b-x', WH, CHARTER_B, CAT_X),
+  item('b-y', WH, CHARTER_B, CAT_Y),
+  item('b-none', WH, CHARTER_B, null),
+  item('w2-a-x', WH2, CHARTER_A, CAT_X),
+];
+const ALL_AT_WH = ['a-x', 'a-y', 'b-none', 'b-x', 'b-y', 'g-none', 'g-x', 'g-y'];
+
+/**
+ * An admin client whose inventory_items reads are EVALUATED against ROWS with
+ * the filters the loader actually applied (eq, is null, in, or-groups), so a
+ * test sees the rows the query would return, not a canned answer.
+ */
+function makeFilteringAdmin(rows: Row[]) {
+  const itemQueries: Array<Array<[string, unknown[]]>> = [];
+  const matchTerm = (row: Record<string, unknown>, term: string): boolean => {
+    const [col, op, ...rest] = term.split('.');
+    const value = rest.join('.');
+    if (op === 'is' && value === 'null') return row[col!] === null;
+    if (op === 'eq') return String(row[col!]) === value;
+    if (op === 'in')
+      return value
+        .slice(1, -1)
+        .split(',')
+        .includes(row[col!] as string);
+    throw new Error(`fake: unsupported or-term ${term}`);
+  };
+  const splitTop = (expr: string) => {
+    const out: string[] = [];
+    let depth = 0;
+    let cur = '';
+    for (const ch of expr) {
+      if (ch === '(') depth += 1;
+      if (ch === ')') depth -= 1;
+      if (ch === ',' && depth === 0) {
+        out.push(cur);
+        cur = '';
+      } else cur += ch;
+    }
+    out.push(cur);
+    return out;
+  };
+  const evaluate = (calls: Array<[string, unknown[]]>) => {
+    let out = rows.map((r) => ({
+      ...r,
+      name: r.id,
+      sku: r.id.toUpperCase(),
+      quantity_on_hand: 5,
+      item_type: 'product',
+      bin_location: null,
+      retail_price: 1,
+      unit_cost: 1,
+      reorder_point: 0,
+      rack_number: null,
+      rack_row: null,
+      book_rack_number: null,
+      book_rack_row: null,
+      status: 'active',
+      is_rental: false,
+      awaiting_first_receipt: false,
+      deleted_at: null,
+      is_bundle: null,
+    })) as Array<Record<string, unknown>>;
+    let limit = Infinity;
+    for (const [m, args] of calls) {
+      if (m === 'eq') out = out.filter((r) => r[args[0] as string] === args[1]);
+      else if (m === 'is') out = out.filter((r) => r[args[0] as string] === args[1]);
+      else if (m === 'in')
+        out = out.filter((r) => (args[1] as unknown[]).includes(r[args[0] as string]));
+      else if (m === 'or')
+        out = out.filter((r) => splitTop(args[0] as string).some((t) => matchTerm(r, t)));
+      else if (m === 'limit') limit = args[0] as number;
+      else if (m !== 'select' && m !== 'order') throw new Error(`fake: unsupported ${m}`);
+    }
+    return out.slice(0, limit);
+  };
+  const client = {
+    from: vi.fn((table: string) => {
+      const calls: Array<[string, unknown[]]> = [];
+      if (table === 'inventory_items') itemQueries.push(calls);
+      const builder: object = new Proxy(
+        {},
+        {
+          get(_t, prop: string) {
+            if (prop === 'then') {
+              return (resolve: (v: unknown) => void) =>
+                resolve({ data: table === 'inventory_items' ? evaluate(calls) : [], error: null });
+            }
+            return (...args: unknown[]) => {
+              calls.push([prop, args]);
+              return builder;
+            };
+          },
+        },
+      );
+      return builder;
+    }),
+  };
+  return { client, itemQueries };
+}
+
+type RpcAnswer = { data: unknown; error: { message: string } | null };
+
+/**
+ * The caller's cookie client. Each policy helper answers with the sets the SQL
+ * helper would return FOR THIS CALLER (see 0229 / 0310), as PostgREST shapes
+ * them: `setof uuid` as a bare string array, `returns table` as objects.
+ */
+function makeCallerClient(answers: {
+  full?: string[];
+  assigned?: string[];
+  pairs?: Array<{ warehouse_id: string; charter_id: string }>;
+  unrestricted?: string[];
+  allowed?: Array<{ organization_id: string; category_id: string }>;
+  override?: Record<string, RpcAnswer>;
+}) {
+  const byName: Record<string, RpcAnswer> = {
+    rls_inv_read_full_warehouse_ids: { data: answers.full ?? [], error: null },
+    rls_inv_read_assigned_warehouse_ids: { data: answers.assigned ?? [], error: null },
+    rls_inv_read_warehouse_charter_ids: { data: answers.pairs ?? [], error: null },
+    rls_cat_unrestricted_org_ids: { data: answers.unrestricted ?? [], error: null },
+    rls_cat_allowed_category_ids: { data: answers.allowed ?? [], error: null },
+    ...answers.override,
+  };
+  const rpc = vi.fn(async (name: string) => {
+    const answer = byName[name];
+    if (!answer) throw new Error(`unexpected rpc ${name}`);
+    return answer;
+  });
+  return { rpc };
+}
+
+async function catalogIds(
+  role: CatalogViewer['role'],
+  caller: ReturnType<typeof makeCallerClient>,
+) {
+  const admin = makeFilteringAdmin(ROWS);
+  createAdminClientMock.mockReturnValue(admin.client);
+  createClientMock.mockResolvedValue(caller);
+  const items = await loadCatalogItems(viewer(role), WH);
+  return { ids: items.map((i) => i.id).sort(), admin };
+}
+
+describe("loadCatalogItems — the catalog is the caller's RLS view of the warehouse", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('throws when the category-grant read fails for a viewer, and reads no items', async () => {
-    const stub = makeSupabaseStub({
-      'organization_members.select': { data: [{ role: 'viewer' }], error: null },
-      'user_category_assignments.select': {
-        data: null,
-        error: { message: 'canceling statement due to statement timeout' },
-      },
-      'inventory_items.select': {
-        data: [{ id: 'i-any', name: 'Any', sku: 'S', quantity_on_hand: 1 }],
-        error: null,
-      },
-    });
-    createAdminClientMock.mockReturnValue(stub.client);
-
-    await expect(loadCatalogItems('org-1', 'wh-1', 'viewer-1')).rejects.toThrow(
-      /category grants read failed/,
+  it('a viewer assigned to charter A sees generic stock and charter A, never charter B', async () => {
+    const { ids } = await catalogIds(
+      'viewer',
+      makeCallerClient({
+        assigned: [WH],
+        pairs: [{ warehouse_id: WH, charter_id: CHARTER_A }],
+        unrestricted: [ORG],
+      }),
     );
-    expect(stub.fromCalls).not.toContain('inventory_items');
+    expect(ids).toEqual(['a-x', 'a-y', 'g-none', 'g-x', 'g-y']);
   });
 
-  it('throws when the membership read fails, and reads no items', async () => {
-    const stub = makeSupabaseStub({
-      'organization_members.select': { data: null, error: { message: 'fetch failed' } },
-      'inventory_items.select': {
-        data: [{ id: 'i-any', name: 'Any', sku: 'S', quantity_on_hand: 1 }],
-        error: null,
-      },
-    });
-    createAdminClientMock.mockReturnValue(stub.client);
-
-    await expect(loadCatalogItems('org-1', 'wh-1', 'viewer-1')).rejects.toThrow(
-      /membership read failed/,
+  it('a staff member assigned to charter B sees generic stock and charter B, never charter A', async () => {
+    const { ids } = await catalogIds(
+      'staff',
+      makeCallerClient({
+        assigned: [WH],
+        pairs: [{ warehouse_id: WH, charter_id: CHARTER_B }],
+        unrestricted: [ORG],
+      }),
     );
-    expect(stub.fromCalls).not.toContain('inventory_items');
+    expect(ids).toEqual(['b-none', 'b-x', 'b-y', 'g-none', 'g-x', 'g-y']);
+  });
+
+  it('a charter assignment at ANOTHER warehouse opens nothing here', async () => {
+    const { ids, admin } = await catalogIds(
+      'viewer',
+      makeCallerClient({
+        assigned: [WH2],
+        pairs: [{ warehouse_id: WH2, charter_id: CHARTER_A }],
+        unrestricted: [ORG],
+      }),
+    );
+    expect(ids).toEqual([]);
+    expect(admin.itemQueries).toHaveLength(0);
+  });
+
+  it('a category-restricted viewer sees only granted categories, never another or none', async () => {
+    const { ids } = await catalogIds(
+      'viewer',
+      makeCallerClient({
+        full: [WH],
+        assigned: [WH],
+        allowed: [{ organization_id: ORG, category_id: CAT_X }],
+      }),
+    );
+    expect(ids).toEqual(['a-x', 'b-x', 'g-x']);
+  });
+
+  it('charter and category restrictions apply together', async () => {
+    const { ids } = await catalogIds(
+      'viewer',
+      makeCallerClient({
+        assigned: [WH],
+        pairs: [{ warehouse_id: WH, charter_id: CHARTER_A }],
+        allowed: [
+          { organization_id: ORG, category_id: CAT_Y },
+          // A grant in another organization says nothing about this one.
+          { organization_id: '00000000-0000-4000-8000-0000000000ff', category_id: CAT_X },
+        ],
+      }),
+    );
+    expect(ids).toEqual(['a-y', 'g-y']);
+  });
+
+  it('a staff member whose view of the warehouse is full gets the shared ALL variant', async () => {
+    const caller = makeCallerClient({ full: [WH], assigned: [WH], unrestricted: [ORG] });
+    createClientMock.mockResolvedValue(caller);
+    await expect(resolveCatalogScopeKey(viewer('staff'), WH)).resolves.toBe(FULL_CATALOG_SCOPE_KEY);
+
+    const { ids } = await catalogIds('staff', caller);
+    expect(ids).toEqual(ALL_AT_WH);
+  });
+
+  it.each(['owner', 'admin', 'manager'] as const)(
+    '%s: the full catalog, with no scope read (no added round trip)',
+    async (role) => {
+      const { ids } = await catalogIds(role, makeCallerClient({}));
+      expect(ids).toEqual(ALL_AT_WH);
+      expect(createClientMock).not.toHaveBeenCalled();
+      await expect(resolveCatalogScopeKey(viewer(role), WH)).resolves.toBe(FULL_CATALOG_SCOPE_KEY);
+    },
+  );
+});
+
+// Every read that decides the scope fails CLOSED: supabase-js resolves a
+// failed query as { data: null, error }, and no scope may be built from it.
+describe('loadCatalogItems — a failed scope read denies', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    'rls_inv_read_full_warehouse_ids',
+    'rls_inv_read_assigned_warehouse_ids',
+    'rls_inv_read_warehouse_charter_ids',
+    'rls_cat_unrestricted_org_ids',
+    'rls_cat_allowed_category_ids',
+  ])('%s failing rejects the catalog and reads no items', async (name) => {
+    const admin = makeFilteringAdmin(ROWS);
+    createAdminClientMock.mockReturnValue(admin.client);
+    createClientMock.mockResolvedValue(
+      makeCallerClient({
+        full: [WH],
+        assigned: [WH],
+        unrestricted: [ORG],
+        override: { [name]: { data: null, error: { message: 'fetch failed' } } },
+      }),
+    );
+
+    // Refused for the ERROR, not merely because null is not an array.
+    await expect(loadCatalogItems(viewer('viewer'), WH)).rejects.toThrow(
+      new RegExp(`catalog scope: ${name} failed`),
+    );
+    expect(admin.itemQueries).toHaveLength(0);
+  });
+
+  it('an answer in an unexpected shape rejects rather than guessing', async () => {
+    const admin = makeFilteringAdmin(ROWS);
+    createAdminClientMock.mockReturnValue(admin.client);
+    createClientMock.mockResolvedValue(
+      makeCallerClient({
+        override: {
+          rls_inv_read_full_warehouse_ids: { data: [{ id: WH }], error: null },
+        },
+      }),
+    );
+
+    await expect(loadCatalogItems(viewer('staff'), WH)).rejects.toThrow(/unexpected shape/);
+    expect(admin.itemQueries).toHaveLength(0);
   });
 });
