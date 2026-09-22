@@ -427,7 +427,9 @@ describe('the Books page asks its two gates together', () => {
       .replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
     expect(code).not.toMatch(/await\s+checkModuleAccess\(/);
     expect(code).toMatch(
-      /await\s+Promise\.all\(\[\s*checkModuleAccess\('books'\),\s*checkModuleAccess\('price_tracking'\),?\s*\]\)/,
+      // Both gates in ONE Promise.all; other independent reads (the search
+      // params) may join it after them.
+      /await\s+Promise\.all\(\[\s*checkModuleAccess\('books'\),\s*checkModuleAccess\('price_tracking'\),?[^\]]*\]\)/,
     );
   });
 });
