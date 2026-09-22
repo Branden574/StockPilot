@@ -23,7 +23,9 @@ vi.mock('@/lib/env', () => ({
 vi.mock('@supabase/supabase-js', () => ({ createClient: () => refs.client }));
 vi.mock('@/lib/supabase/server', () => ({ createClient: async () => refs.client }));
 
-import { effectivePermissions } from '@stockpilot/core';
+import { effectivePermissions, type Permission, type PermissionOverride } from '@stockpilot/core';
+
+import { NON_CORE_MODULE_IDS } from '@/lib/modules/effective-modules';
 
 import { withApiContext } from './api-context';
 
@@ -218,44 +220,92 @@ const shape = (ctx: Awaited<ReturnType<typeof withApiContext>>) =>
     mfaEnrolled: ctx.mfaEnrolled,
   };
 
+/**
+ * Overrides that REALLY change a manager's set, so a fast path that dropped
+ * them could not pass. `members:invite` is not a manager permission and is
+ * granted here; `items:create` is one and is revoked.
+ */
+const GRANTED_NOT_HELD: Permission = 'members:invite';
+const REVOKED_HELD: Permission = 'items:create';
+const REAL_OVERRIDES: {
+  role_overrides: PermissionOverride[];
+  user_overrides: PermissionOverride[];
+} = {
+  role_overrides: [{ permission: GRANTED_NOT_HELD, granted: true }],
+  user_overrides: [{ permission: REVOKED_HELD, granted: false }],
+};
+
 describe('the API context resolves in one round trip', () => {
-  it('reads no tables at all, where the legacy path read six', async () => {
+  it('reads no tables at all, where the legacy path read eight', async () => {
     const { fast, fastCalls, legacyCalls } = await both(cookie());
     expect(fast).not.toBeNull();
     expect(fastCalls).toEqual(['rpc:get_request_context']);
-    expect(fastCalls.filter((c) => c.startsWith('table:'))).toEqual([]);
-    expect(legacyCalls.filter((c) => c.startsWith('table:')).length).toBeGreaterThanOrEqual(6);
+    // An exact count, not a floor: if the legacy path ever got cheaper, the
+    // claim this change rests on would need re-measuring rather than quietly
+    // still passing.
+    expect(legacyCalls).toEqual([
+      'table:user_profiles', // which organization (the default)
+      'table:user_profiles', // account status
+      'table:organization_members', // that membership
+      'table:organizations', // the MFA policy
+      'table:organization_modules', // the enabled modules...
+      'table:organizations', // ...and the comp flag that widens them
+      'table:role_permission_overrides',
+      'table:user_permission_overrides',
+    ]);
   });
 
-  it('gives the same context the separate reads gave', async () => {
+  it.each([
+    ['cookie', cookie],
+    ['bearer', bearer],
+  ])('gives the same context the separate reads gave (%s)', async (_kind, make) => {
     world.memberships = [
       {
         organization_id: ORG_A,
         role: 'manager',
         enabled_modules: ['maintenance'],
-        role_overrides: [{ permission: 'orders:approve', granted: true }],
-        user_overrides: [{ permission: 'items:delete', granted: false }],
+        ...REAL_OVERRIDES,
       },
     ];
-    const { fast, legacy } = await both(cookie());
+    const { fast, legacy, fastCalls } = await both(make());
     expect(shape(fast)).toEqual(shape(legacy));
     expect(fast?.role).toBe('manager');
+    expect(fast?.userId).toBe(USER);
+    expect(fastCalls.filter((c) => c.startsWith('table:'))).toEqual([]);
+    // The overrides BIT, both ways round: without them the sets differ.
+    expect(fast?.permissions?.has(GRANTED_NOT_HELD)).toBe(true);
+    expect(fast?.permissions?.has(REVOKED_HELD)).toBe(false);
+    const plain = effectivePermissions('manager');
+    expect(plain.has(GRANTED_NOT_HELD)).toBe(false);
+    expect(plain.has(REVOKED_HELD)).toBe(true);
     expect(fast?.permissions).toEqual(
-      effectivePermissions(
-        'manager',
-        [{ permission: 'orders:approve', granted: true }],
-        [{ permission: 'items:delete', granted: false }],
-      ),
+      effectivePermissions('manager', REAL_OVERRIDES.role_overrides, REAL_OVERRIDES.user_overrides),
     );
   });
 
-  it('honours the comp flag the same way on both paths', async () => {
+  it.each([
+    ['cookie', cookie],
+    ['bearer', bearer],
+  ])('honours the comp flag the same way (%s)', async (_kind, make) => {
     world.memberships = [
       { organization_id: ORG_A, role: 'admin', all_modules_comp: true, enabled_modules: [] },
     ];
-    const { fast, legacy } = await both(cookie());
+    const { fast, legacy } = await both(make());
     expect(shape(fast)).toEqual(shape(legacy));
-    expect(fast!.enabledModules.size).toBeGreaterThan(0);
+    // Comped means EVERY non-core module, from no explicit rows at all.
+    expect(fast!.enabledModules.size).toBe(NON_CORE_MODULE_IDS.length);
+  });
+
+  it.each([
+    ['cookie', cookie],
+    ['bearer', bearer],
+  ])('carries the explicitly enabled modules and nothing else (%s)', async (_kind, make) => {
+    world.memberships = [
+      { organization_id: ORG_A, role: 'staff', enabled_modules: ['maintenance'] },
+    ];
+    const { fast, legacy } = await both(make());
+    expect(shape(fast)).toEqual(shape(legacy));
+    expect([...fast!.enabledModules]).toContain('maintenance');
   });
 
   it('never lets an override widen an owner', async () => {
@@ -301,6 +351,21 @@ describe('which organization, and whether to answer at all', () => {
       cookie({ 'x-organization-id': 'cccccccc-3333-3333-3333-333333333333' }),
     );
     expect(theirs).toBeNull();
+  });
+
+  it('matches X-Organization-Id the way Postgres did: a uuid, not a case-sensitive string', async () => {
+    // The legacy path compared this in the database, where uuid equality
+    // ignores case. iOS hands out UPPERCASE uuid strings by default, so a
+    // case-sensitive match here would 401 a caller the old path served.
+    world.memberships = [
+      { organization_id: ORG_A, role: 'staff' },
+      { organization_id: ORG_B, role: 'admin' },
+    ];
+    const upper = await withApiContext(cookie({ 'x-organization-id': ORG_B.toUpperCase() }));
+    expect(upper?.organizationId).toBe(ORG_B);
+    expect(upper?.role).toBe('admin');
+    // And it is still an exact uuid match, not a loose one.
+    expect(await withApiContext(cookie({ 'x-organization-id': ORG_B.slice(0, -1) }))).toBeNull();
   });
 
   it('refuses a disabled account', async () => {

@@ -145,11 +145,15 @@ async function mfaFromPolicy(
  * page path keys its bundle on is never set here and
  * `loadRequestContextBundle()` returns null. The API builder therefore kept
  * doing what the page path stopped doing in migration 0355: seven to nine
- * separate reads, in serial waves, on every call. Measured locally on a
- * dashboard load, `/api/v1/me/releases` alone cost 11 Supabase calls — three
- * `user_profiles`, two `organizations`, one each of `auth/user`,
- * `organization_members` and `organization_modules`, plus the release query's
- * own two.
+ * separate reads, in serial waves, on every call.
+ *
+ * Measured locally on a dashboard load, `/api/v1/me/releases` cost 11 Supabase
+ * calls in total. NINE of them are this builder: one `auth/v1/user`, two
+ * `user_profiles` (the membership choice and the account-status check), one
+ * `organization_members`, two `organizations` (the MFA policy and the comp
+ * flag), one `organization_modules`, and the two permission-override tables —
+ * ten when a user with no default organization needs the extra membership
+ * query. The other two are the route's own reads.
  *
  * This asks `get_request_context()` (0355) with the caller's OWN client, so the
  * same row level security decides the answer on both paths, and the strict
@@ -203,8 +207,12 @@ async function resolveApiContextFromBundle(
 
     // The same three-step choice pickActiveMembership makes, against the same
     // accepted-memberships-only set, already ordered oldest first by 0355.
-    const held = requestedOrgId
-      ? (bundle.memberships.find((m) => m.organization_id === requestedOrgId) ?? null)
+    // Postgres compared `X-Organization-Id` as a uuid, which ignores case; a
+    // JS `===` does not, and iOS hands out UPPERCASE uuid strings by default.
+    // Matching case-sensitively here would 401 a caller the legacy path served.
+    const wanted = requestedOrgId?.toLowerCase() ?? null;
+    const held = wanted
+      ? (bundle.memberships.find((m) => m.organization_id.toLowerCase() === wanted) ?? null)
       : (bundle.memberships.find(
           (m) => m.organization_id === bundle.profile?.default_organization_id,
         ) ??
@@ -213,9 +221,16 @@ async function resolveApiContextFromBundle(
     // A requested organization the caller is not an accepted member of is a
     // refusal, not a fallback — the legacy path returns null for it too.
     if (!held) return { ok: false };
-    // No organization row means row level security hid it. Its `mfa_policy`
-    // would silently become 'optional' and its comp flag false, so neither is
-    // guessed here: the legacy reads run and fail closed on their own terms.
+    // No organization row means row level security hid it from a member, which
+    // should not happen. Hand it to the legacy reads rather than invent an MFA
+    // policy and a comp flag here.
+    //
+    // HONESTLY: this buys consistency, not safety. `resolveApiMfaState` reads
+    // the same hidden row, gets null, and falls back to 'optional' itself — so
+    // both paths end up equally permissive for a member whose organization row
+    // is unreadable. That pre-dates this change and is left alone here rather
+    // than tightened invisibly inside a performance change; tightening it would
+    // lock out anyone it currently serves, and belongs in its own PR.
     if (!held.organization) return null;
 
     return {
