@@ -386,6 +386,13 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // `activity` is empty (e.g. the Overview tab, which never fetches
   // activity at all), so the button correctly starts hidden there too.
   const activityInitialCursor = nextActivityCursor(activity);
+  // The feed panel keeps its rows in client state (for "Load older"), seeded
+  // from these props on mount. A re-render of this page (the adjust or
+  // transfer action's own response, a live update) hands it NEW first-page
+  // rows, which a mounted panel ignored: the header showed the new quantity
+  // while the Movements tab kept the old list. Keyed on the first page, the
+  // panel starts over whenever that page changes, and only then.
+  const feedKey = `${activity[0]?.id ?? 'none'}:${activity.length}`;
 
   // Per-kind initial exhaustion (P4 review fix): the Movements tab only
   // ever displays movement events, so ITS "Load older" button must hide
@@ -1023,6 +1030,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
             </CardHeader>
             <CardContent>
               <ItemActivityPanel
+                key={feedKey}
                 itemId={id}
                 initialEvents={movementEvents}
                 initialLocationNames={locationNames}
@@ -1050,6 +1058,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
             </CardHeader>
             <CardContent>
               <ItemActivityPanel
+                key={feedKey}
                 itemId={id}
                 initialEvents={activity}
                 initialLocationNames={locationNames}
