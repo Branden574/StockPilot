@@ -1,14 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import * as React from 'react';
 
 import { navForRole, type NavSection } from '@/components/dashboard/nav';
 import { NavLinkPending } from '@/components/dashboard/nav-link-pending';
 import { OrgSwitcher } from '@/components/dashboard/org-switcher';
 import { IconMark } from '@/components/ui/icon-mark';
-import { markNavigationIntent } from '@/lib/perf/marks';
+import { useWarmRoute } from '@/lib/hooks/use-warm-route';
 import { cn } from '@/lib/utils';
 
 import {
@@ -87,7 +87,6 @@ export function Sidebar({
     [role, moduleSet, navOverrides, permissionSet],
   );
   const pathname = usePathname();
-  const router = useRouter();
   const initials = (userName || 'U')
     .split(/\s+/)
     .map((s) => s[0])
@@ -95,23 +94,23 @@ export function Sidebar({
     .slice(0, 2)
     .join('');
 
-  // `intent` is for the performance mark only (lib/perf/marks.ts): hover, focus
-  // and pointer-down are a PERSON signalling where they are about to go. The
-  // staggered top-5 warm-up below calls this too, and passes false, because a
-  // timer is not intent: marking it would credit every early click on those
-  // routes with a head start nobody's pointer gave it.
-  const warmRoute = React.useCallback(
-    (href: string, intent = true) => {
-      if (href === pathname) return;
-      if (intent) markNavigationIntent(href);
-      router.prefetch(href);
-    },
-    [pathname, router],
-  );
+  // The app's one route warm-up (lib/hooks/use-warm-route.ts), shared with
+  // IntentLink. `intent` is for the performance mark only: hover, focus and
+  // pointer-down are a PERSON signalling where they are about to go. The
+  // staggered top-5 warm-up below passes false, because a timer is not intent:
+  // marking it would credit every early click on those routes with a head
+  // start nobody's pointer gave it.
+  const warmRoute = useWarmRoute();
 
   // Prefetch warmup — top-5 highest-click routes ONLY (Overview,
-  // Inventory, Books, Orders, Movements). Each is a single RSC fetch
-  // and these are the routes ~95% of users click first.
+  // Inventory, Books, Orders, Movements). These are the routes ~95% of
+  // users click first. Each warm is TWO requests under Next 16.3.5's
+  // segment cache (route tree + segments to the nearest loading.tsx;
+  // measured by the perf harness, 2.0 requests per route), so the
+  // four routes warmed on a hard load cost 8 requests. Kept on purpose
+  // (2026-09-22): staggered, bounded at four, and the only BULK warm-up
+  // left in the app. Every link grid, list and table row warms on intent
+  // through IntentLink instead (components/ui/intent-link.tsx).
   //
   // The previous phase-2 "warm the other ~20 sidebar routes at idle"
   // was removed on purpose (perf plan 2026-07-02 P1b): every warmed
