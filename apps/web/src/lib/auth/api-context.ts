@@ -74,11 +74,27 @@ async function resolveApiMfaState(
 ): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean }> {
   let policy: MfaPolicy;
   try {
-    const { data: org } = await supabase
+    const { data: org, error } = await supabase
       .from('organizations')
       .select('mfa_policy')
       .eq('id', organizationId)
       .maybeSingle();
+    // THE ERROR IS NOT A THROW. postgrest-js resolves a failed request as
+    // `{ data: null, error }` unless throwOnError is set, and it is not set
+    // anywhere in this app — so a statement timeout, a gateway 5xx or a lock on
+    // `organizations` used to land on `?? 'optional'` and turn the MFA gate
+    // OFF for anyone not already enrolled. Since 0167 the stored default is
+    // 'admins_required', so that fallback was more permissive than any real
+    // organization's policy.
+    //
+    // An unreadable authorization input must deny. This is what the page path
+    // already does (lib/dashboard/request-cache.ts throws on `error`, and
+    // resolveMfaState's catch fails closed) and what the sibling read in this
+    // same file already does ("an unreadable flag grants NOTHING").
+    //
+    // NOT the same as zero rows: `maybeSingle()` reports no row as
+    // `{ data: null, error: null }`, which stays 'optional' exactly as before.
+    if (error) throw new Error(`mfa_policy unreadable: ${error.code || 'unknown'}`);
     policy = (org?.mfa_policy as MfaPolicy | undefined) ?? 'optional';
   } catch (err) {
     // Fail CLOSED — assume MFA is required and unsatisfied. A flaky
@@ -200,9 +216,18 @@ async function resolveApiContextFromBundle(
       return null;
     }
     const bundle = parseRequestContextBundle(data, userId);
+    if (!bundle) {
+      // NOT a legitimate answer: a shape this code does not understand, which
+      // is permanent for this caller and now costs the RPC ON TOP OF the full
+      // legacy reads. Logged for the same reason the page path logs it — a
+      // fast path that is permanently dead must not be invisible.
+      console.warn('[api-context] unexpected answer, using the legacy reads');
+      return null;
+    }
     // A profile the caller cannot read is NOT "active": the legacy path turns
-    // that into a 5xx through accountIsDisabledOrThrow, and it must keep doing so.
-    if (!bundle?.profile) return null;
+    // that into a 5xx through accountIsDisabledOrThrow, and it must keep doing
+    // so. That IS a legitimate answer, so it stays quiet.
+    if (!bundle.profile) return null;
     if (bundle.profile.disabled_at !== null) return { ok: false };
 
     // The same three-step choice pickActiveMembership makes, against the same

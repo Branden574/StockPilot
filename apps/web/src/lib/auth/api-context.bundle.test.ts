@@ -47,9 +47,13 @@ interface Membership {
 const world = {
   profile: { default_organization_id: null as string | null, disabled_at: null as string | null },
   hideProfile: false,
+  /** Legacy path only: the `organizations` row reads back as absent. */
+  hideOrganization: false,
   memberships: [] as Membership[],
   /** null = the function answers; otherwise the shape the RPC returns instead. */
   rpc: 'answer' as 'answer' | 'error' | 'throw' | 'junk' | 'missing',
+  /** A FAILED read of `organizations` — postgrest resolves these, it does not throw. */
+  orgReadError: null as { code: string; message: string } | null,
   aal: 'aal2' as 'aal1' | 'aal2',
   verifiedFactor: false,
   calls: [] as string[],
@@ -93,13 +97,13 @@ function bundleJson() {
 }
 
 /** A query builder that records the table it was asked for. */
-function table(single: unknown, list: unknown[] = []) {
+function table(single: unknown, list: unknown[] = [], error: unknown = null) {
   const q: Record<string, unknown> = {};
   const self = () => q;
   for (const k of ['select', 'eq', 'is', 'not', 'in', 'limit', 'order']) q[k] = self;
-  q.maybeSingle = async () => ({ data: single, error: null });
+  q.maybeSingle = async () => ({ data: error ? null : single, error });
   q.then = (resolve: (v: unknown) => unknown) =>
-    Promise.resolve({ data: list, error: null }).then(resolve);
+    Promise.resolve({ data: error ? null : list, error }).then(resolve);
   return q;
 }
 
@@ -134,10 +138,16 @@ function makeClient() {
       if (name === 'organization_members')
         return table(m ? { organization_id: m.organization_id, role: m.role } : null);
       if (name === 'organizations')
-        return table({
-          mfa_policy: m?.mfa_policy ?? 'optional',
-          all_modules_comp: m?.all_modules_comp ?? false,
-        });
+        return table(
+          world.hideOrganization
+            ? null
+            : {
+                mfa_policy: m?.mfa_policy ?? 'optional',
+                all_modules_comp: m?.all_modules_comp ?? false,
+              },
+          [],
+          world.orgReadError,
+        );
       if (name === 'organization_modules')
         return table(
           null,
@@ -187,8 +197,10 @@ beforeEach(() => {
   delete process.env.REQUEST_CONTEXT_RPC;
   world.profile = { default_organization_id: null, disabled_at: null };
   world.hideProfile = false;
+  world.hideOrganization = false;
   world.memberships = [{ organization_id: ORG_A, role: 'staff' }];
   world.rpc = 'answer';
+  world.orgReadError = null;
   world.aal = 'aal2';
   world.verifiedFactor = false;
   world.calls = [];
@@ -424,12 +436,71 @@ describe('it falls back rather than guess', () => {
     expect(world.calls).not.toContain('rpc:get_request_context');
   });
 
+  it('says so when the answer is one it does not understand', async () => {
+    // A shape this code cannot read is PERMANENT for that caller, and now costs
+    // the RPC on top of the full legacy reads. A silent fallback would make a
+    // dead fast path invisible and slower than before the change.
+    world.rpc = 'junk';
+    await withApiContext(cookie());
+    expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).toContain('unexpected answer');
+  });
+
+  it('stays quiet when the answer is legitimate but unusable (no readable profile)', async () => {
+    world.hideProfile = true;
+    await withApiContext(cookie());
+    expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain('unexpected answer');
+  });
+
   it('logs a code, never a message', async () => {
     world.rpc = 'error';
     await withApiContext(cookie());
     const logged = JSON.stringify(vi.mocked(console.warn).mock.calls);
     expect(logged).toContain('legacy reads');
     expect(logged).not.toContain('socket');
+  });
+});
+
+describe('an unreadable MFA policy denies, it does not default to optional', () => {
+  // postgrest-js resolves a failed request as { data: null, error } — it does
+  // NOT throw unless throwOnError is set, and this app never sets it. So a
+  // statement timeout or a gateway 5xx on `organizations` used to fall through
+  // to `?? 'optional'` and switch the MFA gate off for anyone not already
+  // enrolled. Since 0167 the stored default is 'admins_required', so that was
+  // more permissive than any real organization's policy.
+  const legacyOnly = async (req: Request) => {
+    process.env.REQUEST_CONTEXT_RPC = 'off';
+    try {
+      return await withApiContext(req);
+    } finally {
+      delete process.env.REQUEST_CONTEXT_RPC;
+    }
+  };
+
+  it('fails CLOSED when the policy read errors, on the cookie path', async () => {
+    world.memberships = [{ organization_id: ORG_A, role: 'staff' }];
+    world.orgReadError = { code: '57014', message: 'canceling statement due to statement timeout' };
+    const ctx = await legacyOnly(cookie());
+    expect(ctx).not.toBeNull();
+    expect(ctx?.mfaRequired).toBe(true);
+    expect(ctx?.mfaSatisfied).toBe(false);
+  });
+
+  it('fails CLOSED on the bearer path too, even with an aal2 token', async () => {
+    world.memberships = [{ organization_id: ORG_A, role: 'admin' }];
+    world.orgReadError = { code: '500', message: 'bad gateway' };
+    world.aal = 'aal2';
+    const ctx = await legacyOnly(bearer());
+    expect(ctx?.mfaRequired).toBe(true);
+    expect(ctx?.mfaSatisfied).toBe(false);
+  });
+
+  it('still treats NO ROW as optional: an absent row is an answer, not a fault', async () => {
+    // maybeSingle() reports zero rows as { data: null, error: null }.
+    world.memberships = [{ organization_id: ORG_A, role: 'staff' }];
+    world.hideOrganization = true;
+    const ctx = await legacyOnly(cookie());
+    expect(ctx?.mfaRequired).toBe(false);
+    expect(ctx?.mfaSatisfied).toBe(true);
   });
 });
 
