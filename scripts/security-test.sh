@@ -120,8 +120,9 @@ PGTAP_TESTS=(
   # every non-admin's outbox event was silently dropped by RLS inside a
   # best-effort try/catch, so connectors only ever heard admins.
   supabase/tests/0341_manual_writeoff_any_mode_and_outbox_secdef.test.sql
-  # Stock-ledger writers: post_shipment_shipped closed to every user role (no
-  # caller since Shipments was removed) and anon off five INVOKER stock RPCs.
+  # Stock writers: post_shipment_shipped (no caller since Shipments was
+  # removed) and putaway_transfer (never had a caller) closed to every user
+  # role, and anon off five INVOKER stock RPCs.
   supabase/tests/0356_stock_rpc_execute_narrowing.test.sql
 
   # Account disable / session revocation.

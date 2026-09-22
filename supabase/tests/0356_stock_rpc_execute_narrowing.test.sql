@@ -17,18 +17,25 @@
 -- 10 is the outage guard: dropping authenticated would break transfers,
 -- receiving, receipt reversal and bundles for every user.
 --
--- CATALOG ONLY, BY DESIGN. Nothing here calls post_shipment_shipped under
--- `anon` or `authenticated`. A permission-denied function call under a
--- supautils hint role segfaulted Postgres images before 17.6.1.155, and the
--- image CI pins may still be one of them, so closed grants are asserted with
--- has_function_privilege / aclexplode, as 0310, 0312 and 0329 do.
+-- PART 3 (assertions 12-16). putaway_transfer, which writes the per-bin
+-- inventory_stock table and has never had a caller, is closed to anon,
+-- authenticated and PUBLIC, and service_role keeps it. It carried the same
+-- default ACL on the 0355 head, so 13, 14 and 15 FAIL there. Assertion 6
+-- is also the control for 13 and 14.
+--
+-- CATALOG ONLY, BY DESIGN. Nothing here calls post_shipment_shipped or
+-- putaway_transfer under `anon` or `authenticated`. A permission-denied
+-- function call under a supautils hint role segfaulted Postgres images
+-- before 17.6.1.155, and the image CI pins may still be one of them, so
+-- closed grants are asserted with has_function_privilege / aclexplode, as
+-- 0310, 0312 and 0329 do.
 --
 -- No fixtures. The only write is the temp list in part 2, dropped with the
 -- transaction. Wrapped in begin/rollback for house consistency.
 -- Run via `supabase test db` after `supabase db reset`.
 
 begin;
-select plan(11);
+select plan(16);
 
 -- 1. List integrity: exactly one overload, with this exact signature. A
 --    rename or a new overload fails HERE instead of leaving an open twin
@@ -139,6 +146,53 @@ select is(
     where has_function_privilege('service_role', to_regprocedure(sig), 'EXECUTE')),
   5,
   '0356/11: service_role keeps EXECUTE on all five');
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- PART 3. putaway_transfer closed to anon, authenticated and PUBLIC.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- 12. List integrity: the exact signature resolves and it is the only
+--     overload. Both facts are in one string, so a renamed signature cannot
+--     hide behind a new overload with the old default ACL.
+select is(
+  format('resolved=%s, overloads=%s',
+    -- ::text spells 'true'; format's %s alone would print boolean as 't'.
+    (to_regprocedure('public.putaway_transfer(uuid, uuid, uuid, uuid, numeric, text, text)') is not null)::text,
+    (select count(*)
+       from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname = 'putaway_transfer')),
+  'resolved=true, overloads=1',
+  '0356/12: putaway_transfer resolves and has exactly one overload (list-integrity pin)');
+
+-- 13-15. The fix. PUBLIC matters as much as the named roles, because anon
+--        and authenticated both inherit a PUBLIC grant.
+select ok(
+  not has_function_privilege('authenticated',
+    'public.putaway_transfer(uuid, uuid, uuid, uuid, numeric, text, text)', 'EXECUTE'),
+  '0356/13: authenticated holds no EXECUTE on putaway_transfer (no signed-in user can call it through PostgREST)');
+
+select ok(
+  not has_function_privilege('anon',
+    'public.putaway_transfer(uuid, uuid, uuid, uuid, numeric, text, text)', 'EXECUTE'),
+  '0356/14: anon holds no EXECUTE on putaway_transfer');
+
+-- A null ACL means default privileges (EXECUTE to PUBLIC), so it must fail
+-- here rather than pass because aclexplode(null) returns no rows.
+select ok(
+  (select p.proacl is not null
+          and not exists (
+            select 1 from aclexplode(p.proacl) a
+             where a.grantee = 0
+               and a.privilege_type = 'EXECUTE')
+     from pg_proc p
+    where p.oid = 'public.putaway_transfer(uuid, uuid, uuid, uuid, numeric, text, text)'::regprocedure),
+  '0356/15: PUBLIC holds no EXECUTE on putaway_transfer (explicit ACL, no PUBLIC entry)');
+
+-- 16. Ops path kept, per the 0329 Group 3c idiom for orphaned RPCs.
+select ok(
+  has_function_privilege('service_role',
+    'public.putaway_transfer(uuid, uuid, uuid, uuid, numeric, text, text)', 'EXECUTE'),
+  '0356/16: service_role keeps EXECUTE on putaway_transfer');
 
 select * from finish();
 rollback;
