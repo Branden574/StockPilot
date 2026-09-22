@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Boxes } from 'lucide-react';
 import Link from 'next/link';
+import type { ReactNode } from 'react';
 
 export const metadata: Metadata = { title: 'Inventory' };
 
@@ -10,7 +11,7 @@ import { InventoryTable, type InstantAdoptedPayload } from '@/components/invento
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { Button } from '@/components/ui/button';
-import { can } from '@stockpilot/core';
+import { can, isManagerOrAbove, type Role } from '@stockpilot/core';
 import { deriveInstantView, instantStateFromPageParams } from '@/lib/inventory/instant-mode';
 import {
   ALL_WAREHOUSES_KEY,
@@ -148,20 +149,31 @@ export default async function InventoryPage({
 
   // Chrome-only dependencies: the request-cached auth context (fast — the
   // dashboard layout already resolved it) gates the create/import buttons,
-  // and the rack list feeds the toolbar dropdown. The item list + trends +
-  // images render in InventoryTableSection below, in the SAME reveal (see the
-  // ONE REVEAL note). The heading inherits a per-org nav rename
-  // (Settings → Navigation) off the request-cached org row — no extra fetch.
+  // and the rack list feeds the toolbar dropdown. The heading inherits a
+  // per-org nav rename (Settings → Navigation) off the request-cached org
+  // row — no extra fetch.
   //
   // The racks RPC is CHAINED INSIDE the Promise.all (not awaited after it):
   // a separate sequential await put one full DB round trip between
   // loading.tsx and the real toolbar — and therefore in front of the table
   // skeleton — on EVERY hard load (cold-start plan rank 2). withContext is
   // request-cached, so the chain adds no duplicate auth work.
-  const [sessionCtx, heading, racks] = await Promise.all([
+  //
+  // The TABLE starts in the same Promise.all. It used to be a child Server
+  // Component, which React only begins rendering once this function has
+  // returned its JSX, i.e. after the racks RPC: every row read (saved views,
+  // the cached list, image signing) queued behind one more Supabase round
+  // trip on every Dashboard -> Inventory click. Calls from Vercel to Supabase
+  // stall 1-8 s at Supabase's entry point on 3-5% of weekday calls (logs,
+  // 2026-09-22), and a stall anywhere in a serial chain stalls the page. As a
+  // plain async function called here, the table's reads run alongside the
+  // header's, and the page (one reveal: it streams nothing until all of it is
+  // ready) waits for the slower of the two instead of their sum.
+  const [sessionCtx, heading, racks, table] = await Promise.all([
     requireOrgContext(),
     effectiveNavLabel('/dashboard/inventory', 'Inventory'),
     InventoryService.forCurrentUser().then((svc) => svc.listDistinctRacks({ scope: rackScope })),
+    inventoryTableSection({ params, lifecycleStatus, itemType }),
   ]);
 
   // Gate the create / import buttons on `items:create`. Viewers (read-
@@ -221,23 +233,11 @@ export default async function InventoryPage({
           now streams as one reveal. Do not re-add a Suspense with a visible
           fallback here (the dataset adopter's fallback={null} boundary
           inside the table is fine: it draws nothing). */}
-      <div className="mt-8">
-        <InventoryTableSection
-          params={params}
-          lifecycleStatus={lifecycleStatus}
-          itemType={itemType}
-        />
-      </div>
+      <div className="mt-8">{table}</div>
     </div>
   );
 }
 
-/**
- * Inner async Server Component: the awaited data fetch (item list + per-row
- * trends/images + filter lookups) lives here so the page shell above paints
- * the chrome immediately and only the table body streams. Same components,
- * same props as before — purely relocated behind <Suspense>.
- */
 /**
  * Data both acquisition paths (cached default view / live filtered
  * view) normalize into before the shared render tail below. The item
@@ -309,7 +309,14 @@ async function buildInstantAdoptedPayload(
   }
 }
 
-async function InventoryTableSection({
+/**
+ * The table: item list + per-row trends/images + filter lookups, or the
+ * empty state. A plain async function, not a component, so the page can
+ * start it inside its own Promise.all (see the note there): as a child
+ * component it only began after the header's awaits. It runs in the same
+ * request, so every React.cache()d helper it calls is shared with the page.
+ */
+async function inventoryTableSection({
   params,
   lifecycleStatus,
   itemType,
@@ -317,28 +324,45 @@ async function InventoryTableSection({
   params: InventorySearchParams;
   lifecycleStatus: 'archived' | 'discontinued' | 'all' | 'active';
   itemType: 'all' | 'book' | 'asset' | 'consumable' | 'product';
-}) {
+}): Promise<ReactNode> {
   const page = Math.max(1, Number(params.page) || 1);
-  const [sessionCtx, warehouseFilter, savedViewsSvc] = await Promise.all([
+  // Saved views are strictly per-user — they never enter the shared
+  // cache — and nothing else here feeds them, so the read starts before the
+  // first await and overlaps everything below (it used to wait for this
+  // Promise.all and the warehouse awaits after it). forCurrentUser resolves
+  // auth itself through withContext (RLS-scoped client).
+  const savedViewsPromise = SavedViewsService.forCurrentUser().then((svc) => svc.list('inventory'));
+  // Keep the rejection observed even if the data path throws before the
+  // await below — an unobserved rejection would crash the lambda.
+  savedViewsPromise.catch(() => {});
+  const [sessionCtx, warehouseFilter] = await Promise.all([
     requireOrgContext(),
     getActiveWarehouseFilter(),
-    SavedViewsService.forCurrentUser(),
   ]);
   // Warehouse-scoped users get the scoping explanation appended to any
   // zero-result empty state (mirrors the header's ScopedWarehouseNotice).
-  // Both helpers are request-cached from the layout render, so this is
-  // memo reads for everyone and null short-circuits for managers+.
-  const warehouseAccess = await getWarehouseAccess();
-  const scopedNote = warehouseAccess.hasAllAccess
-    ? null
-    : scopedWarehouseMessage(
-        buildWarehouseScope(
-          warehouseAccess,
-          await getWarehousesForRequest(sessionCtx.organizationId),
-        ),
+  // Manager-and-above are all-access by role — getWarehouseAccess answers
+  // hasAllAccess = true for them on this SAME isManagerOrAbove test
+  // (lib/auth/warehouse.ts) — so their note is null without the warehouse
+  // read this used to await in front of every row read. Staff/viewer (the
+  // 0280 all-warehouses flag included) resolve it exactly as before, but
+  // alongside the data path: only an empty state reads it.
+  const scopedNotePromise: Promise<string | null> = isManagerOrAbove(sessionCtx.role as Role)
+    ? Promise.resolve(null)
+    : getWarehouseAccess().then(async (warehouseAccess) =>
+        warehouseAccess.hasAllAccess
+          ? null
+          : scopedWarehouseMessage(
+              buildWarehouseScope(
+                warehouseAccess,
+                await getWarehousesForRequest(sessionCtx.organizationId),
+              ),
+            ),
       );
+  // Observed now for the same reason as savedViewsPromise.
+  scopedNotePromise.catch(() => {});
   // The name of the warehouse the VIEW is narrowed to, when the visitor chose
-  // one. `scopedNote` above covers the other case — a staff/viewer whose ACCESS
+  // one. The scoped note above covers the other case — a staff/viewer whose ACCESS
   // is narrowed — and is null for anyone with all access, which is exactly the
   // person who can set this filter and then forget it: the cookie lives a year
   // and is per browser, so a phone on "All warehouses" and a laptop on one
@@ -349,13 +373,6 @@ async function InventoryTableSection({
         (w) => w.id === warehouseFilter,
       )?.name ?? null)
     : null;
-
-  // Saved views are strictly per-user — they never enter the shared
-  // cache. Kick the query off now so it overlaps either data path.
-  const savedViewsPromise = savedViewsSvc.list('inventory');
-  // Keep the rejection observed even if the data path throws before the
-  // await below — an unobserved rejection would crash the lambda.
-  savedViewsPromise.catch(() => {});
 
   // Wrap each query so a single failure surfaces with its tag in Vercel
   // logs instead of the generic "Server Components render" error
@@ -432,8 +449,20 @@ async function InventoryTableSection({
   // AWAITED instant branch below so their SSR HTML reflects the exact URL
   // state; only the default view streams.
   const isDefaultView = isDefaultInventoryView(params, 'items');
+  const awaitsInstantDataset = useSharedCaches && itemType === 'product' && !isDefaultView;
 
-  if (useSharedCaches && itemType === 'product' && !isDefaultView) {
+  // The server-mode render at the end needs the org's counting units
+  // (see the WHOLE-DATASET note there), and nothing on the way feeds them,
+  // so for every view that goes there directly the read starts now and
+  // overlaps the rows instead of following them. A non-sports org pays
+  // nothing either way; a sports org's one read leaves the serial chain.
+  // The awaited instant branch resolves its own units (loadCountingUnits
+  // over its dataset), so it starts nothing here. Never rejects (its own
+  // try/catch returns {}); observed anyway, like savedViewsPromise.
+  const countingUnitsPromise = awaitsInstantDataset ? null : loadCountingUnitsForOrg();
+  countingUnitsPromise?.catch(() => {});
+
+  if (awaitsInstantDataset) {
     // Data acquisition only in here — the JSX renders after the
     // try/catch (react-hooks/error-boundaries: a thrown render wouldn't
     // be caught here anyway). Any failure → instantData stays null →
@@ -479,7 +508,7 @@ async function InventoryTableSection({
   }
 
   if (instantData) {
-    const savedViews = await savedViewsPromise;
+    const [savedViews, scopedNote] = await Promise.all([savedViewsPromise, scopedNotePromise]);
     const { items: instantItems, lookups } = instantData;
     // Sports counting units for whatever groups this dataset touches — ONE
     // batched, module-gated lookup that costs an org with no grouped rows
@@ -756,7 +785,7 @@ async function InventoryTableSection({
     };
   }
 
-  const savedViews = await savedViewsPromise;
+  const [savedViews, scopedNote] = await Promise.all([savedViewsPromise, scopedNotePromise]);
   const itemsWithImages = data.items;
   const placementMap = data.placementMap;
 
@@ -836,8 +865,10 @@ async function InventoryTableSection({
   // as the user paged. Resolving what the ORG's groups define cannot be wrong
   // for any page the client renders, and it keeps the instant branch's cost
   // posture — a non-sports org pays nothing (module set off the request-cached
-  // context, no round trip), a sports org pays one column-only read.
-  const productGroupUnits = await loadCountingUnitsForOrg();
+  // context, no round trip), a sports org pays one column-only read. Started
+  // before the rows (countingUnitsPromise); the fallback covers an awaited
+  // instant branch that fell through (over-cap org or loader failure).
+  const productGroupUnits = await (countingUnitsPromise ?? loadCountingUnitsForOrg());
 
   return (
     <InventoryTable

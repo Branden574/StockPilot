@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { BookOpen } from 'lucide-react';
 import Link from 'next/link';
+import type { ReactNode } from 'react';
 
 export const metadata: Metadata = { title: 'Books' };
 
@@ -112,18 +113,20 @@ export default async function BooksPage({
   // Both gates read the one request-cached module set (no round trip of their
   // own). They used to be two module_enabled RPCs awaited one after the other
   // before the header, two serial chances at a 1-8 s Supabase stall (3-5% of
-  // calls on weekday daytimes, measured 2026-09-22). Asked together, so even a
-  // slow set read is waited for once.
+  // calls on weekday daytimes, measured 2026-09-22). Asked together, with the
+  // search params, so even a slow set read is waited for once. The books gate
+  // still decides before any book is read: nothing below starts until it has
+  // answered.
   // Phase 6: price_tracking gates the bulk price-refresh action. When OFF, the
   // button never renders and the page is identical to before.
-  const [moduleAccess, { enabled: priceTrackingEnabled }] = await Promise.all([
+  const [moduleAccess, { enabled: priceTrackingEnabled }, params] = await Promise.all([
     checkModuleAccess('books'),
     checkModuleAccess('price_tracking'),
+    searchParams,
   ]);
   if (!moduleAccess.enabled) {
     return <ModuleNotEnabled moduleId="books" canManage={moduleAccess.canManage} />;
   }
-  const params = await searchParams;
 
   const lifecycleStatus =
     params.status === 'archived' ||
@@ -135,19 +138,26 @@ export default async function BooksPage({
 
   // Chrome-only dependencies: the request-cached auth context (fast — already
   // resolved by the dashboard layout) gates the create/import buttons, and the
-  // rack list feeds the toolbar dropdown. The book list + trends + covers
-  // render in BooksTableSection below, in the SAME reveal (see ONE REVEAL). The heading inherits a per-org nav rename
-  // (Settings → Navigation) off the request-cached org row — no extra fetch.
-  // The racks RPC is CHAINED INSIDE the Promise.all (not awaited after it)
-  // so the toolbar chrome never waits an extra sequential DB round trip —
+  // rack list feeds the toolbar dropdown. The heading inherits a per-org nav
+  // rename (Settings → Navigation) off the request-cached org row — no extra
+  // fetch. The racks RPC is CHAINED INSIDE the Promise.all (not awaited after
+  // it) so the toolbar chrome never waits an extra sequential DB round trip —
   // same fix as the Items page (cold-start plan rank 2). withContext is
   // request-cached, so the chain adds no duplicate auth work.
-  const [sessionCtx, heading, racks] = await Promise.all([
+  //
+  // The TABLE (book list + trends + covers) starts in the same Promise.all,
+  // for the reason the Items page gives: as a child Server Component it only
+  // began after this function returned, i.e. after the racks RPC, so every
+  // row read queued behind one more Supabase round trip. Called here, the
+  // page (one reveal, see ONE REVEAL) waits for the slower of header and
+  // table instead of their sum.
+  const [sessionCtx, heading, racks, table] = await Promise.all([
     requireOrgContext(),
     effectiveNavLabel('/dashboard/books', 'Books'),
     InventoryService.forCurrentUser().then((svc) =>
       svc.listDistinctRacks({ scope: 'books' }),
     ),
+    booksTableSection({ params, lifecycleStatus }),
   ]);
 
   const canCreate = can(sessionCtx, 'items:create');
@@ -196,19 +206,11 @@ export default async function BooksPage({
           now streams as one reveal. Do not re-add a Suspense with a visible
           fallback here (the dataset adopter's fallback={null} boundary
           inside the table is fine: it draws nothing). */}
-      <div className="mt-8">
-        <BooksTableSection params={params} lifecycleStatus={lifecycleStatus} />
-      </div>
+      <div className="mt-8">{table}</div>
     </div>
   );
 }
 
-/**
- * Inner async Server Component: the awaited data fetch (book list + per-row
- * trends/covers + filter lookups) lives here so the page shell above paints
- * the chrome immediately and only the table body streams. Same components,
- * same props as before — purely relocated behind <Suspense>.
- */
 /**
  * Data both acquisition paths (cached default view / live filtered
  * view) normalize into before the shared render tail below.
@@ -228,25 +230,33 @@ type SectionData = {
   expectedCount: number;
 };
 
-async function BooksTableSection({
+/**
+ * The table: book list + per-row trends/covers + filter lookups, or the
+ * empty state. A plain async function, not a component, so the page can
+ * start it inside its own Promise.all (see the note there): as a child
+ * component it only began after the header's awaits. It runs in the same
+ * request, so every React.cache()d helper it calls is shared with the page.
+ */
+async function booksTableSection({
   params,
   lifecycleStatus,
 }: {
   params: BooksSearchParams;
   lifecycleStatus: 'archived' | 'discontinued' | 'all' | 'active';
-}) {
+}): Promise<ReactNode> {
   const page = Math.max(1, Number(params.page) || 1);
-  const [sessionCtx, warehouseFilter, savedViewsSvc] = await Promise.all([
-    requireOrgContext(),
-    getActiveWarehouseFilter(),
-    SavedViewsService.forCurrentUser(),
-  ]);
   // Saved views are strictly per-user — they never enter the shared
-  // cache. Kick the query off now so it overlaps either data path.
-  const savedViewsPromise = savedViewsSvc.list('books');
+  // cache — and nothing else here feeds them, so the read starts before the
+  // first await and overlaps either data path. forCurrentUser resolves auth
+  // itself through withContext (RLS-scoped client).
+  const savedViewsPromise = SavedViewsService.forCurrentUser().then((svc) => svc.list('books'));
   // Keep the rejection observed even if the data path throws before the
   // await below — an unobserved rejection would crash the lambda.
   savedViewsPromise.catch(() => {});
+  const [sessionCtx, warehouseFilter] = await Promise.all([
+    requireOrgContext(),
+    getActiveWarehouseFilter(),
+  ]);
 
   let data: SectionData | null = null;
 
