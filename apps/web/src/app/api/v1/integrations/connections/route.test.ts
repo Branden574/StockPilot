@@ -52,9 +52,9 @@ describe('GET /api/v1/integrations/connections', () => {
       health: [{ topic: 'bill', status: 'success' }],
     };
     const list = vi.fn(async () => payload);
-    vi.mocked(ConnectionsService).mockImplementationOnce(
-      () => ({ list }) as unknown as InstanceType<typeof ConnectionsService>,
-    );
+    vi.mocked(ConnectionsService).mockImplementationOnce(function () {
+      return { list } as unknown as InstanceType<typeof ConnectionsService>;
+    });
 
     const res = await GET(buildRequest());
 
@@ -68,9 +68,9 @@ describe('GET /api/v1/integrations/connections', () => {
     const list = vi.fn(async () => {
       throw new ServiceError('module_disabled', 'Module not enabled');
     });
-    vi.mocked(ConnectionsService).mockImplementationOnce(
-      () => ({ list }) as unknown as InstanceType<typeof ConnectionsService>,
-    );
+    vi.mocked(ConnectionsService).mockImplementationOnce(function () {
+      return { list } as unknown as InstanceType<typeof ConnectionsService>;
+    });
 
     const res = await GET(buildRequest());
     expect(res.status).toBe(403);

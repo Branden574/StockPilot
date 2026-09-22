@@ -66,9 +66,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   setEnabled.mockResolvedValue({ id: TPL });
   remove.mockResolvedValue(undefined);
-  vi.mocked(RecurringPoTemplatesService).mockImplementation(
-    () => ({ setEnabled, remove }) as never,
-  );
+  vi.mocked(RecurringPoTemplatesService).mockImplementation(function () {
+    return { setEnabled, remove } as never;
+  });
 });
 
 describe('PATCH /api/v1/recurring-pos/[id]', () => {

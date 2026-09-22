@@ -7,7 +7,9 @@ const getZendeskConnection = vi.fn();
 const connectZendesk = vi.fn();
 const disconnect = vi.fn();
 vi.mock('@/server/services/connections', () => ({
-  ConnectionsService: vi.fn().mockImplementation(() => ({ getZendeskConnection, connectZendesk, disconnect })),
+  ConnectionsService: vi.fn().mockImplementation(function () {
+    return { getZendeskConnection, connectZendesk, disconnect };
+  }),
 }));
 
 import { GET as getConnection } from './connection/route';
@@ -16,7 +18,9 @@ import { POST as postDisconnect } from './disconnect/route';
 import { ConnectionsService } from '@/server/services/connections';
 
 beforeEach(() => {
-  vi.mocked(ConnectionsService).mockImplementation(() => ({ getZendeskConnection, connectZendesk, disconnect }) as never);
+  vi.mocked(ConnectionsService).mockImplementation(function () {
+    return { getZendeskConnection, connectZendesk, disconnect } as never;
+  });
   getZendeskConnection.mockReset(); connectZendesk.mockReset(); disconnect.mockReset();
 });
 

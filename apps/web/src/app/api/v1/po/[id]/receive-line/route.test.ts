@@ -127,9 +127,9 @@ function post(tables: Record<string, TableFixture>, body: unknown) {
 beforeEach(() => {
   vi.clearAllMocks();
   postReceipt.mockResolvedValue({ id: 'r1', receipt_number: 'RCV-1' });
-  vi.mocked(ReceivingService).mockImplementation(
-    () => ({ postReceipt }) as unknown as ReceivingService,
-  );
+  vi.mocked(ReceivingService).mockImplementation(function () {
+    return { postReceipt } as unknown as ReceivingService;
+  });
 });
 
 /**

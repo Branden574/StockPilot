@@ -5,7 +5,9 @@ import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
 const validateToken = vi.fn();
 vi.mock('@/server/connectors/zendesk/client', () => ({
   ZendeskApiError: class extends Error { constructor(public status: number){ super('z'); } },
-  ZendeskClient: vi.fn().mockImplementation(() => ({ validateToken })),
+  ZendeskClient: vi.fn().mockImplementation(function () {
+    return { validateToken };
+  }),
 }));
 vi.mock('@/server/connectors/secret-store', () => ({
   putConnectionSecret: vi.fn(async () => 'secret-id-1'),
@@ -20,7 +22,9 @@ const withZ = () => new Set<ModuleId>([...DEFAULT_MODULE_IDS, 'zendesk']);
 const input = { subdomain: 'acme', email: 'a@acme.com', apiToken: 'tok' };
 
 beforeEach(() => {
-  vi.mocked(ZendeskClient).mockImplementation(() => ({ validateToken }) as never);
+  vi.mocked(ZendeskClient).mockImplementation(function () {
+    return { validateToken } as never;
+  });
   validateToken.mockReset();
 });
 

@@ -161,15 +161,17 @@ beforeEach(() => {
     },
   ]);
   getActiveLinkStatus.mockResolvedValue({ expiresAt: '2027-01-01T00:00:00.000Z' });
-  vi.mocked(MaintenanceRequestsService).mockImplementation(
-    () => ({ get, update, emailInput }) as unknown as InstanceType<typeof MaintenanceRequestsService>,
-  );
-  vi.mocked(MaintenanceAttachmentsService).mockImplementation(
-    () => ({ signedViewUrls }) as unknown as InstanceType<typeof MaintenanceAttachmentsService>,
-  );
-  vi.mocked(MaintenanceShareLinksService).mockImplementation(
-    () => ({ getActiveLinkStatus }) as unknown as InstanceType<typeof MaintenanceShareLinksService>,
-  );
+  vi.mocked(MaintenanceRequestsService).mockImplementation(function () {
+    return { get, update, emailInput } as unknown as InstanceType<
+      typeof MaintenanceRequestsService
+    >;
+  });
+  vi.mocked(MaintenanceAttachmentsService).mockImplementation(function () {
+    return { signedViewUrls } as unknown as InstanceType<typeof MaintenanceAttachmentsService>;
+  });
+  vi.mocked(MaintenanceShareLinksService).mockImplementation(function () {
+    return { getActiveLinkStatus } as unknown as InstanceType<typeof MaintenanceShareLinksService>;
+  });
 });
 
 describe('GET /api/v1/maintenance-requests/[id]', () => {

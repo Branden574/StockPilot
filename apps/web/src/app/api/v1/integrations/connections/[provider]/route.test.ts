@@ -82,9 +82,9 @@ describe('DELETE /api/v1/integrations/connections/[provider]', () => {
   it('disconnects quickbooks and returns 200 { ok: true }', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
     const disconnect = vi.fn(async () => undefined);
-    vi.mocked(ConnectionsService).mockImplementationOnce(
-      () => ({ disconnect }) as unknown as InstanceType<typeof ConnectionsService>,
-    );
+    vi.mocked(ConnectionsService).mockImplementationOnce(function () {
+      return { disconnect } as unknown as InstanceType<typeof ConnectionsService>;
+    });
 
     const { req, ctx } = deleteRequest('quickbooks');
     const res = await DELETE(req, ctx);
@@ -99,9 +99,9 @@ describe('DELETE /api/v1/integrations/connections/[provider]', () => {
     const disconnect = vi.fn(async () => {
       throw new ServiceError('forbidden', 'Missing permission: integrations:manage');
     });
-    vi.mocked(ConnectionsService).mockImplementationOnce(
-      () => ({ disconnect }) as unknown as InstanceType<typeof ConnectionsService>,
-    );
+    vi.mocked(ConnectionsService).mockImplementationOnce(function () {
+      return { disconnect } as unknown as InstanceType<typeof ConnectionsService>;
+    });
 
     const { req, ctx } = deleteRequest('quickbooks');
     const res = await DELETE(req, ctx);
@@ -153,10 +153,9 @@ describe('POST /api/v1/integrations/connections/[provider]/account-mapping', () 
   it('saves the mapping and returns 200 { ok: true }', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
     const saveAccountMapping = vi.fn(async () => undefined);
-    vi.mocked(ConnectionsService).mockImplementationOnce(
-      () =>
-        ({ saveAccountMapping }) as unknown as InstanceType<typeof ConnectionsService>,
-    );
+    vi.mocked(ConnectionsService).mockImplementationOnce(function () {
+      return { saveAccountMapping } as unknown as InstanceType<typeof ConnectionsService>;
+    });
 
     const { req, ctx } = mappingRequest('quickbooks', validMapping);
     const res = await POST(req, ctx);
@@ -176,10 +175,9 @@ describe('POST /api/v1/integrations/connections/[provider]/account-mapping', () 
     const saveAccountMapping = vi.fn(async () => {
       throw new ServiceError('forbidden', 'Missing permission: integrations:manage');
     });
-    vi.mocked(ConnectionsService).mockImplementationOnce(
-      () =>
-        ({ saveAccountMapping }) as unknown as InstanceType<typeof ConnectionsService>,
-    );
+    vi.mocked(ConnectionsService).mockImplementationOnce(function () {
+      return { saveAccountMapping } as unknown as InstanceType<typeof ConnectionsService>;
+    });
 
     const { req, ctx } = mappingRequest('quickbooks', validMapping);
     const res = await POST(req, ctx);

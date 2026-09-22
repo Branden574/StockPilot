@@ -44,9 +44,9 @@ beforeEach(() => {
   vi.mocked(withApiContext).mockResolvedValue(buildCtx() as never);
   vi.mocked(checkRateLimit).mockResolvedValue({ allowed: true, resetAt: Date.now() + 1000 } as never);
   recordTrainingSample.mockResolvedValue({ id: 'sample-1' });
-  vi.mocked(SizeCountsService).mockImplementation(
-    () => ({ recordTrainingSample }) as unknown as SizeCountsService,
-  );
+  vi.mocked(SizeCountsService).mockImplementation(function () {
+    return { recordTrainingSample } as unknown as SizeCountsService;
+  });
 });
 
 describe('POST /api/v1/size-counts/training — apparel labels still work', () => {

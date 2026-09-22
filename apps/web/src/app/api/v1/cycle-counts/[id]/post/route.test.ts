@@ -40,9 +40,9 @@ function buildRequest(id: string = ID) {
 
 function mockPost(impl: () => Promise<unknown>) {
   const post = vi.fn(impl);
-  vi.mocked(CycleCountsService).mockImplementation(
-    () => ({ post }) as unknown as InstanceType<typeof CycleCountsService>,
-  );
+  vi.mocked(CycleCountsService).mockImplementation(function () {
+    return { post } as unknown as InstanceType<typeof CycleCountsService>;
+  });
   return post;
 }
 

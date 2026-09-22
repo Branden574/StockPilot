@@ -120,7 +120,14 @@ interface MobileModule {
 const MOBILE_MODULE_PATH = ['..', '..', '..', '..', 'mobile', 'src', 'lib', 'move-stock-form'].join(
   '/',
 );
-const mobile = (await import(/* @vite-ignore */ MOBILE_MODULE_PATH)) as MobileModule;
+// Resolved against import.meta.url into an absolute file URL BEFORE importing.
+// Vitest 4's module runner resolves a bare relative dynamic import against the
+// importer's root-relative id (/src/lib/locations/…), so '../../../../' cannot
+// climb out of apps/web and the import fails as '/mobile/src/lib/move-stock-form'.
+// (Vitest 3's vite-node resolved it against the file path, which is why the
+// relative form used to work.) An absolute file URL resolves from disk.
+const MOBILE_MODULE_URL = new URL(MOBILE_MODULE_PATH, import.meta.url).href;
+const mobile = (await import(/* @vite-ignore */ MOBILE_MODULE_URL)) as MobileModule;
 const {
   bookDestination: mobileBookDestination,
   bookDestinationIsRecordedStorage: mobileIsRecorded,

@@ -46,9 +46,9 @@ function params(id: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   assignLocalOwner.mockReset();
-  vi.mocked(MaintenanceRequestsService).mockImplementation(
-    () => ({ assignLocalOwner }) as unknown as InstanceType<typeof MaintenanceRequestsService>,
-  );
+  vi.mocked(MaintenanceRequestsService).mockImplementation(function () {
+    return { assignLocalOwner } as unknown as InstanceType<typeof MaintenanceRequestsService>;
+  });
 });
 
 describe('POST /api/v1/maintenance-requests/[id]/assign-owner', () => {

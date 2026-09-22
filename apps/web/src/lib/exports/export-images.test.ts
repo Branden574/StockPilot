@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const primaryImagesForServerDecoding = vi.fn();
 
 vi.mock('@/server/services/item-images', () => ({
-  ItemImagesService: vi.fn().mockImplementation(() => ({ primaryImagesForServerDecoding })),
+  ItemImagesService: vi.fn().mockImplementation(function () {
+    return { primaryImagesForServerDecoding };
+  }),
 }));
 
 import { ItemImagesService } from '@/server/services/item-images';
@@ -126,9 +128,9 @@ beforeEach(() => {
   // inner spies. Without this, every test after the first sees `new
   // ItemImagesService()` return undefined and silently fails closed with
   // zero calls to primaryImagesForServerDecoding.
-  vi.mocked(ItemImagesService).mockImplementation(
-    () => ({ primaryImagesForServerDecoding }) as never,
-  );
+  vi.mocked(ItemImagesService).mockImplementation(function () {
+    return { primaryImagesForServerDecoding } as never;
+  });
   primaryImagesForServerDecoding.mockReset();
 });
 

@@ -46,9 +46,9 @@ function params(id: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   resolve.mockReset();
-  vi.mocked(MaintenanceRequestsService).mockImplementation(
-    () => ({ resolve }) as unknown as InstanceType<typeof MaintenanceRequestsService>,
-  );
+  vi.mocked(MaintenanceRequestsService).mockImplementation(function () {
+    return { resolve } as unknown as InstanceType<typeof MaintenanceRequestsService>;
+  });
 });
 
 describe('POST /api/v1/maintenance-requests/[id]/resolve', () => {

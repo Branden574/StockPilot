@@ -22,9 +22,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   reopenPicking.mockReset();
   vi.mocked(checkRateLimit).mockResolvedValue({ allowed: true, resetAt: 0 } as never);
-  vi.mocked(OrderRequestsService).mockImplementation(
-    () => ({ reopenPicking }) as unknown as InstanceType<typeof OrderRequestsService>,
-  );
+  vi.mocked(OrderRequestsService).mockImplementation(function () {
+    return { reopenPicking } as unknown as InstanceType<typeof OrderRequestsService>;
+  });
 });
 
 const ORDER = '11111111-1111-1111-1111-111111111111';

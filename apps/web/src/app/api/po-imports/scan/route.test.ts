@@ -47,7 +47,9 @@ describe('POST /api/po-imports/scan — separate vs combined', () => {
       duplicateOf: null,
       lowConfidenceLines: 0,
     }));
-    vi.mocked(PoImportsService).mockImplementation(() => ({ createFromScan }) as never);
+    vi.mocked(PoImportsService).mockImplementation(function () {
+      return { createFromScan } as never;
+    });
   });
 
   it('separate mode: 3 files → 3 imports, one createFromScan call PER file', async () => {

@@ -110,9 +110,9 @@ beforeEach(() => {
   moduleAccess.current = { enabled: true, canManage: false };
   list.mockReset();
   list.mockResolvedValue([]);
-  vi.mocked(MaintenanceRequestsService).mockImplementation(
-    () => ({ list }) as unknown as InstanceType<typeof MaintenanceRequestsService>,
-  );
+  vi.mocked(MaintenanceRequestsService).mockImplementation(function () {
+    return { list } as unknown as InstanceType<typeof MaintenanceRequestsService>;
+  });
 });
 
 describe('module gate', () => {

@@ -210,18 +210,17 @@ beforeEach(() => {
     },
   }));
 
-  vi.mocked(MaintenanceRequestsService).mockImplementation(
-    () =>
-      ({ get, listNotes, emailInput, listTimelineEvents }) as unknown as InstanceType<
-        typeof MaintenanceRequestsService
-      >,
-  );
-  vi.mocked(MaintenanceAttachmentsService).mockImplementation(
-    () => ({ signedViewUrls }) as unknown as InstanceType<typeof MaintenanceAttachmentsService>,
-  );
-  vi.mocked(MaintenanceShareLinksService).mockImplementation(
-    () => ({ getActiveLinkStatus }) as unknown as InstanceType<typeof MaintenanceShareLinksService>,
-  );
+  vi.mocked(MaintenanceRequestsService).mockImplementation(function () {
+    return { get, listNotes, emailInput, listTimelineEvents } as unknown as InstanceType<
+      typeof MaintenanceRequestsService
+    >;
+  });
+  vi.mocked(MaintenanceAttachmentsService).mockImplementation(function () {
+    return { signedViewUrls } as unknown as InstanceType<typeof MaintenanceAttachmentsService>;
+  });
+  vi.mocked(MaintenanceShareLinksService).mockImplementation(function () {
+    return { getActiveLinkStatus } as unknown as InstanceType<typeof MaintenanceShareLinksService>;
+  });
   vi.mocked(withContext).mockResolvedValue(buildCtx() as never);
 });
 

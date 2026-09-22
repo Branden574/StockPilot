@@ -10,7 +10,9 @@ vi.mock('./client', () => ({
       this.name = 'ZendeskApiError';
     }
   },
-  ZendeskClient: vi.fn().mockImplementation(() => ({ createTicket })),
+  ZendeskClient: vi.fn().mockImplementation(function () {
+    return { createTicket };
+  }),
 }));
 
 import { ZendeskApiError, ZendeskClient } from './client';
@@ -47,7 +49,9 @@ const evt = (topic: string, payload: Record<string, unknown>) =>
 // mock's implementation after the first test — re-arm it (mirrors cycle-counts
 // route.test.ts). createTicket is re-armed per test via mock*Once below.
 beforeEach(() => {
-  vi.mocked(ZendeskClient).mockImplementation(() => ({ createTicket }) as never);
+  vi.mocked(ZendeskClient).mockImplementation(function () {
+    return { createTicket } as never;
+  });
 });
 
 describe('zendeskConnector', () => {

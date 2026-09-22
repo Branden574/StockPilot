@@ -40,9 +40,9 @@ vi.mock('../secret-store', () => ({
 beforeEach(() => {
   postSpy.mockReset().mockResolvedValue({ Bill: { Id: 'BILL-1' } });
   querySpy.mockReset().mockResolvedValue({ QueryResponse: {} });
-  vi.mocked(QboClient).mockImplementation(
-    () => ({ post: postSpy, query: querySpy }) as unknown as QboClient,
-  );
+  vi.mocked(QboClient).mockImplementation(function () {
+    return { post: postSpy, query: querySpy } as unknown as QboClient;
+  });
 });
 
 /** Fixed timestamp injected as runDrain's `now` so assertions are deterministic. */
