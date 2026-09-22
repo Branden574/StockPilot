@@ -45,9 +45,9 @@ describe('POST /api/v1/bundles/[id]/distribute — idempotency key (0347)', () =
   it('threads idempotencyKey through to the service', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
     const distribute = vi.fn(async () => ({ distributionId: 'dist-1' }));
-    vi.mocked(BundlesService).mockImplementationOnce(
-      () => ({ distribute }) as unknown as InstanceType<typeof BundlesService>,
-    );
+    vi.mocked(BundlesService).mockImplementationOnce(function () {
+      return { distribute } as unknown as InstanceType<typeof BundlesService>;
+    });
     const res = await POST(request({ quantity: 2, warehouseId: WH, idempotencyKey: KEY }), params);
     expect(res.status).toBe(200);
     expect(distribute).toHaveBeenCalledWith(
@@ -59,9 +59,9 @@ describe('POST /api/v1/bundles/[id]/distribute — idempotency key (0347)', () =
   it('passes null when the body has no key (web-compatible)', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
     const distribute = vi.fn(async () => ({ distributionId: 'dist-1' }));
-    vi.mocked(BundlesService).mockImplementationOnce(
-      () => ({ distribute }) as unknown as InstanceType<typeof BundlesService>,
-    );
+    vi.mocked(BundlesService).mockImplementationOnce(function () {
+      return { distribute } as unknown as InstanceType<typeof BundlesService>;
+    });
     await POST(request({ quantity: 1, warehouseId: WH }), params);
     expect(distribute).toHaveBeenCalledWith(BUNDLE, expect.objectContaining({ idempotencyKey: null }));
   });
@@ -78,9 +78,9 @@ describe('POST /api/v1/bundles/[id]/distribute — idempotency key (0347)', () =
     const distribute = vi.fn(async () => {
       throw new ServiceError('conflict', 'already submitted with different details');
     });
-    vi.mocked(BundlesService).mockImplementationOnce(
-      () => ({ distribute }) as unknown as InstanceType<typeof BundlesService>,
-    );
+    vi.mocked(BundlesService).mockImplementationOnce(function () {
+      return { distribute } as unknown as InstanceType<typeof BundlesService>;
+    });
     const res = await POST(request({ quantity: 1, warehouseId: WH, idempotencyKey: KEY }), params);
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ error: 'conflict' });

@@ -115,9 +115,9 @@ describe('POST /api/v1/items', () => {
   it('returns 201 with { id } on success and delegates to InventoryService.create', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
     const create = vi.fn(async () => ({ id: 'item-new' }));
-    vi.mocked(InventoryService).mockImplementationOnce(
-      () => ({ create }) as unknown as InstanceType<typeof InventoryService>,
-    );
+    vi.mocked(InventoryService).mockImplementationOnce(function () {
+      return { create } as unknown as InstanceType<typeof InventoryService>;
+    });
 
     const res = await POST(buildRequest(VALID_BODY));
 
@@ -132,9 +132,9 @@ describe('POST /api/v1/items', () => {
     const create = vi.fn(async () => {
       throw new ServiceError('forbidden', 'Missing permission: items:create');
     });
-    vi.mocked(InventoryService).mockImplementationOnce(
-      () => ({ create }) as unknown as InstanceType<typeof InventoryService>,
-    );
+    vi.mocked(InventoryService).mockImplementationOnce(function () {
+      return { create } as unknown as InstanceType<typeof InventoryService>;
+    });
 
     const res = await POST(buildRequest(VALID_BODY));
     expect(res.status).toBe(403);
@@ -148,9 +148,9 @@ describe('POST /api/v1/items', () => {
         code: 'SPORTS_MISSING_SIZE',
       });
     });
-    vi.mocked(InventoryService).mockImplementationOnce(
-      () => ({ create }) as unknown as InstanceType<typeof InventoryService>,
-    );
+    vi.mocked(InventoryService).mockImplementationOnce(function () {
+      return { create } as unknown as InstanceType<typeof InventoryService>;
+    });
 
     const res = await POST(
       buildRequest({ ...VALID_BODY, categoryId: '11111111-1111-1111-1111-111111111111' }),
@@ -166,9 +166,9 @@ describe('POST /api/v1/items', () => {
     const create = vi.fn(async () => {
       throw new Error('boom');
     });
-    vi.mocked(InventoryService).mockImplementationOnce(
-      () => ({ create }) as unknown as InstanceType<typeof InventoryService>,
-    );
+    vi.mocked(InventoryService).mockImplementationOnce(function () {
+      return { create } as unknown as InstanceType<typeof InventoryService>;
+    });
 
     const res = await POST(buildRequest(VALID_BODY));
     expect(res.status).toBe(500);

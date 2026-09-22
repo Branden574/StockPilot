@@ -41,9 +41,9 @@ function buildParams(id = IMPORT_ID) {
 }
 
 function mockService(methods: Record<string, unknown>) {
-  vi.mocked(PoImportsService).mockImplementationOnce(
-    () => methods as unknown as InstanceType<typeof PoImportsService>,
-  );
+  vi.mocked(PoImportsService).mockImplementationOnce(function () {
+    return methods as unknown as InstanceType<typeof PoImportsService>;
+  });
 }
 
 const FOUND = { header: { id: IMPORT_ID, status: 'parsed' }, lines: [] };

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
 import {
   makeServiceContext,
@@ -174,7 +174,7 @@ function transfers(stub: SupabaseStub) {
     .map((c) => c.args as Record<string, unknown>);
 }
 
-let errorSpy: ReturnType<typeof vi.spyOn>;
+let errorSpy: MockInstance<typeof console.error>;
 
 beforeEach(() => {
   vi.clearAllMocks();

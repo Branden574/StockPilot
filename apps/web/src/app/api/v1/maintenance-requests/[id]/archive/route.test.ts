@@ -42,9 +42,9 @@ function params(id: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   archive.mockReset();
-  vi.mocked(MaintenanceRequestsService).mockImplementation(
-    () => ({ archive }) as unknown as InstanceType<typeof MaintenanceRequestsService>,
-  );
+  vi.mocked(MaintenanceRequestsService).mockImplementation(function () {
+    return { archive } as unknown as InstanceType<typeof MaintenanceRequestsService>;
+  });
 });
 
 describe('POST /api/v1/maintenance-requests/[id]/archive', () => {

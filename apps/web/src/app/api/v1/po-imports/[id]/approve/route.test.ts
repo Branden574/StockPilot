@@ -50,9 +50,9 @@ function buildParams(id = IMPORT_ID) {
 }
 
 function mockService(methods: Record<string, unknown>) {
-  vi.mocked(PoImportsService).mockImplementationOnce(
-    () => methods as unknown as InstanceType<typeof PoImportsService>,
-  );
+  vi.mocked(PoImportsService).mockImplementationOnce(function () {
+    return methods as unknown as InstanceType<typeof PoImportsService>;
+  });
 }
 
 const goodBody = { warehouseId: WAREHOUSE_ID, vendorId: VENDOR_ID, locationId: LOCATION_ID };

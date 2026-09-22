@@ -46,9 +46,9 @@ beforeEach(() => {
     resetAt: Date.now() + 1000,
   } as never);
   createSession.mockResolvedValue({ id: 'sess-1' });
-  vi.mocked(SizeCountsService).mockImplementation(
-    () => ({ createSession }) as unknown as SizeCountsService,
-  );
+  vi.mocked(SizeCountsService).mockImplementation(function () {
+    return { createSession } as unknown as SizeCountsService;
+  });
 });
 
 /**

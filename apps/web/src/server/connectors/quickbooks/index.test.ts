@@ -19,9 +19,9 @@ vi.mock('./client', () => ({ QboClient: vi.fn() }));
 beforeEach(() => {
   postSpy.mockReset().mockResolvedValue({ Bill: { Id: 'qbo-bill-99' } });
   querySpy.mockReset().mockResolvedValue({ QueryResponse: {} });
-  vi.mocked(QboClient).mockImplementation(
-    () => ({ post: postSpy, query: querySpy }) as unknown as QboClient,
-  );
+  vi.mocked(QboClient).mockImplementation(function () {
+    return { post: postSpy, query: querySpy } as unknown as QboClient;
+  });
 });
 
 // Drainer dependencies (only exercised by the integration test below).

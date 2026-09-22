@@ -78,9 +78,9 @@ const SAMPLE_ROW: MovementExportRow = {
 
 function stubExportRows(rows: MovementExportRow[], total?: number) {
   const exportRows = vi.fn(async () => ({ rows, total: total ?? rows.length }));
-  vi.mocked(MovementsService).mockImplementationOnce(
-    () => ({ exportRows }) as unknown as InstanceType<typeof MovementsService>,
-  );
+  vi.mocked(MovementsService).mockImplementationOnce(function () {
+    return { exportRows } as unknown as InstanceType<typeof MovementsService>;
+  });
   return exportRows;
 }
 
@@ -196,9 +196,9 @@ describe('GET /api/movements/export.csv', () => {
     const exportRows = vi.fn(async () => {
       throw new ServiceError('internal_error', 'boom');
     });
-    vi.mocked(MovementsService).mockImplementationOnce(
-      () => ({ exportRows }) as unknown as InstanceType<typeof MovementsService>,
-    );
+    vi.mocked(MovementsService).mockImplementationOnce(function () {
+      return { exportRows } as unknown as InstanceType<typeof MovementsService>;
+    });
 
     const res = await GET(buildRequest());
     expect(res.status).toBe(500);

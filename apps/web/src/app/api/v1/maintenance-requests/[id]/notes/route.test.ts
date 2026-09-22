@@ -52,9 +52,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   listNotes.mockReset();
   addNote.mockReset();
-  vi.mocked(MaintenanceRequestsService).mockImplementation(
-    () => ({ listNotes, addNote }) as unknown as InstanceType<typeof MaintenanceRequestsService>,
-  );
+  vi.mocked(MaintenanceRequestsService).mockImplementation(function () {
+    return { listNotes, addNote } as unknown as InstanceType<typeof MaintenanceRequestsService>;
+  });
 });
 
 describe('GET /api/v1/maintenance-requests/[id]/notes', () => {

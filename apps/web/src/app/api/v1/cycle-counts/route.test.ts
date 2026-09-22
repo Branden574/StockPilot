@@ -53,9 +53,9 @@ describe('POST /api/v1/cycle-counts', () => {
   it('creates a selection count and returns 201 with the result', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
     const start = vi.fn(async () => ({ id: 'cc-1', lineCount: 2, skipped: 0 }));
-    vi.mocked(CycleCountsService).mockImplementationOnce(
-      () => ({ start }) as unknown as InstanceType<typeof CycleCountsService>,
-    );
+    vi.mocked(CycleCountsService).mockImplementationOnce(function () {
+      return { start } as unknown as InstanceType<typeof CycleCountsService>;
+    });
 
     const res = await POST(
       buildRequest({
@@ -85,9 +85,9 @@ describe('POST /api/v1/cycle-counts', () => {
     const start = vi.fn(async () => {
       throw new ServiceError('validation_error', 'None active');
     });
-    vi.mocked(CycleCountsService).mockImplementationOnce(
-      () => ({ start }) as unknown as InstanceType<typeof CycleCountsService>,
-    );
+    vi.mocked(CycleCountsService).mockImplementationOnce(function () {
+      return { start } as unknown as InstanceType<typeof CycleCountsService>;
+    });
 
     const res = await POST(
       buildRequest({ scope: 'selection', itemIds: ['33333333-3333-3333-3333-333333333333'] }),
