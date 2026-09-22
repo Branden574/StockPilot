@@ -31,7 +31,7 @@ vi.mock('@/lib/auth/session', () => ({
   })),
 }));
 vi.mock('@/lib/dashboard/request-cache', () => ({
-  getWarehousesForRequest: vi.fn(async () => WAREHOUSES),
+  readWarehousesForRequest: vi.fn(async () => ({ rows: WAREHOUSES, failed: false })),
 }));
 const cookieClientStub = makeSupabaseStub({
   'user_warehouse_assignments.select': {
@@ -43,7 +43,7 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => cookieClientStub.client),
 }));
 
-import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
+import { readWarehousesForRequest } from '@/lib/dashboard/request-cache';
 import { createClient } from '@/lib/supabase/server';
 
 import { getWarehouseAccess } from './warehouse';
@@ -84,8 +84,8 @@ describe('getWarehouseAccess — a withContext() (cookie) context', () => {
     async (role) => {
       const own = makeSupabaseStub({ 'warehouses.select': { data: [{ id: 'x' }], error: null } });
       const access = await getWarehouseAccess(ctx(role, own.client, own.client));
-      expect(getWarehousesForRequest).toHaveBeenCalledTimes(1);
-      expect(getWarehousesForRequest).toHaveBeenCalledWith('org-1');
+      expect(readWarehousesForRequest).toHaveBeenCalledTimes(1);
+      expect(readWarehousesForRequest).toHaveBeenCalledWith('org-1');
       expect(own.fromCalls).toEqual([]);
       expect(access).toEqual({
         readableIds: ['wh-a', 'wh-b'],
@@ -99,7 +99,7 @@ describe('getWarehouseAccess — a withContext() (cookie) context', () => {
   it('staff: still reads its assignments with its OWN client (unchanged)', async () => {
     const own = bearerStub();
     const access = await getWarehouseAccess(ctx('staff', own.client, own.client));
-    expect(getWarehousesForRequest).not.toHaveBeenCalled();
+    expect(readWarehousesForRequest).not.toHaveBeenCalled();
     expect(own.fromCalls.sort()).toEqual(['organization_members', 'user_warehouse_assignments']);
     expect(access.hasAllAccess).toBe(false);
     expect(access.readableIds).toEqual(['wh-b', 'wh-c']);
@@ -111,7 +111,7 @@ describe('getWarehouseAccess — a Bearer / service-role context (the 2026-07-20
     const bearer = bearerStub();
     const access = await getWarehouseAccess(ctx('manager', bearer.client));
     expect(bearer.fromCalls).toEqual(['warehouses']);
-    expect(getWarehousesForRequest).not.toHaveBeenCalled();
+    expect(readWarehousesForRequest).not.toHaveBeenCalled();
     expect(createClient).not.toHaveBeenCalled();
     expect(access.readableIds).toEqual(['wh-b', 'wh-c']);
     expect(access.hasAllAccess).toBe(true);
@@ -133,7 +133,7 @@ describe('getWarehouseAccess — a Bearer / service-role context (the 2026-07-20
     const cookie = makeSupabaseStub();
     const other = bearerStub();
     const access = await getWarehouseAccess(ctx('admin', other.client, cookie.client));
-    expect(getWarehousesForRequest).not.toHaveBeenCalled();
+    expect(readWarehousesForRequest).not.toHaveBeenCalled();
     expect(other.fromCalls).toEqual(['warehouses']);
     expect(access.readableIds).toEqual(['wh-b', 'wh-c']);
   });
@@ -142,7 +142,7 @@ describe('getWarehouseAccess — a Bearer / service-role context (the 2026-07-20
 describe('getWarehouseAccess — no context (the requireOrgContext fallback)', () => {
   it('manager: the request-cached read, as before', async () => {
     const access = await getWarehouseAccess();
-    expect(getWarehousesForRequest).toHaveBeenCalledTimes(1);
+    expect(readWarehousesForRequest).toHaveBeenCalledTimes(1);
     expect(access.readableIds).toEqual(['wh-a', 'wh-b']);
   });
 });

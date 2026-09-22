@@ -461,26 +461,109 @@ describe('rate limit and authentication still deny', () => {
     expect(getWarehouseAccess).not.toHaveBeenCalled();
     expect(queries).toHaveLength(0);
   });
+});
 
-  it('falls back to org-wide access (RLS still gates) and reports it, exactly as before', async () => {
-    vi.mocked(getWarehouseAccess).mockRejectedValue(new Error('assignments unreadable'));
-    mockContext(respondFor());
+// ── 2b. An access lookup that failed is a refusal ───────────────────────
 
-    const res = await GET(request());
+/**
+ * This route used to catch a thrown access lookup as hasAllAccess: true,
+ * which dropped every warehouse filter for a staff or viewer caller and told
+ * the phone it could see every warehouse. A lookup that threw, or that
+ * answered from a read that failed (getWarehouseAccess marks that answer
+ * `unreadable`), now gets the route's failed-read answer instead: a 500 with a
+ * `query` tag and NO data read built. A 500 rather than an empty 200 because
+ * the phone acts on a 200 (a full pull deletes every cached item it was not
+ * sent), and keeps its cache on any non-2xx.
+ */
+describe('a warehouse access lookup that failed is refused, never widened', () => {
+  const REFUSAL = { error: 'internal_error', query: 'warehouse_access' };
 
-    expect(res.status).toBe(200);
+  async function expectRefused(qs: string) {
+    const res = await GET(request(qs));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual(REFUSAL);
+    // Not one data read was built, let alone sent.
+    expect(queries).toHaveLength(0);
     expect(reportError).toHaveBeenCalledTimes(1);
     expect(vi.mocked(reportError).mock.calls[0]?.[1]).toEqual({
       tag: 'mobile.snapshot.warehouse_access',
       organizationId: 'org-1',
     });
-    const wh = queries.find((q) => kindOf(q) === 'warehouses');
-    expect(wh?.calls.some((c) => c.method === 'in')).toBe(false);
-    const body = (await res.json()) as { warehouseScope: unknown };
-    expect(body.warehouseScope).toEqual({
-      hasAllAccess: true,
-      warehouseNames: ['Main', 'Overflow'],
+  }
+
+  it.each([
+    ['a full pull', ''],
+    ['a delta pull', `?since=${SINCE}`],
+  ])('a THROWN lookup refuses %s', async (_label, qs) => {
+    vi.mocked(getWarehouseAccess).mockRejectedValue(new Error('assignments unreadable'));
+    mockContext(respondFor());
+    await expectRefused(qs);
+    const reported = vi.mocked(reportError).mock.calls[0]?.[0] as Error;
+    expect(reported.message).toBe('assignments unreadable');
+  });
+
+  it.each([
+    [
+      'staff whose assignments could not be read',
+      {
+        readableIds: [],
+        writableIds: [],
+        hasAllAccess: false,
+        primaryWarehouseId: null,
+        unreadable: true,
+      },
+    ],
+    [
+      // hasAllAccess by role, but its list read failed: still refused, so a
+      // degraded answer is never served for anyone.
+      'a manager whose warehouses list could not be read',
+      {
+        readableIds: [],
+        writableIds: [],
+        hasAllAccess: true,
+        primaryWarehouseId: null,
+        unreadable: true,
+      },
+    ],
+  ])('an answer built from a failed read refuses: %s', async (_label, access) => {
+    vi.mocked(getWarehouseAccess).mockResolvedValue(access as never);
+    mockContext(respondFor());
+    await expectRefused('');
+  });
+
+  it('the refusal still waits for the rate-limit verdict: a limited caller gets its 429, unreported', async () => {
+    vi.mocked(checkRateLimit).mockResolvedValue({
+      allowed: false,
+      count: 31,
+      resetAt: Date.now() + 5_000,
     });
+    vi.mocked(getWarehouseAccess).mockResolvedValue({
+      readableIds: [],
+      writableIds: [],
+      hasAllAccess: false,
+      primaryWarehouseId: null,
+      unreadable: true,
+    } as never);
+    mockContext(respondFor());
+
+    const res = await GET(request());
+    expect(res.status).toBe(429);
+    expect(reportError).not.toHaveBeenCalled();
+    expect(queries).toHaveLength(0);
+  });
+
+  it('a readable answer is served exactly as before (scoped caller, filters applied)', async () => {
+    mockContext(respondFor());
+    const res = await GET(request());
+    expect(res.status).toBe(200);
+    expect(reportError).not.toHaveBeenCalled();
+    const wh = queries.find((q) => kindOf(q) === 'warehouses');
+    expect(wh?.calls.find((c) => c.method === 'in')?.args).toEqual(['id', ['wh1', 'wh2']]);
+    const items = queries.find((q) => kindOf(q) === 'items');
+    expect(items?.calls.find((c) => c.method === 'in')?.args).toEqual([
+      'warehouse_id',
+      ['wh1', 'wh2'],
+    ]);
   });
 });
 

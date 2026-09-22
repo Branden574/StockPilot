@@ -188,21 +188,36 @@ async function snapshotGET(req: NextRequest) {
       ? new Date(sinceRaw).toISOString()
       : null;
 
+  // An access lookup that threw, or that answered from a failed read, is a
+  // REFUSAL: no data read is built, and the phone keeps what it has.
+  //
+  // This used to fall back to hasAllAccess: true ("RLS still gates"). That
+  // dropped every warehouse filter below for a staff or viewer caller, so the
+  // response was bounded by row level security alone, and it told the phone
+  // "every warehouse" in warehouseScope. An authorization input that could
+  // not be read must deny, never widen.
+  //
+  // Why a 500 and not an empty "no warehouses" 200: a 200 is an instruction
+  // the phone acts on. On a full pull sync.ts sweeps every cached item the
+  // response did not carry (STALE_ITEMS_SWEEP_SQL), so an empty answer to a
+  // transient read failure would wipe a staffer's offline inventory, and the
+  // banner would tell them they have no warehouses. Every other failed read in
+  // this route already answers 500 `internal_error` with a `query` tag, and
+  // pullSnapshot treats any non-2xx as "keep the cache, retry on the next
+  // tick". Same contract, same report tag as before.
   const accessResult = await accessP;
-  let access: Awaited<ReturnType<typeof getWarehouseAccess>>;
-  if (accessResult.ok) {
-    access = accessResult.value;
-  } else {
-    const err = accessResult.reason;
-    void reportError(
-      err instanceof Error ? err : new Error(String(err)),
-      { tag: 'mobile.snapshot.warehouse_access', organizationId: ctx.organizationId },
+  if (!accessResult.ok || accessResult.value.unreadable) {
+    const err = accessResult.ok ? new Error('warehouse access unreadable') : accessResult.reason;
+    void reportError(err instanceof Error ? err : new Error(String(err)), {
+      tag: 'mobile.snapshot.warehouse_access',
+      organizationId: ctx.organizationId,
+    });
+    return NextResponse.json(
+      { error: 'internal_error', query: 'warehouse_access' },
+      { status: 500 },
     );
-    // Fall back to org-wide access. This is the same posture a manager
-    // would get anyway, and the per-table queries are still RLS-gated
-    // by ctx.supabase, so we're not bypassing security here.
-    access = { readableIds: [], writableIds: [], hasAllAccess: true, primaryWarehouseId: null };
   }
+  const access = accessResult.value;
   // Taken before any read below is sent, so the next delta's cursor can only
   // overlap this pull, never leave a gap after it.
   const serverTime = new Date().toISOString();

@@ -42,6 +42,9 @@ vi.mock('@/lib/dashboard/request-cache', () => ({
   getWarehousesForRequest: vi.fn(async () => {
     throw new Error('a ctx-supplied client bypasses the request cache');
   }),
+  readWarehousesForRequest: vi.fn(async () => {
+    throw new Error('a ctx-supplied client bypasses the request cache');
+  }),
 }));
 
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
