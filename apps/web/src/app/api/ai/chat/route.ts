@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { withApiContext } from '@/lib/auth/api-context';
 import { can } from '@/lib/auth/permissions';
 import { assertModuleEnabled, ServiceError } from '@/server/services/context';
+import { runStreamedStockWrites } from '@/server/services/lib/inventory-list-cache';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { buildOrgSnapshot, streamChat, type ChatTurn, type ToolCallRecord } from '@/lib/ai/chat';
@@ -260,83 +261,91 @@ export async function POST(req: Request) {
       let intentForObservability: string = 'general';
 
       try {
-        // Thread the request's AbortSignal into the chat loop so a
-        // client disconnect propagates all the way down to Gemini and
-        // the tool calls. Without this, the model keeps generating
-        // (and burning quota) after the user navigates away.
-        // Compute the org snapshot once per turn and prepend it to the
-        // system prompt so basic stats ("how many active items", "low
-        // stock count", "movements today") answer instantly without
-        // burning a tool call. Failures are swallowed inside the helper.
-        const orgSnapshot = await buildOrgSnapshot(ctx);
-        // Build USER + PAGE CONTEXT blocks alongside the org snapshot.
-        // Page context comes from a strict route allowlist
-        // (extractEntityHint) — never free-form text from the client —
-        // so it's safe to drop straight into the system prompt without
-        // the <data> injection-defense wrapper.
-        const entityHint = extractEntityHint(payload.pageContext?.referrerPath);
-        const userBlock = [
-          '— USER —',
-          `Role: ${ctx.role}`,
-          'Permissions follow standard role rules. Write tools enforce',
-          'them server-side; do not assume you can perform actions the',
-          'role cannot. If asked to do something out of scope for this',
-          'role, explain who CAN do it instead.',
-        ].join('\n');
-        const pageBlock = entityHint
-          ? [
-              '— PAGE CONTEXT —',
-              `The user opened this chat from the ${entityHint.routeLabel} page.`,
-              `Entity in focus: ${entityHint.kind} id="${entityHint.id}"`,
-              'When the user asks an ambiguous question that could refer to',
-              "this entity (\"what's next?\", \"is it ready?\", \"show the",
-              'timeline", "who is assigned?"), assume they mean THIS entity',
-              'unless they clearly name a different one. Pass this id to',
-              'the relevant tool (getOrderRequestSummary, getItemDetails,',
-              'etc.) instead of asking the user to repaste it.',
-            ].join('\n')
-          : '';
-        // Cheap rule-based intent classifier (zero added latency).
-        // Surfaces a short tool-priority nudge so Gemini picks the
-        // right tool on the first hop. Wrong/general intent is safe —
-        // the nudge is just a hint, the full tool catalog is still
-        // available.
-        const intent = classifyIntent(payload.message);
-        intentForObservability = intent;
-        const intentBlock = intentNudge(intent);
-        const snapshot = [orgSnapshot, userBlock, pageBlock, intentBlock]
-          .filter(Boolean)
-          .join('\n\n');
-        // Provider seam: Claude when a key is configured (AI_PROVIDER=gemini
-        // is the rollback lever). Both generators share the SAME signature,
-        // event stream, and { reply, toolCallsUsed } return — the loop below
-        // is provider-agnostic.
-        const runChat = resolveAiProvider() === 'claude' ? streamChatClaude : streamChat;
-        const iter = runChat(history, payload.message, ctx, {
-          signal: req.signal,
-          snapshot,
+        // Every write tool runs INSIDE this streamed body, i.e. after POST has
+        // already returned the Response, which is the only point where Next
+        // sends a Route Handler's recorded cache tags anywhere. Without this
+        // scope each tool's Items/Books invalidation was recorded and then
+        // silently dropped (proven in route.invalidation.test.ts through the
+        // real App Route module). The scope flushes them from after().
+        await runStreamedStockWrites('ai.chat', async () => {
+          // Thread the request's AbortSignal into the chat loop so a
+          // client disconnect propagates all the way down to Gemini and
+          // the tool calls. Without this, the model keeps generating
+          // (and burning quota) after the user navigates away.
+          // Compute the org snapshot once per turn and prepend it to the
+          // system prompt so basic stats ("how many active items", "low
+          // stock count", "movements today") answer instantly without
+          // burning a tool call. Failures are swallowed inside the helper.
+          const orgSnapshot = await buildOrgSnapshot(ctx);
+          // Build USER + PAGE CONTEXT blocks alongside the org snapshot.
+          // Page context comes from a strict route allowlist
+          // (extractEntityHint) — never free-form text from the client —
+          // so it's safe to drop straight into the system prompt without
+          // the <data> injection-defense wrapper.
+          const entityHint = extractEntityHint(payload.pageContext?.referrerPath);
+          const userBlock = [
+            '— USER —',
+            `Role: ${ctx.role}`,
+            'Permissions follow standard role rules. Write tools enforce',
+            'them server-side; do not assume you can perform actions the',
+            'role cannot. If asked to do something out of scope for this',
+            'role, explain who CAN do it instead.',
+          ].join('\n');
+          const pageBlock = entityHint
+            ? [
+                '— PAGE CONTEXT —',
+                `The user opened this chat from the ${entityHint.routeLabel} page.`,
+                `Entity in focus: ${entityHint.kind} id="${entityHint.id}"`,
+                'When the user asks an ambiguous question that could refer to',
+                "this entity (\"what's next?\", \"is it ready?\", \"show the",
+                'timeline", "who is assigned?"), assume they mean THIS entity',
+                'unless they clearly name a different one. Pass this id to',
+                'the relevant tool (getOrderRequestSummary, getItemDetails,',
+                'etc.) instead of asking the user to repaste it.',
+              ].join('\n')
+            : '';
+          // Cheap rule-based intent classifier (zero added latency).
+          // Surfaces a short tool-priority nudge so Gemini picks the
+          // right tool on the first hop. Wrong/general intent is safe —
+          // the nudge is just a hint, the full tool catalog is still
+          // available.
+          const intent = classifyIntent(payload.message);
+          intentForObservability = intent;
+          const intentBlock = intentNudge(intent);
+          const snapshot = [orgSnapshot, userBlock, pageBlock, intentBlock]
+            .filter(Boolean)
+            .join('\n\n');
+          // Provider seam: Claude when a key is configured (AI_PROVIDER=gemini
+          // is the rollback lever). Both generators share the SAME signature,
+          // event stream, and { reply, toolCallsUsed } return — the loop below
+          // is provider-agnostic.
+          const runChat = resolveAiProvider() === 'claude' ? streamChatClaude : streamChat;
+          const iter = runChat(history, payload.message, ctx, {
+            signal: req.signal,
+            snapshot,
+          });
+          // Iterate manually so we can capture the generator's return value
+          // (final reply + tool calls) without losing it to a normal
+          // for-await consumer.
+          while (true) {
+            if (req.signal.aborted) break;
+            const next = await iter.next();
+            if (next.done) {
+              assembledReply = next.value.reply;
+              // toolCallsUsed yielded events were already pushed; the
+              // returned list is authoritative for persistence.
+              toolCallsUsed.length = 0;
+              for (const t of next.value.toolCallsUsed) toolCallsUsed.push(t);
+              break;
+            }
+            const ev = next.value;
+            if (ev.type === 'text') {
+              send({ type: 'text', delta: ev.delta });
+            } else if (ev.type === 'tool') {
+              send({ type: 'tool', name: ev.name, ok: ev.ok });
+            }
+          }
         });
-        // Iterate manually so we can capture the generator's return value
-        // (final reply + tool calls) without losing it to a normal
-        // for-await consumer.
-        while (true) {
-          if (req.signal.aborted) break;
-          const next = await iter.next();
-          if (next.done) {
-            assembledReply = next.value.reply;
-            // toolCallsUsed yielded events were already pushed; the
-            // returned list is authoritative for persistence.
-            toolCallsUsed.length = 0;
-            for (const t of next.value.toolCallsUsed) toolCallsUsed.push(t);
-            break;
-          }
-          const ev = next.value;
-          if (ev.type === 'text') {
-            send({ type: 'text', delta: ev.delta });
-          } else if (ev.type === 'tool') {
-            send({ type: 'tool', name: ev.name, ok: ev.ok });
-          }
-        }
       } catch (err) {
         void reportError(err, { tag: 'ai.chat', organizationId: ctx.organizationId });
         const classified = classifyAiError(err);

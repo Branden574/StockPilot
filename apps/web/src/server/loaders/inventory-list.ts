@@ -76,7 +76,7 @@ import 'server-only';
 //     cached figure serves only the default view, whose filters it
 //     mirrors exactly.
 
-import { revalidateTag, unstable_cache } from 'next/cache';
+import { unstable_cache } from 'next/cache';
 
 import { inventoryViewPredicate } from '@stockpilot/core';
 
@@ -101,6 +101,10 @@ import {
   type ItemTrendBuckets,
   type TrendAggregateRow,
 } from '@/server/services/lib/item-trends';
+import {
+  inventoryListTag,
+  revalidateInventoryList,
+} from '@/server/services/lib/inventory-list-cache';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
 export type InventoryListView = 'items' | 'books';
@@ -121,33 +125,14 @@ const LIST_TTL_SEC = 60;
 
 /* ---- cache tag + invalidation helper --------------------------------- */
 
-/** Single source of truth for the per-org cache tag. */
-export function inventoryListTag(organizationId: string): string {
-  return `inventory-list-${organizationId}`;
-}
-
-/**
- * Invalidate the cached Items/Books default views for one org. Call from
- * every server-side write path that changes what the default list view
- * renders (item CRUD, stock adjust/transfer/put-away, PO receive,
- * returns, cycle-count post, imports, images, lookup-table CRUD).
- * Mobile-app writes that go straight to Supabase can't call this — the
- * 60s TTL bounds their staleness.
- */
-export function revalidateInventoryList(organizationId: string): void {
-  // The object form with expire:0 is REQUIRED here — it means
-  // "expired now, recompute before serving". The 'max' profile is
-  // stale-while-revalidate (stale=now, expire=+INFINITE), so
-  // unstable_cache would serve the pre-write entry ONE more time and
-  // only recompute in the background — every write lacking a matching
-  // revalidatePath for the viewed page would deterministically show
-  // pre-write data on the next view (e.g. delete a book →
-  // /dashboard/books still lists it, server-shared for all managers).
-  // The legacy single-arg call also expires immediately but logs a
-  // deprecation warning on every write. (updateTag would be rejected
-  // in Route Handler callers.)
-  revalidateTag(inventoryListTag(organizationId), { expire: 0 });
-}
+// The tag and revalidateInventoryList live in a leaf module so the SERVICE
+// write methods can invalidate without importing this loader (which imports
+// services — a cycle). Re-exported so existing importers are unchanged.
+// Stock writes invalidate inside the service (invalidateInventoryListAfterWrite);
+// actions still call these for non-stock writes that change what the list
+// renders (lookup-table CRUD, images). Mobile-app writes that go straight to
+// Supabase can't call either — the 60s TTL bounds their staleness.
+export { inventoryListTag, revalidateInventoryList };
 
 /**
  * Server-action convenience wrapper: resolves the caller's org from the

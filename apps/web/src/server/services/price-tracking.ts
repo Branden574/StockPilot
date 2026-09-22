@@ -3,6 +3,7 @@ import 'server-only';
 import { isLikelyIsbn, parseGoogleBooksVolume } from '@stockpilot/core';
 
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { googleBooksClient, type GoogleBooksClient } from '@/server/pricing/google-books-client';
 
 export interface PriceObservationRow {
@@ -75,6 +76,13 @@ export async function recordBookObservation(
   if (stampError) {
     // eslint-disable-next-line no-console
     console.warn(`price-tracking: last_priced_at stamp failed for ${item.id}: ${stampError.message}`);
+  } else {
+    // No list view shows last_priced_at, but every inventory_items UPDATE
+    // bumps updated_at (tg_inventory_items_set_updated_at; 0242 spares only
+    // embedding/search_vector) and updated_at is the default sort key. Next
+    // de-duplicates the tag per request, so the cron's per-book loop records
+    // it once.
+    invalidateInventoryListAfterWrite(orgId, 'price.record_observation');
   }
   return true;
 }

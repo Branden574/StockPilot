@@ -47,7 +47,16 @@ describe('revalidateTag inside a Server Action re-renders the page (installed Ne
   });
 
   it('our loader invalidates with exactly { expire: 0 }', () => {
+    // The call moved to the leaf module the services import (the loader
+    // re-exports it); the loader must not grow a second, different call.
+    const leaf = readFileSync(
+      path.resolve(__dirname, '../services/lib/inventory-list-cache.ts'),
+      'utf8',
+    );
+    expect(leaf).toMatch(
+      /revalidateTag\(\s*inventoryListTag\([^)]*\)\s*,\s*\{\s*expire:\s*0\s*\}\s*\)/,
+    );
     const loader = readFileSync(path.resolve(__dirname, '../loaders/inventory-list.ts'), 'utf8');
-    expect(loader).toMatch(/revalidateTag\(\s*inventoryListTag\([^)]*\)\s*,\s*\{\s*expire:\s*0\s*\}\s*\)/);
+    expect(loader).not.toMatch(/revalidateTag\(/);
   });
 });
