@@ -59,7 +59,15 @@ async function resolvePrincipal(
 
   // MFA posture from the cookie session. Enrollment escalates: a verified
   // factor must be satisfied whatever the org policy says.
-  const { data: factors } = await supabase.auth.mfa.listFactors();
+  const { data: factors, error: factorsError } = await supabase.auth.mfa.listFactors();
+  // Unreadable is not "not enrolled": that would drop the step-up an enrolled
+  // account needs before its sign-in address can change.
+  if (factorsError) {
+    return {
+      ok: false,
+      result: err('internal_error', 'Could not check your two-factor status. Please try again.'),
+    };
+  }
   const enrolled = (factors?.totp ?? []).some((f) => f.status === 'verified');
   let aal2 = false;
   if (enrolled) {

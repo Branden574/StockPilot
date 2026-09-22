@@ -18,7 +18,20 @@ export default async function MfaChallengePage() {
   } = await supabase.auth.getUser();
   if (!user) redirect('/signin');
 
-  const { data: factorsData } = await supabase.auth.mfa.listFactors();
+  const { data: factorsData, error: factorsError } = await supabase.auth.mfa.listFactors();
+  // An unreadable factor list is NOT "no factor": treating it as one sent an
+  // enrolled user straight to the dashboard at AAL1, past this challenge.
+  if (factorsError) {
+    return (
+      <AuthCard
+        eyebrow="Two-factor"
+        title="Two-factor authentication"
+        description="We could not load your authenticator just now. Reload this page to try again."
+      >
+        {null}
+      </AuthCard>
+    );
+  }
   const verifiedTotp = (factorsData?.totp ?? []).filter((f) => f.status === 'verified');
 
   // No verified factor → user shouldn't be here. Send them to the dashboard

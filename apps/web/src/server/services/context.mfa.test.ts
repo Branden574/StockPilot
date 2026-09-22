@@ -240,6 +240,16 @@ describe('withContext / resolveMfaState — fail-closed MFA gate', () => {
     expect(ctx.mfaSatisfied).toBe(true);
   });
 
+  it('(g) factor list UNREADABLE (GoTrue error) -> required=true, satisfied=false, even at AAL2', async () => {
+    // getMfaFactorsForRequest throws on an unreadable list (it used to answer
+    // "no factors", which let an enrolled user through at AAL1).
+    arrange({ policy: 'optional', verifiedFactor: true, aal: 'aal2' });
+    vi.mocked(getMfaFactorsForRequest).mockRejectedValue(new Error('getMfaFactorsForRequest: unreadable'));
+    const ctx = await withContext();
+    expect(ctx.mfaRequired).toBe(true);
+    expect(ctx.mfaSatisfied).toBe(false);
+  });
+
   it('(e) org lookup throws -> required=true, satisfied=false (fail CLOSED)', async () => {
     arrange({ policy: 'all_required', verifiedFactor: true, aal: 'aal2', orgRowThrows: true });
     const ctx = await withContext();
