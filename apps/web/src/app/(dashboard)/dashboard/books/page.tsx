@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import { Suspense } from 'react';
 import { BookOpen } from 'lucide-react';
 import Link from 'next/link';
 
@@ -14,7 +13,6 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { BooksInventoryTable } from '@/components/books/books-inventory-table';
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
-import { TableBodySkeleton } from '@/components/dashboard/skeletons';
 import { Button } from '@/components/ui/button';
 import { can } from '@stockpilot/core';
 import {
@@ -131,8 +129,8 @@ export default async function BooksPage({
 
   // Chrome-only dependencies: the request-cached auth context (fast — already
   // resolved by the dashboard layout) gates the create/import buttons, and the
-  // rack list feeds the toolbar dropdown. The heavy book list + trends + covers
-  // stream behind <Suspense> below. The heading inherits a per-org nav rename
+  // rack list feeds the toolbar dropdown. The book list + trends + covers
+  // render in BooksTableSection below, in the SAME reveal (see ONE REVEAL). The heading inherits a per-org nav rename
   // (Settings → Navigation) off the request-cached org row — no extra fetch.
   // The racks RPC is CHAINED INSIDE the Promise.all (not awaited after it)
   // so the toolbar chrome never waits an extra sequential DB round trip —
@@ -181,10 +179,19 @@ export default async function BooksPage({
         </div>
       </div>
 
+      {/* ONE REVEAL. The table used to sit in its own <Suspense> under
+          loading.tsx, so React revealed twice: skeleton -> header with an inner
+          table skeleton -> rows. React holds each Suspense reveal until 300 ms
+          after the previous one (react-dom-client FALLBACK_THROTTLE_MS), so
+          rows could not appear before ~skeleton + 600 ms however fast the
+          server was: measured minimum 631-663 ms on Dashboard -> Books vs
+          345-379 ms on Orders, which reveals once. loading.tsx's
+          TablePageSkeleton already draws this header and table, so the page
+          now streams as one reveal. Do not re-add a Suspense with a visible
+          fallback here (the dataset adopter's fallback={null} boundary
+          inside the table is fine: it draws nothing). */}
       <div className="mt-8">
-        <Suspense fallback={<TableBodySkeleton rows={10} />}>
-          <BooksTableSection params={params} lifecycleStatus={lifecycleStatus} />
-        </Suspense>
+        <BooksTableSection params={params} lifecycleStatus={lifecycleStatus} />
       </div>
     </div>
   );
