@@ -25,8 +25,9 @@ import { reportError } from '@/lib/error-reporter';
 
 /** Warn above this many characters of path plus query string. */
 export const URL_WARN_CHARS = 6_000;
-/** Development, tests and the lab: refuse above this, matching the local
- *  gateway's own ~8 KB limit, so a long list fails the same way everywhere. */
+/** Development, tests, and any build whose Supabase is a local stack: refuse
+ *  above this, matching the local gateway's own ~8 KB limit, so a long list
+ *  fails the same way everywhere. */
 export const URL_BLOCK_CHARS_DEV = 8_000;
 /** Production: refuse above this. The measured production failure is about
  *  395 uuids, about 15.4 KB of path with a short select, and undici's 16 KB
@@ -56,6 +57,15 @@ export function resetUrlLengthGuardForTests(): void {
 
 function isProduction(): boolean {
   return typeof process !== 'undefined' && process.env.NODE_ENV === 'production';
+}
+
+/** Hosts of a local Supabase stack. The production-model lab runs `next start`
+ *  (NODE_ENV=production) against one, and its gateway still refuses past ~8 KB,
+ *  so the host decides the limit there, not NODE_ENV. */
+const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+
+function usesProductionLimit(url: URL): boolean {
+  return isProduction() && !LOCAL_HOSTS.has(url.hostname);
 }
 
 function describeRequest(
@@ -108,7 +118,7 @@ export function guardedSupabaseFetch(
       if (length > URL_WARN_CHARS) {
         const table = url.pathname;
         const key = `${method} ${table} ${Math.floor(length / 1000)}`;
-        if (isProduction()) {
+        if (usesProductionLimit(url)) {
           const block = length > URL_BLOCK_CHARS_PROD;
           if (firstTime(key)) {
             const params = [...new Set(url.searchParams.keys())].join(',');

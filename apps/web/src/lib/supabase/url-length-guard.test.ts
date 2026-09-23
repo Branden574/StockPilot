@@ -100,6 +100,24 @@ describe('guardedSupabaseFetch', () => {
     expect(realFetch).not.toHaveBeenCalled();
   });
 
+  it('a production build against a local stack (the lab) refuses at the local gateway limit', async () => {
+    // The production-model lab runs `next start`, so NODE_ENV is production,
+    // but its Supabase is the local stack behind a gateway that refuses past
+    // ~8 KB. It gets the local limit and the named refusal, not the 14,500 one.
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const host of ['http://127.0.0.1:54400', 'http://localhost:54321', 'http://[::1]:54321']) {
+      const res = await guardedSupabaseFetch(restUrl(10_000).replace(BASE, host));
+      expect(res.status, host).toBe(414);
+      const body = (await res.json()) as { message: string };
+      expect(body.message).toContain('8000-character limit');
+    }
+    expect(realFetch).not.toHaveBeenCalled();
+    // The hosted project keeps the production limit.
+    expect((await guardedSupabaseFetch(restUrl(10_000))).status).toBe(200);
+    expect(realFetch).toHaveBeenCalledTimes(1);
+  });
+
   it('outside production warns at 7,000 characters and sends the request', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const res = await guardedSupabaseFetch(restUrl(7_000));
