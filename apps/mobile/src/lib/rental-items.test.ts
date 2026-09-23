@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildRentalItemRows, rentalItemsEyebrow } from './rental-items';
+import { buildRentalItemRows, rentalItemsEyebrow, rentalPickerStatus } from './rental-items';
 
 describe('buildRentalItemRows', () => {
   it('available = on hand minus every open reservation for that item', () => {
@@ -73,5 +73,37 @@ describe('rentalItemsEyebrow', () => {
 
   it('falls back to what it has when the count is unknown', () => {
     expect(rentalItemsEyebrow(3, null)).toBe('RENTALS · 3 ITEMS');
+  });
+});
+
+describe('rentalPickerStatus (new rental)', () => {
+  const none = { warehousesError: null, itemsError: null, stockError: null };
+
+  it('is not blocked when every read loaded', () => {
+    expect(rentalPickerStatus(none)).toEqual({ blocked: false, message: null, detail: null });
+  });
+
+  it('a failed reservations read BLOCKS the picker: availability would read as on hand', () => {
+    expect(rentalPickerStatus({ ...none, stockError: 'URI too long' })).toEqual({
+      blocked: true,
+      message: 'Could not check which units are already out on rental.',
+      detail: 'URI too long',
+    });
+  });
+
+  it('a failed items read blocks it, rather than claiming the warehouse has no rental items', () => {
+    expect(rentalPickerStatus({ ...none, itemsError: 'offline' })).toEqual({
+      blocked: true,
+      message: 'Could not load rental items.',
+      detail: 'offline',
+    });
+  });
+
+  it('a failed warehouses read blocks it', () => {
+    expect(rentalPickerStatus({ ...none, warehousesError: 'offline', stockError: 'x' })).toEqual({
+      blocked: true,
+      message: 'Could not load warehouses.',
+      detail: 'offline',
+    });
   });
 });

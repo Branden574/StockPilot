@@ -82,3 +82,49 @@ export function rentalItemsEyebrow(shown: number, total: number | null): string 
   if (total !== null && total > shown) return `RENTALS · SHOWING ${shown} OF ${total} ${noun}`;
   return `RENTALS · ${count} ${noun}`;
 }
+
+// ── New-rental picker ───────────────────────────────────────────────────────
+
+/** What the new-rental picker can offer, given which of its reads failed. */
+export interface RentalPickerStatus {
+  /** True when the item list and its steppers must not be offered, and the
+   *  checkout must not be submitted. */
+  blocked: boolean;
+  /** The sentence to show when blocked. */
+  message: string | null;
+  /** The read's own reason, shown under the sentence. */
+  detail: string | null;
+}
+
+/**
+ * The new-rental picker offers units by AVAILABILITY (on hand minus open
+ * reservations, what the server enforces, SP-052). If the reservations read
+ * fails, every "N AVAILABLE" figure would silently equal on hand and the +
+ * button would offer units the server then refuses, with a cause the operator
+ * cannot see. So each failed read BLOCKS the picker with its own sentence,
+ * instead of showing a picker built on a guess:
+ *
+ * - warehouses failed: there is no warehouse to pick items from;
+ * - items failed: "No rental items in this warehouse" would be false;
+ * - reservations failed: availability is unknown.
+ */
+export function rentalPickerStatus(reads: {
+  warehousesError: string | null;
+  itemsError: string | null;
+  stockError: string | null;
+}): RentalPickerStatus {
+  if (reads.warehousesError !== null) {
+    return { blocked: true, message: 'Could not load warehouses.', detail: reads.warehousesError };
+  }
+  if (reads.itemsError !== null) {
+    return { blocked: true, message: 'Could not load rental items.', detail: reads.itemsError };
+  }
+  if (reads.stockError !== null) {
+    return {
+      blocked: true,
+      message: 'Could not check which units are already out on rental.',
+      detail: reads.stockError,
+    };
+  }
+  return { blocked: false, message: null, detail: null };
+}
