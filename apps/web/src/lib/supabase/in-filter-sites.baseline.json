@@ -23,10 +23,6 @@
     "in:id <- itemIds",
     "in:item_id <- itemIds"
   ],
-  "app/api/reports/inventory-snapshot/pdf/route.tsx": [
-    "in:id <- itemIds",
-    "in:id <- primaryLocIds"
-  ],
   "app/api/search/route.ts": [
     "in:destination.warehouse_id <- access.readableIds",
     "in:warehouse_id <- access.readableIds"

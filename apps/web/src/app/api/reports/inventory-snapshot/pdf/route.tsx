@@ -44,50 +44,22 @@ export async function GET(req: NextRequest) {
     // ReportsService.inventoryValuation() already returns rows enriched
     // with warehouseName + categoryName + value, plus warehouse-access
     // scoping via RLS — exactly the shape we need for the snapshot PDF.
+    //
+    // withLocations: each row also carries its bin label and its primary
+    // location's name, read in the SAME paged stream. The route used to read
+    // them again with `.in('id', <every item in the org>)` and then
+    // `.in('id', <their locations>)`, errors ignored: past ~215 items the
+    // local gateway refused it and past ~395 production failed after ~7 s of
+    // retries, and either way every Location cell printed blank.
     const reportsSvc = new ReportsService(ctx);
-    const data = await reportsSvc.inventoryValuation();
+    const data = await reportsSvc.inventoryValuation({ withLocations: true });
 
-    // Hydrate a location label per item. `bin_location` is the
-    // human-readable label set by the rack picker on items; when blank
-    // we fall back to the `primary_location_id` -> location.name join.
-    // RLS already scopes both tables, so we can batch in a single
-    // round-trip per table.
-    const itemIds = data.rows.map((r) => r.itemId).filter((v): v is string => Boolean(v));
-    const itemLocationMap = new Map<string, string | null>();
-    if (itemIds.length > 0) {
-      const { data: itemRows } = await ctx.supabase
-        .from('inventory_items')
-        .select('id, bin_location, primary_location_id')
-        .in('id', itemIds);
-      const rawItems = (itemRows ?? []) as Array<{
-        id: string;
-        bin_location: string | null;
-        primary_location_id: string | null;
-      }>;
-      const primaryLocIds = rawItems
-        .map((r) => r.primary_location_id)
-        .filter((v): v is string => Boolean(v));
-      const locNameById = new Map<string, string>();
-      if (primaryLocIds.length > 0) {
-        const { data: locs } = await ctx.supabase
-          .from('locations')
-          .select('id, name')
-          .in('id', primaryLocIds);
-        for (const l of (locs ?? []) as Array<{ id: string; name: string }>) {
-          locNameById.set(l.id, l.name);
-        }
-      }
-      for (const r of rawItems) {
-        const bin = r.bin_location?.trim() ?? '';
-        if (bin) {
-          itemLocationMap.set(r.id, bin);
-        } else if (r.primary_location_id) {
-          itemLocationMap.set(r.id, locNameById.get(r.primary_location_id) ?? null);
-        } else {
-          itemLocationMap.set(r.id, null);
-        }
-      }
-    }
+    // `bin_location` is the human-readable label set by the rack picker on
+    // items; when blank we fall back to the primary location's name.
+    const locationFor = (r: (typeof data.rows)[number]): string | null => {
+      const bin = r.binLocation?.trim() ?? '';
+      return bin || r.primaryLocationName || null;
+    };
 
     const groupsByWarehouse = new Map<string, SnapshotPdfRow[]>();
     for (const r of data.rows) {
@@ -100,7 +72,7 @@ export async function GET(req: NextRequest) {
         sku: r.sku,
         name: r.name,
         categoryName: r.categoryName,
-        location: itemLocationMap.get(r.itemId) ?? null,
+        location: locationFor(r),
         quantityOnHand: r.quantityOnHand,
         unitCost: r.unitCost,
         value: r.value,
