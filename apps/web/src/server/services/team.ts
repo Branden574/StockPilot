@@ -15,7 +15,7 @@ import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
 
 import { type Role } from '@stockpilot/core';
 
-import { audit } from './audit';
+import { audit, insertAuditRowReported } from './audit';
 import { dispatchEvent } from './integration-events';
 import {
   assertPermission,
@@ -1291,8 +1291,10 @@ export async function acceptInviteWithToken(token: string, userId: string) {
       .eq('id', userId);
   }
 
-  // Audit log — invite accepted.
-  await admin.from('audit_logs').insert({
+  // Audit log — invite accepted. insertAuditRowReported reads the INSERT's
+  // own result: supabase-js returns a refused write as { error } rather than
+  // throwing, so this row used to be lost without a trace.
+  await insertAuditRowReported({
     organization_id: orgId,
     user_id: userId,
     event: 'user.invite.accepted',

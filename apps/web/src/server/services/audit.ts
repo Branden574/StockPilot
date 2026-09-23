@@ -460,6 +460,18 @@ function auditRow(payload: AuditPayload, c: ServiceContext, meta: RequestMeta) {
   };
 }
 
+/** An audit_logs row as written. organization_id and user_id are nullable in
+ *  the table (auth events before a membership exists); ip and user_agent are
+ *  optional for rows written outside a request's own context. */
+type AuditRowInsert = {
+  organization_id: string | null;
+  user_id: string | null;
+  event: AuditEvent;
+  ip?: string | null;
+  user_agent?: string | null;
+  metadata: Record<string, unknown>;
+};
+
 /** The distinct events of a batch, for a report line. */
 function eventsLabel(payloads: readonly AuditPayload[]): string {
   return [...new Set(payloads.map((p) => p.event))].join(',');
@@ -498,7 +510,7 @@ class AuditInsertTimeout extends Error {
  */
 async function insertAuditRows(
   admin: ReturnType<typeof createAdminClient>,
-  rows: ReturnType<typeof auditRow> | Array<ReturnType<typeof auditRow>>,
+  rows: AuditRowInsert | AuditRowInsert[],
 ): Promise<InsertFailure | null> {
   const controller = new AbortController();
   const deadline = new Promise<never>((_, reject) => {
@@ -687,6 +699,44 @@ export async function audit(payload: AuditPayload, ctx?: ServiceContext): Promis
       cause: e,
     });
   }
+}
+
+/**
+ * Writes one audit row that its caller shaped itself, for the few places that
+ * cannot go through `audit()`: auth events with no organization context yet,
+ * a platform admin's cross-organization event, invite acceptance and email
+ * change. The same deadline and the same loss report as `audit()`: supabase-js
+ * returns a failed INSERT as `{ error }` instead of throwing, so a
+ * `try { await insert } catch` around it never saw a lost row.
+ *
+ * Never throws. Resolves to whether the row was written.
+ */
+export async function insertAuditRowReported(row: AuditRowInsert): Promise<boolean> {
+  const entityType =
+    typeof row.metadata.entity_type === 'string' ? row.metadata.entity_type : null;
+  try {
+    const failure = await insertAuditRows(createAdminClient(), row);
+    if (!failure) return true;
+    reportLostAuditRows({
+      organizationId: row.organization_id,
+      event: row.event,
+      entityType,
+      lost: 1,
+      total: 1,
+      failure,
+    });
+  } catch (e) {
+    reportLostAuditRows({
+      organizationId: row.organization_id,
+      event: row.event,
+      entityType,
+      lost: 1,
+      total: 1,
+      failure: { thrown: e instanceof Error ? e.name : typeof e, timedOut: false },
+      cause: e,
+    });
+  }
+  return false;
 }
 
 /**

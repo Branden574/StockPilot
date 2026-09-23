@@ -68,6 +68,7 @@ import {
   AUDIT_INSERT_TIMEOUT_MS,
   AUDIT_LOSS_REPORT_WINDOW_MS,
   auditMany,
+  insertAuditRowReported,
   resetAuditLossReportsForTests,
   type AuditPayload,
 } from './audit';
@@ -152,6 +153,51 @@ describe('audit()', () => {
   it('never throws, even when the INSERT itself rejects', async () => {
     h.insert.mockRejectedValue(new TypeError('fetch failed'));
     await expect(audit(payload(1), ctx)).resolves.toBeUndefined();
+    expect(h.reportError).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The four places that shape their own row (auth events, a platform admin's
+// cross-organization event, invite acceptance, email change) wrapped
+// `await insert` in try/catch, which never sees a refused write: supabase-js
+// returns it as { error }.
+describe('insertAuditRowReported()', () => {
+  const row = {
+    organization_id: null,
+    user_id: 'user-9',
+    event: 'user.sign_in_failed' as const,
+    ip: '203.0.113.7',
+    user_agent: 'lab-agent/1.0',
+    metadata: { entity_type: 'user', entity_id: 'user-9', attempted_email: SECRET_NAME },
+  };
+
+  it('writes exactly the row it was given, organization_id null included', async () => {
+    h.insert.mockResolvedValue(ok);
+    await expect(insertAuditRowReported(row)).resolves.toBe(true);
+    expect(h.insert).toHaveBeenCalledWith(row, expect.any(AbortSignal));
+    expect(h.reportError).not.toHaveBeenCalled();
+  });
+
+  it('reports a refused INSERT with the event and the status, never the row', async () => {
+    h.insert.mockResolvedValue({
+      error: { message: `Failing row contains (${SECRET_NAME})`, code: '23502' },
+      status: 400,
+      statusText: 'Bad Request',
+    });
+    await expect(insertAuditRowReported(row)).resolves.toBe(false);
+    expect(h.reportError).toHaveBeenCalledTimes(1);
+    const [, report] = h.reportError.mock.calls[0]!;
+    expect(report).toMatchObject({
+      tag: 'audit.write_failed',
+      organizationId: null,
+      extra: { event: 'user.sign_in_failed', entityType: 'user', lost: 1, status: 400, code: '23502' },
+    });
+    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain(SECRET_NAME);
+  });
+
+  it('never throws, even when the INSERT itself rejects', async () => {
+    h.insert.mockRejectedValue(new TypeError('fetch failed'));
+    await expect(insertAuditRowReported(row)).resolves.toBe(false);
     expect(h.reportError).toHaveBeenCalledTimes(1);
   });
 });

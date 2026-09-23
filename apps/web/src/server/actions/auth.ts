@@ -16,7 +16,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { REMEMBER_SESSION_COOKIE, rememberPreferenceOptions } from '@/lib/supabase/session-cookies';
 import { isBannedUserAuthError } from '@/server/actions/auth-error-classify';
-import { audit, type AuditEvent } from '@/server/services/audit';
+import { audit, insertAuditRowReported, type AuditEvent } from '@/server/services/audit';
 
 import {
   ACCOUNT_DISABLED_MESSAGE,
@@ -75,8 +75,9 @@ async function emitAuthAudit(params: {
       h.get('x-forwarded-for')?.split(',')[0]?.trim() ?? h.get('x-real-ip') ?? null;
     const userAgent = h.get('user-agent') ?? null;
 
-    const admin = createAdminClient();
-    await admin.from('audit_logs').insert({
+    // Reads the INSERT's own result: supabase-js returns a refused write as
+    // { error } rather than throwing, so the catch below never saw one.
+    await insertAuditRowReported({
       organization_id: params.organizationId ?? null,
       user_id: params.userId ?? null,
       event: params.event,

@@ -15,7 +15,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { ServiceError } from '@/server/services/context';
 
-import type { AuditEvent } from '@/server/services/audit';
+import { insertAuditRowReported, type AuditEvent } from '@/server/services/audit';
 
 /**
  * VERIFIED SELF-SERVICE EMAIL CHANGE — the one module that changes a user's
@@ -203,8 +203,9 @@ async function writeAudit(
   extra: Record<string, unknown>,
 ): Promise<void> {
   try {
-    const admin = createAdminClient();
-    await admin.from('audit_logs').insert({
+    // Reads the INSERT's own result: supabase-js returns a refused write as
+    // { error } rather than throwing, so the catch below never saw one.
+    await insertAuditRowReported({
       organization_id: organizationId,
       user_id: userId,
       event,
