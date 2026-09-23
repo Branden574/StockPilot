@@ -2,8 +2,11 @@ import 'server-only';
 
 import { z } from 'zod';
 
+import { reportError } from '@/lib/error-reporter';
+
 import { audit } from './audit';
 import { ServiceError, type ServiceContext } from './context';
+import { writeInIdBatches } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 // ---------------------------------------------------------------------------
@@ -51,7 +54,13 @@ export async function purgeExpiredArchivedItems(
   ctx: ServiceContext,
   retentionDays: number,
   opts: { limit?: number } = {},
-): Promise<{ deleted: number; ids: string[]; truncated: boolean }> {
+): Promise<{
+  deleted: number;
+  ids: string[];
+  truncated: boolean;
+  /** Candidates a failed write batch left in place (reported). */
+  failed: number;
+}> {
   const limit = opts.limit ?? PURGE_BATCH_LIMIT;
   const cutoff = new Date(Date.now() - retentionDays * 86_400_000).toISOString();
 
@@ -73,26 +82,42 @@ export async function purgeExpiredArchivedItems(
   // True when we hit the per-run cap — the caller can surface that an org has a
   // backlog (the rest drain on subsequent daily runs).
   const truncated = rows.length === limit;
-  if (rows.length === 0) return { deleted: 0, ids: [], truncated: false };
+  if (rows.length === 0) return { deleted: 0, ids: [], truncated: false, failed: 0 };
 
-  const { data: deletedRows, error: updErr } = await ctx.supabase
-    .from('inventory_items')
-    .update({
-      deleted_at: new Date().toISOString(),
-      deleted_by: ctx.userId,
-      updated_by: ctx.userId,
-    })
-    .eq('organization_id', ctx.organizationId)
-    .in('id', rows.map((r) => r.id))
-    .eq('status', 'archived') // race guard: don't delete an un-archived row
-    .is('deleted_at', null) // race guard: idempotent if a concurrent pass beat us
-    .select('id, name');
-  if (updErr) throw new ServiceError('internal_error', updErr.message);
+  // Batched: up to 1000 ids, one batch at a time. One `.in()` of 1000 uuids
+  // fails in production (and answers 414 locally), so an org with a full
+  // backlog failed every daily run. Each row's update is independent and
+  // race-guarded, so a batch is correct on its own; a failure stops the rest,
+  // which the next run picks up oldest-first.
+  const deletedAt = new Date().toISOString();
+  const write = await writeInIdBatches<string, { id: string; name: string }>(
+    rows.map((r) => r.id),
+    (batch) =>
+      ctx.supabase
+        .from('inventory_items')
+        .update({ deleted_at: deletedAt, deleted_by: ctx.userId, updated_by: ctx.userId })
+        .eq('organization_id', ctx.organizationId)
+        .in('id', batch)
+        .eq('status', 'archived') // race guard: don't delete an un-archived row
+        .is('deleted_at', null) // race guard: idempotent if a concurrent pass beat us
+        .select('id, name'),
+  );
+  if (write.error !== null && write.written.length === 0) {
+    throw new ServiceError('internal_error', write.error);
+  }
 
-  const deleted = (deletedRows ?? []) as Array<{ id: string; name: string }>;
+  const deleted = write.rows;
   if (deleted.length > 0) {
     // Deleted rows leave the Archived view and the instant dataset.
     invalidateInventoryListAfterWrite(ctx.organizationId, 'item.purge_archived');
+  }
+  if (write.error !== null) {
+    // Part of the run committed: audit and return that part, report the rest.
+    void reportError(new Error('Archived-item purge stopped partway through a run'), {
+      tag: 'archive_cleanup.purge.partial',
+      organizationId: ctx.organizationId,
+      extra: { deleted: deleted.length, failed: write.notWritten.length, detail: write.error },
+    });
   }
   for (const item of deleted) {
     await audit(
@@ -107,5 +132,10 @@ export async function purgeExpiredArchivedItems(
     );
   }
 
-  return { deleted: deleted.length, ids: deleted.map((d) => d.id), truncated };
+  return {
+    deleted: deleted.length,
+    ids: deleted.map((d) => d.id),
+    truncated,
+    failed: write.notWritten.length,
+  };
 }

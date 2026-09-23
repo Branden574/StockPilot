@@ -123,7 +123,7 @@ describe('archiveExpiredZeroStockItems', () => {
 
     const res = await archiveExpiredZeroStockItems(ctx, 7);
 
-    expect(res).toEqual({ archived: 0, ids: [], items: [], truncated: false });
+    expect(res).toEqual({ archived: 0, ids: [], items: [], truncated: false, failed: 0 });
     expect(stub.chainsAll.get('stock_reservations.select')).toBeUndefined();
     expect(stub.chainsAll.get('inventory_items.update')).toBeUndefined();
     expect(vi.mocked(audit)).not.toHaveBeenCalled();
