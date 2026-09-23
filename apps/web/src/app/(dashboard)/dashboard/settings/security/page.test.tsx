@@ -52,13 +52,17 @@ vi.mock('@/server/actions/mfa-recovery', () => ({
 }));
 
 let factorsAnswer: { data: unknown; error: unknown };
+let aalAnswer: { data: unknown; error: unknown } = {
+  data: { currentLevel: 'aal2', nextLevel: 'aal2' },
+  error: null,
+};
 vi.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
     auth: {
       getSession: async () => ({ data: { session: null } }),
       mfa: {
         listFactors: async () => factorsAnswer,
-        getAuthenticatorAssuranceLevel: async () => ({ data: { currentLevel: 'aal2' }, error: null }),
+        getAuthenticatorAssuranceLevel: async () => aalAnswer,
       },
     },
     from: () => {
@@ -78,6 +82,7 @@ async function renderPage(enroll?: string) {
 
 beforeEach(() => {
   factorsAnswer = { data: { all: [] }, error: null };
+  aalAnswer = { data: { currentLevel: 'aal2', nextLevel: 'aal2' }, error: null };
 });
 
 describe('Security page: the authenticator card', () => {
@@ -91,6 +96,21 @@ describe('Security page: the authenticator card', () => {
       '/dashboard/settings/security',
     );
     expect(screen.queryByTestId('mfa-enrollment')).toBeNull();
+  });
+
+  it('an unreadable list for an enrolled user at AAL1 offers the step-up, not the password form', async () => {
+    factorsAnswer = { data: null, error: { message: 'upstream timeout', status: 503 } };
+    // The session's own assurance data: a verified factor exists (nextLevel aal2).
+    aalAnswer = { data: { currentLevel: 'aal1', nextLevel: 'aal2' }, error: null };
+    await renderPage();
+    expect(screen.getByText(/Verify it.s you first/)).toBeTruthy();
+  });
+
+  it('an unreadable list for a user with no factor still shows the password form', async () => {
+    factorsAnswer = { data: null, error: { message: 'upstream timeout', status: 503 } };
+    aalAnswer = { data: { currentLevel: 'aal1', nextLevel: 'aal1' }, error: null };
+    await renderPage();
+    expect(screen.queryByText(/Verify it.s you first/)).toBeNull();
   });
 
   it('in enroll mode, an unreadable list does not tell the user to enroll', async () => {

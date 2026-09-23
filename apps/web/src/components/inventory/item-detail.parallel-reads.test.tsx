@@ -488,6 +488,23 @@ describe('ItemDetail: a failed activity feed is a could-not-load state on its ta
     expect(screen.queryByTestId('activity-panel')).toBeNull();
   });
 
+  it("a redirect or not-found thrown by the feed read is the framework's, not a could-not-load state", async () => {
+    // e.g. the service context redirecting to MFA, or a not-found, while the
+    // feed was being read: those must reach Next as themselves.
+    const redirect = Object.assign(new Error('NEXT_REDIRECT'), {
+      digest: 'NEXT_REDIRECT;replace;/signin/mfa;307;',
+    });
+    control.activity = async () => {
+      throw redirect;
+    };
+    await expect(
+      ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back', tab: 'movements' }),
+    ).rejects.toBe(redirect);
+    expect(reportError).not.toHaveBeenCalled();
+    await flush();
+    expect(unhandled).toEqual([]);
+  });
+
   it('a feed that loads renders the panel, with no could-not-load state', async () => {
     render(
       await ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back', tab: 'activity' }),

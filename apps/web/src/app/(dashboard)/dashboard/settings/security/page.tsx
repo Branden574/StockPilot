@@ -73,8 +73,14 @@ export default async function SecuritySettingsPage({
   // (e.g. signed in before enrolling, or session loaded from a remember-me
   // cookie that didn't go through the MFA challenge), don't show the form
   // — show a step-up CTA pointing at /signin/mfa instead.
-  const passwordChangeBlockedByMfa =
-    verifiedFactors.length > 0 && aalRes.data?.currentLevel !== 'aal2';
+  // With the factor list unreadable, "no verified factors" is not known, so
+  // the session's own assurance data decides (nextLevel is aal2 exactly when
+  // the user has a verified factor): an enrolled user at AAL1 must not be
+  // shown a form the action will refuse.
+  const hasVerifiedFactor = factorsUnreadable
+    ? aalRes.data?.nextLevel === 'aal2'
+    : verifiedFactors.length > 0;
+  const passwordChangeBlockedByMfa = hasVerifiedFactor && aalRes.data?.currentLevel !== 'aal2';
 
   return (
     <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
