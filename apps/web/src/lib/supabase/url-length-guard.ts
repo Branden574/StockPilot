@@ -63,8 +63,7 @@ function describeRequest(
   init: RequestInit | undefined,
 ): { url: URL; method: string } | null {
   try {
-    const raw =
-      typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const url = new URL(raw);
     const method = (
       init?.method ?? (typeof input === 'object' && 'method' in input ? input.method : 'GET')

@@ -133,7 +133,10 @@ describe('guardedSupabaseFetch', () => {
       global: { fetch: guardedSupabaseFetch },
       auth: { persistSession: false, autoRefreshToken: false },
     });
-    const ids = Array.from({ length: 400 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+    const ids = Array.from(
+      { length: 400 },
+      (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+    );
     const started = Date.now();
     const { data, error, status } = await client.from('inventory_items').select('id').in('id', ids);
     expect(Date.now() - started).toBeLessThan(500);

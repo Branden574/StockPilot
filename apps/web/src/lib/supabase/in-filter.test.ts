@@ -86,7 +86,10 @@ describe('chunkInFilterValues', () => {
 
   it('packs to the budget, not below it', () => {
     // 60-char plain values cost 63 each: 63 per batch of 4000 -> 63 values.
-    const values = Array.from({ length: 130 }, (_, i) => `${String(i).padStart(3, '0')}${'v'.repeat(57)}`);
+    const values = Array.from(
+      { length: 130 },
+      (_, i) => `${String(i).padStart(3, '0')}${'v'.repeat(57)}`,
+    );
     const batches = chunkInFilterValues(values);
     expect(batches.map((b) => b.length)).toEqual([63, 63, 4]);
   });

@@ -33,9 +33,7 @@ function fakeClient() {
   const chain = (): unknown =>
     new Proxy(() => {}, {
       get: (_t, prop) =>
-        prop === 'then'
-          ? (resolve: (v: unknown) => void) => resolve(failed)
-          : () => chain(),
+        prop === 'then' ? (resolve: (v: unknown) => void) => resolve(failed) : () => chain(),
     });
   return {
     auth: {
