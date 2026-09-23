@@ -79,11 +79,7 @@ vi.mock('@/lib/cycle-counts/use-count-selection', () => ({
   useCountSelection: (selector: (s: { add: () => void }) => unknown) => selector({ add: vi.fn() }),
 }));
 
-import {
-  InventoryTable,
-  type InstantAdoptedPayload,
-  type InstantDatasetItem,
-} from './inventory-table';
+import { InventoryTable, type InstantDatasetItem } from './inventory-table';
 
 function item(
   over: Partial<InstantDatasetItem> & { id: string; name: string },
@@ -113,7 +109,6 @@ const EMPTY_LOOKUPS = {
   charters: new Map<string, { name: string; code: string | null }>(),
 };
 
-const PAGE_ROWS = [item({ id: 'a', name: 'Alpha Widget' }), item({ id: 'b', name: 'Beta Gadget' })];
 
 // ITEM ROWS WARM THEIR ROUTE ON INTENT (not on view). The row link used to be
 // a plain <Link prefetch={false}>, which in next/link also turns hover and
