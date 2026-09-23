@@ -36,9 +36,11 @@ import type { ModuleId, PermissionOverride, Role } from '@stockpilot/core';
  *     that already owns them (`session.ts`, `context.ts`); they are handed the
  *     same rows from a different source.
  *   - Not required. `null` means "resolve this request the old way": the function
- *     is missing (a deploy ahead of its migration), the call failed, the answer
- *     has an unexpected shape, or it is about a different user than the one the
- *     proxy verified. The legacy reads keep every fail-closed rule they have.
+ *     is missing (a deploy ahead of its migration), the call failed, or the
+ *     answer has an unexpected shape. The legacy reads keep every fail-closed
+ *     rule they have. An answer about a different user than the identity header
+ *     names is NOT a reason to use the legacy reads: it means there is no
+ *     session (see `resolveRequestContext`).
  */
 
 const ROLES: readonly Role[] = ['owner', 'admin', 'manager', 'staff', 'viewer'];
@@ -108,9 +110,10 @@ export function parseRequestContextBundle(
   expectedUserId: string,
 ): RequestContextBundle | null {
   if (!isRecord(raw)) return null;
-  // The answer must be about the user the proxy verified. It always is (the
-  // function only knows auth.uid()); if it ever is not, do not build a context
-  // from someone else's rows.
+  // The answer must be about the user the caller expects. The function only
+  // knows auth.uid(), so it differs only when the expected id is not the
+  // session's (a client-supplied identity header); never build a context from
+  // someone else's rows.
   if (raw.user_id !== expectedUserId) return null;
 
   let profile: BundleProfile | null = null;
@@ -195,19 +198,43 @@ export function parseRequestContextBundle(
 }
 
 /**
+ * What the call said about WHO is asking, kept apart from the context it built.
+ *
+ * The identity header is only trustworthy where the proxy ran: it sets or
+ * deletes the header on the routes in its matcher (src/proxy.ts) and nowhere
+ * else, so on `/api/**`, the public pages, and a Server Action POSTed to one of
+ * them, the header is whatever the client sent. `auth.uid()` inside the
+ * function is not: PostgREST verified the JWT it came from. So the answer
+ * doubles as a check of the header, at no extra cost:
+ *
+ *   - 'confirmed': the answer is about the header's user. `bundle` is null when
+ *     its shape was not understood (the legacy reads run, identity settled).
+ *   - 'refuted': the answer is about a different user, or about nobody (no
+ *     session cookie). The header is not this request's identity.
+ *   - 'unknown': no answer (switched off, failed, threw, not an object). The
+ *     caller must verify the header some other way before trusting it.
+ */
+export type RequestContextResolution =
+  | { identity: 'confirmed'; bundle: RequestContextBundle | null }
+  | { identity: 'refuted'; bundle: null }
+  | { identity: 'unknown'; bundle: null };
+
+const UNKNOWN: RequestContextResolution = { identity: 'unknown', bundle: null };
+
+/**
  * One call per render pass, shared by every consumer of that pass (see "Not a
- * cache" above for Server Actions). Returns null whenever the legacy reads
- * should be used instead (see the file header).
+ * cache" above for Server Actions). `session.ts` reads the identity verdict;
+ * everything else wants only the bundle (`loadRequestContextBundle`).
  *
  * `REQUEST_CONTEXT_RPC=off` is the switch back to the legacy reads without a
  * code change.
  */
-export const loadRequestContextBundle = cache(async (): Promise<RequestContextBundle | null> => {
-  if (process.env.REQUEST_CONTEXT_RPC === 'off') return null;
+export const resolveRequestContext = cache(async (): Promise<RequestContextResolution> => {
+  if (process.env.REQUEST_CONTEXT_RPC === 'off') return UNKNOWN;
   try {
     const userId = (await headers()).get(SESSION_HEADER_USER_ID);
-    // No proxy-verified user: an API route, a Bearer request, a signed-out page.
-    if (!userId) return null;
+    // No identity header: an API route, a Bearer request, a signed-out page.
+    if (!userId) return UNKNOWN;
     const supabase = await createClient();
     // GET: PostgREST runs a STABLE function in a read-only transaction.
     const { data, error } = await supabase.rpc('get_request_context', undefined, { get: true });
@@ -217,27 +244,34 @@ export const loadRequestContextBundle = cache(async (): Promise<RequestContextBu
         '[request-context] rpc failed, using the legacy reads:',
         error.code ?? 'unknown',
       );
-      return null;
+      return UNKNOWN;
+    }
+    if (!isRecord(data) || !('user_id' in data)) {
+      console.warn('[request-context] unexpected answer, using the legacy reads');
+      return UNKNOWN;
+    }
+    if (data.user_id !== userId) {
+      // A client-supplied header on a route the proxy does not cover, or a
+      // session that changed between the proxy and here. Either way the header
+      // does not name the user this request is authenticated as.
+      console.warn('[request-context] answer is not about the header user, no session');
+      return { identity: 'refuted', bundle: null };
     }
     const bundle = parseRequestContextBundle(data, userId);
-    if (!bundle) {
-      // Told apart on purpose: the first should never happen and is worth a look.
-      const aboutSomeoneElse =
-        typeof data === 'object' && data !== null && (data as { user_id?: unknown }).user_id !== userId;
-      console.warn(
-        aboutSomeoneElse
-          ? '[request-context] answer is not about the proxy-verified user, using the legacy reads'
-          : '[request-context] unexpected answer, using the legacy reads',
-      );
-    }
-    return bundle;
+    if (!bundle) console.warn('[request-context] unexpected answer, using the legacy reads');
+    return { identity: 'confirmed', bundle };
   } catch {
     // A fixed string, never the error: it can quote request details. Logged so
     // that a fast path which is permanently off does not stay invisible.
     console.warn('[request-context] call threw, using the legacy reads');
-    return null;
+    return UNKNOWN;
   }
 });
+
+/** The bundle alone, or null whenever the legacy reads should be used (see the file header). */
+export const loadRequestContextBundle = cache(
+  async (): Promise<RequestContextBundle | null> => (await resolveRequestContext()).bundle,
+);
 
 /** The caller's accepted membership in `organizationId`, if the bundle has one. */
 export function bundleMembership(

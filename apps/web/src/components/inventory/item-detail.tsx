@@ -53,14 +53,15 @@ import {
 import { canMintPlacementDestination } from '@/lib/locations/placement-destination';
 import { LocationsService } from '@/server/services/locations';
 import { PriceTrackingService } from '@/server/services/price-tracking';
-import { ReportsService } from '@/server/services/reports';
-import { SerialsService } from '@/server/services/serials';
+import { ReportsService, type ItemCostHistory } from '@/server/services/reports';
+import { SerialsService, type SerialsPage } from '@/server/services/serials';
 import { WarehousesService } from '@/server/services/warehouses';
 import { ITEM_ACTIVITY_PAGE_SIZE, nextActivityCursor } from '@/lib/activity-pagination';
 import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage';
+import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
-import { can, holdingsContradictRack, isLikelyIsbn } from '@stockpilot/core';
+import { can, holdingsContradictRack, isLikelyIsbn, type CustomFieldDefinition } from '@stockpilot/core';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { ITEM_DETAIL_TOUR } from '@/lib/onboarding/tours';
@@ -138,8 +139,22 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // throws, the page is notFound() (or the error) and those results are
   // dropped unread. The dependent reads further down (category, supplier,
   // profile, signed photo URLs, market price) only start after it returns.
-  const itemRead = inventorySvc.get(id);
+  const itemRead = inventorySvc.get(id, { withUpdater: true });
   const serialsSvc = new SerialsService(ctx);
+  // OVERVIEW-ONLY READS STAY ON OVERVIEW. A Movements or Activity click is a
+  // query-only navigation, and Next re-renders this whole page for it (the page
+  // segment is keyed with its query: segment.js PAGE_SEGMENT_KEY + '?' + query).
+  // That render used to wait on every read the Overview panel shows: photos and
+  // their signing, cost history, custom field definitions, serials (and warehouse
+  // names), reservations, category, supplier, market price. About nineteen
+  // Supabase calls where the tab needs about ten, and each extra call is another
+  // chance to meet a gateway stall (3-5% of calls from Vercel on weekday
+  // daytimes, 1-8 s each). Worse, a failed photo or cost read failed the TAB,
+  // which never shows either. The header and footer (name, stock, the adjust
+  // and transfer dialogs, "last updated by") read the same things on every tab,
+  // so only what the Overview panel alone renders is skipped. The mirror image
+  // of `activityRead` below, which Overview skips.
+  const isOverview = activeTab === 'overview';
   const locationsRead = locationsSvc.list();
   // Per-location stock levels for the transfer dialog — keeps the dialog's
   // source list accurate after mig 0192 moved stock out of primary_location_id.
@@ -149,27 +164,51 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // real cost the Overview tab was paying on every load even though it never
   // renders the feed. Mirrors mobile's item/[id].tsx, which only calls
   // loadMovements() when its Movements tab is active.
-  const activityRead =
+  //
+  // A failed feed read is the tab's to report, not the page's: null here, and
+  // the panel says it could not load (with a retry) instead of the whole item
+  // page failing, or an empty feed that reads as "no history".
+  const activityRead: Promise<ActivityEvent[] | null> =
     activeTab === 'movements' || activeTab === 'activity'
-      ? activitySvc.forItem(id, ITEM_ACTIVITY_PAGE_SIZE)
+      ? activitySvc.forItem(id, ITEM_ACTIVITY_PAGE_SIZE).catch((e: unknown) => {
+          if (isNextControlFlowError(e)) throw e;
+          void reportError(e, { tag: 'item-detail.activity', organizationId: ctx.organizationId });
+          return null;
+        })
       : Promise.resolve<ActivityEvent[]>([]);
-  const imageRowsRead = imagesSvc.list(id);
+  const imageRowsRead = isOverview
+    ? imagesSvc.list(id)
+    : Promise.resolve<Awaited<ReturnType<ItemImagesService['list']>>>([]);
   // Per-supplier unit-cost trend from our own PO + receipt data, rendered as a
   // lazy Recharts island so the server shell never imports Recharts.
-  const costHistoryRead = reportsSvc.itemCostHistory(id);
+  const costHistoryRead = isOverview
+    ? reportsSvc.itemCostHistory(id)
+    : Promise.resolve<ItemCostHistory>({
+        itemId: id,
+        series: [],
+        lastUnitCost: null,
+        avgUnitCost: null,
+        pointCount: 0,
+      });
   // Org's ACTIVE item custom field definitions — used to render the
   // defined extra fields with their human labels (not raw jsonb keys).
-  const customFieldDefsRead = customFieldsSvc.listDefinitions('item');
+  const customFieldDefsRead = isOverview
+    ? customFieldsSvc.listDefinitions('item')
+    : Promise.resolve<CustomFieldDefinition[]>([]);
   // First page of registered serials (+ total). Fail-closed read: an
   // empty page on error, so the panel degrades instead of the page.
-  const serialsPageRead = serialsSvc.list(id, { page: 1 });
+  const serialsPageRead = isOverview
+    ? serialsSvc.list(id, { page: 1 })
+    : Promise.resolve<SerialsPage>({ rows: [], total: 0, page: 1, pageSize: 0 });
   // RESERVED, through the accessor that already owns this truth. The audit
   // found `stock_reservations` live since mig 0073 and read by the orders
   // catalog, rentals and auto-archive — but nowhere an operator could see
   // the three numbers together. Reusing reservedQuantityByItemIds rather
   // than querying here is the point: availability is derived from two
   // existing facts, and a second query is how the two drift.
-  const reservedRead = inventorySvc.reservedQuantityByItemIds([id]);
+  const reservedRead = isOverview
+    ? inventorySvc.reservedQuantityByItemIds([id])
+    : Promise.resolve(new Map<string, number>());
   // When the item row is missing or forbidden, notFound() throws before any
   // of these is awaited. Mark every rejection observed first, so a read that
   // fails in that window can never become an unhandled rejection (which takes
@@ -200,12 +239,16 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // belongs to (used only by .find() lookups below). Locations stays as a
   // full list (above) because the StockTransferDialog needs every location
   // for its destination dropdown.
-  const categoryIdForFetch = (item.category_id as string | null) ?? null;
-  const supplierIdForFetch = (item.supplier_id as string | null) ?? null;
-  // Last-updated-by footer: the user who last touched the row (if any). RLS
-  // lets org members read user_profiles within their org. It used to be read
-  // on its own after everything else had arrived, one more serial level.
-  const updatedById = (item as { updated_by?: string | null }).updated_by ?? null;
+  // Category and supplier are shown on the Overview panel only.
+  const categoryIdForFetch = isOverview ? ((item.category_id as string | null) ?? null) : null;
+  const supplierIdForFetch = isOverview ? ((item.supplier_id as string | null) ?? null) : null;
+  // Last-updated-by footer: the user who last touched the row (if any), read
+  // WITH the row (`withUpdater`). It used to be read on its own after the row
+  // arrived: a level of its own on every tab, and the only row-keyed read the
+  // Movements and Activity tabs made.
+  const updatedByProfile =
+    (item as { updater?: { full_name?: string | null; email?: string | null } | null }).updater ??
+    null;
   const canEditItem = can(ctx, 'items:update');
   // Serial numbers panel: shown for serial-tracked items, or any item that
   // already has registry rows (e.g. serials were captured before tracking was
@@ -235,15 +278,14 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // exactly as the RPC's did.
   const itemBarcode = (item.barcode as string | null) ?? null;
   const priceTrackingEnabled = isModuleEnabled(ctx, 'price_tracking');
-  const showMarketPrice = priceTrackingEnabled && isLikelyIsbn(itemBarcode);
+  const showMarketPrice = isOverview && priceTrackingEnabled && isLikelyIsbn(itemBarcode);
 
   const [
     categoryRow,
     supplierRow,
-    updatedByProfile,
     locations,
     holdings,
-    activity,
+    activityResult,
     images,
     costHistory,
     customFieldDefs,
@@ -270,14 +312,6 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
           .maybeSingle()
           .then((r) => r.data)
       : Promise.resolve(null),
-    updatedById
-      ? ctx.supabase
-          .from('user_profiles')
-          .select('full_name, email')
-          .eq('id', updatedById)
-          .maybeSingle()
-          .then((r) => r.data as { full_name?: string | null; email?: string | null } | null)
-      : Promise.resolve(null),
     locationsRead,
     holdingsRead,
     activityRead,
@@ -285,6 +319,8 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
     // (this runs after `get` returned), never for an item the caller may not
     // see. The rows themselves were read alongside the item.
     imageRowsRead.then(async (imageRows) => {
+      // No photos (an item without any, or a tab, which reads none): no signing.
+      if (imageRows.length === 0) return [];
       const signed = await imagesSvc.signedUrls(imageRows.map((r) => r.storage_path as string));
       return imageRows.map((r) => ({
         id: r.id as string,
@@ -342,10 +378,21 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   const value = (item.quantity_on_hand as number) * (item.unit_cost as number);
 
   // ── Last-updated-by footer ──────────────────────────────────────────
-  // The profile was read with the other row-keyed reads above.
+  // The profile came with the row (see `updatedByProfile` above).
   const updatedAt = (item as { updated_at?: string | null }).updated_at ?? null;
   const updatedByName: string | null =
     (updatedByProfile?.full_name?.trim() || updatedByProfile?.email?.trim()) ?? null;
+
+  // null: the feed could not be read (see activityRead). Both tabs then show
+  // that state instead of a feed, and the counts below see no events.
+  const activityFailed = activityResult === null;
+  const activity = activityResult ?? [];
+  // Relative, so it keeps this page's path: the same tab, and the validated
+  // return target the page was opened with.
+  const activityRetryHref = `?${new URLSearchParams({
+    tab: activeTab,
+    ...(returnParam ? { return: returnParam } : {}),
+  }).toString()}`;
 
   // Filter for the Movements tab — kind === 'movement' from the unified
   // ActivityService feed is exactly the stock_movements rows.
@@ -359,6 +406,13 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // `activity` is empty (e.g. the Overview tab, which never fetches
   // activity at all), so the button correctly starts hidden there too.
   const activityInitialCursor = nextActivityCursor(activity);
+  // The feed panel keeps its rows in client state (for "Load older"), seeded
+  // from these props on mount. A re-render of this page (the adjust or
+  // transfer action's own response, a live update) hands it NEW first-page
+  // rows, which a mounted panel ignored: the header showed the new quantity
+  // while the Movements tab kept the old list. Keyed on the first page, the
+  // panel starts over whenever that page changes, and only then.
+  const feedKey = `${activity[0]?.id ?? 'none'}:${activity.length}`;
 
   // Per-kind initial exhaustion (P4 review fix): the Movements tab only
   // ever displays movement events, so ITS "Load older" button must hide
@@ -995,15 +1049,20 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <ItemActivityPanel
-                itemId={id}
-                initialEvents={movementEvents}
-                initialLocationNames={locationNames}
-                initialCursor={activityInitialCursor}
-                initialExhausted={movementsInitialExhausted}
-                kindFilter="movement"
-                canEditNotes={canEditNotes}
-              />
+              {activityFailed ? (
+                <ActivityUnavailable what="stock movements" retryHref={activityRetryHref} />
+              ) : (
+                <ItemActivityPanel
+                  key={feedKey}
+                  itemId={id}
+                  initialEvents={movementEvents}
+                  initialLocationNames={locationNames}
+                  initialCursor={activityInitialCursor}
+                  initialExhausted={movementsInitialExhausted}
+                  kindFilter="movement"
+                  canEditNotes={canEditNotes}
+                />
+              )}
             </CardContent>
           </Card>
         </div>
@@ -1022,14 +1081,19 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <ItemActivityPanel
-                itemId={id}
-                initialEvents={activity}
-                initialLocationNames={locationNames}
-                initialCursor={activityInitialCursor}
-                initialExhausted={activityInitialExhausted}
-                canEditNotes={canEditNotes}
-              />
+              {activityFailed ? (
+                <ActivityUnavailable what="activity" retryHref={activityRetryHref} />
+              ) : (
+                <ItemActivityPanel
+                  key={feedKey}
+                  itemId={id}
+                  initialEvents={activity}
+                  initialLocationNames={locationNames}
+                  initialCursor={activityInitialCursor}
+                  initialExhausted={activityInitialExhausted}
+                  canEditNotes={canEditNotes}
+                />
+              )}
             </CardContent>
           </Card>
         </div>
@@ -1065,6 +1129,27 @@ function DetailRow({
         </p>
         <div className="flex flex-wrap items-center gap-2">{children}</div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The Movements/Activity panel when the feed could not be read. Says so rather
+ * than showing an empty feed, which would read as "nothing ever happened".
+ * The retry links back to this tab, which renders the page on the server again
+ * (a link to the current URL is a refresh in Next).
+ */
+function ActivityUnavailable({ what, retryHref }: { what: string; retryHref: string }) {
+  return (
+    <div role="alert" className="text-muted-foreground py-10 text-center text-sm">
+      <p>Could not load this item&rsquo;s {what}. The history itself is unchanged.</p>
+      <Link
+        href={retryHref}
+        prefetch={false}
+        className="text-foreground mt-2 inline-block font-medium underline underline-offset-4"
+      >
+        Try again
+      </Link>
     </div>
   );
 }

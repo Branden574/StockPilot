@@ -29,7 +29,10 @@ export const SESSION_HEADER_USER_EMAIL = 'x-stockpilot-user-email';
  * TRUST CHAIN (cited by src/lib/auth/platform-admin.ts + src/lib/auth/session.ts
  * — keep those comments in sync): the identity headers are set ONLY after one
  * of the two verification paths above succeeds, and are unconditionally
- * DELETED otherwise, so a client-supplied header can never survive.
+ * DELETED otherwise, so a client-supplied header can never survive ON THE
+ * ROUTES IN THE PROXY MATCHER (src/proxy.ts). Everywhere else this function
+ * never runs and the header is whatever the client sent, which is why
+ * session.ts uses it only once the request's own session agrees with it.
  */
 export async function updateSession(request: NextRequest) {
   // Track any cookies the supabase client wants to set (token refreshes).

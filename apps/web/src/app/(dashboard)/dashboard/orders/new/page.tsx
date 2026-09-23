@@ -118,7 +118,9 @@ export default async function NewOrderPage({
   // shell (head + setup bar) only needs warehouses/charters/viewer, so
   // it flushes immediately; the client suspends just the grid + cart
   // rail on this promise and React streams the resolved payload in.
-  const catalogPromise = loadCatalogBundle(ctx.organizationId, warehouseId, ctx.userId);
+  // The context carries the role the catalog scope starts from (see
+  // resolveCatalogScopeKey): owner/admin/manager need no extra read.
+  const catalogPromise = loadCatalogBundle(ctx, warehouseId);
   // Same treatment for the "Frequently ordered" strip, the first row of photos
   // on the page: started now, in parallel with the catalog, never awaited, and
   // it never rejects. It was a browser fetch that could only begin after

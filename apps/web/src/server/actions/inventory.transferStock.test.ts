@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { revalidatePath, revalidateTag } from 'next/cache';
+
 import { makeSupabaseStub, type SupabaseStub } from '@/test/supabase-mock';
 
 // unstable_cache/revalidateTag: the actions under test import the
@@ -182,6 +184,11 @@ describe('transferStockAction (destination union)', () => {
     });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.data.toLocationId).toBe(EXISTING_LOC);
+    // The page re-renders through revalidatePath; the list cache is expired by
+    // the services themselves (transferStock, syncBookCratePlacement), not a
+    // second time here through a freshly built context.
+    expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/inventory/${ITEM_ID}`);
+    expect(revalidateTag).not.toHaveBeenCalled();
   });
 
   it('2. creates the new rack (org-verified warehouse) then transfers to it', async () => {

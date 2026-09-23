@@ -133,6 +133,9 @@ const visibleEnabledRows = () =>
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
+    // Without the RPC's answer, session.ts verifies the cookie session before
+    // trusting the identity header (the legacy path).
+    auth: { getClaims: async () => ({ data: { claims: { sub: 'u1' } }, error: null }) },
     rpc: async (fn: string, args?: { p_org: string; p_module: string }) => {
       calls.rpc.push(fn);
       if (fn === 'module_enabled' && args) {

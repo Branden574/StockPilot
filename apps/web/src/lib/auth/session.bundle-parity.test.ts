@@ -52,6 +52,9 @@ const calls = { rpc: 0, from: [] as string[] };
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
+    // Without the RPC's answer, session.ts verifies the cookie session before
+    // trusting the identity header. Not a table read, so the counts are unchanged.
+    auth: { getClaims: async () => ({ data: { claims: { sub: 'u1' } }, error: null }) },
     rpc: async (fn: string) => {
       calls.rpc += 1;
       if (!rpcAvailable || fn !== 'get_request_context')

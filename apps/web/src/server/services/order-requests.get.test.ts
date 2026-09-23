@@ -187,3 +187,58 @@ describe('OrderRequestsService.get pickSlipStale', () => {
     expect(String(selectArgs)).toMatch(/\bcreated_at\b/);
   });
 });
+
+describe('OrderRequestsService.get: read order', () => {
+  it('reads the requester profile alongside the lines, not after them', async () => {
+    // A lazy PostgREST-like client: each read starts when awaited; the lines
+    // answer only when the test says so.
+    const started: string[] = [];
+    let answerLines!: () => void;
+    const answers: Record<string, unknown> = {
+      order_requests: { data: baseHeader({ requester_user_id: 'u-req' }), error: null },
+      stock_reservations: { data: [], error: null },
+      warehouses: { data: { name: 'Main WH' }, error: null },
+      user_profiles: { data: { full_name: 'Req User', email: 'req@example.com' }, error: null },
+    };
+    const client = {
+      from(table: string) {
+        const builder: Record<string, unknown> = new Proxy(
+          {},
+          {
+            get(_t, prop: string) {
+              if (prop === 'then') {
+                return (onFulfilled: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) => {
+                  started.push(table);
+                  const answer =
+                    table === 'order_request_lines'
+                      ? new Promise((resolve) => {
+                          answerLines = () => resolve({ data: [], error: null });
+                        })
+                      : Promise.resolve(answers[table]);
+                  return answer.then(onFulfilled, onRejected);
+                };
+              }
+              return () => builder;
+            },
+          },
+        );
+        return builder;
+      },
+    };
+    const service = new (OrderRequestsService as unknown as new (
+      ctx: unknown,
+    ) => OrderRequestsService)(
+      makeServiceContext(client as never, { enabledModules: new Set<ModuleId>(['orders']) }),
+    );
+
+    const detail = service.get('ord-1');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(started).toContain('order_request_lines');
+    // Out before the lines have answered.
+    expect(started).toContain('user_profiles');
+
+    answerLines();
+    const result = await detail;
+    expect(result.requesterName).toBe('Req User');
+  });
+});

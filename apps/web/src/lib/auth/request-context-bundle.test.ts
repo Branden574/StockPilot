@@ -319,3 +319,48 @@ describe('loadRequestContextBundle', () => {
     expect(rpc).not.toHaveBeenCalled();
   });
 });
+
+describe('resolveRequestContext — the answer also checks the identity header', () => {
+  beforeEach(() => {
+    rpc.mockReset();
+    headerUserId = USER;
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  async function freshResolve() {
+    vi.resetModules();
+    return (await import('./request-context-bundle')).resolveRequestContext;
+  }
+
+  it('confirms the header when the answer is about that user, even if its shape is not understood', async () => {
+    rpc.mockResolvedValueOnce({ data: good(), error: null });
+    const ok = await (await freshResolve())();
+    expect(ok.identity).toBe('confirmed');
+    expect(ok.bundle?.profile?.id).toBe(USER);
+    rpc.mockResolvedValueOnce({ data: { user_id: USER, memberships: 'nope' }, error: null });
+    expect(await (await freshResolve())()).toEqual({ identity: 'confirmed', bundle: null });
+  });
+
+  it('refutes the header when the answer is about someone else, or about nobody', async () => {
+    rpc.mockResolvedValueOnce({ data: { ...good(), user_id: 'someone-else' }, error: null });
+    expect(await (await freshResolve())()).toEqual({ identity: 'refuted', bundle: null });
+    rpc.mockResolvedValueOnce({ data: { user_id: null, profile: null, memberships: [] }, error: null });
+    expect(await (await freshResolve())()).toEqual({ identity: 'refuted', bundle: null });
+  });
+
+  it('says nothing about the header without an answer', async () => {
+    rpc.mockResolvedValueOnce({ data: null, error: { code: 'PGRST202', message: 'x' } });
+    expect((await (await freshResolve())()).identity).toBe('unknown');
+    rpc.mockRejectedValueOnce(new Error('network'));
+    expect((await (await freshResolve())()).identity).toBe('unknown');
+    rpc.mockResolvedValueOnce({ data: 'not an object', error: null });
+    expect((await (await freshResolve())()).identity).toBe('unknown');
+    vi.stubEnv('REQUEST_CONTEXT_RPC', 'off');
+    expect((await (await freshResolve())()).identity).toBe('unknown');
+    expect(rpc).toHaveBeenCalledTimes(3);
+  });
+});

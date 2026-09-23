@@ -47,7 +47,25 @@ export function OrderRealtimeRefresh({ orderId }: Props) {
   // once per burst.
   const lastRefreshRef = React.useRef(0);
   const pendingRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // A hidden tab does no server work for a change nobody is looking at: it
+  // remembers the change and refreshes once, when it is visible again (the
+  // same rule as InventoryRealtime and the notification bell).
+  const dirtyWhileHiddenRef = React.useRef(false);
+  React.useEffect(() => {
+    function onVisibilityChange() {
+      if (document.visibilityState === 'hidden' || !dirtyWhileHiddenRef.current) return;
+      dirtyWhileHiddenRef.current = false;
+      lastRefreshRef.current = Date.now();
+      router.refresh();
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [router]);
   const requestRefresh = React.useCallback(() => {
+    if (document.visibilityState === 'hidden') {
+      dirtyWhileHiddenRef.current = true;
+      return;
+    }
     const now = Date.now();
     const since = now - lastRefreshRef.current;
     if (since >= 500) {
@@ -58,6 +76,10 @@ export function OrderRealtimeRefresh({ orderId }: Props) {
     if (pendingRef.current) return;
     pendingRef.current = setTimeout(() => {
       pendingRef.current = null;
+      if (document.visibilityState === 'hidden') {
+        dirtyWhileHiddenRef.current = true;
+        return;
+      }
       lastRefreshRef.current = Date.now();
       router.refresh();
     }, 500 - since);

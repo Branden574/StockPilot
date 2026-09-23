@@ -148,6 +148,9 @@ vi.mock('@/lib/supabase/server', () => ({
         return builder;
       },
       auth: {
+        // Without the RPC's answer, session.ts verifies the cookie session
+        // before trusting the identity header (the legacy-reads test).
+        getClaims: async () => ({ data: { claims: { sub: 'u1' } }, error: null }),
         mfa: {
           listFactors: async () => {
             calls.listFactors += 1;

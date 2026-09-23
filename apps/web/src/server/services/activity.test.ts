@@ -228,6 +228,48 @@ describe('ActivityService.forItem', () => {
     ]);
   });
 
+  // supabase-js resolves a failed query as { data: null, error }. Read as
+  // `data ?? []`, a failed read was an item with "no history".
+  it('a failed movements read throws instead of returning an empty feed', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': { data: null, error: { message: 'upstream timeout' } },
+      'audit_logs.select': { data: [], error: null },
+    });
+    const svc = makeService(stub.client);
+
+    await expect(svc.forItem('item-1')).rejects.toMatchObject({
+      name: 'ServiceError',
+      code: 'internal_error',
+    });
+  });
+
+  it('a failed audit read throws instead of returning a feed without its audit rows', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          {
+            id: 'm1',
+            movement_type: 'adjust',
+            quantity_change: 1,
+            new_quantity: 5,
+            reason: 'restock',
+            notes: null,
+            created_at: '2025-01-01T00:00:00.000Z',
+            user_id: null,
+          },
+        ],
+        error: null,
+      },
+      'audit_logs.select': { data: null, error: { message: 'upstream timeout' } },
+    });
+    const svc = makeService(stub.client);
+
+    await expect(svc.forItem('item-1')).rejects.toMatchObject({
+      name: 'ServiceError',
+      code: 'internal_error',
+    });
+  });
+
   it('skips the user_profiles lookup entirely when no user_ids are present', async () => {
     const stub = makeSupabaseStub({
       'stock_movements.select': { data: [], error: null },

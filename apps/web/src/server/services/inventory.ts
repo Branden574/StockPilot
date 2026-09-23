@@ -866,6 +866,20 @@ export class InventoryService {
     if (!result.ok) throw new ServiceError('validation_error', result.error);
   }
 
+  /**
+   * The viewer's category grants for the defensive list filter, started early
+   * by its callers. null for every other role (no read) and for a viewer with
+   * no grants (unrestricted). A failed read rejects; callers catch it and
+   * leave visibility to RLS, as before. The rejection is marked observed here
+   * because a caller may return (no warehouse access) before awaiting it.
+   */
+  private viewerCategoryGrants(): Promise<Set<string> | null> {
+    if (this.ctx.role !== 'viewer') return Promise.resolve(null);
+    const read = new UserCategoriesService(this.ctx).getGrantedCategoryIdsForViewer(this.ctx.userId);
+    read.catch(() => {});
+    return read;
+  }
+
   async list(filters: ItemListFilters = {}) {
     // Default page is 50; the hard cap is 1000 (PostgREST's max_rows) so explicit
     // high-limit callers — chiefly the inventory export, which asks for the whole
@@ -874,6 +888,12 @@ export class InventoryService {
     // follow-up.)
     const limit = Math.min(filters.limit ?? 50, 1000);
     const offset = Math.max(0, filters.offset ?? 0);
+    // A viewer's category grants are read ALONGSIDE the warehouse access, not
+    // after it: they need nothing from it. They used to be two more reads in
+    // series after it (the membership row again, then the grants), two
+    // serial levels only viewers paid (lab 2026-09-22: a viewer's Books page
+    // arrived ~100 ms after a staff member's). See viewerCategoryGrants.
+    const viewerGrantsRead = this.viewerCategoryGrants();
     // Pass our ctx so getWarehouseAccess doesn't fall through to
     // requireOrgContext() — same NEXT_REDIRECT trap that broke
     // /api/v1/items/[id]/barcode when called from an API route.
@@ -926,8 +946,7 @@ export class InventoryService {
     // fall through to "no filter" — production always has them.
     if (this.ctx.role === 'viewer') {
       try {
-        const accessibleCats = await new UserCategoriesService(this.ctx)
-          .getAccessibleCategoryIds(this.ctx.userId);
+        const accessibleCats = await viewerGrantsRead;
         if (accessibleCats !== null) {
           if (accessibleCats.size === 0) {
             return { items: [], total: 0, valueOnHand: 0 };
@@ -1551,6 +1570,7 @@ export class InventoryService {
       created_at: string;
     }>
   > {
+    const viewerGrantsRead = this.viewerCategoryGrants();
     const access = await getWarehouseAccess(this.ctx);
     // Same fail-closed early return as list(): a warehouse-scoped user with
     // no assignments sees nothing.
@@ -1561,8 +1581,7 @@ export class InventoryService {
     let accessibleCats: Set<string> | null = null;
     if (this.ctx.role === 'viewer') {
       try {
-        accessibleCats = await new UserCategoriesService(this.ctx)
-          .getAccessibleCategoryIds(this.ctx.userId);
+        accessibleCats = await viewerGrantsRead;
         if (accessibleCats !== null && accessibleCats.size === 0) return [];
       } catch {
         // Defense in depth: the DB RLS policy still enforces visibility.
@@ -1630,14 +1649,14 @@ export class InventoryService {
     const uniqueGroupIds = Array.from(new Set(groupIds.filter(Boolean)));
     if (uniqueGroupIds.length === 0) return [];
 
+    const viewerGrantsRead = this.viewerCategoryGrants();
     const access = await getWarehouseAccess(this.ctx);
     if (!access.hasAllAccess && access.readableIds.length === 0) return [];
 
     let accessibleCats: Set<string> | null = null;
     if (this.ctx.role === 'viewer') {
       try {
-        accessibleCats = await new UserCategoriesService(this.ctx)
-          .getAccessibleCategoryIds(this.ctx.userId);
+        accessibleCats = await viewerGrantsRead;
         if (accessibleCats !== null && accessibleCats.size === 0) return [];
       } catch {
         // Defense in depth: the DB RLS policy still enforces visibility.
@@ -1686,22 +1705,46 @@ export class InventoryService {
    * are mirrored into custom_fields.rack_number by migration 0065 so
    * they surface here without the user re-saving.)
    */
+  /**
+   * One scope's racks, from inventory_distinct_racks_for_org (0357) when the
+   * database has it. The app deploys when main is pushed and migrations are
+   * applied separately, so this commit can be live before 0357 is: the racks
+   * read sits in the Items and Books pages' Promise.all, and a missing function
+   * (PGRST202 from PostgREST's schema cache, 42883 from Postgres) would take
+   * both pages down. It falls back to the old one-argument function instead,
+   * which is today's behaviour (RLS-bounded; a user in two organizations sees
+   * both organizations' racks). Remove the fallback in the migration that drops
+   * inventory_distinct_racks.
+   */
+  private async distinctRacksFor(scope: 'items' | 'books') {
+    const res = await this.ctx.supabase.rpc('inventory_distinct_racks_for_org', {
+      p_org: this.ctx.organizationId,
+      p_scope: scope,
+    });
+    if (res.error?.code === 'PGRST202' || res.error?.code === '42883') {
+      console.warn('[racks] migration 0357 not applied yet, using inventory_distinct_racks');
+      return this.ctx.supabase.rpc('inventory_distinct_racks', { p_scope: scope });
+    }
+    return res;
+  }
+
   async listDistinctRacks(opts: { scope: 'items' | 'books' | 'all' }): Promise<string[]> {
-    // Server-side DISTINCT via the public.inventory_distinct_racks
-    // function (migration 0066). RLS scopes the read to the caller's
-    // org. Returns a pre-sorted, deduped text[] so we don't ship
-    // every row's custom_fields over the wire just to compute the
-    // dropdown options.
+    // Server-side DISTINCT via public.inventory_distinct_racks_for_org
+    // (migration 0357; the same body as 0066/0068's
+    // inventory_distinct_racks). Returns a pre-sorted, deduped text[] so we
+    // don't ship every row's custom_fields over the wire just to compute
+    // the dropdown options.
+    //
+    // The organization is passed explicitly. RLS scopes by MEMBERSHIP, so
+    // the old one-argument function gave a user in two organizations both
+    // organizations' racks. RLS still applies on top of p_org.
     //
     // The RPC's ORDER BY is alphabetic ("10" < "2"), so we re-sort
     // numerically in JS regardless of scope. Keeps the dropdown
     // ordered top-to-bottom the way a user reads the stockroom map
     // without a new migration for a presentation-only fix.
     if (opts.scope !== 'all') {
-      const { data, error } = await this.ctx.supabase.rpc(
-        'inventory_distinct_racks',
-        { p_scope: opts.scope },
-      );
+      const { data, error } = await this.distinctRacksFor(opts.scope);
       if (error) throw new ServiceError('internal_error', error.message);
       return ((data ?? []) as string[]).slice().sort(rackCmp);
     }
@@ -1709,8 +1752,8 @@ export class InventoryService {
     // both and merge client-side. Dedupe + numeric-sort to keep the
     // dropdown identical in shape to the single-scope path.
     const [items, books] = await Promise.all([
-      this.ctx.supabase.rpc('inventory_distinct_racks', { p_scope: 'items' }),
-      this.ctx.supabase.rpc('inventory_distinct_racks', { p_scope: 'books' }),
+      this.distinctRacksFor('items'),
+      this.distinctRacksFor('books'),
     ]);
     if (items.error) throw new ServiceError('internal_error', items.error.message);
     if (books.error) throw new ServiceError('internal_error', books.error.message);
@@ -1757,7 +1800,15 @@ export class InventoryService {
     };
   }
 
-  async get(id: string) {
+  /**
+   * `withUpdater` embeds the profile of the user who last updated the row
+   * (`updater: { full_name, email } | null`) in the SAME request, for the item
+   * page's "last updated by" footer, which otherwise read it in a level of its
+   * own after the row. Same RLS as that read: a profile the caller may not see
+   * comes back null. The hint names the column because inventory_items has
+   * three foreign keys to user_profiles (created_by, updated_by, deleted_by).
+   */
+  async get(id: string, opts: { withUpdater?: boolean } = {}) {
     // THREE reads, started together. They used to run one after another (the
     // item row, then the caller's warehouse access, then the Staging/Unplaced
     // holdings), and production logs of the item page (2026-09-22) showed what
@@ -1770,14 +1821,25 @@ export class InventoryService {
     //
     // A PostgREST builder is lazy (the request leaves when `.then` is called),
     // so Promise.resolve is what actually starts the two table reads now.
+    // Two literal selects, not one select with a conditional string: the typed
+    // PostgREST parser cannot read a union of select strings (it types the row
+    // as a ParserError).
     const rowRead = Promise.resolve(
-      this.ctx.supabase
-        .from('inventory_items')
-        .select('*')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('id', id)
-        .is('deleted_at', null)
-        .maybeSingle(),
+      opts.withUpdater
+        ? this.ctx.supabase
+            .from('inventory_items')
+            .select('*, updater:user_profiles!updated_by (full_name, email)')
+            .eq('organization_id', this.ctx.organizationId)
+            .eq('id', id)
+            .is('deleted_at', null)
+            .maybeSingle()
+        : this.ctx.supabase
+            .from('inventory_items')
+            .select('*')
+            .eq('organization_id', this.ctx.organizationId)
+            .eq('id', id)
+            .is('deleted_at', null)
+            .maybeSingle(),
     );
     // Pass our own ctx so the helper doesn't fall back to
     // requireOrgContext() — that path redirects to /signin and inside an

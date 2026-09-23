@@ -14,9 +14,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * answered yet, and pins:
  *   1. every read that needs only the item id is already running before the
  *      row answers;
- *   2. the reads that need a field off the row (category, supplier, updated-by
- *      profile, signed photo URLs) start only after it answers, and start
- *      together with the rest rather than after them;
+ *   2. the reads that need a field off the row (category, supplier, signed
+ *      photo URLs) start only after it answers, and start together with the
+ *      rest rather than after them; the updated-by profile comes WITH the row;
+ *   2b. a Movements or Activity tab (a query-only navigation that re-renders
+ *      this whole page) makes none of the reads only the Overview panel shows,
+ *      so none of them can slow or fail the tab;
  *   3. a not-found (which is also what a forbidden warehouse becomes, inside
  *      InventoryService.get) is still notFound(), nothing read early is used,
  *      no dependent read is made, and no early read can surface as an
@@ -39,7 +42,18 @@ vi.mock('next/link', async () => {
   };
 });
 
-vi.mock('@/components/inventory/item-activity-panel', () => ({ ItemActivityPanel: () => null }));
+// A marker, so a test can tell the feed rendered from the could-not-load state.
+vi.mock('@/components/inventory/item-activity-panel', async () => {
+  const React = await import('react');
+  return {
+    ItemActivityPanel: () => React.createElement('div', { 'data-testid': 'activity-panel' }),
+  };
+});
+const reportError = vi.fn();
+vi.mock('@/lib/error-reporter', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/error-reporter')>()),
+  reportError: (...args: unknown[]) => reportError(...args),
+}));
 vi.mock('@/components/inventory/placements-breakdown', () => ({ PlacementsBreakdown: () => null }));
 vi.mock('@/components/inventory/barcode-display', () => ({ BarcodeDisplay: () => null }));
 vi.mock('@/components/inventory/duplicate-item-dialog', () => ({ DuplicateItemDialog: () => null }));
@@ -131,11 +145,16 @@ const control: {
   get: () => Promise<unknown>;
   reserved: () => Promise<Map<string, number>>;
   locations: () => Promise<unknown[]>;
+  activity: () => Promise<unknown[]>;
 } = {
   get: async () => ({}),
   reserved: async () => new Map(),
   locations: async () => [],
+  activity: async () => [],
 };
+
+/** Arguments `InventoryService.get` was called with, per call. */
+const getCalls: unknown[][] = [];
 
 const signedUrls = vi.fn(async (paths: unknown) => {
   started.push('signedUrls');
@@ -145,7 +164,10 @@ const signedUrls = vi.fn(async (paths: unknown) => {
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: {
     forCurrentUser: vi.fn(async () => ({
-      get: rec('get', () => control.get()),
+      get: rec('get', (...args: unknown[]) => {
+        getCalls.push(args);
+        return control.get();
+      }),
       placements: rec('placements', async () => []),
       reservedQuantityByItemIds: rec('reserved', () => control.reserved()),
     })),
@@ -154,7 +176,7 @@ vi.mock('@/server/services/inventory', () => ({
 
 vi.mock('@/server/services/activity', () => ({
   ActivityService: {
-    forCurrentUser: vi.fn(async () => ({ forItem: rec('activity', async () => []) })),
+    forCurrentUser: vi.fn(async () => ({ forItem: rec('activity', () => control.activity()) })),
   },
   auditLimitFor: (limit: number) => Math.max(1, Math.ceil(limit / 2)),
 }));
@@ -254,6 +276,8 @@ function itemRow(overrides: Record<string, unknown> = {}) {
     unplaced_quantity: 0,
     updated_by: 'u-editor',
     updated_at: '2026-09-20T12:00:00.000Z',
+    // What InventoryService.get(id, { withUpdater: true }) embeds.
+    updater: { full_name: 'Dana Editor', email: 'dana@example.com' },
     ...overrides,
   };
 }
@@ -270,19 +294,14 @@ function deferred<T>() {
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-/** The reads that need nothing but the item id (Movements tab open). */
-const ID_ONLY_READS = [
-  'placements',
-  'reserved',
-  'activity',
-  'images',
-  'locations',
-  'costHistory',
-  'customFields',
-  'serials',
-];
-/** The reads that need a field off the item row. */
-const ROW_KEYED_READS = ['table:categories', 'table:suppliers', 'table:user_profiles', 'signedUrls'];
+/** Reads only the Overview panel shows. A Movements or Activity render makes none of them. */
+const OVERVIEW_ONLY_READS = ['reserved', 'images', 'costHistory', 'customFields', 'serials'];
+/** The reads that need nothing but the item id, on a Movements or Activity tab. */
+const TAB_ID_ONLY_READS = ['placements', 'activity', 'locations'];
+/** The reads that need nothing but the item id, on Overview. */
+const OVERVIEW_ID_ONLY_READS = ['placements', 'locations', ...OVERVIEW_ONLY_READS];
+/** The reads that need a field off the item row (Overview only). */
+const ROW_KEYED_READS = ['table:categories', 'table:suppliers', 'signedUrls'];
 
 let unhandled: unknown[] = [];
 const onUnhandled = (reason: unknown) => {
@@ -292,15 +311,16 @@ const onUnhandled = (reason: unknown) => {
 beforeEach(() => {
   vi.clearAllMocks();
   started.length = 0;
+  getCalls.length = 0;
   unhandled = [];
   process.on('unhandledRejection', onUnhandled);
   control.get = async () => itemRow();
   control.reserved = async () => new Map();
   control.locations = async () => [];
+  control.activity = async () => [];
   for (const k of Object.keys(tableAnswers)) delete tableAnswers[k];
   tableAnswers.categories = { id: 'cat-1', name: 'HVAC', color: null, public_visibility: 'public' };
   tableAnswers.suppliers = { id: 'sup-1', name: 'Acme Supply' };
-  tableAnswers.user_profiles = { full_name: 'Dana Editor', email: 'dana@example.com' };
 });
 
 afterEach(() => {
@@ -308,7 +328,7 @@ afterEach(() => {
 });
 
 describe('ItemDetail: reads start by what they need, not one after another', () => {
-  it('every id-only read is already running before the item row answers; no row-keyed read is', async () => {
+  it('a tab: every read it needs is running before the row answers, and no Overview-only read ever starts', async () => {
     const row = deferred<unknown>();
     control.get = () => row.promise;
 
@@ -321,16 +341,69 @@ describe('ItemDetail: reads start by what they need, not one after another', () 
     await flush();
 
     expect(started).toContain('get');
-    for (const read of ID_ONLY_READS) expect(started).toContain(read);
+    for (const read of TAB_ID_ONLY_READS) expect(started).toContain(read);
+
+    row.resolve(itemRow());
+    render(await rendering);
+
+    for (const read of [...OVERVIEW_ONLY_READS, ...ROW_KEYED_READS]) {
+      expect(started).not.toContain(read);
+    }
+    // The footer's editor came with the row: no read of its own.
+    expect(getCalls).toEqual([[ITEM_ID, { withUpdater: true }]]);
+    expect(started).not.toContain('table:user_profiles');
+    expect(screen.getByText(/Last updated by Dana Editor/)).toBeTruthy();
+    // One module answer source, and it is not a round trip.
+    expect(checkModuleAccess).not.toHaveBeenCalled();
+  });
+
+  it('Overview: every id-only read is running before the row answers; no row-keyed read is', async () => {
+    const row = deferred<unknown>();
+    control.get = () => row.promise;
+
+    const rendering = ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back' });
+    await flush();
+
+    expect(started).toContain('get');
+    for (const read of OVERVIEW_ID_ONLY_READS) expect(started).toContain(read);
     for (const read of ROW_KEYED_READS) expect(started).not.toContain(read);
 
     row.resolve(itemRow());
     render(await rendering);
 
     for (const read of ROW_KEYED_READS) expect(started).toContain(read);
+    expect(started).not.toContain('table:user_profiles');
     expect(screen.getByText(/Last updated by Dana Editor/)).toBeTruthy();
-    // One module answer source, and it is not a round trip.
-    expect(checkModuleAccess).not.toHaveBeenCalled();
+  });
+
+  it('a tab cannot be failed by a read only Overview shows, because it never makes one', async () => {
+    control.reserved = async () => {
+      throw new Error('reservations read failed');
+    };
+    render(
+      await ItemDetail({
+        id: ITEM_ID,
+        backHref: '/dashboard/inventory',
+        backLabel: 'Back',
+        tab: 'activity',
+      }),
+    );
+    expect(screen.getByText(/Last updated by Dana Editor/)).toBeTruthy();
+    await flush();
+    expect(unhandled).toEqual([]);
+  });
+
+  it('an editor profile the caller may not see (embed null) leaves the footer without a name', async () => {
+    control.get = async () => itemRow({ updater: null });
+    render(
+      await ItemDetail({
+        id: ITEM_ID,
+        backHref: '/dashboard/inventory',
+        backLabel: 'Back',
+        tab: 'movements',
+      }),
+    );
+    expect(screen.queryByText(/Last updated by/)).toBeNull();
   });
 
   it('the Overview tab renders what the row-keyed reads returned (category, supplier, editor)', async () => {
@@ -343,17 +416,12 @@ describe('ItemDetail: reads start by what they need, not one after another', () 
   });
 
   it('the row-keyed reads start as soon as the row answers, while slower id-only reads are still in flight', async () => {
-    // The location list is the slow one this time. The updated-by profile used
-    // to be read only after EVERYTHING had arrived; it must not wait for it.
+    // The location list is the slow one this time. The row-keyed reads used
+    // to start only after EVERYTHING had arrived; they must not wait for it.
     const slowLocations = deferred<unknown[]>();
     control.locations = () => slowLocations.promise;
 
-    const rendering = ItemDetail({
-      id: ITEM_ID,
-      backHref: '/dashboard/inventory',
-      backLabel: 'Back',
-      tab: 'activity',
-    });
+    const rendering = ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back' });
     await flush();
     await flush();
 
@@ -403,7 +471,7 @@ describe('ItemDetail: reads start by what they need, not one after another', () 
     expect(unhandled).toEqual([]);
   });
 
-  it('an early read that fails AFTER the row is found still fails the page, as it always did', async () => {
+  it('on Overview, an early read that fails AFTER the row is found still fails the page, as it always did', async () => {
     control.reserved = async () => {
       throw new Error('reservations read failed');
     };
@@ -412,5 +480,99 @@ describe('ItemDetail: reads start by what they need, not one after another', () 
     ).rejects.toThrow('reservations read failed');
     await flush();
     expect(unhandled).toEqual([]);
+  });
+});
+
+/**
+ * The activity feed is the one early read whose failure is the TAB's, not the
+ * page's. ActivityService.forItem now throws on a failed read (it used to
+ * return [] for it, which the tabs showed as "no history"); the page must turn
+ * that into a could-not-load state with a retry, and keep everything else.
+ */
+describe('ItemDetail: a failed activity feed is a could-not-load state on its tab', () => {
+  const failFeed = () => {
+    control.activity = async () => {
+      throw new ServiceError('internal_error', 'upstream timeout');
+    };
+  };
+
+  it('Movements tab: says it could not load, offers a retry to the same tab, and the page still renders', async () => {
+    failFeed();
+    render(
+      await ItemDetail({
+        id: ITEM_ID,
+        backHref: '/dashboard/inventory',
+        backLabel: 'Back',
+        tab: 'movements',
+      }),
+    );
+
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toMatch(/Could not load this item.s stock movements/);
+    expect(screen.getByRole('link', { name: 'Try again' }).getAttribute('href')).toBe('?tab=movements');
+    expect(screen.queryByTestId('activity-panel')).toBeNull();
+    // The rest of the page is there.
+    expect(screen.getByText(/Last updated by Dana Editor/)).toBeTruthy();
+    expect(reportError).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'internal_error' }),
+      expect.objectContaining({ tag: 'item-detail.activity' }),
+    );
+    await flush();
+    expect(unhandled).toEqual([]);
+  });
+
+  it('Activity tab: the same, and the retry keeps the validated return target', async () => {
+    failFeed();
+    render(
+      await ItemDetail({
+        id: ITEM_ID,
+        backHref: '/dashboard/inventory?q=hvac',
+        backLabel: 'Back',
+        tab: 'activity',
+        returnParam: '/dashboard/inventory?q=hvac',
+      }),
+    );
+
+    expect(screen.getByRole('alert').textContent).toMatch(/Could not load this item.s activity/);
+    const retry = new URLSearchParams(
+      (screen.getByRole('link', { name: 'Try again' }).getAttribute('href') ?? '').slice(1),
+    );
+    expect(retry.get('tab')).toBe('activity');
+    expect(retry.get('return')).toBe('/dashboard/inventory?q=hvac');
+    expect(screen.queryByTestId('activity-panel')).toBeNull();
+  });
+
+  it("a redirect or not-found thrown by the feed read is the framework's, not a could-not-load state", async () => {
+    // e.g. the service context redirecting to MFA, or a not-found, while the
+    // feed was being read: those must reach Next as themselves.
+    const redirect = Object.assign(new Error('NEXT_REDIRECT'), {
+      digest: 'NEXT_REDIRECT;replace;/signin/mfa;307;',
+    });
+    control.activity = async () => {
+      throw redirect;
+    };
+    await expect(
+      ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back', tab: 'movements' }),
+    ).rejects.toBe(redirect);
+    expect(reportError).not.toHaveBeenCalled();
+    await flush();
+    expect(unhandled).toEqual([]);
+  });
+
+  it('a feed that loads renders the panel, with no could-not-load state', async () => {
+    render(
+      await ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back', tab: 'activity' }),
+    );
+    expect(screen.getByTestId('activity-panel')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('the Overview tab is untouched: it never reads the feed, so a broken feed cannot affect it', async () => {
+    failFeed();
+    render(await ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back' }));
+    expect(started).not.toContain('activity');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByText('HVAC')).toBeTruthy();
+    expect(reportError).not.toHaveBeenCalled();
   });
 });

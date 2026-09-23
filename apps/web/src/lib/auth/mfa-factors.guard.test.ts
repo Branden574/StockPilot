@@ -16,7 +16,8 @@ const SRC = path.resolve(__dirname, '../..');
 /** Sites that only DISPLAY or tidy up, with the reason they may ignore an error. */
 const NOT_A_GATE: Record<string, string> = {
   'server/actions/mfa.ts': 'enroll: deletes stale UNVERIFIED factors before enrolling; decides nothing',
-  'app/(dashboard)/dashboard/settings/security/page.tsx': 'renders the factor list; every action on it re-checks server-side',
+  'app/(dashboard)/dashboard/settings/security/page.tsx':
+    'renders the factor list (an unreadable one gets its own state, see page.test.tsx); every action on it re-checks server-side',
   'components/auth/step-up-modal.tsx': 'client UI picking a factor to challenge; the server verifies the code',
 };
 

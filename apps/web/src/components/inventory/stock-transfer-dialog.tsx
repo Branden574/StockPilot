@@ -13,7 +13,6 @@ import {
   type BookStorageInfo,
 } from '@stockpilot/core';
 import { ArrowRightLeft, Loader2 } from 'lucide-react';
-import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
@@ -149,7 +148,6 @@ export function StockTransferDialog({
   canMintDestination = false,
   trigger,
 }: StockTransferDialogProps) {
-  const router = useRouter();
   const [open, setOpen] = React.useState(false);
 
   const sourceHoldings = transferableHoldings(holdings);
@@ -488,7 +486,8 @@ export function StockTransferDialog({
     setOpen(false);
     setQuantity('1');
     setNotes('');
-    router.refresh();
+    // No router.refresh(): transferStockAction revalidates paths, so its
+    // response already carries the re-rendered page (the adjust dialog's rule).
   }
 
   function submit() {
