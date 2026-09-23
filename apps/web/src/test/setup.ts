@@ -12,6 +12,10 @@ import { afterEach, vi } from 'vitest';
 // so their assertions still work.
 vi.mock('@/server/services/audit', () => ({
   audit: vi.fn(async () => undefined),
+  auditMany: vi.fn(async (payloads: readonly unknown[]) => ({
+    written: payloads.length,
+    lost: 0,
+  })),
 }));
 
 // Same reason, same shape: every service stock write now calls

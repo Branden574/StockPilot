@@ -4,6 +4,8 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { headers } from 'next/headers';
 
 import { reportError } from '@/lib/error-reporter';
+import { mapWithConcurrency } from '@/lib/supabase/in-filter';
+
 import { withContext, type ServiceContext } from './context';
 
 export type AuditEvent =
@@ -387,9 +389,25 @@ export interface AuditPayload {
   extra?: Record<string, unknown>;
 }
 
+/**
+ * Rows per audit_logs INSERT in `auditMany`. The rows travel in the POST body,
+ * so no URL limit applies; 100 keeps one body small even with before/after
+ * diffs, and a failed request loses at most 100 rows.
+ */
+export const AUDIT_INSERT_BATCH_ROWS = 100;
+
+/**
+ * INSERT requests `auditMany` keeps in flight at once. One `void audit()` per
+ * selected item put 443 POSTs on the wire at the same moment on the lab org:
+ * the gateway answered 190 of them 502, and the bulk Set rack read that
+ * started right after them failed too. Two in flight writes 500 rows in three
+ * round trips and leaves room for the request that is doing the real work.
+ */
+export const AUDIT_INSERT_CONCURRENCY = 2;
+
 type RequestMeta = { ip: string | null; userAgent: string | null };
 
-/** IP and user agent of the current request. */
+/** IP and user agent of the current request, read once per call. */
 async function readRequestMeta(): Promise<RequestMeta> {
   const h = await headers();
   return {
@@ -398,7 +416,8 @@ async function readRequestMeta(): Promise<RequestMeta> {
   };
 }
 
-/** The one place an audit_logs row is shaped. */
+/** The one place an audit_logs row is shaped, so `audit` and `auditMany`
+ *  write exactly the same columns and metadata for the same payload. */
 function auditRow(payload: AuditPayload, c: ServiceContext, meta: RequestMeta) {
   return {
     organization_id: c.organizationId,
@@ -416,6 +435,11 @@ function auditRow(payload: AuditPayload, c: ServiceContext, meta: RequestMeta) {
       ...(payload.extra ?? {}),
     },
   };
+}
+
+/** The distinct events of a batch, for a report line. */
+function eventsLabel(payloads: readonly AuditPayload[]): string {
+  return [...new Set(payloads.map((p) => p.event))].join(',');
 }
 
 /**
@@ -451,6 +475,8 @@ function insertFailure(res: {
  * never silent: a refused or failed INSERT is reported. supabase-js returns a
  * failed request as `{ error }` instead of throwing, so the result is read;
  * the catch only sees what throws (no context, no request headers).
+ *
+ * For one row per item over a selection or a list, use `auditMany`.
  */
 export async function audit(payload: AuditPayload, ctx?: ServiceContext): Promise<void> {
   try {
@@ -478,4 +504,76 @@ export async function audit(payload: AuditPayload, ctx?: ServiceContext): Promis
       extra: { event: payload.event, entityType: payload.entityType ?? null, lost: 1 },
     });
   }
+}
+
+/**
+ * Writes one audit row per payload, for the loops that audit every item of a
+ * selection or a list (bulk actions, crons, cancellations).
+ *
+ * The rows are exactly the rows `audit()` writes for the same payloads (same
+ * user, IP, user agent, event and metadata; the headers are read once). They
+ * go out AUDIT_INSERT_BATCH_ROWS per INSERT with at most
+ * AUDIT_INSERT_CONCURRENCY INSERTs in flight, instead of one request per row
+ * all at once.
+ *
+ * Best-effort for the action like `audit()`: never throws. A chunk that fails
+ * is counted, and when any row is lost ONE report says which events and how
+ * many rows, never their contents. Returns the counts so a caller or a test
+ * can see them; callers are free to ignore them.
+ */
+export async function auditMany(
+  payloads: readonly AuditPayload[],
+  ctx?: ServiceContext,
+): Promise<{ written: number; lost: number }> {
+  const total = payloads.length;
+  if (total === 0) return { written: 0, lost: 0 };
+  const events = eventsLabel(payloads);
+  let c: ServiceContext;
+  let rows: Array<ReturnType<typeof auditRow>>;
+  let admin: ReturnType<typeof createAdminClient>;
+  try {
+    c = ctx ?? (await withContext());
+    const meta = await readRequestMeta();
+    rows = payloads.map((p) => auditRow(p, c, meta));
+    admin = createAdminClient();
+  } catch (e) {
+    void reportError(e, {
+      tag: 'audit.write_failed',
+      level: 'warning',
+      organizationId: ctx?.organizationId ?? null,
+      extra: { event: events, lost: total, total },
+    });
+    return { written: 0, lost: total };
+  }
+
+  const chunks: Array<typeof rows> = [];
+  for (let i = 0; i < rows.length; i += AUDIT_INSERT_BATCH_ROWS) {
+    chunks.push(rows.slice(i, i + AUDIT_INSERT_BATCH_ROWS));
+  }
+  let lost = 0;
+  let firstFailure: ReturnType<typeof insertFailure> | { thrown: string } | null = null;
+  // `run` never throws, so mapWithConcurrency's stop-on-first-error never
+  // applies: every chunk is attempted.
+  await mapWithConcurrency(chunks, AUDIT_INSERT_CONCURRENCY, async (chunk) => {
+    try {
+      const res = await admin.from('audit_logs').insert(chunk);
+      if (res.error) {
+        lost += chunk.length;
+        firstFailure ??= insertFailure(res);
+      }
+    } catch (e) {
+      lost += chunk.length;
+      firstFailure ??= { thrown: e instanceof Error ? e.name : typeof e };
+    }
+  });
+
+  if (lost > 0) {
+    void reportError(new Error('Audit rows were not written'), {
+      tag: 'audit.write_failed',
+      level: 'warning',
+      organizationId: c.organizationId,
+      extra: { event: events, lost, total, ...(firstFailure ?? {}) },
+    });
+  }
+  return { written: total - lost, lost };
 }
