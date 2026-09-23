@@ -12,6 +12,7 @@ import { generateSku } from '@/lib/utils';
 import { PLANS, isUnlimited, type PlanId } from '@stockpilot/core';
 
 import { assertPermission, ServiceError, type ServiceContext } from './context';
+import { fetchAllRowsByIds, rawErrorText, writeInIdBatches } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 // Hosts the book-lookup pipeline ever returns thumbnails from. Anything
@@ -327,19 +328,27 @@ export class BooksImportService {
       { id: string; name: string; quantityOnHand: number }
     >();
     if (uniqueIsbns.length > 0) {
-      const { data, error } = await this.ctx.supabase
-        .from('inventory_items')
-        .select('id, name, barcode, quantity_on_hand')
-        .eq('organization_id', this.ctx.organizationId)
-        .is('deleted_at', null)
-        .in('barcode', uniqueIsbns);
-      if (error) throw new ServiceError('internal_error', error.message);
-      for (const row of (data ?? []) as Array<{
+      // Batched: a pasted list has no cap below the URL limit. A failed batch
+      // throws: a missed "already exists" would import a duplicate book.
+      const ctx = this.ctx;
+      const data = await fetchAllRowsByIds<{
         id: string;
         name: string;
         barcode: string;
         quantity_on_hand: number;
-      }>) {
+      }>(
+        uniqueIsbns,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('inventory_items')
+            .select('id, name, barcode, quantity_on_hand')
+            .eq('organization_id', ctx.organizationId)
+            .is('deleted_at', null)
+            .in('barcode', batch)
+            .order('id')
+            .range(from, to),
+      );
+      for (const row of data) {
         existingByIsbn.set(row.barcode, {
           id: row.id,
           name: row.name,
@@ -771,22 +780,45 @@ export class BooksImportService {
     stockedIds: string[],
     movementErr: { message: string },
   ): Promise<never> {
-    // (a) The PLACEMENTS the 0199 trigger seeded.
-    const { error: levelErr } = await this.ctx.supabase
-      .from('item_stock_levels')
-      .update({ quantity: 0 })
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', stockedIds);
+    // Every step is BATCHED (an import creates up to 200 books, and one
+    // `.in()` past ~215 uuids fails) and attempts every batch
+    // (stopOnError: false) so one bad batch still lets the rest be rolled back.
+    const ctx = this.ctx;
 
-    // (b) The row quantity. `.update().eq()` is FAIL-OPEN under RLS — no error,
-    // no row (pattern #2) — so take the row-count proof from `.select('id')`.
-    const { data: zeroed, error: zeroErr } = await this.ctx.supabase
-      .from('inventory_items')
-      .update({ quantity_on_hand: 0, updated_by: this.ctx.userId })
-      .eq('organization_id', this.ctx.organizationId)
-      .in('id', stockedIds)
-      .select('id');
-    const compensated = ((zeroed ?? []) as Array<{ id: string }>).length;
+    // (a) The PLACEMENTS the 0199 trigger seeded.
+    const levels = await writeInIdBatches(
+      stockedIds,
+      (batch) =>
+        ctx.supabase
+          .from('item_stock_levels')
+          .update({ quantity: 0 })
+          .eq('organization_id', ctx.organizationId)
+          .in('item_id', batch),
+      { stopOnError: false },
+    );
+    const levelErr = levels.error;
+
+    // (b) The row quantity — ONLY for items whose placements (a) zeroed. With
+    // batching, a levels batch can fail while every items batch would
+    // succeed; zeroing those items anyway would leave on_hand 0 with placed
+    // levels > 0, the phantom-placed state the ORDER rule above exists to
+    // prevent. Their on_hand stays, the count below comes up short, and the
+    // throw says they could not be rolled back.
+    // `.update().eq()` is FAIL-OPEN under RLS — no error, no row (pattern #2) —
+    // so take the row-count proof from `.select('id')`.
+    const items = await writeInIdBatches<string, { id: string }>(
+      levels.written,
+      (batch) =>
+        ctx.supabase
+          .from('inventory_items')
+          .update({ quantity_on_hand: 0, updated_by: ctx.userId })
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .select('id'),
+      { stopOnError: false },
+    );
+    const zeroErr = items.error;
+    const compensated = items.rows.length;
     // Every exit below throws; see InventoryService.compensateOpeningStockOrThrow.
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'books.compensate_opening_stock');
 
@@ -797,13 +829,25 @@ export class BooksImportService {
     // is the only unambiguous answer, and it is the answer that matters: any
     // surviving placement is exactly the phantom-stock state this exists to
     // prevent.
-    const { data: leftovers, error: verifyErr } = await this.ctx.supabase
-      .from('item_stock_levels')
-      .select('id')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', stockedIds)
-      .gt('quantity', 0);
-    const survivingPlacements = ((leftovers ?? []) as unknown[]).length;
+    let verifyErr: string | null = null;
+    let survivingPlacements = 0;
+    try {
+      const leftovers = await fetchAllRowsByIds<{ id: string }>(
+        stockedIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('item_stock_levels')
+            .select('id')
+            .eq('organization_id', ctx.organizationId)
+            .in('item_id', batch)
+            .gt('quantity', 0)
+            .order('id')
+            .range(from, to),
+      );
+      survivingPlacements = leftovers.length;
+    } catch (err) {
+      verifyErr = rawErrorText(err);
+    }
 
     if (
       levelErr ||
@@ -814,9 +858,9 @@ export class BooksImportService {
     ) {
       console.error('[booksImport] opening movements failed AND the rollback failed', {
         movementError: movementErr.message,
-        levelError: levelErr?.message,
-        rollbackError: zeroErr?.message,
-        verifyError: verifyErr?.message,
+        levelError: levelErr,
+        rollbackError: zeroErr,
+        verifyError: verifyErr,
         survivingPlacements,
         stockedIds,
       });
