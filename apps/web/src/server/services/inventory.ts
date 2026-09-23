@@ -866,6 +866,20 @@ export class InventoryService {
     if (!result.ok) throw new ServiceError('validation_error', result.error);
   }
 
+  /**
+   * The viewer's category grants for the defensive list filter, started early
+   * by its callers. null for every other role (no read) and for a viewer with
+   * no grants (unrestricted). A failed read rejects; callers catch it and
+   * leave visibility to RLS, as before. The rejection is marked observed here
+   * because a caller may return (no warehouse access) before awaiting it.
+   */
+  private viewerCategoryGrants(): Promise<Set<string> | null> {
+    if (this.ctx.role !== 'viewer') return Promise.resolve(null);
+    const read = new UserCategoriesService(this.ctx).getGrantedCategoryIdsForViewer(this.ctx.userId);
+    read.catch(() => {});
+    return read;
+  }
+
   async list(filters: ItemListFilters = {}) {
     // Default page is 50; the hard cap is 1000 (PostgREST's max_rows) so explicit
     // high-limit callers — chiefly the inventory export, which asks for the whole
@@ -874,6 +888,12 @@ export class InventoryService {
     // follow-up.)
     const limit = Math.min(filters.limit ?? 50, 1000);
     const offset = Math.max(0, filters.offset ?? 0);
+    // A viewer's category grants are read ALONGSIDE the warehouse access, not
+    // after it: they need nothing from it. They used to be two more reads in
+    // series after it (the membership row again, then the grants), two
+    // serial levels only viewers paid (lab 2026-09-22: a viewer's Books page
+    // arrived ~100 ms after a staff member's). See viewerCategoryGrants.
+    const viewerGrantsRead = this.viewerCategoryGrants();
     // Pass our ctx so getWarehouseAccess doesn't fall through to
     // requireOrgContext() — same NEXT_REDIRECT trap that broke
     // /api/v1/items/[id]/barcode when called from an API route.
@@ -926,8 +946,7 @@ export class InventoryService {
     // fall through to "no filter" — production always has them.
     if (this.ctx.role === 'viewer') {
       try {
-        const accessibleCats = await new UserCategoriesService(this.ctx)
-          .getAccessibleCategoryIds(this.ctx.userId);
+        const accessibleCats = await viewerGrantsRead;
         if (accessibleCats !== null) {
           if (accessibleCats.size === 0) {
             return { items: [], total: 0, valueOnHand: 0 };
@@ -1551,6 +1570,7 @@ export class InventoryService {
       created_at: string;
     }>
   > {
+    const viewerGrantsRead = this.viewerCategoryGrants();
     const access = await getWarehouseAccess(this.ctx);
     // Same fail-closed early return as list(): a warehouse-scoped user with
     // no assignments sees nothing.
@@ -1561,8 +1581,7 @@ export class InventoryService {
     let accessibleCats: Set<string> | null = null;
     if (this.ctx.role === 'viewer') {
       try {
-        accessibleCats = await new UserCategoriesService(this.ctx)
-          .getAccessibleCategoryIds(this.ctx.userId);
+        accessibleCats = await viewerGrantsRead;
         if (accessibleCats !== null && accessibleCats.size === 0) return [];
       } catch {
         // Defense in depth: the DB RLS policy still enforces visibility.
@@ -1630,14 +1649,14 @@ export class InventoryService {
     const uniqueGroupIds = Array.from(new Set(groupIds.filter(Boolean)));
     if (uniqueGroupIds.length === 0) return [];
 
+    const viewerGrantsRead = this.viewerCategoryGrants();
     const access = await getWarehouseAccess(this.ctx);
     if (!access.hasAllAccess && access.readableIds.length === 0) return [];
 
     let accessibleCats: Set<string> | null = null;
     if (this.ctx.role === 'viewer') {
       try {
-        accessibleCats = await new UserCategoriesService(this.ctx)
-          .getAccessibleCategoryIds(this.ctx.userId);
+        accessibleCats = await viewerGrantsRead;
         if (accessibleCats !== null && accessibleCats.size === 0) return [];
       } catch {
         // Defense in depth: the DB RLS policy still enforces visibility.
