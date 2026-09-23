@@ -43,6 +43,7 @@ import { SavedViewsService } from '@/server/services/saved-views';
 import { SuppliersService } from '@/server/services/suppliers';
 import { TagsService } from '@/server/services/tags';
 import { requireOrgContext } from '@/lib/auth/session';
+import { withContext } from '@/server/services/context';
 import { effectiveNavLabel } from '@/lib/nav-labels';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
@@ -119,6 +120,17 @@ export default async function BooksPage({
   // answered.
   // Phase 6: price_tracking gates the bulk price-refresh action. When OFF, the
   // button never renders and the page is identical to before.
+  //
+  // The service context starts NOW, beside the gate, not after it. Everything
+  // below that reads (saved views, racks, the live list) goes through
+  // withContext, which asks GoTrue for the MFA factors while the context RPC
+  // runs; started only after the gate, that request waited for the gate's own
+  // round trip, one Supabase level more than the Items page on every soft
+  // navigation. It reads no book, so the gate still decides before any book is
+  // read. Request-cached: the reads below get this same promise. Observed here
+  // because a gate that says no returns before anything awaits it.
+  const contextStarted = withContext();
+  contextStarted.catch(() => {});
   const [moduleAccess, { enabled: priceTrackingEnabled }, params] = await Promise.all([
     checkModuleAccess('books'),
     checkModuleAccess('price_tracking'),

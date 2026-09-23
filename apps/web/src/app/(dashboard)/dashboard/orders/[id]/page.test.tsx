@@ -119,6 +119,14 @@ vi.mock('@/lib/auth/session', () => ({
   })),
 }));
 
+// The page starts the service context itself (beside the request context);
+// the real ServiceError is kept so the page's not-found test is the real one.
+const withContextMock = vi.hoisted(() => vi.fn(async () => ({ organizationId: 'org-1' })));
+vi.mock('@/server/services/context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/context')>()),
+  withContext: withContextMock,
+}));
+
 vi.mock('@/lib/auth/warehouse', () => ({
   getWarehouseAccess: (ctx: unknown) => getWarehouseAccessMock(ctx),
 }));
@@ -260,6 +268,26 @@ beforeEach(() => {
   getWarehouseAccessMock.mockResolvedValue({ hasAllAccess: true, writableIds: [] });
   setPermissions(true);
   checkModuleAccessMock.mockResolvedValue({ enabled: true, canManage: false });
+});
+
+describe('orders/[id]: the order read', () => {
+  it('starts the service context (its GoTrue factors read) with the request context', async () => {
+    await renderPage();
+    expect(withContextMock).toHaveBeenCalled();
+  });
+
+  it('a missing order is the not-found page', async () => {
+    const { ServiceError } = await import('@/server/services/context');
+    orderGet.mockRejectedValue(new ServiceError('not_found', 'Order request not found'));
+    await expect(renderPage()).rejects.toThrow('notFound');
+  });
+
+  it('a FAILED order read is not a 404: it reaches the error boundary as itself', async () => {
+    const { ServiceError } = await import('@/server/services/context');
+    const failure = new ServiceError('internal_error', 'gateway timeout');
+    orderGet.mockRejectedValue(failure);
+    await expect(renderPage()).rejects.toBe(failure);
+  });
 });
 
 describe('orders/[id] host — ReportProblemButton gating (I1, fix wave 2)', () => {

@@ -53,6 +53,7 @@ import {
   type Role,
 } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
+import { ServiceError, withContext } from '@/server/services/context';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { getCachedOrgTimezone, getOrgEmailRouting } from '@/lib/dashboard/cached-org';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
@@ -98,8 +99,15 @@ export default async function OrderDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const { id } = await params;
-  const ctx = await requireOrgContext();
+  // The service context starts now, beside the request context, not after
+  // it: the order and attachment reads below go through withContext, which
+  // asks GoTrue for the MFA factors while the context RPC runs. Started only
+  // after requireOrgContext had answered, that request waited for the RPC's
+  // round trip, one Supabase level more on every open of an order. Both are
+  // request-cached; observed here in case the order read fails first.
+  const contextStarted = withContext();
+  contextStarted.catch(() => {});
+  const [{ id }, ctx] = await Promise.all([params, requireOrgContext()]);
   const canApprove = can(ctx, 'orders:approve');
 
   // The order fetch and the attachments fetch are independent (both need only
@@ -112,6 +120,13 @@ export default async function OrderDetailPage({
     OrderAttachmentsService.forCurrentUser().then((attSvc) => attSvc.list(id)),
   ]);
   if (detailRes.status === 'rejected') {
+    // Only a MISSING order is "not found". A failed read (a gateway stall, a
+    // timeout) used to become the 404 page too, telling the person the order
+    // did not exist; it now reaches the error boundary, which offers a retry.
+    // Anything else (including a redirect thrown by the auth context, which
+    // this branch used to swallow as a 404) propagates as itself.
+    const reason: unknown = detailRes.reason;
+    if (!(reason instanceof ServiceError && reason.code === 'not_found')) throw reason;
     notFound();
   }
   const detail = detailRes.value;

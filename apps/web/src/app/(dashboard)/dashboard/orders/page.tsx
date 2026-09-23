@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/table';
 import { can } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
+import { withContext } from '@/server/services/context';
 import {
   OrderRequestsService,
   type OrderRequestSummary,
@@ -61,11 +62,20 @@ export default async function OrdersPage({
 }: {
   searchParams: Promise<{ status?: string; page?: string }>;
 }) {
-  const moduleAccess = await checkModuleAccess('orders');
+  // The service context starts beside the module gate, not after it (the same
+  // change as the Books page). The list below is read through withContext,
+  // which asks GoTrue for the MFA factors while the context RPC runs; started
+  // only after the gate had answered, that request waited for the gate's own
+  // round trip, one Supabase level more on every soft navigation to Orders
+  // (lab 2026-09-22: page data complete 186 ms vs 141 ms for Items). It reads
+  // no order, so the gate still decides before any order is read.
+  // Request-cached; observed here because a closed gate never awaits it.
+  const contextStarted = withContext();
+  contextStarted.catch(() => {});
+  const [moduleAccess, params] = await Promise.all([checkModuleAccess('orders'), searchParams]);
   if (!moduleAccess.enabled) {
     return <ModuleNotEnabled moduleId="orders" canManage={moduleAccess.canManage} />;
   }
-  const params = await searchParams;
   const ctx = await requireOrgContext();
   const canApprove = can(ctx, 'orders:approve');
 

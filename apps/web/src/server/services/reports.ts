@@ -987,7 +987,11 @@ export class ReportsService {
           }[]
         | null;
     };
-    const poRows = await fetchAllRows<PoLine>(
+    // Started now, awaited with the receipt lines below: the two reads need
+    // nothing from each other, and awaiting this one first put a whole
+    // Supabase round trip (and another chance at a gateway stall) in front of
+    // the second on every item page open (the cost trend card is on Overview).
+    const poRowsRead = fetchAllRows<PoLine>(
       (from, to) => {
         // Date-window filtering happens in JS (see `observe` below): filtering
         // on the embedded `po.ordered_at` here would NOT restrict the top-level
@@ -1042,7 +1046,7 @@ export class ReportsService {
           }[]
         | null;
     };
-    const rcRows = await fetchAllRows<ReceiptLine>(
+    const rcRowsRead = fetchAllRows<ReceiptLine>(
       (from, to) => {
         // Date window applied in JS (see `observe`); same embed-filter caveat
         // as the PO query above.
@@ -1065,6 +1069,9 @@ export class ReportsService {
       },
       { cap: 10_000 },
     );
+    // Either failing fails the history, as before: allSettled is not used, so a
+    // rejected read is never read as "no history".
+    const [poRows, rcRows] = await Promise.all([poRowsRead, rcRowsRead]);
 
     const NO_SUPPLIER = '__none';
     // Per-supplier accumulator: keep the display name + the raw points.

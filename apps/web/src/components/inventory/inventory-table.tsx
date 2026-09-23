@@ -46,6 +46,7 @@ import {
   toggleSavedViewShareAction,
 } from '@/server/actions/saved-views';
 import { toast } from 'sonner';
+import { IntentLink } from '@/components/ui/intent-link';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { ImageHoverPreview, prewarmPreviewImages } from '@/components/ui/image-hover-preview';
@@ -2222,25 +2223,29 @@ export function InventoryTable({
                           />
                         )}
                       </ImageHoverPreview>
-                      <Link
+                      <IntentLink
                         href={`${rowLinkPrefix}/${item.id}?return=${encodeURIComponent(currentListUrl)}`}
-                        // Disable eager prefetch. The previous
-                        // `prefetch` setting fired an RSC prefetch for
-                        // EVERY row's detail page on mount — measured
-                        // 50+ prefetches × ~500ms server time each on
-                        // a 50-row inventory list, dominating the
-                        // page's resource graph and slowing the
-                        // initial render. The user clicks ~1 row on
-                        // average, so 49 prefetches were pure waste.
-                        // Next.js still prefetches on hover by
-                        // default, so perceived nav speed stays
-                        // identical for the row the user actually
-                        // chooses.
-                        prefetch={false}
+                        // No viewport prefetch: a prefetch for EVERY row's
+                        // detail page on mount measured 50+ requests at
+                        // ~500 ms of server time each on a 50-row list,
+                        // for the ~1 row a person clicks. The comment that
+                        // stood here said Next still prefetched on hover;
+                        // it does not (next/link: prefetch={false} turns
+                        // hover and touch prefetch off too), so the item
+                        // route's shape was unknown until the click and
+                        // its skeleton painted a server round trip late
+                        // (166 ms vs 49 ms for warmed sidebar routes, lab
+                        // 2026-09-22), which also starts React's 300 ms
+                        // reveal hold that much later. IntentLink warms
+                        // just this row's route, starting the moment the
+                        // pointer arrives (hoverDwellMs 0: Next only reuses
+                        // a warm-up that has FINISHED, so it needs a round
+                        // trip's head start), on focus, or on pointer-down.
+                        hoverDwellMs={0}
                         className="font-medium hover:underline"
                       >
                         {item.name}
-                      </Link>
+                      </IntentLink>
                     </div>
                   </td>
                   <td className="px-3 font-mono text-[11.5px] tracking-[-0.01em] text-[var(--ed-ink-3)]">

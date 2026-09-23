@@ -13,12 +13,63 @@ vi.mock('@/server/services/inventory', () => ({
   InventoryService: { forCurrentUser: vi.fn() },
 }));
 
+// The context-building list invalidation: spied on so the adjust action can be
+// held to NOT calling it (its service already invalidates, see below).
+const revalidateForCurrentOrg = vi.hoisted(() => vi.fn(async () => true));
+vi.mock('@/server/loaders/inventory-list', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/loaders/inventory-list')>()),
+  revalidateInventoryListForCurrentOrg: revalidateForCurrentOrg,
+}));
+
 import { revalidatePath } from 'next/cache';
 
 import { InventoryService } from '@/server/services/inventory';
 import { ServiceError } from '@/server/services/context';
 
-import { bulkUpdateInventoryAction } from './inventory';
+import { adjustStockAction, bulkUpdateInventoryAction } from './inventory';
+
+describe('adjustStockAction', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('adjusts, re-renders through revalidatePath, and builds no second context', async () => {
+    const adjustStock = vi.fn(async () => undefined);
+    vi.mocked(InventoryService.forCurrentUser).mockResolvedValue({ adjustStock } as any);
+
+    const itemId = '11111111-1111-4111-8111-111111111111';
+    const result = await adjustStockAction({ itemId, quantityChange: 1, movementType: 'add' });
+
+    expect(result.ok).toBe(true);
+    expect(adjustStock).toHaveBeenCalledTimes(1);
+    // These are what put the re-rendered page into the action's response.
+    expect(revalidatePath).toHaveBeenCalledWith('/dashboard');
+    expect(revalidatePath).toHaveBeenCalledWith('/dashboard/inventory');
+    expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/inventory/${itemId}`);
+    // InventoryService.adjustStock expires the org's list itself
+    // (invalidateInventoryListAfterWrite 'stock.adjust'); a second expiry here
+    // built a whole new service context in the action (cache() does not
+    // memoize there) between the commit and the re-render.
+    expect(revalidateForCurrentOrg).not.toHaveBeenCalled();
+  });
+
+  it('a refused adjustment revalidates nothing', async () => {
+    const adjustStock = vi.fn(async () => {
+      throw new ServiceError('validation_error', 'Insufficient stock for this adjustment');
+    });
+    vi.mocked(InventoryService.forCurrentUser).mockResolvedValue({ adjustStock } as any);
+
+    const result = await adjustStockAction({
+      itemId: '11111111-1111-4111-8111-111111111111',
+      quantityChange: 1,
+      movementType: 'add',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(revalidatePath).not.toHaveBeenCalled();
+    expect(revalidateForCurrentOrg).not.toHaveBeenCalled();
+  });
+});
 
 describe('bulkUpdateInventoryAction', () => {
   beforeEach(() => {

@@ -183,6 +183,21 @@ export function InventoryRealtime({
       let rerun = false;
       let dirtyWhileHidden = false;
       const isHidden = () => document.visibilityState === 'hidden';
+      //   seenSinceStart / covered: ONE refresh per database transaction. One
+      //     adjust_stock sends two events, the inventory_items UPDATE and the
+      //     stock_movements INSERT, with the SAME commit_timestamp in the same
+      //     millisecond (lab check, 2026-09-22). The first starts a refresh; the
+      //     second used to schedule a trailing one that found the first still
+      //     running and earned a rerun: a second full page render that read
+      //     nothing new. Events arrive only after their transaction commits, so
+      //     a refresh that STARTS after an event reads that whole transaction.
+      //     When a refresh starts, every commit seen so far is `covered`, and a
+      //     later event of a covered commit is dropped. An event of a commit not
+      //     yet covered (it landed while a refresh was already running) still
+      //     earns its rerun, and an event without a timestamp is never dropped.
+      const seenSinceStart = new Set<string>();
+      const covered = new Set<string>();
+      const COVERED_MAX = 256;
 
       // Bust this org's cached default list view, which also re-renders this
       // page (the action's response carries the new render). Web writes
@@ -204,6 +219,13 @@ export function InventoryRealtime({
         }
         inFlight = true;
         lastRefreshRef.current = Date.now();
+        for (const commit of seenSinceStart) {
+          covered.add(commit);
+          // Oldest first (a Set keeps insertion order): bounded, and a
+          // transaction's events arrive together, so old entries are dead.
+          if (covered.size > COVERED_MAX) covered.delete(covered.values().next().value as string);
+        }
+        seenSinceStart.clear();
         let watchdog: ReturnType<typeof setTimeout> | undefined;
         // false on failure, on "did not invalidate" and on the watchdog: in
         // all three no re-render is coming from the action, so we refresh.
@@ -254,6 +276,15 @@ export function InventoryRealtime({
         }, THROTTLE_MS - since);
       }
 
+      function onChange(payload?: { commit_timestamp?: unknown }) {
+        const commit = typeof payload?.commit_timestamp === 'string' ? payload.commit_timestamp : null;
+        if (commit !== null) {
+          if (covered.has(commit)) return;
+          seenSinceStart.add(commit);
+        }
+        nudge();
+      }
+
       function onVisibilityChange() {
         if (isHidden() || !dirtyWhileHidden) return;
         dirtyWhileHidden = false;
@@ -274,7 +305,7 @@ export function InventoryRealtime({
             table,
             filter: `organization_id=eq.${organizationId}`,
           },
-          nudge,
+          onChange,
         );
       }
 
