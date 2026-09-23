@@ -9,7 +9,9 @@ import {
 } from '@/lib/auth/warehouse';
 import type { PlaceDest } from '@/lib/locations/destination-option';
 import { isRackShelfLocation, isSystemLocation } from '@/lib/locations/groups';
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { encodedInValueLength, IN_FILTER_MAX_VALUES } from '@/lib/supabase/in-filter';
 
 import type {
   AdjustStockInput,
@@ -71,7 +73,22 @@ import {
   validateCustomFields,
 } from '@stockpilot/core';
 
-import { assertModuleEnabled, assertPermission, assertPlanLimit, ServiceError, withContext, type PlanLimitSlot, type ServiceContext } from './context';
+import {
+  assertModuleEnabled,
+  assertPermission,
+  assertPlanLimit,
+  ServiceError,
+  withContext,
+  type PlanLimitSlot,
+  type ServiceContext,
+} from './context';
+import {
+  fetchAllRowsByIds,
+  mapIdBatches,
+  rawErrorText,
+  reportDegradedRead,
+  writeInIdBatches,
+} from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { fetchAllRows } from './lib/paginate';
 import { audit, type AuditEvent } from './audit';
@@ -243,6 +260,7 @@ function buildItemSearchClause(rawQ: string, isbnVariants?: string[]): string | 
     .map((v) => v.replace(/[^0-9Xx]/g, '').toUpperCase())
     .filter((v) => v.length === 10 || v.length === 13);
   if (variants.length === 0) return clause;
+  // in-list-bound: the ISBN-10 and ISBN-13 forms of one search term
   return `${clause},barcode.in.(${variants.map((v) => `"${v}"`).join(',')})`;
 }
 
@@ -818,16 +836,75 @@ export interface BookCrateSyncResult {
   cratePreservedItemIds: string[];
 }
 
+/** The columns list() and listByIdsForExport read. One constant, so the two
+ *  cannot drift (loaders/inventory-list.ts keeps its own verbatim copy). */
+const INVENTORY_LIST_COLUMNS =
+  'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, reorder_quantity, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, auto_archived, awaiting_first_receipt, custom_fields, group_id, variant_size, variant_size_system, jersey_number, variant_key, created_at, updated_at, created_by, updated_by';
+
+/** One row of listByIdsForExport: list()'s item row without the placement
+ *  columns list() derives from holdings. */
+export interface InventoryExportItemRow {
+  id: string;
+  sku: string;
+  barcode: string | null;
+  model_number: string | null;
+  name: string;
+  description: string | null;
+  status: 'active' | 'archived' | 'discontinued';
+  quantity_on_hand: number;
+  reorder_point: number;
+  reorder_quantity: number;
+  unit_cost: number;
+  retail_price: number;
+  category_id: string | null;
+  supplier_id: string | null;
+  primary_location_id: string | null;
+  warehouse_id: string | null;
+  charter_id: string | null;
+  tracking_type: 'none' | 'lot' | 'serial' | 'serial_optional';
+  item_type: 'product' | 'book' | 'asset' | 'consumable';
+  is_rental: boolean;
+  auto_archived: boolean;
+  awaiting_first_receipt: boolean;
+  custom_fields: Record<string, unknown>;
+  group_id: string | null;
+  variant_size: string | null;
+  variant_size_system: string | null;
+  jersey_number: string | null;
+  variant_key: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+  updated_by: string | null;
+}
+
 /**
- * How many item ids may ride in ONE `.in('item_id', …)` filter.
- *
- * NOT a row cap — a REQUEST cap. PostgREST echoes the whole request path back
- * in the `Content-Location` response header, so a single `.in()` carrying ~395+
- * uuids overflows Node's 16KB header limit and the supabase-js call fails as a
- * bare `TypeError: fetch failed` (measured against prod with this exact select
- * string). 300 leaves headroom for the rest of the query string.
+ * A viewer's category grants (up to 500) are a DEFENSIVE filter: RLS already
+ * enforces them. In a URL they stack onto everything else the query carries
+ * (the warehouse list, chip filters, an id batch), so they only go in the URL
+ * while they are this short (~30 uuids); past that the rows are filtered
+ * after the read instead, which keeps the same defence without the length.
  */
-const HOLDINGS_ID_CHUNK = 300;
+const GRANTS_IN_URL_MAX_CHARS = 1_200;
+
+function grantsFitInUrl(grants: ReadonlySet<string>): boolean {
+  let chars = 0;
+  for (const id of grants) {
+    chars += encodedInValueLength(id) + 3;
+    if (chars > GRANTS_IN_URL_MAX_CHARS) return false;
+  }
+  return true;
+}
+
+/** Keep only rows in a granted category (a null category is not granted),
+ *  exactly what `.in('category_id', grants)` keeps. */
+function keepGranted<Row extends { category_id: string | null }>(
+  rows: Row[],
+  grants: ReadonlySet<string> | null,
+): Row[] {
+  if (grants === null) return rows;
+  return rows.filter((r) => r.category_id !== null && grants.has(r.category_id));
+}
 
 export class InventoryService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -888,6 +965,16 @@ export class InventoryService {
     // follow-up.)
     const limit = Math.min(filters.limit ?? 50, 1000);
     const offset = Math.max(0, filters.offset ?? 0);
+    // `ids` narrows a paged, counted query, so it cannot be split across
+    // requests; past one batch it would overflow the URL (414 locally, "fetch
+    // failed" in production after ~7 s of retries). A selection that large
+    // reads through listByIdsForExport instead.
+    if (filters.ids && filters.ids.length > IN_FILTER_MAX_VALUES) {
+      throw new ServiceError(
+        'validation_error',
+        `Narrow by at most ${IN_FILTER_MAX_VALUES} item ids here; use listByIdsForExport for a larger selection.`,
+      );
+    }
     // A viewer's category grants are read ALONGSIDE the warehouse access, not
     // after it: they need nothing from it. They used to be two more reads in
     // series after it (the membership row again, then the grants), two
@@ -905,7 +992,7 @@ export class InventoryService {
     let query = this.ctx.supabase
       .from('inventory_items')
       .select(
-        'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, reorder_quantity, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, auto_archived, awaiting_first_receipt, custom_fields, group_id, variant_size, variant_size_system, jersey_number, variant_key, created_at, updated_at, created_by, updated_by',
+        INVENTORY_LIST_COLUMNS,
         // Exact count: pagination needs precise totals so "Page X of Y"
         // math doesn't lie, and the empty-state heuristics
         // (`inventory.total === 0`) don't false-fire on stale
@@ -929,6 +1016,7 @@ export class InventoryService {
       if (access.readableIds.length === 0) {
         return { items: [], total: 0, valueOnHand: 0 };
       }
+      // in-list-bound: the caller's readable warehouses (an org's handful of sites)
       query = query.in('warehouse_id', access.readableIds);
     } else if (filters.warehouseId) {
       query = query.eq('warehouse_id', filters.warehouseId);
@@ -944,6 +1032,9 @@ export class InventoryService {
     // entirely when ctx.role isn't 'viewer' — that's ~99% of list calls.
     // Wrapped in try/catch so test stubs without these tables still
     // fall through to "no filter" — production always has them.
+    // Grants that are too long for the URL (see GRANTS_IN_URL_MAX_CHARS) are
+    // applied to the returned rows instead.
+    let grantsAfterRead: Set<string> | null = null;
     if (this.ctx.role === 'viewer') {
       try {
         const accessibleCats = await viewerGrantsRead;
@@ -951,7 +1042,12 @@ export class InventoryService {
           if (accessibleCats.size === 0) {
             return { items: [], total: 0, valueOnHand: 0 };
           }
-          query = query.in('category_id', [...accessibleCats]);
+          if (grantsFitInUrl(accessibleCats)) {
+            // in-list-bound: grantsFitInUrl keeps this under GRANTS_IN_URL_MAX_CHARS
+            query = query.in('category_id', [...accessibleCats]);
+          } else {
+            grantsAfterRead = accessibleCats;
+          }
         }
       } catch {
         // Defense in depth: if the lookup itself crashes, fall through.
@@ -1030,6 +1126,7 @@ export class InventoryService {
     // warehouse-access scoping above, so a user still can't export items
     // outside their RLS/warehouse access — ids only ever subtracts.
     if (filters.ids && filters.ids.length > 0) {
+      // in-list-bound: refused above past IN_FILTER_MAX_VALUES ids
       query = query.in('id', filters.ids);
     }
     if (filters.outOfStock) query = query.lte('quantity_on_hand', 0);
@@ -1056,6 +1153,7 @@ export class InventoryService {
     // doesn't accidentally show books/assets. Pass 'all' to disable, or
     // itemTypes for a multi-type set (which wins when present).
     if (filters.itemTypes && filters.itemTypes.length > 0) {
+      // in-list-bound: item types are a fixed enum of four values
       query = query.in('item_type', filters.itemTypes);
     } else if (filters.itemType === undefined) {
       query = query.eq('item_type', 'product');
@@ -1114,6 +1212,7 @@ export class InventoryService {
           // already returned earlier in this case; keep this guard for
           // safety if the access guard moves.
         } else {
+          // in-list-bound: the caller's readable warehouses (an org's handful of sites)
           sumQuery = sumQuery.in('warehouse_id', access.readableIds);
         }
       } else if (filters.warehouseId) {
@@ -1171,6 +1270,7 @@ export class InventoryService {
         sumQuery = sumQuery.or('reorder_point.gt.0,quantity_on_hand.lte.0');
       }
       if (filters.itemTypes && filters.itemTypes.length > 0) {
+        // in-list-bound: item types are a fixed enum of four values
         sumQuery = sumQuery.in('item_type', filters.itemTypes);
       } else if (filters.itemType === undefined) {
         sumQuery = sumQuery.eq('item_type', 'product');
@@ -1198,7 +1298,7 @@ export class InventoryService {
     const { data, error, count } = mainRes;
     if (error) throw new ServiceError('internal_error', error.message);
 
-    let rows = data ?? [];
+    let rows = keepGranted(data ?? [], grantsAfterRead);
     let totalCount = count ?? 0;
     let sumRows = sumRowsRaw;
     if (filters.lowStock) {
@@ -1405,6 +1505,73 @@ export class InventoryService {
   }
 
   /**
+   * The rows `list()` would return for an explicit selection of item ids, for
+   * the export's "selected" scope (up to 10,000 ids). list() narrows a paged,
+   * counted query, so it cannot split its `ids` across requests, and one
+   * `.in()` past ~215 ids fails (414 locally, "fetch failed" in production
+   * after ~7 s of retries). This reads the selection in batches through
+   * fetchAllRowsByIds instead.
+   *
+   * Same posture as list() with `{ ids, status: 'all', expected: 'any' }`:
+   * org-scoped, not deleted, not a rental, list()'s item_type defaulting,
+   * warehouse-scoped for non-all-access roles, and a viewer's category grants
+   * (applied to the rows; RLS enforces them as well). No placement columns:
+   * the export reads none. Rows come back in list()'s default order
+   * (updated_at newest first, then id), capped like list() at `limit`
+   * (1000), with `total` counting every match so the export can say
+   * "first N of M".
+   *
+   * Throws on a failed batch: an export must not silently drop rows.
+   */
+  async listByIdsForExport(
+    ids: string[],
+    opts: { itemType?: ItemListFilters['itemType']; limit?: number } = {},
+  ): Promise<{ items: InventoryExportItemRow[]; total: number }> {
+    const limit = Math.min(opts.limit ?? 1000, 1000);
+    if (ids.length === 0) return { items: [], total: 0 };
+    const viewerGrantsRead = this.viewerCategoryGrants();
+    const access = await getWarehouseAccess(this.ctx);
+    if (!access.hasAllAccess && access.readableIds.length === 0) return { items: [], total: 0 };
+
+    let grants: Set<string> | null = null;
+    if (this.ctx.role === 'viewer') {
+      try {
+        grants = await viewerGrantsRead;
+        if (grants !== null && grants.size === 0) return { items: [], total: 0 };
+      } catch {
+        // Defense in depth, as in list(): RLS still enforces the grants.
+      }
+    }
+
+    const ctx = this.ctx;
+    const rows = await fetchAllRowsByIds<InventoryExportItemRow>(ids, (batch) => (from, to) => {
+      let query = ctx.supabase
+        .from('inventory_items')
+        .select(INVENTORY_LIST_COLUMNS)
+        .eq('organization_id', ctx.organizationId)
+        .in('id', batch)
+        .is('deleted_at', null)
+        // Rentals never reach a regular list (see list()).
+        .eq('is_rental', false);
+      if (!access.hasAllAccess) {
+        // in-list-bound: the caller's readable warehouses (an org's handful of sites)
+        query = query.in('warehouse_id', access.readableIds);
+      }
+      // list()'s item_type defaulting: undefined means 'product', 'all' none.
+      if (opts.itemType === undefined) query = query.eq('item_type', 'product');
+      else if (opts.itemType !== 'all') query = query.eq('item_type', opts.itemType);
+      return query.order('id').range(from, to) as unknown as PromiseLike<{
+        data: InventoryExportItemRow[] | null;
+        error: { message: string } | null;
+      }>;
+    });
+    const visible = keepGranted(rows, grants).sort(
+      (a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? '') || a.id.localeCompare(b.id),
+    );
+    return { items: visible.slice(0, limit), total: visible.length };
+  }
+
+  /**
    * HEAD count of items awaiting their first receipt (migration 0277)
    * for one view — the badge on the Items/Books pages' "Expected" chip.
    * Mirrors the Expected view's own predicate (org, not deleted,
@@ -1440,6 +1607,7 @@ export class InventoryService {
       .eq('awaiting_first_receipt', true);
     if (!access.hasAllAccess) {
       if (access.readableIds.length === 0) return 0;
+      // in-list-bound: the caller's readable warehouses (an org's handful of sites)
       query = query.in('warehouse_id', access.readableIds);
     } else if (opts.warehouseId) {
       query = query.eq('warehouse_id', opts.warehouseId);
@@ -1519,20 +1687,24 @@ export class InventoryService {
     }>
   > {
     if (ids.length === 0) return [];
-    let query = this.ctx.supabase
-      .from('inventory_items')
-      .select('id, sku, name, barcode, tracking_type, group_id, variant_size')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('id', ids);
-    // Live surfaces (lists, pickers) exclude soft-deleted items. Historical
-    // read-only display (past POs/receipts) opts in to includeDeleted so an
-    // item deleted AFTER the document was created still shows its real name
-    // instead of "Unknown item" — keeps the auto-delete feature's promise that
-    // history is preserved.
-    if (!opts.includeDeleted) query = query.is('deleted_at', null);
-    const { data, error } = await query;
-    if (error) throw new ServiceError('internal_error', error.message);
-    return (data ?? []).map((r) => ({
+    // Batched: labels, rentals and PO pages pass up to 500 ids, and one
+    // `.in()` past ~215 fails (414 locally, "fetch failed" in production).
+    const ctx = this.ctx;
+    const data = await fetchAllRowsByIds(ids, (batch) => (from, to) => {
+      let query = ctx.supabase
+        .from('inventory_items')
+        .select('id, sku, name, barcode, tracking_type, group_id, variant_size')
+        .eq('organization_id', ctx.organizationId)
+        .in('id', batch);
+      // Live surfaces (lists, pickers) exclude soft-deleted items. Historical
+      // read-only display (past POs/receipts) opts in to includeDeleted so an
+      // item deleted AFTER the document was created still shows its real name
+      // instead of "Unknown item" — keeps the auto-delete feature's promise that
+      // history is preserved.
+      if (!opts.includeDeleted) query = query.is('deleted_at', null);
+      return query.order('id').range(from, to);
+    });
+    return data.map((r) => ({
       id: r.id as string,
       sku: r.sku as string,
       name: r.name as string,
@@ -1591,28 +1763,55 @@ export class InventoryService {
     // Build per page so each `.range()` applies to a fresh query; stable
     // `.order('id')` keeps every row on exactly one page across the loop
     // (fetchAllRows' documented contract).
-    return fetchAllRows<{
+    //
+    // Grants too long for the URL (up to 500, see GRANTS_IN_URL_MAX_CHARS) are
+    // applied to the rows instead, reading category_id only then; RLS already
+    // enforces them, so the read returns the same rows either way.
+    const grantsAfterRead =
+      accessibleCats !== null && !grantsFitInUrl(accessibleCats) ? accessibleCats : null;
+    type Row = {
       id: string;
       sku: string;
       name: string;
       quantity_on_hand: number;
       created_at: string;
-    }>((from, to) => {
+      category_id?: string | null;
+    };
+    const columns: string = grantsAfterRead
+      ? 'id, sku, name, quantity_on_hand, created_at, category_id'
+      : 'id, sku, name, quantity_on_hand, created_at';
+    const rows = await fetchAllRows<Row>((from, to) => {
       let query = this.ctx.supabase
         .from('inventory_items')
-        .select('id, sku, name, quantity_on_hand, created_at')
+        .select(columns)
         .eq('organization_id', this.ctx.organizationId)
         .is('deleted_at', null)
         .eq('status', 'active')
         .eq('is_rental', false);
       if (!access.hasAllAccess) {
+        // in-list-bound: the caller's readable warehouses (an org's handful of sites)
         query = query.in('warehouse_id', access.readableIds);
       }
-      if (accessibleCats !== null) {
+      if (accessibleCats !== null && grantsAfterRead === null) {
+        // in-list-bound: grantsFitInUrl keeps this under GRANTS_IN_URL_MAX_CHARS
         query = query.in('category_id', [...accessibleCats]);
       }
-      return query.order('id', { ascending: true }).range(from, to);
+      return query.order('id', { ascending: true }).range(from, to) as unknown as PromiseLike<{
+        data: Row[] | null;
+        error: { message: string } | null;
+      }>;
     });
+    if (grantsAfterRead === null) return rows;
+    return keepGranted(
+      rows.map((r) => ({ ...r, category_id: r.category_id ?? null })),
+      grantsAfterRead,
+    ).map(({ id, sku, name, quantity_on_hand, created_at }) => ({
+      id,
+      sku,
+      name,
+      quantity_on_hand,
+      created_at,
+    }));
   }
 
   /**
@@ -1630,11 +1829,11 @@ export class InventoryService {
    *
    * Read posture mirrors `listForMatching()`: org-scoped, non-deleted,
    * active, non-rental, warehouse-scoped for non-all-access roles, viewer
-   * category restriction. `group_id` is sent in `chunkIdsForInFilter`
-   * batches rather than one `.in()` — the same batching precedent as the
-   * portal catalog fix (23e319f6): a large sports catalog can carry hundreds
-   * of product groups, and a single `.in()` risks the same URL-length /
-   * row-cap failure mode chunking already guards elsewhere in this file.
+   * category restriction. `group_id` is sent in batches of 100 through
+   * `fetchAllRowsByIds` rather than one `.in()`: a large sports catalog can
+   * carry hundreds of product groups, and one `.in()` past ~215 ids fails on
+   * URL length. The viewer's grants are applied to the rows, not the URL,
+   * for the same reason (they stacked onto every batch).
    */
   async listGroupVariants(groupIds: string[]): Promise<
     Array<{
@@ -1670,29 +1869,49 @@ export class InventoryService {
       unit_cost: number;
       group_id: string | null;
       variant_size: string | null;
+      category_id?: string | null;
     };
-    const out: Row[] = [];
-    for (const idChunk of chunkIdsForInFilter(uniqueGroupIds)) {
-      const rows = await fetchAllRows<Row>((from, to) => {
-        let query = this.ctx.supabase
-          .from('inventory_items')
-          .select('id, sku, name, unit_cost, group_id, variant_size')
-          .eq('organization_id', this.ctx.organizationId)
-          .in('group_id', idChunk)
-          .is('deleted_at', null)
-          .eq('status', 'active')
-          .eq('is_rental', false);
-        if (!access.hasAllAccess) {
-          query = query.in('warehouse_id', access.readableIds);
-        }
-        if (accessibleCats !== null) {
-          query = query.in('category_id', [...accessibleCats]);
-        }
-        return query.order('id', { ascending: true }).range(from, to);
-      });
-      out.push(...rows);
-    }
-    return out;
+    // Grants too long for the URL are applied to the rows (see listForMatching).
+    const grantsAfterRead =
+      accessibleCats !== null && !grantsFitInUrl(accessibleCats) ? accessibleCats : null;
+    const columns: string = grantsAfterRead
+      ? 'id, sku, name, unit_cost, group_id, variant_size, category_id'
+      : 'id, sku, name, unit_cost, group_id, variant_size';
+    const ctx = this.ctx;
+    const rows = await fetchAllRowsByIds<Row>(uniqueGroupIds, (batch) => (from, to) => {
+      let query = ctx.supabase
+        .from('inventory_items')
+        .select(columns)
+        .eq('organization_id', ctx.organizationId)
+        .in('group_id', batch)
+        .is('deleted_at', null)
+        .eq('status', 'active')
+        .eq('is_rental', false);
+      if (!access.hasAllAccess) {
+        // in-list-bound: the caller's readable warehouses (an org's handful of sites)
+        query = query.in('warehouse_id', access.readableIds);
+      }
+      if (accessibleCats !== null && grantsAfterRead === null) {
+        // in-list-bound: grantsFitInUrl keeps this under GRANTS_IN_URL_MAX_CHARS
+        query = query.in('category_id', [...accessibleCats]);
+      }
+      return query.order('id', { ascending: true }).range(from, to) as unknown as PromiseLike<{
+        data: Row[] | null;
+        error: { message: string } | null;
+      }>;
+    });
+    if (grantsAfterRead === null) return rows.map(({ category_id: _drop, ...r }) => r);
+    return keepGranted(
+      rows.map((r) => ({ ...r, category_id: r.category_id ?? null })),
+      grantsAfterRead,
+    ).map(({ id, sku, name, unit_cost, group_id, variant_size }) => ({
+      id,
+      sku,
+      name,
+      unit_cost,
+      group_id,
+      variant_size,
+    }));
   }
 
   /**
@@ -2028,15 +2247,25 @@ export class InventoryService {
   async reservedQuantityByItemIds(itemIds: string[]): Promise<Map<string, number>> {
     const out = new Map<string, number>();
     if (itemIds.length === 0) return out;
-    const { data, error } = await this.ctx.supabase
-      .from('stock_reservations')
-      .select('item_id, quantity')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', itemIds)
-      .is('released_at', null);
-    if (error) throw new ServiceError('internal_error', error.message);
-    for (const r of (data ?? []) as Array<{ item_id: string; quantity: number }>) {
-      out.set(r.item_id, (out.get(r.item_id) ?? 0) + r.quantity);
+    // Batched AND paged: the rentals catalog passes up to 500 ids (one `.in()`
+    // past ~215 fails), and an unpaged read was cut at 1000 reservation rows,
+    // which under-counted reservations and over-stated availability. A failed
+    // batch THROWS: this map decides what is available to promise.
+    const ctx = this.ctx;
+    const rows = await fetchAllRowsByIds<{ item_id: string; quantity: number }>(
+      itemIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('stock_reservations')
+          .select('item_id, quantity')
+          .eq('organization_id', ctx.organizationId)
+          .in('item_id', batch)
+          .is('released_at', null)
+          .order('id')
+          .range(from, to),
+    );
+    for (const r of rows) {
+      out.set(r.item_id, (out.get(r.item_id) ?? 0) + Number(r.quantity));
     }
     return out;
   }
@@ -3313,23 +3542,45 @@ export class InventoryService {
     movementErr: { message: string },
     opts: { tag: string; subject: string; pronoun: 'its' | 'their' },
   ): Promise<never> {
-    // (a) The PLACEMENTS the 0199 trigger seeded.
-    const { error: levelErr } = await this.ctx.supabase
-      .from('item_stock_levels')
-      .update({ quantity: 0 })
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', stockedIds);
+    // Every step is BATCHED (bulkCreate stocks up to 500 items, and one
+    // `.in()` past ~215 uuids fails) and attempts every batch
+    // (stopOnError: false) so one bad batch still lets the rest be rolled back.
+    const ctx = this.ctx;
 
-    // (b) The row quantity.
-    const { data: zeroed, error: zeroErr } = await this.ctx.supabase
-      .from('inventory_items')
-      .update({ quantity_on_hand: 0, updated_by: this.ctx.userId })
-      .eq('organization_id', this.ctx.organizationId)
-      .in('id', stockedIds)
-      .select('id');
+    // (a) The PLACEMENTS the 0199 trigger seeded.
+    const levels = await writeInIdBatches(
+      stockedIds,
+      (batch) =>
+        ctx.supabase
+          .from('item_stock_levels')
+          .update({ quantity: 0 })
+          .eq('organization_id', ctx.organizationId)
+          .in('item_id', batch),
+      { stopOnError: false },
+    );
+    const levelErr = levels.error;
+
+    // (b) The row quantity — ONLY for items whose placements (a) zeroed. With
+    // batching, a levels batch can fail while every items batch would
+    // succeed; zeroing those items anyway would leave on_hand 0 with placed
+    // levels > 0, the phantom-placed state the ORDER rule above exists to
+    // prevent. Their on_hand stays, the count below comes up short, and the
+    // throw says they could not be rolled back.
+    const items = await writeInIdBatches<string, { id: string }>(
+      levels.written,
+      (batch) =>
+        ctx.supabase
+          .from('inventory_items')
+          .update({ quantity_on_hand: 0, updated_by: ctx.userId })
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .select('id'),
+      { stopOnError: false },
+    );
+    const zeroErr = items.error;
     // .update().eq() is FAIL-OPEN under RLS: no error, no row (pattern #2). A
     // partial compensation is still a broken ledger, so it counts as a failure.
-    const compensated = ((zeroed ?? []) as Array<{ id: string }>).length;
+    const compensated = items.rows.length;
     // Every exit below throws; the zeroed quantities must not be served from
     // the cache as the opening stock that was just rolled back.
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.compensate_opening_stock');
@@ -3341,13 +3592,25 @@ export class InventoryService {
     // A re-read is the only unambiguous answer, and it is the answer that
     // matters: any surviving placement is exactly the phantom-stock state this
     // compensation exists to prevent.
-    const { data: leftovers, error: verifyErr } = await this.ctx.supabase
-      .from('item_stock_levels')
-      .select('id')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', stockedIds)
-      .gt('quantity', 0);
-    const survivingPlacements = ((leftovers ?? []) as unknown[]).length;
+    let verifyErr: string | null = null;
+    let survivingPlacements = 0;
+    try {
+      const leftovers = await fetchAllRowsByIds<{ id: string }>(
+        stockedIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('item_stock_levels')
+            .select('id')
+            .eq('organization_id', ctx.organizationId)
+            .in('item_id', batch)
+            .gt('quantity', 0)
+            .order('id')
+            .range(from, to),
+      );
+      survivingPlacements = leftovers.length;
+    } catch (err) {
+      verifyErr = rawErrorText(err);
+    }
 
     if (
       levelErr ||
@@ -3358,9 +3621,9 @@ export class InventoryService {
     ) {
       console.error(`${opts.tag} opening movements failed AND the rollback failed`, {
         movementError: movementErr.message,
-        levelError: levelErr?.message,
-        rollbackError: zeroErr?.message,
-        verifyError: verifyErr?.message,
+        levelError: levelErr,
+        rollbackError: zeroErr,
+        verifyError: verifyErr,
         survivingPlacements,
         stockedIds,
       });
@@ -3492,15 +3755,25 @@ export class InventoryService {
 
     // Pre-flight: which barcodes already exist? Count those as skipped,
     // build payloads only for the survivors.
+    //
+    // Batched (up to 500 barcodes, and a long barcode costs more URL than a
+    // uuid) and FAIL-CLOSED: the error used to be ignored, so a failed read
+    // looked like "none exist" and created duplicates of every item already
+    // in the org. A failed batch throws before anything is inserted.
     const allBarcodes = input.items.map((i) => i.barcode);
-    const { data: existing } = await this.ctx.supabase
-      .from('inventory_items')
-      .select('barcode')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('barcode', allBarcodes);
-    const existingSet = new Set(
-      (existing ?? []).map((r: { barcode: string }) => r.barcode),
+    const ctx = this.ctx;
+    const existing = await fetchAllRowsByIds<{ barcode: string }>(
+      allBarcodes,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('inventory_items')
+          .select('barcode')
+          .eq('organization_id', ctx.organizationId)
+          .in('barcode', batch)
+          .order('id')
+          .range(from, to),
     );
+    const existingSet = new Set(existing.map((r) => r.barcode));
 
     const survivors = input.items.filter((i) => !existingSet.has(i.barcode));
     const skipped = input.items.length - survivors.length;
@@ -4239,68 +4512,58 @@ export class InventoryService {
    *     reported `0 failed` (the `label_mismatch` the Exception Center flags);
    *   - list() reported staged/unplaced/placed_racks as empty for the overflow.
    *
-   * So: CHUNK the ids (HOLDINGS_ID_CHUNK — a request-size limit, not a row one)
-   * and PAGE each chunk through fetchAllRows with the stable `.order('id')` the
-   * helper requires.
+   * So: BATCH the ids (a request-size limit, not a row one: 100 ids per
+   * request, since one `.in()` past ~215 uuids answers 414 locally and past
+   * ~395 fails in production) and PAGE each batch with the stable
+   * `.order('id')` — fetchAllRowsByIds does both.
    *
-   * THROWS on a read error, because fetchAllRows does. That is deliberate: each
-   * caller must DECIDE (the archive guard fails closed, list() logs and
-   * degrades, the placement pass reports every item as failed). What none of
-   * them may do any more is what the old `const { data }` did — read a failed
-   * query as "this item has no holdings".
+   * THROWS on a read error, because fetchAllRowsByIds does. That is
+   * deliberate: each caller must DECIDE (the archive guard fails closed,
+   * list() logs and degrades, the placement pass reports every item as
+   * failed). What none of them may do any more is what the old
+   * `const { data }` did — read a failed query as "this item has no holdings".
    */
   /**
-   * Runs an id-filtered read in `.in()` chunks and concatenates the rows.
-   *
-   * Same request-size limit as holdingsForItemIds (see HOLDINGS_ID_CHUNK): a
-   * single `.in()` carrying ~395+ uuids fails on the Node runtime as a bare
+   * Runs an id-filtered read in batches and concatenates the rows (100 ids per
+   * request, each batch paged, a few batches at a time). A single `.in()`
+   * carrying ~395+ uuids fails on the Node runtime as a bare
    * `TypeError: fetch failed`, which meant bulkUpdate's advertised "500 items
    * at a time" was a lie — the batch died on its FIRST read, before any guard
-   * ran. One row per id, so no row-cap paging is needed on top.
+   * ran. `build` must end with `.order(…'id'…).range(from, to)`.
    *
    * Throws ServiceError('internal_error') on a page error: these reads decide
    * which items a bulk op may touch, so a partial answer is not an answer.
    */
-  private async chunkedItemRead<Row>(
+  private chunkedItemRead<Row>(
     ids: readonly string[],
-    build: (chunk: string[]) => PromiseLike<{
+    build: (batch: string[]) => (
+      from: number,
+      to: number,
+    ) => PromiseLike<{
       data: Row[] | null;
       error: { message: string } | null;
     }>,
   ): Promise<Row[]> {
-    const out: Row[] = [];
-    for (const chunk of chunkIdsForInFilter(ids, HOLDINGS_ID_CHUNK)) {
-      const { data, error } = await build(chunk);
-      if (error) throw new ServiceError('internal_error', error.message);
-      for (const r of data ?? []) out.push(r);
-    }
-    return out;
+    return fetchAllRowsByIds<Row>(ids, build);
   }
 
-  private async holdingsForItemIds<Row>(
-    ids: readonly string[],
-    select: string,
-  ): Promise<Row[]> {
-    if (ids.length === 0) return [];
-    const out: Row[] = [];
-    for (const chunk of chunkIdsForInFilter(ids, HOLDINGS_ID_CHUNK)) {
-      const page = await fetchAllRows<Row>(
-        (from, to) =>
-          this.ctx.supabase
-            .from('item_stock_levels')
-            .select(select)
-            .eq('organization_id', this.ctx.organizationId)
-            .in('item_id', chunk as string[])
-            .gt('quantity', 0)
-            .order('id')
-            .range(from, to) as unknown as PromiseLike<{
-            data: Row[] | null;
-            error: { message: string } | null;
-          }>,
-      );
-      for (const r of page) out.push(r);
-    }
-    return out;
+  private holdingsForItemIds<Row>(ids: readonly string[], select: string): Promise<Row[]> {
+    const ctx = this.ctx;
+    return fetchAllRowsByIds<Row>(
+      ids,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('item_stock_levels')
+          .select(select)
+          .eq('organization_id', ctx.organizationId)
+          .in('item_id', batch)
+          .gt('quantity', 0)
+          .order('id')
+          .range(from, to) as unknown as PromiseLike<{
+          data: Row[] | null;
+          error: { message: string } | null;
+        }>,
+    );
   }
 
   private async assertBulkArchivableOrThrow(ids: string[]): Promise<void> {
@@ -4442,6 +4705,12 @@ export class InventoryService {
   }): Promise<{
     ok: number;
     skipped: number;
+    /**
+     * Items a failed write batch left unchanged. The batches before it
+     * committed (and were audited); the caller tells the operator to run the
+     * action again on the same selection. Absent when every batch wrote.
+     */
+    failed?: number;
     placed?: number;
     /**
      * Set rack only: items whose stock demonstrably did NOT reach the rack —
@@ -4508,13 +4777,15 @@ export class InventoryService {
     // truncated or failed answer silently narrows every guard below it.
     const rows = await this.chunkedItemRead<{ id: string; warehouse_id: string | null }>(
       input.ids,
-      (chunk) =>
+      (batch) => (from, to) =>
         this.ctx.supabase
           .from('inventory_items')
           .select('id, warehouse_id')
           .eq('organization_id', this.ctx.organizationId)
-          .in('id', chunk)
-          .is('deleted_at', null),
+          .in('id', batch)
+          .is('deleted_at', null)
+          .order('id')
+          .range(from, to),
     );
 
     const access = await getWarehouseAccess(this.ctx);
@@ -4570,17 +4841,22 @@ export class InventoryService {
       // Batch-read the OLD rack label before the RPC overwrites it, so the
       // per-item audit rows below can carry a real before→after diff
       // instead of just the new value.
-      // CHUNKED for the same request-size reason; still BEST-EFFORT (this only
-      // enriches the audit diff, so a failure leaves the before-value null
-      // rather than blocking the op).
+      // CHUNKED for the same request-size reason, org-scoped like every other
+      // read here, and FAIL-CLOSED: the audit diff is part of the record, and
+      // this runs before the RPC, so a failed read stops the op with nothing
+      // written instead of auditing a null "before" (it used to be swallowed).
       const oldRackRows = await this.chunkedItemRead<{ id: string; bin_location: string | null }>(
         allowedIds,
-        (chunk) =>
-          this.ctx.supabase.from('inventory_items').select('id, bin_location').in('id', chunk),
-      ).catch(() => [] as Array<{ id: string; bin_location: string | null }>);
-      const oldBinById = new Map(
-        oldRackRows.map((r) => [r.id, r.bin_location ?? null]),
+        (batch) => (from, to) =>
+          this.ctx.supabase
+            .from('inventory_items')
+            .select('id, bin_location')
+            .eq('organization_id', this.ctx.organizationId)
+            .in('id', batch)
+            .order('id')
+            .range(from, to),
       );
+      const oldBinById = new Map(oldRackRows.map((r) => [r.id, r.bin_location ?? null]));
 
       const { data: updatedCount, error } = await this.ctx.supabase.rpc(
         'inventory_set_rack',
@@ -4635,7 +4911,17 @@ export class InventoryService {
         // two reasons: it is the `verified` freshness proof syncBookCratePlacement
         // requires, and reading it after the move would compare the row against
         // itself and prove nothing.
-        const before = await this.readBookCrateSummaries(allowedIds).catch(() => null);
+        const before = await this.readBookCrateSummaries(allowedIds).catch((e: unknown) => {
+          // Reported, not just dropped: without this freshness proof the crate
+          // labels are deliberately left as they were (see below), and a
+          // persistent failure here would otherwise be invisible.
+          void reportError(new Error(rawErrorText(e)), {
+            tag: 'inventory.bulk_set_rack.crate_summaries',
+            level: 'warning',
+            organizationId: this.ctx.organizationId,
+          });
+          return null;
+        });
         const placement = await this.placeItemsOntoRackByName(
           allowedIds,
           num,
@@ -4809,8 +5095,22 @@ export class InventoryService {
       const tags = new TagsService(this.ctx);
       if (input.op.kind === 'add_tags') {
         await tags.bulkAddToItems(allowedIds, input.op.tagIds);
-      } else {
-        await tags.bulkRemoveFromItems(allowedIds, input.op.tagIds);
+        return { ok: allowedIds.length, skipped };
+      }
+      // The removal runs in batches and returns what it did when a later
+      // batch fails (the removed part is already audited).
+      const removal = await tags.bulkRemoveFromItems(allowedIds, input.op.tagIds);
+      if (removal.notWritten.length > 0) {
+        void reportError(new Error('Bulk tag removal stopped partway'), {
+          tag: 'inventory.bulk_update.partial',
+          organizationId: this.ctx.organizationId,
+          extra: {
+            op: input.op.kind,
+            ok: removal.written.length,
+            failed: removal.notWritten.length,
+          },
+        });
+        return { ok: removal.written.length, skipped, failed: removal.notWritten.length };
       }
       return { ok: allowedIds.length, skipped };
     }
@@ -4857,22 +5157,41 @@ export class InventoryService {
     const changedKeys = Object.keys(update).filter((k) => k !== 'updated_by');
 
     // Batch-read old values BEFORE the update so the per-item audit rows
-    // below can carry a real before→after diff. One query covers every
-    // affected item — no N+1.
-    const { data: oldRows } = await this.ctx.supabase
-      .from('inventory_items')
-      .select(['id', ...changedKeys].join(', '))
-      .in('id', allowedIds);
-    const oldById = new Map<string, Record<string, unknown>>(
-      ((oldRows ?? []) as unknown as Array<Record<string, unknown>>).map((r) => [String(r.id), r]),
+    // below can carry a real before→after diff. Batched (up to 500 ids; one
+    // `.in()` of that many fails), org-scoped, and FAIL-CLOSED: its error
+    // used to be ignored, which wrote every audit row with a null "before".
+    // It runs before any write, so a failure changes nothing.
+    const ctx = this.ctx;
+    const oldRows = await fetchAllRowsByIds<Record<string, unknown>>(
+      allowedIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('inventory_items')
+          .select(['id', ...changedKeys].join(', '))
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to) as unknown as PromiseLike<{
+          data: Array<Record<string, unknown>> | null;
+          error: { message: string } | null;
+        }>,
     );
+    const oldById = new Map<string, Record<string, unknown>>(oldRows.map((r) => [String(r.id), r]));
 
-    const { error } = await this.ctx.supabase
-      .from('inventory_items')
-      .update(update)
-      .eq('organization_id', this.ctx.organizationId)
-      .in('id', allowedIds);
-    if (error) throw new ServiceError('internal_error', error.message);
+    // Written one batch at a time: each row's change is the same constant
+    // patch, so a batch is correct on its own. A failure stops the rest;
+    // whatever committed is invalidated and audited before it is reported,
+    // and `failed` tells the operator to run the action again.
+    const write = await writeInIdBatches(allowedIds, (batch) =>
+      ctx.supabase
+        .from('inventory_items')
+        .update(update)
+        .eq('organization_id', ctx.organizationId)
+        .in('id', batch),
+    );
+    if (write.error !== null && write.written.length === 0) {
+      throw new ServiceError('internal_error', write.error);
+    }
     invalidateInventoryListAfterWrite(this.ctx.organizationId, `item.bulk_${input.op.kind}`);
 
     // Emit one audit row per affected item so the per-item history
@@ -4888,7 +5207,7 @@ export class InventoryService {
         : input.op.kind === 'unarchive'
           ? ('inventory.item.restored' as const)
           : ('inventory.item.updated' as const);
-    for (const id of allowedIds) {
+    for (const id of write.written) {
       const oldRow = oldById.get(id) ?? {};
       void audit(
         {
@@ -4903,6 +5222,19 @@ export class InventoryService {
       );
     }
 
+    if (write.error !== null) {
+      void reportError(new Error('Bulk update stopped partway'), {
+        tag: 'inventory.bulk_update.partial',
+        organizationId: this.ctx.organizationId,
+        extra: {
+          op: input.op.kind,
+          ok: write.written.length,
+          failed: write.notWritten.length,
+          detail: write.error,
+        },
+      });
+      return { ok: write.written.length, skipped, failed: write.notWritten.length };
+    }
     return { ok: allowedIds.length, skipped };
   }
 
@@ -5560,19 +5892,27 @@ export class InventoryService {
   async readBookCrateSummaries(itemIds: string[]): Promise<Map<string, BookCrateSummary>> {
     const out = new Map<string, BookCrateSummary>();
     if (itemIds.length === 0) return out;
-    const { data, error } = await this.ctx.supabase
-      .from('inventory_items')
-      .select('id, name, item_type, custom_fields')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('id', itemIds)
-      .is('deleted_at', null);
-    if (error) throw new ServiceError('internal_error', error.message);
-    for (const row of (data ?? []) as Array<{
+    // Batched: bulk Set rack passes up to 500 ids. Throws on a failed batch;
+    // callers treat that as "no freshness proof" and write no crate label.
+    const ctx = this.ctx;
+    const data = await fetchAllRowsByIds<{
       id: string;
       name: string | null;
       item_type: string | null;
       custom_fields: Record<string, unknown> | null;
-    }>) {
+    }>(
+      itemIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('inventory_items')
+          .select('id, name, item_type, custom_fields')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .is('deleted_at', null)
+          .order('id')
+          .range(from, to),
+    );
+    for (const row of data) {
       if (row.item_type !== 'book') continue;
       const storage = readBookStorage(row.custom_fields);
       out.set(row.id, {
@@ -5951,21 +6291,25 @@ export class InventoryService {
     const known = itemIds.filter((id) => moves.has(id));
     if (known.length === 0) return out;
 
-    const { data, error } = await this.ctx.supabase
-      .from('item_stock_levels')
-      .select('item_id, location_id, quantity, locations!inner(id, kind, type)')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', known)
-      .gt('quantity', 0);
-    if (error) return out;
-
-    const placedByItem = new Map<string, Array<{ locationId: string; quantity: number }>>();
-    for (const row of (data ?? []) as unknown as Array<{
+    // Batched and paged (holdingsForItemIds). A failed read returns an empty
+    // prediction, which the caller reads as "assume it writes" (fail closed).
+    let data: Array<{
       item_id: string;
       location_id: string;
       quantity: number;
       locations: { kind: string | null; type: string | null } | null;
-    }>) {
+    }>;
+    try {
+      data = await this.holdingsForItemIds(
+        known,
+        'item_id, location_id, quantity, locations!inner(id, kind, type)',
+      );
+    } catch {
+      return out;
+    }
+
+    const placedByItem = new Map<string, Array<{ locationId: string; quantity: number }>>();
+    for (const row of data) {
       const loc = row.locations;
       if (!loc) continue;
       if (isSystemLocation({ type: loc.type, kind: loc.kind })) continue;
@@ -6240,15 +6584,21 @@ export class InventoryService {
     // NULL-kind rows (recurring pattern #23 — the bug migration 0292 fixed for
     // the placed draw-down), and a NULL-kind SITE holding is exactly the kind
     // of "this book is also somewhere else" evidence the split rule needs.
-    const { data, error } = await this.ctx.supabase
-      .from('item_stock_levels')
-      .select(
+    //
+    // Batched and PAGED (holdingsForItemIds): up to 500 books, several
+    // holdings each, used to run into the 1000-row cap, and dropping one of a
+    // split book's holdings makes it look unsplit. A failed read writes
+    // nothing and reports every book as failed.
+    let data: unknown[] | null = null;
+    try {
+      data = await this.holdingsForItemIds<unknown>(
+        bookIds,
         'item_id, location_id, quantity, locations!inner(id, kind, type, crate_color, crate_number, rack_number, rack_row)',
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', bookIds)
-      .gt('quantity', 0);
-    if (error)
+      );
+    } catch {
+      data = null;
+    }
+    if (data === null)
       return {
         syncedItemIds: [],
         failedItemIds: bookIds,
@@ -6726,12 +7076,14 @@ export class InventoryService {
     // read would manufacture failures for stock that was fine.
     const rows = await this.chunkedItemRead<{ id: string; warehouse_id: string | null }>(
       itemIds,
-      (chunk) =>
+      (batch) => (from, to) =>
         this.ctx.supabase
           .from('inventory_items')
           .select('id, warehouse_id')
           .eq('organization_id', this.ctx.organizationId)
-          .in('id', chunk),
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
     );
     const whByItem = new Map(rows.map((i) => [i.id, i.warehouse_id]));
 
@@ -7040,17 +7392,22 @@ export class InventoryService {
     // ONE holdings read for the whole batch, not one per item: a 60-size run
     // (the schema's ceiling) would otherwise pay 60 round trips to read what a
     // single `.in` answers.
-    const { data: holdings } = await this.ctx.supabase
-      .from('item_stock_levels')
-      .select('item_id, location_id, quantity')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', itemIds)
-      .gt('quantity', 0);
-    const rows = (holdings ?? []) as Array<{
-      item_id: string;
-      location_id: string;
-      quantity: number;
-    }>;
+    //
+    // Batched and paged (holdingsForItemIds). Its error used to be ignored:
+    // the empty result did report every item as not placed (see below), but
+    // nothing said why. A failed read now returns that same answer directly,
+    // and is reported.
+    let rows: Array<{ item_id: string; location_id: string; quantity: number }>;
+    try {
+      rows = await this.holdingsForItemIds(itemIds, 'item_id, location_id, quantity');
+    } catch (e) {
+      void reportError(new Error(rawErrorText(e)), {
+        tag: 'inventory.manual_create_place.holdings',
+        level: 'warning',
+        organizationId: this.ctx.organizationId,
+      });
+      return { rackName, failedItemIds: [...itemIds] };
+    }
     // Group by OWNING item — `item_id` is now part of the projection above
     // precisely because one read serves many items and a holding has to be
     // attributable to exactly one of them. Anything not in the requested set is
@@ -7266,60 +7623,79 @@ export class InventoryService {
     // correct. `.order('id')` is only the tiebreaker fetchAllRows needs for a
     // stable page boundary. The `movement_type = 'receive_po'` filter is NOT
     // widened — widening it was itself a past regression (see the doc below).
-    const candidates: Array<Record<string, any>> = [];
-    for (const chunk of chunkIdsForInFilter(itemIds, HOLDINGS_ID_CHUNK)) {
+    //
+    // Batches of 100 ids (mapIdBatches), each paged, a few at a time. Each
+    // batch degrades ON ITS OWN, as the per-chunk loop did: a failed batch
+    // costs only its items' source badges, and is reported.
+    const ctx = this.ctx;
+    const candidateBatches = await mapIdBatches(itemIds, async (batch) => {
       try {
-        const page = await fetchAllRows<Record<string, any>>((from, to) =>
-          this.ctx.supabase
+        return await fetchAllRows<Record<string, any>>((from, to) =>
+          ctx.supabase
             .from('stock_movements')
             .select('item_id, created_at, notes, movement_type')
-            .eq('organization_id', this.ctx.organizationId)
+            .eq('organization_id', ctx.organizationId)
             .eq('movement_type', 'receive_po')
-            .in('item_id', chunk)
+            .in('item_id', batch)
             .order('created_at', { ascending: false })
             .order('id')
             .range(from, to),
         );
-        for (const m of page) candidates.push(m);
       } catch (e) {
         // Graceful degradation: a source-lookup failure still returns the staged
-        // items (just without the source/age badge) — log so the silent failure
-        // is diagnosable.
-        console.error('staging worklist: source-movement lookup failed', {
-          error: e instanceof ServiceError ? (e.internalDetail ?? e.message) : String(e),
+        // items (just without the source/age badge), reported so it is seen.
+        reportDegradedRead('inventory.staged_worklist.source_movements', e, {
+          items: batch.length,
         });
+        return [] as Array<Record<string, any>>;
       }
-    }
+    });
+    const candidates = candidateBatches.flat();
 
     // 3. Resolve receipt -> status / PO number / receipt number. Every candidate
     //    receipt is fetched (not just one per item) because the status decides
     //    which candidate wins, and that is only knowable after this lookup.
-    const candidateReceiptIds = [...new Set(
-      candidates.map((m) => (m.notes as string | null)?.trim() || null).filter(Boolean),
-    )] as string[];
-    const receiptMeta = new Map<string, { poNumber: string | null; receiptNumber: string | null; receivedAt: string | null; status: string | null }>();
+    // Only uuid-shaped notes can be receipt ids: `notes` is free text on other
+    // writers, and one non-uuid value in a batch fails the WHOLE batch (22P02).
+    const candidateReceiptIds = [
+      ...new Set(
+        candidates
+          .map((m) => (m.notes as string | null)?.trim() || null)
+          .filter((v): v is string => v !== null && UUID_RE.test(v)),
+      ),
+    ];
+    const receiptMeta = new Map<
+      string,
+      {
+        poNumber: string | null;
+        receiptNumber: string | null;
+        receivedAt: string | null;
+        status: string | null;
+      }
+    >();
     // CHUNKED + PAGED for the same reason as the movement query above: the
     // receipt STATUS is what decides which candidate movement wins, so a
     // truncated lookup silently demotes real posted receipts to "no source".
-    for (const chunk of chunkIdsForInFilter(candidateReceiptIds, HOLDINGS_ID_CHUNK)) {
-      let receipts: Array<Record<string, any>> = [];
+    // Each batch degrades on its own, reported.
+    const receiptBatches = await mapIdBatches(candidateReceiptIds, async (batch) => {
       try {
-        receipts = await fetchAllRows<Record<string, any>>((from, to) =>
-          this.ctx.supabase
+        return await fetchAllRows<Record<string, any>>((from, to) =>
+          ctx.supabase
             .from('receipts')
             .select('id, receipt_number, received_at, status, purchase_orders(po_number)')
-            .eq('organization_id', this.ctx.organizationId)
-            .in('id', chunk)
+            .eq('organization_id', ctx.organizationId)
+            .in('id', batch)
             .order('id')
             .range(from, to),
         );
       } catch (e) {
         // Graceful degradation: a receipt/PO-lookup failure still returns the staged
-        // items (without PO/receipt numbers) — log so it's diagnosable.
-        console.error('staging worklist: receipt/PO lookup failed', {
-          error: e instanceof ServiceError ? (e.internalDetail ?? e.message) : String(e),
-        });
+        // items (without PO/receipt numbers), reported so it is seen.
+        reportDegradedRead('inventory.staged_worklist.receipts', e, { receipts: batch.length });
+        return [] as Array<Record<string, any>>;
       }
+    });
+    for (const receipts of receiptBatches) {
       for (const r of receipts) {
         receiptMeta.set(r.id, {
           poNumber: r.purchase_orders?.po_number ?? null,
@@ -7407,10 +7783,11 @@ export class InventoryService {
    *
    * BATCHED JOINS, never N+1: the actor comes from the user_profiles embed
    * (same embed MovementsService.list uses), and location names + receipts are
-   * each an `in(...)` query over the ids on the page — CHUNKED at 500, because
-   * `limit` clamps at 2000 and a single `in(...)` would be silently truncated
-   * at PostgREST's 1000-row cap, losing route and PO attribution on the rows
-   * past the cut (see chunkIdsForInFilter).
+   * each an `in(...)` read over the ids on the page — BATCHED 100 ids per
+   * request and paged (fetchAllRowsByIds), because `limit` clamps at 2000: a
+   * single `in(...)` would overflow the URL, or be silently truncated at
+   * PostgREST's 1000-row cap, losing route and PO attribution on the rows
+   * past the cut.
    *
    * TRUTHFULNESS. Rendering vocabulary lives in @stockpilot/core
    * (formatHistoryMovement) so web and mobile say the same words; this method
@@ -7498,30 +7875,22 @@ export class InventoryService {
       ),
     ];
     const locationNames = new Map<string, string>();
-    // CHUNKED, not one `.in()`. These lookups are bounded by the number of
+    // BATCHED, not one `.in()`. These lookups are bounded by the number of
     // distinct ids ON THIS PAGE, and `limit` clamps to 2000 (deliberately above
     // PostgREST's 1000-row `[api] max_rows` ceiling, see the param doc) — so a
     // large page can ask for more than 1000 rows here and PostgREST would
     // silently return the first 1000. The rows past the cut would render with
     // no route and no receipt/PO attribution, which is the SAME defect (a
     // widened query hitting the 1000-row cap and erasing PO attribution) that
-    // got the first attempt at this feature reverted. Chunking is preferred
-    // over lowering the route's limit because the limit's whole purpose is
-    // "give me this busy item's entire ledger in one read".
-    for (const idChunk of chunkIdsForInFilter(locationIds)) {
-      const { data: locs, error: locErr } = await this.ctx.supabase
-        .from('locations')
-        .select('id, name')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', idChunk);
-      // Graceful degradation: an unresolvable location renders no route rather
-      // than hiding the movement (or leaking a raw uuid as a "name").
-      if (locErr) console.error('item history: location lookup failed', { error: locErr.message });
-      for (const l of (locs ?? []) as Array<{ id: string; name: string }>) {
-        locationNames.set(l.id, l.name);
-      }
-    }
-
+    // got the first attempt at this feature reverted. Batching (100 ids per
+    // request, each batch paged) is preferred over lowering the route's limit
+    // because the limit's whole purpose is "give me this busy item's entire
+    // ledger in one read".
+    //
+    // The four lookups are independent, so they run TOGETHER (they used to run
+    // one after another). Each degrades on its own to an empty map, reported:
+    // the movement still renders, just without that label.
+    //
     // post_receipt_v2 (mig 0190) stores receipts.id in stock_movements.notes
     // (the p_notes arg of adjust_stock), NOT reference_id — the same schema
     // quirk stagedWorklist documents. That is why receipt provenance is keyed
@@ -7542,45 +7911,14 @@ export class InventoryService {
       reversalReason: string | null;
     };
     const receiptMeta = new Map<string, ReceiptMeta>();
-    // Chunked for the same reason as the location lookup above: a 2000-row page
-    // can carry more than 1000 distinct receipt ids, and a single `.in()` would
-    // silently drop the receipt/PO provenance of everything past PostgREST's
-    // 1000-row cap.
-    for (const idChunk of chunkIdsForInFilter(receiptIds)) {
-      const { data: receipts, error: rErr } = await this.ctx.supabase
-        .from('receipts')
-        .select(
-          'id, receipt_number, status, reversed_receipt_id, reversal_reason, purchase_orders(po_number, status)',
-        )
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', idChunk);
-      // Graceful degradation: the movement still renders, just without its
-      // receipt/PO provenance, rather than the whole history failing.
-      if (rErr) console.error('item history: receipt/PO lookup failed', { error: rErr.message });
-      for (const r of (receipts ?? []) as Array<Record<string, unknown>>) {
-        const poField = r.purchase_orders as
-          | { po_number?: string | null; status?: string | null }
-          | Array<{ po_number?: string | null; status?: string | null }>
-          | null;
-        const po = Array.isArray(poField) ? (poField[0] ?? null) : poField;
-        receiptMeta.set(r.id as string, {
-          receiptNumber: (r.receipt_number as string | null) ?? null,
-          status: (r.status as string | null) ?? null,
-          poNumber: po?.po_number ?? null,
-          poStatus: po?.status ?? null,
-          reversedReceiptId: (r.reversed_receipt_id as string | null) ?? null,
-          reversalReason: (r.reversal_reason as string | null) ?? null,
-        });
-      }
-    }
 
     // 5b. Some reasons stringify a RECORD'S UUID into the words a human reads:
     //     pre-0306 pick/cancel rows ('Order pick (order_request b3c7390a-…)',
     //     written before order_requests.order_number arrived in 0254) and the
     //     return rows the shipped RMA RPCs write to this day ('Return restock
     //     (return …)', 0153/0154/0197). The ledger is append-only so both are
-    //     resolved at read time, not rewritten. Chunked and org-scoped for
-    //     exactly the reasons the two lookups above are, and degrading to an
+    //     resolved at read time, not rewritten. Batched and org-scoped for
+    //     exactly the reasons the lookups above are, and degrading to an
     //     empty map on error — historyNote then falls back to the bare "Order
     //     pick" / "Return restock" it has always rendered. Resolving BOTH here
     //     is what keeps this dialog and the Movements page saying the same
@@ -7589,32 +7927,104 @@ export class InventoryService {
     const legacyRefIds = collectLegacyRefIdsByKind(
       raw.map((r) => ({ reason: (r.reason as string | null) ?? null })),
     );
-    for (const idChunk of chunkIdsForInFilter(legacyRefIds.order_request)) {
-      const { data: orders, error: oErr } = await this.ctx.supabase
-        .from('order_requests')
-        .select('id, order_number')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', idChunk);
-      if (oErr) console.error('item history: order number lookup failed', { error: oErr.message });
-      for (const [id, label] of orderNumberLabels(
-        (orders ?? []) as Array<{ id: string; order_number: number | null }>,
-      )) {
-        refLabelById.set(id, label);
-      }
+
+    const ctx = this.ctx;
+    /** One degradable lookup, batched: a failed batch costs only its own
+     *  labels, and is reported. */
+    const lookup = async <Row>(
+      tag: string,
+      ids: string[],
+      build: (
+        batch: string[],
+      ) => (
+        from: number,
+        to: number,
+      ) => PromiseLike<{ data: Row[] | null; error: { message: string } | null }>,
+    ): Promise<Row[]> => {
+      const perBatch = await mapIdBatches(ids, async (batch) => {
+        try {
+          return await fetchAllRows<Row>(build(batch));
+        } catch (e) {
+          reportDegradedRead(tag, e, { ids: batch.length });
+          return [] as Row[];
+        }
+      });
+      return perBatch.flat();
+    };
+    const [locs, receipts, orders, returns] = await Promise.all([
+      // Graceful degradation: an unresolvable location renders no route rather
+      // than hiding the movement (or leaking a raw uuid as a "name").
+      lookup<{ id: string; name: string }>(
+        'inventory.item_history.locations',
+        locationIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('locations')
+            .select('id, name')
+            .eq('organization_id', ctx.organizationId)
+            .in('id', batch)
+            .order('id')
+            .range(from, to),
+      ),
+      // The movement still renders, just without its receipt/PO provenance.
+      lookup<Record<string, unknown>>(
+        'inventory.item_history.receipts',
+        receiptIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('receipts')
+            .select(
+              'id, receipt_number, status, reversed_receipt_id, reversal_reason, purchase_orders(po_number, status)',
+            )
+            .eq('organization_id', ctx.organizationId)
+            .in('id', batch)
+            .order('id')
+            .range(from, to),
+      ),
+      lookup<{ id: string; order_number: number | null }>(
+        'inventory.item_history.order_numbers',
+        legacyRefIds.order_request,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('order_requests')
+            .select('id, order_number')
+            .eq('organization_id', ctx.organizationId)
+            .in('id', batch)
+            .order('id')
+            .range(from, to),
+      ),
+      lookup<{ id: string; return_number: string | null }>(
+        'inventory.item_history.return_numbers',
+        legacyRefIds.return,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('returns')
+            .select('id, return_number')
+            .eq('organization_id', ctx.organizationId)
+            .in('id', batch)
+            .order('id')
+            .range(from, to),
+      ),
+    ]);
+
+    for (const l of locs) locationNames.set(l.id, l.name);
+    for (const r of receipts) {
+      const poField = r.purchase_orders as
+        | { po_number?: string | null; status?: string | null }
+        | Array<{ po_number?: string | null; status?: string | null }>
+        | null;
+      const po = Array.isArray(poField) ? (poField[0] ?? null) : poField;
+      receiptMeta.set(r.id as string, {
+        receiptNumber: (r.receipt_number as string | null) ?? null,
+        status: (r.status as string | null) ?? null,
+        poNumber: po?.po_number ?? null,
+        poStatus: po?.status ?? null,
+        reversedReceiptId: (r.reversed_receipt_id as string | null) ?? null,
+        reversalReason: (r.reversal_reason as string | null) ?? null,
+      });
     }
-    for (const idChunk of chunkIdsForInFilter(legacyRefIds.return)) {
-      const { data: returns, error: rErr } = await this.ctx.supabase
-        .from('returns')
-        .select('id, return_number')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', idChunk);
-      if (rErr) console.error('item history: return number lookup failed', { error: rErr.message });
-      for (const [id, label] of returnNumberLabels(
-        (returns ?? []) as Array<{ id: string; return_number: string | null }>,
-      )) {
-        refLabelById.set(id, label);
-      }
-    }
+    for (const [id, label] of orderNumberLabels(orders)) refLabelById.set(id, label);
+    for (const [id, label] of returnNumberLabels(returns)) refLabelById.set(id, label);
 
     // 6. Reversal pairing. `receipts.reversed_receipt_id` is the RECORDED link
     //    between an undo and what it undid — we read it rather than matching on
@@ -7717,23 +8127,4 @@ export class InventoryService {
       hasMore,
     };
   }
-}
-
-/**
- * Splits a list of ids into batches small enough that a PostgREST `.in()`
- * filter can return ALL of the matches.
- *
- * PostgREST truncates any single response at `[api] max_rows` (1000 on this
- * project) WITHOUT an error — the client just gets fewer rows than it asked
- * about, which reads as "those ids do not exist". For a lookup that decorates
- * rows (location names, receipt/PO provenance) that silent truncation shows up
- * as missing attribution on real movements, not as a failure. 500 leaves
- * headroom for a row-per-id join fanning out (a receipt embeds its PO).
- *
- * Returns an empty array for an empty input, so callers can simply `for…of` it.
- */
-function chunkIdsForInFilter(ids: readonly string[], size = 500): string[][] {
-  const out: string[][] = [];
-  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size));
-  return out;
 }

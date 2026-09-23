@@ -111,16 +111,18 @@ describe('InventoryService.listGroupVariants', () => {
 
     await svc.listGroupVariants(manyGroupIds);
 
-    // 1200 ids at 500/batch = 3 batches, each its own query.
+    // 1200 ids at 100/batch = 12 batches, each its own query. 100 keeps each
+    // URL under the local gateway's ~8 KB limit (~215 uuids) and production's
+    // ~395; the old 500 exceeded both.
     const chains = stub.chainsAll.get('inventory_items.select') ?? [];
     const argsAll = stub.chainArgsAll.get('inventory_items.select') ?? [];
-    expect(chains).toHaveLength(3);
+    expect(chains).toHaveLength(12);
     const batchSizes = chains.map((chain, q) => {
       const idx = chain.indexOf('in');
       const args = argsAll[q]?.[idx] as [string, string[]];
       return args[1].length;
     });
-    expect(batchSizes).toEqual([500, 500, 200]);
+    expect(batchSizes).toEqual(Array.from({ length: 12 }, () => 100));
   });
 
   it('fails closed for a warehouse-scoped user with zero assignments (no query issued)', async () => {
