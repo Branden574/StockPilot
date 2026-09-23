@@ -35,6 +35,9 @@ import { classifyInFilterSites, mayHoldInFilter } from '@/test/in-filter-sites';
  */
 
 const SRC = path.resolve(__dirname, '../..');
+/** Test helpers and fixtures. Only this exact directory: a directory NAMED
+ *  `test` elsewhere can be shipped code (app/api/v1/push/test is a route). */
+const TEST_HELPERS = path.join(SRC, 'test');
 const BASELINE = path.join(__dirname, 'in-filter-sites.baseline.json');
 
 type Baseline = Record<string, string[]>;
@@ -43,7 +46,7 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const full = path.join(dir, entry);
     if (statSync(full).isDirectory()) {
-      if (entry === '__tests__' || entry === 'test' || entry === 'node_modules') continue;
+      if (entry === '__tests__' || entry === 'node_modules' || full === TEST_HELPERS) continue;
       sourceFiles(full, out);
     } else if (
       /\.(ts|tsx)$/.test(entry) &&
@@ -90,6 +93,13 @@ describe('in-filter sites', () => {
   it('scans real source (the check would pass vacuously otherwise)', () => {
     expect(existsSync(path.join(SRC, 'server/services/lib/fetch-by-ids.ts'))).toBe(true);
     expect(sourceFiles(SRC).length).toBeGreaterThan(500);
+  });
+
+  it('skips only the test helpers in src/test, not shipped code in a directory named test', () => {
+    const files = sourceFiles(SRC);
+    // A real API route (POST /api/v1/push/test).
+    expect(files).toContain(path.join(SRC, 'app/api/v1/push/test/route.ts'));
+    expect(files).not.toContain(path.join(SRC, 'test/supabase-mock.ts'));
   });
 
   it('adds no unbounded .in() list beyond the baseline, and the baseline has no stale entries', () => {
