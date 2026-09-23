@@ -7,8 +7,10 @@ import {
 } from '@stockpilot/core';
 
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { reportError } from '@/lib/error-reporter';
 
-import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { assertPermission, withContext, type ServiceContext } from './context';
+import { fetchAllRowsByIds, rawErrorText } from './lib/fetch-by-ids';
 import { fetchAllRows } from './lib/paginate';
 
 /**
@@ -73,10 +75,16 @@ const STALE_STAGING_DAYS = 7;
 /** Unplaced has no natural cadence, so the bar is "nobody is coming back". */
 const LONG_UNPLACED_DAYS = 30;
 
-export interface ExceptionsResult {
+interface RuleResult {
   exceptions: WarehouseException[];
   /** Rules whose row count exceeded the cap, so the page can say so out loud. */
   truncatedRules: string[];
+}
+
+export interface ExceptionsResult extends RuleResult {
+  /** Rules whose read FAILED, so the page can say those are unknown rather
+   *  than clean. Empty when every rule ran. */
+  failedRules: string[];
 }
 
 type HoldingRow = {
@@ -103,7 +111,11 @@ export class ExceptionsService {
   /**
    * Run every rule. Rules are independent, so they run in parallel and a
    * failure in one must not blank the page — a half-populated exception screen
-   * still surfaces real problems, whereas a 500 surfaces none.
+   * still surfaces real problems, whereas a 500 surfaces none. That used to be
+   * only a hope: a `Promise.all` meant one failed read failed the whole page.
+   * Now each rule group settles on its own; a failed one is reported and
+   * named in `failedRules`, so the page says those rules are UNKNOWN rather
+   * than presenting their silence as "nothing wrong".
    */
   async list(): Promise<ExceptionsResult> {
     assertPermission(this.ctx, 'items:read');
@@ -112,18 +124,31 @@ export class ExceptionsService {
     // No readable warehouse means no visible stock, which is a legitimate empty
     // rather than an error — an auditor scoped to nothing sees nothing.
     if (warehouseIds && warehouseIds.length === 0) {
-      return { exceptions: [], truncatedRules: [] };
+      return { exceptions: [], truncatedRules: [], failedRules: [] };
     }
 
-    const [placement, reservations] = await Promise.all([
-      this.placementRules(warehouseIds),
-      this.overReserved(),
-    ]);
+    const groups: Array<{ rules: readonly string[]; run: Promise<RuleResult> }> = [
+      { rules: PLACEMENT_RULES, run: this.placementRules(warehouseIds) },
+      { rules: ['over_reserved'], run: this.overReserved() },
+    ];
+    const settled = await Promise.allSettled(groups.map((g) => g.run));
 
-    return {
-      exceptions: [...placement.exceptions, ...reservations.exceptions],
-      truncatedRules: [...placement.truncatedRules, ...reservations.truncatedRules],
-    };
+    const result: ExceptionsResult = { exceptions: [], truncatedRules: [], failedRules: [] };
+    settled.forEach((outcome, i) => {
+      const group = groups[i] as (typeof groups)[number];
+      if (outcome.status === 'fulfilled') {
+        result.exceptions.push(...outcome.value.exceptions);
+        result.truncatedRules.push(...outcome.value.truncatedRules);
+        return;
+      }
+      result.failedRules.push(...group.rules);
+      void reportError(new Error('Exception Center rule failed to read'), {
+        tag: 'exceptions.rule_failed',
+        organizationId: this.ctx.organizationId,
+        extra: { rules: group.rules.join(','), detail: rawErrorText(outcome.reason) },
+      });
+    });
+    return result;
   }
 
   /**
@@ -131,7 +156,7 @@ export class ExceptionsService {
    * its location and item — so they share ONE query rather than four. The
    * alternative reads `item_stock_levels` four times for the same rows.
    */
-  private async placementRules(warehouseIds: string[] | null): Promise<ExceptionsResult> {
+  private async placementRules(warehouseIds: string[] | null): Promise<RuleResult> {
     // Every filter is rebuilt INSIDE buildPage, so page 2 is scoped exactly
     // like page 1 — a warehouse filter applied only to the first window would
     // leak another site's stock onto a scoped auditor's page (pattern #10).
@@ -146,6 +171,7 @@ export class ExceptionsService {
           )
           .eq('organization_id', this.ctx.organizationId)
           .gt('quantity', 0);
+        // in-list-bound: the caller's readable warehouses (an org's handful of sites)
         if (warehouseIds) q = q.in('locations.warehouse_id', warehouseIds);
         return q.order('id', { ascending: true }).range(from, to);
       },
@@ -273,35 +299,49 @@ export class ExceptionsService {
    * Bounded by OPEN reservations rather than by catalogue size — an org with
    * 50,000 items and three open orders reads three rows here.
    */
-  private async overReserved(): Promise<ExceptionsResult> {
-    const { data: resRows, error: resErr } = await this.ctx.supabase
-      .from('stock_reservations')
-      .select('item_id, quantity')
-      .eq('organization_id', this.ctx.organizationId)
-      .is('released_at', null);
-    if (resErr) throw new ServiceError('internal_error', resErr.message);
+  private async overReserved(): Promise<RuleResult> {
+    // Paged: open reservations are usually few, but the read was a bare
+    // `.select()`, which PostgREST cuts at 1000 rows with no error, so a busy
+    // org's sums were silently low.
+    const ctx = this.ctx;
+    const resRows = await fetchAllRows<{ item_id: string; quantity: number }>((from, to) =>
+      ctx.supabase
+        .from('stock_reservations')
+        .select('item_id, quantity')
+        .eq('organization_id', ctx.organizationId)
+        .is('released_at', null)
+        .order('id')
+        .range(from, to),
+    );
 
     const reservedByItem = new Map<string, number>();
-    for (const r of (resRows ?? []) as Array<{ item_id: string; quantity: number }>) {
+    for (const r of resRows) {
       reservedByItem.set(r.item_id, (reservedByItem.get(r.item_id) ?? 0) + Number(r.quantity));
     }
     const itemIds = [...reservedByItem.keys()];
     if (itemIds.length === 0) return { exceptions: [], truncatedRules: [] };
 
-    const { data: items, error: itemErr } = await this.ctx.supabase
-      .from('inventory_items')
-      .select('id, name, sku, quantity_on_hand')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('id', itemIds)
-      .is('deleted_at', null);
-    if (itemErr) throw new ServiceError('internal_error', itemErr.message);
-
-    const out: WarehouseException[] = [];
-    for (const it of (items ?? []) as Array<{
+    // Batched: every item with an open reservation, org-wide, has no ceiling,
+    // and one `.in()` past ~215 uuids fails.
+    const items = await fetchAllRowsByIds<{
       id: string;
       name: string;
       quantity_on_hand: number;
-    }>) {
+    }>(
+      itemIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('inventory_items')
+          .select('id, name, sku, quantity_on_hand')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .is('deleted_at', null)
+          .order('id')
+          .range(from, to),
+    );
+
+    const out: WarehouseException[] = [];
+    for (const it of items) {
       const reserved = reservedByItem.get(it.id) ?? 0;
       const onHand = Number(it.quantity_on_hand) || 0;
       if (reserved <= onHand) continue;
