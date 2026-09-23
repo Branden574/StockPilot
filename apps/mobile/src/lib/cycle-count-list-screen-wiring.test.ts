@@ -29,7 +29,7 @@ describe('the cycle-count history screen', () => {
   });
 
   it('keeps the downloaded counts reachable under a failed read, labelled as downloaded', () => {
-    expect(screen).toMatch(/const cached = await readDownloaded\(\);\s*if \(guard\.current\.isCurrent\(token\)\) setDownloaded\(cached \?\? \[\]\);/);
+    expect(screen).toMatch(/const cached = await readDownloaded\(\);\s*if \(guard\.current\.isCurrent\(token\)\) setDownloaded\(cached\);/);
     expect(screen).toMatch(/const showingDownloaded = offline \|\| \(error !== null && downloaded !== null\);/);
     expect(screen).toContain("'Searching downloaded counts only'");
     expect(screen).toContain('Offline · searching downloaded counts only');
@@ -48,5 +48,21 @@ describe('the cycle-count history screen', () => {
   it('debounces typing by 250 ms and searches at once on submit', () => {
     expect(screen).toMatch(/const SEARCH_DEBOUNCE_MS = 250;/);
     expect(screen).toMatch(/onSubmitEditing=\{searchNow\}/);
+  });
+});
+
+describe('cycle-counts list: "none downloaded" only after a successful read', () => {
+  it('keeps a failed or skipped read as null, never an empty list', () => {
+    expect(screen).not.toMatch(/setDownloaded\(cached \?\? \[\]\)/);
+    expect(screen).toMatch(/const cached = await readDownloaded\(\);\s*if \(!guard\.current\.isCurrent\(token\)\) return;[\s\S]{0,200}setDownloaded\(cached\);/);
+  });
+
+  it('says "No counts are downloaded" under an error only when the store was read', () => {
+    expect(screen).toMatch(/const empty = error \? \(\s*downloaded \? \(/);
+  });
+
+  it('the footer and the offline heading count downloads only when they were read', () => {
+    expect(screen).toMatch(/const footerText = showingDownloaded\s*\?\s*downloaded\s*\?/);
+    expect(screen).toMatch(/\? downloaded\s*\? `OFFLINE · \$\{downloaded\.length\} DOWNLOADED`\s*: 'OFFLINE'/);
   });
 });

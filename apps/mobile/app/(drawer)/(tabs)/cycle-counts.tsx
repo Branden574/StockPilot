@@ -214,7 +214,9 @@ export default function CycleCounts() {
         // Offline: only what this device downloaded. Read, never written back.
         const cached = await readDownloaded();
         if (!guard.current.isCurrent(token)) return;
-        setDownloaded(cached ?? []);
+        // null (the read failed) stays null: the screen never claims "none
+        // downloaded" about a store it could not read.
+        setDownloaded(cached);
         setError(cached ? null : 'Could not read the counts saved on this device.');
         setBusy(false);
         return;
@@ -254,7 +256,7 @@ export default function CycleCounts() {
         setPage(null);
         setError(e instanceof Error ? e.message : 'Could not load cycle counts.');
         const cached = await readDownloaded();
-        if (guard.current.isCurrent(token)) setDownloaded(cached ?? []);
+        if (guard.current.isCurrent(token)) setDownloaded(cached);
       } finally {
         if (guard.current.isCurrent(token)) setBusy(false);
       }
@@ -358,9 +360,11 @@ export default function CycleCounts() {
   const todayText = offline || !summary ? '—' : String(summary.startedToday);
 
   const footerText = showingDownloaded
-    ? `${view.q ? 'Searching downloaded counts only' : 'Showing downloaded counts only'} · ${rows.length} ${
-        rows.length === 1 ? NOUN.one : NOUN.other
-      }`
+    ? downloaded
+      ? `${view.q ? 'Searching downloaded counts only' : 'Showing downloaded counts only'} · ${rows.length} ${
+          rows.length === 1 ? NOUN.one : NOUN.other
+        }`
+      : ''
     : page
       ? formatListFooter({ ...page, itemCount: page.items.length }, NOUN)
       : '';
@@ -457,10 +461,15 @@ export default function CycleCounts() {
     </View>
   );
 
+  // Under an error, "none downloaded" is said only after the device store was
+  // actually read (downloaded is null while unread or when the read failed;
+  // the error card above already explains).
   const empty = error ? (
-    <View style={{ paddingVertical: 12 }}>
-      <Body muted>No counts are downloaded to this device{view.q || view.status ? ' that match' : ''}.</Body>
-    </View>
+    downloaded ? (
+      <View style={{ paddingVertical: 12 }}>
+        <Body muted>No counts are downloaded to this device{view.q || view.status ? ' that match' : ''}.</Body>
+      </View>
+    ) : null
   ) : searching ? (
     <View style={styles.empty}>
       <Display size={18}>No counts <Em>match.</Em></Display>
@@ -557,7 +566,9 @@ export default function CycleCounts() {
         <View style={styles.head}>
           <Eyebrow>
             {offline
-              ? `OFFLINE · ${(downloaded ?? []).length} DOWNLOADED`
+              ? downloaded
+                ? `OFFLINE · ${downloaded.length} DOWNLOADED`
+                : 'OFFLINE'
               : `${inProgressText} IN PROGRESS`}
           </Eyebrow>
           <Display size={34} style={{ marginTop: 12 }}>
