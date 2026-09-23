@@ -14,6 +14,7 @@ import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { ProductGroupsService } from '@/server/services/product-groups';
+import { MAX_BULK_TAGS } from '@/server/services/tags';
 import { ServiceError, withContext } from '@/server/services/context';
 
 import {
@@ -402,6 +403,14 @@ export async function bulkUpdateInventoryAction(input: {
      * for these books.
      */
     cratePreserved?: number;
+    /**
+     * Items whose batch was not written because an earlier batch failed. A
+     * bulk op of up to 500 items writes 100 at a time and stops at the first
+     * failure; the batches before it committed (and were audited). The
+     * toolbar says how many were left and to run it again. Declared here so it
+     * is not type-erased the way the crate counts once were.
+     */
+    failed?: number;
   }>
 > {
   if (!Array.isArray(input.ids) || input.ids.length === 0) {
@@ -418,6 +427,23 @@ export async function bulkUpdateInventoryAction(input: {
   }
   if (input.op.kind === 'set_location' && !isUuidOrNull(input.op.locationId)) {
     return err('validation_error', 'Invalid location id.');
+  }
+  if (input.op.kind === 'add_tags' || input.op.kind === 'remove_tags') {
+    // The tag list rides in the same URL as every batch of item ids (the
+    // removal is a cross product), so it is capped at MAX_BULK_TAGS; the
+    // service enforces the same cap. Checked here first so a bad list is a
+    // plain validation error before any work, and malformed ids never reach
+    // Postgres.
+    const tagIds = input.op.tagIds;
+    if (!Array.isArray(tagIds) || tagIds.length === 0) {
+      return err('validation_error', 'Pick at least one tag.');
+    }
+    if (new Set(tagIds).size > MAX_BULK_TAGS) {
+      return err('validation_error', `Apply or remove at most ${MAX_BULK_TAGS} tags at a time.`);
+    }
+    if (tagIds.some((id) => typeof id !== 'string' || !UUID_REGEX.test(id))) {
+      return err('validation_error', 'Invalid tag id.');
+    }
   }
   if (input.op.kind === 'set_rack') {
     const rn = input.op.rackNumber;

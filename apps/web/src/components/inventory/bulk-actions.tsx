@@ -342,8 +342,22 @@ export function BulkActions({
           : `Kept the crate label on ${preserved} books — Set rack was not asked to clear them, so they may now be wrong. Check those books’ details or place them into their crates.`,
       );
     }
+    // ═══ AND WHETHER EVERY ITEM WAS WRITTEN ═══
+    // A bulk op writes 100 items at a time and stops at the first failed
+    // batch; the ones before it committed. The selection is KEPT so that
+    // running the same action again finishes the rest (the write is the same
+    // value for every item, so repeating it on the done ones is harmless).
+    const failed = r.data.failed ?? 0;
     setDialog(null);
-    onClear();
+    if (failed > 0) {
+      toast.warning(
+        failed === 1
+          ? 'One item was not updated because of an error. Run it again on the same selection to finish.'
+          : `${failed} items were not updated because of an error. Run it again on the same selection to finish.`,
+      );
+    } else {
+      onClear();
+    }
     router.refresh();
   }
 
