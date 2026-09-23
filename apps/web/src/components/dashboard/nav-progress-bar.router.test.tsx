@@ -268,6 +268,27 @@ describe('<NavProgressBar /> and router starts', () => {
     expect(markNavigationFeedback).toHaveBeenCalledTimes(1);
   });
 
+  it('F10 a second link click while the bar climbs for a first one gets no feedback mark from it, as before', () => {
+    // The bar was already on screen and did not change for the second click.
+    // Only F8's case (a bar no click was marked for) re-arms the frames.
+    render(<NavProgressBar />);
+    act(() => {
+      fireEvent.click(link('/dashboard/orders'));
+    });
+    frame();
+    frame();
+    expect(markNavigationFeedback).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      fireEvent.click(link('/dashboard/books'));
+    });
+    expect(markNavigationClick).toHaveBeenCalledTimes(2);
+    expect(climbing()).toBe(true);
+    frame();
+    frame();
+    expect(markNavigationFeedback).toHaveBeenCalledTimes(1);
+  });
+
   it('a page restored from the back-forward cache ends a climbing bar', () => {
     render(<NavProgressBar />);
     start('/dashboard/orders');

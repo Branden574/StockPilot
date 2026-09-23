@@ -94,10 +94,14 @@ export function NavProgressBar() {
   // The phase as of the last call to enter(), readable at once. A click and
   // the router start it causes arrive in the same task, before any re-render.
   const phaseRef = React.useRef<Phase>('idle');
-  // Counts measured clicks. A click that lands while the bar is ALREADY
-  // climbing (for a navigation started from code, which marks nothing) does
-  // not change the phase, so without this the feedback effect would not run
-  // for it and marks.ts would report the click as never acknowledged.
+  // Bumped by a measured click that lands on a bar ALREADY climbing for a
+  // navigation no click was marked for (one started from code). The phase does
+  // not change, so without this the feedback effect would not run for it and
+  // marks.ts would report the click as never acknowledged; before the bar
+  // followed code-started navigations it was idle there and the click started
+  // it. A click on a bar climbing for an earlier CLICK does not bump it: that
+  // click got no feedback from the bar before either, and the marks stay
+  // comparable with the baseline.
   const [measuredClicks, setMeasuredClicks] = React.useState(0);
   const startKeyRef = React.useRef<string | null>(null);
   // True while the bar climbs for a click that markNavigationClick recorded.
@@ -202,8 +206,10 @@ export function NavProgressBar() {
       // event's own timeStamp is passed so a busy main thread's input delay
       // counts against the navigation instead of vanishing.
       markNavigationClick(next.pathname, e.timeStamp);
+      if (phaseRef.current === 'climbing' && !measuredRef.current) {
+        setMeasuredClicks((n) => n + 1);
+      }
       measuredRef.current = true;
-      setMeasuredClicks((n) => n + 1);
       start(fromKey);
     }
 
@@ -258,8 +264,7 @@ export function NavProgressBar() {
   // A bar started by a query-only click or by the router alone marked no
   // click, so it marks no feedback either: the navigation marks.ts has in
   // flight would be an older one, and this bar is not feedback for it. It
-  // runs again for every measured click (measuredClicks), including one that
-  // lands on a bar that is already climbing.
+  // runs again when a measured click lands on such a bar (measuredClicks).
   React.useEffect(() => {
     if (phase !== 'climbing') return;
     if (!measuredRef.current) return;
