@@ -409,15 +409,19 @@ export class CycleCountsService {
     const pageSize = CYCLE_COUNT_PAGE_SIZE;
     const page = parsePageParam(query.page);
 
-    const access = await getWarehouseAccess(this.ctx);
-    if (!access.hasAllAccess && access.unreadable) {
+    // Managers and above see every count by ROLE alone, the first rule in
+    // getWarehouseAccess (isManagerOrAbove), so their list needs no warehouse
+    // read: on the Bearer path that read was a round trip whose answer went
+    // unused. Everyone else is decided by their assignments.
+    const access = isManagerOrAbove(this.ctx.role) ? null : await getWarehouseAccess(this.ctx);
+    if (access && !access.hasAllAccess && access.unreadable) {
       throw new ServiceError(
         'internal_error',
         'Could not check which warehouses you can see. Try again.',
       );
     }
-    const seesNothing = !access.hasAllAccess && access.writableIds.length === 0;
-    const scopeIds = access.hasAllAccess ? null : access.writableIds;
+    const seesNothing = access !== null && !access.hasAllAccess && access.writableIds.length === 0;
+    const scopeIds = access === null || access.hasAllAccess ? null : access.writableIds;
     if (seesNothing) {
       const empty = toListPage<CycleCountListItem>([], { page: 1, pageSize, total: 0 });
       if (!opts.includeSummary) return empty;

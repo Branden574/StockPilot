@@ -214,9 +214,23 @@ describe('CycleCountsService.listPage: warehouse-scoped visibility', () => {
     expect(pageArgs(stub).p_scope_warehouse_ids).toEqual(['wh-a', 'wh-b']);
   });
 
-  it('a full-access manager is not narrowed', async () => {
+  it('a manager is not narrowed, and no warehouse read is spent deciding it', async () => {
     const { stub, svc } = svcWith({ data: [], error: null });
     await svc.listPage();
+    expect(pageArgs(stub).p_scope_warehouse_ids).toBeNull();
+    expect(getWarehouseAccess).not.toHaveBeenCalled();
+  });
+
+  it('a staffer with the all-warehouses flag is not narrowed either', async () => {
+    vi.mocked(getWarehouseAccess).mockResolvedValue({
+      readableIds: ['wh-a'],
+      writableIds: ['wh-a'],
+      hasAllAccess: true,
+      primaryWarehouseId: 'wh-a',
+    });
+    const { stub, svc } = svcWith({ data: [], error: null }, { role: 'staff' });
+    await svc.listPage();
+    expect(getWarehouseAccess).toHaveBeenCalledTimes(1);
     expect(pageArgs(stub).p_scope_warehouse_ids).toBeNull();
   });
 

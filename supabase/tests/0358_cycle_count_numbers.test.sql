@@ -29,7 +29,7 @@
 
 begin;
 
-select plan(69);
+select plan(75);
 
 \set orgA '\'cc035800-0000-4000-8000-00000000000a\''
 \set orgB '\'cc035800-0000-4000-8000-00000000000b\''
@@ -131,6 +131,10 @@ select ok(
 select ok(
   (select prosecdef from pg_proc where oid = 'public.cycle_counts_page(uuid, bigint, text, text, uuid, uuid, boolean, timestamptz, uuid[], integer, integer)'::regprocedure) = false,
   'A10: the list is SECURITY INVOKER (RLS applies)');
+select ok(
+  has_function_privilege('authenticated', 'public.cycle_count_line_progress(uuid, uuid[])', 'execute')
+  and not has_function_privilege('anon', 'public.cycle_count_line_progress(uuid, uuid[])', 'execute'),
+  'A11: the progress helper is callable by signed-in users only');
 
 -- ═══ B. Allocation ═══════════════════════════════════════════════════════
 insert into public.cycle_counts (id, organization_id, warehouse_id, status, started_at) values
@@ -477,6 +481,33 @@ select results_eq(
      from public.cycle_counts_page('cc035800-0000-4000-8000-00000000000d', p_number => 135) $$,
   $$ values (3, 2) $$,
   'G21: line progress is aggregated on the server');
+
+-- The progress helper answers only for the caller's own organization.
+select results_eq(
+  $$ select line_total::int, line_counted::int from public.cycle_count_line_progress(
+       'cc035800-0000-4000-8000-00000000000d',
+       array(select id from public.cycle_counts
+             where organization_id = 'cc035800-0000-4000-8000-00000000000d' and count_number = 135)) $$,
+  $$ values (3, 2) $$,
+  'G21b: progress for a count in the caller''s organization');
+select is(
+  (select count(*)::int from public.cycle_count_line_progress(
+     'cc035800-0000-4000-8000-00000000000a',
+     array['cc035800-0000-4000-8000-0000000a0001']::uuid[])),
+  0, 'G21c: nothing for an organization the caller is not a member of');
+select is(
+  (select count(*)::int from public.cycle_count_line_progress(
+     'cc035800-0000-4000-8000-00000000000d',
+     array['cc035800-0000-4000-8000-0000000a0001']::uuid[])),
+  0, 'G21d: another org''s count id named under the caller''s org counts nothing');
+select is(
+  (select count(*)::int from public.cycle_count_line_progress(
+     'cc035800-0000-4000-8000-00000000000d',
+     array(select id from public.cycle_counts where organization_id = 'cc035800-0000-4000-8000-00000000000d' limit 101))),
+  0, 'G21e: more than 100 ids is refused (bounded work)');
+select is(
+  (select min(total_count)::int from public.cycle_counts_page('cc035800-0000-4000-8000-00000000000d', p_text => 'delta')),
+  91, 'G21f: the warehouse name is still searched (91 counts have a Delta warehouse)');
 
 -- As staff D, who may work in Delta North only.
 set local "request.jwt.claim.sub" to 'cc035800-0000-4000-8000-0000000000a4';

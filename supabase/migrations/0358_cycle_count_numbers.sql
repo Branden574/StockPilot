@@ -354,6 +354,49 @@ begin
 end;
 $function$;
 
+-- ── 9a. Line progress for one page of counts ──────────────────────────────
+-- Lines and counted lines per count, for at most 100 counts of ONE org.
+--
+-- Why SECURITY DEFINER: under the caller's RLS, cycle_count_lines is checked
+-- with "exists (a cycle_counts row the caller is a member for)", and the
+-- planner answers that by scanning EVERY cycle_counts row in the database,
+-- every org's, calling is_org_member on each (measured: 35 ms at 3,140 counts,
+-- growing with every tenant's history). The gate here is the same rule, asked
+-- once: the caller must be a member of p_organization_id, and only counts of
+-- that org are counted. A member can already read every line of their org's
+-- counts (cycle_count_lines_select), so no number here is new to them.
+create or replace function public.cycle_count_line_progress(
+  p_organization_id uuid,
+  p_count_ids       uuid[]
+)
+returns table (cycle_count_id uuid, line_total bigint, line_counted bigint)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    l.cycle_count_id,
+    count(*)::bigint as line_total,
+    count(*) filter (where l.counted_quantity is not null)::bigint as line_counted
+  from public.cycle_counts c
+  join public.cycle_count_lines l on l.cycle_count_id = c.id
+  where public.is_org_member(p_organization_id)
+    and cardinality(p_count_ids) <= 100
+    and c.organization_id = p_organization_id
+    and c.id = any(p_count_ids)
+  group by l.cycle_count_id
+$$;
+
+revoke all on function public.cycle_count_line_progress(uuid, uuid[]) from public, anon;
+grant execute on function public.cycle_count_line_progress(uuid, uuid[]) to authenticated;
+
+comment on function public.cycle_count_line_progress(uuid, uuid[]) is
+  'Line totals and counted lines for up to 100 cycle counts of one org, for '
+  'the history list. SECURITY DEFINER only to skip the per-line RLS scan of '
+  'every org''s counts; gated in the body on is_org_member(p_organization_id) '
+  'and restricted to that org''s counts. authenticated may execute.';
+
 -- ── 9. The history list ────────────────────────────────────────────────────
 -- One page of an org's cycle counts, newest first (started_at DESC, id DESC).
 --
@@ -382,9 +425,9 @@ $function$;
 -- matches) inside the query, so a stale ?page= link gets rows, and the page
 -- they came from, in the same round trip. p_page_size is bounded to 1..100.
 --
--- Progress: line_total / line_counted are aggregated for the returned page
--- only (at most p_page_size counts), set-based, so no client downloads a
--- count's lines to draw a progress bar.
+-- Progress: line_total / line_counted come from cycle_count_line_progress for
+-- the returned page only (at most p_page_size counts), set-based, so no client
+-- downloads a count's lines to draw a progress bar.
 create or replace function public.cycle_counts_page(
   p_organization_id     uuid,
   p_number              bigint  default null,
@@ -438,7 +481,6 @@ as $$
     select c.id, c.started_at
     from public.cycle_counts c
     cross join params
-    left join public.warehouses w on w.id = c.warehouse_id
     where c.organization_id = p_organization_id
       and (
         p_scope_warehouse_ids is null
@@ -454,7 +496,11 @@ as $$
       and (
         params.pat is null
         or c.notes ilike params.pat
-        or w.name ilike params.pat
+        -- The warehouse name is read only when there is text to match.
+        or exists (
+          select 1 from public.warehouses w
+          where w.id = c.warehouse_id and w.name ilike params.pat
+        )
       )
   ),
   paging as (
@@ -505,13 +551,10 @@ as $$
   left join public.warehouses w on w.id = c.warehouse_id
   left join public.user_profiles u on u.id = c.assigned_to
   left join public.user_profiles sb on sb.id = c.started_by
-  left join lateral (
-    select
-      count(*) as line_total,
-      count(*) filter (where l.counted_quantity is not null) as line_counted
-    from public.cycle_count_lines l
-    where l.cycle_count_id = c.id
-  ) prog on true
+  left join public.cycle_count_line_progress(
+    p_organization_id,
+    (select array_agg(pi.id) from page_ids pi)
+  ) prog on prog.cycle_count_id = c.id
   cross join paging
   order by c.started_at desc, c.id desc
 $$;
