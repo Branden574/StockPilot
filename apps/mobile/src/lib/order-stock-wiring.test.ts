@@ -24,11 +24,17 @@ function loadBody(): string {
 describe('order screen: a failed header or lines read is a load error, not an order', () => {
   it('binds both errors and stops before building an order from them', () => {
     const body = loadBody();
-    expect(body).toContain('const { data, error: headerError } = await supabase');
-    expect(body).toContain('const { data: lineRows, error: linesError } = await supabase');
+    expect(body).toContain('const { data, error: headerError, status: headerStatus } = await supabase');
+    expect(body).toContain(
+      'const { data: lineRows, error: linesError, status: linesStatus } = await supabase',
+    );
     // EITHER error is a failure (the lines one is the one that used to show
-    // "This order has no items yet." with every action still offered).
-    expect(body).toContain('const readFailure = headerError?.message ?? linesError?.message ?? null;');
+    // "This order has no items yet." with every action still offered), and
+    // its text is never empty (readErrorMessage): an empty gateway error body
+    // would otherwise fall through to "Order not found.".
+    expect(body).toMatch(
+      /const readFailure = headerError\s*\? readErrorMessage\(headerError, headerStatus\)\s*: linesError\s*\? readErrorMessage\(linesError, linesStatus\)\s*: null;/,
+    );
     const failure = body.indexOf('if (readFailure !== null) {');
     expect(failure).toBeGreaterThan(-1);
     // Nothing is read after the failure is noticed (no stock check, no
@@ -50,10 +56,13 @@ describe('order screen: a failed header or lines read is a load error, not an or
   });
 
   it('renders the error with a guarded Try again instead of "Order not found."', () => {
-    expect(screen).toMatch(/\) : !order && loadError \? \(/);
+    // `!== null`, not truthiness: the error screen shows for ANY failure.
+    expect(screen).toMatch(/\) : !order && loadError !== null \? \(/);
     expect(screen).toContain('Could not load this <Em>order.</Em>');
     // The error branch comes BEFORE the not-found branch.
-    expect(screen.indexOf('!order && loadError ?')).toBeLessThan(screen.indexOf('Order not <Em>found.</Em>'));
+    expect(screen.indexOf('!order && loadError !== null ?')).toBeLessThan(
+      screen.indexOf('Order not <Em>found.</Em>'),
+    );
     expect(screen).toMatch(/async function retryLoad\(\) \{\s*if \(retrying\) return;/);
     const tries = screen.match(/onPress=\{\(\) => void retryLoad\(\)\}\s*disabled=\{retrying\}/g) ?? [];
     expect(tries.length).toBe(2); // the load error and the stock-check notice

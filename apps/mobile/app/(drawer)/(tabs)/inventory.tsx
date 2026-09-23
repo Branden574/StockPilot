@@ -53,6 +53,7 @@ import { countSelection, useIsPicked } from '@/lib/use-count-selection';
 import { TRAILING_COLUMN_MAX_WIDTH, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { listStatusPredicate, stockPill, stockPillFor } from '@/lib/expected-items';
 import { signListThumbnails } from '@/lib/image-cache';
+import { readErrorMessage } from '@/lib/id-batches';
 import { readPrimaryPhotos } from '@/lib/id-reads';
 import { resolveListThumbnails } from '@/lib/list-thumbnails';
 import {
@@ -439,7 +440,7 @@ export default function Inventory() {
           .order(ord.col, { ascending: ord.asc })
           .order('id', { ascending: true })
           .limit(POSTGREST_MAX_ROWS);
-      const { data, count, error } =
+      const { data, count, error, status: listStatus } =
         f.locationIds.length > 0
           ? await listRead(ITEM_COLUMNS_AT_LOCATIONS)
           : await listRead(ITEM_COLUMNS);
@@ -449,9 +450,11 @@ export default function Inventory() {
       // branch with 0298's `group_id` / `variant_size` and a `product_groups`
       // embed, so against a database that has not taken 0294+ yet PostgREST
       // refuses the whole select and every item disappears. Say so instead.
+      // readErrorMessage: never empty (an empty gateway error body would
+      // otherwise hide the banner and leave "No items match.").
       if (error) {
         console.warn('inventory list', error);
-        setLoadError(error.message);
+        setLoadError(readErrorMessage(error, listStatus));
       } else {
         setLoadError(null);
       }
@@ -883,7 +886,7 @@ export default function Inventory() {
               than left to the list's own "No items match." so a refused
               select — the shape a mobile build takes when it is ahead of the
               database — is visible instead of looking like a clean org. */}
-          {loadError ? (
+          {loadError !== null ? (
             <Body size={11.5} color={ACCENT.warn} style={{ marginTop: 8 }}>
               {`Could not load items: ${loadError}. Pull to retry — if the app was just updated, the server may still be catching up.`}
             </Body>

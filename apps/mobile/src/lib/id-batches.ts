@@ -189,6 +189,23 @@ function errorText(err: unknown): string {
 }
 
 /**
+ * The text of a PostgREST `{ error }`, never empty.
+ *
+ * postgrest-js turns a response body that is not JSON into
+ * `{ message: body }`, so an empty body (a 502 or 504 from a gateway) gives an
+ * EMPTY message. A screen that shows `error.message` behind a truthiness check
+ * then shows nothing, and the failure passes for an empty list or "not
+ * found". Say what came back instead.
+ */
+export function readErrorMessage(
+  error: { message?: string | null },
+  status?: number | null,
+  statusText?: string | null,
+): string {
+  return error.message || `HTTP ${status ?? '?'} ${statusText ?? ''}`.trim();
+}
+
+/**
  * Every row of ONE query, paged past the 1000-row cap: one batch of an id
  * list, or a whole list read with no id filter. The builder's query must end
  * in a stable order (ending on `id`) and `.range(from, to)`. Throws
@@ -214,10 +231,10 @@ export async function fetchAllPages<Row>(
     }
     if (res.error) {
       // An empty 502 body has an empty message; say what came back instead.
-      const message =
-        res.error.message ||
-        `HTTP ${res.status ?? '?'} ${res.statusText ?? ''}`.trim();
-      throw new IdBatchReadError(message, res.status ?? null);
+      throw new IdBatchReadError(
+        readErrorMessage(res.error, res.status, res.statusText),
+        res.status ?? null,
+      );
     }
     const window = res.data ?? [];
     for (const r of window) rows.push(r);

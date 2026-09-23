@@ -263,8 +263,10 @@ describe('items list — identical behaviour to books, because the owner compare
     expect(body).not.toContain('placedItemIds');
     expect(body).not.toContain('00000000-0000-0000-0000-000000000000');
     expect(body).not.toContain(".from('item_stock_levels')");
-    // One read, so its error takes the visible banner path.
-    expect(body).toContain('setLoadError(error.message)');
+    // One read, so its error takes the visible banner path, with a message
+    // that is never empty (an empty one would hide the banner).
+    expect(body).toContain('setLoadError(readErrorMessage(error, listStatus))');
+    expect(inventory).toMatch(/\{loadError !== null \? \(\s*<Body[^>]*>\s*\{`Could not load items: /);
   });
 
   it('renders the partial marker on a collapsed header (overflow case only)', () => {
@@ -306,9 +308,13 @@ describe('books list — a failed read says so, never passes for an empty or cur
 
   it('a refused list read shows an error, not "No books match."', () => {
     const body = loadBody(books);
-    expect(body).toMatch(/if \(error\) \{\s*console\.warn\('books list', error\);\s*setLoadError\(error\.message\);/);
+    // Never an empty message: an empty gateway error body would otherwise
+    // hide the notice behind a truthiness test.
+    expect(body).toMatch(
+      /if \(error\) \{\s*console\.warn\('books list', error\);\s*setLoadError\(readErrorMessage\(error, listStatus\)\);/,
+    );
     expect(books).toContain('`Could not load books: ${loadError}. Pull to retry.`');
-    expect(books).toMatch(/\{loadError \? \(/);
+    expect(books).toMatch(/\{loadError !== null \? \(/);
   });
 
   it('every load starts with its error flags cleared, and only the newest load writes', () => {

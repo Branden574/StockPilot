@@ -39,6 +39,11 @@ describe('PO import review: item names', () => {
 
   it('a clean load clears an earlier refresh failure, and a refresh failure over a loaded import is shown', () => {
     expect(load()).toMatch(/if \(hErr \|\| lErr\) \{[\s\S]*?return;\s*\}[\s\S]*?setLoadError\(null\);/);
+    // `||`, not `??`: an empty gateway error body is an empty message, which
+    // would render a blank screen instead of the failure.
+    expect(load()).toContain(
+      "setLoadError(hErr?.message || lErr?.message || 'Could not load this import.');",
+    );
     expect(importScreen).toContain('Could not refresh this import: {loadError}. Pull down to try again.');
   });
 

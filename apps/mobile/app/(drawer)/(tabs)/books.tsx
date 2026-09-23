@@ -56,7 +56,7 @@ import {
   type LifecycleStatus,
 } from '@/lib/expected-items';
 import { signListThumbnails } from '@/lib/image-cache';
-import { settleIdBatchRead } from '@/lib/id-batches';
+import { readErrorMessage, settleIdBatchRead } from '@/lib/id-batches';
 import { readPrimaryPhotos, readRackHoldings } from '@/lib/id-reads';
 import { resolveListThumbnails } from '@/lib/list-thumbnails';
 import {
@@ -399,16 +399,18 @@ export default function BooksScreen() {
       // `id` is a SECONDARY sort key: updated_at / name / quantity all tie
       // freely, and ties ordered differently between two fetches can put a row
       // in two groups or none.
-      const { data, count, error } = await scoped(BOOK_COLUMNS, { count: 'exact' })
+      const { data, count, error, status: listStatus } = await scoped(BOOK_COLUMNS, { count: 'exact' })
         .order(ord.col, { ascending: ord.asc })
         .order('id', { ascending: true })
         .limit(POSTGREST_MAX_ROWS);
       if (!isCurrent()) return;
       // FAIL LOUD: a refused read used to be a console.warn and "No books
       // match.", a claim about the org's shelves made from an error.
+      // readErrorMessage: never empty (an empty gateway error body would
+      // otherwise hide the notice and leave "No books match.").
       if (error) {
         console.warn('books list', error);
-        setLoadError(error.message);
+        setLoadError(readErrorMessage(error, listStatus));
       }
 
       let bookRows: BookRow[] = (data ?? []).map(toBookRow);
@@ -800,7 +802,7 @@ export default function BooksScreen() {
           ) : null}
 
           {/* A READ that failed is not an empty shelf. */}
-          {loadError ? (
+          {loadError !== null ? (
             <Body size={11.5} color={ACCENT.warn} style={{ marginTop: 8 }}>
               {`Could not load books: ${loadError}. Pull to retry.`}
             </Body>

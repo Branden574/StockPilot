@@ -86,6 +86,7 @@ import {
   orderStockGates,
   type OrderStockCheck,
 } from '@/lib/order-stock-check';
+import { readErrorMessage } from '@/lib/id-batches';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   BLOCKED_HEADLINE as DR_BLOCKED_HEADLINE,
@@ -747,7 +748,7 @@ export default function OrderDetail() {
 
   const load = React.useCallback(async () => {
     if (!orgId || !id) return;
-    const { data, error: headerError } = await supabase
+    const { data, error: headerError, status: headerStatus } = await supabase
       .from('order_requests')
       .select(
         // `requester:user_profiles!requester_user_id` resolves the team-member
@@ -775,7 +776,7 @@ export default function OrderDetail() {
       .maybeSingle();
     // Order lines — both the per-line ITEMS list (a manager must SEE what's
     // being ordered before approving) and the backorder roll-ups.
-    const { data: lineRows, error: linesError } = await supabase
+    const { data: lineRows, error: linesError, status: linesStatus } = await supabase
       .from('order_request_lines')
       .select(
         // quantity_picked is read for the line-edit floors: it is what a picker
@@ -788,7 +789,13 @@ export default function OrderDetail() {
     // not found." and the lines to an order with no items; both are claims
     // about the order made from an error. Nothing below runs on a failure:
     // the screen shows the error and a Try again instead of the order.
-    const readFailure = headerError?.message ?? linesError?.message ?? null;
+    // readErrorMessage: an empty error body (a gateway 502) has an empty
+    // message, which would otherwise fall through to "Order not found.".
+    const readFailure = headerError
+      ? readErrorMessage(headerError, headerStatus)
+      : linesError
+        ? readErrorMessage(linesError, linesStatus)
+        : null;
     if (readFailure !== null) {
       console.warn('order load', readFailure);
       setOrder(null);
@@ -1562,7 +1569,7 @@ export default function OrderDetail() {
 
       {loading ? (
         <ActivityIndicator color={c.ink} style={{ marginTop: 40 }} />
-      ) : !order && loadError ? (
+      ) : !order && loadError !== null ? (
         <View style={styles.center}>
           <Display size={18}>Could not load this <Em>order.</Em></Display>
           <Body muted style={{ marginTop: 6, textAlign: 'center' }}>

@@ -309,7 +309,9 @@ export default function PoImportDetailScreen() {
     ]);
 
     if (hErr || lErr) {
-      setLoadError(hErr?.message ?? lErr?.message ?? 'Could not load this import.');
+      // `||`, not `??`: an empty gateway error body gives an empty message,
+      // which would render as a blank screen instead of the failure.
+      setLoadError(hErr?.message || lErr?.message || 'Could not load this import.');
       setLoading(false);
       return;
     }

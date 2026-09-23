@@ -12,6 +12,7 @@ import {
   fetchAllRowsByIds,
   idReadTable,
   mapWithConcurrency,
+  readErrorMessage,
   settleIdBatchRead,
   type PageBuilder,
   type PageResult,
@@ -271,6 +272,16 @@ describe('fetchAllRowsByIds', () => {
       Promise.resolve({ data: null, error: { message: '' }, status: 502, statusText: 'Bad Gateway' }),
     );
     await expect(read).rejects.toMatchObject({ message: 'HTTP 502 Bad Gateway', status: 502 });
+  });
+
+  it('readErrorMessage is never empty: an empty gateway error body says what came back', () => {
+    // postgrest-js turns a non-JSON body into { message: body }, so an empty
+    // 502 body is an empty message; a screen that tests it for truthiness
+    // would show nothing and pass the failure off as an empty list.
+    expect(readErrorMessage({ message: '' }, 502, 'Bad Gateway')).toBe('HTTP 502 Bad Gateway');
+    expect(readErrorMessage({ message: '' }, 504)).toBe('HTTP 504');
+    expect(readErrorMessage({ message: '' })).toBe('HTTP ?');
+    expect(readErrorMessage({ message: 'permission denied' }, 403)).toBe('permission denied');
   });
 
   it('a rejected request (network failure) rejects with IdBatchReadError', async () => {
