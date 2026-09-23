@@ -376,7 +376,7 @@ export type AuditEvent =
    */
   | 'ai.write_tool_invoked';
 
-interface AuditPayload {
+export interface AuditPayload {
   event: AuditEvent;
   entityType?: string;
   entityId?: string | null;
@@ -385,6 +385,55 @@ interface AuditPayload {
   after?: unknown;
   reason?: string;
   extra?: Record<string, unknown>;
+}
+
+type RequestMeta = { ip: string | null; userAgent: string | null };
+
+/** IP and user agent of the current request. */
+async function readRequestMeta(): Promise<RequestMeta> {
+  const h = await headers();
+  return {
+    ip: h.get('x-forwarded-for')?.split(',')[0]?.trim() || h.get('x-real-ip') || null,
+    userAgent: h.get('user-agent') || null,
+  };
+}
+
+/** The one place an audit_logs row is shaped. */
+function auditRow(payload: AuditPayload, c: ServiceContext, meta: RequestMeta) {
+  return {
+    organization_id: c.organizationId,
+    user_id: c.userId,
+    event: payload.event,
+    ip: meta.ip,
+    user_agent: meta.userAgent,
+    metadata: {
+      entity_type: payload.entityType ?? null,
+      entity_id: payload.entityId ?? null,
+      warehouse_id: payload.warehouseId ?? null,
+      before: payload.before ?? null,
+      after: payload.after ?? null,
+      reason: payload.reason ?? null,
+      ...(payload.extra ?? {}),
+    },
+  };
+}
+
+/**
+ * What a rejected INSERT said about itself: HTTP status and PostgREST/Postgres
+ * code only. Never the message or details: a Postgres rejection quotes the
+ * failing row ("Failing row contains (...)"), and audit metadata carries item
+ * names and before/after values.
+ */
+function insertFailure(res: {
+  status?: number;
+  statusText?: string;
+  error: { code?: string } | null;
+}) {
+  return {
+    status: typeof res.status === 'number' ? res.status : null,
+    statusText: res.statusText || null,
+    code: res.error?.code || null,
+  };
 }
 
 /**
@@ -398,38 +447,35 @@ interface AuditPayload {
  * would silently drop the event. Bearer/API callers MUST pass their
  * `ServiceContext` so the audit row is written.
  *
- * Best-effort — never throws to the caller. Audit failures are logged to
- * stderr only; we never want a logging error to break a user action.
+ * Best-effort for the action — never throws to the caller — but a lost row is
+ * never silent: a refused or failed INSERT is reported. supabase-js returns a
+ * failed request as `{ error }` instead of throwing, so the result is read;
+ * the catch only sees what throws (no context, no request headers).
  */
 export async function audit(payload: AuditPayload, ctx?: ServiceContext): Promise<void> {
   try {
     const c = ctx ?? (await withContext());
-    const h = await headers();
-    const ip = h.get('x-forwarded-for')?.split(',')[0]?.trim() || h.get('x-real-ip') || null;
-    const userAgent = h.get('user-agent') || null;
-
+    const meta = await readRequestMeta();
     const admin = createAdminClient();
-    await admin.from('audit_logs').insert({
-      organization_id: c.organizationId,
-      user_id: c.userId,
-      event: payload.event,
-      ip,
-      user_agent: userAgent,
-      metadata: {
-        entity_type: payload.entityType ?? null,
-        entity_id: payload.entityId ?? null,
-        warehouse_id: payload.warehouseId ?? null,
-        before: payload.before ?? null,
-        after: payload.after ?? null,
-        reason: payload.reason ?? null,
-        ...(payload.extra ?? {}),
-      },
-    });
+    const res = await admin.from('audit_logs').insert(auditRow(payload, c, meta));
+    if (res.error) {
+      void reportError(new Error('Audit rows were not written'), {
+        tag: 'audit.write_failed',
+        level: 'warning',
+        organizationId: c.organizationId,
+        extra: {
+          event: payload.event,
+          entityType: payload.entityType ?? null,
+          lost: 1,
+          ...insertFailure(res),
+        },
+      });
+    }
   } catch (e) {
     void reportError(e, {
       tag: 'audit.write_failed',
       level: 'warning',
-      extra: { event: payload.event, entityType: payload.entityType ?? null },
+      extra: { event: payload.event, entityType: payload.entityType ?? null, lost: 1 },
     });
   }
 }
