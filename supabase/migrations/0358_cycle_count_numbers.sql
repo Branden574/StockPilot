@@ -21,8 +21,8 @@
 --      never handed out twice, even if a count row were ever removed. If the
 --      creating transaction rolls back (an empty scope raises inside
 --      start_cycle_count), the increment rolls back with it. Gaps are allowed
---      (an INSERT ... ON CONFLICT DO NOTHING that finds its row already there
---      still fires the BEFORE trigger and spends a number); reuse is not.
+--      (a count deleted after creation leaves its number unused); reuse is
+--      not.
 --   3. A BEFORE UPDATE guard: count_number and organization_id never change
 --      once set. Assignment, notes, posting, cancellation and sync cannot
 --      change the number because nothing can.
@@ -34,8 +34,11 @@
 -- ── WHO CAN SET THE NUMBER ─────────────────────────────────────────────────
 -- Only the trigger. It OVERWRITES any count_number an INSERT supplies, so a
 -- client (a manager can insert a header directly under the 0023/0203 policy)
--- cannot choose, reuse or skip ahead in the series; the UPDATE guard refuses
--- any change after that. The counter table has RLS on, no policies, and every
+-- cannot choose or reuse a number; the UPDATE guard refuses any change after
+-- that. A row the insert policy will refuse (a caller who is not a manager of
+-- the org) and a row whose id already exists (an upsert that updates or skips)
+-- draw no number, so neither an outsider nor a repeated upsert can touch the
+-- series. The counter table has RLS on, no policies, and every
 -- privilege revoked from the API roles, so it cannot be read or reset over
 -- PostgREST. The allocator is a trigger function: it cannot be called as an
 -- RPC, and EXECUTE is revoked anyway (0329 posture; a trigger fires regardless
@@ -199,6 +202,34 @@ as $$
 declare
   v_next bigint;
 begin
+  -- A signed-in or anonymous caller who is not a manager of this org is about
+  -- to be refused by the cycle_counts INSERT policy (manager+ only), which
+  -- Postgres checks AFTER the BEFORE triggers. Such a row draws no number and
+  -- touches no counter: otherwise anyone could hold another tenant's counter
+  -- row lock, and a foreign key error on the counter would tell them whether an
+  -- organization id exists. Any client-supplied number is still discarded.
+  if coalesce(auth.role(), '') in ('anon', 'authenticated')
+     and not public.has_org_role(new.organization_id, 'manager') then
+    new.count_number := null;
+    return new;
+  end if;
+
+  -- A row whose id already exists is never inserted: ON CONFLICT DO NOTHING
+  -- skips it, ON CONFLICT DO UPDATE updates the existing row instead, and a
+  -- plain INSERT fails on the primary key. It spends no number (a repeated
+  -- upsert could otherwise skip the series ahead at will). It carries the
+  -- EXISTING number, not NULL: Postgres checks NOT NULL before it looks for
+  -- the conflicting row, so NULL would turn a harmless DO NOTHING into an
+  -- error, and a DO UPDATE SET count_number = excluded.count_number then
+  -- writes the number the row already has (the guard below sees no change).
+  select cc.count_number into v_next
+    from public.cycle_counts cc
+   where cc.id = new.id;
+  if found then
+    new.count_number := v_next;
+    return new;
+  end if;
+
   -- The first count an org ever creates seeds its counter from any numbers
   -- already on that org's counts (never below them), so a missing counter row
   -- cannot restart the series at 1 and collide. Every later count increments
@@ -473,7 +504,9 @@ as $$
     select
       case
         when p_text is null or btrim(p_text) = '' then null
-        else '%' || replace(replace(replace(btrim(p_text), '\', '\\'), '%', '\%'), '_', '\_') || '%'
+        -- At most 200 characters are matched (the apps send at most 100), so
+        -- a direct caller cannot make every row scan a huge pattern.
+        else '%' || replace(replace(replace(left(btrim(p_text), 200), '\', '\\'), '%', '\%'), '_', '\_') || '%'
       end as pat,
       least(greatest(coalesce(p_page_size, 25), 1), 100) as size
   ),

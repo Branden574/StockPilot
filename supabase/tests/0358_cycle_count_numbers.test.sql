@@ -29,7 +29,7 @@
 
 begin;
 
-select plan(75);
+select plan(81);
 
 \set orgA '\'cc035800-0000-4000-8000-00000000000a\''
 \set orgB '\'cc035800-0000-4000-8000-00000000000b\''
@@ -208,6 +208,47 @@ select is(
   (select count(*)::int from public.cycle_counts where organization_id = :orgA)
     = (select count(distinct count_number)::int from public.cycle_counts where organization_id = :orgA),
   true, 'B10: no two counts in the org share a number');
+
+-- An upsert of an existing id spends no number (it would otherwise let a
+-- manager skip the series ahead at will).
+insert into public.cycle_counts (id, organization_id, warehouse_id, status)
+  select 'cc035800-0000-4000-8000-0000000a0001', :orgA, :whA1, 'completed'
+  from generate_series(1, 50)
+  on conflict (id) do nothing;
+select is(
+  (select last_number from public.cycle_count_number_counters where organization_id = :orgA),
+  7::bigint, 'B11: ON CONFLICT DO NOTHING on an existing id draws no number');
+insert into public.cycle_counts (id, organization_id, warehouse_id, status)
+  values ('cc035800-0000-4000-8000-0000000a0001', :orgA, :whA1, 'completed')
+  on conflict (id) do update set count_number = excluded.count_number, notes = 'upserted';
+select results_eq(
+  $$ select count_number, notes from public.cycle_counts where id = 'cc035800-0000-4000-8000-0000000a0001' $$,
+  $$ values (1::bigint, 'upserted'::text) $$,
+  'B12: an upsert that writes excluded.count_number keeps the row''s own number');
+
+-- A caller the insert policy refuses draws no number and touches no counter.
+set local "request.jwt.claim.sub" to 'cc035800-0000-4000-8000-0000000000a4';
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+select throws_ok(
+  $$ insert into public.cycle_counts (organization_id, warehouse_id, status)
+     values ('cc035800-0000-4000-8000-00000000000a', 'cc035800-0000-4000-8000-0000000000b1', 'in_progress') $$,
+  '42501', null,
+  'B13: a non-member''s insert is refused by the policy');
+select throws_ok(
+  $$ insert into public.cycle_counts (organization_id, status)
+     values ('cc035800-0000-4000-8000-00000000ffff', 'in_progress') $$,
+  '42501', null,
+  'B14: an unknown organization id gets the same refusal (no foreign-key hint that it does not exist)');
+reset role;
+set local "request.jwt.claim.sub" to 'cc035800-0000-4000-8000-0000000000a1';
+set local "request.jwt.claim.role" to '';
+select is(
+  (select last_number from public.cycle_count_number_counters where organization_id = :orgA),
+  7::bigint, 'B15: the refused insert left the org''s counter untouched');
+select is(
+  (select count(*)::int from public.cycle_count_number_counters where organization_id = 'cc035800-0000-4000-8000-00000000ffff'),
+  0, 'B16: and created no counter for an organization that does not exist');
 
 -- ═══ C. Immutability ═════════════════════════════════════════════════════
 select throws_ok(
