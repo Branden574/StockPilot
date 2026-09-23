@@ -536,6 +536,66 @@ describe('storefront loaders throw on a failed read instead of caching it', () =
     });
   });
 
+  // One query string with every catalog id failed at the gateway ("URI too
+  // long": the local one refuses past ~8 KB, ~215 ids; production already sent
+  // 15.8 KB). Batches keep each request small and still add up per item.
+  it('catalog items: a big catalog reads reservations in batches of at most 100 ids, summed across batches', async () => {
+    const items = Array.from({ length: 250 }, (_, i) => ({ ...ITEM, id: `i-${i}` }));
+    const perBatch = [
+      [{ item_id: 'i-5', quantity: 2 }],
+      [
+        { item_id: 'i-150', quantity: 4 },
+        { item_id: 'i-150', quantity: 1 },
+      ],
+      [{ item_id: 'i-249', quantity: 7 }],
+    ];
+    let batch = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: items, error: null },
+      'stock_reservations.select': () => ({ data: perBatch[batch++] ?? [], error: null }),
+      'categories.select': { data: [{ id: CAT_X, name: 'Tech' }], error: null },
+      'charters.select': { data: [{ id: CHARTER_A, name: 'Alpha', code: 'A' }], error: null },
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+
+    const cards = await loadCatalogItems(owner, WH);
+
+    const chains = stub.chainsAll.get('stock_reservations.select') ?? [];
+    const argsAll = stub.chainArgsAll.get('stock_reservations.select') ?? [];
+    expect(chains).toHaveLength(3);
+    const argOf = (i: number, method: string) => argsAll[i]![chains[i]!.indexOf(method)];
+    const sent = chains.map((_, i) => {
+      const [column, ids] = argOf(i, 'in') as [string, string[]];
+      expect(column).toBe('item_id');
+      expect(ids.length).toBeLessThanOrEqual(100);
+      // Paged past the row cap, in a stable order.
+      expect(argOf(i, 'order')).toEqual(['id', { ascending: true }]);
+      expect(argOf(i, 'range')).toEqual([0, 999]);
+      return ids;
+    });
+    expect(sent.flat()).toEqual(items.map((i) => i.id));
+
+    const reserved = new Map(cards.map((c) => [c.id, c.reservedQuantity]));
+    expect(reserved.get('i-5')).toBe(2);
+    expect(reserved.get('i-150')).toBe(5);
+    expect(reserved.get('i-249')).toBe(7);
+    expect(reserved.get('i-0')).toBe(0);
+  });
+
+  it('catalog items: one failed reservations batch rejects the whole read', async () => {
+    const items = Array.from({ length: 250 }, (_, i) => ({ ...ITEM, id: `i-${i}` }));
+    let batch = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: items, error: null },
+      'stock_reservations.select': () =>
+        batch++ === 1 ? FAILED : { data: [{ item_id: 'i-5', quantity: 2 }], error: null },
+      'categories.select': { data: [{ id: CAT_X, name: 'Tech' }], error: null },
+      'charters.select': { data: [{ id: CHARTER_A, name: 'Alpha', code: 'A' }], error: null },
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+    await expect(loadCatalogItems(owner, WH)).rejects.toThrow(/reservations read failed: fetch failed/);
+  });
+
   it('thumb map: a failed image-rows read rejects (was an empty map for 4 h), signs nothing', async () => {
     const stub = makeSupabaseStub({ 'item_images.select': FAILED });
     createAdminClientMock.mockReturnValue(stub.client);
