@@ -45,6 +45,7 @@ import {
   type MockCall,
 } from '@/test/supabase-mock';
 
+import { audit } from './audit';
 import { PlanningService } from './planning';
 import { ScheduleService } from './schedule';
 
@@ -197,5 +198,74 @@ describe('ScheduleService distributed flag', () => {
       new ScheduleService(ctxFor(stub.client)).update(uuid(1, 'e'), { title: 'Renamed' } as never),
     ).rejects.toMatchObject({ code: 'internal_error' });
     expect(stub.chainsAll.get('schedule_events.update')).toBeUndefined();
+  });
+
+  describe('the completion audit', () => {
+    const eventId = uuid(1, 'e');
+    function completeWith(rpc: { data: null; error: { message: string; code?: string } | null }) {
+      let distReads = 0;
+      const stub = makeSupabaseStub({
+        'schedule_events.select': {
+          data: [
+            {
+              status: 'in_progress',
+              bundle_id: 'bundle-1',
+              bundle_quantity: 2,
+              bundle_warehouse_id: 'wh-1',
+              warehouse_id: null,
+            },
+          ],
+          error: null,
+        },
+        // The first read decides the lock (nothing distributed yet); the
+        // re-read after the update fails.
+        'bundle_distributions.select': () => {
+          distReads += 1;
+          return distReads === 1
+            ? { data: [], error: null }
+            : { data: null, error: { message: 'boom' } };
+        },
+        'schedule_events.update': {
+          data: [{ ...events[1], id: eventId, status: 'completed' }],
+          error: null,
+        },
+        'rpc:distribute_bundle': rpc,
+      });
+      vi.mocked(audit).mockClear();
+      return {
+        run: () =>
+          new ScheduleService(ctxFor(stub.client)).update(eventId, {
+            status: 'completed',
+          } as never),
+        stub,
+      };
+    }
+    const completedExtra = () =>
+      vi
+        .mocked(audit)
+        .mock.calls.map((c) => c[0] as { event: string; extra?: Record<string, unknown> })
+        .find((e) => e.event === 'schedule.completed')?.extra;
+
+    it('records a distribution this call made even when the re-read after it fails', async () => {
+      const { run, stub } = completeWith({ data: null, error: null });
+      await run();
+      expect(stub.rpcCalls.map((c) => c.name)).toEqual(['distribute_bundle']);
+      expect(completedExtra()).toEqual({ autoDistributed: true });
+    });
+
+    it('records no distribution when the distribution failed', async () => {
+      const { run } = completeWith({ data: null, error: { message: 'short on kits' } });
+      await expect(run()).rejects.toMatchObject({ code: 'conflict' });
+      expect(completedExtra()).toEqual({ autoDistributed: false });
+    });
+
+    it('records a distribution another caller made first (unique violation)', async () => {
+      const { run } = completeWith({
+        data: null,
+        error: { message: 'duplicate key', code: '23505' },
+      });
+      await run();
+      expect(completedExtra()).toEqual({ autoDistributed: true });
+    });
   });
 });

@@ -488,6 +488,10 @@ export class ScheduleService {
     // the prior status to be exactly 'in_progress' — the normal
     // workflow path. Reopen → in_progress → complete still works.
     let autoDistFailed: { message: string; bundleId: string } | null = null;
+    // Whether the event has a distribution once this call is done, from what
+    // the call itself saw. The completion audit records it; the re-read below
+    // is for display and degrades to "not distributed" when it fails.
+    let distributedNow = distributedBefore.has(id);
     if (
       patch.status === 'completed' &&
       beforeStatus === 'in_progress'
@@ -539,6 +543,7 @@ export class ScheduleService {
             },
           );
           if (!distErr) {
+            distributedNow = true;
             // distribute_bundle drew every component off the shelf. The only
             // caller, updateScheduleEventAction, revalidates the schedule pages
             // alone, so completing an event left the Items list showing the
@@ -558,7 +563,9 @@ export class ScheduleService {
               code === '23505' ||
               msg.includes('bundle_distributions_event_uniq') ||
               msg.toLowerCase().includes('duplicate key');
-            if (!isDup) {
+            if (isDup) {
+              distributedNow = true;
+            } else {
               // Status flip already succeeded. Capture the failure
               // so we can surface a soft error to the UI after
               // emitting audit events.
@@ -587,7 +594,7 @@ export class ScheduleService {
           warehouseId: row.warehouseId,
           before: { status: beforeStatus },
           after: { status: 'completed' },
-          extra: { autoDistributed: row.bundleDistributed },
+          extra: { autoDistributed: distributedNow },
         },
         this.ctx,
       );
