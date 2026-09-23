@@ -3,11 +3,6 @@
   "app/(dashboard)/dashboard/settings/migrate/sage50/page.tsx": ["in:id <- access.writableIds"],
   "app/api/cron/maintenance-draft-reminders/route.ts": ["in:organization_id <- enabledOrgIds"],
   "app/api/cron/prewarm-orders-catalog/route.ts": ["in:organization_id <- [...KNOWN_HOT_ORG_IDS]"],
-  "app/api/cron/schedule-reminders/route.ts": [
-    "in:id <- [...userIds]",
-    "in:id <- orgIds",
-    "in:user_id <- [...userIds]"
-  ],
   "app/api/orders/freq/route.ts": [
     "in:id <- categoryIds",
     "in:id <- itemIds",

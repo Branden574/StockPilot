@@ -423,3 +423,104 @@ describe('GET /api/cron/schedule-reminders', () => {
     expect(sendEmailMock.mock.calls[0]![0].to).toBe('manager@l4l.example');
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════
+// LONG ID LISTS
+//
+// A run carries up to 500 events across many orgs, and an event's recipients
+// are every owner, admin and manager of its org. Each list went into one
+// `.in()`: past ~215 ids the local gateway answers 414 and past ~395
+// production fails after ~7 s of retries. The timezone read was reported and
+// the two recipient reads were ignored. All three now go 100 ids per request.
+// ═════════════════════════════════════════════════════════════════════════
+describe('GET /api/cron/schedule-reminders — long id lists', () => {
+  const inList = (call: { methods: string[]; args: unknown[][] }, column: string) => {
+    const i = call.methods.findIndex((m, k) => m === 'in' && call.args[k]?.[0] === column);
+    return (i === -1 ? [] : call.args[i]![1]) as string[];
+  };
+
+  it('150 orgs: timezones read in batches of 100, and an org in the second batch gets its zone', async () => {
+    const events = Array.from({ length: 150 }, (_, i) =>
+      eventIn(0, {
+        id: `ev-${i}`,
+        organization_id: `org-${i}`,
+        starts_at: '2026-08-25T04:30:00.000Z',
+      }),
+    );
+    const orgLists: string[][] = [];
+    const stub = stubFor(events, {
+      'schedule_events.update': { data: [{ id: 'stamped' }], error: null },
+      'organizations.select': ((call: { methods: string[]; args: unknown[][] }) => {
+        const ids = inList(call, 'id');
+        orgLists.push(ids);
+        return {
+          data: ids.map((id) => ({
+            id,
+            timezone: id === 'org-149' ? 'America/New_York' : null,
+          })),
+          error: null,
+        };
+      }) as never,
+    });
+    adminHolder.client = stub.client;
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    expect(orgLists.map((l) => l.length)).toEqual([100, 50]);
+    const pushFor = (eventId: string) =>
+      createNotificationMock.mock.calls
+        .map((c) => c[0] as { title: string; metadata: { scheduleEventId: string } })
+        .find((p) => p.metadata.scheduleEventId === eventId)!;
+    // 00:30 ET on the 25th is tomorrow; in the default Pacific zone it is today.
+    expect(pushFor('ev-149').title).toContain('tomorrow');
+    expect(pushFor('ev-0').title).toContain('today');
+  });
+
+  it('150 managers: profiles and preferences read in batches of 100, and the last manager is emailed', async () => {
+    const managers = Array.from({ length: 150 }, (_, i) => ({ user_id: `mgr-${String(i).padStart(3, '0')}` }));
+    const profileLists: string[][] = [];
+    const prefLists: string[][] = [];
+    const stub = stubFor([eventIn(0.5, { assigned_user_id: null })], {
+      'organization_members.select': { data: managers, error: null },
+      'user_profiles.select': ((call: { methods: string[]; args: unknown[][] }) => {
+        const ids = inList(call, 'id');
+        profileLists.push(ids);
+        return {
+          data: ids.map((id) => ({ id, email: `${id}@l4l.example`, full_name: null, disabled_at: null })),
+          error: null,
+        };
+      }) as never,
+      'notification_preferences.select': ((call: { methods: string[]; args: unknown[][] }) => {
+        prefLists.push(inList(call, 'user_id'));
+        return { data: [], error: null };
+      }) as never,
+    });
+    adminHolder.client = stub.client;
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    expect(profileLists.map((l) => l.length)).toEqual([100, 50]);
+    expect(prefLists.map((l) => l.length)).toEqual([100, 50]);
+    const emailed = sendEmailMock.mock.calls.map((c) => c[0].to);
+    expect(emailed).toContain('mgr-149@l4l.example');
+    expect(emailed).toHaveLength(150);
+  });
+
+  it('a failed profile batch still sends the push, skips the email, and is reported', async () => {
+    const { reportError } = await import('@/lib/error-reporter');
+    const stub = stubFor([eventIn(0.5)], {
+      'user_profiles.select': { data: null, error: { message: 'fetch failed' } } as never,
+    });
+    adminHolder.client = stub.client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+
+    expect(await res.json()).toMatchObject({ ok: true, remindersSent: 1 });
+    expect(createNotificationMock).toHaveBeenCalled();
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(vi.mocked(reportError)).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tag: 'cron.schedule-reminders.profiles' }),
+    );
+  });
+});

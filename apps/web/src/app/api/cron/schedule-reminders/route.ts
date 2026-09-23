@@ -12,6 +12,7 @@ import {
 } from '@/lib/email/families/schedule';
 import { sendEmail } from '@/lib/email/resend';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
 import { createNotification } from '@/server/services/notifications';
 
 import type { ScheduleReminderParams } from '@/lib/email/families/schedule';
@@ -152,28 +153,32 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 
-  // One batched read of the display zone for every org in this run's events.
-  // Batched rather than per-event because a single run can carry up to 500
-  // events across many orgs; `.in()` on at most 500 distinct ids stays well
-  // inside PostgREST's 1000-row clamp, so no pagination is needed here.
+  // One read of the display zone for every org in this run's events, rather
+  // than per event: a single run can carry up to 500 events across many
+  // orgs. 500 org ids in one `.in()` is past the URL limits (the local
+  // gateway refuses ~215, production fails ~395 after ~7 s of retries), so
+  // they go 100 per request.
   // Read fails CLOSED to the documented default (see resolveOrgTimezone): a
   // missing row must degrade the printed zone, never skip the reminder.
   const events = (data ?? []) as EventRow[];
   const orgIds = [...new Set(events.map((e) => e.organization_id))];
   const tzByOrg = new Map<string, string>();
-  if (orgIds.length > 0) {
-    const { data: orgs, error: orgErr } = await admin
-      .from('organizations')
-      .select('id, timezone')
-      .in('id', orgIds);
-    if (orgErr) {
-      void reportError(new Error(orgErr.message), {
-        tag: 'cron.schedule-reminders.org-timezone',
-      });
-    }
-    for (const o of (orgs ?? []) as { id: string; timezone: string | null }[]) {
-      tzByOrg.set(o.id, resolveOrgTimezone(o.timezone));
-    }
+  try {
+    const orgs = await fetchAllRowsByIds<{ id: string; timezone: string | null }>(
+      orgIds,
+      (batch) => (from, to) =>
+        admin
+          .from('organizations')
+          .select('id, timezone')
+          .in('id', batch)
+          .order('id', { ascending: true })
+          .range(from, to),
+    );
+    for (const o of orgs) tzByOrg.set(o.id, resolveOrgTimezone(o.timezone));
+  } catch (orgErr) {
+    void reportError(new Error(rawErrorText(orgErr)), {
+      tag: 'cron.schedule-reminders.org-timezone',
+    });
   }
 
   let sent = 0;
@@ -276,35 +281,59 @@ export async function GET(req: Request) {
       // this loop ALSO calls sendEmail directly below, bypassing that
       // choke point entirely — so the check is repeated here, against data
       // already in hand, no extra round trip.
-      const { data: profiles } = await admin
-        .from('user_profiles')
-        .select('id, email, full_name, disabled_at')
-        .in('id', [...userIds]);
-      const profileById = new Map(
-        (
-          (profiles ?? []) as {
-            id: string;
-            email: string | null;
-            full_name: string | null;
-            disabled_at: string | null;
-          }[]
-        ).map((p) => [p.id, p]),
-      );
-      // Per-user prefs (0258), house fail-open pattern: missing row or null
-      // column = subscribed; only an explicit false opts out.
-      const { data: prefRows } = await admin
-        .from('notification_preferences')
-        .select('user_id, email_schedule_reminders, push_schedule_reminders')
-        .in('user_id', [...userIds]);
-      const prefById = new Map(
-        (
-          (prefRows ?? []) as {
-            user_id: string;
-            email_schedule_reminders: boolean | null;
-            push_schedule_reminders: boolean | null;
-          }[]
-        ).map((r) => [r.user_id, r]),
-      );
+      //
+      // The recipients are every owner, admin and manager of the org, which
+      // no cap bounds, so both reads go 100 ids per request. Both were read
+      // with their errors ignored; a failure now degrades exactly as before
+      // (no profile: no email, and createNotification still refuses a
+      // disabled account; no preferences: subscribed), and is reported. The
+      // event is already stamped, so skipping it would lose the reminder.
+      type ProfileRow = {
+        id: string;
+        email: string | null;
+        full_name: string | null;
+        disabled_at: string | null;
+      };
+      type PrefRow = {
+        user_id: string;
+        email_schedule_reminders: boolean | null;
+        push_schedule_reminders: boolean | null;
+      };
+      const recipientIds = [...userIds];
+      const [profiles, prefRows] = await Promise.all([
+        fetchAllRowsByIds<ProfileRow>(recipientIds, (batch) => (from, to) =>
+          admin
+            .from('user_profiles')
+            .select('id, email, full_name, disabled_at')
+            .in('id', batch)
+            .order('id', { ascending: true })
+            .range(from, to),
+        ).catch((err: unknown) => {
+          void reportError(new Error(rawErrorText(err)), {
+            tag: 'cron.schedule-reminders.profiles',
+            level: 'warning',
+          });
+          return [] as ProfileRow[];
+        }),
+        // Per-user prefs (0258), house fail-open pattern: missing row or null
+        // column = subscribed; only an explicit false opts out.
+        fetchAllRowsByIds<PrefRow>(recipientIds, (batch) => (from, to) =>
+          admin
+            .from('notification_preferences')
+            .select('user_id, email_schedule_reminders, push_schedule_reminders')
+            .in('user_id', batch)
+            .order('user_id', { ascending: true })
+            .range(from, to),
+        ).catch((err: unknown) => {
+          void reportError(new Error(rawErrorText(err)), {
+            tag: 'cron.schedule-reminders.preferences',
+            level: 'warning',
+          });
+          return [] as PrefRow[];
+        }),
+      ]);
+      const profileById = new Map(profiles.map((p) => [p.id, p]));
+      const prefById = new Map(prefRows.map((r) => [r.user_id, r]));
 
       for (const uid of userIds) {
         const profile = profileById.get(uid);
