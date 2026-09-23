@@ -128,6 +128,15 @@ function fromDownload(c: CachedCycleCountHeader): ListRow {
   };
 }
 
+/** The downloaded (cached) counts, or null when the device store cannot be read. */
+async function readDownloaded(): Promise<CachedCycleCountHeader[] | null> {
+  try {
+    return await listCachedCycleCounts();
+  } catch {
+    return null;
+  }
+}
+
 function sameView(a: CycleCountListView, b: CycleCountListView): boolean {
   return a.q === b.q && a.status === b.status && a.page === b.page;
 }
@@ -203,10 +212,10 @@ export default function CycleCounts() {
       if (!activeOrg) return; // the workspace is still resolving; its switch loads
       if (!online) {
         // Offline: only what this device downloaded. Read, never written back.
-        const cached = await listCachedCycleCounts();
+        const cached = await readDownloaded();
         if (!guard.current.isCurrent(token)) return;
-        setDownloaded(cached);
-        setError(null);
+        setDownloaded(cached ?? []);
+        setError(cached ? null : 'Could not read the counts saved on this device.');
         setBusy(false);
         return;
       }
@@ -214,7 +223,17 @@ export default function CycleCounts() {
       setBusy(true);
       try {
         const res = await listCycleCounts(target, { summary: opts.withSummary, signal: ctrl.signal });
-        if (!isCurrentListAnswer(res, orgRef.current, guard.current.isCurrent(token))) return;
+        if (!isCurrentListAnswer(res, orgRef.current, guard.current.isCurrent(token))) {
+          // A newer request, or a workspace switch that has its own load, owns
+          // the screen: drop this answer quietly. But an answer for another
+          // workspace to the NEWEST request, with no switch since, means the
+          // app and the server disagree about the workspace. Say so; never spin.
+          if (guard.current.isCurrent(token) && orgRef.current === activeOrg) {
+            setPage(null);
+            setError('The server answered for a different workspace. Pull down to refresh, or switch workspace from the menu.');
+          }
+          return;
+        }
         setPage(res);
         setDownloaded(null);
         setError(null);
@@ -228,9 +247,14 @@ export default function CycleCounts() {
         }
       } catch (e) {
         if (ctrl.signal.aborted || !guard.current.isCurrent(token)) return;
-        // A failed read is an error on screen, never an empty history.
+        // A failed read is an error on screen, never an empty history. The
+        // counts already downloaded to this device stay reachable under it (a
+        // weak warehouse connection is exactly when counting offline matters),
+        // labelled as downloaded counts only.
         setPage(null);
         setError(e instanceof Error ? e.message : 'Could not load cycle counts.');
+        const cached = await readDownloaded();
+        if (guard.current.isCurrent(token)) setDownloaded(cached ?? []);
       } finally {
         if (guard.current.isCurrent(token)) setBusy(false);
       }
@@ -321,7 +345,10 @@ export default function CycleCounts() {
     setRefreshing(false);
   }
 
-  const rows: ListRow[] = offline
+  // Downloaded counts are shown offline, and under the error when an online
+  // read failed; otherwise the server's page.
+  const showingDownloaded = offline || (error !== null && downloaded !== null);
+  const rows: ListRow[] = showingDownloaded
     ? searchDownloadedCounts(downloaded ?? [], view).map(fromDownload)
     : (page?.items ?? []).map(fromServer);
   const searching = view.q !== '' || view.status !== null;
@@ -330,7 +357,7 @@ export default function CycleCounts() {
   const inProgressText = offline || !summary ? '—' : String(summary.inProgress);
   const todayText = offline || !summary ? '—' : String(summary.startedToday);
 
-  const footerText = offline
+  const footerText = showingDownloaded
     ? `${view.q ? 'Searching downloaded counts only' : 'Showing downloaded counts only'} · ${rows.length} ${
         rows.length === 1 ? NOUN.one : NOUN.other
       }`
@@ -408,20 +435,32 @@ export default function CycleCounts() {
             />
           ))}
         </View>
+        {error ? (
+          <Card padding={16} style={{ gap: 10 }}>
+            <Body>Cycle counts did not load.</Body>
+            <Body size={12.5} muted>
+              {error}
+            </Body>
+            {offline ? null : (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onPress={() => void load(view, { withSummary: !summary })}
+              >
+                {busy ? 'Trying again…' : 'Try again'}
+              </Button>
+            )}
+          </Card>
+        ) : null}
       </View>
     </View>
   );
 
   const empty = error ? (
-    <Card padding={16} style={{ gap: 10 }}>
-      <Body>Cycle counts did not load.</Body>
-      <Body size={12.5} muted>
-        {error}
-      </Body>
-      <Button size="sm" variant="outline" disabled={busy} onPress={() => void load(view, { withSummary: !summary })}>
-        {busy ? 'Trying again…' : 'Try again'}
-      </Button>
-    </Card>
+    <View style={{ paddingVertical: 12 }}>
+      <Body muted>No counts are downloaded to this device{view.q || view.status ? ' that match' : ''}.</Body>
+    </View>
   ) : searching ? (
     <View style={styles.empty}>
       <Display size={18}>No counts <Em>match.</Em></Display>
@@ -460,7 +499,7 @@ export default function CycleCounts() {
   );
 
   const footer =
-    rows.length > 0 || (page && !error) ? (
+    rows.length > 0 || (page && !error && !showingDownloaded) ? (
       <View style={styles.footer}>
         <Mono
           size={11}
@@ -471,7 +510,7 @@ export default function CycleCounts() {
         >
           {footerText}
         </Mono>
-        {!offline && page && page.totalPages > 1 ? (
+        {!showingDownloaded && page && page.totalPages > 1 ? (
           <View style={styles.pager}>
             <PagerButton
               direction="prev"
