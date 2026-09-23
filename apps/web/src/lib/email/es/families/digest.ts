@@ -30,6 +30,8 @@
  * cron/action wiring, byte-identical.
  */
 
+import { formatCycleCountNumber } from '@stockpilot/core';
+
 import type { DigestPayload } from '@/server/services/digest';
 
 import {
@@ -56,6 +58,13 @@ import { esEmailById } from '../registry';
 import { ES_LIGHT, esAssetUrl } from '../tokens';
 
 import type { ActionListItem, KpiCardOptions, ScheduleRowItem } from '../components';
+
+/** " CC-000042" after "Cycle count", or nothing when the count has no number
+ *  (a database before 0358): never a made-up reference. */
+function cycleCountRefSuffix(n: number | null | undefined): string {
+  const ref = formatCycleCountNumber(n);
+  return ref ? ` ${ref}` : '';
+}
 
 const DIGEST_DEF = esEmailById('digest');
 const DIGEST_PREVIEW_DEF = esEmailById('digest-preview');
@@ -217,7 +226,7 @@ export function renderWeeklyDigestHtml(
   const progressRows: ScheduleRowItem[] = cycleCounts
     .slice(0, IN_PROGRESS_ROW_CAP)
     .map((cc) => ({
-      titleHtml: `Cycle count — ${escapeHtml(cc.warehouseName ?? 'Unassigned')}`,
+      titleHtml: `Cycle count${cycleCountRefSuffix(cc.countNumber)} — ${escapeHtml(cc.scopeLabel)}`,
       detailHtml: `${cc.countedLines}/${cc.totalLines} counted &middot; started ${MONTH_DAY_FMT.format(new Date(cc.startedAt))}`,
     }));
   if (cycleCounts.length > IN_PROGRESS_ROW_CAP) {
@@ -406,13 +415,14 @@ export function weeklyDigestText(
     blocks.push('CYCLE COUNTS IN PROGRESS');
     for (const cc of payload.openCycleCounts) {
       const started = new Date(cc.startedAt).toLocaleDateString('en-US');
-      const wh = cc.warehouseName ?? 'Unassigned';
+      const wh = cc.scopeLabel;
+      const ref = formatCycleCountNumber(cc.countNumber);
       const pct =
         cc.totalLines > 0
           ? `${Math.round((cc.countedLines / cc.totalLines) * 100)}%`
           : '—';
       blocks.push(
-        `  ${started} · ${wh} · ${cc.countedLines}/${cc.totalLines} counted (${pct})`,
+        `  ${ref ? `${ref} · ` : ''}${started} · ${wh} · ${cc.countedLines}/${cc.totalLines} counted (${pct})`,
       );
     }
     blocks.push(`  → ${appUrl}/dashboard/cycle-counts`, '');

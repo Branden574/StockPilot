@@ -398,7 +398,7 @@ async function snapshotGET(req: NextRequest) {
   let ccQ = ctx.supabase
     .from('cycle_counts')
     .select(
-      `id, status, warehouse_id, started_at, assigned_to, notes,
+      `id, count_number, status, warehouse_id, started_at, assigned_to, notes,
        lines:cycle_count_lines (
          id, item_id, expected_quantity, counted_quantity
        )`,
@@ -698,6 +698,9 @@ async function snapshotGET(req: NextRequest) {
       }>;
       return {
         id: c.id,
+        // The count's permanent reference (0358). The phone stores it beside
+        // the header and renders it with formatCycleCountNumber.
+        countNumber: (c as { count_number?: number | null }).count_number ?? null,
         status: c.status,
         warehouseId: c.warehouse_id,
         startedAt: c.started_at,

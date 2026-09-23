@@ -177,6 +177,7 @@ const ROWS = {
   counts: [
     {
       id: 'cc-1',
+      count_number: 7,
       status: 'in_progress',
       warehouse_id: 'wh1',
       started_at: '2026-09-22T09:00:00.000Z',
@@ -755,6 +756,7 @@ const GOLDEN_DELTA_BODY = JSON.stringify({
   openCycleCounts: [
     {
       id: 'cc-1',
+      countNumber: 7,
       status: 'in_progress',
       warehouseId: 'wh1',
       startedAt: '2026-09-22T09:00:00.000Z',
@@ -808,7 +810,7 @@ const GOLDEN_DELTA_QUERIES = [
   'bundle_components | bundle_id, item_id, quantity, is_optional | select("bundle_id, item_id, quantity, is_optional") in("bundle_id",["b-1","b-2"]) order("bundle_id",{"ascending":true}) order("item_id",{"ascending":true}) range(0,999)',
   'bundles | id | select("id") eq("organization_id","org-1") eq("is_active",true) is("archived_at",null) order("id",{"ascending":true}) range(0,999)',
   'bundles | id, name, sku, preassembly_enabled, phantom_item_id, updated_at | select("id, name, sku, preassembly_enabled, phantom_item_id, updated_at") eq("organization_id","org-1") eq("is_active",true) is("archived_at",null) order("name",{"ascending":true}) gte("updated_at","2026-09-22T11:00:00.000Z")',
-  'cycle_counts | id, status, warehouse_id, started_at, assigned_to, notes, lines:cycle_count_lines ( id, item_id, expected_quantity, counted_quantity ) | select("id, status, warehouse_id, started_at, assigned_to, notes, lines:cycle_count_lines ( id, item_id, expected_quantity, counted_quantity )") eq("organization_id","org-1") eq("status","in_progress") order("started_at",{"ascending":false}) limit(50) or("warehouse_id.is.null,warehouse_id.in.(wh1,wh2)")',
+  'cycle_counts | id, count_number, status, warehouse_id, started_at, assigned_to, notes, lines:cycle_count_lines ( id, item_id, expected_quantity, counted_quantity ) | select("id, count_number, status, warehouse_id, started_at, assigned_to, notes, lines:cycle_count_lines ( id, item_id, expected_quantity, counted_quantity )") eq("organization_id","org-1") eq("status","in_progress") order("started_at",{"ascending":false}) limit(50) or("warehouse_id.is.null,warehouse_id.in.(wh1,wh2)")',
   'inventory_items | id | select("id") eq("organization_id","org-1") eq("is_bundle",false) gte("updated_at","2026-09-22T11:00:00.000Z") order("id",{"ascending":true}) range(0,999)',
   'inventory_items | id, quantity_on_hand, warehouse_id | select("id, quantity_on_hand, warehouse_id") in("id",["ph-1"]) order("id",{"ascending":true}) range(0,999)',
   'inventory_items | id, sku, name, barcode, quantity_on_hand, unit_cost, warehouse_id, item_type, is_bundle, updated_at | select("id, sku, name, barcode, quantity_on_hand, unit_cost, warehouse_id, item_type, is_bundle, updated_at") eq("organization_id","org-1") is("deleted_at",null) eq("status","active") eq("is_bundle",false) order("id",{"ascending":true}) range(0,999) in("warehouse_id",["wh1","wh2"]) gte("updated_at","2026-09-22T11:00:00.000Z")',

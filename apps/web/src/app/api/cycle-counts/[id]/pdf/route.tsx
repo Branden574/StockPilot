@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { renderToStream } from '@react-pdf/renderer';
 
-import { can, variantLabel } from '@stockpilot/core';
+import { can, formatCycleCountNumber, resolveOrgTimezone, variantLabel } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
@@ -184,7 +184,7 @@ export async function GET(
 
     const { data: org } = await ctx.supabase
       .from('organizations')
-      .select('name, logo_url')
+      .select('name, logo_url, timezone')
       .eq('id', ctx.organizationId)
       .maybeSingle();
     const orgName = ((org as { name?: string | null })?.name ?? 'StockPilot') || 'StockPilot';
@@ -194,10 +194,14 @@ export async function GET(
       <CycleCountSheetPdf
         cycle={{
           id: header.id,
+          countNumber: header.count_number ?? null,
+          warehouseId: header.warehouse_id,
+          scope: header.scope ?? null,
           warehouseName,
           notes: header.notes ?? null,
           startedAt: header.started_at ?? null,
           status: header.status,
+          timeZone: resolveOrgTimezone((org as { timezone?: string | null } | null)?.timezone),
         }}
         lines={lineRows}
         org={{ name: orgName, logoUrl: orgLogoUrl }}
@@ -225,7 +229,8 @@ export async function GET(
       ctx,
     );
 
-    const filename = `cycle-count-${id.slice(0, 8)}.pdf`;
+    const reference = formatCycleCountNumber(header.count_number);
+    const filename = reference ? `cycle-count-${reference}.pdf` : `cycle-count-${id.slice(0, 8)}.pdf`;
     return new NextResponse(stream as unknown as ReadableStream<Uint8Array>, {
       status: 200,
       headers: {

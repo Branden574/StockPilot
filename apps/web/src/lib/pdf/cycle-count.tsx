@@ -2,6 +2,8 @@ import { Document, Page, Text, View } from '@react-pdf/renderer';
 
 import { BrandedHeader } from './branding';
 import { capCountSheetLines } from './count-sheet-cap';
+import { cycleCountScopeLabel, formatCycleCountNumber } from '@stockpilot/core';
+
 import { PDF_COLORS, formatDateForPdf, pdfStyles } from './styles';
 
 export interface CycleCountPdfLine {
@@ -143,10 +145,18 @@ function dominantUnit(lines: readonly CycleCountPdfLine[]): string {
 
 export interface CycleCountPdfHeader {
   id: string;
+  /** Permanent reference number (0358), printed as CC-000042. */
+  countNumber?: number | null;
+  /** The header warehouse id and the count's scope decide the scope label
+   *  ("All warehouses" only for a real org-wide count). */
+  warehouseId?: string | null;
+  scope?: string | null;
   warehouseName: string | null;
   notes: string | null;
   startedAt: string | null;
   status: string;
+  /** Workspace timezone for the printed start date. */
+  timeZone?: string;
 }
 
 export interface CycleCountPdfOrg {
@@ -175,7 +185,7 @@ export function CycleCountSheetPdf({
   lines,
   org,
 }: CycleCountSheetPdfProps) {
-  const idShort = cycle.id.slice(0, 8);
+  const reference = formatCycleCountNumber(cycle.countNumber);
   // Status pivots PDF behavior: 'in_progress' renders a printable count
   // sheet with blank Counted/Notes columns; everything else (completed,
   // canceled) renders a variance report so the printed artifact matches
@@ -184,16 +194,31 @@ export function CycleCountSheetPdf({
   const isVarianceReport = cycle.status !== 'in_progress';
   const subtitle =
     [
-      cycle.warehouseName ?? 'All warehouses',
-      formatDateForPdf(cycle.startedAt),
+      // Before 0358's warehouseId/scope were passed, a null warehouse always
+      // printed "All warehouses", which misdescribed a mixed selection.
+      cycle.warehouseId === undefined && cycle.scope === undefined
+        ? (cycle.warehouseName ?? 'All warehouses')
+        : cycleCountScopeLabel({
+            warehouseId: cycle.warehouseId ?? null,
+            warehouseName: cycle.warehouseName,
+            scope: cycle.scope ?? null,
+          }),
+      formatDateForPdf(cycle.startedAt, cycle.timeZone),
       isVarianceReport ? 'Variance report' : null,
     ]
       .filter(Boolean)
       .join(' · ');
 
-  const title = isVarianceReport
-    ? `Cycle count variance #${idShort}`
-    : `Cycle count #${idShort}`;
+  // The count's permanent reference. Without one (a database before 0358)
+  // the title says so plainly rather than printing a uuid fragment that
+  // reads like a reference.
+  const title = reference
+    ? isVarianceReport
+      ? `Cycle count variance ${reference}`
+      : `Cycle count ${reference}`
+    : isVarianceReport
+      ? 'Cycle count variance report'
+      : 'Cycle count sheet';
 
   // Pre-sort: SKU for count sheets so the printed list matches a
   // shelf-walk pass; variance-magnitude descending for variance

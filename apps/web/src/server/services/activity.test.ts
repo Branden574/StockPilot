@@ -1563,7 +1563,7 @@ describe('ActivityService.forItem display mapping (0231)', () => {
     expect(events[0]!.referenceLabel).toBe('SO-000049');
   });
 
-  it('leaves referenceLabel null for a known type with no cheap number (cycle_count) — still routable', async () => {
+  it('labels a cycle_count reference with its CC number (0358), still routable', async () => {
     const stub = makeSupabaseStub({
       'stock_movements.select': {
         data: [
@@ -1577,17 +1577,42 @@ describe('ActivityService.forItem display mapping (0231)', () => {
         error: null,
       },
       'audit_logs.select': { data: [], error: null },
+      'cycle_counts.select': { data: [{ id: 'cc-1', count_number: 42 }], error: null },
     });
     const svc = makeService(stub.client);
 
     const events = await svc.forItem('item-1');
     expect(events[0]!.referenceType).toBe('cycle_count');
     expect(events[0]!.referenceId).toBe('cc-1');
-    expect(events[0]!.referenceLabel).toBeNull();
-    // No display number for cycle counts → no extra lookup query fires.
+    expect(events[0]!.referenceLabel).toBe('CC-000042');
+    // Only the cycle-count lookup fires for a page of cycle-count movements.
+    expect(stub.fromCalls).toContain('cycle_counts');
     expect(stub.fromCalls).not.toContain('order_requests');
     expect(stub.fromCalls).not.toContain('returns');
     expect(stub.fromCalls).not.toContain('bundles');
+  });
+
+  it('keeps the generic label when the cycle count number cannot be read', async () => {
+    const stub = makeSupabaseStub({
+      'stock_movements.select': {
+        data: [
+          movementRow({
+            id: 'm-cc',
+            movement_type: 'adjust',
+            reference_type: 'cycle_count',
+            reference_id: 'cc-1',
+          }),
+        ],
+        error: null,
+      },
+      'audit_logs.select': { data: [], error: null },
+      'cycle_counts.select': { data: null, error: { message: 'stall' } },
+    });
+    const svc = makeService(stub.client);
+
+    const events = await svc.forItem('item-1');
+    expect(events[0]!.referenceId).toBe('cc-1');
+    expect(events[0]!.referenceLabel).toBeNull();
   });
 
   it('skips every reference-label query when no movement row has a reference', async () => {
