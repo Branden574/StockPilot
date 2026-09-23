@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   CYCLE_COUNT_REFERENCE_UNAVAILABLE,
+  cycleCountScopeLabel,
   formatCycleCountNumber,
   variantLabel,
 } from '@stockpilot/core';
@@ -111,6 +112,10 @@ export default function CycleCountDetail() {
   /** The server's own message for a refused read, shown instead of an empty
    *  count. Only ever set when there is no cached snapshot to fall back to. */
   const [readError, setReadError] = React.useState<string | null>(null);
+  // The count's scope ('warehouse' | 'selection'), from the online read only:
+  // the offline cache does not store it, so offline the subtitle falls back
+  // to what the cache knows.
+  const [scope, setScope] = React.useState<string | null>(null);
   const [conflictBanner, setConflictBanner] = React.useState<string | null>(null);
 
   const debounceRefs = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -177,7 +182,7 @@ export default function CycleCountDetail() {
         .from('cycle_counts')
         .select(
           `id, count_number, organization_id, status, started_at, completed_at,
-           warehouse_id, assigned_to, notes,
+           warehouse_id, assigned_to, notes, scope,
            warehouse:warehouses!warehouse_id (name)`,
         )
         .eq('organization_id', orgId)
@@ -212,6 +217,7 @@ export default function CycleCountDetail() {
     const wh = ccRow.warehouse as { name: string } | { name: string }[] | null;
     const whName = Array.isArray(wh) ? wh[0]?.name ?? null : wh?.name ?? null;
 
+    setScope((ccRow.scope as string | null | undefined) ?? null);
     const fetchedHeader = {
       id: ccRow.id as string,
       organizationId: (ccRow.organization_id as string | null) ?? null,
@@ -509,8 +515,14 @@ export default function CycleCountDetail() {
               </>
             )}
             <Text style={styles.subtitle}>
-              {header?.warehouseName ?? (header?.warehouseId ? '—' : 'No single warehouse')} ·{' '}
-              {countedCount}/{lines.length} counted
+              {header && scope
+                ? cycleCountScopeLabel({
+                    warehouseId: header.warehouseId,
+                    warehouseName: header.warehouseName,
+                    scope,
+                  })
+                : (header?.warehouseName ?? (header?.warehouseId ? '—' : 'No single warehouse'))}{' '}
+              · {countedCount}/{lines.length} counted
             </Text>
           </View>
           {header && canAdjust && isOpen ? (

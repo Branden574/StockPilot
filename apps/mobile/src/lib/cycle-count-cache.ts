@@ -1,4 +1,4 @@
-import { CYCLE_COUNT_CACHE_HEADER_SQL } from './cycle-count-snapshot-sql';
+import { CACHED_CYCLE_COUNTS_LIST_SQL, CYCLE_COUNT_CACHE_HEADER_SQL } from './cycle-count-snapshot-sql';
 import { getDb } from './db';
 import { markRejected } from './queue';
 
@@ -544,13 +544,7 @@ export async function listCachedCycleCounts(): Promise<CachedCycleCountHeader[]>
     cached_at: number | null;
     count_number: number | null;
     notes: string | null;
-  }>(
-    `select id, organization_id, status, warehouse_id, warehouse_name,
-            started_at, posted_at, assigned_to, cached_at, count_number, notes
-       from cycle_counts
-      where status = 'in_progress' or status is null
-      order by started_at desc`,
-  );
+  }>(CACHED_CYCLE_COUNTS_LIST_SQL);
   return rows.map((r) => ({
     id: r.id,
     organizationId: r.organization_id,

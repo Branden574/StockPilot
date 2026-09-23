@@ -83,3 +83,18 @@ export const CYCLE_COUNT_CACHE_HEADER_SQL = `
   values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
           coalesce(?, (select count_number from cycle_counts where id = ?)),
           coalesce(?, (select notes from cycle_counts where id = ?)))`;
+
+/**
+ * The downloaded counts the history screen lists offline (and under a failed
+ * read): open counts only, newest first. The warehouse name falls back to the
+ * synced warehouses table, because a count the snapshot downloaded but nobody
+ * opened has no warehouse_name of its own.
+ */
+export const CACHED_CYCLE_COUNTS_LIST_SQL = `
+  select cc.id, cc.organization_id, cc.status, cc.warehouse_id,
+         coalesce(cc.warehouse_name, w.name) as warehouse_name,
+         cc.started_at, cc.posted_at, cc.assigned_to, cc.cached_at, cc.count_number, cc.notes
+    from cycle_counts cc
+    left join warehouses w on w.id = cc.warehouse_id
+   where cc.status = 'in_progress' or cc.status is null
+   order by cc.started_at desc`;

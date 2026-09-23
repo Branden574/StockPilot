@@ -702,15 +702,16 @@ function CountCard({
   const progress = row.lineTotal > 0 ? Math.round((row.lineCounted / row.lineTotal) * 100) : 0;
   const isCompleted = row.status === 'completed';
   const isCanceled = row.status === 'canceled';
-  const syncStatus = row.source === 'downloaded' ? 'OFFLINE' : pending > 0 ? 'PENDING' : 'SYNCED';
+  // A downloaded row is the device's copy (offline, or under a failed read).
+  const syncStatus = row.source === 'downloaded' ? 'DOWNLOADED' : pending > 0 ? 'PENDING' : 'SYNCED';
   const statusPill = isCompleted ? (
     <Pill status="ok">POSTED</Pill>
   ) : isCanceled ? (
     <Pill>CANCELED</Pill>
   ) : pending > 0 ? (
     <Pill status="warn">PENDING</Pill>
-  ) : syncStatus === 'OFFLINE' ? (
-    <Pill>OFFLINE</Pill>
+  ) : syncStatus === 'DOWNLOADED' ? (
+    <Pill>DOWNLOADED</Pill>
   ) : (
     <Pill status="ok">SYNCED</Pill>
   );

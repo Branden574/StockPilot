@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  CACHED_CYCLE_COUNTS_LIST_SQL,
   CYCLE_COUNT_CACHE_HEADER_SQL,
   CYCLE_COUNT_HEADER_UPSERT_SQL,
   CYCLE_COUNT_LINE_UPSERT_SQL,
@@ -25,6 +26,7 @@ const DDL = `
     notes text, last_synced_at integer not null, cached_at integer,
     count_number integer
   );
+  create table warehouses (id text primary key, name text not null);
   create table cycle_count_lines (
     id text primary key, count_id text not null, item_id text not null,
     item_name text, item_sku text, item_barcode text, item_variant_label text,
@@ -148,5 +150,21 @@ describe('the count reference in the cache (server 0358)', () => {
     cacheHeader(42, null);
     const l = db.prepare('select * from cycle_count_lines where id = ?').get('dirty') as Record<string, unknown>;
     expect(l).toMatchObject({ counted: 7, local_dirty: 1 });
+  });
+});
+
+describe('the downloaded-counts list', () => {
+  it('lists open counts newest first, with the reference, notes and a warehouse name from the synced warehouses', () => {
+    db.prepare("insert into warehouses (id, name) values ('wh1', 'North DC'), ('wh2', 'South DC')").run();
+    // c1 (fixture): opened, has its own warehouse_name 'DC4'.
+    db.prepare(CYCLE_COUNT_HEADER_UPSERT_SQL).run('c2', 'in_progress', 'wh2', '2026-09-03T00:00:00Z', null, 'aisle 9', 12, 5);
+    db.prepare(CYCLE_COUNT_HEADER_UPSERT_SQL).run('c3', 'completed', 'wh1', '2026-09-04T00:00:00Z', null, null, 13, 5);
+    db.prepare(CYCLE_COUNT_HEADER_UPSERT_SQL).run('c4', 'in_progress', null, '2026-09-02T00:00:00Z', null, null, 11, 5);
+    const rows = db.prepare(CACHED_CYCLE_COUNTS_LIST_SQL).all() as Array<Record<string, unknown>>;
+    expect(rows.map((r) => r.id)).toEqual(['c2', 'c4', 'c1']);
+    expect(rows[0]).toMatchObject({ warehouse_name: 'South DC', count_number: 12, notes: 'aisle 9' });
+    expect(rows[1]).toMatchObject({ warehouse_name: null, count_number: 11 });
+    // A name the count itself carries wins over the warehouses table.
+    expect(rows[2]).toMatchObject({ id: 'c1', warehouse_name: 'DC4' });
   });
 });
