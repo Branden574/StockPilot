@@ -43,15 +43,27 @@ const uuid = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0
 const ids = Array.from({ length: 250 }, (_, i) => uuid(i));
 const inList = (call: MockCall) => (inFilters(call).find(([c]) => c === 'id')?.[1] ?? []) as string[];
 
-function stubWith(opts: { failRead?: number; failWrite?: number }) {
+function stubWith(opts: {
+  failRead?: number;
+  failWrite?: number;
+  failLinksRead?: number;
+  visibilityOf?: (id: string) => string;
+}) {
   const readLists: string[][] = [];
   const writeLists: string[][] = [];
+  let linkReads = 0;
   const stub = makeSupabaseStub({
     'inventory_items.select': (call) => {
       const list = inList(call);
       readLists.push(list);
       if (readLists.length === opts.failRead) return { data: null, error: { message: 'fetch failed' } };
-      return { data: list.map((id) => ({ id, public_visibility: 'internal_only' })), error: null };
+      return {
+        data: list.map((id) => ({
+          id,
+          public_visibility: opts.visibilityOf?.(id) ?? 'internal_only',
+        })),
+        error: null,
+      };
     },
     'inventory_items.update': (call) => {
       const list = inList(call);
@@ -61,10 +73,16 @@ function stubWith(opts: { failRead?: number; failWrite?: number }) {
       }
       return { data: list.map((id) => ({ id })), error: null };
     },
-    'public_request_links.select': { data: [{ id: 'link-1' }], error: null },
+    'public_request_links.select': () => {
+      linkReads += 1;
+      if (linkReads === opts.failLinksRead) {
+        return { data: null, error: { message: 'fetch failed' } };
+      }
+      return { data: [{ id: 'link-1' }], error: null };
+    },
   });
   adminRef.current = stub.client;
-  return { readLists, writeLists };
+  return { readLists, writeLists, linkReads: () => linkReads };
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -129,5 +147,35 @@ describe('bulkSetItemPublicVisibilityAction with 250 items', () => {
     if (!r.ok) expect(r.error.code).toBe('internal_error');
     expect(invalidate).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('revalidates the link catalogs once on success, so a second read cannot fail a finished change', async () => {
+    // The link read inside the revalidation throws on error. Called twice, a
+    // failure on the second call answered "failed" after every item had been
+    // changed, audited and revalidated.
+    const { linkReads } = stubWith({ failLinksRead: 2 });
+    const r = await bulkSetItemPublicVisibilityAction({ itemIds: ids, visibility: 'public' });
+    expect(r).toEqual({ ok: true, data: { updated: 250, visibility: 'public' } });
+    expect(linkReads()).toBe(1);
+    expect(revalidateTag).toHaveBeenCalledTimes(1);
+  });
+
+  it('a partial write audits the before-counts of the items it wrote, not of every item asked for', async () => {
+    // The first 100 were internal_only and the rest public; only the first
+    // batch commits.
+    const firstBatch = new Set(ids.slice(0, 100));
+    stubWith({
+      failWrite: 2,
+      visibilityOf: (id) => (firstBatch.has(id) ? 'internal_only' : 'public'),
+    });
+    const r = await bulkSetItemPublicVisibilityAction({ itemIds: ids, visibility: 'hidden' });
+    expect(r.ok).toBe(false);
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extra: expect.objectContaining({ count: 100, item_ids: ids.slice(0, 100) }),
+        before: { public_visibility_counts: { internal_only: 100 } },
+      }),
+      expect.anything(),
+    );
   });
 });

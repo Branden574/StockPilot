@@ -316,10 +316,6 @@ export async function bulkSetItemPublicVisibilityAction(
     if (rows.length !== ids.length) {
       throw new ServiceError('not_found', 'One or more items were not found.');
     }
-    const beforeCounts: Record<string, number> = {};
-    for (const r of rows) {
-      beforeCounts[r.public_visibility] = (beforeCounts[r.public_visibility] ?? 0) + 1;
-    }
 
     // One batch at a time, stopping at the first failure. Setting one column
     // to a constant is independent per row, so the batches that committed are
@@ -345,6 +341,15 @@ export async function bulkSetItemPublicVisibilityAction(
     // embedding/search_vector write is exempt, 0242 as restated in 0303), and
     // updated_at is the Items list's default sort key and a rendered column.
     invalidateInventoryListAfterWrite(ctx.organizationId, 'item.public_visibility.bulk');
+
+    // Counted over the items whose batch committed, so the before side of the
+    // audit describes the same items as its item_ids.
+    const writtenIds = new Set(write.written);
+    const beforeCounts: Record<string, number> = {};
+    for (const r of rows) {
+      if (!writtenIds.has(r.id)) continue;
+      beforeCounts[r.public_visibility] = (beforeCounts[r.public_visibility] ?? 0) + 1;
+    }
 
     await audit(
       {
@@ -379,7 +384,6 @@ export async function bulkSetItemPublicVisibilityAction(
         `Changed ${updated} of ${ids.length} items before an error stopped the rest. Run it again to finish.`,
       );
     }
-    await revalidateOrgPublicCatalogs(admin, ctx.organizationId);
     return ok({ updated, visibility });
   } catch (e) {
     return toResult(e);
