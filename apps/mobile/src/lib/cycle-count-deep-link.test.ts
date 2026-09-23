@@ -18,3 +18,19 @@ describe('cycle-count deep-link shim', () => {
     expect(src).toMatch(/<Redirect href=\{\{ pathname: '\/cycle-count\/\[id\]', params: \{ id \} \}\} \/>/);
   });
 });
+
+describe('cycle-count detail leaves safely after a cold-start link', () => {
+  const detail = readFileSync(path.join(__dirname, '../../app/cycle-count/[id].tsx'), 'utf8');
+
+  it('falls back to the list when there is no screen to go back to', () => {
+    expect(detail).toMatch(
+      /const leave = React\.useCallback\(\(\) => \{\s+if \(router\.canGoBack\(\)\) router\.back\(\);\s+else router\.replace\('\/cycle-counts'\);/,
+    );
+  });
+
+  it('never calls router.back() directly (Back, post, release and reassign all use leave)', () => {
+    expect(detail.match(/router\.back\(\)/g) ?? []).toHaveLength(1);
+    expect(detail.match(/onPress=\{leave\}/g) ?? []).toHaveLength(3);
+    expect(detail.match(/\bleave\(\);/g) ?? []).toHaveLength(3);
+  });
+});

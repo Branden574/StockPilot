@@ -71,6 +71,13 @@ const SAVE_DEBOUNCE_MS = 300;
 
 export default function CycleCountDetail() {
   const router = useRouter();
+  // A cold-start link (a notification tap with the app closed) opens this
+  // screen with no history under it, and going back is then a no-op that
+  // leaves the person stuck here. Fall back to the cycle-count list.
+  const leave = React.useCallback(() => {
+    if (router.canGoBack()) router.back();
+    else router.replace('/cycle-counts');
+  }, [router]);
   // Counting + posting are WRITES (stock:adjust). A cycle_counts:read-only
   // viewer gets a read-only view: inputs frozen, no post footer — mirroring
   // the web detail's canAdjust=false mode. The API enforces server-side;
@@ -282,9 +289,21 @@ export default function CycleCountDetail() {
       }
     }
 
-    await cacheCycleCount(fetchedHeader, fetchedLines);
-    const fresh = await getCycleCount(id);
-    if (fresh) hydrateFromSnapshot(fresh);
+    // The screen renders from the phone's cache, so the fetch is stored first.
+    // If that write fails the screen must say so: a throw here used to go
+    // unhandled (load() is fire-and-forget) and leave an uncached count
+    // spinning forever.
+    try {
+      await cacheCycleCount(fetchedHeader, fetchedLines);
+      const fresh = await getCycleCount(id);
+      if (fresh) hydrateFromSnapshot(fresh);
+    } catch (e) {
+      console.warn('[cycle-count] could not store the count on this phone', e);
+      if (!cached) {
+        setReadError('This count could not be saved on this phone.');
+        setEmptyState('read-failed');
+      }
+    }
     setLoading(false);
   }, [id, orgId]);
 
@@ -409,7 +428,7 @@ export default function CycleCountDetail() {
       setPosting(false);
     }
     Alert.alert('Posted', 'Variance adjustments applied.');
-    router.back();
+    leave();
   }
 
   const countedCount = lines.filter((l) => l.counted !== null).length;
@@ -429,7 +448,7 @@ export default function CycleCountDetail() {
       <SafeAreaView style={styles.root} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
         <View style={styles.header}>
-          <Pressable onPress={() => router.back()} style={styles.backBtn}>
+          <Pressable onPress={leave} style={styles.backBtn}>
             <Text style={styles.backText}>← Back</Text>
           </Pressable>
         </View>
@@ -460,7 +479,7 @@ export default function CycleCountDetail() {
       <SafeAreaView style={styles.root} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
         <View style={styles.header}>
-          <Pressable onPress={() => router.back()} style={styles.backBtn}>
+          <Pressable onPress={leave} style={styles.backBtn}>
             <Text style={styles.backText}>← Back</Text>
           </Pressable>
         </View>
@@ -488,7 +507,7 @@ export default function CycleCountDetail() {
     <SafeAreaView style={styles.root} edges={['top']}>
       <Stack.Screen options={{ headerShown: false }} />
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn}>
+        <Pressable onPress={leave} style={styles.backBtn}>
           <Text style={styles.backText}>← Back</Text>
         </Pressable>
         <View style={styles.headerRow}>
@@ -718,7 +737,7 @@ export default function CycleCountDetail() {
           setReleaseOpen(false);
           // The count is no longer assigned to us — return to the list, which
           // reloads with the updated assignment.
-          router.back();
+          leave();
         }}
       />
 
@@ -731,7 +750,7 @@ export default function CycleCountDetail() {
         onReassigned={() => {
           setReassignOpen(false);
           // Reassigned away — reflect the new assignment by reloading the list.
-          router.back();
+          leave();
         }}
       />
     </SafeAreaView>
