@@ -14,6 +14,43 @@ import { ServiceError } from './context';
 describe('ReportsService.itemCostHistory', () => {
   const ITEM = 'item-1';
 
+  it('asks for PO lines and receipt lines together, not one after the other', async () => {
+    // A lazy PostgREST-like builder: a read starts when awaited (.then), and
+    // answers only when the test says so.
+    const started: string[] = [];
+    const answer: Record<string, (v: { data: unknown[]; error: null }) => void> = {};
+    const client = {
+      from(table: string) {
+        const builder: Record<string, unknown> = new Proxy(
+          {},
+          {
+            get(_t, prop: string) {
+              if (prop === 'then') {
+                return (onFulfilled: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) => {
+                  started.push(table);
+                  return new Promise((resolve) => {
+                    answer[table] = resolve;
+                  }).then(onFulfilled, onRejected);
+                };
+              }
+              return () => builder;
+            },
+          },
+        );
+        return builder;
+      },
+    };
+    const svc = new ReportsService(makeServiceContext(client as never));
+    const history = svc.itemCostHistory(ITEM);
+    await new Promise((r) => setTimeout(r, 0));
+    // Both reads are out before either has answered.
+    expect(started).toEqual(['purchase_order_items', 'receipt_lines']);
+    answer.purchase_order_items!({ data: [], error: null });
+    answer.receipt_lines!({ data: [], error: null });
+    const result = await history;
+    expect(result.pointCount).toBe(0);
+  });
+
   it('merges PO + receipt unit costs into chronological per-supplier series', async () => {
     const stub = makeSupabaseStub({
       'purchase_order_items.select': {
