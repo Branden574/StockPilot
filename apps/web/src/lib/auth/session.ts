@@ -8,7 +8,7 @@ import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
 import {
   bundleMembership,
   holdMembership,
-  loadRequestContextBundle,
+  resolveRequestContext,
   type RequestContextBundle,
 } from '@/lib/auth/request-context-bundle';
 import {
@@ -118,12 +118,46 @@ function loadProfileAndMemberships(
   ]);
 }
 
+function noSession(): LoadedContext {
+  return { session: null, orgRole: null, orgId: null, orgName: null, memberships: [], bundle: null };
+}
+
+/**
+ * The user id of this request's cookie session, VERIFIED, or null. The same
+ * two steps the proxy takes (lib/supabase/middleware.ts): auth.getClaims()
+ * verifies the JWT locally, auth.getUser() asks the Auth server when that
+ * cannot answer. Never getSession() or a bare decode: both return whatever the
+ * cookie says. Any error is "no verified user", which denies.
+ *
+ * Only reached when get_request_context() gave no answer, so the fast path
+ * never pays for it.
+ */
+async function verifiedCookieUserId(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+): Promise<string | null> {
+  try {
+    const { data, error } = await supabase.auth.getClaims();
+    if (!error && typeof data?.claims?.sub === 'string') return data.claims.sub;
+  } catch {
+    // getClaims() rethrows non-Auth errors (a bad JWK, no WebCrypto). The
+    // network check below gives the authoritative answer.
+  }
+  try {
+    const { data, error } = await supabase.auth.getUser();
+    if (!error && data?.user?.id) return data.user.id;
+  } catch {
+    // Fall through: unverifiable is unverified.
+  }
+  return null;
+}
+
 /**
  * Loads user, profile, active membership, and active org name in
  * **one** parallel-pair Supabase round trip. The user id comes from a
- * request header set by the proxy after session verification
+ * request header the proxy sets after session verification
  * (auth.getClaims() local JWT verify, auth.getUser() fallback — see
- * lib/supabase/middleware.ts).
+ * lib/supabase/middleware.ts), and is used only once this request's own
+ * session is shown to be that user (see below).
  *
  * Wrapped in React.cache() so every consumer in the same render shares
  * one fetch — layout, page, and every service. Layouts no longer need
@@ -132,19 +166,29 @@ function loadProfileAndMemberships(
 const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
   const h = await headers();
   const userId = h.get(SESSION_HEADER_USER_ID);
-  if (!userId) {
-    return {
-      session: null,
-      orgRole: null,
-      orgId: null,
-      orgName: null,
-      memberships: [],
-      bundle: null,
-    };
-  }
+  if (!userId) return noSession();
 
   const email = h.get(SESSION_HEADER_USER_EMAIL) ?? '';
   const supabase = await createClient();
+
+  // ═══ THE HEADER IS A HINT, NOT AN IDENTITY ═══
+  //
+  // The proxy sets or deletes the header only on the routes in its matcher
+  // (src/proxy.ts). On `/api/**`, the public pages, and a Server Action POSTed
+  // to one of them, it is whatever the client sent. Taken at its word, a signed
+  // in member could name a colleague and get the colleague's organization, role
+  // and permissions, with the service-role paths scoped by that context.
+  //
+  // So the header is used only once the request's own session agrees with it.
+  // The fast path costs nothing extra: get_request_context() answers with
+  // auth.uid(), which PostgREST took from a verified JWT. An answer about
+  // anyone else (or nobody) means no session. Without an answer (switched off,
+  // failed), the cookie session is verified here before the legacy reads run.
+  const resolution = await resolveRequestContext();
+  if (resolution.identity === 'refuted') return noSession();
+  if (resolution.identity === 'unknown' && (await verifiedCookieUserId(supabase)) !== userId) {
+    return noSession();
+  }
 
   // ONE ROUND TRIP WHEN IT CAN BE (migration 0355). `get_request_context()`
   // returns these two reads, and the five that used to follow them, in a single
@@ -158,7 +202,7 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
   // with several organizations and no valid default, and for that user every
   // path must land on the SAME organization: the page and the cookie-authed
   // /api calls it makes, and a request that fell back to the legacy reads.
-  const bundle = await loadRequestContextBundle();
+  const bundle = resolution.bundle;
   const [profileRes, membersRes] = bundle
     ? [
         { data: bundle.profile, error: null },
@@ -192,10 +236,11 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
   // every org-scoped Server Action, inherited by all ~128 requireOrgContext and
   // ~166 withContext call sites without touching any of them.
   //
-  // It is safe to redirect from inside this cache()d loader precisely because
-  // `userId` can only come from the proxy-set header: an /api route never has
-  // that header, returns early above, and therefore can never throw
-  // NEXT_REDIRECT out of a route handler (recurring bug #23).
+  // It is safe to redirect from inside this cache()d loader because an /api
+  // route has no proxy-set header and returns early above, so it can never
+  // throw NEXT_REDIRECT out of a route handler (recurring bug #23). A client
+  // that sends the header itself gets here only when it names its OWN verified
+  // session (checked above), and then only redirects its own request.
   //
   // The read is CLASSIFIED, not merely null-checked. This used to be
   // `if (profile) assertAccountActiveOrRedirect(profile)`, which never looked at
