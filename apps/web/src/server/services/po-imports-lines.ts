@@ -490,7 +490,13 @@ export async function createItemsFromPoLines(
   // Pull just the lines we're creating items for. RLS guarantees the
   // import belongs to the caller's org. Batched: 200 ids (the schema cap) in
   // one `.in()` plus this select passes the local gateway's ~8 KB limit.
-  const lines = await fetchAllRowsByIds(
+  //
+  // Walked in FILE order (line_number). The loop below is order-sensitive: the
+  // first line of a size run find-or-creates the product group, and a later
+  // line with the same variant key maps onto the item an earlier one created.
+  // Pages are ordered by id (stable paging) and batches come back in the order
+  // of the selected ids, so the merged rows are sorted after the read.
+  const fetchedLines = await fetchAllRowsByIds(
     input.lineIds,
     (batch) => (from, to) =>
       supabase
@@ -509,6 +515,8 @@ export async function createItemsFromPoLines(
         .order('id')
         .range(from, to),
   );
+  // line_number is unique per import (unique (po_import_id, line_number)).
+  const lines = fetchedLines.sort((a, b) => (a.line_number as number) - (b.line_number as number));
 
   let created = 0;
   let mapped = 0;

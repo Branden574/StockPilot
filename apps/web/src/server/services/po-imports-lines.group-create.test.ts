@@ -106,6 +106,8 @@ function statefulStub(lines: Array<Record<string, unknown>>) {
   function chainFor(table: string) {
     let op: 'select' | 'insert' | 'update' | 'delete' = 'select';
     const eqs: Record<string, unknown> = {};
+    const ins: Record<string, unknown[]> = {};
+    const orders: string[] = [];
     let payload: unknown = null;
 
     function resolve(): { data: unknown; error: null; count?: number } {
@@ -113,7 +115,21 @@ function statefulStub(lines: Array<Record<string, unknown>>) {
         return { data: { id: IMPORT_ID, status: 'parsed' }, error: null };
       }
       if (table === 'po_import_lines') {
-        return op === 'select' ? { data: lines, error: null } : { data: null, error: null };
+        if (op !== 'select') return { data: null, error: null };
+        // Honour the id filter and the ORDER BY the way PostgREST would, so the
+        // order the service walks the lines in is the order it asked for.
+        const wanted = ins.id ? new Set(ins.id) : null;
+        const rows = lines.filter((l) => !wanted || wanted.has(l.id));
+        rows.sort((a, b) => {
+          for (const col of orders) {
+            const x = a[col] as string | number;
+            const y = b[col] as string | number;
+            if (x < y) return -1;
+            if (x > y) return 1;
+          }
+          return 0;
+        });
+        return { data: rows, error: null };
       }
       if (table === 'categories') return { data: SHOE_CATEGORY, error: null };
       if (table === 'organizations') return { data: { plan: 'enterprise' }, error: null };
@@ -173,6 +189,10 @@ function statefulStub(lines: Array<Record<string, unknown>>) {
             op = 'delete';
           } else if (prop === 'eq') {
             eqs[String(args[0])] = args[1];
+          } else if (prop === 'in') {
+            ins[String(args[0])] = args[1] as unknown[];
+          } else if (prop === 'order') {
+            orders.push(String(args[0]));
           }
           return new Proxy(stub, handler);
         };
@@ -248,5 +268,71 @@ describe('createItemsFromPoLines — R2: a size run becomes ONE group', () => {
     for (const item of stub.items) {
       expect(item.tracking_type).toBe('none');
     }
+  });
+});
+
+describe('createItemsFromPoLines — lines are walked in file order', () => {
+  async function run(lines: Array<Record<string, unknown>>, lineIds: string[]) {
+    const stub = statefulStub(lines);
+    const ctx = makeServiceContext(stub.client, {
+      organizationId: 'org-test',
+      role: 'admin',
+      enabledModules: new Set<ModuleId>(['inventory', 'po_imports', 'sports']),
+    });
+    const r = await createItemsFromPoLines(
+      {
+        supabase: stub.client as never,
+        organizationId: 'org-test',
+        inventorySvc: new InventoryService(ctx as never),
+        mappingsSvc: { upsert: vi.fn(async () => {}) } as never,
+        ctx: ctx as never,
+      },
+      {
+        poImportId: IMPORT_ID,
+        lineIds,
+        vendorId: VENDOR_ID,
+        warehouseId: WAREHOUSE_ID,
+        categoryId: CATEGORY_ID,
+      },
+    );
+    return { r, stub };
+  }
+
+  it('follows line_number, not the uuid order of the line ids', async () => {
+    // Line 1 carries the LARGEST uuid and line 3 the smallest, so an id-ordered
+    // read walks the size run backwards.
+    const ids = [
+      '22222222-2222-4222-8222-2222222222cc',
+      '22222222-2222-4222-8222-2222222222bb',
+      '22222222-2222-4222-8222-2222222222aa',
+    ];
+    const lines = sizeRun().map((l, i) => ({ ...l, id: ids[i] }));
+
+    const { r, stub } = await run(lines, ids);
+
+    expect(r.created).toBe(3);
+    expect(stub.items.map((i) => i.variant_size)).toEqual(['9', '10', '11']);
+  });
+
+  it('keeps file order when the selected ids span more than one batch', async () => {
+    // 101 selected ids is two batches of the id read. Line 2 is in the FIRST
+    // batch and line 1 is the only id in the SECOND, so merging the batches in
+    // batch order would create size 10 before size 9.
+    const [nine, ten] = sizeRun();
+    const filler = Array.from({ length: 99 }, (_, i) => ({
+      ...nine,
+      id: `22222222-2222-4222-8222-${String(i).padStart(12, '0')}`,
+      line_number: i + 3,
+      line_type: 'freight',
+      description: `Freight ${i}`,
+    }));
+    const lineOne = { ...nine, id: '22222222-2222-4222-8222-9999999999a1' };
+    const lineTwo = { ...ten, id: '22222222-2222-4222-8222-9999999999a2' };
+    const lineIds = [lineTwo.id, ...filler.map((l) => l.id), lineOne.id];
+
+    const { r, stub } = await run([lineOne, lineTwo, ...filler], lineIds);
+
+    expect(r.created).toBe(2);
+    expect(stub.items.map((i) => i.variant_size)).toEqual(['9', '10']);
   });
 });
