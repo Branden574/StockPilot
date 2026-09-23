@@ -18,7 +18,6 @@
     "in:id <- orgIds",
     "in:user_id <- [...userIds]"
   ],
-  "app/api/cycle-counts/[id]/pdf/route.tsx": ["in:id <- chunk"],
   "app/api/orders/freq/route.ts": [
     "in:id <- categoryIds",
     "in:id <- itemIds",

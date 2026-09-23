@@ -181,3 +181,143 @@ describe('GET /api/cycle-counts/[id]/pdf — group fields gated on the sports mo
     expect(line!.groupName).toBe('Pegasus 41');
   });
 });
+
+/**
+ * The walk-to location lookup covers EVERY line of the count. One `.in('id')`
+ * over a big count overflowed the URL (the local gateway refuses past ~215
+ * uuids; production fails past ~395 after ~7 s of retries), and the old
+ * chunks all went out at once. Now: 100 ids per request, at most 6 in flight,
+ * and any failed batch is the route's 500, reported with its cause.
+ */
+describe('GET /api/cycle-counts/[id]/pdf — the location lookup batches', () => {
+  const itemId = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+  function lineFor(i: number) {
+    const l = groupedLine();
+    return { ...l, id: `line-${i}`, item_id: itemId(i), item: { ...l.item, id: itemId(i), group_id: null } };
+  }
+  function ctxWithItems(answer: (ids: string[], n: number) => { data: unknown; error: unknown }) {
+    let n = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': (call) => {
+        n += 1;
+        const ids = call.args[call.methods.indexOf('in')]![1] as string[];
+        return answer(ids, n) as never;
+      },
+      'organizations.select': { data: { name: 'Acme', logo_url: null }, error: null },
+    });
+    return {
+      stub,
+      ctx: {
+        organizationId: 'org-1',
+        userId: 'user-1',
+        role: 'admin' as const,
+        supabase: stub.client,
+        mfaRequired: false,
+        mfaSatisfied: true,
+        enabledModules: new Set<ModuleId>([...DEFAULT_MODULE_IDS]),
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(exportRateLimited).mockResolvedValue(null as never);
+    vi.mocked(WarehousesService).mockImplementation(function () {
+      return { list: async () => [] } as never;
+    });
+  });
+
+  it('250 lines: three lookups of at most 100 ids, and the last batch still prints its location', async () => {
+    const lines = Array.from({ length: 250 }, (_, i) => lineFor(i));
+    vi.mocked(CycleCountsService).mockImplementation(function () {
+      return { get: async () => ({ header: header(), lines }) } as never;
+    });
+    const { stub, ctx } = ctxWithItems((ids) => ({
+      data: ids.map((id) => ({
+        id,
+        item_type: 'product',
+        custom_fields: null,
+        bin_location: `BIN-${id.slice(-3)}`,
+        locations: null,
+      })),
+      error: null,
+    }));
+    vi.mocked(withApiContext).mockResolvedValue(ctx as never);
+
+    const res = await GET(req(), await paramsFor('cc-1'));
+
+    expect(res.status).toBe(200);
+    const sent = (stub.chainArgsAll.get('inventory_items.select') ?? []).map(
+      (args, i) =>
+        args[stub.chainsAll.get('inventory_items.select')![i]!.indexOf('in')]![1] as string[],
+    );
+    expect(sent.map((l) => l.length)).toEqual([100, 100, 50]);
+    const printed = capturedLines();
+    expect(printed).toHaveLength(250);
+    expect(printed[249]!.location).toContain('BIN-249');
+  });
+
+  it('a big count never has more than 6 lookups in flight', async () => {
+    const lines = Array.from({ length: 1000 }, (_, i) => lineFor(i));
+    vi.mocked(CycleCountsService).mockImplementation(function () {
+      return { get: async () => ({ header: header(), lines }) } as never;
+    });
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const { ctx } = ctxWithItems(() => ({ data: [], error: null }));
+    const from = ctx.supabase.from;
+    ctx.supabase.from = vi.fn((table: string) => {
+      const builder = from(table);
+      if (table !== 'inventory_items') return builder;
+      const wrap = (b: Record<string, unknown>): unknown =>
+        new Proxy(b, {
+          get(target, prop) {
+            if (prop === 'then') {
+              return (resolve: (v: unknown) => void) => {
+                inFlight += 1;
+                maxInFlight = Math.max(maxInFlight, inFlight);
+                setTimeout(() => {
+                  inFlight -= 1;
+                  (target.then as (r: (v: unknown) => void) => void)(resolve);
+                }, 2);
+              };
+            }
+            const fn = target[prop as string] as (...a: unknown[]) => Record<string, unknown>;
+            return (...args: unknown[]) => wrap(fn(...args));
+          },
+        });
+      return wrap(builder);
+    });
+    vi.mocked(withApiContext).mockResolvedValue(ctx as never);
+
+    const res = await GET(req(), await paramsFor('cc-1'));
+
+    expect(res.status).toBe(200);
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(maxInFlight).toBeLessThanOrEqual(6);
+  });
+
+  it('a failed batch is a 500 with the cause reported, never a sheet without locations', async () => {
+    const lines = Array.from({ length: 250 }, (_, i) => lineFor(i));
+    vi.mocked(CycleCountsService).mockImplementation(function () {
+      return { get: async () => ({ header: header(), lines }) } as never;
+    });
+    const { ctx } = ctxWithItems((_ids, n) =>
+      n === 2 ? { data: null, error: { message: 'fetch failed' } } : { data: [], error: null },
+    );
+    vi.mocked(withApiContext).mockResolvedValue(ctx as never);
+    const { reportError } = await import('@/lib/error-reporter');
+
+    const res = await GET(req(), await paramsFor('cc-1'));
+
+    expect(res.status).toBe(500);
+    expect(renderToStream).not.toHaveBeenCalled();
+    expect(vi.mocked(reportError)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        tag: 'pdf.cycle_count',
+        extra: { detail: expect.stringContaining('fetch failed') },
+      }),
+    );
+  });
+});

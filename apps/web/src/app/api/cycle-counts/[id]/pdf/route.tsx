@@ -11,6 +11,7 @@ import { CycleCountSheetPdf, type CycleCountPdfLine } from '@/lib/pdf/cycle-coun
 import { audit } from '@/server/services/audit';
 import { assertPermission, ServiceError } from '@/server/services/context';
 import { CycleCountsService } from '@/server/services/cycle-counts';
+import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
 import { ProductGroupsService } from '@/server/services/product-groups';
 import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
 import { WarehousesService } from '@/server/services/warehouses';
@@ -67,17 +68,17 @@ export async function GET(
       .map((l) => l.item_id)
       .filter((v): v is string => Boolean(v));
     const binByItem = new Map<string, string | null>();
-    // CHUNKED: get() now returns EVERY line (no 1000-row cap), so a big-warehouse
-    // count can carry tens of thousands of item ids. A single `.in('id', ids)`
-    // would both build a giant statement AND clamp its RESULT to [api]
-    // max_rows = 1000, silently dropping the location hint for every row past
-    // #1000. 100 uuids ≈ 3.7KB of query string — comfortably under the
-    // 8–16KB gateway/URL rejection threshold (same ID_CHUNK_SIZE rationale as
-    // server/loaders/inventory-list.ts; a 1000-id chunk was a ~37KB GET the
-    // edge would bounce). Chunks run in PARALLEL, and any chunk error THROWS:
-    // a count sheet printing without walk-to locations is a silent
-    // correctness failure, so it must surface as the route's 500, never as a
-    // quietly location-less printout.
+    // BATCHED: get() now returns EVERY line (no 1000-row cap), so a
+    // big-warehouse count can carry tens of thousands of item ids. A single
+    // `.in('id', ids)` would both overflow the request URL (the local gateway
+    // refuses past ~215 uuids, production past ~395 after ~7 s of retries)
+    // AND clamp its RESULT to max_rows = 1000, silently dropping the location
+    // hint for every row past #1000. fetchAllRowsByIds sends 100 ids per
+    // request with at most 6 in flight (the old code fired every chunk at
+    // once, hundreds of requests for a big count). Any batch error THROWS: a
+    // count sheet printing without walk-to locations is a silent correctness
+    // failure, so it must surface as the route's 500, never as a quietly
+    // location-less printout.
     type LookupRow = {
       id: string;
       item_type: string | null;
@@ -85,27 +86,30 @@ export async function GET(
       bin_location: string | null;
       locations: { name: string } | { name: string }[] | null;
     };
-    const LOOKUP_CHUNK = 100;
-    const chunks: string[][] = [];
-    for (let i = 0; i < itemIds.length; i += LOOKUP_CHUNK) {
-      chunks.push(itemIds.slice(i, i + LOOKUP_CHUNK));
+    let lookupRows: LookupRow[];
+    try {
+      lookupRows = await fetchAllRowsByIds<LookupRow>(
+        itemIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('inventory_items')
+            .select(
+              'id, item_type, custom_fields, bin_location, primary_location_id, locations:locations!primary_location_id (name)',
+            )
+            .eq('organization_id', ctx.organizationId)
+            .in('id', batch)
+            .order('id', { ascending: true })
+            .range(from, to) as unknown as PromiseLike<{
+            data: LookupRow[] | null;
+            error: { message: string } | null;
+          }>,
+      );
+    } catch (err) {
+      throw new ServiceError(
+        'internal_error',
+        `Count-sheet location lookup failed: ${rawErrorText(err)}`,
+      );
     }
-    const chunkResults = await Promise.all(
-      chunks.map(async (chunk) => {
-        const { data, error } = await ctx.supabase
-          .from('inventory_items')
-          .select('id, item_type, custom_fields, bin_location, primary_location_id, locations:locations!primary_location_id (name)')
-          .eq('organization_id', ctx.organizationId)
-          .in('id', chunk);
-        if (error) {
-          throw new ServiceError(
-            'internal_error',
-            `Count-sheet location lookup failed: ${error.message}`,
-          );
-        }
-        return (data ?? []) as LookupRow[];
-      }),
-    );
 
     // Rack/crate HOLDINGS for every item on the sheet — scoped to the
     // count's warehouse when it has one (a per-warehouse count only ever
@@ -119,7 +123,7 @@ export async function GET(
       header.warehouse_id,
     );
 
-    for (const row of chunkResults.flat()) {
+    for (const row of lookupRows) {
       const locField = row.locations;
       const loc = Array.isArray(locField) ? locField[0] : locField;
       const label = countSheetLocationLabel({
@@ -232,6 +236,14 @@ export async function GET(
     });
   } catch (e) {
     if (e instanceof ServiceError) {
+      // An internal_error's public message is generic; the cause is only in
+      // internalDetail, so report it or it is lost.
+      if (e.code === 'internal_error') {
+        void reportError(e, {
+          tag: 'pdf.cycle_count',
+          extra: { detail: e.internalDetail ?? null },
+        });
+      }
       const status =
         e.code === 'not_found'
           ? 404
