@@ -749,6 +749,24 @@ export class OrderRequestsService {
 
     // M6: lines, reservations, and warehouse name are independent reads —
     // fan them out concurrently to shave a round-trip off the detail page.
+    //
+    // The requester and picker profiles join them: they need only the header
+    // (requester_user_id, assigned_picker_id), but were read after this batch
+    // had answered, one more Supabase level on every open of an order (lab
+    // trace 2026-09-22: 7 serial waves on the order page). Started here, a
+    // rejection is observed at once and surfaced where it is awaited below.
+    const hdr = header as OrderRequestRow;
+    const profilesRead = Promise.all([
+      // Resolve the requester identity ONCE from user_profiles (only for
+      // internal self-submit orders, which carry a `requester_user_id` and
+      // NULL name/email columns). On-behalf-of + public-link orders instead
+      // carry the free-text name/email and no `requester_user_id`.
+      hdr.requester_user_id ? this.lookupUserProfile(hdr.requester_user_id) : Promise.resolve(null),
+      // Picker who CLAIMED this order — pre-printed on the pick slip's
+      // PICKER NAME line. Null when unclaimed (see OrderRequestDetail doc).
+      hdr.assigned_picker_id ? this.lookupUserProfile(hdr.assigned_picker_id) : Promise.resolve(null),
+    ]);
+    profilesRead.catch(() => {});
     const [linesRes, rsRes, whRes] = await Promise.all([
       this.ctx.supabase
         .from('order_request_lines')
@@ -836,18 +854,8 @@ export class OrderRequestsService {
 
     const h = header as OrderRequestRow;
 
-    // Resolve the requester identity ONCE from user_profiles (only for
-    // internal self-submit orders, which carry a `requester_user_id` and
-    // NULL name/email columns). On-behalf-of + public-link orders instead
-    // carry the free-text name/email and no `requester_user_id`.
-    // Resolved in PARALLEL with the picker below so adding the picker name
-    // costs no extra round-trip on the detail path.
-    const [profile, pickerProfile] = await Promise.all([
-      h.requester_user_id ? this.lookupUserProfile(h.requester_user_id) : Promise.resolve(null),
-      // Picker who CLAIMED this order — pre-printed on the pick slip's
-      // PICKER NAME line. Null when unclaimed (see OrderRequestDetail doc).
-      h.assigned_picker_id ? this.lookupUserProfile(h.assigned_picker_id) : Promise.resolve(null),
-    ]);
+    // Requester and picker profiles: started with the batch above.
+    const [profile, pickerProfile] = await profilesRead;
 
     // Resolved name/email safe for a name cell — SAME fallback the list()
     // path uses: free-text column wins, else the joined profile, else null.
