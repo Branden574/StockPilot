@@ -3,7 +3,7 @@ import 'server-only';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { headers } from 'next/headers';
 
-import { reportError } from '@/lib/error-reporter';
+import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
 import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 
 import { withContext, type ServiceContext } from './context';
@@ -405,6 +405,29 @@ export const AUDIT_INSERT_BATCH_ROWS = 100;
  */
 export const AUDIT_INSERT_CONCURRENCY = 2;
 
+/**
+ * How long one audit_logs INSERT may take before it is abandoned and its rows
+ * are counted as lost (and reported). Bulk actions await their audit write,
+ * and the admin client's fetch has no timeout of its own: a gateway that
+ * accepts the connection and never answers (the 2026-09-22 Supabase-entry
+ * stalls) held a finished action open until undici gave up, about 300 s.
+ * A normal 100-row INSERT takes well under a second. An abandoned request
+ * may still have committed, so a timeout can over-report a loss; it never
+ * under-reports one.
+ */
+export const AUDIT_INSERT_TIMEOUT_MS = 5_000;
+
+/**
+ * Lost audit rows are reported at most once per organization per window.
+ * reportError posts to the alerts webhook on every call, with no dedupe, and
+ * during a gateway incident every failed write reports: the placement pass of
+ * a bulk Set rack alone makes one audit write per transfer (409 on the lab
+ * org). The first loss after a quiet period is reported at once, so an
+ * incident is never silent; the rest are counted and sent as one report when
+ * the window closes, and a window keeps rolling while losses keep coming.
+ */
+export const AUDIT_LOSS_REPORT_WINDOW_MS = 5_000;
+
 type RequestMeta = { ip: string | null; userAgent: string | null };
 
 /** IP and user agent of the current request, read once per call. */
@@ -443,21 +466,172 @@ function eventsLabel(payloads: readonly AuditPayload[]): string {
 }
 
 /**
- * What a rejected INSERT said about itself: HTTP status and PostgREST/Postgres
- * code only. Never the message or details: a Postgres rejection quotes the
- * failing row ("Failing row contains (...)"), and audit metadata carries item
- * names and before/after values.
+ * What a failed INSERT said about itself: HTTP status and PostgREST/Postgres
+ * code, or the name of what was thrown, and whether it hit the deadline.
+ * Never the message or details: a Postgres rejection quotes the failing row
+ * ("Failing row contains (...)"), and audit metadata carries item names and
+ * before/after values.
  */
-function insertFailure(res: {
-  status?: number;
-  statusText?: string;
-  error: { code?: string } | null;
-}) {
-  return {
-    status: typeof res.status === 'number' ? res.status : null,
-    statusText: res.statusText || null,
-    code: res.error?.code || null,
+type InsertFailure = {
+  status?: number | null;
+  statusText?: string | null;
+  code?: string | null;
+  thrown?: string;
+  timedOut: boolean;
+};
+
+/** Thrown into the race when an INSERT passes its deadline. */
+class AuditInsertTimeout extends Error {
+  constructor() {
+    super('Audit INSERT timed out');
+    this.name = 'AuditInsertTimeout';
+  }
+}
+
+/**
+ * One audit_logs INSERT with a deadline. Resolves to null when the rows were
+ * written, or to what went wrong; never throws.
+ *
+ * The request carries an abort signal, so the socket is released at the
+ * deadline, and the result is raced against that same deadline, so the caller
+ * is released even if a fetch implementation ignored the signal.
+ */
+async function insertAuditRows(
+  admin: ReturnType<typeof createAdminClient>,
+  rows: ReturnType<typeof auditRow> | Array<ReturnType<typeof auditRow>>,
+): Promise<InsertFailure | null> {
+  const controller = new AbortController();
+  const deadline = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener('abort', () => reject(new AuditInsertTimeout()), {
+      once: true,
+    });
+  });
+  const timer = setTimeout(() => controller.abort(), AUDIT_INSERT_TIMEOUT_MS);
+  try {
+    const res = await Promise.race([
+      admin.from('audit_logs').insert(rows).abortSignal(controller.signal),
+      deadline,
+    ]);
+    if (!res.error) return null;
+    return {
+      status: typeof res.status === 'number' ? res.status : null,
+      statusText: res.statusText || null,
+      code: res.error.code || null,
+      timedOut: controller.signal.aborted,
+    };
+  } catch (e) {
+    return {
+      thrown: e instanceof Error ? e.name : typeof e,
+      timedOut: controller.signal.aborted,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ── Lost-row reports, coalesced per organization ────────────────────────────
+
+type LossWindow = {
+  organizationId: string | null;
+  lost: number;
+  total: number;
+  events: Set<string>;
+  failure: InsertFailure | null;
+  timer: ReturnType<typeof setTimeout> | undefined;
+};
+
+/** Open windows by organization id ('' when the organization is unknown). */
+const lossWindows = new Map<string, LossWindow>();
+
+type LostRows = {
+  organizationId: string | null;
+  /** One event, or a comma-separated list for a batch. */
+  event: string;
+  entityType?: string | null;
+  lost: number;
+  total: number;
+  failure: InsertFailure | null;
+  /** What was thrown, when something was; the first report carries it. */
+  cause?: unknown;
+};
+
+function sendLossReport(
+  cause: unknown,
+  organizationId: string | null,
+  extra: Record<string, string | number | boolean | null | undefined>,
+) {
+  void reportError(cause ?? new Error('Audit rows were not written'), {
+    tag: 'audit.write_failed',
+    level: 'warning',
+    organizationId,
+    extra,
+  });
+}
+
+function openLossWindow(key: string, organizationId: string | null): void {
+  const w: LossWindow = {
+    organizationId,
+    lost: 0,
+    total: 0,
+    events: new Set(),
+    failure: null,
+    timer: undefined,
   };
+  w.timer = setTimeout(() => closeLossWindow(key, w), AUDIT_LOSS_REPORT_WINDOW_MS);
+  // Never keep a process (a script, a test run) alive just to send a count.
+  w.timer.unref?.();
+  lossWindows.set(key, w);
+}
+
+function closeLossWindow(key: string, w: LossWindow): void {
+  if (lossWindows.get(key) !== w) return;
+  lossWindows.delete(key);
+  if (w.lost === 0) return;
+  sendLossReport(null, w.organizationId, {
+    event: [...w.events].join(','),
+    lost: w.lost,
+    total: w.total,
+    windowMs: AUDIT_LOSS_REPORT_WINDOW_MS,
+    ...(w.failure ?? {}),
+  });
+  // Losses are still coming in: keep counting instead of reporting each one.
+  openLossWindow(key, w.organizationId);
+}
+
+/**
+ * Report lost audit rows: at once when no report went out for this
+ * organization in the current window, otherwise counted into the report that
+ * goes out when the window closes. Counts, events and status only.
+ *
+ * The count report runs on a timer. On a serverless instance that is frozen
+ * or recycled before the window closes it can be late or lost, the same risk
+ * any fire-and-forget report has; the first report of an incident never
+ * waits for it.
+ */
+function reportLostAuditRows(r: LostRows): void {
+  const key = r.organizationId ?? '';
+  const open = lossWindows.get(key);
+  if (open) {
+    open.lost += r.lost;
+    open.total += r.total;
+    for (const e of r.event.split(',')) if (e) open.events.add(e);
+    open.failure ??= r.failure;
+    return;
+  }
+  sendLossReport(r.cause, r.organizationId, {
+    event: r.event,
+    entityType: r.entityType ?? null,
+    lost: r.lost,
+    total: r.total,
+    ...(r.failure ?? {}),
+  });
+  openLossWindow(key, r.organizationId);
+}
+
+/** Test hook: forget every open window and its timer. */
+export function resetAuditLossReportsForTests(): void {
+  for (const w of lossWindows.values()) clearTimeout(w.timer);
+  lossWindows.clear();
 }
 
 /**
@@ -472,36 +646,45 @@ function insertFailure(res: {
  * `ServiceContext` so the audit row is written.
  *
  * Best-effort for the action — never throws to the caller — but a lost row is
- * never silent: a refused or failed INSERT is reported. supabase-js returns a
+ * never silent: a refused, failed or timed-out INSERT is reported (coalesced
+ * per organization, see AUDIT_LOSS_REPORT_WINDOW_MS). supabase-js returns a
  * failed request as `{ error }` instead of throwing, so the result is read;
  * the catch only sees what throws (no context, no request headers).
  *
  * For one row per item over a selection or a list, use `auditMany`.
  */
 export async function audit(payload: AuditPayload, ctx?: ServiceContext): Promise<void> {
+  let c: ServiceContext | undefined = ctx;
   try {
-    const c = ctx ?? (await withContext());
+    c ??= await withContext();
     const meta = await readRequestMeta();
     const admin = createAdminClient();
-    const res = await admin.from('audit_logs').insert(auditRow(payload, c, meta));
-    if (res.error) {
-      void reportError(new Error('Audit rows were not written'), {
-        tag: 'audit.write_failed',
-        level: 'warning',
+    const failure = await insertAuditRows(admin, auditRow(payload, c, meta));
+    if (failure) {
+      reportLostAuditRows({
         organizationId: c.organizationId,
-        extra: {
-          event: payload.event,
-          entityType: payload.entityType ?? null,
-          lost: 1,
-          ...insertFailure(res),
-        },
+        event: payload.event,
+        entityType: payload.entityType ?? null,
+        lost: 1,
+        total: 1,
+        failure,
       });
     }
   } catch (e) {
-    void reportError(e, {
-      tag: 'audit.write_failed',
-      level: 'warning',
-      extra: { event: payload.event, entityType: payload.entityType ?? null, lost: 1 },
+    // A Next.js redirect or notFound is control flow, not a write failure:
+    // reportError drops it quietly, and it is not counted as a lost row.
+    if (isNextControlFlowError(e)) {
+      void reportError(e, { tag: 'audit.write_failed', level: 'warning' });
+      return;
+    }
+    reportLostAuditRows({
+      organizationId: c?.organizationId ?? null,
+      event: payload.event,
+      entityType: payload.entityType ?? null,
+      lost: 1,
+      total: 1,
+      failure: { thrown: e instanceof Error ? e.name : typeof e, timedOut: false },
+      cause: e,
     });
   }
 }
@@ -516,10 +699,12 @@ export async function audit(payload: AuditPayload, ctx?: ServiceContext): Promis
  * AUDIT_INSERT_CONCURRENCY INSERTs in flight, instead of one request per row
  * all at once.
  *
- * Best-effort for the action like `audit()`: never throws. A chunk that fails
- * is counted, and when any row is lost ONE report says which events and how
- * many rows, never their contents. Returns the counts so a caller or a test
- * can see them; callers are free to ignore them.
+ * Best-effort for the action like `audit()`: never throws, and never waits
+ * longer than AUDIT_INSERT_TIMEOUT_MS for one INSERT. A chunk that fails or
+ * times out is counted, and when any row is lost ONE report says which events
+ * and how many rows, never their contents (folded into the organization's
+ * open report window when there is one). Returns the counts so a caller or a
+ * test can see them; callers are free to ignore them.
  */
 export async function auditMany(
   payloads: readonly AuditPayload[],
@@ -537,11 +722,17 @@ export async function auditMany(
     rows = payloads.map((p) => auditRow(p, c, meta));
     admin = createAdminClient();
   } catch (e) {
-    void reportError(e, {
-      tag: 'audit.write_failed',
-      level: 'warning',
+    if (isNextControlFlowError(e)) {
+      void reportError(e, { tag: 'audit.write_failed', level: 'warning' });
+      return { written: 0, lost: total };
+    }
+    reportLostAuditRows({
       organizationId: ctx?.organizationId ?? null,
-      extra: { event: events, lost: total, total },
+      event: events,
+      lost: total,
+      total,
+      failure: { thrown: e instanceof Error ? e.name : typeof e, timedOut: false },
+      cause: e,
     });
     return { written: 0, lost: total };
   }
@@ -551,28 +742,25 @@ export async function auditMany(
     chunks.push(rows.slice(i, i + AUDIT_INSERT_BATCH_ROWS));
   }
   let lost = 0;
-  let firstFailure: ReturnType<typeof insertFailure> | { thrown: string } | null = null;
-  // `run` never throws, so mapWithConcurrency's stop-on-first-error never
-  // applies: every chunk is attempted.
+  let firstFailure: InsertFailure | null = null;
+  // `run` never throws (insertAuditRows returns its failure), so
+  // mapWithConcurrency's stop-on-first-error never applies: every chunk is
+  // attempted, each with its own deadline.
   await mapWithConcurrency(chunks, AUDIT_INSERT_CONCURRENCY, async (chunk) => {
-    try {
-      const res = await admin.from('audit_logs').insert(chunk);
-      if (res.error) {
-        lost += chunk.length;
-        firstFailure ??= insertFailure(res);
-      }
-    } catch (e) {
+    const failure = await insertAuditRows(admin, chunk);
+    if (failure) {
       lost += chunk.length;
-      firstFailure ??= { thrown: e instanceof Error ? e.name : typeof e };
+      firstFailure ??= failure;
     }
   });
 
   if (lost > 0) {
-    void reportError(new Error('Audit rows were not written'), {
-      tag: 'audit.write_failed',
-      level: 'warning',
+    reportLostAuditRows({
       organizationId: c.organizationId,
-      extra: { event: events, lost, total, ...(firstFailure ?? {}) },
+      event: events,
+      lost,
+      total,
+      failure: firstFailure,
     });
   }
   return { written: total - lost, lost };
