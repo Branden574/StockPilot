@@ -386,6 +386,30 @@ describe('PendingRouteFrame', () => {
     expect(main().scrollTop).toBe(3000);
   });
 
+  it('E17 focus goes back to the control it was on when the same page comes back, unless the person moved it', () => {
+    render(
+      <>
+        <Frame />
+        <button type="button">outside</button>
+      </>,
+    );
+    const row = screen.getByRole('button', { name: 'count 0' });
+    row.focus();
+    push('/dashboard/orders');
+    advance(400);
+    expect(document.activeElement).toBe(main());
+    push('/dashboard/inventory');
+    expect(document.activeElement).toBe(row);
+
+    push('/dashboard/orders');
+    advance(400);
+    expect(document.activeElement).toBe(main());
+    const outside = screen.getByRole('button', { name: 'outside' });
+    outside.focus();
+    push('/dashboard/inventory');
+    expect(document.activeElement).toBe(outside);
+  });
+
   it('E13 a dead navigation does not come back when a shallow pushState returns to the page it left', () => {
     // Inventory's instant-mode view chips: history.pushState, which Next applies
     // with a RESTORE (discarding the row click's navigation) and never reports.

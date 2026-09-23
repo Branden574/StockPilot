@@ -118,7 +118,13 @@ export function PendingRouteFrame({ children }: { children: React.ReactNode }) {
   }, [coveredId]);
 
   const pageRef = React.useRef<HTMLDivElement>(null);
-  const savedScrollRef = React.useRef<{ key: string; top: number } | null>(null);
+  // Where the person was on the page the skeleton covers: its scroll position
+  // and the control that had focus, to put back if that page comes back.
+  const savedPlaceRef = React.useRef<{
+    key: string;
+    top: number;
+    focus: HTMLElement | null;
+  } | null>(null);
 
   React.useEffect(() => {
     if (!eligible || tracked === null) return;
@@ -132,10 +138,12 @@ export function PendingRouteFrame({ children }: { children: React.ReactNode }) {
         const page = pageRef.current;
         const main = page?.closest('main');
         if (page && main) {
-          if (page.contains(document.activeElement)) main.focus({ preventScroll: true });
-          const saved = savedScrollRef.current;
+          const active = document.activeElement;
+          const focus = active instanceof HTMLElement && page.contains(active) ? active : null;
+          if (focus) main.focus({ preventScroll: true });
+          const saved = savedPlaceRef.current;
           if (saved === null || saved.key !== tracked.fromKey) {
-            savedScrollRef.current = { key: tracked.fromKey, top: main.scrollTop };
+            savedPlaceRef.current = { key: tracked.fromKey, top: main.scrollTop, focus };
           }
         }
         setSlowFromKey(tracked.fromKey);
@@ -157,16 +165,22 @@ export function PendingRouteFrame({ children }: { children: React.ReactNode }) {
   // height, so after a long page it would show its middle or bottom, header
   // off screen (Chromium, 3000 -> 318 px, 2026-09-23). Once the page is back,
   // and it is the same page (the navigation was abandoned or expired), it goes
-  // back where the person left it; a new page gets Next's own scroll handling.
+  // back where the person left it: the scroll position, and focus on the
+  // control they were on, unless they have moved focus since it went to main.
+  // A new page gets Next's own scroll handling.
   React.useLayoutEffect(() => {
     const main = pageRef.current?.closest('main');
     if (show) {
       if (main) main.scrollTop = 0;
       return;
     }
-    const saved = savedScrollRef.current;
-    savedScrollRef.current = null;
-    if (saved && main && saved.key === currentKey) main.scrollTop = saved.top;
+    const saved = savedPlaceRef.current;
+    savedPlaceRef.current = null;
+    if (!saved || !main || saved.key !== currentKey) return;
+    main.scrollTop = saved.top;
+    if (saved.focus?.isConnected && document.activeElement === main) {
+      saved.focus.focus({ preventScroll: true });
+    }
   }, [show, currentKey]);
 
   return (
