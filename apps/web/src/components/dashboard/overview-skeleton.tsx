@@ -2,8 +2,10 @@
  * The Overview page's skeleton: the greeting/date header block plus the
  * streamed body's stat row and chart rows (same shapes as
  * `DashboardBodySkeleton` in the Overview page). It was the Overview's
- * loading.tsx; it is now drawn by PendingRouteSkeleton, only for a navigation
- * that is still waiting after SLOW_NAVIGATION_MS (see nav-progress-bar.tsx).
+ * loading.tsx; it is now drawn through RouteSkeleton (route-skeleton.tsx) by
+ * the late skeleton, for a navigation still waiting after SLOW_NAVIGATION_MS
+ * (pending-route-skeleton.tsx), and by the (dashboard) group's loading.tsx on
+ * a hard load of /dashboard.
  */
 export function OverviewSkeleton() {
   return (

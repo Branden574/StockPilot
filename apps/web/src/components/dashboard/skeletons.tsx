@@ -85,10 +85,10 @@ export function TablePageSkeleton({ rows = 8, className }: { rows?: number; clas
 
 /**
  * Just the table-body chunk of TablePageSkeleton (no h1/toolbar). Used as the
- * <Suspense fallback> for the streamed data table on the list pages so the
- * page chrome (heading, filter toolbar, New/Import buttons, view toggles)
- * paints immediately while only the rows stream in. Rows + column grid mirror
- * TablePageSkeleton so the in-page fallback matches the full-page loading.tsx.
+ * <Suspense fallback> for a streamed data table (staging, categories) so the
+ * page chrome paints immediately while only the rows stream in. Rows + column
+ * grid mirror TablePageSkeleton so the in-page fallback matches the full-page
+ * skeleton. Items and Books do not use it: they reveal once (see their pages).
  */
 export function TableBodySkeleton({ rows = 8, className }: { rows?: number; className?: string }) {
   return (

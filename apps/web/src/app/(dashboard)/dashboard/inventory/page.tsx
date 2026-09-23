@@ -162,9 +162,9 @@ export default async function InventoryPage({
   // row — no extra fetch.
   //
   // The racks RPC is CHAINED INSIDE the Promise.all (not awaited after it):
-  // a separate sequential await put one full DB round trip between
-  // loading.tsx and the real toolbar — and therefore in front of the table
-  // skeleton — on EVERY hard load (cold-start plan rank 2). withContext is
+  // a separate sequential await put one full DB round trip between the
+  // skeleton and the real toolbar — and therefore in front of the table
+  // — on EVERY hard load (cold-start plan rank 2). withContext is
   // request-cached, so the chain adds no duplicate auth work.
   //
   // The TABLE starts in the same Promise.all. It used to be a child Server
@@ -236,11 +236,15 @@ export default async function InventoryPage({
           after the previous one (react-dom-client FALLBACK_THROTTLE_MS), so
           rows could not appear before ~skeleton + 600 ms however fast the
           server was: measured minimum 631-663 ms on Dashboard -> Inventory vs
-          345-379 ms on Orders, which reveals once. loading.tsx's
-          TablePageSkeleton already draws this header and table, so the page
-          now streams as one reveal. Do not re-add a Suspense with a visible
-          fallback here (the dataset adopter's fallback={null} boundary
-          inside the table is fine: it draws nothing). */}
+          345-379 ms on Orders, which reveals once. The route's skeleton
+          already draws this header and table (TablePageSkeleton: the late
+          skeleton on a slow navigation, the (dashboard) group's loading.tsx
+          on a hard load; lib/navigation/route-skeletons.ts), so the page
+          streams as one reveal. Do not re-add a Suspense with a visible
+          fallback here, nor a loading.tsx for this route: either is a
+          fallback React holds the page behind for 300 ms (the dataset
+          adopter's fallback={null} boundary inside the table is fine: it
+          draws nothing). */}
       <div className="mt-8">{table}</div>
     </div>
   );

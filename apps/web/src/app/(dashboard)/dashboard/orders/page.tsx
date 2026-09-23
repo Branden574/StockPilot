@@ -118,9 +118,11 @@ export default async function OrdersPage({
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
       {/* Performance marker. This page has no Suspense split: by the time any
           of it renders, the order rows above have been awaited, so the page
-          itself IS the real data (loading.tsx is the skeleton and never
-          renders this). An empty tab is a finished page and counts; the
-          "couldn't load" banner is a failure, not useful content, and does not. */}
+          itself IS the real data (its skeleton is drawn elsewhere and never
+          renders this: the late skeleton on a slow navigation, the
+          (dashboard) group's loading.tsx on a hard load). An empty tab is a
+          finished page and counts; the "couldn't load" banner is a failure,
+          not useful content, and does not. */}
       {!loadFailed && <PerfUseful />}
       <div className="flex flex-wrap items-end justify-between gap-3 sm:gap-4">
         <div>
