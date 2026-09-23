@@ -703,6 +703,7 @@ async function loadCatalogItemsUncached(
     // Category half: a category-restricted viewer sees only the granted
     // categories, and never a NULL category (IN drops NULLs, as the policy's
     // pair probe does).
+    // in-list-bound: one mapIdBatches batch of the grants, via readItems below
     if (batch !== null) q = q.in('category_id', batch);
     return q;
   };

@@ -4782,6 +4782,7 @@ export class InventoryService {
           .from('inventory_items')
           .select('id, warehouse_id')
           .eq('organization_id', this.ctx.organizationId)
+          // in-list-bound: one fetchAllRowsByIds batch, handed in by chunkedItemRead
           .in('id', batch)
           .is('deleted_at', null)
           .order('id')
@@ -4852,6 +4853,7 @@ export class InventoryService {
             .from('inventory_items')
             .select('id, bin_location')
             .eq('organization_id', this.ctx.organizationId)
+            // in-list-bound: one fetchAllRowsByIds batch, handed in by chunkedItemRead
             .in('id', batch)
             .order('id')
             .range(from, to),
@@ -7081,6 +7083,7 @@ export class InventoryService {
           .from('inventory_items')
           .select('id, warehouse_id')
           .eq('organization_id', this.ctx.organizationId)
+          // in-list-bound: one fetchAllRowsByIds batch, handed in by chunkedItemRead
           .in('id', batch)
           .order('id')
           .range(from, to),
@@ -7962,6 +7965,7 @@ export class InventoryService {
             .from('locations')
             .select('id, name')
             .eq('organization_id', ctx.organizationId)
+            // in-list-bound: one mapIdBatches batch, handed in by lookup() above
             .in('id', batch)
             .order('id')
             .range(from, to),
@@ -7977,6 +7981,7 @@ export class InventoryService {
               'id, receipt_number, status, reversed_receipt_id, reversal_reason, purchase_orders(po_number, status)',
             )
             .eq('organization_id', ctx.organizationId)
+            // in-list-bound: one mapIdBatches batch, handed in by lookup() above
             .in('id', batch)
             .order('id')
             .range(from, to),
@@ -7989,6 +7994,7 @@ export class InventoryService {
             .from('order_requests')
             .select('id, order_number')
             .eq('organization_id', ctx.organizationId)
+            // in-list-bound: one mapIdBatches batch, handed in by lookup() above
             .in('id', batch)
             .order('id')
             .range(from, to),
@@ -8001,6 +8007,7 @@ export class InventoryService {
             .from('returns')
             .select('id, return_number')
             .eq('organization_id', ctx.organizationId)
+            // in-list-bound: one mapIdBatches batch, handed in by lookup() above
             .in('id', batch)
             .order('id')
             .range(from, to),

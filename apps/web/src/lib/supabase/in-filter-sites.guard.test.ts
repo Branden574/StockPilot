@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { classifyInFilterSites } from '@/test/in-filter-sites';
+import { classifyInFilterSites, mayHoldInFilter } from '@/test/in-filter-sites';
 
 /**
  * No new unbounded `.in()` list goes into a request URL.
@@ -15,11 +15,14 @@ import { classifyInFilterSites } from '@/test/in-filter-sites';
  * caller ignored `error`, that became a silent wrong answer: the storefront
  * showed a 401-item warehouse's reserved stock as available (PR #236).
  *
- * Every `.in()` / `.notIn()` / `in.(${…})` in `src` must be one of:
- *   - a list of literals, or a SCREAMING_CASE constant;
- *   - the `batch` parameter of fetchAllRowsByIds / mapIdBatches /
- *     writeInIdBatches (server/services/lib/fetch-by-ids.ts) or
- *     chunkInFilterValues (lib/supabase/in-filter.ts);
+ * Every `.in()` / `.notIn()`, `.filter(col, 'in', …)` / `.not(col, 'in', …)`
+ * and `in.(…` filter string (template, `+` or array join) in `src` must be
+ * one of (the full rules are in `@/test/in-filter-sites`):
+ *   - a list of literals, or built from a SCREAMING_CASE constant;
+ *   - the `batch` parameter of a callback passed straight to
+ *     fetchAllRowsByIds / mapIdBatches / writeInIdBatches
+ *     (server/services/lib/fetch-by-ids.ts), or the loop variable of
+ *     `for (const batch of chunkInFilterValues(…))` (lib/supabase/in-filter.ts);
  *   - annotated `// in-list-bound: <why it stays under 100 values>`;
  *   - or already recorded in in-filter-sites.baseline.json, which only ever
  *     shrinks. A new site fails here; a baseline entry that no longer exists
@@ -58,7 +61,7 @@ function currentSites(): { counted: Baseline; lines: Map<string, number[]> } {
   const lines = new Map<string, number[]>();
   for (const file of sourceFiles(SRC)) {
     const text = readFileSync(file, 'utf8');
-    if (!/\.in\(|\.notIn\(|in\.\(/.test(text)) continue;
+    if (!mayHoldInFilter(text)) continue;
     const rel = path.relative(SRC, file).split(path.sep).join('/');
     for (const site of classifyInFilterSites(file, text)) {
       if (site.exempt !== null) continue;
