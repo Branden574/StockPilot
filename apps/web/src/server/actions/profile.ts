@@ -494,23 +494,31 @@ export async function deleteOwnAccountAction(input: {
     // Find every org this user owns. If any of them have another
     // accepted member, refuse the delete — the owner must transfer
     // ownership or remove the other members first.
-    const { data: ownedRows } = await supabase
+    //
+    // Both reads bind their errors. Read as data, a failed read was "owns
+    // nothing" or "no other members", and the account was deleted out from
+    // under an org that still has people in it: the check this exists for
+    // failed open.
+    const { data: ownedRows, error: ownedErr } = await supabase
       .from('organization_members')
       .select('organization_id')
       .eq('user_id', session.userId)
       .eq('role', 'owner')
       .not('accepted_at', 'is', null);
+    if (ownedErr) throw new ServiceError('internal_error', ownedErr.message);
     const ownedOrgIds = ((ownedRows as { organization_id: string }[] | null) ?? []).map(
       (r) => r.organization_id,
     );
     if (ownedOrgIds.length > 0) {
-      const { data: otherMembers } = await supabase
+      const { data: otherMembers, error: othersErr } = await supabase
         .from('organization_members')
         .select('organization_id')
+        // in-list-bound: the orgs this one user owns (a handful)
         .in('organization_id', ownedOrgIds)
         .neq('user_id', session.userId)
         .not('accepted_at', 'is', null)
         .limit(1);
+      if (othersErr) throw new ServiceError('internal_error', othersErr.message);
       if ((otherMembers ?? []).length > 0) {
         return err(
           'forbidden',

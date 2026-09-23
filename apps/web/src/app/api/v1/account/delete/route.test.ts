@@ -28,6 +28,8 @@ vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: vi.fn(() => ({ auth: { admin: { deleteUser } } })),
 }));
 
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+
 const USER_ID = '22222222-2222-2222-2222-222222222222';
 
 function buildCtx(stub: SupabaseStub, role: Role = 'staff') {
@@ -129,5 +131,32 @@ describe('POST /api/v1/account/delete', () => {
     await POST(buildRequest({ confirm: 'DELETE' }));
 
     expect(order).toEqual(['audit', 'deleteUser']);
+  });
+
+  // The sole-owner check fails CLOSED: a failed read of the caller's owned
+  // orgs, or of their other members, used to read as "owns nothing" / "no
+  // other members" and the account was deleted out from under an org that
+  // still had people in it.
+  it.each([
+    ['owned-orgs', 1],
+    ['other-members', 2],
+  ])('a failed %s read refuses the delete and touches nothing', async (_label, failAt) => {
+    let n = 0;
+    const stub = makeSupabaseStub({
+      'organization_members.select': () => {
+        n += 1;
+        if (n === failAt) return { data: null, error: { message: 'fetch failed' } };
+        return { data: [{ organization_id: 'org-1' }], error: null };
+      },
+      'user_profiles.update': { data: null, error: null },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub) as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(500);
+    expect(stub.chains.get('user_profiles.update')).toBeUndefined();
+    expect(audit).not.toHaveBeenCalled();
+    expect(deleteUser).not.toHaveBeenCalled();
   });
 });

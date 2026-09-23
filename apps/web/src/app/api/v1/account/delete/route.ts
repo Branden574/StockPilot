@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { audit } from '@/server/services/audit';
 
@@ -70,23 +71,43 @@ export async function POST(req: NextRequest) {
     // Refuse the delete if the user is the sole accepted owner of an
     // org that still has other accepted members — they must transfer
     // ownership first. Same rule as the web action.
-    const { data: ownedRows } = await ctx.supabase
+    //
+    // Both reads bind their errors. Read as data, a failed read was "owns
+    // nothing" or "no other members", and the account was deleted out from
+    // under an org that still has people in it: the check failed open.
+    const ownerCheckFailed = (err: { message: string }) => {
+      void reportError(new Error(err.message), {
+        tag: 'account.delete.owner_check',
+        extra: { source: 'mobile' },
+      });
+      return NextResponse.json(
+        {
+          error: 'internal_error',
+          message: 'Could not check the organizations you own. Nothing was deleted. Try again.',
+        },
+        { status: 500 },
+      );
+    };
+    const { data: ownedRows, error: ownedErr } = await ctx.supabase
       .from('organization_members')
       .select('organization_id')
       .eq('user_id', ctx.userId)
       .eq('role', 'owner')
       .not('accepted_at', 'is', null);
+    if (ownedErr) return ownerCheckFailed(ownedErr);
     const ownedOrgIds = ((ownedRows as { organization_id: string }[] | null) ?? []).map(
       (r) => r.organization_id,
     );
     if (ownedOrgIds.length > 0) {
-      const { data: otherMembers } = await ctx.supabase
+      const { data: otherMembers, error: othersErr } = await ctx.supabase
         .from('organization_members')
         .select('organization_id')
+        // in-list-bound: the orgs this one user owns (a handful)
         .in('organization_id', ownedOrgIds)
         .neq('user_id', ctx.userId)
         .not('accepted_at', 'is', null)
         .limit(1);
+      if (othersErr) return ownerCheckFailed(othersErr);
       if ((otherMembers ?? []).length > 0) {
         return NextResponse.json(
           {
