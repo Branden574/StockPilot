@@ -13,10 +13,16 @@ const RELAY = 'http://127.0.0.1:54400';
 const PREFIX = process.argv[2] ?? 'trace';
 const N = Number(process.argv[3] ?? 5);
 const EMAIL = process.env.EMAIL ?? 'perf-lab+admin@stockpilotusa.com';
+// The local stack's API. This script sends that stack's service key, so it
+// refuses any host but loopback: a mistyped URL can never carry it elsewhere.
+const LOCAL_API = new URL(process.env.LOCAL_SUPABASE_URL ?? 'http://127.0.0.1:54321');
+if (!['127.0.0.1', 'localhost', '[::1]'].includes(LOCAL_API.hostname)) {
+  throw new Error(`trace-nav talks to a local Supabase stack only, not ${LOCAL_API.hostname}`);
+}
 
 async function tokenHash() {
   const key = process.env.SERVICE_ROLE_KEY;
-  const res = await fetch('http://127.0.0.1:54321/auth/v1/admin/generate_link', {
+  const res = await fetch(new URL('/auth/v1/admin/generate_link', LOCAL_API), {
     method: 'POST',
     redirect: 'error',
     headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
@@ -91,4 +97,4 @@ for (const s of scenarios) {
   }
 }
 await browser.close();
-console.log('trace pass done', PREFIX);
+console.info('trace pass done', PREFIX);
