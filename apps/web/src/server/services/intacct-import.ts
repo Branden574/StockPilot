@@ -12,6 +12,7 @@ import {
   type ServiceContext,
 } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
+import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
 
 /**
  * "Migrate from Sage Intacct" — pull items (+ on-hand where readable) from the
@@ -191,22 +192,30 @@ export async function importItemsFromIntacct(
     });
     if (page.records.length === 0) break;
 
-    // Existing-SKU check per page (≤500 ids — under the 1000-row read cap).
+    // Existing-SKU check per page (≤500 SKUs).
     // Soft-deleted rows don't count as existing: their SKU is re-importable
     // (matches the 0126 partial unique index, which is scoped to live rows).
+    //
+    // Batched: 500 SKUs in one `.in()` is far past the URL limit (a SKU of
+    // ~30 characters costs about as much as a uuid), so every page failed.
+    // The helper batches by value count AND encoded length. A failed batch
+    // throws: a missed "already exists" would create a duplicate item.
     const skus = page.records
       .map((r) => String((r as Record<string, unknown>).id ?? '').trim())
       .filter(Boolean);
-    const { data: existingRows, error: existErr } = await ctx.supabase
-      .from('inventory_items')
-      .select('sku')
-      .eq('organization_id', ctx.organizationId)
-      .is('deleted_at', null)
-      .in('sku', skus);
-    if (existErr) throw new ServiceError('internal_error', existErr.message);
-    const existing = new Set(
-      ((existingRows ?? []) as { sku: string | null }[]).map((r) => r.sku ?? ''),
+    const existingRows = await fetchAllRowsByIds<{ sku: string | null }>(
+      skus,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('inventory_items')
+          .select('sku')
+          .eq('organization_id', ctx.organizationId)
+          .is('deleted_at', null)
+          .in('sku', batch)
+          .order('id')
+          .range(from, to),
     );
+    const existing = new Set(existingRows.map((r) => r.sku ?? ''));
 
     for (const r of page.records) {
       const rec = r as Record<string, unknown>;
