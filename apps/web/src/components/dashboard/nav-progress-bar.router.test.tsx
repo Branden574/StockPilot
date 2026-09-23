@@ -35,6 +35,21 @@ import {
 import { NavProgressBar } from './nav-progress-bar';
 import { PendingRouteFrame } from './pending-route-skeleton';
 
+/**
+ * React's scheduler runs its tasks on the REAL clock, not the fake one: it
+ * captures setImmediate when it loads, with this file's imports, before the
+ * fake timers are installed. A render or effect it schedules therefore waits
+ * for a real macrotask, which on a busy machine can land after the fake clock
+ * has moved. `reactTasks` yields real macrotasks until `done()` holds, a
+ * bounded number of times. Captured at module load, while setImmediate is real.
+ */
+const realSetImmediate = globalThis.setImmediate;
+async function reactTasks(done: () => boolean, max = 200): Promise<void> {
+  for (let i = 0; i < max && !done(); i += 1) {
+    await new Promise<void>((resolve) => realSetImmediate(resolve));
+  }
+}
+
 const ORIGIN = window.location.origin;
 
 let frames = new Map<number, FrameRequestCallback>();
@@ -245,6 +260,8 @@ describe('<NavProgressBar /> and router starts', () => {
         suspend.current(never);
       });
       await vi.advanceTimersByTimeAsync(50);
+      // React runs its tasks on the real clock (see reactTasks).
+      await reactTasks(() => climbing());
       expect(climbing()).toBe(true);
     } finally {
       flushSync(() => root.unmount());
