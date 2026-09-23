@@ -5,7 +5,6 @@
   "app/(dashboard)/dashboard/returns/[id]/page.tsx": ["in:id <- itemIds"],
   "app/(dashboard)/dashboard/settings/integrations/page.tsx": ["in:id <- access.writableIds"],
   "app/(dashboard)/dashboard/settings/migrate/sage50/page.tsx": ["in:id <- access.writableIds"],
-  "app/(dashboard)/dashboard/team/page.tsx": ["in:user_id <- viewerUserIds"],
   "app/api/cron/maintenance-draft-reminders/route.ts": ["in:organization_id <- enabledOrgIds"],
   "app/api/cron/prewarm-orders-catalog/route.ts": ["in:organization_id <- [...KNOWN_HOT_ORG_IDS]"],
   "app/api/cron/schedule-reminders/route.ts": [
