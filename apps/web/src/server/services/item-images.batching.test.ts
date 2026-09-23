@@ -10,10 +10,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * sit in one batch.
  */
 
-const { createSignedUrlMock, createSignedUrlsMock } = vi.hoisted(() => ({
+const { createSignedUrlMock, createSignedUrlsMock, reportError } = vi.hoisted(() => ({
   createSignedUrlMock: vi.fn(),
   createSignedUrlsMock: vi.fn(),
+  reportError: vi.fn(async (_err: unknown, _context: unknown) => {}),
 }));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
 vi.mock('next/cache', () => ({ unstable_cache: vi.fn((fn: unknown) => fn) }));
 vi.mock('@/lib/supabase/admin', () => ({
@@ -86,6 +88,7 @@ function service(client: unknown) {
 }
 
 beforeEach(() => {
+  reportError.mockClear();
   createSignedUrlMock.mockReset();
   createSignedUrlsMock.mockReset();
   createSignedUrlMock.mockImplementation(async (path: string) => ({
@@ -171,5 +174,112 @@ describe('ItemImagesService batched reads', () => {
     await expect(service(stub.client).primaryMasterUrlsForItems(ids)).rejects.toBeInstanceOf(
       ServiceError,
     );
+  });
+});
+
+/**
+ * Signing a COLD cache. A signer used to start one storage request per path,
+ * all at once: a cold lab run returned 244 of 356 catalog thumbnails and the
+ * route still answered 200 with nothing reported. Storage requests now wait
+ * for one of STORAGE_SIGN_CONCURRENCY slots, the catalog masters go through
+ * one batched createSignedUrls, and a failed sign is reported with a count.
+ */
+describe('ItemImagesService signing on a cold cache', () => {
+  /** A createSignedUrl that takes a moment, tracks the peak in flight, and
+   *  fails for the paths `fails` picks. */
+  function slowSigner(fails: (path: string) => boolean = () => false) {
+    const state = { inFlight: 0, peak: 0 };
+    createSignedUrlMock.mockImplementation(async (path: string) => {
+      state.inFlight += 1;
+      state.peak = Math.max(state.peak, state.inFlight);
+      await new Promise((r) => setTimeout(r, 1));
+      state.inFlight -= 1;
+      return fails(path)
+        ? { data: null, error: { message: 'Bad Gateway' } }
+        : { data: { signedUrl: `https://signed/${path}` }, error: null };
+    });
+    return state;
+  }
+  const lost = (id: string) => Number(id.slice(-12)) % 10 === 0;
+
+  it('catalog masters: one batched createSignedUrls for 356 cold paths, no per-path storm', async () => {
+    const stub = makeSupabaseStub({ 'item_images.select': imageTable().fn });
+    const ids = Array.from({ length: 356 }, (_, i) => itemId('1', i));
+    const map = await service(stub.client).primaryMasterUrlsForItems(ids);
+    expect(map.size).toBe(356);
+    expect(createSignedUrlsMock).toHaveBeenCalledTimes(1);
+    expect((createSignedUrlsMock.mock.calls[0]![0] as string[]).length).toBe(356);
+    expect(createSignedUrlMock).not.toHaveBeenCalled();
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('when the batch fails, the per-path fallback keeps at most 20 in flight and reports what it lost', async () => {
+    createSignedUrlsMock.mockRejectedValue(new TypeError('fetch failed'));
+    const signer = slowSigner((path) => lost(path.split('/')[1]!));
+    const stub = makeSupabaseStub({
+      'item_images.select': imageTable().fn,
+      // The custom_fields cover fallback finds nothing for the lost ones.
+      'inventory_items.select': { data: [], error: null },
+    });
+    const ids = Array.from({ length: 300 }, (_, i) => itemId('2', i));
+
+    const map = await service(stub.client).primaryMasterUrlsForItems(ids);
+
+    expect(createSignedUrlMock).toHaveBeenCalledTimes(300);
+    expect(signer.peak).toBe(20);
+    expect(map.size).toBe(270);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError.mock.calls[0]![1]).toMatchObject({
+      tag: 'item_images.sign_failed',
+      level: 'warning',
+      extra: { method: 'signedUrls', requested: 300, failed: 30 },
+    });
+  });
+
+  it('exports: per-item signing keeps at most 20 in flight and reports the items left without a photo', async () => {
+    const signer = slowSigner((path) => lost(path.split('/')[1]!));
+    const stub = makeSupabaseStub({
+      'item_images.select': imageTable().fn,
+      'inventory_items.select': { data: [], error: null },
+    });
+    const ids = Array.from({ length: 300 }, (_, i) => itemId('3', i));
+
+    const map = await service(stub.client).primaryImagesForServerDecoding(ids);
+
+    expect(signer.peak).toBe(20);
+    expect(map.size).toBe(270);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError.mock.calls[0]![1]).toMatchObject({
+      tag: 'item_images.sign_failed',
+      extra: { method: 'primaryImagesForServerDecoding', requested: 300, failed: 30 },
+    });
+  });
+
+  it('PDF transforms wait for a slot too: at most 20 in flight', async () => {
+    const signer = slowSigner();
+    const stub = makeSupabaseStub({ 'item_images.select': imageTable().fn });
+    const ids = Array.from({ length: 60 }, (_, i) => itemId('5', i));
+
+    const map = await service(stub.client).primaryImagesForPdfRendering(ids);
+
+    expect(map.size).toBe(60);
+    expect(createSignedUrlMock.mock.calls.every((c) => c[2]?.transform)).toBe(true);
+    expect(signer.peak).toBe(20);
+  });
+
+  it('a failed transform rescued by the next leg is not reported as a lost photo', async () => {
+    createSignedUrlMock.mockImplementation(
+      async (path: string, _ttl: number, opts?: { transform?: unknown }) =>
+        opts?.transform
+          ? { data: null, error: { message: 'rate limited' } }
+          : { data: { signedUrl: `https://signed/${path}` }, error: null },
+    );
+    const stub = makeSupabaseStub({ 'item_images.select': imageTable().fn });
+    const ids = Array.from({ length: 5 }, (_, i) => itemId('4', i));
+
+    const map = await service(stub.client).primaryImagesForPdfRendering(ids);
+
+    expect(map.size).toBe(5);
+    expect(reportError).not.toHaveBeenCalled();
   });
 });

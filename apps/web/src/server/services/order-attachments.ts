@@ -8,6 +8,7 @@ import { isValidStoragePath, orderAttachmentPathShape } from '@/lib/storage-path
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { ServiceError, withContext, type ServiceContext } from './context';
+import { withStorageSignSlot } from './lib/storage-sign-limiter';
 import { verifyStoredDocumentOrDelete } from './upload-verification';
 
 const BUCKET = 'order-attachments';
@@ -30,9 +31,10 @@ const SIGNED_URL_CACHE_SEC = 25 * 24 * 60 * 60;
 const signAttachmentFull = unstable_cache(
   async (storagePath: string): Promise<string> => {
     const admin = createAdminClient();
-    const { data, error } = await admin.storage
-      .from(BUCKET)
-      .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC);
+    // Waits for a storage signing slot (storage-sign-limiter.ts).
+    const { data, error } = await withStorageSignSlot(() =>
+      admin.storage.from(BUCKET).createSignedUrl(storagePath, SIGNED_URL_TTL_SEC),
+    );
     if (error || !data?.signedUrl) {
       throw new Error(`sign attachment failed: ${error?.message ?? 'no signedUrl'}`);
     }
@@ -51,11 +53,11 @@ const signAttachmentFull = unstable_cache(
 const signAttachmentThumb = unstable_cache(
   async (storagePath: string, width: number): Promise<string> => {
     const admin = createAdminClient();
-    const { data, error } = await admin.storage
-      .from(BUCKET)
-      .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC, {
+    const { data, error } = await withStorageSignSlot(() =>
+      admin.storage.from(BUCKET).createSignedUrl(storagePath, SIGNED_URL_TTL_SEC, {
         transform: { width, height: width, resize: 'contain' },
-      });
+      }),
+    );
     if (error || !data?.signedUrl) {
       throw new Error(`sign attachment thumb failed: ${error?.message ?? 'no signedUrl'}`);
     }

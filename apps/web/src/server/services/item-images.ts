@@ -2,6 +2,7 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
+import { reportError } from '@/lib/error-reporter';
 import {
   isSniffedKindAllowedInBucket,
   sniffImage,
@@ -17,6 +18,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { withStorageSignSlot } from './lib/storage-sign-limiter';
 
 /**
  * Long-lived signed URL per storage path. The signed URL itself is
@@ -140,9 +142,9 @@ async function batchSignPaths(paths: string[]): Promise<Map<string, string>> {
   if (safePaths.length === 0) return out;
   try {
     const admin = createAdminClient();
-    const { data, error } = await admin.storage
-      .from('item-images')
-      .createSignedUrls(safePaths, SIGNED_URL_TTL_SEC);
+    const { data, error } = await withStorageSignSlot(() =>
+      admin.storage.from('item-images').createSignedUrls(safePaths, SIGNED_URL_TTL_SEC),
+    );
     if (error || !data) return out;
     for (const entry of data) {
       if (entry.signedUrl && !entry.error && entry.path) {
@@ -172,9 +174,11 @@ const signItemImageMaster = unstable_cache(
       // batch didn't cover it (partial failure) → single-sign below
     }
     const admin = createAdminClient();
-    const { data, error } = await admin.storage
-      .from('item-images')
-      .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC);
+    // A cold cache used to start one of these per path, all at once (see
+    // storage-sign-limiter.ts); the request now waits for a slot.
+    const { data, error } = await withStorageSignSlot(() =>
+      admin.storage.from('item-images').createSignedUrl(storagePath, SIGNED_URL_TTL_SEC),
+    );
     if (error || !data?.signedUrl) {
       throw new Error(`sign master failed: ${error?.message ?? 'no signedUrl'}`);
     }
@@ -187,7 +191,13 @@ const signItemImageMaster = unstable_cache(
   ['item-image-signed-url-v4'],
   { revalidate: SIGNED_URL_CACHE_SEC, tags: ['item-image-signed-url'] },
 );
-async function getCachedItemImageSignedUrl(storagePath: string): Promise<string | null> {
+/** Called when a sign attempt failed (not for a path rejected by shape). */
+type SignFailureSink = (err: unknown) => void;
+
+async function getCachedItemImageSignedUrl(
+  storagePath: string,
+  onFailure?: SignFailureSink,
+): Promise<string | null> {
   // Checked BEFORE the cached signer so a rejected path never creates an
   // `unstable_cache` entry at all.
   if (!isSignableItemImagePath(storagePath)) return null;
@@ -197,6 +207,7 @@ async function getCachedItemImageSignedUrl(storagePath: string): Promise<string 
     console.warn(
       `[item-image] master sign failed (${storagePath}): ${err instanceof Error ? err.message : String(err)}`,
     );
+    onFailure?.(err);
     return null;
   }
 }
@@ -219,11 +230,11 @@ async function getCachedItemImageSignedUrl(storagePath: string): Promise<string 
 const signItemImageTransformed = unstable_cache(
   async (storagePath: string, width: number): Promise<string> => {
     const admin = createAdminClient();
-    const { data, error } = await admin.storage
-      .from('item-images')
-      .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC, {
+    const { data, error } = await withStorageSignSlot(() =>
+      admin.storage.from('item-images').createSignedUrl(storagePath, SIGNED_URL_TTL_SEC, {
         transform: { width, height: width, resize: 'cover' },
-      });
+      }),
+    );
     if (error || !data?.signedUrl) {
       throw new Error(`sign transform failed: ${error?.message ?? 'no signedUrl'}`);
     }
@@ -236,6 +247,7 @@ const signItemImageTransformed = unstable_cache(
 async function getCachedItemImageTransformedSignedUrl(
   storagePath: string,
   width: number,
+  onFailure?: SignFailureSink,
 ): Promise<string | null> {
   // Same gate as the plain signer — this path also reaches storage with the
   // service-role client, just with transform params folded into the signature.
@@ -246,8 +258,34 @@ async function getCachedItemImageTransformedSignedUrl(
     console.warn(
       `[item-image] transform sign failed (${storagePath}): ${err instanceof Error ? err.message : String(err)}`,
     );
+    onFailure?.(err);
     return null;
   }
+}
+
+/**
+ * Report the images a call could not sign, once per call, with counts only.
+ * A failed sign still degrades to "no photo" for that item (the page or
+ * export goes on), but it used to do so with nothing but a console line per
+ * path, so a cold run that dropped 112 of 356 thumbnails looked like success.
+ */
+function reportSignFailures(
+  method: string,
+  requested: number,
+  failed: number,
+  firstError: unknown,
+): void {
+  if (failed === 0) return;
+  void reportError(new Error('Item image signing failed; those images are missing'), {
+    tag: 'item_images.sign_failed',
+    level: 'warning',
+    extra: {
+      method,
+      requested,
+      failed,
+      detail: firstError instanceof Error ? firstError.message : String(firstError),
+    },
+  });
 }
 
 // NOTE (2026-07-01, media audit): a "width-only on-demand transform of the
@@ -306,10 +344,16 @@ export class ItemImagesService {
     // latency ≈ max(dataCacheReads, batchSign) instead of their sum.
     const batchPromise = batchSignPaths(unmemoized);
     for (const path of unmemoized) pendingBatchSigns.set(path, batchPromise);
+    let failed = 0;
+    let firstError: unknown = null;
+    const onFailure: SignFailureSink = (err) => {
+      failed += 1;
+      firstError ??= err;
+    };
     try {
       const entries = await Promise.all(
         unmemoized.map(async (path) => {
-          const url = await getCachedItemImageSignedUrl(path);
+          const url = await getCachedItemImageSignedUrl(path, onFailure);
           return [path, url] as const;
         }),
       );
@@ -329,6 +373,7 @@ export class ItemImagesService {
         if (pendingBatchSigns.get(path) === batchPromise) pendingBatchSigns.delete(path);
       }
     }
+    reportSignFailures('signedUrls', paths.length, failed, firstError);
     return map;
   }
 
@@ -502,12 +547,16 @@ export class ItemImagesService {
    * one thing passed in as `resolveRow` rather than duplicated per method.
    */
   private async resolvePrimaryImageUrls(
+    method: string,
     itemIds: string[],
-    resolveRow: (row: {
-      item_id: string;
-      storage_path: string;
-      thumb_path: string | null;
-    }) => Promise<string | null>,
+    resolveRow: (
+      row: {
+        item_id: string;
+        storage_path: string;
+        thumb_path: string | null;
+      },
+      onFailure: SignFailureSink,
+    ) => Promise<string | null>,
   ): Promise<Map<string, string>> {
     if (itemIds.length === 0) return new Map();
 
@@ -541,9 +590,16 @@ export class ItemImagesService {
     // browsers — see the two public wrappers below for why they differ).
     // `targetWidth` isn't a parameter here — each public wrapper closes over
     // its own in `resolveRow` since only their transform legs need it.
+    // An item counts as failed when a sign attempt for it failed and it
+    // ended with no URL; a failed transform leg rescued by the next leg is not.
+    const signFailedItems = new Set<string>();
+    let firstError: unknown = null;
     const signed = await Promise.all(
       [...pickByItem.entries()].map(async ([itemId, row]) => {
-        const url = await resolveRow(row);
+        const url = await resolveRow(row, (err) => {
+          signFailedItems.add(itemId);
+          firstError ??= err;
+        });
         return url ? ([itemId, url] as const) : null;
       }),
     );
@@ -566,6 +622,9 @@ export class ItemImagesService {
     if (unresolved.length > 0) {
       await this.addCustomFieldThumbnails(unresolved, result);
     }
+    let failed = 0;
+    for (const id of signFailedItems) if (!result.has(id)) failed += 1;
+    reportSignFailures(method, pickByItem.size, failed, firstError);
     return result;
   }
 
@@ -612,15 +671,23 @@ export class ItemImagesService {
     itemIds: string[],
     targetWidth = 200,
   ): Promise<Map<string, string>> {
-    return this.resolvePrimaryImageUrls(itemIds, async (row) => {
-      return (
-        (row.thumb_path
-          ? await getCachedItemImageTransformedSignedUrl(row.thumb_path, targetWidth)
-          : null) ??
-        (await getCachedItemImageTransformedSignedUrl(row.storage_path, targetWidth)) ??
-        (row.thumb_path ? await getCachedItemImageSignedUrl(row.thumb_path) : null)
-      );
-    });
+    return this.resolvePrimaryImageUrls(
+      'primaryImagesForPdfRendering',
+      itemIds,
+      async (row, onFailure) => {
+        return (
+          (row.thumb_path
+            ? await getCachedItemImageTransformedSignedUrl(row.thumb_path, targetWidth, onFailure)
+            : null) ??
+          (await getCachedItemImageTransformedSignedUrl(
+            row.storage_path,
+            targetWidth,
+            onFailure,
+          )) ??
+          (row.thumb_path ? await getCachedItemImageSignedUrl(row.thumb_path, onFailure) : null)
+        );
+      },
+    );
   }
 
   /**
@@ -661,11 +728,15 @@ export class ItemImagesService {
     itemIds: string[],
     targetWidth = 200,
   ): Promise<Map<string, string>> {
-    return this.resolvePrimaryImageUrls(itemIds, async (row) => {
-      return row.thumb_path
-        ? await getCachedItemImageSignedUrl(row.thumb_path)
-        : await getCachedItemImageTransformedSignedUrl(row.storage_path, targetWidth);
-    });
+    return this.resolvePrimaryImageUrls(
+      'primaryImagesForServerDecoding',
+      itemIds,
+      async (row, onFailure) => {
+        return row.thumb_path
+          ? await getCachedItemImageSignedUrl(row.thumb_path, onFailure)
+          : await getCachedItemImageTransformedSignedUrl(row.storage_path, targetWidth, onFailure);
+      },
+    );
   }
 
   /**
@@ -701,11 +772,15 @@ export class ItemImagesService {
     itemIds: string[],
     targetWidth = 200,
   ): Promise<Map<string, string>> {
-    return this.resolvePrimaryImageUrls(itemIds, async (row) => {
-      return row.thumb_path
-        ? await getCachedItemImageSignedUrl(row.thumb_path)
-        : await getCachedItemImageTransformedSignedUrl(row.storage_path, targetWidth);
-    });
+    return this.resolvePrimaryImageUrls(
+      'primaryImagesForBrowserDisplay',
+      itemIds,
+      async (row, onFailure) => {
+        return row.thumb_path
+          ? await getCachedItemImageSignedUrl(row.thumb_path, onFailure)
+          : await getCachedItemImageTransformedSignedUrl(row.storage_path, targetWidth, onFailure);
+      },
+    );
   }
 
   /**
@@ -746,15 +821,17 @@ export class ItemImagesService {
       if (!pickByItem.has(row.item_id)) pickByItem.set(row.item_id, row);
     }
 
-    const signed = await Promise.all(
-      [...pickByItem.entries()].map(async ([itemId, row]) => {
-        const url = await getCachedItemImageSignedUrl(row.storage_path);
-        return url ? ([itemId, url] as const) : null;
-      }),
-    );
+    // Through signedUrls: a cold cache pays ONE batched createSignedUrls for
+    // every path instead of one request per item started all at once (the
+    // cold lab run returned 244 of 356 catalog thumbnails that way), and a
+    // failed sign is reported rather than only logged.
+    const urlByPath = await this.signedUrls([
+      ...new Set([...pickByItem.values()].map((r) => r.storage_path)),
+    ]);
     const result = new Map<string, string>();
-    for (const entry of signed) {
-      if (entry) result.set(entry[0], entry[1]);
+    for (const [itemId, row] of pickByItem) {
+      const url = urlByPath.get(row.storage_path);
+      if (url) result.set(itemId, url);
     }
 
     // Fallback: external ISBN covers stored on the item (no item_images row).

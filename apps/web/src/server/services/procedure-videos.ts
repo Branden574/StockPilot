@@ -4,11 +4,13 @@ import { unstable_cache } from 'next/cache';
 
 import type { RecordProcedureVideoInput } from '@stockpilot/core';
 
+import { reportError } from '@/lib/error-reporter';
 import { isValidStoragePath, procedureVideoPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { withStorageSignSlot } from './lib/storage-sign-limiter';
 
 export interface ProcedureVideoRow {
   id: string;
@@ -45,9 +47,11 @@ const SIGNED_URL_CACHE_SEC = 6 * 24 * 60 * 60;
 const signProcedureVideoPath = unstable_cache(
   async (storagePath: string): Promise<string> => {
     const admin = createAdminClient();
-    const { data, error } = await admin.storage
-      .from(PROCEDURE_VIDEOS_BUCKET)
-      .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC);
+    // The procedures list signs one poster per procedure through here; a cold
+    // cache waits for a slot instead of starting every request at once.
+    const { data, error } = await withStorageSignSlot(() =>
+      admin.storage.from(PROCEDURE_VIDEOS_BUCKET).createSignedUrl(storagePath, SIGNED_URL_TTL_SEC),
+    );
     if (error || !data?.signedUrl) {
       throw new Error(`sign video failed: ${error?.message ?? 'no signedUrl'}`);
     }
@@ -56,13 +60,17 @@ const signProcedureVideoPath = unstable_cache(
   ['procedure-video-signed-url-v1'],
   { revalidate: SIGNED_URL_CACHE_SEC, tags: ['procedure-video-signed-url'] },
 );
-async function cachedVideoUrl(storagePath: string): Promise<string | null> {
+async function cachedVideoUrl(
+  storagePath: string,
+  onFailure?: (err: unknown) => void,
+): Promise<string | null> {
   try {
     return await signProcedureVideoPath(storagePath);
   } catch (err) {
     console.warn(
       `[procedure-videos] sign failed (${storagePath}): ${err instanceof Error ? err.message : String(err)}`,
     );
+    onFailure?.(err);
     return null;
   }
 }
@@ -132,15 +140,34 @@ export class ProcedureVideosService {
    */
   async signedUrls(paths: string[]): Promise<Map<string, string>> {
     if (paths.length === 0) return new Map();
+    let failed = 0;
+    let firstError: unknown = null;
     const entries = await Promise.all(
       paths.map(async (p) => {
-        const url = await cachedVideoUrl(p);
+        const url = await cachedVideoUrl(p, (err) => {
+          failed += 1;
+          firstError ??= err;
+        });
         return url ? ([p, url] as const) : null;
       }),
     );
     const map = new Map<string, string>();
     for (const entry of entries) {
       if (entry) map.set(entry[0], entry[1]);
+    }
+    // A missing poster or player URL is still degraded, not fatal, but it is
+    // reported once per call with a count instead of only logged per path.
+    if (failed > 0) {
+      void reportError(new Error('Procedure video signing failed; those videos are missing'), {
+        tag: 'procedure_videos.sign_failed',
+        level: 'warning',
+        organizationId: this.ctx.organizationId,
+        extra: {
+          requested: paths.length,
+          failed,
+          detail: firstError instanceof Error ? firstError.message : String(firstError),
+        },
+      });
     }
     return map;
   }
