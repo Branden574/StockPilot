@@ -74,6 +74,7 @@ vi.mock('@/server/services/locations', () => ({
   },
 }));
 
+import { audit, auditMany } from '@/server/services/audit';
 import { ServiceError } from '@/server/services/context';
 import { bulkPlaceStockAction } from './inventory';
 
@@ -142,20 +143,28 @@ describe('bulkPlaceStockAction', () => {
 
     expect(mockFindOrCreateRackOrCrate).not.toHaveBeenCalled();
     expect(mockTransferStock).toHaveBeenCalledTimes(2);
-    expect(mockTransferStock).toHaveBeenNthCalledWith(1, {
-      itemId: ITEM_A,
-      fromLocationId: FROM_A,
-      toLocationId: EXISTING_LOC,
-      quantity: 500,
-      notes: undefined,
-    });
-    expect(mockTransferStock).toHaveBeenNthCalledWith(2, {
-      itemId: ITEM_B,
-      fromLocationId: FROM_B,
-      toLocationId: EXISTING_LOC,
-      quantity: 150,
-      notes: undefined,
-    });
+    expect(mockTransferStock).toHaveBeenNthCalledWith(
+      1,
+      {
+        itemId: ITEM_A,
+        fromLocationId: FROM_A,
+        toLocationId: EXISTING_LOC,
+        quantity: 500,
+        notes: undefined,
+      },
+      { auditInto: expect.any(Array) },
+    );
+    expect(mockTransferStock).toHaveBeenNthCalledWith(
+      2,
+      {
+        itemId: ITEM_B,
+        fromLocationId: FROM_B,
+        toLocationId: EXISTING_LOC,
+        quantity: 150,
+        notes: undefined,
+      },
+      { auditInto: expect.any(Array) },
+    );
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.data.placed).toBe(2);
@@ -195,8 +204,16 @@ describe('bulkPlaceStockAction', () => {
 
     expect(mockFindOrCreateRackOrCrate).toHaveBeenCalledOnce();
     expect(mockTransferStock).toHaveBeenCalledTimes(2);
-    expect(mockTransferStock).toHaveBeenNthCalledWith(1, expect.objectContaining({ toLocationId: newLocId, itemId: ITEM_A }));
-    expect(mockTransferStock).toHaveBeenNthCalledWith(2, expect.objectContaining({ toLocationId: newLocId, itemId: ITEM_B }));
+    expect(mockTransferStock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ toLocationId: newLocId, itemId: ITEM_A }),
+      { auditInto: expect.any(Array) },
+    );
+    expect(mockTransferStock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ toLocationId: newLocId, itemId: ITEM_B }),
+      { auditInto: expect.any(Array) },
+    );
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.placed).toBe(2);
 
@@ -274,5 +291,35 @@ describe('bulkPlaceStockAction', () => {
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error.code).toBe('validation_error');
     expect(mockTransferStock).not.toHaveBeenCalled();
+  });
+});
+
+// Up to 200 placements, one transferStock each. Each move's stock.transferred
+// row used to be its own `void audit()` INSERT (and, when the gateway was
+// failing, its own lost-row report); the batch now writes them in one
+// auditMany after the loop.
+describe('bulkPlaceStockAction audit rows', () => {
+  it('collects every committed move and writes the rows in one batched call', async () => {
+    const committed = new Set([ITEM_A]);
+    mockTransferStock.mockImplementation((async (
+      input: { itemId: string },
+      opts?: { auditInto?: unknown[] },
+    ) => {
+      // Like the real transferStock: a refused move adds no row.
+      if (!committed.has(input.itemId)) throw new Error('insufficient_stock');
+      opts?.auditInto?.push({ event: 'stock.transferred', entityId: input.itemId });
+    }) as never);
+
+    const res = await bulkPlaceStockAction({
+      placements: TWO,
+      destination: { existingLocationId: EXISTING_LOC },
+    });
+
+    expect(res.ok).toBe(true);
+    expect(audit).not.toHaveBeenCalled();
+    expect(auditMany).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(auditMany).mock.calls[0]![0]).toEqual([
+      { event: 'stock.transferred', entityId: ITEM_A },
+    ]);
   });
 });

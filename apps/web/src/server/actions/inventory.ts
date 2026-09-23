@@ -11,6 +11,7 @@ import {
   type PlaceDest,
 } from '@/lib/locations/destination-option';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
+import { auditMany, type AuditPayload } from '@/server/services/audit';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { ProductGroupsService } from '@/server/services/product-groups';
@@ -1401,27 +1402,38 @@ export async function bulkPlaceStockAction(
     let placed = 0;
     const placedItemIds: string[] = [];
     const failed: Array<{ itemId: string; message: string }> = [];
-    for (const p of data.placements) {
-      try {
-        await invSvc.transferStock({
-          itemId: p.itemId,
-          fromLocationId: p.fromLocationId,
-          toLocationId,
-          quantity: p.quantity,
-          notes: data.notes,
-        });
-        placed += 1;
-        placedItemIds.push(p.itemId);
-      } catch (e) {
-        const insufficient =
-          e instanceof ServiceError &&
-          e.code === 'internal_error' &&
-          (e.internalDetail ?? '').toLowerCase().includes('insufficient_stock');
-        failed.push({
-          itemId: p.itemId,
-          message: insufficient ? 'Not enough available to place.' : 'Could not place this item.',
-        });
+    // Every committed move's stock.transferred row, written in ONE batched
+    // auditMany after the loop instead of one INSERT per placement.
+    const transferAudits: AuditPayload[] = [];
+    try {
+      for (const p of data.placements) {
+        try {
+          await invSvc.transferStock(
+            {
+              itemId: p.itemId,
+              fromLocationId: p.fromLocationId,
+              toLocationId,
+              quantity: p.quantity,
+              notes: data.notes,
+            },
+            { auditInto: transferAudits },
+          );
+          placed += 1;
+          placedItemIds.push(p.itemId);
+        } catch (e) {
+          const insufficient =
+            e instanceof ServiceError &&
+            e.code === 'internal_error' &&
+            (e.internalDetail ?? '').toLowerCase().includes('insufficient_stock');
+          failed.push({
+            itemId: p.itemId,
+            message: insufficient ? 'Not enough available to place.' : 'Could not place this item.',
+          });
+        }
       }
+    } finally {
+      // Never throws, and bounded by its per-INSERT deadline.
+      if (transferAudits.length > 0) await auditMany(transferAudits, ctx);
     }
     // One label-stamp for every item that actually landed on the destination.
     await invSvc.stampPlacementBin(placedItemIds, dest);

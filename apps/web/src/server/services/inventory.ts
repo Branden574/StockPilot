@@ -5649,7 +5649,14 @@ export class InventoryService {
     return { item, crateSync, crateSyncUpdated };
   }
 
-  async transferStock(input: TransferStockInput) {
+  /**
+   * `opts.auditInto`: a caller that moves stock for a whole list (a placement
+   * pass) collects the stock.transferred rows here and writes them with ONE
+   * auditMany when the list is done, instead of one INSERT per move. The row is
+   * exactly the one written without it; it is only added once the move
+   * committed.
+   */
+  async transferStock(input: TransferStockInput, opts: { auditInto?: AuditPayload[] } = {}) {
     assertPermission(this.ctx, 'stock:transfer');
     // The RPC raises `same_location` for this, but nothing app-side stopped it
     // reaching the DB — so the round-trip existed only to produce an error.
@@ -5716,21 +5723,20 @@ export class InventoryService {
     // before/after diff. No extra query for location NAMES here — ids are
     // acceptable per the plan; the service layer shouldn't pay for a lookup
     // the caller may not need.
-    void audit(
-      {
-        event: 'stock.transferred',
-        entityType: 'inventory_item',
-        entityId: input.itemId,
-        before: { location_id: input.fromLocationId },
-        after: { location_id: input.toLocationId },
-        extra: {
-          quantity: input.quantity,
-          from_location_id: input.fromLocationId,
-          to_location_id: input.toLocationId,
-        },
+    const auditRow: AuditPayload = {
+      event: 'stock.transferred',
+      entityType: 'inventory_item',
+      entityId: input.itemId,
+      before: { location_id: input.fromLocationId },
+      after: { location_id: input.toLocationId },
+      extra: {
+        quantity: input.quantity,
+        from_location_id: input.fromLocationId,
+        to_location_id: input.toLocationId,
       },
-      this.ctx,
-    );
+    };
+    if (opts.auditInto) opts.auditInto.push(auditRow);
+    else void audit(auditRow, this.ctx);
 
     return data;
   }
@@ -7195,79 +7201,96 @@ export class InventoryService {
     // many of its transfers were refused.
     const failedItemIds = new Set<string>();
 
-    // Run the per-holding transfers CONCURRENTLY (in capped chunks) instead of
-    // one-at-a-time — a 13-item bulk Set rack was ~13 sequential RPC round-trips
-    // ("took forever"). Different items touch different stock-level rows, so
-    // there's no lock contention; the cap keeps the connection pool sane for the
-    // 500-item ceiling.
-    const CONCURRENCY = 20;
-    for (let i = 0; i < levels.length; i += CONCURRENCY) {
-      await Promise.all(
-        levels.slice(i, i + CONCURRENCY).map(async (h) => {
-          const wh = whByItem.get(h.item_id) ?? null;
-          const toLoc = wh ? rackByWh.get(wh) : undefined;
-          // No destination: the item has no warehouse, or findOrCreateRackLocation
-          // could not resolve or mint the rack in it (it logged why). Either way
-          // this holding is not going anywhere, and that is a failure to place —
-          // it used to share a `return` with the already-on-the-rack case below,
-          // which is the opposite outcome.
-          if (!toLoc) {
-            failedItemIds.add(h.item_id);
-            return;
-          }
-          if (toLoc === h.location_id) return;
-          try {
-            await this.transferStock({
-              itemId: h.item_id,
-              fromLocationId: h.location_id,
-              toLocationId: toLoc,
-              quantity: Number(h.quantity),
-              notes: `Placed on rack ${name} (bulk Set rack)`,
-            });
-            placedCount += 1;
-          } catch (e) {
-            failedItemIds.add(h.item_id);
-            console.error('[set_rack place] transfer failed', {
-              item: h.item_id,
-              error: e instanceof Error ? e.message : String(e),
-            });
-          }
-        }),
-      );
-    }
+    // The stock.transferred rows of every move below, written with ONE
+    // auditMany when the pass ends (see transferStock's `auditInto`). One
+    // `void audit()` per transfer was up to 20 more INSERTs in flight next to
+    // the transfers, and one lost-row report per transfer when the gateway
+    // was failing.
+    const transferAudits: AuditPayload[] = [];
+    try {
+      // Run the per-holding transfers CONCURRENTLY (in capped chunks) instead of
+      // one-at-a-time — a 13-item bulk Set rack was ~13 sequential RPC round-trips
+      // ("took forever"). Different items touch different stock-level rows, so
+      // there's no lock contention; the cap keeps the connection pool sane for the
+      // 500-item ceiling.
+      const CONCURRENCY = 20;
+      for (let i = 0; i < levels.length; i += CONCURRENCY) {
+        await Promise.all(
+          levels.slice(i, i + CONCURRENCY).map(async (h) => {
+            const wh = whByItem.get(h.item_id) ?? null;
+            const toLoc = wh ? rackByWh.get(wh) : undefined;
+            // No destination: the item has no warehouse, or findOrCreateRackLocation
+            // could not resolve or mint the rack in it (it logged why). Either way
+            // this holding is not going anywhere, and that is a failure to place —
+            // it used to share a `return` with the already-on-the-rack case below,
+            // which is the opposite outcome.
+            if (!toLoc) {
+              failedItemIds.add(h.item_id);
+              return;
+            }
+            if (toLoc === h.location_id) return;
+            try {
+              await this.transferStock(
+                {
+                  itemId: h.item_id,
+                  fromLocationId: h.location_id,
+                  toLocationId: toLoc,
+                  quantity: Number(h.quantity),
+                  notes: `Placed on rack ${name} (bulk Set rack)`,
+                },
+                { auditInto: transferAudits },
+              );
+              placedCount += 1;
+            } catch (e) {
+              failedItemIds.add(h.item_id);
+              console.error('[set_rack place] transfer failed', {
+                item: h.item_id,
+                error: e instanceof Error ? e.message : String(e),
+              });
+            }
+          }),
+        );
+      }
 
-    // Single-placement fine-grained holdings (Unit B): the item's whole
-    // in-stock quantity already sits on exactly one such placement, so
-    // retarget it — PHYSICALLY MOVE via transfer_stock (never a raw
-    // stock-level write), same as the not-yet-placed path above.
-    // Idempotent: already on the resolved target → no-op.
-    for (let i = 0; i < singleRackMoves.length; i += CONCURRENCY) {
-      await Promise.all(
-        singleRackMoves.slice(i, i + CONCURRENCY).map(async (mv) => {
-          const toLoc = mv.warehouseId ? rackByWh.get(mv.warehouseId) : undefined;
-          if (!toLoc) {
-            failedItemIds.add(mv.item_id);
-            return;
-          }
-          if (toLoc === mv.location_id) return;
-          try {
-            await this.transferStock({
-              itemId: mv.item_id,
-              fromLocationId: mv.location_id,
-              toLocationId: toLoc,
-              quantity: mv.quantity,
-              notes: `Moved to rack ${name} (bulk Set rack)`,
-            });
-            placedCount += 1;
-          } catch (e) {
-            failedItemIds.add(mv.item_id);
-            console.error('[set_rack move] transfer failed', {
-              item: mv.item_id,
-              error: e instanceof Error ? e.message : String(e),
-            });
-          }
-        }),
-      );
+      // Single-placement fine-grained holdings (Unit B): the item's whole
+      // in-stock quantity already sits on exactly one such placement, so
+      // retarget it — PHYSICALLY MOVE via transfer_stock (never a raw
+      // stock-level write), same as the not-yet-placed path above.
+      // Idempotent: already on the resolved target → no-op.
+      for (let i = 0; i < singleRackMoves.length; i += CONCURRENCY) {
+        await Promise.all(
+          singleRackMoves.slice(i, i + CONCURRENCY).map(async (mv) => {
+            const toLoc = mv.warehouseId ? rackByWh.get(mv.warehouseId) : undefined;
+            if (!toLoc) {
+              failedItemIds.add(mv.item_id);
+              return;
+            }
+            if (toLoc === mv.location_id) return;
+            try {
+              await this.transferStock(
+                {
+                  itemId: mv.item_id,
+                  fromLocationId: mv.location_id,
+                  toLocationId: toLoc,
+                  quantity: mv.quantity,
+                  notes: `Moved to rack ${name} (bulk Set rack)`,
+                },
+                { auditInto: transferAudits },
+              );
+              placedCount += 1;
+            } catch (e) {
+              failedItemIds.add(mv.item_id);
+              console.error('[set_rack move] transfer failed', {
+                item: mv.item_id,
+                error: e instanceof Error ? e.message : String(e),
+              });
+            }
+          }),
+        );
+      }
+    } finally {
+      // Never throws, and bounded by its per-INSERT deadline.
+      if (transferAudits.length > 0) await auditMany(transferAudits, this.ctx);
     }
 
     return { placed: placedCount, failedItemIds: [...failedItemIds] };
@@ -7465,37 +7488,46 @@ export class InventoryService {
     // never contend, while two holdings of the SAME item both draw down that
     // one row and stay ordered.
     const groups = [...byItem.entries()];
-    for (let i = 0; i < groups.length; i += RACK_PLACE_CONCURRENCY) {
-      await Promise.all(
-        groups.slice(i, i + RACK_PLACE_CONCURRENCY).map(async ([itemId, itemHoldings]) => {
-          try {
-            for (const row of itemHoldings) {
-              // Already on the resolved rack (e.g. the caller's own
-              // primaryLocationId happened to BE this rack) — nothing to move.
-              if (row.location_id === rackId) continue;
-              await this.transferStock({
-                itemId,
-                fromLocationId: row.location_id,
-                toLocationId: rackId,
-                quantity: Number(row.quantity),
-                notes: `Placed on rack ${rackName} at creation`,
+    // One batched audit write for the whole run, as in placeItemsOntoRackByName.
+    const transferAudits: AuditPayload[] = [];
+    try {
+      for (let i = 0; i < groups.length; i += RACK_PLACE_CONCURRENCY) {
+        await Promise.all(
+          groups.slice(i, i + RACK_PLACE_CONCURRENCY).map(async ([itemId, itemHoldings]) => {
+            try {
+              for (const row of itemHoldings) {
+                // Already on the resolved rack (e.g. the caller's own
+                // primaryLocationId happened to BE this rack) — nothing to move.
+                if (row.location_id === rackId) continue;
+                await this.transferStock(
+                  {
+                    itemId,
+                    fromLocationId: row.location_id,
+                    toLocationId: rackId,
+                    quantity: Number(row.quantity),
+                    notes: `Placed on rack ${rackName} at creation`,
+                  },
+                  { auditInto: transferAudits },
+                );
+              }
+            } catch (e) {
+              console.error('[rack place] create-time transfer failed', {
+                item: itemId,
+                rack: rackName,
+                error: e instanceof Error ? e.message : String(e),
               });
+              // The loop above is per-HOLDING, so a throw part-way leaves this
+              // item's stock split across the old location and the rack. It is
+              // reported as failed either way: "some of it moved" is still not
+              // the placement the operator asked for, and the honest report is
+              // the one that sends them to look.
+              failedItemIds.push(itemId);
             }
-          } catch (e) {
-            console.error('[rack place] create-time transfer failed', {
-              item: itemId,
-              rack: rackName,
-              error: e instanceof Error ? e.message : String(e),
-            });
-            // The loop above is per-HOLDING, so a throw part-way leaves this
-            // item's stock split across the old location and the rack. It is
-            // reported as failed either way: "some of it moved" is still not
-            // the placement the operator asked for, and the honest report is
-            // the one that sends them to look.
-            failedItemIds.push(itemId);
-          }
-        }),
-      );
+          }),
+        );
+      }
+    } finally {
+      if (transferAudits.length > 0) await auditMany(transferAudits, this.ctx);
     }
     return { rackName, failedItemIds };
   }
