@@ -27,7 +27,7 @@
 
 import {
   fetchAllPages,
-  idReadTable,
+  idReadSelect,
   type IdReadClient,
   type PageResult,
 } from './id-batches';
@@ -52,8 +52,7 @@ export async function loadOrgMembers<P extends { id: string }>(
   opts: { profileColumns: string; acceptedOnly?: boolean },
 ): Promise<{ members: OrgMemberRow[]; profiles: Map<string, P> }> {
   const members = await fetchAllPages<OrgMemberRow>((from, to) => {
-    let q = idReadTable(client, 'organization_members')
-      .select('id, user_id, role, accepted_at, created_at')
+    let q = idReadSelect(client, 'organization_members', 'id, user_id, role, accepted_at, created_at')
       .eq('organization_id', orgId);
     if (opts.acceptedOnly) q = q.not('accepted_at', 'is', null);
     return q

@@ -10,7 +10,7 @@ import {
   encodedInValueLength,
   fetchAllPages,
   fetchAllRowsByIds,
-  idReadTable,
+  idReadSelect,
   mapWithConcurrency,
   readErrorMessage,
   settleIdBatchRead,
@@ -182,8 +182,7 @@ describe('fetchAllRowsByIds', () => {
     const rows = await fetchAllRowsByIds<{ item_id: string }>(
       [...ids, ...ids.slice(0, 10), null],
       (batch) => (from, to) =>
-        idReadTable(client, 't')
-          .select('item_id')
+        idReadSelect(client, 't', 'item_id')
           .in('item_id', batch)
           .order('id')
           .range(from, to) as PromiseLike<PageResult<{ item_id: string }>>,
@@ -197,8 +196,7 @@ describe('fetchAllRowsByIds', () => {
       rowsServer(() => Array.from({ length: 2500 }, (_, i) => ({ n: i }))),
     );
     const rows = await fetchAllRowsByIds<{ n: number }>(['one-id'], (batch) => (from, to) =>
-      idReadTable(client, 't')
-        .select('n')
+      idReadSelect(client, 't', 'n')
         .in('item_id', batch)
         .order('id')
         .range(from, to) as PromiseLike<PageResult<{ n: number }>>,
@@ -224,8 +222,7 @@ describe('fetchAllRowsByIds', () => {
     const rows = await fetchAllRowsByIds<{ n: number }>(
       ['x'],
       (batch) => (from, to) =>
-        idReadTable(client, 't')
-          .select('n')
+        idReadSelect(client, 't', 'n')
           .in('id', batch)
           .order('id')
           .range(from, to) as PromiseLike<PageResult<{ n: number }>>,
@@ -261,7 +258,7 @@ describe('fetchAllRowsByIds', () => {
       return { data: vals.map((id) => ({ id })), error: null };
     });
     const read = fetchAllRowsByIds(ids, (batch) => (from, to) =>
-      idReadTable(client, 't').select('id').in('item_id', batch).order('id').range(from, to),
+      idReadSelect(client, 't', 'id').in('item_id', batch).order('id').range(from, to),
     );
     await expect(read).rejects.toBeInstanceOf(IdBatchReadError);
     await expect(read).rejects.toMatchObject({ message: 'URI too long', status: 414 });

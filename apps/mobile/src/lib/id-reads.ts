@@ -19,7 +19,7 @@ import type { CountingUnit, RackHoldingLike, SizeScaleValueOrder } from '@stockp
 
 import {
   fetchAllRowsByIds,
-  idReadTable,
+  idReadSelect,
   type IdReadClient,
   type PageResult,
 } from './id-batches';
@@ -51,8 +51,7 @@ export async function readOpenReservations(
     itemIds,
     (batch) => (from, to) =>
       typed(
-        idReadTable(client, 'stock_reservations')
-          .select('id, item_id, quantity')
+        idReadSelect(client, 'stock_reservations', 'id, item_id, quantity')
           .eq('organization_id', orgId)
           .in('item_id', batch)
           .is('released_at', null)
@@ -89,8 +88,7 @@ export async function readOnHand(
     itemIds,
     (batch) => (from, to) =>
       typed(
-        idReadTable(client, 'inventory_items')
-          .select('id, quantity_on_hand')
+        idReadSelect(client, 'inventory_items', 'id, quantity_on_hand')
           .eq('organization_id', orgId)
           .in('id', batch)
           .order('id', { ascending: true })
@@ -127,8 +125,7 @@ export async function readPrimaryPhotos(
     itemIds,
     (batch) => (from, to) =>
       typed(
-        idReadTable(client, 'item_images')
-          .select('item_id, storage_path, thumb_path, is_primary, sort_order')
+        idReadSelect(client, 'item_images', 'item_id, storage_path, thumb_path, is_primary, sort_order')
           .eq('organization_id', orgId)
           .in('item_id', batch)
           .order('is_primary', { ascending: false })
@@ -167,8 +164,7 @@ export async function readRackHoldings(
     itemIds,
     (batch) => (from, to) =>
       typed(
-        idReadTable(client, 'item_stock_levels')
-          .select('item_id, quantity, locations!inner(name, kind)')
+        idReadSelect(client, 'item_stock_levels', 'item_id, quantity, locations!inner(name, kind)')
           .eq('organization_id', orgId)
           .in('item_id', batch)
           .in('locations.kind', ['rack', 'crate'])
@@ -200,8 +196,7 @@ export async function readProfilesByIds<P extends { id: string }>(
     userIds,
     (batch) => (from, to) =>
       typed(
-        idReadTable(client, 'user_profiles')
-          .select(columns)
+        idReadSelect(client, 'user_profiles', columns)
           .in('id', batch)
           .order('id', { ascending: true })
           .range(from, to),
@@ -230,8 +225,7 @@ export async function readItemRefs(
     ids,
     (batch) => (from, to) =>
       typed(
-        idReadTable(client, 'inventory_items')
-          .select('id, name, sku')
+        idReadSelect(client, 'inventory_items', 'id, name, sku')
           .eq('organization_id', orgId)
           .in('id', batch)
           .order('id', { ascending: true })
@@ -266,8 +260,7 @@ export async function readPoRunGroups(
     groupIds,
     (batch) => (from, to) =>
       typed(
-        idReadTable(client, 'product_groups')
-          .select('id, name, default_counting_unit, size_scale_id')
+        idReadSelect(client, 'product_groups', 'id, name, default_counting_unit, size_scale_id')
           .eq('organization_id', orgId)
           .in('id', batch)
           .is('deleted_at', null)
@@ -285,8 +278,7 @@ export async function readPoRunGroups(
     scaleIds,
     (batch) => (from, to) =>
       typed(
-        idReadTable(client, 'size_scale_values')
-          .select('id, size_scale_id, value, normalized, sort_order')
+        idReadSelect(client, 'size_scale_values', 'id, size_scale_id, value, normalized, sort_order')
           .in('size_scale_id', batch)
           .order('sort_order', { ascending: true })
           .order('id', { ascending: true })
@@ -334,8 +326,7 @@ export async function readReceiptTotals(
     receiptIds,
     (batch) => (from, to) =>
       typed(
-        idReadTable(client, 'receipt_lines')
-          .select('id, receipt_id, qty_accepted_base, qty_rejected_base')
+        idReadSelect(client, 'receipt_lines', 'id, receipt_id, qty_accepted_base, qty_rejected_base')
           .in('receipt_id', batch)
           .order('id', { ascending: true })
           .range(from, to),

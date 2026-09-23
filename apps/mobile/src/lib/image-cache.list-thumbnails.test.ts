@@ -104,7 +104,7 @@ describe('the list screens', () => {
     // screens call it and sign through signListThumbnails.
     const reader = readFileSync(path.resolve(__dirname, 'id-reads.ts'), 'utf8');
     expect(reader, 'readPrimaryPhotos must read the stored thumbnail path').toMatch(
-      /\.select\('item_id, storage_path, thumb_path, is_primary, sort_order'\)/,
+      /idReadSelect\(\s*client,\s*'item_images',\s*'item_id, storage_path, thumb_path, is_primary, sort_order',?\s*\)/,
     );
     for (const screen of ['inventory.tsx', 'books.tsx']) {
       const source = readFileSync(path.resolve(__dirname, '..', '..', 'app', '(drawer)', '(tabs)', screen), 'utf8');

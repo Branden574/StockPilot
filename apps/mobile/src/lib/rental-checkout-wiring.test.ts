@@ -115,7 +115,7 @@ describe('rentals/new.tsx — item selection (SP-012)', () => {
     // past one `.in()` URL); the reader holds the table and the open filter.
     expect(code()).toMatch(/readOpenReservations\(\s*supabase,\s*orgId,/);
     const reader = readFileSync(path.resolve(__dirname, 'id-reads.ts'), 'utf8');
-    expect(reader).toMatch(/idReadTable\(client, 'stock_reservations'\)/);
+    expect(reader).toMatch(/idReadSelect\(client, 'stock_reservations'/);
     expect(reader).toMatch(/\.is\('released_at', null\)/);
   });
 });

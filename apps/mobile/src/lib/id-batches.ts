@@ -333,7 +333,13 @@ export interface IdReadTable {
   select(columns: string): IdReadChain;
 }
 
-/** Narrow a structural client's table to the chain the readers use. */
-export function idReadTable(client: IdReadClient, table: string): IdReadTable {
-  return client.from(table) as IdReadTable;
+/**
+ * `client.from(table).select(columns)`, re-narrowed to the chain the readers
+ * use. A read by construction: the table is only ever selected from here.
+ * Keep `.select` directly on the `.from()` call: apps/web's
+ * inventory-list-invalidation guard scans mobile code too, and refuses a
+ * `.from(<non-literal table>)` it cannot see being read.
+ */
+export function idReadSelect(client: IdReadClient, table: string, columns: string): IdReadChain {
+  return (client.from(table) as IdReadTable).select(columns);
 }
