@@ -169,9 +169,16 @@ describe('CycleCountsService.listPage: the page contract', () => {
     expect(res.items[0]!.countNumber).toBeNull();
   });
 
-  it('throws on an RPC error instead of showing an empty history', async () => {
-    const { svc } = svcWith({ data: null, error: { message: 'boom' } });
-    await expect(svc.listPage()).rejects.toMatchObject({ code: 'internal_error' });
+  it('throws on an RPC error instead of showing an empty history, without the database text', async () => {
+    const { svc } = svcWith({ data: null, error: { message: 'canceling statement due to statement timeout' } });
+    const err = await svc.listPage().catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: 'internal_error', message: 'An internal error occurred. Please try again.' });
+    expect(String((err as Error).message)).not.toContain('statement');
+    expect((err as { internalDetail?: string }).internalDetail).toContain('statement timeout');
+    expect(reportError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('statement timeout') }),
+      expect.objectContaining({ tag: 'cycle_counts.list_page' }),
+    );
   });
 });
 

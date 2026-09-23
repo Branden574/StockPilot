@@ -450,7 +450,16 @@ export class CycleCountsService {
         p_page: args.page,
         p_page_size: args.pageSize,
       });
-      if (error) throw new ServiceError('internal_error', error.message);
+      if (error) {
+        // Reported here because the routes do not report a ServiceError. The
+        // database text stays server-side (ServiceError keeps it as
+        // internalDetail; the public message of an internal_error is generic).
+        void reportError(new Error(`cycle_counts_page failed: ${error.message}`), {
+          tag: 'cycle_counts.list_page',
+          extra: { code: (error as { code?: string }).code ?? null },
+        });
+        throw new ServiceError('internal_error', `cycle_counts_page failed: ${error.message}`);
+      }
       const rows = (data ?? []) as CycleCountPageRpcRow[];
       const first = rows[0];
       return {

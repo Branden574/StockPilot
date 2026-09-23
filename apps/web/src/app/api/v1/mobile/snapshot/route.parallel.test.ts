@@ -970,3 +970,43 @@ describe('an error in one read behaves as before', () => {
     ]);
   });
 });
+
+describe('open cycle counts before migration 0358', () => {
+  beforeEach(() => {
+    queries.length = 0;
+    vi.mocked(getWarehouseAccess).mockResolvedValue(SCOPED_ACCESS as never);
+    vi.mocked(checkRateLimit).mockResolvedValue({
+      allowed: true,
+      count: 1,
+      resetAt: Date.now() + 60_000,
+    } as never);
+  });
+
+  it('a missing count_number column reads the counts again without it, instead of failing every phone sync', async () => {
+    const base = respondFor();
+    mockContext((q) => {
+      if (kindOf(q) !== 'cycle_counts') return base(q);
+      if (q.select.includes('count_number')) {
+        return { data: null, error: { message: 'column cycle_counts.count_number does not exist', code: '42703' } };
+      }
+      // A database without the column cannot return it.
+      const rows = (ROWS.counts as Array<Record<string, unknown>>).map(({ count_number: _n, ...r }) => r);
+      return { data: rows, error: null };
+    });
+    const res = await GET(request());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.openCycleCounts).toHaveLength(1);
+    expect(body.openCycleCounts[0]).toMatchObject({ id: 'cc-1', countNumber: null, notes: 'aisle 3' });
+    const countReads = queries.filter((q) => kindOf(q) === 'cycle_counts');
+    expect(countReads).toHaveLength(2);
+    expect(countReads[1]!.select).not.toContain('count_number');
+  });
+
+  it('any other failure still fails the snapshot loudly', async () => {
+    mockContext(respondFor({ cycle_counts: boom('cc') }));
+    const res = await GET(request());
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    expect(queries.filter((q) => kindOf(q) === 'cycle_counts')).toHaveLength(1);
+  });
+});
