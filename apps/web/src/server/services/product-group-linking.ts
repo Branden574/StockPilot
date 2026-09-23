@@ -18,6 +18,7 @@ import {
   ServiceError,
   type ServiceContext,
 } from './context';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import type { ProductGroupsService } from './product-groups';
 
@@ -327,14 +328,21 @@ export async function linkFamily(
   // before anything is resolved or written: an id from another org must fail
   // here, not be discovered by an .update().eq() quietly matching no rows
   // (that path is fail-OPEN — no error, no row, and a success response).
-  const { data, error } = await supabase
-    .from('inventory_items')
-    .select(LINK_TARGET_COLUMNS)
-    .eq('organization_id', ctx.organizationId)
-    .in('id', ids)
-    .is('deleted_at', null);
-  if (error) throw new ServiceError('internal_error', error.message);
-  const found = (data ?? []) as unknown as LinkTargetRow[];
+  //
+  // Batched (MAX_LINK_MEMBERS ids): 200 uuids in one `.in()` sits at the local
+  // gateway's ~8 KB limit. A failed batch throws, never "not in this org".
+  const found = (await fetchAllRowsByIds(
+    ids,
+    (batch) => (from, to) =>
+      supabase
+        .from('inventory_items')
+        .select(LINK_TARGET_COLUMNS)
+        .eq('organization_id', ctx.organizationId)
+        .in('id', batch)
+        .is('deleted_at', null)
+        .order('id')
+        .range(from, to),
+  )) as unknown as LinkTargetRow[];
   const byId = new Map(found.map((r) => [r.id, r]));
   const missing = ids.filter((id) => !byId.has(id));
   if (missing.length > 0) {
@@ -554,15 +562,21 @@ async function assertNoVariantKeyCollision(args: {
   // group's size.
   const keys = Array.from(new Set(planned.map((p) => p.variantKey))).filter(Boolean);
   if (keys.length > 0) {
-    const { data, error } = await supabase
-      .from('inventory_items')
-      .select('id, name, sku, variant_key')
-      .eq('organization_id', ctx.organizationId)
-      .eq('group_id', groupId)
-      .in('variant_key', keys)
-      .is('deleted_at', null);
-    if (error) throw new ServiceError('internal_error', error.message);
-    const existing = (data ?? []) as unknown as Array<{
+    // Batched by encoded length: a variant key runs ~55 characters, so a full
+    // batch of keys is far longer than the same count of uuids.
+    const existing = (await fetchAllRowsByIds(
+      keys,
+      (batch) => (from, to) =>
+        supabase
+          .from('inventory_items')
+          .select('id, name, sku, variant_key')
+          .eq('organization_id', ctx.organizationId)
+          .eq('group_id', groupId)
+          .in('variant_key', batch)
+          .is('deleted_at', null)
+          .order('id')
+          .range(from, to),
+    )) as unknown as Array<{
       id: string;
       name: string;
       sku: string | null;
@@ -634,18 +648,23 @@ export async function unlinkItems(
     );
   }
 
-  const { data, error } = await supabase
-    .from('inventory_items')
-    .select('id, group_id, variant_key')
-    .eq('organization_id', ctx.organizationId)
-    .in('id', ids)
-    .is('deleted_at', null);
-  if (error) throw new ServiceError('internal_error', error.message);
-  const found = (data ?? []) as unknown as Array<{
+  // Batched like linkItemsToGroup's ownership read; a failed batch throws.
+  const found = await fetchAllRowsByIds<{
     id: string;
     group_id: string | null;
     variant_key: string | null;
-  }>;
+  }>(
+    ids,
+    (batch) => (from, to) =>
+      supabase
+        .from('inventory_items')
+        .select('id, group_id, variant_key')
+        .eq('organization_id', ctx.organizationId)
+        .in('id', batch)
+        .is('deleted_at', null)
+        .order('id')
+        .range(from, to),
+  );
   const byId = new Map(found.map((r) => [r.id, r]));
   const missing = ids.filter((id) => !byId.has(id));
   if (missing.length > 0) {

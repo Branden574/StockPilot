@@ -11,6 +11,7 @@ import {
 import { audit } from './audit';
 import { ServiceError, type ServiceContext } from './context';
 import type { InventoryService } from './inventory';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import {
   asSizeSystem,
   groupPartsForLine,
@@ -193,19 +194,43 @@ export async function findDuplicatesForPoLines(
     .maybeSingle();
   if (!importHeader) throw new ServiceError('not_found', 'PO import not found');
 
-  let linesQuery = deps.supabase
-    .from('po_import_lines')
-    .select('id, description, vendor_item_number, vendor_product_number, auxiliary_number')
-    .eq('po_import_id', input.poImportId);
-  linesQuery =
-    input.lineIds && input.lineIds.length > 0
-      ? linesQuery.in('id', input.lineIds)
-      : linesQuery.limit(200);
-  const { data: lines, error: lErr } = await linesQuery;
-  if (lErr) throw new ServiceError('internal_error', lErr.message);
+  type LineRow = {
+    id: string;
+    description: string | null;
+    vendor_item_number: string | null;
+    vendor_product_number: string | null;
+    auxiliary_number: string | null;
+  };
+  const lineColumns =
+    'id, description, vendor_item_number, vendor_product_number, auxiliary_number';
+  let lines: LineRow[];
+  if (input.lineIds && input.lineIds.length > 0) {
+    // Batched: 200 ids (the schema cap) in one `.in()` sits past the local
+    // gateway's ~8 KB limit once the rest of the URL is added.
+    const lineIds = input.lineIds;
+    lines = await fetchAllRowsByIds<LineRow>(
+      lineIds,
+      (batch) => (from, to) =>
+        deps.supabase
+          .from('po_import_lines')
+          .select(lineColumns)
+          .eq('po_import_id', input.poImportId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+    );
+  } else {
+    const { data, error: lErr } = await deps.supabase
+      .from('po_import_lines')
+      .select(lineColumns)
+      .eq('po_import_id', input.poImportId)
+      .limit(200);
+    if (lErr) throw new ServiceError('internal_error', lErr.message);
+    lines = (data ?? []) as LineRow[];
+  }
 
   const matches: Record<string, DuplicateCandidate[]> = {};
-  for (const l of lines ?? []) {
+  for (const l of lines) {
     const lineId = l.id as string;
     const description = (l.description as string | null)?.trim();
     const vendorNumbers = [
@@ -225,6 +250,7 @@ export async function findDuplicatesForPoLines(
         .select('id, name, sku, barcode, quantity_on_hand')
         .eq('organization_id', deps.organizationId)
         .is('deleted_at', null)
+        // in-list-bound: at most the line's three vendor numbers
         .in('barcode', vendorNumbers);
       for (const r of byBarcode ?? []) {
         candidates.set(r.id as string, {
@@ -462,21 +488,27 @@ export async function createItemsFromPoLines(
   }
 
   // Pull just the lines we're creating items for. RLS guarantees the
-  // import belongs to the caller's org.
-  const { data: lines, error: lErr } = await supabase
-    .from('po_import_lines')
-    // Hand-written column list: the create path cannot see a column that is
-    // not named here, so the 0301 variant columns are named explicitly —
-    // Task 14's group-first matching reads them off exactly this row, and a
-    // missing name would fail silently. `mapping_confidence` was the one 0301
-    // column Task 13 left out; without it the confidence gate below reads
-    // undefined and never fires.
-    .select(
-      'id, po_import_id, line_number, line_type, description, qty_ordered_original, uom_original, unit_cost, vendor_item_number, vendor_product_number, auxiliary_number, item_id, variant_size, variant_size_original, variant_size_system, variant_width, variant_fit, variant_color, jersey_number, player_name, group_hint, serial_hint, suggested_group_id, mapping_confidence',
-    )
-    .eq('po_import_id', input.poImportId)
-    .in('id', input.lineIds);
-  if (lErr) throw new ServiceError('internal_error', lErr.message);
+  // import belongs to the caller's org. Batched: 200 ids (the schema cap) in
+  // one `.in()` plus this select passes the local gateway's ~8 KB limit.
+  const lines = await fetchAllRowsByIds(
+    input.lineIds,
+    (batch) => (from, to) =>
+      supabase
+        .from('po_import_lines')
+        // Hand-written column list: the create path cannot see a column that is
+        // not named here, so the 0301 variant columns are named explicitly —
+        // Task 14's group-first matching reads them off exactly this row, and a
+        // missing name would fail silently. `mapping_confidence` was the one 0301
+        // column Task 13 left out; without it the confidence gate below reads
+        // undefined and never fires.
+        .select(
+          'id, po_import_id, line_number, line_type, description, qty_ordered_original, uom_original, unit_cost, vendor_item_number, vendor_product_number, auxiliary_number, item_id, variant_size, variant_size_original, variant_size_system, variant_width, variant_fit, variant_color, jersey_number, player_name, group_hint, serial_hint, suggested_group_id, mapping_confidence',
+        )
+        .eq('po_import_id', input.poImportId)
+        .in('id', batch)
+        .order('id')
+        .range(from, to),
+  );
 
   let created = 0;
   let mapped = 0;
@@ -597,6 +629,7 @@ export async function createItemsFromPoLines(
             .select('id')
             .eq('organization_id', organizationId)
             .eq('item_type', 'book')
+            // in-list-bound: the ISBN-10 and ISBN-13 forms of one ISBN
             .in('barcode', variants)
             .is('deleted_at', null)
             .limit(1);
@@ -633,6 +666,7 @@ export async function createItemsFromPoLines(
           .from('inventory_items')
           .select('id')
           .eq('organization_id', organizationId)
+          // in-list-bound: at most the line's three vendor numbers
           .in('barcode', vendorNumbers)
           .is('deleted_at', null)
           .limit(1);
