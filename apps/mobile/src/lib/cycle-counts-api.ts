@@ -1,4 +1,9 @@
 import { api } from './api';
+import {
+  cycleCountListPath,
+  type CycleCountListResponse,
+  type CycleCountListView,
+} from './cycle-count-history';
 
 /**
  * Thin typed wrappers over the mobile `api()` client for cycle counts — the
@@ -34,5 +39,22 @@ export interface PostCycleCountResponse {
 export async function postCycleCount(id: string): Promise<PostCycleCountResponse> {
   return api<PostCycleCountResponse>(`/api/v1/cycle-counts/${id}/post`, {
     method: 'POST',
+  });
+}
+
+/**
+ * One page of the cycle-count history (GET /api/v1/cycle-counts): the
+ * server's search, status filter and 25-per-page window, the same one the web
+ * list renders. `signal` cancels a request a newer search or page has made
+ * obsolete; the screen also drops any answer that is not the newest or not for
+ * the active workspace (isCurrentListAnswer), because a cancelled request can
+ * still resolve.
+ */
+export async function listCycleCounts(
+  view: CycleCountListView,
+  opts: { summary?: boolean; signal?: AbortSignal } = {},
+): Promise<CycleCountListResponse> {
+  return api<CycleCountListResponse>(cycleCountListPath(view, { summary: opts.summary }), {
+    signal: opts.signal,
   });
 }

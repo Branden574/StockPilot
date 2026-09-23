@@ -198,6 +198,11 @@ async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
     'item_variant_label',
     'text',
   );
+  // The count's permanent reference, CC-000042 (server migration 0358). A
+  // display column, so it is added in place (never a SCHEMA_VERSION bump, which
+  // would drop the outbox): existing rows read NULL, shown as "Reference
+  // unavailable" until the next snapshot pull or online open fills them.
+  await addColumnIfMissing(db, 'cycle_counts', 'count_number', 'integer');
 }
 
 /**

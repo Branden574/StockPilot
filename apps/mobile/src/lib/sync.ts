@@ -82,6 +82,8 @@ interface SnapshotResponse {
   }[];
   openCycleCounts: {
     id: string;
+    /** Permanent reference number (server 0358). Absent from older servers. */
+    countNumber?: number | null;
     status: string;
     warehouseId: string | null;
     startedAt: string;
@@ -303,6 +305,7 @@ export async function pullSnapshot(
         c.startedAt,
         c.assignedTo,
         c.notes,
+        c.countNumber ?? null,
         now,
       ]);
       for (const l of c.lines) {

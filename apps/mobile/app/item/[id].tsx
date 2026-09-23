@@ -36,6 +36,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   can,
   collectLegacyRefIdsByKind,
+  formatCycleCountNumber,
   formatOrderNumber,
   legacyOrderRefId,
   readDisplayStorage,
@@ -284,10 +285,10 @@ const ACTIVITY_AUDITS_PAGE_SIZE = auditCapFor(ACTIVITY_MOVEMENTS_PAGE_SIZE);
 // ActivityService.forItem: resolveOrderNumbers / resolveReturnNumbers /
 // resolveBundleNames). Mobile has no server "service" layer — these run
 // directly against the Supabase client, same convention as every other read
-// in this screen. cycle_count is intentionally NOT queried: the table
-// carries no display field, so those events always fall back to the
-// generic `referenceTypeLabel('cycle_count')` while still being tappable
-// via `referenceRoute`.
+// in this screen. cycle_count joined them once counts had a display number
+// (server 0358, CC-000042); a count whose number cannot be read keeps the
+// generic `referenceTypeLabel('cycle_count')` and stays tappable via
+// `referenceRoute`.
 //
 // The merge (combine the 3 maps below into one) and attach (stitch the
 // merged map onto each movement row) steps are deliberately NOT done here —
@@ -323,6 +324,22 @@ async function resolveReturnNumbers(orgId: string, ids: string[]): Promise<Map<s
     .in('id', ids);
   for (const r of (data ?? []) as { id: string; return_number: string | null }[]) {
     if (r.return_number) map.set(r.id, r.return_number);
+  }
+  return map;
+}
+
+async function resolveCycleCountNumbers(orgId: string, ids: string[]): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (ids.length === 0) return map;
+  const { data } = await supabase
+    .from('cycle_counts')
+    .select('id, count_number')
+    .eq('organization_id', orgId)
+    // in-list-bound: reference ids from ONE page of movements (50) or activity (30 + 15)
+    .in('id', ids);
+  for (const r of (data ?? []) as { id: string; count_number: number | null }[]) {
+    const n = formatCycleCountNumber(r.count_number);
+    if (n) map.set(r.id, n);
   }
   return map;
 }
@@ -783,15 +800,27 @@ export default function ItemDetail() {
       // the 5 awaits. locationNameById is kept separate (not merged into
       // pageLabelMap) since a location id could theoretically collide with a
       // reference id in that shared map's key space.
-      const [orderLabels, returnLabels, bundleLabels, poNumberByReceipt, locationNameById] =
-        await Promise.all([
-          resolveOrderNumbers(orgId, idsByType.order_request ?? []),
-          resolveReturnNumbers(orgId, idsByType.return ?? []),
-          resolveBundleNames(orgId, idsByType.bundle ?? []),
-          resolveReceiptPoNumbers(orgId, receiptLineIds),
-          resolveLocationNames(orgId, locationIds),
-        ]);
-      const pageLabelMap = mergeReferenceLabelMaps([orderLabels, returnLabels, bundleLabels]);
+      const [
+        orderLabels,
+        returnLabels,
+        bundleLabels,
+        cycleCountLabels,
+        poNumberByReceipt,
+        locationNameById,
+      ] = await Promise.all([
+        resolveOrderNumbers(orgId, idsByType.order_request ?? []),
+        resolveReturnNumbers(orgId, idsByType.return ?? []),
+        resolveBundleNames(orgId, idsByType.bundle ?? []),
+        resolveCycleCountNumbers(orgId, idsByType.cycle_count ?? []),
+        resolveReceiptPoNumbers(orgId, receiptLineIds),
+        resolveLocationNames(orgId, locationIds),
+      ]);
+      const pageLabelMap = mergeReferenceLabelMaps([
+        orderLabels,
+        returnLabels,
+        bundleLabels,
+        cycleCountLabels,
+      ]);
 
       const mapped = rows.map((row) => {
         const r = row as Record<string, unknown>;

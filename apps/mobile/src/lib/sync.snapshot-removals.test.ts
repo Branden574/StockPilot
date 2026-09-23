@@ -80,7 +80,9 @@ const DDL = `
   create table cycle_counts (
     id text primary key, organization_id text, status text, warehouse_id text,
     warehouse_name text, started_at text, posted_at text, assigned_to text,
-    notes text, last_synced_at integer not null, cached_at integer
+    notes text, last_synced_at integer not null, cached_at integer,
+    -- added in place at startup by addColumnIfMissing (db.ts), not in SCHEMA_SQL
+    count_number integer
   );
   create table cycle_count_lines (
     id text primary key, count_id text not null, item_id text not null,

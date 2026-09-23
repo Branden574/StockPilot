@@ -13,7 +13,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { variantLabel } from '@stockpilot/core';
+import {
+  CYCLE_COUNT_REFERENCE_UNAVAILABLE,
+  formatCycleCountNumber,
+  variantLabel,
+} from '@stockpilot/core';
 
 import { CycleCountReassignSheet } from '@/components/cycle-count-reassign-sheet';
 import { CycleCountReleaseSheet } from '@/components/cycle-count-release-sheet';
@@ -172,8 +176,8 @@ export default function CycleCountDetail() {
       supabase
         .from('cycle_counts')
         .select(
-          `id, organization_id, status, started_at, completed_at, warehouse_id,
-           assigned_to,
+          `id, count_number, organization_id, status, started_at, completed_at,
+           warehouse_id, assigned_to, notes,
            warehouse:warehouses!warehouse_id (name)`,
         )
         .eq('organization_id', orgId)
@@ -217,6 +221,10 @@ export default function CycleCountDetail() {
       startedAt: (ccRow.started_at as string | null) ?? new Date().toISOString(),
       postedAt: (ccRow.completed_at as string | null) ?? null,
       assignedTo: (ccRow.assigned_to as string | null) ?? null,
+      // Permanent reference (server 0358). Null from a server without it: the
+      // cache then keeps whatever number it already holds.
+      countNumber: (ccRow.count_number as number | null | undefined) ?? null,
+      notes: (ccRow.notes as string | null | undefined) ?? null,
     };
 
     const fetchedLines = ((lineRows ?? []) as Array<Record<string, unknown>>).map((r) => {
@@ -399,6 +407,9 @@ export default function CycleCountDetail() {
   }
 
   const countedCount = lines.filter((l) => l.counted !== null).length;
+  // The count's permanent reference, from the cache (filled by the snapshot
+  // pull or the fetch above). Never made up when absent.
+  const reference = formatCycleCountNumber(header?.countNumber);
   const allCounted = countedCount === lines.length && lines.length > 0;
   const offline = syncSnapshot.status === 'offline';
   const hasPending = pendingForThis > 0;
@@ -476,9 +487,30 @@ export default function CycleCountDetail() {
         </Pressable>
         <View style={styles.headerRow}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.title}>Cycle count</Text>
+            {reference ? (
+              <>
+                <Text style={styles.eyebrow}>CYCLE COUNT</Text>
+                {/* Selectable: a long press offers the system Copy, which is the
+                    copy action here (this binary has no clipboard module, so the
+                    app never claims a copy it cannot confirm). */}
+                <Text
+                  style={[styles.title, styles.reference]}
+                  selectable
+                  accessibilityLabel={`Cycle count ${reference}`}
+                  accessibilityHint="Long press to copy the reference"
+                >
+                  {reference}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.title}>Cycle count</Text>
+                <Text style={styles.subtitle}>{CYCLE_COUNT_REFERENCE_UNAVAILABLE}</Text>
+              </>
+            )}
             <Text style={styles.subtitle}>
-              {header?.warehouseName ?? '—'} · {countedCount}/{lines.length} counted
+              {header?.warehouseName ?? (header?.warehouseId ? '—' : 'No single warehouse')} ·{' '}
+              {countedCount}/{lines.length} counted
             </Text>
           </View>
           {header && canAdjust && isOpen ? (
@@ -715,6 +747,8 @@ const styles = StyleSheet.create({
   backText: { color: theme.primary, fontSize: 14 },
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, marginTop: 4 },
   title: { color: theme.text, fontSize: 22, fontWeight: '700' },
+  eyebrow: { color: theme.textMuted, fontSize: 10.5, letterSpacing: 1.2, fontWeight: '600' },
+  reference: { fontVariant: ['tabular-nums'], letterSpacing: 0.2 },
   subtitle: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
   badgeRow: {
     marginTop: space.sm,

@@ -40,6 +40,10 @@ export function Chip({
   return (
     <Pressable
       onPress={onPress}
+      // A selectable option: screen readers hear the label and whether it is
+      // the one chosen.
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
       style={{
         paddingHorizontal: 12,
         paddingVertical: 9,

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { postCycleCount } from './cycle-counts-api';
+import { listCycleCounts, postCycleCount } from './cycle-counts-api';
 
 // ./api reaches for expo-constants, AsyncStorage and the Supabase client at
 // import time, none of which exist under the node test environment. Same idiom
@@ -26,5 +26,23 @@ describe('postCycleCount (SP-055)', () => {
     await expect(postCycleCount('cc-1')).rejects.toThrow(
       'You do not have permission to post this cycle count.',
     );
+  });
+});
+
+describe('listCycleCounts', () => {
+  it('GETs one page of the server history for the view, passing the cancel signal', async () => {
+    const ctrl = new AbortController();
+    apiMock.api.mockResolvedValueOnce({ items: [], page: 2 });
+    await listCycleCounts({ q: 'CC-42', status: 'completed', page: 2 }, { summary: true, signal: ctrl.signal });
+    expect(apiMock.api).toHaveBeenCalledWith(
+      '/api/v1/cycle-counts?q=CC-42&status=completed&page=2&summary=1',
+      { signal: ctrl.signal },
+    );
+  });
+
+  it('asks for page 1 without a page parameter and no summary unless asked', async () => {
+    apiMock.api.mockResolvedValueOnce({ items: [], page: 1 });
+    await listCycleCounts({ q: '  ', status: null, page: 1 });
+    expect(apiMock.api).toHaveBeenCalledWith('/api/v1/cycle-counts', { signal: undefined });
   });
 });

@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  CYCLE_COUNT_CACHE_HEADER_SQL,
   CYCLE_COUNT_HEADER_UPSERT_SQL,
   CYCLE_COUNT_LINE_UPSERT_SQL,
   CYCLE_COUNT_STALE_LINES_DELETE_SQL,
@@ -21,7 +22,8 @@ const DDL = `
   create table cycle_counts (
     id text primary key, organization_id text, status text, warehouse_id text,
     warehouse_name text, started_at text, posted_at text, assigned_to text,
-    notes text, last_synced_at integer not null, cached_at integer
+    notes text, last_synced_at integer not null, cached_at integer,
+    count_number integer
   );
   create table cycle_count_lines (
     id text primary key, count_id text not null, item_id text not null,
@@ -33,7 +35,7 @@ const DDL = `
 let db: DatabaseSync;
 
 function snapshotPull(lines: { id: string; itemId: string; expected: number; counted: number | null }[]) {
-  db.prepare(CYCLE_COUNT_HEADER_UPSERT_SQL).run('c1', 'in_progress', 'wh1', '2026-09-01T00:00:00Z', 'user-assignee', 'note', 999);
+  db.prepare(CYCLE_COUNT_HEADER_UPSERT_SQL).run('c1', 'in_progress', 'wh1', '2026-09-01T00:00:00Z', 'user-assignee', 'note', 42, 999);
   for (const l of lines) db.prepare(CYCLE_COUNT_LINE_UPSERT_SQL).run(l.id, 'c1', l.itemId, l.expected, l.counted);
   db.prepare(CYCLE_COUNT_STALE_LINES_DELETE_SQL).run('c1', JSON.stringify(lines.map((l) => l.id)));
 }
@@ -98,5 +100,53 @@ describe('cycle-count snapshot SQL (SP-011)', () => {
     expect(l.counted).toBeNull();
     expect(l.local_dirty).toBe(0);
     expect(l.count_id).toBe('c1');
+  });
+});
+
+describe('the count reference in the cache (server 0358)', () => {
+  function header() {
+    return db.prepare('select * from cycle_counts where id = ?').get('c1') as Record<string, unknown>;
+  }
+
+  it('a snapshot pull stores the reference', () => {
+    snapshotPull([]);
+    expect(header().count_number).toBe(42);
+  });
+
+  it('a snapshot from a server that does not send it yet never erases a stored one', () => {
+    snapshotPull([]);
+    db.prepare(CYCLE_COUNT_HEADER_UPSERT_SQL).run('c1', 'in_progress', 'wh1', '2026-09-01T00:00:00Z', null, 'note', null, 1000);
+    expect(header().count_number).toBe(42);
+  });
+
+  it('a count the snapshot inserts for the first time gets its reference too', () => {
+    db.prepare(CYCLE_COUNT_HEADER_UPSERT_SQL).run('c2', 'in_progress', null, '2026-09-02T00:00:00Z', null, null, 7, 5);
+    const h = db.prepare('select * from cycle_counts where id = ?').get('c2') as Record<string, unknown>;
+    expect(h.count_number).toBe(7);
+    expect(h.cached_at).toBeNull(); // still "not opened for offline use"
+  });
+
+  function cacheHeader(countNumber: number | null, notes: string | null) {
+    db.prepare(CYCLE_COUNT_CACHE_HEADER_SQL).run(
+      'c1', 'org1', 'in_progress', 'wh1', 'DC4', '2026-09-01T00:00:00Z', null, null, 2000, 2000,
+      countNumber, 'c1', notes, 'c1',
+    );
+  }
+
+  it('the detail screen\'s full cache write stores the reference and the notes', () => {
+    cacheHeader(42, 'Aisle 4');
+    expect(header()).toMatchObject({ count_number: 42, notes: 'Aisle 4', cached_at: 2000 });
+  });
+
+  it('a full cache write without them keeps what is stored (insert or replace no longer wipes them)', () => {
+    cacheHeader(42, 'Aisle 4');
+    cacheHeader(null, null);
+    expect(header()).toMatchObject({ count_number: 42, notes: 'Aisle 4', cached_at: 2000, warehouse_name: 'DC4' });
+  });
+
+  it('the full cache write never touches the lines or their unsynced counts', () => {
+    cacheHeader(42, null);
+    const l = db.prepare('select * from cycle_count_lines where id = ?').get('dirty') as Record<string, unknown>;
+    expect(l).toMatchObject({ counted: 7, local_dirty: 1 });
   });
 });

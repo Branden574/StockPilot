@@ -1,3 +1,4 @@
+import { CYCLE_COUNT_CACHE_HEADER_SQL } from './cycle-count-snapshot-sql';
 import { getDb } from './db';
 import { markRejected } from './queue';
 
@@ -27,6 +28,12 @@ export interface CachedCycleCountHeader {
    *  non-assignee sees the count read-only, mirroring the server 0282 lock.
    *  Optional for back-compat with cache entries written before this field. */
   assignedTo?: string | null;
+  /** Permanent reference number (server 0358), shown as CC-000042. Null on a
+   *  row cached before the number reached this device: show "Reference
+   *  unavailable", never a made-up reference. */
+  countNumber?: number | null;
+  /** The count's notes, when known (offline search looks at them). */
+  notes?: string | null;
   cachedAt: number;
 }
 
@@ -71,6 +78,11 @@ export async function cacheCycleCount(
      *  header cached without it un-locks the count for every non-assignee and
      *  hides Release from the assignee (the 0282 lock was dead on mobile). */
     assignedTo?: string | null;
+    /** Permanent reference (0358). Null from a server without it: the number
+     *  already stored is kept rather than erased. */
+    countNumber?: number | null;
+    /** Null from a caller that did not read them: the stored notes are kept. */
+    notes?: string | null;
   },
   lines: Array<{
     id: string;
@@ -87,11 +99,10 @@ export async function cacheCycleCount(
   const db = await getDb();
   const now = Date.now();
   await db.withTransactionAsync(async () => {
+    // See CYCLE_COUNT_CACHE_HEADER_SQL: the number and notes survive a caller
+    // that does not carry them.
     await db.runAsync(
-      `insert or replace into cycle_counts
-         (id, organization_id, status, warehouse_id, warehouse_name,
-          started_at, posted_at, assigned_to, last_synced_at, cached_at)
-       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      CYCLE_COUNT_CACHE_HEADER_SQL,
       [
         header.id,
         header.organizationId,
@@ -103,6 +114,10 @@ export async function cacheCycleCount(
         header.assignedTo ?? null,
         now,
         now,
+        header.countNumber ?? null,
+        header.id,
+        header.notes ?? null,
+        header.id,
       ],
     );
 
@@ -168,9 +183,11 @@ export async function getCycleCount(
     posted_at: string | null;
     assigned_to: string | null;
     cached_at: number | null;
+    count_number: number | null;
+    notes: string | null;
   }>(
     `select id, organization_id, status, warehouse_id, warehouse_name,
-            started_at, posted_at, assigned_to, cached_at
+            started_at, posted_at, assigned_to, cached_at, count_number, notes
        from cycle_counts where id = ?`,
     [id],
   );
@@ -210,6 +227,8 @@ export async function getCycleCount(
       startedAt: headerRow.started_at ?? '',
       postedAt: headerRow.posted_at,
       assignedTo: headerRow.assigned_to ?? null,
+      countNumber: headerRow.count_number ?? null,
+      notes: headerRow.notes ?? null,
       cachedAt: headerRow.cached_at,
     },
     lines: lineRows.map((r) => ({
@@ -523,9 +542,11 @@ export async function listCachedCycleCounts(): Promise<CachedCycleCountHeader[]>
     posted_at: string | null;
     assigned_to: string | null;
     cached_at: number | null;
+    count_number: number | null;
+    notes: string | null;
   }>(
     `select id, organization_id, status, warehouse_id, warehouse_name,
-            started_at, posted_at, assigned_to, cached_at
+            started_at, posted_at, assigned_to, cached_at, count_number, notes
        from cycle_counts
       where status = 'in_progress' or status is null
       order by started_at desc`,
@@ -539,6 +560,8 @@ export async function listCachedCycleCounts(): Promise<CachedCycleCountHeader[]>
     startedAt: r.started_at ?? '',
     postedAt: r.posted_at,
     assignedTo: r.assigned_to ?? null,
+    countNumber: r.count_number ?? null,
+    notes: r.notes ?? null,
     cachedAt: r.cached_at ?? 0,
   }));
 }
