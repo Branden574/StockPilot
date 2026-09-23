@@ -476,6 +476,7 @@ export async function POST(req: NextRequest) {
       .from('inventory_items')
       .select('id, unit_cost')
       .eq('organization_id', organizationId)
+      // in-list-bound: a request's distinct items; lineSchema caps lines at 100
       .in('id', itemIds);
     if (itemsErr) {
       return NextResponse.json({ error: 'internal_error' }, { status: 500 });
@@ -491,6 +492,7 @@ export async function POST(req: NextRequest) {
       .from('inventory_items')
       .select('id, warehouse_id, unit_cost, item_type, status, deleted_at')
       .eq('organization_id', organizationId)
+      // in-list-bound: a request's distinct items; lineSchema caps lines at 100
       .in('id', itemIds);
     if (itemsErr) {
       return NextResponse.json({ error: 'internal_error' }, { status: 500 });

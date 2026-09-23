@@ -233,6 +233,7 @@ async function loadWritableWarehouses(ctx: Awaited<ReturnType<typeof requireOrgC
   const { data } = await supabase
     .from('warehouses')
     .select('id, name')
+    // in-list-bound: the caller's writable warehouses (an org's handful of sites)
     .in('id', access.writableIds)
     .order('name', { ascending: true });
   return ((data ?? []) as { id: string; name: string }[]).map((w) => ({ id: w.id, name: w.name }));

@@ -154,6 +154,7 @@ export async function GET(req: Request) {
     const { data: warehouseRows, error } = await admin
       .from('warehouses')
       .select('id, organization_id')
+      // in-list-bound: KNOWN_HOT_ORG_IDS, a hardcoded list of two orgs (org-sweep.ts)
       .in('organization_id', [...KNOWN_HOT_ORG_IDS])
       .neq('status', 'archived');
     if (error) {

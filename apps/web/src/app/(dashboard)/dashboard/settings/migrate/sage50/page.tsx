@@ -35,6 +35,7 @@ export default async function Sage50MigratePage() {
     ? await supabase
         .from('warehouses')
         .select('id, name')
+        // in-list-bound: the caller's writable warehouses (an org's handful of sites)
         .in('id', access.writableIds)
         .order('name', { ascending: true })
     : { data: [] };

@@ -54,6 +54,7 @@ export async function GET(req: Request) {
     .order('updated_at', { ascending: false })
     .limit(5);
   if (!access.hasAllAccess) {
+    // in-list-bound: the caller's readable warehouses (an org's handful of sites)
     itemsQ.in('warehouse_id', access.readableIds);
   }
 
@@ -79,6 +80,7 @@ export async function GET(req: Request) {
         .from('purchase_orders')
         .select('id, po_number, status, destination:locations!destination_location_id!inner (warehouse_id)')
         .eq('organization_id', ctx.organizationId)
+        // in-list-bound: the caller's readable warehouses (an org's handful of sites)
         .in('destination.warehouse_id', access.readableIds)
         .ilike('po_number', like)
         .order('created_at', { ascending: false })

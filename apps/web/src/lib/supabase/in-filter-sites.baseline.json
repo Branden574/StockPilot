@@ -1,13 +1,4 @@
 {
-  "app/(dashboard)/dashboard/settings/integrations/page.tsx": ["in:id <- access.writableIds"],
-  "app/(dashboard)/dashboard/settings/migrate/sage50/page.tsx": ["in:id <- access.writableIds"],
-  "app/api/cron/prewarm-orders-catalog/route.ts": ["in:organization_id <- [...KNOWN_HOT_ORG_IDS]"],
-  "app/api/search/route.ts": [
-    "in:destination.warehouse_id <- access.readableIds",
-    "in:warehouse_id <- access.readableIds"
-  ],
-  "app/api/v1/public/order-requests/route.ts": ["in:id <- itemIds", "in:id <- itemIds"],
-  "components/orders/order-timeline.tsx": ["in:id <- userIds"],
   "server/services/inventory.ts": [
     "in:category_id <- filters.categoryIds",
     "in:category_id <- filters.categoryIds",
