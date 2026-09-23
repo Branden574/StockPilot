@@ -108,3 +108,51 @@ describe('InventoryService.listDistinctRacks', () => {
     );
   });
 });
+
+// The app deploys when main is pushed; migrations are applied separately. A
+// deploy that lands before 0357 must not take the Items and Books pages down.
+describe('InventoryService.listDistinctRacks before migration 0357 is applied', () => {
+  function makeSvcWithoutNewFunction(missingCode: string) {
+    const rpcCalls: Array<[string, Record<string, unknown>]> = [];
+    const supabase: any = {
+      rpc: (name: string, args: Record<string, unknown>) => {
+        rpcCalls.push([name, args]);
+        if (name === 'inventory_distinct_racks_for_org') {
+          return Promise.resolve({
+            data: null,
+            error: { code: missingCode, message: 'Could not find the function' },
+          });
+        }
+        return Promise.resolve({ data: ['12', '5-B'], error: null });
+      },
+    };
+    const svc = new InventoryService({
+      supabase,
+      organizationId: 'org-1',
+      userId: 'u1',
+      email: 'a@b.c',
+      role: 'admin',
+    } as any);
+    return { svc, rpcCalls };
+  }
+
+  it.each(['PGRST202', '42883'])(
+    'a missing function (%s) falls back to the one-argument function instead of failing the page',
+    async (code) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const { svc, rpcCalls } = makeSvcWithoutNewFunction(code);
+      await expect(svc.listDistinctRacks({ scope: 'books' })).resolves.toEqual(['5-B', '12']);
+      expect(rpcCalls).toEqual([
+        ['inventory_distinct_racks_for_org', { p_org: 'org-1', p_scope: 'books' }],
+        ['inventory_distinct_racks', { p_scope: 'books' }],
+      ]);
+      warn.mockRestore();
+    },
+  );
+
+  it('any OTHER error still fails, with no fallback', async () => {
+    const { svc, rpcCalls } = makeSvc({ data: null, error: { code: '57014', message: 'timeout' } });
+    await expect(svc.listDistinctRacks({ scope: 'items' })).rejects.toThrow('timeout');
+    expect(rpcCalls).toHaveLength(1);
+  });
+});

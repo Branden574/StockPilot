@@ -1686,6 +1686,29 @@ export class InventoryService {
    * are mirrored into custom_fields.rack_number by migration 0065 so
    * they surface here without the user re-saving.)
    */
+  /**
+   * One scope's racks, from inventory_distinct_racks_for_org (0357) when the
+   * database has it. The app deploys when main is pushed and migrations are
+   * applied separately, so this commit can be live before 0357 is: the racks
+   * read sits in the Items and Books pages' Promise.all, and a missing function
+   * (PGRST202 from PostgREST's schema cache, 42883 from Postgres) would take
+   * both pages down. It falls back to the old one-argument function instead,
+   * which is today's behaviour (RLS-bounded; a user in two organizations sees
+   * both organizations' racks). Remove the fallback in the migration that drops
+   * inventory_distinct_racks.
+   */
+  private async distinctRacksFor(scope: 'items' | 'books') {
+    const res = await this.ctx.supabase.rpc('inventory_distinct_racks_for_org', {
+      p_org: this.ctx.organizationId,
+      p_scope: scope,
+    });
+    if (res.error?.code === 'PGRST202' || res.error?.code === '42883') {
+      console.warn('[racks] migration 0357 not applied yet, using inventory_distinct_racks');
+      return this.ctx.supabase.rpc('inventory_distinct_racks', { p_scope: scope });
+    }
+    return res;
+  }
+
   async listDistinctRacks(opts: { scope: 'items' | 'books' | 'all' }): Promise<string[]> {
     // Server-side DISTINCT via public.inventory_distinct_racks_for_org
     // (migration 0357; the same body as 0066/0068's
@@ -1702,10 +1725,7 @@ export class InventoryService {
     // ordered top-to-bottom the way a user reads the stockroom map
     // without a new migration for a presentation-only fix.
     if (opts.scope !== 'all') {
-      const { data, error } = await this.ctx.supabase.rpc('inventory_distinct_racks_for_org', {
-        p_org: this.ctx.organizationId,
-        p_scope: opts.scope,
-      });
+      const { data, error } = await this.distinctRacksFor(opts.scope);
       if (error) throw new ServiceError('internal_error', error.message);
       return ((data ?? []) as string[]).slice().sort(rackCmp);
     }
@@ -1713,14 +1733,8 @@ export class InventoryService {
     // both and merge client-side. Dedupe + numeric-sort to keep the
     // dropdown identical in shape to the single-scope path.
     const [items, books] = await Promise.all([
-      this.ctx.supabase.rpc('inventory_distinct_racks_for_org', {
-        p_org: this.ctx.organizationId,
-        p_scope: 'items',
-      }),
-      this.ctx.supabase.rpc('inventory_distinct_racks_for_org', {
-        p_org: this.ctx.organizationId,
-        p_scope: 'books',
-      }),
+      this.distinctRacksFor('items'),
+      this.distinctRacksFor('books'),
     ]);
     if (items.error) throw new ServiceError('internal_error', items.error.message);
     if (books.error) throw new ServiceError('internal_error', books.error.message);
