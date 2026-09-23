@@ -5,6 +5,8 @@ import { parseTemplate, type LabelFormat } from '@/components/inventory/label-te
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 interface LabelItem {
   id: string;
   name: string;
@@ -23,10 +25,12 @@ export default async function LabelsPage({
   }>;
 }) {
   const params = await searchParams;
+  // Shape-checked before the read: one malformed id in a hand-edited URL
+  // would fail its whole batch (22P02), which now fails the page.
   const ids = (params.items ?? '')
     .split(',')
     .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+    .filter((s) => UUID_RE.test(s));
   const copies = Math.max(1, Math.min(20, Number(params.copies) || 1));
   const template = parseTemplate(params.template);
   const format: LabelFormat = params.format === 'qr' ? 'qr' : 'barcode';
@@ -47,7 +51,10 @@ export default async function LabelsPage({
         .filter((i): i is NonNullable<typeof i> => Boolean(i))
         .map((i) => ({ id: i.id, name: i.name, sku: i.sku, barcode: i.barcode }));
     } catch (e) {
-      if (!(e instanceof ServiceError)) throw e;
+      // A failed read is not "No items selected": that sent the user back to
+      // pick items that were already picked. byIds batches the ids and throws
+      // internal_error on a failed batch; that reaches the error boundary.
+      if (!(e instanceof ServiceError) || e.code === 'internal_error') throw e;
     }
   }
 
