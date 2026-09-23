@@ -1,8 +1,18 @@
 import 'server-only';
 
-import { isManagerOrAbove } from '@stockpilot/core';
+import {
+  can,
+  CYCLE_COUNT_PAGE_SIZE,
+  isManagerOrAbove,
+  parseCycleCountSearch,
+  parsePageParam,
+  startOfOrgDay,
+  toListPage,
+  type ListPage,
+} from '@stockpilot/core';
 
 import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib/auth/warehouse';
+import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { reportError } from '@/lib/error-reporter';
 
 import { audit } from './audit';
@@ -22,6 +32,10 @@ export type CycleCountStatus = 'in_progress' | 'completed' | 'canceled';
 
 export interface CycleCountRow {
   id: string;
+  /** Permanent per-org reference number (0358), shown as CC-000042 via
+   *  formatCycleCountNumber. Null only against a database that has not run
+   *  0358 yet; render cycleCountReferenceLabel, never a made-up number. */
+  count_number: number | null;
   organization_id: string;
   warehouse_id: string | null;
   status: CycleCountStatus;
@@ -34,6 +48,9 @@ export interface CycleCountRow {
   canceled_at: string | null;
   /** Manager-set assignee responsible for the count. Null = unassigned. */
   assigned_to: string | null;
+  /** 'warehouse' (every active item in scope) or 'selection' (hand-picked;
+   *  a group count is stored as a selection). Migration 0141. */
+  scope?: 'warehouse' | 'selection' | null;
 }
 
 export interface CycleCountLineRow {
@@ -111,6 +128,106 @@ export interface CycleCountDetailPage {
 }
 
 export type CycleCountLineFilter = 'all' | 'uncounted' | 'variance';
+
+/** One count SESSION on the history list (web table, /api/v1 list, phone). */
+export interface CycleCountListItem {
+  id: string;
+  /** Null only before 0358 has run: show the unavailable label, never a guess. */
+  countNumber: number | null;
+  warehouseId: string | null;
+  /** Null when the header has no warehouse, or the viewer cannot read it. */
+  warehouseName: string | null;
+  scope: 'warehouse' | 'selection';
+  status: CycleCountStatus;
+  notes: string | null;
+  startedBy: string | null;
+  /** Who started it (the phone shows this when nobody is assigned). */
+  startedByName: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  canceledAt: string | null;
+  assignedTo: string | null;
+  assigneeName: string | null;
+  /** Lines in the count and lines counted so far, aggregated server-side for
+   *  this page's counts only. */
+  lineTotal: number;
+  lineCounted: number;
+}
+
+/** What the history list can be narrowed by. Every field is optional. */
+export interface CycleCountListQuery {
+  /** Raw search text. "CC-000042" / "cc-42" / "000042" / "42" look up that
+   *  exact number; anything else matches notes and warehouse names literally. */
+  q?: string | null;
+  /** Requested 1-based page. The result carries the EFFECTIVE page. */
+  page?: number | string | null;
+  status?: CycleCountStatus | null;
+  warehouseId?: string | null;
+  /** Only counts assigned to this member. */
+  assignedTo?: string | null;
+  /** Only counts nobody is assigned to. */
+  unassigned?: boolean;
+}
+
+/** Visibility-scoped totals the phone's summary tiles show. They ignore the
+ *  search and filters (they describe the whole list), never the scope. */
+export interface CycleCountListSummary {
+  inProgress: number;
+  /** Counts started since midnight in the workspace's timezone. */
+  startedToday: number;
+  /** That timezone (IANA name): the day "today" means, and the zone the phone
+   *  prints exact start times in. */
+  timezone: string;
+}
+
+export type CycleCountListResult = ListPage<CycleCountListItem> & {
+  /** Present when asked for. Null when the totals could not be read. */
+  summary?: CycleCountListSummary | null;
+};
+
+/** A row of the cycle_counts_page RPC (migration 0358). */
+interface CycleCountPageRpcRow {
+  id: string;
+  count_number: number | string | null;
+  warehouse_id: string | null;
+  warehouse_name: string | null;
+  scope: string | null;
+  status: CycleCountStatus;
+  notes: string | null;
+  started_by: string | null;
+  started_by_name: string | null;
+  started_at: string;
+  completed_at: string | null;
+  canceled_at: string | null;
+  assigned_to: string | null;
+  assignee_name: string | null;
+  line_total: number | string | null;
+  line_counted: number | string | null;
+  total_count: number | string | null;
+  effective_page: number | string | null;
+}
+
+function toListItem(r: CycleCountPageRpcRow): CycleCountListItem {
+  const n = r.count_number == null ? null : Number(r.count_number);
+  return {
+    id: r.id,
+    countNumber: n != null && Number.isSafeInteger(n) && n > 0 ? n : null,
+    warehouseId: r.warehouse_id ?? null,
+    warehouseName: r.warehouse_name ?? null,
+    scope: r.scope === 'selection' ? 'selection' : 'warehouse',
+    status: r.status,
+    notes: r.notes ?? null,
+    startedBy: r.started_by ?? null,
+    startedByName: r.started_by_name ?? null,
+    startedAt: r.started_at,
+    completedAt: r.completed_at ?? null,
+    canceledAt: r.canceled_at ?? null,
+    assignedTo: r.assigned_to ?? null,
+    assigneeName: r.assignee_name ?? null,
+    lineTotal: Number(r.line_total) || 0,
+    lineCounted: Number(r.line_counted) || 0,
+  };
+}
 
 /**
  * Maps stable PG raise-exception codes from post_cycle_count (v2 0079,
@@ -243,59 +360,127 @@ export class CycleCountsService {
     return count ?? 0;
   }
 
-  async list(filters: { assignedTo?: string | null } = {}): Promise<CycleCountRow[]> {
+  /**
+   * ONE page of the cycle-count history (CYCLE_COUNT_PAGE_SIZE sessions),
+   * searched and filtered in the database before paging, newest first
+   * (started_at DESC, id DESC). The one implementation behind the web list
+   * page and GET /api/v1/cycle-counts, so the phone and the browser can never
+   * disagree about which counts exist or what "page 2" holds.
+   *
+   * It replaces list(), which returned the newest 200 and nothing older: a
+   * count past that cap could not be found at all, and the phone's own read
+   * stopped at 50.
+   *
+   * READ GATE: cycle_counts:read, or stock:adjust (someone who can count can
+   * see the counts), the same pair the web page has always checked. No MFA
+   * step-up, exactly like the page and the phone's read before this.
+   *
+   * VISIBILITY (unchanged from list()): a warehouse-restricted member sees
+   * counts in the warehouses they can WRITE to, plus any count with no header
+   * warehouse that is assigned to them personally; managers+ (and 0280
+   * all-warehouse members) see every count in the org.
+   *
+   *   Why the null arm exists (SP-127): a count's header warehouse is null
+   *   both for a true org-wide count AND for a manager's SELECTION whose picks
+   *   span two warehouses (start() only labels the header when every pick
+   *   shares one warehouse). A bare `warehouse_id = ANY(...)` never matches
+   *   NULL (recurring bug pattern #23(b)), so the assignee's own count vanished
+   *   from her web list while her notification link and her phone showed it.
+   *   The arm stays narrow: null header AND assigned to the caller.
+   *
+   * The rule is decided HERE, from getWarehouseAccess, and handed to the
+   * SECURITY INVOKER RPC as a narrowing list, so it can only ever show less
+   * than org-member RLS allows, never more. A member with no writable
+   * warehouse sees no counts (the pre-0358 rule, kept). An access read that
+   * FAILED is an error, not an empty history: "No cycle counts yet" would be a
+   * wrong answer from a read that did not happen.
+   *
+   * With `includeSummary`, the in-progress and started-today totals for the
+   * same visibility are fetched alongside, sharing the one access read.
+   */
+  async listPage(
+    query: CycleCountListQuery = {},
+    opts: { includeSummary?: boolean; now?: Date } = {},
+  ): Promise<CycleCountListResult> {
     assertModuleEnabled(this.ctx, 'cycle_counts');
-    // Warehouse-scoped users (staff/viewer with assignments) only see
-    // counts for warehouses they can write to — PLUS any null-warehouse
-    // count assigned to them personally. Managers+ have hasAllAccess and
-    // see every count.
-    //
-    // Why the null arm exists (SP-127): a count's header warehouse is null
-    // both for a true org-wide count AND for a manager's SELECTION whose
-    // picks span two warehouses (start() only labels the header when every
-    // pick shares one warehouse). This filter used to be a bare
-    // `.in('warehouse_id', writableIds)`, which PostgREST compiles to
-    // `= ANY(...)` — NULL is never a member of that list, so the row was
-    // DROPPED (recurring bug pattern #23(b)). The assignee could open the
-    // count from her notification link (getDetailPage skips the warehouse
-    // gate for a null header) and record lines (assertSessionAccess gates
-    // on the LINES' warehouses, which she can write) — and her phone listed
-    // it, because the mobile list reads under org-member RLS. Only the web
-    // list said she had no work. The arm is narrow on purpose: null header
-    // AND assigned to the caller — it does not widen to counts in
-    // warehouses she cannot read.
+    if (!can(this.ctx, 'cycle_counts:read') && !can(this.ctx, 'stock:adjust')) {
+      throw new ServiceError('forbidden', 'You do not have access to cycle counts.');
+    }
+    const pageSize = CYCLE_COUNT_PAGE_SIZE;
+    const page = parsePageParam(query.page);
+
     const access = await getWarehouseAccess(this.ctx);
-
-    let query = this.ctx.supabase
-      .from('cycle_counts')
-      .select('*')
-      .eq('organization_id', this.ctx.organizationId)
-      .order('started_at', { ascending: false })
-      // 200 rows is multiple years of monthly counts for a typical
-      // org. Pagination + cursor can come later if any org actually
-      // crosses this; the cap exists to bound memory + payload size.
-      .limit(200);
-
-    if (!access.hasAllAccess) {
-      if (access.writableIds.length === 0) return [];
-      // `or` ANDs with every other filter on this query (organization_id,
-      // and the assigned_to filter below), so this only ever narrows.
-      query = query.or(
-        // in-list-bound: the caller's writable warehouses (an org's handful of sites)
-        `warehouse_id.in.(${access.writableIds.join(',')}),` +
-          `and(warehouse_id.is.null,assigned_to.eq.${this.ctx.userId})`,
+    if (!access.hasAllAccess && access.unreadable) {
+      throw new ServiceError(
+        'internal_error',
+        'Could not check which warehouses you can see. Try again.',
       );
     }
-
-    if (filters.assignedTo === null) {
-      // Explicit unassigned filter — used by the "unassigned" view.
-      query = query.is('assigned_to', null);
-    } else if (typeof filters.assignedTo === 'string') {
-      query = query.eq('assigned_to', filters.assignedTo);
+    const seesNothing = !access.hasAllAccess && access.writableIds.length === 0;
+    const scopeIds = access.hasAllAccess ? null : access.writableIds;
+    const emptySummary: CycleCountListSummary = { inProgress: 0, startedToday: 0 };
+    if (seesNothing) {
+      const empty = toListPage<CycleCountListItem>([], { page: 1, pageSize, total: 0 });
+      return opts.includeSummary ? { ...empty, summary: emptySummary } : empty;
     }
-    const { data, error } = await query;
-    if (error) throw new ServiceError('internal_error', error.message);
-    return (data ?? []) as CycleCountRow[];
+
+    const search = parseCycleCountSearch(query.q);
+    const runPage = async (args: {
+      page: number;
+      pageSize: number;
+      filtered: boolean;
+      status?: CycleCountStatus | null;
+      startedFrom?: string | null;
+    }) => {
+      const { data, error } = await this.ctx.supabase.rpc('cycle_counts_page', {
+        p_organization_id: this.ctx.organizationId,
+        p_number: args.filtered && search.kind === 'number' ? search.number : null,
+        p_text: args.filtered && search.kind === 'text' ? search.text : null,
+        p_status: args.status ?? null,
+        p_warehouse_id: args.filtered ? (query.warehouseId ?? null) : null,
+        p_assigned_to: args.filtered ? (query.assignedTo ?? null) : null,
+        p_unassigned: args.filtered && query.unassigned === true,
+        p_started_from: args.startedFrom ?? null,
+        p_scope_warehouse_ids: scopeIds,
+        p_page: args.page,
+        p_page_size: args.pageSize,
+      });
+      if (error) throw new ServiceError('internal_error', error.message);
+      const rows = (data ?? []) as CycleCountPageRpcRow[];
+      const first = rows[0];
+      return {
+        rows,
+        total: first ? Number(first.total_count) || 0 : 0,
+        page: first ? Number(first.effective_page) || 1 : 1,
+      };
+    };
+
+    const listP = runPage({ page, pageSize, filtered: true, status: query.status ?? null });
+    let summaryP: Promise<CycleCountListSummary | null> | null = null;
+    if (opts.includeSummary) {
+      summaryP = (async () => {
+        const tz = await getCachedOrgTimezone(this.ctx.organizationId);
+        const todayStart = startOfOrgDay(opts.now ?? new Date(), tz).toISOString();
+        const [open, today] = await Promise.all([
+          runPage({ page: 1, pageSize: 1, filtered: false, status: 'in_progress' }),
+          runPage({ page: 1, pageSize: 1, filtered: false, startedFrom: todayStart }),
+        ]);
+        return { inProgress: open.total, startedToday: today.total, timezone: tz };
+      })().catch((e: unknown) => {
+        // The tiles are secondary: a failed total becomes "unknown" (null,
+        // shown as a dash), never a zero and never a failed list.
+        void reportError(e, { tag: 'cycle_counts.list.summary', level: 'warning' });
+        return null;
+      });
+    }
+
+    const [list, summary] = await Promise.all([listP, summaryP]);
+    const result = toListPage(list.rows.map(toListItem), {
+      page: list.page,
+      pageSize,
+      total: list.total,
+    });
+    return opts.includeSummary ? { ...result, summary: summary ?? null } : result;
   }
 
   /**

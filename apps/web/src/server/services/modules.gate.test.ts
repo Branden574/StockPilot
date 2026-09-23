@@ -83,7 +83,7 @@ describe('optional-module gates (assertModuleEnabled at service entry points)', 
 
   it('cycle_counts: list throws module_disabled when cycle_counts is off', async () => {
     const svc = new CycleCountsService(ctxWithout('cycle_counts'));
-    await expect(svc.list()).rejects.toMatchObject({ code: 'module_disabled' });
+    await expect(svc.listPage()).rejects.toMatchObject({ code: 'module_disabled' });
   });
 
   it('cycle_counts: start throws module_disabled when cycle_counts is off', async () => {
