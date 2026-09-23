@@ -10,6 +10,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 export interface BundleRow {
@@ -219,17 +220,30 @@ export class BundlesService {
     });
   }
 
+  /**
+   * Newest distribution per bundle. Batched and paged: the bundle list has no
+   * ceiling (one `.in()` past ~215 ids fails), and the unpaged read was cut at
+   * 1000 rows, so a busy org's older bundles showed "never distributed".
+   * Values are deduped, so all of one bundle's rows sit in one batch and the
+   * newest-first pick holds; the `id` tie-break keeps pages stable.
+   */
   private async lastDistributedMap(bundleIds: string[]): Promise<Map<string, string>> {
     if (bundleIds.length === 0) return new Map();
-    const { data, error } = await this.ctx.supabase
-      .from('bundle_distributions')
-      .select('bundle_id, distributed_at')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('bundle_id', bundleIds)
-      .order('distributed_at', { ascending: false });
-    if (error) throw new ServiceError('internal_error', error.message);
+    const ctx = this.ctx;
+    const data = await fetchAllRowsByIds<{ bundle_id: string; distributed_at: string }>(
+      bundleIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('bundle_distributions')
+          .select('bundle_id, distributed_at')
+          .eq('organization_id', ctx.organizationId)
+          .in('bundle_id', batch)
+          .order('distributed_at', { ascending: false })
+          .order('id')
+          .range(from, to),
+    );
     const map = new Map<string, string>();
-    for (const row of data ?? []) {
+    for (const row of data) {
       const bid = row.bundle_id as string;
       if (!map.has(bid)) map.set(bid, row.distributed_at as string);
     }
@@ -341,14 +355,22 @@ export class BundlesService {
       .filter((v): v is string => Boolean(v));
     const warehouseStock = new Map<string, number>();
     if (componentItemIds.length > 0) {
-      const { data: stockRows, error: stockErr } = await this.ctx.supabase
-        .from('inventory_items')
-        .select('id, quantity_on_hand')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('warehouse_id', warehouseId)
-        .in('id', componentItemIds);
-      if (stockErr) throw new ServiceError('internal_error', stockErr.message);
-      for (const row of (stockRows as Array<{ id: string; quantity_on_hand: number }>) ?? []) {
+      // Batched like every id-list read (a bundle's components are capped at
+      // 100 by the form, but older rows are not); a failed batch throws.
+      const ctx = this.ctx;
+      const stockRows = await fetchAllRowsByIds<{ id: string; quantity_on_hand: number }>(
+        componentItemIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('inventory_items')
+            .select('id, quantity_on_hand')
+            .eq('organization_id', ctx.organizationId)
+            .eq('warehouse_id', warehouseId)
+            .in('id', batch)
+            .order('id')
+            .range(from, to),
+      );
+      for (const row of stockRows) {
         warehouseStock.set(row.id, Number(row.quantity_on_hand) || 0);
       }
     }
