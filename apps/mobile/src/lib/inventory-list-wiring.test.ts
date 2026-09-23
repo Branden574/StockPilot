@@ -257,7 +257,7 @@ describe('items list — identical behaviour to books, because the owner compare
     // locally, and its first read ignored its error, so a failure became the
     // zero-uuid sentinel and a silent "No items match.".
     const body = loadBody(inventory);
-    expect(inventory).toContain('item_stock_levels!inner(location_id)`;');
+    expect(inventory).toMatch(/item_stock_levels!inner\(location_id\)` as const;/);
     expect(body).toContain(".in('item_stock_levels.location_id', f.locationIds)");
     expect(body).toContain(".gt('item_stock_levels.quantity', 0)");
     expect(body).not.toContain('placedItemIds');
@@ -271,6 +271,16 @@ describe('items list — identical behaviour to books, because the owner compare
     // that is never empty (an empty one would hide the banner).
     expect(body).toContain('setLoadError(readErrorMessage(error, listStatus))');
     expect(inventory).toMatch(/\{loadError !== null \? \(\s*<Body[^>]*>\s*\{`Could not load items: /);
+  });
+
+  it('derives the location-filter columns from ITEM_COLUMNS, so the two cannot drift', () => {
+    // It was a hand copy of ITEM_COLUMNS plus the embed: a column added to one
+    // and not the other came back undefined, and only while a location filter
+    // was on.
+    expect(inventory).toMatch(
+      /const ITEM_COLUMNS_AT_LOCATIONS = `\$\{ITEM_COLUMNS\},\s*item_stock_levels!inner\(location_id\)` as const;/,
+    );
+    expect(inventory.match(/product_group:product_groups!group_id \(default_counting_unit\)/g)).toHaveLength(1);
   });
 
   it('renders the partial marker on a collapsed header (overflow case only)', () => {

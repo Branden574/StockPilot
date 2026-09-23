@@ -172,13 +172,13 @@ const ITEM_COLUMNS = `id, name, sku, quantity_on_hand, reorder_point, status, ca
  * `count: 'exact'` counts the filtered parents. The embed is NOT aliased so the
  * filter paths can use the table name. The extra `item_stock_levels` field on
  * each row is ignored by the mapper below.
+ *
+ * DERIVED from ITEM_COLUMNS, never copied: a column added to one list and not
+ * the other would come back undefined, and only while a location filter is
+ * on. `as const` keeps it a literal type, so the typed select still parses it.
  */
-const ITEM_COLUMNS_AT_LOCATIONS = `id, name, sku, quantity_on_hand, reorder_point, status, category_id,
-           primary_location_id, charter_id, warehouse_id, updated_at, auto_archived,
-           awaiting_first_receipt, group_id, variant_size,
-           category:categories!category_id (name),
-           product_group:product_groups!group_id (default_counting_unit),
-           item_stock_levels!inner(location_id)`;
+const ITEM_COLUMNS_AT_LOCATIONS = `${ITEM_COLUMNS},
+           item_stock_levels!inner(location_id)` as const;
 
 /** One definition of the Items tab, shared with the web list. */
 const ITEMS_VIEW = inventoryViewPredicate('items');
