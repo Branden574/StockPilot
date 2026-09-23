@@ -47,6 +47,10 @@ export default async function SecuritySettingsPage({
     supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
   ]);
 
+  // Display only (every action on this page re-checks server-side), but an
+  // unreadable list must not read as "not enrolled": that tells an enrolled
+  // user to set up an authenticator they already have. It gets its own state.
+  const factorsUnreadable = Boolean(factorsRes.error);
   const verifiedFactors = (factorsRes.data?.all ?? [])
     .filter((f) => f.status === 'verified')
     .map((f) => ({
@@ -69,8 +73,14 @@ export default async function SecuritySettingsPage({
   // (e.g. signed in before enrolling, or session loaded from a remember-me
   // cookie that didn't go through the MFA challenge), don't show the form
   // — show a step-up CTA pointing at /signin/mfa instead.
-  const passwordChangeBlockedByMfa =
-    verifiedFactors.length > 0 && aalRes.data?.currentLevel !== 'aal2';
+  // With the factor list unreadable, "no verified factors" is not known, so
+  // the session's own assurance data decides (nextLevel is aal2 exactly when
+  // the user has a verified factor): an enrolled user at AAL1 must not be
+  // shown a form the action will refuse.
+  const hasVerifiedFactor = factorsUnreadable
+    ? aalRes.data?.nextLevel === 'aal2'
+    : verifiedFactors.length > 0;
+  const passwordChangeBlockedByMfa = hasVerifiedFactor && aalRes.data?.currentLevel !== 'aal2';
 
   return (
     <div className="container mx-auto max-w-3xl px-4 py-8 sm:px-6">
@@ -88,7 +98,7 @@ export default async function SecuritySettingsPage({
       </div>
 
       <div className="space-y-6">
-        {enrollMode && verifiedFactors.length === 0 && (
+        {enrollMode && !factorsUnreadable && verifiedFactors.length === 0 && (
           <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm dark:border-amber-900/50 dark:bg-amber-950/30">
             <p className="font-medium">Enroll to continue</p>
             <p className="text-muted-foreground mt-0.5 text-xs">
@@ -139,10 +149,33 @@ export default async function SecuritySettingsPage({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <MfaEnrollment
-              verifiedFactors={verifiedFactors}
-              policyRequired={policyRequired}
-            />
+            {factorsUnreadable ? (
+              <div
+                role="alert"
+                className="border-border bg-muted/40 rounded-lg border p-4 text-sm"
+              >
+                <p className="font-medium">Could not load your authenticator status</p>
+                <p className="text-muted-foreground mt-0.5 text-xs">
+                  Nothing about your two-factor setup has changed; this page could not
+                  read it.{' '}
+                  <Link
+                    href={
+                      enrollMode
+                        ? '/dashboard/settings/security?enroll=1'
+                        : '/dashboard/settings/security'
+                    }
+                    className="text-foreground font-medium underline underline-offset-4"
+                  >
+                    Try again
+                  </Link>
+                </p>
+              </div>
+            ) : (
+              <MfaEnrollment
+                verifiedFactors={verifiedFactors}
+                policyRequired={policyRequired}
+              />
+            )}
           </CardContent>
         </Card>
 

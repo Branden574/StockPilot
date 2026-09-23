@@ -10,7 +10,7 @@ import {
   userMovementNote,
 } from '@stockpilot/core';
 
-import { ServiceContext, withContext } from './context';
+import { ServiceContext, ServiceError, withContext } from './context';
 
 export interface ActivityEvent {
   id: string;
@@ -521,6 +521,12 @@ export class ActivityService {
       .limit(auditLimit);
 
     const [movementsRes, auditRes] = await Promise.all([movementsQuery, auditQuery]);
+    // supabase-js resolves a failed query as { data: null, error }. Read as
+    // `data ?? []` that was an item with "no history", which is a different
+    // claim from "its history could not be read". Refuse instead; the item
+    // page turns this into a "could not load" state on the tab.
+    if (movementsRes.error) throw new ServiceError('internal_error', movementsRes.error.message);
+    if (auditRes.error) throw new ServiceError('internal_error', auditRes.error.message);
 
     // Defensive re-cap in JS: `.limit()` above already bounds each result at
     // the query layer, but slicing here again keeps the separate-caps

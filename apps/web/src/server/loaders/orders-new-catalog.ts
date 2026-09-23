@@ -16,6 +16,9 @@ import { unstable_cache } from 'next/cache';
 import type { StorefrontCatalogData } from '@/components/orders/storefront/orders-storefront';
 import type { AisleSummary, CatalogItem, StorefrontCharter } from '@/components/orders/v2/types';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@/lib/supabase/server';
+
+import type { Role } from '@stockpilot/core';
 
 /**
  * Catalog items + thumbnail media merged into the streamed payload.
@@ -25,14 +28,18 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * exists, and 350 inline base64 blurs were dead weight in the RSC
  * payload. Items whose URL failed to sign keep their lqip so cards
  * still blur-up instead of flashing the glyph.
+ *
+ * The media map is warehouse-wide, but it is only ever used to decorate
+ * the items the caller's scope returned; the map itself never leaves
+ * the server.
  */
 export async function loadCatalogBundle(
-  organizationId: string,
+  viewer: CatalogViewer,
   warehouseId: string,
-  userId: string,
 ): Promise<StorefrontCatalogData> {
+  const { organizationId } = viewer;
   const [items, mediaMap] = await Promise.all([
-    loadCatalogItems(organizationId, warehouseId, userId),
+    loadCatalogItems(viewer, warehouseId),
     // A thrown batch-sign failure is deliberately NOT cached (see the
     // map fn); degrade to a photo-less catalog for THIS request and
     // let the next one retry instead of rejecting the Suspense
@@ -107,7 +114,7 @@ export const loadCatalogThumbMapCached = unstable_cache(
     const supabase = createAdminClient();
     // Mirror the catalog loader's item scoping with an inner join on
     // inventory_items so only this warehouse's images get signed.
-    const { data } = await supabase
+    const { data, error: rowsError } = await supabase
       .from('item_images')
       .select(
         'item_id, lqip, thumb_path, storage_path, is_primary, sort_order, item:inventory_items!inner(warehouse_id)',
@@ -116,6 +123,12 @@ export const loadCatalogThumbMapCached = unstable_cache(
       .eq('item.warehouse_id', warehouseId)
       .order('is_primary', { ascending: false })
       .order('sort_order', { ascending: true });
+    // THROW, never an empty map: a failed read cached as {} would blank every
+    // photo for 4h. loadCatalogBundle catches, so this request goes
+    // photo-less and the next one retries.
+    if (rowsError) {
+      throw new Error(`thumb map image rows read failed: ${rowsError.message}`);
+    }
 
     // First row per item wins (is_primary DESC + sort_order ASC).
     const rowByItem = new Map<
@@ -247,10 +260,16 @@ export const loadCatalogThumbMapCached = unstable_cache(
 const loadChartersForWarehouseCached = unstable_cache(
   async (warehouseId: string): Promise<StorefrontCharter[]> => {
     const supabase = createAdminClient();
-    const { data: pairs } = await supabase
+    const { data: pairs, error } = await supabase
       .from('warehouse_charters')
       .select('charter:charters!inner (id, name, code, status, address)')
       .eq('warehouse_id', warehouseId);
+    // THROW, never []: a failed read cached as "this warehouse services no
+    // sites" would hide every delivery site for 5 minutes. The page shows its
+    // error state instead, and the next request retries.
+    if (error) {
+      throw new Error(`[orders-new] warehouse charters read failed: ${error.message}`);
+    }
     return (pairs ?? []).flatMap((p) => {
       const c = Array.isArray((p as { charter?: unknown }).charter)
         ? ((p as { charter: unknown[] }).charter[0] as Record<string, unknown>)
@@ -283,60 +302,206 @@ export async function loadChartersForWarehouse(
   return loadChartersForWarehouseCached(warehouseId);
 }
 
+/* ---- who may see which rows: the catalog scope ---------------------- */
+
 /**
- * Returns a stable string that uniquely identifies a user's
- * category-access pattern. Used as a cache-key component so a
- * restricted viewer's payload doesn't get served to other users
- * (or vice versa). Truth table mirrors
- * `user_can_see_item_category` from migration 0128:
- *
- *   role = manager/admin/owner/staff               → 'ALL'
- *   role = viewer + 0 grants                        → 'ALL' (unrestricted default)
- *   role = viewer + N grants                        → 'v:c1,c2,c3...' (sorted)
- *   no membership                                   → 'NONE'
- *
- * Cached 60s per (org, user) — perf plan P4. These are 1–2 serial
- * admin queries that used to run on EVERY request inside the catalog
- * promise. SECURITY TRADEOFF, documented deliberately: a role change
- * or category-grant change takes up to 60s to affect which CACHED
- * CATALOG VARIANT a user is served (e.g. a just-restricted viewer may
- * see the broader item list for ≤60s). This only scopes the picker
- * payload — RLS still governs every read/write the user actually
- * performs, and order submission re-validates server-side.
+ * Who is asking for the catalog. `OrgContext` (requireOrgContext) satisfies it.
  */
-const loadAccessibleCategoryKeyCached = unstable_cache(
-  async (organizationId: string, userId: string): Promise<string> => {
-    const admin = createAdminClient();
-    const { data: member } = await admin
-      .from('organization_members')
-      .select('role')
-      .eq('user_id', userId)
-      .eq('organization_id', organizationId)
-      .maybeSingle();
-    const role = (member as { role?: string } | null)?.role;
-    if (!role) return 'NONE';
-    if (role !== 'viewer') return 'ALL';
+export interface CatalogViewer {
+  organizationId: string;
+  userId: string;
+  role: Role;
+}
 
-    const { data: rows } = await admin
-      .from('user_category_assignments')
-      .select('category_id')
-      .eq('user_id', userId)
-      .eq('organization_id', organizationId);
-    const ids = ((rows ?? []) as Array<{ category_id: string }>)
-      .map((r) => r.category_id)
-      .sort();
-    if (ids.length === 0) return 'ALL';
-    return 'v:' + ids.join(',');
-  },
-  ['orders-new-accesskey-v1'],
-  { revalidate: 60, tags: ['orders-new-accesskey'] },
-);
+/**
+ * The catalog key of a caller who sees EVERY item row of the warehouse. The one
+ * variant shared by every such caller, and the one the prewarm cron fills.
+ */
+export const FULL_CATALOG_SCOPE_KEY = 'ALL';
+/** The caller sees no item row of the warehouse. */
+const EMPTY_CATALOG_SCOPE_KEY = 'NONE';
 
-async function loadAccessibleCategoryKey(
-  organizationId: string,
-  userId: string,
+/**
+ * Roles whose row level security view of EVERY warehouse in their organization
+ * is the full one, decided by role alone. The two policy helpers say so without
+ * consulting anything else: rls_inv_read_full_warehouse_ids returns every
+ * warehouse of an org where the caller is owner/admin/manager, and
+ * rls_cat_unrestricted_org_ids returns that org for the same roles. The role
+ * comes from the request context, which already read the membership under the
+ * caller's own row level security (so it is accepted, unexpired, and the
+ * account is not disabled, or there is no context). No round trip is added for
+ * these callers.
+ */
+const FULL_VIEW_ROLES: ReadonlySet<Role> = new Set<Role>(['owner', 'admin', 'manager']);
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** What one caller may see of one warehouse's items, as inventory_items_select decides it. */
+interface CatalogScope {
+  /** Items with charter_id IS NULL are visible. */
+  generic: boolean;
+  /** null: items of EVERY charter are visible. Otherwise the charters whose items are. */
+  charterIds: string[] | null;
+  /**
+   * null: every category is visible. Otherwise the only visible categories
+   * (a NULL category is then not visible).
+   */
+  categoryIds: string[] | null;
+}
+
+type RpcResult = { data: unknown; error: { message: string } | null };
+
+function readUuidSet(label: string, res: RpcResult): Set<string> {
+  // A failed read DENIES: no scope is built from a helper that did not answer.
+  if (res.error) {
+    throw new Error(`[orders-new] catalog scope: ${label} failed: ${res.error.message}`);
+  }
+  // `returns setof uuid` arrives over PostgREST as a bare array of strings.
+  if (!Array.isArray(res.data) || res.data.some((v) => typeof v !== 'string' || !UUID_RE.test(v))) {
+    throw new Error(`[orders-new] catalog scope: ${label} returned an unexpected shape`);
+  }
+  return new Set(res.data as string[]);
+}
+
+function readUuidPairs(
+  label: string,
+  res: RpcResult,
+  first: string,
+  second: string,
+): Array<[string, string]> {
+  if (res.error) {
+    throw new Error(`[orders-new] catalog scope: ${label} failed: ${res.error.message}`);
+  }
+  if (!Array.isArray(res.data)) {
+    throw new Error(`[orders-new] catalog scope: ${label} returned an unexpected shape`);
+  }
+  return res.data.map((row) => {
+    const a = (row as Record<string, unknown> | null)?.[first];
+    const b = (row as Record<string, unknown> | null)?.[second];
+    if (typeof a !== 'string' || typeof b !== 'string' || !UUID_RE.test(a) || !UUID_RE.test(b)) {
+      throw new Error(`[orders-new] catalog scope: ${label} returned an unexpected shape`);
+    }
+    return [a, b] as [string, string];
+  });
+}
+
+function scopeKey(scope: CatalogScope): string {
+  if (scope.charterIds === null && scope.categoryIds === null) return FULL_CATALOG_SCOPE_KEY;
+  if (scope.charterIds !== null && !scope.generic && scope.charterIds.length === 0) {
+    return EMPTY_CATALOG_SCOPE_KEY;
+  }
+  if (scope.categoryIds !== null && scope.categoryIds.length === 0) return EMPTY_CATALOG_SCOPE_KEY;
+  const list = (ids: string[] | null) => (ids === null ? '*' : ids.join(','));
+  const g = scope.generic ? 1 : 0;
+  return `scoped:g=${g};c=${list(scope.charterIds)};k=${list(scope.categoryIds)}`;
+}
+
+/**
+ * Parses a catalog key back into the filter it stands for, or null for "no
+ * rows". Strict: every id must be a uuid (they are interpolated into a
+ * PostgREST filter), and anything unrecognised throws rather than being read
+ * as a wider scope.
+ */
+function parseScopeKey(key: string): CatalogScope | null {
+  if (key === FULL_CATALOG_SCOPE_KEY) return { generic: true, charterIds: null, categoryIds: null };
+  if (key === EMPTY_CATALOG_SCOPE_KEY) return null;
+  const m = /^scoped:g=([01]);c=([^;]*);k=([^;]*)$/.exec(key);
+  if (!m) throw new Error('[orders-new] unrecognised catalog scope key');
+  const list = (raw: string): string[] | null => {
+    if (raw === '*') return null;
+    const ids = raw === '' ? [] : raw.split(',');
+    if (ids.some((id) => !UUID_RE.test(id))) {
+      throw new Error('[orders-new] unrecognised catalog scope key');
+    }
+    return ids;
+  };
+  return { generic: m[1] === '1', charterIds: list(m[2]!), categoryIds: list(m[3]!) };
+}
+
+/**
+ * The catalog key for this caller and warehouse: exactly the rows the
+ * inventory_items SELECT policy (0229, helpers restated in 0310) lets the
+ * caller read there, and nothing else.
+ *
+ * The catalog is read with the admin client (so the cached value never
+ * captures a user's cookies) and cached per (org, warehouse, key). This key is
+ * therefore what stands in for row level security, and it used to be too
+ * coarse: every non-viewer got 'ALL', and a viewer's key carried categories
+ * only. A viewer or staff member whose warehouse assignment names a charter
+ * (who under RLS sees generic items plus that charter's) was served every
+ * charter's items, with names, stock, prices and unit cost.
+ *
+ * The policy is
+ *
+ *   ( warehouse_id IN rls_inv_read_full_warehouse_ids()
+ *     OR (charter_id IS NULL AND warehouse_id IN rls_inv_read_assigned_warehouse_ids())
+ *     OR (warehouse_id, charter_id) IN rls_inv_read_warehouse_charter_ids() )
+ *   AND
+ *   ( organization_id IN rls_cat_unrestricted_org_ids()
+ *     OR (organization_id, category_id) IN rls_cat_allowed_category_ids() )
+ *
+ * and this evaluates those SAME five helpers, as the caller (their own cookie
+ * client, so auth.uid() is theirs), for this one org and warehouse. Owner,
+ * admin and manager skip it: for them both halves are true by role (see
+ * FULL_VIEW_ROLES). A staff member or viewer whose view of the warehouse turns
+ * out to be the full one gets the same shared 'ALL' variant as the owner.
+ *
+ * Not cached, on purpose: it is per caller, one parallel wave, and a removed
+ * assignment or category grant must bite on the next request. Any helper that
+ * fails, or answers in a shape this does not understand, THROWS: the
+ * storefront shows its error state rather than a guessed scope.
+ */
+export async function resolveCatalogScopeKey(
+  viewer: CatalogViewer,
+  warehouseId: string,
 ): Promise<string> {
-  return loadAccessibleCategoryKeyCached(organizationId, userId);
+  if (FULL_VIEW_ROLES.has(viewer.role)) return FULL_CATALOG_SCOPE_KEY;
+
+  const supabase = await createClient();
+  // GET: the helpers are STABLE, so PostgREST runs them read-only. Each name
+  // is a literal at its call: the stock-write guard
+  // (inventory-list-invalidation.guard.test.ts) refuses an RPC it cannot name.
+  const get = { get: true } as const;
+  const [fullRes, assignedRes, pairsRes, unrestrictedRes, allowedRes] = await Promise.all([
+    supabase.rpc('rls_inv_read_full_warehouse_ids', undefined, get),
+    supabase.rpc('rls_inv_read_assigned_warehouse_ids', undefined, get),
+    supabase.rpc('rls_inv_read_warehouse_charter_ids', undefined, get),
+    supabase.rpc('rls_cat_unrestricted_org_ids', undefined, get),
+    supabase.rpc('rls_cat_allowed_category_ids', undefined, get),
+  ]);
+  const fullWarehouses = readUuidSet('rls_inv_read_full_warehouse_ids', fullRes);
+  const assignedWarehouses = readUuidSet('rls_inv_read_assigned_warehouse_ids', assignedRes);
+  const charterPairs = readUuidPairs(
+    'rls_inv_read_warehouse_charter_ids',
+    pairsRes,
+    'warehouse_id',
+    'charter_id',
+  );
+  const unrestrictedOrgs = readUuidSet('rls_cat_unrestricted_org_ids', unrestrictedRes);
+  const categoryPairs = readUuidPairs(
+    'rls_cat_allowed_category_ids',
+    allowedRes,
+    'organization_id',
+    'category_id',
+  );
+
+  const sortedUnique = (ids: string[]) => [...new Set(ids)].sort();
+  const fullWarehouse = fullWarehouses.has(warehouseId);
+  return scopeKey({
+    generic: fullWarehouse || assignedWarehouses.has(warehouseId),
+    charterIds: fullWarehouse
+      ? null
+      : sortedUnique(
+          charterPairs.filter(([wh]) => wh === warehouseId).map(([, charter]) => charter),
+        ),
+    categoryIds: unrestrictedOrgs.has(viewer.organizationId)
+      ? null
+      : sortedUnique(
+          categoryPairs
+            .filter(([org]) => org === viewer.organizationId)
+            .map(([, category]) => category),
+        ),
+  });
 }
 
 /**
@@ -346,22 +511,24 @@ async function loadAccessibleCategoryKey(
  * filtered out (phantom rows).
  *
  * Wrapped in unstable_cache (60s TTL, keyed by orgId + warehouseId +
- * accessKey). The accessKey is critical: without it a manager's
- * full-catalog payload would be served to a restricted viewer
- * hitting the same warehouse (RLS is bypassed in here because the
- * admin client is used to dodge cookies). Bumped to v2 prefix when
- * the access-key component was added — cold cache forced.
+ * scope key). The scope key is what keeps one caller's rows from being
+ * served to another: RLS is bypassed in here because the admin client
+ * is used to dodge cookies, so the key must say EXACTLY which rows the
+ * caller's RLS would return (see resolveCatalogScopeKey), and the
+ * loader applies that filter to the query. Callers with the same scope
+ * share one entry; 'ALL' is shared by everyone whose view is the full one.
  *
  * Admin client is used inside the cache so the cached value doesn't
- * capture per-user cookies. The page-level perimeter (requireOrgContext
- * + warehouse list scoping) guarantees only warehouseIds the user
- * is authorized to see ever get passed in.
+ * capture per-user cookies. Never call this with a key that was not
+ * produced by resolveCatalogScopeKey for the caller (or 'ALL' from the
+ * prewarm cron, which serves no one directly).
  *
  * TTL tradeoff (FIX 5): 30s → 60s halves the cache-miss rate for the
  * heaviest per-request work. The cost is availability numbers being up
  * to a minute stale on cards — acceptable because they're advisory:
  * the submit path re-validates against live stock/reservations, and
- * the cap warnings in the cart handle any drift.
+ * the cap warnings in the cart handle any drift. The SCOPE is never
+ * stale: it is resolved live on every request.
  */
 export const loadCatalogItemsCached = unstable_cache(
   async (
@@ -376,12 +543,11 @@ export const loadCatalogItemsCached = unstable_cache(
 );
 
 export async function loadCatalogItems(
-  organizationId: string,
+  viewer: CatalogViewer,
   warehouseId: string,
-  userId: string,
 ): Promise<CatalogItem[]> {
-  const accessKey = await loadAccessibleCategoryKey(organizationId, userId);
-  return loadCatalogItemsCached(organizationId, warehouseId, accessKey);
+  const accessKey = await resolveCatalogScopeKey(viewer, warehouseId);
+  return loadCatalogItemsCached(viewer.organizationId, warehouseId, accessKey);
 }
 
 /** The four flattened rack keys this loader selects, plus what decides between
@@ -432,16 +598,12 @@ async function loadCatalogItemsUncached(
   warehouseId: string,
   accessKey: string,
 ): Promise<CatalogItem[]> {
-  const supabase = createAdminClient();
+  // The scope the key stands for (resolveCatalogScopeKey). null = the caller
+  // sees no row here; 'ALL' = every row, no filter. An unrecognised key throws.
+  const scope = parseScopeKey(accessKey);
+  if (scope === null) return [];
 
-  // Parse the allow-list (if any) from the access key. NONE = no
-  // memberships, return empty payload defensively. ALL = unrestricted,
-  // skip the filter entirely.
-  let allowedCategoryIds: Set<string> | null = null;
-  if (accessKey === 'NONE') return [];
-  if (accessKey.startsWith('v:')) {
-    allowedCategoryIds = new Set(accessKey.slice(2).split(',').filter(Boolean));
-  }
+  const supabase = createAdminClient();
 
   // custom_fields is fetched as FOUR flattened rack keys (PostgREST
   // `->>` extraction) instead of wholesale: the picker only needs the
@@ -471,16 +633,43 @@ async function loadCatalogItemsUncached(
     .order('name', { ascending: true })
     .limit(500);
 
-  // Defense-in-depth: filter by the user's category allow-list at the
-  // admin-client query level too. Restricted viewers never see
-  // null-category items (matches the RLS truth table). Unrestricted
-  // (ALL) callers skip this filter entirely.
-  if (allowedCategoryIds !== null) {
-    if (allowedCategoryIds.size === 0) return [];
-    itemsQuery = itemsQuery.in('category_id', [...allowedCategoryIds]);
+  // RLS is bypassed here, so the scope IS the row filter. It is applied in
+  // SQL, before the limit, exactly where the policy would apply. 'ALL'
+  // callers skip both filters.
+  //
+  // Charter half (the policy's warehouse/charter disjuncts, for this one
+  // warehouse): generic items (charter_id IS NULL) when the caller holds any
+  // assignment here, plus the charters of their charter-scoped assignments.
+  // The two .or() groups (this one and is_bundle's) AND together.
+  if (scope.charterIds !== null) {
+    if (scope.generic && scope.charterIds.length > 0) {
+      itemsQuery = itemsQuery.or(
+        `charter_id.is.null,charter_id.in.(${scope.charterIds.join(',')})`,
+      );
+    } else if (scope.generic) {
+      itemsQuery = itemsQuery.is('charter_id', null);
+    } else if (scope.charterIds.length > 0) {
+      itemsQuery = itemsQuery.in('charter_id', scope.charterIds);
+    } else {
+      return [];
+    }
+  }
+  // Category half: a category-restricted viewer sees only the granted
+  // categories, and never a NULL category (IN drops NULLs, as the policy's
+  // pair probe does).
+  if (scope.categoryIds !== null) {
+    if (scope.categoryIds.length === 0) return [];
+    itemsQuery = itemsQuery.in('category_id', scope.categoryIds);
   }
 
-  const { data: itemsData } = await itemsQuery;
+  // THROW-DON'T-CACHE: every read below throws on error, so unstable_cache
+  // stores nothing and the next request retries. Read as data, a failed items
+  // read was an empty catalog for 60 s, and a failed reservations read was
+  // "nothing reserved", which overstated available-to-promise on every card.
+  const { data: itemsData, error: itemsError } = await itemsQuery;
+  if (itemsError) {
+    throw new Error(`[orders-new] catalog items read failed: ${itemsError.message}`);
+  }
 
   const items = (itemsData ?? []) as unknown as Array<{
     id: string;
@@ -524,7 +713,7 @@ async function loadCatalogItemsUncached(
           .select('id, name')
           .eq('organization_id', organizationId)
           .in('id', categoryIds)
-      : Promise.resolve({ data: [] as Array<{ id: string; name: string }> }),
+      : Promise.resolve({ data: [] as Array<{ id: string; name: string }>, error: null }),
     charterIds.length > 0
       ? supabase
           .from('charters')
@@ -533,8 +722,20 @@ async function loadCatalogItemsUncached(
           .in('id', charterIds)
       : Promise.resolve({
           data: [] as Array<{ id: string; name: string; code: string | null }>,
+          error: null,
         }),
   ]);
+  if (rsRes.error) {
+    throw new Error(`[orders-new] catalog reservations read failed: ${rsRes.error.message}`);
+  }
+  if (categoriesRes.error) {
+    throw new Error(
+      `[orders-new] catalog category names read failed: ${categoriesRes.error.message}`,
+    );
+  }
+  if (chartersRes.error) {
+    throw new Error(`[orders-new] catalog charter names read failed: ${chartersRes.error.message}`);
+  }
 
   const reservedByItem = new Map<string, number>();
   for (const row of (rsRes.data ?? []) as Array<{ item_id: string; quantity: number }>) {
@@ -638,8 +839,9 @@ export interface PrewarmPairResult {
 
 /**
  * Warms the caches a real visitor would hit, for one org×warehouse
- * pair. Uses accessKey 'ALL' — the variant every manager/admin/staff
- * request resolves to (restricted-viewer variants are per-user and
+ * pair. Uses the 'ALL' key — the variant every owner/admin/manager
+ * request resolves to, and every staff member or viewer whose RLS view
+ * of the warehouse is the full one (scoped variants are per scope and
  * not worth prewarming). Called by the prewarm cron so the first human
  * after a deploy lands on warm caches instead of the sign-storm path.
  */
@@ -648,7 +850,7 @@ export async function prewarmOrdersNewCatalog(
   warehouseId: string,
 ): Promise<PrewarmPairResult> {
   const t0 = Date.now();
-  const items = await loadCatalogItemsCached(organizationId, warehouseId, 'ALL');
+  const items = await loadCatalogItemsCached(organizationId, warehouseId, FULL_CATALOG_SCOPE_KEY);
   const t1 = Date.now();
   let mediaCount = 0;
   let thumbMapError: string | null = null;
