@@ -52,14 +52,6 @@
   "server/actions/item-visibility.ts": ["in:id <- ids", "in:id <- ids"],
   "server/actions/profile.ts": ["in:organization_id <- ownedOrgIds"],
   "server/connectors/drainer.ts": ["in:organization_id <- orgIds"],
-  "server/loaders/orders-new-catalog.ts": [
-    "in:category_id <- scope.categoryIds",
-    "in:charter_id <- scope.charterIds",
-    "in:id <- categoryIds",
-    "in:id <- charterIds",
-    "in:item_id <- chunk",
-    "template:charter_id.is.null,charter_id.in.( <- scope.charterIds.join(',')"
-  ],
   "server/services/inventory.ts": [
     "in:category_id <- filters.categoryIds",
     "in:category_id <- filters.categoryIds",
