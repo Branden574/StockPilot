@@ -96,10 +96,27 @@ function commit(view: ReturnType<typeof render>, pathname: string, search = '', 
 }
 
 /**
- * Renders `ui` into a root driven by React's own scheduler instead of act():
- * the fake timers run its tasks and an async advance lets its microtasks run.
- * The root is unmounted even when an assertion fails, so a stuck transition
- * cannot leak into the next test.
+ * React's scheduler runs its tasks on the REAL clock, not the fake one: it
+ * captures setImmediate when it loads (scheduler.development.js prefers it),
+ * and it loads with this file's imports, before beforeEach installs the fake
+ * timers. So a passive effect (the frame arming its 400 ms timer) and a render
+ * scheduled by a timer's state update each wait for a real macrotask. Under a
+ * busy machine (the full suite in parallel) that task can land after the test
+ * has already advanced the fake clock, and the skeleton never shows.
+ * `reactTasks` yields real macrotasks until `done()` holds, a bounded number
+ * of times. Captured here, at module load, while setImmediate is still real.
+ */
+const realSetImmediate = globalThis.setImmediate;
+async function reactTasks(done: () => boolean, max = 200): Promise<void> {
+  for (let i = 0; i < max && !done(); i += 1) {
+    await new Promise<void>((resolve) => realSetImmediate(resolve));
+  }
+}
+
+/**
+ * Renders `ui` into a root driven by React's own scheduler instead of act()
+ * (see reactTasks for how its tasks run). The root is unmounted even when an
+ * assertion fails, so a stuck transition cannot leak into the next test.
  */
 async function withRealScheduler(ui: React.ReactNode, body: () => Promise<void>) {
   const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
@@ -278,11 +295,16 @@ describe('PendingRouteFrame', () => {
         </React.Suspense>
       </Frame>,
       async () => {
+        const timersBefore = vi.getTimerCount();
         React.startTransition(() => {
           recordRouterTransitionStart('/dashboard/orders', 'push');
           suspend.current(never);
         });
+        // The frame arms its 400 ms (and 30 s) timers in an effect, on a real task.
+        await reactTasks(() => vi.getTimerCount() > timersBefore);
         await vi.advanceTimersByTimeAsync(400);
+        // The timer's state update renders on a real task too.
+        await reactTasks(() => skeleton() !== null);
         expect(skeleton()).not.toBeNull();
         // The transition is still pending: the page it was rendering never showed.
         expect(screen.queryByText('fallback')).toBeNull();
