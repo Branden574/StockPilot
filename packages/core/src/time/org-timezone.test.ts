@@ -4,6 +4,7 @@ import {
   ORG_TIMEZONE_DEFAULT,
   formatOrgDateTime,
   resolveOrgTimezone,
+  startOfOrgDay,
 } from './org-timezone';
 
 /**
@@ -109,6 +110,46 @@ describe('resolveOrgTimezone — a stored zone must never take a screen down', (
     // above is not passing because everything renders the same.
     expect(formatOrgDateTime(instant, opts, 'America/New_York')).not.toBe(
       formatOrgDateTime(instant, opts, ORG_TIMEZONE_DEFAULT),
+    );
+  });
+});
+
+describe('startOfOrgDay', () => {
+  it('returns local midnight in the org zone, as a UTC instant', () => {
+    // 2026-09-23 10:00 UTC is 03:00 PDT (UTC-7): the LA day began 07:00 UTC.
+    expect(startOfOrgDay(new Date('2026-09-23T10:00:00Z'), 'America/Los_Angeles').toISOString()).toBe(
+      '2026-09-23T07:00:00.000Z',
+    );
+    // 2026-09-23 03:00 UTC is still Sep 22 in LA (20:00 PDT).
+    expect(startOfOrgDay(new Date('2026-09-23T03:00:00Z'), 'America/Los_Angeles').toISOString()).toBe(
+      '2026-09-22T07:00:00.000Z',
+    );
+  });
+
+  it('handles days that start in standard time and days next to a DST change', () => {
+    // Winter: PST is UTC-8.
+    expect(startOfOrgDay(new Date('2026-01-15T20:00:00Z'), 'America/Los_Angeles').toISOString()).toBe(
+      '2026-01-15T08:00:00.000Z',
+    );
+    // 2026-03-08 is the US spring-forward day; its midnight is still PST.
+    expect(startOfOrgDay(new Date('2026-03-08T20:00:00Z'), 'America/Los_Angeles').toISOString()).toBe(
+      '2026-03-08T08:00:00.000Z',
+    );
+    // 2026-11-01 is the fall-back day; its midnight is still PDT.
+    expect(startOfOrgDay(new Date('2026-11-01T20:00:00Z'), 'America/Los_Angeles').toISOString()).toBe(
+      '2026-11-01T07:00:00.000Z',
+    );
+  });
+
+  it('works east of UTC and for UTC itself, and falls back on a bad zone', () => {
+    expect(startOfOrgDay(new Date('2026-09-23T20:00:00Z'), 'Asia/Tokyo').toISOString()).toBe(
+      '2026-09-23T15:00:00.000Z',
+    );
+    expect(startOfOrgDay(new Date('2026-09-23T20:00:00Z'), 'UTC').toISOString()).toBe(
+      '2026-09-23T00:00:00.000Z',
+    );
+    expect(startOfOrgDay(new Date('2026-09-23T10:00:00Z'), 'Not/AZone').toISOString()).toBe(
+      '2026-09-23T07:00:00.000Z',
     );
   });
 });
