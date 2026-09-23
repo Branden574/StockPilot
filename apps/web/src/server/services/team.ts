@@ -121,6 +121,9 @@ export class TeamService {
             .select('user_id, warehouse_id, charter_id, is_primary')
             .eq('organization_id', ctx.organizationId)
             .in('user_id', batch)
+            // assigned_at first: "first by assignment order" is the fallback
+            // pick below. id keeps the paging stable.
+            .order('assigned_at', { ascending: true })
             .order('id')
             .range(from, to),
       );
