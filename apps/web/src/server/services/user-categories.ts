@@ -29,6 +29,28 @@ export class UserCategoriesService {
    * by the orders/new picker cache-key hash and by `InventoryService.list`
    * for defense-in-depth filtering.
    */
+  /**
+   * The category grants of a caller ALREADY KNOWN to be a viewer in this
+   * organization (ctx.role, from the request context's membership read under
+   * the caller's own RLS). Same answer as getAccessibleCategoryIds for a
+   * viewer, without re-reading the membership row: one read instead of two in
+   * series, so the list's defensive filter can be read alongside the warehouse
+   * access instead of after it. A failed read THROWS (never "no grants", which
+   * would mean unrestricted); callers that treat this filter as
+   * defense-in-depth catch it and leave visibility to RLS.
+   */
+  async getGrantedCategoryIdsForViewer(userId: string): Promise<Set<string> | null> {
+    const { data: rows, error } = await this.ctx.supabase
+      .from('user_category_assignments')
+      .select('category_id')
+      .eq('user_id', userId)
+      .eq('organization_id', this.ctx.organizationId);
+    if (error) throw new Error(`user_category_assignments read failed: ${error.message}`);
+    const list = ((rows ?? []) as Array<{ category_id: string }>).map((r) => r.category_id);
+    if (list.length === 0) return null; // viewer with no grants = unrestricted
+    return new Set(list);
+  }
+
   async getAccessibleCategoryIds(userId: string): Promise<Set<string> | null> {
     const { data: member } = await this.ctx.supabase
       .from('organization_members')
