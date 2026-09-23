@@ -8,11 +8,6 @@
   ],
   "app/api/v1/public/order-requests/route.ts": ["in:id <- itemIds", "in:id <- itemIds"],
   "components/orders/order-timeline.tsx": ["in:id <- userIds"],
-  "lib/ai/tools.ts": [
-    "in:id <- Array.from(actorIds)",
-    "in:id <- rows.map((r) => r.id)",
-    "in:id <- userIds"
-  ],
   "server/services/inventory.ts": [
     "in:category_id <- filters.categoryIds",
     "in:category_id <- filters.categoryIds",
