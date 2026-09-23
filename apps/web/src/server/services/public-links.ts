@@ -3,6 +3,7 @@ import 'server-only';
 import { revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
 
@@ -14,6 +15,7 @@ import {
   type ServiceContext,
 } from './context';
 import { audit } from './audit';
+import { fetchAllRowsByIds, writeInIdBatches } from './lib/fetch-by-ids';
 
 /**
  * Public request links — admin-side CRUD for the per-link curated public
@@ -554,15 +556,23 @@ export class PublicLinksService {
     }
 
     // Org check on every item id — the RLS with-check re-enforces this via
-    // item_in_org, but a friendly error beats a bare 42501.
-    const { data: items, error: itemsErr } = await this.ctx.supabase
-      .from('inventory_items')
-      .select('id')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('id', ids)
-      .is('deleted_at', null);
-    if (itemsErr) throw new ServiceError('internal_error', itemsErr.message);
-    const found = new Set(((items ?? []) as Array<{ id: string }>).map((i) => i.id));
+    // item_in_org, but a friendly error beats a bare 42501. Batched: up to
+    // 1000 ids, and one `.in()` past ~215 fails (414 locally, "fetch failed"
+    // in production). A failed batch throws rather than reading as "not found".
+    const ctx = this.ctx;
+    const items = await fetchAllRowsByIds<{ id: string }>(
+      ids,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('inventory_items')
+          .select('id')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .is('deleted_at', null)
+          .order('id')
+          .range(from, to),
+    );
+    const found = new Set(items.map((i) => i.id));
     const missing = ids.filter((id) => !found.has(id));
     if (missing.length > 0) {
       throw new ServiceError('not_found', 'One or more items were not found.');
@@ -597,36 +607,61 @@ export class PublicLinksService {
     return { added: ids.length };
   }
 
-  async removeEntries(linkId: string, itemIds: string[]): Promise<{ removed: number }> {
+  /**
+   * Removes items from a link's catalog, in batches of 100 (one `.in()` of up
+   * to 1000 ids failed outright). One batch at a time; a failure stops the
+   * rest. When part of the change committed, that part is still audited and
+   * the public catalog revalidated before the failure is reported, and
+   * `failed` counts what was left on the link so the editor can say so. A
+   * failure before anything committed throws, as before.
+   */
+  async removeEntries(
+    linkId: string,
+    itemIds: string[],
+  ): Promise<{ removed: number; failed: number }> {
     this.gate();
     await this.assertLinkInOrg(linkId);
     const ids = [...new Set(itemIds)];
-    if (ids.length === 0) return { removed: 0 };
+    if (ids.length === 0) return { removed: 0, failed: 0 };
     if (ids.length > 1000) {
       throw new ServiceError('validation_error', 'Too many items in one change (max 1000).');
     }
-    const { error } = await this.ctx.supabase
-      .from('public_link_catalog_entries')
-      .delete()
-      .eq('link_id', linkId)
-      .in('item_id', ids);
-    if (error) throw new ServiceError('internal_error', error.message);
+    const ctx = this.ctx;
+    const write = await writeInIdBatches(ids, (batch) =>
+      ctx.supabase
+        .from('public_link_catalog_entries')
+        .delete()
+        .eq('link_id', linkId)
+        .in('item_id', batch),
+    );
+    if (write.error !== null && write.written.length === 0) {
+      throw new ServiceError('internal_error', write.error);
+    }
+    const removedIds = write.written;
     await audit(
       {
-        event: ids.length === 1 ? 'public_catalog.entry_removed' : 'public_catalog.bulk_change',
+        event:
+          removedIds.length === 1 ? 'public_catalog.entry_removed' : 'public_catalog.bulk_change',
         entityType: 'public_request_link',
         entityId: linkId,
         extra: {
           link_id: linkId,
           action: 'entries_removed',
-          item_id: ids.length === 1 ? ids[0] : null,
-          item_ids: ids,
+          item_id: removedIds.length === 1 ? removedIds[0] : null,
+          item_ids: removedIds,
         },
       },
       this.ctx,
     );
     revalidateTag(publicCatalogTag(linkId), 'max');
-    return { removed: ids.length };
+    if (write.error !== null) {
+      void reportError(new Error('Removing catalog entries stopped partway'), {
+        tag: 'public_links.remove_entries.partial',
+        organizationId: this.ctx.organizationId,
+        extra: { removed: removedIds.length, failed: write.notWritten.length, detail: write.error },
+      });
+    }
+    return { removed: removedIds.length, failed: write.notWritten.length };
   }
 
   /**
