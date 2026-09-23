@@ -179,6 +179,40 @@ describe('listByIdsForExport', () => {
     expect(out.total).toBe(1200);
   });
 
+  // The export of a selection used to go through list(), whose grant filter
+  // rode in the same URL as the id list. Here a viewer's grants (up to 500)
+  // never enter the URL; the rows are filtered after the read, and the
+  // viewer's readable warehouses scope every batch.
+  it('a viewer with 150 grants: no category list in any batch, rows outside the grants dropped and not counted', async () => {
+    grants.current = new Set(ids(150, 'c'));
+    access.current = { ...access.current, hasAllAccess: false, readableIds: ['wh-1'] };
+    const lists: string[][] = [];
+    const stub = makeSupabaseStub({
+      'inventory_items.select': (call) => {
+        const list = inList(call, 'id') ?? [];
+        lists.push(list);
+        // Every third item sits in a category the viewer was not granted.
+        return {
+          data: list.map((id) =>
+            itemRow(id, {
+              category_id: Number(id.slice(-4)) % 3 === 0 ? 'not-granted' : uuid(7, 'c'),
+            }),
+          ),
+          error: null,
+        };
+      },
+    });
+    const out = await svc(stub.client, 'viewer').listByIdsForExport(ids(250));
+    expect(lists.map((l) => l.length)).toEqual([100, 100, 50]);
+    for (const call of stub.chainArgsAll.get('inventory_items.select') ?? []) {
+      expect(call.some((a) => a[0] === 'category_id')).toBe(false);
+      expect(call).toContainEqual(['warehouse_id', ['wh-1']]);
+    }
+    const kept = ids(250).filter((_, i) => i % 3 !== 0);
+    expect(out.total).toBe(kept.length);
+    expect(new Set(out.items.map((i) => i.id))).toEqual(new Set(kept));
+  });
+
   it('throws when a batch fails, never a short export', async () => {
     const { stub } = exportStub({ n: 250, failBatch: 2 });
     await expect(svc(stub.client).listByIdsForExport(ids(250))).rejects.toMatchObject({

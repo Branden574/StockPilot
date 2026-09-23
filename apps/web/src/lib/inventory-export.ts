@@ -6,7 +6,11 @@ import { ChartersService } from '@/server/services/charters';
 import { LocationsService } from '@/server/services/locations';
 import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
-import { InventoryService, type ItemListSort } from '@/server/services/inventory';
+import {
+  InventoryService,
+  type InventoryExportItemRow,
+  type ItemListSort,
+} from '@/server/services/inventory';
 import { formatCharterCell } from '@/lib/charter-display';
 import { readBookStorage } from '@/lib/book-storage';
 
@@ -100,34 +104,44 @@ export async function buildInventoryExportSourceRows(
   args: BuildExportArgs,
 ): Promise<InventoryExportSourceResult> {
   const inv = new InventoryService(ctx);
-  const list = await inv.list({
-    itemType: args.itemType,
-    limit: ROW_CAP,
-    ...(args.scope === 'selected'
-      ? // expected:'any' (mig 0277): an explicitly-selected row must export
-        // whether or not it is still awaiting its first receipt — the ids
-        // narrowing IS the user's filter, so the default flagged-row
-        // exclusion would silently drop rows they checked.
-        { ids: args.ids ?? [], status: 'all' as const, expected: 'any' as const }
-      : args.scope === 'filtered'
-        ? {
-            q: args.filters?.q,
-            // The Expected view spans lifecycles (the pages pass
-            // status:'all' to list() when ?expected=1), so its export
-            // does too — otherwise an archived flagged row shows in the
-            // view but vanishes from its export.
-            status: args.filters?.expected ? ('all' as const) : (args.filters?.status ?? 'active'),
-            lowStock: args.filters?.stock === 'low',
-            outOfStock: args.filters?.stock === 'out',
-            expected: args.filters?.expected === true,
-            sort: args.filters?.sort ?? 'updated_desc',
-            categoryIds: args.filters?.categoryIds ?? [],
-            locationIds: args.filters?.locationIds ?? [],
-            charterIds: args.filters?.charterIds ?? [],
-            warehouseId: args.filters?.warehouseId ?? null,
-          }
-        : { status: 'active' as const }),
-  });
+  // A selection can be up to 10,000 ids (the export routes' schema), far past
+  // what one `.in()` can carry in a URL: list() refuses more than 100 ids, so
+  // the selected scope reads through listByIdsForExport, which batches them.
+  // It keeps list()'s posture for this scope: every lifecycle and expected
+  // row (the ids ARE the user's filter, so the default flagged-row exclusion
+  // would silently drop rows they checked), newest first, at most 1000 rows,
+  // and `total` counts every selected row so `truncated` says when some were
+  // left out.
+  const list: {
+    items: Omit<InventoryExportItemRow, 'is_rental' | 'created_by' | 'updated_by'>[];
+    total: number;
+  } =
+    args.scope === 'selected'
+      ? await inv.listByIdsForExport(args.ids ?? [], { itemType: args.itemType })
+      : await inv.list({
+          itemType: args.itemType,
+          limit: ROW_CAP,
+          ...(args.scope === 'filtered'
+            ? {
+                q: args.filters?.q,
+                // The Expected view spans lifecycles (the pages pass
+                // status:'all' to list() when ?expected=1), so its export
+                // does too — otherwise an archived flagged row shows in the
+                // view but vanishes from its export.
+                status: args.filters?.expected
+                  ? ('all' as const)
+                  : (args.filters?.status ?? 'active'),
+                lowStock: args.filters?.stock === 'low',
+                outOfStock: args.filters?.stock === 'out',
+                expected: args.filters?.expected === true,
+                sort: args.filters?.sort ?? 'updated_desc',
+                categoryIds: args.filters?.categoryIds ?? [],
+                locationIds: args.filters?.locationIds ?? [],
+                charterIds: args.filters?.charterIds ?? [],
+                warehouseId: args.filters?.warehouseId ?? null,
+              }
+            : { status: 'active' as const }),
+        });
 
   // FAIL-CLOSED lookups — each independently degrades to an empty map.
   const safe = async <T>(p: Promise<T[]>): Promise<T[]> => {

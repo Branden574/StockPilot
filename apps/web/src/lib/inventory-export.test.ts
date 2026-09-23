@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const listMock = vi.fn();
+const listByIdsMock = vi.fn();
 const categoriesList = vi.fn();
 const locationsList = vi.fn();
 const suppliersList = vi.fn();
@@ -9,7 +10,7 @@ const chartersList = vi.fn();
 
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: vi.fn().mockImplementation(function () {
-    return { list: listMock };
+    return { list: listMock, listByIdsForExport: listByIdsMock };
   }),
 }));
 vi.mock('@/server/services/categories', () => ({
@@ -77,7 +78,7 @@ const sampleItem = {
 
 beforeEach(() => {
   vi.mocked(InventoryService).mockImplementation(function () {
-    return { list: listMock } as never;
+    return { list: listMock, listByIdsForExport: listByIdsMock } as never;
   });
   vi.mocked(CategoriesService).mockImplementation(function () {
     return { list: categoriesList } as never;
@@ -95,12 +96,14 @@ beforeEach(() => {
     return { list: chartersList } as never;
   });
   listMock.mockReset();
+  listByIdsMock.mockReset();
   categoriesList.mockReset();
   locationsList.mockReset();
   suppliersList.mockReset();
   warehousesList.mockReset();
   chartersList.mockReset();
   listMock.mockResolvedValue({ items: [sampleItem], total: 1 });
+  listByIdsMock.mockResolvedValue({ items: [sampleItem], total: 1 });
   categoriesList.mockResolvedValue([{ id: 'c1', name: 'Electronics' }]);
   locationsList.mockResolvedValue([{ id: 'l1', name: 'DC4' }]);
   suppliersList.mockResolvedValue([{ id: 's1', name: 'Acme' }]);
@@ -133,16 +136,34 @@ describe('buildInventoryExportRows', () => {
     expect(r.category).toBe('Electronics'); // others unaffected
   });
 
-  it('passes ids through for scope=selected', async () => {
+  // A selection can be up to 10,000 ids; list() refuses more than one `.in()`
+  // batch (100), so the selected scope reads through listByIdsForExport,
+  // which batches them and keeps every lifecycle and expected row (the ids
+  // ARE the filter, mig 0277).
+  it('passes ids through for scope=selected, to the batched id read (not list())', async () => {
     await buildInventoryExportRows(ctx, { scope: 'selected', itemType: 'all', ids: ['i1', 'i2'] });
-    expect(listMock).toHaveBeenCalledWith(expect.objectContaining({ ids: ['i1', 'i2'] }));
+    expect(listByIdsMock).toHaveBeenCalledWith(['i1', 'i2'], { itemType: 'all' });
+    expect(listMock).not.toHaveBeenCalled();
   });
 
-  it("scope=selected uses expected:'any' so explicitly-selected flagged rows are NOT dropped (mig 0277)", async () => {
-    await buildInventoryExportRows(ctx, { scope: 'selected', itemType: 'all', ids: ['i1'] });
-    expect(listMock).toHaveBeenCalledWith(
-      expect.objectContaining({ ids: ['i1'], status: 'all', expected: 'any' }),
-    );
+  it('a 1200-item selection is read in full and reported as truncated past the 1000-row cap', async () => {
+    const ids = Array.from({ length: 1200 }, (_, i) => `i${i}`);
+    listByIdsMock.mockResolvedValueOnce({
+      items: Array.from({ length: 1000 }, (_, i) => ({ ...sampleItem, id: `i${i}` })),
+      total: 1200,
+    });
+    const res = await buildInventoryExportRows(ctx, { scope: 'selected', itemType: 'book', ids });
+    expect(listByIdsMock).toHaveBeenCalledWith(ids, { itemType: 'book' });
+    expect(res.rows).toHaveLength(1000);
+    expect(res.total).toBe(1200);
+    expect(res.truncated).toBe(true);
+  });
+
+  it('a failed selected read fails the export (never an empty file)', async () => {
+    listByIdsMock.mockRejectedValueOnce(new Error('internal_error'));
+    await expect(
+      buildInventoryExportRows(ctx, { scope: 'selected', itemType: 'all', ids: ['i1'] }),
+    ).rejects.toThrow('internal_error');
   });
 
   it('scope=filtered forwards the page\'s ?expected=1 (the Expected chip view) and spans lifecycles', async () => {
@@ -335,15 +356,14 @@ describe('buildInventoryExportSourceRows', () => {
     expect(Object.keys(res.rows[0]!).sort()).toEqual([...INVENTORY_EXPORT_HEADERS].sort());
   });
 
-  it('uses the same list() arguments as the flat builder for every scope', async () => {
+  it('uses the same id read as the flat builder for the selected scope', async () => {
     await buildInventoryExportSourceRows(ctx, {
       scope: 'selected',
       itemType: 'all',
       ids: ['i1'],
     });
-    expect(listMock).toHaveBeenCalledWith(
-      expect.objectContaining({ ids: ['i1'], status: 'all', expected: 'any' }),
-    );
+    expect(listByIdsMock).toHaveBeenCalledWith(['i1'], { itemType: 'all' });
+    expect(listMock).not.toHaveBeenCalled();
   });
 });
 
