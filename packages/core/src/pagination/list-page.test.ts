@@ -29,14 +29,17 @@ describe('parsePageParam', () => {
   });
 
   it('falls back to page 1 for anything unreadable', () => {
-    for (const bad of [undefined, null, '', '0', '-1', '1.5', 'abc', '2abc', '1e3', {}, [], NaN, 0, -4]) {
+    for (const bad of [undefined, null, '', '0', '-1', '1.5', 'abc', '2abc', '1e3', '٣', {}, [], NaN, 0, -4]) {
       expect(parsePageParam(bad)).toBe(1);
     }
   });
 
-  it('caps absurd pages instead of doing unbounded arithmetic', () => {
+  it('caps absurd pages at the last page instead of doing unbounded arithmetic', () => {
     expect(parsePageParam('999999999')).toBe(MAX_PAGE_NUMBER);
-    expect(parsePageParam('99999999999999999999')).toBe(1);
+    expect(parsePageParam('9999999999')).toBe(MAX_PAGE_NUMBER);
+    expect(parsePageParam('99999999999999999999')).toBe(MAX_PAGE_NUMBER);
+    expect(parsePageParam('0000000000002')).toBe(2);
+    expect(parsePageParam('000')).toBe(1);
   });
 });
 

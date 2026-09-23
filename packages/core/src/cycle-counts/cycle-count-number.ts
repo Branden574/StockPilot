@@ -47,14 +47,18 @@ export type CycleCountSearch =
 
 /**
  * Trim, fold compatibility forms (full-width digits and letters, the
- * full-width hyphen), drop control characters, collapse runs of whitespace and
- * cap the length. Counted in code points so a cap never splits an emoji or
+ * full-width hyphen), drop invisible format characters and control
+ * characters, collapse runs of whitespace and cap the length. Counted in code points so a cap never splits an emoji or
  * other surrogate pair.
  */
 export function normalizeCycleCountSearch(raw: string | null | undefined): string {
   if (typeof raw !== 'string') return '';
   const folded = raw
     .normalize('NFKC')
+    // Invisible format characters a paste carries along (zero-width space,
+    // direction marks, soft hyphen, word joiner) would turn "CC-000042" into
+    // text that matches nothing.
+    .replace(/\p{Cf}/gu, '')
     .replace(/\p{Cc}/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();

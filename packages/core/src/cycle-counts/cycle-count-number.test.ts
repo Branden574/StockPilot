@@ -54,6 +54,12 @@ describe('parseCycleCountSearch', () => {
     expect(parseCycleCountSearch('CC−42')).toMatchObject({ kind: 'number', number: 42 });
   });
 
+  it('ignores invisible characters a paste carries along', () => {
+    for (const q of ['CC-000042\u200B', '\u200ECC-000042', 'CC-000042\u2060', 'CC\u00AD-42', '\uFEFF42']) {
+      expect(parseCycleCountSearch(q)).toMatchObject({ kind: 'number', number: 42 });
+    }
+  });
+
   it('keeps numbers above six digits intact', () => {
     expect(parseCycleCountSearch('CC-1234567')).toMatchObject({ kind: 'number', number: 1234567 });
   });

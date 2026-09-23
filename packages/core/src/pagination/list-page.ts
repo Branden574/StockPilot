@@ -33,10 +33,13 @@ export const MAX_PAGE_NUMBER = 1_000_000;
 export function parsePageParam(raw: unknown): number {
   const first = Array.isArray(raw) ? raw[0] : raw;
   const text = typeof first === 'number' ? String(first) : typeof first === 'string' ? first.trim() : '';
-  if (!/^\d{1,9}$/.test(text)) return 1;
-  const n = Number(text);
-  if (!Number.isSafeInteger(n) || n < 1) return 1;
-  return Math.min(n, MAX_PAGE_NUMBER);
+  if (!/^\d+$/.test(text)) return 1;
+  // Any run of digits is a page; one too large to be real is the last page
+  // (the server clamps it), never page 1.
+  const digits = text.replace(/^0+/, '');
+  if (digits === '') return 1;
+  if (digits.length > String(MAX_PAGE_NUMBER).length) return MAX_PAGE_NUMBER;
+  return Math.min(Number(digits), MAX_PAGE_NUMBER);
 }
 
 /** Pages needed for `total` rows, at least 1. */

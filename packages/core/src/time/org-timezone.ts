@@ -163,6 +163,14 @@ export function startOfOrgDay(now: Date, tz: string = ORG_TIMEZONE_DEFAULT): Dat
   const midnightAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, 0, 0, 0);
   const first = midnightAsUtc - zoneOffsetMs(new Date(midnightAsUtc), zone);
   const second = midnightAsUtc - zoneOffsetMs(new Date(first), zone);
+  // Where the clocks spring forward AT midnight (Santiago, Havana, Asunción),
+  // local midnight does not exist: the day starts at 01:00. The second
+  // correction then lands an hour early, on the PREVIOUS local day; the first
+  // one is the day's real start.
+  const s2 = zonedParts(new Date(second), zone);
+  if (s2.year !== parts.year || s2.month !== parts.month || s2.day !== parts.day) {
+    return new Date(first);
+  }
   return new Date(second);
 }
 
