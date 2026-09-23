@@ -76,14 +76,14 @@ import type { ServiceContext } from './context';
 
 const ctx = { organizationId: 'org-1', userId: 'user-1' } as unknown as ServiceContext;
 
-const SECRET_NAME = 'Item name that must never reach a report';
+const SENSITIVE_NAME = 'Item name that must never reach a report';
 
 function payload(i: number): AuditPayload {
   return {
     event: 'inventory.item.updated',
     entityType: 'inventory_item',
     entityId: `item-${i}`,
-    before: { bin_location: SECRET_NAME },
+    before: { bin_location: SENSITIVE_NAME },
     after: { bin_location: '947-Q' },
     extra: { bulk_op: 'set_rack', changed_keys: ['bin_location'] },
   };
@@ -115,7 +115,7 @@ describe('audit()', () => {
       organizationId: 'org-1',
       extra: { event: 'inventory.item.updated', lost: 1, status: 502 },
     });
-    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain(SECRET_NAME);
+    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain(SENSITIVE_NAME);
   });
 
   it('writes the row it has always written: user, IP, user agent, event and metadata', async () => {
@@ -132,7 +132,7 @@ describe('audit()', () => {
           entity_type: 'inventory_item',
           entity_id: 'item-7',
           warehouse_id: null,
-          before: { bin_location: SECRET_NAME },
+          before: { bin_location: SENSITIVE_NAME },
           after: { bin_location: '947-Q' },
           reason: null,
           bulk_op: 'set_rack',
@@ -168,7 +168,7 @@ describe('insertAuditRowReported()', () => {
     event: 'user.sign_in_failed' as const,
     ip: '203.0.113.7',
     user_agent: 'lab-agent/1.0',
-    metadata: { entity_type: 'user', entity_id: 'user-9', attempted_email: SECRET_NAME },
+    metadata: { entity_type: 'user', entity_id: 'user-9', attempted_email: SENSITIVE_NAME },
   };
 
   it('writes exactly the row it was given, organization_id null included', async () => {
@@ -180,7 +180,7 @@ describe('insertAuditRowReported()', () => {
 
   it('reports a refused INSERT with the event and the status, never the row', async () => {
     h.insert.mockResolvedValue({
-      error: { message: `Failing row contains (${SECRET_NAME})`, code: '23502' },
+      error: { message: `Failing row contains (${SENSITIVE_NAME})`, code: '23502' },
       status: 400,
       statusText: 'Bad Request',
     });
@@ -192,7 +192,7 @@ describe('insertAuditRowReported()', () => {
       organizationId: null,
       extra: { event: 'user.sign_in_failed', entityType: 'user', lost: 1, status: 400, code: '23502' },
     });
-    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain(SECRET_NAME);
+    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain(SENSITIVE_NAME);
   });
 
   it('never throws, even when the INSERT itself rejects', async () => {
@@ -260,7 +260,7 @@ describe('auditMany()', () => {
       organizationId: 'org-1',
       extra: { event: 'inventory.item.updated', lost: 200, total: 443, status: 502 },
     });
-    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain(SECRET_NAME);
+    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain(SENSITIVE_NAME);
   });
 
   it('reports every row as lost when the context cannot be read, and never throws', async () => {
@@ -308,7 +308,7 @@ describe('lost-row reports during an incident', () => {
       organizationId: 'org-1',
       extra: { event: 'inventory.item.updated', lost: 408, total: 408, status: 502 },
     });
-    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain(SECRET_NAME);
+    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain(SENSITIVE_NAME);
 
     // A quiet window sends nothing more.
     await vi.advanceTimersByTimeAsync(AUDIT_LOSS_REPORT_WINDOW_MS * 3);
