@@ -188,8 +188,20 @@ function errorText(err: unknown): string {
   return s && s !== '[object Object]' ? s : 'The request failed.';
 }
 
-/** Every row of ONE batch, paged. Throws IdBatchReadError, never a short set. */
-async function fetchBatchPages<Row>(builder: PageBuilder<Row>, pageSize: number): Promise<Row[]> {
+/**
+ * Every row of ONE query, paged past the 1000-row cap: one batch of an id
+ * list, or a whole list read with no id filter. The builder's query must end
+ * in a stable order (ending on `id`) and `.range(from, to)`. Throws
+ * IdBatchReadError on a failed page, a rejected request, or a query still
+ * full after MAX_PAGES_PER_BATCH pages; never returns a short set.
+ */
+export async function fetchAllPages<Row>(
+  builder: PageBuilder<Row>,
+  pageSize: number = POSTGREST_MAX_ROWS,
+): Promise<Row[]> {
+  // Capped at the server's row cap: a larger page would make a full server
+  // page look short, which is silent truncation.
+  pageSize = Math.min(POSTGREST_MAX_ROWS, Math.max(1, Math.floor(pageSize)));
   const rows: Row[] = [];
   for (let page = 0; page < MAX_PAGES_PER_BATCH; page += 1) {
     const from = page * pageSize;
@@ -254,7 +266,7 @@ export async function fetchAllRowsByIds<Row, V extends string | number = string>
       } catch (err) {
         throw new IdBatchReadError(errorText(err), null);
       }
-      return fetchBatchPages(builder, pageSize);
+      return fetchAllPages(builder, pageSize);
     },
   );
   const rows: Row[] = [];

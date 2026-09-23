@@ -13,14 +13,11 @@ import {
 } from 'react-native';
 
 import { api } from '@/lib/api';
+import { buildReassignCandidates, loadOrgMembers, type ReassignCandidate } from '@/lib/org-members';
 import { supabase } from '@/lib/supabase';
 import { radius, space, theme } from '@/lib/theme';
 
-interface Member {
-  userId: string;
-  name: string;
-  role: string;
-}
+type Member = ReassignCandidate;
 
 /**
  * Manager-only force-reassign of an active cycle count to another member, with
@@ -90,41 +87,35 @@ function ReassignSheetContent({
   const [reason, setReason] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // The member list did not load. Kept apart from `error` (the submit's own
+  // refusal): while it is set the list is hidden and a Try again is shown,
+  // never "No other team members to assign.".
+  const [membersFailed, setMembersFailed] = React.useState(false);
+  const [reloadNonce, setReloadNonce] = React.useState(0);
 
   React.useEffect(() => {
     if (!visible || !orgId) return;
     let cancelled = false;
     (async () => {
+      // loadOrgMembers THROWS on a failed read. The two reads made here used
+      // to return their errors (supabase-js does not throw), so this catch
+      // never fired and a failed profile read showed an empty list.
       try {
-        const { data: rows } = await supabase
-          .from('organization_members')
-          .select('user_id, role, accepted_at')
-          .eq('organization_id', orgId)
-          .not('accepted_at', 'is', null);
-        const ids = (rows ?? [])
-          .map((r) => (r as { user_id: string }).user_id)
-          .filter(Boolean);
-        const byId = new Map<string, { role: string }>();
-        for (const r of (rows ?? []) as Array<{ user_id: string; role: string }>) {
-          byId.set(r.user_id, { role: r.role });
+        const { members: rows, profiles } = await loadOrgMembers<{
+          id: string;
+          full_name: string | null;
+          email: string | null;
+        }>(supabase, orgId, { acceptedOnly: true, profileColumns: 'id, full_name, email' });
+        if (!cancelled) {
+          setMembers(buildReassignCandidates(rows, profiles));
+          setMembersFailed(false);
         }
-        let profiles: Array<{ id: string; full_name: string | null; email: string | null }> = [];
-        if (ids.length > 0) {
-          const { data: profs } = await supabase
-            .from('user_profiles')
-            .select('id, full_name, email')
-            .in('id', ids);
-          profiles = (profs ?? []) as typeof profiles;
+      } catch (e) {
+        console.warn('[reassign] members load failed:', e instanceof Error ? e.message : e);
+        if (!cancelled) {
+          setMembers([]);
+          setMembersFailed(true);
         }
-        const list: Member[] = profiles.map((p) => ({
-          userId: p.id,
-          name: p.full_name ?? p.email ?? 'Unnamed',
-          role: byId.get(p.id)?.role ?? 'staff',
-        }));
-        list.sort((a, b) => a.name.localeCompare(b.name));
-        if (!cancelled) setMembers(list);
-      } catch {
-        if (!cancelled) setError('Could not load team members.');
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -132,7 +123,14 @@ function ReassignSheetContent({
     return () => {
       cancelled = true;
     };
-  }, [visible, orgId]);
+  }, [visible, orgId, reloadNonce]);
+
+  function retryMembers() {
+    if (loading) return;
+    setMembersFailed(false);
+    setLoading(true);
+    setReloadNonce((n) => n + 1);
+  }
 
   const canSubmit = !!selected && reason.trim().length > 0 && !submitting;
 
@@ -210,6 +208,28 @@ function ReassignSheetContent({
             </Text>
             {loading ? (
               <ActivityIndicator color={theme.primary} style={{ marginVertical: 16 }} />
+            ) : membersFailed ? (
+              <View style={{ paddingVertical: 8, gap: 10 }}>
+                <Text style={{ color: '#dc2626', fontSize: 13 }}>Could not load team members.</Text>
+                <Pressable
+                  onPress={retryMembers}
+                  disabled={loading}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: loading }}
+                  style={{
+                    alignSelf: 'flex-start',
+                    minHeight: 40,
+                    paddingHorizontal: 16,
+                    borderRadius: radius.md,
+                    borderWidth: 1,
+                    borderColor: theme.border,
+                    justifyContent: 'center',
+                    opacity: loading ? 0.5 : 1,
+                  }}
+                >
+                  <Text style={{ color: theme.text, fontSize: 14, fontWeight: '600' }}>Try again</Text>
+                </Pressable>
+              </View>
             ) : (
               <ScrollView style={{ maxHeight: 200 }} keyboardShouldPersistTaps="handled">
                 {members

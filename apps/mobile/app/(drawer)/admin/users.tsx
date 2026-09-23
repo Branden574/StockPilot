@@ -18,6 +18,7 @@ import { Pill } from '@/components/ui/pill';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { canChangeMemberRoles, interpretMemberRoleWrite } from '@/lib/member-role-write';
+import { joinMemberProfiles, loadOrgMembers } from '@/lib/org-members';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
@@ -77,6 +78,11 @@ export default function UsersAdmin() {
   const permissions = useEffectivePermissions();
   const canChangeRoles = canChangeMemberRoles(role, permissions);
   const [rows, setRows] = React.useState<UserRow[]>([]);
+  // The member list did not load. An empty list here is then an error, not
+  // "No users yet.", and no row (so no role change) is offered. Set by every
+  // load that completes (not cleared at its start, which would flash "No
+  // users yet." during a pull-to-refresh).
+  const [loadFailed, setLoadFailed] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [editing, setEditing] = React.useState<UserRow | null>(null);
@@ -95,52 +101,41 @@ export default function UsersAdmin() {
     // `organization_members` — including it here previously crashed the
     // whole query with `column ... does not exist` and returned zero
     // rows.
-    const { data: members, error: membersErr } = await supabase
-      .from('organization_members')
-      .select('user_id, role, accepted_at, created_at')
-      .eq('organization_id', orgId)
-      .order('accepted_at', { ascending: false });
-    if (membersErr) {
-      console.warn('[admin/users] members fetch failed:', membersErr.message);
-    }
-    const memberRows = (members ?? []) as Array<{
-      user_id: string;
-      role: string;
-      accepted_at: string | null;
-      created_at: string;
-    }>;
-    const userIds = memberRows.map((m) => m.user_id).filter(Boolean);
-    let profileMap = new Map<string, UserRow['profile']>();
-    if (userIds.length > 0) {
-      const { data: profiles, error: profilesErr } = await supabase
-        .from('user_profiles')
-        .select('id, full_name, avatar_url, email, disabled_at')
-        .in('id', userIds);
-      if (profilesErr) {
-        console.warn('[admin/users] profile fetch failed:', profilesErr.message);
-      }
-      profileMap = new Map(
-        (profiles ?? []).map((p) => [
-          p.id as string,
-          {
-            full_name: (p.full_name as string | null) ?? null,
-            avatar_url: (p.avatar_url as string | null) ?? null,
-            email: (p.email as string | null) ?? null,
-            disabled_at: (p.disabled_at as string | null) ?? null,
-          },
-        ]),
+    //
+    // Both reads live in loadOrgMembers: paged, batched, and THROWING on
+    // either failure. A failed profile read used to render every member as
+    // "Unnamed" with no DISABLED badge while still offering the role picker.
+    try {
+      const { members, profiles } = await loadOrgMembers<{
+        id: string;
+        full_name: string | null;
+        avatar_url: string | null;
+        email: string | null;
+        disabled_at: string | null;
+      }>(supabase, orgId, { profileColumns: 'id, full_name, avatar_url, email, disabled_at' });
+      setRows(
+        joinMemberProfiles(members, profiles).map(({ member: m, profile: p }) => ({
+          user_id: m.user_id,
+          role: m.role,
+          accepted_at: m.accepted_at,
+          invited_email: null,
+          created_at: m.created_at ?? '',
+          profile: p
+            ? {
+                full_name: p.full_name ?? null,
+                avatar_url: p.avatar_url ?? null,
+                email: p.email ?? null,
+                disabled_at: p.disabled_at ?? null,
+              }
+            : null,
+        })),
       );
+      setLoadFailed(false);
+    } catch (e) {
+      console.warn('[admin/users] members load failed:', e instanceof Error ? e.message : e);
+      setRows([]);
+      setLoadFailed(true);
     }
-    setRows(
-      memberRows.map((m) => ({
-        user_id: m.user_id,
-        role: m.role,
-        accepted_at: m.accepted_at,
-        invited_email: null,
-        created_at: m.created_at,
-        profile: profileMap.get(m.user_id) ?? null,
-      })),
-    );
     setLoading(false);
   }, [orgId, isAdmin]);
 
@@ -237,11 +232,19 @@ export default function UsersAdmin() {
   return (
     <>
       <DataListScreen
-        eyebrow={`ADMIN · ${accepted} MEMBERS${pending > 0 ? ` · ${pending} PENDING` : ''}`}
+        eyebrow={
+          loadFailed
+            ? 'ADMIN · USERS'
+            : `ADMIN · ${accepted} MEMBERS${pending > 0 ? ` · ${pending} PENDING` : ''}`
+        }
         title="Users"
         italic="."
-        emptyTitle="No users yet."
-        emptyBody="Invite teammates on the web — pending and active members show here."
+        emptyTitle={loadFailed ? 'Could not load users.' : 'No users yet.'}
+        emptyBody={
+          loadFailed
+            ? 'Check your connection and pull down to try again.'
+            : 'Invite teammates on the web — pending and active members show here.'
+        }
         emptyIcon={Users}
         data={rows}
         loading={loading || roleLoading}

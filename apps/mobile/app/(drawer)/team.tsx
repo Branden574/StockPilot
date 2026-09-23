@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
+import { joinMemberProfiles, loadOrgMembers } from '@/lib/org-members';
 import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
@@ -35,6 +36,9 @@ const ROLE_PILL: Record<string, { label: string; status: 'ok' | 'warn' | 'crit' 
 export default function TeamScreen() {
   const { orgId } = useOrg();
   const [rows, setRows] = React.useState<MemberRow[]>([]);
+  // The member list did not load: an error, not "No team yet.". Set by every
+  // load that completes.
+  const [loadFailed, setLoadFailed] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
 
@@ -46,49 +50,38 @@ export default function TeamScreen() {
     // resolution silently nulled the embed.
     // `invited_email` lives on `organization_invites`, not here — selecting
     // it caused `column ... does not exist` and dropped every row.
-    const { data: members, error: membersErr } = await supabase
-      .from('organization_members')
-      .select('user_id, role, accepted_at')
-      .eq('organization_id', orgId)
-      .order('accepted_at', { ascending: false });
-    if (membersErr) {
-      console.warn('[team] members fetch failed:', membersErr.message);
-    }
-    const memberRows = (members ?? []) as Array<{
-      user_id: string;
-      role: string;
-      accepted_at: string | null;
-    }>;
-    const userIds = memberRows.map((m) => m.user_id).filter(Boolean);
-    let profileMap = new Map<string, MemberRow['profile']>();
-    if (userIds.length > 0) {
-      const { data: profiles, error: profilesErr } = await supabase
-        .from('user_profiles')
-        .select('id, full_name, avatar_url, email')
-        .in('id', userIds);
-      if (profilesErr) {
-        console.warn('[team] profile fetch failed:', profilesErr.message);
-      }
-      profileMap = new Map(
-        (profiles ?? []).map((p) => [
-          p.id as string,
-          {
-            full_name: (p.full_name as string | null) ?? null,
-            avatar_url: (p.avatar_url as string | null) ?? null,
-            email: (p.email as string | null) ?? null,
-          },
-        ]),
+    //
+    // Both reads live in loadOrgMembers: paged, batched, and THROWING on
+    // either failure, which used to render "No team yet." or a list of
+    // "Unnamed" members.
+    try {
+      const { members, profiles } = await loadOrgMembers<{
+        id: string;
+        full_name: string | null;
+        avatar_url: string | null;
+        email: string | null;
+      }>(supabase, orgId, { profileColumns: 'id, full_name, avatar_url, email' });
+      setRows(
+        joinMemberProfiles(members, profiles).map(({ member: m, profile: p }) => ({
+          user_id: m.user_id,
+          role: m.role,
+          accepted_at: m.accepted_at,
+          invited_email: null,
+          profile: p
+            ? {
+                full_name: p.full_name ?? null,
+                avatar_url: p.avatar_url ?? null,
+                email: p.email ?? null,
+              }
+            : null,
+        })),
       );
+      setLoadFailed(false);
+    } catch (e) {
+      console.warn('[team] members load failed:', e instanceof Error ? e.message : e);
+      setRows([]);
+      setLoadFailed(true);
     }
-    setRows(
-      memberRows.map((m) => ({
-        user_id: m.user_id,
-        role: m.role,
-        accepted_at: m.accepted_at,
-        invited_email: null,
-        profile: profileMap.get(m.user_id) ?? null,
-      })),
-    );
     setLoading(false);
   }, [orgId]);
 
@@ -108,11 +101,19 @@ export default function TeamScreen() {
 
   return (
     <DataListScreen
-      eyebrow={`TEAM · ${accepted} MEMBERS${pending > 0 ? ` · ${pending} PENDING` : ''}`}
+      eyebrow={
+        loadFailed
+          ? 'TEAM'
+          : `TEAM · ${accepted} MEMBERS${pending > 0 ? ` · ${pending} PENDING` : ''}`
+      }
       title="Team"
       italic="& roles."
-      emptyTitle="No team yet."
-      emptyBody="Invite teammates on the web. Pending invites and active members show here."
+      emptyTitle={loadFailed ? 'Could not load the team.' : 'No team yet.'}
+      emptyBody={
+        loadFailed
+          ? 'Check your connection and pull down to try again.'
+          : 'Invite teammates on the web. Pending invites and active members show here.'
+      }
       emptyIcon={Users}
       data={rows}
       loading={loading}
