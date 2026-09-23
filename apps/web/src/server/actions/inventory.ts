@@ -949,8 +949,14 @@ export async function transferStockAction(
           quantityByItemId: new Map([[data.itemId, data.quantity]]),
         },
       });
+    // The org's Items/Books list is expired by the services themselves, the
+    // moment each write commits: transferStock ('stock.transfer') and, for a
+    // book whose crate label moved, syncBookCratePlacement
+    // ('item.sync_book_crate'). A second expiry here built a whole service
+    // context in this action (cache() does not memoize in a Server Action)
+    // between the commit and the re-render. The revalidatePath calls stay:
+    // they put the re-rendered page into this action's response.
     revalidatePath('/dashboard/inventory');
-    await revalidateInventoryListForCurrentOrg();
     revalidatePath(`/dashboard/inventory/${data.itemId}`);
     return ok({
       toLocationId,
