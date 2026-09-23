@@ -20,10 +20,11 @@ vi.mock('@/lib/auth/warehouse', () => ({
 import { InventoryService } from './inventory';
 
 /**
- * The service now delegates to the public.inventory_distinct_racks
- * Postgres function (migration 0066). The Supabase JS client's
+ * The service delegates to the public.inventory_distinct_racks_for_org
+ * Postgres function (migration 0357). The Supabase JS client's
  * `.rpc()` is what we mock here — the server-side DISTINCT + sort
- * is exercised in the SQL function itself.
+ * is exercised in the SQL function itself
+ * (supabase/tests/0357_inventory_distinct_racks_org_scope.test.sql).
  */
 function makeSvc(rpcResult: { data: string[] | null; error: unknown }) {
   const rpcCalls: Array<[string, Record<string, unknown>]> = [];
@@ -55,7 +56,9 @@ describe('InventoryService.listDistinctRacks', () => {
       error: null,
     });
     const out = await svc.listDistinctRacks({ scope: 'items' });
-    expect(rpcCalls).toEqual([['inventory_distinct_racks', { p_scope: 'items' }]]);
+    expect(rpcCalls).toEqual([
+      ['inventory_distinct_racks_for_org', { p_org: 'org-1', p_scope: 'items' }],
+    ]);
     expect(out).toEqual(['5-B', '12', '20-A']);
   });
 
@@ -65,8 +68,31 @@ describe('InventoryService.listDistinctRacks', () => {
       error: null,
     });
     const out = await svc.listDistinctRacks({ scope: 'books' });
-    expect(rpcCalls).toEqual([['inventory_distinct_racks', { p_scope: 'books' }]]);
+    expect(rpcCalls).toEqual([
+      ['inventory_distinct_racks_for_org', { p_org: 'org-1', p_scope: 'books' }],
+    ]);
     expect(out).toEqual(['38-A', '40-B']);
+  });
+
+  // RLS scopes by MEMBERSHIP, so without the organization a user in two
+  // organizations got both organizations' racks (the one-argument function).
+  it('"all" asks for both scopes, each for THIS organization, and merges them', async () => {
+    const { svc, rpcCalls } = makeSvc({ data: ['5-B', '12'], error: null });
+    const out = await svc.listDistinctRacks({ scope: 'all' });
+    expect(rpcCalls).toEqual([
+      ['inventory_distinct_racks_for_org', { p_org: 'org-1', p_scope: 'items' }],
+      ['inventory_distinct_racks_for_org', { p_org: 'org-1', p_scope: 'books' }],
+    ]);
+    expect(out).toEqual(['5-B', '12']);
+  });
+
+  it('never calls the organization-less function', async () => {
+    const { svc, rpcCalls } = makeSvc({ data: [], error: null });
+    await svc.listDistinctRacks({ scope: 'items' });
+    await svc.listDistinctRacks({ scope: 'books' });
+    await svc.listDistinctRacks({ scope: 'all' });
+    expect(rpcCalls.map(([name]) => name)).not.toContain('inventory_distinct_racks');
+    expect(rpcCalls.every(([, args]) => args.p_org === 'org-1')).toBe(true);
   });
 
   it('returns [] when the RPC returns null data', async () => {

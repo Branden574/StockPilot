@@ -1687,21 +1687,25 @@ export class InventoryService {
    * they surface here without the user re-saving.)
    */
   async listDistinctRacks(opts: { scope: 'items' | 'books' | 'all' }): Promise<string[]> {
-    // Server-side DISTINCT via the public.inventory_distinct_racks
-    // function (migration 0066). RLS scopes the read to the caller's
-    // org. Returns a pre-sorted, deduped text[] so we don't ship
-    // every row's custom_fields over the wire just to compute the
-    // dropdown options.
+    // Server-side DISTINCT via public.inventory_distinct_racks_for_org
+    // (migration 0357; the same body as 0066/0068's
+    // inventory_distinct_racks). Returns a pre-sorted, deduped text[] so we
+    // don't ship every row's custom_fields over the wire just to compute
+    // the dropdown options.
+    //
+    // The organization is passed explicitly. RLS scopes by MEMBERSHIP, so
+    // the old one-argument function gave a user in two organizations both
+    // organizations' racks. RLS still applies on top of p_org.
     //
     // The RPC's ORDER BY is alphabetic ("10" < "2"), so we re-sort
     // numerically in JS regardless of scope. Keeps the dropdown
     // ordered top-to-bottom the way a user reads the stockroom map
     // without a new migration for a presentation-only fix.
     if (opts.scope !== 'all') {
-      const { data, error } = await this.ctx.supabase.rpc(
-        'inventory_distinct_racks',
-        { p_scope: opts.scope },
-      );
+      const { data, error } = await this.ctx.supabase.rpc('inventory_distinct_racks_for_org', {
+        p_org: this.ctx.organizationId,
+        p_scope: opts.scope,
+      });
       if (error) throw new ServiceError('internal_error', error.message);
       return ((data ?? []) as string[]).slice().sort(rackCmp);
     }
@@ -1709,8 +1713,14 @@ export class InventoryService {
     // both and merge client-side. Dedupe + numeric-sort to keep the
     // dropdown identical in shape to the single-scope path.
     const [items, books] = await Promise.all([
-      this.ctx.supabase.rpc('inventory_distinct_racks', { p_scope: 'items' }),
-      this.ctx.supabase.rpc('inventory_distinct_racks', { p_scope: 'books' }),
+      this.ctx.supabase.rpc('inventory_distinct_racks_for_org', {
+        p_org: this.ctx.organizationId,
+        p_scope: 'items',
+      }),
+      this.ctx.supabase.rpc('inventory_distinct_racks_for_org', {
+        p_org: this.ctx.organizationId,
+        p_scope: 'books',
+      }),
     ]);
     if (items.error) throw new ServiceError('internal_error', items.error.message);
     if (books.error) throw new ServiceError('internal_error', books.error.message);
