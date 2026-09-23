@@ -276,6 +276,8 @@ describe('quickbooksConnector via runDrain (integration) — Step 6', () => {
         in: () => self,
         is: () => self,
         order: () => self,
+        // The integrations module gate pages its batched read (fetchAllRowsByIds).
+        range: () => self,
         limit: () => self,
         maybeSingle: () => {
           if (table === 'connection_sync_log') {

@@ -104,6 +104,8 @@ function makeDrainAdmin(domain: Record<string, { data: unknown }>) {
       is: () => self,
       not: () => self,
       order: () => self,
+      // The integrations module gate pages its batched read (fetchAllRowsByIds).
+      range: () => self,
       limit: () => self,
       maybeSingle: () => {
         if (table === 'connection_sync_log') {
