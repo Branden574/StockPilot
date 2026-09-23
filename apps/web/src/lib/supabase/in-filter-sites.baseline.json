@@ -52,12 +52,6 @@
   "server/actions/item-visibility.ts": ["in:id <- ids", "in:id <- ids"],
   "server/actions/profile.ts": ["in:organization_id <- ownedOrgIds"],
   "server/connectors/drainer.ts": ["in:organization_id <- orgIds"],
-  "server/loaders/inventory-list.ts": [
-    "in:item_id <- chunk",
-    "in:item_id <- chunk",
-    "in:item_id <- ids",
-    "in:item_id <- ids"
-  ],
   "server/loaders/orders-new-catalog.ts": [
     "in:category_id <- scope.categoryIds",
     "in:charter_id <- scope.charterIds",
