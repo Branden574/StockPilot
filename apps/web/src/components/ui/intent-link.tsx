@@ -32,10 +32,15 @@ import { useWarmRoute } from '@/lib/hooks/use-warm-route';
  *     links without meaning any of them; firing on every crossing would
  *     rebuild the storm this component exists to stop, one row at a time.
  *     Leaving the link (pointer-leave / blur) before the dwell cancels it.
- * A click then paints the destination's loading.tsx at once, as before,
- * because the navigation reads the same prefetch cache (the Link's own
+ * A click then paints the destination's loading.tsx at once IF the warm-up
+ * has finished: the navigation reads the same prefetch cache (the Link's own
  * prefetch prop only feeds instrumentation hooks, read in
- * next/dist/client/components/app-router-instance.js).
+ * next/dist/client/components/app-router-instance.js), but it uses a route
+ * entry only once it is fulfilled. A warm-up still in flight is not waited
+ * for; the click sends its own request (segment-cache/navigation.js
+ * navigateToUnknownRoute). So a warm-up must START at least a round trip
+ * before the click to help, and `hoverDwellMs` lets a table row start it the
+ * moment the pointer arrives.
  *
  * Use it for any link that is one of many on a page. A single primary next
  * step (a lone "New order" button, a "Back to list" link) can stay a plain
@@ -49,10 +54,26 @@ type NextLinkProps = React.ComponentProps<typeof Link>;
 export type IntentLinkProps = Omit<NextLinkProps, 'href' | 'prefetch'> & {
   /** A string href, so the warm-up and the performance mark see the same URL the click does. */
   href: string;
+  /**
+   * How long the POINTER must rest on the link before the warm-up starts.
+   * Default INTENT_DWELL_MS. 0 starts it on arrival: right for rows whose
+   * warm-up is cheap (only the route tree is new per row; the loading
+   * segments are shared) and whose click comes soon after the pointer lands.
+   * Keyboard focus always waits INTENT_DWELL_MS (Tab held through a list).
+   */
+  hoverDwellMs?: number;
 };
+
+/** A plain primary press: not a right/middle click, not a modified click that opens elsewhere. */
+function isPlainPrimaryPress(event: React.PointerEvent): boolean {
+  return (
+    event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
+  );
+}
 
 export function IntentLink({
   href,
+  hoverDwellMs = INTENT_DWELL_MS,
   onPointerEnter,
   onPointerLeave,
   onPointerDown,
@@ -74,12 +95,16 @@ export function IntentLink({
   // must not warm a route after it is gone.
   React.useEffect(() => cancelDwell, [cancelDwell]);
 
-  const warmAfterDwell = () => {
+  const warmAfterDwell = (dwellMs: number) => {
     cancelDwell();
+    if (dwellMs <= 0) {
+      warmRoute(href);
+      return;
+    }
     dwellTimer.current = setTimeout(() => {
       dwellTimer.current = null;
       warmRoute(href);
-    }, INTENT_DWELL_MS);
+    }, dwellMs);
   };
 
   const warmNow = () => {
@@ -94,7 +119,7 @@ export function IntentLink({
       prefetch={false}
       onPointerEnter={(event) => {
         onPointerEnter?.(event);
-        warmAfterDwell();
+        warmAfterDwell(hoverDwellMs);
       }}
       onPointerLeave={(event) => {
         onPointerLeave?.(event);
@@ -102,11 +127,13 @@ export function IntentLink({
       }}
       onPointerDown={(event) => {
         onPointerDown?.(event);
-        warmNow();
+        // A right or middle click, or a modified click that opens a new tab
+        // or window, will not navigate THIS tab: nothing to warm here.
+        if (isPlainPrimaryPress(event)) warmNow();
       }}
       onFocus={(event) => {
         onFocus?.(event);
-        warmAfterDwell();
+        warmAfterDwell(INTENT_DWELL_MS);
       }}
       onBlur={(event) => {
         onBlur?.(event);

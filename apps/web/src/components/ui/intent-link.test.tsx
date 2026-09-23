@@ -132,6 +132,33 @@ describe('IntentLink: warms on intent', () => {
     expect(callsOf(markNavigationIntent)).toEqual([[HREF]]);
   });
 
+  it('hoverDwellMs 0 warms the moment the pointer arrives; keyboard focus still waits', () => {
+    const link = renderLink({ hoverDwellMs: 0 });
+    fireEvent.pointerEnter(link);
+    expect(callsOf(prefetchMock)).toEqual([[HREF]]);
+
+    prefetchMock.mockReset();
+    fireEvent.focus(link);
+    expect(callsOf(prefetchMock)).toEqual([]);
+    act(() => {
+      vi.advanceTimersByTime(INTENT_DWELL_MS);
+    });
+    expect(callsOf(prefetchMock)).toEqual([[HREF]]);
+  });
+
+  it('a right, middle or modified press (opens elsewhere) warms nothing in this tab', () => {
+    const link = renderLink();
+    fireEvent.pointerDown(link, { button: 2 });
+    fireEvent.pointerDown(link, { button: 1 });
+    fireEvent.pointerDown(link, { button: 0, metaKey: true });
+    fireEvent.pointerDown(link, { button: 0, ctrlKey: true });
+    fireEvent.pointerDown(link, { button: 0, shiftKey: true });
+    fireEvent.pointerDown(link, { button: 0, altKey: true });
+    expect(callsOf(prefetchMock)).toEqual([]);
+    fireEvent.pointerDown(link, { button: 0 });
+    expect(callsOf(prefetchMock)).toEqual([[HREF]]);
+  });
+
   it('a pointer that passes over the link without stopping warms nothing', () => {
     const link = renderLink();
     fireEvent.pointerEnter(link);

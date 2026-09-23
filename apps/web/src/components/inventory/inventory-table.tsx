@@ -2237,8 +2237,11 @@ export function InventoryTable({
                         // (166 ms vs 49 ms for warmed sidebar routes, lab
                         // 2026-09-22), which also starts React's 300 ms
                         // reveal hold that much later. IntentLink warms
-                        // just this row's route on hover (after 65 ms),
-                        // focus, or pointer-down.
+                        // just this row's route, starting the moment the
+                        // pointer arrives (hoverDwellMs 0: Next only reuses
+                        // a warm-up that has FINISHED, so it needs a round
+                        // trip's head start), on focus, or on pointer-down.
+                        hoverDwellMs={0}
                         className="font-medium hover:underline"
                       >
                         {item.name}

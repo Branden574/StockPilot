@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -119,8 +119,8 @@ const PAGE_ROWS = [item({ id: 'a', name: 'Alpha Widget' }), item({ id: 'b', name
 // a plain <Link prefetch={false}>, which in next/link also turns hover and
 // touch prefetch off, so the item route's shape was unknown until the click
 // and its skeleton painted a server round trip late. IntentLink warms the one
-// row a person approaches: after 65 ms of hover, on focus, or at once on
-// pointer-down; never on render.
+// row a person approaches: when the pointer arrives, on focus (after a short
+// dwell), or on pointer-down; never on render.
 
 const ROWS = [item({ id: 'a', name: 'Alpha Widget' }), item({ id: 'b', name: 'Beta Gadget' })];
 
@@ -132,7 +132,6 @@ describe('InventoryTable item rows warm on intent', () => {
   });
 
   afterEach(() => {
-    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -146,28 +145,14 @@ describe('InventoryTable item rows warm on intent', () => {
     expect(routerMock.prefetch).not.toHaveBeenCalled();
   });
 
-  it('hovering a row name warms that item route after the dwell, and only it', () => {
-    vi.useFakeTimers();
+  it('hovering a row name warms that item route the moment the pointer arrives, and only it', () => {
+    // No dwell for rows: Next reuses a warm-up only once it has finished, so it
+    // needs a round trip's head start on the click.
     const link = renderTable();
     fireEvent.pointerEnter(link);
-    expect(routerMock.prefetch).not.toHaveBeenCalled();
-    act(() => {
-      vi.advanceTimersByTime(65);
-    });
     expect(routerMock.prefetch).toHaveBeenCalledTimes(1);
     const warmed = String(routerMock.prefetch.mock.calls[0]?.[0]);
     expect(warmed.startsWith('/dashboard/inventory/a?return=')).toBe(true);
-  });
-
-  it('a pointer that passes over a row without stopping warms nothing', () => {
-    vi.useFakeTimers();
-    const link = renderTable();
-    fireEvent.pointerEnter(link);
-    fireEvent.pointerLeave(link);
-    act(() => {
-      vi.advanceTimersByTime(500);
-    });
-    expect(routerMock.prefetch).not.toHaveBeenCalled();
   });
 
   it('pointer-down warms at once', () => {
