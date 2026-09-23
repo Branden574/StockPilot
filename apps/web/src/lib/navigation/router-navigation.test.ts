@@ -10,6 +10,7 @@ import {
   noteCommittedLocation,
   pendingPathNavigationRemaining,
   recordRouterTransitionStart,
+  REDIRECT_FOLLOW_MS,
   resetRouterNavigationForTests,
   subscribeRouterNavigation,
   type RouterNavigation,
@@ -147,6 +148,33 @@ describe('recordRouterTransitionStart', () => {
     expect(getRouterNavigation()).toBeNull();
     expect(pendingPathNavigationRemaining(getRouterNavigation(), '/dashboard/inventory', Date.now())).toBe(0);
     unsubscribe();
+  });
+
+  it('A11 a path replace as the page it leaves commits is a redirect; later, a push, a query or outside the shell is not', () => {
+    vi.useFakeTimers();
+    window.history.replaceState(null, '', '/dashboard/inventory/new');
+    noteCommittedLocation('/dashboard/inventory/new');
+    recordRouterTransitionStart('/dashboard/inventory', 'replace');
+    expect(nav()).toMatchObject({ kind: 'path', type: 'replace', redirect: true });
+    recordRouterTransitionStart('/dashboard/inventory', 'push');
+    expect(nav().redirect).toBe(false);
+    recordRouterTransitionStart('?tab=photos', 'replace');
+    expect(nav()).toMatchObject({ kind: 'query', redirect: false });
+
+    vi.advanceTimersByTime(REDIRECT_FOLLOW_MS);
+    recordRouterTransitionStart('/dashboard/inventory', 'replace');
+    expect(nav().redirect).toBe(true);
+    vi.advanceTimersByTime(1);
+    recordRouterTransitionStart('/dashboard/inventory', 'replace');
+    expect(nav().redirect).toBe(false);
+    // Noting the same location again is not a new commit: the clock stays.
+    noteCommittedLocation('/dashboard/inventory/new');
+    recordRouterTransitionStart('/dashboard/inventory', 'replace');
+    expect(nav().redirect).toBe(false);
+
+    noteCommittedLocation(null);
+    recordRouterTransitionStart('/dashboard/inventory', 'replace');
+    expect(nav().redirect).toBe(false);
   });
 
   it('noting the committed location it started from (or null) does not retire it', () => {

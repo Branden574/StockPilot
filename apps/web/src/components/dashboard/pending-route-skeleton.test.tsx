@@ -339,6 +339,40 @@ describe('PendingRouteFrame', () => {
     errors.mockRestore();
   });
 
+  it.each([
+    ['after its own skeleton was up', 400],
+    ['when the redirecting page answered first', 150],
+  ])('E14 a server redirect() into a mapped route shows the skeleton at once, %s', (_label, firstLeg) => {
+    // `n i` without items:create: inventory/new redirects to the list. Next
+    // commits the redirecting page (HandleRedirect renders nothing) and
+    // replaces from its first effect, a millisecond later (lab, 2026-09-23).
+    pathnameRef.value = '/dashboard';
+    window.history.replaceState(null, '', '/dashboard');
+    const view = render(<Frame />);
+    push('/dashboard/inventory/new');
+    advance(firstLeg);
+
+    commit(view, '/dashboard/inventory/new', '', null);
+    expect(skeleton()).toBeNull();
+    act(() => {
+      recordRouterTransitionStart('/dashboard/inventory', 'replace');
+    });
+    expect(tableRows()).toBe(10);
+  });
+
+  it('E15 a replace long after the page it leaves committed waits its 400 ms like any navigation', () => {
+    render(<Frame />);
+    advance(1_000);
+    act(() => {
+      recordRouterTransitionStart('/dashboard/orders', 'replace');
+    });
+    expect(skeleton()).toBeNull();
+    advance(399);
+    expect(skeleton()).toBeNull();
+    advance(1);
+    expect(tableRows()).toBe(8);
+  });
+
   it('E13 a dead navigation does not come back when a shallow pushState returns to the page it left', () => {
     // Inventory's instant-mode view chips: history.pushState, which Next applies
     // with a RESTORE (discarding the row click's navigation) and never reports.

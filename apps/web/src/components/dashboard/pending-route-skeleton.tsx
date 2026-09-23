@@ -37,6 +37,7 @@ import { routeSkeletonFor } from '@/lib/navigation/route-skeletons';
  * so Link clicks, router.push/replace and Back/Forward alike. Only routes
  * without a loading.tsx of their own get it (lib/navigation/route-skeletons.ts);
  * the others show their own fallback, and a second skeleton would stack on it.
+ * A redirect (a replace from the page that just committed) does not wait.
  *
  * What ends it, all at render time so a page that has arrived is never hidden,
  * not even for one frame:
@@ -93,7 +94,12 @@ export function PendingRouteFrame({ children }: { children: React.ReactNode }) {
   // a loading.tsx of its own), instead of flashing the page for 400 ms.
   const continuing = slowFromKey !== null && slowFromKey === currentKey;
   const eligible = tracked !== null && (mapped !== null || continuing);
-  const show = eligible && continuing;
+  // A redirect into a mapped route (RouterNavigation.redirect): the page it
+  // leaves is the redirecting one, which rendered nothing, so waiting 400 ms
+  // would leave the page area blank. Its skeleton shows at once instead, as
+  // the route's loading.tsx used to as soon as the replace committed.
+  const atOnce = tracked !== null && tracked.redirect && mapped !== null;
+  const show = eligible && (continuing || atOnce);
 
   // Nothing left to cover: forget the page it covered, so a later navigation
   // from the same URL waits its own 400 ms. Adjusted during render (React's

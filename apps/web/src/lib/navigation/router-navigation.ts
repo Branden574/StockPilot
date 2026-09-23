@@ -47,6 +47,16 @@ export const SLOW_NAVIGATION_MS = 400;
 export const MAX_PENDING_NAVIGATION_MS = 30_000;
 
 /**
+ * A replace that starts within this long of the commit of the page it leaves
+ * is that page redirecting itself (RouterNavigation.redirect). Next's replace
+ * for a server-component redirect() ran 1 ms after the redirecting page
+ * committed, and a page replacing itself on mount 3 ms after (navigation lab,
+ * 2026-09-23); the margin covers a busy main thread. A person cannot start a
+ * navigation from a page this soon after it appeared.
+ */
+export const REDIRECT_FOLLOW_MS = 100;
+
+/**
  * 'path'  the pathname changes: the only kind that gets a late skeleton.
  * 'query' same pathname, different query.
  * 'same'  same path and query (a same-URL or hash-only push), another origin,
@@ -67,10 +77,22 @@ export interface RouterNavigation {
   targetPath: string;
   /** Date.now() at the start. Fake timers fake Date, and 400 ms / 30 s need no monotonic clock. */
   startedAt: number;
+  /**
+   * A path replace that started as the page it leaves committed (within
+   * REDIRECT_FOLLOW_MS). That is how Next answers a server-component
+   * redirect() during a soft navigation: it commits the redirecting page,
+   * which renders nothing (redirect-boundary.js HandleRedirect), and calls
+   * router.replace from that page's first effect. It is also a page that
+   * replaces itself as it mounts. Either way the page it leaves is empty or
+   * already on its way out, so the late skeleton does not wait for it.
+   */
+  redirect: boolean;
 }
 
 let latest: RouterNavigation | null = null;
 let committedKey: string | null = null;
+/** Date.now() when committedKey last changed to a location. */
+let committedAt = 0;
 let nextId = 1;
 const listeners = new Set<() => void>();
 
@@ -120,13 +142,19 @@ export function recordRouterTransitionStart(url: string, type: RouterNavigationT
   } else {
     kind = 'query';
   }
+  const now = Date.now();
   latest = {
     id: nextId++,
     kind,
     type,
     fromKey: fromKey ?? '',
     targetPath: to.pathname,
-    startedAt: Date.now(),
+    startedAt: now,
+    redirect:
+      kind === 'path' &&
+      type === 'replace' &&
+      committedKey !== null &&
+      now - committedAt <= REDIRECT_FOLLOW_MS,
   };
   notify();
 }
@@ -143,6 +171,7 @@ export function recordRouterTransitionStart(url: string, type: RouterNavigationT
  * dead navigation back to life and cover the page with its skeleton.
  */
 export function noteCommittedLocation(key: string | null): void {
+  if (key !== null && key !== committedKey) committedAt = Date.now();
   committedKey = key;
   if (latest !== null && key !== null && key !== latest.fromKey) {
     latest = null;
@@ -184,6 +213,7 @@ export function pendingPathNavigationRemaining(
 export function resetRouterNavigationForTests(): void {
   latest = null;
   committedKey = null;
+  committedAt = 0;
   nextId = 1;
 }
 
