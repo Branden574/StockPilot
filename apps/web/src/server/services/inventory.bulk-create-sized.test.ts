@@ -22,6 +22,7 @@ vi.mock('@/lib/auth/warehouse', () => ({
   ForbiddenError: class extends Error {},
 }));
 
+import { audit, auditMany } from './audit';
 import { InventoryService } from './inventory';
 
 const BASE_INPUT = {
@@ -263,6 +264,33 @@ describe('InventoryService.bulkCreateSizedVariants', () => {
     // warning must stay absent on the ordinary path or it stops meaning
     // anything when it does fire.
     expect(res.placementFailed).toBeNull();
+  });
+
+  it('audits every variant of the run in one batched write (auditMany), not one request each', async () => {
+    const stub = buildStub();
+    const svc = makeSvc(stub);
+
+    const res = await svc.bulkCreateSizedVariants({
+      ...BASE_INPUT,
+      variants: [
+        { size: 'S', quantity: 3 },
+        { size: 'M', quantity: 5 },
+        { size: 'L', quantity: 0 },
+      ],
+    });
+
+    expect(audit).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'inventory.item.created' }),
+      expect.anything(),
+    );
+    expect(auditMany).toHaveBeenCalledTimes(1);
+    const rows = vi.mocked(auditMany).mock.calls[0]![0];
+    expect(rows.map((r) => r.entityId)).toEqual(res.rows.map((r) => r.id));
+    expect(rows[0]).toMatchObject({
+      event: 'inventory.item.created',
+      entityType: 'inventory_item',
+      extra: { bulk_op: 'sized_variants' },
+    });
   });
 
   it('writes stock_movements for non-zero variants only', async () => {

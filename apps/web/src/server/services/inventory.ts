@@ -91,7 +91,7 @@ import {
 } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { fetchAllRows } from './lib/paginate';
-import { audit, type AuditEvent } from './audit';
+import { audit, auditMany, type AuditEvent, type AuditPayload } from './audit';
 import { dispatchEvent } from './integration-events';
 import { CustomFieldsService } from './custom-fields';
 import { ProductGroupsService } from './product-groups';
@@ -3340,19 +3340,18 @@ export class InventoryService {
 
     // Audited FIRST: the rows exist from here on whatever happens to the
     // movement write below, and an item that exists with no 'created' event is
-    // a hole in the trail no later step can fill.
-    for (const r of inserted) {
-      void audit(
-        {
-          event: 'inventory.item.created',
-          entityType: 'inventory_item',
-          entityId: r.id as string,
-          warehouseId: resolvedWarehouseId,
-          extra: { bulk_op: 'sized_variants' },
-        },
-        this.ctx,
-      );
-    }
+    // a hole in the trail no later step can fill. One batched write for the
+    // whole run (auditMany), not one request per variant.
+    await auditMany(
+      inserted.map((r) => ({
+        event: 'inventory.item.created' as const,
+        entityType: 'inventory_item',
+        entityId: r.id as string,
+        warehouseId: resolvedWarehouseId,
+        extra: { bulk_op: 'sized_variants' },
+      })),
+      this.ctx,
+    );
 
     // Opening stock_movements for the non-zero variants.
     //
@@ -3863,18 +3862,18 @@ export class InventoryService {
       }
     }
 
-    for (const id of createdIds) {
-      void audit(
-        {
-          event: 'inventory.item.created',
-          entityType: 'inventory_item',
-          entityId: id,
-          warehouseId: input.warehouseId,
-          extra: { bulk_op: 'bulk_create' },
-        },
-        this.ctx,
-      );
-    }
+    // Up to 500 rows per import: batched INSERTs (auditMany), not one
+    // request per created item fired all at once.
+    await auditMany(
+      createdIds.map((id: string) => ({
+        event: 'inventory.item.created' as const,
+        entityType: 'inventory_item',
+        entityId: id,
+        warehouseId: input.warehouseId,
+        extra: { bulk_op: 'bulk_create' },
+      })),
+      this.ctx,
+    );
 
     return {
       created: createdIds.length,
@@ -4878,24 +4877,29 @@ export class InventoryService {
       // know which of `allowedIds` survived RLS, so this slightly
       // over-counts when ok < allowedIds.length — acceptable cost for
       // a queryable trail.
-      for (const id of allowedIds) {
-        void audit(
-          {
-            event: 'inventory.item.updated',
-            entityType: 'inventory_item',
-            entityId: id,
-            before: { bin_location: oldBinById.get(id) ?? null },
-            after: { bin_location: composedBin },
-            extra: {
-              bulk_op: 'set_rack',
-              rack_number: num,
-              rack_row: row,
-              changed_keys: ['bin_location'],
-            },
+      //
+      // BATCHED AND AWAITED, before the placement pass. This used to be one
+      // `void audit()` per item: 443 INSERTs started at once on the lab org,
+      // the gateway answered 190 of them 502, and the placement's first read
+      // (started right behind them) failed too, so every item came back
+      // placeFailed. auditMany writes the same rows 100 per INSERT with at
+      // most 2 in flight, and it is finished before the placement reads start.
+      await auditMany(
+        allowedIds.map((id) => ({
+          event: 'inventory.item.updated' as const,
+          entityType: 'inventory_item',
+          entityId: id,
+          before: { bin_location: oldBinById.get(id) ?? null },
+          after: { bin_location: composedBin },
+          extra: {
+            bulk_op: 'set_rack',
+            rack_number: num,
+            rack_row: row,
+            changed_keys: ['bin_location'],
           },
-          this.ctx,
-        );
-      }
+        })),
+        this.ctx,
+      );
       // Beyond writing the rack LABEL above, ACTUALLY PLACE the selected items'
       // not-yet-placed stock onto that rack — so bulk "Set rack" moves stock
       // in ONE action (the label alone never moved anything, which is the
@@ -5209,20 +5213,22 @@ export class InventoryService {
         : input.op.kind === 'unarchive'
           ? ('inventory.item.restored' as const)
           : ('inventory.item.updated' as const);
-    for (const id of write.written) {
-      const oldRow = oldById.get(id) ?? {};
-      void audit(
-        {
+    // Batched (auditMany): up to 500 rows in a few INSERTs, not 500
+    // requests started at once.
+    await auditMany(
+      write.written.map((id) => {
+        const oldRow = oldById.get(id) ?? {};
+        return {
           event: bulkEvent,
           entityType: 'inventory_item',
           entityId: id,
           before: Object.fromEntries(changedKeys.map((k) => [k, oldRow[k] ?? null])),
           after: Object.fromEntries(changedKeys.map((k) => [k, update[k]])),
           extra: { bulk_op: input.op.kind, changed_keys: changedKeys },
-        },
-        this.ctx,
-      );
-    }
+        };
+      }),
+      this.ctx,
+    );
 
     if (write.error !== null) {
       void reportError(new Error('Bulk update stopped partway'), {
@@ -6901,58 +6907,63 @@ export class InventoryService {
 
     const failedItemIds: string[] = [];
     const syncedItemIds: string[] = [];
-    for (const batch of batches.values()) {
-      // ONE STATEMENT FOR ONE FACT (migration 0336). Both pairs are projections
-      // of the single location above, so they are written together: two calls
-      // admit a half-updated row — crate written, rack write lost to RLS or a
-      // dropped connection — that says "recorded in Blue 13, on no rack". That
-      // self-contradicting row is the exact shape this whole line of work has
-      // been fixing, so it is made unreachable rather than merely unlikely.
-      //
-      // This REPLACES the call to inventory_set_book_storage (0334), which can
-      // only write the crate half. 0334 is left in the database, untouched and
-      // still correct; it simply has no caller now. 0335 is NOT superseded —
-      // `bin_location` is a separate fact, written by `stampPlacementBin` on a
-      // put-away, and this statement cannot reach it.
-      const { data: updated, error: rpcError } = await this.ctx.supabase.rpc(
-        'inventory_set_book_placement',
-        {
-          p_item_ids: batch.ids,
-          p_crate_color: batch.color,
-          p_crate_number: batch.number,
-          p_rack_number: batch.rackNumber,
-          p_rack_row: batch.rackRow,
-        },
-      );
-      // Any error-free call may have rewritten rows, including a short count
-      // the report below treats as failed: book_crate_* / rack keys live in
-      // custom_fields, which the list rows carry, and the write bumps updated_at.
-      if (!rpcError) {
-        invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.sync_book_crate');
-      }
-      // FAIL-CLOSED ON THE REPORT, not on the stock (recurring pattern #2: a
-      // write whose affected-row count is never checked fails open). The RPC
-      // returns its real row count, so 0 rows means the summary did NOT change
-      // — RLS filtered them, or they were archived underneath us — and the
-      // caller must be told rather than shown a green toast.
-      if (rpcError || typeof updated !== 'number' || updated < batch.ids.length) {
-        if (rpcError) {
-          console.error('[placement] book crate summary sync failed (stock still placed)', {
-            error: rpcError.message,
-            items: batch.ids.length,
-          });
-        }
-        failedItemIds.push(...batch.ids);
-        continue;
-      }
-      syncedItemIds.push(...batch.ids);
-      // Trail: one row per item, before→after, on the SAME event the other
-      // custom_fields writers use. `summaries` was read before the RPC, so
-      // `before` is genuinely the previous crate rather than an echo.
-      for (const id of batch.ids) {
-        const previous = summaries.get(id);
-        void audit(
+    // One audit row per written book, collected and written in batches after
+    // the loop (auditMany) instead of one request per book: bulk Set rack
+    // syncs up to 500 books here. The finally writes the rows of every batch
+    // that landed even if a later batch throws.
+    const auditRows: AuditPayload[] = [];
+    try {
+      for (const batch of batches.values()) {
+        // ONE STATEMENT FOR ONE FACT (migration 0336). Both pairs are projections
+        // of the single location above, so they are written together: two calls
+        // admit a half-updated row — crate written, rack write lost to RLS or a
+        // dropped connection — that says "recorded in Blue 13, on no rack". That
+        // self-contradicting row is the exact shape this whole line of work has
+        // been fixing, so it is made unreachable rather than merely unlikely.
+        //
+        // This REPLACES the call to inventory_set_book_storage (0334), which can
+        // only write the crate half. 0334 is left in the database, untouched and
+        // still correct; it simply has no caller now. 0335 is NOT superseded —
+        // `bin_location` is a separate fact, written by `stampPlacementBin` on a
+        // put-away, and this statement cannot reach it.
+        const { data: updated, error: rpcError } = await this.ctx.supabase.rpc(
+          'inventory_set_book_placement',
           {
+            p_item_ids: batch.ids,
+            p_crate_color: batch.color,
+            p_crate_number: batch.number,
+            p_rack_number: batch.rackNumber,
+            p_rack_row: batch.rackRow,
+          },
+        );
+        // Any error-free call may have rewritten rows, including a short count
+        // the report below treats as failed: book_crate_* / rack keys live in
+        // custom_fields, which the list rows carry, and the write bumps updated_at.
+        if (!rpcError) {
+          invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.sync_book_crate');
+        }
+        // FAIL-CLOSED ON THE REPORT, not on the stock (recurring pattern #2: a
+        // write whose affected-row count is never checked fails open). The RPC
+        // returns its real row count, so 0 rows means the summary did NOT change
+        // — RLS filtered them, or they were archived underneath us — and the
+        // caller must be told rather than shown a green toast.
+        if (rpcError || typeof updated !== 'number' || updated < batch.ids.length) {
+          if (rpcError) {
+            console.error('[placement] book crate summary sync failed (stock still placed)', {
+              error: rpcError.message,
+              items: batch.ids.length,
+            });
+          }
+          failedItemIds.push(...batch.ids);
+          continue;
+        }
+        syncedItemIds.push(...batch.ids);
+        // Trail: one row per item, before→after, on the SAME event the other
+        // custom_fields writers use. `summaries` was read before the RPC, so
+        // `before` is genuinely the previous crate rather than an echo.
+        for (const id of batch.ids) {
+          const previous = summaries.get(id);
+          auditRows.push({
             event: 'inventory.item.updated',
             entityType: 'inventory_item',
             entityId: id,
@@ -6989,10 +7000,11 @@ export class InventoryService {
                   }
                 : {}),
             },
-          },
-          this.ctx,
-        );
+          });
+        }
       }
+    } finally {
+      await auditMany(auditRows, this.ctx);
     }
     // The preserve is reported only for books whose write actually LANDED, so
     // `rackPreservedItemIds ⊆ syncedItemIds` holds. A batch the RPC refused

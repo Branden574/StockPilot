@@ -28,21 +28,30 @@ vi.mock('@/lib/auth/session', () => ({
   })),
 }));
 
-// bulkUpdate fires audit() per affected item — mock it so the assertions
-// below can inspect exactly which event name was emitted (Task 8's
-// archive/restore audit-label fix) without a real audit_logs write.
+// bulkUpdate writes one audit row per affected item through auditMany (one
+// batched write, not one request per item); single-item paths use audit().
+// Both are mocked so the assertions below can inspect exactly which event
+// name was emitted (Task 8's archive/restore audit-label fix) without a real
+// audit_logs write.
 vi.mock('./audit', () => ({
   audit: vi.fn(async () => undefined),
+  auditMany: vi.fn(async (payloads: readonly unknown[]) => ({
+    written: payloads.length,
+    lost: 0,
+  })),
 }));
 
 import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib/auth/warehouse';
-import { audit } from './audit';
+import { audit, auditMany } from './audit';
 import {
   ADJUST_WAREHOUSE_WRITE_REFUSED,
   InventoryService,
   mapMovementTypeToAuditEvent,
 } from './inventory';
 import { ServiceError } from './context';
+
+/** Every payload handed to auditMany, in order, flattened across calls. */
+const auditManyPayloads = () => vi.mocked(auditMany).mock.calls.flatMap(([payloads]) => payloads);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -436,14 +445,13 @@ describe('InventoryService.bulkUpdate', () => {
 
     await svc.bulkUpdate({ ids: ['item-1'], op: { kind: 'unarchive' } });
 
-    expect(audit).toHaveBeenCalledWith(
+    expect(auditManyPayloads()).toContainEqual(
       expect.objectContaining({ event: 'inventory.item.restored', entityId: 'item-1' }),
-      expect.anything(),
     );
-    expect(audit).not.toHaveBeenCalledWith(
+    expect(auditManyPayloads()).not.toContainEqual(
       expect.objectContaining({ event: 'inventory.item.updated' }),
-      expect.anything(),
     );
+    expect(audit).not.toHaveBeenCalled();
   });
 
   it('still emits inventory.item.archived for a bulk archive (unchanged)', async () => {
@@ -458,9 +466,8 @@ describe('InventoryService.bulkUpdate', () => {
 
     await svc.bulkUpdate({ ids: ['item-1'], op: { kind: 'archive' } });
 
-    expect(audit).toHaveBeenCalledWith(
+    expect(auditManyPayloads()).toContainEqual(
       expect.objectContaining({ event: 'inventory.item.archived', entityId: 'item-1' }),
-      expect.anything(),
     );
   });
 
@@ -601,7 +608,7 @@ describe('InventoryService.bulkUpdate — audit before/after capture', () => {
       op: { kind: 'set_category', categoryId: 'cat-new' },
     });
 
-    expect(audit).toHaveBeenCalledWith(
+    expect(auditManyPayloads()).toContainEqual(
       expect.objectContaining({
         event: 'inventory.item.updated',
         entityType: 'inventory_item',
@@ -610,7 +617,6 @@ describe('InventoryService.bulkUpdate — audit before/after capture', () => {
         after: { category_id: 'cat-new' },
         extra: { bulk_op: 'set_category', changed_keys: ['category_id'] },
       }),
-      expect.anything(),
     );
   });
 
@@ -635,7 +641,7 @@ describe('InventoryService.bulkUpdate — audit before/after capture', () => {
       op: { kind: 'set_rack', rackNumber: '2', rackRow: 'B' },
     });
 
-    expect(audit).toHaveBeenCalledWith(
+    expect(auditManyPayloads()).toContainEqual(
       expect.objectContaining({
         event: 'inventory.item.updated',
         entityType: 'inventory_item',
@@ -647,7 +653,6 @@ describe('InventoryService.bulkUpdate — audit before/after capture', () => {
           changed_keys: ['bin_location'],
         }),
       }),
-      expect.anything(),
     );
   });
 });

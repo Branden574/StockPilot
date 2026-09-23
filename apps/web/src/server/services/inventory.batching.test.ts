@@ -11,10 +11,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * committed.
  */
 
-const { reportError, invalidate, audit, access } = vi.hoisted(() => ({
+const { reportError, invalidate, audit, auditMany, access } = vi.hoisted(() => ({
   reportError: vi.fn(async () => {}),
   invalidate: vi.fn(),
   audit: vi.fn(async () => undefined),
+  auditMany: vi.fn(async (payloads: readonly unknown[]) => ({
+    written: payloads.length,
+    lost: 0,
+  })),
   access: {
     current: {
       readableIds: ['wh-1'],
@@ -31,7 +35,7 @@ const { reportError, invalidate, audit, access } = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
 vi.mock('./lib/inventory-list-cache', () => ({ invalidateInventoryListAfterWrite: invalidate }));
-vi.mock('./audit', () => ({ audit }));
+vi.mock('./audit', () => ({ audit, auditMany }));
 vi.mock('./integration-events', () => ({ dispatchEvent: vi.fn(async () => undefined) }));
 vi.mock('@/lib/auth/warehouse', () => ({
   getWarehouseAccess: vi.fn(async () => access.current),
@@ -411,6 +415,43 @@ describe('bulkCreate barcode pre-check', () => {
   });
 });
 
+describe('bulkCreate audit rows', () => {
+  it('audits 250 created items in one batched call, not one request per item', async () => {
+    const stub = makeSupabaseStub({
+      'organizations.select': { data: { plan: 'enterprise' }, error: null },
+      'inventory_items.select': { data: [], error: null, count: 0 },
+      'inventory_items.insert': (call) => {
+        const rows = (callArgs(call, 'insert')?.[0] ?? []) as unknown[];
+        return {
+          data: rows.map((_, i) => ({ id: uuid(i, 'c'), quantity_on_hand: 0 })),
+          error: null,
+        };
+      },
+    });
+    const items = Array.from({ length: 250 }, (_, i) => ({
+      name: `Item ${i}`,
+      barcode: `97800000${String(i).padStart(5, '0')}`,
+      itemType: 'product' as const,
+      quantityOnHand: 0,
+      unitCost: 1,
+      retailPrice: 1,
+    }));
+    const res = await svc(stub.client).bulkCreate({ warehouseId: 'wh-1', items });
+    expect(res.created).toBe(250);
+    expect(audit).not.toHaveBeenCalled();
+    expect(auditMany).toHaveBeenCalledTimes(1);
+    const rows = auditMany.mock.calls[0]![0] as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(250);
+    expect(rows[0]).toEqual({
+      event: 'inventory.item.created',
+      entityType: 'inventory_item',
+      entityId: uuid(0, 'c'),
+      warehouseId: 'wh-1',
+      extra: { bulk_op: 'bulk_create' },
+    });
+  });
+});
+
 describe('bulkUpdate with 250 items', () => {
   function bulkStub(opts: {
     failUpdateBatch?: number;
@@ -461,9 +502,56 @@ describe('bulkUpdate with 250 items', () => {
     } as never);
     expect(updateLists.map((l) => l.length)).toEqual([100, 100]);
     expect(res).toMatchObject({ ok: 100, failed: 150 });
-    expect(audit).toHaveBeenCalledTimes(100);
+    // The 100 committed items, in ONE batched audit write (not 100 requests).
+    expect(audit).not.toHaveBeenCalled();
+    expect(auditMany).toHaveBeenCalledTimes(1);
+    expect(auditMany.mock.calls[0]![0]).toHaveLength(100);
     expect(invalidate).toHaveBeenCalledTimes(1);
     expect(tags()).toContain('inventory.bulk_update.partial');
+  });
+
+  it('set_rack writes its 250 audit rows in one batched call that finishes before the placement reads', async () => {
+    // The lab run: 443 `void audit()` INSERTs started at once, the gateway
+    // answered 190 of them 502, and the placement read right behind them failed,
+    // so every item came back placeFailed. The rows now go through ONE
+    // auditMany call, awaited before the placement pass starts reading.
+    const events: string[] = [];
+    auditMany.mockImplementationOnce(async (payloads: readonly unknown[]) => {
+      events.push('audit:start');
+      await new Promise((r) => setTimeout(r, 5));
+      events.push('audit:end');
+      return { written: payloads.length, lost: 0 };
+    });
+    const { stub } = bulkStub({});
+    const base = stub.client.rpc;
+    stub.client.rpc = (name: string, args: unknown) => {
+      events.push(`rpc:${name}`);
+      return base(name, args);
+    };
+    const baseFrom = stub.client.from;
+    stub.client.from = (table: string) => {
+      events.push(`from:${table}`);
+      return baseFrom(table);
+    };
+
+    const res = await svc(stub.client).bulkUpdate({
+      ids: ids(250),
+      op: { kind: 'set_rack', rackNumber: '12', rackRow: 'B' },
+    } as never);
+
+    expect(res).toMatchObject({ ok: 250 });
+    expect(audit).not.toHaveBeenCalled();
+    expect(auditMany).toHaveBeenCalledTimes(1);
+    const rows = auditMany.mock.calls[0]![0] as Array<{ entityId: string; event: string }>;
+    expect(rows.map((r) => r.entityId)).toEqual(ids(250));
+    expect(rows.every((r) => r.event === 'inventory.item.updated')).toBe(true);
+    // Nothing is requested between the label RPC and the end of the audit
+    // write: the placement pass starts after it.
+    const rpcAt = events.indexOf('rpc:inventory_set_rack');
+    const endAt = events.indexOf('audit:end');
+    expect(rpcAt).toBeGreaterThanOrEqual(0);
+    expect(events.slice(rpcAt + 1, endAt + 1)).toEqual(['audit:start', 'audit:end']);
+    expect(events.slice(endAt + 1)).toContain('from:item_stock_levels');
   });
 
   it('writes nothing when the before-values read fails', async () => {
