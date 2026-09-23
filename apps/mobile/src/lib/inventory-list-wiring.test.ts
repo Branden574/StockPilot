@@ -263,6 +263,10 @@ describe('items list — identical behaviour to books, because the owner compare
     expect(body).not.toContain('placedItemIds');
     expect(body).not.toContain('00000000-0000-0000-0000-000000000000');
     expect(body).not.toContain(".from('item_stock_levels')");
+    // Only the newest load writes: an older debounced load finishing late
+    // cannot put back its rows or its error over a newer answer.
+    expect(body).toMatch(/const seq = \(loadSeq\.current \+= 1\);/);
+    expect(body).toMatch(/: await listRead\(ITEM_COLUMNS\);\s*if \(seq !== loadSeq\.current\) return;/);
     // One read, so its error takes the visible banner path, with a message
     // that is never empty (an empty one would hide the banner).
     expect(body).toContain('setLoadError(readErrorMessage(error, listStatus))');

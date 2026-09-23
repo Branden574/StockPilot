@@ -232,6 +232,10 @@ export default function Inventory() {
   /** A refused list read, disclosed above the list. Never a silent empty state
    *  — an error is not the same claim as "this org has no items". */
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  // Load token: only the newest load may write state. The load is debounced
+  // and pull-to-refresh can overlap it, so an older load finishing late could
+  // otherwise put back its rows, or its error, over a newer answer.
+  const loadSeq = React.useRef(0);
   // Signed thumbnail URLs, resolved for the CURRENT PAGE's rows only and kept
   // across page flips. Keyed by item id; a null value means "resolved, has no
   // image", so a photoless item is never re-queried.
@@ -319,6 +323,7 @@ export default function Inventory() {
 
   const load = React.useCallback(
     async (orgIdParam: string, query: string, f: FilterState, warehouseScopeId: string | null) => {
+      const seq = (loadSeq.current += 1);
       const sortMap: Record<typeof f.sort, { col: string; asc: boolean }> = {
         updated_desc: { col: 'updated_at', asc: false },
         name_asc: { col: 'name', asc: true },
@@ -444,6 +449,7 @@ export default function Inventory() {
         f.locationIds.length > 0
           ? await listRead(ITEM_COLUMNS_AT_LOCATIONS)
           : await listRead(ITEM_COLUMNS);
+      if (seq !== loadSeq.current) return;
       // FAIL LOUD (release-order rule). A console.warn is invisible on a phone,
       // so a refused read rendered "No items match." — a claim about the org's
       // inventory, made from an error. This read was WIDENED by the sports
