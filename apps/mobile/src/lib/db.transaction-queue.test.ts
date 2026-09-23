@@ -120,5 +120,12 @@ describe('the cache wipes wait their turn', () => {
     expect(body('deleteOrgData')).toContain('await withDbTransaction(db, () => clearOrgScopedTables(db));');
     expect(body('wipeForSignOut')).toMatch(/await withDbTransaction\(db, async \(\) => \{\s+await clearOrgScopedTables\(db\);[\s\S]*delete from pending_actions/);
   });
+
+  it('both wipes bump the cache generation first, before they wait in the queue', () => {
+    // sync.ts discards a snapshot whose generation moved; the bump must come
+    // before the queue so a pull that is mid-write stops at its next row.
+    expect(body('deleteOrgData')).toMatch(/^export async function deleteOrgData\(\): Promise<void> \{\s+cacheGeneration \+= 1;/);
+    expect(body('wipeForSignOut')).toMatch(/^export async function wipeForSignOut\(\): Promise<void> \{\s+cacheGeneration \+= 1;/);
+  });
 });
 

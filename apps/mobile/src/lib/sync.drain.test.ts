@@ -48,7 +48,7 @@ const queueMock = vi.hoisted(() => ({
 }));
 vi.mock('./queue', () => queueMock);
 
-const apiMock = vi.hoisted(() => ({ api: vi.fn(), orgHeader: vi.fn(async () => ({})) }));
+const apiMock = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock('./api', () => apiMock);
 
 const disabledMock = vi.hoisted(() => ({ getAccountDisabled: vi.fn(() => false) }));
@@ -59,6 +59,7 @@ vi.mock('./account-disabled-state', () => disabledMock);
 vi.mock('./db', () => ({
   getDb: vi.fn(),
   withDbTransaction: vi.fn(),
+  currentCacheGeneration: vi.fn(() => 0),
   getMeta: vi.fn(async () => null),
   setMeta: vi.fn(async () => {}),
 }));

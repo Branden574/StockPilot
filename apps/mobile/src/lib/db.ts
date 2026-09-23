@@ -331,6 +331,22 @@ async function clearOrgScopedTables(db: SQLite.SQLiteDatabase): Promise<void> {
 }
 
 /**
+ * Bumped the moment a wipe of the org-scoped cache is REQUESTED (workspace
+ * switch, workspace repair, sign-out), before the wipe waits its turn in the
+ * transaction queue. A snapshot pull notes the value before it reads its
+ * cursor and sends its request, and discards its answer if the value has moved
+ * (sync.ts): that answer belongs to a cache that has been, or is about to be,
+ * wiped. Keyed on wipes, not on the workspace id, so the first pull after
+ * sign-in (sent before the workspace was saved, answered for the same default
+ * workspace) is kept.
+ */
+let cacheGeneration = 0;
+
+export function currentCacheGeneration(): number {
+  return cacheGeneration;
+}
+
+/**
  * Wipe the local SQLite cache for an ORG SWITCH (multi-org device isolation).
  *
  * Clears all per-org cached data tables and resets the delta cursor
@@ -364,14 +380,15 @@ async function clearOrgScopedTables(db: SQLite.SQLiteDatabase): Promise<void> {
  * follow-up.
  */
 export async function deleteOrgData(): Promise<void> {
+  cacheGeneration += 1;
   const db = await getDb();
-  // Queued like every transaction, so the wipe can never interleave with a
-  // snapshot pull that is mid-write (sync.ts checks the workspace inside its
-  // own queued transaction).
+  // Queued like every transaction, so the wipe never interleaves with a
+  // snapshot pull that is mid-write.
   await withDbTransaction(db, () => clearOrgScopedTables(db));
 }
 
 export async function wipeForSignOut(): Promise<void> {
+  cacheGeneration += 1;
   const db = await getDb();
   await withDbTransaction(db, async () => {
     await clearOrgScopedTables(db);

@@ -172,7 +172,23 @@ async function hydrate(userId: string) {
   }
 }
 
-export async function setActiveOrg(orgId: string): Promise<void> {
+/** Workspace switches in the order they were asked for (see setActiveOrg). */
+let switchQueue: Promise<void> = Promise.resolve();
+
+/**
+ * Switches run one at a time. A switch saves the new workspace, then waits for
+ * the cache wipe and the warehouse read before it publishes, so a second tap
+ * in that window used to be lost (a re-tap of the still-highlighted workspace
+ * returned early) or publish out of order. Now it waits its turn and then
+ * applies: the last choice wins and is published last.
+ */
+export function setActiveOrg(orgId: string): Promise<void> {
+  const run = switchQueue.then(() => switchActiveOrg(orgId));
+  switchQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function switchActiveOrg(orgId: string): Promise<void> {
   if (orgId === cached.activeOrgId) return;
   await AsyncStorage.setItem(ORG_STORAGE_KEY, orgId);
   // Multi-org device isolation: wipe the prior org's cached SQLite tables and

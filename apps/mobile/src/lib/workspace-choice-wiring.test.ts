@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
  * by source text instead (the rule itself is tested in workspace-choice.test.ts).
  */
 const src = readFileSync(path.join(__dirname, 'use-workspace.ts'), 'utf8');
-const hydrate = src.slice(src.indexOf('async function hydrate('), src.indexOf('export async function setActiveOrg'));
+const hydrate = src.slice(src.indexOf('async function hydrate('), src.indexOf('/** Workspace switches in the order'));
 
 describe('hydrate() saves the workspace it chooses', () => {
   it('chooses with the stored id, the profile default and the memberships', () => {

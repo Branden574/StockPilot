@@ -28,10 +28,18 @@ const netMock = vi.hoisted(() => ({
 }));
 vi.mock('expo-network', () => netMock);
 
-const meta = vi.hoisted(() => ({ store: new Map<string, string>(), db: { current: null as unknown } }));
+const meta = vi.hoisted(() => ({
+  store: new Map<string, string>(),
+  db: { current: null as unknown },
+  // db.ts's cache-wipe generation (deleteOrgData / wipeForSignOut bump it).
+  generation: 0,
+  // Called before every runAsync, so a test can act mid-write.
+  onRun: null as null | ((sql: string) => void),
+}));
 
 vi.mock('./db', () => ({
   getDb: async () => meta.db.current,
+  currentCacheGeneration: () => meta.generation,
   // The queue itself is tested in db.transaction-queue.test.ts; here a
   // transaction is just the fake db's own.
   withDbTransaction: (db: { withTransactionAsync: (t: () => Promise<void>) => Promise<void> }, task: () => Promise<void>) =>
@@ -48,14 +56,7 @@ vi.mock('./queue', () => ({
   markFailed: vi.fn(),
   markRejected: vi.fn(),
 }));
-const workspace = vi.hoisted(() => ({ org: 'org-a' as string | null }));
-const apiMock = vi.hoisted(() => ({
-  api: vi.fn(),
-  // The stored workspace api() sends as X-Organization-Id.
-  orgHeader: vi.fn(async (): Promise<Record<string, string>> =>
-    workspace.org ? { 'X-Organization-Id': workspace.org } : {},
-  ),
-}));
+const apiMock = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock('./api', () => apiMock);
 vi.mock('./account-disabled-state', () => ({ getAccountDisabled: () => false }));
 vi.mock('./enabled-modules', () => ({
@@ -115,14 +116,24 @@ const DDL = `
 /** expo-sqlite's async surface over node:sqlite — same methods sync.ts calls. */
 function fakeDb(sqlite: DatabaseSync) {
   return {
-    runAsync: async (sql: string, params: unknown[] = []) =>
-      sqlite.prepare(sql).run(...(params as never[])),
+    runAsync: async (sql: string, params: unknown[] = []) => {
+      meta.onRun?.(sql);
+      return sqlite.prepare(sql).run(...(params as never[]));
+    },
     getAllAsync: async (sql: string, params: unknown[] = []) =>
       sqlite.prepare(sql).all(...(params as never[])),
     getFirstAsync: async (sql: string, params: unknown[] = []) =>
       sqlite.prepare(sql).get(...(params as never[])) ?? null,
+    // expo-sqlite's own shape: BEGIN, task, COMMIT, ROLLBACK on a throw.
     withTransactionAsync: async (fn: () => Promise<void>) => {
-      await fn();
+      sqlite.exec('BEGIN');
+      try {
+        await fn();
+        sqlite.exec('COMMIT');
+      } catch (e) {
+        sqlite.exec('ROLLBACK');
+        throw e;
+      }
     },
   };
 }
@@ -179,7 +190,8 @@ beforeEach(() => {
   sqlite.exec(DDL);
   meta.db.current = fakeDb(sqlite);
   meta.store = new Map();
-  workspace.org = 'org-a';
+  meta.generation = 0;
+  meta.onRun = null;
   apiMock.api.mockReset();
   netMock.getNetworkStateAsync.mockResolvedValue({
     isConnected: true,
@@ -343,26 +355,30 @@ describe('the pull still does its original job', () => {
   });
 });
 
-describe('a workspace switch while a snapshot is loading', () => {
+describe('a cache wipe while a snapshot is loading (workspace switch, repair or sign-out)', () => {
   const answerForA = () =>
     emptySnap({
       enabledModules: ['cycle_counts'],
       warehouses: [{ id: 'wh-a', name: 'A Warehouse' }],
       openCycleCounts: [{ ...count('cc-a'), warehouseId: 'wh-a' }],
     });
-
-  beforeEach(() => {
-    // The switch to B has wiped the cache (deleteOrgData).
+  /** What deleteOrgData and wipeForSignOut do first, before the wipe queues. */
+  const askForWipe = () => {
+    meta.generation += 1;
+  };
+  /** The queued wipe itself (clearOrgScopedTables). */
+  const runWipe = () => {
     sqlite.exec(`
       delete from warehouses; delete from items; delete from bundles; delete from bundle_components;
       delete from cycle_counts; delete from cycle_count_lines;
     `);
-  });
+    for (const k of ['last_synced_at', 'enabled_modules', 'effective_permissions', 'warehouse_scope']) meta.store.delete(k);
+  };
 
-  it("discards the old workspace's answer: no rows, no cursor, no modules", async () => {
+  it("discards an answer that lands after the wipe: no rows, no cursor, no modules", async () => {
     apiMock.api.mockImplementation(async () => {
-      // The person switches to B while A's request is out.
-      workspace.org = 'org-b';
+      askForWipe();
+      runWipe();
       return answerForA();
     });
     await expect(pullSnapshot(true)).resolves.toBeNull();
@@ -372,15 +388,45 @@ describe('a workspace switch while a snapshot is loading', () => {
     expect(meta.store.has('enabled_modules')).toBe(false);
   });
 
-  it('keeps the answer when the workspace did not change', async () => {
+  it('keeps the answer when nothing was wiped (the first pull after sign-in included)', async () => {
     apiMock.api.mockResolvedValue(answerForA());
     await expect(pullSnapshot(true)).resolves.not.toBeNull();
     expect(ids('select id from warehouses')).toEqual(['wh-a']);
-    expect(ids('select id from cycle_counts')).toEqual(['cc-a']);
+    expect(ids('select id from cycle_counts order by id')).toContain('cc-a');
     expect(meta.store.get('last_synced_at')).toBe('2026-09-05T12:00:00.000Z');
   });
 
-  it('a forced sync asked for mid-pull still runs, as a full pull for the new workspace', async () => {
+  it('discards a delta whose cursor was cleared under it (the wipe was asked for just before the pull)', async () => {
+    meta.store.set('last_synced_at', '2026-09-01T00:00:00.000Z');
+    askForWipe();
+    apiMock.api.mockImplementation(async () => {
+      runWipe(); // the queued wipe runs while the request is out
+      return answerForA();
+    });
+    await expect(pullSnapshot()).resolves.toBeNull();
+    expect(apiMock.api.mock.calls[0]?.[0]).toContain('?since=');
+    expect(meta.store.has('last_synced_at')).toBe(false);
+    expect(ids('select id from warehouses')).toEqual([]);
+  });
+
+  it('a wipe asked for mid-write rolls the pull back at the next row', async () => {
+    const items = ['i-1', 'i-2', 'i-3', 'i-4'].map((id) => ({
+      id, sku: id, name: id, barcode: null, quantityOnHand: 1, unitCost: 0, warehouseId: 'wh1', itemType: 'standard',
+    }));
+    apiMock.api.mockResolvedValue(emptySnap({ items }));
+    let itemWrites = 0;
+    meta.onRun = (sql) => {
+      if (/into items/.test(sql) && ++itemWrites === 2) askForWipe();
+    };
+    await expect(pullSnapshot(true)).resolves.toBeNull();
+    expect(itemWrites).toBe(2);
+    // Rolled back: the earlier cache is untouched, none of the new rows landed.
+    expect(ids('select id from items order by id')).toEqual(['i-archived', 'i-keep']);
+    expect(meta.store.has('last_synced_at')).toBe(false);
+  });
+
+  it('a forced sync asked for mid-pull still runs afterwards, as a full pull', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     let releaseA!: () => void;
     const aLoaded = new Promise<void>((resolve) => {
       releaseA = resolve;
@@ -391,13 +437,13 @@ describe('a workspace switch while a snapshot is loading', () => {
         await aLoaded;
         return answerForA();
       })
-      .mockImplementationOnce(async () =>
-        emptySnap({ warehouses: [{ id: 'wh-b', name: 'B Warehouse' }] }),
-      );
+      .mockImplementationOnce(async () => emptySnap({ warehouses: [{ id: 'wh-b', name: 'B Warehouse' }] }));
 
     const timerSync = syncNow();
-    // setActiveOrg: store B, then ask for a forced pull while A's is out.
-    workspace.org = 'org-b';
+    await vi.waitFor(() => expect(apiMock.api).toHaveBeenCalledTimes(1)); // A's request is out
+    // setActiveOrg: the wipe is asked for and a forced pull requested.
+    askForWipe();
+    runWipe();
     const forced = syncNow(true);
     releaseA();
     await Promise.all([timerSync, forced]);
@@ -405,8 +451,9 @@ describe('a workspace switch while a snapshot is loading', () => {
     expect(apiMock.api).toHaveBeenCalledTimes(2);
     expect(apiMock.api.mock.calls[0]?.[0]).toContain('?since=');
     expect(apiMock.api.mock.calls[1]?.[0]).toBe('/api/v1/mobile/snapshot');
-    // A's answer was discarded; B's landed.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('discarded'));
     expect(ids('select id from warehouses')).toEqual(['wh-b']);
     expect(ids('select id from cycle_counts')).toEqual([]);
+    warn.mockRestore();
   });
 });
