@@ -5,15 +5,15 @@ import { reportError } from '@/lib/error-reporter';
 import type { RackHoldingLike } from '@stockpilot/core';
 
 import type { ServiceContext } from './context';
+import { mapIdBatches, rawErrorText } from './lib/fetch-by-ids';
+import { fetchAllRows } from './lib/paginate';
 
 export type { RackHoldingLike };
-
-const ID_CHUNK_SIZE = 100;
 
 /**
  * Batched fetch of rack/crate HOLDINGS (item_stock_levels rows with
  * quantity > 0 sitting on a rack/crate location) for a set of item ids —
- * ONE round trip per ID_CHUNK_SIZE-item chunk (chunks run in parallel),
+ * one paged read per 100-item batch (mapIdBatches: at most 6 in flight),
  * org-scoped, using the caller's user-authed `ctx.supabase` (RLS applies,
  * same as every other read in these services — never the admin client).
  *
@@ -21,10 +21,11 @@ const ID_CHUNK_SIZE = 100;
  * the FULL breakdown when an item's stock is split across more than one
  * rack/crate, instead of trusting a single (possibly stale) bin_location
  * label: the pick-slip PDF, the cycle-count sheet PDF, and the
- * scanner/lookup API. Chunked the same way the cycle-count PDF route
- * already chunks its own bin-location lookup (100 uuids ≈ 3.7KB — well
- * under the edge/gateway URL-length rejection threshold a single
- * `.in('item_id', ids)` could hit for a big order/count).
+ * scanner/lookup API. Batched because a single `.in('item_id', ids)` for a
+ * big order or count fails on URL length (414 locally past ~215 uuids,
+ * "fetch failed" in production past ~395). Each batch is PAGED as well: an
+ * item can hold several rows, and an unpaged read was cut at 1000 rows
+ * with no error, hiding split stock from the picker.
  *
  * `warehouseId`, when passed, scopes holdings to that warehouse's
  * locations only — mirrors how `stock_reservations` and the digital pick
@@ -48,37 +49,34 @@ export async function fetchRackHoldingsByItem(
     locations: { name: string; kind: string; warehouse_id: string | null } | null;
   };
 
-  const chunks: string[][] = [];
-  for (let i = 0; i < uniqueIds.length; i += ID_CHUNK_SIZE) {
-    chunks.push(uniqueIds.slice(i, i + ID_CHUNK_SIZE));
-  }
-
-  const chunkResults = await Promise.all(
-    chunks.map(async (chunk) => {
-      let q = ctx.supabase
-        .from('item_stock_levels')
-        .select('item_id, quantity, locations!inner(name, kind, warehouse_id)')
-        .eq('organization_id', ctx.organizationId)
-        .in('item_id', chunk)
-        .in('locations.kind', ['rack', 'crate'])
-        .gt('quantity', 0);
-      if (warehouseId) q = q.eq('locations.warehouse_id', warehouseId);
-      const { data, error } = await q;
-      // Graceful degradation is deliberate (consumers fall back to the
-      // stale label) — but never silently: a persistent failure here would
-      // otherwise hide split stock from pickers with zero telemetry.
-      if (error) {
-        void reportError(new Error(`rack-holdings fetch: ${error.message}`), {
-          tag: 'rack-holdings.fetch',
-          level: 'warning',
-        });
-      }
+  const chunkResults = await mapIdBatches(uniqueIds, async (batch) => {
+    try {
       // `locations` is a to-one embed → a single object at runtime; the
       // generated PostgREST types model it as an array (same convention
       // as the other holdings reads in InventoryService).
-      return (data ?? []) as unknown as HoldingRow[];
-    }),
-  );
+      return (await fetchAllRows<unknown>((from, to) => {
+        let q = ctx.supabase
+          .from('item_stock_levels')
+          .select('item_id, quantity, locations!inner(name, kind, warehouse_id)')
+          .eq('organization_id', ctx.organizationId)
+          .in('item_id', batch)
+          .in('locations.kind', ['rack', 'crate'])
+          .gt('quantity', 0);
+        if (warehouseId) q = q.eq('locations.warehouse_id', warehouseId);
+        return q.order('id').range(from, to);
+      })) as HoldingRow[];
+    } catch (err) {
+      // Graceful degradation is deliberate (consumers fall back to the
+      // stale label), and per batch, so one failed batch costs only its own
+      // items — but never silently: a persistent failure here would
+      // otherwise hide split stock from pickers with zero telemetry.
+      void reportError(new Error(`rack-holdings fetch: ${rawErrorText(err)}`), {
+        tag: 'rack-holdings.fetch',
+        level: 'warning',
+      });
+      return [] as HoldingRow[];
+    }
+  });
 
   for (const row of chunkResults.flat()) {
     const name = row.locations?.name;
