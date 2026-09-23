@@ -33,6 +33,12 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
+  LABELS_URL_FALLBACK_MAX,
+  labelsItemsHref,
+  labelsSelectionHref,
+  writeLabelsSelection,
+} from '@/lib/inventory/labels-selection';
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -186,6 +192,26 @@ export function BulkActions({
 
   const count = selectedIds.length;
   const [draftBusy, setDraftBusy] = React.useState(false);
+
+  // The ids travel to the labels page through this tab's sessionStorage, not
+  // the URL: a link carrying every selected id was 16,437 bytes for 443
+  // items and Node refused it with 431 before the app ran. The page reads
+  // them back and fetches the rows in a POST body (labels-selection.ts).
+  function openLabels() {
+    const key = writeLabelsSelection(selectedIds);
+    if (key) {
+      router.push(labelsSelectionHref(key));
+      return;
+    }
+    // Storage blocked: a small selection still fits comfortably in a URL.
+    if (selectedIds.length <= LABELS_URL_FALLBACK_MAX) {
+      router.push(labelsItemsHref(selectedIds));
+      return;
+    }
+    toast.error(
+      `This browser would not keep the selection for the label page. Select ${LABELS_URL_FALLBACK_MAX} items or fewer and try again.`,
+    );
+  }
   const [exportOpen, setExportOpen] = React.useState(false);
 
   async function createDraftPos() {
@@ -404,12 +430,13 @@ export function BulkActions({
         ) : null}
 
         <span className="text-[var(--ed-ink-4)]">·</span>
-        <a
-          href={`/dashboard/inventory/labels?items=${selectedIds.join(',')}`}
+        <button
+          type="button"
+          onClick={openLabels}
           className="text-[var(--ed-ink-2)] hover:text-foreground"
         >
           Print labels
-        </a>
+        </button>
 
         <span className="text-[var(--ed-ink-4)]">·</span>
         <button

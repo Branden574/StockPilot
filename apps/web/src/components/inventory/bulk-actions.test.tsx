@@ -43,7 +43,7 @@ beforeEach(() => {
 });
 
 describe('BulkActions', () => {
-  it('renders selected count and a Print labels link with selectedIds joined', () => {
+  it('renders selected count and a Print labels button (the ids no longer ride in a link)', () => {
     render(
       <BulkActions
         selectedIds={['a', 'b', 'c']}
@@ -56,8 +56,9 @@ describe('BulkActions', () => {
       />,
     );
     expect(screen.getByText('3 selected')).toBeInTheDocument();
-    const link = screen.getByRole('link', { name: /Print labels/i });
-    expect(link).toHaveAttribute('href', '/dashboard/inventory/labels?items=a,b,c');
+    // Handoff behaviour is pinned in bulk-actions.labels.test.tsx.
+    expect(screen.getByRole('button', { name: /Print labels/i })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Print labels/i })).toBeNull();
   });
 
   it('shows Archive when selection is not archived', () => {
