@@ -23,6 +23,7 @@ import {
   TREND_WINDOW_DAYS,
   type ItemTrend,
 } from './lib/item-trends';
+import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
 import { fetchAllRows } from './lib/paginate';
 
 // The bucketing + reverse-walk math lives in lib/item-trends.ts so the
@@ -474,24 +475,35 @@ export class MovementsService {
   }
 
   /**
-   * id -> name for this export's from/to locations, in ONE batched query.
-   * A lookup error (or a hard-deleted location) degrades to a blank cell
-   * rather than failing the whole export — the same fail-open posture
-   * `buildInventoryExportRows` takes. Extracted so it can sit in the same
-   * Promise.all as the reason resolvers instead of running after them.
+   * id -> name for this export's from/to locations. A lookup error (or a
+   * hard-deleted location) degrades to a blank cell rather than failing the
+   * whole export — the same fail-open posture `buildInventoryExportRows`
+   * takes — and is reported. Extracted so it can sit in the same Promise.all
+   * as the reason resolvers instead of running after them.
+   *
+   * Batched: an export of up to 50,000 movements can name more locations than
+   * one `.in()` carries (~215 ids locally, ~395 in production).
    */
   private async resolveLocationNames(locationIds: string[]): Promise<Map<string, string>> {
     if (locationIds.length === 0) return new Map();
-    const { data, error } = await this.ctx.supabase
-      .from('locations')
-      .select('id, name')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('id', locationIds);
-    if (error) {
-      console.error('movements export: location name lookup failed', { error: error.message });
+    const ctx = this.ctx;
+    try {
+      const rows = await fetchAllRowsByIds<{ id: string; name: string }>(
+        locationIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('locations')
+            .select('id, name')
+            .eq('organization_id', ctx.organizationId)
+            .in('id', batch)
+            .order('id')
+            .range(from, to),
+      );
+      return new Map(rows.map((l) => [l.id, l.name]));
+    } catch (err) {
+      reportDegradedRead('movements.export.location_names', err, { ids: locationIds.length });
       return new Map();
     }
-    return new Map(((data ?? []) as Array<{ id: string; name: string }>).map((l) => [l.id, l.name]));
   }
 }
 
@@ -982,17 +994,25 @@ export async function getItemTrends(
   const itemIds = items.map((i) => i.id);
   // Paginated: >1000 movements across the requested items in the 14-day window
   // would otherwise be silently truncated, undercounting the trend lines.
-  const data = await fetchAllRows<{ item_id: string; quantity_change: number; created_at: string }>(
-    (from, to) =>
+  // Batched: the rental items page passes every rental item, and one `.in()`
+  // past ~215 ids fails (414 locally, a bare "fetch failed" in production).
+  // Each batch of 100 items is paged on its own, so the old 100,000-row cap
+  // on one combined read no longer applies.
+  const data = await fetchAllRowsByIds<{
+    item_id: string;
+    quantity_change: number;
+    created_at: string;
+  }>(
+    itemIds,
+    (batch) => (from, to) =>
       ctx.supabase
         .from('stock_movements')
         .select('item_id, quantity_change, created_at')
         .eq('organization_id', ctx.organizationId)
-        .in('item_id', itemIds)
+        .in('item_id', batch)
         .gte('created_at', new Date(startMs).toISOString())
         .order('id', { ascending: true })
         .range(from, to),
-    { cap: 100_000 },
   );
 
   const buckets = bucketTrendMovements(data ?? [], startMs);

@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { reportError } from '@/lib/error-reporter';
 import {
   chunkInFilterValues,
   IN_FILTER_DEFAULT_CONCURRENCY,
@@ -150,6 +151,26 @@ export function rawErrorText(err: unknown): string {
   if (err instanceof ServiceError && err.internalDetail) return err.internalDetail;
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+/**
+ * Report a COSMETIC read that failed and is being degraded (a photo, a label,
+ * a display number): level `warning`, a fixed message, the raw text in
+ * `extra.detail`. Only for reads whose answer does not feed a decision; a read
+ * that feeds stock, availability, access, money or audit must throw instead.
+ * `reportError` redacts signed URLs, but callers still pass only counts and
+ * ids in `extra`, never values a user typed.
+ */
+export function reportDegradedRead(
+  tag: string,
+  err: unknown,
+  extra: Record<string, string | number | boolean | null | undefined> = {},
+): void {
+  void reportError(new Error('Id-list lookup failed; showing the page without it'), {
+    tag,
+    level: 'warning',
+    extra: { ...extra, detail: rawErrorText(err) },
+  });
 }
 
 /** Adapt a throwing batched read to the `{ data, error }` shape that
