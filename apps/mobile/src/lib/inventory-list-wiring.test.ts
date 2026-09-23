@@ -286,3 +286,38 @@ describe('items list — identical behaviour to books, because the owner compare
     expect(inventory).toContain('stockPillFor(item)');
   });
 });
+
+describe('books list — a failed read says so, never passes for an empty or current shelf', () => {
+  it('reads rack holdings batched through the shared reader, and a failure sets a visible notice', () => {
+    // The holdings read put every loaded id (up to 1000) in one `.in()` URL,
+    // and its error was only logged: the cards silently fell back to the
+    // stored custom_fields rack label, which can be out of date.
+    const body = loadBody(books);
+    expect(body).toContain('settleIdBatchRead(readRackHoldings(supabase, orgId, ids))');
+    expect(body).toMatch(
+      /if \(holdingsRead\.ok\) \{\s*setHoldings\(holdingsRead\.value\);\s*\} else \{[\s\S]*?setHoldings\(new Map\(\)\);\s*setHoldingsError\(holdingsRead\.message\);/,
+    );
+    expect(body).not.toContain(".from('item_stock_levels')");
+    expect(books).toContain(
+      "Rack locations did not load, so a book's rack label may be out of date. Pull down to try again.",
+    );
+    expect(books).toMatch(/\{holdingsError \? \(/);
+  });
+
+  it('a refused list read shows an error, not "No books match."', () => {
+    const body = loadBody(books);
+    expect(body).toMatch(/if \(error\) \{\s*console\.warn\('books list', error\);\s*setLoadError\(error\.message\);/);
+    expect(books).toContain('`Could not load books: ${loadError}. Pull to retry.`');
+    expect(books).toMatch(/\{loadError \? \(/);
+  });
+
+  it('every load starts with its error flags cleared, and only the newest load writes', () => {
+    const body = loadBody(books);
+    const firstAwait = body.indexOf('await ');
+    const clears = body.slice(0, firstAwait);
+    expect(clears).toContain('setLoadError(null);');
+    expect(clears).toContain('setHoldingsError(null);');
+    // Two awaits (the list, the holdings), each followed by the token check.
+    expect(body.match(/if \(!isCurrent\(\)\) return;/g)?.length).toBe(2);
+  });
+});

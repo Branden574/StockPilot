@@ -56,7 +56,8 @@ import {
   type LifecycleStatus,
 } from '@/lib/expected-items';
 import { signListThumbnails } from '@/lib/image-cache';
-import { readPrimaryPhotos } from '@/lib/id-reads';
+import { settleIdBatchRead } from '@/lib/id-batches';
+import { readPrimaryPhotos, readRackHoldings } from '@/lib/id-reads';
 import { resolveListThumbnails } from '@/lib/list-thumbnails';
 import {
   buildGroupUnits,
@@ -71,7 +72,7 @@ import {
   readIsComplete,
 } from '@/lib/inventory-paging';
 import { supabase } from '@/lib/supabase';
-import { FONT } from '@/lib/theme';
+import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
 import { inventoryViewPredicate } from '@stockpilot/core';
@@ -216,6 +217,17 @@ export default function BooksScreen() {
   // cannot tell a book that has moved into a crate from one still on its rack,
   // and prints the departed rack. See placement-resolution.ts.
   const [holdings, setHoldings] = React.useState<ReadonlyMap<string, RackHoldingLike[]>>(new Map());
+  // Why the holdings above are empty when they did not load. The cards then
+  // fall back to the stored custom_fields rack label, which can be out of date,
+  // so the screen says so instead of passing the stale label off as current.
+  const [holdingsError, setHoldingsError] = React.useState<string | null>(null);
+  // A list read that FAILED is not an empty shelf: shown above the list rather
+  // than left to "No books match.".
+  const [loadError, setLoadError] = React.useState<string | null>(null);
+  // Load token: only the newest load may write state. The load is debounced
+  // and pull-to-refresh can overlap it, so an older load finishing late could
+  // otherwise put back its (possibly failed) answer over a newer one.
+  const loadSeq = React.useRef(0);
   const listRef = React.useRef<FlatList<BookGroupedRow> | null>(null);
   const [bookCategories, setBookCategories] = React.useState<FilterOption[]>([]);
   const [locations, setLocations] = React.useState<FilterOption[]>([]);
@@ -284,6 +296,11 @@ export default function BooksScreen() {
   const load = React.useCallback(
     async (query: string, f: FilterState, _allBookCatIds: string[]) => {
       if (!orgId) return;
+      const seq = (loadSeq.current += 1);
+      const isCurrent = () => seq === loadSeq.current;
+      // Every error flag belongs to ONE load: a new load starts clean.
+      setLoadError(null);
+      setHoldingsError(null);
 
       const sortMap: Record<typeof f.sort, { col: string; asc: boolean }> = {
         updated_desc: { col: 'updated_at', asc: false },
@@ -382,7 +399,13 @@ export default function BooksScreen() {
         .order(ord.col, { ascending: ord.asc })
         .order('id', { ascending: true })
         .limit(POSTGREST_MAX_ROWS);
-      if (error) console.warn('books list', error);
+      if (!isCurrent()) return;
+      // FAIL LOUD: a refused read used to be a console.warn and "No books
+      // match.", a claim about the org's shelves made from an error.
+      if (error) {
+        console.warn('books list', error);
+        setLoadError(error.message);
+      }
 
       let bookRows: BookRow[] = (data ?? []).map(toBookRow);
       const returned = bookRows.length;
@@ -410,32 +433,22 @@ export default function BooksScreen() {
       setServerRowCount(count ?? null);
       setLoadedRowCount(returned);
 
-      // Holdings for exactly the rows just loaded. Failure is non-fatal: an
-      // empty map degrades every card to the custom_fields label, which is the
-      // behaviour before this fetch existed — never a broken list.
+      // Holdings for exactly the rows just loaded, batched (the set can be
+      // 1000 rows, far past what one `.in()` URL carries). A failure is
+      // non-fatal but NOT silent: the cards fall back to the custom_fields
+      // label, and the notice above the list says that label may be out of
+      // date. Nothing is cached, so the next load reads again.
       const ids = bookRows.map((b) => b.id);
       if (ids.length > 0) {
-        const { data: levels, error: lvlErr } = await supabase
-          .from('item_stock_levels')
-          .select('item_id, quantity, locations!inner(name, kind)')
-          .eq('organization_id', orgId)
-          .in('item_id', ids)
-          .in('locations.kind', ['rack', 'crate'])
-          .gt('quantity', 0);
-        if (lvlErr) console.warn('books holdings', lvlErr);
-        const byItem = new Map<string, RackHoldingLike[]>();
-        for (const lvl of (levels ?? []) as unknown as {
-          item_id: string;
-          quantity: number;
-          locations: { name: string; kind: string } | { name: string; kind: string }[] | null;
-        }[]) {
-          const l = Array.isArray(lvl.locations) ? lvl.locations[0] : lvl.locations;
-          if (!l?.name) continue;
-          const arr = byItem.get(lvl.item_id) ?? [];
-          arr.push({ name: l.name, quantity: Number(lvl.quantity) || 0, kind: l.kind ?? null });
-          byItem.set(lvl.item_id, arr);
+        const holdingsRead = await settleIdBatchRead(readRackHoldings(supabase, orgId, ids));
+        if (!isCurrent()) return;
+        if (holdingsRead.ok) {
+          setHoldings(holdingsRead.value);
+        } else {
+          console.warn('books holdings', holdingsRead.message);
+          setHoldings(new Map());
+          setHoldingsError(holdingsRead.message);
         }
-        setHoldings(byItem);
       } else {
         setHoldings(new Map());
       }
@@ -779,6 +792,22 @@ export default function BooksScreen() {
           {truncated ? (
             <Body muted size={11.5} style={{ marginTop: 8 }}>
               {`Showing the first ${loadedRowCount.toLocaleString()} of ${(serverRowCount ?? loadedRowCount).toLocaleString()} placements. Search or filter to narrow — grouped totals below cover only the loaded rows.`}
+            </Body>
+          ) : null}
+
+          {/* A READ that failed is not an empty shelf. */}
+          {loadError ? (
+            <Body size={11.5} color={ACCENT.warn} style={{ marginTop: 8 }}>
+              {`Could not load books: ${loadError}. Pull to retry.`}
+            </Body>
+          ) : null}
+
+          {/* Holdings did not load, so each card shows its STORED rack label,
+              which can be out of date. Say so rather than pass it off as
+              where the book is now. */}
+          {holdingsError ? (
+            <Body size={11.5} color={ACCENT.warn} style={{ marginTop: 8 }}>
+              {"Rack locations did not load, so a book's rack label may be out of date. Pull down to try again."}
             </Body>
           ) : null}
         </View>
