@@ -458,14 +458,16 @@ export async function resolveCatalogScopeKey(
   if (FULL_VIEW_ROLES.has(viewer.role)) return FULL_CATALOG_SCOPE_KEY;
 
   const supabase = await createClient();
-  // GET: the helpers are STABLE, so PostgREST runs them read-only.
-  const call = (fn: string) => supabase.rpc(fn, undefined, { get: true });
+  // GET: the helpers are STABLE, so PostgREST runs them read-only. Each name
+  // is a literal at its call: the stock-write guard
+  // (inventory-list-invalidation.guard.test.ts) refuses an RPC it cannot name.
+  const get = { get: true } as const;
   const [fullRes, assignedRes, pairsRes, unrestrictedRes, allowedRes] = await Promise.all([
-    call('rls_inv_read_full_warehouse_ids'),
-    call('rls_inv_read_assigned_warehouse_ids'),
-    call('rls_inv_read_warehouse_charter_ids'),
-    call('rls_cat_unrestricted_org_ids'),
-    call('rls_cat_allowed_category_ids'),
+    supabase.rpc('rls_inv_read_full_warehouse_ids', undefined, get),
+    supabase.rpc('rls_inv_read_assigned_warehouse_ids', undefined, get),
+    supabase.rpc('rls_inv_read_warehouse_charter_ids', undefined, get),
+    supabase.rpc('rls_cat_unrestricted_org_ids', undefined, get),
+    supabase.rpc('rls_cat_allowed_category_ids', undefined, get),
   ]);
   const fullWarehouses = readUuidSet('rls_inv_read_full_warehouse_ids', fullRes);
   const assignedWarehouses = readUuidSet('rls_inv_read_assigned_warehouse_ids', assignedRes);
