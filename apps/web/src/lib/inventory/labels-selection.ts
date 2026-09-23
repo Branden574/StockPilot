@@ -16,6 +16,16 @@
 //
 // The entry is NOT removed on read: reloading the labels page (common while
 // fiddling with a printer) must still work. Old entries are pruned on write.
+//
+// A NEW TAB. The bar's control is a link, so cmd-click, middle-click and
+// "Open in new tab" work as they did when the ids rode in the URL. But
+// sessionStorage belongs to one tab, and Chrome no longer copies it into a tab
+// opened from a link, so the write also leaves a short-lived copy in
+// localStorage (LABELS_HANDOFF_TTL_MS, at most KEEP_SELECTIONS copies). A tab
+// that does not find the key in its own sessionStorage takes the copy and
+// keeps it in its own sessionStorage, so its reloads work after the copy
+// expires. The copy holds item ids only, and the labels page still asks the
+// server, which returns only the items the caller may read.
 
 /** The most items one label sheet prints; the Server Action refuses more. */
 export const LABELS_MAX_ITEMS = 500;
@@ -25,8 +35,13 @@ export const LABELS_MAX_ITEMS = 500;
  *  limit, leaving the rest for cookies. */
 export const LABELS_URL_FALLBACK_MAX = 100;
 
-/** sessionStorage key prefix. Versioned so a shape change cannot feed a stale blob. */
+/** Storage key prefix. Versioned so a shape change cannot feed a stale blob. */
 export const LABELS_SELECTION_PREFIX = 'sp:labels-selection:v1:';
+
+/** How long the localStorage copy for a new tab is honoured. A tab opened with
+ *  cmd-click loads at once; this leaves room for one opened in the background
+ *  and looked at a few minutes later. */
+export const LABELS_HANDOFF_TTL_MS = 10 * 60 * 1000;
 
 /** Selections kept per tab; older ones are pruned when a new one is written. */
 const KEEP_SELECTIONS = 5;
@@ -59,64 +74,118 @@ export function labelsItemsHref(ids: readonly string[]): string {
 
 type Stored = { ids: string[]; savedAt: number };
 
-function safeStorage(): Storage | null {
+function safeStorage(kind: 'session' | 'local'): Storage | null {
   try {
-    return typeof sessionStorage === 'undefined' ? null : sessionStorage;
+    if (kind === 'session') return typeof sessionStorage === 'undefined' ? null : sessionStorage;
+    return typeof localStorage === 'undefined' ? null : localStorage;
   } catch {
     return null;
+  }
+}
+
+/** Write one entry; false when the storage is missing, blocked or full. */
+function tryWrite(storage: Storage | null, key: string, value: string, prune: () => void): boolean {
+  if (!storage) return false;
+  try {
+    prune();
+    storage.setItem(LABELS_SELECTION_PREFIX + key, value);
+    return true;
+  } catch {
+    return false;
   }
 }
 
 /**
  * Store a selection and return its key, or null when storage is unavailable
- * (blocked site data, a sandboxed frame) or full. Client-only.
+ * (blocked site data, a sandboxed frame) or full. Writes this tab's copy and
+ * the short-lived copy a new tab can pick up. Client-only.
  */
 export function writeLabelsSelection(ids: readonly string[]): string | null {
-  const storage = safeStorage();
-  if (!storage) return null;
+  let key: string;
+  let value: string;
   try {
-    const key = crypto.randomUUID();
+    key = crypto.randomUUID();
     const entry: Stored = { ids: cleanLabelIds(ids), savedAt: Date.now() };
-    pruneOldSelections(storage);
-    storage.setItem(LABELS_SELECTION_PREFIX + key, JSON.stringify(entry));
-    return key;
+    value = JSON.stringify(entry);
+  } catch {
+    return null;
+  }
+  const session = safeStorage('session');
+  const local = safeStorage('local');
+  const inTab = tryWrite(session, key, value, () => pruneOldSelections(session!, 0));
+  const forNewTab = tryWrite(local, key, value, () =>
+    pruneOldSelections(local!, LABELS_HANDOFF_TTL_MS),
+  );
+  return inTab || forNewTab ? key : null;
+}
+
+/**
+ * Keep the newest KEEP_SELECTIONS - 1 entries, making room for one more, and
+ * drop entries older than `ttlMs` when it is set.
+ */
+function pruneOldSelections(storage: Storage, ttlMs: number): void {
+  const entries: Array<{ key: string; savedAt: number }> = [];
+  for (let i = 0; i < storage.length; i += 1) {
+    const key = storage.key(i);
+    if (!key || !key.startsWith(LABELS_SELECTION_PREFIX)) continue;
+    entries.push({ key, savedAt: savedAtOf(storage.getItem(key)) });
+  }
+  entries.sort((a, b) => b.savedAt - a.savedAt);
+  const now = Date.now();
+  entries.forEach(({ key, savedAt }, i) => {
+    if (i >= KEEP_SELECTIONS - 1 || (ttlMs > 0 && now - savedAt > ttlMs)) storage.removeItem(key);
+  });
+}
+
+function savedAtOf(raw: string | null): number {
+  try {
+    return Number((JSON.parse(raw ?? '{}') as Partial<Stored>).savedAt) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function parseIds(raw: string | null): string[] | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<Stored>;
+    if (!parsed || !Array.isArray(parsed.ids)) return null;
+    return cleanLabelIds(parsed.ids);
   } catch {
     return null;
   }
 }
 
-/** Keep the newest KEEP_SELECTIONS - 1 entries, making room for one more. */
-function pruneOldSelections(storage: Storage): void {
-  const entries: Array<{ key: string; savedAt: number }> = [];
-  for (let i = 0; i < storage.length; i += 1) {
-    const key = storage.key(i);
-    if (!key || !key.startsWith(LABELS_SELECTION_PREFIX)) continue;
-    let savedAt = 0;
-    try {
-      savedAt = Number((JSON.parse(storage.getItem(key) ?? '{}') as Partial<Stored>).savedAt) || 0;
-    } catch {
-      savedAt = 0;
-    }
-    entries.push({ key, savedAt });
-  }
-  entries.sort((a, b) => b.savedAt - a.savedAt);
-  for (const { key } of entries.slice(KEEP_SELECTIONS - 1)) storage.removeItem(key);
-}
-
 /**
- * The ids stored under `key`, or null when there is no such selection in this
- * tab (another tab, a cleared session, a malformed key or blob). Never throws.
+ * The ids stored under `key`, or null when there is no such selection (a tab
+ * of another browser, a handoff copy that expired, a cleared session, a
+ * malformed key or blob). This tab's own copy first, then the handoff copy
+ * for a tab opened from the link, which is then kept in this tab. Never
+ * throws.
  */
 export function readLabelsSelection(key: string): string[] | null {
   if (!isUuid(key)) return null;
-  const storage = safeStorage();
-  if (!storage) return null;
+  const session = safeStorage('session');
   try {
-    const raw = storage.getItem(LABELS_SELECTION_PREFIX + key);
+    const own = parseIds(session?.getItem(LABELS_SELECTION_PREFIX + key) ?? null);
+    if (own) return own;
+  } catch {
+    // Unreadable here; try the handoff copy.
+  }
+  const local = safeStorage('local');
+  if (!local) return null;
+  try {
+    const raw = local.getItem(LABELS_SELECTION_PREFIX + key);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<Stored>;
-    if (!parsed || !Array.isArray(parsed.ids)) return null;
-    return cleanLabelIds(parsed.ids);
+    if (Date.now() - savedAtOf(raw) > LABELS_HANDOFF_TTL_MS) {
+      local.removeItem(LABELS_SELECTION_PREFIX + key);
+      return null;
+    }
+    const ids = parseIds(raw);
+    if (!ids) return null;
+    // Kept in this tab, so reloading it works after the copy expires.
+    if (session) tryWrite(session, key, raw, () => pruneOldSelections(session, 0));
+    return ids;
   } catch {
     return null;
   }

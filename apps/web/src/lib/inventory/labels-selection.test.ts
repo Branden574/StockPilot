@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   cleanLabelIds,
+  LABELS_HANDOFF_TTL_MS,
   LABELS_SELECTION_PREFIX,
   labelsItemsHref,
   labelsSelectionHref,
@@ -20,7 +21,10 @@ import {
 const uuid = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
 const ids = (n: number) => Array.from({ length: n }, (_, i) => uuid(i));
 
-beforeEach(() => sessionStorage.clear());
+beforeEach(() => {
+  sessionStorage.clear();
+  localStorage.clear();
+});
 afterEach(() => vi.restoreAllMocks());
 
 describe('labels selection handoff', () => {
@@ -66,7 +70,7 @@ describe('labels selection handoff', () => {
   });
 
   it('returns null instead of throwing when storage refuses the write', () => {
-    vi.stubGlobal('sessionStorage', {
+    const refusing = {
       length: 0,
       key: () => null,
       getItem: () => null,
@@ -74,7 +78,9 @@ describe('labels selection handoff', () => {
       setItem: () => {
         throw new DOMException('quota', 'QuotaExceededError');
       },
-    });
+    };
+    vi.stubGlobal('sessionStorage', refusing);
+    vi.stubGlobal('localStorage', refusing);
     try {
       expect(writeLabelsSelection(ids(3))).toBeNull();
     } finally {
@@ -89,5 +95,53 @@ describe('labels selection handoff', () => {
   it('cleanLabelIds drops non-strings and non-uuids', () => {
     const mixed = 'ABCDEF00-0000-4000-8000-00000000000A';
     expect(cleanLabelIds([uuid(1), 42, null, '', 'x', mixed, uuid(1)])).toEqual([uuid(1), mixed]);
+  });
+});
+
+/**
+ * Review of this branch: Print labels used to be a plain link, so cmd-click or
+ * middle-click opened the sheet in a new tab and left the Items tab and its
+ * selection as they were. sessionStorage belongs to one tab (and Chrome no
+ * longer copies it into a tab opened from a link), so a ?selection= link
+ * opened in a new tab found nothing. A short-lived copy in localStorage lets
+ * the new tab pick the selection up.
+ */
+describe('labels selection in a new tab', () => {
+  it('a new tab reads the selection from the handoff copy and keeps it for its own reloads', () => {
+    const key = writeLabelsSelection(ids(443))!;
+    // A new tab starts with an empty sessionStorage.
+    sessionStorage.clear();
+
+    expect(readLabelsSelection(key)).toEqual(ids(443));
+    // Copied into the new tab's own storage, so a reload after the handoff
+    // copy expires still works.
+    localStorage.clear();
+    expect(readLabelsSelection(key)).toEqual(ids(443));
+  });
+
+  it(`the handoff copy expires after ${LABELS_HANDOFF_TTL_MS / 60_000} minutes`, () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    const key = writeLabelsSelection(ids(3))!;
+    sessionStorage.clear();
+    now.mockReturnValue(1_000_000 + LABELS_HANDOFF_TTL_MS + 1);
+    expect(readLabelsSelection(key)).toBeNull();
+    // And an expired copy is removed, not left behind.
+    expect(Object.keys(localStorage).filter((k) => k.startsWith(LABELS_SELECTION_PREFIX))).toEqual(
+      [],
+    );
+  });
+
+  it('keeps at most five handoff copies, and drops expired ones on the next write', () => {
+    const now = vi.spyOn(Date, 'now');
+    for (let i = 0; i < 7; i += 1) {
+      now.mockReturnValue(1_000 + i);
+      writeLabelsSelection(ids(2));
+    }
+    const handoff = () =>
+      Object.keys(localStorage).filter((k) => k.startsWith(LABELS_SELECTION_PREFIX));
+    expect(handoff()).toHaveLength(5);
+    now.mockReturnValue(1_000 + LABELS_HANDOFF_TTL_MS + 10);
+    writeLabelsSelection(ids(2));
+    expect(handoff()).toHaveLength(1);
   });
 });
