@@ -132,6 +132,13 @@ describe('rentalPickerStatus (new rental)', () => {
     });
   });
 
+  it('an EMPTY error message still blocks: a failure is not decided by its text', () => {
+    // A gateway 502 or 504 with an empty body gives an empty message.
+    for (const key of ['warehousesError', 'itemsError', 'stockError'] as const) {
+      expect(rentalPickerStatus({ ...none, [key]: '' }).blocked, key).toBe(true);
+    }
+  });
+
   it('a failed warehouses read blocks it', () => {
     expect(rentalPickerStatus({ ...none, warehousesError: 'offline', stockError: 'x' })).toEqual({
       blocked: true,

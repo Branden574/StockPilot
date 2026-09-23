@@ -33,7 +33,7 @@ import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { showWriteCta } from '@/lib/cta-gating';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
-import { settleIdBatchRead } from '@/lib/id-batches';
+import { readErrorMessage, settleIdBatchRead } from '@/lib/id-batches';
 import { readOpenReservations, sumReservedByItem } from '@/lib/id-reads';
 import { rentalPickerStatus } from '@/lib/rental-items';
 import { useOrg } from '@/lib/use-org';
@@ -133,7 +133,7 @@ export default function NewRental() {
     void (async () => {
       setWarehousesLoading(true);
       setWarehousesError(null);
-      const { data, error } = await supabase
+      const { data, error, status } = await supabase
         .from('warehouses')
         .select('id, name')
         .eq('organization_id', orgId)
@@ -145,7 +145,9 @@ export default function NewRental() {
         setWarehouses([]);
         setWarehouseId(null);
         setCart({});
-        setWarehousesError(error.message);
+        // Never empty: a gateway 502 or 504 with an empty body gives an empty
+        // error.message, which would leave the failure with no reason.
+        setWarehousesError(readErrorMessage(error, status));
         setWarehousesLoading(false);
         return;
       }
@@ -182,7 +184,7 @@ export default function NewRental() {
       // whose item is not in the rental warehouse, so keeping it would
       // guarantee a refusal the operator cannot see the cause of.
       setCart({});
-      const { data, error } = await supabase
+      const { data, error, status } = await supabase
         .from('inventory_items')
         .select('id, name, sku, quantity_on_hand')
         .eq('organization_id', orgId)
@@ -199,7 +201,7 @@ export default function NewRental() {
         console.warn('rental items', error);
         setItems([]);
         setReservedByItem({});
-        setItemsError(error.message);
+        setItemsError(readErrorMessage(error, status));
         setItemsLoading(false);
         return;
       }

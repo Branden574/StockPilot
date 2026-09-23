@@ -149,8 +149,12 @@ describe('rentals/new.tsx — a failed read blocks the picker, never reads as av
 
   it('a failed items read sets its own error instead of "No rental items in this warehouse"', () => {
     const body = itemsEffect();
-    expect(body).toContain('const { data, error } = await supabase');
-    expect(body).toMatch(/if \(error\) \{[\s\S]*?setItemsError\(error\.message\);[\s\S]*?return;/);
+    expect(body).toContain('const { data, error, status } = await supabase');
+    // readErrorMessage: never empty. A 502 or 504 with an empty body gives an
+    // empty error.message, which left the failure with no reason under it.
+    expect(body).toMatch(
+      /if \(error\) \{[\s\S]*?setItemsError\(readErrorMessage\(error, status\)\);[\s\S]*?return;/,
+    );
   });
 
   it('every items load clears both flags before its first read', () => {
@@ -164,9 +168,28 @@ describe('rentals/new.tsx — a failed read blocks the picker, never reads as av
     const body = warehousesEffect();
     const firstAwait = body.indexOf('await ');
     expect(body.slice(0, firstAwait)).toContain('setWarehousesError(null);');
-    expect(body).toMatch(/if \(error\) \{[\s\S]*?setWarehousesError\(error\.message\);/);
+    expect(body).toContain('const { data, error, status } = await supabase');
+    expect(body).toMatch(/if \(error\) \{[\s\S]*?setWarehousesError\(readErrorMessage\(error, status\)\);/);
     expect(source).toContain('onRetry={() => setWarehousesNonce((n) => n + 1)}');
     expect(source).toContain('No active warehouses to check out from. Add one on the web first.');
+  });
+
+  it('no failure flag is ever tested for truthiness, and none stores a raw error message', () => {
+    // An empty message is still a failure. Behind a truthiness test the
+    // warehouses section would say "No active warehouses to check out from"
+    // for a read that failed.
+    const src = code();
+    expect(src).toContain('{warehousesError !== null ? (');
+    for (const flag of ['warehousesError', 'itemsError', 'stockError']) {
+      expect(src, `${flag} tested for truthiness`).not.toMatch(
+        new RegExp(`(?:[!(&|?]\\s*|\\{)${flag}\\s*(?:\\?|&&|\\|\\||\\))`),
+      );
+    }
+    expect(src).not.toMatch(/set(?:Warehouses|Items|Stock)Error\(error\.message\)/);
+    // The failure is decided before the empty-list sentence can be reached.
+    expect(src.indexOf('{warehousesError !== null ? (')).toBeLessThan(
+      src.indexOf('No active warehouses to check out from.'),
+    );
   });
 
   it('Check out is disabled and submit() refuses while the picker is blocked', () => {
