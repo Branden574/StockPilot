@@ -82,7 +82,9 @@ export function NavProgressBar({
   const deferredStartRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const slowTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const onSlowRef = React.useRef(onSlowNavigation);
-  onSlowRef.current = onSlowNavigation;
+  React.useEffect(() => {
+    onSlowRef.current = onSlowNavigation;
+  }, [onSlowNavigation]);
 
   React.useEffect(() => {
     function isModifiedClick(e: MouseEvent): boolean {
