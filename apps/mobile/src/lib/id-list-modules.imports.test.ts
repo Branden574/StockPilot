@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 
 const LIB = __dirname;
 
-const PURE_MODULES = ['id-batches.ts', 'id-reads.ts', 'list-thumbnails.ts'];
+const PURE_MODULES = ['id-batches.ts', 'id-reads.ts', 'list-thumbnails.ts', 'order-stock-check.ts'];
 
 const FORBIDDEN = [
   /^\.\/supabase$/,
