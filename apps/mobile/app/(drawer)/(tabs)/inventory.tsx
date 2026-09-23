@@ -152,6 +152,31 @@ const ITEM_COLUMNS = `id, name, sku, quantity_on_hand, reorder_point, status, ca
            category:categories!category_id (name),
            product_group:product_groups!group_id (default_counting_unit)`;
 
+/**
+ * ITEM_COLUMNS plus an INNER embed of the item's stock levels, used only when
+ * the LOCATION filter is on. The filter lists sites, but an item's real
+ * placement lives in item_stock_levels, not primary_location_id (a home/zone
+ * hint that is usually null). Filtering the list read through this embed
+ * (`.in('item_stock_levels.location_id', …)` plus quantity > 0) keeps only
+ * items that hold stock there, in the SAME request, so no id list rides in the
+ * URL.
+ *
+ * It replaced a two-step read: item_stock_levels first, then `.in('id', ids)`
+ * on the list. That id list reached 1000 uuids for a busy site and broke the
+ * request (past about 215 locally), the first read ignored its error (a failure
+ * became "No items match") and it was never paged. With `!inner`, PostgREST
+ * keeps only parents with a matching child, never duplicates a parent, and
+ * `count: 'exact'` counts the filtered parents. The embed is NOT aliased so the
+ * filter paths can use the table name. The extra `item_stock_levels` field on
+ * each row is ignored by the mapper below.
+ */
+const ITEM_COLUMNS_AT_LOCATIONS = `id, name, sku, quantity_on_hand, reorder_point, status, category_id,
+           primary_location_id, charter_id, warehouse_id, updated_at, auto_archived,
+           awaiting_first_receipt, group_id, variant_size,
+           category:categories!category_id (name),
+           product_group:product_groups!group_id (default_counting_unit),
+           item_stock_levels!inner(location_id)`;
+
 /** One definition of the Items tab, shared with the web list. */
 const ITEMS_VIEW = inventoryViewPredicate('items');
 
@@ -316,28 +341,6 @@ export default function Inventory() {
       // as "Out of stock" before anything was delivered.
       const pred = listStatusPredicate(f.status);
 
-      let placedItemIds: string[] | null = null;
-      if (f.locationIds.length > 0) {
-        // The LOCATION filter lists racks/zones, but an item's real placement
-        // lives in item_stock_levels — NOT primary_location_id (a home/zone
-        // hint that's usually null or a zone, so filtering it by a rack matched
-        // nothing). Resolve the items that physically hold stock at the
-        // selected locations, then constrain the list to them. Resolved ONCE,
-        // before the reads below, so both of them narrow identically.
-        const { data: levelRows } = await supabase
-          .from('item_stock_levels')
-          .select('item_id')
-          .eq('organization_id', orgIdParam)
-          .in('location_id', f.locationIds)
-          .gt('quantity', 0);
-        const ids = Array.from(
-          new Set((levelRows ?? []).map((r) => (r as { item_id: string }).item_id)),
-        );
-        // No items at those locations → match nothing (sentinel id) rather than
-        // silently dropping the filter.
-        placedItemIds = ids.length ? ids : ['00000000-0000-0000-0000-000000000000'];
-      }
-
       // EVERY predicate lives in ONE place. It used to serve two reads (the
       // visible page and a per-SKU count) that had to see the identical
       // dataset; there is only one read now, but the builder stays — it is
@@ -384,8 +387,14 @@ export default function Inventory() {
         if (f.categoryIds.length > 0) {
           r = r.in('category_id', f.categoryIds);
         }
-        if (placedItemIds) {
-          r = r.in('id', placedItemIds);
+        if (f.locationIds.length > 0) {
+          // Items holding stock at the selected locations, through the inner
+          // embed in ITEM_COLUMNS_AT_LOCATIONS (see there). The chips are
+          // user-picked sites, so this list stays short.
+          r = r
+            // in-list-bound: user-picked location filter chips, a handful of sites
+            .in('item_stock_levels.location_id', f.locationIds)
+            .gt('item_stock_levels.quantity', 0);
         }
         if (f.charterIds.length > 0) {
           const wantsGeneric = f.charterIds.includes(FILTER_GENERIC_CHARTER_ID);
@@ -416,10 +425,19 @@ export default function Inventory() {
       // `id` is a SECONDARY sort key: updated_at / name / quantity all tie
       // freely, and ties ordered differently between two fetches can put a row
       // in two groups or none.
-      const { data, count, error } = await scoped(ITEM_COLUMNS, { count: 'exact' })
-        .order(ord.col, { ascending: ord.asc })
-        .order('id', { ascending: true })
-        .limit(POSTGREST_MAX_ROWS);
+      // The location filter needs the stock-levels embed in the SELECT, so it
+      // reads the wider column list; every predicate is still the one builder.
+      // Two literal calls rather than a union-typed column list: the typed
+      // select parser cannot parse a union of select strings.
+      const listRead = <Q extends string>(columns: Q) =>
+        scoped(columns, { count: 'exact' })
+          .order(ord.col, { ascending: ord.asc })
+          .order('id', { ascending: true })
+          .limit(POSTGREST_MAX_ROWS);
+      const { data, count, error } =
+        f.locationIds.length > 0
+          ? await listRead(ITEM_COLUMNS_AT_LOCATIONS)
+          : await listRead(ITEM_COLUMNS);
       // FAIL LOUD (release-order rule). A console.warn is invisible on a phone,
       // so a refused read rendered "No items match." — a claim about the org's
       // inventory, made from an error. This read was WIDENED by the sports

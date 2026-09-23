@@ -229,11 +229,28 @@ describe('items list — identical behaviour to books, because the owner compare
   });
 
   it('runs the count read through the SAME predicate builder as the row read', () => {
-    // One `scoped` builder owns every predicate, and the location pre-query is
-    // resolved once, above it, so the rows and their exact count can never
-    // answer different questions.
+    // One `scoped` builder owns every predicate (the location filter included),
+    // so the rows and their exact count can never answer different questions.
     expect(inventory).toContain('const scoped = <Q extends string>(');
-    expect(inventory).toContain("scoped(ITEM_COLUMNS, { count: 'exact' })");
+    expect(inventory).toContain("scoped(columns, { count: 'exact' })");
+    expect(inventory).toContain('await listRead(ITEM_COLUMNS_AT_LOCATIONS)');
+    expect(inventory).toContain('await listRead(ITEM_COLUMNS)');
+  });
+
+  it('filters by location through an inner stock-levels embed, never an id list in the URL', () => {
+    // The two-step read (item_stock_levels, then `.in('id', placedItemIds)`)
+    // put up to 1000 uuids in the list read's URL, which failed past about 215
+    // locally, and its first read ignored its error, so a failure became the
+    // zero-uuid sentinel and a silent "No items match.".
+    const body = loadBody(inventory);
+    expect(inventory).toContain('item_stock_levels!inner(location_id)`;');
+    expect(body).toContain(".in('item_stock_levels.location_id', f.locationIds)");
+    expect(body).toContain(".gt('item_stock_levels.quantity', 0)");
+    expect(body).not.toContain('placedItemIds');
+    expect(body).not.toContain('00000000-0000-0000-0000-000000000000');
+    expect(body).not.toContain(".from('item_stock_levels')");
+    // One read, so its error takes the visible banner path.
+    expect(body).toContain('setLoadError(error.message)');
   });
 
   it('renders the partial marker on a collapsed header (overflow case only)', () => {
