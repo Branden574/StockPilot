@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest';
  *   .in(col, values)          .not(col, 'in', values)
  *   .filter(col, 'in', values)   and `in.(` inside a filter string (.or())
  * and fails on any whose values are not provably short. A site passes when:
- *   - the values are an array literal (`['rack', 'crate']`);
+ *   - the values are an array literal (`['rack', 'crate']`), not a spread;
  *   - the values are a SCREAMING_CASE constant (`RECEIVABLE_STATUSES`);
  *   - the values are the identifier `batch` (a fetchAllRowsByIds builder);
  *   - or an `// in-list-bound: <reason>` comment sits on the same line or up
@@ -164,7 +164,8 @@ function findInSites(src: string): InSite[] {
 function siteAllowance(site: InSite, srcLines: readonly string[]): string | null {
   const v = site.values;
   if (v !== null) {
-    if (v.startsWith('[')) return 'array literal';
+    // A spread (`[...ids]`) is an array literal of unbounded length.
+    if (v.startsWith('[') && !v.includes('...')) return 'array literal';
     if (/^[A-Z][A-Z0-9_]*$/.test(v)) return 'constant';
     if (v === 'batch') return 'batched';
   }
@@ -226,6 +227,7 @@ describe('in-filter guard: the scanner', () => {
       '',
       '',
       "q.in('id', farIds);", // 14: annotation is 4 lines up, flagged
+      "q.in('id', [...ids]);", // 15: a spread is not a short literal, flagged
     ].join('\n');
     const lines = src.split('\n');
     const verdicts = findInSites(src).map((s) => [s.line, siteAllowance(s, lines)]);
@@ -236,6 +238,7 @@ describe('in-filter guard: the scanner', () => {
       [4, 'batched'],
       [6, 'annotated: one page of 50 rows'],
       [14, null],
+      [15, null],
     ]);
   });
 
