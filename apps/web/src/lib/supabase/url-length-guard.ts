@@ -29,12 +29,15 @@ export const URL_WARN_CHARS = 6_000;
  *  above this, matching the local gateway's own ~8 KB limit, so a long list
  *  fails the same way everywhere. */
 export const URL_BLOCK_CHARS_DEV = 8_000;
-/** Production: refuse above this. The measured production failure is about
- *  395 uuids, about 15.4 KB of path with a short select, and undici's 16 KB
- *  limit covers the WHOLE response header block (Content-Location plus every
- *  other header), so the block sits below the failure point rather than at
- *  16,384, leaving room for the other headers. */
-export const URL_BLOCK_CHARS_PROD = 14_500;
+/** Production: refuse above this, and only above it. undici's 16,384-byte
+ *  limit covers the WHOLE response header block (Content-Location plus about
+ *  890 bytes of other headers). A read-only probe of production (2026-09-23,
+ *  stock_reservations, a short select) was answered at 15,549 characters of
+ *  path plus query and failed at 15,588. The block sits just above that
+ *  failure, with a margin for a response with slightly fewer headers, so it
+ *  never refuses a request that could still succeed; everything past
+ *  URL_WARN_CHARS is reported either way. */
+export const URL_BLOCK_CHARS_PROD = 15_700;
 
 const REST_PATH = '/rest/v1/';
 

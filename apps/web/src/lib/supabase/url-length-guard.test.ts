@@ -72,9 +72,9 @@ describe('guardedSupabaseFetch', () => {
     expect(JSON.stringify(ctx.extra)).not.toContain('aaaa');
   });
 
-  it('in production refuses 15,500 characters with a 414 and never calls fetch', async () => {
+  it('in production refuses 15,800 characters with a 414 and never calls fetch', async () => {
     vi.stubEnv('NODE_ENV', 'production');
-    const res = await guardedSupabaseFetch(restUrl(15_500));
+    const res = await guardedSupabaseFetch(restUrl(15_800));
     expect(res.status).toBe(414);
     expect(realFetch).not.toHaveBeenCalled();
     const body = (await res.json()) as { code: string; message: string };
@@ -93,6 +93,14 @@ describe('guardedSupabaseFetch', () => {
     expect(realFetch).toHaveBeenCalledTimes(1);
   });
 
+  it('in production never refuses a length production was measured to answer', async () => {
+    // Probe 2026-09-23: 15,549 characters answered, 15,588 failed in undici.
+    vi.stubEnv('NODE_ENV', 'production');
+    expect((await guardedSupabaseFetch(restUrl(15_549))).status).toBe(200);
+    expect(realFetch).toHaveBeenCalledTimes(1);
+    expect(URL_BLOCK_CHARS_PROD).toBeGreaterThan(15_588);
+  });
+
   it('outside production refuses 9,000 characters like the local gateway does', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const res = await guardedSupabaseFetch(restUrl(9_000));
@@ -103,7 +111,7 @@ describe('guardedSupabaseFetch', () => {
   it('a production build against a local stack (the lab) refuses at the local gateway limit', async () => {
     // The production-model lab runs `next start`, so NODE_ENV is production,
     // but its Supabase is the local stack behind a gateway that refuses past
-    // ~8 KB. It gets the local limit and the named refusal, not the 14,500 one.
+    // ~8 KB. It gets the local limit and the named refusal, not the production one.
     vi.stubEnv('NODE_ENV', 'production');
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     for (const host of ['http://127.0.0.1:54400', 'http://localhost:54321', 'http://[::1]:54321']) {
