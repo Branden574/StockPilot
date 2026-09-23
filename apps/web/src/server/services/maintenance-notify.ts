@@ -10,6 +10,7 @@ import {
 import { reportError } from '@/lib/error-reporter';
 import { type NotificationPrefKey } from '@/lib/notification-prefs';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 
 import { fetchAllRowsByIds, rawErrorText } from './lib/fetch-by-ids';
 import { createNotification } from './notifications';
@@ -270,6 +271,10 @@ export async function resolveMaintenanceAudience(args: {
  * shape is what Task 18's mobile web-path-rewrite rules translate into a
  * native deep link; changing it breaks that translation.
  */
+/** Notifications created at once by one fan-out (purchase-orders.ts uses the
+ *  same number for the same reason). */
+const NOTIFY_CONCURRENCY = 6;
+
 export async function notifyMaintenanceEvent(args: {
   organizationId: string;
   event: MaintenanceNotifyEvent;
@@ -305,18 +310,19 @@ export async function notifyMaintenanceEvent(args: {
     if (recipients.length === 0) return;
 
     const title = titleFor(event, requestHandle);
-    await Promise.all(
-      recipients.map((userId) =>
-        createNotification({
-          organizationId,
-          userId,
-          type: 'maintenance_request',
-          title,
-          body: subject,
-          link: `/dashboard/maintenance/${requestId}`,
-          metadata: { request_id: requestId, event },
-        }),
-      ),
+    // At most NOTIFY_CONCURRENCY at once: each one is a profile read and an
+    // INSERT, and the audience grows with the org. createNotification never
+    // throws, so every recipient is attempted.
+    await mapWithConcurrency(recipients, NOTIFY_CONCURRENCY, (userId) =>
+      createNotification({
+        organizationId,
+        userId,
+        type: 'maintenance_request',
+        title,
+        body: subject,
+        link: `/dashboard/maintenance/${requestId}`,
+        metadata: { request_id: requestId, event },
+      }),
     );
   } catch (err) {
     void reportError(err instanceof Error ? err : new Error(String(err)), {

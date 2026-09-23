@@ -486,4 +486,35 @@ describe('PurchaseOrdersService.update — notifications', () => {
     expect(call.userId).toBe('user-admin-other');
     expect(call.userId).not.toBe('user-test');
   });
+
+  // Each createNotification is a user_profiles read and a notifications INSERT
+  // (plus the push trigger). All owners and admins were notified at once, so the
+  // number of requests in flight grew with the org's admin count.
+  it('notifies a large admin list with at most 6 notifications in flight', async () => {
+    mockAdminMembers.mockResolvedValue({
+      data: Array.from({ length: 40 }, (_, i) => ({ user_id: `admin-${i}` })),
+      error: null,
+    });
+    let inFlight = 0;
+    let peak = 0;
+    mockCreateNotification.mockImplementation(async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 2));
+      inFlight -= 1;
+      return 'notif-id';
+    });
+
+    const stub = makeUpdateStub();
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+    await svc.update(PO_ID, {
+      lines: [{ itemId: 'item-uuid-1', quantityOrdered: 1, unitCost: 10 }],
+    });
+    await vi.waitFor(() => expect(mockCreateNotification).toHaveBeenCalledTimes(40), {
+      timeout: 2000,
+    });
+    await vi.waitFor(() => expect(inFlight).toBe(0));
+
+    expect(peak).toBe(6);
+  });
 });

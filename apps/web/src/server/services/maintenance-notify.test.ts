@@ -336,6 +336,52 @@ describe('notifyMaintenanceEvent — insert shape, link, and NO push call', () =
     expect(insert.title).toBe('Urgent maintenance request MR-2026-000002');
   });
 
+  // Each createNotification is a user_profiles read and a notifications INSERT
+  // (plus the push trigger). The whole permission-resolved audience, which has
+  // no cap, used to be notified at once.
+  it('notifies a large audience with at most 6 notifications in flight, and still reaches everyone', async () => {
+    const members = Array.from({ length: 40 }, (_, i) => ({
+      user_id: `admin-${i}`,
+      role: 'admin' as const,
+    }));
+    const stub = buildAdmin({
+      members,
+      notifyAudience: Object.fromEntries(members.map((m) => [m.user_id, 'all' as const])),
+    });
+    let inFlight = 0;
+    let peak = 0;
+    const base = stub.client.from;
+    stub.client.from = (table: string) => {
+      if (table !== 'user_profiles') return base(table);
+      // createNotification's first request: the disabled-account read.
+      return {
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => {
+              inFlight += 1;
+              peak = Math.max(peak, inFlight);
+              await new Promise((r) => setTimeout(r, 2));
+              inFlight -= 1;
+              return { data: { disabled_at: null }, error: null };
+            },
+          }),
+        }),
+      };
+    };
+
+    await notifyMaintenanceEvent({
+      organizationId: ORG,
+      event: 'new_request',
+      requestId: 'req-9',
+      requestHandle: 'MR-2026-000009',
+      subject: 'Heater out',
+      actorUserId: 'someone-else',
+    });
+
+    expect(stub.chainArgsAll.get('notifications.insert')).toHaveLength(40);
+    expect(peak).toBe(6);
+  });
+
   it('an empty resolved audience never calls createNotification at all', async () => {
     const stub = buildAdmin({
       members: [{ user_id: 'admin-1', role: 'admin' }],
