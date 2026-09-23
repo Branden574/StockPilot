@@ -1,6 +1,16 @@
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
-import { buildRentalItemRows, rentalItemsEyebrow, rentalPickerStatus } from './rental-items';
+import { fakePostgrest, filterValue, inValues, uuid, type RecordedCall } from './__fixtures__/fake-postgrest';
+import type { PageResult } from './id-batches';
+import {
+  buildRentalItemRows,
+  loadRentalItemsView,
+  rentalItemsEyebrow,
+  rentalPickerStatus,
+} from './rental-items';
 
 describe('buildRentalItemRows', () => {
   it('available = on hand minus every open reservation for that item', () => {
@@ -105,5 +115,80 @@ describe('rentalPickerStatus (new rental)', () => {
       message: 'Could not load warehouses.',
       detail: 'offline',
     });
+  });
+});
+
+describe('loadRentalItemsView (Rentals -> Items)', () => {
+  const ORG = 'org-1';
+  const sources = Array.from({ length: 200 }, (_, i) => ({
+    id: uuid(i),
+    name: `Item ${i}`,
+    sku: null,
+    quantity_on_hand: 4,
+  }));
+
+  function server(fail?: 'stock_reservations' | 'item_images') {
+    return fakePostgrest((call: RecordedCall): PageResult<unknown> => {
+      if (call.table === fail) return { data: null, error: { message: 'URI too long' }, status: 414 };
+      const ids = (inValues(call, 'item_id') ?? []) as string[];
+      const rows =
+        call.table === 'stock_reservations'
+          ? ids.map((id) => ({ id: `r-${id}`, item_id: id, quantity: 1 }))
+          : ids
+              .filter((_, i) => i % 2 === 0)
+              .map((id) => ({ item_id: id, storage_path: `${id}.jpg`, thumb_path: null }));
+      return { data: rows.slice(call.from, call.to + 1), error: null, status: 200 };
+    });
+  }
+
+  it('batches both reads (200 ids is right at the local URL limit) and folds reservations in', async () => {
+    const client = server();
+    const view = await loadRentalItemsView(client, ORG, sources);
+    expect(view.failed).toBe(false);
+    expect(view.rows).toHaveLength(200);
+    expect(view.rows[0]).toMatchObject({ onHand: 4, reserved: 1, available: 3 });
+    expect(view.photoByItem.size).toBe(100);
+    for (const c of client.calls) {
+      expect(inValues(c, 'item_id')!.length).toBeLessThanOrEqual(100);
+      expect(filterValue(c, 'eq', 'organization_id')).toBe(ORG);
+    }
+    expect(client.calls.filter((c) => c.table === 'stock_reservations')).toHaveLength(2);
+    expect(client.calls.filter((c) => c.table === 'item_images')).toHaveLength(2);
+  });
+
+  it('a failed reservations read FAILS the view: Available would silently equal On hand', async () => {
+    const view = await loadRentalItemsView(server('stock_reservations'), ORG, sources);
+    expect(view).toEqual({ failed: true, message: 'URI too long', rows: [], photoByItem: new Map() });
+  });
+
+  it('a failed photo read leaves glyphs, with the rows and their figures intact', async () => {
+    const view = await loadRentalItemsView(server('item_images'), ORG, sources);
+    expect(view.failed).toBe(false);
+    expect(view.rows).toHaveLength(200);
+    expect(view.rows[0]).toMatchObject({ reserved: 1, available: 3 });
+    expect(view.photoByItem.size).toBe(0);
+  });
+});
+
+describe('Rentals screen wiring', () => {
+  const screen = readFileSync(path.resolve(__dirname, '../screens/rentals.tsx'), 'utf8');
+
+  it('reads reservations and photos through loadRentalItemsView, never an unbatched in()', () => {
+    expect(screen).toContain('await loadRentalItemsView(supabase, orgId, sources)');
+    expect(screen).not.toContain(".from('stock_reservations')");
+    expect(screen).not.toContain(".from('item_images')");
+  });
+
+  it('a failed view sets the failed state with no total, so the eyebrow quotes no count', () => {
+    expect(screen).toMatch(
+      /if \(view\.failed\) \{[\s\S]*?setItems\(\{ orgId, rows: \[\], total: null, images: new Map\(\), failed: true \}\);\s*return;/,
+    );
+  });
+
+  it('a failed checkouts read says so instead of "No rentals yet.", on every load', () => {
+    expect(screen).toContain('const { data, error } = await supabase\n      .from(\'rentals\')');
+    expect(screen).toContain('setCheckoutsFailed(Boolean(error));');
+    expect(screen).toContain("emptyTitle={checkoutsFailed ? 'Could not load rentals.' : 'No rentals yet.'}");
+    expect(screen).toMatch(/checkoutsFailed\s*\? 'RENTALS · CHECKOUTS'/);
   });
 });

@@ -1,5 +1,8 @@
 import { stockAvailability } from '@stockpilot/core';
 
+import { settleIdBatchRead, type IdReadClient } from './id-batches';
+import { readOpenReservations, readPrimaryPhotos, type PhotoPaths } from './id-reads';
+
 /**
  * The Rentals screen's Items view: the rental inventory itself, twin of web's
  * Rentals -> Items (`/dashboard/rentals/items`).
@@ -70,6 +73,49 @@ export function buildRentalItemRows(
       overReserved: stock.overReserved,
     };
   });
+}
+
+/** The Rentals screen's Items view, before its photos are signed. */
+export interface RentalItemsView {
+  /** The availability figures could not be computed: show the failed state. */
+  failed: boolean;
+  /** Why it failed, for the log. */
+  message: string | null;
+  rows: RentalItemRow[];
+  /** Primary photo per item. Empty when the photo read failed (glyphs). */
+  photoByItem: Map<string, PhotoPaths>;
+}
+
+/**
+ * Open reservations and primary photos for the fetched rental items, both
+ * batched (up to RENTAL_ITEMS_LIMIT = 200 ids: about 7.8 KB of uuids, right at
+ * the local 8 KB URL limit for one `.in()`).
+ *
+ * - Reservations FEED A FIGURE the operator acts on (Available, OVER-LENT). A
+ *   failure fails the view: it used to be ignored, so Available silently
+ *   equalled On hand.
+ * - Photos are cosmetic: a failure leaves glyphs. Nothing is cached, since the
+ *   view is rebuilt on every load.
+ */
+export async function loadRentalItemsView(
+  client: IdReadClient,
+  orgId: string,
+  sources: readonly RentalItemSource[],
+): Promise<RentalItemsView> {
+  const ids = sources.map((s) => s.id);
+  const [reservations, photos] = await Promise.all([
+    settleIdBatchRead(readOpenReservations(client, orgId, ids)),
+    settleIdBatchRead(readPrimaryPhotos(client, orgId, ids)),
+  ]);
+  if (!reservations.ok) {
+    return { failed: true, message: reservations.message, rows: [], photoByItem: new Map() };
+  }
+  return {
+    failed: false,
+    message: null,
+    rows: buildRentalItemRows(sources, reservations.value),
+    photoByItem: photos.ok ? new Map(photos.value) : new Map(),
+  };
 }
 
 /**
