@@ -9,6 +9,7 @@ import {
 
 import { ServiceError } from '../context';
 import { fetchAllRows } from './paginate';
+import { postgrestErrorText } from './postgrest-error';
 
 /**
  * Id-list reads and writes that stay under the request-URL limits.
@@ -27,7 +28,12 @@ import { fetchAllRows } from './paginate';
  * by its parameter name, so name it `batch`.
  */
 
-type PageResult<Row> = { data: Row[] | null; error: { message: string } | null };
+type PageResult<Row> = {
+  data: Row[] | null;
+  error: { message: string } | null;
+  status?: number;
+  statusText?: string;
+};
 
 export type BatchOpts = {
   maxValues?: number;
@@ -114,7 +120,12 @@ export interface IdBatchWriteResult<V, Row> {
  */
 export async function writeInIdBatches<V extends string | number, Row = never>(
   values: readonly (V | null | undefined)[],
-  run: (batch: V[]) => PromiseLike<{ data?: Row[] | null; error: { message: string } | null }>,
+  run: (batch: V[]) => PromiseLike<{
+    data?: Row[] | null;
+    error: { message: string } | null;
+    status?: number;
+    statusText?: string;
+  }>,
   opts: { maxValues?: number; maxEncodedChars?: number; stopOnError?: boolean } = {},
 ): Promise<IdBatchWriteResult<V, Row>> {
   const stopOnError = opts.stopOnError ?? true;
@@ -124,8 +135,11 @@ export async function writeInIdBatches<V extends string | number, Row = never>(
     const batch = batches[i] as V[];
     let failure: string | null = null;
     try {
-      const { data, error } = await run(batch);
-      if (error) failure = error.message;
+      const res = await run(batch);
+      const { data, error } = res;
+      // Same reason as fetchAllRows: an empty 502 body has an empty message,
+      // and `error: ''` reached the caller's ServiceError with no detail.
+      if (error) failure = postgrestErrorText(error, res);
       else if (data) for (const row of data) result.rows.push(row);
     } catch (err) {
       failure = rawErrorText(err);

@@ -54,6 +54,19 @@ describe('fetchAllRowsByIds', () => {
     expect(err.message).not.toContain('URI');
   });
 
+  it('keeps the status as the detail when a gateway answers 502 with an empty body', async () => {
+    const run = fetchAllRowsByIds(ids(150), () => async () => ({
+      data: null,
+      error: { message: '' },
+      status: 502,
+      statusText: 'Bad Gateway',
+    }));
+    const err = (await run.catch((e: unknown) => e)) as ServiceError;
+    expect(err).toBeInstanceOf(ServiceError);
+    expect(err.internalDetail).toBe('HTTP 502 Bad Gateway (empty error message)');
+    expect(rawErrorText(err)).toBe('HTTP 502 Bad Gateway (empty error message)');
+  });
+
   it('makes no request for an empty or all-null list', async () => {
     let calls = 0;
     const rows = await fetchAllRowsByIds([null, undefined], () => {
@@ -139,6 +152,18 @@ describe('writeInIdBatches', () => {
     expect(res.written).toEqual([...ids(100), ...ids(350).slice(200)]);
     expect(res.notWritten).toEqual(ids(200).slice(100));
     expect(res.error).toBe('second');
+  });
+
+  it('names the status when a gateway answers 502 with an empty body', async () => {
+    // supabase-js builds `error` from the body, so an empty 502 arrives as
+    // { message: '' }. `error: ''` gave the caller a ServiceError with no detail.
+    const res = await writeInIdBatches(ids(150), async () => ({
+      error: { message: '' },
+      status: 502,
+      statusText: 'Bad Gateway',
+    }));
+    expect(res.error).toBe('HTTP 502 Bad Gateway (empty error message)');
+    expect(new ServiceError('internal_error', res.error!).internalDetail).toBe(res.error);
   });
 
   it('treats a rejected request as a failed batch instead of throwing', async () => {

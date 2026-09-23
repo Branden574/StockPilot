@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { ServiceError } from '../context';
 import { fetchAllRows, PAGE_SIZE } from './paginate';
 
 /**
@@ -73,5 +74,33 @@ describe('fetchAllRows', () => {
       code: 'internal_error',
       internalDetail: 'boom',
     });
+  });
+});
+
+describe('fetchAllRows error detail', () => {
+  it('keeps the PostgREST message as the internal detail', async () => {
+    const err = await fetchAllRows(async () => ({
+      data: null,
+      error: { message: 'relation "x" does not exist' },
+      status: 404,
+      statusText: 'Not Found',
+    })).catch((e: unknown) => e as ServiceError);
+    expect(err).toBeInstanceOf(ServiceError);
+    expect((err as ServiceError).internalDetail).toBe('relation "x" does not exist');
+  });
+
+  it('names the status when an empty 502 body leaves the message empty', async () => {
+    // Before: internalDetail was undefined, so the set-rack log said only
+    // "An internal error occurred" for a gateway that was dropping requests.
+    const err = await fetchAllRows(async () => ({
+      data: null,
+      error: { message: '' },
+      status: 502,
+      statusText: 'Bad Gateway',
+    })).catch((e: unknown) => e as ServiceError);
+    expect(err).toBeInstanceOf(ServiceError);
+    expect((err as ServiceError).code).toBe('internal_error');
+    expect((err as ServiceError).internalDetail).toBe('HTTP 502 Bad Gateway (empty error message)');
+    expect((err as ServiceError).message).not.toContain('502');
   });
 });
