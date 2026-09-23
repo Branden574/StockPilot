@@ -478,11 +478,16 @@ export async function drainIntegrationDeliveries(
 
     // Batch-load the endpoints for the due rows.
     const endpointIds = Array.from(new Set(due.map((d) => (d as DeliveryRow).endpoint_id)));
-    const { data: eps } = await admin
+    const { data: eps, error: epsErr } = await admin
       .from('integration_endpoints')
       .select('id, organization_id, type, url, secret')
       // in-list-bound: endpoints of at most `limit` (100) due deliveries per tick
       .in('id', endpointIds);
+    // A delivery whose endpoint is missing from this read is marked dead below,
+    // so a FAILED read must not be read as "every endpoint was removed": that
+    // permanently dropped every due webhook. Stop here; the rows stay pending
+    // and the next tick retries them. The catch below reports it.
+    if (epsErr) throw new Error(`integration_endpoints select: ${epsErr.message}`);
     const epById = new Map((eps ?? []).map((e) => [(e as EndpointRow).id, e as EndpointRow]));
 
     // Partition into deliverable rows vs orphans (endpoint deleted out-of-band).
