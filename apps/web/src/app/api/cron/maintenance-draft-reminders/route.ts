@@ -7,6 +7,7 @@ import { formatMaintenanceRequestNumber } from '@stockpilot/core';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { mapIdBatches } from '@/server/services/lib/fetch-by-ids';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { createNotification } from '@/server/services/notifications';
 
@@ -54,7 +55,7 @@ function secretsEqual(a: string, b: string): boolean {
  * directly. So the org allowlist is fetched FIRST (organization_modules,
  * mirroring the auto-reorder cron's own module-enabled prefetch:
  * api/cron/auto-reorder/route.ts) and applied as an `.in('organization_id',
- * ...)` filter on the eligibility SELECT itself — a module-OFF org's rows
+ * ...)` filter (100 orgs per request) on the eligibility SELECT itself — a module-OFF org's rows
  * never enter `data`, so they are never stamped and never notified. That
  * also means re-enabling the module later revives the reminder for a saved
  * draft that would otherwise have gone quiet, which is the intended
@@ -124,30 +125,56 @@ export async function GET(req: Request) {
     return NextResponse.json({ ok: true, remindersSent: 0 });
   }
 
-  const { data, error } = await admin
-    .from('maintenance_requests')
-    .select('id, organization_id, requester_user_id, request_number, created_at')
-    .eq('status', 'saved')
-    .lt('created_at', cutoffIso)
-    .is('draft_reminder_sent_at', null)
-    .is('archived_at', null)
-    .is('cancelled_at', null)
-    // Defensive hedge (Maintenance Resolved): resolve() already moves status
-    // off 'saved' on every resolution, so the `status = 'saved'` filter above
-    // already excludes a resolved row in practice — this is belt-and-
-    // suspenders against a future write path that touches resolved_at
-    // without also flipping status, matching the same double-guard posture
-    // the archived_at/cancelled_at pair above already applies.
-    .is('resolved_at', null)
-    .in('organization_id', enabledOrgIds)
-    .limit(200);
-  if (error) {
-    void reportError(new Error(error.message), { tag: 'cron.maintenance-draft-reminders' });
+  // The allowlist is every org with the module on, which no cap bounds: one
+  // `.in()` of it fails past ~215 ids locally and ~395 in production (after
+  // ~7 s of retries), which failed every run. So the eligibility read runs
+  // per batch of 100 orgs, each keeping its OLDEST 200 drafts, and the merge
+  // keeps the oldest 200 of those: every row of the overall oldest 200 is
+  // among the oldest 200 of its own batch, so this is the same set one query
+  // ordered the same way would return. (The single query had no order at all;
+  // oldest first is the fair order for a nag that runs until each is sent.)
+  const REMINDER_BATCH_LIMIT = 200;
+  let eligible: EligibleRow[];
+  try {
+    const perBatch = await mapIdBatches(enabledOrgIds, async (batch) => {
+      const { data, error } = await admin
+        .from('maintenance_requests')
+        .select('id, organization_id, requester_user_id, request_number, created_at')
+        .eq('status', 'saved')
+        .lt('created_at', cutoffIso)
+        .is('draft_reminder_sent_at', null)
+        .is('archived_at', null)
+        .is('cancelled_at', null)
+        // Defensive hedge (Maintenance Resolved): resolve() already moves status
+        // off 'saved' on every resolution, so the `status = 'saved'` filter above
+        // already excludes a resolved row in practice — this is belt-and-
+        // suspenders against a future write path that touches resolved_at
+        // without also flipping status, matching the same double-guard posture
+        // the archived_at/cancelled_at pair above already applies.
+        .is('resolved_at', null)
+        .in('organization_id', batch)
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .limit(REMINDER_BATCH_LIMIT);
+      if (error) throw new Error(error.message);
+      return (data ?? []) as EligibleRow[];
+    });
+    eligible = perBatch
+      .flat()
+      .sort(
+        (a, b) =>
+          Date.parse(a.created_at) - Date.parse(b.created_at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      )
+      .slice(0, REMINDER_BATCH_LIMIT);
+  } catch (e) {
+    void reportError(e instanceof Error ? e : new Error(String(e)), {
+      tag: 'cron.maintenance-draft-reminders',
+    });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 
   let sent = 0;
-  for (const row of (data ?? []) as EligibleRow[]) {
+  for (const row of eligible) {
     try {
       // Stamp FIRST (crash-safe dedupe), and only proceed if we won the write.
       const { data: stamped } = await admin

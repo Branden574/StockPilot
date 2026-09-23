@@ -1,7 +1,6 @@
 {
   "app/(dashboard)/dashboard/settings/integrations/page.tsx": ["in:id <- access.writableIds"],
   "app/(dashboard)/dashboard/settings/migrate/sage50/page.tsx": ["in:id <- access.writableIds"],
-  "app/api/cron/maintenance-draft-reminders/route.ts": ["in:organization_id <- enabledOrgIds"],
   "app/api/cron/prewarm-orders-catalog/route.ts": ["in:organization_id <- [...KNOWN_HOT_ORG_IDS]"],
   "app/api/orders/freq/route.ts": [
     "in:id <- categoryIds",
