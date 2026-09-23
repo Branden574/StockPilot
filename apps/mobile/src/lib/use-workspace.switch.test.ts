@@ -23,12 +23,19 @@ vi.mock('./db', () => dbMock);
 vi.mock('./enabled-modules', () => ({ refreshEnabledModules: vi.fn() }));
 const syncMock = vi.hoisted(() => ({ syncNow: vi.fn(async () => {}) }));
 vi.mock('./sync', () => syncMock);
+const net = vi.hoisted(() => ({ stallNextWarehouseRead: false }));
 vi.mock('./supabase', () => {
   // loadWarehouses: from('warehouses').select().eq().order() -> { data, error }
   const query = {
     select: () => query,
     eq: () => query,
-    order: async () => ({ data: [], error: null }),
+    order: () => {
+      if (net.stallNextWarehouseRead) {
+        net.stallNextWarehouseRead = false;
+        return new Promise(() => {}); // a socket that never answers
+      }
+      return Promise.resolve({ data: [], error: null });
+    },
   };
   return { supabase: { from: () => query } };
 });
@@ -87,5 +94,25 @@ describe('setActiveOrg: one switch at a time, the last choice wins', () => {
     storage.setItem.mockClear();
     await setActiveOrg('org-g');
     expect(orgWrites()).toEqual(['org-g']);
+  });
+
+  it('a warehouse read that never answers holds the queue for 15 s at most', async () => {
+    vi.useFakeTimers();
+    try {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      storage.setItem.mockClear();
+      net.stallNextWarehouseRead = true;
+      const stalled = setActiveOrg('org-h');
+      const next = setActiveOrg('org-i');
+      await vi.advanceTimersByTimeAsync(14_000);
+      expect(orgWrites()).toEqual(['org-h']);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await Promise.all([stalled, next]);
+      expect(orgWrites()).toEqual(['org-h', 'org-i']);
+      expect(warn).toHaveBeenCalledWith('[workspace] loadWarehouses timed out');
+      warn.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

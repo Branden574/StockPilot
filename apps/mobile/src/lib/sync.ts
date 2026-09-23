@@ -209,12 +209,6 @@ export async function isOnline(): Promise<boolean> {
   }
 }
 
-/** Rolls a pull's transaction back when its answer belongs to a wiped cache. */
-class StaleSnapshot extends Error {
-  constructor() {
-    super('the local cache was wiped while this snapshot was loading');
-  }
-}
 
 /**
  * Pull the org snapshot into local SQLite.
@@ -249,267 +243,273 @@ export async function pullSnapshot(
 
   const db = await getDb();
   const now = Date.now();
-  const stillCurrent = () => {
-    if (currentCacheGeneration() !== generationAtRequest) throw new StaleSnapshot();
-  };
+  // Once the generation moves (a wipe was asked for), the pull stops writing
+  // and lets its transaction COMMIT what already ran: the wipe is queued right
+  // behind this transaction and clears those rows. A ROLLBACK would also undo
+  // plain writes other flows made on the shared connection meanwhile (the
+  // outbox rejection at account eviction, a receipt queued offline).
+  let stale = false;
+  const moved = () => (stale ||= currentCacheGeneration() !== generationAtRequest);
   let modulesChanged = false;
   let permissionsChanged = false;
   let scopeChanged = false;
 
-  try {
-    await withDbTransaction(db, async () => {
-      // A wipe asked for while the request was out (a workspace switch or
-      // repair, a sign-out) means this answer belongs to a cache that no longer
-      // exists: writing it would put the old workspace's rows, cursor, modules
-      // and permissions under the new one, or a signed-out user's under the next.
-      stillCurrent();
-      // A wipe asked for just BEFORE this pull began can still have run after
-      // the cursor was read: a delta built on a cleared cursor would commit a
-      // partial cache with a fresh cursor that never back-fills.
-      if (since !== null && (await getMeta('last_synced_at')) !== since) throw new StaleSnapshot();
-
-      // Warehouses (full replace for simplicity — small set)
-      if (snap.warehouses.length > 0) {
-        await db.runAsync('delete from warehouses');
-        for (const w of snap.warehouses) {
-          stillCurrent();
-          await db.runAsync(
-            'insert into warehouses (id, name) values (?, ?)',
-            [w.id, w.name],
-          );
-        }
-      }
-
-      // Items (upsert on id)
-      for (const i of snap.items) {
-        stillCurrent();
-        await db.runAsync(
-          `insert or replace into items
-           (id, sku, name, barcode, quantity_on_hand, unit_cost,
-            warehouse_id, item_type, last_synced_at)
-           values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            i.id,
-            i.sku,
-            i.name,
-            i.barcode ?? null,
-            i.quantityOnHand,
-            i.unitCost,
-            i.warehouseId,
-            i.itemType,
-            now,
-          ],
-        );
-      }
-
-      // POs + lines (replace on PO id)
-      for (const p of snap.openPOs) {
-        stillCurrent();
-        await db.runAsync(
-          `insert or replace into purchase_orders
-           (id, po_number, status, warehouse_id, expected_at, last_synced_at)
-           values (?, ?, ?, ?, ?, ?)`,
-          [p.id, p.poNumber, p.status, p.warehouseId, p.expectedAt, now],
-        );
-        await db.runAsync('delete from po_lines where po_id = ?', [p.id]);
-        for (const l of p.lines) {
-          stillCurrent();
-          await db.runAsync(
-            `insert into po_lines
-             (id, po_id, item_id, qty_ordered, qty_received, unit_cost)
-             values (?, ?, ?, ?, ?, ?)`,
-            [l.id, p.id, l.itemId, l.qtyOrdered, l.qtyReceived, l.unitCost],
-          );
-        }
-      }
-
-      // Cycle counts + lines — UPSERT, never replace. `insert or replace` is a
-      // DELETE + INSERT in SQLite and the delete-then-reinsert of lines was
-      // worse: together they wiped cached_at, warehouse_name, item names and —
-      // the real damage — local_dirty and the operator's unsynced counted value,
-      // every 60 s, on every open count. The statements and their rules are
-      // documented and tested in cycle-count-snapshot-sql.ts.
-      for (const c of snap.openCycleCounts) {
-        stillCurrent();
-        await db.runAsync(CYCLE_COUNT_HEADER_UPSERT_SQL, [
-          c.id,
-          c.status,
-          c.warehouseId,
-          c.startedAt,
-          c.assignedTo,
-          c.notes,
-          c.countNumber ?? null,
-          now,
-        ]);
-        for (const l of c.lines) {
-          stillCurrent();
-          await db.runAsync(CYCLE_COUNT_LINE_UPSERT_SQL, [
-            l.id,
-            c.id,
-            l.itemId,
-            l.expected,
-            l.counted,
-          ]);
-        }
-        await db.runAsync(CYCLE_COUNT_STALE_LINES_DELETE_SQL, [
-          c.id,
-          JSON.stringify(c.lines.map((l) => l.id)),
-        ]);
-      }
-
-      // Bundles + components (replace on bundle id)
-      for (const b of snap.bundles) {
-        stillCurrent();
-        await db.runAsync(
-          `insert or replace into bundles
-           (id, name, sku, preassembly_enabled, phantom_item_id,
-            phantom_qty, phantom_warehouse_id, last_synced_at)
-           values (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            b.id,
-            b.name,
-            b.sku,
-            b.preassemblyEnabled ? 1 : 0,
-            b.phantomItemId,
-            b.phantomQty,
-            b.phantomWarehouseId,
-            now,
-          ],
-        );
-        await db.runAsync('delete from bundle_components where bundle_id = ?', [b.id]);
-        for (const comp of b.components) {
-          stillCurrent();
-          await db.runAsync(
-            `insert into bundle_components
-             (bundle_id, item_id, quantity, is_optional)
-             values (?, ?, ?, ?)`,
-            [b.id, comp.itemId, comp.quantity, comp.isOptional ? 1 : 0],
-          );
-        }
-      }
-
-      // ── Reconcile REMOVALS (SP-081) ────────────────────────────────────
-      //
-      // Everything above only ever UPSERTS. A row that leaves the server's
-      // scope — an item archived or deleted, a count posted or cancelled, a
-      // bundle deactivated — simply stops appearing in the payload, and the
-      // only local delete in the whole app was clearOrgScopedTables (org
-      // switch / sign-out). So the phone kept showing an archived bundle in
-      // the Bundles list; a staffer opened it, enqueued a distribute, and the
-      // server refused it ("This bundle is archived or inactive.") — terminal
-      // work parked in Unsent work, from a row that should not have been on
-      // the device at all.
-      //
-      // What may be reconciled depends on what the payload PROVES:
-      //
-      //   • openCycleCounts carries NO `since` filter server-side (the route
-      //     builds it from status='in_progress' + warehouse scope only), so
-      //     every pull returns the caller's COMPLETE open list. Absence IS
-      //     proof of removal — reconcile on every pull.
-      //   • items / openPOs / bundles ARE `since`-filtered: on a delta pull an
-      //     untouched row is simply not in the payload, so absence proves
-      //     nothing. They are reconciled only against a FULL pull, or against
-      //     the explicit removal lists once the route emits them.
-      //   • POs are deliberately left alone: the route filters them by status
-      //     AND caps them at 200, so its response is not a complete set under
-      //     either rule.
-
-      // Cycle counts. A count still holding a local_dirty line is the
-      // operator's own unsynced work waiting on the outbox — never delete it
-      // here (same rule CYCLE_COUNT_STALE_LINES_DELETE_SQL already encodes for
-      // lines); the outbox settles it and a later pull removes it.
-      if (snap.openCycleCounts.length < SNAPSHOT_CYCLE_COUNT_LIMIT) {
-        const openCountIds = JSON.stringify(snap.openCycleCounts.map((c) => c.id));
-        await db.runAsync(STALE_CYCLE_COUNT_LINES_DELETE_SQL, [openCountIds]);
-        await db.runAsync(STALE_CYCLE_COUNTS_DELETE_SQL, [openCountIds]);
-      }
-
-      // Items the server explicitly reported as gone (delta-safe; no-op until
-      // the route emits the field).
-      if (Array.isArray(snap.removedItemIds) && snap.removedItemIds.length > 0) {
-        await db.runAsync(REMOVED_ITEMS_DELETE_SQL, [
-          JSON.stringify(snap.removedItemIds.filter((id) => typeof id === 'string')),
-        ]);
-      }
-
-      // The authoritative active-bundle list, when the server sends one.
-      if (Array.isArray(snap.activeBundleIds)) {
-        const activeIds = JSON.stringify(
-          snap.activeBundleIds.filter((id) => typeof id === 'string'),
-        );
-        await db.runAsync(STALE_BUNDLE_COMPONENTS_DELETE_SQL, [activeIds]);
-        await db.runAsync(STALE_BUNDLES_DELETE_SQL, [activeIds]);
-      }
-
-      // Full pull: everything the server returned was just stamped with `now`,
-      // so an older stamp means "the server no longer lists this row".
-      if (since === null) {
-        // items are fetched with fetchAllRows server-side (paged past the
-        // PostgREST 1000-row cap), so an items payload is never truncated.
-        await db.runAsync(STALE_ITEMS_SWEEP_SQL, [now]);
-        // bundles are ONE query with no explicit limit: at exactly max_rows we
-        // cannot tell a complete set from a truncated page, and sweeping a
-        // truncated page would delete live bundles on every full pull.
-        if (snap.bundles.length < POSTGREST_MAX_ROWS && !Array.isArray(snap.activeBundleIds)) {
-          await db.runAsync(STALE_BUNDLE_COMPONENTS_SWEEP_SQL, [now]);
-          await db.runAsync(STALE_BUNDLES_SWEEP_SQL, [now]);
-        }
-      }
-
-      // The cursor, modules, permissions and warehouse scope are part of the
-      // same answer, so they commit (or are discarded) with the rows.
-      await setMeta('last_synced_at', snap.serverTime);
-      // Persist the org's enabled modules so the drawer + tab gating can read
-      // them synchronously between syncs (and while offline). Always written —
-      // even an empty array is meaningful (the consumers treat "no persisted
-      // value yet" differently from "explicitly no optional modules").
-      //
-      // If the set CHANGED since the last sync (e.g. an admin toggled a module on
-      // the web control plane), notify the live useEnabledModules() subscribers so
-      // the drawer + bottom tabs add/remove the entry IMMEDIATELY — on the next
-      // foreground/60s sync, no app restart. Compared as JSON so we only re-render
-      // the nav when it actually changed, not on every routine sync.
-      const nextModulesJson = JSON.stringify(
-        Array.isArray(snap.enabledModules) ? snap.enabledModules : [],
-      );
-      const prevModulesJson = await getMeta(ENABLED_MODULES_META_KEY);
-      await setMeta(ENABLED_MODULES_META_KEY, nextModulesJson);
-      modulesChanged = prevModulesJson !== nextModulesJson;
-
-      // Same pattern for the user's EFFECTIVE permissions — drives the drawer's
-      // permission-based nav gating. Re-renders the drawer immediately when an
-      // admin grants/revokes access (next foreground/60s sync, no restart).
-      const nextPermsJson = JSON.stringify(
-        Array.isArray(snap.permissions) ? snap.permissions : [],
-      );
-      const prevPermsJson = await getMeta(EFFECTIVE_PERMISSIONS_META_KEY);
-      await setMeta(EFFECTIVE_PERMISSIONS_META_KEY, nextPermsJson);
-      permissionsChanged = prevPermsJson !== nextPermsJson;
-
-      // Warehouse scope (same persist+notify pattern) — drives the Items
-      // screen's scoped-view banner. Only written when the server actually sent
-      // it: an older server omitting the field must not clobber a previously
-      // persisted scope (and must never read as "no warehouses assigned").
-      if (snap.warehouseScope && typeof snap.warehouseScope.hasAllAccess === 'boolean') {
-        const nextScopeJson = JSON.stringify({
-          hasAllAccess: snap.warehouseScope.hasAllAccess,
-          warehouseNames: Array.isArray(snap.warehouseScope.warehouseNames)
-            ? snap.warehouseScope.warehouseNames.filter((n): n is string => typeof n === 'string')
-            : [],
-        });
-        const prevScopeJson = await getMeta(WAREHOUSE_SCOPE_META_KEY);
-        await setMeta(WAREHOUSE_SCOPE_META_KEY, nextScopeJson);
-        scopeChanged = prevScopeJson !== nextScopeJson;
-      }
-    });
-  } catch (e) {
-    if (e instanceof StaleSnapshot) {
-      // Rolled back. The switch or repair that wiped the cache asks for its
-      // own forced pull (syncNow chains it after this one).
-      console.warn('[sync] the cache was wiped while the snapshot was loading; it was discarded');
-      return null;
+  await withDbTransaction(db, async () => {
+    // A wipe asked for while the request was out (a workspace switch or
+    // repair, a sign-out) means this answer belongs to a cache that no longer
+    // exists: writing it would put the old workspace's rows, cursor, modules
+    // and permissions under the new one, or a signed-out user's under the next.
+    if (moved()) return;
+    // A wipe asked for just BEFORE this pull began can still have run after
+    // the cursor was read: a delta built on a cleared cursor would commit a
+    // partial cache with a fresh cursor that never back-fills.
+    if (since !== null && (await getMeta('last_synced_at')) !== since) {
+      stale = true;
+      return;
     }
-    throw e;
+
+    // Warehouses (full replace for simplicity — small set)
+    if (snap.warehouses.length > 0) {
+      await db.runAsync('delete from warehouses');
+      for (const w of snap.warehouses) {
+        if (moved()) return;
+        await db.runAsync(
+          'insert into warehouses (id, name) values (?, ?)',
+          [w.id, w.name],
+        );
+      }
+    }
+
+    // Items (upsert on id)
+    for (const i of snap.items) {
+      if (moved()) return;
+      await db.runAsync(
+        `insert or replace into items
+         (id, sku, name, barcode, quantity_on_hand, unit_cost,
+          warehouse_id, item_type, last_synced_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          i.id,
+          i.sku,
+          i.name,
+          i.barcode ?? null,
+          i.quantityOnHand,
+          i.unitCost,
+          i.warehouseId,
+          i.itemType,
+          now,
+        ],
+      );
+    }
+
+    // POs + lines (replace on PO id)
+    for (const p of snap.openPOs) {
+      if (moved()) return;
+      await db.runAsync(
+        `insert or replace into purchase_orders
+         (id, po_number, status, warehouse_id, expected_at, last_synced_at)
+         values (?, ?, ?, ?, ?, ?)`,
+        [p.id, p.poNumber, p.status, p.warehouseId, p.expectedAt, now],
+      );
+      await db.runAsync('delete from po_lines where po_id = ?', [p.id]);
+      for (const l of p.lines) {
+        if (moved()) return;
+        await db.runAsync(
+          `insert into po_lines
+           (id, po_id, item_id, qty_ordered, qty_received, unit_cost)
+           values (?, ?, ?, ?, ?, ?)`,
+          [l.id, p.id, l.itemId, l.qtyOrdered, l.qtyReceived, l.unitCost],
+        );
+      }
+    }
+
+    // Cycle counts + lines — UPSERT, never replace. `insert or replace` is a
+    // DELETE + INSERT in SQLite and the delete-then-reinsert of lines was
+    // worse: together they wiped cached_at, warehouse_name, item names and —
+    // the real damage — local_dirty and the operator's unsynced counted value,
+    // every 60 s, on every open count. The statements and their rules are
+    // documented and tested in cycle-count-snapshot-sql.ts.
+    for (const c of snap.openCycleCounts) {
+      if (moved()) return;
+      await db.runAsync(CYCLE_COUNT_HEADER_UPSERT_SQL, [
+        c.id,
+        c.status,
+        c.warehouseId,
+        c.startedAt,
+        c.assignedTo,
+        c.notes,
+        c.countNumber ?? null,
+        now,
+      ]);
+      for (const l of c.lines) {
+        if (moved()) return;
+        await db.runAsync(CYCLE_COUNT_LINE_UPSERT_SQL, [
+          l.id,
+          c.id,
+          l.itemId,
+          l.expected,
+          l.counted,
+        ]);
+      }
+      await db.runAsync(CYCLE_COUNT_STALE_LINES_DELETE_SQL, [
+        c.id,
+        JSON.stringify(c.lines.map((l) => l.id)),
+      ]);
+    }
+
+    // Bundles + components (replace on bundle id)
+    for (const b of snap.bundles) {
+      if (moved()) return;
+      await db.runAsync(
+        `insert or replace into bundles
+         (id, name, sku, preassembly_enabled, phantom_item_id,
+          phantom_qty, phantom_warehouse_id, last_synced_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          b.id,
+          b.name,
+          b.sku,
+          b.preassemblyEnabled ? 1 : 0,
+          b.phantomItemId,
+          b.phantomQty,
+          b.phantomWarehouseId,
+          now,
+        ],
+      );
+      await db.runAsync('delete from bundle_components where bundle_id = ?', [b.id]);
+      for (const comp of b.components) {
+        if (moved()) return;
+        await db.runAsync(
+          `insert into bundle_components
+           (bundle_id, item_id, quantity, is_optional)
+           values (?, ?, ?, ?)`,
+          [b.id, comp.itemId, comp.quantity, comp.isOptional ? 1 : 0],
+        );
+      }
+    }
+
+    // ── Reconcile REMOVALS (SP-081) ────────────────────────────────────
+    //
+    if (moved()) return;
+    // Everything above only ever UPSERTS. A row that leaves the server's
+    // scope — an item archived or deleted, a count posted or cancelled, a
+    // bundle deactivated — simply stops appearing in the payload, and the
+    // only local delete in the whole app was clearOrgScopedTables (org
+    // switch / sign-out). So the phone kept showing an archived bundle in
+    // the Bundles list; a staffer opened it, enqueued a distribute, and the
+    // server refused it ("This bundle is archived or inactive.") — terminal
+    // work parked in Unsent work, from a row that should not have been on
+    // the device at all.
+    //
+    // What may be reconciled depends on what the payload PROVES:
+    //
+    //   • openCycleCounts carries NO `since` filter server-side (the route
+    //     builds it from status='in_progress' + warehouse scope only), so
+    //     every pull returns the caller's COMPLETE open list. Absence IS
+    //     proof of removal — reconcile on every pull.
+    //   • items / openPOs / bundles ARE `since`-filtered: on a delta pull an
+    //     untouched row is simply not in the payload, so absence proves
+    //     nothing. They are reconciled only against a FULL pull, or against
+    //     the explicit removal lists once the route emits them.
+    //   • POs are deliberately left alone: the route filters them by status
+    //     AND caps them at 200, so its response is not a complete set under
+    //     either rule.
+
+    // Cycle counts. A count still holding a local_dirty line is the
+    // operator's own unsynced work waiting on the outbox — never delete it
+    // here (same rule CYCLE_COUNT_STALE_LINES_DELETE_SQL already encodes for
+    // lines); the outbox settles it and a later pull removes it.
+    if (snap.openCycleCounts.length < SNAPSHOT_CYCLE_COUNT_LIMIT) {
+      const openCountIds = JSON.stringify(snap.openCycleCounts.map((c) => c.id));
+      await db.runAsync(STALE_CYCLE_COUNT_LINES_DELETE_SQL, [openCountIds]);
+      await db.runAsync(STALE_CYCLE_COUNTS_DELETE_SQL, [openCountIds]);
+    }
+
+    // Items the server explicitly reported as gone (delta-safe; no-op until
+    // the route emits the field).
+    if (Array.isArray(snap.removedItemIds) && snap.removedItemIds.length > 0) {
+      await db.runAsync(REMOVED_ITEMS_DELETE_SQL, [
+        JSON.stringify(snap.removedItemIds.filter((id) => typeof id === 'string')),
+      ]);
+    }
+
+    // The authoritative active-bundle list, when the server sends one.
+    if (Array.isArray(snap.activeBundleIds)) {
+      const activeIds = JSON.stringify(
+        snap.activeBundleIds.filter((id) => typeof id === 'string'),
+      );
+      await db.runAsync(STALE_BUNDLE_COMPONENTS_DELETE_SQL, [activeIds]);
+      await db.runAsync(STALE_BUNDLES_DELETE_SQL, [activeIds]);
+    }
+
+    // Full pull: everything the server returned was just stamped with `now`,
+    // so an older stamp means "the server no longer lists this row".
+    if (since === null) {
+      // items are fetched with fetchAllRows server-side (paged past the
+      // PostgREST 1000-row cap), so an items payload is never truncated.
+      await db.runAsync(STALE_ITEMS_SWEEP_SQL, [now]);
+      // bundles are ONE query with no explicit limit: at exactly max_rows we
+      // cannot tell a complete set from a truncated page, and sweeping a
+      // truncated page would delete live bundles on every full pull.
+      if (snap.bundles.length < POSTGREST_MAX_ROWS && !Array.isArray(snap.activeBundleIds)) {
+        await db.runAsync(STALE_BUNDLE_COMPONENTS_SWEEP_SQL, [now]);
+        await db.runAsync(STALE_BUNDLES_SWEEP_SQL, [now]);
+      }
+    }
+
+    if (moved()) return;
+    // The cursor, modules, permissions and warehouse scope are part of the
+    // same answer, so they are written only when the rows were.
+    await setMeta('last_synced_at', snap.serverTime);
+    // Persist the org's enabled modules so the drawer + tab gating can read
+    // them synchronously between syncs (and while offline). Always written —
+    // even an empty array is meaningful (the consumers treat "no persisted
+    // value yet" differently from "explicitly no optional modules").
+    //
+    // If the set CHANGED since the last sync (e.g. an admin toggled a module on
+    // the web control plane), notify the live useEnabledModules() subscribers so
+    // the drawer + bottom tabs add/remove the entry IMMEDIATELY — on the next
+    // foreground/60s sync, no app restart. Compared as JSON so we only re-render
+    // the nav when it actually changed, not on every routine sync.
+    const nextModulesJson = JSON.stringify(
+      Array.isArray(snap.enabledModules) ? snap.enabledModules : [],
+    );
+    const prevModulesJson = await getMeta(ENABLED_MODULES_META_KEY);
+    await setMeta(ENABLED_MODULES_META_KEY, nextModulesJson);
+    modulesChanged = prevModulesJson !== nextModulesJson;
+
+    // Same pattern for the user's EFFECTIVE permissions — drives the drawer's
+    // permission-based nav gating. Re-renders the drawer immediately when an
+    // admin grants/revokes access (next foreground/60s sync, no restart).
+    const nextPermsJson = JSON.stringify(
+      Array.isArray(snap.permissions) ? snap.permissions : [],
+    );
+    const prevPermsJson = await getMeta(EFFECTIVE_PERMISSIONS_META_KEY);
+    await setMeta(EFFECTIVE_PERMISSIONS_META_KEY, nextPermsJson);
+    permissionsChanged = prevPermsJson !== nextPermsJson;
+
+    // Warehouse scope (same persist+notify pattern) — drives the Items
+    // screen's scoped-view banner. Only written when the server actually sent
+    // it: an older server omitting the field must not clobber a previously
+    // persisted scope (and must never read as "no warehouses assigned").
+    if (snap.warehouseScope && typeof snap.warehouseScope.hasAllAccess === 'boolean') {
+      const nextScopeJson = JSON.stringify({
+        hasAllAccess: snap.warehouseScope.hasAllAccess,
+        warehouseNames: Array.isArray(snap.warehouseScope.warehouseNames)
+          ? snap.warehouseScope.warehouseNames.filter((n): n is string => typeof n === 'string')
+          : [],
+      });
+      const prevScopeJson = await getMeta(WAREHOUSE_SCOPE_META_KEY);
+      await setMeta(WAREHOUSE_SCOPE_META_KEY, nextScopeJson);
+      scopeChanged = prevScopeJson !== nextScopeJson;
+    }
+  });
+
+  if (stale) {
+    // The switch, repair or sign-out that wiped the cache gets a fresh pull:
+    // syncNow chains one after this sync.
+    console.warn('[sync] the cache was wiped while the snapshot was loading; it was discarded');
+    return null;
   }
   // Notify the live readers only after the new values are committed.
   if (modulesChanged) refreshEnabledModules();
@@ -659,8 +659,10 @@ async function sendOne(
  * only one sync runs at a time.
  */
 let inFlightSync: Promise<void> | null = null;
-/** A forced pull asked for while another sync was running (see syncNow). */
+/** A pull asked for while another sync was running (see syncNow). */
 let forcedAfterInFlight: Promise<void> | null = null;
+/** The cache generation the in-flight sync started under. */
+let inFlightGeneration = 0;
 
 /**
  * Run pull then push. Called on app open + foreground + a 60s timer.
@@ -671,17 +673,19 @@ let forcedAfterInFlight: Promise<void> | null = null;
  */
 export async function syncNow(force = false): Promise<void> {
   if (inFlightSync) {
-    if (!force) return inFlightSync;
-    // A forced pull comes from a workspace switch that has just wiped the
-    // cache. The sync already running is for the previous workspace (its pull
-    // discards itself), so joining it would leave the new workspace empty
-    // until the next timer. Run the forced pull once it finishes.
+    // Join a running sync only when it started against the current cache. A
+    // forced pull (a workspace switch or repair), or any sync after a wipe (a
+    // sign-out, then the next sign-in's first sync), would otherwise join a
+    // pull that discards itself and leave the cache empty until the next
+    // timer. Run a full pull once the running one finishes instead.
+    if (!force && currentCacheGeneration() === inFlightGeneration) return inFlightSync;
     forcedAfterInFlight ??= inFlightSync.then(() => {
       forcedAfterInFlight = null;
       return syncNow(true);
     });
     return forcedAfterInFlight;
   }
+  inFlightGeneration = currentCacheGeneration();
   inFlightSync = (async () => {
     try {
       await pullSnapshot(force);

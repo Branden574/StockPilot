@@ -108,6 +108,32 @@ async function loadWarehouses(orgId: string) {
     .map((w) => ({ id: w.id, name: w.name }));
 }
 
+/** How long a switch waits for the warehouse list. React Native's fetch has
+ *  no timeout of its own, and a switch waits for this read inside the switch
+ *  queue: a stalled request must not hold every later switch. */
+const WAREHOUSE_READ_TIMEOUT_MS = 15_000;
+
+/** loadWarehouses, answered with [] (as its error path does) when it fails or
+ *  takes longer than WAREHOUSE_READ_TIMEOUT_MS. */
+function loadWarehousesBounded(orgId: string): Promise<WarehouseOption[]> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      console.warn('[workspace] loadWarehouses timed out');
+      resolve([]);
+    }, WAREHOUSE_READ_TIMEOUT_MS);
+    loadWarehouses(orgId).then(
+      (rows) => {
+        clearTimeout(timer);
+        resolve(rows);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve([]);
+      },
+    );
+  });
+}
+
 /** The profile's default organization (the server's choice when a request
  *  names none), or null when unset or unreadable. */
 async function loadProfileDefaultOrg(userId: string): Promise<string | null> {
@@ -211,7 +237,7 @@ async function switchActiveOrg(orgId: string): Promise<void> {
     activeWarehouseId: null,
     activeWarehouseName: null,
   });
-  const warehouses = await loadWarehouses(orgId);
+  const warehouses = await loadWarehousesBounded(orgId);
   const persistedWh = await AsyncStorage.getItem(WAREHOUSE_STORAGE_KEY(orgId));
   const activeWarehouseId =
     persistedWh && warehouses.some((w) => w.id === persistedWh) ? persistedWh : null;

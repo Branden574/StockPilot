@@ -409,20 +409,73 @@ describe('a cache wipe while a snapshot is loading (workspace switch, repair or 
     expect(ids('select id from warehouses')).toEqual([]);
   });
 
-  it('a wipe asked for mid-write rolls the pull back at the next row', async () => {
-    const items = ['i-1', 'i-2', 'i-3', 'i-4'].map((id) => ({
+  const fourItems = () =>
+    ['i-1', 'i-2', 'i-3', 'i-4'].map((id) => ({
       id, sku: id, name: id, barcode: null, quantityOnHand: 1, unitCost: 0, warehouseId: 'wh1', itemType: 'standard',
     }));
-    apiMock.api.mockResolvedValue(emptySnap({ items }));
+
+  it('a wipe asked for mid-write stops the pull at the next row; the queued wipe clears what it wrote', async () => {
+    apiMock.api.mockResolvedValue(emptySnap({ items: fourItems() }));
     let itemWrites = 0;
     meta.onRun = (sql) => {
       if (/into items/.test(sql) && ++itemWrites === 2) askForWipe();
     };
     await expect(pullSnapshot(true)).resolves.toBeNull();
     expect(itemWrites).toBe(2);
-    // Rolled back: the earlier cache is untouched, none of the new rows landed.
-    expect(ids('select id from items order by id')).toEqual(['i-archived', 'i-keep']);
+    // Committed up to the stop, never the cursor or modules.
+    expect(ids("select id from items where id like 'i-_' order by id")).toEqual(['i-1', 'i-2']);
     expect(meta.store.has('last_synced_at')).toBe(false);
+    expect(meta.store.has('enabled_modules')).toBe(false);
+    runWipe(); // queued right behind the pull's transaction
+    expect(ids('select id from items')).toEqual([]);
+  });
+
+  it('a stop never rolls back what other flows wrote meanwhile (the outbox rejection at eviction)', async () => {
+    sqlite.exec(`
+      create table pending_actions (id integer primary key, status text not null);
+      insert into pending_actions (id, status) values (1, 'pending'), (2, 'failed');
+    `);
+    apiMock.api.mockResolvedValue(emptySnap({ items: fourItems() }));
+    let itemWrites = 0;
+    meta.onRun = (sql) => {
+      if (/into items/.test(sql) && ++itemWrites === 2) {
+        // Account eviction: rejectAllPending (a plain write on the shared
+        // connection, so inside the pull's open transaction), then
+        // wipeForSignOut asks for the wipe.
+        sqlite.exec("update pending_actions set status = 'rejected' where status <> 'rejected'");
+        askForWipe();
+      }
+    };
+    await expect(pullSnapshot(true)).resolves.toBeNull();
+    const statuses = sqlite.prepare('select status from pending_actions order by id').all() as { status: string }[];
+    expect(statuses.map((r) => r.status)).toEqual(['rejected', 'rejected']);
+  });
+
+  it('the first sync after a sign-out does not join the pull started before it', async () => {
+    let releaseOld!: () => void;
+    const oldLoaded = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    apiMock.api
+      .mockImplementationOnce(async () => {
+        await oldLoaded;
+        return answerForA();
+      })
+      .mockImplementationOnce(async () => emptySnap({ warehouses: [{ id: 'wh-next', name: 'Next user' }] }));
+
+    const timerSync = syncNow();
+    await vi.waitFor(() => expect(apiMock.api).toHaveBeenCalledTimes(1));
+    // Sign-out: wipeForSignOut asks for and runs the wipe. Then the next
+    // sign-in's first sync (useSync on mount, not forced).
+    askForWipe();
+    runWipe();
+    const firstSyncAfterSignIn = syncNow();
+    releaseOld();
+    await Promise.all([timerSync, firstSyncAfterSignIn]);
+
+    expect(apiMock.api).toHaveBeenCalledTimes(2);
+    expect(apiMock.api.mock.calls[1]?.[0]).toBe('/api/v1/mobile/snapshot');
+    expect(ids('select id from warehouses')).toEqual(['wh-next']);
   });
 
   it('a forced sync asked for mid-pull still runs afterwards, as a full pull', async () => {
