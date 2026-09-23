@@ -226,9 +226,14 @@ describe('formatValue', () => {
 
 describe('verdict', () => {
   const QUALIFIED = 'within budget in this sample (n=20 cannot confirm a p95 budget)';
+  // Warm-navigation rows also carry the owner's median goal (350 ms).
+  const MEETS = '; p50 meets the 350 ms goal';
+  const ABOVE = '; p50 ABOVE the 350 ms goal';
 
   it('judges BOTH p75 and p95', () => {
-    expect(verdict(row(run('ok', [0, ...range(100, 480, 20)]), 'nav-inventory'))).toBe(QUALIFIED);
+    expect(verdict(row(run('ok', [0, ...range(100, 480, 20)]), 'nav-inventory'))).toBe(
+      QUALIFIED + MEETS,
+    );
     expect(verdict(row(run('slow', [0, ...range(600, 980, 20)]), 'nav-inventory'))).toBe(
       'OVER budget',
     );
@@ -239,9 +244,11 @@ describe('verdict', () => {
   });
 
   it('says a small sample cannot CONFIRM a p95 budget, and stops saying it at n=60', () => {
-    expect(verdict(row(run('n20', [0, ...Array(20).fill(100)]), 'nav-inventory'))).toBe(QUALIFIED);
+    expect(verdict(row(run('n20', [0, ...Array(20).fill(100)]), 'nav-inventory'))).toBe(
+      QUALIFIED + MEETS,
+    );
     expect(verdict(row(run('n60', [0, ...Array(60).fill(100)]), 'nav-inventory'))).toBe(
-      'within budget',
+      'within budget' + MEETS,
     );
   });
 
@@ -258,7 +265,19 @@ describe('verdict', () => {
   });
 
   it('treats a value exactly on the budget as within it', () => {
-    expect(verdict(row(run('edge', [0, ...Array(20).fill(500)]), 'nav-inventory'))).toBe(QUALIFIED);
+    expect(verdict(row(run('edge', [0, ...Array(20).fill(500)]), 'nav-inventory'))).toBe(
+      QUALIFIED + ABOVE,
+    );
+  });
+
+  it('judges the median goal apart from the p75/p95 budget, on its edge too', () => {
+    // Within p75/p95 but a median above the goal: said, not hidden.
+    expect(verdict(row(run('median', [0, ...Array(20).fill(420)]), 'nav-inventory'))).toBe(
+      QUALIFIED + ABOVE,
+    );
+    expect(verdict(row(run('onGoal', [0, ...Array(20).fill(350)]), 'nav-inventory'))).toBe(
+      QUALIFIED + MEETS,
+    );
   });
 
   it('judges only the side of a budget the owner actually set', () => {
@@ -346,7 +365,7 @@ describe('buildRunReport', () => {
 
   it('prints real sample counts, failures and gaps on every row', () => {
     expect(report.markdown).toContain(
-      '| Dashboard → Inventory | 20 / 20 | 0 | 0 | 580 ms | 680 ms | 760 ms | 400 ms | 780 ms | 500 ms / 1000 ms | OVER budget |',
+      '| Dashboard → Inventory | 20 / 20 | 0 | 0 | 580 ms | 680 ms | 760 ms | 400 ms | 780 ms | 500 ms / 1000 ms (p50 goal 350 ms) | OVER budget |',
     );
   });
 

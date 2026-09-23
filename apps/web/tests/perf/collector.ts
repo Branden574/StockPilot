@@ -63,6 +63,11 @@ export interface ArmConfig {
    * Back / Forward or types, from inside the page, on the page's clock.
    */
   manualStart?: boolean;
+  /**
+   * Useful = the text of this element DIFFERS from what it was when the step
+   * was armed (a saved value on screen). Replaces the selector test.
+   */
+  changedTextSelector?: string;
 }
 
 export interface PageImageRecord {
@@ -167,6 +172,7 @@ function collector(fingerprintKeyHex: string): void {
     shellPaintAt: null,
     shellBefore: new WeakSet<Element>(),
     usefulBefore: new WeakSet<Element>(),
+    textBefore: null as string | null,
     errorScreen: false,
     blurSeen: new WeakMap<Element, boolean>(),
     lcp: null,
@@ -246,7 +252,13 @@ function collector(fingerprintKeyHex: string): void {
       }
     }
 
-    if (state.usefulAt === null && onTarget) {
+    if (state.usefulAt === null && onTarget && cfg.changedTextSelector) {
+      const el = document.querySelector(cfg.changedTextSelector);
+      if (el && visible(el) && (el.textContent ?? '') !== state.textBefore) {
+        state.usefulAt = performance.now();
+        nextFrame('usefulPaintAt');
+      }
+    } else if (state.usefulAt === null && onTarget) {
       const pattern = cfg.usefulHrefPattern ? new RegExp(cfg.usefulHrefPattern) : null;
       const nodes = document.querySelectorAll(cfg.usefulSelector);
       const text = cfg.rowText ? String(cfg.rowText).toLowerCase() : null;
@@ -390,6 +402,9 @@ function collector(fingerprintKeyHex: string): void {
         for (const el of Array.from(document.querySelectorAll(config.shellSelector)))
           state.shellBefore.add(el);
       }
+      state.textBefore = config.changedTextSelector
+        ? (document.querySelector(config.changedTextSelector)?.textContent ?? null)
+        : null;
       if (config.freshOnly) {
         for (const el of Array.from(document.querySelectorAll(config.usefulSelector)))
           state.usefulBefore.add(el);

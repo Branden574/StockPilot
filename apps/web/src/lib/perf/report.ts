@@ -207,6 +207,8 @@ export interface RunFile {
 }
 
 export interface Budget {
+  /** A GOAL for the median (the owner's ~350 ms recovery goal), judged apart from p75/p95. */
+  p50?: number;
   p75?: number;
   p95?: number;
   source: string;
@@ -239,7 +241,10 @@ export interface RowSpec {
 const RESOLUTION: Record<Unit, number> = { ms: 17, score: 0.01, count: 1, KB: 1 };
 
 const BRIEF = 'owner brief 2026-09';
-const WARM_NAV: Budget = { p75: 500, p95: 1000, source: BRIEF };
+// p50: the owner's "restore fast navigation" goal (brief 2026-09-22), a warm
+// useful-content median of about 350 ms. Reported next to p75/p95, never
+// instead of them.
+const WARM_NAV: Budget = { p50: 350, p75: 500, p95: 1000, source: BRIEF };
 const CLICK: Budget = { p75: 75, p95: 150, source: BRIEF };
 const ZERO: Budget = { p75: 0, p95: 0, source: `${BRIEF}: no regression` };
 
@@ -269,6 +274,11 @@ function INTERACTION_ROWS(): RowSpec[] {
     { scenario: 'item-activity-tab', title: 'Item → Activity tab', feedback: true },
     { scenario: 'back-item-to-inventory', title: 'Back: Item → Inventory', feedback: false },
     { scenario: 'forward-inventory-to-item', title: 'Forward: Inventory → Item', feedback: false },
+    {
+      scenario: 'item-adjust-save',
+      title: 'Item: adjust stock, Apply → new on-hand shown',
+      feedback: false,
+    },
     { scenario: 'inventory-next-page', title: 'Inventory → next page', feedback: true },
     { scenario: 'inventory-search', title: 'Inventory search (typed)', feedback: false },
     { scenario: 'inventory-sort', title: 'Inventory sort (Name Z → A)', feedback: true },
@@ -1032,7 +1042,8 @@ export function formatValue(value: number | null | undefined, unit: Unit): strin
 function formatBudget(budget: Budget | undefined, unit: Unit): string {
   if (!budget) return 'none yet';
   const side = (v: number | undefined) => (v === undefined ? 'none' : formatValue(v, unit));
-  return `${side(budget.p75)} / ${side(budget.p95)}`;
+  const goal = budget.p50 === undefined ? '' : ` (p50 goal ${formatValue(budget.p50, unit)})`;
+  return `${side(budget.p75)} / ${side(budget.p95)}${goal}`;
 }
 
 /** Below this many samples a budget verdict would be a guess. */
@@ -1064,11 +1075,21 @@ export function verdict(row: RowResult): string {
     (spec.budget.p75 !== undefined && summary.p75 > spec.budget.p75) ||
     (spec.budget.p95 !== undefined && summary.p95 > spec.budget.p95);
   if (over) return 'OVER budget';
+  // The median goal is judged on its own and reported beside the budget: a
+  // row can be within p75/p95 and still miss the median goal.
+  const goal =
+    spec.budget.p50 !== undefined
+      ? summary.p50 > spec.budget.p50
+        ? `; p50 ABOVE the ${formatValue(spec.budget.p50, spec.unit)} goal`
+        : `; p50 meets the ${formatValue(spec.budget.p50, spec.unit)} goal`
+      : '';
   // Nearest-rank p95 of a small sample is the second-slowest value or so: it
   // UNDERSTATES the true tail. "Within" is then a statement about this sample.
-  return spec.budget.p95 !== undefined && summary.n < 60
-    ? `within budget in this sample (n=${summary.n} cannot confirm a p95 budget)`
-    : 'within budget';
+  return (
+    (spec.budget.p95 !== undefined && summary.n < 60
+      ? `within budget in this sample (n=${summary.n} cannot confirm a p95 budget)`
+      : 'within budget') + goal
+  );
 }
 
 const KIND_LABEL: Record<RunMeta['kind'], string> = {

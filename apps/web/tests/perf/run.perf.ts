@@ -84,6 +84,10 @@ const NETWORK_PROFILES: Record<
     downloadThroughput: (1.6 * 1024 * 1024) / 8,
     uploadThroughput: (750 * 1024) / 8,
   },
+  // A LAB target given the round trip this machine measures to production
+  // (130 ms, run 2026-09-22 after-batch) and no bandwidth limit (-1), so a
+  // localhost build answers across the same distance a customer's request travels.
+  'rtt-130': { latency: 130, downloadThroughput: -1, uploadThroughput: -1 },
 };
 const NETWORK = process.env.PERF_NETWORK ?? 'unthrottled';
 const CPU_SLOWDOWN = num('PERF_CPU', 1);
@@ -124,6 +128,7 @@ function arm(marker: Marker, fromNavigationStart = false, manualStart = false): 
     usefulHrefPattern: marker.hrefPattern,
     freshOnly: marker.freshOnly,
     rowText: marker.rowText,
+    changedTextSelector: marker.changedText,
     shellSelector: marker.shell,
     errorSelector: ERROR_SCREEN,
     fromNavigationStart,

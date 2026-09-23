@@ -41,6 +41,8 @@ export interface Marker {
   freshOnly?: boolean;
   /** The marker's table row must contain this text (a search result). */
   rowText?: string;
+  /** Useful = this element's text changed from its value when armed (a saved number on screen). */
+  changedText?: string;
 }
 
 export interface ClickStep {
@@ -154,6 +156,8 @@ const itemTab = (tab: 'movements' | 'activity'): Marker => ({
   search: `(^|[?&])tab=${tab}(&|$)`,
   selector: `#item-detail-panel-${tab}`,
 });
+// The Overview panel's on-hand number (item-detail.tsx, DetailRow "On hand").
+const ON_HAND = '#item-detail-panel-overview span.text-base.font-semibold.tabular-nums';
 const OPEN_FIRST_ITEM: ClickStep = {
   selector: 'main table tbody tr a[href]',
   hrefPattern: INVENTORY_ROWS.hrefPattern,
@@ -332,6 +336,26 @@ export const SCENARIOS: Scenario[] = [
       // after a 300 ms debounce (use-instant-filters.ts), so the rows are the
       // user's answer.
       arrives: inventoryRowsWhere(),
+    },
+  },
+  {
+    // LAB ONLY: writes. A +1 adjustment on the first item, timed from Apply to
+    // the NEW on-hand number on screen: time to confirmed freshness after a
+    // save. Its requests row counts the renders a save costs.
+    id: 'item-adjust-save',
+    title: 'Item: adjust stock, Apply → new on-hand shown',
+    kind: 'soft-navigation',
+    start: '/dashboard/inventory',
+    startReady: INVENTORY_ROWS,
+    prelude: [OPEN_FIRST_ITEM],
+    click: {
+      setup: ['main button:has-text("Adjust stock")'],
+      selector: '[role="dialog"] button:has-text("Apply")',
+      arrives: {
+        path: ITEM_DETAIL.path,
+        selector: ON_HAND,
+        changedText: ON_HAND,
+      },
     },
   },
   {
