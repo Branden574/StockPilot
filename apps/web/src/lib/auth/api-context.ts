@@ -4,6 +4,7 @@ import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 
 import { env } from '@/lib/env';
 import { createClient } from '@/lib/supabase/server';
+import { guardedSupabaseFetch } from '@/lib/supabase/url-length-guard';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
 import { effectiveModules } from '@/lib/modules/effective-modules';
 import { accountIsDisabledOrThrow, loadAccountStatus } from '@/lib/auth/account-status';
@@ -425,7 +426,9 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
       env.NEXT_PUBLIC_SUPABASE_URL,
       env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
       {
-        global: { headers: { Authorization: `Bearer ${bearer}` } },
+        // The guard refuses a PostgREST URL too long to succeed instead of
+        // letting it fail after ~7 s of retries (see url-length-guard.ts).
+        global: { headers: { Authorization: `Bearer ${bearer}` }, fetch: guardedSupabaseFetch },
         auth: { persistSession: false, autoRefreshToken: false },
       },
     );
