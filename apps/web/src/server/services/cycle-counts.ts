@@ -7,6 +7,7 @@ import { reportError } from '@/lib/error-reporter';
 
 import { audit } from './audit';
 import { dispatchEvent } from './integration-events';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { fetchAllRows } from './lib/paginate';
 import {
@@ -280,6 +281,7 @@ export class CycleCountsService {
       // `or` ANDs with every other filter on this query (organization_id,
       // and the assigned_to filter below), so this only ever narrows.
       query = query.or(
+        // in-list-bound: the caller's writable warehouses (an org's handful of sites)
         `warehouse_id.in.(${access.writableIds.join(',')}),` +
           `and(warehouse_id.is.null,assigned_to.eq.${this.ctx.userId})`,
       );
@@ -798,13 +800,21 @@ export class CycleCountsService {
       { group_id: string | null; variant_size: string | null; jersey_number: string | null }
     >();
     if (pageItemIds.length > 0) {
-      const { data: vRows, error: vErr } = await this.ctx.supabase
-        .from('inventory_items')
-        .select('id, group_id, variant_size, jersey_number')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', pageItemIds);
-      if (vErr) throw new ServiceError('internal_error', vErr.message);
-      for (const v of (vRows ?? []) as Array<Record<string, unknown>>) {
+      // Batched: 200 uuids in one `.in()` already sits at the local
+      // gateway's ~8 KB limit (~215 uuids) once the rest of the URL is added.
+      const ctx = this.ctx;
+      const vRows = await fetchAllRowsByIds<Record<string, unknown>>(
+        pageItemIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('inventory_items')
+            .select('id, group_id, variant_size, jersey_number')
+            .eq('organization_id', ctx.organizationId)
+            .in('id', batch)
+            .order('id')
+            .range(from, to),
+      );
+      for (const v of vRows) {
         variantByItem.set(v.id as string, {
           group_id: (v.group_id as string | null) ?? null,
           variant_size: (v.variant_size as string | null) ?? null,
@@ -975,16 +985,22 @@ export class CycleCountsService {
       // past 1000 easily — a big jersey run would otherwise start a count
       // scoped to an arbitrary 1000-row subset and nobody would ever know a
       // variant was dropped.
-      const expansionRows = await fetchAllRows<{ id: string }>((from, to) =>
-        this.ctx.supabase
-          .from('inventory_items')
-          .select('id')
-          .eq('organization_id', this.ctx.organizationId)
-          .in('group_id', groupIds)
-          .is('deleted_at', null)
-          .eq('status', 'active')
-          .order('id', { ascending: true })
-          .range(from, to),
+      //
+      // BATCHED by group as well: `groupIds` has no cap, and one `.in()` past
+      // ~215 uuids answers 414 locally and fails in production.
+      const ctx = this.ctx;
+      const expansionRows = await fetchAllRowsByIds<{ id: string }>(
+        groupIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('inventory_items')
+            .select('id')
+            .eq('organization_id', ctx.organizationId)
+            .in('group_id', batch)
+            .is('deleted_at', null)
+            .eq('status', 'active')
+            .order('id', { ascending: true })
+            .range(from, to),
       );
       groupItemIds = expansionRows.map((r) => r.id);
       if (groupItemIds.length === 0) {
@@ -1031,15 +1047,22 @@ export class CycleCountsService {
       // above paged past it correctly. A plain hand-picked selection is
       // capped at 1000 by the action schema, so this only bites group scope
       // today, but the read has to page regardless of which caller filled it.
-      const items = await fetchAllRows<{ id: string; warehouse_id: string | null }>(
-        (from, to) =>
-          this.ctx.supabase
+      //
+      // BATCHED as well: up to 1000 picks (or an uncapped group expansion) in
+      // one `.in()` failed outright (414 locally, "fetch failed" in
+      // production), so a large selection could never start. A failed batch
+      // throws, so no count starts on a partial, ungated set.
+      const ctx = this.ctx;
+      const items = await fetchAllRowsByIds<{ id: string; warehouse_id: string | null }>(
+        ids,
+        (batch) => (from, to) =>
+          ctx.supabase
             .from('inventory_items')
             .select('id, warehouse_id')
-            .eq('organization_id', this.ctx.organizationId)
+            .eq('organization_id', ctx.organizationId)
             .is('deleted_at', null)
             .eq('status', 'active')
-            .in('id', ids)
+            .in('id', batch)
             .order('id', { ascending: true })
             .range(from, to),
       );

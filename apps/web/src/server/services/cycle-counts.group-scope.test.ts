@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
 
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import { callArgs, inFilters, makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 import { PAGE_SIZE } from './lib/paginate';
 
 vi.mock('@/lib/auth/warehouse', () => ({
@@ -198,17 +198,20 @@ describe('CycleCountsService.start (group scope)', () => {
       warehouse_id: 'wh-a',
     }));
     const the1001st = { id: 'v-01000', warehouse_id: 'wh-a' };
-    const page2 = [the1001st];
+    const all = [...page1, the1001st];
     // Both the expansion query and the downstream selection re-read hit the
-    // same 'inventory_items.select' key. Each is its own fetchAllRows loop of
-    // exactly 2 pages (a full page then a short one that ends the loop), so
-    // alternating on an even/odd call counter serves BOTH loops correctly.
-    let call = 0;
+    // same 'inventory_items.select' key, so answer by the call itself: the
+    // expansion (`.in('group_id', …)`) pages the 1001 variants by `.range`;
+    // the selection re-read (`.in('id', …)`, now batched 100 ids at a time)
+    // returns exactly the rows its batch asked for.
     const stub = makeSupabaseStub({
-      'inventory_items.select': () => ({
-        data: call++ % 2 === 0 ? page1 : page2,
-        error: null,
-      }),
+      'inventory_items.select': (call) => {
+        const [column, values] = inFilters(call)[0] ?? ['', []];
+        const [from, to] = (callArgs(call, 'range') ?? [0, PAGE_SIZE - 1]) as [number, number];
+        if (column === 'group_id') return { data: all.slice(from, to + 1), error: null };
+        const wanted = new Set(values as string[]);
+        return { data: all.filter((r) => wanted.has(r.id)).slice(from, to + 1), error: null };
+      },
       'rpc:start_cycle_count': {
         data: [{ cycle_count_id: 'cc-big', line_count: PAGE_SIZE + 1 }],
         error: null,
