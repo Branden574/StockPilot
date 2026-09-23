@@ -35,6 +35,9 @@ interface Props {
  * and reopening the dashboard tab resets it, which is fine — the user
  * has already seen those toasts.
  */
+/** The one page that renders notifications on the server. */
+const NOTIFICATIONS_PAGE = '/dashboard/notifications';
+
 export function NotificationBell({ userId, organizationId }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -152,6 +155,39 @@ export function NotificationBell({ userId, organizationId }: Props) {
   // events doesn't run surfaceUnread 50 times. Leading-edge + trailing
   // call: the first event fires immediately, follow-ups within 500ms
   // schedule a single trailing run.
+  //
+  // THE PAGE IS RE-RENDERED ONLY WHERE IT SHOWS NOTIFICATIONS. Every event used
+  // to router.refresh() whatever page was open, hidden tabs included: a full
+  // server render (and a purge of the tab's router cache) per notification,
+  // although since the layout stopped reading notifications (7c3c05ed) the
+  // only server-rendered reader is /dashboard/notifications. The bell's own
+  // badge and toasts come from surfaceUnread (a browser read), and every other
+  // live surface has its own refresher (InventoryRealtime, OrderRealtimeRefresh,
+  // PermissionsRealtime). A hidden Notifications tab refreshes once when it is
+  // visible again.
+  const pathnameRef = React.useRef(pathname);
+  React.useEffect(() => {
+    pathnameRef.current = pathname;
+  }, [pathname]);
+  const pageDirtyRef = React.useRef(false);
+  const refreshNotificationsPage = React.useCallback(() => {
+    if (!pathnameRef.current?.startsWith(NOTIFICATIONS_PAGE)) return;
+    if (document.visibilityState === 'hidden') {
+      pageDirtyRef.current = true;
+      return;
+    }
+    router.refresh();
+  }, [router]);
+  React.useEffect(() => {
+    function onVisibilityChange() {
+      if (document.visibilityState === 'hidden' || !pageDirtyRef.current) return;
+      pageDirtyRef.current = false;
+      if (pathnameRef.current?.startsWith(NOTIFICATIONS_PAGE)) router.refresh();
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [router]);
+
   const lastRefreshAtRef = React.useRef(0);
   const refreshPendingRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestRefresh = React.useCallback(() => {
@@ -160,7 +196,7 @@ export function NotificationBell({ userId, organizationId }: Props) {
     if (since >= 500) {
       lastRefreshAtRef.current = now;
       void surfaceUnread();
-      router.refresh();
+      refreshNotificationsPage();
       return;
     }
     if (refreshPendingRef.current) return;
@@ -168,9 +204,9 @@ export function NotificationBell({ userId, organizationId }: Props) {
       refreshPendingRef.current = null;
       lastRefreshAtRef.current = Date.now();
       void surfaceUnread();
-      router.refresh();
+      refreshNotificationsPage();
     }, 500 - since);
-  }, [router, surfaceUnread]);
+  }, [surfaceUnread, refreshNotificationsPage]);
 
   // Realtime path. Each event triggers a surfaceUnread() — the function
   // dedups via seenIds so it's safe to call on every event without
