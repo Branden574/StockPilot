@@ -2,7 +2,7 @@
  * Which skeleton a dashboard route shows while it loads, for the two places
  * that draw one outside a route's own loading.tsx:
  *   - the late skeleton (components/dashboard/pending-route-skeleton.tsx), for
- *     a soft navigation still waiting after SLOW_NAVIGATION_MS;
+ *     a soft navigation still waiting after SLOW_NAVIGATION_MS (lateSkeletonFor);
  *   - the (dashboard) group's loading.tsx, on a hard load or refresh.
  *
  * null means "this route has a loading.tsx of its own": it keeps it, and the
@@ -42,6 +42,29 @@ const PAGE_SECTIONS = [
   '/dashboard/admin',
   '/dashboard/reports',
 ];
+
+/**
+ * The sections whose async layout sits above their own loading.tsx. Only a
+ * navigation that ENTERS one needs the late skeleton: inside the section the
+ * layout is already mounted, and its loading.tsx shows as it always did.
+ */
+const ASYNC_LAYOUT_SECTIONS = [
+  '/dashboard/admin',
+  '/dashboard/purchase-orders',
+  '/dashboard/reports',
+];
+
+/**
+ * The late skeleton for a soft navigation from `fromPath` to `targetPath`:
+ * routeSkeletonFor, except within one async-layout section, where the
+ * section's own loading.tsx is left to show (null).
+ */
+export function lateSkeletonFor(targetPath: string, fromPath: string): RouteSkeletonKind | null {
+  if (ASYNC_LAYOUT_SECTIONS.some((base) => within(targetPath, base) && within(fromPath, base))) {
+    return null;
+  }
+  return routeSkeletonFor(targetPath);
+}
 
 export function routeSkeletonFor(pathname: string): RouteSkeletonKind | null {
   if (pathname === '/dashboard') return 'overview';

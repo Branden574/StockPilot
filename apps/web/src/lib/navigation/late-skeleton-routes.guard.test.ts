@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { routeSkeletonFor, type RouteSkeletonKind } from './route-skeletons';
+import { lateSkeletonFor, routeSkeletonFor, type RouteSkeletonKind } from './route-skeletons';
 
 /**
  * Which dashboard routes rely on the late skeleton (and on the (dashboard)
@@ -176,6 +176,17 @@ describe('routes that rely on the late skeleton', () => {
     expect(kind).not.toBeNull();
     expect(routeSkeletonFor(samplePath(dirOf(page)))).toBe(kind);
   });
+
+  it.each(UNDER_ASYNC_LAYOUT)(
+    'D6 %s gets no late skeleton from inside its section, and the section shape from outside',
+    (page) => {
+      const section = nearestLoading(page);
+      if (section === null) throw new Error('unreachable');
+      const target = samplePath(dirOf(page));
+      expect(lateSkeletonFor(target, samplePath(section))).toBeNull();
+      expect(lateSkeletonFor(target, '/dashboard/inventory')).toBe(kindOfLoading(section));
+    },
+  );
 
   const OWN_LOADING = PAGES.filter(
     (page) => !RELYING.includes(page) && !UNDER_ASYNC_LAYOUT.includes(page),

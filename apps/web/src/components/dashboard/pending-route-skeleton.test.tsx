@@ -410,6 +410,28 @@ describe('PendingRouteFrame', () => {
     expect(document.activeElement).toBe(outside);
   });
 
+  it.each([
+    ['/dashboard/reports', '/dashboard/reports/dead-stock'],
+    ['/dashboard/admin/users', '/dashboard/admin/warehouses'],
+    ['/dashboard/purchase-orders', '/dashboard/purchase-orders/abc'],
+  ])('E18 inside an async-layout section (%s -> %s) its own loading.tsx is left to show', (from, to) => {
+    pathnameRef.value = from;
+    window.history.replaceState(null, '', from);
+    render(<Frame />);
+    push(to);
+    advance(5_000);
+    expect(skeleton()).toBeNull();
+    expect(pageWrapper().className).toBe('contents');
+  });
+
+  it('E19 entering an async-layout section from outside still gets the late skeleton', () => {
+    render(<Frame />);
+    push('/dashboard/reports/dead-stock');
+    advance(400);
+    expect(skeleton()).not.toBeNull();
+    expect(tableRows()).toBeNull();
+  });
+
   it('E13 a dead navigation does not come back when a shallow pushState returns to the page it left', () => {
     // Inventory's instant-mode view chips: history.pushState, which Next applies
     // with a RESTORE (discarding the row click's navigation) and never reports.

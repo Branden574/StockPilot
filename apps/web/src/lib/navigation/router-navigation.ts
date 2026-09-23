@@ -112,7 +112,8 @@ export function locationKey(pathname: string, search: string): string {
   return query ? `${pathname}?${query}` : pathname;
 }
 
-function pathOf(key: string): string {
+/** The pathname of a locationKey. */
+export function pathOf(key: string): string {
   const q = key.indexOf('?');
   return q === -1 ? key : key.slice(0, q);
 }

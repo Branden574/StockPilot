@@ -11,10 +11,11 @@ import {
   MAX_PENDING_NAVIGATION_MS,
   noteCommittedLocation,
   noteLateSkeleton,
+  pathOf,
   SLOW_NAVIGATION_MS,
   subscribeRouterNavigation,
 } from '@/lib/navigation/router-navigation';
-import { routeSkeletonFor } from '@/lib/navigation/route-skeletons';
+import { lateSkeletonFor } from '@/lib/navigation/route-skeletons';
 
 /**
  * The dashboard's page area, with the LATE skeleton: a path navigation still
@@ -36,8 +37,10 @@ import { routeSkeletonFor } from '@/lib/navigation/route-skeletons';
  *
  * What starts it: the router's own start event (lib/navigation/router-navigation.ts),
  * so Link clicks, router.push/replace and Back/Forward alike. Only routes
- * without a loading.tsx of their own get it (lib/navigation/route-skeletons.ts);
- * the others show their own fallback, and a second skeleton would stack on it.
+ * without a loading.tsx of their own get it (lib/navigation/route-skeletons.ts
+ * lateSkeletonFor, which also covers entering admin, purchase-orders and
+ * reports from outside); the others show their own fallback, and a second
+ * skeleton would stack on it.
  * A redirect (a replace from the page that just committed) does not wait.
  *
  * What ends it, all at render time so a page that has arrived is never hidden,
@@ -90,7 +93,7 @@ export function PendingRouteFrame({ children }: { children: React.ReactNode }) {
     nav !== null && nav.kind === 'path' && nav.fromKey === currentKey && nav.id !== expiredId
       ? nav
       : null;
-  const mapped = tracked ? routeSkeletonFor(tracked.targetPath) : null;
+  const mapped = tracked ? lateSkeletonFor(tracked.targetPath, pathOf(tracked.fromKey)) : null;
   // A skeleton is already up over this page: a newer path navigation from it
   // keeps one up (its target's, or the generic page shape when the target has
   // a loading.tsx of its own), instead of flashing the page for 400 ms.
