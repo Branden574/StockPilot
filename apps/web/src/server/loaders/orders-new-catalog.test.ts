@@ -351,6 +351,34 @@ describe("loadCatalogItems — the catalog is the caller's RLS view of the wareh
     expect(ids).toEqual(['a-y', 'g-y']);
   });
 
+  it('a FULL view of ANOTHER warehouse widens nothing here', async () => {
+    // Full access is per warehouse: full at WH2 says nothing about WH, where
+    // this staff member holds charter A only.
+    const { ids } = await catalogIds(
+      'staff',
+      makeCallerClient({
+        full: [WH2],
+        assigned: [WH, WH2],
+        pairs: [{ warehouse_id: WH, charter_id: CHARTER_A }],
+        unrestricted: [ORG],
+      }),
+    );
+    expect(ids).toEqual(['a-x', 'a-y', 'g-none', 'g-x', 'g-y']);
+  });
+
+  it('being category-unrestricted in ANOTHER organization lifts no grant here', async () => {
+    const { ids } = await catalogIds(
+      'viewer',
+      makeCallerClient({
+        full: [WH],
+        assigned: [WH],
+        unrestricted: ['00000000-0000-4000-8000-0000000000ff'],
+        allowed: [{ organization_id: ORG, category_id: CAT_X }],
+      }),
+    );
+    expect(ids).toEqual(['a-x', 'b-x', 'g-x']);
+  });
+
   it('a staff member whose view of the warehouse is full gets the shared ALL variant', async () => {
     const caller = makeCallerClient({ full: [WH], assigned: [WH], unrestricted: [ORG] });
     createClientMock.mockResolvedValue(caller);
