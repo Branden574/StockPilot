@@ -530,7 +530,7 @@ export default function NewRental() {
               label="EMAIL (OPTIONAL)"
               value={borrowerEmail}
               onChangeText={setBorrowerEmail}
-              placeholder="branden@stockpilotusa.com"
+              placeholder="borrower@company.com"
               keyboardType="email-address"
               autoCapitalize="none"
             />
