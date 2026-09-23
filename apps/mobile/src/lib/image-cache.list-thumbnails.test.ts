@@ -100,12 +100,16 @@ describe('the list screens', () => {
   it('select thumb_path and use signListThumbnails, not the transform preset', async () => {
     const { readFileSync } = await import('node:fs');
     const path = await import('node:path');
+    // The photo read lives in the shared reader (batched, fails loudly); the
+    // screens call it and sign through signListThumbnails.
+    const reader = readFileSync(path.resolve(__dirname, 'id-reads.ts'), 'utf8');
+    expect(reader, 'readPrimaryPhotos must read the stored thumbnail path').toMatch(
+      /idReadSelect\(\s*client,\s*'item_images',\s*'item_id, storage_path, thumb_path, is_primary, sort_order',?\s*\)/,
+    );
     for (const screen of ['inventory.tsx', 'books.tsx']) {
       const source = readFileSync(path.resolve(__dirname, '..', '..', 'app', '(drawer)', '(tabs)', screen), 'utf8');
-      expect(source, `${screen} must read the stored thumbnail path`).toMatch(
-        /\.select\('item_id, storage_path, thumb_path, is_primary, sort_order'\)/,
-      );
-      expect(source).toMatch(/signListThumbnails\(/);
+      expect(source, `${screen} must read photos through the shared reader`).toMatch(/readPrimaryPhotos\(/);
+      expect(source).toMatch(/signListThumbnails/);
       expect(source, `${screen} must not ask for the on-demand transform itself`).not.toMatch(/THUMB_TRANSFORM/);
     }
   });

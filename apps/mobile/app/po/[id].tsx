@@ -14,12 +14,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import type { CountingUnit, SizeScaleValueOrder } from '@stockpilot/core';
-
 import { PoAttachments } from '@/components/po-attachments';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { mapPostReceiptError } from '@/lib/receipt-post-error';
+import { settleIdBatchRead } from '@/lib/id-batches';
+import { readPoRunGroups, readReceiptTotals } from '@/lib/id-reads';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   buildPoBlocks,
@@ -84,6 +84,16 @@ export default function PoReceiveScreen() {
   const [lines, setLines] = React.useState<PoLine[]>([]);
   const [groups, setGroups] = React.useState<Record<string, PoRunGroup>>({});
   const [receipts, setReceipts] = React.useState<ReceiptHistoryItem[]>([]);
+  // The size-run read failed: lines render one by one (receiving still works,
+  // it is the job), and a notice says why. Set by every size-run read.
+  const [groupsDegraded, setGroupsDegraded] = React.useState(false);
+  // The receipt history (or its totals) did not load: said in place of the
+  // history, never shown as receipts with 0 accepted. Set by every read.
+  const [receiptsError, setReceiptsError] = React.useState<string | null>(null);
+  // A part-reload in flight ("Try again" on the size runs or the history).
+  // Only that part re-reads: a full load() reseeds the draft and would wipe
+  // the quantities being typed.
+  const [retryingPart, setRetryingPart] = React.useState<'groups' | 'history' | null>(null);
   const [draft, setDraft] = React.useState<Record<string, DraftLine>>({});
   const [loading, setLoading] = React.useState(true);
   /** A READ that failed, surfaced in place of the screen. Never a silent empty
@@ -116,6 +126,128 @@ export default function PoReceiveScreen() {
   React.useEffect(() => {
     sportsEnabledRef.current = sportsEnabled;
   });
+
+  /**
+   * Size-run grouping (Task 16), mirroring the web receive dialog. Only when
+   * the org has the sports module AND a line actually carries a group; for
+   * every other PO this is zero extra queries and the flat cards stay exactly
+   * as they are.
+   *
+   * Read BY ID, at any status: these are the groups this PO's own lines
+   * already point at, and a receipt in flight must keep rendering its size
+   * runs even if someone archived the group meanwhile (web's displayByIds has
+   * the same stance). Batched, and the size-scale values read is checked too
+   * (it used to be ignored, so sizes could come back unordered). A failure
+   * degrades to flat cards with a notice, never silently.
+   */
+  const loadRunGroups = React.useCallback(
+    async (groupIds: string[]) => {
+      if (!orgId) return;
+      if (groupIds.length === 0 || !sportsEnabledRef.current) {
+        setGroups({});
+        setGroupsDegraded(false);
+        return;
+      }
+      const read = await settleIdBatchRead(readPoRunGroups(supabase, orgId, groupIds));
+      if (read.ok) {
+        setGroups(read.value);
+        setGroupsDegraded(false);
+      } else {
+        console.warn('[po] size-run group lookup failed', read.message);
+        setGroups({});
+        setGroupsDegraded(true);
+      }
+    },
+    [orgId],
+  );
+
+  /**
+   * Receipt history (who / when / qty): the audit log shown below the receive
+   * form, mirroring the web PO detail page. Read-only and org-scoped. The
+   * totals are paged (the `.limit(5000)` they replace was clamped to 1000 by
+   * max_rows, so a big PO's totals came out short) and batched; a failed
+   * receipts or totals read shows "did not load" instead of zero totals.
+   */
+  const loadReceiptHistory = React.useCallback(async () => {
+    if (!id || !orgId) return;
+    const { data: receiptRows, error: receiptsErr } = await supabase
+      .from('receipts')
+      .select('id, receipt_number, status, received_at, received_by')
+      .eq('organization_id', orgId)
+      .eq('purchase_order_id', id)
+      .order('received_at', { ascending: false });
+    if (receiptsErr) {
+      console.warn('[po] receipt history failed', receiptsErr.message);
+      setReceipts([]);
+      setReceiptsError(receiptsErr.message);
+      return;
+    }
+    const receiptIds = (receiptRows ?? []).map((r) => (r as Record<string, unknown>).id as string);
+    const totals = await settleIdBatchRead(readReceiptTotals(supabase, receiptIds));
+    if (!totals.ok) {
+      console.warn('[po] receipt totals failed', totals.message);
+      setReceipts([]);
+      setReceiptsError(totals.message);
+      return;
+    }
+    const totalsById = totals.value;
+    const nameById = new Map<string, string>();
+    const receiverIds = Array.from(
+      new Set(
+        (receiptRows ?? [])
+          .map((r) => (r as Record<string, unknown>).received_by as string | null)
+          .filter((v): v is string => Boolean(v)),
+      ),
+    );
+    if (receiverIds.length > 0) {
+      // Cosmetic (a name, 'Unknown' when unread), and small.
+      const { data: profs } = await supabase
+        .from('user_profiles')
+        .select('id, full_name, email')
+        // in-list-bound: the distinct people who received THIS PO, a handful
+        .in('id', receiverIds);
+      for (const p of profs ?? []) {
+        const pr = p as Record<string, unknown>;
+        nameById.set(
+          pr.id as string,
+          ((pr.full_name as string | null) || (pr.email as string | null) || 'Unknown').trim(),
+        );
+      }
+    }
+    setReceipts(
+      (receiptRows ?? []).map((row) => {
+        const r = row as Record<string, unknown>;
+        const t = totalsById.get(r.id as string) ?? { accepted: 0, rejected: 0 };
+        return {
+          id: r.id as string,
+          receipt_number: r.receipt_number as string,
+          status: r.status as string,
+          received_at: (r.received_at as string | null) ?? null,
+          received_by_name: nameById.get(r.received_by as string) ?? 'Unknown',
+          accepted: t.accepted,
+          rejected: t.rejected,
+        };
+      }),
+    );
+    setReceiptsError(null);
+  }, [id, orgId]);
+
+  /** "Try again" on one part. Guarded so repeated taps do not stack reads. */
+  async function retryPart(part: 'groups' | 'history') {
+    if (retryingPart !== null) return;
+    setRetryingPart(part);
+    try {
+      if (part === 'groups') {
+        await loadRunGroups(
+          Array.from(new Set(lines.map((l) => l.groupId).filter((v): v is string => Boolean(v)))),
+        );
+      } else {
+        await loadReceiptHistory();
+      }
+    } finally {
+      setRetryingPart(null);
+    }
+  }
 
   // NOTE: `loading` starts true and `loadError` starts null, so load() needs
   // no synchronous pre-await resets on mount; the "Try again" button resets
@@ -201,73 +333,11 @@ export default function PoReceiveScreen() {
     });
     setLines(flatLines);
 
-    // Size-run grouping (Task 16), mirroring the web receive dialog. Only when
-    // the org has the sports module AND a line actually carries a group — for
-    // every other PO this is zero extra queries and the flat cards below stay
-    // exactly as they are.
-    const groupIds = Array.from(
-      new Set(flatLines.map((l) => l.groupId).filter((v): v is string => Boolean(v))),
+    // Size runs (see loadRunGroups): batched, and a failure degrades to flat
+    // cards with a notice.
+    await loadRunGroups(
+      Array.from(new Set(flatLines.map((l) => l.groupId).filter((v): v is string => Boolean(v)))),
     );
-    if (groupIds.length > 0 && sportsEnabledRef.current) {
-      // Read BY ID, at any status: these are the groups this PO's own lines
-      // already point at, and a receipt in flight must keep rendering its size
-      // runs even if someone archived the group meanwhile. Only `deleted_at`
-      // excludes a row. (Web's `displayByIds` is the same read with the same
-      // stance; the pickers that OFFER a group are active-only.)
-      const { data: groupRows, error: groupErr } = await supabase
-        .from('product_groups')
-        .select('id, name, default_counting_unit, size_scale_id')
-        .eq('organization_id', orgId)
-        .in('id', groupIds)
-        .is('deleted_at', null);
-
-      // Degrade to flat cards on a read failure rather than blocking receiving
-      // — the grouping is presentation, the receipt is the job.
-      if (groupErr) {
-        console.warn('[po] size-run group lookup failed', groupErr.message);
-        setGroups({});
-      } else {
-        const rows = (groupRows ?? []) as Record<string, unknown>[];
-        const scaleIds = Array.from(
-          new Set(
-            rows
-              .map((g) => g.size_scale_id as string | null)
-              .filter((v): v is string => Boolean(v)),
-          ),
-        );
-        const valuesByScale = new Map<string, SizeScaleValueOrder[]>();
-        if (scaleIds.length > 0) {
-          const { data: valueRows } = await supabase
-            .from('size_scale_values')
-            .select('size_scale_id, value, normalized, sort_order')
-            .in('size_scale_id', scaleIds)
-            .order('sort_order', { ascending: true });
-          for (const v of (valueRows ?? []) as Record<string, unknown>[]) {
-            const key = v.size_scale_id as string;
-            const entry: SizeScaleValueOrder = {
-              value: v.value as string,
-              normalized: (v.normalized as string | null) ?? null,
-              sortOrder: Number(v.sort_order),
-            };
-            const arr = valuesByScale.get(key);
-            if (arr) arr.push(entry);
-            else valuesByScale.set(key, [entry]);
-          }
-        }
-        const next: Record<string, PoRunGroup> = {};
-        for (const g of rows) {
-          const scaleId = g.size_scale_id as string | null;
-          next[g.id as string] = {
-            name: g.name as string,
-            countingUnit: g.default_counting_unit as CountingUnit,
-            sizeValues: scaleId ? (valuesByScale.get(scaleId) ?? []) : [],
-          };
-        }
-        setGroups(next);
-      }
-    } else {
-      setGroups({});
-    }
 
     // Seed draft with empty values; user fills in only the lines they
     // actually receive in this session.
@@ -277,75 +347,15 @@ export default function PoReceiveScreen() {
     }
     setDraft(seed);
 
-    // Receipt history (who / when / qty) — the audit log shown below the
-    // receive form, mirroring the web PO detail page. Read-only + org-scoped.
-    const { data: receiptRows } = await supabase
-      .from('receipts')
-      .select('id, receipt_number, status, received_at, received_by')
-      .eq('organization_id', orgId)
-      .eq('purchase_order_id', id)
-      .order('received_at', { ascending: false });
-
-    const receiptIds = (receiptRows ?? []).map((r) => (r as Record<string, unknown>).id as string);
-    const totalsById = new Map<string, { accepted: number; rejected: number }>();
-    const nameById = new Map<string, string>();
-    if (receiptIds.length > 0) {
-      const { data: receiptLines } = await supabase
-        .from('receipt_lines')
-        .select('receipt_id, qty_accepted_base, qty_rejected_base')
-        .in('receipt_id', receiptIds)
-        // Display-only totals; cap well above any realistic PO so PostgREST's
-        // default 1000-row window can't silently understate the history.
-        .limit(5000);
-      for (const rl of receiptLines ?? []) {
-        const r = rl as Record<string, unknown>;
-        const rid = r.receipt_id as string;
-        const t = totalsById.get(rid) ?? { accepted: 0, rejected: 0 };
-        t.accepted += Number(r.qty_accepted_base) || 0;
-        t.rejected += Number(r.qty_rejected_base) || 0;
-        totalsById.set(rid, t);
-      }
-      const receiverIds = Array.from(
-        new Set(
-          (receiptRows ?? [])
-            .map((r) => (r as Record<string, unknown>).received_by as string | null)
-            .filter((v): v is string => Boolean(v)),
-        ),
-      );
-      if (receiverIds.length > 0) {
-        const { data: profs } = await supabase
-          .from('user_profiles')
-          .select('id, full_name, email')
-          .in('id', receiverIds);
-        for (const p of profs ?? []) {
-          const pr = p as Record<string, unknown>;
-          nameById.set(
-            pr.id as string,
-            ((pr.full_name as string | null) || (pr.email as string | null) || 'Unknown').trim(),
-          );
-        }
-      }
-    }
-    setReceipts(
-      (receiptRows ?? []).map((row) => {
-        const r = row as Record<string, unknown>;
-        const t = totalsById.get(r.id as string) ?? { accepted: 0, rejected: 0 };
-        return {
-          id: r.id as string,
-          receipt_number: r.receipt_number as string,
-          status: r.status as string,
-          received_at: (r.received_at as string | null) ?? null,
-          received_by_name: nameById.get(r.received_by as string) ?? 'Unknown',
-          accepted: t.accepted,
-          rejected: t.rejected,
-        };
-      }),
-    );
+    // Receipt history (see loadReceiptHistory): paged totals, and a failure
+    // says "did not load" instead of zero totals.
+    await loadReceiptHistory();
 
     setLoading(false);
     // sportsEnabled deliberately excluded — see sportsEnabledRef above. Only
-    // the PO id / org context re-key the draft.
-  }, [id, orgId]);
+    // the PO id / org context re-key the draft (the two part loaders are
+    // keyed on the same values, so their identity never changes on their own).
+  }, [id, orgId, loadRunGroups, loadReceiptHistory]);
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount AND dep-change re-run: the flag resets are pre-await by necessity (the spinner must show during the fetch; a workspace switch re-runs this with stale content otherwise); everything else is post-await
@@ -602,6 +612,29 @@ export default function PoReceiveScreen() {
           <ScrollView
             contentContainerStyle={{ padding: space.md, paddingBottom: 140 }}
           >
+            {groupsDegraded ? (
+              <View style={styles.partNotice}>
+                <Text style={styles.partNoticeText}>
+                  Size runs did not load, so lines are shown one by one. Receiving still works.
+                </Text>
+                <Pressable
+                  onPress={() => void retryPart('groups')}
+                  disabled={retryingPart !== null}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: retryingPart !== null }}
+                  style={({ pressed }) => [
+                    styles.partRetry,
+                    (pressed || retryingPart !== null) && { opacity: 0.6 },
+                  ]}
+                >
+                  {retryingPart === 'groups' ? (
+                    <ActivityIndicator color={theme.text} />
+                  ) : (
+                    <Text style={styles.partRetryText}>Try again</Text>
+                  )}
+                </Pressable>
+              </View>
+            ) : null}
             {lines.length === 0 ? (
               <Text style={styles.muted}>No lines on this PO.</Text>
             ) : (
@@ -695,7 +728,34 @@ export default function PoReceiveScreen() {
               })
             )}
 
-            {receipts.length > 0 && (
+            {receiptsError !== null ? (
+              <View style={styles.historySection}>
+                <Text style={styles.historyHeading}>Receipt history</Text>
+                <View style={styles.partNotice}>
+                  <Text style={styles.partNoticeText}>
+                    Receipt history did not load, so past receipts and their totals are not shown.
+                  </Text>
+                  <Pressable
+                    onPress={() => void retryPart('history')}
+                    disabled={retryingPart !== null}
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: retryingPart !== null }}
+                    style={({ pressed }) => [
+                      styles.partRetry,
+                      (pressed || retryingPart !== null) && { opacity: 0.6 },
+                    ]}
+                  >
+                    {retryingPart === 'history' ? (
+                      <ActivityIndicator color={theme.text} />
+                    ) : (
+                      <Text style={styles.partRetryText}>Try again</Text>
+                    )}
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+
+            {receiptsError === null && receipts.length > 0 && (
               <View style={styles.historySection}>
                 <Text style={styles.historyHeading}>Receipt history</Text>
                 {receipts.map((r) => (
@@ -1102,6 +1162,26 @@ const styles = StyleSheet.create({
   },
   allBtnText: { color: theme.text, fontWeight: '700' },
   historySection: { marginTop: space.lg },
+  partNotice: {
+    backgroundColor: theme.card,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.warning,
+    padding: space.md,
+    marginBottom: space.sm,
+    gap: space.sm,
+  },
+  partNoticeText: { color: theme.text, fontSize: 13, lineHeight: 18 },
+  partRetry: {
+    alignSelf: 'flex-start',
+    minHeight: 36,
+    paddingHorizontal: space.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: theme.border,
+    justifyContent: 'center',
+  },
+  partRetryText: { color: theme.text, fontSize: 13, fontWeight: '600' },
   historyHeading: {
     color: theme.textMuted,
     fontSize: 11,

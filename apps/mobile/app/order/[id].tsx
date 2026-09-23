@@ -81,6 +81,12 @@ import {
   type ReturnReasonCode,
 } from '@/lib/order-returns';
 import { extractApiErrorMessage } from '@/lib/po-import-approve';
+import {
+  loadOrderStockCheck,
+  orderStockGates,
+  type OrderStockCheck,
+} from '@/lib/order-stock-check';
+import { readErrorMessage } from '@/lib/id-batches';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   BLOCKED_HEADLINE as DR_BLOCKED_HEADLINE,
@@ -232,10 +238,11 @@ interface OrderHeader {
    *  fulfilled = provided to the customer (shipped at hand-over). */
   totalRequested: number;
   totalFulfilled: number;
-  /** Whether a strict approve would fall short (drives "Approve partial"). */
-  isShortStock: boolean;
-  /** Whether any still-owed line has available stock (gates "Resume fulfillment"). */
-  hasFulfillableStock: boolean;
+  /** The stock check behind "Approve partial" (pending: would a strict
+   *  approve fall short?) and "Resume fulfillment" (backordered: does any
+   *  still-owed item have stock?). A failed check is its own state, never a
+   *  check with zeros in it; orderStockGates turns it into what renders. */
+  stockCheck: OrderStockCheck;
   /** The order's returns (RMAs) with their lines — the reverse of the returns
    *  page's "Against order" link. Empty on any non-returnable status (never
    *  read there) and when nothing was ever returned. Decisions about what they
@@ -285,6 +292,16 @@ export default function OrderDetail() {
 
   const { activeOrgId: orgId, activeRole: role } = useWorkspace();
   const [order, setOrder] = React.useState<OrderHeader | null>(null);
+  // Why the order did not load. The header or the lines read FAILED, which is
+  // not "Order not found." and not an order with no items: an empty lines list
+  // would show "This order has no items yet.", zero totals, and still offer
+  // Add items, pick slips, the delivery request email and returns built from
+  // nothing. Set (or cleared) by EVERY load that completes.
+  const [loadError, setLoadError] = React.useState<string | null>(null);
+  // A reload started from a "Try again" button, so the button can be disabled
+  // while it runs (a failing read retries for several seconds before its
+  // error shows).
+  const [retrying, setRetrying] = React.useState(false);
   const [attachments, setAttachments] = React.useState<Attachment[]>([]);
   const [attachmentsError, setAttachmentsError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -731,7 +748,7 @@ export default function OrderDetail() {
 
   const load = React.useCallback(async () => {
     if (!orgId || !id) return;
-    const { data } = await supabase
+    const { data, error: headerError, status: headerStatus } = await supabase
       .from('order_requests')
       .select(
         // `requester:user_profiles!requester_user_id` resolves the team-member
@@ -759,7 +776,7 @@ export default function OrderDetail() {
       .maybeSingle();
     // Order lines — both the per-line ITEMS list (a manager must SEE what's
     // being ordered before approving) and the backorder roll-ups.
-    const { data: lineRows } = await supabase
+    const { data: lineRows, error: linesError, status: linesStatus } = await supabase
       .from('order_request_lines')
       .select(
         // quantity_picked is read for the line-edit floors: it is what a picker
@@ -768,6 +785,24 @@ export default function OrderDetail() {
         'id, item_id, created_at, quantity_requested, quantity_fulfilled, quantity_picked, returned_quantity, item:inventory_items(name, sku, charter_id, charter:charters!charter_id(name, code))',
       )
       .eq('order_request_id', id);
+    // FAIL CLOSED on either read. The header used to fall through to "Order
+    // not found." and the lines to an order with no items; both are claims
+    // about the order made from an error. Nothing below runs on a failure:
+    // the screen shows the error and a Try again instead of the order.
+    // readErrorMessage: an empty error body (a gateway 502) has an empty
+    // message, which would otherwise fall through to "Order not found.".
+    const readFailure = headerError
+      ? readErrorMessage(headerError, headerStatus)
+      : linesError
+        ? readErrorMessage(linesError, linesStatus)
+        : null;
+    if (readFailure !== null) {
+      console.warn('order load', readFailure);
+      setOrder(null);
+      setLoadError(readFailure);
+      setLoading(false);
+      return;
+    }
     type LineItemEmbed = {
       name: string | null;
       sku: string | null;
@@ -824,47 +859,16 @@ export default function OrderDetail() {
     //  - pending_approval → isShortStock (drives "Approve partial"), judged on
     //    PER-ITEM demand (duplicate-item lines are summed first).
     //  - backordered → hasFulfillableStock (gates "Resume fulfillment").
-    // Only computed on those two statuses to keep load() light.
-    let isShortStock = false;
-    let hasFulfillableStock = false;
-    const stStatus = (data as Record<string, unknown> | null)?.status;
-    if ((stStatus === 'pending_approval' || stStatus === 'backordered') && rows.length > 0) {
-      const itemIds = [...new Set(rows.map((l) => l.item_id).filter((x): x is string => Boolean(x)))];
-      if (itemIds.length > 0) {
-        const [{ data: itemRows }, { data: resvRows }] = await Promise.all([
-          supabase.from('inventory_items').select('id, quantity_on_hand').in('id', itemIds),
-          supabase
-            .from('stock_reservations')
-            .select('item_id, quantity')
-            .in('item_id', itemIds)
-            .is('released_at', null),
-        ]);
-        const onHandById = new Map<string, number>();
-        for (const it of (itemRows ?? []) as { id: string; quantity_on_hand: number | null }[]) {
-          onHandById.set(it.id, Number(it.quantity_on_hand) || 0);
-        }
-        const reservedByItem = new Map<string, number>();
-        for (const rv of (resvRows ?? []) as { item_id: string; quantity: number | null }[]) {
-          reservedByItem.set(rv.item_id, (reservedByItem.get(rv.item_id) ?? 0) + (Number(rv.quantity) || 0));
-        }
-        const demandByItem = new Map<string, { requested: number; owed: number }>();
-        for (const l of rows) {
-          if (!l.item_id) continue;
-          const entry = demandByItem.get(l.item_id) ?? { requested: 0, owed: 0 };
-          entry.requested += Number(l.quantity_requested) || 0;
-          entry.owed += Math.max(
-            0,
-            (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0),
-          );
-          demandByItem.set(l.item_id, entry);
-        }
-        for (const [itemId, d] of demandByItem) {
-          const available = Math.max(0, (onHandById.get(itemId) ?? 0) - (reservedByItem.get(itemId) ?? 0));
-          if (stStatus === 'pending_approval' && d.requested > available) isShortStock = true;
-          if (stStatus === 'backordered' && d.owed > 0 && available > 0) hasFulfillableStock = true;
-        }
-      }
-    }
+    // Only read on those two statuses to keep load() light. Batched, and a
+    // failed read (or an item this viewer cannot read) is a FAILED check that
+    // disables those actions and says why, never on hand or reserved as 0.
+    // See lib/order-stock-check.ts.
+    const stockCheck = await loadOrderStockCheck(
+      supabase,
+      orgId,
+      (data as Record<string, unknown> | null)?.status as string | null,
+      rows,
+    );
     // Delivery-request inputs: the destination site and the org's timezone.
     //
     // Gated on ROW-DERIVED facts only — is this a live delivery order — and
@@ -949,6 +953,8 @@ export default function OrderDetail() {
       orgTimezone = (orgRow?.timezone as string | null) ?? null;
     }
 
+    setLoadError(null);
+    if (!data) setOrder(null);
     if (data) {
       const r = data as Record<string, unknown>;
       const wh = r.warehouse as { name: string | null } | { name: string | null }[] | null;
@@ -1003,8 +1009,7 @@ export default function OrderDetail() {
         deliveryRouting,
         totalRequested,
         totalFulfilled,
-        isShortStock,
-        hasFulfillableStock,
+        stockCheck,
         returns: orderReturns,
         lines: rows.map((l) => {
           const itemObj = Array.isArray(l.item) ? l.item[0] : l.item;
@@ -1077,6 +1082,18 @@ export default function OrderDetail() {
     setRefreshing(true);
     await load();
     setRefreshing(false);
+  }
+
+  // "Try again" on a failed order or stock check. Guarded, and the buttons
+  // are disabled while it runs, so repeated taps do not stack reloads.
+  async function retryLoad() {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      await load();
+    } finally {
+      setRetrying(false);
+    }
   }
 
   // Run any order mutation under a shared busy key, then reload. The server
@@ -1197,6 +1214,37 @@ export default function OrderDetail() {
       st === 'in_transit' ||
       st === 'backordered');
 
+  // What the stock-dependent actions render (Approve partial, Resume). A
+  // failed stock check disables them and explains; see lib/order-stock-check.
+  const stockGates = orderStockGates(st ?? '', order?.stockCheck ?? { state: 'not_needed' });
+  const stockNotice = stockGates.notice ? (
+    <View style={{ gap: 8 }}>
+      <Body size={12} color={ACCENT.warn}>
+        {stockGates.notice}
+      </Body>
+      {stockGates.canRetry ? (
+        <Pressable
+          onPress={() => void retryLoad()}
+          disabled={retrying}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: retrying }}
+          style={[
+            styles.addBtn,
+            { borderWidth: 1, borderColor: c.hair, opacity: retrying ? 0.5 : 1 },
+          ]}
+        >
+          {retrying ? (
+            <ActivityIndicator color={c.ink} />
+          ) : (
+            <Mono size={13} color={c.ink}>
+              Try again
+            </Mono>
+          )}
+        </Pressable>
+      ) : null}
+    </View>
+  ) : null;
+
   // Fulfilled = units PROVIDED to the customer (shipped at hand-over); owed =
   // the still-unfulfilled remainder. Drives the backorder progress card.
   const totalRequested = order?.totalRequested ?? 0;
@@ -1269,6 +1317,7 @@ export default function OrderDetail() {
     busyKey: string,
     onPress: () => void,
     tone: 'primary' | 'danger' | 'default' = 'primary',
+    disabled = false,
   ) => {
     const isBusy = acting === busyKey;
     const bg = tone === 'primary' ? c.ink : tone === 'danger' ? '#b42318' : 'transparent';
@@ -1277,14 +1326,15 @@ export default function OrderDetail() {
       <Pressable
         key={label}
         onPress={onPress}
-        disabled={acting !== null}
+        disabled={acting !== null || disabled}
+        accessibilityState={{ disabled: acting !== null || disabled }}
         style={[
           styles.addBtn,
           {
             backgroundColor: bg,
             borderWidth: 1,
             borderColor: tone === 'default' ? c.hair : 'transparent',
-            opacity: acting !== null && !isBusy ? 0.5 : 1,
+            opacity: disabled || (acting !== null && !isBusy) ? 0.5 : 1,
           },
         ]}
       >
@@ -1519,6 +1569,25 @@ export default function OrderDetail() {
 
       {loading ? (
         <ActivityIndicator color={c.ink} style={{ marginTop: 40 }} />
+      ) : !order && loadError !== null ? (
+        <View style={styles.center}>
+          <Display size={18}>Could not load this <Em>order.</Em></Display>
+          <Body muted style={{ marginTop: 6, textAlign: 'center' }}>
+            {loadError}
+          </Body>
+          <Pressable
+            onPress={() => void retryLoad()}
+            disabled={retrying}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: retrying }}
+            style={[
+              styles.addBtn,
+              { marginTop: 16, borderWidth: 1, borderColor: c.hair, opacity: retrying ? 0.5 : 1 },
+            ]}
+          >
+            {retrying ? <ActivityIndicator color={c.ink} /> : <Mono size={13} color={c.ink}>Try again</Mono>}
+          </Pressable>
+        </View>
       ) : !order ? (
         <View style={styles.center}>
           <Display size={18}>Order not <Em>found.</Em></Display>
@@ -1860,15 +1929,17 @@ export default function OrderDetail() {
               {order.status === 'pending_approval' ? (
                 <>
                   {actionBtn('Approve', 'approve', () => void act({ action: 'approve' }, 'approve'))}
-                  {order.isShortStock
+                  {stockGates.approvePartial !== 'hidden'
                     ? actionBtn(
                         'Approve partial',
                         'approve-partial',
                         () => void act({ action: 'approve_partial' }, 'approve-partial'),
                         'default',
+                        stockGates.approvePartial === 'disabled',
                       )
                     : null}
                   {actionBtn('Deny', 'deny', () => setDenyOpen(true), 'danger')}
+                  {stockNotice}
                 </>
               ) : null}
               {order.status === 'approved'
@@ -1945,15 +2016,20 @@ export default function OrderDetail() {
               ) : null}
               {order.status === 'backordered' ? (
                 <>
-                  {order.hasFulfillableStock ? (
-                    actionBtn('Resume fulfillment', 'resume', () =>
-                      void act({ action: 'resume_fulfillment' }, 'resume'),
-                    )
-                  ) : (
+                  {stockGates.resume === 'waiting' ? (
                     <Body size={12} color={c.ink4}>
                       Resume unlocks when owed items are back in stock.
                     </Body>
+                  ) : (
+                    actionBtn(
+                      'Resume fulfillment',
+                      'resume',
+                      () => void act({ action: 'resume_fulfillment' }, 'resume'),
+                      'primary',
+                      stockGates.resume === 'disabled',
+                    )
                   )}
+                  {stockNotice}
                   {actionBtn(
                     'Close as delivered-partial',
                     'closepartial',

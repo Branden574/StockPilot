@@ -56,6 +56,9 @@ import {
   type LifecycleStatus,
 } from '@/lib/expected-items';
 import { signListThumbnails } from '@/lib/image-cache';
+import { readErrorMessage, settleIdBatchRead } from '@/lib/id-batches';
+import { readPrimaryPhotos, readRackHoldings } from '@/lib/id-reads';
+import { resolveListThumbnails } from '@/lib/list-thumbnails';
 import {
   buildGroupUnits,
   buildGroupedRows,
@@ -69,7 +72,7 @@ import {
   readIsComplete,
 } from '@/lib/inventory-paging';
 import { supabase } from '@/lib/supabase';
-import { FONT } from '@/lib/theme';
+import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
 import { inventoryViewPredicate } from '@stockpilot/core';
@@ -214,6 +217,17 @@ export default function BooksScreen() {
   // cannot tell a book that has moved into a crate from one still on its rack,
   // and prints the departed rack. See placement-resolution.ts.
   const [holdings, setHoldings] = React.useState<ReadonlyMap<string, RackHoldingLike[]>>(new Map());
+  // Why the holdings above are empty when they did not load. The cards then
+  // fall back to the stored custom_fields rack label, which can be out of date,
+  // so the screen says so instead of passing the stale label off as current.
+  const [holdingsError, setHoldingsError] = React.useState<string | null>(null);
+  // A list read that FAILED is not an empty shelf: shown above the list rather
+  // than left to "No books match.".
+  const [loadError, setLoadError] = React.useState<string | null>(null);
+  // Load token: only the newest load may write state. The load is debounced
+  // and pull-to-refresh can overlap it, so an older load finishing late could
+  // otherwise put back its (possibly failed) answer over a newer one.
+  const loadSeq = React.useRef(0);
   const listRef = React.useRef<FlatList<BookGroupedRow> | null>(null);
   const [bookCategories, setBookCategories] = React.useState<FilterOption[]>([]);
   const [locations, setLocations] = React.useState<FilterOption[]>([]);
@@ -282,6 +296,11 @@ export default function BooksScreen() {
   const load = React.useCallback(
     async (query: string, f: FilterState, _allBookCatIds: string[]) => {
       if (!orgId) return;
+      const seq = (loadSeq.current += 1);
+      const isCurrent = () => seq === loadSeq.current;
+      // Every error flag belongs to ONE load: a new load starts clean.
+      setLoadError(null);
+      setHoldingsError(null);
 
       const sortMap: Record<typeof f.sort, { col: string; asc: boolean }> = {
         updated_desc: { col: 'updated_at', asc: false },
@@ -331,6 +350,7 @@ export default function BooksScreen() {
           r = r.eq('warehouse_id', activeWarehouseId);
         }
         if (f.categoryIds.length > 0) {
+          // in-list-bound: user-picked category filter chips
           r = r.in('category_id', f.categoryIds);
         }
         if (query.trim()) {
@@ -341,16 +361,19 @@ export default function BooksScreen() {
           r = r.or(`name.ilike."%${term}%",sku.ilike."%${term}%",barcode.ilike."%${term}%"`);
         }
         if (f.locationIds.length > 0) {
+          // in-list-bound: user-picked location filter chips
           r = r.in('primary_location_id', f.locationIds);
         }
         if (f.charterIds.length > 0) {
           const wantsGeneric = f.charterIds.includes(FILTER_GENERIC_CHARTER_ID);
           const real = f.charterIds.filter((x) => x !== FILTER_GENERIC_CHARTER_ID);
           if (wantsGeneric && real.length > 0) {
+            // in-list-bound: user-picked charter filter chips
             r = r.or(`charter_id.is.null,charter_id.in.(${real.join(',')})`);
           } else if (wantsGeneric) {
             r = r.is('charter_id', null);
           } else {
+            // in-list-bound: user-picked charter filter chips
             r = r.in('charter_id', real);
           }
         }
@@ -376,11 +399,19 @@ export default function BooksScreen() {
       // `id` is a SECONDARY sort key: updated_at / name / quantity all tie
       // freely, and ties ordered differently between two fetches can put a row
       // in two groups or none.
-      const { data, count, error } = await scoped(BOOK_COLUMNS, { count: 'exact' })
+      const { data, count, error, status: listStatus } = await scoped(BOOK_COLUMNS, { count: 'exact' })
         .order(ord.col, { ascending: ord.asc })
         .order('id', { ascending: true })
         .limit(POSTGREST_MAX_ROWS);
-      if (error) console.warn('books list', error);
+      if (!isCurrent()) return;
+      // FAIL LOUD: a refused read used to be a console.warn and "No books
+      // match.", a claim about the org's shelves made from an error.
+      // readErrorMessage: never empty (an empty gateway error body would
+      // otherwise hide the notice and leave "No books match.").
+      if (error) {
+        console.warn('books list', error);
+        setLoadError(readErrorMessage(error, listStatus));
+      }
 
       let bookRows: BookRow[] = (data ?? []).map(toBookRow);
       const returned = bookRows.length;
@@ -408,32 +439,22 @@ export default function BooksScreen() {
       setServerRowCount(count ?? null);
       setLoadedRowCount(returned);
 
-      // Holdings for exactly the rows just loaded. Failure is non-fatal: an
-      // empty map degrades every card to the custom_fields label, which is the
-      // behaviour before this fetch existed — never a broken list.
+      // Holdings for exactly the rows just loaded, batched (the set can be
+      // 1000 rows, far past what one `.in()` URL carries). A failure is
+      // non-fatal but NOT silent: the cards fall back to the custom_fields
+      // label, and the notice above the list says that label may be out of
+      // date. Nothing is cached, so the next load reads again.
       const ids = bookRows.map((b) => b.id);
       if (ids.length > 0) {
-        const { data: levels, error: lvlErr } = await supabase
-          .from('item_stock_levels')
-          .select('item_id, quantity, locations!inner(name, kind)')
-          .eq('organization_id', orgId)
-          .in('item_id', ids)
-          .in('locations.kind', ['rack', 'crate'])
-          .gt('quantity', 0);
-        if (lvlErr) console.warn('books holdings', lvlErr);
-        const byItem = new Map<string, RackHoldingLike[]>();
-        for (const lvl of (levels ?? []) as unknown as {
-          item_id: string;
-          quantity: number;
-          locations: { name: string; kind: string } | { name: string; kind: string }[] | null;
-        }[]) {
-          const l = Array.isArray(lvl.locations) ? lvl.locations[0] : lvl.locations;
-          if (!l?.name) continue;
-          const arr = byItem.get(lvl.item_id) ?? [];
-          arr.push({ name: l.name, quantity: Number(lvl.quantity) || 0, kind: l.kind ?? null });
-          byItem.set(lvl.item_id, arr);
+        const holdingsRead = await settleIdBatchRead(readRackHoldings(supabase, orgId, ids));
+        if (!isCurrent()) return;
+        if (holdingsRead.ok) {
+          setHoldings(holdingsRead.value);
+        } else {
+          console.warn('books holdings', holdingsRead.message);
+          setHoldings(new Map());
+          setHoldingsError(holdingsRead.message);
         }
-        setHoldings(byItem);
       } else {
         setHoldings(new Map());
       }
@@ -581,48 +602,35 @@ export default function BooksScreen() {
     [pageItems, images],
   );
   React.useEffect(() => {
-    if (unresolvedIds.length === 0) return;
+    if (!orgId || unresolvedIds.length === 0) return;
     let cancelled = false;
     void (async () => {
-      const { data: imgs } = await supabase
-        .from('item_images')
-        .select('item_id, storage_path, thumb_path, is_primary, sort_order')
-        .in('item_id', unresolvedIds)
-        .order('is_primary', { ascending: false })
-        .order('sort_order', { ascending: true });
-      const byItem = new Map<string, { storage_path: string; thumb_path: string | null }>();
-      for (const row of (imgs ?? []) as Array<{
-        item_id: string;
-        storage_path: string;
-        thumb_path: string | null;
-      }>) {
-        if (!byItem.has(row.item_id)) {
-          byItem.set(row.item_id, { storage_path: row.storage_path, thumb_path: row.thumb_path });
-        }
-      }
+      // Batched (a page can hold every placement of 50 titles), and a failed
+      // read or signing round records NOTHING: the covers show the glyph for
+      // now and the next page view or pull-to-refresh asks again. It used to
+      // ignore the read's error and record every id as "no cover".
+      //
       // Never the full-res original (huge bitmaps for a 56px row): the stored
       // thumbnail when the cover has one, the on-demand transform only when it
       // does not. See signListThumbnails and inventory.tsx.
-      const urlByPath =
-        byItem.size > 0
-          ? await signListThumbnails(Array.from(byItem.values()))
-          : new Map<string, string>();
+      const round = await resolveListThumbnails(
+        unresolvedIds,
+        (ids) => readPrimaryPhotos(supabase, orgId, ids),
+        signListThumbnails,
+      );
       if (cancelled) return;
-      setImages((prev) => {
-        const next = new Map(prev);
-        for (const id of unresolvedIds) {
-          const p = byItem.get(id);
-          // null records "resolved, no cover" so a coverless book is asked
-          // about exactly once.
-          next.set(id, (p ? urlByPath.get(p.storage_path) : null) ?? null);
-        }
-        return next;
-      });
+      if (!round.ok) {
+        console.warn('book covers', round.message);
+        return;
+      }
+      // null records "resolved, no cover" so a coverless book is asked about
+      // exactly once; a cover that did not sign stays unresolved.
+      setImages(round.value);
     })();
     return () => {
       cancelled = true;
     };
-  }, [unresolvedIds]);
+  }, [orgId, unresolvedIds]);
 
   const pageRows = React.useMemo<BookRow[]>(
     () =>
@@ -744,8 +752,13 @@ export default function BooksScreen() {
               collapsed headers use, so the two read as one vocabulary. The
               list now holds the whole set, so this is an exact count of it —
               except when truncated, where it quotes the server's count and the
-              line below says the list is showing less than that. */}
-          <Eyebrow>{`INVENTORY · ${datasetRowCount.toLocaleString()} PLACEMENTS`}</Eyebrow>
+              line below says the list is showing less than that. A failed
+              read holds no rows, so it quotes no count rather than "0". */}
+          <Eyebrow>
+            {loadError !== null
+              ? 'INVENTORY · PLACEMENTS'
+              : `INVENTORY · ${datasetRowCount.toLocaleString()} PLACEMENTS`}
+          </Eyebrow>
           <Display size={34} style={{ marginTop: 12 }}>
             Book <Em>catalog.</Em>
           </Display>
@@ -792,6 +805,22 @@ export default function BooksScreen() {
               {`Showing the first ${loadedRowCount.toLocaleString()} of ${(serverRowCount ?? loadedRowCount).toLocaleString()} placements. Search or filter to narrow — grouped totals below cover only the loaded rows.`}
             </Body>
           ) : null}
+
+          {/* A READ that failed is not an empty shelf. */}
+          {loadError !== null ? (
+            <Body size={11.5} color={ACCENT.warn} style={{ marginTop: 8 }}>
+              {`Could not load books: ${loadError}. Pull to retry.`}
+            </Body>
+          ) : null}
+
+          {/* Holdings did not load, so each card shows its STORED rack label,
+              which can be out of date. Say so rather than pass it off as
+              where the book is now. */}
+          {holdingsError ? (
+            <Body size={11.5} color={ACCENT.warn} style={{ marginTop: 8 }}>
+              {"Rack locations did not load, so a book's rack label may be out of date. Pull down to try again."}
+            </Body>
+          ) : null}
         </View>
       </SafeAreaView>
 
@@ -811,12 +840,23 @@ export default function BooksScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />
           }
           ListEmptyComponent={
-            <View style={styles.empty}>
-              <Display size={18}>No books match.</Display>
-              <Body muted style={{ marginTop: 6, textAlign: 'center' }}>
-                Scan a book on the Scan tab to add one, or import from the web.
-              </Body>
-            </View>
+            /* A failed read leaves no rows. Saying "No books match." under the
+               failure notice would contradict it. */
+            loadError !== null ? (
+              <View style={styles.empty}>
+                <Display size={18}>Books did not load.</Display>
+                <Body muted style={{ marginTop: 6, textAlign: 'center' }}>
+                  Pull down to try again.
+                </Body>
+              </View>
+            ) : (
+              <View style={styles.empty}>
+                <Display size={18}>No books match.</Display>
+                <Body muted style={{ marginTop: 6, textAlign: 'center' }}>
+                  Scan a book on the Scan tab to add one, or import from the web.
+                </Body>
+              </View>
+            )
           }
           ListFooterComponent={
             /* Every number here describes what this page ACTUALLY renders:

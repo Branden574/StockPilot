@@ -325,6 +325,7 @@ export function MoveStockModal({
           .select('id, name, kind, warehouse_id, rack_number, rack_row, crate_color, crate_number')
           .eq('organization_id', organizationId)
           .is('deleted_at', null)
+          // in-list-bound: destinationKinds is a 2- or 3-element literal (above)
           .in('kind', destinationKinds);
         if (scope.kind === 'warehouse') {
           destQuery = destQuery.eq('warehouse_id', scope.warehouseId);

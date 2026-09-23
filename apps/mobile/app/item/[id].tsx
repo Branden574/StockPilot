@@ -303,6 +303,7 @@ async function resolveOrderNumbers(orgId: string, ids: string[]): Promise<Map<st
     .from('order_requests')
     .select('id, order_number')
     .eq('organization_id', orgId)
+    // in-list-bound: reference ids from ONE page of movements (50) or activity (30 + 15)
     .in('id', ids);
   for (const r of (data ?? []) as { id: string; order_number: number | null }[]) {
     const n = formatOrderNumber(r.order_number);
@@ -318,6 +319,7 @@ async function resolveReturnNumbers(orgId: string, ids: string[]): Promise<Map<s
     .from('returns')
     .select('id, return_number')
     .eq('organization_id', orgId)
+    // in-list-bound: reference ids from ONE page of movements (50) or activity (30 + 15)
     .in('id', ids);
   for (const r of (data ?? []) as { id: string; return_number: string | null }[]) {
     if (r.return_number) map.set(r.id, r.return_number);
@@ -332,6 +334,7 @@ async function resolveBundleNames(orgId: string, ids: string[]): Promise<Map<str
     .from('bundles')
     .select('id, name')
     .eq('organization_id', orgId)
+    // in-list-bound: reference ids from ONE page of movements (50) or activity (30 + 15)
     .in('id', ids);
   for (const r of (data ?? []) as { id: string; name: string | null }[]) {
     if (r.name) map.set(r.id, r.name);
@@ -360,6 +363,7 @@ async function resolveLocationNames(orgId: string, ids: string[]): Promise<Map<s
     .from('locations')
     .select('id, name')
     .eq('organization_id', orgId)
+    // in-list-bound: from/to locations of ONE page of movements, at most 2 x 50 = 100
     .in('id', ids);
   if (error) return map;
   for (const r of (data ?? []) as { id: string; name: string | null }[]) {
@@ -394,6 +398,7 @@ async function resolveReceiptPoNumbers(
     .from('receipts')
     .select('id, purchase_orders(po_number)')
     .eq('organization_id', orgId)
+    // in-list-bound: receipt ids from ONE page of movements (50) or activity (30 + 15)
     .in('id', receiptIds);
   if (error) return map;
   for (const r of (data ?? []) as Record<string, unknown>[]) {
@@ -920,6 +925,7 @@ export default function ItemDetail() {
         )
         .eq('organization_id', orgId)
         .eq('metadata->>entity_id', id)
+        // in-list-bound: MOVEMENT_SHADOWED_AUDIT_EVENTS, a constant list of event names
         .not('event', 'in', `(${MOVEMENT_SHADOWED_AUDIT_EVENTS.join(',')})`)
         .order('created_at', { ascending: false })
         .order('id', { ascending: true })

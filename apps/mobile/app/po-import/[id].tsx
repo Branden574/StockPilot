@@ -34,6 +34,7 @@ import {
   buildLineOverrides,
   createLineIds,
   isSiteLocation,
+  lineMatchLabel,
   normalizeExpectedAt,
   ownershipCharterForCreate,
   unmatchedLineIds,
@@ -48,6 +49,8 @@ import {
   fetchLineMatches,
   parsePoImport,
 } from '@/lib/po-imports-api';
+import { settleIdBatchRead } from '@/lib/id-batches';
+import { readItemRefs } from '@/lib/id-reads';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, SHADOW } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
@@ -184,6 +187,12 @@ export default function PoImportDetailScreen() {
   const [header, setHeader] = React.useState<ImportHeader | null>(null);
   const [lines, setLines] = React.useState<ImportLine[]>([]);
   const [itemsById, setItemsById] = React.useState<Record<string, ItemRef>>({});
+  // Why the linked/suggested item names did not load (null when they did).
+  // The lookup used to ignore its error: matched lines lost their item, and
+  // the approve sheet offered a suggestion named only "Suggested item" with a
+  // blank SKU, so a PO line could be mapped to an item nobody could identify.
+  // While set, Approve is withheld. Set by every load that reaches the lookup.
+  const [itemNamesError, setItemNamesError] = React.useState<string | null>(null);
   const [predecessor, setPredecessor] = React.useState<LineageRef | null>(null);
   const [replacement, setReplacement] = React.useState<LineageRef | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -238,6 +247,7 @@ export default function PoImportDetailScreen() {
           .from('purchase_orders')
           .select('id, po_number, status')
           .eq('organization_id', orgId)
+          // in-list-bound: the POs of one import's reimport lineage, a handful
           .in('id', poIds);
         for (const p of (pos ?? []) as Record<string, unknown>[]) {
           poById[p.id as string] = {
@@ -299,10 +309,15 @@ export default function PoImportDetailScreen() {
     ]);
 
     if (hErr || lErr) {
-      setLoadError(hErr?.message ?? lErr?.message ?? 'Could not load this import.');
+      // `||`, not `??`: an empty gateway error body gives an empty message,
+      // which would render as a blank screen instead of the failure.
+      setLoadError(hErr?.message || lErr?.message || 'Could not load this import.');
       setLoading(false);
       return;
     }
+    // Every load that reads cleanly clears the flag (runParse and the cancel
+    // path call load() directly, without refresh()'s pre-clear).
+    setLoadError(null);
     if (!head) {
       // Not found OR not visible under RLS — same message either way.
       setHeader(null);
@@ -368,7 +383,10 @@ export default function PoImportDetailScreen() {
     });
     setLines(flat);
 
-    // Resolve linked + suggested item names in one org-scoped lookup.
+    // Resolve linked + suggested item names, org-scoped and batched: two ids a
+    // line over up to 500 lines is up to 1000 ids, far past one `.in()` URL.
+    // A failure is shown (and blocks Approve), never an empty map passed off
+    // as "no names".
     const refIds = Array.from(
       new Set(
         flat
@@ -376,17 +394,14 @@ export default function PoImportDetailScreen() {
           .filter((v): v is string => Boolean(v)),
       ),
     );
-    if (refIds.length > 0) {
-      const { data: items } = await supabase
-        .from('inventory_items')
-        .select('id, name, sku')
-        .eq('organization_id', orgId)
-        .in('id', refIds);
-      const map: Record<string, ItemRef> = {};
-      for (const it of (items ?? []) as ItemRef[]) map[it.id] = it;
-      setItemsById(map);
+    const refs = await settleIdBatchRead(readItemRefs(supabase, orgId, refIds));
+    if (refs.ok) {
+      setItemsById(refs.value);
+      setItemNamesError(null);
     } else {
+      console.warn('po import item names', refs.message);
       setItemsById({});
+      setItemNamesError(refs.message);
     }
     setLoading(false);
   }, [id, orgId, loadLineage]);
@@ -527,6 +542,13 @@ export default function PoImportDetailScreen() {
             contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 160, gap: 10 }}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
           >
+            {loadError !== null ? (
+              // A refresh that failed while an earlier load is on screen: say
+              // so, rather than leave the older copy looking current.
+              <Body size={12} color={ACCENT.warn}>
+                Could not refresh this import: {loadError}. Pull down to try again.
+              </Body>
+            ) : null}
             <Card padding={14}>
               <View
                 style={{
@@ -671,6 +693,11 @@ export default function PoImportDetailScreen() {
             <View style={{ marginTop: 8 }}>
               <Eyebrow>PARSED LINES</Eyebrow>
             </View>
+            {itemNamesError !== null ? (
+              <Body size={12} color={ACCENT.warn}>
+                Item names did not load. Pull down to try again.
+              </Body>
+            ) : null}
             {lines.length === 0 ? (
               <Body muted size={13} style={{ marginTop: 4 }}>
                 {header.status === 'uploaded' || header.status === 'parsing'
@@ -679,7 +706,12 @@ export default function PoImportDetailScreen() {
               </Body>
             ) : (
               lines.map((l) => (
-                <LineCard key={l.id} line={l} itemsById={itemsById} />
+                <LineCard
+                  key={l.id}
+                  line={l}
+                  itemsById={itemsById}
+                  namesFailed={itemNamesError !== null}
+                />
               ))
             )}
           </ScrollView>
@@ -703,6 +735,12 @@ export default function PoImportDetailScreen() {
               {actionError ? (
                 <Mono size={11.5} color={ACCENT.crit} style={{ lineHeight: 16 }}>
                   {actionError}
+                </Mono>
+              ) : null}
+              {actions.includes('approve') && itemNamesError !== null ? (
+                <Mono size={11.5} color={ACCENT.warn} style={{ lineHeight: 16 }}>
+                  Approve is unavailable until item names load, so every line can be checked
+                  against its item. Pull down to try again.
                 </Mono>
               ) : null}
               <View style={{ flexDirection: 'row', gap: 10 }}>
@@ -733,8 +771,9 @@ export default function PoImportDetailScreen() {
                   <View style={{ flex: 1 }}>
                     <Button
                       block
-                      disabled={actionBusy !== null}
+                      disabled={actionBusy !== null || itemNamesError !== null}
                       onPress={() => {
+                        if (itemNamesError !== null) return;
                         setActionError(null);
                         setApproveOpen(true);
                       }}
@@ -756,6 +795,7 @@ export default function PoImportDetailScreen() {
               defaultVendorId={header.vendor_id}
               unmatchedLines={unmatchedLines}
               itemsById={itemsById}
+              namesFailed={itemNamesError !== null}
               onClose={() => setApproveOpen(false)}
               onApproved={handleApproved}
             />
@@ -795,9 +835,11 @@ function HeaderStat({ label, value }: { label: string; value: string }) {
 function LineCard({
   line,
   itemsById,
+  namesFailed,
 }: {
   line: ImportLine;
   itemsById: Record<string, ItemRef>;
+  namesFailed: boolean;
 }) {
   const { c } = useTheme();
   const isInventory = line.line_type === 'inventory';
@@ -816,8 +858,9 @@ function LineCard({
   // ONE predicate with the web review table and with approve(): a bare
   // confidence test flagged every AI-scanned non-sports line here too.
   const needsMapping = lineNeedsMappingConfirmation(line);
-  const matched = line.item_id ? itemsById[line.item_id] : undefined;
-  const suggested = line.suggested_item_id ? itemsById[line.suggested_item_id] : undefined;
+  // Linked item, else suggestion, else exception. A linked line whose name
+  // did not load still says it is linked (lineMatchLabel).
+  const match = lineMatchLabel(line, itemsById, namesFailed);
 
   const qtyText = line.qty != null && Number.isFinite(line.qty) ? String(line.qty) : '—';
   const costText =
@@ -858,20 +901,10 @@ function LineCard({
               Confirm column mapping in web review
             </Mono>
           ) : null}
-          {isInventory ? (
-            matched ? (
-              <Mono size={11} color={c.ink3} style={{ marginTop: 6 }}>
-                → {matched.name} ({matched.sku})
-              </Mono>
-            ) : suggested ? (
-              <Mono size={11} color={c.ink4} style={{ marginTop: 6 }}>
-                Suggested: {suggested.name} ({suggested.sku})
-              </Mono>
-            ) : line.exception_reason ? (
-              <Mono size={11} color={c.ink4} style={{ marginTop: 6 }}>
-                {line.exception_reason}
-              </Mono>
-            ) : null
+          {isInventory && match.kind !== 'none' ? (
+            <Mono size={11} color={match.kind === 'matched' ? c.ink3 : c.ink4} style={{ marginTop: 6 }}>
+              {match.text}
+            </Mono>
           ) : null}
         </View>
         {isInventory ? (
@@ -919,6 +952,7 @@ function ApproveSheet({
   defaultVendorId,
   unmatchedLines,
   itemsById,
+  namesFailed,
   onClose,
   onApproved,
 }: {
@@ -929,6 +963,8 @@ function ApproveSheet({
   defaultVendorId: string | null;
   unmatchedLines: ImportLine[];
   itemsById: Record<string, ItemRef>;
+  /** The item-name lookup failed: approving is refused (see the screen). */
+  namesFailed: boolean;
   onClose: () => void;
   onApproved: (poId: string) => void;
 }) {
@@ -953,6 +989,7 @@ function ApproveSheet({
         defaultVendorId={defaultVendorId}
         unmatchedLines={unmatchedLines}
         itemsById={itemsById}
+        namesFailed={namesFailed}
         onClose={onClose}
         onApproved={onApproved}
       />
@@ -968,6 +1005,7 @@ function ApproveSheetContent({
   defaultVendorId,
   unmatchedLines,
   itemsById,
+  namesFailed,
   onClose,
   onApproved,
 }: {
@@ -978,6 +1016,8 @@ function ApproveSheetContent({
   defaultVendorId: string | null;
   unmatchedLines: ImportLine[];
   itemsById: Record<string, ItemRef>;
+  /** The item-name lookup failed: approving is refused (see the screen). */
+  namesFailed: boolean;
   onClose: () => void;
   onApproved: (poId: string) => void;
 }) {
@@ -989,6 +1029,12 @@ function ApproveSheetContent({
   const [siteLocations, setSiteLocations] = React.useState<SiteLocationRow[]>([]);
   const [suggestions, setSuggestions] = React.useState<Record<string, MatchCandidate[]>>({});
   const [suggestionsNote, setSuggestionsNote] = React.useState<string | null>(null);
+  // The vendor, charter or location choices did not load. Each read used to
+  // ignore its error, so a failure read as "No suppliers yet", "No charters
+  // configured" (the PO then billed Generic) or "No site locations". While
+  // set, the choices are withheld and Approve is refused; the sheet re-reads
+  // every time it opens.
+  const [pickersError, setPickersError] = React.useState<string | null>(null);
 
   // Initial values are what the pre-remount-keying visible-effect used to
   // reset each field to on open: the header's warehouse/vendor as defaults,
@@ -1042,6 +1088,9 @@ function ApproveSheetContent({
           .order('name', { ascending: true }),
       ]);
       if (cancelled) return;
+      const pickerFailure =
+        vendorsRes.error?.message ?? chartersRes.error?.message ?? locationsRes.error?.message ?? null;
+      setPickersError(pickerFailure);
       setWarehouses(whs);
       // Keep the header's warehouse when it exists, else default to the only/first.
       setWarehouseId((cur) => cur ?? (whs.length === 1 ? (whs[0]?.id ?? null) : null));
@@ -1120,7 +1169,16 @@ function ApproveSheetContent({
   );
   const validation = validateApprove({ warehouseId, vendorId, locationId }, unmatchedIds, decisions);
   const expected = normalizeExpectedAt(expectedAtText);
-  const canSubmit = validation.ok && expected.ok && !submitting && !loading;
+  // Never approve while the item names did not load: a candidate would be
+  // an item nobody on this screen can identify.
+  // Nor while the vendor, charter or location choices did not load.
+  const canSubmit =
+    validation.ok &&
+    expected.ok &&
+    !submitting &&
+    !loading &&
+    !namesFailed &&
+    pickersError === null;
 
   const charterDraft = { billToCharterId, itemCharterId };
 
@@ -1222,6 +1280,18 @@ function ApproveSheetContent({
             {loading ? (
               <View style={{ paddingVertical: 40, alignItems: 'center' }}>
                 <ActivityIndicator color={c.ink4} />
+              </View>
+            ) : pickersError !== null ? (
+              <View style={{ marginTop: 18, gap: 6 }}>
+                <Body size={13} color={ACCENT.warn}>
+                  Could not load the vendor, charter and location choices.
+                </Body>
+                <Mono size={11} color={c.ink4} style={{ lineHeight: 16 }}>
+                  {pickersError}
+                </Mono>
+                <Mono size={11} color={c.ink4} style={{ lineHeight: 16 }}>
+                  Close this sheet and open it again to try again.
+                </Mono>
               </View>
             ) : (
               <ScrollView

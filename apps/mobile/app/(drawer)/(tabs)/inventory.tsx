@@ -53,6 +53,9 @@ import { countSelection, useIsPicked } from '@/lib/use-count-selection';
 import { TRAILING_COLUMN_MAX_WIDTH, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { listStatusPredicate, stockPill, stockPillFor } from '@/lib/expected-items';
 import { signListThumbnails } from '@/lib/image-cache';
+import { readErrorMessage } from '@/lib/id-batches';
+import { readPrimaryPhotos } from '@/lib/id-reads';
+import { resolveListThumbnails } from '@/lib/list-thumbnails';
 import {
   buildGroupUnits,
   buildGroupedRows,
@@ -152,6 +155,31 @@ const ITEM_COLUMNS = `id, name, sku, quantity_on_hand, reorder_point, status, ca
            category:categories!category_id (name),
            product_group:product_groups!group_id (default_counting_unit)`;
 
+/**
+ * ITEM_COLUMNS plus an INNER embed of the item's stock levels, used only when
+ * the LOCATION filter is on. The filter lists sites, but an item's real
+ * placement lives in item_stock_levels, not primary_location_id (a home/zone
+ * hint that is usually null). Filtering the list read through this embed
+ * (`.in('item_stock_levels.location_id', …)` plus quantity > 0) keeps only
+ * items that hold stock there, in the SAME request, so no id list rides in the
+ * URL.
+ *
+ * It replaced a two-step read: item_stock_levels first, then `.in('id', ids)`
+ * on the list. That id list reached 1000 uuids for a busy site and broke the
+ * request (past about 215 locally), the first read ignored its error (a failure
+ * became "No items match") and it was never paged. With `!inner`, PostgREST
+ * keeps only parents with a matching child, never duplicates a parent, and
+ * `count: 'exact'` counts the filtered parents. The embed is NOT aliased so the
+ * filter paths can use the table name. The extra `item_stock_levels` field on
+ * each row is ignored by the mapper below.
+ *
+ * DERIVED from ITEM_COLUMNS, never copied: a column added to one list and not
+ * the other would come back undefined, and only while a location filter is
+ * on. `as const` keeps it a literal type, so the typed select still parses it.
+ */
+const ITEM_COLUMNS_AT_LOCATIONS = `${ITEM_COLUMNS},
+           item_stock_levels!inner(location_id)` as const;
+
 /** One definition of the Items tab, shared with the web list. */
 const ITEMS_VIEW = inventoryViewPredicate('items');
 
@@ -204,6 +232,10 @@ export default function Inventory() {
   /** A refused list read, disclosed above the list. Never a silent empty state
    *  — an error is not the same claim as "this org has no items". */
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  // Load token: only the newest load may write state. The load is debounced
+  // and pull-to-refresh can overlap it, so an older load finishing late could
+  // otherwise put back its rows, or its error, over a newer answer.
+  const loadSeq = React.useRef(0);
   // Signed thumbnail URLs, resolved for the CURRENT PAGE's rows only and kept
   // across page flips. Keyed by item id; a null value means "resolved, has no
   // image", so a photoless item is never re-queried.
@@ -291,6 +323,7 @@ export default function Inventory() {
 
   const load = React.useCallback(
     async (orgIdParam: string, query: string, f: FilterState, warehouseScopeId: string | null) => {
+      const seq = (loadSeq.current += 1);
       const sortMap: Record<typeof f.sort, { col: string; asc: boolean }> = {
         updated_desc: { col: 'updated_at', asc: false },
         name_asc: { col: 'name', asc: true },
@@ -315,28 +348,6 @@ export default function Inventory() {
       // view carries awaiting_first_receipt=false so phantoms never read
       // as "Out of stock" before anything was delivered.
       const pred = listStatusPredicate(f.status);
-
-      let placedItemIds: string[] | null = null;
-      if (f.locationIds.length > 0) {
-        // The LOCATION filter lists racks/zones, but an item's real placement
-        // lives in item_stock_levels — NOT primary_location_id (a home/zone
-        // hint that's usually null or a zone, so filtering it by a rack matched
-        // nothing). Resolve the items that physically hold stock at the
-        // selected locations, then constrain the list to them. Resolved ONCE,
-        // before the reads below, so both of them narrow identically.
-        const { data: levelRows } = await supabase
-          .from('item_stock_levels')
-          .select('item_id')
-          .eq('organization_id', orgIdParam)
-          .in('location_id', f.locationIds)
-          .gt('quantity', 0);
-        const ids = Array.from(
-          new Set((levelRows ?? []).map((r) => (r as { item_id: string }).item_id)),
-        );
-        // No items at those locations → match nothing (sentinel id) rather than
-        // silently dropping the filter.
-        placedItemIds = ids.length ? ids : ['00000000-0000-0000-0000-000000000000'];
-      }
 
       // EVERY predicate lives in ONE place. It used to serve two reads (the
       // visible page and a per-SKU count) that had to see the identical
@@ -382,20 +393,29 @@ export default function Inventory() {
           }
         }
         if (f.categoryIds.length > 0) {
+          // in-list-bound: user-picked category filter chips
           r = r.in('category_id', f.categoryIds);
         }
-        if (placedItemIds) {
-          r = r.in('id', placedItemIds);
+        if (f.locationIds.length > 0) {
+          // Items holding stock at the selected locations, through the inner
+          // embed in ITEM_COLUMNS_AT_LOCATIONS (see there). The chips are
+          // user-picked sites, so this list stays short.
+          r = r
+            // in-list-bound: user-picked location filter chips, a handful of sites
+            .in('item_stock_levels.location_id', f.locationIds)
+            .gt('item_stock_levels.quantity', 0);
         }
         if (f.charterIds.length > 0) {
           const wantsGeneric = f.charterIds.includes(FILTER_GENERIC_CHARTER_ID);
           const real = f.charterIds.filter((x) => x !== FILTER_GENERIC_CHARTER_ID);
           if (wantsGeneric && real.length > 0) {
             // PostgREST .or() — match items with no charter OR in selected charters
+            // in-list-bound: user-picked charter filter chips
             r = r.or(`charter_id.is.null,charter_id.in.(${real.join(',')})`);
           } else if (wantsGeneric) {
             r = r.is('charter_id', null);
           } else {
+            // in-list-bound: user-picked charter filter chips
             r = r.in('charter_id', real);
           }
         }
@@ -416,19 +436,31 @@ export default function Inventory() {
       // `id` is a SECONDARY sort key: updated_at / name / quantity all tie
       // freely, and ties ordered differently between two fetches can put a row
       // in two groups or none.
-      const { data, count, error } = await scoped(ITEM_COLUMNS, { count: 'exact' })
-        .order(ord.col, { ascending: ord.asc })
-        .order('id', { ascending: true })
-        .limit(POSTGREST_MAX_ROWS);
+      // The location filter needs the stock-levels embed in the SELECT, so it
+      // reads the wider column list; every predicate is still the one builder.
+      // Two literal calls rather than a union-typed column list: the typed
+      // select parser cannot parse a union of select strings.
+      const listRead = <Q extends string>(columns: Q) =>
+        scoped(columns, { count: 'exact' })
+          .order(ord.col, { ascending: ord.asc })
+          .order('id', { ascending: true })
+          .limit(POSTGREST_MAX_ROWS);
+      const { data, count, error, status: listStatus } =
+        f.locationIds.length > 0
+          ? await listRead(ITEM_COLUMNS_AT_LOCATIONS)
+          : await listRead(ITEM_COLUMNS);
+      if (seq !== loadSeq.current) return;
       // FAIL LOUD (release-order rule). A console.warn is invisible on a phone,
       // so a refused read rendered "No items match." — a claim about the org's
       // inventory, made from an error. This read was WIDENED by the sports
       // branch with 0298's `group_id` / `variant_size` and a `product_groups`
       // embed, so against a database that has not taken 0294+ yet PostgREST
       // refuses the whole select and every item disappears. Say so instead.
+      // readErrorMessage: never empty (an empty gateway error body would
+      // otherwise hide the banner and leave "No items match.").
       if (error) {
         console.warn('inventory list', error);
-        setLoadError(error.message);
+        setLoadError(readErrorMessage(error, listStatus));
       } else {
         setLoadError(null);
       }
@@ -627,25 +659,15 @@ export default function Inventory() {
     [pageItems, images],
   );
   React.useEffect(() => {
-    if (unresolvedIds.length === 0) return;
+    if (!orgId || unresolvedIds.length === 0) return;
     let cancelled = false;
     void (async () => {
-      const { data: imgs } = await supabase
-        .from('item_images')
-        .select('item_id, storage_path, thumb_path, is_primary, sort_order')
-        .in('item_id', unresolvedIds)
-        .order('is_primary', { ascending: false })
-        .order('sort_order', { ascending: true });
-      const byItem = new Map<string, { storage_path: string; thumb_path: string | null }>();
-      for (const row of (imgs ?? []) as Array<{
-        item_id: string;
-        storage_path: string;
-        thumb_path: string | null;
-      }>) {
-        if (!byItem.has(row.item_id)) {
-          byItem.set(row.item_id, { storage_path: row.storage_path, thumb_path: row.thumb_path });
-        }
-      }
+      // Batched: with size runs on, one page can hold several hundred ids,
+      // which broke the old single `.in()` read on URL length. A failed read
+      // or signing round records NOTHING: the rows show their glyph for now
+      // and the next page view or pull-to-refresh asks again. It used to
+      // ignore the read's error and record every id as "no photo".
+      //
       // Never the full-resolution original: web/PO-imported product and
       // book-cover images can be multi-megapixel, and decoding originals into
       // bitmaps for a 56px row balloons resident image memory (jetsam risk on
@@ -653,26 +675,24 @@ export default function Inventory() {
       // thumbnail is used when the photo has one (one batched signing request,
       // no per-photo transform bill); the on-demand transform only covers
       // photos without a thumbnail. See signListThumbnails.
-      const urlByPath =
-        byItem.size > 0
-          ? await signListThumbnails(Array.from(byItem.values()))
-          : new Map<string, string>();
+      const round = await resolveListThumbnails(
+        unresolvedIds,
+        (ids) => readPrimaryPhotos(supabase, orgId, ids),
+        signListThumbnails,
+      );
       if (cancelled) return;
-      setImages((prev) => {
-        const next = new Map(prev);
-        for (const id of unresolvedIds) {
-          const p = byItem.get(id);
-          // null records "resolved, no photo" so a photoless item is asked
-          // about exactly once.
-          next.set(id, (p ? urlByPath.get(p.storage_path) : null) ?? null);
-        }
-        return next;
-      });
+      if (!round.ok) {
+        console.warn('item photos', round.message);
+        return;
+      }
+      // null records "resolved, no photo" so a photoless item is asked about
+      // exactly once; a photo that did not sign stays unresolved.
+      setImages(round.value);
     })();
     return () => {
       cancelled = true;
     };
-  }, [unresolvedIds]);
+  }, [orgId, unresolvedIds]);
 
   const pageRows = React.useMemo<Item[]>(
     () =>
@@ -798,8 +818,13 @@ export default function Inventory() {
               smaller number — the same misnaming the Books eyebrow already
               fixed. The list now holds the whole set, so this is an exact count
               of it; when truncated it quotes the server's count and the line
-              below says the list is showing less than that. */}
-          <Eyebrow>{`INVENTORY · ${datasetRowCount.toLocaleString()} ITEMS`}</Eyebrow>
+              below says the list is showing less than that. A failed read
+              holds no rows, so it quotes no count rather than "0". */}
+          <Eyebrow>
+            {loadError !== null
+              ? 'INVENTORY · ITEMS'
+              : `INVENTORY · ${datasetRowCount.toLocaleString()} ITEMS`}
+          </Eyebrow>
           <Display size={34} style={{ marginTop: 12 }}>
             Items<Em>.</Em>
           </Display>
@@ -872,7 +897,7 @@ export default function Inventory() {
               than left to the list's own "No items match." so a refused
               select — the shape a mobile build takes when it is ahead of the
               database — is visible instead of looking like a clean org. */}
-          {loadError ? (
+          {loadError !== null ? (
             <Body size={11.5} color={ACCENT.warn} style={{ marginTop: 8 }}>
               {`Could not load items: ${loadError}. Pull to retry — if the app was just updated, the server may still be catching up.`}
             </Body>
@@ -892,9 +917,18 @@ export default function Inventory() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.ink} />
           }
           ListEmptyComponent={
-            /* Ghost only for a genuinely empty org — an empty SEARCH result
+            /* A failed read leaves no rows: neither "No items match." (it
+               would contradict the banner above) nor the tour's ghost row.
+               Ghost only for a genuinely empty org — an empty SEARCH result
                must not claim the org has no items yet. */
-            tourActive && datasetRowCount === 0 && !q.trim() && filterCount === 0 ? (
+            loadError !== null ? (
+              <View style={styles.empty}>
+                <Body color={c.ink}>Items did not load.</Body>
+                <Body muted style={{ marginTop: 4, textAlign: 'center' }}>
+                  Pull down to try again.
+                </Body>
+              </View>
+            ) : tourActive && datasetRowCount === 0 && !q.trim() && filterCount === 0 ? (
               <SampleItemRow />
             ) : (
               <View style={styles.empty}>

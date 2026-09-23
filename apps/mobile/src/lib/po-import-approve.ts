@@ -124,6 +124,46 @@ export function unmatchedLineIds(lines: ImportLineLike[]): string[] {
     .map((l) => l.id);
 }
 
+// ── What a line says about its item ─────────────────────────────────────────
+
+export interface LineMatchLine {
+  item_id: string | null;
+  suggested_item_id: string | null;
+  exception_reason: string | null;
+}
+
+export type LineMatchLabel =
+  | { kind: 'matched' | 'suggested' | 'exception'; text: string }
+  | { kind: 'none'; text: null };
+
+/**
+ * The line card's item sentence: the linked item, else the suggestion, else
+ * the exception. `namesFailed` means the item-name lookup did not load (it
+ * used to be ignored): a LINKED line then still says it is linked ("Linked
+ * item (name did not load)") instead of falling through to its suggestion or
+ * exception, which would read as a line that is not linked. A suggested one
+ * says the same of its suggestion. With names loaded, the branch order is
+ * unchanged.
+ */
+export function lineMatchLabel(
+  line: LineMatchLine,
+  itemsById: Readonly<Record<string, { name: string; sku: string }>>,
+  namesFailed: boolean,
+): LineMatchLabel {
+  const matched = line.item_id ? itemsById[line.item_id] : undefined;
+  if (matched) return { kind: 'matched', text: `→ ${matched.name} (${matched.sku})` };
+  if (line.item_id && namesFailed) {
+    return { kind: 'matched', text: 'Linked item (name did not load)' };
+  }
+  const suggested = line.suggested_item_id ? itemsById[line.suggested_item_id] : undefined;
+  if (suggested) return { kind: 'suggested', text: `Suggested: ${suggested.name} (${suggested.sku})` };
+  if (line.suggested_item_id && namesFailed) {
+    return { kind: 'suggested', text: 'Suggested item (name did not load)' };
+  }
+  if (line.exception_reason) return { kind: 'exception', text: line.exception_reason };
+  return { kind: 'none', text: null };
+}
+
 // ── Approve validation ──────────────────────────────────────────────────────
 
 export interface ApproveDraftFields {

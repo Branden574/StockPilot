@@ -16,6 +16,7 @@ import {
   createLineIds,
   extractApiErrorMessage,
   isSiteLocation,
+  lineMatchLabel,
   normalizeExpectedAt,
   normalizeLineMatches,
   ownershipCharterForCreate,
@@ -395,5 +396,63 @@ describe('buildApproveCharterFields / ownershipCharterForCreate', () => {
       {},
     );
     expect(v).toEqual({ ok: false, reason: 'Pick a destination location for this warehouse.' });
+  });
+});
+
+describe('lineMatchLabel', () => {
+  const items = {
+    'item-a': { name: 'Blue Hoodie', sku: 'BH-1' },
+    'item-b': { name: 'Red Cap', sku: 'RC-2' },
+  };
+  const line = (over: Partial<{ item_id: string | null; suggested_item_id: string | null; exception_reason: string | null }>) => ({
+    item_id: null,
+    suggested_item_id: null,
+    exception_reason: null,
+    ...over,
+  });
+
+  it('names loaded: linked item, else suggestion, else exception, else nothing (the old branch order)', () => {
+    expect(lineMatchLabel(line({ item_id: 'item-a', suggested_item_id: 'item-b' }), items, false)).toEqual({
+      kind: 'matched',
+      text: '→ Blue Hoodie (BH-1)',
+    });
+    expect(
+      lineMatchLabel(line({ suggested_item_id: 'item-b', exception_reason: 'No match' }), items, false),
+    ).toEqual({ kind: 'suggested', text: 'Suggested: Red Cap (RC-2)' });
+    expect(lineMatchLabel(line({ exception_reason: 'No match' }), items, false)).toEqual({
+      kind: 'exception',
+      text: 'No match',
+    });
+    expect(lineMatchLabel(line({}), items, false)).toEqual({ kind: 'none', text: null });
+  });
+
+  it('names FAILED: a linked line still says it is linked, never its suggestion or exception', () => {
+    // The lookup used to be ignored: a linked line lost its "→ name" and fell
+    // through to whatever else it carried, reading as a line with no item.
+    const failed = lineMatchLabel(
+      line({ item_id: 'item-a', suggested_item_id: 'item-b', exception_reason: 'Low confidence' }),
+      {},
+      true,
+    );
+    expect(failed).toEqual({ kind: 'matched', text: 'Linked item (name did not load)' });
+  });
+
+  it('names FAILED: a suggestion says its name did not load rather than vanishing', () => {
+    expect(
+      lineMatchLabel(line({ suggested_item_id: 'item-b', exception_reason: 'Low confidence' }), {}, true),
+    ).toEqual({ kind: 'suggested', text: 'Suggested item (name did not load)' });
+    // With nothing to name, the exception still shows.
+    expect(lineMatchLabel(line({ exception_reason: 'Low confidence' }), {}, true)).toEqual({
+      kind: 'exception',
+      text: 'Low confidence',
+    });
+  });
+
+  it('names loaded but one item not returned (hidden by access): unchanged from before', () => {
+    // Only a FAILED lookup changes the wording; a missing row with a good
+    // lookup keeps the old fall-through.
+    expect(
+      lineMatchLabel(line({ item_id: 'item-x', exception_reason: 'No match' }), items, false),
+    ).toEqual({ kind: 'exception', text: 'No match' });
   });
 });

@@ -183,9 +183,23 @@ describe('both lists — fetch the WHOLE filtered set, then page over GROUPS', (
       // without one still costs a storage request (and a billed transform) PER
       // PATH, so signing the whole set would trade a saved page fetch for
       // hundreds of calls.
-      expect(src).toContain('signListThumbnails(Array.from(byItem.values()))');
       expect(src).not.toContain('THUMB_TRANSFORM'); // the screens never ask for the transform themselves
-      expect(src).toContain('.in(\'item_id\', unresolvedIds)');
+      // Page-scoped (unresolvedIds, never the whole set), batched through the
+      // shared reader, and resolved through resolveListThumbnails, which
+      // records nothing when the read or the signing fails.
+      expect(src).toMatch(
+        /resolveListThumbnails\(\s*unresolvedIds,\s*\(ids\) => readPrimaryPhotos\(supabase, orgId, ids\),\s*signListThumbnails,\s*\)/,
+      );
+      expect(src).toContain('setImages(round.value)');
+      expect(src).not.toContain(".from('item_images')");
+    });
+
+    it(`${name}: a failed photo round is logged and records nothing`, () => {
+      // It used to ignore the read's error and write null ("no photo") for
+      // every id on the page until the next full load.
+      const m = /if \(!round\.ok\) \{\s*console\.warn\([^)]*\);\s*return;\s*\}/.exec(src);
+      expect(m).not.toBeNull();
+      expect(src).not.toMatch(/next\.set\(id, \(p \? urlByPath\.get\(p\.storage_path\) : null\) \?\? null\)/);
     });
   }
 });
@@ -195,8 +209,8 @@ describe('books list — a header agrees with the rows it expands to', () => {
     // The count counts inventory_items ROWS, and under Model B one title is one
     // row per charter/rack — "N BOOKS" claimed a title count the grouped list
     // on screen contradicts.
-    expect(books).not.toContain('BOOKS`}</Eyebrow>');
-    expect(books).toContain('PLACEMENTS`}</Eyebrow>');
+    expect(books).not.toMatch(/BOOKS`\}\s*<\/Eyebrow>/);
+    expect(books).toMatch(/PLACEMENTS`\}\s*<\/Eyebrow>/);
   });
 
   it('takes the EXPECTED pill from the rows, never from the filter state', () => {
@@ -224,16 +238,49 @@ describe('items list — identical behaviour to books, because the owner compare
   it('names the eyebrow count after what it actually counts', () => {
     // It said "SKUS" over a ROW count — under Model B a different, smaller
     // number than the one printed.
-    expect(inventory).not.toContain('SKUS`}</Eyebrow>');
-    expect(inventory).toContain('ITEMS`}</Eyebrow>');
+    expect(inventory).not.toMatch(/SKUS`\}\s*<\/Eyebrow>/);
+    expect(inventory).toMatch(/ITEMS`\}\s*<\/Eyebrow>/);
   });
 
   it('runs the count read through the SAME predicate builder as the row read', () => {
-    // One `scoped` builder owns every predicate, and the location pre-query is
-    // resolved once, above it, so the rows and their exact count can never
-    // answer different questions.
+    // One `scoped` builder owns every predicate (the location filter included),
+    // so the rows and their exact count can never answer different questions.
     expect(inventory).toContain('const scoped = <Q extends string>(');
-    expect(inventory).toContain("scoped(ITEM_COLUMNS, { count: 'exact' })");
+    expect(inventory).toContain("scoped(columns, { count: 'exact' })");
+    expect(inventory).toContain('await listRead(ITEM_COLUMNS_AT_LOCATIONS)');
+    expect(inventory).toContain('await listRead(ITEM_COLUMNS)');
+  });
+
+  it('filters by location through an inner stock-levels embed, never an id list in the URL', () => {
+    // The two-step read (item_stock_levels, then `.in('id', placedItemIds)`)
+    // put up to 1000 uuids in the list read's URL, which failed past about 215
+    // locally, and its first read ignored its error, so a failure became the
+    // zero-uuid sentinel and a silent "No items match.".
+    const body = loadBody(inventory);
+    expect(inventory).toMatch(/item_stock_levels!inner\(location_id\)` as const;/);
+    expect(body).toContain(".in('item_stock_levels.location_id', f.locationIds)");
+    expect(body).toContain(".gt('item_stock_levels.quantity', 0)");
+    expect(body).not.toContain('placedItemIds');
+    expect(body).not.toContain('00000000-0000-0000-0000-000000000000');
+    expect(body).not.toContain(".from('item_stock_levels')");
+    // Only the newest load writes: an older debounced load finishing late
+    // cannot put back its rows or its error over a newer answer.
+    expect(body).toMatch(/const seq = \(loadSeq\.current \+= 1\);/);
+    expect(body).toMatch(/: await listRead\(ITEM_COLUMNS\);\s*if \(seq !== loadSeq\.current\) return;/);
+    // One read, so its error takes the visible banner path, with a message
+    // that is never empty (an empty one would hide the banner).
+    expect(body).toContain('setLoadError(readErrorMessage(error, listStatus))');
+    expect(inventory).toMatch(/\{loadError !== null \? \(\s*<Body[^>]*>\s*\{`Could not load items: /);
+  });
+
+  it('derives the location-filter columns from ITEM_COLUMNS, so the two cannot drift', () => {
+    // It was a hand copy of ITEM_COLUMNS plus the embed: a column added to one
+    // and not the other came back undefined, and only while a location filter
+    // was on.
+    expect(inventory).toMatch(
+      /const ITEM_COLUMNS_AT_LOCATIONS = `\$\{ITEM_COLUMNS\},\s*item_stock_levels!inner\(location_id\)` as const;/,
+    );
+    expect(inventory.match(/product_group:product_groups!group_id \(default_counting_unit\)/g)).toHaveLength(1);
   });
 
   it('renders the partial marker on a collapsed header (overflow case only)', () => {
@@ -253,5 +300,113 @@ describe('items list — identical behaviour to books, because the owner compare
     expect(inventory).not.toContain('function skuHeaderStatus');
     expect(inventory).toContain('stockPill({ expected, lifecycle, quantity: total, reorderPoint })');
     expect(inventory).toContain('stockPillFor(item)');
+  });
+});
+
+describe('books list — a failed read says so, never passes for an empty or current shelf', () => {
+  it('reads rack holdings batched through the shared reader, and a failure sets a visible notice', () => {
+    // The holdings read put every loaded id (up to 1000) in one `.in()` URL,
+    // and its error was only logged: the cards silently fell back to the
+    // stored custom_fields rack label, which can be out of date.
+    const body = loadBody(books);
+    expect(body).toContain('settleIdBatchRead(readRackHoldings(supabase, orgId, ids))');
+    expect(body).toMatch(
+      /if \(holdingsRead\.ok\) \{\s*setHoldings\(holdingsRead\.value\);\s*\} else \{[\s\S]*?setHoldings\(new Map\(\)\);\s*setHoldingsError\(holdingsRead\.message\);/,
+    );
+    expect(body).not.toContain(".from('item_stock_levels')");
+    expect(books).toContain(
+      "Rack locations did not load, so a book's rack label may be out of date. Pull down to try again.",
+    );
+    expect(books).toMatch(/\{holdingsError \? \(/);
+  });
+
+  it('a refused list read shows an error, not "No books match."', () => {
+    const body = loadBody(books);
+    // Never an empty message: an empty gateway error body would otherwise
+    // hide the notice behind a truthiness test.
+    expect(body).toMatch(
+      /if \(error\) \{\s*console\.warn\('books list', error\);\s*setLoadError\(readErrorMessage\(error, listStatus\)\);/,
+    );
+    expect(books).toContain('`Could not load books: ${loadError}. Pull to retry.`');
+    expect(books).toMatch(/\{loadError !== null \? \(/);
+  });
+
+  it('every load starts with its error flags cleared, and only the newest load writes', () => {
+    const body = loadBody(books);
+    const firstAwait = body.indexOf('await ');
+    const clears = body.slice(0, firstAwait);
+    expect(clears).toContain('setLoadError(null);');
+    expect(clears).toContain('setHoldingsError(null);');
+    // Two awaits (the list, the holdings), each followed by the token check.
+    expect(body.match(/if \(!isCurrent\(\)\) return;/g)?.length).toBe(2);
+  });
+});
+
+/**
+ * The JSX of the list's `ListEmptyComponent` prop, found by matching its
+ * braces (the copy inside has none), with its comments stripped: a comment
+ * may quote the copy it explains.
+ */
+const emptyComponent = (src: string): string => {
+  const open = src.indexOf('ListEmptyComponent={');
+  expect(open, 'ListEmptyComponent not found').toBeGreaterThan(-1);
+  let depth = 0;
+  for (let i = open + 'ListEmptyComponent='.length; i < src.length; i += 1) {
+    if (src[i] === '{') depth += 1;
+    else if (src[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return src.slice(open, i + 1).replace(/\/\*[\s\S]*?\*\//g, '');
+    }
+  }
+  throw new Error('ListEmptyComponent is not closed');
+};
+
+describe('both lists — a failed read is never "no results" or a zero count', () => {
+  const cases: {
+    name: string;
+    src: string;
+    failed: string;
+    noResults: string;
+    eyebrow: RegExp;
+  }[] = [
+    {
+      name: 'books',
+      src: books,
+      failed: 'Books did not load.',
+      noResults: 'No books match.',
+      eyebrow: /\{loadError !== null\s*\? 'INVENTORY · PLACEMENTS'\s*: `INVENTORY · \$\{datasetRowCount\.toLocaleString\(\)\} PLACEMENTS`\}/,
+    },
+    {
+      name: 'inventory',
+      src: inventory,
+      failed: 'Items did not load.',
+      noResults: 'No items match.',
+      eyebrow: /\{loadError !== null\s*\? 'INVENTORY · ITEMS'\s*: `INVENTORY · \$\{datasetRowCount\.toLocaleString\(\)\} ITEMS`\}/,
+    },
+  ];
+
+  for (const { name, src, failed, noResults, eyebrow } of cases) {
+    it(`${name}: the empty state says the read failed, not "${noResults}"`, () => {
+      // A failed read leaves no rows, so the list's empty state rendered
+      // "${noResults}" right under the failure notice, contradicting it.
+      const empty = emptyComponent(src);
+      const check = empty.indexOf('loadError !== null ?');
+      expect(check, 'the empty state must switch on the failed read').toBeGreaterThan(-1);
+      expect(empty.indexOf(failed)).toBeGreaterThan(check);
+      expect(empty.indexOf(noResults)).toBeGreaterThan(empty.indexOf(failed));
+      expect(empty).toContain('Pull down to try again.');
+    });
+
+    it(`${name}: the eyebrow quotes no count for a read that failed`, () => {
+      // It said "INVENTORY · 0 …" over a failed load.
+      expect(src).toMatch(eyebrow);
+    });
+  }
+
+  it('inventory: a failed read never shows the tour ghost row either', () => {
+    // The ghost stands in for a genuinely empty org; a failed read is not one.
+    const empty = emptyComponent(inventory);
+    expect(empty.indexOf('loadError !== null ?')).toBeGreaterThan(-1);
+    expect(empty.indexOf('loadError !== null ?')).toBeLessThan(empty.indexOf('tourActive &&'));
   });
 });

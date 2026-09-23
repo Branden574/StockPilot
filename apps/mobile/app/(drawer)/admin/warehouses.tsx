@@ -79,6 +79,7 @@ export default function WarehousesAdmin() {
       const { data: charters, error: chErr } = await supabase
         .from('charters')
         .select('id, name')
+        // in-list-bound: distinct charters linked to the org's warehouses, bounded by its charters (a dozen or so)
         .in('id', charterIds);
       if (chErr) {
         console.warn('[admin/warehouses] charter fetch failed:', chErr.message);

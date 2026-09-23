@@ -33,9 +33,12 @@ import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { showWriteCta } from '@/lib/cta-gating';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
+import { readErrorMessage, settleIdBatchRead } from '@/lib/id-batches';
+import { readOpenReservations, sumReservedByItem } from '@/lib/id-reads';
+import { rentalPickerStatus } from '@/lib/rental-items';
 import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
-import { FONT, RADIUS } from '@/lib/theme';
+import { ACCENT, FONT, RADIUS } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 interface WarehouseRow {
@@ -98,9 +101,23 @@ export default function NewRental() {
   const canCreate = showWriteCta(perms, 'rentals:create');
   const [warehouses, setWarehouses] = React.useState<WarehouseRow[]>([]);
   const [warehouseId, setWarehouseId] = React.useState<string | null>(null);
+  // The warehouses read has its OWN state and retry trigger. It used to ignore
+  // its error, leaving an empty list, which spun the WAREHOUSE section (and,
+  // through `!warehouseId`, the ITEMS section) forever. An org with no active
+  // warehouse spun forever too.
+  const [warehousesLoading, setWarehousesLoading] = React.useState(true);
+  const [warehousesError, setWarehousesError] = React.useState<string | null>(null);
+  const [warehousesNonce, setWarehousesNonce] = React.useState(0);
   const [items, setItems] = React.useState<RentalItemRow[]>([]);
   const [reservedByItem, setReservedByItem] = React.useState<Record<string, number>>({});
   const [itemsLoading, setItemsLoading] = React.useState(false);
+  // Why the items or their open reservations did not load. Either one BLOCKS
+  // the picker (rentalPickerStatus): a failed reservations read used to read
+  // as "nothing reserved", so every figure showed on hand as available and the
+  // + button offered units the server then refused. Cleared by every load.
+  const [itemsError, setItemsError] = React.useState<string | null>(null);
+  const [stockError, setStockError] = React.useState<string | null>(null);
+  const [itemsNonce, setItemsNonce] = React.useState(0);
   const [search, setSearch] = React.useState('');
   /** itemId → quantity. The cart; each entry becomes one `lines[]` element. */
   const [cart, setCart] = React.useState<Record<string, number>>({});
@@ -112,18 +129,40 @@ export default function NewRental() {
 
   React.useEffect(() => {
     if (!orgId) return;
+    let cancelled = false;
     void (async () => {
-      const { data } = await supabase
+      setWarehousesLoading(true);
+      setWarehousesError(null);
+      const { data, error, status } = await supabase
         .from('warehouses')
         .select('id, name')
         .eq('organization_id', orgId)
         .neq('status', 'archived')
         .order('name', { ascending: true });
+      if (cancelled) return;
+      if (error) {
+        console.warn('rental warehouses', error);
+        setWarehouses([]);
+        setWarehouseId(null);
+        setCart({});
+        // Never empty: a gateway 502 or 504 with an empty body gives an empty
+        // error.message, which would leave the failure with no reason.
+        setWarehousesError(readErrorMessage(error, status));
+        setWarehousesLoading(false);
+        return;
+      }
       const list = (data ?? []) as WarehouseRow[];
       setWarehouses(list);
-      if (list.length > 0) setWarehouseId(list[0].id);
+      // A retry keeps the operator's pick when it is still there.
+      setWarehouseId((prev) =>
+        prev && list.some((w) => w.id === prev) ? prev : (list[0]?.id ?? null),
+      );
+      setWarehousesLoading(false);
     })();
-  }, [orgId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [orgId, warehousesNonce]);
 
   // Rental items for the selected warehouse, plus the OPEN reservations against
   // them. Availability, not on-hand, is what the server enforces (SP-052), so
@@ -138,11 +177,14 @@ export default function NewRental() {
     // react-hooks/set-state-in-effect).
     void (async () => {
       setItemsLoading(true);
+      // Every error flag belongs to ONE load: a new load starts clean.
+      setItemsError(null);
+      setStockError(null);
       // Changing warehouse invalidates the cart: the service refuses any line
       // whose item is not in the rental warehouse, so keeping it would
       // guarantee a refusal the operator cannot see the cause of.
       setCart({});
-      const { data } = await supabase
+      const { data, error, status } = await supabase
         .from('inventory_items')
         .select('id, name, sku, quantity_on_hand')
         .eq('organization_id', orgId)
@@ -152,31 +194,45 @@ export default function NewRental() {
         .is('deleted_at', null)
         .order('name', { ascending: true })
         .limit(500);
-      const rows = (data ?? []) as RentalItemRow[];
       if (cancelled) return;
+      if (error) {
+        // Not "No rental items in this warehouse": that sentence sends the
+        // operator to the web to mark items rentable that already are.
+        console.warn('rental items', error);
+        setItems([]);
+        setReservedByItem({});
+        setItemsError(readErrorMessage(error, status));
+        setItemsLoading(false);
+        return;
+      }
+      const rows = (data ?? []) as RentalItemRow[];
       setItems(rows);
 
-      const ids = rows.map((r) => r.id);
-      const reserved: Record<string, number> = {};
-      if (ids.length > 0) {
-        const { data: resv } = await supabase
-          .from('stock_reservations')
-          .select('item_id, quantity')
-          .eq('organization_id', orgId)
-          .in('item_id', ids)
-          .is('released_at', null);
-        for (const r of (resv ?? []) as { item_id: string; quantity: number | null }[]) {
-          reserved[r.item_id] = (reserved[r.item_id] ?? 0) + (r.quantity ?? 0);
-        }
-      }
+      // Open reservations for up to 500 items, batched (one `.in()` URL with
+      // 500 uuids fails). A failure is NOT "nothing reserved": it blocks the
+      // picker, since every figure would otherwise show on hand as available.
+      const reservations = await settleIdBatchRead(
+        readOpenReservations(
+          supabase,
+          orgId,
+          rows.map((r) => r.id),
+        ),
+      );
       if (cancelled) return;
-      setReservedByItem(reserved);
+      if (reservations.ok) {
+        setReservedByItem(Object.fromEntries(sumReservedByItem(reservations.value)));
+      } else {
+        console.warn('rental reservations', reservations.message);
+        setReservedByItem({});
+        setCart({});
+        setStockError(reservations.message);
+      }
       setItemsLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [orgId, warehouseId]);
+  }, [orgId, warehouseId, itemsNonce]);
 
   const availableFor = React.useCallback(
     (item: RentalItemRow) =>
@@ -234,6 +290,10 @@ export default function NewRental() {
     });
   }
 
+  // Blocked while any read the picker is built on has failed (see
+  // rentalPickerStatus): the list, its steppers and Check out are withheld.
+  const picker = rentalPickerStatus({ warehousesError, itemsError, stockError });
+
   const canSubmit =
     canCreate &&
     Boolean(orgId) &&
@@ -241,10 +301,14 @@ export default function NewRental() {
     lines.length > 0 &&
     borrowerName.trim().length > 0 &&
     Boolean(expectedReturn) &&
-    !busy;
+    !busy &&
+    !picker.blocked &&
+    !itemsLoading;
 
   async function submit() {
     if (!orgId || !warehouseId || !user) return;
+    // Never check out against availability that did not load.
+    if (picker.blocked || itemsLoading) return;
     // Defense in depth with the disabled button above — a disabled Button is a
     // rendering detail. The authoritative gate is RentalsService.assertPermission
     // behind the route; this only saves an honest deep link a round-trip.
@@ -317,8 +381,19 @@ export default function NewRental() {
           keyboardShouldPersistTaps="handled"
         >
           <FormSection icon={Warehouse} label="WAREHOUSE">
-            {warehouses.length === 0 ? (
+            {warehousesError !== null ? (
+              <ReadFailure
+                message="Could not load warehouses."
+                detail={warehousesError}
+                retrying={warehousesLoading}
+                onRetry={() => setWarehousesNonce((n) => n + 1)}
+              />
+            ) : warehousesLoading && warehouses.length === 0 ? (
               <ActivityIndicator color={c.ink} style={{ paddingVertical: 8 }} />
+            ) : warehouses.length === 0 ? (
+              <Body size={12.5} muted>
+                No active warehouses to check out from. Add one on the web first.
+              </Body>
             ) : (
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                 {warehouses.map((w) => {
@@ -369,13 +444,29 @@ export default function NewRental() {
               />
             </View>
 
-            {itemsLoading || !warehouseId ? (
+            {!warehouseId && !warehousesLoading ? (
+              // No warehouse to pick from (the read failed, or the org has
+              // none): said in the WAREHOUSE section above, never a spinner
+              // that cannot stop.
+              <Body size={12.5} muted>
+                Choose a warehouse above to see its rental items.
+              </Body>
+            ) : itemsLoading || !warehouseId ? (
               // `|| !warehouseId` so the first paint is a spinner rather than
               // "No rental items in this warehouse" — the warehouse list has
               // not resolved yet, so that sentence would be a lie the operator
               // acts on (going to the web to mark items rentable that already
               // are).
               <ActivityIndicator color={c.ink} style={{ paddingVertical: 8 }} />
+            ) : picker.blocked ? (
+              // The items or their reservations did not load. No list and no
+              // steppers: a figure here would be a guess the server refuses.
+              <ReadFailure
+                message={picker.message ?? 'Could not load rental items.'}
+                detail={picker.detail}
+                retrying={itemsLoading}
+                onRetry={() => setItemsNonce((n) => n + 1)}
+              />
             ) : visibleItems.length === 0 ? (
               <Body size={12.5} muted>
                 {items.length === 0
@@ -439,7 +530,7 @@ export default function NewRental() {
               label="EMAIL (OPTIONAL)"
               value={borrowerEmail}
               onChangeText={setBorrowerEmail}
-              placeholder="branden@stockpilotusa.com"
+              placeholder="borrower@company.com"
               keyboardType="email-address"
               autoCapitalize="none"
             />
@@ -537,6 +628,56 @@ function FormSection({
       </View>
       <View style={{ gap: 12 }}>{children}</View>
     </Card>
+  );
+}
+
+/**
+ * A read that failed: the sentence, the read's own reason, and a Try again
+ * that is disabled while the retry runs (a failing read retries for several
+ * seconds before its error shows, so repeated taps would stack reloads).
+ */
+function ReadFailure({
+  message,
+  detail,
+  retrying,
+  onRetry,
+}: {
+  message: string;
+  detail: string | null;
+  retrying: boolean;
+  onRetry: () => void;
+}) {
+  const { c } = useTheme();
+  return (
+    <View style={{ gap: 8 }}>
+      <Body size={13} color={ACCENT.warn}>
+        {message}
+      </Body>
+      {detail ? (
+        <Body size={12} muted>
+          {detail}
+        </Body>
+      ) : null}
+      <Pressable
+        onPress={onRetry}
+        disabled={retrying}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: retrying }}
+        style={({ pressed }) => [
+          styles.chip,
+          {
+            alignSelf: 'flex-start',
+            borderColor: c.hair,
+            backgroundColor: c.card,
+            opacity: retrying ? 0.5 : pressed ? 0.85 : 1,
+          },
+        ]}
+      >
+        <Body size={13} color={c.ink2} style={{ fontFamily: FONT.display }}>
+          Try again
+        </Body>
+      </Pressable>
+    </View>
   );
 }
 

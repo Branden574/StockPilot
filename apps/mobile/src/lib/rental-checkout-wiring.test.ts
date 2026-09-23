@@ -111,8 +111,106 @@ describe('rentals/new.tsx — item selection (SP-012)', () => {
   it('reads open reservations so availability shown matches what the server enforces', () => {
     // Server-side truth is quantity_on_hand - open reservations (SP-052). If
     // the phone showed on-hand it would offer units the route then refuses.
-    expect(source).toMatch(/stock_reservations/);
-    expect(source).toMatch(/released_at/);
+    // The read lives in the shared, batched reader (up to 500 ids here, far
+    // past one `.in()` URL); the reader holds the table and the open filter.
+    expect(code()).toMatch(/readOpenReservations\(\s*supabase,\s*orgId,/);
+    const reader = readFileSync(path.resolve(__dirname, 'id-reads.ts'), 'utf8');
+    expect(reader).toMatch(/idReadSelect\(client, 'stock_reservations'/);
+    expect(reader).toMatch(/\.is\('released_at', null\)/);
+  });
+});
+
+/** The body of the effect that loads the items and their reservations. */
+function itemsEffect(): string {
+  const start = source.indexOf('if (!orgId || !warehouseId) return;');
+  expect(start, 'items effect not found').toBeGreaterThan(-1);
+  const end = source.indexOf('}, [orgId, warehouseId, itemsNonce]);', start);
+  expect(end, 'items effect deps not found (a retry must re-run it)').toBeGreaterThan(start);
+  return source.slice(start, end);
+}
+
+/** The body of the effect that loads the warehouses. */
+function warehousesEffect(): string {
+  const start = source.indexOf(".from('warehouses')");
+  expect(start).toBeGreaterThan(-1);
+  const open = source.lastIndexOf('React.useEffect(', start);
+  const end = source.indexOf('}, [orgId, warehousesNonce]);', start);
+  expect(end, 'warehouses effect deps not found (it needs its own retry)').toBeGreaterThan(start);
+  return source.slice(open, end);
+}
+
+describe('rentals/new.tsx — a failed read blocks the picker, never reads as available', () => {
+  it('a failed reservations read sets a blocking error, never "nothing reserved"', () => {
+    const body = itemsEffect();
+    expect(body).toMatch(
+      /if \(reservations\.ok\) \{\s*setReservedByItem\(Object\.fromEntries\(sumReservedByItem\(reservations\.value\)\)\);\s*\} else \{[\s\S]*?setStockError\(reservations\.message\);/,
+    );
+  });
+
+  it('a failed items read sets its own error instead of "No rental items in this warehouse"', () => {
+    const body = itemsEffect();
+    expect(body).toContain('const { data, error, status } = await supabase');
+    // readErrorMessage: never empty. A 502 or 504 with an empty body gives an
+    // empty error.message, which left the failure with no reason under it.
+    expect(body).toMatch(
+      /if \(error\) \{[\s\S]*?setItemsError\(readErrorMessage\(error, status\)\);[\s\S]*?return;/,
+    );
+  });
+
+  it('every items load clears both flags before its first read', () => {
+    const body = itemsEffect();
+    const firstAwait = body.indexOf('await ');
+    expect(body.slice(0, firstAwait)).toContain('setItemsError(null);');
+    expect(body.slice(0, firstAwait)).toContain('setStockError(null);');
+  });
+
+  it('the warehouses read binds its error, clears it on every load, and can be retried', () => {
+    const body = warehousesEffect();
+    const firstAwait = body.indexOf('await ');
+    expect(body.slice(0, firstAwait)).toContain('setWarehousesError(null);');
+    expect(body).toContain('const { data, error, status } = await supabase');
+    expect(body).toMatch(/if \(error\) \{[\s\S]*?setWarehousesError\(readErrorMessage\(error, status\)\);/);
+    expect(source).toContain('onRetry={() => setWarehousesNonce((n) => n + 1)}');
+    expect(source).toContain('No active warehouses to check out from. Add one on the web first.');
+  });
+
+  it('no failure flag is ever tested for truthiness, and none stores a raw error message', () => {
+    // An empty message is still a failure. Behind a truthiness test the
+    // warehouses section would say "No active warehouses to check out from"
+    // for a read that failed.
+    const src = code();
+    expect(src).toContain('{warehousesError !== null ? (');
+    for (const flag of ['warehousesError', 'itemsError', 'stockError']) {
+      expect(src, `${flag} tested for truthiness`).not.toMatch(
+        new RegExp(`(?:[!(&|?]\\s*|\\{)${flag}\\s*(?:\\?|&&|\\|\\||\\))`),
+      );
+    }
+    expect(src).not.toMatch(/set(?:Warehouses|Items|Stock)Error\(error\.message\)/);
+    // The failure is decided before the empty-list sentence can be reached.
+    expect(src.indexOf('{warehousesError !== null ? (')).toBeLessThan(
+      src.indexOf('No active warehouses to check out from.'),
+    );
+  });
+
+  it('Check out is disabled and submit() refuses while the picker is blocked', () => {
+    expect(source).toContain('const picker = rentalPickerStatus({ warehousesError, itemsError, stockError });');
+    const canSubmit = source.slice(source.indexOf('const canSubmit ='));
+    expect(canSubmit.slice(0, canSubmit.indexOf(';'))).toMatch(/!picker\.blocked/);
+    const body = submitBody();
+    const guard = body.indexOf('if (picker.blocked || itemsLoading) return;');
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(body.indexOf("'/api/v1/rentals'"));
+  });
+
+  it('a blocked picker renders the failure and a retry, not the list or its steppers', () => {
+    const jsx = source.slice(source.indexOf('return (\n    <View'));
+    const blocked = jsx.indexOf(') : picker.blocked ? (');
+    const list = jsx.indexOf('visibleItems.map(');
+    expect(blocked).toBeGreaterThan(-1);
+    expect(blocked).toBeLessThan(list);
+    expect(jsx).toContain('onRetry={() => setItemsNonce((n) => n + 1)}');
+    // The retry button is disabled while its reload runs.
+    expect(source).toMatch(/onPress=\{onRetry\}\s*disabled=\{retrying\}/);
   });
 });
 

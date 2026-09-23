@@ -15,8 +15,8 @@ import { showWriteCta } from '@/lib/cta-gating';
 import { signListThumbnails } from '@/lib/image-cache';
 import {
   RENTAL_ITEMS_LIMIT,
-  buildRentalItemRows,
-  rentalItemsEyebrow,
+  loadRentalItemsView,
+  rentalItemsViewEyebrow,
   type RentalItemRow,
   type RentalItemSource,
 } from '@/lib/rental-items';
@@ -70,6 +70,8 @@ export default function RentalsScreen() {
   const canCreate = showWriteCta(perms, 'rentals:create');
   const { orgId } = useOrg();
   const [rows, setRows] = React.useState<RentalRow[]>([]);
+  // The checkouts read FAILED: not "No rentals yet.". Set by every load.
+  const [checkoutsFailed, setCheckoutsFailed] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [now, setNow] = React.useState(() => Date.now());
@@ -82,7 +84,7 @@ export default function RentalsScreen() {
     // rule): overdue badges refresh exactly when the list does - on mount and
     // pull-to-refresh - instead of whenever an unrelated re-render happens.
     setNow(Date.now());
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('rentals')
       .select(
         `id, status, borrower_name, borrower_email,
@@ -92,6 +94,10 @@ export default function RentalsScreen() {
       .eq('organization_id', orgId)
       .order('checked_out_at', { ascending: false })
       .limit(100);
+    // A refused read used to render "No rentals yet.", a claim about the
+    // org's checkouts made from an error.
+    if (error) console.warn('rentals list', error);
+    setCheckoutsFailed(Boolean(error));
     setRows(
       (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
@@ -134,54 +140,37 @@ export default function RentalsScreen() {
       return;
     }
     const sources = (data ?? []) as RentalItemSource[];
-    const ids = sources.map((r) => r.id);
     // Out on rental = open reservations; the photo is the primary one. Both
-    // are best effort: without them the list is still right about what exists.
-    const [reservations, photos] = ids.length
-      ? await Promise.all([
-          supabase
-            .from('stock_reservations')
-            .select('item_id, quantity')
-            .eq('organization_id', orgId)
-            .in('item_id', ids)
-            .is('released_at', null),
-          supabase
-            .from('item_images')
-            .select('item_id, storage_path, thumb_path, is_primary, sort_order')
-            .in('item_id', ids)
-            .order('is_primary', { ascending: false })
-            .order('sort_order', { ascending: true }),
-        ])
-      : [{ data: [] }, { data: [] }];
-    const firstPhoto = new Map<string, { storage_path: string; thumb_path: string | null }>();
-    for (const p of (photos.data ?? []) as {
-      item_id: string;
-      storage_path: string;
-      thumb_path: string | null;
-    }[]) {
-      if (!firstPhoto.has(p.item_id)) {
-        firstPhoto.set(p.item_id, { storage_path: p.storage_path, thumb_path: p.thumb_path });
-      }
+    // batched (200 ids is right at the local URL limit for one `.in()`).
+    // Reservations feed Available and OVER-LENT, so a failure fails the view
+    // (it used to be ignored, and Available silently equalled On hand); a
+    // failed photo read leaves glyphs. See loadRentalItemsView.
+    const view = await loadRentalItemsView(supabase, orgId, sources);
+    if (view.failed) {
+      console.warn('rental items reservations', view.message);
+      // failed: true, so the eyebrow quotes no count for a list that did not
+      // load (never "0 ITEMS" or "SHOWING 0 OF N"; rentalItemsViewEyebrow).
+      setItems({ orgId, rows: [], total: null, images: new Map(), failed: true });
+      return;
     }
     // The stored ~200px thumbnail where there is one, never the master (see
     // signListThumbnails and the Items tab).
     let signed = new Map<string, string>();
     try {
-      signed = firstPhoto.size ? await signListThumbnails(Array.from(firstPhoto.values())) : signed;
+      signed = view.photoByItem.size
+        ? await signListThumbnails(Array.from(view.photoByItem.values()))
+        : signed;
     } catch {
       // A glyph instead of a photo; the row itself is still true.
     }
     const images = new Map<string, string>();
-    for (const [itemId, photo] of firstPhoto) {
+    for (const [itemId, photo] of view.photoByItem) {
       const url = signed.get(photo.storage_path);
       if (url) images.set(itemId, url);
     }
     setItems({
       orgId,
-      rows: buildRentalItemRows(
-        sources,
-        (reservations.data ?? []) as { item_id: string; quantity: number | null }[],
-      ),
+      rows: view.rows,
       total: count ?? null,
       images,
       failed: false,
@@ -219,7 +208,7 @@ export default function RentalsScreen() {
   if (view === 'items') {
     return (
       <DataListScreen<RentalItemRow>
-        eyebrow={current ? rentalItemsEyebrow(current.rows.length, current.total) : 'RENTALS · ITEMS'}
+        eyebrow={rentalItemsViewEyebrow(current)}
         title="Rental"
         italic="items."
         header={viewSwitch}
@@ -253,12 +242,20 @@ export default function RentalsScreen() {
 
   return (
     <DataListScreen
-      eyebrow={`RENTALS · ${out} OUT${overdue > 0 ? ` · ${overdue} OVERDUE` : ''}`}
+      eyebrow={
+        checkoutsFailed
+          ? 'RENTALS · CHECKOUTS'
+          : `RENTALS · ${out} OUT${overdue > 0 ? ` · ${overdue} OVERDUE` : ''}`
+      }
       title="Rental"
       italic="checkouts."
       header={viewSwitch}
-      emptyTitle="No rentals yet."
-      emptyBody="Check out reusable assets (canopies, supplies, equipment) on the web. Track returns and overdue items here."
+      emptyTitle={checkoutsFailed ? 'Could not load rentals.' : 'No rentals yet.'}
+      emptyBody={
+        checkoutsFailed
+          ? 'Check your connection and pull down to try again.'
+          : 'Check out reusable assets (canopies, supplies, equipment) on the web. Track returns and overdue items here.'
+      }
       emptyIcon={PackageOpen}
       data={rows}
       loading={loading}
