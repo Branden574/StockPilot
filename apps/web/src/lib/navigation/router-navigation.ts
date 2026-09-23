@@ -93,6 +93,8 @@ let latest: RouterNavigation | null = null;
 let committedKey: string | null = null;
 /** Date.now() when committedKey last changed to a location. */
 let committedAt = 0;
+/** The navigation whose late skeleton is covering the page (written by PendingRouteFrame). */
+let coveredId: number | null = null;
 let nextId = 1;
 const listeners = new Set<() => void>();
 
@@ -179,6 +181,15 @@ export function noteCommittedLocation(key: string | null): void {
   }
 }
 
+/**
+ * The navigation the late skeleton is covering the page for, or null, written
+ * by PendingRouteFrame whenever that changes. Only such a navigation keeps the
+ * progress bar past its 8 s failsafe (pendingPathNavigationRemaining).
+ */
+export function noteLateSkeleton(id: number | null): void {
+  coveredId = id;
+}
+
 export function subscribeRouterNavigation(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
@@ -196,16 +207,22 @@ export function getServerRouterNavigation(): null {
 }
 
 /**
- * Milliseconds a path navigation from `currentKey` may still be waited for,
- * or 0 when none is in flight. The late skeleton and the progress bar's
- * failsafe share it, so they end together.
+ * Milliseconds the progress bar may keep climbing past its failsafe for a
+ * path navigation from `currentKey`, or 0. Only while the late skeleton is
+ * covering the page for it: the bar then ends with the skeleton, at
+ * MAX_PENDING_NAVIGATION_MS at the latest, instead of leaving a skeleton with
+ * no sign of progress. Without a skeleton the navigation may be over without
+ * the location moving (a proxy redirect back to the page it left, or Next
+ * falling back to the current state), and the bar gives up at 8 s as before.
  */
 export function pendingPathNavigationRemaining(
   nav: RouterNavigation | null,
   currentKey: string | null,
   now: number,
 ): number {
-  if (nav === null || nav.kind !== 'path' || nav.fromKey !== currentKey) return 0;
+  if (nav === null || nav.kind !== 'path' || nav.fromKey !== currentKey || nav.id !== coveredId) {
+    return 0;
+  }
   const left = MAX_PENDING_NAVIGATION_MS - (now - nav.startedAt);
   return left > 0 ? left : 0;
 }
@@ -214,6 +231,7 @@ export function resetRouterNavigationForTests(): void {
   latest = null;
   committedKey = null;
   committedAt = 0;
+  coveredId = null;
   nextId = 1;
 }
 

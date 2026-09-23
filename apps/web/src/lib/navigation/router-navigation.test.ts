@@ -8,6 +8,7 @@ import {
   getRouterNavigation,
   MAX_PENDING_NAVIGATION_MS,
   noteCommittedLocation,
+  noteLateSkeleton,
   pendingPathNavigationRemaining,
   recordRouterTransitionStart,
   REDIRECT_FOLLOW_MS,
@@ -187,12 +188,18 @@ describe('recordRouterTransitionStart', () => {
 });
 
 describe('pendingPathNavigationRemaining (A8)', () => {
-  it('counts down from 30 s for a path navigation from this key, and is 0 otherwise', () => {
+  it('counts down from 30 s for a path navigation from this key whose late skeleton is up, and is 0 otherwise', () => {
     vi.useFakeTimers();
     noteCommittedLocation('/dashboard/inventory');
     recordRouterTransitionStart('/dashboard/orders', 'push');
     const path = nav();
     const t0 = path.startedAt;
+
+    // No skeleton covering the page: the bar keeps its 8 s failsafe.
+    expect(pendingPathNavigationRemaining(path, '/dashboard/inventory', t0 + 8_000)).toBe(0);
+    noteLateSkeleton(path.id + 1);
+    expect(pendingPathNavigationRemaining(path, '/dashboard/inventory', t0 + 8_000)).toBe(0);
+    noteLateSkeleton(path.id);
 
     expect(pendingPathNavigationRemaining(path, '/dashboard/inventory', t0 + 8_000)).toBe(
       MAX_PENDING_NAVIGATION_MS - 8_000,

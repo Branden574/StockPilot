@@ -37,12 +37,14 @@ import { markNavigationClick, markNavigationFeedback } from '@/lib/perf/marks';
  *   • Completes when the location (path AND query) moves, or when the
  *     router starts a same-URL navigation (Next discarded the one the bar
  *     was following).
- *   • Failsafe: after 8 s it gives up quietly, UNLESS the router still has
- *     a path navigation in flight from this page. Then it keeps climbing
- *     alongside the late skeleton (pending-route-skeleton.tsx) and both end
- *     together, at MAX_PENDING_NAVIGATION_MS (30 s) at the latest. Ending the
- *     bar at 8 s used to end the skeleton with it, showing the page being
- *     left again while its replacement was still on the way.
+ *   • Failsafe: after 8 s it gives up quietly, UNLESS the late skeleton
+ *     (pending-route-skeleton.tsx) is covering the page for a path navigation
+ *     still in flight from it. Then it keeps climbing alongside the skeleton
+ *     and both end together, at MAX_PENDING_NAVIGATION_MS (30 s) at the
+ *     latest, so a covered page never waits with no sign of progress. With
+ *     no skeleton up it still gives up at 8 s: a navigation can end without
+ *     the location moving (the proxy sends /signin back to /dashboard), and
+ *     nothing else would stop the bar.
  *
  * Query-only navigations (the item page's Movements/Activity tabs, ?page=,
  * filter chips) get the bar too. They used to be skipped as "in-page", but a
@@ -128,8 +130,8 @@ export function NavProgressBar() {
       enter('climbing');
       if (failsafeRef.current) clearTimeout(failsafeRef.current);
       const giveUp = () => {
-        // A path navigation the router is still waiting on keeps the bar (and
-        // the late skeleton, which uses the same clock) up to 30 s from its start.
+        // A path navigation whose late skeleton covers the page keeps the bar
+        // up with it, to 30 s from its start (the skeleton uses the same clock).
         const remaining = pendingPathNavigationRemaining(
           getRouterNavigation(),
           startKeyRef.current,

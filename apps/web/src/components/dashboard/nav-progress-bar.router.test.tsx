@@ -7,9 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * The bar and the router's own start events (lib/navigation/router-navigation.ts,
  * fed by src/instrumentation-client.ts). A path navigation started from code
- * gets the bar without a click; a navigation the router is still waiting on
- * keeps it past the 8 s failsafe; and neither source fabricates a performance
- * mark. Frames are a queue the test turns by hand, as in nav-progress-bar.test.tsx.
+ * gets the bar without a click; a navigation whose late skeleton covers the
+ * page keeps it past the 8 s failsafe, and one without keeps the failsafe;
+ * and neither source fabricates a performance mark. Frames are a queue the test turns by hand, as in nav-progress-bar.test.tsx.
  */
 
 const { pathnameRef, searchRef, markNavigationClick, markNavigationFeedback } = vi.hoisted(() => ({
@@ -33,6 +33,7 @@ import {
 } from '@/lib/navigation/router-navigation';
 
 import { NavProgressBar } from './nav-progress-bar';
+import { PendingRouteFrame } from './pending-route-skeleton';
 
 const ORIGIN = window.location.origin;
 
@@ -66,6 +67,24 @@ function link(href: string): HTMLAnchorElement {
   a.addEventListener('click', (event) => event.preventDefault());
   document.body.appendChild(a);
   return a;
+}
+
+/** The bar with the shell's late skeleton beside it, as DashboardShell renders them. */
+function BarAndFrame() {
+  return (
+    <>
+      <NavProgressBar />
+      <main>
+        <PendingRouteFrame>
+          <p>page</p>
+        </PendingRouteFrame>
+      </main>
+    </>
+  );
+}
+
+function lateSkeleton(): Element | null {
+  return document.querySelector('[data-pending-route-skeleton]');
 }
 
 function start(url: string, type: 'push' | 'replace' | 'traverse' = 'push') {
@@ -154,14 +173,32 @@ describe('<NavProgressBar /> and router starts', () => {
     expect(completing()).toBe(true);
   });
 
-  it('F5 keeps climbing past 8 s while the router still waits on the path navigation, idle at 30 s', () => {
-    render(<NavProgressBar />);
+  it('F5 keeps climbing past 8 s while the late skeleton covers the page, and ends with it at 30 s', () => {
+    render(<BarAndFrame />);
     start('/dashboard/orders');
-    advance(8_001);
+    // Two steps: act() renders the skeleton when it returns, and in a browser
+    // it is up at 400 ms, long before the 8 s failsafe looks for it.
+    advance(400);
+    expect(lateSkeleton()).not.toBeNull();
+    advance(7_601);
     expect(climbing()).toBe(true);
     advance(20_000);
     expect(climbing()).toBe(true);
     advance(1_999);
+    expect(bar()).toBeNull();
+    expect(lateSkeleton()).toBeNull();
+  });
+
+  it('F9 a path navigation that lands back on the page it left, with no skeleton up, still gives up at 8 s', () => {
+    // (dashboard)/error.tsx links to /signin; the proxy sends a signed-in
+    // person back to /dashboard, and the router commits /dashboard again. The
+    // location never moves, so nothing retires the navigation.
+    render(<BarAndFrame />);
+    start('/signin');
+    expect(climbing()).toBe(true);
+    advance(400);
+    expect(lateSkeleton()).toBeNull();
+    advance(7_601);
     expect(bar()).toBeNull();
   });
 

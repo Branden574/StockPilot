@@ -10,6 +10,7 @@ import {
   locationKey,
   MAX_PENDING_NAVIGATION_MS,
   noteCommittedLocation,
+  noteLateSkeleton,
   SLOW_NAVIGATION_MS,
   subscribeRouterNavigation,
 } from '@/lib/navigation/router-navigation';
@@ -50,7 +51,8 @@ import { routeSkeletonFor } from '@/lib/navigation/route-skeletons';
  *   - a failed request: Next falls back to a full page load;
  *   - MAX_PENDING_NAVIGATION_MS (30 s), for a navigation Next abandoned without
  *     a word. The page comes back with its scroll position, and the progress
- *     bar goes idle at the same moment.
+ *     bar, which climbs past its own 8 s failsafe only while this skeleton is
+ *     up, goes idle at the same moment.
  *
  * Its own component, holding its own state, so that only it (not the shell,
  * the sidebar or the topbar) re-renders while a navigation is pending.
@@ -106,6 +108,14 @@ export function PendingRouteFrame({ children }: { children: React.ReactNode }) {
   // pattern for state derived from a change) rather than in an effect, so the
   // stale key is gone before the next navigation can be compared with it.
   if (!eligible && slowFromKey !== null) setSlowFromKey(null);
+
+  // The progress bar climbs past its 8 s failsafe only while this covers the
+  // page (router-navigation.ts pendingPathNavigationRemaining).
+  const coveredId = show && tracked !== null ? tracked.id : null;
+  React.useLayoutEffect(() => {
+    noteLateSkeleton(coveredId);
+    return () => noteLateSkeleton(null);
+  }, [coveredId]);
 
   const pageRef = React.useRef<HTMLDivElement>(null);
   const savedScrollRef = React.useRef<{ key: string; top: number } | null>(null);
