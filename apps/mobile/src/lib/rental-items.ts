@@ -129,6 +129,24 @@ export function rentalItemsEyebrow(shown: number, total: number | null): string 
   return `RENTALS · ${count} ${noun}`;
 }
 
+/** The Items view's state, as far as its eyebrow needs it. */
+export interface RentalItemsEyebrowState {
+  rows: readonly unknown[];
+  total: number | null;
+  failed: boolean;
+}
+
+/**
+ * The eyebrow the Items view renders, from its state (null while the first
+ * load runs). No count while loading or after a failed load: a failed load
+ * holds no rows and no total, and counting those put "RENTALS · 0 ITEMS"
+ * right above "Could not load rental items.", a zero the read never returned.
+ */
+export function rentalItemsViewEyebrow(state: RentalItemsEyebrowState | null): string {
+  if (state === null || state.failed) return 'RENTALS · ITEMS';
+  return rentalItemsEyebrow(state.rows.length, state.total);
+}
+
 // ── New-rental picker ───────────────────────────────────────────────────────
 
 /** What the new-rental picker can offer, given which of its reads failed. */

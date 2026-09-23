@@ -16,7 +16,7 @@ import { signListThumbnails } from '@/lib/image-cache';
 import {
   RENTAL_ITEMS_LIMIT,
   loadRentalItemsView,
-  rentalItemsEyebrow,
+  rentalItemsViewEyebrow,
   type RentalItemRow,
   type RentalItemSource,
 } from '@/lib/rental-items';
@@ -148,8 +148,8 @@ export default function RentalsScreen() {
     const view = await loadRentalItemsView(supabase, orgId, sources);
     if (view.failed) {
       console.warn('rental items reservations', view.message);
-      // total: null, so the eyebrow never quotes a count for a list that did
-      // not load ("SHOWING 0 OF N").
+      // failed: true, so the eyebrow quotes no count for a list that did not
+      // load (never "0 ITEMS" or "SHOWING 0 OF N"; rentalItemsViewEyebrow).
       setItems({ orgId, rows: [], total: null, images: new Map(), failed: true });
       return;
     }
@@ -208,7 +208,7 @@ export default function RentalsScreen() {
   if (view === 'items') {
     return (
       <DataListScreen<RentalItemRow>
-        eyebrow={current ? rentalItemsEyebrow(current.rows.length, current.total) : 'RENTALS · ITEMS'}
+        eyebrow={rentalItemsViewEyebrow(current)}
         title="Rental"
         italic="items."
         header={viewSwitch}

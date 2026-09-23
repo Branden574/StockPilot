@@ -9,6 +9,7 @@ import {
   buildRentalItemRows,
   loadRentalItemsView,
   rentalItemsEyebrow,
+  rentalItemsViewEyebrow,
   rentalPickerStatus,
 } from './rental-items';
 
@@ -83,6 +84,28 @@ describe('rentalItemsEyebrow', () => {
 
   it('falls back to what it has when the count is unknown', () => {
     expect(rentalItemsEyebrow(3, null)).toBe('RENTALS · 3 ITEMS');
+  });
+});
+
+describe('rentalItemsViewEyebrow (what the Items view renders)', () => {
+  it('quotes no count while the first load runs', () => {
+    expect(rentalItemsViewEyebrow(null)).toBe('RENTALS · ITEMS');
+  });
+
+  it('quotes NO count after a failed load, never "0 ITEMS" from a read that did not answer', () => {
+    // The failed state the screen sets: no rows, no total. It used to render
+    // "RENTALS · 0 ITEMS" right above "Could not load rental items.".
+    expect(rentalItemsViewEyebrow({ rows: [], total: null, failed: true })).toBe('RENTALS · ITEMS');
+    // Even if a failed state ever carried rows or a total, it quotes none.
+    expect(rentalItemsViewEyebrow({ rows: [{}, {}], total: 5, failed: true })).toBe('RENTALS · ITEMS');
+  });
+
+  it('counts a loaded view, including a genuinely empty one', () => {
+    expect(rentalItemsViewEyebrow({ rows: [{}, {}], total: 2, failed: false })).toBe('RENTALS · 2 ITEMS');
+    expect(rentalItemsViewEyebrow({ rows: [], total: 0, failed: false })).toBe('RENTALS · 0 ITEMS');
+    expect(rentalItemsViewEyebrow({ rows: [{}], total: 3, failed: false })).toBe(
+      'RENTALS · SHOWING 1 OF 3 ITEMS',
+    );
   });
 });
 
@@ -183,6 +206,13 @@ describe('Rentals screen wiring', () => {
     expect(screen).toMatch(
       /if \(view\.failed\) \{[\s\S]*?setItems\(\{ orgId, rows: \[\], total: null, images: new Map\(\), failed: true \}\);\s*return;/,
     );
+  });
+
+  it('renders the eyebrow from the whole view state, so a failed load quotes no count', () => {
+    // Computing it from rows.length and total alone put "RENTALS · 0 ITEMS"
+    // over a failed load (see rentalItemsViewEyebrow).
+    expect(screen).toContain('eyebrow={rentalItemsViewEyebrow(current)}');
+    expect(screen).not.toMatch(/rentalItemsEyebrow\(/);
   });
 
   it('a failed checkouts read says so instead of "No rentals yet.", on every load', () => {
