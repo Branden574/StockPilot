@@ -1,17 +1,13 @@
 /**
- * Route-level loading state for the Overview (`/dashboard`) — perf plan
- * 2026-07-02 P1c. Mirrors the real page frame: the greeting/date header
- * block plus the streamed body's stat row + chart rows (same shapes as
- * `DashboardBodySkeleton` in page.tsx), so a soft navigation to Overview
- * paints a route-true skeleton in ~0ms instead of the generic
- * `PageSkeleton` from the (dashboard) group boundary.
- *
- * NOTE: every child section under /dashboard/* has its own loading.tsx,
- * so this file only ever renders for the Overview segment itself. Keep it
- * that way — if a new child section is added without a loading.tsx, THIS
- * Overview-shaped skeleton would flash on its navigations.
+ * The Overview page's skeleton: the greeting/date header block plus the
+ * streamed body's stat row and chart rows (same shapes as
+ * `DashboardBodySkeleton` in the Overview page). It was the Overview's
+ * loading.tsx; it is now drawn through RouteSkeleton (route-skeleton.tsx) by
+ * the late skeleton, for a navigation still waiting after SLOW_NAVIGATION_MS
+ * (pending-route-skeleton.tsx), and by the (dashboard) group's loading.tsx on
+ * a hard load of /dashboard.
  */
-export default function DashboardOverviewLoading() {
+export function OverviewSkeleton() {
   return (
     <div className="mx-auto w-full max-w-[1760px] px-5 pb-20 pt-6 sm:px-7 2xl:px-9">
       {/* Greeting + action-button header (matches the page's lead section). */}

@@ -7,6 +7,7 @@ import { EdgeSwipeOpener } from '@/components/dashboard/edge-swipe-opener';
 import { KeyboardShortcutsProvider } from '@/components/dashboard/keyboard-shortcuts';
 import { navForRole } from '@/components/dashboard/nav';
 import { NavProgressBar } from '@/components/dashboard/nav-progress-bar';
+import { PendingRouteFrame } from '@/components/dashboard/pending-route-skeleton';
 import { SessionUserProvider } from '@/components/dashboard/session-user';
 import { OrderStatusConfigProvider } from '@/components/orders/order-status-config-provider';
 import { ImageDiagnostics } from '@/components/perf/image-diagnostics';
@@ -208,7 +209,8 @@ export function DashboardShell({
     <div className="bg-background flex h-dvh overflow-hidden">
       {/* Top progress bar — fires at click time on every internal nav,
           covers links the per-link useLinkStatus indicator can't see
-          (topbar, dashboard cards, table rows, breadcrumbs, etc). */}
+          (topbar, dashboard cards, table rows, breadcrumbs, etc), and
+          path navigations the router starts from code. */}
       <NavProgressBar />
       {/* Photo-loading diagnostics for real users: image load failures and
           per-route load timings, reduced to a CLASS ("thumbnail via the
@@ -277,9 +279,14 @@ export function DashboardShell({
           className="bg-card flex-1 overflow-y-auto focus:outline-none"
         >
           <div className="min-h-full">
-            <OrderStatusConfigProvider config={orderStatusConfig}>
-              <SessionUserProvider userId={userId}>{children}</SessionUserProvider>
-            </OrderStatusConfigProvider>
+            {/* The page area. A navigation still waiting after 400 ms
+                swaps the page for its destination's skeleton here; the
+                frame owns that state, so nothing above re-renders. */}
+            <PendingRouteFrame>
+              <OrderStatusConfigProvider config={orderStatusConfig}>
+                <SessionUserProvider userId={userId}>{children}</SessionUserProvider>
+              </OrderStatusConfigProvider>
+            </PendingRouteFrame>
           </div>
         </main>
       </div>

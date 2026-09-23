@@ -12,7 +12,8 @@ import { useWarmRoute } from '@/lib/hooks/use-warm-route';
  * WHY. A default <Link> prefetches its route as soon as it scrolls into view,
  * and in Next 16.3.5 each prefetch of one of our (dynamic) routes is TWO
  * server requests: the route tree, then the segments down to the nearest
- * loading.tsx. A page of tiles or rows therefore fires two requests per
+ * loading.tsx (measured before Overview, Items, Books and Orders dropped
+ * theirs). A page of tiles or rows therefore fires two requests per
  * distinct link the moment it renders. Measured in production on 2026-09-22:
  * opening /dashboard/reports fired 26 page requests in about 1.4 s (13 tiles
  * x 2); a Dashboard hard load fired about 40; the Orders list fired 14
@@ -33,7 +34,11 @@ import { useWarmRoute } from '@/lib/hooks/use-warm-route';
  *     rebuild the storm this component exists to stop, one row at a time.
  *     Leaving the link (pointer-leave / blur) before the dwell cancels it.
  * A click then paints the destination's loading.tsx at once IF the warm-up
- * has finished: the navigation reads the same prefetch cache (the Link's own
+ * has finished. (Overview, Items, Books, Orders and their sub-pages have no
+ * loading.tsx: the page being left stays up with the progress bar until the
+ * new one is ready, and a navigation still waiting after 400 ms shows the
+ * late skeleton, components/dashboard/pending-route-skeleton.tsx.) The
+ * navigation reads the same prefetch cache (the Link's own
  * prefetch prop only feeds instrumentation hooks, read in
  * next/dist/client/components/app-router-instance.js), but it uses a route
  * entry only once it is fulfilled. A warm-up still in flight is not waited
