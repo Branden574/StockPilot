@@ -20,7 +20,6 @@
     "in:id <- userIds"
   ],
   "server/actions/profile.ts": ["in:organization_id <- ownedOrgIds"],
-  "server/connectors/drainer.ts": ["in:organization_id <- orgIds"],
   "server/services/inventory.ts": [
     "in:category_id <- filters.categoryIds",
     "in:category_id <- filters.categoryIds",

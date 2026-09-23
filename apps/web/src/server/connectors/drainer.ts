@@ -8,6 +8,7 @@ import type {
 } from '@stockpilot/core';
 
 import { reportError } from '@/lib/error-reporter';
+import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
 
 import { getConnectionSecret, putConnectionSecret } from './secret-store';
 
@@ -76,14 +77,26 @@ export async function enabledIntegrationOrgIds(
   orgIds: string[],
 ): Promise<Set<string>> {
   if (orgIds.length === 0) return new Set();
-  const { data, error } = await admin
-    .from('organization_modules')
-    .select('organization_id')
-    .eq('module_id', 'integrations')
-    .eq('enabled', true)
-    .in('organization_id', orgIds);
-  if (error) throw new Error(`organization_modules select: ${error.message}`);
-  return new Set(((data ?? []) as Array<{ organization_id: string }>).map((r) => r.organization_id));
+  // Every org with an active connection, which no cap bounds: one `.in()` of
+  // them fails past ~215 ids locally and ~395 in production (after ~7 s of
+  // retries), so they go 100 per request. Any failed batch still throws.
+  let rows: Array<{ organization_id: string }>;
+  try {
+    rows = await fetchAllRowsByIds<{ organization_id: string }>(orgIds, (batch) => (from, to) =>
+      admin
+        .from('organization_modules')
+        .select('organization_id')
+        .eq('module_id', 'integrations')
+        .eq('enabled', true)
+        .in('organization_id', batch)
+        // One row per org for this module: a stable page order.
+        .order('organization_id', { ascending: true })
+        .range(from, to),
+    );
+  } catch (err) {
+    throw new Error(`organization_modules select: ${rawErrorText(err)}`);
+  }
+  return new Set(rows.map((r) => r.organization_id));
 }
 
 /**
