@@ -818,8 +818,13 @@ export default function Inventory() {
               smaller number — the same misnaming the Books eyebrow already
               fixed. The list now holds the whole set, so this is an exact count
               of it; when truncated it quotes the server's count and the line
-              below says the list is showing less than that. */}
-          <Eyebrow>{`INVENTORY · ${datasetRowCount.toLocaleString()} ITEMS`}</Eyebrow>
+              below says the list is showing less than that. A failed read
+              holds no rows, so it quotes no count rather than "0". */}
+          <Eyebrow>
+            {loadError !== null
+              ? 'INVENTORY · ITEMS'
+              : `INVENTORY · ${datasetRowCount.toLocaleString()} ITEMS`}
+          </Eyebrow>
           <Display size={34} style={{ marginTop: 12 }}>
             Items<Em>.</Em>
           </Display>
@@ -912,9 +917,18 @@ export default function Inventory() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.ink} />
           }
           ListEmptyComponent={
-            /* Ghost only for a genuinely empty org — an empty SEARCH result
+            /* A failed read leaves no rows: neither "No items match." (it
+               would contradict the banner above) nor the tour's ghost row.
+               Ghost only for a genuinely empty org — an empty SEARCH result
                must not claim the org has no items yet. */
-            tourActive && datasetRowCount === 0 && !q.trim() && filterCount === 0 ? (
+            loadError !== null ? (
+              <View style={styles.empty}>
+                <Body color={c.ink}>Items did not load.</Body>
+                <Body muted style={{ marginTop: 4, textAlign: 'center' }}>
+                  Pull down to try again.
+                </Body>
+              </View>
+            ) : tourActive && datasetRowCount === 0 && !q.trim() && filterCount === 0 ? (
               <SampleItemRow />
             ) : (
               <View style={styles.empty}>

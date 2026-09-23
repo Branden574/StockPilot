@@ -209,8 +209,8 @@ describe('books list — a header agrees with the rows it expands to', () => {
     // The count counts inventory_items ROWS, and under Model B one title is one
     // row per charter/rack — "N BOOKS" claimed a title count the grouped list
     // on screen contradicts.
-    expect(books).not.toContain('BOOKS`}</Eyebrow>');
-    expect(books).toContain('PLACEMENTS`}</Eyebrow>');
+    expect(books).not.toMatch(/BOOKS`\}\s*<\/Eyebrow>/);
+    expect(books).toMatch(/PLACEMENTS`\}\s*<\/Eyebrow>/);
   });
 
   it('takes the EXPECTED pill from the rows, never from the filter state', () => {
@@ -238,8 +238,8 @@ describe('items list — identical behaviour to books, because the owner compare
   it('names the eyebrow count after what it actually counts', () => {
     // It said "SKUS" over a ROW count — under Model B a different, smaller
     // number than the one printed.
-    expect(inventory).not.toContain('SKUS`}</Eyebrow>');
-    expect(inventory).toContain('ITEMS`}</Eyebrow>');
+    expect(inventory).not.toMatch(/SKUS`\}\s*<\/Eyebrow>/);
+    expect(inventory).toMatch(/ITEMS`\}\s*<\/Eyebrow>/);
   });
 
   it('runs the count read through the SAME predicate builder as the row read', () => {
@@ -329,5 +329,74 @@ describe('books list — a failed read says so, never passes for an empty or cur
     expect(clears).toContain('setHoldingsError(null);');
     // Two awaits (the list, the holdings), each followed by the token check.
     expect(body.match(/if \(!isCurrent\(\)\) return;/g)?.length).toBe(2);
+  });
+});
+
+/**
+ * The JSX of the list's `ListEmptyComponent` prop, found by matching its
+ * braces (the copy inside has none), with its comments stripped: a comment
+ * may quote the copy it explains.
+ */
+const emptyComponent = (src: string): string => {
+  const open = src.indexOf('ListEmptyComponent={');
+  expect(open, 'ListEmptyComponent not found').toBeGreaterThan(-1);
+  let depth = 0;
+  for (let i = open + 'ListEmptyComponent='.length; i < src.length; i += 1) {
+    if (src[i] === '{') depth += 1;
+    else if (src[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return src.slice(open, i + 1).replace(/\/\*[\s\S]*?\*\//g, '');
+    }
+  }
+  throw new Error('ListEmptyComponent is not closed');
+};
+
+describe('both lists — a failed read is never "no results" or a zero count', () => {
+  const cases: {
+    name: string;
+    src: string;
+    failed: string;
+    noResults: string;
+    eyebrow: RegExp;
+  }[] = [
+    {
+      name: 'books',
+      src: books,
+      failed: 'Books did not load.',
+      noResults: 'No books match.',
+      eyebrow: /\{loadError !== null\s*\? 'INVENTORY · PLACEMENTS'\s*: `INVENTORY · \$\{datasetRowCount\.toLocaleString\(\)\} PLACEMENTS`\}/,
+    },
+    {
+      name: 'inventory',
+      src: inventory,
+      failed: 'Items did not load.',
+      noResults: 'No items match.',
+      eyebrow: /\{loadError !== null\s*\? 'INVENTORY · ITEMS'\s*: `INVENTORY · \$\{datasetRowCount\.toLocaleString\(\)\} ITEMS`\}/,
+    },
+  ];
+
+  for (const { name, src, failed, noResults, eyebrow } of cases) {
+    it(`${name}: the empty state says the read failed, not "${noResults}"`, () => {
+      // A failed read leaves no rows, so the list's empty state rendered
+      // "${noResults}" right under the failure notice, contradicting it.
+      const empty = emptyComponent(src);
+      const check = empty.indexOf('loadError !== null ?');
+      expect(check, 'the empty state must switch on the failed read').toBeGreaterThan(-1);
+      expect(empty.indexOf(failed)).toBeGreaterThan(check);
+      expect(empty.indexOf(noResults)).toBeGreaterThan(empty.indexOf(failed));
+      expect(empty).toContain('Pull down to try again.');
+    });
+
+    it(`${name}: the eyebrow quotes no count for a read that failed`, () => {
+      // It said "INVENTORY · 0 …" over a failed load.
+      expect(src).toMatch(eyebrow);
+    });
+  }
+
+  it('inventory: a failed read never shows the tour ghost row either', () => {
+    // The ghost stands in for a genuinely empty org; a failed read is not one.
+    const empty = emptyComponent(inventory);
+    expect(empty.indexOf('loadError !== null ?')).toBeGreaterThan(-1);
+    expect(empty.indexOf('loadError !== null ?')).toBeLessThan(empty.indexOf('tourActive &&'));
   });
 });

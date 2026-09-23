@@ -752,8 +752,13 @@ export default function BooksScreen() {
               collapsed headers use, so the two read as one vocabulary. The
               list now holds the whole set, so this is an exact count of it —
               except when truncated, where it quotes the server's count and the
-              line below says the list is showing less than that. */}
-          <Eyebrow>{`INVENTORY · ${datasetRowCount.toLocaleString()} PLACEMENTS`}</Eyebrow>
+              line below says the list is showing less than that. A failed
+              read holds no rows, so it quotes no count rather than "0". */}
+          <Eyebrow>
+            {loadError !== null
+              ? 'INVENTORY · PLACEMENTS'
+              : `INVENTORY · ${datasetRowCount.toLocaleString()} PLACEMENTS`}
+          </Eyebrow>
           <Display size={34} style={{ marginTop: 12 }}>
             Book <Em>catalog.</Em>
           </Display>
@@ -835,12 +840,23 @@ export default function BooksScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />
           }
           ListEmptyComponent={
-            <View style={styles.empty}>
-              <Display size={18}>No books match.</Display>
-              <Body muted style={{ marginTop: 6, textAlign: 'center' }}>
-                Scan a book on the Scan tab to add one, or import from the web.
-              </Body>
-            </View>
+            /* A failed read leaves no rows. Saying "No books match." under the
+               failure notice would contradict it. */
+            loadError !== null ? (
+              <View style={styles.empty}>
+                <Display size={18}>Books did not load.</Display>
+                <Body muted style={{ marginTop: 6, textAlign: 'center' }}>
+                  Pull down to try again.
+                </Body>
+              </View>
+            ) : (
+              <View style={styles.empty}>
+                <Display size={18}>No books match.</Display>
+                <Body muted style={{ marginTop: 6, textAlign: 'center' }}>
+                  Scan a book on the Scan tab to add one, or import from the web.
+                </Body>
+              </View>
+            )
           }
           ListFooterComponent={
             /* Every number here describes what this page ACTUALLY renders:
