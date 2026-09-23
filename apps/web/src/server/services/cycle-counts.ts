@@ -418,10 +418,11 @@ export class CycleCountsService {
     }
     const seesNothing = !access.hasAllAccess && access.writableIds.length === 0;
     const scopeIds = access.hasAllAccess ? null : access.writableIds;
-    const emptySummary: CycleCountListSummary = { inProgress: 0, startedToday: 0 };
     if (seesNothing) {
       const empty = toListPage<CycleCountListItem>([], { page: 1, pageSize, total: 0 });
-      return opts.includeSummary ? { ...empty, summary: emptySummary } : empty;
+      if (!opts.includeSummary) return empty;
+      const timezone = await getCachedOrgTimezone(this.ctx.organizationId);
+      return { ...empty, summary: { inProgress: 0, startedToday: 0, timezone } };
     }
 
     const search = parseCycleCountSearch(query.q);

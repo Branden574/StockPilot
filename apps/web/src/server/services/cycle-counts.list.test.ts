@@ -329,6 +329,18 @@ describe('CycleCountsService.listPage: summary', () => {
     expect(reportError).toHaveBeenCalled();
   });
 
+  it('a member who sees no counts gets zero totals, still in the workspace timezone', async () => {
+    scopedAccess([], ['wh-a']);
+    vi.mocked(getCachedOrgTimezone).mockResolvedValue('America/Chicago');
+    const { stub, svc } = svcWith(
+      { data: [row(1)], error: null },
+      { role: 'viewer', permissions: new Set(['cycle_counts:read']) },
+    );
+    const res = await svc.listPage({}, { includeSummary: true });
+    expect(res.summary).toEqual({ inProgress: 0, startedToday: 0, timezone: 'America/Chicago' });
+    expect(stub.rpcCalls).toHaveLength(0);
+  });
+
   it('is absent unless asked for', async () => {
     const { stub, svc } = svcWith({ data: [], error: null });
     const res = await svc.listPage();
