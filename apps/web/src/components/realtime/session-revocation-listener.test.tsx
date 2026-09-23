@@ -58,6 +58,9 @@ const h = vi.hoisted(() => ({
   replace: vi.fn(),
   signOut: vi.fn(async (_opts?: unknown) => ({ error: null })),
   getSession: vi.fn(),
+  // GoTrue's answer about THIS session when a message arrives. A real
+  // revocation deletes the session first, so getUser fails.
+  getUser: vi.fn(),
   handlers: [] as Array<(msg: { payload: unknown }) => void>,
   channelName: vi.fn(),
   forgetTourState: vi.fn(),
@@ -77,7 +80,7 @@ vi.mock('@/lib/onboarding/tour-state-cache', () => ({
 
 vi.mock('@/lib/supabase/client', () => ({
   createClient: () => ({
-    auth: { getSession: h.getSession, signOut: h.signOut },
+    auth: { getSession: h.getSession, getUser: h.getUser, signOut: h.signOut },
     channel: (name: string) => {
       h.channelName(name);
       const ch: Record<string, unknown> = {
@@ -92,6 +95,8 @@ vi.mock('@/lib/supabase/client', () => ({
     removeChannel: vi.fn(),
   }),
 }));
+
+import { AuthApiError, AuthRetryableFetchError } from '@supabase/supabase-js';
 
 import { SessionRevocationListener } from './session-revocation-listener';
 
@@ -121,6 +126,12 @@ describe('SessionRevocationListener (browser Buffer polyfill installed)', () => 
     h.channelName.mockClear();
     h.handlers.length = 0;
     h.getSession.mockResolvedValue({ data: { session: { access_token: TOKEN } } });
+    // Default: the session really was revoked (GoTrue no longer knows it).
+    h.getUser.mockReset();
+    h.getUser.mockResolvedValue({
+      data: { user: null },
+      error: new AuthApiError('Session from session_id claim in JWT does not exist', 403, 'session_not_found'),
+    });
   });
 
   async function mount() {
@@ -147,6 +158,49 @@ describe('SessionRevocationListener (browser Buffer polyfill installed)', () => 
     onRevoked({ payload: { keepId: 'the-device-that-asked' } });
 
     await waitFor(() => expect(h.signOut).toHaveBeenCalledWith({ scope: 'local' }));
+  });
+
+  it('a FORGED message (the session is still live at GoTrue) signs nothing out', async () => {
+    // The channel is public: anyone with the anon key and this user's id can
+    // send one. Before signing out, the tab asks GoTrue; a session it still
+    // accepts means the message is not a real revocation.
+    h.getUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null });
+    const onRevoked = await mount();
+
+    onRevoked({ payload: { sessionIds: [MY_SESSION] } });
+    onRevoked({ payload: { keepId: 'someone-else' } });
+    await waitFor(() => expect(h.getUser).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+
+    expect(h.signOut).not.toHaveBeenCalled();
+    expect(h.replace).not.toHaveBeenCalled();
+    expect(h.forgetTourState).not.toHaveBeenCalled();
+  });
+
+  it('a check that could not be made (network) signs nothing out; token expiry still applies', async () => {
+    h.getUser.mockResolvedValue({
+      data: { user: null },
+      error: new AuthRetryableFetchError('Failed to fetch', 0),
+    });
+    const onRevoked = await mount();
+
+    onRevoked({ payload: { sessionIds: [MY_SESSION] } });
+    await waitFor(() => expect(h.getUser).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+
+    expect(h.signOut).not.toHaveBeenCalled();
+  });
+
+  it('a tab whose own session id is unknown ignores a keepId message', async () => {
+    h.getSession.mockResolvedValue({ data: { session: { access_token: 'not-a-jwt' } } });
+    const onRevoked = await mount();
+
+    onRevoked({ payload: { keepId: 'x' } });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(h.getUser).not.toHaveBeenCalled();
+    expect(h.signOut).not.toHaveBeenCalled();
   });
 
   it('a broadcast about other sessions leaves this tab signed in', async () => {
