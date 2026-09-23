@@ -30,7 +30,10 @@ vi.mock('@/lib/auth/warehouse', () => ({
     readonly code = 'forbidden' as const;
   },
 }));
-vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
+vi.mock('./audit', () => ({
+  audit: vi.fn(async () => {}),
+  auditMany: vi.fn(async (rows: readonly unknown[]) => ({ written: rows.length, lost: 0 })),
+}));
 vi.mock('./integration-events', () => ({ dispatchEvent: vi.fn(async () => undefined) }));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
 vi.mock('./lib/inventory-list-cache', () => ({ invalidateInventoryListAfterWrite: invalidate }));
@@ -54,7 +57,7 @@ import {
   type MockCall,
 } from '@/test/supabase-mock';
 
-import { audit } from './audit';
+import { audit, auditMany } from './audit';
 import { PurchaseOrdersService } from './purchase-orders';
 
 const uuid = (i: number, p = '0') => `${p.repeat(8)}-0000-4000-8000-${String(i).padStart(12, '0')}`;
@@ -65,11 +68,19 @@ function inList(call: MockCall, column: string): string[] {
 function tagsReported(): string[] {
   return reportError.mock.calls.map((c) => (c as unknown as [Error, { tag: string }])[1].tag);
 }
-const archivedAudits = () =>
-  vi
+// The archive rows go through the batched writer (auditMany); audit() is
+// never called once per archived item.
+const archivedAudits = () => {
+  const perItem = vi
     .mocked(audit)
-    .mock.calls.map((c) => c[0] as { event?: string; entityId?: string })
+    .mock.calls.map((c) => c[0] as { event?: string })
     .filter((a) => a.event === 'inventory.item.archived');
+  expect(perItem).toEqual([]);
+  return vi
+    .mocked(auditMany)
+    .mock.calls.flatMap((c) => c[0] as Array<{ event?: string; entityId?: string }>)
+    .filter((a) => a.event === 'inventory.item.archived');
+};
 
 beforeEach(() => {
   vi.clearAllMocks();

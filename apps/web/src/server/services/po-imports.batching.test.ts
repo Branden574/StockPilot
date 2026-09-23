@@ -13,12 +13,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *   still archives nothing.
  */
 
-const { mockAudit, reportError, invalidate } = vi.hoisted(() => ({
+const { mockAudit, mockAuditMany, reportError, invalidate } = vi.hoisted(() => ({
   mockAudit: vi.fn(async () => {}),
+  mockAuditMany: vi.fn(async (rows: readonly unknown[]) => ({ written: rows.length, lost: 0 })),
   reportError: vi.fn(async () => undefined),
   invalidate: vi.fn(),
 }));
-vi.mock('./audit', () => ({ audit: mockAudit }));
+vi.mock('./audit', () => ({ audit: mockAudit, auditMany: mockAuditMany }));
 vi.mock('@/lib/po-parser', () => ({ parsePoFile: vi.fn() }));
 vi.mock('@/lib/po-scan/extract', () => ({ extractPoFromMedia: vi.fn(), SCAN_MODEL_NAME: 'mock' }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn() }));
@@ -259,10 +260,19 @@ describe('cancel() cleans up 250 import-created items in batches', () => {
     });
     return { stub, lists };
   }
-  const archived = () =>
-    mockAudit.mock.calls
-      .map((c) => (c as unknown as [{ event?: string }])[0])
-      .filter((a) => a.event === 'inventory.item.archived');
+  // The archive rows go through ONE batched write (auditMany), never one
+  // audit() call per item.
+  const archived = () => {
+    expect(
+      mockAudit.mock.calls.some(
+        (c) => (c as unknown as [{ event?: string }])[0]?.event === 'inventory.item.archived',
+      ),
+    ).toBe(false);
+    expect(mockAuditMany).toHaveBeenCalledTimes(1);
+    return (mockAuditMany.mock.calls[0]![0] as Array<{ event?: string }>).filter(
+      (a) => a.event === 'inventory.item.archived',
+    );
+  };
 
   it('reads candidates and the keep-check and archives in batches, keeping an item on a live PO from the last batch', async () => {
     const { stub, lists } = cancelStub();

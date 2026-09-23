@@ -3,7 +3,7 @@ import { reportError } from '@/lib/error-reporter';
 
 import { createHash, randomUUID } from 'node:crypto';
 
-import { audit } from './audit';
+import { audit, auditMany } from './audit';
 import { InventoryService } from './inventory';
 import { fetchAllRowsByIds, rawErrorText, writeInIdBatches } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
@@ -2543,19 +2543,18 @@ export class PoImportsService {
       // cancelPoImportAction and the v1 cancel route revalidated only the
       // import pages, so these rows stayed in the cached views.
       invalidateInventoryListAfterWrite(this.ctx.organizationId, 'po_import.cancel');
-      for (const item of flip.rows) {
-        await audit(
-          {
-            event: 'inventory.item.archived',
-            entityType: 'inventory_item',
-            entityId: item.id,
-            before: { status: 'active' },
-            after: { status: 'archived' },
-            extra: { reason: 'po_import_canceled', poImportId: importId, itemName: item.name },
-          },
-          this.ctx,
-        );
-      }
+      // Batched INSERTs (auditMany), not one awaited request per item.
+      await auditMany(
+        flip.rows.map((item) => ({
+          event: 'inventory.item.archived' as const,
+          entityType: 'inventory_item',
+          entityId: item.id,
+          before: { status: 'active' },
+          after: { status: 'archived' },
+          extra: { reason: 'po_import_canceled', poImportId: importId, itemName: item.name },
+        })),
+        this.ctx,
+      );
       if (flip.error !== null) return skip('archive', flip.error);
     } catch (e) {
       console.warn(

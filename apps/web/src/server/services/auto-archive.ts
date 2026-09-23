@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { reportError } from '@/lib/error-reporter';
 import type { createAdminClient } from '@/lib/supabase/admin';
 
-import { audit } from './audit';
+import { auditMany } from './audit';
 import { ServiceError, type ServiceContext } from './context';
 import { fetchAllRowsByIds, reportDegradedRead, writeInIdBatches } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
@@ -204,18 +204,18 @@ export async function archiveExpiredZeroStockItems(
     });
   }
 
-  for (const item of archived) {
-    await audit(
-      {
-        event: 'inventory.item.archived',
-        entityType: 'inventory_item',
-        entityId: item.id,
-        after: { status: 'archived' },
-        extra: { reason: 'auto_zero_stock', dwellDays, itemName: item.name },
-      },
-      ctx,
-    );
-  }
+  // Up to 500 rows per run: batched INSERTs (auditMany) instead of one
+  // awaited request per archived item.
+  await auditMany(
+    archived.map((item) => ({
+      event: 'inventory.item.archived' as const,
+      entityType: 'inventory_item',
+      entityId: item.id,
+      after: { status: 'archived' },
+      extra: { reason: 'auto_zero_stock', dwellDays, itemName: item.name },
+    })),
+    ctx,
+  );
   return {
     archived: archived.length,
     ids: archived.map((d) => d.id),

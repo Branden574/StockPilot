@@ -2,14 +2,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
-vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
+vi.mock('./audit', () => ({
+  audit: vi.fn(async () => {}),
+  auditMany: vi.fn(async (rows: readonly unknown[]) => ({ written: rows.length, lost: 0 })),
+}));
 
-import { audit } from './audit';
+import { audit, auditMany } from './audit';
 import { parseAutoDeleteArchivedSettings, purgeExpiredArchivedItems } from './archive-cleanup';
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
+
+/** Rows the list audit wrote. They go through the batched writer (auditMany);
+ *  audit() is never called once per row. */
+function auditedRows(): unknown[] {
+  expect(vi.mocked(audit)).not.toHaveBeenCalled();
+  return vi.mocked(auditMany).mock.calls.flatMap(([rows]) => rows);
+}
 
 describe('parseAutoDeleteArchivedSettings', () => {
   it('accepts valid settings unchanged', () => {
@@ -67,7 +77,7 @@ describe('purgeExpiredArchivedItems', () => {
     expect(payload?.deleted_at).toBeTruthy();
     expect(payload?.deleted_by).toBeDefined();
     // One audit row per deleted item.
-    expect(vi.mocked(audit)).toHaveBeenCalledTimes(2);
+    expect(auditedRows()).toHaveLength(2);
   });
 
   it('no-ops (no UPDATE, no audit) when nothing is past the retention window', async () => {
@@ -78,6 +88,6 @@ describe('purgeExpiredArchivedItems', () => {
 
     expect(res.deleted).toBe(0);
     expect(stub.chainsAll.get('inventory_items.update')).toBeUndefined();
-    expect(vi.mocked(audit)).not.toHaveBeenCalled();
+    expect(auditedRows()).toHaveLength(0);
   });
 });

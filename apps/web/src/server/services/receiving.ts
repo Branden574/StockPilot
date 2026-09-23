@@ -3,7 +3,7 @@ import 'server-only';
 import { createHash } from 'node:crypto';
 
 import { reportError } from '@/lib/error-reporter';
-import { audit } from './audit';
+import { audit, auditMany } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { dispatchEvent } from './integration-events';
 import {
@@ -486,19 +486,18 @@ export class ReceivingService {
       // eq('status','archived') guard means a concurrent receipt flips a
       // given row only once; auditing the SELECT result would emit a
       // duplicate 'restored' entry for the loser of the race.
-      for (const item of flip.rows) {
-        await audit(
-          {
-            event: 'inventory.item.restored',
-            entityType: 'inventory_item',
-            entityId: item.id,
-            after: { status: 'active' },
-            before: { status: 'archived' },
-            extra: { reason: 'receipt_posted', receiptId, itemName: item.name },
-          },
-          this.ctx,
-        );
-      }
+      // Batched INSERTs (auditMany), not one awaited request per item.
+      await auditMany(
+        flip.rows.map((item) => ({
+          event: 'inventory.item.restored' as const,
+          entityType: 'inventory_item',
+          entityId: item.id,
+          after: { status: 'active' },
+          before: { status: 'archived' },
+          extra: { reason: 'receipt_posted', receiptId, itemName: item.name },
+        })),
+        this.ctx,
+      );
     } catch (e) {
       void reportError(e, {
         tag: 'receiving.auto_unarchive.unhandled',

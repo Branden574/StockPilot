@@ -22,7 +22,7 @@ import {
 } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { fetchAllRows } from './lib/paginate';
-import { audit } from './audit';
+import { audit, auditMany } from './audit';
 import { dispatchEvent } from './integration-events';
 import { ItemImagesService } from './item-images';
 import { InventoryService } from './inventory';
@@ -1347,20 +1347,18 @@ export class PurchaseOrdersService {
       // Archived rows leave the default view.
       invalidateInventoryListAfterWrite(this.ctx.organizationId, 'po.cancel.archive_custom_items');
 
-      await Promise.all(
-        flip.rows.map((item) =>
-          audit(
-            {
-              event: 'inventory.item.archived',
-              entityType: 'inventory_item',
-              entityId: item.id,
-              after: { status: 'archived' },
-              before: { status: 'active' },
-              extra: { reason: 'po_cancelled', purchaseOrderId: poId, itemName: item.name },
-            },
-            this.ctx,
-          ),
-        ),
+      // Batched INSERTs (auditMany): a Promise.all of one audit() per item
+      // started every INSERT at once, however many items the PO carried.
+      await auditMany(
+        flip.rows.map((item) => ({
+          event: 'inventory.item.archived' as const,
+          entityType: 'inventory_item',
+          entityId: item.id,
+          after: { status: 'archived' },
+          before: { status: 'active' },
+          extra: { reason: 'po_cancelled', purchaseOrderId: poId, itemName: item.name },
+        })),
+        this.ctx,
       );
     } catch (e) {
       void reportError(e, {

@@ -14,7 +14,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const reportError = vi.hoisted(() => vi.fn(async () => {}));
 const invalidate = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
-vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
+vi.mock('./audit', () => ({
+  audit: vi.fn(async () => {}),
+  auditMany: vi.fn(async (rows: readonly unknown[]) => ({ written: rows.length, lost: 0 })),
+}));
 vi.mock('./notifications', () => ({ createNotification: vi.fn(async () => 'n') }));
 vi.mock('./lib/inventory-list-cache', () => ({ invalidateInventoryListAfterWrite: invalidate }));
 
@@ -26,7 +29,7 @@ import {
 } from '@/test/supabase-mock';
 
 import { purgeExpiredArchivedItems } from './archive-cleanup';
-import { audit } from './audit';
+import { audit, auditMany } from './audit';
 import {
   archiveExpiredZeroStockItems,
   countEligibleForAutoArchive,
@@ -46,7 +49,15 @@ beforeEach(() => {
   reportError.mockClear();
   invalidate.mockClear();
   vi.mocked(audit).mockClear();
+  vi.mocked(auditMany).mockClear();
 });
+
+/** Rows the list audit wrote. They go through the batched writer (auditMany);
+ *  audit() is never called once per row. */
+function auditedRows(): unknown[] {
+  expect(vi.mocked(audit)).not.toHaveBeenCalled();
+  return vi.mocked(auditMany).mock.calls.flatMap(([rows]) => rows);
+}
 
 describe('archiveExpiredZeroStockItems with 250 candidates', () => {
   it('reads reservations in org-scoped batches of at most 100 and skips one reserved in the last batch', async () => {
@@ -97,7 +108,7 @@ describe('archiveExpiredZeroStockItems with 250 candidates', () => {
       archiveExpiredZeroStockItems(makeServiceContext(stub.client) as never, 7),
     ).rejects.toMatchObject({ code: 'internal_error' });
     expect(stub.chainsAll.get('inventory_items.update')).toBeUndefined();
-    expect(vi.mocked(audit)).not.toHaveBeenCalled();
+    expect(auditedRows()).toHaveLength(0);
   });
 
   it('audits, invalidates and returns the archived part when a later write batch fails', async () => {
@@ -117,7 +128,7 @@ describe('archiveExpiredZeroStockItems with 250 candidates', () => {
     expect(res.archived).toBe(100);
     expect(res.items).toHaveLength(100);
     expect(res.failed).toBe(150);
-    expect(vi.mocked(audit)).toHaveBeenCalledTimes(100);
+    expect(auditedRows()).toHaveLength(100);
     expect(invalidate).toHaveBeenCalledTimes(1);
     const tags = reportError.mock.calls.map(
       (c) => (c as unknown as [Error, { tag: string }])[1].tag,
@@ -134,7 +145,7 @@ describe('archiveExpiredZeroStockItems with 250 candidates', () => {
     await expect(
       archiveExpiredZeroStockItems(makeServiceContext(stub.client) as never, 7),
     ).rejects.toMatchObject({ code: 'internal_error' });
-    expect(vi.mocked(audit)).not.toHaveBeenCalled();
+    expect(auditedRows()).toHaveLength(0);
     expect(invalidate).not.toHaveBeenCalled();
   });
 
@@ -172,7 +183,7 @@ describe('purgeExpiredArchivedItems with 250 candidates', () => {
     expect(lists.map((l) => l.length)).toEqual([100, 100, 50]);
     expect(res.deleted).toBe(250);
     expect(res.failed).toBe(0);
-    expect(vi.mocked(audit)).toHaveBeenCalledTimes(250);
+    expect(auditedRows()).toHaveLength(250);
   });
 
   it('audits, invalidates and returns the deleted part when a later batch fails', async () => {
@@ -188,7 +199,7 @@ describe('purgeExpiredArchivedItems with 250 candidates', () => {
     const res = await purgeExpiredArchivedItems(makeServiceContext(stub.client) as never, 90);
     expect(res.deleted).toBe(100);
     expect(res.failed).toBe(150);
-    expect(vi.mocked(audit)).toHaveBeenCalledTimes(100);
+    expect(auditedRows()).toHaveLength(100);
     expect(invalidate).toHaveBeenCalledTimes(1);
     const tags = reportError.mock.calls.map(
       (c) => (c as unknown as [Error, { tag: string }])[1].tag,

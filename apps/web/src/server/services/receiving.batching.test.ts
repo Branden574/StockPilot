@@ -10,14 +10,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * and audits what it restored.
  */
 
-const { reportError, invalidate, audit } = vi.hoisted(() => ({
+const { reportError, invalidate, audit, auditMany } = vi.hoisted(() => ({
   reportError: vi.fn(async () => {}),
   invalidate: vi.fn(),
   audit: vi.fn(async () => {}),
+  auditMany: vi.fn(async (rows: readonly unknown[]) => ({ written: rows.length, lost: 0 })),
 }));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
 vi.mock('./lib/inventory-list-cache', () => ({ invalidateInventoryListAfterWrite: invalidate }));
-vi.mock('./audit', () => ({ audit }));
+vi.mock('./audit', () => ({ audit, auditMany }));
 vi.mock('./integration-events', () => ({ dispatchEvent: vi.fn(async () => undefined) }));
 
 import type { PostReceiptInput } from '@stockpilot/core';
@@ -35,10 +36,17 @@ const uuid = (i: number, p = '0') => `${p.repeat(8)}-0000-4000-8000-${String(i).
 function inList(call: MockCall, column: string): string[] {
   return (inFilters(call).find(([c]) => c === column)?.[1] ?? []) as string[];
 }
-const restoredAudits = () =>
-  audit.mock.calls
+// The restore rows go through the batched writer (auditMany); audit() is never
+// called once per restored item.
+const restoredAudits = () => {
+  const perItem = audit.mock.calls
     .map((c) => (c as unknown as [{ event?: string }])[0])
     .filter((a) => a.event === 'inventory.item.restored');
+  expect(perItem).toEqual([]);
+  return auditMany.mock.calls
+    .flatMap((c) => (c as unknown as [Array<{ event?: string }>])[0])
+    .filter((a) => a.event === 'inventory.item.restored');
+};
 const tags = () =>
   reportError.mock.calls.map((c) => (c as unknown as [Error, { tag: string }])[1].tag);
 

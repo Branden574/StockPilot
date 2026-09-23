@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { reportError } from '@/lib/error-reporter';
 
-import { audit } from './audit';
+import { auditMany } from './audit';
 import { ServiceError, type ServiceContext } from './context';
 import { writeInIdBatches } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
@@ -119,18 +119,18 @@ export async function purgeExpiredArchivedItems(
       extra: { deleted: deleted.length, failed: write.notWritten.length, detail: write.error },
     });
   }
-  for (const item of deleted) {
-    await audit(
-      {
-        event: 'inventory.item.deleted',
-        entityType: 'inventory_item',
-        entityId: item.id,
-        after: { deleted_at: '(auto)' },
-        extra: { reason: 'auto_delete_archived', retentionDays, itemName: item.name },
-      },
-      ctx,
-    );
-  }
+  // Up to 1000 rows per run: batched INSERTs (auditMany) instead of one
+  // awaited request per deleted item.
+  await auditMany(
+    deleted.map((item) => ({
+      event: 'inventory.item.deleted' as const,
+      entityType: 'inventory_item',
+      entityId: item.id,
+      after: { deleted_at: '(auto)' },
+      extra: { reason: 'auto_delete_archived', retentionDays, itemName: item.name },
+    })),
+    ctx,
+  );
 
   return {
     deleted: deleted.length,

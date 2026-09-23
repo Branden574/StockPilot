@@ -2,14 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
-vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
+vi.mock('./audit', () => ({
+  audit: vi.fn(async () => {}),
+  auditMany: vi.fn(async (rows: readonly unknown[]) => ({ written: rows.length, lost: 0 })),
+}));
 
 const { mockCreateNotification } = vi.hoisted(() => ({
   mockCreateNotification: vi.fn(async () => 'notif-id'),
 }));
 vi.mock('./notifications', () => ({ createNotification: mockCreateNotification }));
 
-import { audit } from './audit';
+import { audit, auditMany } from './audit';
 import {
   archiveExpiredZeroStockItems,
   countEligibleForAutoArchive,
@@ -20,6 +23,13 @@ import {
 beforeEach(() => {
   vi.clearAllMocks();
 });
+
+/** Rows the list audit wrote. They go through the batched writer (auditMany);
+ *  audit() is never called once per row. */
+function auditedRows(): unknown[] {
+  expect(vi.mocked(audit)).not.toHaveBeenCalled();
+  return vi.mocked(auditMany).mock.calls.flatMap(([rows]) => rows);
+}
 
 describe('parseAutoArchiveSettings', () => {
   it('accepts valid settings unchanged', () => {
@@ -114,7 +124,7 @@ describe('archiveExpiredZeroStockItems', () => {
     expect(updChain).toContain('eq'); // organization_id + status + auto_archived race guards
     expect(updChain).toContain('lte'); // quantity_on_hand race guard
 
-    expect(vi.mocked(audit)).toHaveBeenCalledTimes(2);
+    expect(auditedRows()).toHaveLength(2);
   });
 
   it('no-ops (no reservation lookup, no UPDATE, no audit) when nothing is past the dwell window', async () => {
@@ -126,7 +136,7 @@ describe('archiveExpiredZeroStockItems', () => {
     expect(res).toEqual({ archived: 0, ids: [], items: [], truncated: false, failed: 0 });
     expect(stub.chainsAll.get('stock_reservations.select')).toBeUndefined();
     expect(stub.chainsAll.get('inventory_items.update')).toBeUndefined();
-    expect(vi.mocked(audit)).not.toHaveBeenCalled();
+    expect(auditedRows()).toHaveLength(0);
   });
 
   it('excludes items with an open reservation (approved-unpicked order / open rental) — no UPDATE for a fully-reserved batch', async () => {
@@ -154,7 +164,7 @@ describe('archiveExpiredZeroStockItems', () => {
     // even though nothing ended up archived (there may be more candidates).
     expect(res.truncated).toBe(true);
     expect(stub.chainsAll.get('inventory_items.update')).toBeUndefined();
-    expect(vi.mocked(audit)).not.toHaveBeenCalled();
+    expect(auditedRows()).toHaveLength(0);
   });
 
   it('archives only the non-reserved subset when some candidates are reserved', async () => {
@@ -178,7 +188,7 @@ describe('archiveExpiredZeroStockItems', () => {
 
     expect(res.archived).toBe(1);
     expect(res.ids).toEqual(['i1']);
-    expect(vi.mocked(audit)).toHaveBeenCalledTimes(1);
+    expect(auditedRows()).toHaveLength(1);
   });
 });
 
