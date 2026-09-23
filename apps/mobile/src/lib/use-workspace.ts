@@ -6,6 +6,7 @@ import { deleteOrgData } from './db';
 import { refreshEnabledModules } from './enabled-modules';
 import { syncNow } from './sync';
 import { supabase } from './supabase';
+import { chooseActiveOrg } from './workspace-choice';
 
 /**
  * Multi-org / multi-warehouse workspace state. Replaces the older
@@ -107,13 +108,45 @@ async function loadWarehouses(orgId: string) {
     .map((w) => ({ id: w.id, name: w.name }));
 }
 
+/** The profile's default organization (the server's choice when a request
+ *  names none), or null when unset or unreadable. */
+async function loadProfileDefaultOrg(userId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('user_profiles')
+    .select('default_organization_id')
+    .eq('id', userId)
+    .maybeSingle();
+  if (error) {
+    console.warn('[workspace] default organization read failed:', error.message);
+    return null;
+  }
+  return ((data as { default_organization_id: string | null } | null)?.default_organization_id ?? null) || null;
+}
+
 async function hydrate(userId: string) {
-  const orgs = await loadOrgs(userId);
-  const persisted = await AsyncStorage.getItem(ORG_STORAGE_KEY);
-  const activeOrgId =
-    persisted && orgs.some((o) => o.id === persisted)
-      ? persisted
-      : orgs[0]?.id ?? null;
+  const [orgs, persisted, profileDefault] = await Promise.all([
+    loadOrgs(userId),
+    AsyncStorage.getItem(ORG_STORAGE_KEY),
+    loadProfileDefaultOrg(userId),
+  ]);
+  // See workspace-choice.ts: the same order the server uses, and the choice is
+  // SAVED, so X-Organization-Id on every /api/v1 call names the workspace this
+  // screen shows. Before, a choice made after sign-out lived only in memory and
+  // the API answered for the default organization instead.
+  const choice = chooseActiveOrg({ orgIds: orgs.map((o) => o.id), stored: persisted, profileDefault });
+  const activeOrgId = choice.activeOrgId;
+  if (activeOrgId && choice.persist) {
+    await AsyncStorage.setItem(ORG_STORAGE_KEY, activeOrgId);
+  }
+  if (activeOrgId && choice.resetCache) {
+    // The cache may hold another workspace's rows; clear the org-scoped
+    // tables (never the outbox) and pull this workspace in full below.
+    try {
+      await deleteOrgData();
+    } catch (err) {
+      console.warn('[workspace] deleteOrgData on workspace repair failed', err);
+    }
+  }
   let warehouses: WarehouseOption[] = [];
   let activeWarehouseId: string | null = null;
   if (activeOrgId) {
@@ -134,6 +167,9 @@ async function hydrate(userId: string) {
     activeWarehouseId,
     activeWarehouseName: activeWarehouse?.name ?? null,
   });
+  if (activeOrgId && choice.resetCache) {
+    void syncNow(true).then(() => refreshEnabledModules());
+  }
 }
 
 export async function setActiveOrg(orgId: string): Promise<void> {
