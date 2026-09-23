@@ -365,21 +365,26 @@ async function clearOrgScopedTables(db: SQLite.SQLiteDatabase): Promise<void> {
  */
 export async function deleteOrgData(): Promise<void> {
   const db = await getDb();
-  await clearOrgScopedTables(db);
+  // Queued like every transaction, so the wipe can never interleave with a
+  // snapshot pull that is mid-write (sync.ts checks the workspace inside its
+  // own queued transaction).
+  await withDbTransaction(db, () => clearOrgScopedTables(db));
 }
 
 export async function wipeForSignOut(): Promise<void> {
   const db = await getDb();
-  await clearOrgScopedTables(db);
-  // Sign-out is a full reset: the user (and any queued writes) are leaving the
-  // device session entirely, so the pending outbox is dropped here too.
-  //
-  // EXCEPT rows already marked 'rejected'. Those are terminal — no drain reads
-  // them, so keeping them cannot replay anything — and they are the only record
-  // that queued work existed at all. This path also runs during the disabled-
-  // account eviction, which rejects the outbox immediately beforehand
-  // (use-account-gate.ts); deleting them here would mean the operator is shown
-  // the disabled screen while the work they thought they had saved disappears
-  // silently, and listRejected() could never return a row.
-  await db.execAsync("delete from pending_actions where status <> 'rejected';");
+  await withDbTransaction(db, async () => {
+    await clearOrgScopedTables(db);
+    // Sign-out is a full reset: the user (and any queued writes) are leaving the
+    // device session entirely, so the pending outbox is dropped here too.
+    //
+    // EXCEPT rows already marked 'rejected'. Those are terminal — no drain reads
+    // them, so keeping them cannot replay anything — and they are the only record
+    // that queued work existed at all. This path also runs during the disabled-
+    // account eviction, which rejects the outbox immediately beforehand
+    // (use-account-gate.ts); deleting them here would mean the operator is shown
+    // the disabled screen while the work they thought they had saved disappears
+    // silently, and listRejected() could never return a row.
+    await db.execAsync("delete from pending_actions where status <> 'rejected';");
+  });
 }

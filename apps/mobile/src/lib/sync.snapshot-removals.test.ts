@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { pullSnapshot } from './sync';
+import { pullSnapshot, syncNow } from './sync';
 
 // vi.mock / vi.hoisted are hoisted above these imports by vitest's transform,
 // so declaring them below keeps the import block lint-clean.
@@ -48,7 +48,14 @@ vi.mock('./queue', () => ({
   markFailed: vi.fn(),
   markRejected: vi.fn(),
 }));
-const apiMock = vi.hoisted(() => ({ api: vi.fn() }));
+const workspace = vi.hoisted(() => ({ org: 'org-a' as string | null }));
+const apiMock = vi.hoisted(() => ({
+  api: vi.fn(),
+  // The stored workspace api() sends as X-Organization-Id.
+  orgHeader: vi.fn(async (): Promise<Record<string, string>> =>
+    workspace.org ? { 'X-Organization-Id': workspace.org } : {},
+  ),
+}));
 vi.mock('./api', () => apiMock);
 vi.mock('./account-disabled-state', () => ({ getAccountDisabled: () => false }));
 vi.mock('./enabled-modules', () => ({
@@ -172,6 +179,7 @@ beforeEach(() => {
   sqlite.exec(DDL);
   meta.db.current = fakeDb(sqlite);
   meta.store = new Map();
+  workspace.org = 'org-a';
   apiMock.api.mockReset();
   netMock.getNetworkStateAsync.mockResolvedValue({
     isConnected: true,
@@ -332,5 +340,73 @@ describe('the pull still does its original job', () => {
       'cc-open',
       'cc-posted',
     ]);
+  });
+});
+
+describe('a workspace switch while a snapshot is loading', () => {
+  const answerForA = () =>
+    emptySnap({
+      enabledModules: ['cycle_counts'],
+      warehouses: [{ id: 'wh-a', name: 'A Warehouse' }],
+      openCycleCounts: [{ ...count('cc-a'), warehouseId: 'wh-a' }],
+    });
+
+  beforeEach(() => {
+    // The switch to B has wiped the cache (deleteOrgData).
+    sqlite.exec(`
+      delete from warehouses; delete from items; delete from bundles; delete from bundle_components;
+      delete from cycle_counts; delete from cycle_count_lines;
+    `);
+  });
+
+  it("discards the old workspace's answer: no rows, no cursor, no modules", async () => {
+    apiMock.api.mockImplementation(async () => {
+      // The person switches to B while A's request is out.
+      workspace.org = 'org-b';
+      return answerForA();
+    });
+    await expect(pullSnapshot(true)).resolves.toBeNull();
+    expect(ids('select id from warehouses')).toEqual([]);
+    expect(ids('select id from cycle_counts')).toEqual([]);
+    expect(meta.store.has('last_synced_at')).toBe(false);
+    expect(meta.store.has('enabled_modules')).toBe(false);
+  });
+
+  it('keeps the answer when the workspace did not change', async () => {
+    apiMock.api.mockResolvedValue(answerForA());
+    await expect(pullSnapshot(true)).resolves.not.toBeNull();
+    expect(ids('select id from warehouses')).toEqual(['wh-a']);
+    expect(ids('select id from cycle_counts')).toEqual(['cc-a']);
+    expect(meta.store.get('last_synced_at')).toBe('2026-09-05T12:00:00.000Z');
+  });
+
+  it('a forced sync asked for mid-pull still runs, as a full pull for the new workspace', async () => {
+    let releaseA!: () => void;
+    const aLoaded = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    meta.store.set('last_synced_at', '2026-09-01T00:00:00.000Z');
+    apiMock.api
+      .mockImplementationOnce(async () => {
+        await aLoaded;
+        return answerForA();
+      })
+      .mockImplementationOnce(async () =>
+        emptySnap({ warehouses: [{ id: 'wh-b', name: 'B Warehouse' }] }),
+      );
+
+    const timerSync = syncNow();
+    // setActiveOrg: store B, then ask for a forced pull while A's is out.
+    workspace.org = 'org-b';
+    const forced = syncNow(true);
+    releaseA();
+    await Promise.all([timerSync, forced]);
+
+    expect(apiMock.api).toHaveBeenCalledTimes(2);
+    expect(apiMock.api.mock.calls[0]?.[0]).toContain('?since=');
+    expect(apiMock.api.mock.calls[1]?.[0]).toBe('/api/v1/mobile/snapshot');
+    // A's answer was discarded; B's landed.
+    expect(ids('select id from warehouses')).toEqual(['wh-b']);
+    expect(ids('select id from cycle_counts')).toEqual([]);
   });
 });

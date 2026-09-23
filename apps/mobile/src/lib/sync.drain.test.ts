@@ -48,7 +48,7 @@ const queueMock = vi.hoisted(() => ({
 }));
 vi.mock('./queue', () => queueMock);
 
-const apiMock = vi.hoisted(() => ({ api: vi.fn() }));
+const apiMock = vi.hoisted(() => ({ api: vi.fn(), orgHeader: vi.fn(async () => ({})) }));
 vi.mock('./api', () => apiMock);
 
 const disabledMock = vi.hoisted(() => ({ getAccountDisabled: vi.fn(() => false) }));

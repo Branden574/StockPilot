@@ -101,10 +101,24 @@ describe('every transaction in the app goes through the queue', () => {
   it('only db.ts calls withTransactionAsync, and nothing opens a transaction by hand', () => {
     const offenders = [...sources('src'), ...sources('app')].filter((f) => {
       const src = readFileSync(path.join(root, f), 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
-      const direct = /\.withTransactionAsync\(|\.withExclusiveTransactionAsync\(/.test(src) && f !== path.join('src', 'lib', 'db.ts');
+      const direct = /\.with(Exclusive)?Transaction(Async|Sync)\(/.test(src) && f !== path.join('src', 'lib', 'db.ts');
       const manual = /['"`]\s*BEGIN\b/i.test(src);
       return direct || manual;
     });
     expect(offenders).toEqual([]);
   });
 });
+
+describe('the cache wipes wait their turn', () => {
+  const db = readFileSync(path.join(__dirname, 'db.ts'), 'utf8');
+  const body = (name: string) => db.slice(db.indexOf(`export async function ${name}`)).split('\n}\n')[0] ?? '';
+
+  it('deleteOrgData (workspace switch) and wipeForSignOut run through the queue', () => {
+    // A wipe interleaving with a snapshot pull mid-write would let the old
+    // workspace's rows land after it (sync.ts checks the workspace inside its
+    // own queued transaction).
+    expect(body('deleteOrgData')).toContain('await withDbTransaction(db, () => clearOrgScopedTables(db));');
+    expect(body('wipeForSignOut')).toMatch(/await withDbTransaction\(db, async \(\) => \{\s+await clearOrgScopedTables\(db\);[\s\S]*delete from pending_actions/);
+  });
+});
+
