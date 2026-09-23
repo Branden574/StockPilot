@@ -84,6 +84,10 @@ const NETWORK_PROFILES: Record<
     downloadThroughput: (1.6 * 1024 * 1024) / 8,
     uploadThroughput: (750 * 1024) / 8,
   },
+  // A LAB target given the round trip this machine measures to production
+  // (130 ms, run 2026-09-22 after-batch) and no bandwidth limit (-1), so a
+  // localhost build answers across the same distance a customer's request travels.
+  'rtt-130': { latency: 130, downloadThroughput: -1, uploadThroughput: -1 },
 };
 const NETWORK = process.env.PERF_NETWORK ?? 'unthrottled';
 const CPU_SLOWDOWN = num('PERF_CPU', 1);
@@ -115,21 +119,27 @@ async function step<T>(code: string, run: () => Promise<T>): Promise<T> {
   }
 }
 
-function arm(marker: Marker, fromNavigationStart = false): ArmConfig {
+function arm(marker: Marker, fromNavigationStart = false, manualStart = false): ArmConfig {
   return {
     feedbackSelectors: FEEDBACK_SELECTORS,
     targetPath: marker.path,
+    targetSearch: marker.search,
     usefulSelector: marker.selector,
     usefulHrefPattern: marker.hrefPattern,
+    freshOnly: marker.freshOnly,
+    rowText: marker.rowText,
+    changedTextSelector: marker.changedText,
     shellSelector: marker.shell,
     errorSelector: ERROR_SCREEN,
     fromNavigationStart,
+    manualStart,
   };
 }
 
 type PerfWindow = {
   __spPerf: {
     arm(config: ArmConfig): void;
+    start(): void;
     isUseful(): boolean;
     result(until: number | null): PageResult;
     images(
@@ -151,7 +161,46 @@ function waitUseful(page: Page, code: string): Promise<unknown> {
   );
 }
 
-async function clickStep(page: Page, click: ClickStep): Promise<void> {
+/**
+ * The previous navigation's progress bar fades out for a moment after its
+ * content is up. Wait for a clean slate, or that leftover bar would be read
+ * as instant feedback for THIS step.
+ */
+function waitNoFeedback(page: Page): Promise<unknown> {
+  return step('feedback-marker-stuck', () =>
+    page.waitForFunction(
+      (selectors) => selectors.every((s) => document.querySelector(s) === null),
+      FEEDBACK_SELECTORS,
+      { timeout: 5000, polling: 100 },
+    ),
+  );
+}
+
+async function clickStep(page: Page, click: ClickStep, hoverMs = HOVER_MS): Promise<void> {
+  const via = click.via ?? 'click';
+  if (via === 'back' || via === 'forward') {
+    await waitNoFeedback(page);
+    await page.evaluate(
+      (config) => (window as never as PerfWindow).__spPerf.arm(config),
+      arm(click.arrives, false, true),
+    );
+    // Started and sent in ONE task on the page's clock: nothing between the
+    // stamp and the history call.
+    await page.evaluate((direction) => {
+      (window as never as PerfWindow).__spPerf.start();
+      if (direction === 'back') history.back();
+      else history.forward();
+    }, via);
+    await waitUseful(page, 'timeout:useful');
+    return;
+  }
+  // Unmeasured clicks that open what the measured one needs (a menu, a popover).
+  for (const selector of click.setup ?? []) {
+    const opener = page.locator(selector).first();
+    if ((await opener.count()) === 0) throw new PerfFailure('setup-missing');
+    await step('setup-failed', () => opener.click());
+    await page.waitForTimeout(300);
+  }
   let link = page.locator(click.selector);
   if (click.hrefPattern) {
     const pattern = new RegExp(click.hrefPattern);
@@ -166,26 +215,30 @@ async function clickStep(page: Page, click: ClickStep): Promise<void> {
   // Below 768 px the sidebar is display:none and its links live in a drawer.
   const rendered = await link.evaluate((el) => el.getClientRects().length > 0).catch(() => false);
   if (!rendered) throw new PerfFailure('link-hidden-at-this-viewport');
-  // The previous navigation's progress bar fades out for a moment after its
-  // content is up. Wait for a clean slate, or that leftover bar would be read
-  // as instant feedback for THIS click.
-  await step('feedback-marker-stuck', () =>
-    page.waitForFunction(
-      (selectors) => selectors.every((s) => document.querySelector(s) === null),
-      FEEDBACK_SELECTORS,
-      {
-        timeout: 5000,
-        polling: 100,
-      },
-    ),
-  );
+  await waitNoFeedback(page);
+  if (via === 'fill') {
+    // Typing: the clock starts in the page right before the text goes in, so
+    // it errs slow by one round trip, never fast.
+    await page.evaluate(
+      (config) => (window as never as PerfWindow).__spPerf.arm(config),
+      arm(click.arrives, false, true),
+    );
+    await step('input-not-focusable', () => link.focus());
+    await page.evaluate(() => (window as never as PerfWindow).__spPerf.start());
+    await step('fill-failed', () => link.fill(click.text ?? ''));
+    await waitUseful(page, 'timeout:useful');
+    return;
+  }
   // Armed only now, so the wait above cannot eat into the measured interval.
   await page.evaluate(
     (config) => (window as never as PerfWindow).__spPerf.arm(config),
     arm(click.arrives),
   );
-  await step('link-not-hoverable', () => link.hover());
-  if (HOVER_MS > 0) await page.waitForTimeout(HOVER_MS);
+  // hoverMs 0 is the no-warning click: the pointer lands and clicks at once.
+  if (hoverMs > 0) {
+    await step('link-not-hoverable', () => link.hover());
+    await page.waitForTimeout(hoverMs);
+  }
   await step('click-failed', () => link.click({ noWaitAfter: true }));
   await waitUseful(page, 'timeout:useful');
 }
@@ -318,13 +371,19 @@ async function iterate(
     if (!hardLoad) {
       // Let the start page finish its own work (the sidebar's staggered
       // warm-ups, late chunks) so the click is measured from a resting page.
-      await page.waitForLoadState('load').catch(() => {});
-      await page.waitForTimeout(SETTLE_MS);
+      // A scenario with settleMs 0 is the QUICK click: made as soon as the
+      // start page shows content, before any of that work has finished.
+      const settle = scenario.settleMs ?? SETTLE_MS;
+      if (settle > 0) {
+        await page.waitForLoadState('load').catch(() => {});
+        await page.waitForTimeout(settle);
+      }
       for (const prelude of scenario.prelude ?? []) {
         await clickStep(page, prelude);
         await page.waitForTimeout(500);
       }
-      await clickStep(page, scenario.click as ClickStep);
+      if (scenario.restBeforeMs) await page.waitForTimeout(scenario.restBeforeMs);
+      await clickStep(page, scenario.click as ClickStep, scenario.hoverMs ?? HOVER_MS);
     }
 
     const collected = scenario.photos
@@ -391,6 +450,11 @@ async function iterate(
         // May be negative: hover warming can send the request before the click.
         rscRequestStartMs: sinceClick(fetched?.requestSentAt),
         rscFirstByteMs: sinceClick(fetched?.firstByteAt),
+        // The whole page-data stream in hand: every streamed part, not only the first.
+        rscCompleteMs:
+          fetched?.requestSentAt != null && fetched.totalMs != null
+            ? sinceClick(fetched.requestSentAt + fetched.totalMs)
+            : null,
         ttfbMs: hardLoad ? result.ttfb : null,
         fcpMs: hardLoad ? result.fcp : null,
         lcpMs: hardLoad ? result.lcp : null,
@@ -425,6 +489,7 @@ const FAILED: Measured = {
   shellPaintMs: null,
   rscRequestStartMs: null,
   rscFirstByteMs: null,
+  rscCompleteMs: null,
   ttfbMs: null,
   fcpMs: null,
   lcpMs: null,
@@ -605,7 +670,8 @@ for (const scenario of SCENARIOS) {
     }))();
     await environment;
 
-    const count = scenario.coldBrowserCache ? COLD_ITERATIONS : ITERATIONS;
+    const count =
+      scenario.iterations ?? (scenario.coldBrowserCache ? COLD_ITERATIONS : ITERATIONS);
     const open = async () => {
       const context = await browser.newContext({ storageState: authStatePath() });
       await context.addInitScript({ content: collectorScript(fingerprintKey()) });

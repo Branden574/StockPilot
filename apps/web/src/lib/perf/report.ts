@@ -29,7 +29,7 @@ import {
 /** Bump when the SHAPE of results.json changes. */
 export const SCHEMA_VERSION = 5;
 /** Bump when WHAT A NUMBER MEANS changes (a marker, a clock, a floor). Runs with different values are not comparable. */
-export const HARNESS_VERSION = '2026-09-21.1';
+export const HARNESS_VERSION = '2026-09-22.1';
 
 export interface ImageRecord {
   order: number;
@@ -150,6 +150,8 @@ export interface Sample {
   /** Page-data fetch on the page's own clock, from the click. */
   rscRequestStartMs: number | null;
   rscFirstByteMs: number | null;
+  /** The whole page-data stream in hand, from the click. Absent in runs before harness 2026-09-22.1. */
+  rscCompleteMs?: number | null;
   ttfbMs: number | null;
   fcpMs: number | null;
   lcpMs: number | null;
@@ -205,6 +207,8 @@ export interface RunFile {
 }
 
 export interface Budget {
+  /** A GOAL for the median (the owner's ~350 ms recovery goal), judged apart from p75/p95. */
+  p50?: number;
   p75?: number;
   p95?: number;
   source: string;
@@ -237,7 +241,10 @@ export interface RowSpec {
 const RESOLUTION: Record<Unit, number> = { ms: 17, score: 0.01, count: 1, KB: 1 };
 
 const BRIEF = 'owner brief 2026-09';
-const WARM_NAV: Budget = { p75: 500, p95: 1000, source: BRIEF };
+// p50: the owner's "restore fast navigation" goal (brief 2026-09-22), a warm
+// useful-content median of about 350 ms. Reported next to p75/p95, never
+// instead of them.
+const WARM_NAV: Budget = { p50: 350, p75: 500, p95: 1000, source: BRIEF };
 const CLICK: Budget = { p75: 75, p95: 150, source: BRIEF };
 const ZERO: Budget = { p75: 0, p95: 0, source: `${BRIEF}: no regression` };
 
@@ -255,6 +262,129 @@ const rscWait = (s: Sample) =>
     : s.rscFirstByteMs - s.rscRequestStartMs;
 const shell = (s: Sample) => s.shellPaintMs;
 const allPrefetches = (s: Sample) => (s.network ? (s.network.counts['rsc-prefetch'] ?? 0) : null);
+
+/**
+ * Harness 2026-09-22.1 (navigation recovery brief): the interactions inside and
+ * between pages. Each gets its content time, its click feedback where there is
+ * a click, and its requests, so a change is never judged on one number.
+ */
+function INTERACTION_ROWS(): RowSpec[] {
+  const items: Array<{ scenario: string; title: string; feedback: boolean }> = [
+    { scenario: 'item-movements-tab', title: 'Item → Movements tab', feedback: true },
+    { scenario: 'item-activity-tab', title: 'Item → Activity tab', feedback: true },
+    { scenario: 'back-item-to-inventory', title: 'Back: Item → Inventory', feedback: false },
+    { scenario: 'forward-inventory-to-item', title: 'Forward: Inventory → Item', feedback: false },
+    {
+      scenario: 'item-adjust-save',
+      title: 'Item: adjust stock, Apply → new on-hand shown',
+      feedback: false,
+    },
+    { scenario: 'inventory-next-page', title: 'Inventory → next page', feedback: true },
+    { scenario: 'inventory-search', title: 'Inventory search (typed)', feedback: false },
+    { scenario: 'inventory-sort', title: 'Inventory sort (Name Z → A)', feedback: true },
+    { scenario: 'inventory-filter', title: 'Inventory filter (first category)', feedback: true },
+    {
+      scenario: 'dashboard-to-inventory-no-hover',
+      title: 'Dashboard → Inventory, no hover',
+      feedback: true,
+    },
+    {
+      scenario: 'dashboard-to-inventory-quick',
+      title: 'Dashboard → Inventory, quick click after load',
+      feedback: true,
+    },
+    {
+      scenario: 'inventory-revisit-after-90s',
+      title: 'Inventory revisit after 95 s',
+      feedback: true,
+    },
+  ];
+  return items.flatMap(({ scenario, title, feedback: withFeedback }) => [
+    {
+      id: `nav-${scenario}`,
+      group: 'navigation' as const,
+      title,
+      scenario,
+      unit: 'ms' as const,
+      censored: 'right' as const,
+      pick: useful,
+      budget: WARM_NAV,
+    },
+    ...(withFeedback
+      ? [
+          {
+            id: `click-${scenario}`,
+            group: 'click' as const,
+            title: `Click → visible response (${title})`,
+            scenario,
+            unit: 'ms' as const,
+            pick: feedback,
+            budget: CLICK,
+          },
+        ]
+      : []),
+    {
+      id: `requests-${scenario}`,
+      group: 'network' as const,
+      title: `Requests, step → content + 1 s (${title})`,
+      scenario,
+      unit: 'count' as const,
+      pick: (s: Sample) => s.network?.total ?? null,
+    },
+  ]);
+}
+
+/**
+ * When the page-data stream was COMPLETE, from the click: the server's whole
+ * render plus the trip. Beside "useful", it tells a slow server (stream ends
+ * late) from a page held back on the client (stream done, content still not
+ * shown: React's reveal throttle, a nested fallback, client work).
+ */
+function STREAM_ROWS(): RowSpec[] {
+  const items: Array<[string, string]> = [
+    ['dashboard-to-inventory', 'Inventory'],
+    ['dashboard-to-books', 'Books'],
+    ['dashboard-to-orders', 'Orders'],
+    ['inventory-to-item', 'Item'],
+    ['orders-to-order', 'Order'],
+    ['orders-to-storefront', 'storefront'],
+    ['item-movements-tab', 'Movements tab'],
+    ['item-activity-tab', 'Activity tab'],
+    ['inventory-revisit-after-90s', 'Inventory after 95 s'],
+  ];
+  return items.flatMap(([scenario, label]) => [
+    {
+      id: `stream-done-${scenario}`,
+      group: 'navigation' as const,
+      title: `Click → page-data stream complete (${label})`,
+      scenario,
+      unit: 'ms' as const,
+      pick: (s: Sample) => s.rscCompleteMs ?? null,
+    },
+    {
+      id: `held-${scenario}`,
+      group: 'navigation' as const,
+      title: `Content shown after the stream completed, gap (${label}; negative = shown while still streaming)`,
+      scenario,
+      unit: 'ms' as const,
+      pick: (s: Sample) =>
+        s.usefulPaintMs === null || s.rscCompleteMs == null ? null : s.usefulPaintMs - s.rscCompleteMs,
+    },
+    // Inventory and Item already have their skeleton rows above.
+    ...(scenario === 'dashboard-to-inventory' || scenario === 'inventory-to-item'
+      ? []
+      : [
+          {
+            id: `shell-${scenario}`,
+            group: 'navigation' as const,
+            title: `Click → loading skeleton visible (${label})`,
+            scenario,
+            unit: 'ms' as const,
+            pick: shell,
+          },
+        ]),
+  ]);
+}
 
 /** The first six are the owner's required table, in the owner's order. */
 export const ROWS: RowSpec[] = [
@@ -793,6 +923,8 @@ export const ROWS: RowSpec[] = [
     unit: 'count',
     pick: (s) => s.consoleErrors,
   },
+  ...INTERACTION_ROWS(),
+  ...STREAM_ROWS(),
 ];
 
 export interface RowResult {
@@ -910,7 +1042,8 @@ export function formatValue(value: number | null | undefined, unit: Unit): strin
 function formatBudget(budget: Budget | undefined, unit: Unit): string {
   if (!budget) return 'none yet';
   const side = (v: number | undefined) => (v === undefined ? 'none' : formatValue(v, unit));
-  return `${side(budget.p75)} / ${side(budget.p95)}`;
+  const goal = budget.p50 === undefined ? '' : ` (p50 goal ${formatValue(budget.p50, unit)})`;
+  return `${side(budget.p75)} / ${side(budget.p95)}${goal}`;
 }
 
 /** Below this many samples a budget verdict would be a guess. */
@@ -942,11 +1075,21 @@ export function verdict(row: RowResult): string {
     (spec.budget.p75 !== undefined && summary.p75 > spec.budget.p75) ||
     (spec.budget.p95 !== undefined && summary.p95 > spec.budget.p95);
   if (over) return 'OVER budget';
+  // The median goal is judged on its own and reported beside the budget: a
+  // row can be within p75/p95 and still miss the median goal.
+  const goal =
+    spec.budget.p50 !== undefined
+      ? summary.p50 > spec.budget.p50
+        ? `; p50 ABOVE the ${formatValue(spec.budget.p50, spec.unit)} goal`
+        : `; p50 meets the ${formatValue(spec.budget.p50, spec.unit)} goal`
+      : '';
   // Nearest-rank p95 of a small sample is the second-slowest value or so: it
   // UNDERSTATES the true tail. "Within" is then a statement about this sample.
-  return spec.budget.p95 !== undefined && summary.n < 60
-    ? `within budget in this sample (n=${summary.n} cannot confirm a p95 budget)`
-    : 'within budget';
+  return (
+    (spec.budget.p95 !== undefined && summary.n < 60
+      ? `within budget in this sample (n=${summary.n} cannot confirm a p95 budget)`
+      : 'within budget') + goal
+  );
 }
 
 const KIND_LABEL: Record<RunMeta['kind'], string> = {

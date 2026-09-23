@@ -48,6 +48,26 @@ export interface ArmConfig {
   shellSelector?: string;
   /** Hard loads have no click: time from navigation start instead. */
   fromNavigationStart?: boolean;
+  /** Regex source `location.search` must ALSO match (a tab, a page, a sort in the URL). */
+  targetSearch?: string;
+  /**
+   * The marker must be a node that was NOT in the page when the step was armed.
+   * For a change inside one page (next page, a sort, a filter, a search), where
+   * the old rows already match the selector.
+   */
+  freshOnly?: boolean;
+  /** The marker's row (its closest <tr>, else itself) must contain this text, case-insensitive. */
+  rowText?: string;
+  /**
+   * No click starts the clock: the runner calls `start()` right before it goes
+   * Back / Forward or types, from inside the page, on the page's clock.
+   */
+  manualStart?: boolean;
+  /**
+   * Useful = the text of this element DIFFERS from what it was when the step
+   * was armed (a saved value on screen). Replaces the selector test.
+   */
+  changedTextSelector?: string;
 }
 
 export interface PageImageRecord {
@@ -151,6 +171,8 @@ function collector(fingerprintKeyHex: string): void {
     shellAt: null,
     shellPaintAt: null,
     shellBefore: new WeakSet<Element>(),
+    usefulBefore: new WeakSet<Element>(),
+    textBefore: null as string | null,
     errorScreen: false,
     blurSeen: new WeakMap<Element, boolean>(),
     lcp: null,
@@ -198,7 +220,9 @@ function collector(fingerprintKeyHex: string): void {
     }
     // Done: stop querying, so the instrument costs the page nothing afterwards.
     if (state.usefulAt !== null && (state.feedbackAt !== null || cfg.fromNavigationStart)) return;
-    const onTarget = new RegExp(cfg.targetPath).test(location.pathname);
+    const onTarget =
+      new RegExp(cfg.targetPath).test(location.pathname) &&
+      (!cfg.targetSearch || new RegExp(cfg.targetSearch).test(location.search));
 
     if (state.feedbackAt === null && !cfg.fromNavigationStart) {
       let by: string | null = null;
@@ -228,11 +252,21 @@ function collector(fingerprintKeyHex: string): void {
       }
     }
 
-    if (state.usefulAt === null && onTarget) {
+    if (state.usefulAt === null && onTarget && cfg.changedTextSelector) {
+      const el = document.querySelector(cfg.changedTextSelector);
+      if (el && visible(el) && (el.textContent ?? '') !== state.textBefore) {
+        state.usefulAt = performance.now();
+        nextFrame('usefulPaintAt');
+      }
+    } else if (state.usefulAt === null && onTarget) {
       const pattern = cfg.usefulHrefPattern ? new RegExp(cfg.usefulHrefPattern) : null;
       const nodes = document.querySelectorAll(cfg.usefulSelector);
+      const text = cfg.rowText ? String(cfg.rowText).toLowerCase() : null;
       for (const node of Array.from(nodes)) {
         if (pattern && !pattern.test(node.getAttribute('href') ?? '')) continue;
+        if (cfg.freshOnly && state.usefulBefore.has(node)) continue;
+        if (text && !((node.closest('tr') ?? node).textContent ?? '').toLowerCase().includes(text))
+          continue;
         if (!visible(node)) continue;
         state.usefulAt = performance.now();
         nextFrame('usefulPaintAt');
@@ -279,7 +313,13 @@ function collector(fingerprintKeyHex: string): void {
   document.addEventListener(
     'click',
     (event) => {
-      if (!event.isTrusted || state.config === null || state.clickAt !== null) return;
+      if (
+        !event.isTrusted ||
+        state.config === null ||
+        state.config.manualStart ||
+        state.clickAt !== null
+      )
+        return;
       state.clickAt = event.timeStamp;
       state.hoverLead = state.pointerOverAt === null ? null : event.timeStamp - state.pointerOverAt;
       // The link spinner can be committed synchronously inside this same task.
@@ -356,11 +396,26 @@ function collector(fingerprintKeyHex: string): void {
       state.usefulAt = state.usefulPaintAt = null;
       state.shellAt = state.shellPaintAt = null;
       state.shellBefore = new WeakSet<Element>();
+      state.usefulBefore = new WeakSet<Element>();
       state.errorScreen = false;
       if (config.shellSelector) {
         for (const el of Array.from(document.querySelectorAll(config.shellSelector)))
           state.shellBefore.add(el);
       }
+      state.textBefore = config.changedTextSelector
+        ? (document.querySelector(config.changedTextSelector)?.textContent ?? null)
+        : null;
+      if (config.freshOnly) {
+        for (const el of Array.from(document.querySelectorAll(config.usefulSelector)))
+          state.usefulBefore.add(el);
+      }
+    },
+
+    /** The clock for a step with no click (Back, Forward, typing). Called in the same task that starts it. */
+    start() {
+      state.clickAt = performance.now();
+      state.hoverLead = null;
+      queueMicrotask(check);
     },
 
     isUseful(): boolean {
