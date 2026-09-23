@@ -361,9 +361,11 @@ describe('portalCatalog — the allowlist is still the only gate', () => {
 });
 
 describe('portalCatalog — the final inventory_items read is chunked', () => {
-  it('returns the FULL set when the allowlist spans more than one 500-id batch', async () => {
-    // 650 > one batch (500), so covering it proves the id list was actually
+  it('returns the FULL set when the allowlist spans several 100-id batches', async () => {
+    // 650 > one batch (100), so covering it proves the id list was actually
     // split and stitched back together, not just handed to one `.in(...)`.
+    // 100 per batch keeps each URL under the local gateway's ~8 KB limit
+    // (~215 uuids) and production's ~395; the old 500 exceeded both.
     const bulkIds = Array.from({ length: 650 }, (_, n) => `bulk-${String(n).padStart(4, '0')}`);
     const db = makeDb();
     db.inventory_items = bulkIds.map((id) => item(id));
@@ -375,12 +377,23 @@ describe('portalCatalog — the final inventory_items read is chunked', () => {
 
     expect(rows.map((r) => r.itemId).sort()).toEqual([...bulkIds].sort());
     // And prove it via the read pattern itself, not just the result: more
-    // than one `.in()` call against inventory_items, each within the 500-id
+    // than one `.in()` call against inventory_items, each within the 100-id
     // batch size, together covering exactly the 650 requested ids.
     const sizes = admin.inCallSizes.inventory_items ?? [];
-    expect(sizes.length).toBeGreaterThan(1);
-    expect(sizes.every((n) => n <= 500)).toBe(true);
-    expect(sizes.reduce((a, b) => a + b, 0)).toBe(650);
+    expect(sizes).toEqual([100, 100, 100, 100, 100, 100, 50]);
+  });
+
+  it('a failing inventory_items batch fails the catalog with the customer-facing message', async () => {
+    const bulkIds = Array.from({ length: 250 }, (_, n) => `bulk-${String(n).padStart(4, '0')}`);
+    const db = makeDb();
+    db.inventory_items = bulkIds.map((id) => item(id));
+    db.customer_catalog = bulkIds.map((id) => ({ customer_id: CUSTOMER, item_id: id }));
+    admin = makeAdmin(db, { inventory_items: 'URI too long' });
+    adminRef.current = admin.client;
+
+    await expect(portalCatalog(ctxNoCharge)).rejects.toThrow(
+      'Catalog could not be loaded. Please try again.',
+    );
   });
 });
 
