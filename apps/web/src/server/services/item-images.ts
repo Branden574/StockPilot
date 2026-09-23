@@ -16,6 +16,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 
 /**
  * Long-lived signed URL per storage path. The signed URL itself is
@@ -332,11 +333,53 @@ export class ItemImagesService {
   }
 
   /**
+   * Fallback for items with no `item_images` row (bulk-imported books keep an
+   * external cover URL in `custom_fields.thumbnail_url`): adds each one found
+   * to `result`. Throws on a failed read, as the image reads above do.
+   */
+  private async addCustomFieldThumbnails(
+    unresolved: string[],
+    result: Map<string, string>,
+  ): Promise<void> {
+    const ctx = this.ctx;
+    const rows = await fetchAllRowsByIds<{
+      id: string;
+      custom_fields: unknown;
+    }>(
+      unresolved,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('inventory_items')
+          .select('id, custom_fields')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+    );
+    for (const row of rows) {
+      const cf = row.custom_fields;
+      if (cf && typeof cf === 'object') {
+        const url = (cf as { thumbnail_url?: unknown }).thumbnail_url;
+        if (typeof url === 'string' && url.length > 0 && url.length < 2000) {
+          result.set(row.id, url);
+        }
+      }
+    }
+  }
+
+  /**
    * Returns a Map<itemId, masterSignedUrl> for the primary (or first)
-   * image per item across the given list. Two round trips total: one
-   * `item_images IN (...)` query, one `createSignedUrls` for all
-   * matched paths. Used by PDF + JSON-API surfaces that want the full
-   * image URL.
+   * image per item across the given list. Two round trips for up to 100
+   * items: the `item_images` read, one `createSignedUrls` for all matched
+   * paths. Used by PDF + JSON-API surfaces that want the full image URL.
+   *
+   * Every `item_images` read in this class is BATCHED through
+   * `fetchAllRowsByIds` (100 ids per request, each batch paged past the
+   * 1000-row cap): the catalog thumbnails and exports pass up to 1000 ids,
+   * and one `.in()` past ~215 uuids answers 414 locally and fails as "fetch
+   * failed" in production after ~7 s of retries. Values are deduped, so all
+   * of one item's rows sit in one batch and the primary-first pick is
+   * unchanged; the `id` tie-break keeps pages stable.
    *
    * For list-page row thumbnails — which want the 200px pre-resized
    * thumb + LQIP blur placeholder — use {@link primaryImagesWithThumbsForItems}
@@ -345,20 +388,23 @@ export class ItemImagesService {
   async primaryImagesForItems(itemIds: string[]): Promise<Map<string, string>> {
     if (itemIds.length === 0) return new Map();
 
-    const { data, error } = await this.ctx.supabase
-      .from('item_images')
-      .select('item_id, storage_path, is_primary, sort_order')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', itemIds)
-      .order('is_primary', { ascending: false })
-      .order('sort_order', { ascending: true });
-    if (error) throw new ServiceError('internal_error', error.message);
+    const ctx = this.ctx;
+    const data = await fetchAllRowsByIds<{ item_id: string; storage_path: string }>(
+      itemIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('item_images')
+          .select('item_id, storage_path, is_primary, sort_order')
+          .eq('organization_id', ctx.organizationId)
+          .in('item_id', batch)
+          .order('is_primary', { ascending: false })
+          .order('sort_order', { ascending: true })
+          .order('id')
+          .range(from, to),
+    );
 
     const pathByItem = new Map<string, string>();
-    for (const row of (data ?? []) as Array<{
-      item_id: string;
-      storage_path: string;
-    }>) {
+    for (const row of data) {
       if (!pathByItem.has(row.item_id)) {
         pathByItem.set(row.item_id, row.storage_path);
       }
@@ -396,23 +442,29 @@ export class ItemImagesService {
   > {
     if (itemIds.length === 0) return new Map();
 
-    const { data, error } = await this.ctx.supabase
-      .from('item_images')
-      .select('item_id, storage_path, thumb_path, lqip, is_primary, sort_order')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', itemIds)
-      .order('is_primary', { ascending: false })
-      .order('sort_order', { ascending: true });
-    if (error) throw new ServiceError('internal_error', error.message);
-
     type Row = {
       item_id: string;
       storage_path: string;
       thumb_path: string | null;
       lqip: string | null;
     };
+    const ctx = this.ctx;
+    const data = await fetchAllRowsByIds<Row>(
+      itemIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('item_images')
+          .select('item_id, storage_path, thumb_path, lqip, is_primary, sort_order')
+          .eq('organization_id', ctx.organizationId)
+          .in('item_id', batch)
+          .order('is_primary', { ascending: false })
+          .order('sort_order', { ascending: true })
+          .order('id')
+          .range(from, to),
+    );
+
     const pickByItem = new Map<string, Row>();
-    for (const row of (data ?? []) as Row[]) {
+    for (const row of data) {
       if (!pickByItem.has(row.item_id)) pickByItem.set(row.item_id, row);
     }
 
@@ -459,22 +511,28 @@ export class ItemImagesService {
   ): Promise<Map<string, string>> {
     if (itemIds.length === 0) return new Map();
 
-    const { data, error } = await this.ctx.supabase
-      .from('item_images')
-      .select('item_id, storage_path, thumb_path, is_primary, sort_order')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', itemIds)
-      .order('is_primary', { ascending: false })
-      .order('sort_order', { ascending: true });
-    if (error) throw new ServiceError('internal_error', error.message);
-
     type Row = {
       item_id: string;
       storage_path: string;
       thumb_path: string | null;
     };
+    const ctx = this.ctx;
+    const data = await fetchAllRowsByIds<Row>(
+      itemIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('item_images')
+          .select('item_id, storage_path, thumb_path, is_primary, sort_order')
+          .eq('organization_id', ctx.organizationId)
+          .in('item_id', batch)
+          .order('is_primary', { ascending: false })
+          .order('sort_order', { ascending: true })
+          .order('id')
+          .range(from, to),
+    );
+
     const pickByItem = new Map<string, Row>();
-    for (const row of (data ?? []) as Row[]) {
+    for (const row of data) {
       if (!pickByItem.has(row.item_id)) pickByItem.set(row.item_id, row);
     }
 
@@ -506,24 +564,7 @@ export class ItemImagesService {
     // Open Library, archive.org); no signing required.
     const unresolved = itemIds.filter((id) => !result.has(id));
     if (unresolved.length > 0) {
-      const { data: cfRows, error: cfErr } = await this.ctx.supabase
-        .from('inventory_items')
-        .select('id, custom_fields')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', unresolved);
-      if (cfErr) throw new ServiceError('internal_error', cfErr.message);
-      for (const row of (cfRows ?? []) as Array<{
-        id: string;
-        custom_fields: Record<string, unknown> | null;
-      }>) {
-        const cf = row.custom_fields;
-        if (cf && typeof cf === 'object') {
-          const url = (cf as { thumbnail_url?: unknown }).thumbnail_url;
-          if (typeof url === 'string' && url.length > 0 && url.length < 2000) {
-            result.set(row.id, url);
-          }
-        }
-      }
+      await this.addCustomFieldThumbnails(unresolved, result);
     }
     return result;
   }
@@ -684,18 +725,24 @@ export class ItemImagesService {
   async primaryMasterUrlsForItems(itemIds: string[]): Promise<Map<string, string>> {
     if (itemIds.length === 0) return new Map();
 
-    const { data, error } = await this.ctx.supabase
-      .from('item_images')
-      .select('item_id, storage_path, is_primary, sort_order')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', itemIds)
-      .order('is_primary', { ascending: false })
-      .order('sort_order', { ascending: true });
-    if (error) throw new ServiceError('internal_error', error.message);
-
     type Row = { item_id: string; storage_path: string };
+    const ctx = this.ctx;
+    const data = await fetchAllRowsByIds<Row>(
+      itemIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('item_images')
+          .select('item_id, storage_path, is_primary, sort_order')
+          .eq('organization_id', ctx.organizationId)
+          .in('item_id', batch)
+          .order('is_primary', { ascending: false })
+          .order('sort_order', { ascending: true })
+          .order('id')
+          .range(from, to),
+    );
+
     const pickByItem = new Map<string, Row>();
-    for (const row of (data ?? []) as Row[]) {
+    for (const row of data) {
       if (!pickByItem.has(row.item_id)) pickByItem.set(row.item_id, row);
     }
 
@@ -713,24 +760,7 @@ export class ItemImagesService {
     // Fallback: external ISBN covers stored on the item (no item_images row).
     const unresolved = itemIds.filter((id) => !result.has(id));
     if (unresolved.length > 0) {
-      const { data: cfRows, error: cfErr } = await this.ctx.supabase
-        .from('inventory_items')
-        .select('id, custom_fields')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', unresolved);
-      if (cfErr) throw new ServiceError('internal_error', cfErr.message);
-      for (const row of (cfRows ?? []) as Array<{
-        id: string;
-        custom_fields: Record<string, unknown> | null;
-      }>) {
-        const cf = row.custom_fields;
-        if (cf && typeof cf === 'object') {
-          const url = (cf as { thumbnail_url?: unknown }).thumbnail_url;
-          if (typeof url === 'string' && url.length > 0 && url.length < 2000) {
-            result.set(row.id, url);
-          }
-        }
-      }
+      await this.addCustomFieldThumbnails(unresolved, result);
     }
     return result;
   }
