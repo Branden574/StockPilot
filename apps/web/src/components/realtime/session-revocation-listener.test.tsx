@@ -26,7 +26,7 @@ function b64url(value: unknown): string {
   return Buffer.from(JSON.stringify(value)).toString('base64url');
 }
 const PAYLOAD_SEGMENT = b64url(PAYLOAD);
-const TOKEN = `${b64url({ alg: 'HS256', typ: 'JWT' })}.${PAYLOAD_SEGMENT}.signature`;
+const FAKE_JWT = `${b64url({ alg: 'HS256', typ: 'JWT' })}.${PAYLOAD_SEGMENT}.signature`;
 
 describe('decodeBase64UrlUtf8', () => {
   it('the fixture really exercises the URL-safe alphabet and missing padding', () => {
@@ -41,7 +41,7 @@ describe('decodeBase64UrlUtf8', () => {
   });
 
   it('reads the session_id claim from a token', () => {
-    expect(sessionIdFromAccessToken(TOKEN)).toBe(MY_SESSION);
+    expect(sessionIdFromAccessToken(FAKE_JWT)).toBe(MY_SESSION);
   });
 
   it('returns null for anything it cannot read', () => {
@@ -125,7 +125,7 @@ describe('SessionRevocationListener (browser Buffer polyfill installed)', () => 
     h.toast.mockClear();
     h.channelName.mockClear();
     h.handlers.length = 0;
-    h.getSession.mockResolvedValue({ data: { session: { access_token: TOKEN } } });
+    h.getSession.mockResolvedValue({ data: { session: { access_token: FAKE_JWT } } });
     // Default: the session really was revoked (GoTrue no longer knows it).
     h.getUser.mockReset();
     h.getUser.mockResolvedValue({
