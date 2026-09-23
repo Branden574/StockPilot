@@ -32,6 +32,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
@@ -434,6 +435,7 @@ export class OrderRequestsService {
 
     if (filters.status) {
       const arr = Array.isArray(filters.status) ? filters.status : [filters.status];
+      // in-list-bound: order statuses are a fixed enum of a dozen values
       q = q.in('status', arr);
     } else {
       // Anti-spam: pending_confirmation rows are public-submit limbo —
@@ -477,12 +479,20 @@ export class OrderRequestsService {
     type ProfileRow = { id: string; full_name: string | null; email: string | null };
     const profilesById = new Map<string, ProfileRow>();
     if (assignedIds.size > 0) {
-      const { data: profs, error: profErr } = await this.ctx.supabase
-        .from('user_profiles')
-        .select('id, full_name, email')
-        .in('id', [...assignedIds]);
-      if (profErr) throw new ServiceError('internal_error', profErr.message);
-      for (const p of (profs ?? []) as ProfileRow[]) {
+      // Batched: a page with no `limit` carries every order, so two ids per
+      // row have no ceiling.
+      const ctx = this.ctx;
+      const profs = await fetchAllRowsByIds<ProfileRow>(
+        [...assignedIds],
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('user_profiles')
+            .select('id, full_name, email')
+            .in('id', batch)
+            .order('id')
+            .range(from, to),
+      );
+      for (const p of profs) {
         profilesById.set(p.id, p);
       }
     }
@@ -622,6 +632,7 @@ export class OrderRequestsService {
 
       if (filters.status) {
         const arr = Array.isArray(filters.status) ? filters.status : [filters.status];
+        // in-list-bound: order statuses are a fixed enum of a dozen values
         q = q.in('status', arr);
       } else {
         // Same anti-spam exclusion as list(): hide public-submit limbo rows
@@ -933,6 +944,37 @@ export class OrderRequestsService {
 
   // ── Write — requester actions ───────────────────────────────────
 
+  /**
+   * The items an order's lines name, for create() and addLines() to validate
+   * (in-org, in the order's warehouse, received). Batched through
+   * fetchAllRowsByIds: an order's lines have no cap, and one `.in()` past
+   * ~215 ids fails (414 locally, "fetch failed" in production). Throws on a
+   * failed batch, so a line is never rejected as "not found" because its
+   * read failed.
+   */
+  private readOrderItems(itemIds: string[]): Promise<
+    Array<{
+      id: string;
+      name: string;
+      warehouse_id: string | null;
+      unit_cost: number;
+      awaiting_first_receipt: boolean;
+    }>
+  > {
+    const ctx = this.ctx;
+    return fetchAllRowsByIds(
+      itemIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('inventory_items')
+          .select('id, name, warehouse_id, unit_cost, awaiting_first_receipt')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+    );
+  }
+
   async create(input: CreateOrderRequestInput): Promise<OrderRequestRow> {
     assertModuleEnabled(this.ctx, 'orders');
     assertPermission(this.ctx, 'orders:request');
@@ -947,24 +989,15 @@ export class OrderRequestsService {
     }
 
     // Validate every item belongs to the chosen warehouse + snapshot unit costs.
+    // Batched: a request's lines have no cap, and a failed batch throws (a
+    // missing item would otherwise read as "not in this warehouse").
     const itemIds = [...new Set(input.lines.map((l) => l.itemId))];
-    const { data: items, error: iErr } = await this.ctx.supabase
-      .from('inventory_items')
-      .select('id, name, warehouse_id, unit_cost, awaiting_first_receipt')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('id', itemIds);
-    if (iErr) throw new ServiceError('internal_error', iErr.message);
+    const items = await this.readOrderItems(itemIds);
     const itemMap = new Map<
       string,
       { name: string; warehouse_id: string | null; unit_cost: number; awaiting: boolean }
     >();
-    for (const row of (items ?? []) as Array<{
-      id: string;
-      name: string;
-      warehouse_id: string | null;
-      unit_cost: number;
-      awaiting_first_receipt: boolean;
-    }>) {
+    for (const row of items) {
       itemMap.set(row.id, {
         name: row.name,
         warehouse_id: row.warehouse_id,
@@ -1187,23 +1220,8 @@ export class OrderRequestsService {
     // Validate items exactly like create(): must exist in-org, sit in THIS
     // order's warehouse, and not be an unreceived (expected) phantom.
     const itemIds = [...new Set(lines.map((l) => l.itemId))];
-    const { data: items, error: iErr } = await this.ctx.supabase
-      .from('inventory_items')
-      .select('id, name, warehouse_id, unit_cost, awaiting_first_receipt')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('id', itemIds);
-    if (iErr) throw new ServiceError('internal_error', iErr.message);
-    const itemMap = new Map(
-      (
-        (items ?? []) as Array<{
-          id: string;
-          name: string;
-          warehouse_id: string | null;
-          unit_cost: number;
-          awaiting_first_receipt: boolean;
-        }>
-      ).map((r) => [r.id, r]),
-    );
+    const items = await this.readOrderItems(itemIds);
+    const itemMap = new Map(items.map((r) => [r.id, r]));
     for (const l of lines) {
       const it = itemMap.get(l.itemId);
       if (!it) throw new ServiceError('validation_error', `Item ${l.itemId} not found`);
@@ -3328,6 +3346,7 @@ export class OrderRequestsService {
         .from('inventory_items')
         .select('id')
         .eq('organization_id', this.ctx.organizationId)
+        // in-list-bound: the org's publicly-orderable warehouses (a handful of sites)
         .in('warehouse_id', whIds)
         .eq('item_type', 'book')
         .eq('status', 'active')
