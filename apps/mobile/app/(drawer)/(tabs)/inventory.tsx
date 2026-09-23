@@ -387,6 +387,7 @@ export default function Inventory() {
           }
         }
         if (f.categoryIds.length > 0) {
+          // in-list-bound: user-picked category filter chips
           r = r.in('category_id', f.categoryIds);
         }
         if (f.locationIds.length > 0) {
@@ -403,10 +404,12 @@ export default function Inventory() {
           const real = f.charterIds.filter((x) => x !== FILTER_GENERIC_CHARTER_ID);
           if (wantsGeneric && real.length > 0) {
             // PostgREST .or() — match items with no charter OR in selected charters
+            // in-list-bound: user-picked charter filter chips
             r = r.or(`charter_id.is.null,charter_id.in.(${real.join(',')})`);
           } else if (wantsGeneric) {
             r = r.is('charter_id', null);
           } else {
+            // in-list-bound: user-picked charter filter chips
             r = r.in('charter_id', real);
           }
         }

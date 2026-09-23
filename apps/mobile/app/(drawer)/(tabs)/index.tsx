@@ -200,6 +200,7 @@ export default function Home() {
             .from('order_requests')
             .select('id, order_number')
             .eq('organization_id', orgId)
+            // in-list-bound: legacy refs from the 3 movements this teaser reads (.limit(3))
             .in('id', legacyRefIds.order_request)
         : Promise.resolve({ data: [] as { id: string; order_number: number | null }[] }),
       legacyRefIds.return.length > 0
@@ -207,6 +208,7 @@ export default function Home() {
             .from('returns')
             .select('id, return_number')
             .eq('organization_id', orgId)
+            // in-list-bound: legacy refs from the 3 movements this teaser reads (.limit(3))
             .in('id', legacyRefIds.return)
         : Promise.resolve({ data: [] as { id: string; return_number: string | null }[] }),
     ]);

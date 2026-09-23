@@ -89,6 +89,7 @@ export default function MovementsScreen() {
             .from('order_requests')
             .select('id, order_number')
             .eq('organization_id', orgId)
+            // in-list-bound: legacy refs from the 100 movements this screen reads (.limit(100))
             .in('id', legacyRefIds.order_request)
         : Promise.resolve({ data: [] as { id: string; order_number: number | null }[] }),
       legacyRefIds.return.length > 0
@@ -96,6 +97,7 @@ export default function MovementsScreen() {
             .from('returns')
             .select('id, return_number')
             .eq('organization_id', orgId)
+            // in-list-bound: legacy refs from the 100 movements this screen reads (.limit(100))
             .in('id', legacyRefIds.return)
         : Promise.resolve({ data: [] as { id: string; return_number: string | null }[] }),
     ]);

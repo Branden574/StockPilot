@@ -118,6 +118,7 @@ export default function NotificationsScreen() {
     const { error } = await supabase
       .from('notifications')
       .update({ read_at: now })
+      // in-list-bound: unread rows of the inbox read, which is .limit(100)
       .in('id', unreadIds);
     if (!error) {
       setRows((prev) => prev.map((r) => (r.read_at ? r : { ...r, read_at: now })));

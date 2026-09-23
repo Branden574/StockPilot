@@ -128,6 +128,7 @@ export async function replacePrimaryPhoto(args: {
   const { error: delErr } = await supabase
     .from('item_images')
     .delete()
+    // in-list-bound: the previous photos of ONE item
     .in(
       'id',
       previous.map((r) => r.id),

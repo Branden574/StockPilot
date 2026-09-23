@@ -247,6 +247,7 @@ export default function PoImportDetailScreen() {
           .from('purchase_orders')
           .select('id, po_number, status')
           .eq('organization_id', orgId)
+          // in-list-bound: the POs of one import's reimport lineage, a handful
           .in('id', poIds);
         for (const p of (pos ?? []) as Record<string, unknown>[]) {
           poById[p.id as string] = {
