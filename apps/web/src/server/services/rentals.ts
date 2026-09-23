@@ -5,7 +5,7 @@ import { sendRentalCheckoutEmail, sendRentalReturnedEmail } from '@/lib/email/re
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
-import { fetchAllRows } from './lib/paginate';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import {
   assertModuleEnabled,
   assertPermission,
@@ -136,25 +136,31 @@ export class RentalsService {
     }
 
     // Validate: every line's item_id must exist + be is_rental=true.
+    // Batched (the service does not cap its lines itself) and error-BOUND: the
+    // read used to ignore its error, so a failed read reported every item as
+    // "not found". It decides what may be lent, so a failed batch throws.
     const itemIds = input.lines.map((l) => l.itemId);
-    const { data: rentalItems } = await this.ctx.supabase
-      .from('inventory_items')
-      // `name` is here for the availability refusal message below — an operator
-      // who is told "Projector B: only 2 available" can go find the open rental.
-      .select('id, name, is_rental, warehouse_id, quantity_on_hand')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('id', itemIds);
-    const itemsById = new Map(
-      (
-        (rentalItems ?? []) as Array<{
-          id: string;
-          name: string | null;
-          is_rental: boolean;
-          warehouse_id: string;
-          quantity_on_hand: number;
-        }>
-      ).map((i) => [i.id, i]),
+    const ctx = this.ctx;
+    const rentalItems = await fetchAllRowsByIds<{
+      id: string;
+      name: string | null;
+      is_rental: boolean;
+      warehouse_id: string;
+      quantity_on_hand: number;
+    }>(
+      itemIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('inventory_items')
+          // `name` is here for the availability refusal message below — an operator
+          // who is told "Projector B: only 2 available" can go find the open rental.
+          .select('id, name, is_rental, warehouse_id, quantity_on_hand')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
     );
+    const itemsById = new Map(rentalItems.map((i) => [i.id, i]));
     for (const line of input.lines) {
       const it = itemsById.get(line.itemId);
       if (!it) throw new ServiceError('not_found', `Item ${line.itemId} not found.`);
@@ -185,13 +191,17 @@ export class RentalsService {
     for (const line of input.lines) {
       requestedByItem.set(line.itemId, (requestedByItem.get(line.itemId) ?? 0) + line.quantity);
     }
-    const activeReservations = await fetchAllRows<{ item_id: string; quantity: number | null }>(
-      (from, to) =>
-        this.ctx.supabase
+    const activeReservations = await fetchAllRowsByIds<{
+      item_id: string;
+      quantity: number | null;
+    }>(
+      itemIds,
+      (batch) => (from, to) =>
+        ctx.supabase
           .from('stock_reservations')
           .select('id, item_id, quantity')
-          .eq('organization_id', this.ctx.organizationId)
-          .in('item_id', itemIds)
+          .eq('organization_id', ctx.organizationId)
+          .in('item_id', batch)
           .is('released_at', null)
           .order('id')
           .range(from, to),

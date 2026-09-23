@@ -536,6 +536,7 @@ export async function planLimitBudget(
       // warehouse spawns 2 system rows; put-away creates racks freely). SQL
       // mirror of isSiteLocation() — the two .or() groups AND together, and
       // each keeps NULL rows (NOT IN drops NULLs on its own).
+      // in-list-bound: fixed kind and type constants (a handful of literals)
       query = query
         .or(`kind.is.null,kind.not.in.(${[...SYSTEM_KINDS, ...PLACEMENT_KINDS].join(',')})`)
         .or(`type.is.null,type.not.in.(${PLACEMENT_TYPES.join(',')})`);

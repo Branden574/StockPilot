@@ -157,6 +157,7 @@ export class MovementsService {
 
     if (!access.hasAllAccess) {
       if (access.readableIds.length === 0) return [];
+      // in-list-bound: the caller's readable warehouses (an org's handful of sites)
       query = query.in('item.warehouse_id', access.readableIds);
     } else if (params.warehouseId) {
       query = query.eq('item.warehouse_id', params.warehouseId);
@@ -166,6 +167,7 @@ export class MovementsService {
     if (params.since) query = query.gte('created_at', params.since);
     if (params.until) query = query.lt('created_at', params.until);
     if (params.types && params.types.length > 0) {
+      // in-list-bound: movement types are a fixed enum of a few values
       query = query.in('movement_type', params.types);
     }
     const search = params.search?.trim();
@@ -282,6 +284,7 @@ export class MovementsService {
 
     if (!access.hasAllAccess) {
       if (access.readableIds.length === 0) return 0;
+      // in-list-bound: the caller's readable warehouses (an org's handful of sites)
       query = query.in('item.warehouse_id', access.readableIds);
     } else if (params.warehouseId) {
       query = query.eq('item.warehouse_id', params.warehouseId);
@@ -289,6 +292,7 @@ export class MovementsService {
     if (params.itemId) query = query.eq('item_id', params.itemId);
     if (params.since) query = query.gte('created_at', params.since);
     if (params.until) query = query.lt('created_at', params.until);
+    // in-list-bound: movement types are a fixed enum of a few values
     if (params.types && params.types.length > 0) query = query.in('movement_type', params.types);
     const search = params.search?.trim();
     if (search) {
@@ -363,12 +367,14 @@ export class MovementsService {
         .order('id', { ascending: false });
 
       if (!access.hasAllAccess) {
+        // in-list-bound: the caller's readable warehouses (an org's handful of sites)
         q = q.in('item.warehouse_id', access.readableIds);
       } else if (params.warehouseId) {
         q = q.eq('item.warehouse_id', params.warehouseId);
       }
       if (params.since) q = q.gte('created_at', params.since);
       if (params.until) q = q.lt('created_at', params.until);
+      // in-list-bound: movement types are a fixed enum of a few values
       if (params.types && params.types.length > 0) q = q.in('movement_type', params.types);
       const search = params.search?.trim();
       if (search) {

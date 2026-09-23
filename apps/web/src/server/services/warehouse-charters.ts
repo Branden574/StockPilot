@@ -67,6 +67,7 @@ export class WarehouseChartersService {
         .select('id', { count: 'exact', head: true })
         .eq('organization_id', this.ctx.organizationId)
         .eq('warehouse_id', warehouseId)
+        // in-list-bound: charters removed from one warehouse (the org's charters, a few dozen at most)
         .in('charter_id', toRemove)
         .is('deleted_at', null);
       if ((count ?? 0) > 0) {
@@ -80,6 +81,7 @@ export class WarehouseChartersService {
         .delete()
         .eq('organization_id', this.ctx.organizationId)
         .eq('warehouse_id', warehouseId)
+        // in-list-bound: charters removed from one warehouse (the org's charters, a few dozen at most)
         .in('charter_id', toRemove);
       if (delErr) throw new ServiceError('internal_error', delErr.message);
     }

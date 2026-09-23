@@ -481,6 +481,7 @@ export async function drainIntegrationDeliveries(
     const { data: eps } = await admin
       .from('integration_endpoints')
       .select('id, organization_id, type, url, secret')
+      // in-list-bound: endpoints of at most `limit` (100) due deliveries per tick
       .in('id', endpointIds);
     const epById = new Map((eps ?? []).map((e) => [(e as EndpointRow).id, e as EndpointRow]));
 
@@ -496,6 +497,7 @@ export async function drainIntegrationDeliveries(
       await admin
         .from('integration_deliveries')
         .update({ status: 'dead', error: 'endpoint removed' })
+        // in-list-bound: at most `limit` (100) due deliveries per tick
         .in('id', deadIds);
     }
     // Attempt all due deliveries in PARALLEL (was sequential — a single slow/hung

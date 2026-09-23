@@ -11,6 +11,7 @@ import { reportError } from '@/lib/error-reporter';
 import { type NotificationPrefKey } from '@/lib/notification-prefs';
 import { createAdminClient } from '@/lib/supabase/admin';
 
+import { fetchAllRowsByIds, rawErrorText } from './lib/fetch-by-ids';
 import { createNotification } from './notifications';
 
 /**
@@ -98,20 +99,33 @@ async function loadPrefFlags(
   const flags = new Map<string, boolean>(userIds.map((id) => [id, true]));
   if (userIds.length === 0) return flags;
 
-  const { data, error } = await admin
-    .from('notification_preferences')
-    .select(`user_id, ${key}`)
-    .in('user_id', userIds);
-  if (error) {
+  // Batched: an audience is every member holding a permission, with no cap,
+  // and one `.in()` past ~215 ids fails.
+  let data: Array<Record<string, unknown>>;
+  try {
+    data = await fetchAllRowsByIds<Record<string, unknown>>(
+      userIds,
+      (batch) => (from, to) =>
+        admin
+          .from('notification_preferences')
+          .select(`user_id, ${key}`)
+          .in('user_id', batch)
+          .order('user_id')
+          .range(from, to) as unknown as PromiseLike<{
+          data: Array<Record<string, unknown>> | null;
+          error: { message: string } | null;
+        }>,
+    );
+  } catch (err) {
     // A read failure is NOT evidence of a mute — fail open, same contract as
     // createNotification's own disabled_at check.
-    void reportError(new Error(error.message), {
+    void reportError(new Error(rawErrorText(err)), {
       tag: 'maintenance_notify.load_prefs',
       extra: { key },
     });
     return flags;
   }
-  for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+  for (const row of data) {
     const userId = row.user_id as string;
     if (row[key] === false) flags.set(userId, false);
   }

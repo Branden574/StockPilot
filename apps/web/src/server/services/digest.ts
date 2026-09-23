@@ -3,6 +3,7 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { ServiceError } from './context';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { fetchAllRows } from './lib/paginate';
 
 export interface DigestLowStockGroup {
@@ -235,14 +236,21 @@ async function getOpenCycleCounts(
   // Fetch ALL lines for the open cycle counts, paginated to avoid the 1000-row
   // PostgREST cap. NB: the FK column on cycle_count_lines is `cycle_count_id`
   // (migration 0023), not `count_id`.
+  //
+  // Batched by count, and paged on `id`: ordering on `cycle_count_id` alone is
+  // not unique, so range pages could repeat or skip lines (fetchAllRows needs
+  // a stable key). Open counts have no cap, and one `.in()` past ~215 ids
+  // fails.
   type LineRow = { cycle_count_id: string; counted_quantity: number | null };
-  const lines = await fetchAllRows<LineRow>((from, to) =>
-    supabase
-      .from('cycle_count_lines')
-      .select('cycle_count_id, counted_quantity')
-      .in('cycle_count_id', countIds)
-      .order('cycle_count_id', { ascending: true })
-      .range(from, to),
+  const lines = await fetchAllRowsByIds<LineRow>(
+    countIds,
+    (batch) => (from, to) =>
+      supabase
+        .from('cycle_count_lines')
+        .select('cycle_count_id, counted_quantity')
+        .in('cycle_count_id', batch)
+        .order('id', { ascending: true })
+        .range(from, to),
   );
 
   // Group line stats by cycle_count_id.

@@ -170,6 +170,7 @@ export class ItemImportBatchesService {
         .from('item_import_batches')
         .update({ superseded_by_id: batchId })
         .eq('organization_id', this.ctx.organizationId)
+        // in-list-bound: the live batches this file supersedes (one per earlier import of it)
         .in('id', predecessors);
     }
     return batchId;

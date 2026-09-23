@@ -1,10 +1,12 @@
 import 'server-only';
 
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 
 import { audit } from './audit';
+import { writeInIdBatches } from './lib/fetch-by-ids';
 import { fetchAllRows } from './lib/paginate';
 import {
   assertCurrentAal2,
@@ -492,6 +494,19 @@ export async function pruneSnapshots(
     .range(RETENTION, RETENTION + 999);
   const stale = ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
   if (stale.length > 0) {
-    await admin.from('restore_points').delete().in('id', stale);
+    // Batched (up to 1000 ids; one `.in()` past ~215 fails) and reported: the
+    // error used to be ignored, so a prune that never ran went unnoticed.
+    // Pruning is housekeeping, so a failure does not fail the snapshot.
+    const prune = await writeInIdBatches(stale, (batch) =>
+      admin.from('restore_points').delete().in('id', batch),
+    );
+    if (prune.error !== null) {
+      void reportError(new Error(prune.error), {
+        tag: 'restore_points.prune',
+        level: 'warning',
+        organizationId,
+        extra: { pruned: prune.written.length, left: prune.notWritten.length },
+      });
+    }
   }
 }
