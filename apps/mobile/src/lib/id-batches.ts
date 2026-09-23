@@ -252,10 +252,8 @@ export async function fetchAllRowsByIds<Row, V extends string | number = string>
 ): Promise<Row[]> {
   const batches = chunkInFilterValues(values, opts);
   if (batches.length === 0) return [];
-  const pageSize = Math.min(
-    POSTGREST_MAX_ROWS,
-    Math.max(1, Math.floor(opts.pageSize ?? POSTGREST_MAX_ROWS)),
-  );
+  // fetchAllPages caps this at POSTGREST_MAX_ROWS (the one place it is capped).
+  const pageSize = opts.pageSize ?? POSTGREST_MAX_ROWS;
   const perBatch = await mapWithConcurrency(
     batches,
     opts.concurrency ?? IN_FILTER_DEFAULT_CONCURRENCY,

@@ -8,6 +8,7 @@ import {
   MAX_PAGES_PER_BATCH,
   chunkInFilterValues,
   encodedInValueLength,
+  fetchAllPages,
   fetchAllRowsByIds,
   idReadTable,
   mapWithConcurrency,
@@ -231,6 +232,22 @@ describe('fetchAllRowsByIds', () => {
     );
     expect(rows).toHaveLength(1500);
     expect(client.calls[0]!.to - client.calls[0]!.from + 1).toBe(POSTGREST_MAX_ROWS);
+  });
+
+  it('fetchAllPages caps a larger page size too: a clamped 1000-row page asks for the next one', async () => {
+    const all = Array.from({ length: 1500 }, (_, i) => ({ n: i }));
+    const asked: [number, number][] = [];
+    const rows = await fetchAllPages<{ n: number }>((from, to) => {
+      asked.push([from, to]);
+      // The server clamps every response to max_rows, whatever range is asked.
+      const end = Math.min(to, from + POSTGREST_MAX_ROWS - 1);
+      return Promise.resolve({ data: all.slice(from, end + 1), error: null });
+    }, 5000);
+    expect(rows).toHaveLength(1500);
+    expect(asked).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ]);
   });
 
   it('a failed batch rejects with IdBatchReadError carrying the message, and returns no rows', async () => {
