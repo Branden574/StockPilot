@@ -53,6 +53,8 @@ import { countSelection, useIsPicked } from '@/lib/use-count-selection';
 import { TRAILING_COLUMN_MAX_WIDTH, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { listStatusPredicate, stockPill, stockPillFor } from '@/lib/expected-items';
 import { signListThumbnails } from '@/lib/image-cache';
+import { readPrimaryPhotos } from '@/lib/id-reads';
+import { resolveListThumbnails } from '@/lib/list-thumbnails';
 import {
   buildGroupUnits,
   buildGroupedRows,
@@ -645,25 +647,15 @@ export default function Inventory() {
     [pageItems, images],
   );
   React.useEffect(() => {
-    if (unresolvedIds.length === 0) return;
+    if (!orgId || unresolvedIds.length === 0) return;
     let cancelled = false;
     void (async () => {
-      const { data: imgs } = await supabase
-        .from('item_images')
-        .select('item_id, storage_path, thumb_path, is_primary, sort_order')
-        .in('item_id', unresolvedIds)
-        .order('is_primary', { ascending: false })
-        .order('sort_order', { ascending: true });
-      const byItem = new Map<string, { storage_path: string; thumb_path: string | null }>();
-      for (const row of (imgs ?? []) as Array<{
-        item_id: string;
-        storage_path: string;
-        thumb_path: string | null;
-      }>) {
-        if (!byItem.has(row.item_id)) {
-          byItem.set(row.item_id, { storage_path: row.storage_path, thumb_path: row.thumb_path });
-        }
-      }
+      // Batched: with size runs on, one page can hold several hundred ids,
+      // which broke the old single `.in()` read on URL length. A failed read
+      // or signing round records NOTHING: the rows show their glyph for now
+      // and the next page view or pull-to-refresh asks again. It used to
+      // ignore the read's error and record every id as "no photo".
+      //
       // Never the full-resolution original: web/PO-imported product and
       // book-cover images can be multi-megapixel, and decoding originals into
       // bitmaps for a 56px row balloons resident image memory (jetsam risk on
@@ -671,26 +663,24 @@ export default function Inventory() {
       // thumbnail is used when the photo has one (one batched signing request,
       // no per-photo transform bill); the on-demand transform only covers
       // photos without a thumbnail. See signListThumbnails.
-      const urlByPath =
-        byItem.size > 0
-          ? await signListThumbnails(Array.from(byItem.values()))
-          : new Map<string, string>();
+      const round = await resolveListThumbnails(
+        unresolvedIds,
+        (ids) => readPrimaryPhotos(supabase, orgId, ids),
+        signListThumbnails,
+      );
       if (cancelled) return;
-      setImages((prev) => {
-        const next = new Map(prev);
-        for (const id of unresolvedIds) {
-          const p = byItem.get(id);
-          // null records "resolved, no photo" so a photoless item is asked
-          // about exactly once.
-          next.set(id, (p ? urlByPath.get(p.storage_path) : null) ?? null);
-        }
-        return next;
-      });
+      if (!round.ok) {
+        console.warn('item photos', round.message);
+        return;
+      }
+      // null records "resolved, no photo" so a photoless item is asked about
+      // exactly once; a photo that did not sign stays unresolved.
+      setImages(round.value);
     })();
     return () => {
       cancelled = true;
     };
-  }, [unresolvedIds]);
+  }, [orgId, unresolvedIds]);
 
   const pageRows = React.useMemo<Item[]>(
     () =>

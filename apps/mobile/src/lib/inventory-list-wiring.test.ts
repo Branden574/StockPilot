@@ -183,9 +183,23 @@ describe('both lists — fetch the WHOLE filtered set, then page over GROUPS', (
       // without one still costs a storage request (and a billed transform) PER
       // PATH, so signing the whole set would trade a saved page fetch for
       // hundreds of calls.
-      expect(src).toContain('signListThumbnails(Array.from(byItem.values()))');
       expect(src).not.toContain('THUMB_TRANSFORM'); // the screens never ask for the transform themselves
-      expect(src).toContain('.in(\'item_id\', unresolvedIds)');
+      // Page-scoped (unresolvedIds, never the whole set), batched through the
+      // shared reader, and resolved through resolveListThumbnails, which
+      // records nothing when the read or the signing fails.
+      expect(src).toMatch(
+        /resolveListThumbnails\(\s*unresolvedIds,\s*\(ids\) => readPrimaryPhotos\(supabase, orgId, ids\),\s*signListThumbnails,\s*\)/,
+      );
+      expect(src).toContain('setImages(round.value)');
+      expect(src).not.toContain(".from('item_images')");
+    });
+
+    it(`${name}: a failed photo round is logged and records nothing`, () => {
+      // It used to ignore the read's error and write null ("no photo") for
+      // every id on the page until the next full load.
+      const m = /if \(!round\.ok\) \{\s*console\.warn\([^)]*\);\s*return;\s*\}/.exec(src);
+      expect(m).not.toBeNull();
+      expect(src).not.toMatch(/next\.set\(id, \(p \? urlByPath\.get\(p\.storage_path\) : null\) \?\? null\)/);
     });
   }
 });
