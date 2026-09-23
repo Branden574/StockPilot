@@ -6,7 +6,7 @@ import { CommandPaletteLauncher } from '@/components/dashboard/command-palette-l
 import { EdgeSwipeOpener } from '@/components/dashboard/edge-swipe-opener';
 import { KeyboardShortcutsProvider } from '@/components/dashboard/keyboard-shortcuts';
 import { navForRole } from '@/components/dashboard/nav';
-import { NavProgressBar, type SlowNavigation } from '@/components/dashboard/nav-progress-bar';
+import { NavProgressBar } from '@/components/dashboard/nav-progress-bar';
 import { PendingRouteFrame } from '@/components/dashboard/pending-route-skeleton';
 import { SessionUserProvider } from '@/components/dashboard/session-user';
 import { OrderStatusConfigProvider } from '@/components/orders/order-status-config-provider';
@@ -95,8 +95,6 @@ export function DashboardShell({
   initialSidebarHidden = false,
 }: DashboardShellProps) {
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
-  // A navigation still waiting after SLOW_NAVIGATION_MS (PendingRouteFrame).
-  const [slowNavigation, setSlowNavigation] = React.useState<SlowNavigation | null>(null);
   const [desktopSidebarHidden, setDesktopSidebarHidden] =
     React.useState(initialSidebarHidden);
 
@@ -211,8 +209,9 @@ export function DashboardShell({
     <div className="bg-background flex h-dvh overflow-hidden">
       {/* Top progress bar — fires at click time on every internal nav,
           covers links the per-link useLinkStatus indicator can't see
-          (topbar, dashboard cards, table rows, breadcrumbs, etc). */}
-      <NavProgressBar onSlowNavigation={setSlowNavigation} />
+          (topbar, dashboard cards, table rows, breadcrumbs, etc), and
+          path navigations the router starts from code. */}
+      <NavProgressBar />
       {/* Photo-loading diagnostics for real users: image load failures and
           per-route load timings, reduced to a CLASS ("thumbnail via the
           optimizer") before anything is kept. Never a URL. Dashboard only,
@@ -280,7 +279,10 @@ export function DashboardShell({
           className="bg-card flex-1 overflow-y-auto focus:outline-none"
         >
           <div className="min-h-full">
-            <PendingRouteFrame slowNavigation={slowNavigation}>
+            {/* The page area. A navigation still waiting after 400 ms
+                swaps the page for its destination's skeleton here; the
+                frame owns that state, so nothing above re-renders. */}
+            <PendingRouteFrame>
               <OrderStatusConfigProvider config={orderStatusConfig}>
                 <SessionUserProvider userId={userId}>{children}</SessionUserProvider>
               </OrderStatusConfigProvider>

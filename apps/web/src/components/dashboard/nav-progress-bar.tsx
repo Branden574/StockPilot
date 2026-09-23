@@ -3,6 +3,13 @@
 import { usePathname, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 
+import {
+  getRouterNavigation,
+  getServerRouterNavigation,
+  locationKey,
+  pendingPathNavigationRemaining,
+  subscribeRouterNavigation,
+} from '@/lib/navigation/router-navigation';
 import { markNavigationClick, markNavigationFeedback } from '@/lib/perf/marks';
 
 /**
@@ -15,13 +22,27 @@ import { markNavigationClick, markNavigationFeedback } from '@/lib/perf/marks';
  *   • Document-level capture-phase click listener on internal <a>
  *     links (same-origin, not modified-click). Fires the moment the
  *     user clicks, which is before Next.js's RSC fetch even starts.
+ *   • Navigations started from CODE (router.push/replace from a form
+ *     submit, a keyboard shortcut, the command palette) have no click to
+ *     see. The router reports every start it makes (src/instrumentation-client.ts
+ *     -> lib/navigation/router-navigation.ts), and a path change reported
+ *     there starts the bar too, in the same task as the start. Back/Forward
+ *     and query-only starts do not: React renders a popstate synchronously,
+ *     so a Back to a page the tab still holds commits at once, and a query
+ *     change started from code has its own in-page pending state.
  *   • Bar fills to ~80% on a fast ease curve, then pauses (mimics
  *     the classic NProgress feel — we don't actually know how long
  *     the RSC fetch will take, so the asymptotic crawl signals "still
  *     working" without lying about completion).
- *   • Completes when the location (path AND query) moves OR when 8s of
- *     guard time has elapsed without it moving (failsafe so a
- *     prevented/cancelled nav doesn't leave the bar stuck).
+ *   • Completes when the location (path AND query) moves, or when the
+ *     router starts a same-URL navigation (Next discarded the one the bar
+ *     was following).
+ *   • Failsafe: after 8 s it gives up quietly, UNLESS the router still has
+ *     a path navigation in flight from this page. Then it keeps climbing
+ *     alongside the late skeleton (pending-route-skeleton.tsx) and both end
+ *     together, at MAX_PENDING_NAVIGATION_MS (30 s) at the latest. Ending the
+ *     bar at 8 s used to end the skeleton with it, showing the page being
+ *     left again while its replacement was still on the way.
  *
  * Query-only navigations (the item page's Movements/Activity tabs, ?page=,
  * filter chips) get the bar too. They used to be skipped as "in-page", but a
@@ -43,73 +64,95 @@ import { markNavigationClick, markNavigationFeedback } from '@/lib/perf/marks';
  *
  * Safe by construction:
  *   • Only ever triggers a CSS animation on a 2px-tall div. No data
- *     fetching, no router patching, no React state outside this
- *     component.
+ *     fetching and no router patching: it reads the router's start events,
+ *     it never changes them.
  *   • No effect on the actual navigation flow — pure visual feedback.
  *   • Failsafe timer makes it impossible for the bar to remain
  *     visible after a real navigation completes.
  */
-/**
- * How long a path-changing navigation may keep the page being left on screen
- * before the shell swaps it for a skeleton (PendingRouteSkeleton). Below it, a
- * fast navigation goes straight from the old page to the new one, with the
- * progress bar as its acknowledgement (painted ~30 ms after the click).
- */
-export const SLOW_NAVIGATION_MS = 400;
 
-export interface SlowNavigation {
-  /** The pathname the navigation left. The skeleton shows only while this is still the URL. */
-  from: string;
-  /** The pathname it is going to (chooses the skeleton). */
-  target: string;
-}
+/** The bar gives up after this long unless the router still has a path navigation in flight. */
+const FAILSAFE_MS = 8000;
 
-export function NavProgressBar({
-  onSlowNavigation,
-}: {
-  /** Called with the navigation once it has waited SLOW_NAVIGATION_MS, and with null when it ends. */
-  onSlowNavigation?: (nav: SlowNavigation | null) => void;
-} = {}) {
+type Phase = 'idle' | 'climbing' | 'completing';
+
+export function NavProgressBar() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const currentKey = locationKey(pathname, searchParams?.toString() ?? '');
-  const [phase, setPhase] = React.useState<'idle' | 'climbing' | 'completing'>('idle');
+  // useSyncExternalStore, never setState from a store listener: the start is
+  // recorded inside Next's startTransition, and a setState there would join the
+  // navigation's transition, so the bar would paint when the page does.
+  const nav = React.useSyncExternalStore(
+    subscribeRouterNavigation,
+    getRouterNavigation,
+    getServerRouterNavigation,
+  );
+  const [phase, setPhase] = React.useState<Phase>('idle');
+  // The phase as of the last call to enter(), readable at once. A click and
+  // the router start it causes arrive in the same task, before any re-render.
+  const phaseRef = React.useRef<Phase>('idle');
+  // Counts measured clicks. A click that lands while the bar is ALREADY
+  // climbing (for a navigation started from code, which marks nothing) does
+  // not change the phase, so without this the feedback effect would not run
+  // for it and marks.ts would report the click as never acknowledged.
+  const [measuredClicks, setMeasuredClicks] = React.useState(0);
   const startKeyRef = React.useRef<string | null>(null);
   // True while the bar climbs for a click that markNavigationClick recorded.
   // Only such a click gets a feedback mark (see the frames effect below).
   const measuredRef = React.useRef(false);
   const failsafeRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const deferredStartRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const slowTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const onSlowRef = React.useRef(onSlowNavigation);
-  React.useEffect(() => {
-    onSlowRef.current = onSlowNavigation;
-  }, [onSlowNavigation]);
+  // The router start the bar has already answered.
+  const handledNavIdRef = React.useRef<number | null>(null);
+
+  const enter = React.useCallback((next: Phase) => {
+    phaseRef.current = next;
+    setPhase(next);
+  }, []);
+
+  const complete = React.useCallback(() => {
+    measuredRef.current = false;
+    if (failsafeRef.current) {
+      clearTimeout(failsafeRef.current);
+      failsafeRef.current = null;
+    }
+    enter('completing');
+  }, [enter]);
+
+  // One start for both sources (a click, a router start), so either can find
+  // the bar already climbing and leave it alone.
+  const start = React.useCallback(
+    (fromKey: string) => {
+      startKeyRef.current = fromKey;
+      enter('climbing');
+      if (failsafeRef.current) clearTimeout(failsafeRef.current);
+      const giveUp = () => {
+        // A path navigation the router is still waiting on keeps the bar (and
+        // the late skeleton, which uses the same clock) up to 30 s from its start.
+        const remaining = pendingPathNavigationRemaining(
+          getRouterNavigation(),
+          startKeyRef.current,
+          Date.now(),
+        );
+        if (remaining > 0) {
+          failsafeRef.current = setTimeout(giveUp, remaining);
+          return;
+        }
+        // No-completion guard: cancel quietly. A prevented Link, a plain <a>
+        // to a download, a query change that never lands.
+        failsafeRef.current = null;
+        measuredRef.current = false;
+        enter('idle');
+      };
+      failsafeRef.current = setTimeout(giveUp, FAILSAFE_MS);
+    },
+    [enter],
+  );
 
   React.useEffect(() => {
     function isModifiedClick(e: MouseEvent): boolean {
       return e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0;
-    }
-
-    function endSlow() {
-      if (slowTimerRef.current) {
-        clearTimeout(slowTimerRef.current);
-        slowTimerRef.current = null;
-      }
-      onSlowRef.current?.(null);
-    }
-
-    function start(fromKey: string) {
-      startKeyRef.current = fromKey;
-      setPhase('climbing');
-      if (failsafeRef.current) clearTimeout(failsafeRef.current);
-      failsafeRef.current = setTimeout(() => {
-        // 8s no-completion guard: cancel quietly. Real navs that take
-        // longer are unusual enough that we'd rather hide the bar than
-        // pretend it's still loading.
-        measuredRef.current = false;
-        setPhase('idle');
-      }, 8000);
     }
 
     function onClick(e: MouseEvent) {
@@ -158,19 +201,8 @@ export function NavProgressBar({
       // counts against the navigation instead of vanishing.
       markNavigationClick(next.pathname, e.timeStamp);
       measuredRef.current = true;
+      setMeasuredClicks((n) => n + 1);
       start(fromKey);
-      // A path change that has not landed after SLOW_NAVIGATION_MS gets the
-      // shell's skeleton. Only while the URL is still the one it left: a
-      // route with its own loading.tsx commits its fallback (and the URL)
-      // early, and never reaches this.
-      endSlow();
-      const from = window.location.pathname;
-      const target = next.pathname;
-      slowTimerRef.current = setTimeout(() => {
-        slowTimerRef.current = null;
-        if (window.location.pathname !== from) return;
-        onSlowRef.current?.({ from, target });
-      }, SLOW_NAVIGATION_MS);
     }
 
     document.addEventListener('click', onClick, { capture: true });
@@ -178,20 +210,32 @@ export function NavProgressBar({
       document.removeEventListener('click', onClick, { capture: true });
       if (deferredStartRef.current) clearTimeout(deferredStartRef.current);
       if (failsafeRef.current) clearTimeout(failsafeRef.current);
-      if (slowTimerRef.current) clearTimeout(slowTimerRef.current);
     };
-  }, []);
+  }, [start]);
 
-  // The skeleton ends when the navigation does: the URL moved, the failsafe
-  // gave up, or the bar went idle for any other reason.
+  // Router starts (see "How it works"). A Link click reaches here too, right
+  // after the listener above started the bar for it: the bar is then already
+  // climbing from the same page and this leaves it, and its marks, alone.
   React.useEffect(() => {
-    if (phase === 'climbing') return;
-    if (slowTimerRef.current) {
-      clearTimeout(slowTimerRef.current);
-      slowTimerRef.current = null;
+    if (nav === null) {
+      // The navigation the bar followed is over: its page committed, or the
+      // page came back from the back-forward cache with nothing in flight.
+      if (handledNavIdRef.current !== null && phaseRef.current === 'climbing') complete();
+      handledNavIdRef.current = null;
+      return;
     }
-    onSlowRef.current?.(null);
-  }, [phase]);
+    if (handledNavIdRef.current === nav.id) return;
+    handledNavIdRef.current = nav.id;
+    if (nav.kind === 'same') {
+      // Next discarded whatever the bar was following for a same-URL start.
+      if (phaseRef.current === 'climbing') complete();
+      return;
+    }
+    if (nav.kind !== 'path' || nav.type === 'traverse' || nav.fromKey !== currentKey) return;
+    if (phaseRef.current === 'climbing' && startKeyRef.current === nav.fromKey) return;
+    // Not measured: no click was marked for it, so it marks no feedback.
+    start(nav.fromKey);
+  }, [nav, currentKey, start, complete]);
 
   // Performance mark only: "the click was acknowledged". The effect runs once
   // the bar is in the DOM, and then waits a DOUBLE requestAnimationFrame. The
@@ -209,9 +253,11 @@ export function NavProgressBar({
   // First feedback wins, so when a sidebar link's spinner (NavLinkPending)
   // got there earlier this call is ignored.
   //
-  // A bar started by a query-only click marked no click, so it marks no
-  // feedback either: the navigation marks.ts has in flight would be an older
-  // one, and this bar is not feedback for it.
+  // A bar started by a query-only click or by the router alone marked no
+  // click, so it marks no feedback either: the navigation marks.ts has in
+  // flight would be an older one, and this bar is not feedback for it. It
+  // runs again for every measured click (measuredClicks), including one that
+  // lands on a bar that is already climbing.
   React.useEffect(() => {
     if (phase !== 'climbing') return;
     if (!measuredRef.current) return;
@@ -223,16 +269,14 @@ export function NavProgressBar({
       cancelAnimationFrame(outer);
       if (inner !== null) cancelAnimationFrame(inner);
     };
-  }, [phase]);
+  }, [phase, measuredClicks]);
 
   React.useEffect(() => {
     if (phase === 'climbing' && startKeyRef.current !== currentKey) {
       // Navigation completed — the path or the query changed.
-      measuredRef.current = false;
-      setPhase('completing');
-      if (failsafeRef.current) clearTimeout(failsafeRef.current);
+      complete();
     }
-  }, [currentKey, phase]);
+  }, [currentKey, phase, complete]);
 
   // The fade-out gets an effect of its OWN, keyed on `phase` alone.
   //
@@ -247,9 +291,9 @@ export function NavProgressBar({
   // from the first click until a reload: a loading bar that never stopped.
   React.useEffect(() => {
     if (phase !== 'completing') return;
-    const t = setTimeout(() => setPhase('idle'), 250);
+    const t = setTimeout(() => enter('idle'), 250);
     return () => clearTimeout(t);
-  }, [phase]);
+  }, [phase, enter]);
 
   if (phase === 'idle') return null;
 
@@ -264,14 +308,4 @@ export function NavProgressBar({
       />
     </div>
   );
-}
-
-/**
- * Path plus query, the query re-serialized so two spellings of the same
- * params (`%20` and `+`) compare equal. No hash: a hash change is not a
- * navigation.
- */
-function locationKey(pathname: string, search: string): string {
-  const query = new URLSearchParams(search).toString();
-  return query ? `${pathname}?${query}` : pathname;
 }

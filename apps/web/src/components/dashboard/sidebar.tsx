@@ -106,7 +106,8 @@ export function Sidebar({
   // Inventory, Books, Orders, Movements). These are the routes ~95% of
   // users click first. Each warm is TWO requests under Next 16.3.5's
   // segment cache (route tree + segments to the nearest loading.tsx;
-  // measured by the perf harness, 2.0 requests per route), so the
+  // measured by the perf harness, 2.0 requests per route, before
+  // Overview, Items, Books and Orders dropped their loading.tsx), so the
   // four routes warmed on a hard load cost 8 requests. Kept on purpose
   // (2026-09-22): staggered, bounded at four, and the only BULK warm-up
   // left in the app. Every link grid, list and table row warms on intent
@@ -121,7 +122,8 @@ export function Sidebar({
   // `staleTimes.dynamic = 90`, any entry not clicked within 90s was
   // re-fetched on navigation anyway. Rarely-clicked tabs are covered
   // by the hover/focus/pointer-down warmRoute below plus their
-  // route-true loading.tsx skeletons.
+  // route-true loading.tsx skeletons (or, for a page without one, the
+  // late skeleton: components/dashboard/pending-route-skeleton.tsx).
   const TOP_ROUTES = React.useMemo(
     () => [
       '/dashboard',
