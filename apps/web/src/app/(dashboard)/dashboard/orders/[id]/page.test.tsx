@@ -51,7 +51,12 @@ vi.mock('next/link', async () => {
 // renders is covered elsewhere (or not this task's concern).
 vi.mock('@/components/orders/add-items-dialog', () => ({ AddItemsDialog: () => null }));
 vi.mock('@/components/orders/cancel-order-button', () => ({ CancelOrderButton: () => null }));
-vi.mock('@/components/orders/manager-actions-panel', () => ({ ManagerActionsPanel: () => null }));
+vi.mock('@/components/orders/manager-actions-panel', () => ({
+  ManagerActionsPanel: (props: Record<string, unknown>) => {
+    managerActionsProps(props);
+    return null;
+  },
+}));
 vi.mock('@/components/orders/order-line-actions', () => ({ OrderLineActions: () => null }));
 vi.mock('@/components/orders/delivery-location-share', () => ({ DeliveryLocationShare: () => null }));
 vi.mock('@/components/returns/create-return-dialog', () => ({ CreateReturnDialog: () => null }));
@@ -163,6 +168,14 @@ vi.mock('@/server/services/order-attachments', () => ({
 vi.mock('@/server/services/order-requests', () => ({
   OrderRequestsService: { forCurrentUser: vi.fn(async () => ({ get: orderGet })) },
 }));
+// The pending-approval stock check reads reservations through the service's
+// batched, paged, throwing read (see the stock-check describe below).
+const reservedQuantityByItemIds = vi.fn(async (_ids: string[]) => new Map<string, number>());
+vi.mock('@/server/services/inventory', () => ({
+  InventoryService: { forCurrentUser: vi.fn(async () => ({ reservedQuantityByItemIds })) },
+}));
+const managerActionsProps = vi.fn();
+
 vi.mock('@/server/services/returns', () => ({
   RMAService: { forCurrentUser: vi.fn(async () => ({ returnableLinesForOrder })) },
   // The order page's returns read (fired only on completed / legacy delivered
@@ -456,5 +469,48 @@ describe('orders/[id] host — delivery-request assistant re-entry gating + prop
     expect(sendDeliveryRequestProps).not.toHaveBeenCalled();
     // And the gated timezone read is not paid for a viewer who gets no button.
     expect(getCachedOrgTimezoneMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The pending-approval stock check. It read every line's reservations in one
+ * `.in()` with the error ignored: an order's lines have no total cap, so past
+ * ~215 items the local gateway answered 414 and past ~395 production failed
+ * after ~7 s of retries, and the page read that as "nothing reserved",
+ * offering a plain Approve on an order that is short. It now goes through
+ * InventoryService.reservedQuantityByItemIds, which batches, pages and throws.
+ */
+describe('orders/[id]: the pending-approval stock check', () => {
+  const itemId = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+  const lines = Array.from({ length: 250 }, (_, i) => ({
+    id: `line-${i}`,
+    quantity_requested: 1,
+    quantity_fulfilled: 0,
+    quantity_picked: 0,
+    returned_quantity: 0,
+    item: { id: itemId(i), name: `Item ${i}`, sku: `S-${i}`, quantity_on_hand: 1 },
+  }));
+  function asManager() {
+    ctxHolder.current = { role: 'manager', permissions: new Set(['orders:read', 'orders:approve']) };
+  }
+
+  it('reads reservations for all 250 items through the service, and one fully reserved item makes the order short', async () => {
+    asManager();
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'pending_approval' }), lines }));
+    reservedQuantityByItemIds.mockResolvedValue(new Map([[itemId(249), 1]]));
+
+    await renderPage();
+
+    expect(reservedQuantityByItemIds).toHaveBeenCalledWith(lines.map((l) => l.item.id));
+    expect(managerActionsProps).toHaveBeenCalledWith(
+      expect.objectContaining({ isShortStock: true }),
+    );
+  });
+
+  it('a failed reservations read fails the page (error boundary), never "nothing reserved"', async () => {
+    asManager();
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'pending_approval' }), lines }));
+    reservedQuantityByItemIds.mockRejectedValue(new Error('internal_error'));
+    await expect(renderPage()).rejects.toThrow('internal_error');
   });
 });

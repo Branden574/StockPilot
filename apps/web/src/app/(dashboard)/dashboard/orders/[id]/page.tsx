@@ -62,6 +62,7 @@ import {
   ATTACHABLE_ORDER_STATUSES,
   OrderAttachmentsService,
 } from '@/server/services/order-attachments';
+import { InventoryService } from '@/server/services/inventory';
 import {
   OrderRequestsService,
   type OrderRequestRow,
@@ -333,16 +334,13 @@ export default async function OrderDetailPage({
           if (itemIds.length === 0) {
             return { isShortStock: false, hasFulfillableStock: false };
           }
-          const supabase = await createClient();
-          const { data: resvRows } = await supabase
-            .from('stock_reservations')
-            .select('item_id, quantity')
-            .in('item_id', itemIds)
-            .is('released_at', null);
-          const reservedByItem = new Map<string, number>();
-          for (const r of (resvRows ?? []) as { item_id: string; quantity: number }[]) {
-            reservedByItem.set(r.item_id, (reservedByItem.get(r.item_id) ?? 0) + Number(r.quantity || 0));
-          }
+          // Batched and paged, and THROWS on a failed batch (the error
+          // boundary offers a retry). An order's lines have no total cap, and
+          // one `.in()` of every item fails past ~215 locally and ~395 in
+          // production; read with its error ignored, that was "nothing
+          // reserved", which hid a short-stock order behind a plain Approve.
+          const inventory = await InventoryService.forCurrentUser();
+          const reservedByItem = await inventory.reservedQuantityByItemIds(itemIds);
           // Group demand per item: requested (approval check) and owed (resume check).
           const demandByItem = new Map<string, { requested: number; owed: number; onHand: number }>();
           for (const l of lines) {

@@ -5,6 +5,8 @@ import { RentalCreateForm } from '@/components/rentals/rental-create-form';
 import type { AisleSummary, CatalogItem } from '@/components/orders/v2/types';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { InventoryService } from '@/server/services/inventory';
+import { fetchAllRowsByIds, reportDegradedRead } from '@/server/services/lib/fetch-by-ids';
 import { TeamService } from '@/server/services/team';
 import { WarehousesService } from '@/server/services/warehouses';
 import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
@@ -85,7 +87,7 @@ export default async function NewRentalPage({
   // We use the admin client here so we can do a direct .eq('is_rental', true) query
   // similar to how orders/new page loads its catalog.
   const supabase = createAdminClient();
-  const { data: rentalItemsData } = await supabase
+  const { data: rentalItemsData, error: rentalItemsError } = await supabase
     .from('inventory_items')
     .select(
       'id, name, sku, quantity_on_hand, warehouse_id, item_type, custom_fields, bin_location, category_id, retail_price, unit_cost, reorder_point',
@@ -97,6 +99,11 @@ export default async function NewRentalPage({
     .is('deleted_at', null)
     .order('name', { ascending: true })
     .limit(500);
+  // An ignored error here was an empty catalog: "no rental items" for a
+  // warehouse that has them. The error boundary offers a retry instead.
+  if (rentalItemsError) {
+    throw new Error(`[rentals/new] rental items read failed: ${rentalItemsError.message}`);
+  }
 
   // Get reservations for these items
   const rentalItemIds = ((rentalItemsData ?? []) as Array<{ id: string }>).map((r) => r.id);
@@ -112,20 +119,19 @@ export default async function NewRentalPage({
     warehouseId,
   );
 
-  let reservedByItem = new Map<string, number>();
-  if (rentalItemIds.length > 0) {
-    const { data: reservations } = await supabase
-      .from('stock_reservations')
-      .select('item_id, quantity')
-      .eq('organization_id', ctx.organizationId)
-      .in('item_id', rentalItemIds)
-      .is('released_at', null);
-    for (const r of (reservations ?? []) as Array<{ item_id: string; quantity: number }>) {
-      reservedByItem.set(r.item_id, (reservedByItem.get(r.item_id) ?? 0) + r.quantity);
-    }
-  }
+  // Reservations decide what is available to rent. Up to 500 items: one
+  // `.in()` of them all fails past ~215 locally and ~395 in production, and
+  // with its error ignored that was "nothing reserved", so an item already
+  // out on another rental looked available. The service batches and pages
+  // the read and THROWS on a failed batch. (Every org member can read the
+  // org's reservations, so the caller's own client sees what the admin
+  // client did.)
+  const reservedByItem = await (
+    await InventoryService.forCurrentUser()
+  ).reservedQuantityByItemIds(rentalItemIds);
 
-  // Get category names
+  // Category names are labels only: a failed batch shows the aisles as
+  // uncategorized, reported, rather than failing the page.
   const categoryIds = [
     ...new Set(
       ((rentalItemsData ?? []) as Array<{ category_id: string | null }>)
@@ -134,14 +140,21 @@ export default async function NewRentalPage({
     ),
   ];
   let categoryNames = new Map<string, string>();
-  if (categoryIds.length > 0) {
-    const { data: cats } = await supabase
-      .from('categories')
-      .select('id, name')
-      .in('id', categoryIds);
-    categoryNames = new Map(
-      ((cats ?? []) as Array<{ id: string; name: string }>).map((c) => [c.id, c.name]),
+  try {
+    const cats = await fetchAllRowsByIds<{ id: string; name: string }>(
+      categoryIds,
+      (batch) => (from, to) =>
+        supabase
+          .from('categories')
+          .select('id, name')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .order('id', { ascending: true })
+          .range(from, to),
     );
+    categoryNames = new Map(cats.map((c) => [c.id, c.name]));
+  } catch (err) {
+    reportDegradedRead('rentals.new.category_names', err, { categories: categoryIds.length });
   }
 
   const items: CatalogItem[] = ((rentalItemsData ?? []) as Array<{

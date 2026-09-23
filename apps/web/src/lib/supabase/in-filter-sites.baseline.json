@@ -1,11 +1,6 @@
 {
-  "app/(dashboard)/dashboard/orders/[id]/page.tsx": ["in:item_id <- itemIds"],
   "app/(dashboard)/dashboard/orders/[id]/print/page.tsx": [
     "in:id <- itemIds.length ? itemIds : ['00000000-0000-0000-0000-000000000000']"
-  ],
-  "app/(dashboard)/dashboard/rentals/new/page.tsx": [
-    "in:id <- categoryIds",
-    "in:item_id <- rentalItemIds"
   ],
   "app/(dashboard)/dashboard/returns/[id]/page.tsx": ["in:id <- itemIds"],
   "app/(dashboard)/dashboard/settings/integrations/page.tsx": ["in:id <- access.writableIds"],
