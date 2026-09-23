@@ -3,7 +3,7 @@ import { reportError } from '@/lib/error-reporter';
 
 import { createHash, randomUUID } from 'node:crypto';
 
-import { audit, auditMany } from './audit';
+import { audit, auditMany, type AuditPayload } from './audit';
 import { InventoryService } from './inventory';
 import { fetchAllRowsByIds, rawErrorText, writeInIdBatches } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
@@ -2222,63 +2222,68 @@ export class PoImportsService {
 
     const byId = new Map(lines.map((l) => [l.id, l]));
     let confirmed = 0;
-    for (const [lineId, meaning] of Object.entries(input.decisions)) {
-      const line = byId.get(lineId);
-      if (!line) throw new ServiceError('not_found', `Line ${lineId} is not part of this import.`);
+    // One row per confirmed line, written in batches (auditMany) after the
+    // loop instead of one awaited request per line. The finally writes the
+    // rows of every line that was saved even when a later line throws.
+    const auditRows: AuditPayload[] = [];
+    try {
+      for (const [lineId, meaning] of Object.entries(input.decisions)) {
+        const line = byId.get(lineId);
+        if (!line)
+          throw new ServiceError('not_found', `Line ${lineId} is not part of this import.`);
 
-      const sourceValue = line.jersey_number;
-      // EVERY field the extractor mapped on this line — the exact set the modal
-      // renders, from the one shared helper, so a value the reviewer never saw
-      // can never be the one that survives.
-      const flagged = flaggedSportsMappings(line);
-      // 'jersey_number' / 'confirm' confirm what was read; every other meaning
-      // says the value is NOT a number, so it leaves the number field. It is
-      // only ever MOVED to a field that means the same thing — the style
-      // number, or the serial the reviewer says it is — never rewritten into a
-      // quantity. Inventing a quantity is exactly what the requirements forbid.
-      const patch: Record<string, unknown> = { mapping_confidence: 1 };
-      if (!meaningKeepsFlaggedValues(meaning)) {
-        // IGNORE: drop every flagged value. Only the fields that actually
-        // CARRY a value are written, so a field the document said nothing
-        // about stays untouched rather than being re-asserted as null.
-        for (const f of flagged) patch[f.field] = null;
-      } else if (meaning !== 'jersey_number' && meaning !== 'confirm') {
-        patch.jersey_number = null;
-      }
-      if (meaning === 'style_number' && sourceValue && !line.vendor_product_number) {
-        patch.vendor_product_number = sourceValue;
-      }
-      // A reviewer declaring the column to BE a serial is one of the three
-      // ways serial_hint is populated, and the one that makes the
-      // `serial_required` verdict settleable from the review screen. The value
-      // still comes from the DOCUMENT — this only says which field it belongs
-      // in. Nothing is fabricated when there was no value to move.
-      if (meaning === 'serial' && sourceValue && !line.serial_hint) {
-        patch.serial_hint = sourceValue;
-      }
+        const sourceValue = line.jersey_number;
+        // EVERY field the extractor mapped on this line — the exact set the modal
+        // renders, from the one shared helper, so a value the reviewer never saw
+        // can never be the one that survives.
+        const flagged = flaggedSportsMappings(line);
+        // 'jersey_number' / 'confirm' confirm what was read; every other meaning
+        // says the value is NOT a number, so it leaves the number field. It is
+        // only ever MOVED to a field that means the same thing — the style
+        // number, or the serial the reviewer says it is — never rewritten into a
+        // quantity. Inventing a quantity is exactly what the requirements forbid.
+        const patch: Record<string, unknown> = { mapping_confidence: 1 };
+        if (!meaningKeepsFlaggedValues(meaning)) {
+          // IGNORE: drop every flagged value. Only the fields that actually
+          // CARRY a value are written, so a field the document said nothing
+          // about stays untouched rather than being re-asserted as null.
+          for (const f of flagged) patch[f.field] = null;
+        } else if (meaning !== 'jersey_number' && meaning !== 'confirm') {
+          patch.jersey_number = null;
+        }
+        if (meaning === 'style_number' && sourceValue && !line.vendor_product_number) {
+          patch.vendor_product_number = sourceValue;
+        }
+        // A reviewer declaring the column to BE a serial is one of the three
+        // ways serial_hint is populated, and the one that makes the
+        // `serial_required` verdict settleable from the review screen. The value
+        // still comes from the DOCUMENT — this only says which field it belongs
+        // in. Nothing is fabricated when there was no value to move.
+        if (meaning === 'serial' && sourceValue && !line.serial_hint) {
+          patch.serial_hint = sourceValue;
+        }
 
-      const { data: updated, error } = await this.ctx.supabase
-        .from('po_import_lines')
-        .update(patch)
-        .eq('po_import_id', input.poImportId)
-        .eq('id', lineId)
-        .select('id')
-        .maybeSingle();
-      if (error) throw new ServiceError('internal_error', error.message);
-      // FAIL CLOSED. `.update().eq()` reports no error when it matches zero
-      // rows, so ignoring the result meant a confirmation that RLS refused —
-      // or that raced a cancel — still counted as confirmed, told the reviewer
-      // so, and wrote an audit entry for a change that never happened. The
-      // line would then hit the approval gate again with no explanation.
-      if (!updated) {
-        throw new ServiceError(
-          'conflict',
-          `Line ${line.line_number}'s column mapping could not be saved. Reload the import and try again.`,
-        );
-      }
+        const { data: updated, error } = await this.ctx.supabase
+          .from('po_import_lines')
+          .update(patch)
+          .eq('po_import_id', input.poImportId)
+          .eq('id', lineId)
+          .select('id')
+          .maybeSingle();
+        if (error) throw new ServiceError('internal_error', error.message);
+        // FAIL CLOSED. `.update().eq()` reports no error when it matches zero
+        // rows, so ignoring the result meant a confirmation that RLS refused —
+        // or that raced a cancel — still counted as confirmed, told the reviewer
+        // so, and wrote an audit entry for a change that never happened. The
+        // line would then hit the approval gate again with no explanation.
+        if (!updated) {
+          throw new ServiceError(
+            'conflict',
+            `Line ${line.line_number}'s column mapping could not be saved. Reload the import and try again.`,
+          );
+        }
 
-      await audit(
-        {
+        auditRows.push({
           event: 'sports.import.mapping_confirmed',
           entityType: 'po_import_line',
           entityId: lineId,
@@ -2290,10 +2295,11 @@ export class PoImportsService {
             flagged: Object.fromEntries(flagged.map((f) => [f.field, f.value])),
           },
           after: { meaning, appliedTo: patch },
-        },
-        this.ctx,
-      );
-      confirmed++;
+        });
+        confirmed++;
+      }
+    } finally {
+      await auditMany(auditRows, this.ctx);
     }
     return { confirmed };
   }

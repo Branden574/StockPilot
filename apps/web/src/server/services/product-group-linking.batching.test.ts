@@ -11,7 +11,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * its read failed.
  */
 
-vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
+vi.mock('./audit', () => ({
+  audit: vi.fn(async () => {}),
+  auditMany: vi.fn(async (rows: readonly unknown[]) => ({ written: rows.length, lost: 0 })),
+}));
 
 import type { ModuleId } from '@stockpilot/core';
 
