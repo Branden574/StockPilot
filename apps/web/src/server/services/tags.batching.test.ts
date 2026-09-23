@@ -13,8 +13,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * partway audits and returns what it did.
  */
 
-const { audit } = vi.hoisted(() => ({ audit: vi.fn(async () => undefined) }));
-vi.mock('./audit', () => ({ audit }));
+const { audit, auditMany } = vi.hoisted(() => ({
+  audit: vi.fn(async () => undefined),
+  auditMany: vi.fn(async (payloads: readonly unknown[]) => ({
+    written: payloads.length,
+    lost: 0,
+  })),
+}));
+vi.mock('./audit', () => ({ audit, auditMany }));
+
+/** Rows handed to the ONE batched audit write (never one audit() per row). */
+function auditedRowCount(): number {
+  expect(audit).not.toHaveBeenCalled();
+  expect(auditMany).toHaveBeenCalledTimes(1);
+  return (auditMany.mock.calls[0]![0] as unknown[]).length;
+}
 vi.mock('@/lib/email/resend', () => ({ sendEmail: vi.fn() }));
 
 import { encodedInValueLength, IN_FILTER_MAX_ENCODED_CHARS } from '@/lib/supabase/in-filter';
@@ -102,7 +115,7 @@ describe('TagsService.bulkRemoveFromItems with 250 items', () => {
       const itemChars = l.reduce((n, id) => n + encodedInValueLength(id) + 3, 0);
       expect(itemChars + tagChars).toBeLessThanOrEqual(IN_FILTER_MAX_ENCODED_CHARS);
     }
-    expect(audit).toHaveBeenCalledTimes(250);
+    expect(auditedRowCount()).toBe(250);
   });
 
   it('returns and audits only what was removed when a later batch fails', async () => {
@@ -114,7 +127,7 @@ describe('TagsService.bulkRemoveFromItems with 250 items', () => {
     const first = lists[0] ?? [];
     expect(res.written).toEqual(first);
     expect(res.notWritten).toHaveLength(250 - first.length);
-    expect(audit).toHaveBeenCalledTimes(first.length);
+    expect(auditedRowCount()).toBe(first.length);
   });
 
   it('throws when the first batch fails', async () => {
@@ -123,6 +136,7 @@ describe('TagsService.bulkRemoveFromItems with 250 items', () => {
       new TagsService(makeServiceContext(stub.client) as never).bulkRemoveFromItems(ITEMS, TAGS),
     ).rejects.toMatchObject({ code: 'internal_error' });
     expect(audit).not.toHaveBeenCalled();
+    expect(auditMany).not.toHaveBeenCalled();
   });
 
   it(`refuses more than ${MAX_BULK_TAGS} tags before any read`, async () => {
@@ -152,7 +166,42 @@ describe('TagsService.setForItem removing 150 tags', () => {
     });
     await new TagsService(makeServiceContext(stub.client) as never).setForItem('item-1', []);
     expect(lists.map((l) => l.length)).toEqual([100, 50]);
-    expect(audit).toHaveBeenCalledTimes(150);
+    expect(auditedRowCount()).toBe(150);
+  });
+
+  it('audits the tags it adds in one batched write', async () => {
+    const tags = Array.from({ length: 60 }, (_, i) => uuid(i, 't'));
+    const stub = makeSupabaseStub({
+      'tags.select': { data: tags.map((id) => ({ id })), error: null },
+      'inventory_items.select': { data: [{ id: 'item-1' }], error: null },
+      'item_tags.select': { data: [], error: null },
+      'item_tags.insert': { data: null, error: null },
+    });
+    await new TagsService(makeServiceContext(stub.client) as never).setForItem('item-1', tags);
+    expect(auditedRowCount()).toBe(60);
+    expect(auditMany.mock.calls[0]![0]).toContainEqual({
+      event: 'tag.applied',
+      entityType: 'inventory_item',
+      entityId: 'item-1',
+      extra: { tag_id: tags[0] },
+    });
+  });
+
+  it('audits the tags a committed batch removed even when a later batch fails', async () => {
+    const existing = Array.from({ length: 150 }, (_, i) => ({ tag_id: uuid(i, 't') }));
+    let n = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [{ id: 'item-1' }], error: null },
+      'item_tags.select': { data: existing, error: null },
+      'item_tags.delete': () => {
+        n += 1;
+        return n === 2 ? { data: null, error: { message: 'boom' } } : { data: null, error: null };
+      },
+    });
+    await expect(
+      new TagsService(makeServiceContext(stub.client) as never).setForItem('item-1', []),
+    ).rejects.toMatchObject({ code: 'internal_error' });
+    expect(auditedRowCount()).toBe(100);
   });
 });
 

@@ -4,7 +4,7 @@ import type { CreateTagInput, UpdateTagInput } from '@stockpilot/core';
 
 import { encodedInValueLength, IN_FILTER_MAX_ENCODED_CHARS } from '@/lib/supabase/in-filter';
 
-import { audit } from './audit';
+import { audit, auditMany } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRowsByIds, writeInIdBatches } from './lib/fetch-by-ids';
 
@@ -258,17 +258,17 @@ export class TagsService {
       const rows = toAdd.map((tag_id) => ({ item_id: itemId, tag_id }));
       const { error } = await this.ctx.supabase.from('item_tags').insert(rows);
       if (error) throw new ServiceError('internal_error', error.message);
-      for (const tagId of toAdd) {
-        void audit(
-          {
-            event: 'tag.applied',
-            entityType: 'inventory_item',
-            entityId: itemId,
-            extra: { tag_id: tagId },
-          },
-          this.ctx,
-        );
-      }
+      // One row per tag, as before, written in batches (auditMany): an item
+      // can take up to 100 tags here, and each used to be its own request.
+      await auditMany(
+        toAdd.map((tagId) => ({
+          event: 'tag.applied' as const,
+          entityType: 'inventory_item',
+          entityId: itemId,
+          extra: { tag_id: tagId },
+        })),
+        this.ctx,
+      );
     }
 
     if (toRemove.length > 0) {
@@ -278,17 +278,17 @@ export class TagsService {
       const removal = await writeInIdBatches(toRemove, (batch) =>
         ctx.supabase.from('item_tags').delete().eq('item_id', itemId).in('tag_id', batch),
       );
-      for (const tagId of removal.written) {
-        void audit(
-          {
-            event: 'tag.removed',
-            entityType: 'inventory_item',
-            entityId: itemId,
-            extra: { tag_id: tagId },
-          },
-          this.ctx,
-        );
-      }
+      // Written before the throw below, so tags removed by the batches that
+      // committed are in the trail even when a later batch failed.
+      await auditMany(
+        removal.written.map((tagId) => ({
+          event: 'tag.removed' as const,
+          entityType: 'inventory_item',
+          entityId: itemId,
+          extra: { tag_id: tagId },
+        })),
+        this.ctx,
+      );
       if (removal.error !== null) throw new ServiceError('internal_error', removal.error);
     }
   }
@@ -336,22 +336,22 @@ export class TagsService {
     // One audit row PER item (not one row for the whole batch) so each
     // affected item's own Activity feed / "View history" link actually
     // shows the tag change — a single entityId-less row was invisible
-    // everywhere except a raw audit_logs query.
-    for (const itemId of new Set(itemIds)) {
-      void audit(
-        {
-          event: 'tag.applied',
-          entityType: 'inventory_item',
-          entityId: itemId,
-          extra: {
-            bulk: true,
-            item_count: itemIds.length,
-            tag_ids: safeTags,
-          },
+    // everywhere except a raw audit_logs query. The rows go out in batches
+    // (auditMany): one request per item, all at once, is what 443 selected
+    // items turned into on the lab org.
+    await auditMany(
+      [...new Set(itemIds)].map((itemId) => ({
+        event: 'tag.applied' as const,
+        entityType: 'inventory_item',
+        entityId: itemId,
+        extra: {
+          bulk: true,
+          item_count: itemIds.length,
+          tag_ids: safeTags,
         },
-        this.ctx,
-      );
-    }
+      })),
+      this.ctx,
+    );
   }
 
   /**
@@ -430,22 +430,20 @@ export class TagsService {
       throw new ServiceError('internal_error', write.error);
     }
 
-    // One audit row per item — same rationale as bulkAddToItems above.
-    for (const itemId of write.written) {
-      void audit(
-        {
-          event: 'tag.removed',
-          entityType: 'inventory_item',
-          entityId: itemId,
-          extra: {
-            bulk: true,
-            item_count: write.written.length,
-            tag_ids: uniqueTags,
-          },
+    // One audit row per item, in batches — same rationale as bulkAddToItems.
+    await auditMany(
+      write.written.map((itemId) => ({
+        event: 'tag.removed' as const,
+        entityType: 'inventory_item',
+        entityId: itemId,
+        extra: {
+          bulk: true,
+          item_count: write.written.length,
+          tag_ids: uniqueTags,
         },
-        this.ctx,
-      );
-    }
+      })),
+      this.ctx,
+    );
     return { written: write.written, notWritten: write.notWritten };
   }
 }
