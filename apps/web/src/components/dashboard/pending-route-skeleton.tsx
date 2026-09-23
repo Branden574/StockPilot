@@ -152,14 +152,20 @@ export function PendingRouteFrame({ children }: { children: React.ReactNode }) {
     };
   }, [eligible, tracked]);
 
-  // The page is back. When it is the same page (the navigation was abandoned or
-  // expired), put it back where the person left it; a new page gets Next's own
-  // scroll handling. Before paint, so the jump is never seen.
+  // Before paint, so neither jump is ever seen. The skeleton starts at its
+  // top: the browser only clamps main's scroll position to the skeleton's
+  // height, so after a long page it would show its middle or bottom, header
+  // off screen (Chromium, 3000 -> 318 px, 2026-09-23). Once the page is back,
+  // and it is the same page (the navigation was abandoned or expired), it goes
+  // back where the person left it; a new page gets Next's own scroll handling.
   React.useLayoutEffect(() => {
-    if (show) return;
+    const main = pageRef.current?.closest('main');
+    if (show) {
+      if (main) main.scrollTop = 0;
+      return;
+    }
     const saved = savedScrollRef.current;
     savedScrollRef.current = null;
-    const main = pageRef.current?.closest('main');
     if (saved && main && saved.key === currentKey) main.scrollTop = saved.top;
   }, [show, currentKey]);
 

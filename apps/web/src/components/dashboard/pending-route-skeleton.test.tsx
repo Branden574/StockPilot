@@ -244,8 +244,6 @@ describe('PendingRouteFrame', () => {
     push('/dashboard/orders');
     advance(400);
     expect(skeleton()).not.toBeNull();
-    // What a browser does once the page is display:none and main is short.
-    main().scrollTop = 0;
 
     advance(19_600); // 20 s
     expect(skeleton()).not.toBeNull();
@@ -371,6 +369,21 @@ describe('PendingRouteFrame', () => {
     expect(skeleton()).toBeNull();
     advance(1);
     expect(tableRows()).toBe(8);
+  });
+
+  it('E16 the skeleton starts at its top however far the page was scrolled, and an abandoned page comes back where it was', () => {
+    // A browser only clamps main's scroll position to the skeleton's height,
+    // so a skeleton taller than the viewport would show its middle or bottom.
+    render(<Frame />);
+    main().scrollTop = 3000;
+    push('/dashboard/orders');
+    advance(400);
+    expect(skeleton()).not.toBeNull();
+    expect(main().scrollTop).toBe(0);
+
+    push('/dashboard/inventory');
+    expect(skeleton()).toBeNull();
+    expect(main().scrollTop).toBe(3000);
   });
 
   it('E13 a dead navigation does not come back when a shallow pushState returns to the page it left', () => {
