@@ -340,7 +340,7 @@ describe('PendingRouteFrame', () => {
   it.each([
     ['after its own skeleton was up', 400],
     ['when the redirecting page answered first', 150],
-  ])('E14 a server redirect() into a mapped route shows the skeleton at once, %s', (_label, firstLeg) => {
+  ])('E14 a redirect() into a mapped route shows the skeleton at once, %s', (_label, firstLeg) => {
     // `n i` without items:create: inventory/new redirects to the list. Next
     // commits the redirecting page (HandleRedirect renders nothing) and
     // replaces from its first effect, a millisecond later (lab, 2026-09-23).
@@ -414,7 +414,7 @@ describe('PendingRouteFrame', () => {
     ['/dashboard/reports', '/dashboard/reports/dead-stock'],
     ['/dashboard/admin/users', '/dashboard/admin/warehouses'],
     ['/dashboard/purchase-orders', '/dashboard/purchase-orders/abc'],
-  ])('E18 inside an async-layout section (%s -> %s) its own loading.tsx is left to show', (from, to) => {
+  ])('E18 inside an async-layout section (%s -> %s) its own loading.tsx shows', (from, to) => {
     pathnameRef.value = from;
     window.history.replaceState(null, '', from);
     render(<Frame />);
