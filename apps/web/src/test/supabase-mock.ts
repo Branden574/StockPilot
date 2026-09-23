@@ -57,7 +57,35 @@ export interface SupabaseStub {
   chainArgsAll: Map<string, unknown[][][]>;
 }
 
-type ResultMap = Record<string, QueryResult | (() => QueryResult)>;
+/** What a function result receives: the chain that is being resolved. Lets a
+ *  test answer per call (return rows filtered by the `.in` values, slice by the
+ *  `.range` window, fail the Nth batch). Existing zero-argument functions
+ *  ignore it. */
+export interface MockCall {
+  table: string;
+  op: 'select' | 'insert' | 'update' | 'delete' | 'rpc';
+  /** Method names in call order, e.g. ['select', 'eq', 'in', 'order', 'range']. */
+  methods: string[];
+  /** Arguments per method, same order as `methods`. */
+  args: unknown[][];
+}
+
+type ResultMap = Record<string, QueryResult | ((call: MockCall) => QueryResult)>;
+
+/** The arguments of the FIRST call to `method` in a mock chain, or undefined. */
+export function callArgs(call: MockCall, method: string): unknown[] | undefined {
+  const i = call.methods.indexOf(method);
+  return i === -1 ? undefined : call.args[i];
+}
+
+/** Every `.in(column, values)` in a mock chain, as [column, values] pairs. */
+export function inFilters(call: MockCall): Array<[string, unknown[]]> {
+  const out: Array<[string, unknown[]]> = [];
+  call.methods.forEach((m, i) => {
+    if (m === 'in') out.push([call.args[i]?.[0] as string, call.args[i]?.[1] as unknown[]]);
+  });
+  return out;
+}
 
 /** A minimal but GENUINE 26-byte PNG — the 8-byte signature, the IHDR
  *  length + tag, then 2x3 dimensions. Every byte is a literal from the PNG
@@ -76,10 +104,11 @@ function pickResult(
   resultMap: ResultMap,
   key: string,
   fallbackKey: string,
+  call: MockCall,
 ): QueryResult {
   const v = resultMap[key] ?? resultMap[fallbackKey];
   if (!v) return { data: null, error: null };
-  return typeof v === 'function' ? v() : v;
+  return typeof v === 'function' ? v(call) : v;
 }
 
 /**
@@ -128,7 +157,14 @@ export function makeSupabaseStub(results: ResultMap = {}): SupabaseStub {
         if (prop === 'then') {
           // Resolve the chain when awaited.
           return (resolve: (v: QueryResult) => void) => {
-            resolve(pickResult(results, `${table}.${op}`, `${table}.select`));
+            resolve(
+              pickResult(results, `${table}.${op}`, `${table}.select`, {
+                table,
+                op,
+                methods: chain,
+                args,
+              }),
+            );
           };
         }
         if (prop === 'select') {
@@ -169,11 +205,12 @@ export function makeSupabaseStub(results: ResultMap = {}): SupabaseStub {
         }
         if (prop === 'maybeSingle' || prop === 'single') {
           return () => {
-            const result = pickResult(
-              results,
-              `${table}.${op}.${prop}`,
-              `${table}.${op}`,
-            );
+            const result = pickResult(results, `${table}.${op}.${prop}`, `${table}.${op}`, {
+              table,
+              op,
+              methods: chain,
+              args,
+            });
             const data =
               Array.isArray(result.data) && result.data.length > 0
                 ? result.data[0]
@@ -202,7 +239,14 @@ export function makeSupabaseStub(results: ResultMap = {}): SupabaseStub {
     }),
     rpc: vi.fn((name: string, args: unknown) => {
       rpcCalls.push({ name, args });
-      return Promise.resolve(pickResult(results, `rpc:${name}`, `rpc:${name}`));
+      return Promise.resolve(
+        pickResult(results, `rpc:${name}`, `rpc:${name}`, {
+          table: name,
+          op: 'rpc',
+          methods: [],
+          args: [[args]],
+        }),
+      );
     }),
     auth: {
       getUser: vi.fn(async () => ({
