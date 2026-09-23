@@ -18,14 +18,6 @@
     "in:warehouse_id <- access.readableIds"
   ],
   "app/api/v1/account/delete/route.ts": ["in:organization_id <- ownedOrgIds"],
-  "app/api/v1/mobile/snapshot/route.ts": [
-    "in:bundle_id <- bundleIds",
-    "in:destination.warehouse_id <- scopeIds",
-    "in:id <- phantomIds",
-    "in:id <- scopeIds",
-    "in:warehouse_id <- scopeIds",
-    "template:warehouse_id.is.null,warehouse_id.in.( <- scopeIds.join(',')"
-  ],
   "app/api/v1/public/order-requests/route.ts": ["in:id <- itemIds", "in:id <- itemIds"],
   "components/orders/order-timeline.tsx": ["in:id <- userIds"],
   "lib/ai/tools.ts": [

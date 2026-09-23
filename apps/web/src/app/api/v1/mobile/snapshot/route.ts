@@ -6,6 +6,7 @@ import { getWarehouseAccess, type WarehouseAccess } from '@/lib/auth/warehouse';
 import { buildWarehouseScope } from '@/lib/warehouse-scope';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { fetchAllRowsByIds, settleAsDataError } from '@/server/services/lib/fetch-by-ids';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
 /**
@@ -309,6 +310,7 @@ async function snapshotGET(req: NextRequest) {
   // immutable — `.in()` returns a NEW builder, so the result must be
   // reassigned or the warehouse-access filter is silently dropped (a
   // restricted user would otherwise receive the org's full warehouse list).
+  // in-list-bound: the caller's readable warehouses (an org's handful of sites)
   if (scopeIds) whQ = whQ.in('id', scopeIds);
   const warehousesP = scopedRead(seesNoWarehouse, whQ);
 
@@ -351,6 +353,7 @@ async function snapshotGET(req: NextRequest) {
           .eq('is_bundle', false)
           .order('id', { ascending: true })
           .range(from, to);
+        // in-list-bound: the caller's readable warehouses (an org's handful of sites)
         if (scopeIds) q = q.in('warehouse_id', scopeIds);
         if (since) q = q.gte('updated_at', since);
         return q;
@@ -386,6 +389,7 @@ async function snapshotGET(req: NextRequest) {
     .in('status', ['ordered', 'partially_received', 'draft'])
     .order('updated_at', { ascending: false })
     .limit(200);
+  // in-list-bound: the caller's readable warehouses (an org's handful of sites)
   if (scopeIds) poQ = poQ.in('destination.warehouse_id', scopeIds);
   if (since) poQ = poQ.gte('updated_at', since);
   const posP = scopedRead(seesNoWarehouse, poQ);
@@ -404,6 +408,7 @@ async function snapshotGET(req: NextRequest) {
     .order('started_at', { ascending: false })
     .limit(50);
   if (scopeIds) {
+    // in-list-bound: the caller's readable warehouses (an org's handful of sites)
     ccQ = ccQ.or(`warehouse_id.is.null,warehouse_id.in.(${scopeIds.join(',')})`);
   }
   // Narrowed to nothing answers no counts at all, the null-warehouse ones
@@ -438,19 +443,43 @@ async function snapshotGET(req: NextRequest) {
         .map((b) => b.phantom_item_id as string | null)
         .filter((v): v is string => Boolean(v));
 
+      // An org's active bundles are not capped. One `.in()` of every bundle
+      // id failed past ~215 locally and ~395 in production, which failed the
+      // whole snapshot (the phone's sync) for an org with that many bundles;
+      // and a bundle's components were one unpaged read, cut at 1000 rows.
+      // Both now go 100 ids per request, paged, into the same { data, error }
+      // shape, so a failure still answers as bundle_components /
+      // bundle_phantoms below.
+      type ComponentRow = {
+        bundle_id: string;
+        item_id: string;
+        quantity: number;
+        is_optional: boolean;
+      };
+      type PhantomRow = { id: string; quantity_on_hand: number; warehouse_id: string | null };
       const [componentsRes, phantomsRes] = await Promise.all([
-        bundleIds.length > 0
-          ? ctx.supabase
+        settleAsDataError(
+          fetchAllRowsByIds<ComponentRow>(bundleIds, (batch) => (from, to) =>
+            ctx.supabase
               .from('bundle_components')
               .select('bundle_id, item_id, quantity, is_optional')
-              .in('bundle_id', bundleIds)
-          : Promise.resolve({ data: [], error: null }),
-        phantomIds.length > 0
-          ? ctx.supabase
+              .in('bundle_id', batch)
+              // (bundle_id, item_id) is the primary key: a stable page order.
+              .order('bundle_id', { ascending: true })
+              .order('item_id', { ascending: true })
+              .range(from, to),
+          ),
+        ),
+        settleAsDataError(
+          fetchAllRowsByIds<PhantomRow>(phantomIds, (batch) => (from, to) =>
+            ctx.supabase
               .from('inventory_items')
               .select('id, quantity_on_hand, warehouse_id')
-              .in('id', phantomIds)
-          : Promise.resolve({ data: [], error: null }),
+              .in('id', batch)
+              .order('id', { ascending: true })
+              .range(from, to),
+          ),
+        ),
       ]);
       return { ok: true as const, bundles: bundlesRes.data, componentsRes, phantomsRes };
     })(),
