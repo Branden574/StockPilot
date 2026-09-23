@@ -114,7 +114,7 @@ export const loadCatalogThumbMapCached = unstable_cache(
     const supabase = createAdminClient();
     // Mirror the catalog loader's item scoping with an inner join on
     // inventory_items so only this warehouse's images get signed.
-    const { data } = await supabase
+    const { data, error: rowsError } = await supabase
       .from('item_images')
       .select(
         'item_id, lqip, thumb_path, storage_path, is_primary, sort_order, item:inventory_items!inner(warehouse_id)',
@@ -123,6 +123,12 @@ export const loadCatalogThumbMapCached = unstable_cache(
       .eq('item.warehouse_id', warehouseId)
       .order('is_primary', { ascending: false })
       .order('sort_order', { ascending: true });
+    // THROW, never an empty map: a failed read cached as {} would blank every
+    // photo for 4h. loadCatalogBundle catches, so this request goes
+    // photo-less and the next one retries.
+    if (rowsError) {
+      throw new Error(`thumb map image rows read failed: ${rowsError.message}`);
+    }
 
     // First row per item wins (is_primary DESC + sort_order ASC).
     const rowByItem = new Map<
@@ -254,10 +260,16 @@ export const loadCatalogThumbMapCached = unstable_cache(
 const loadChartersForWarehouseCached = unstable_cache(
   async (warehouseId: string): Promise<StorefrontCharter[]> => {
     const supabase = createAdminClient();
-    const { data: pairs } = await supabase
+    const { data: pairs, error } = await supabase
       .from('warehouse_charters')
       .select('charter:charters!inner (id, name, code, status, address)')
       .eq('warehouse_id', warehouseId);
+    // THROW, never []: a failed read cached as "this warehouse services no
+    // sites" would hide every delivery site for 5 minutes. The page shows its
+    // error state instead, and the next request retries.
+    if (error) {
+      throw new Error(`[orders-new] warehouse charters read failed: ${error.message}`);
+    }
     return (pairs ?? []).flatMap((p) => {
       const c = Array.isArray((p as { charter?: unknown }).charter)
         ? ((p as { charter: unknown[] }).charter[0] as Record<string, unknown>)
@@ -648,7 +660,14 @@ async function loadCatalogItemsUncached(
     itemsQuery = itemsQuery.in('category_id', scope.categoryIds);
   }
 
-  const { data: itemsData } = await itemsQuery;
+  // THROW-DON'T-CACHE: every read below throws on error, so unstable_cache
+  // stores nothing and the next request retries. Read as data, a failed items
+  // read was an empty catalog for 60 s, and a failed reservations read was
+  // "nothing reserved", which overstated available-to-promise on every card.
+  const { data: itemsData, error: itemsError } = await itemsQuery;
+  if (itemsError) {
+    throw new Error(`[orders-new] catalog items read failed: ${itemsError.message}`);
+  }
 
   const items = (itemsData ?? []) as unknown as Array<{
     id: string;
@@ -692,7 +711,7 @@ async function loadCatalogItemsUncached(
           .select('id, name')
           .eq('organization_id', organizationId)
           .in('id', categoryIds)
-      : Promise.resolve({ data: [] as Array<{ id: string; name: string }> }),
+      : Promise.resolve({ data: [] as Array<{ id: string; name: string }>, error: null }),
     charterIds.length > 0
       ? supabase
           .from('charters')
@@ -701,8 +720,20 @@ async function loadCatalogItemsUncached(
           .in('id', charterIds)
       : Promise.resolve({
           data: [] as Array<{ id: string; name: string; code: string | null }>,
+          error: null,
         }),
   ]);
+  if (rsRes.error) {
+    throw new Error(`[orders-new] catalog reservations read failed: ${rsRes.error.message}`);
+  }
+  if (categoriesRes.error) {
+    throw new Error(
+      `[orders-new] catalog category names read failed: ${categoriesRes.error.message}`,
+    );
+  }
+  if (chartersRes.error) {
+    throw new Error(`[orders-new] catalog charter names read failed: ${chartersRes.error.message}`);
+  }
 
   const reservedByItem = new Map<string, number>();
   for (const row of (rsRes.data ?? []) as Array<{ item_id: string; quantity: number }>) {

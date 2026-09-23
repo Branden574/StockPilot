@@ -24,7 +24,10 @@ vi.mock('@/lib/supabase/server', () => ({
 
 import {
   FULL_CATALOG_SCOPE_KEY,
+  loadCatalogBundle,
   loadCatalogItems,
+  loadCatalogThumbMapCached,
+  loadChartersForWarehouse,
   resolveCatalogScopeKey,
   type CatalogViewer,
 } from './orders-new-catalog';
@@ -413,5 +416,141 @@ describe('loadCatalogItems — a failed scope read denies', () => {
 
     await expect(loadCatalogItems(viewer('staff'), WH)).rejects.toThrow(/unexpected shape/);
     expect(admin.itemQueries).toHaveLength(0);
+  });
+});
+
+/* ---- throw-don't-cache: no cached loader stores a failure as data ---- */
+
+// Every loader below runs inside unstable_cache, which stores whatever the
+// callback RESOLVES with and nothing when it throws. supabase-js resolves a
+// failed query as { data: null, error }, so each of these used to turn a
+// failure into a cached "empty" answer.
+describe('storefront loaders throw on a failed read instead of caching it', () => {
+  const ITEM = {
+    id: 'i-1',
+    name: 'Chromebook',
+    sku: 'CB-1',
+    quantity_on_hand: 10,
+    warehouse_id: WH,
+    item_type: 'product',
+    bin_location: null,
+    category_id: CAT_X,
+    charter_id: CHARTER_A,
+    retail_price: 200,
+    unit_cost: 150,
+    reorder_point: 0,
+    rack_number: null,
+    rack_row: null,
+    book_rack_number: null,
+    book_rack_row: null,
+  };
+  const FAILED = { data: null, error: { message: 'fetch failed' } };
+  const owner = viewer('owner');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('catalog items: a failed items read rejects (was an empty catalog for 60 s)', async () => {
+    const stub = makeSupabaseStub({ 'inventory_items.select': FAILED });
+    createAdminClientMock.mockReturnValue(stub.client);
+    await expect(loadCatalogItems(owner, WH)).rejects.toThrow(/catalog items read failed/);
+  });
+
+  it('catalog items: a failed reservations read rejects (was "nothing reserved")', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [ITEM], error: null },
+      'stock_reservations.select': FAILED,
+      'categories.select': { data: [{ id: CAT_X, name: 'Tech' }], error: null },
+      'charters.select': { data: [{ id: CHARTER_A, name: 'A', code: null }], error: null },
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+    await expect(loadCatalogItems(owner, WH)).rejects.toThrow(/reservations read failed/);
+  });
+
+  it('catalog items: a failed category-name read rejects', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [ITEM], error: null },
+      'stock_reservations.select': { data: [], error: null },
+      'categories.select': FAILED,
+      'charters.select': { data: [{ id: CHARTER_A, name: 'A', code: null }], error: null },
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+    await expect(loadCatalogItems(owner, WH)).rejects.toThrow(/category names read failed/);
+  });
+
+  it('catalog items: a failed charter-name read rejects', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [ITEM], error: null },
+      'stock_reservations.select': { data: [], error: null },
+      'categories.select': { data: [{ id: CAT_X, name: 'Tech' }], error: null },
+      'charters.select': FAILED,
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+    await expect(loadCatalogItems(owner, WH)).rejects.toThrow(/charter names read failed/);
+  });
+
+  it('catalog items: reads that succeed still produce the card (reserved stock counted)', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [ITEM], error: null },
+      'stock_reservations.select': { data: [{ item_id: 'i-1', quantity: 3 }], error: null },
+      'categories.select': { data: [{ id: CAT_X, name: 'Tech' }], error: null },
+      'charters.select': { data: [{ id: CHARTER_A, name: 'Alpha', code: 'A' }], error: null },
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+    const [card] = await loadCatalogItems(owner, WH);
+    expect(card).toMatchObject({
+      id: 'i-1',
+      reservedQuantity: 3,
+      categoryName: 'Tech',
+      charterName: 'Alpha',
+      charterCode: 'A',
+    });
+  });
+
+  it('thumb map: a failed image-rows read rejects (was an empty map for 4 h), signs nothing', async () => {
+    const stub = makeSupabaseStub({ 'item_images.select': FAILED });
+    createAdminClientMock.mockReturnValue(stub.client);
+    await expect(loadCatalogThumbMapCached(ORG, WH)).rejects.toThrow(/image rows read failed/);
+    expect(stub.client.storage.from).not.toHaveBeenCalled();
+  });
+
+  it('thumb map failure: the bundle still renders this request, photo-less', async () => {
+    const stub = makeSupabaseStub({
+      'item_images.select': FAILED,
+      'inventory_items.select': { data: [ITEM], error: null },
+      'stock_reservations.select': { data: [], error: null },
+      'categories.select': { data: [{ id: CAT_X, name: 'Tech' }], error: null },
+      'charters.select': { data: [{ id: CHARTER_A, name: 'Alpha', code: 'A' }], error: null },
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const bundle = await loadCatalogBundle(owner, WH);
+    expect(bundle.items.map((i) => [i.id, i.imageUrl])).toEqual([['i-1', null]]);
+    warn.mockRestore();
+  });
+
+  it('charters: a failed warehouse_charters read rejects (was "no sites" for 5 min)', async () => {
+    const stub = makeSupabaseStub({ 'warehouse_charters.select': FAILED });
+    createAdminClientMock.mockReturnValue(stub.client);
+    await expect(loadChartersForWarehouse(WH)).rejects.toThrow(/warehouse charters read failed/);
+  });
+
+  it('charters: a successful read lists the active charters', async () => {
+    const stub = makeSupabaseStub({
+      'warehouse_charters.select': {
+        data: [
+          { charter: { id: CHARTER_A, name: 'Alpha', code: 'A', status: 'active', address: null } },
+          {
+            charter: { id: CHARTER_B, name: 'Beta', code: null, status: 'archived', address: null },
+          },
+        ],
+        error: null,
+      },
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+    await expect(loadChartersForWarehouse(WH)).resolves.toEqual([
+      { id: CHARTER_A, name: 'Alpha', code: 'A', address: null },
+    ]);
   });
 });
