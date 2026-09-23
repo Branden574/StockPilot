@@ -17,6 +17,8 @@ import type { StorefrontCatalogData } from '@/components/orders/storefront/order
 import type { AisleSummary, CatalogItem, StorefrontCharter } from '@/components/orders/v2/types';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
+import { ServiceError } from '@/server/services/context';
+import { fetchAllRows } from '@/server/services/lib/paginate';
 
 import type { Role } from '@stockpilot/core';
 
@@ -593,6 +595,13 @@ export function rackLabelFor(it: OrdersCatalogRackRow): string | null {
   return row ? `${num}-${row}` : String(num);
 }
 
+/**
+ * Uuids per reservations `.in('item_id', …)` call: 100 ≈ 3.7 KB of query
+ * string, the same batch size as inventory-list.ts ID_CHUNK_SIZE and
+ * rack-holdings.ts. The catalog's 500-row limit means at most 5 batches.
+ */
+const RESERVATION_ID_CHUNK = 100;
+
 async function loadCatalogItemsUncached(
   organizationId: string,
   warehouseId: string,
@@ -700,13 +709,48 @@ async function loadCatalogItemsUncached(
   // media work happens in here: thumbnail URLs and LQIP blurs come
   // from loadCatalogThumbMapCached (4h cadence) and are merged in
   // loadCatalogBundle — this loader is pure stock/catalog reads.
+  //
+  // Reservations go out in RESERVATION_ID_CHUNK batches, all in parallel (one
+  // wave, as before): up to 500 uuids in one query string is ~18.5 KB, past the
+  // local gateway's 8 KB and the edge's usual 16 KB. Production's largest
+  // catalog already sent 15.8 KB (edge logs, 2026-09-22), and the local
+  // gateway refused every read past ~215 items. Each batch is paged past the
+  // 1000-row cap; any failed batch fails the whole read (throws, not cached).
+  const reservationChunks: string[][] = [];
+  for (let i = 0; i < itemIds.length; i += RESERVATION_ID_CHUNK) {
+    reservationChunks.push(itemIds.slice(i, i + RESERVATION_ID_CHUNK));
+  }
+  const reservationsRead = Promise.all(
+    reservationChunks.map((chunk) =>
+      fetchAllRows<{ item_id: string; quantity: number }>((from, to) =>
+        supabase
+          .from('stock_reservations')
+          .select('item_id, quantity')
+          .eq('organization_id', organizationId)
+          .in('item_id', chunk)
+          .is('released_at', null)
+          .order('id', { ascending: true })
+          .range(from, to),
+      ),
+    ),
+  ).then(
+    (pages) => ({ data: pages.flat(), error: null }),
+    // fetchAllRows keeps the PostgREST text in internalDetail (its public
+    // message is generic); this server-side log wants the real cause.
+    (err: unknown) => ({
+      data: null,
+      error: {
+        message:
+          err instanceof ServiceError && err.internalDetail
+            ? err.internalDetail
+            : err instanceof Error
+              ? err.message
+              : String(err),
+      },
+    }),
+  );
   const [rsRes, categoriesRes, chartersRes] = await Promise.all([
-    supabase
-      .from('stock_reservations')
-      .select('item_id, quantity')
-      .eq('organization_id', organizationId)
-      .in('item_id', itemIds)
-      .is('released_at', null),
+    reservationsRead,
     categoryIds.length > 0
       ? supabase
           .from('categories')
