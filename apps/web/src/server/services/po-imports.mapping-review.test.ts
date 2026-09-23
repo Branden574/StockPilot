@@ -4,11 +4,19 @@ import type { ModuleId } from '@stockpilot/core';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
-const { mockAudit, mockAdmin } = vi.hoisted(() => ({
+const { mockAudit, mockAuditMany, mockAdmin } = vi.hoisted(() => ({
   mockAudit: vi.fn(async () => {}),
+  mockAuditMany: vi.fn(async (rows: readonly unknown[]) => ({ written: rows.length, lost: 0 })),
   mockAdmin: vi.fn(),
 }));
-vi.mock('./audit', () => ({ audit: mockAudit }));
+vi.mock('./audit', () => ({ audit: mockAudit, auditMany: mockAuditMany }));
+
+/** The confirmation rows: one per saved line, written through ONE batched
+ *  write (auditMany) after the loop, never one audit() call per line. */
+function auditedRows(): unknown[] {
+  expect(mockAudit).not.toHaveBeenCalled();
+  return mockAuditMany.mock.calls.flatMap(([rows]) => rows as unknown[]);
+}
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: mockAdmin }));
 
 import { PoImportsService } from './po-imports';
@@ -151,12 +159,12 @@ describe('PoImportsService.confirmLineMappings', () => {
     expect(patch.mapping_confidence).toBe(1);
     // Confirming that it IS a jersey number leaves the value alone.
     expect(patch).not.toHaveProperty('jersey_number');
-    expect(mockAudit).toHaveBeenCalledWith(
+    expect(mockAuditMany).toHaveBeenCalledTimes(1);
+    expect(auditedRows()).toContainEqual(
       expect.objectContaining({
         event: 'sports.import.mapping_confirmed',
         before: expect.objectContaining({ jerseyNumber: '12' }),
       }),
-      expect.anything(),
     );
   });
 
@@ -329,7 +337,32 @@ describe('confirmLineMappings — the write is checked, and serial is settleable
       }),
     ).rejects.toThrow(/could not be saved/);
     // Nothing is audited for a write that did not land.
-    expect(mockAudit).not.toHaveBeenCalled();
+    expect(auditedRows()).toEqual([]);
+  });
+
+  it('still audits the lines saved before a later line fails to save', async () => {
+    const SECOND = '33333333-3333-4333-8333-333333333333';
+    let n = 0;
+    const { svc } = svcFor({
+      'po_imports.select': HEADER,
+      'po_import_lines.select': {
+        data: [line(), line({ id: SECOND, line_number: 2 })],
+        error: null,
+      },
+      'po_import_lines.update': () => {
+        n += 1;
+        return n === 2 ? { data: null, error: null } : { data: { id: LINE_ID }, error: null };
+      },
+      'purchase_orders.select': { data: [], error: null },
+    });
+
+    await expect(
+      svc.confirmLineMappings({
+        poImportId: IMPORT_ID,
+        decisions: { [LINE_ID]: 'jersey_number', [SECOND]: 'jersey_number' },
+      }),
+    ).rejects.toThrow(/could not be saved/);
+    expect(auditedRows()).toEqual([expect.objectContaining({ entityId: LINE_ID })]);
   });
 
   it('moves the value into serial_hint when the reviewer says it is a serial', async () => {
@@ -479,7 +512,7 @@ describe('confirmLineMappings — the write is checked, and serial is settleable
       decisions: { [LINE_ID]: 'ignore' },
     });
 
-    expect(mockAudit).toHaveBeenCalledWith(
+    expect(auditedRows()).toContainEqual(
       expect.objectContaining({
         event: 'sports.import.mapping_confirmed',
         before: expect.objectContaining({
@@ -490,7 +523,6 @@ describe('confirmLineMappings — the write is checked, and serial is settleable
           }),
         }),
       }),
-      expect.anything(),
     );
   });
 

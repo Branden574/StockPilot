@@ -1,14 +1,22 @@
 import 'server-only';
 
 import { ServiceError } from '../context';
+import { postgrestErrorText } from './postgrest-error';
 
 /** PostgREST clamps every response to `[api] max_rows` (1000;
  *  supabase/config.toml). Keep page size at the cap so each page returns in
  *  full. */
 export const PAGE_SIZE = 1000;
 
-/** Minimal shape of a Supabase PostgREST query awaited to `{ data, error }`. */
-type PageResult<Row> = { data: Row[] | null; error: { message: string } | null };
+/** Minimal shape of a Supabase PostgREST query awaited to `{ data, error }`.
+ *  `status` is optional because a hand-built stub may leave it out; the real
+ *  response always carries it. */
+type PageResult<Row> = {
+  data: Row[] | null;
+  error: { message: string } | null;
+  status?: number;
+  statusText?: string;
+};
 
 /**
  * Fetch the COMPLETE rowset for a filtered PostgREST query, working around the
@@ -34,8 +42,12 @@ export async function fetchAllRows<Row>(
   for (let from = 0; ; from += PAGE_SIZE) {
     const to = cap !== undefined ? Math.min(from + PAGE_SIZE, cap) - 1 : from + PAGE_SIZE - 1;
     if (cap !== undefined && to < from) break;
-    const { data, error } = await buildPage(from, to);
-    if (error) throw new ServiceError('internal_error', error.message);
+    const res = await buildPage(from, to);
+    const { data, error } = res;
+    // postgrestErrorText, not error.message: a gateway 502 with an empty body
+    // has an empty message, which left internalDetail undefined and the log
+    // with no cause at all.
+    if (error) throw new ServiceError('internal_error', postgrestErrorText(error, res));
     const page = (data ?? []) as Row[];
     for (const r of page) rows.push(r);
     if (page.length < to - from + 1) break;

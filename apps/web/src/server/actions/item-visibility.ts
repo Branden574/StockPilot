@@ -3,9 +3,11 @@
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { audit } from '@/server/services/audit';
 import { assertPermission, ServiceError, withContext } from '@/server/services/context';
+import { fetchAllRowsByIds, writeInIdBatches } from '@/server/services/lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from '@/server/services/lib/inventory-list-cache';
 import { publicCatalogTag } from '@/server/services/public-links';
 
@@ -294,39 +296,60 @@ export async function bulkSetItemPublicVisibilityAction(
 
     // Org check on every id (admin client bypasses RLS, so this filter is
     // the tenancy boundary) + capture the before-distribution for audit.
-    const { data: beforeRows, error: readErr } = await admin
-      .from('inventory_items')
-      .select('id, public_visibility')
-      .eq('organization_id', ctx.organizationId)
-      .in('id', ids)
-      .is('deleted_at', null);
-    if (readErr) throw new ServiceError('internal_error', readErr.message);
-    const rows = (beforeRows ?? []) as Array<{
-      id: string;
-      public_visibility: ItemPublicVisibility;
-    }>;
+    // Up to 500 ids: one `.in()` of them overflowed the URL past ~215 locally
+    // and ~395 in production, so the read and the write go 100 at a time.
+    // A failed read batch throws before anything is written.
+    type BeforeRow = { id: string; public_visibility: ItemPublicVisibility };
+    const rows = await fetchAllRowsByIds<BeforeRow>(ids, (batch) => (from, to) =>
+      admin
+        .from('inventory_items')
+        .select('id, public_visibility')
+        .eq('organization_id', ctx.organizationId)
+        .in('id', batch)
+        .is('deleted_at', null)
+        .order('id', { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{
+        data: BeforeRow[] | null;
+        error: { message: string } | null;
+      }>,
+    );
     if (rows.length !== ids.length) {
       throw new ServiceError('not_found', 'One or more items were not found.');
     }
-    const beforeCounts: Record<string, number> = {};
-    for (const r of rows) {
-      beforeCounts[r.public_visibility] = (beforeCounts[r.public_visibility] ?? 0) + 1;
-    }
 
-    const { data: updatedRows, error: writeErr } = await admin
-      .from('inventory_items')
-      .update({ public_visibility: visibility })
-      .eq('organization_id', ctx.organizationId)
-      .in('id', ids)
-      .is('deleted_at', null)
-      .select('id');
-    if (writeErr) throw new ServiceError('internal_error', writeErr.message);
-    const updated = ((updatedRows ?? []) as Array<{ id: string }>).length;
-    if (updated === 0) throw new ServiceError('not_found', 'One or more items were not found.');
+    // One batch at a time, stopping at the first failure. Setting one column
+    // to a constant is independent per row, so the batches that committed are
+    // correct on their own; they are accounted for below before the failure
+    // is reported, and running the action again finishes the rest.
+    const write = await writeInIdBatches<string, { id: string }>(ids, (batch) =>
+      admin
+        .from('inventory_items')
+        .update({ public_visibility: visibility })
+        .eq('organization_id', ctx.organizationId)
+        .in('id', batch)
+        .is('deleted_at', null)
+        .select('id'),
+    );
+    const updated = write.rows.length;
+    if (write.error !== null && updated === 0) {
+      throw new ServiceError('internal_error', write.error);
+    }
+    if (write.error === null && updated === 0) {
+      throw new ServiceError('not_found', 'One or more items were not found.');
+    }
     // tg_inventory_items_set_updated_at bumps updated_at on this row (only an
     // embedding/search_vector write is exempt, 0242 as restated in 0303), and
     // updated_at is the Items list's default sort key and a rendered column.
     invalidateInventoryListAfterWrite(ctx.organizationId, 'item.public_visibility.bulk');
+
+    // Counted over the items whose batch committed, so the before side of the
+    // audit describes the same items as its item_ids.
+    const writtenIds = new Set(write.written);
+    const beforeCounts: Record<string, number> = {};
+    for (const r of rows) {
+      if (!writtenIds.has(r.id)) continue;
+      beforeCounts[r.public_visibility] = (beforeCounts[r.public_visibility] ?? 0) + 1;
+    }
 
     await audit(
       {
@@ -334,7 +357,9 @@ export async function bulkSetItemPublicVisibilityAction(
         entityType: 'inventory_item',
         extra: {
           action: 'items_public_visibility_set',
-          item_ids: ids,
+          // Only the items whose batch committed: the audit trail says what
+          // changed, not what was asked for.
+          item_ids: write.written,
           count: updated,
         },
         before: { public_visibility_counts: beforeCounts },
@@ -344,6 +369,21 @@ export async function bulkSetItemPublicVisibilityAction(
     );
 
     await revalidateOrgPublicCatalogs(admin, ctx.organizationId);
+    if (write.notWritten.length > 0) {
+      void reportError(new Error('Bulk visibility change stopped partway'), {
+        tag: 'item_visibility.bulk.partial',
+        organizationId: ctx.organizationId,
+        extra: {
+          written: write.written.length,
+          notWritten: write.notWritten.length,
+          detail: write.error,
+        },
+      });
+      return err(
+        'internal_error',
+        `Changed ${updated} of ${ids.length} items before an error stopped the rest. Run it again to finish.`,
+      );
+    }
     return ok({ updated, visibility });
   } catch (e) {
     return toResult(e);

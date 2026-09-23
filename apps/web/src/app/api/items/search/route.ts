@@ -6,6 +6,7 @@ const ITEM_ID_RE =
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { isbnVariants } from '@/lib/books/isbn-variants';
+import { IN_FILTER_MAX_VALUES } from '@/lib/supabase/in-filter';
 import { InventoryService, type ItemListSort } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 
@@ -87,7 +88,9 @@ export async function GET(req: Request): Promise<Response> {
   const ids = params
     .getAll('ids')
     .filter((v) => ITEM_ID_RE.test(v))
-    .slice(0, 100);
+    // InventoryService.list() refuses more ids than one `.in()` batch holds;
+    // the PO form chunks its requests by the same constant.
+    .slice(0, IN_FILTER_MAX_VALUES);
   const byIds = ids.length > 0;
 
   if (!browse && !byIds && raw.length < 2) {

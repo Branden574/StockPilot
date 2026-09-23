@@ -66,7 +66,15 @@ vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 vi.mock('@/lib/realtime/broadcast', () => ({ broadcastToChannel: vi.fn() }));
 vi.mock('@/lib/auth/password-reset-email', () => ({ sendPasswordResetEmail: vi.fn() }));
 vi.mock('@/lib/auth/verify-password', () => ({ verifyPasswordSideChannel: vi.fn() }));
-vi.mock('@/server/services/audit', () => ({ audit: vi.fn() }));
+// emitAuthAudit writes through insertAuditRowReported; the row it hands over
+// is captured by the same auditInsert the admin-client mock uses.
+vi.mock('@/server/services/audit', () => ({
+  audit: vi.fn(),
+  insertAuditRowReported: vi.fn(async (row: unknown) => {
+    auditInsert(row);
+    return true;
+  }),
+}));
 vi.mock('@/lib/env', () => ({
   env: {
     NEXT_PUBLIC_SUPABASE_URL: 'https://sb.example.com',

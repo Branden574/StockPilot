@@ -12,6 +12,25 @@ import { afterEach, vi } from 'vitest';
 // so their assertions still work.
 vi.mock('@/server/services/audit', () => ({
   audit: vi.fn(async () => undefined),
+  auditMany: vi.fn(async (payloads: readonly unknown[]) => ({
+    written: payloads.length,
+    lost: 0,
+  })),
+  // Hands the row to the (mocked) admin client exactly as the call sites did
+  // before they used this helper, so tests that capture audit rows through
+  // their admin-client mock keep asserting the same rows. Like the real
+  // helper it never throws. The real one is tested in services/audit.test.ts.
+  insertAuditRowReported: vi.fn(async (row: unknown) => {
+    try {
+      const { createAdminClient } = await import('@/lib/supabase/admin');
+      const res = (await createAdminClient().from('audit_logs').insert(row as never)) as
+        | { error?: unknown }
+        | undefined;
+      return !res?.error;
+    } catch {
+      return false;
+    }
+  }),
 }));
 
 // Same reason, same shape: every service stock write now calls

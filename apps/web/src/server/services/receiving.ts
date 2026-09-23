@@ -3,11 +3,16 @@ import 'server-only';
 import { createHash } from 'node:crypto';
 
 import { reportError } from '@/lib/error-reporter';
-import { audit } from './audit';
+import { audit, auditMany } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { dispatchEvent } from './integration-events';
+import {
+  fetchAllRowsByIds,
+  rawErrorText,
+  reportDegradedRead,
+  writeInIdBatches,
+} from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
-import { fetchAllRows } from './lib/paginate';
 
 import type {
   PostReceiptInput,
@@ -111,13 +116,17 @@ export class ReceivingService {
     // Paginate: a long-lived PO can accumulate >1000 receipt_lines across many
     // receipts, and the PDF/detail totals sum these — a silent 1000-row cap
     // would understate accepted/rejected. Stable .order('id') per the helper.
-    const lines = await fetchAllRows<Record<string, unknown>>((from, to) =>
-      this.ctx.supabase
-        .from('receipt_lines')
-        .select('*')
-        .in('receipt_id', ids)
-        .order('id')
-        .range(from, to),
+    // Batched by receipt too: a PO's receipts have no cap.
+    const ctx = this.ctx;
+    const lines = await fetchAllRowsByIds<Record<string, unknown>>(
+      ids,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('receipt_lines')
+          .select('*')
+          .in('receipt_id', batch)
+          .order('id')
+          .range(from, to),
     );
 
     // Resolve received_by → display name so the history can show WHO received
@@ -133,12 +142,24 @@ export class ReceivingService {
     );
     const nameById = new Map<string, string>();
     if (receiverIds.length > 0) {
-      const { data: profs } = await this.ctx.supabase
-        .from('user_profiles')
-        .select('id, full_name, email')
-        .in('id', receiverIds);
-      for (const p of (profs ?? []) as ProfileRow[]) {
-        nameById.set(p.id, (p.full_name || p.email || 'Unknown').trim());
+      // A label: a failed read shows "Unknown" (as before) but is reported
+      // now instead of ignored.
+      try {
+        const profs = await fetchAllRowsByIds<ProfileRow>(
+          receiverIds,
+          (batch) => (from, to) =>
+            ctx.supabase
+              .from('user_profiles')
+              .select('id, full_name, email')
+              .in('id', batch)
+              .order('id')
+              .range(from, to),
+        );
+        for (const p of profs) {
+          nameById.set(p.id, (p.full_name || p.email || 'Unknown').trim());
+        }
+      } catch (err) {
+        reportDegradedRead('receiving.receiver_names', err, { users: receiverIds.length });
       }
     }
 
@@ -367,15 +388,37 @@ export class ReceivingService {
     try {
       if (poLineIds.length === 0) return;
 
+      // Every read here is batched (a receipt's lines have no cap; one
+      // `.in()` past ~215 ids fails) and its error is BOUND: they used to be
+      // ignored, so a failed read quietly skipped the unarchive. Skipping is
+      // still the safe outcome (the DB restock trigger is the backstop), but
+      // it is reported now.
+      const ctx = this.ctx;
+      const skip = (step: string, err: unknown) => {
+        void reportError(new Error(rawErrorText(err)), {
+          tag: `receiving.auto_unarchive.${step}`,
+          organizationId: this.ctx.organizationId,
+        });
+      };
+
       // Resolve poLineId → item_id
-      const { data: lines } = await this.ctx.supabase
-        .from('purchase_order_items')
-        .select('id, item_id')
-        .in('id', poLineIds);
+      let lines: Array<{ item_id: string | null }>;
+      try {
+        lines = await fetchAllRowsByIds<{ item_id: string | null }>(
+          poLineIds,
+          (batch) => (from, to) =>
+            ctx.supabase
+              .from('purchase_order_items')
+              .select('id, item_id')
+              .in('id', batch)
+              .order('id')
+              .range(from, to),
+        );
+      } catch (err) {
+        return skip('lines', err);
+      }
       const itemIds = Array.from(
-        new Set(((lines ?? []) as Array<{ item_id: string | null }>)
-          .map((l) => l.item_id)
-          .filter((x): x is string => !!x)),
+        new Set(lines.map((l) => l.item_id).filter((x): x is string => !!x)),
       );
       if (itemIds.length === 0) return;
 
@@ -386,14 +429,24 @@ export class ReceivingService {
       // discontinued line that still happens to receive a return/
       // correction). Mirrors the DB's own restock trigger
       // (_auto_restock_restore), which carries the identical guard.
-      const { data: archivedRows } = await this.ctx.supabase
-        .from('inventory_items')
-        .select('id, name')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', itemIds)
-        .eq('status', 'archived')
-        .eq('auto_archived', true);
-      const archived = (archivedRows ?? []) as Array<{ id: string; name: string }>;
+      let archived: Array<{ id: string; name: string }>;
+      try {
+        archived = await fetchAllRowsByIds<{ id: string; name: string }>(
+          itemIds,
+          (batch) => (from, to) =>
+            ctx.supabase
+              .from('inventory_items')
+              .select('id, name')
+              .eq('organization_id', ctx.organizationId)
+              .in('id', batch)
+              .eq('status', 'archived')
+              .eq('auto_archived', true)
+              .order('id')
+              .range(from, to),
+        );
+      } catch (err) {
+        return skip('candidates', err);
+      }
       if (archived.length === 0) return;
 
       // Flip them back to active AND clear auto_archived — mirrors the DB
@@ -403,21 +456,28 @@ export class ReceivingService {
       // permanently hide this item from future auto-archiving). The
       // `eq('status', 'archived')` guard makes this race-safe: if another
       // writer un-archived between the SELECT and the UPDATE we don't
-      // accidentally touch 'discontinued' or anything else.
-      const { data: flippedRows, error: updErr } = await this.ctx.supabase
-        .from('inventory_items')
-        .update({ status: 'active', auto_archived: false })
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', archived.map((a) => a.id))
-        .eq('status', 'archived')
-        .select('id, name');
-      if (updErr) {
-        void reportError(new Error(updErr.message), {
+      // accidentally touch 'discontinued' or anything else. One batch at a
+      // time; whatever committed is invalidated and audited even when a
+      // later batch fails.
+      const flip = await writeInIdBatches<string, { id: string; name: string }>(
+        archived.map((a) => a.id),
+        (batch) =>
+          ctx.supabase
+            .from('inventory_items')
+            .update({ status: 'active', auto_archived: false })
+            .eq('organization_id', ctx.organizationId)
+            .in('id', batch)
+            .eq('status', 'archived')
+            .select('id, name'),
+      );
+      if (flip.error !== null) {
+        void reportError(new Error(flip.error), {
           tag: 'receiving.auto_unarchive.update',
           organizationId: this.ctx.organizationId,
+          extra: { restored: flip.rows.length, notRestored: flip.notWritten.length },
         });
-        return;
       }
+      if (flip.rows.length === 0) return;
       // An archived row coming back to 'active' re-enters the default view.
       invalidateInventoryListAfterWrite(this.ctx.organizationId, 'receipt.auto_unarchive');
 
@@ -426,20 +486,18 @@ export class ReceivingService {
       // eq('status','archived') guard means a concurrent receipt flips a
       // given row only once; auditing the SELECT result would emit a
       // duplicate 'restored' entry for the loser of the race.
-      const flipped = (flippedRows ?? []) as Array<{ id: string; name: string }>;
-      for (const item of flipped) {
-        await audit(
-          {
-            event: 'inventory.item.restored',
-            entityType: 'inventory_item',
-            entityId: item.id,
-            after: { status: 'active' },
-            before: { status: 'archived' },
-            extra: { reason: 'receipt_posted', receiptId, itemName: item.name },
-          },
-          this.ctx,
-        );
-      }
+      // Batched INSERTs (auditMany), not one awaited request per item.
+      await auditMany(
+        flip.rows.map((item) => ({
+          event: 'inventory.item.restored' as const,
+          entityType: 'inventory_item',
+          entityId: item.id,
+          after: { status: 'active' },
+          before: { status: 'archived' },
+          extra: { reason: 'receipt_posted', receiptId, itemName: item.name },
+        })),
+        this.ctx,
+      );
     } catch (e) {
       void reportError(e, {
         tag: 'receiving.auto_unarchive.unhandled',

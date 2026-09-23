@@ -5,10 +5,8 @@ import { unstable_cache } from 'next/cache';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
 
-import type {
-  PublicAvailability,
-  PublicCatalogItem,
-} from '@/components/orders/public-v2/types';
+import { fetchAllRowsByIds, reportDegradedRead, settleAsDataError } from './lib/fetch-by-ids';
+import type { PublicAvailability, PublicCatalogItem } from '@/components/orders/public-v2/types';
 
 import { publicCatalogTag } from './public-links';
 
@@ -297,17 +295,25 @@ async function loadPublicCatalogUncached(
     category_id: string | null;
     custom_fields: Record<string, unknown> | null;
   };
-  const items: ItemRow[] = [];
-  for (const chunk of chunked(eligibleIds, 200)) {
-    const { data } = await admin
-      .from('inventory_items')
-      .select(
-        'id, name, public_display_name, public_description, quantity_on_hand, item_type, category_id, custom_fields',
-      )
-      .eq('organization_id', orgId)
-      .in('id', chunk);
-    items.push(...((data ?? []) as ItemRow[]));
-  }
+  //
+  // Batched (100 ids per request) and THROWS on a failed batch. The old
+  // 200-id chunks ignored their errors, so a failed chunk silently dropped
+  // its items from the public catalog; this loader is wrapped in
+  // unstable_cache, and a throw is never cached, whereas a short list was
+  // served for 60 s.
+  const items = await fetchAllRowsByIds<ItemRow>(
+    eligibleIds,
+    (batch) => (from, to) =>
+      admin
+        .from('inventory_items')
+        .select(
+          'id, name, public_display_name, public_description, quantity_on_hand, item_type, category_id, custom_fields',
+        )
+        .eq('organization_id', orgId)
+        .in('id', batch)
+        .order('id')
+        .range(from, to),
+  );
 
   items.sort((a, b) =>
     (a.public_display_name ?? a.name).localeCompare(b.public_display_name ?? b.name),
@@ -321,38 +327,70 @@ async function loadPublicCatalogUncached(
 
   // 3. Reservations (only when a stock signal ships), category labels, and
   // LQIP blurs in parallel. Signed thumbnail URLs stay deferred to the client.
-  const [rsRes, categoriesRes, lqipRes] = await Promise.all([
+  //
+  // All three are batched: a page is up to CATALOG_LIMIT ids, and one `.in()`
+  // past ~215 uuids answers 414 locally and fails as "fetch failed" in
+  // production after ~7 s of retries. Their errors used to be ignored, so a
+  // failed reservation read showed reserved stock as available. Reservations
+  // decide the availability shown, so a failed batch THROWS (never cached).
+  // Categories and blur placeholders are cosmetic: they degrade, reported.
+  const [rsRows, categoriesRes, lqipRes] = await Promise.all([
     availabilityDisplay === 'none'
-      ? Promise.resolve({ data: [] as Array<{ item_id: string; quantity: number }> })
-      : admin
-          .from('stock_reservations')
-          .select('item_id, quantity')
-          .eq('organization_id', orgId)
-          .in('item_id', pageIds)
-          .is('released_at', null),
-    categoryIds.length > 0
-      ? admin
-          .from('categories')
-          .select('id, name')
-          .eq('organization_id', orgId)
-          .in('id', categoryIds)
-      : Promise.resolve({ data: [] as Array<{ id: string; name: string }> }),
-    admin
-      .from('item_images')
-      .select('item_id, lqip, is_primary, sort_order')
-      .eq('organization_id', orgId)
-      .in('item_id', pageIds)
-      .not('lqip', 'is', null)
-      .order('is_primary', { ascending: false })
-      .order('sort_order', { ascending: true }),
+      ? Promise.resolve([] as Array<{ item_id: string; quantity: number }>)
+      : fetchAllRowsByIds<{ item_id: string; quantity: number }>(
+          pageIds,
+          (batch) => (from, to) =>
+            admin
+              .from('stock_reservations')
+              .select('item_id, quantity')
+              .eq('organization_id', orgId)
+              .in('item_id', batch)
+              .is('released_at', null)
+              .order('id')
+              .range(from, to),
+        ),
+    settleAsDataError(
+      fetchAllRowsByIds<{ id: string; name: string }>(
+        categoryIds,
+        (batch) => (from, to) =>
+          admin
+            .from('categories')
+            .select('id, name')
+            .eq('organization_id', orgId)
+            .in('id', batch)
+            .order('id')
+            .range(from, to),
+      ),
+    ),
+    settleAsDataError(
+      fetchAllRowsByIds<{ item_id: string; lqip: string | null }>(
+        pageIds,
+        (batch) => (from, to) =>
+          admin
+            .from('item_images')
+            .select('item_id, lqip, is_primary, sort_order')
+            .eq('organization_id', orgId)
+            .in('item_id', batch)
+            .not('lqip', 'is', null)
+            .order('is_primary', { ascending: false })
+            .order('sort_order', { ascending: true })
+            .order('id')
+            .range(from, to),
+      ),
+    ),
   ]);
+  if (categoriesRes.error) {
+    reportDegradedRead('public_catalog.categories', categoriesRes.error.message, {
+      categories: categoryIds.length,
+    });
+  }
+  if (lqipRes.error) {
+    reportDegradedRead('public_catalog.lqip', lqipRes.error.message, { items: pageIds.length });
+  }
 
   const reservedByItem = new Map<string, number>();
-  for (const row of (rsRes.data ?? []) as Array<{ item_id: string; quantity: number }>) {
-    reservedByItem.set(
-      row.item_id,
-      (reservedByItem.get(row.item_id) ?? 0) + Number(row.quantity),
-    );
+  for (const row of rsRows) {
+    reservedByItem.set(row.item_id, (reservedByItem.get(row.item_id) ?? 0) + Number(row.quantity));
   }
   const categoryNameById = new Map<string, string>();
   for (const c of (categoriesRes.data ?? []) as Array<{ id: string; name: string }>) {
@@ -410,9 +448,3 @@ async function loadPublicCatalogUncached(
 // public UI now renders PublicCatalogItem directly, so the anonymous
 // payload simply never carries sku/price/charter/reserved fields, not even
 // as empty strings/zeros.)
-
-function chunked<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
-}

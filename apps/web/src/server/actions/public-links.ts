@@ -182,7 +182,7 @@ const removeEntriesSchema = bulkEntriesSchema.omit({ maxQtyPerRequest: true });
 
 export async function removePublicLinkEntriesAction(
   input: z.input<typeof removeEntriesSchema>,
-): Promise<ActionResult<{ removed: number }>> {
+): Promise<ActionResult<{ removed: number; failed: number }>> {
   const parsed = removeEntriesSchema.safeParse(input);
   if (!parsed.success)
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');

@@ -3,6 +3,7 @@ import 'server-only';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { ServiceError, withContext, type ServiceContext } from './context';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { fetchAllRows } from './lib/paginate';
 
 export interface ValuationRow {
@@ -14,6 +15,10 @@ export interface ValuationRow {
   quantityOnHand: number;
   unitCost: number;
   value: number;
+  /** Only with `withLocations`: the item's bin label (rack picker). */
+  binLocation?: string | null;
+  /** Only with `withLocations`: the item's primary location name. */
+  primaryLocationName?: string | null;
 }
 
 export interface ValuationReport {
@@ -216,8 +221,19 @@ export class ReportsService {
    * charterId returns an EMPTY report (zero totals), never an error and
    * never another org's numbers (see inventoryValuationByCharter()).
    */
-  async inventoryValuation(opts?: { charterId?: string | null }): Promise<ValuationReport> {
+  async inventoryValuation(opts?: {
+    charterId?: string | null;
+    /**
+     * Also return each row's `binLocation` and `primaryLocationName`, read in
+     * the SAME paged stream as an embed. The inventory-snapshot PDF used to
+     * re-read every active item's location with one unpaged, unbatched
+     * `.in()` of the whole org's ids, which failed on URL length (and its
+     * error was ignored, leaving the Location column blank).
+     */
+    withLocations?: boolean;
+  }): Promise<ValuationReport> {
     const charterId = opts?.charterId?.trim() || null;
+    const withLocations = opts?.withLocations === true;
     if (charterId) {
       return this.inventoryValuationByCharter(charterId);
     }
@@ -238,16 +254,24 @@ export class ReportsService {
       unit_cost: number;
       warehouse: { name: string } | { name: string }[] | null;
       category: { name: string } | { name: string }[] | null;
+      bin_location?: string | null;
+      location?: { name: string } | { name: string }[] | null;
     };
+    // A plain string, not a literal union: the typed select parser rejects a
+    // union of two column lists, and the row shape is declared above.
+    const columns: string = withLocations
+      ? `id, sku, name, quantity_on_hand, unit_cost,
+         warehouse:warehouses!warehouse_id (name),
+         category:categories!category_id (name),
+         bin_location, location:locations!primary_location_id (name)`
+      : `id, sku, name, quantity_on_hand, unit_cost,
+         warehouse:warehouses!warehouse_id (name),
+         category:categories!category_id (name)`;
     const data = await fetchAllRows<ValuationItemRow>(
       (from, to) =>
         this.ctx.supabase
           .from('inventory_items')
-          .select(
-            `id, sku, name, quantity_on_hand, unit_cost,
-         warehouse:warehouses!warehouse_id (name),
-         category:categories!category_id (name)`,
-          )
+          .select(columns)
           .eq('organization_id', this.ctx.organizationId)
           .is('deleted_at', null)
           .eq('status', 'active')
@@ -258,7 +282,10 @@ export class ReportsService {
           // Stable order for range pagination; the report re-sorts by
           // quantity_on_hand below.
           .order('id', { ascending: true })
-          .range(from, to),
+          .range(from, to) as unknown as PromiseLike<{
+          data: ValuationItemRow[] | null;
+          error: { message: string } | null;
+        }>,
       // NO cap — stream every item row for the detail list.
       {},
     );
@@ -271,7 +298,7 @@ export class ReportsService {
         const cat = Array.isArray(rec.category) ? rec.category[0] : rec.category;
         const qty = Number(rec.quantity_on_hand) || 0;
         const cost = Number(rec.unit_cost) || 0;
-        return {
+        const row: ValuationRow = {
           itemId: rec.id,
           sku: rec.sku,
           name: rec.name,
@@ -281,6 +308,12 @@ export class ReportsService {
           unitCost: cost,
           value: qty * cost,
         };
+        if (withLocations) {
+          const loc = Array.isArray(rec.location) ? rec.location[0] : rec.location;
+          row.binLocation = rec.bin_location ?? null;
+          row.primaryLocationName = loc?.name ?? null;
+        }
+        return row;
       });
 
     return {
@@ -792,33 +825,29 @@ export class ReportsService {
     if (poIds.length > 0) {
       // The `.in(poIds)` aggregate is likewise capped at 1000 rows by
       // PostgREST; page it so fill-rate sums cover every PO line. Batch the
-      // poIds (URL length) and page each batch.
-      const PO_ID_BATCH = 200;
-      for (let i = 0; i < poIds.length; i += PO_ID_BATCH) {
-        const batch = poIds.slice(i, i + PO_ID_BATCH);
-        const batchItems = await fetchAllRows<{
-          id: string;
-          purchase_order_id: string;
-          quantity_ordered: number;
-          quantity_received: number;
-        }>(
-          (from, to) =>
-            this.ctx.supabase
-              .from('purchase_order_items')
-              .select('id, purchase_order_id, quantity_ordered, quantity_received')
-              .in('purchase_order_id', batch)
-              .order('id', { ascending: true })
-              .range(from, to),
-          { cap: 100_000 },
-        );
-        for (const it of batchItems) {
-          poItems.push({
-            purchase_order_id: it.purchase_order_id,
-            quantity_ordered: it.quantity_ordered,
-            quantity_received: it.quantity_received,
-          });
-        }
-      }
+      // poIds (URL length: 100 per request) and page each batch; the batches
+      // run a few at a time instead of one after another.
+      const ctx = this.ctx;
+      const batchItems = await fetchAllRowsByIds<{
+        id: string;
+        purchase_order_id: string;
+        quantity_ordered: number;
+        quantity_received: number;
+      }>(
+        poIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('purchase_order_items')
+            .select('id, purchase_order_id, quantity_ordered, quantity_received')
+            .in('purchase_order_id', batch)
+            .order('id', { ascending: true })
+            .range(from, to),
+      );
+      poItems = batchItems.map((it) => ({
+        purchase_order_id: it.purchase_order_id,
+        quantity_ordered: it.quantity_ordered,
+        quantity_received: it.quantity_received,
+      }));
     }
     const itemsByPo = new Map<
       string,

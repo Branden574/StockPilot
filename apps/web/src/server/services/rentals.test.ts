@@ -302,19 +302,20 @@ function makeCtx(opts: MakeCtxOpts = {}) {
       // ----------------------------------------------------------------
       if (table === 'inventory_items') {
         return {
+          // .select().eq().in().order().range() — batched and paged through
+          // fetchAllRowsByIds, so the window is a thenable.
           select(_cols: string) {
-            return {
-              eq(_col: string, _val: string) {
-                return {
-                  in(_col2: string, _vals: string[]) {
-                    return Promise.resolve({
-                      data: opts.inventoryItems ?? [],
-                      error: null,
-                    });
-                  },
-                };
-              },
+            const self: Record<string, unknown> = {
+              eq: (_c: string, _v: unknown) => self,
+              in: (_c: string, _v: unknown) => self,
+              order: (_c: string, _o?: unknown) => self,
+              range: (_from: number, _to: number) => self,
+              then: (
+                resolve: (v: { data: unknown[]; error: null }) => unknown,
+                _reject?: unknown,
+              ) => Promise.resolve({ data: opts.inventoryItems ?? [], error: null }).then(resolve),
             };
+            return self;
           },
         };
       }

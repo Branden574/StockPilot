@@ -325,6 +325,37 @@ describe('PO item picker — selected-line labels survive an absent result', () 
     expect(requests.some((u) => u.includes('ids=b-b'))).toBe(true);
   });
 
+  // The endpoint takes at most 100 ids (one `.in()` batch; list() refuses
+  // more). A long draft still resolves every line, 100 ids per request.
+  it('a 250-line draft resolves every line in requests of at most 100 ids', async () => {
+    const rowFor = (i: number) => ({ ...PRODUCT_A_ROW, id: `i-${i}`, sku: `SKU-${i}`, name: `Item ${i}` });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string) => {
+        requests.push(input);
+        const ids = new URL(input, 'https://example.test').searchParams.getAll('ids');
+        return {
+          ok: true,
+          json: async () => ({ items: ids.map((id) => rowFor(Number(id.slice(2)))), total: ids.length }),
+        } as unknown as Response;
+      }),
+    );
+    const initial = {
+      ...EDIT_INITIAL,
+      lines: Array.from({ length: 250 }, (_, i) => ({ itemId: `i-${i}`, quantityOrdered: 1, unitCost: 1 })),
+    };
+    render(<PoForm {...BASE_PROPS} poId="po-1" initial={initial} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /SKU-249 · Item 249/ })).toBeInTheDocument(),
+    );
+    const idRequests = requests
+      .map((u) => new URL(u, 'https://example.test').searchParams.getAll('ids'))
+      .filter((ids) => ids.length > 0);
+    expect(idRequests.map((ids) => ids.length)).toEqual([100, 100, 50]);
+    expect(screen.getByRole('button', { name: /SKU-0 · Item 0/ })).toBeInTheDocument();
+  });
+
   it('keeps that label while the user searches for something else entirely', async () => {
     responses.set('ids:b-b', [BOOK_B_ROW]);
     responses.set('product', [PRODUCT_A_ROW]);

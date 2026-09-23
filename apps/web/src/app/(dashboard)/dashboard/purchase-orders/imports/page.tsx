@@ -49,23 +49,30 @@ export default async function PoImportsPage({
   let total = 0;
   let counts: Record<PoImportTab, number> = { active: 0, approved: 0, cancelled: 0 };
   let loadFailed = false;
+  // True when the search matched more suppliers or POs than one request can
+  // carry: the list then covers the most recent of them only, and says so.
+  let searchCapped = false;
   try {
     const svc = await PoImportsService.forCurrentUser();
     // Rows + the current tab's filtered total (pagination) + the three
     // UNFILTERED per-tab totals (pill counts — always reflect the whole
     // bucket, independent of the active search, like an inbox count).
-    const [rowsResult, totalResult, activeCount, approvedCount, cancelledCount] = await Promise.all([
-      svc.list({
-        statuses: TAB_STATUSES[tab],
-        q,
-        limit: PAGE_SIZE,
-        offset: (page - 1) * PAGE_SIZE,
-      }),
-      svc.count({ statuses: TAB_STATUSES[tab], q }),
-      svc.count({ statuses: TAB_STATUSES.active }),
-      svc.count({ statuses: TAB_STATUSES.approved }),
-      svc.count({ statuses: TAB_STATUSES.cancelled }),
-    ]);
+    const [rowsResult, totalResult, activeCount, approvedCount, cancelledCount, capped] =
+      await Promise.all([
+        svc.list({
+          statuses: TAB_STATUSES[tab],
+          q,
+          limit: PAGE_SIZE,
+          offset: (page - 1) * PAGE_SIZE,
+        }),
+        svc.count({ statuses: TAB_STATUSES[tab], q }),
+        svc.count({ statuses: TAB_STATUSES.active }),
+        svc.count({ statuses: TAB_STATUSES.approved }),
+        svc.count({ statuses: TAB_STATUSES.cancelled }),
+        // Shares list()'s memoized search resolution: no extra query.
+        q ? svc.searchCapped(q) : Promise.resolve(false),
+      ]);
+    searchCapped = capped;
     rows = rowsResult;
     total = totalResult;
     counts = { active: activeCount, approved: approvedCount, cancelled: cancelledCount };
@@ -141,6 +148,16 @@ export default async function PoImportsPage({
 
         <PoImportSearch key={`${tab}:${q}`} status={tab} initialQuery={q} />
       </div>
+
+      {!loadFailed && searchCapped && (
+        /* A search term that matches many suppliers or POs ("a") can only
+           carry the most recent of them in one request. Say so, rather than
+           present a partial list as every match. */
+        <p role="status" className="text-muted-foreground mt-3 text-sm">
+          Showing matches for the most recent suppliers and POs only. Refine the search to find
+          older ones.
+        </p>
+      )}
 
       <div className="mt-4">
         {loadFailed ? (

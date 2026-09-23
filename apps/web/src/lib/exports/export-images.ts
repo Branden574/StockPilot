@@ -1,7 +1,13 @@
 import 'server-only';
 
+import { reportError } from '@/lib/error-reporter';
 import { ItemImagesService } from '@/server/services/item-images';
 import type { ServiceContext } from '@/server/services/context';
+import {
+  fetchAllRowsByIds,
+  rawErrorText,
+  reportDegradedRead,
+} from '@/server/services/lib/fetch-by-ids';
 
 import type { InventoryExportSourceRow } from './source-row';
 import { webpToPng } from './webp-to-png';
@@ -132,10 +138,18 @@ export async function attachExportImages(
       const url = urls.get(row.id);
       row.image = url ? { thumbnailUrl: url } : null;
     }
-  } catch {
-    // Swallow and blank, exactly like buildInventoryExportRows' safe() wrapper.
-    // Never log: the message can carry a signed URL.
+  } catch (err) {
+    // Blank, exactly like buildInventoryExportRows' safe() wrapper: a photo is
+    // cosmetic and the file still exports. But not silently: a failed lookup
+    // used to turn every image cell into a placeholder with no trace at all.
+    // A fixed message and the row count; the raw text goes in `detail`, which
+    // reportError runs through its signed-URL redaction (error-reporter.ts).
     for (const row of rows) row.image = null;
+    void reportError(new Error('Export image lookup failed; images left blank'), {
+      tag: 'export.images',
+      level: 'warning',
+      extra: { rows: rows.length, detail: rawErrorText(err) },
+    });
   }
 }
 
@@ -145,39 +159,62 @@ export async function attachExportImages(
  * Readiness ("84 of 111 have a cover") only needs presence, and signing is the
  * expensive half of the resolver — so this is two plain selects and no Storage
  * round trip at all.
+ *
+ * Up to 1000 export rows: the ids go out 100 per request (one `.in()` of them
+ * all overflowed the URL past ~215 ids locally and ~395 in production), and
+ * the image rows are paged, since 1000 items with a few photos each is past
+ * PostgREST's 1000-row cap.
+ *
+ * Returns null when a read fails, never 0: "0 have a cover" for a selection
+ * that has covers is a wrong answer. The dialog says the check is unavailable.
  */
 export async function countRowsWithImages(
   ctx: ServiceContext,
   itemIds: string[],
-): Promise<number> {
+): Promise<number | null> {
   if (itemIds.length === 0) return 0;
   try {
     const withRow = new Set<string>();
-    const { data } = await ctx.supabase
-      .from('item_images')
-      .select('item_id')
-      .eq('organization_id', ctx.organizationId)
-      .in('item_id', itemIds);
-    for (const row of (data ?? []) as Array<{ item_id: string }>) withRow.add(row.item_id);
+    const imageRows = await fetchAllRowsByIds<{ id: string; item_id: string }>(
+      itemIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('item_images')
+          .select('id, item_id')
+          .eq('organization_id', ctx.organizationId)
+          .in('item_id', batch)
+          .order('id', { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{
+          data: Array<{ id: string; item_id: string }> | null;
+          error: { message: string } | null;
+        }>,
+    );
+    for (const row of imageRows) withRow.add(row.item_id);
 
     const rest = itemIds.filter((id) => !withRow.has(id));
-    if (rest.length > 0) {
-      const { data: cfRows } = await ctx.supabase
-        .from('inventory_items')
-        .select('id, custom_fields')
-        .eq('organization_id', ctx.organizationId)
-        .in('id', rest);
-      for (const row of (cfRows ?? []) as Array<{
-        id: string;
-        custom_fields: Record<string, unknown> | null;
-      }>) {
-        const url = row.custom_fields?.thumbnail_url;
-        if (typeof url === 'string' && url.length > 0) withRow.add(row.id);
-      }
+    type CoverRow = { id: string; custom_fields: Record<string, unknown> | null };
+    const cfRows = await fetchAllRowsByIds<CoverRow>(
+      rest,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('inventory_items')
+          .select('id, custom_fields')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .order('id', { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{
+          data: CoverRow[] | null;
+          error: { message: string } | null;
+        }>,
+    );
+    for (const row of cfRows) {
+      const url = row.custom_fields?.thumbnail_url;
+      if (typeof url === 'string' && url.length > 0) withRow.add(row.id);
     }
     return withRow.size;
-  } catch {
-    return 0;
+  } catch (err) {
+    reportDegradedRead('export.preview.image_count', err, { rows: itemIds.length });
+    return null;
   }
 }
 

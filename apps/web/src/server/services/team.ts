@@ -11,10 +11,11 @@ import { sendEmail } from '@/lib/email/resend';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
+import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
 
 import { type Role } from '@stockpilot/core';
 
-import { audit } from './audit';
+import { audit, insertAuditRowReported } from './audit';
 import { dispatchEvent } from './integration-events';
 import {
   assertPermission,
@@ -99,26 +100,40 @@ export class TeamService {
     // (org, user, warehouse, charter); a member may have rows for multiple
     // warehouses. We surface the primary warehouse (is_primary) — or the first
     // by assignment order if none is flagged — and the charter_ids at it.
+    //
+    // Batched and paged: an org's members have no cap (one `.in()` past ~215
+    // ids fails), and the unpaged read was cut at 1000 assignment rows with
+    // no error, so a large team showed members with no warehouse. Grants feed
+    // access, so a failed batch throws.
     const userIds = members.map((m) => m.user_id);
     if (userIds.length > 0) {
-      const { data: assignRows, error: assignErr } = await this.ctx.supabase
-        .from('user_warehouse_assignments')
-        .select('user_id, warehouse_id, charter_id, is_primary')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('user_id', userIds);
-      if (assignErr) throw new ServiceError('internal_error', assignErr.message);
+      const ctx = this.ctx;
+      const assignRows = await fetchAllRowsByIds<{
+        user_id: string;
+        warehouse_id: string;
+        charter_id: string | null;
+        is_primary: boolean | null;
+      }>(
+        userIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('user_warehouse_assignments')
+            .select('user_id, warehouse_id, charter_id, is_primary')
+            .eq('organization_id', ctx.organizationId)
+            .in('user_id', batch)
+            // assigned_at first: "first by assignment order" is the fallback
+            // pick below. id keeps the paging stable.
+            .order('assigned_at', { ascending: true })
+            .order('id')
+            .range(from, to),
+      );
 
       // Group rows by user, then pick the primary warehouse (or first seen).
       const byUser = new Map<
         string,
         Array<{ warehouse_id: string; charter_id: string | null; is_primary: boolean }>
       >();
-      for (const row of (assignRows ?? []) as Array<{
-        user_id: string;
-        warehouse_id: string;
-        charter_id: string | null;
-        is_primary: boolean | null;
-      }>) {
+      for (const row of assignRows) {
         const list = byUser.get(row.user_id) ?? [];
         list.push({
           warehouse_id: row.warehouse_id,
@@ -591,6 +606,7 @@ export class TeamService {
           .from('user_warehouse_assignments')
           .delete()
           .eq('user_id', removedUserId)
+          // in-list-bound: the org's warehouses (a handful of sites)
           .in('warehouse_id', warehouseIds)
           .select('warehouse_id');
         if (!clearErr) {
@@ -795,6 +811,7 @@ export class TeamService {
         .eq('organization_id', this.ctx.organizationId)
         .eq('user_id', params.userId)
         .eq('warehouse_id', params.warehouseId)
+        // in-list-bound: one user's charter rows at one warehouse (one per charter)
         .in(
           'id',
           toDelete.map((r) => r.id),
@@ -1274,8 +1291,10 @@ export async function acceptInviteWithToken(token: string, userId: string) {
       .eq('id', userId);
   }
 
-  // Audit log — invite accepted.
-  await admin.from('audit_logs').insert({
+  // Audit log — invite accepted. insertAuditRowReported reads the INSERT's
+  // own result: supabase-js returns a refused write as { error } rather than
+  // throwing, so this row used to be lost without a trace.
+  await insertAuditRowReported({
     organization_id: orgId,
     user_id: userId,
     event: 'user.invite.accepted',

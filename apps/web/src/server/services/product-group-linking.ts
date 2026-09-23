@@ -11,13 +11,14 @@ import {
   type CreateProductGroupInput,
 } from '@stockpilot/core';
 
-import { audit } from './audit';
+import { auditMany, type AuditPayload } from './audit';
 import {
   assertModuleEnabled,
   assertPermission,
   ServiceError,
   type ServiceContext,
 } from './context';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import type { ProductGroupsService } from './product-groups';
 
@@ -327,14 +328,21 @@ export async function linkFamily(
   // before anything is resolved or written: an id from another org must fail
   // here, not be discovered by an .update().eq() quietly matching no rows
   // (that path is fail-OPEN — no error, no row, and a success response).
-  const { data, error } = await supabase
-    .from('inventory_items')
-    .select(LINK_TARGET_COLUMNS)
-    .eq('organization_id', ctx.organizationId)
-    .in('id', ids)
-    .is('deleted_at', null);
-  if (error) throw new ServiceError('internal_error', error.message);
-  const found = (data ?? []) as unknown as LinkTargetRow[];
+  //
+  // Batched (MAX_LINK_MEMBERS ids): 200 uuids in one `.in()` sits at the local
+  // gateway's ~8 KB limit. A failed batch throws, never "not in this org".
+  const found = (await fetchAllRowsByIds(
+    ids,
+    (batch) => (from, to) =>
+      supabase
+        .from('inventory_items')
+        .select(LINK_TARGET_COLUMNS)
+        .eq('organization_id', ctx.organizationId)
+        .in('id', batch)
+        .is('deleted_at', null)
+        .order('id')
+        .range(from, to),
+  )) as unknown as LinkTargetRow[];
   const byId = new Map(found.map((r) => [r.id, r]));
   const missing = ids.filter((id) => !byId.has(id));
   if (missing.length > 0) {
@@ -419,44 +427,48 @@ export async function linkFamily(
   await assertNoVariantKeyCollision({ supabase, ctx, groupId, planned });
 
   let linked = 0;
-  for (const { member, before, size, sizeOriginal, sizeSystem, jersey, variantKey } of planned) {
-    const patch = {
-      group_id: groupId,
-      variant_size: size,
-      variant_size_original: sizeOriginal,
-      variant_size_system: sizeSystem,
-      jersey_number: jersey,
-      variant_key: variantKey,
-      updated_by: ctx.userId,
-    };
+  // One row per linked item, written in batches (auditMany) after the loop
+  // rather than one request per item. The finally writes the rows of every
+  // item that committed even when a later item refuses and throws.
+  const auditRows: AuditPayload[] = [];
+  try {
+    for (const { member, before, size, sizeOriginal, sizeSystem, jersey, variantKey } of planned) {
+      const patch = {
+        group_id: groupId,
+        variant_size: size,
+        variant_size_original: sizeOriginal,
+        variant_size_system: sizeSystem,
+        jersey_number: jersey,
+        variant_key: variantKey,
+        updated_by: ctx.userId,
+      };
 
-    const { data: updated, error: updErr } = await supabase
-      .from('inventory_items')
-      .update(patch)
-      .eq('organization_id', ctx.organizationId)
-      .eq('id', member.itemId)
-      .is('deleted_at', null)
-      .select('id')
-      .maybeSingle();
-    if (updErr) throw new ServiceError('internal_error', updErr.message);
-    // .update().eq() is FAIL-OPEN when RLS hides the row: no error, no row.
-    // A link that silently did nothing must not be reported as a link.
-    if (!updated) {
-      throw new ServiceError(
-        'forbidden',
-        'One of the selected items could not be updated. Nothing further was linked.',
-      );
-    }
-    // Per row, because a later row can refuse after this one committed.
-    // group_id / variant_* are list columns.
-    invalidateInventoryListAfterWrite(ctx.organizationId, 'sports.link_family');
-    linked += 1;
+      const { data: updated, error: updErr } = await supabase
+        .from('inventory_items')
+        .update(patch)
+        .eq('organization_id', ctx.organizationId)
+        .eq('id', member.itemId)
+        .is('deleted_at', null)
+        .select('id')
+        .maybeSingle();
+      if (updErr) throw new ServiceError('internal_error', updErr.message);
+      // .update().eq() is FAIL-OPEN when RLS hides the row: no error, no row.
+      // A link that silently did nothing must not be reported as a link.
+      if (!updated) {
+        throw new ServiceError(
+          'forbidden',
+          'One of the selected items could not be updated. Nothing further was linked.',
+        );
+      }
+      // Per row, because a later row can refuse after this one committed.
+      // group_id / variant_* are list columns.
+      invalidateInventoryListAfterWrite(ctx.organizationId, 'sports.link_family');
+      linked += 1;
 
-    // One event per item, carrying who / before / after / why. A grouping that
-    // later looks wrong has to be answerable, and "the review tool did it" is
-    // not an answer — the actor and the reason are.
-    void audit(
-      {
+      // One event per item, carrying who / before / after / why. A grouping that
+      // later looks wrong has to be answerable, and "the review tool did it" is
+      // not an answer — the actor and the reason are.
+      auditRows.push({
         event: 'sports.item.group_matched',
         entityType: 'inventory_item',
         entityId: member.itemId,
@@ -478,9 +490,10 @@ export async function linkFamily(
           variant_key: variantKey,
         },
         extra: { source: 'group_linking_review', forced: input.force === true },
-      },
-      ctx,
-    );
+      });
+    }
+  } finally {
+    await auditMany(auditRows, ctx);
   }
 
   return { groupId, linked };
@@ -554,15 +567,21 @@ async function assertNoVariantKeyCollision(args: {
   // group's size.
   const keys = Array.from(new Set(planned.map((p) => p.variantKey))).filter(Boolean);
   if (keys.length > 0) {
-    const { data, error } = await supabase
-      .from('inventory_items')
-      .select('id, name, sku, variant_key')
-      .eq('organization_id', ctx.organizationId)
-      .eq('group_id', groupId)
-      .in('variant_key', keys)
-      .is('deleted_at', null);
-    if (error) throw new ServiceError('internal_error', error.message);
-    const existing = (data ?? []) as unknown as Array<{
+    // Batched by encoded length: a variant key runs ~55 characters, so a full
+    // batch of keys is far longer than the same count of uuids.
+    const existing = (await fetchAllRowsByIds(
+      keys,
+      (batch) => (from, to) =>
+        supabase
+          .from('inventory_items')
+          .select('id, name, sku, variant_key')
+          .eq('organization_id', ctx.organizationId)
+          .eq('group_id', groupId)
+          .in('variant_key', batch)
+          .is('deleted_at', null)
+          .order('id')
+          .range(from, to),
+    )) as unknown as Array<{
       id: string;
       name: string;
       sku: string | null;
@@ -634,18 +653,23 @@ export async function unlinkItems(
     );
   }
 
-  const { data, error } = await supabase
-    .from('inventory_items')
-    .select('id, group_id, variant_key')
-    .eq('organization_id', ctx.organizationId)
-    .in('id', ids)
-    .is('deleted_at', null);
-  if (error) throw new ServiceError('internal_error', error.message);
-  const found = (data ?? []) as unknown as Array<{
+  // Batched like linkItemsToGroup's ownership read; a failed batch throws.
+  const found = await fetchAllRowsByIds<{
     id: string;
     group_id: string | null;
     variant_key: string | null;
-  }>;
+  }>(
+    ids,
+    (batch) => (from, to) =>
+      supabase
+        .from('inventory_items')
+        .select('id, group_id, variant_key')
+        .eq('organization_id', ctx.organizationId)
+        .in('id', batch)
+        .is('deleted_at', null)
+        .order('id')
+        .range(from, to),
+  );
   const byId = new Map(found.map((r) => [r.id, r]));
   const missing = ids.filter((id) => !byId.has(id));
   if (missing.length > 0) {
@@ -656,31 +680,33 @@ export async function unlinkItems(
   }
 
   let unlinked = 0;
-  for (const id of ids) {
-    const before = byId.get(id)!;
-    // Already ungrouped — nothing to undo, and no audit noise for a no-op.
-    if (!before.group_id) continue;
+  // Same batching and finally as linkFamily.
+  const auditRows: AuditPayload[] = [];
+  try {
+    for (const id of ids) {
+      const before = byId.get(id)!;
+      // Already ungrouped — nothing to undo, and no audit noise for a no-op.
+      if (!before.group_id) continue;
 
-    const { data: updated, error: updErr } = await supabase
-      .from('inventory_items')
-      .update({ group_id: null, variant_key: null, updated_by: ctx.userId })
-      .eq('organization_id', ctx.organizationId)
-      .eq('id', id)
-      .is('deleted_at', null)
-      .select('id')
-      .maybeSingle();
-    if (updErr) throw new ServiceError('internal_error', updErr.message);
-    if (!updated) {
-      throw new ServiceError(
-        'forbidden',
-        'One of the selected items could not be updated. Nothing further was unlinked.',
-      );
-    }
-    invalidateInventoryListAfterWrite(ctx.organizationId, 'sports.unlink_items');
-    unlinked += 1;
+      const { data: updated, error: updErr } = await supabase
+        .from('inventory_items')
+        .update({ group_id: null, variant_key: null, updated_by: ctx.userId })
+        .eq('organization_id', ctx.organizationId)
+        .eq('id', id)
+        .is('deleted_at', null)
+        .select('id')
+        .maybeSingle();
+      if (updErr) throw new ServiceError('internal_error', updErr.message);
+      if (!updated) {
+        throw new ServiceError(
+          'forbidden',
+          'One of the selected items could not be updated. Nothing further was unlinked.',
+        );
+      }
+      invalidateInventoryListAfterWrite(ctx.organizationId, 'sports.unlink_items');
+      unlinked += 1;
 
-    void audit(
-      {
+      auditRows.push({
         event: 'sports.item.group_unlinked',
         entityType: 'inventory_item',
         entityId: id,
@@ -688,9 +714,10 @@ export async function unlinkItems(
         before: { group_id: before.group_id, variant_key: before.variant_key },
         after: { group_id: null, variant_key: null },
         extra: { source: 'group_linking_review' },
-      },
-      ctx,
-    );
+      });
+    }
+  } finally {
+    await auditMany(auditRows, ctx);
   }
 
   return { unlinked };

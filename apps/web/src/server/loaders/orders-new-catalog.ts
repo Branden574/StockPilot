@@ -16,9 +16,13 @@ import { unstable_cache } from 'next/cache';
 import type { StorefrontCatalogData } from '@/components/orders/storefront/orders-storefront';
 import type { AisleSummary, CatalogItem, StorefrontCharter } from '@/components/orders/v2/types';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { encodedInValueLength, IN_FILTER_MAX_ENCODED_CHARS } from '@/lib/supabase/in-filter';
 import { createClient } from '@/lib/supabase/server';
-import { ServiceError } from '@/server/services/context';
-import { fetchAllRows } from '@/server/services/lib/paginate';
+import {
+  fetchAllRowsByIds,
+  mapIdBatches,
+  settleAsDataError,
+} from '@/server/services/lib/fetch-by-ids';
 
 import type { Role } from '@stockpilot/core';
 
@@ -595,12 +599,34 @@ export function rackLabelFor(it: OrdersCatalogRackRow): string | null {
   return row ? `${num}-${row}` : String(num);
 }
 
-/**
- * Uuids per reservations `.in('item_id', …)` call: 100 ≈ 3.7 KB of query
- * string, the same batch size as inventory-list.ts ID_CHUNK_SIZE and
- * rack-holdings.ts. The catalog's 500-row limit means at most 5 batches.
- */
-const RESERVATION_ID_CHUNK = 100;
+/** Rows the storefront catalog holds for one warehouse. */
+const CATALOG_ROW_LIMIT = 500;
+
+type CatalogItemRow = {
+  id: string;
+  name: string;
+  sku: string;
+  quantity_on_hand: number;
+  warehouse_id: string;
+  item_type: string | null;
+  bin_location: string | null;
+  category_id: string | null;
+  charter_id: string | null;
+  retail_price: number | null;
+  unit_cost: number | null;
+  reorder_point: number | null;
+  // Flattened from custom_fields via `->>` (always text or null).
+  rack_number: string | null;
+  rack_row: string | null;
+  book_rack_number: string | null;
+  book_rack_row: string | null;
+};
+
+/** `ORDER BY name, id` for rows merged from several category batches. */
+function byNameThenId(a: CatalogItemRow, b: CatalogItemRow): number {
+  if (a.name !== b.name) return a.name < b.name ? -1 : 1;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
 
 async function loadCatalogItemsUncached(
   organizationId: string,
@@ -612,6 +638,10 @@ async function loadCatalogItemsUncached(
   const scope = parseScopeKey(accessKey);
   if (scope === null) return [];
 
+  // A scope that can see nothing here reads nothing.
+  if (scope.charterIds !== null && !scope.generic && scope.charterIds.length === 0) return [];
+  if (scope.categoryIds !== null && scope.categoryIds.length === 0) return [];
+
   const supabase = createAdminClient();
 
   // custom_fields is fetched as FOUR flattened rack keys (PostgREST
@@ -620,85 +650,99 @@ async function loadCatalogItemsUncached(
   // custom_fields blobs (descriptions, grades, authors) that were
   // inflating the query transfer for nothing. `is_bundle` is filter-only
   // (the .or below), so it isn't selected either.
-  let itemsQuery = supabase
-    .from('inventory_items')
-    .select(
-      'id, name, sku, quantity_on_hand, warehouse_id, item_type, bin_location, category_id, charter_id, retail_price, unit_cost, reorder_point, rack_number:custom_fields->>rack_number, rack_row:custom_fields->>rack_row, book_rack_number:custom_fields->>book_rack_number, book_rack_row:custom_fields->>book_rack_row',
-    )
-    .eq('organization_id', organizationId)
-    .eq('warehouse_id', warehouseId)
-    .eq('status', 'active')
-    // Rental items (canopies, supplies for school events) are a
-    // separate inventory class — they circulate via /dashboard/rentals,
-    // not the order request flow. Never show them in the order picker.
-    .eq('is_rental', false)
-    // Expected items (mig 0277): auto-created from an inbound PO and
-    // never received — not orderable until the first stock arrives
-    // (server-side line validation rejects them too, so a stale cached
-    // catalog can't sneak one through).
-    .eq('awaiting_first_receipt', false)
-    .is('deleted_at', null)
-    .or('is_bundle.is.null,is_bundle.eq.false')
-    .order('name', { ascending: true })
-    .limit(500);
-
-  // RLS is bypassed here, so the scope IS the row filter. It is applied in
-  // SQL, before the limit, exactly where the policy would apply. 'ALL'
-  // callers skip both filters.
   //
-  // Charter half (the policy's warehouse/charter disjuncts, for this one
-  // warehouse): generic items (charter_id IS NULL) when the caller holds any
-  // assignment here, plus the charters of their charter-scoped assignments.
-  // The two .or() groups (this one and is_bundle's) AND together.
-  if (scope.charterIds !== null) {
-    if (scope.generic && scope.charterIds.length > 0) {
-      itemsQuery = itemsQuery.or(
-        `charter_id.is.null,charter_id.in.(${scope.charterIds.join(',')})`,
-      );
-    } else if (scope.generic) {
-      itemsQuery = itemsQuery.is('charter_id', null);
-    } else if (scope.charterIds.length > 0) {
-      itemsQuery = itemsQuery.in('charter_id', scope.charterIds);
-    } else {
-      return [];
+  // `batch` is the category half of the scope, or null for none. It is one
+  // batch of the grants from mapIdBatches below, never the whole list.
+  const itemsQuery = (batch: string[] | null) => {
+    let q = supabase
+      .from('inventory_items')
+      .select(
+        'id, name, sku, quantity_on_hand, warehouse_id, item_type, bin_location, category_id, charter_id, retail_price, unit_cost, reorder_point, rack_number:custom_fields->>rack_number, rack_row:custom_fields->>rack_row, book_rack_number:custom_fields->>book_rack_number, book_rack_row:custom_fields->>book_rack_row',
+      )
+      .eq('organization_id', organizationId)
+      .eq('warehouse_id', warehouseId)
+      .eq('status', 'active')
+      // Rental items (canopies, supplies for school events) are a
+      // separate inventory class — they circulate via /dashboard/rentals,
+      // not the order request flow. Never show them in the order picker.
+      .eq('is_rental', false)
+      // Expected items (mig 0277): auto-created from an inbound PO and
+      // never received — not orderable until the first stock arrives
+      // (server-side line validation rejects them too, so a stale cached
+      // catalog can't sneak one through).
+      .eq('awaiting_first_receipt', false)
+      .is('deleted_at', null)
+      .or('is_bundle.is.null,is_bundle.eq.false')
+      // id breaks ties so the rows kept at the limit are the same on every
+      // read, and the same when several category batches are merged below.
+      .order('name', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(CATALOG_ROW_LIMIT);
+
+    // RLS is bypassed here, so the scope IS the row filter. It is applied in
+    // SQL, before the limit, exactly where the policy would apply. 'ALL'
+    // callers skip both filters.
+    //
+    // Charter half (the policy's warehouse/charter disjuncts, for this one
+    // warehouse): generic items (charter_id IS NULL) when the caller holds any
+    // assignment here, plus the charters of their charter-scoped assignments.
+    // The two .or() groups (this one and is_bundle's) AND together.
+    if (scope.charterIds !== null) {
+      if (scope.generic && scope.charterIds.length > 0) {
+        q = q.or(
+          // in-list-bound: one caller's charter assignments at this one warehouse (one per charter)
+          `charter_id.is.null,charter_id.in.(${scope.charterIds.join(',')})`,
+        );
+      } else if (scope.generic) {
+        q = q.is('charter_id', null);
+      } else {
+        // in-list-bound: one caller's charter assignments at this one warehouse (one per charter)
+        q = q.in('charter_id', scope.charterIds);
+      }
     }
-  }
-  // Category half: a category-restricted viewer sees only the granted
-  // categories, and never a NULL category (IN drops NULLs, as the policy's
-  // pair probe does).
-  if (scope.categoryIds !== null) {
-    if (scope.categoryIds.length === 0) return [];
-    itemsQuery = itemsQuery.in('category_id', scope.categoryIds);
-  }
+    // Category half: a category-restricted viewer sees only the granted
+    // categories, and never a NULL category (IN drops NULLs, as the policy's
+    // pair probe does).
+    // in-list-bound: one mapIdBatches batch of the grants, via readItems below
+    if (batch !== null) q = q.in('category_id', batch);
+    return q;
+  };
 
   // THROW-DON'T-CACHE: every read below throws on error, so unstable_cache
   // stores nothing and the next request retries. Read as data, a failed items
   // read was an empty catalog for 60 s, and a failed reservations read was
   // "nothing reserved", which overstated available-to-promise on every card.
-  const { data: itemsData, error: itemsError } = await itemsQuery;
-  if (itemsError) {
-    throw new Error(`[orders-new] catalog items read failed: ${itemsError.message}`);
-  }
+  const readItems = async (batch: string[] | null): Promise<CatalogItemRow[]> => {
+    const { data, error } = await itemsQuery(batch);
+    if (error) throw new Error(`[orders-new] catalog items read failed: ${error.message}`);
+    return (data ?? []) as unknown as CatalogItemRow[];
+  };
 
-  const items = (itemsData ?? []) as unknown as Array<{
-    id: string;
-    name: string;
-    sku: string;
-    quantity_on_hand: number;
-    warehouse_id: string;
-    item_type: string | null;
-    bin_location: string | null;
-    category_id: string | null;
-    charter_id: string | null;
-    retail_price: number | null;
-    unit_cost: number | null;
-    reorder_point: number | null;
-    // Flattened from custom_fields via `->>` (always text or null).
-    rack_number: string | null;
-    rack_row: string | null;
-    book_rack_number: string | null;
-    book_rack_row: string | null;
-  }>;
+  let items: CatalogItemRow[];
+  if (scope.categoryIds === null) {
+    items = await readItems(null);
+  } else {
+    // A viewer can hold up to 500 category grants (user-categories.ts), about
+    // 19.5 KB in one `.in()`: past the local gateway's 8 KB and past
+    // production's limit, where the read would fail after ~7 s of retries.
+    // So the grants go out in batches sized to leave room for the charter
+    // list that shares the URL, each batch keeps its own first 500 rows by
+    // (name, id), and the merge keeps the first 500 of those. That is the
+    // same set one query would return: every row of the overall first 500 is
+    // among the first 500 of its own batch. The usual short grant list is one
+    // batch, the same single query as before.
+    const charterChars = (scope.charterIds ?? []).reduce(
+      (n, id) => n + encodedInValueLength(id) + 3,
+      0,
+    );
+    const perBatch = await mapIdBatches(scope.categoryIds, (batch) => readItems(batch), {
+      maxEncodedChars: IN_FILTER_MAX_ENCODED_CHARS - charterChars,
+    });
+    items =
+      perBatch.length === 1
+        ? perBatch[0]!
+        : perBatch.flat().sort(byNameThenId).slice(0, CATALOG_ROW_LIMIT);
+  }
   if (items.length === 0) return [];
 
   const itemIds = items.map((i) => i.id);
@@ -710,64 +754,51 @@ async function loadCatalogItemsUncached(
   // from loadCatalogThumbMapCached (4h cadence) and are merged in
   // loadCatalogBundle — this loader is pure stock/catalog reads.
   //
-  // Reservations go out in RESERVATION_ID_CHUNK batches, all in parallel (one
-  // wave, as before): up to 500 uuids in one query string is ~18.5 KB, past the
-  // local gateway's 8 KB and the edge's usual 16 KB. Production's largest
-  // catalog already sent 15.8 KB (edge logs, 2026-09-22), and the local
-  // gateway refused every read past ~215 items. Each batch is paged past the
+  // Reservations go out in batches of 100 (fetchAllRowsByIds), in one wave:
+  // up to 500 uuids in one query string is ~18.5 KB, past the local
+  // gateway's 8 KB and production's limit. Production's largest catalog
+  // already sent 15.8 KB (edge logs, 2026-09-22), and the local gateway
+  // refused every read past ~215 items. Each batch is paged past the
   // 1000-row cap; any failed batch fails the whole read (throws, not cached).
-  const reservationChunks: string[][] = [];
-  for (let i = 0; i < itemIds.length; i += RESERVATION_ID_CHUNK) {
-    reservationChunks.push(itemIds.slice(i, i + RESERVATION_ID_CHUNK));
-  }
-  const reservationsRead = Promise.all(
-    reservationChunks.map((chunk) =>
-      fetchAllRows<{ item_id: string; quantity: number }>((from, to) =>
+  // The category and charter names come from the same up-to-500 rows, so
+  // they batch the same way.
+  const [rsRes, categoriesRes, chartersRes] = await Promise.all([
+    settleAsDataError(
+      fetchAllRowsByIds<{ item_id: string; quantity: number }>(itemIds, (batch) => (from, to) =>
         supabase
           .from('stock_reservations')
           .select('item_id, quantity')
           .eq('organization_id', organizationId)
-          .in('item_id', chunk)
+          .in('item_id', batch)
           .is('released_at', null)
           .order('id', { ascending: true })
           .range(from, to),
       ),
     ),
-  ).then(
-    (pages) => ({ data: pages.flat(), error: null }),
-    // fetchAllRows keeps the PostgREST text in internalDetail (its public
-    // message is generic); this server-side log wants the real cause.
-    (err: unknown) => ({
-      data: null,
-      error: {
-        message:
-          err instanceof ServiceError && err.internalDetail
-            ? err.internalDetail
-            : err instanceof Error
-              ? err.message
-              : String(err),
-      },
-    }),
-  );
-  const [rsRes, categoriesRes, chartersRes] = await Promise.all([
-    reservationsRead,
-    categoryIds.length > 0
-      ? supabase
+    settleAsDataError(
+      fetchAllRowsByIds<{ id: string; name: string }>(categoryIds, (batch) => (from, to) =>
+        supabase
           .from('categories')
           .select('id, name')
           .eq('organization_id', organizationId)
-          .in('id', categoryIds)
-      : Promise.resolve({ data: [] as Array<{ id: string; name: string }>, error: null }),
-    charterIds.length > 0
-      ? supabase
-          .from('charters')
-          .select('id, name, code')
-          .eq('organization_id', organizationId)
-          .in('id', charterIds)
-      : Promise.resolve({
-          data: [] as Array<{ id: string; name: string; code: string | null }>,
-          error: null,
-        }),
+          .in('id', batch)
+          .order('id', { ascending: true })
+          .range(from, to),
+      ),
+    ),
+    settleAsDataError(
+      fetchAllRowsByIds<{ id: string; name: string; code: string | null }>(
+        charterIds,
+        (batch) => (from, to) =>
+          supabase
+            .from('charters')
+            .select('id, name, code')
+            .eq('organization_id', organizationId)
+            .in('id', batch)
+            .order('id', { ascending: true })
+            .range(from, to),
+      ),
+    ),
   ]);
   if (rsRes.error) {
     throw new Error(`[orders-new] catalog reservations read failed: ${rsRes.error.message}`);

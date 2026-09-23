@@ -20,6 +20,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { fetchAllRows } from './lib/paginate';
 
 /** One `product_groups` row. Identity only — a group NEVER owns a quantity. */
@@ -675,18 +676,27 @@ export class ProductGroupsService {
   async rollups(groupIds: string[]): Promise<Map<string, GroupRollup>> {
     assertModuleEnabled(this.ctx, 'sports');
     if (groupIds.length === 0) return new Map();
-    const { data, error } = await this.ctx.supabase
-      .from('product_group_rollups')
-      .select('group_id, variant_count, total_quantity, counting_unit')
-      // The view is security_invoker, so RLS already scopes it — but every
-      // other read here carries the org filter and a defence-in-depth predicate
-      // costs nothing. It also keeps the query honest if the view is ever read
-      // through a service-role context, where RLS is not in play at all.
-      .eq('organization_id', this.ctx.organizationId)
-      .in('group_id', groupIds);
-    if (error) throw new ServiceError('internal_error', error.message);
+    // Batched: a list page can hand over every group it shows, and one `.in()`
+    // past ~215 ids fails (414 locally, "fetch failed" in production). The
+    // view has one row per group, so `group_id` is a stable page order.
+    const ctx = this.ctx;
+    const data = await fetchAllRowsByIds<Record<string, unknown>>(
+      groupIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('product_group_rollups')
+          .select('group_id, variant_count, total_quantity, counting_unit')
+          // The view is security_invoker, so RLS already scopes it — but every
+          // other read here carries the org filter and a defence-in-depth predicate
+          // costs nothing. It also keeps the query honest if the view is ever read
+          // through a service-role context, where RLS is not in play at all.
+          .eq('organization_id', ctx.organizationId)
+          .in('group_id', batch)
+          .order('group_id')
+          .range(from, to),
+    );
     const out = new Map<string, GroupRollup>();
-    for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+    for (const r of data) {
       out.set(r.group_id as string, {
         variantCount: Number(r.variant_count),
         totalQuantity: Number(r.total_quantity),
@@ -723,45 +733,53 @@ export class ProductGroupsService {
     const unique = Array.from(new Set(groupIds.filter(Boolean)));
     if (unique.length === 0) return new Map();
 
-    // Chunked, not one `.in(...)`: `unique` can carry every product group id a
+    // Batched, not one `.in(...)`: `unique` can carry every product group id a
     // caller collected across a whole catalog (up to ~1000 — the PO create/edit
-    // pages' page-level cap), and PostgREST's max_rows silently truncates a
-    // single `.in()` past 1000 rows with NO error — the same failure mode
-    // fixed in the portal catalog (23e319f6). A batch error is NOT swallowed:
-    // this map decides which groups the size-run picker can even offer, so a
-    // partial read must fail loud rather than quietly hiding a group.
+    // pages' page-level cap). One `.in()` past ~215 ids fails in the URL (414
+    // locally, "fetch failed" in production; the old batch of 500 did too),
+    // and PostgREST's max_rows silently truncates a response past 1000 rows,
+    // so each batch is also paged. A batch error is NOT swallowed: this map
+    // decides which groups the size-run picker can even offer, so a partial
+    // read must fail loud rather than quietly hiding a group.
     type GroupMetaRow = {
       id: string;
       name: string;
       default_counting_unit: CountingUnit;
       size_scale_id: string | null;
     };
-    const GROUP_BATCH_SIZE = 500;
-    const groups: GroupMetaRow[] = [];
-    for (let i = 0; i < unique.length; i += GROUP_BATCH_SIZE) {
-      const batch = unique.slice(i, i + GROUP_BATCH_SIZE);
-      const { data: groupRows, error: groupErr } = await this.ctx.supabase
-        .from('product_groups')
-        .select('id, name, default_counting_unit, size_scale_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', batch)
-        .is('deleted_at', null);
-      if (groupErr) throw new ServiceError('internal_error', groupErr.message);
-      groups.push(...((groupRows ?? []) as GroupMetaRow[]));
-    }
+    const ctx = this.ctx;
+    const groups = await fetchAllRowsByIds<GroupMetaRow>(
+      unique,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('product_groups')
+          .select('id, name, default_counting_unit, size_scale_id')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .is('deleted_at', null)
+          .order('id')
+          .range(from, to),
+    );
 
     const scaleIds = Array.from(
       new Set(groups.map((g) => g.size_scale_id).filter((v): v is string => Boolean(v))),
     );
     const valuesByScale = new Map<string, SizeScaleValueOrder[]>();
     if (scaleIds.length > 0) {
-      const { data: valueRows, error: valueErr } = await this.ctx.supabase
-        .from('size_scale_values')
-        .select('size_scale_id, value, normalized, sort_order')
-        .in('size_scale_id', scaleIds)
-        .order('sort_order', { ascending: true });
-      if (valueErr) throw new ServiceError('internal_error', valueErr.message);
-      for (const row of (valueRows ?? []) as Array<Record<string, unknown>>) {
+      // Batched and paged like the groups; every value of one scale sits in
+      // one batch, and sort_order then id keeps each scale's order stable.
+      const valueRows = await fetchAllRowsByIds<Record<string, unknown>>(
+        scaleIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('size_scale_values')
+            .select('size_scale_id, value, normalized, sort_order')
+            .in('size_scale_id', batch)
+            .order('sort_order', { ascending: true })
+            .order('id')
+            .range(from, to),
+      );
+      for (const row of valueRows) {
         const key = row.size_scale_id as string;
         const arr = valuesByScale.get(key);
         const entry: SizeScaleValueOrder = {
@@ -893,29 +911,28 @@ export class ProductGroupsService {
     const out = new Map<string, VariantRow[]>();
     if (unique.length === 0) return out;
 
-    // Groups are still chunked into `.in()` batches — that bounds the URL
-    // length, which is a separate limit from max_rows — but each batch is now
-    // itself row-paged.
-    const GROUP_BATCH_SIZE = 100;
-    for (let i = 0; i < unique.length; i += GROUP_BATCH_SIZE) {
-      const batch = unique.slice(i, i + GROUP_BATCH_SIZE);
-      const rows = await fetchAllRows<VariantRow & { group_id: string }>((from, to) =>
-        this.ctx.supabase
+    // Groups are still batched for the `.in()` — that bounds the URL length,
+    // which is a separate limit from max_rows — and each batch is itself
+    // row-paged (fetchAllRowsByIds, the shared form of this loop).
+    const ctx = this.ctx;
+    const rows = await fetchAllRowsByIds<VariantRow & { group_id: string }>(
+      unique,
+      (batch) => (from, to) =>
+        ctx.supabase
           .from('inventory_items')
           .select(`${VARIANT_COLUMNS}, group_id`)
-          .eq('organization_id', this.ctx.organizationId)
+          .eq('organization_id', ctx.organizationId)
           .in('group_id', batch)
           .is('deleted_at', null)
           // The paging order MUST be the stable one (`fetchAllRows` header):
           // an unstable sort lands the same row on two windows or on none.
           .order('id', { ascending: true })
           .range(from, to),
-      );
-      for (const row of rows) {
-        const arr = out.get(row.group_id);
-        if (arr) arr.push(row);
-        else out.set(row.group_id, [row]);
-      }
+    );
+    for (const row of rows) {
+      const arr = out.get(row.group_id);
+      if (arr) arr.push(row);
+      else out.set(row.group_id, [row]);
     }
     // Sorted after the fact so paging keeps its stable key: callers re-sort by
     // SIZE anyway (the group's authored scale lives in `displayByIds`), and a

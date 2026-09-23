@@ -603,7 +603,7 @@ describe('ProductGroupsService.variantsByKey', () => {
 });
 
 describe('ProductGroupsService.displayByIds (Task 16 review fix: chunking)', () => {
-  it('chunks a >500 group-id list into batches instead of one un-bounded `.in()`', async () => {
+  it('chunks a large group-id list into batches of 100 instead of one un-bounded `.in()`', async () => {
     const manyIds = Array.from({ length: 1200 }, (_, i) => `grp-${i}`);
     let call = 0;
     const stub = makeSupabaseStub({
@@ -616,17 +616,19 @@ describe('ProductGroupsService.displayByIds (Task 16 review fix: chunking)', () 
     });
     const out = await new ProductGroupsService(sportsCtx(stub.client)).displayByIds(manyIds);
 
-    // 1200 ids at 500/batch = 3 batches, merged into 3 map entries.
-    expect(out.size).toBe(3);
+    // 1200 ids at 100/batch = 12 batches, merged into 12 map entries. 100
+    // keeps each URL under the local gateway's ~8 KB limit (~215 uuids) and
+    // production's ~395; the old 500 exceeded both.
+    expect(out.size).toBe(12);
     const chains = stub.chainsAll.get('product_groups.select') ?? [];
     const argsAll = stub.chainArgsAll.get('product_groups.select') ?? [];
-    expect(chains).toHaveLength(3);
+    expect(chains).toHaveLength(12);
     const batchSizes = chains.map((chain, q) => {
       const idx = chain.indexOf('in');
       const args = argsAll[q]?.[idx] as [string, string[]];
       return args[1].length;
     });
-    expect(batchSizes).toEqual([500, 500, 200]);
+    expect(batchSizes).toEqual(Array.from({ length: 12 }, () => 100));
   });
 
   it('throws rather than swallowing a mid-batch error', async () => {

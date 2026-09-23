@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { makeSupabaseStub } from '@/test/supabase-mock';
+const reportError = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
+
+import { callArgs, inFilters, makeSupabaseStub } from '@/test/supabase-mock';
 
 import { fetchRackHoldingsByItem } from './rack-holdings';
 
@@ -84,5 +87,48 @@ describe('fetchRackHoldingsByItem', () => {
     await fetchRackHoldingsByItem(ctxFor(client), ids);
     const all = chainsAll.get('item_stock_levels.select') ?? [];
     expect(all).toHaveLength(2);
+  });
+
+  it('pages each batch past the 1000-row cap, so split stock on row 1001 is not hidden', async () => {
+    const rows = Array.from({ length: 1200 }, (_, n) => ({
+      item_id: 'item-0',
+      quantity: 1,
+      locations: { name: `Rack ${n}`, kind: 'rack', warehouse_id: 'wh-1' },
+    }));
+    const { client } = makeSupabaseStub({
+      'item_stock_levels.select': (call) => {
+        const [from, to] = (callArgs(call, 'range') ?? [0, 999]) as [number, number];
+        return { data: rows.slice(from, to + 1), error: null };
+      },
+    });
+    const out = await fetchRackHoldingsByItem(ctxFor(client), ['item-0']);
+    expect(out.get('item-0')).toHaveLength(1200);
+  });
+
+  it('a failed batch costs only its own items, and is reported', async () => {
+    reportError.mockClear();
+    let n = 0;
+    const { client } = makeSupabaseStub({
+      'item_stock_levels.select': (call) => {
+        n += 1;
+        const ids = (inFilters(call).find(([c]) => c === 'item_id')?.[1] ?? []) as string[];
+        if (n === 2) return { data: null, error: { message: 'URI too long' } };
+        return {
+          data: ids.map((item_id) => ({
+            item_id,
+            quantity: 1,
+            locations: { name: 'Rack 1', kind: 'rack', warehouse_id: 'wh-1' },
+          })),
+          error: null,
+        };
+      },
+    });
+    const ids = Array.from({ length: 250 }, (_, i) => `item-${i}`);
+    const out = await fetchRackHoldingsByItem(ctxFor(client), ids);
+    expect(out.size).toBe(150);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect((reportError.mock.calls[0] as unknown as [Error, { tag: string }])[1].tag).toBe(
+      'rack-holdings.fetch',
+    );
   });
 });

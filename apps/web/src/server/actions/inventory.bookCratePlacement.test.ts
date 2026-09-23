@@ -35,13 +35,20 @@ vi.mock('@/server/services/context', async (importOriginal) => {
   };
 });
 
-// audit() writes through the admin client — silence it.
+// audit() and auditMany() write through the admin client — silence them.
 vi.mock('@/server/services/audit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/server/services/audit')>();
-  return { ...actual, audit: vi.fn(async () => undefined) };
+  return {
+    ...actual,
+    audit: vi.fn(async () => undefined),
+    auditMany: vi.fn(async (payloads: readonly unknown[]) => ({
+      written: payloads.length,
+      lost: 0,
+    })),
+  };
 });
 
-import { audit } from '@/server/services/audit';
+import { audit, auditMany } from '@/server/services/audit';
 import { InventoryService } from '@/server/services/inventory';
 
 import {
@@ -1439,10 +1446,11 @@ describe('bulkPlaceStockAction — a book listed TWICE is described to the gate 
     });
 
     expect(res.ok).toBe(true);
-    const crateAudits = vi
-      .mocked(audit)
-      .mock.calls.map(([payload]) => payload)
-      .filter((p) => p.extra?.placement === 'book_crate');
+    // The crate sync writes its rows through auditMany (one batched write).
+    const crateAudits = [
+      ...vi.mocked(audit).mock.calls.map(([payload]) => payload),
+      ...vi.mocked(auditMany).mock.calls.flatMap(([payloads]) => payloads),
+    ].filter((p) => p.extra?.placement === 'book_crate');
     expect(crateAudits).toHaveLength(1);
     expect(crateAudits[0]!.entityId).toBe(BOOK_ID);
     // 8 + 7. Last-wins recorded 7 — a trail that under-reports the placement

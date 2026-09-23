@@ -10,7 +10,9 @@ import {
 import { reportError } from '@/lib/error-reporter';
 import { type NotificationPrefKey } from '@/lib/notification-prefs';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 
+import { fetchAllRowsByIds, rawErrorText } from './lib/fetch-by-ids';
 import { createNotification } from './notifications';
 
 /**
@@ -98,20 +100,33 @@ async function loadPrefFlags(
   const flags = new Map<string, boolean>(userIds.map((id) => [id, true]));
   if (userIds.length === 0) return flags;
 
-  const { data, error } = await admin
-    .from('notification_preferences')
-    .select(`user_id, ${key}`)
-    .in('user_id', userIds);
-  if (error) {
+  // Batched: an audience is every member holding a permission, with no cap,
+  // and one `.in()` past ~215 ids fails.
+  let data: Array<Record<string, unknown>>;
+  try {
+    data = await fetchAllRowsByIds<Record<string, unknown>>(
+      userIds,
+      (batch) => (from, to) =>
+        admin
+          .from('notification_preferences')
+          .select(`user_id, ${key}`)
+          .in('user_id', batch)
+          .order('user_id')
+          .range(from, to) as unknown as PromiseLike<{
+          data: Array<Record<string, unknown>> | null;
+          error: { message: string } | null;
+        }>,
+    );
+  } catch (err) {
     // A read failure is NOT evidence of a mute — fail open, same contract as
     // createNotification's own disabled_at check.
-    void reportError(new Error(error.message), {
+    void reportError(new Error(rawErrorText(err)), {
       tag: 'maintenance_notify.load_prefs',
       extra: { key },
     });
     return flags;
   }
-  for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+  for (const row of data) {
     const userId = row.user_id as string;
     if (row[key] === false) flags.set(userId, false);
   }
@@ -256,6 +271,10 @@ export async function resolveMaintenanceAudience(args: {
  * shape is what Task 18's mobile web-path-rewrite rules translate into a
  * native deep link; changing it breaks that translation.
  */
+/** Notifications created at once by one fan-out (purchase-orders.ts uses the
+ *  same number for the same reason). */
+const NOTIFY_CONCURRENCY = 6;
+
 export async function notifyMaintenanceEvent(args: {
   organizationId: string;
   event: MaintenanceNotifyEvent;
@@ -291,18 +310,19 @@ export async function notifyMaintenanceEvent(args: {
     if (recipients.length === 0) return;
 
     const title = titleFor(event, requestHandle);
-    await Promise.all(
-      recipients.map((userId) =>
-        createNotification({
-          organizationId,
-          userId,
-          type: 'maintenance_request',
-          title,
-          body: subject,
-          link: `/dashboard/maintenance/${requestId}`,
-          metadata: { request_id: requestId, event },
-        }),
-      ),
+    // At most NOTIFY_CONCURRENCY at once: each one is a profile read and an
+    // INSERT, and the audience grows with the org. createNotification never
+    // throws, so every recipient is attempted.
+    await mapWithConcurrency(recipients, NOTIFY_CONCURRENCY, (userId) =>
+      createNotification({
+        organizationId,
+        userId,
+        type: 'maintenance_request',
+        title,
+        body: subject,
+        link: `/dashboard/maintenance/${requestId}`,
+        metadata: { request_id: requestId, event },
+      }),
     );
   } catch (err) {
     void reportError(err instanceof Error ? err : new Error(String(err)), {

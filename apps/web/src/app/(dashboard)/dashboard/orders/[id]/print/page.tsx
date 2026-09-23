@@ -4,6 +4,7 @@ import { AutoPrint } from '@/components/orders/auto-print';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { createClient } from '@/lib/supabase/server';
+import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
 import { OrderRequestsService } from '@/server/services/order-requests';
 import { formatNumber } from '@/lib/utils';
 
@@ -63,7 +64,13 @@ export default async function OrderPrintPage({
   const supabase = await createClient();
   const orgTimezone = await getCachedOrgTimezone(ctx.organizationId);
 
-  const [orgRes, whRes, binRes] = await Promise.all([
+  // Each line's bin decides the walk order and is printed beside it, so a
+  // failed read fails the page (the cycle-count sheet's rule) instead of
+  // printing a pick list with no bins in no order. An order's lines have no
+  // total cap: one `.in()` of every item failed past ~215 locally and ~395 in
+  // production, and its error was ignored. Now 100 ids per request, paged.
+  type BinRow = { id: string; bin_location: string | null };
+  const [orgRes, whRes, binRows] = await Promise.all([
     supabase
       .from('organizations')
       .select('name, logo_url')
@@ -74,11 +81,15 @@ export default async function OrderPrintPage({
       .select('name, code, address, contact_name, contact_email, contact_phone')
       .eq('id', request.warehouse_id)
       .maybeSingle(),
-    supabase
-      .from('inventory_items')
-      .select('id, bin_location')
-      .eq('organization_id', ctx.organizationId)
-      .in('id', itemIds.length ? itemIds : ['00000000-0000-0000-0000-000000000000']),
+    fetchAllRowsByIds<BinRow>(itemIds, (batch) => (from, to) =>
+      supabase
+        .from('inventory_items')
+        .select('id, bin_location')
+        .eq('organization_id', ctx.organizationId)
+        .in('id', batch)
+        .order('id', { ascending: true })
+        .range(from, to),
+    ),
   ]);
 
   const org = orgRes.data as { name: string; logo_url: string | null } | null;
@@ -95,7 +106,7 @@ export default async function OrderPrintPage({
   const whAddressLines = formatAddressLines(warehouse?.address);
 
   const binByItem = new Map<string, string | null>();
-  for (const r of (binRes.data ?? []) as Array<{ id: string; bin_location: string | null }>) {
+  for (const r of binRows) {
     binByItem.set(r.id, r.bin_location ?? null);
   }
 

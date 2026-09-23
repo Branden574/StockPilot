@@ -186,6 +186,7 @@ export async function OrderTimeline({ orderId, organizationId }: Props) {
     const { data: profiles } = await supabase
       .from('user_profiles')
       .select('id, full_name, email')
+      // in-list-bound: the distinct people who acted on this one order (a handful)
       .in('id', userIds);
     for (const p of (profiles ?? []) as UserProfile[]) {
       usersById.set(p.id, p);

@@ -129,6 +129,48 @@ describe('bulkUpdateInventoryAction', () => {
     expect(revalidatePath).toHaveBeenCalledWith('/dashboard');
   });
 
+  // A bulk tag list rides in the URL of every batch of item ids, so it is
+  // capped (MAX_BULK_TAGS = 50) and shape-checked before any work.
+  it('refuses more than 50 tags, before the service is built', async () => {
+    const tagIds = Array.from(
+      { length: 51 },
+      (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+    );
+    for (const kind of ['add_tags', 'remove_tags'] as const) {
+      const result = await bulkUpdateInventoryAction({ ids: ['a'], op: { kind, tagIds } });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.message).toBe('Apply or remove at most 50 tags at a time.');
+    }
+    expect(InventoryService.forCurrentUser).not.toHaveBeenCalled();
+  });
+
+  it('refuses a malformed tag id, and passes 50 well-formed ones through', async () => {
+    const bad = await bulkUpdateInventoryAction({
+      ids: ['a'],
+      op: { kind: 'add_tags', tagIds: ['not-a-uuid'] },
+    });
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.error.code).toBe('validation_error');
+    expect(InventoryService.forCurrentUser).not.toHaveBeenCalled();
+
+    const bulkUpdate = vi.fn(async () => ({ ok: 1, skipped: 0 }));
+    vi.mocked(InventoryService.forCurrentUser).mockResolvedValue({ bulkUpdate } as any);
+    const tagIds = Array.from(
+      { length: 50 },
+      (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+    );
+    const good = await bulkUpdateInventoryAction({ ids: ['a'], op: { kind: 'add_tags', tagIds } });
+    expect(good.ok).toBe(true);
+  });
+
+  it('passes a partial write\'s failed count through to the toolbar', async () => {
+    const bulkUpdate = vi.fn(async () => ({ ok: 100, skipped: 0, failed: 150 }));
+    vi.mocked(InventoryService.forCurrentUser).mockResolvedValue({ bulkUpdate } as any);
+    const result = await bulkUpdateInventoryAction({ ids: ['a'], op: { kind: 'archive' } });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.failed).toBe(150);
+  });
+
   it('maps ServiceError to err result code', async () => {
     const bulkUpdate = vi.fn(async () => {
       throw new ServiceError('forbidden', 'no permission');

@@ -2,6 +2,7 @@ import 'server-only';
 
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 
 /**
  * The 6 lifecycle statuses a registered serial can be in — mirrors the
@@ -124,6 +125,7 @@ export class SerialsService {
         .from('warehouses')
         .select('id, name')
         .eq('organization_id', this.ctx.organizationId)
+        // in-list-bound: distinct warehouses of one page of serials (an org's handful of sites)
         .in('id', warehouseIds);
       if (whError) {
         console.error('[SerialsService.list] warehouse name lookup failed:', whError);
@@ -206,16 +208,24 @@ export class SerialsService {
 
     // Pre-check for already-registered serials so the conflict names them
     // (the raw 23505 message doesn't say WHICH serial collided).
-    const { data: existing, error: existingError } = await this.ctx.supabase
-      .from('serial_registry')
-      .select('serial_number')
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('item_id', itemId)
-      .in('serial_number', serials);
-    if (existingError) throw new ServiceError('internal_error', existingError.message);
-    const duplicates = ((existing ?? []) as Array<{ serial_number: string }>).map(
-      (r) => r.serial_number,
+    //
+    // Batched by encoded length: up to 500 serials of up to 128 characters
+    // would put ~64 KB in one URL. A failed batch throws (the insert's unique
+    // index is still the backstop, but the conflict would not name serials).
+    const ctx = this.ctx;
+    const existing = await fetchAllRowsByIds<{ serial_number: string }>(
+      serials,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('serial_registry')
+          .select('serial_number')
+          .eq('organization_id', ctx.organizationId)
+          .eq('item_id', itemId)
+          .in('serial_number', batch)
+          .order('id')
+          .range(from, to),
     );
+    const duplicates = existing.map((r) => r.serial_number);
     if (duplicates.length > 0) {
       const shown = duplicates.slice(0, 5).join(', ');
       const more = duplicates.length > 5 ? ` (+${duplicates.length - 5} more)` : '';

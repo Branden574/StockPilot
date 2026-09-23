@@ -5,6 +5,7 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { reportError } from '@/lib/error-reporter';
 import { safeFetch, SsrfBlockedError } from '@/lib/ssrf-guard';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 
 import {
   assertModuleEnabled,
@@ -84,6 +85,22 @@ const DELIVERY_TIMEOUT_MS = 8000;
  * invocation) frees the row within seconds instead of stranding it.
  */
 const CLAIM_LEASE_MS = DELIVERY_TIMEOUT_MS + 5_000;
+
+/**
+ * Deliveries the drain keeps in flight at once. Each one is a claim UPDATE,
+ * an outbound POST and one or two finalize UPDATEs; starting a whole tick's
+ * 100 together put 100 PostgREST writes on the gateway in the same moment.
+ * The per-delivery 8 s timeout keeps one slow endpoint from holding the rest.
+ */
+export const DRAIN_DELIVERY_CONCURRENCY = 10;
+
+/**
+ * The drain starts no new delivery after this long. With the cap above, 100
+ * deliveries to an endpoint that hangs for the full 8 s would take 80 s, and
+ * the drain-outbox cron has maxDuration 60 (and runs other work first). A row
+ * that is not started is not claimed, so it stays pending for the next tick.
+ */
+export const DRAIN_TIME_BUDGET_MS = 30_000;
 /** Backoff: ~1m, 2m, 4m, 8m, 16m, capped at 30m. */
 function backoffMs(attempt: number): number {
   return Math.min(30 * 60_000, 60_000 * 2 ** Math.max(0, attempt - 1));
@@ -463,7 +480,11 @@ export async function drainIntegrationDeliveries(
   admin: Admin,
   now: Date = new Date(),
   limit = 100,
+  /** Test seam: the clock the time budget is measured with. */
+  opts: { clock?: () => number } = {},
 ): Promise<{ attempted: number; delivered: number }> {
+  const clock = opts.clock ?? Date.now;
+  const startedAt = clock();
   let attempted = 0;
   let delivered = 0;
   try {
@@ -478,10 +499,16 @@ export async function drainIntegrationDeliveries(
 
     // Batch-load the endpoints for the due rows.
     const endpointIds = Array.from(new Set(due.map((d) => (d as DeliveryRow).endpoint_id)));
-    const { data: eps } = await admin
+    const { data: eps, error: epsErr } = await admin
       .from('integration_endpoints')
       .select('id, organization_id, type, url, secret')
+      // in-list-bound: endpoints of at most `limit` (100) due deliveries per tick
       .in('id', endpointIds);
+    // A delivery whose endpoint is missing from this read is marked dead below,
+    // so a FAILED read must not be read as "every endpoint was removed": that
+    // permanently dropped every due webhook. Stop here; the rows stay pending
+    // and the next tick retries them. The catch below reports it.
+    if (epsErr) throw new Error(`integration_endpoints select: ${epsErr.message}`);
     const epById = new Map((eps ?? []).map((e) => [(e as EndpointRow).id, e as EndpointRow]));
 
     // Partition into deliverable rows vs orphans (endpoint deleted out-of-band).
@@ -496,19 +523,29 @@ export async function drainIntegrationDeliveries(
       await admin
         .from('integration_deliveries')
         .update({ status: 'dead', error: 'endpoint removed' })
+        // in-list-bound: at most `limit` (100) due deliveries per tick
         .in('id', deadIds);
     }
-    // Attempt all due deliveries in PARALLEL (was sequential — a single slow/hung
-    // webhook blocked every later row for up to the 8s timeout). limit caps the
-    // fan-out per tick (audit 2026-06-09).
-    const results = await Promise.allSettled(
-      live.map((d) => attemptDelivery(admin, epById.get(d.endpoint_id)!, d)),
-    );
+    // Attempt due deliveries CONCURRENTLY (was sequential — a single slow/hung
+    // webhook blocked every later row for up to the 8s timeout), at most
+    // DRAIN_DELIVERY_CONCURRENCY at once (it was all 100 at once), and none
+    // started after DRAIN_TIME_BUDGET_MS. `run` never throws (a failed attempt
+    // counts as not claimed, as Promise.allSettled's rejection did), so
+    // mapWithConcurrency's stop-on-first-error never applies.
+    const results = await mapWithConcurrency(live, DRAIN_DELIVERY_CONCURRENCY, async (d) => {
+      if (clock() - startedAt >= DRAIN_TIME_BUDGET_MS) return { claimed: false, ok: false };
+      try {
+        return await attemptDelivery(admin, epById.get(d.endpoint_id)!, d);
+      } catch {
+        return { claimed: false, ok: false };
+      }
+    });
     // Count only rows we actually CLAIMED. A row another worker is mid-flight
-    // on is skipped, not attempted — reporting it would make the cron summary
-    // claim deliveries this tick never made (SP-067).
-    attempted = results.filter((r) => r.status === 'fulfilled' && r.value.claimed).length;
-    delivered = results.filter((r) => r.status === 'fulfilled' && r.value.ok).length;
+    // on, or one left for the next tick, is skipped, not attempted — reporting
+    // it would make the cron summary claim deliveries this tick never made
+    // (SP-067).
+    attempted = results.filter((r) => r.claimed).length;
+    delivered = results.filter((r) => r.ok).length;
   } catch (e) {
     void reportError(e, { tag: 'integration-events.drain' });
   }

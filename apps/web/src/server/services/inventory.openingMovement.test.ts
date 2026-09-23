@@ -29,7 +29,10 @@ vi.mock('@/lib/auth/warehouse', () => ({
   assertWarehouseAccess: vi.fn(async () => undefined),
   ForbiddenError: class extends Error {},
 }));
-vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
+vi.mock('./audit', () => ({
+  audit: vi.fn(async () => undefined),
+  auditMany: vi.fn(async (payloads: readonly unknown[]) => ({ written: payloads.length, lost: 0 })),
+}));
 vi.mock('@/lib/ai/embeddings', () => ({ embedInventoryItem: vi.fn(async () => undefined) }));
 
 import { InventoryService } from './inventory';

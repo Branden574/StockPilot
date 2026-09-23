@@ -108,8 +108,9 @@ export interface ExportPreviewResponse {
     rows: number;
     withIsbn: number;
     missingIsbn: number;
-    withImage: number;
-    missingImage: number;
+    /** null when the image check failed (the dialog says it is unavailable). */
+    withImage: number | null;
+    missingImage: number | null;
   };
 }
 

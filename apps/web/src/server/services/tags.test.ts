@@ -6,16 +6,29 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 // emit ONE audit row for the whole batch with no entityId — invisible in
 // any per-item "View history" / Activity feed. Mock the writer so these
 // tests can assert one row PER affected item, each carrying entityId=itemId.
+// The rows go through auditMany (one batched write), never one audit() call
+// per item.
 vi.mock('./audit', () => ({
   audit: vi.fn(async () => undefined),
+  auditMany: vi.fn(async (payloads: readonly unknown[]) => ({
+    written: payloads.length,
+    lost: 0,
+  })),
 }));
 
-import { audit } from './audit';
+import { audit, auditMany } from './audit';
 import { TagsService } from './tags';
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
+
+/** The rows of the one auditMany call the operation must make. */
+function auditedRows() {
+  expect(audit).not.toHaveBeenCalled();
+  expect(auditMany).toHaveBeenCalledTimes(1);
+  return vi.mocked(auditMany).mock.calls[0]![0];
+}
 
 describe('TagsService.bulkAddToItems', () => {
   it('emits one tag.applied audit row per affected item, each with entityId=itemId', async () => {
@@ -27,23 +40,22 @@ describe('TagsService.bulkAddToItems', () => {
 
     await svc.bulkAddToItems(['item-1', 'item-2'], ['tag-1', 'tag-2']);
 
-    expect(audit).toHaveBeenCalledTimes(2);
-    expect(audit).toHaveBeenCalledWith(
+    const rows = auditedRows();
+    expect(rows).toHaveLength(2);
+    expect(rows).toContainEqual(
       expect.objectContaining({
         event: 'tag.applied',
         entityType: 'inventory_item',
         entityId: 'item-1',
         extra: expect.objectContaining({ bulk: true, tag_ids: ['tag-1', 'tag-2'] }),
       }),
-      expect.anything(),
     );
-    expect(audit).toHaveBeenCalledWith(
+    expect(rows).toContainEqual(
       expect.objectContaining({
         event: 'tag.applied',
         entityType: 'inventory_item',
         entityId: 'item-2',
       }),
-      expect.anything(),
     );
   });
 
@@ -56,7 +68,7 @@ describe('TagsService.bulkAddToItems', () => {
 
     await svc.bulkAddToItems(['item-1', 'item-1'], ['tag-1']);
 
-    expect(audit).toHaveBeenCalledTimes(1);
+    expect(auditedRows()).toHaveLength(1);
   });
 
   it('no-ops (and never audits) when itemIds is empty', async () => {
@@ -65,6 +77,7 @@ describe('TagsService.bulkAddToItems', () => {
 
     await svc.bulkAddToItems([], ['tag-1']);
     expect(audit).not.toHaveBeenCalled();
+    expect(auditMany).not.toHaveBeenCalled();
   });
 });
 
@@ -79,23 +92,22 @@ describe('TagsService.bulkRemoveFromItems', () => {
 
     await svc.bulkRemoveFromItems(['item-1', 'item-2'], ['tag-1']);
 
-    expect(audit).toHaveBeenCalledTimes(2);
-    expect(audit).toHaveBeenCalledWith(
+    const rows = auditedRows();
+    expect(rows).toHaveLength(2);
+    expect(rows).toContainEqual(
       expect.objectContaining({
         event: 'tag.removed',
         entityType: 'inventory_item',
         entityId: 'item-1',
         extra: expect.objectContaining({ bulk: true, tag_ids: ['tag-1'] }),
       }),
-      expect.anything(),
     );
-    expect(audit).toHaveBeenCalledWith(
+    expect(rows).toContainEqual(
       expect.objectContaining({
         event: 'tag.removed',
         entityType: 'inventory_item',
         entityId: 'item-2',
       }),
-      expect.anything(),
     );
   });
 });

@@ -7,7 +7,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ExceptionsService } from '@/server/services/exceptions';
 import { ServiceError } from '@/server/services/context';
 
-import { countExceptions, groupExceptions, type WarehouseException } from '@stockpilot/core';
+import {
+  countExceptions,
+  EXCEPTION_RULES,
+  groupExceptions,
+  type ExceptionRule,
+  type WarehouseException,
+} from '@stockpilot/core';
 
 export const metadata = { title: 'Exceptions · StockPilot' };
 
@@ -46,6 +52,11 @@ export default async function ExceptionsPage() {
 
   const groups = groupExceptions(result.exceptions);
   const { total, critical } = countExceptions(result.exceptions);
+  // Rules whose read failed. Their silence is UNKNOWN, not clean, so the page
+  // names them and never shows "Nothing needs attention" while any is out.
+  const failedLabels = result.failedRules.map(
+    (rule) => EXCEPTION_RULES[rule as ExceptionRule]?.label ?? rule,
+  );
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:py-8">
@@ -57,7 +68,21 @@ export default async function ExceptionsPage() {
         </p>
       </header>
 
-      {total === 0 ? (
+      {failedLabels.length > 0 && (
+        <div
+          role="alert"
+          className="border-warning/40 bg-warning/5 mb-5 flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
+        >
+          <AlertTriangle className="text-warning mt-0.5 size-4 shrink-0" aria-hidden />
+          <p>
+            {failedLabels.length === 1 ? 'One check' : `${failedLabels.length} checks`} could not
+            run: {failedLabels.join(', ')}. What {failedLabels.length === 1 ? 'it' : 'they'} would
+            show is unknown, not clean. Reload the page to try again.
+          </p>
+        </div>
+      )}
+
+      {total === 0 && failedLabels.length > 0 ? null : total === 0 ? (
         /* The empty state a reader should WANT to see, and deliberately distinct
            from "no results match your filters" — there are no filters here. */
         <Card>

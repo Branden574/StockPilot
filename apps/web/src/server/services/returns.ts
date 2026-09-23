@@ -21,6 +21,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 /**
@@ -241,20 +242,28 @@ export async function pendingReturnQuantitiesByLine(
   const pending = new Map<string, number>();
   if (orderRequestLineIds.length === 0) return pending;
 
-  const { data, error } = await client
-    .from('return_lines')
-    .select('order_request_line_id, quantity, applied, return:returns!return_id (status)')
-    .eq('organization_id', organizationId)
-    .in('order_request_line_id', orderRequestLineIds)
-    .eq('applied', false);
-  if (error) throw new ServiceError('internal_error', error.message);
-
-  for (const row of (data as Array<{
+  // Batched and paged: an order's lines have no cap (one `.in()` past ~215
+  // ids fails), and pending return lines past 1000 were cut off silently,
+  // which overstated what could still be returned. A failed batch throws.
+  const data = await fetchAllRowsByIds<{
     order_request_line_id: string;
     quantity: number | null;
     applied: boolean;
     return: { status: string } | { status: string }[] | null;
-  }> | null) ?? []) {
+  }>(
+    orderRequestLineIds,
+    (batch) => (from, to) =>
+      client
+        .from('return_lines')
+        .select('order_request_line_id, quantity, applied, return:returns!return_id (status)')
+        .eq('organization_id', organizationId)
+        .in('order_request_line_id', batch)
+        .eq('applied', false)
+        .order('id')
+        .range(from, to),
+  );
+
+  for (const row of data) {
     const header = Array.isArray(row.return) ? (row.return[0] ?? null) : (row.return ?? null);
     const status = header?.status;
     if (status === 'cancelled' || status === 'denied') continue;
@@ -407,6 +416,7 @@ export class RMAService {
     }
     if (filters.status) {
       const statuses = Array.isArray(filters.status) ? filters.status : [filters.status];
+      // in-list-bound: return statuses are a fixed enum of a few values
       query = query.in('status', statuses);
     }
 
@@ -579,12 +589,27 @@ export class RMAService {
     // in-org parent check above (line 'order' verified .eq(organization_id)),
     // order_request_lines RLS being org-scoped through that parent, AND the
     // per-line belonging re-check below (orderLine.order_request_id === id).
-    const { data: orderLines, error: orderLinesError } = await this.ctx.supabase
-      .from('order_request_lines')
-      .select('id, order_request_id, item_id, quantity_fulfilled, returned_quantity')
-      .eq('order_request_id', orderRequestId)
-      .in('id', lineIds);
-    if (orderLinesError) throw new ServiceError('internal_error', orderLinesError.message);
+    //
+    // Batched: a return's lines have no cap here; a failed batch throws, so a
+    // line is never rejected as "not on this order" because its read failed.
+    const ctx = this.ctx;
+    const orderLines = await fetchAllRowsByIds<{
+      id: string;
+      order_request_id: string;
+      item_id: string;
+      quantity_fulfilled: number | null;
+      returned_quantity: number | null;
+    }>(
+      lineIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('order_request_lines')
+          .select('id, order_request_id, item_id, quantity_fulfilled, returned_quantity')
+          .eq('order_request_id', orderRequestId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+    );
 
     const orderLineById = new Map<
       string,
@@ -596,13 +621,7 @@ export class RMAService {
         returned_quantity: number;
       }
     >();
-    for (const ol of (orderLines as Array<{
-      id: string;
-      order_request_id: string;
-      item_id: string;
-      quantity_fulfilled: number | null;
-      returned_quantity: number | null;
-    }> | null) ?? []) {
+    for (const ol of orderLines) {
       orderLineById.set(ol.id, {
         id: ol.id,
         order_request_id: ol.order_request_id,

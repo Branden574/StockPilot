@@ -141,7 +141,21 @@ describe('GET /api/cron/maintenance-draft-reminders', () => {
     // Eligibility predicate, pinned via call-recording (the mock replays
     // canned rows without applying real PostgREST filters).
     const selectChain = stub.chains.get('maintenance_requests.select');
-    expect(selectChain).toEqual(['select', 'eq', 'lt', 'is', 'is', 'is', 'is', 'in', 'limit']);
+    // The org allowlist goes 100 per request, each batch oldest-first so the
+    // merged 200 are the oldest (see the long-allowlist test below).
+    expect(selectChain).toEqual([
+      'select',
+      'eq',
+      'lt',
+      'is',
+      'is',
+      'is',
+      'is',
+      'in',
+      'order',
+      'order',
+      'limit',
+    ]);
     const selectArgs = stub.chainArgs.get('maintenance_requests.select') ?? [];
     expect(selectArgs[selectChain!.indexOf('eq')]).toEqual(['status', 'saved']);
     expect(selectArgs[selectChain!.indexOf('lt')]?.[0]).toBe('created_at');
@@ -158,7 +172,9 @@ describe('GET /api/cron/maintenance-draft-reminders', () => {
     // Module-gate fast-follow: the eligibility SELECT is filtered to the
     // module-enabled org allowlist BEFORE the row limit.
     expect(selectArgs[7]).toEqual(['organization_id', ['org-1']]);
-    expect(selectArgs[8]).toEqual([200]);
+    expect(selectArgs[8]).toEqual(['created_at', { ascending: true }]);
+    expect(selectArgs[9]).toEqual(['id', { ascending: true }]);
+    expect(selectArgs[10]).toEqual([200]);
 
     // The module allowlist query itself: enabled orgs for this module only.
     const modChain = stub.chains.get('organization_modules.select');
@@ -323,5 +339,85 @@ describe('GET /api/cron/maintenance-draft-reminders', () => {
     // The allowlist query itself still ran and was correctly scoped.
     const modChain = stub.chains.get('organization_modules.select');
     expect(modChain).toEqual(['select', 'eq', 'eq', 'order', 'range']);
+  });
+
+  // The allowlist is every org with the module on. One `.in()` of it failed
+  // past ~215 ids locally and ~395 in production (after ~7 s of retries),
+  // which failed every run. It now goes 100 orgs per request; each batch
+  // keeps its oldest 200 drafts and the merge keeps the oldest 200 overall.
+  describe('a long org allowlist', () => {
+    const orgId = (i: number) => `org-${String(i).padStart(3, '0')}`;
+    // 250 orgs x 2 drafts. Draft ages are scrambled so the oldest 200 are
+    // spread over every batch.
+    const drafts = Array.from({ length: 250 }, (_, i) =>
+      [0, 1].map((k) => ({
+        id: `mr-${i}-${k}`,
+        organization_id: orgId(i),
+        requester_user_id: `user-${i}`,
+        request_number: i,
+        created_at: new Date(
+          Date.UTC(2026, 7, 1) + ((i * 7919 + k * 104729) % 50_000) * 60_000,
+        ).toISOString(),
+      })),
+    ).flat();
+
+    /** A client that answers each eligibility batch the way the database
+     *  would (its orgs' drafts, oldest first, at most 200) and records the
+     *  org list of every batch and the id of every stamp. */
+    function longStub(failBatch?: number) {
+      const orgLists: string[][] = [];
+      const stamped: string[] = [];
+      const stub = makeSupabaseStub({
+        'organization_modules.select': {
+          data: Array.from({ length: 250 }, (_, i) => ({ organization_id: orgId(i) })),
+          error: null,
+        },
+        'maintenance_requests.select': (call) => {
+          const orgs = call.args[call.methods.indexOf('in')]![1] as string[];
+          orgLists.push(orgs);
+          if (orgLists.length === failBatch) {
+            return { data: null, error: { message: 'fetch failed' } };
+          }
+          const rows = drafts
+            .filter((d) => orgs.includes(d.organization_id))
+            .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
+            .slice(0, 200);
+          return { data: rows, error: null };
+        },
+        'maintenance_requests.update': (call) => {
+          stamped.push(call.args[call.methods.indexOf('eq')]![1] as string);
+          return { data: [{ id: 'stamped' }], error: null };
+        },
+        'notification_preferences.select': { data: [], error: null },
+      });
+      adminHolder.client = stub.client;
+      return { orgLists, stamped };
+    }
+
+    it('reads 100 orgs per request and reminds the oldest 200 drafts across every batch', async () => {
+      const { orgLists, stamped } = longStub();
+
+      const res = await GET(buildRequest('Bearer test-cron-secret'));
+
+      expect(res.status).toBe(200);
+      expect(orgLists.map((l) => l.length)).toEqual([100, 100, 50]);
+      const oldest200 = [...drafts]
+        .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
+        .slice(0, 200)
+        .map((d) => d.id);
+      expect(stamped).toEqual(oldest200);
+      // The oldest drafts include some from the last batch of orgs.
+      expect(stamped.some((id) => Number(id.split('-')[1]) >= 200)).toBe(true);
+    });
+
+    it('a failed batch fails the run and stamps nothing', async () => {
+      const { stamped } = longStub(2);
+
+      const res = await GET(buildRequest('Bearer test-cron-secret'));
+
+      expect(res.status).toBe(500);
+      expect(stamped).toEqual([]);
+      expect(createNotificationMock).not.toHaveBeenCalled();
+    });
   });
 });

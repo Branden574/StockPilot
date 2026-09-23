@@ -31,6 +31,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { isbnVariants } from '@/lib/books/isbn-variants';
 import { PURCHASE_ORDER_ITEM_TYPES } from '@/lib/purchase-orders/item-types';
+import { chunkInFilterValues, IN_FILTER_MAX_VALUES } from '@/lib/supabase/in-filter';
 import { cn } from '@/lib/utils';
 import { createPoAction, updatePoAction } from '@/server/actions/purchase-orders';
 import { formatCurrency } from '@/lib/utils';
@@ -688,10 +689,10 @@ export function PoForm({
     // edit, and aborting would cancel a resolution whose ids are already
     // marked requested — leaving that label permanently blank. `mountedRef`
     // is what stops the state write after unmount.
-    // The endpoint caps at 100 ids per request; chunk so a large size run
-    // (or a long pasted draft) still resolves every line.
-    for (let i = 0; i < missing.length; i += 100) {
-      const chunk = missing.slice(i, i + 100);
+    // The endpoint takes at most IN_FILTER_MAX_VALUES ids per request (the
+    // same constant it slices with, so the two cannot drift apart); chunk so
+    // a large size run (or a long pasted draft) still resolves every line.
+    for (const chunk of chunkInFilterValues(missing, { maxValues: IN_FILTER_MAX_VALUES })) {
       void (async () => {
         try {
           const res = await fetch(buildResolveByIdsUrl(chunk));

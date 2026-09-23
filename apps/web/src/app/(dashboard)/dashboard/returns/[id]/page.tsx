@@ -20,6 +20,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
 import { formatNumber, formatRelative } from '@/lib/utils';
+import { fetchAllRowsByIds, reportDegradedRead } from '@/server/services/lib/fetch-by-ids';
 import { RMAService } from '@/server/services/returns';
 import { ShippingService, type CarrierShipmentRow } from '@/server/services/shipping';
 
@@ -53,23 +54,28 @@ export default async function ReturnDetailPage({
   }
 
   // Resolve item name/sku for each line. Items are org-scoped under RLS, so
-  // this read can only return items in the caller's org.
+  // this read can only return items in the caller's org. A return's lines
+  // follow its order's, which have no total cap: one `.in()` of every item
+  // failed past ~215 locally and ~395 in production, silently. Now 100 per
+  // request; names are labels only, so a failure shows the lines unnamed and
+  // is reported rather than failing the page.
   const itemIds = Array.from(new Set(detail.lines.map((l) => l.item_id)));
   const itemMap = new Map<string, { name: string; sku: string | null }>();
-  if (itemIds.length > 0) {
+  type ItemName = { id: string; name: string; sku: string | null };
+  try {
     const supabase = await createClient();
-    const { data: items } = await supabase
-      .from('inventory_items')
-      .select('id, name, sku')
-      .eq('organization_id', ctx.organizationId)
-      .in('id', itemIds);
-    for (const it of (items ?? []) as Array<{
-      id: string;
-      name: string;
-      sku: string | null;
-    }>) {
-      itemMap.set(it.id, { name: it.name, sku: it.sku });
-    }
+    const items = await fetchAllRowsByIds<ItemName>(itemIds, (batch) => (from, to) =>
+      supabase
+        .from('inventory_items')
+        .select('id, name, sku')
+        .eq('organization_id', ctx.organizationId)
+        .in('id', batch)
+        .order('id', { ascending: true })
+        .range(from, to),
+    );
+    for (const it of items) itemMap.set(it.id, { name: it.name, sku: it.sku });
+  } catch (err) {
+    reportDegradedRead('returns.detail.item_names', err, { items: itemIds.length });
   }
 
   const totalQty = detail.lines.reduce((s, l) => s + (Number(l.quantity) || 0), 0);

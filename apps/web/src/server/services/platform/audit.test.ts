@@ -28,6 +28,7 @@ vi.mock('@/lib/supabase/admin', () => ({
         select: () => builder,
         order: () => builder,
         limit: () => builder,
+        range: () => builder,
         eq: () => builder,
         in: (column: string, values: unknown[]) => {
           inCalls.push({ table, column, values });
@@ -163,6 +164,27 @@ describe('listPlatformAudit', () => {
       'a@example.com',
       null,
     ]);
+  });
+
+  it('resolves 250 distinct targets in batches of at most 100 (a 500-row page has no smaller cap)', async () => {
+    const targets = Array.from(
+      { length: 250 },
+      (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+    );
+    selectResult.set('platform_admin_audit', {
+      data: targets.map((t, i) => row({ id: `a${i}`, target_user_id: t })),
+      error: null,
+    });
+    selectResult.set('user_profiles', {
+      data: targets.map((id) => ({ id, email: `${id}@example.com` })),
+      error: null,
+    });
+
+    const rows = await listPlatformAudit({ limit: 500 });
+
+    const lookups = inCalls.filter((c) => c.table === 'user_profiles');
+    expect(lookups.map((c) => c.values.length)).toEqual([100, 100, 50]);
+    expect(rows.at(-1)?.targetUserEmail).toBe(`${targets[249]}@example.com`);
   });
 
   it('does not look anyone up when no row names a target user', async () => {

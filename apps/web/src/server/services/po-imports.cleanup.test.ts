@@ -4,14 +4,18 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 // po-imports approve/cancel only touch the DB + audit. Stub the heavy
 // collaborators the module pulls in so the suite stays hermetic.
-const { mockAudit: _mockAudit } = vi.hoisted(() => ({ mockAudit: vi.fn(async () => {}) }));
-vi.mock('./audit', () => ({ audit: _mockAudit }));
+const { mockAudit: _mockAudit, mockAuditMany: _mockAuditMany } = vi.hoisted(() => ({
+  mockAudit: vi.fn(async () => {}),
+  mockAuditMany: vi.fn(async (rows: readonly unknown[]) => ({ written: rows.length, lost: 0 })),
+}));
+vi.mock('./audit', () => ({ audit: _mockAudit, auditMany: _mockAuditMany }));
 vi.mock('@/lib/po-parser', () => ({ parsePoFile: vi.fn() }));
 vi.mock('@/lib/po-scan/extract', () => ({ extractPoFromMedia: vi.fn(), SCAN_MODEL_NAME: 'mock' }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 
 const mockAudit = _mockAudit;
+const mockAuditMany = _mockAuditMany;
 
 import { reportError } from '@/lib/error-reporter';
 
@@ -74,9 +78,10 @@ describe('PoImportsService.cancel — cleanup of auto-created items (Fix #2)', (
     // Race guard: only flip rows still active.
     expect(updateArgs).toContain('active');
 
-    // Audited the archive of item-A with the cancellation reason.
-    const archivedCall = mockAudit.mock.calls
-      .map((c) => (c as unknown as [Record<string, unknown>])[0])
+    // Audited the archive of item-A with the cancellation reason, through the
+    // batched writer.
+    const archivedCall = mockAuditMany.mock.calls
+      .flatMap((c) => (c as unknown as [Array<Record<string, unknown>>])[0])
       .find((a) => a.event === 'inventory.item.archived');
     expect(archivedCall?.entityId).toBe('item-A');
     expect((archivedCall?.extra as Record<string, unknown>)?.reason).toBe('po_import_canceled');
@@ -127,6 +132,7 @@ describe('PoImportsService.cancel — cleanup of auto-created items (Fix #2)', (
         (c) => (c as unknown as [{ event?: string }])[0]?.event === 'inventory.item.archived',
       ),
     ).toBe(false);
+    expect(mockAuditMany).not.toHaveBeenCalled();
     expect(vi.mocked(reportError)).toHaveBeenCalledWith(
       expect.objectContaining({ message: 'canceling statement due to statement timeout' }),
       expect.objectContaining({ tag: 'po_import.cancel.archive_created_items.keep_check' }),

@@ -10,6 +10,7 @@ import { env } from '@/lib/env';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { safeFetch, SsrfBlockedError } from '@/lib/ssrf-guard';
 import { assertPermission, type ServiceContext } from '@/server/services/context';
+import { fetchAllRowsByIds, reportDegradedRead } from '@/server/services/lib/fetch-by-ids';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { BooksImportService } from '@/server/services/books-import';
 import { CategoriesService } from '@/server/services/categories';
@@ -2039,6 +2040,7 @@ const listOrderRequestsTool: ToolExecutor = {
       const { data: profiles } = await ctx.supabase
         .from('user_profiles')
         .select('id, full_name, email')
+        // in-list-bound: requesters of at most 50 orders (limit clamped above)
         .in('id', userIds);
       for (const p of (profiles ?? []) as Array<{
         id: string;
@@ -2377,20 +2379,27 @@ const getRecentItemsTool: ToolExecutor = {
       if (it.created_by) actorIds.add(it.created_by);
       if (it.updated_by) actorIds.add(it.updated_by);
     }
+    // Up to 100 items with two actors each: up to 200 ids, past what one
+    // `.in()` can carry once the rest of the URL is added (the local gateway
+    // refuses ~215 uuids). Names are labels only: a failed batch leaves the
+    // actor unnamed and is reported, it does not fail the tool.
     const actorMap = new Map<string, string>();
-    if (actorIds.size > 0) {
-      const { data: users } = await ctx.supabase
-        .from('user_profiles')
-        .select('id, full_name, email')
-        .in('id', Array.from(actorIds));
-      for (const u of (users ?? []) as Array<{
-        id: string;
-        full_name: string | null;
-        email: string | null;
-      }>) {
+    type ActorRow = { id: string; full_name: string | null; email: string | null };
+    try {
+      const users = await fetchAllRowsByIds<ActorRow>(Array.from(actorIds), (batch) => (from, to) =>
+        ctx.supabase
+          .from('user_profiles')
+          .select('id, full_name, email')
+          .in('id', batch)
+          .order('id', { ascending: true })
+          .range(from, to),
+      );
+      for (const u of users) {
         const display = (u.full_name?.trim() || u.email?.trim()) ?? '';
         if (display) actorMap.set(u.id, display);
       }
+    } catch (err) {
+      reportDegradedRead('ai.tools.recent_items.actors', err, { actors: actorIds.size });
     }
     const resolveActor = (id: string | null | undefined): string | null => {
       if (!id) return null;
@@ -2830,6 +2839,7 @@ const searchInventorySemanticTool: ToolExecutor = {
       .from('inventory_items')
       .select('id')
       .eq('organization_id', ctx.organizationId)
+      // in-list-bound: the RPC's matches, p_limit clamped to 25 above
       .in(
         'id',
         rows.map((r) => r.id),

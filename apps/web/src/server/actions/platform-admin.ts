@@ -13,6 +13,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { slugify } from '@/lib/utils';
 import { recordPlatformAudit } from '@/server/services/platform/audit';
+import { insertAuditRowReported } from '@/server/services/audit';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -191,22 +192,21 @@ export async function createOrgForCustomerAction(
   //    event (the actor is in their own org, the action targets a new
   //    org). Scope to the NEW org so it appears in that org's audit
   //    feed, with the platform admin as the recorded actor.
-  try {
-    await admin.from('audit_logs').insert({
-      organization_id: orgId,
-      user_id: session.userId,
-      event: 'organization.provisioned_by_platform_admin',
-      metadata: {
-        entity_type: 'organization',
-        entity_id: orgId,
-        provisioned_for_email: parsed.data.email,
-        provisioned_for_user_id: newUserId,
-        platform_admin_email: session.email,
-      },
-    });
-  } catch (e) {
-    await reportError(e, { tag: 'platform-admin.audit', extra: { orgId } });
-  }
+  //    insertAuditRowReported reads the INSERT's own result: supabase-js
+  //    returns a refused write as { error } rather than throwing, so the
+  //    try/catch that used to wrap it never reported one.
+  await insertAuditRowReported({
+    organization_id: orgId,
+    user_id: session.userId,
+    event: 'organization.provisioned_by_platform_admin',
+    metadata: {
+      entity_type: 'organization',
+      entity_id: orgId,
+      provisioned_for_email: parsed.data.email,
+      provisioned_for_user_id: newUserId,
+      platform_admin_email: session.email,
+    },
+  });
 
   // 9. Deliver the sign-in link via the app's Resend transport (see step 1
   //    — generateLink minted the link but sent nothing). If the send fails,

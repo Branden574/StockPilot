@@ -3,6 +3,7 @@ import { cookies } from 'next/headers';
 
 import { env } from '@/lib/env';
 import { applyRememberSession } from '@/lib/supabase/session-cookies';
+import { guardedSupabaseFetch } from '@/lib/supabase/url-length-guard';
 
 import type { Database } from '@stockpilot/core';
 
@@ -43,6 +44,9 @@ export async function createClient(options: CreateClientOptions = {}) {
           }
         },
       },
+      // Refuses a PostgREST URL too long to succeed instead of letting it fail
+      // after ~7 s of retries (see url-length-guard.ts).
+      global: { fetch: guardedSupabaseFetch },
     },
   );
 }

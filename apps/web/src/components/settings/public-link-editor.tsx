@@ -427,6 +427,22 @@ export function PublicLinkEditor({
       setBulkError(res.error.message);
       return;
     }
+    // Up to 1000 items are removed 100 at a time, stopping at the first
+    // failed batch; the ones before it are gone (audited, and the public
+    // catalog revalidated). Say how many were left, refresh the rows so the
+    // removals show, and keep the dialog and the selection so "Remove" again
+    // finishes the rest.
+    if (res.data.failed > 0) {
+      const { removed, failed } = res.data;
+      setBulkError(
+        `Removed ${removed} item${removed === 1 ? '' : 's'}. ${failed} item${
+          failed === 1 ? ' was' : 's were'
+        } not removed because of an error. Run it again to finish.`,
+      );
+      await Promise.all([loadRows(), refreshEffective()]);
+      router.refresh();
+      return;
+    }
     setRemoveOpen(false);
     await afterBulkChange();
   }

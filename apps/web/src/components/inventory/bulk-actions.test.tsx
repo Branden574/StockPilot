@@ -43,7 +43,7 @@ beforeEach(() => {
 });
 
 describe('BulkActions', () => {
-  it('renders selected count and a Print labels link with selectedIds joined', () => {
+  it('renders selected count and a Print labels link that carries no ids', () => {
     render(
       <BulkActions
         selectedIds={['a', 'b', 'c']}
@@ -56,8 +56,9 @@ describe('BulkActions', () => {
       />,
     );
     expect(screen.getByText('3 selected')).toBeInTheDocument();
+    // Handoff behaviour is pinned in bulk-actions.labels.test.tsx.
     const link = screen.getByRole('link', { name: /Print labels/i });
-    expect(link).toHaveAttribute('href', '/dashboard/inventory/labels?items=a,b,c');
+    expect(link.getAttribute('href')).not.toMatch(/items=/);
   });
 
   it('shows Archive when selection is not archived', () => {
@@ -153,6 +154,62 @@ describe('BulkActions', () => {
       ids: ['a', 'b'],
       op: { kind: 'archive' },
     });
+  });
+
+  // A bulk op writes 100 items at a time and stops at the first failed
+  // batch. The toolbar says how many were left, and KEEPS the selection so
+  // running the same action again finishes them.
+  it('a partial write names the items left and keeps the selection', async () => {
+    const user = userEvent.setup();
+    const onClear = vi.fn();
+    vi.mocked(bulkUpdateInventoryAction).mockResolvedValueOnce({
+      ok: true as const,
+      data: { ok: 100, skipped: 0, failed: 150 },
+    });
+    render(
+      <BulkActions
+        selectedIds={['a', 'b']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={[]}
+        onClear={onClear}
+        onCycleCount={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /Archive/i }));
+    const dialog = await screen.findByRole('dialog');
+    const buttons = within(dialog).getAllByRole('button', { name: /Archive/i });
+    await user.click(buttons[buttons.length - 1]!);
+
+    expect(toast.success).toHaveBeenCalledWith('Updated 100 items.');
+    expect(toast.warning).toHaveBeenCalledWith(
+      '150 items were not updated because of an error. Run it again on the same selection to finish.',
+    );
+    expect(onClear).not.toHaveBeenCalled();
+  });
+
+  it('a complete write clears the selection and warns about nothing', async () => {
+    const user = userEvent.setup();
+    const onClear = vi.fn();
+    render(
+      <BulkActions
+        selectedIds={['a', 'b']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={[]}
+        onClear={onClear}
+        onCycleCount={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /Archive/i }));
+    const dialog = await screen.findByRole('dialog');
+    const buttons = within(dialog).getAllByRole('button', { name: /Archive/i });
+    await user.click(buttons[buttons.length - 1]!);
+
+    expect(toast.warning).not.toHaveBeenCalled();
+    expect(onClear).toHaveBeenCalledTimes(1);
   });
 
   it('when archive is refused for having stock, offers "Archive anyway" instead of a dead-end toast', async () => {

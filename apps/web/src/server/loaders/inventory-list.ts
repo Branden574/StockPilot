@@ -105,6 +105,7 @@ import {
   inventoryListTag,
   revalidateInventoryList,
 } from '@/server/services/lib/inventory-list-cache';
+import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
 export type InventoryListView = 'items' | 'books';
@@ -555,6 +556,7 @@ async function loadInventoryRowsUncached(
           .from('item_stock_levels')
           .select('item_id, location_id, quantity, locations!inner(name, kind)')
           .eq('organization_id', organizationId)
+          // in-list-bound: one default-view page, DEFAULT_VIEW_PAGE_SIZE (30) ids
           .in('item_id', ids)
           .gt('quantity', 0)
       : Promise.resolve({ data: [], error: null }),
@@ -563,6 +565,7 @@ async function loadInventoryRowsUncached(
           .from('item_images')
           .select('item_id, storage_path, thumb_path, lqip, is_primary, sort_order')
           .eq('organization_id', organizationId)
+          // in-list-bound: one default-view page, DEFAULT_VIEW_PAGE_SIZE (30) ids
           .in('item_id', ids)
           .order('is_primary', { ascending: false })
           .order('sort_order', { ascending: true })
@@ -865,29 +868,36 @@ async function loadInventoryDatasetUncached(
   );
   if (rows.length > INSTANT_MODE_MAX_ROWS) throw new Error(DATASET_TOO_LARGE);
 
-  // Second wave: holdings + images, ID-SCOPED via chunked `.in('item_id',
+  // Second wave: holdings + images, ID-SCOPED via batched `.in('item_id',
   // …)` (scale-audit rank 7). The old org-wide fetch + in-memory pruning
   // read EVERY org holding/image row to serve ≤2000 items — at 50k SKUs
   // that is 50+ sequential 1000-row pages per table for a bounded
   // dataset. All 2000 uuids in ONE query string would blow the URL
-  // length limit, so the ids go out in ID_CHUNK_SIZE batches (parallel,
-  // each batch itself paginated past the 1000-row cap — a batch's items
-  // can carry many holdings/images rows). An item's rows are confined to
-  // its own chunk, so the per-item first-row-wins image pick in
-  // assembleInventoryRows is unaffected by chunk merge order. The
+  // length limit, so fetchAllRowsByIds sends them 100 at a time, each
+  // batch itself paginated past the 1000-row cap (a batch's items can
+  // carry many holdings/images rows). An item's rows are confined to its
+  // own batch, so the per-item first-row-wins image pick in
+  // assembleInventoryRows is unaffected by batch merge order. The
   // ids-Set prune stays as defense-in-depth (it also keeps the loader's
-  // behavior byte-identical if a chunk query ever over-returns).
+  // behavior byte-identical if a batch query ever over-returns).
+  //
+  // Concurrency: the dataset is capped at INSTANT_MODE_MAX_ROWS (2000), so
+  // 20 batches per table is the most there can be. All of them run in one
+  // wave, as before; the helper's default of 6 would turn a full dataset
+  // into four serial waves. Any failed page throws, so a failed pass is
+  // never cached.
   const idList = rows.map((r) => r.id);
   const ids = new Set(idList);
+  const secondWave = { concurrency: DATASET_ID_BATCH_CONCURRENCY };
   const [levelsAll, imagesAll] = await Promise.all([
-    fetchRowsForItemIdChunks<HoldingLevelRow>(
+    fetchAllRowsByIds<HoldingLevelRow>(
       idList,
-      (chunk) => (from, to) =>
+      (batch) => (from, to) =>
         admin
           .from('item_stock_levels')
           .select('item_id, location_id, quantity, locations!inner(name, kind)')
           .eq('organization_id', organizationId)
-          .in('item_id', chunk)
+          .in('item_id', batch)
           .gt('quantity', 0)
           .order('id', { ascending: true })
           // The to-one `locations` embed types as an array in generated
@@ -897,15 +907,16 @@ async function loadInventoryDatasetUncached(
           data: HoldingLevelRow[] | null;
           error: { message: string } | null;
         }>,
+      secondWave,
     ),
-    fetchRowsForItemIdChunks<PrimaryImageRow>(
+    fetchAllRowsByIds<PrimaryImageRow>(
       idList,
-      (chunk) => (from, to) =>
+      (batch) => (from, to) =>
         admin
           .from('item_images')
           .select('item_id, storage_path, thumb_path, lqip, is_primary, sort_order')
           .eq('organization_id', organizationId)
-          .in('item_id', chunk)
+          .in('item_id', batch)
           // Same pick order as the paged loader (primary first, then
           // sort_order) + the id tiebreak fetchAllRows needs for a total
           // order across pages.
@@ -916,6 +927,7 @@ async function loadInventoryDatasetUncached(
           data: PrimaryImageRow[] | null;
           error: { message: string } | null;
         }>,
+      secondWave,
     ),
   ]);
 
@@ -927,40 +939,12 @@ async function loadInventoryDatasetUncached(
 }
 
 /**
- * Uuids per `.in('item_id', …)` call. 100 uuids ≈ 3.7KB of query string —
- * comfortably under every proxy/URL limit in the chain (PostgREST/Kong
- * reject around 8–16KB), while keeping the fan-out for a full 2000-row
- * dataset to ≤20 parallel calls per table (vs 50+ SEQUENTIAL org-wide
- * pages at 50k SKUs before).
+ * Batches in flight per second-wave table. INSTANT_MODE_MAX_ROWS (2000) ids
+ * at 100 per batch is 20 batches, so this keeps the reviewed "at most 20
+ * parallel calls per table" fan-out exactly (vs 50+ SEQUENTIAL org-wide pages
+ * at 50k SKUs before).
  */
-const ID_CHUNK_SIZE = 100;
-
-/**
- * Chunked-id fetch for the dataset's second wave: splits `itemIds` into
- * ID_CHUNK_SIZE batches, runs one fetchAllRows per batch IN PARALLEL
- * (each batch is still paginated internally so >1000 rows for a batch's
- * items can't be silently clamped), and merges. fetchAllRows THROWS on
- * any page error, so a failed chunk fails the whole dataset pass —
- * throw-don't-cache is preserved. Empty `itemIds` → no queries at all.
- */
-async function fetchRowsForItemIdChunks<Row>(
-  itemIds: string[],
-  buildChunkPage: (
-    chunk: string[],
-  ) => (
-    from: number,
-    to: number,
-  ) => PromiseLike<{ data: Row[] | null; error: { message: string } | null }>,
-): Promise<Row[]> {
-  const chunks: string[][] = [];
-  for (let i = 0; i < itemIds.length; i += ID_CHUNK_SIZE) {
-    chunks.push(itemIds.slice(i, i + ID_CHUNK_SIZE));
-  }
-  const results = await Promise.all(
-    chunks.map((chunk) => fetchAllRows<Row>(buildChunkPage(chunk))),
-  );
-  return results.flat();
-}
+const DATASET_ID_BATCH_CONCURRENCY = 20;
 
 /* ---- filter-independent sub-loaders ------------------------------------ */
 

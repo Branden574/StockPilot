@@ -33,6 +33,12 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
+  LABELS_URL_FALLBACK_MAX,
+  labelsItemsHref,
+  labelsSelectionHref,
+  writeLabelsSelection,
+} from '@/lib/inventory/labels-selection';
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -130,6 +136,16 @@ type ActiveDialog =
   | { kind: 'set_public_visibility' }
   | null;
 
+/** The labels page with no selection; the Print labels link's href until the
+ *  selection is stored (pointer down or focus). */
+const LABELS_PAGE_HREF = '/dashboard/inventory/labels';
+
+/** Same ids in the same order: a re-render with an equal selection keeps the
+ *  stored key instead of writing another one. */
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a === b || (a.length === b.length && a.every((id, i) => id === b[i]));
+}
+
 const PUBLIC_VISIBILITY_LABELS: Record<ItemPublicVisibility, string> = {
   internal_only: 'Internal only',
   public: 'Public',
@@ -186,6 +202,60 @@ export function BulkActions({
 
   const count = selectedIds.length;
   const [draftBusy, setDraftBusy] = React.useState(false);
+
+  // The ids travel to the labels page through browser storage, not the URL:
+  // a link carrying every selected id was 16,437 bytes for 443 items and Node
+  // refused it with 431 before the app ran. The page reads them back and
+  // fetches the rows in a POST body (labels-selection.ts).
+  //
+  // It is still a LINK, so cmd-click, middle-click and "Open in new tab" work
+  // as they did when the ids rode in the URL (labels-selection.ts leaves a
+  // short-lived copy a new tab can read). The selection is stored and the
+  // href set when the pointer goes down on the link or it takes focus, which
+  // happens before any click or context menu, so the browser opens the
+  // prepared href. `null` href: storage blocked and too many ids for a URL.
+  const [labelsTarget, setLabelsTarget] = React.useState<{
+    ids: readonly string[];
+    href: string | null;
+  } | null>(null);
+  const labelsReady = labelsTarget !== null && sameIds(labelsTarget.ids, selectedIds);
+
+  function prepareLabels(): string | null {
+    if (labelsReady) return labelsTarget.href;
+    const key = writeLabelsSelection(selectedIds);
+    const href = key
+      ? labelsSelectionHref(key)
+      : // Storage blocked: a small selection still fits comfortably in a URL.
+        selectedIds.length <= LABELS_URL_FALLBACK_MAX
+        ? labelsItemsHref(selectedIds)
+        : null;
+    setLabelsTarget({ ids: selectedIds, href });
+    return href;
+  }
+
+  function onLabelsClick(e: React.MouseEvent<HTMLAnchorElement>) {
+    const href = prepareLabels();
+    if (!href) {
+      e.preventDefault();
+      toast.error(
+        `This browser would not keep the selection for the label page. Select ${LABELS_URL_FALLBACK_MAX} items or fewer and try again.`,
+      );
+      return;
+    }
+    const plainClick = e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
+    if (plainClick) {
+      // Same tab: client-side navigation, as before.
+      e.preventDefault();
+      router.push(href);
+      return;
+    }
+    // A modified click opens a new tab or window from the href. If it was not
+    // prepared yet (no pointer-down or focus came first), open it directly.
+    if (e.currentTarget.getAttribute('href') !== href) {
+      e.preventDefault();
+      window.open(href, '_blank', 'noopener');
+    }
+  }
   const [exportOpen, setExportOpen] = React.useState(false);
 
   async function createDraftPos() {
@@ -342,8 +412,22 @@ export function BulkActions({
           : `Kept the crate label on ${preserved} books — Set rack was not asked to clear them, so they may now be wrong. Check those books’ details or place them into their crates.`,
       );
     }
+    // ═══ AND WHETHER EVERY ITEM WAS WRITTEN ═══
+    // A bulk op writes 100 items at a time and stops at the first failed
+    // batch; the ones before it committed. The selection is KEPT so that
+    // running the same action again finishes the rest (the write is the same
+    // value for every item, so repeating it on the done ones is harmless).
+    const failed = r.data.failed ?? 0;
     setDialog(null);
-    onClear();
+    if (failed > 0) {
+      toast.warning(
+        failed === 1
+          ? 'One item was not updated because of an error. Run it again on the same selection to finish.'
+          : `${failed} items were not updated because of an error. Run it again on the same selection to finish.`,
+      );
+    } else {
+      onClear();
+    }
     router.refresh();
   }
 
@@ -391,7 +475,10 @@ export function BulkActions({
 
         <span className="text-[var(--ed-ink-4)]">·</span>
         <a
-          href={`/dashboard/inventory/labels?items=${selectedIds.join(',')}`}
+          href={labelsReady && labelsTarget.href ? labelsTarget.href : LABELS_PAGE_HREF}
+          onPointerDown={() => void prepareLabels()}
+          onFocus={() => void prepareLabels()}
+          onClick={onLabelsClick}
           className="text-[var(--ed-ink-2)] hover:text-foreground"
         >
           Print labels

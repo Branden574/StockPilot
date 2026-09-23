@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 import { env } from '@/lib/env';
+import { guardedSupabaseFetch } from '@/lib/supabase/url-length-guard';
 
 import type { Database } from '@stockpilot/core';
 
@@ -18,5 +19,8 @@ export function createAdminClient() {
       autoRefreshToken: false,
       persistSession: false,
     },
+    // Refuses a PostgREST URL too long to succeed instead of letting it fail
+    // after ~7 s of retries (see url-length-guard.ts).
+    global: { fetch: guardedSupabaseFetch },
   });
 }

@@ -10,6 +10,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 import type {
@@ -123,24 +124,54 @@ function mapRow(
 
 /**
  * Returns the set of schedule_event ids that already have at least one
- * bundle_distributions row pointing back at them. Used to decide whether
- * a "Mark complete" action should fire a distribution or skip it.
+ * bundle_distributions row pointing back at them. THROWS on a failed read:
+ * update() uses it to decide whether bundle fields are locked and whether a
+ * "Mark complete" must fire a distribution, and neither may be decided on a
+ * read that did not happen (it used to ignore the error, which unlocked a
+ * distributed event's bundle fields).
+ *
+ * Batched and paged: a calendar range has no cap on events, and one `.in()`
+ * past ~215 ids fails.
+ */
+async function readDistributedEventIds(
+  ctx: ServiceContext,
+  eventIds: string[],
+): Promise<Set<string>> {
+  if (eventIds.length === 0) return new Set();
+  const data = await fetchAllRowsByIds<{ schedule_event_id: string | null }>(
+    eventIds,
+    (batch) => (from, to) =>
+      ctx.supabase
+        .from('bundle_distributions')
+        .select('schedule_event_id')
+        .eq('organization_id', ctx.organizationId)
+        .in('schedule_event_id', batch)
+        .order('id')
+        .range(from, to),
+  );
+  const set = new Set<string>();
+  for (const row of data) {
+    if (row.schedule_event_id) set.add(row.schedule_event_id);
+  }
+  return set;
+}
+
+/**
+ * The same set for DISPLAY (the "distributed" badge on a list or detail
+ * view): a failed read leaves every event unflagged and is reported, so a
+ * calendar still renders. Never use this for a decision; see
+ * readDistributedEventIds.
  */
 async function loadDistributedEventIds(
   ctx: ServiceContext,
   eventIds: string[],
 ): Promise<Set<string>> {
-  if (eventIds.length === 0) return new Set();
-  const { data } = await ctx.supabase
-    .from('bundle_distributions')
-    .select('schedule_event_id')
-    .eq('organization_id', ctx.organizationId)
-    .in('schedule_event_id', eventIds);
-  const set = new Set<string>();
-  for (const row of (data ?? []) as Array<{ schedule_event_id: string | null }>) {
-    if (row.schedule_event_id) set.add(row.schedule_event_id);
+  try {
+    return await readDistributedEventIds(ctx, eventIds);
+  } catch (err) {
+    reportDegradedRead('schedule.distributed_events', err, { events: eventIds.length });
+    return new Set();
   }
-  return set;
 }
 
 /**
@@ -157,17 +188,25 @@ async function loadCreatorNames(
   if (ids.length === 0) return new Map();
   // user_profiles.id is the PK and references auth.users(id) directly
   // (see migration 0001_init.sql) — no separate user_id column.
-  const { data, error } = await ctx.supabase
-    .from('user_profiles')
-    .select('id, full_name, email')
-    .in('id', ids);
-  if (error) return new Map();
+  // Batched; a failed read leaves names blank and is reported.
+  let data: Array<{ id: string; full_name: string | null; email: string | null }>;
+  try {
+    data = await fetchAllRowsByIds<{ id: string; full_name: string | null; email: string | null }>(
+      ids,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('user_profiles')
+          .select('id, full_name, email')
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+    );
+  } catch (err) {
+    reportDegradedRead('schedule.creator_names', err, { users: ids.length });
+    return new Map();
+  }
   const map = new Map<string, string>();
-  for (const row of (data ?? []) as Array<{
-    id: string;
-    full_name: string | null;
-    email: string | null;
-  }>) {
+  for (const row of data) {
     const display = row.full_name?.trim() || row.email || null;
     if (display) map.set(row.id, display);
   }
@@ -385,7 +424,7 @@ export class ScheduleService {
     // are out the door the linkage is historical and must not change.
     // The form already disables these inputs, but the service is the
     // source of truth.
-    const distributedBefore = await loadDistributedEventIds(this.ctx, [id]);
+    const distributedBefore = await readDistributedEventIds(this.ctx, [id]);
     const lockedAfterDistribution = distributedBefore.has(id);
     if (lockedAfterDistribution) {
       const touchesBundle =
@@ -449,6 +488,10 @@ export class ScheduleService {
     // the prior status to be exactly 'in_progress' — the normal
     // workflow path. Reopen → in_progress → complete still works.
     let autoDistFailed: { message: string; bundleId: string } | null = null;
+    // Whether the event has a distribution once this call is done, from what
+    // the call itself saw. The completion audit records it; the re-read below
+    // is for display and degrades to "not distributed" when it fails.
+    let distributedNow = distributedBefore.has(id);
     if (
       patch.status === 'completed' &&
       beforeStatus === 'in_progress'
@@ -500,6 +543,7 @@ export class ScheduleService {
             },
           );
           if (!distErr) {
+            distributedNow = true;
             // distribute_bundle drew every component off the shelf. The only
             // caller, updateScheduleEventAction, revalidates the schedule pages
             // alone, so completing an event left the Items list showing the
@@ -519,7 +563,9 @@ export class ScheduleService {
               code === '23505' ||
               msg.includes('bundle_distributions_event_uniq') ||
               msg.toLowerCase().includes('duplicate key');
-            if (!isDup) {
+            if (isDup) {
+              distributedNow = true;
+            } else {
               // Status flip already succeeded. Capture the failure
               // so we can surface a soft error to the UI after
               // emitting audit events.
@@ -548,7 +594,7 @@ export class ScheduleService {
           warehouseId: row.warehouseId,
           before: { status: beforeStatus },
           after: { status: 'completed' },
-          extra: { autoDistributed: row.bundleDistributed },
+          extra: { autoDistributed: distributedNow },
         },
         this.ctx,
       );

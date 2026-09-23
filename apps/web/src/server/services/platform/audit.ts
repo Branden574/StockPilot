@@ -2,6 +2,7 @@ import 'server-only';
 
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
 
 /**
  * Platform-admin audit trail (migration 0175 — `platform_admin_audit`).
@@ -170,7 +171,8 @@ export async function listPlatformAudit(
 }
 
 /**
- * One `in (...)` for the whole page, never one lookup per row.
+ * One batched read for the whole page, never one lookup per row (batched
+ * because a page's distinct targets are not capped below the URL limit).
  *
  * Degrades to an empty map rather than throwing: a name column that cannot be
  * filled must never blank out the audit trail itself. The page renders the uuid
@@ -183,15 +185,21 @@ async function targetEmails(
   const byId = new Map<string, string>();
   if (ids.length === 0) return byId;
 
-  const { data, error } = await admin.from('user_profiles').select('id, email').in('id', ids);
-  if (error) {
-    await reportError(new Error(error.message), {
+  let data: Array<{ id?: unknown; email?: unknown }>;
+  try {
+    data = await fetchAllRowsByIds<{ id?: unknown; email?: unknown }>(
+      ids,
+      (batch) => (from, to) =>
+        admin.from('user_profiles').select('id, email').in('id', batch).order('id').range(from, to),
+    );
+  } catch (err) {
+    await reportError(new Error(rawErrorText(err)), {
       tag: 'platform-audit.target-emails',
       extra: { count: ids.length },
     });
     return byId;
   }
-  for (const row of (data ?? []) as Array<{ id?: unknown; email?: unknown }>) {
+  for (const row of data) {
     if (typeof row.id === 'string' && typeof row.email === 'string') byId.set(row.id, row.email);
   }
   return byId;

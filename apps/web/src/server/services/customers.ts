@@ -17,6 +17,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { audit } from './audit';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 
 // ── Schemas ─────────────────────────────────────────────────────────────────
 
@@ -27,6 +28,60 @@ export const customerSchema = z.object({
   status: z.enum(['active', 'archived']).optional(),
 });
 export type CustomerInput = z.infer<typeof customerSchema>;
+
+export interface CustomerUserRow {
+  user_id: string;
+  email: string;
+  invited_at: string;
+  accepted_at: string | null;
+}
+
+export interface CatalogEntryRow {
+  item_id: string;
+  name: string | null;
+  sku: string | null;
+}
+
+export interface PriceRow {
+  item_id: string;
+  unit_price: number;
+  name: string | null;
+  sku: string | null;
+}
+
+/**
+ * Catalog entries per customer, and prices per price list, that the Accounts
+ * page shows: the cap each per-customer read had (`.limit(1000)`), kept when
+ * the reads became one read per list of customers.
+ */
+const DETAIL_ROWS_PER_PARENT = 1000;
+
+type ItemEmbed = { name: string | null; sku: string | null };
+
+/** The `item:inventory_items(name, sku)` embed, which PostgREST may hand back as
+ *  an object or a one-element array. */
+function itemOf(raw: unknown): ItemEmbed | undefined {
+  const item = raw as ItemEmbed | ItemEmbed[] | null;
+  return (Array.isArray(item) ? item[0] : item) ?? undefined;
+}
+
+/** Group rows by `key` in the order they arrive, keeping at most `cap` per key.
+ *  Every requested id gets an entry, empty when it has no rows. */
+function groupRows<Row, Out>(
+  ids: readonly string[],
+  rows: readonly Row[],
+  key: (row: Row) => string,
+  map: (row: Row) => Out,
+  cap = Number.POSITIVE_INFINITY,
+): Record<string, Out[]> {
+  const out: Record<string, Out[]> = {};
+  for (const id of ids) out[id] = [];
+  for (const row of rows) {
+    const list = out[key(row)];
+    if (list && list.length < cap) list.push(map(row));
+  }
+  return out;
+}
 
 export interface CustomerRow {
   id: string;
@@ -203,26 +258,42 @@ export class CustomersService {
     return { id: data.id as string };
   }
 
-  async listPrices(priceListId: string): Promise<
-    Array<{ item_id: string; unit_price: number; name: string | null; sku: string | null }>
-  > {
+  /**
+   * Prices for every given price list, keyed by price list id (up to
+   * DETAIL_ROWS_PER_PARENT each). One batched read for the whole page: the
+   * page used to run one request per price list, all at once (up to 200),
+   * next to one request per customer for users and for catalog entries.
+   */
+  async listPricesByList(priceListIds: readonly string[]): Promise<Record<string, PriceRow[]>> {
     this.gate();
-    const { data, error } = await this.ctx.supabase
-      .from('price_list_items')
-      .select('item_id, unit_price, item:inventory_items(name, sku)')
-      .eq('price_list_id', priceListId)
-      .limit(1000);
-    if (error) throw new ServiceError('internal_error', error.message);
-    return ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
-      const item = r.item as { name: string | null; sku: string | null } | { name: string | null; sku: string | null }[] | null;
-      const itemObj = Array.isArray(item) ? item[0] : item;
-      return {
-        item_id: r.item_id as string,
-        unit_price: Number(r.unit_price) || 0,
-        name: itemObj?.name ?? null,
-        sku: itemObj?.sku ?? null,
-      };
-    });
+    type Raw = { price_list_id: string; item_id: string; unit_price: unknown; item: unknown };
+    const ctx = this.ctx;
+    const rows = await fetchAllRowsByIds<Raw>(
+      priceListIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('price_list_items')
+          .select('price_list_id, item_id, unit_price, item:inventory_items(name, sku)')
+          .in('price_list_id', batch)
+          .order('price_list_id')
+          .order('item_id')
+          .range(from, to),
+    );
+    return groupRows(
+      priceListIds,
+      rows,
+      (r) => r.price_list_id,
+      (r) => {
+        const item = itemOf(r.item);
+        return {
+          item_id: r.item_id,
+          unit_price: Number(r.unit_price) || 0,
+          name: item?.name ?? null,
+          sku: item?.sku ?? null,
+        };
+      },
+      DETAIL_ROWS_PER_PARENT,
+    );
   }
 
   async setPrice(priceListId: string, itemId: string, unitPrice: number): Promise<void> {
@@ -270,21 +341,35 @@ export class CustomersService {
 
   // ── Catalog allowlist ─────────────────────────────────────────────────────
 
-  async listCatalog(customerId: string): Promise<
-    Array<{ item_id: string; name: string | null; sku: string | null }>
-  > {
+  /** Catalog entries for every given customer, keyed by customer id (up to
+   *  DETAIL_ROWS_PER_PARENT each), in one batched read. */
+  async listCatalogByCustomer(
+    customerIds: readonly string[],
+  ): Promise<Record<string, CatalogEntryRow[]>> {
     this.gate();
-    const { data, error } = await this.ctx.supabase
-      .from('customer_catalog')
-      .select('item_id, item:inventory_items(name, sku)')
-      .eq('customer_id', customerId)
-      .limit(1000);
-    if (error) throw new ServiceError('internal_error', error.message);
-    return ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
-      const item = r.item as { name: string | null; sku: string | null } | { name: string | null; sku: string | null }[] | null;
-      const itemObj = Array.isArray(item) ? item[0] : item;
-      return { item_id: r.item_id as string, name: itemObj?.name ?? null, sku: itemObj?.sku ?? null };
-    });
+    type Raw = { customer_id: string; item_id: string; item: unknown };
+    const ctx = this.ctx;
+    const rows = await fetchAllRowsByIds<Raw>(
+      customerIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('customer_catalog')
+          .select('customer_id, item_id, item:inventory_items(name, sku)')
+          .in('customer_id', batch)
+          .order('customer_id')
+          .order('item_id')
+          .range(from, to),
+    );
+    return groupRows(
+      customerIds,
+      rows,
+      (r) => r.customer_id,
+      (r) => {
+        const item = itemOf(r.item);
+        return { item_id: r.item_id, name: item?.name ?? null, sku: item?.sku ?? null };
+      },
+      DETAIL_ROWS_PER_PARENT,
+    );
   }
 
   async addCatalogItem(customerId: string, itemId: string): Promise<void> {
@@ -324,22 +409,37 @@ export class CustomersService {
 
   // ── Portal users ──────────────────────────────────────────────────────────
 
-  async listUsers(customerId: string): Promise<
-    Array<{ user_id: string; email: string; invited_at: string; accepted_at: string | null }>
-  > {
+  /** Portal users for every given customer, keyed by customer id, newest
+   *  invite first, in one batched read. */
+  async listUsersByCustomer(
+    customerIds: readonly string[],
+  ): Promise<Record<string, CustomerUserRow[]>> {
     this.gate();
-    const { data, error } = await this.ctx.supabase
-      .from('customer_users')
-      .select('user_id, email, invited_at, accepted_at')
-      .eq('customer_id', customerId)
-      .order('invited_at', { ascending: false });
-    if (error) throw new ServiceError('internal_error', error.message);
-    return (data ?? []) as Array<{
-      user_id: string;
-      email: string;
-      invited_at: string;
-      accepted_at: string | null;
-    }>;
+    type Raw = CustomerUserRow & { customer_id: string };
+    const ctx = this.ctx;
+    const rows = await fetchAllRowsByIds<Raw>(
+      customerIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('customer_users')
+          .select('customer_id, user_id, email, invited_at, accepted_at')
+          .in('customer_id', batch)
+          .order('customer_id')
+          .order('invited_at', { ascending: false })
+          .order('user_id')
+          .range(from, to),
+    );
+    return groupRows(
+      customerIds,
+      rows,
+      (r) => r.customer_id,
+      (r) => ({
+        user_id: r.user_id,
+        email: r.email,
+        invited_at: r.invited_at,
+        accepted_at: r.accepted_at ?? null,
+      }),
+    );
   }
 
   /**

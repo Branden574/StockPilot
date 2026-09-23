@@ -15,7 +15,10 @@ vi.mock('@/lib/auth/warehouse', () => ({
     readonly code = 'forbidden' as const;
   },
 }));
-vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
+vi.mock('./audit', () => ({
+  audit: vi.fn(async () => {}),
+  auditMany: vi.fn(async (rows: readonly unknown[]) => ({ written: rows.length, lost: 0 })),
+}));
 vi.mock('./integration-events', () => ({ dispatchEvent: vi.fn(async () => undefined) }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 vi.mock('./item-images', () => ({
@@ -28,7 +31,7 @@ vi.mock('./item-images', () => ({
 
 import { reportError } from '@/lib/error-reporter';
 
-import { audit } from './audit';
+import { audit, auditMany } from './audit';
 import { PurchaseOrdersService } from './purchase-orders';
 
 /**
@@ -65,11 +68,19 @@ function stubFor(keepCheck: { data: unknown; error: { message: string } | null }
   });
 }
 
-const archivedAudits = () =>
-  vi
+// The archive rows go through the batched writer (auditMany); audit() is
+// never called once per archived item.
+const archivedAudits = () => {
+  const perItem = vi
     .mocked(audit)
-    .mock.calls.map((c) => c[0] as { event?: string; entityId?: string })
+    .mock.calls.map((c) => c[0] as { event?: string })
     .filter((a) => a.event === 'inventory.item.archived');
+  expect(perItem).toEqual([]);
+  return vi
+    .mocked(auditMany)
+    .mock.calls.flatMap((c) => c[0] as Array<{ event?: string; entityId?: string }>)
+    .filter((a) => a.event === 'inventory.item.archived');
+};
 
 describe('PurchaseOrdersService.updateStatus(cancelled) — orphaned custom items', () => {
   it('archives only the item with no receipt history and no live PO', async () => {

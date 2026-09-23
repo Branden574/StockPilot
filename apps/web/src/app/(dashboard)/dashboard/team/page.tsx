@@ -10,6 +10,7 @@ import { TeamService } from '@/server/services/team';
 import { WarehousesService } from '@/server/services/warehouses';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 import { createClient } from '@/lib/supabase/server';
+import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
 import { env } from '@/lib/env';
 
 import { can, resolveTerminology, type Role } from '@stockpilot/core';
@@ -58,7 +59,8 @@ export default async function TeamPage() {
     .filter((m) => m.role === 'viewer')
     .map((m) => m.user_id);
 
-  const [categoriesRes, grantsRes] = await Promise.all([
+  type GrantRow = { user_id: string; category_id: string };
+  const [categoriesRes, grants] = await Promise.all([
     // All active categories in this org — populates the viewer
     // category-access dialog. Sorted alphabetically for predictable UI.
     supabase
@@ -70,16 +72,28 @@ export default async function TeamPage() {
     // Grants ONLY for current viewers. Filtering by user_id keeps the
     // payload small on orgs with many ex-viewers; the org_id filter
     // is defense in depth (RLS also enforces).
-    viewerUserIds.length > 0
-      ? supabase
-          .from('user_category_assignments')
-          .select('user_id, category_id')
-          .eq('organization_id', ctx.organizationId)
-          .in('user_id', viewerUserIds)
-      : Promise.resolve({
-          data: [] as Array<{ user_id: string; category_id: string }>,
-        }),
+    //
+    // Batched and paged: one `.in()` of every viewer fails past ~215 ids
+    // locally and ~395 in production, and a viewer can hold up to 500
+    // grants, so one unpaged read was cut at 1000 rows. Either way the
+    // dialog showed a viewer with fewer grants than they have, and saving
+    // it would have written that back. A failed batch THROWS (error
+    // boundary) rather than show wrong access.
+    fetchAllRowsByIds<GrantRow>(viewerUserIds, (batch) => (from, to) =>
+      supabase
+        .from('user_category_assignments')
+        .select('user_id, category_id')
+        .eq('organization_id', ctx.organizationId)
+        .in('user_id', batch)
+        .order('id', { ascending: true })
+        .range(from, to),
+    ),
   ]);
+  // The same dialog lists the categories to grant; an ignored error here
+  // was an empty list.
+  if (categoriesRes.error) {
+    throw new Error(`[team] categories read failed: ${categoriesRes.error.message}`);
+  }
 
   const allCategories = ((categoriesRes.data ?? []) as Array<{
     id: string;
@@ -87,10 +101,7 @@ export default async function TeamPage() {
   }>).map((c) => ({ id: c.id, name: c.name }));
 
   const grantsByUser: Record<string, string[]> = {};
-  for (const row of (grantsRes.data ?? []) as Array<{
-    user_id: string;
-    category_id: string;
-  }>) {
+  for (const row of grants) {
     const list = grantsByUser[row.user_id] ?? [];
     list.push(row.category_id);
     grantsByUser[row.user_id] = list;

@@ -1312,6 +1312,50 @@ describe('loadInventoryDataset (instant-mode full-view rows)', () => {
     }
   });
 
+  // The dataset is capped at INSTANT_MODE_MAX_ROWS (2000 ids = 20 batches).
+  // All 20 batches per table go out in one wave, as they did before the
+  // shared helper (whose default is 6 at once); four serial waves would add
+  // three round trips to every instant-mode page open.
+  it('a full 2000-row dataset sends all 20 batches per table in one wave, each at most 100 ids', async () => {
+    const manyItems = Array.from({ length: INSTANT_MODE_MAX_ROWS }, (_, i) => ({
+      ...baseItem,
+      id: `i${String(i).padStart(4, '0')}`,
+    }));
+    const { admin, buildersByTable } = makeRecordingAdmin({
+      inventory_items: { data: manyItems, count: manyItems.length, error: null },
+      item_stock_levels: { data: [], error: null },
+      item_images: { data: [], error: null },
+    });
+    createAdminClientMock.mockReturnValue(admin);
+    let inFlight = 0;
+    let maxInFlight = 0;
+    vi.mocked(fetchAllRows).mockImplementation(async (buildPage) => {
+      const page = (buildPage as (f: number, t: number) => PromiseLike<{ data: unknown[] | null }>)(
+        0,
+        999,
+      );
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      // Yield long enough for every batch that is allowed to start to start.
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight -= 1;
+      return ((await page).data ?? []) as never;
+    });
+
+    const payload = await loadInventoryDataset('org-1', 'all', 'items');
+    expect(payload!.items).toHaveLength(INSTANT_MODE_MAX_ROWS);
+
+    for (const table of ['item_stock_levels', 'item_images'] as const) {
+      const sizes = buildersByTable[table]!.map(
+        (b) => ((b.in as ReturnType<typeof vi.fn>).mock.calls[0] as [string, string[]])[1].length,
+      );
+      expect(sizes).toEqual(Array.from({ length: 20 }, () => 100));
+    }
+    // The main row read (1) is done before the second wave starts; then both
+    // tables' 20 batches are in flight together.
+    expect(maxInFlight).toBe(40);
+  });
+
   it('over-cap view → resolves null WITHOUT fetching rows, and the cached fn THROWS (so "too large" — like null — is never cached)', async () => {
     createAdminClientMock.mockReturnValue(
       makeAdmin({

@@ -34,13 +34,22 @@ vi.mock('./context', async (importOriginal) => {
 });
 
 // audit() writes through the admin client; silence it and keep a spy so the
-// trail assertions below have something to read.
-const { mockAudit } = vi.hoisted(() => ({
-  mockAudit: vi.fn(async (_payload: Record<string, unknown>, _ctx?: unknown) => undefined),
-}));
+// trail assertions below have something to read. auditMany (the batched
+// writer the crate sync uses) hands each row to the same spy, so a row reads
+// the same whichever writer sent it.
+const { mockAudit, mockAuditMany } = vi.hoisted(() => {
+  const mockAudit = vi.fn(async (_payload: Record<string, unknown>, _ctx?: unknown) => undefined);
+  return {
+    mockAudit,
+    mockAuditMany: vi.fn(async (payloads: readonly Record<string, unknown>[], ctx?: unknown) => {
+      for (const p of payloads) await mockAudit(p, ctx);
+      return { written: payloads.length, lost: 0 };
+    }),
+  };
+});
 vi.mock('./audit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./audit')>();
-  return { ...actual, audit: mockAudit };
+  return { ...actual, audit: mockAudit, auditMany: mockAuditMany };
 });
 
 import { ServiceError } from './context';
@@ -1102,6 +1111,77 @@ describe('syncBookCratePlacement', () => {
       rackPreservedItemIds: [],
       cratePreservedItemIds: [],
     });
+  });
+
+  // Bulk Set rack syncs up to 500 books, one RPC per distinct summary. The rows
+  // used to go out as one `void audit()` per book, all at once; they are now
+  // collected and written in one batched call after the loop.
+  it('audits every book of every batch in ONE batched write, after the last batch', async () => {
+    const { svc } = svcWith({
+      'inventory_items.select': {
+        data: [itemRow(BOOK_A, 'Persepolis', 'book', null), itemRow(BOOK_B, 'Maus', 'book', null)],
+        error: null,
+      },
+      'item_stock_levels.select': {
+        data: [
+          holding(BOOK_A, 'loc-green', { kind: 'crate', crate_color: 'green', crate_number: '2' }),
+          holding(BOOK_B, 'loc-red', { kind: 'crate', crate_color: 'red', crate_number: '9' }),
+        ],
+        error: null,
+      },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
+    });
+
+    const res = await svc.syncBookCratePlacement([BOOK_A, BOOK_B], {
+      verified: verified([
+        [BOOK_A, NO_CRATE],
+        [BOOK_B, NO_CRATE],
+      ]),
+    });
+
+    expect(res.syncedItemIds).toEqual([BOOK_A, BOOK_B]);
+    expect(mockAuditMany).toHaveBeenCalledTimes(1);
+    const rows = mockAuditMany.mock.calls[0]![0] as Array<{ entityId: string; after: unknown }>;
+    expect(rows.map((r) => r.entityId)).toEqual([BOOK_A, BOOK_B]);
+    expect(rows[1]!.after).toMatchObject({ book_crate_color: 'red', book_crate_number: '9' });
+  });
+
+  it('still writes the audit rows of the batches that landed when a later batch throws', async () => {
+    let rpcCalls = 0;
+    const { svc, stub } = svcWith({
+      'inventory_items.select': {
+        data: [itemRow(BOOK_A, 'Persepolis', 'book', null), itemRow(BOOK_B, 'Maus', 'book', null)],
+        error: null,
+      },
+      'item_stock_levels.select': {
+        data: [
+          holding(BOOK_A, 'loc-green', { kind: 'crate', crate_color: 'green', crate_number: '2' }),
+          holding(BOOK_B, 'loc-red', { kind: 'crate', crate_color: 'red', crate_number: '9' }),
+        ],
+        error: null,
+      },
+      'rpc:inventory_set_book_placement': { data: 1, error: null },
+    });
+    const base = stub.client.rpc;
+    stub.client.rpc = (name: string, args: unknown) => {
+      if (name === 'inventory_set_book_placement' && ++rpcCalls === 2) {
+        return Promise.reject(new TypeError('fetch failed'));
+      }
+      return base(name, args);
+    };
+
+    // The wrapper reports a thrown sync as "nothing synced" (its contract);
+    // the row written by the batch that DID land must still reach the trail.
+    const res = await svc.syncBookCratePlacement([BOOK_A, BOOK_B], {
+      verified: verified([
+        [BOOK_A, NO_CRATE],
+        [BOOK_B, NO_CRATE],
+      ]),
+    });
+    expect(res.failedItemIds).toEqual([BOOK_A, BOOK_B]);
+    expect(mockAuditMany).toHaveBeenCalledTimes(1);
+    const rows = mockAuditMany.mock.calls[0]![0] as Array<{ entityId: string }>;
+    expect(rows.map((r) => r.entityId)).toEqual([BOOK_A]);
   });
 
   // REWRITTEN, deliberately: this test used to pin `before`/`after` as the CRATE

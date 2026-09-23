@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { MAX_ATTEMPTS, nextBackoff, runDrain } from './drainer';
+import { makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
+
+import { enabledIntegrationOrgIds, MAX_ATTEMPTS, nextBackoff, runDrain } from './drainer';
 
 vi.mock('@/lib/error-reporter', () => ({
   reportError: vi.fn(),
@@ -81,6 +83,9 @@ function makeFakeAdmin(opts: {
         return self;
       },
       order() {
+        return self;
+      },
+      range() {
         return self;
       },
       limit() {
@@ -498,5 +503,51 @@ describe('runDrain honors PushResult.retryable', () => {
     expect(typeof update?.values.next_attempt_at).toBe('string');
     expect(res.failed).toBe(1);
     expect(res.deadlettered).toBe(0);
+  });
+});
+
+/**
+ * The integrations module gate covers every org with an active connection.
+ * One `.in()` of them fails past ~215 ids locally and ~395 in production
+ * (after ~7 s of retries), which failed the gate on every tick and, fail
+ * closed, stopped every org's exports. It now reads 100 orgs per request.
+ */
+describe('enabledIntegrationOrgIds with 250 orgs', () => {
+  const orgId = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+  const orgs = Array.from({ length: 250 }, (_, i) => orgId(i));
+  const inList = (call: MockCall) =>
+    call.args[call.methods.indexOf('in')]![1] as string[];
+
+  it('reads the gate in batches of 100 and finds an enabled org in the last batch', async () => {
+    const lists: string[][] = [];
+    const stub = makeSupabaseStub({
+      'organization_modules.select': (call) => {
+        const ids = inList(call);
+        lists.push(ids);
+        // Every even org has the module on.
+        return {
+          data: ids
+            .filter((id) => Number(id.slice(-3)) % 2 === 0)
+            .map((organization_id) => ({ organization_id })),
+          error: null,
+        };
+      },
+    });
+    const enabled = await enabledIntegrationOrgIds(stub.client, orgs);
+    expect(lists.map((l) => l.length)).toEqual([100, 100, 50]);
+    expect(enabled.size).toBe(125);
+    expect(enabled.has(orgId(248))).toBe(true);
+    expect(enabled.has(orgId(249))).toBe(false);
+  });
+
+  it('a failed batch throws (the callers fail closed), naming the gate read', async () => {
+    let n = 0;
+    const stub = makeSupabaseStub({
+      'organization_modules.select': () =>
+        ++n === 2 ? { data: null, error: { message: 'fetch failed' } } : { data: [], error: null },
+    });
+    await expect(enabledIntegrationOrgIds(stub.client, orgs)).rejects.toThrow(
+      'organization_modules select: fetch failed',
+    );
   });
 });

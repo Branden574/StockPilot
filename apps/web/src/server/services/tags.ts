@@ -2,13 +2,18 @@ import 'server-only';
 
 import type { CreateTagInput, UpdateTagInput } from '@stockpilot/core';
 
-import { audit } from './audit';
-import {
-  assertPermission,
-  ServiceError,
-  withContext,
-  type ServiceContext,
-} from './context';
+import { encodedInValueLength, IN_FILTER_MAX_ENCODED_CHARS } from '@/lib/supabase/in-filter';
+
+import { audit, auditMany } from './audit';
+import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { fetchAllRowsByIds, writeInIdBatches } from './lib/fetch-by-ids';
+
+/**
+ * Most tags one bulk add/remove may carry. The tag list rides in the SAME
+ * URL as each batch of item ids (the remove is a cross product), so it has to
+ * be small and fixed for the item batches to have room.
+ */
+export const MAX_BULK_TAGS = 50;
 
 export interface TagRow {
   id: string;
@@ -51,13 +56,24 @@ export class TagsService {
     const tags = await this.list();
     if (tags.length === 0) return [];
     const ids = tags.map((t) => t.id);
-    const { data, error } = await this.ctx.supabase
-      .from('item_tags')
-      .select('tag_id')
-      .in('tag_id', ids);
-    if (error) throw new ServiceError('internal_error', error.message);
+    // Batched by tag and paged: an org's tags have no cap (one `.in()` past
+    // ~215 ids fails), and one row per tagged item was cut at 1000 rows with
+    // no error, so busy tags showed low counts. (item_id, tag_id) is the key,
+    // so ordering on both keeps pages stable.
+    const ctx = this.ctx;
+    const data = await fetchAllRowsByIds<{ tag_id: string }>(
+      ids,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('item_tags')
+          .select('tag_id')
+          .in('tag_id', batch)
+          .order('tag_id')
+          .order('item_id')
+          .range(from, to),
+    );
     const counts = new Map<string, number>();
-    for (const row of (data ?? []) as Array<{ tag_id: string }>) {
+    for (const row of data) {
       counts.set(row.tag_id, (counts.get(row.tag_id) ?? 0) + 1);
     }
     return tags.map((t) => ({ ...t, usage_count: counts.get(t.id) ?? 0 }));
@@ -202,6 +218,7 @@ export class TagsService {
         .from('tags')
         .select('id')
         .eq('organization_id', this.ctx.organizationId)
+        // in-list-bound: setItemTagsSchema caps one item's tag set at 100
         .in('id', uniqueIds);
       if (validErr) throw new ServiceError('internal_error', validErr.message);
       const validSet = new Set(((validRows ?? []) as Array<{ id: string }>).map((r) => r.id));
@@ -241,37 +258,38 @@ export class TagsService {
       const rows = toAdd.map((tag_id) => ({ item_id: itemId, tag_id }));
       const { error } = await this.ctx.supabase.from('item_tags').insert(rows);
       if (error) throw new ServiceError('internal_error', error.message);
-      for (const tagId of toAdd) {
-        void audit(
-          {
-            event: 'tag.applied',
-            entityType: 'inventory_item',
-            entityId: itemId,
-            extra: { tag_id: tagId },
-          },
-          this.ctx,
-        );
-      }
+      // One row per tag, as before, written in batches (auditMany): an item
+      // can take up to 100 tags here, and each used to be its own request.
+      await auditMany(
+        toAdd.map((tagId) => ({
+          event: 'tag.applied' as const,
+          entityType: 'inventory_item',
+          entityId: itemId,
+          extra: { tag_id: tagId },
+        })),
+        this.ctx,
+      );
     }
 
     if (toRemove.length > 0) {
-      const { error } = await this.ctx.supabase
-        .from('item_tags')
-        .delete()
-        .eq('item_id', itemId)
-        .in('tag_id', toRemove);
-      if (error) throw new ServiceError('internal_error', error.message);
-      for (const tagId of toRemove) {
-        void audit(
-          {
-            event: 'tag.removed',
-            entityType: 'inventory_item',
-            entityId: itemId,
-            extra: { tag_id: tagId },
-          },
-          this.ctx,
-        );
-      }
+      // Batched: an item can carry more tags than the form's 100 after several
+      // bulk adds. Tags removed before a failed batch are still audited.
+      const ctx = this.ctx;
+      const removal = await writeInIdBatches(toRemove, (batch) =>
+        ctx.supabase.from('item_tags').delete().eq('item_id', itemId).in('tag_id', batch),
+      );
+      // Written before the throw below, so tags removed by the batches that
+      // committed are in the trail even when a later batch failed.
+      await auditMany(
+        removal.written.map((tagId) => ({
+          event: 'tag.removed' as const,
+          entityType: 'inventory_item',
+          entityId: itemId,
+          extra: { tag_id: tagId },
+        })),
+        this.ctx,
+      );
+      if (removal.error !== null) throw new ServiceError('internal_error', removal.error);
     }
   }
 
@@ -288,10 +306,12 @@ export class TagsService {
 
     // Validate tag ids — same defense as setForItem.
     const uniqueTags = Array.from(new Set(tagIds));
+    assertBulkTagCount(uniqueTags);
     const { data: validRows, error: validErr } = await this.ctx.supabase
       .from('tags')
       .select('id')
       .eq('organization_id', this.ctx.organizationId)
+      // in-list-bound: assertBulkTagCount caps a bulk tag list at MAX_BULK_TAGS
       .in('id', uniqueTags);
     if (validErr) throw new ServiceError('internal_error', validErr.message);
     const validSet = new Set(((validRows ?? []) as Array<{ id: string }>).map((r) => r.id));
@@ -316,38 +336,52 @@ export class TagsService {
     // One audit row PER item (not one row for the whole batch) so each
     // affected item's own Activity feed / "View history" link actually
     // shows the tag change — a single entityId-less row was invisible
-    // everywhere except a raw audit_logs query.
-    for (const itemId of new Set(itemIds)) {
-      void audit(
-        {
-          event: 'tag.applied',
-          entityType: 'inventory_item',
-          entityId: itemId,
-          extra: {
-            bulk: true,
-            item_count: itemIds.length,
-            tag_ids: safeTags,
-          },
+    // everywhere except a raw audit_logs query. The rows go out in batches
+    // (auditMany): one request per item, all at once, is what 443 selected
+    // items turned into on the lab org.
+    await auditMany(
+      [...new Set(itemIds)].map((itemId) => ({
+        event: 'tag.applied' as const,
+        entityType: 'inventory_item',
+        entityId: itemId,
+        extra: {
+          bulk: true,
+          item_count: itemIds.length,
+          tag_ids: safeTags,
         },
-        this.ctx,
-      );
-    }
+      })),
+      this.ctx,
+    );
   }
 
-  /** Mirror of bulkAddToItems but DELETEs every (item, tag) pair in the cross product. */
-  async bulkRemoveFromItems(itemIds: string[], tagIds: string[]): Promise<void> {
+  /**
+   * Mirror of bulkAddToItems but DELETEs every (item, tag) pair in the cross
+   * product.
+   *
+   * Batched by ITEM: the tag list (at most MAX_BULK_TAGS) rides in every
+   * request, so each item batch gets whatever character budget the tag list
+   * leaves. One batch at a time; a failure stops the rest. Items whose tags
+   * were removed before the failure are audited, and the result names what
+   * was and was not changed so the caller can report a partial result.
+   */
+  async bulkRemoveFromItems(
+    itemIds: string[],
+    tagIds: string[],
+  ): Promise<{ written: string[]; notWritten: string[] }> {
     assertPermission(this.ctx, 'items:update');
-    if (itemIds.length === 0 || tagIds.length === 0) return;
+    if (itemIds.length === 0 || tagIds.length === 0) return { written: [], notWritten: [] };
 
     // Validate every tag id belongs to this org — same defense as
     // bulkAddToItems. RLS would already block a delete on a cross-org
     // tag link, but this surfaces a clear error and keeps audit
     // entries honest.
     const uniqueTags = Array.from(new Set(tagIds));
+    assertBulkTagCount(uniqueTags);
     const { data: validTags, error: validTagErr } = await this.ctx.supabase
       .from('tags')
       .select('id')
       .eq('organization_id', this.ctx.organizationId)
+      // in-list-bound: assertBulkTagCount caps a bulk tag list at MAX_BULK_TAGS
       .in('id', uniqueTags);
     if (validTagErr) throw new ServiceError('internal_error', validTagErr.message);
     if ((validTags?.length ?? 0) !== uniqueTags.length) {
@@ -358,43 +392,68 @@ export class TagsService {
     }
 
     // Same check on item ids. A forged item id (cross-org or
-    // non-existent) is silently no-op'd by RLS today; flag it.
+    // non-existent) is silently no-op'd by RLS today; flag it. Batched:
+    // a bulk selection carries up to 500 ids.
     const uniqueItems = Array.from(new Set(itemIds));
-    const { data: validItems, error: validItemErr } = await this.ctx.supabase
-      .from('inventory_items')
-      .select('id')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('id', uniqueItems);
-    if (validItemErr) throw new ServiceError('internal_error', validItemErr.message);
-    if ((validItems?.length ?? 0) !== uniqueItems.length) {
+    const ctx = this.ctx;
+    const validItems = await fetchAllRowsByIds<{ id: string }>(
+      uniqueItems,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('inventory_items')
+          .select('id')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+    );
+    if (validItems.length !== uniqueItems.length) {
       throw new ServiceError(
         'validation_error',
         'One or more items do not belong to this organization.',
       );
     }
 
-    const { error } = await this.ctx.supabase
-      .from('item_tags')
-      .delete()
-      .in('item_id', itemIds)
-      .in('tag_id', tagIds);
-    if (error) throw new ServiceError('internal_error', error.message);
-
-    // One audit row per item — same rationale as bulkAddToItems above.
-    for (const itemId of new Set(itemIds)) {
-      void audit(
-        {
-          event: 'tag.removed',
-          entityType: 'inventory_item',
-          entityId: itemId,
-          extra: {
-            bulk: true,
-            item_count: itemIds.length,
-            tag_ids: tagIds,
-          },
-        },
-        this.ctx,
-      );
+    const tagListChars = uniqueTags.reduce((n, id) => n + encodedInValueLength(id) + 3, 0);
+    const write = await writeInIdBatches(
+      uniqueItems,
+      (batch) =>
+        ctx.supabase
+          .from('item_tags')
+          .delete()
+          .in('item_id', batch)
+          // in-list-bound: assertBulkTagCount caps a bulk tag list at MAX_BULK_TAGS
+          .in('tag_id', uniqueTags),
+      { maxEncodedChars: Math.max(400, IN_FILTER_MAX_ENCODED_CHARS - tagListChars) },
+    );
+    if (write.error !== null && write.written.length === 0) {
+      throw new ServiceError('internal_error', write.error);
     }
+
+    // One audit row per item, in batches — same rationale as bulkAddToItems.
+    await auditMany(
+      write.written.map((itemId) => ({
+        event: 'tag.removed' as const,
+        entityType: 'inventory_item',
+        entityId: itemId,
+        extra: {
+          bulk: true,
+          item_count: write.written.length,
+          tag_ids: uniqueTags,
+        },
+      })),
+      this.ctx,
+    );
+    return { written: write.written, notWritten: write.notWritten };
+  }
+}
+
+/** A bulk tag change carries at most MAX_BULK_TAGS distinct tags. */
+function assertBulkTagCount(uniqueTags: string[]): void {
+  if (uniqueTags.length > MAX_BULK_TAGS) {
+    throw new ServiceError(
+      'validation_error',
+      `Apply or remove at most ${MAX_BULK_TAGS} tags at a time.`,
+    );
   }
 }

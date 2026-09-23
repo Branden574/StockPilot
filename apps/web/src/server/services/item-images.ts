@@ -2,6 +2,7 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
+import { reportError } from '@/lib/error-reporter';
 import {
   isSniffedKindAllowedInBucket,
   sniffImage,
@@ -16,6 +17,8 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { withStorageSignSlot } from './lib/storage-sign-limiter';
 
 /**
  * Long-lived signed URL per storage path. The signed URL itself is
@@ -139,9 +142,9 @@ async function batchSignPaths(paths: string[]): Promise<Map<string, string>> {
   if (safePaths.length === 0) return out;
   try {
     const admin = createAdminClient();
-    const { data, error } = await admin.storage
-      .from('item-images')
-      .createSignedUrls(safePaths, SIGNED_URL_TTL_SEC);
+    const { data, error } = await withStorageSignSlot(() =>
+      admin.storage.from('item-images').createSignedUrls(safePaths, SIGNED_URL_TTL_SEC),
+    );
     if (error || !data) return out;
     for (const entry of data) {
       if (entry.signedUrl && !entry.error && entry.path) {
@@ -171,9 +174,11 @@ const signItemImageMaster = unstable_cache(
       // batch didn't cover it (partial failure) → single-sign below
     }
     const admin = createAdminClient();
-    const { data, error } = await admin.storage
-      .from('item-images')
-      .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC);
+    // A cold cache used to start one of these per path, all at once (see
+    // storage-sign-limiter.ts); the request now waits for a slot.
+    const { data, error } = await withStorageSignSlot(() =>
+      admin.storage.from('item-images').createSignedUrl(storagePath, SIGNED_URL_TTL_SEC),
+    );
     if (error || !data?.signedUrl) {
       throw new Error(`sign master failed: ${error?.message ?? 'no signedUrl'}`);
     }
@@ -186,7 +191,13 @@ const signItemImageMaster = unstable_cache(
   ['item-image-signed-url-v4'],
   { revalidate: SIGNED_URL_CACHE_SEC, tags: ['item-image-signed-url'] },
 );
-async function getCachedItemImageSignedUrl(storagePath: string): Promise<string | null> {
+/** Called when a sign attempt failed (not for a path rejected by shape). */
+type SignFailureSink = (err: unknown) => void;
+
+async function getCachedItemImageSignedUrl(
+  storagePath: string,
+  onFailure?: SignFailureSink,
+): Promise<string | null> {
   // Checked BEFORE the cached signer so a rejected path never creates an
   // `unstable_cache` entry at all.
   if (!isSignableItemImagePath(storagePath)) return null;
@@ -196,6 +207,7 @@ async function getCachedItemImageSignedUrl(storagePath: string): Promise<string 
     console.warn(
       `[item-image] master sign failed (${storagePath}): ${err instanceof Error ? err.message : String(err)}`,
     );
+    onFailure?.(err);
     return null;
   }
 }
@@ -218,11 +230,11 @@ async function getCachedItemImageSignedUrl(storagePath: string): Promise<string 
 const signItemImageTransformed = unstable_cache(
   async (storagePath: string, width: number): Promise<string> => {
     const admin = createAdminClient();
-    const { data, error } = await admin.storage
-      .from('item-images')
-      .createSignedUrl(storagePath, SIGNED_URL_TTL_SEC, {
+    const { data, error } = await withStorageSignSlot(() =>
+      admin.storage.from('item-images').createSignedUrl(storagePath, SIGNED_URL_TTL_SEC, {
         transform: { width, height: width, resize: 'cover' },
-      });
+      }),
+    );
     if (error || !data?.signedUrl) {
       throw new Error(`sign transform failed: ${error?.message ?? 'no signedUrl'}`);
     }
@@ -235,6 +247,7 @@ const signItemImageTransformed = unstable_cache(
 async function getCachedItemImageTransformedSignedUrl(
   storagePath: string,
   width: number,
+  onFailure?: SignFailureSink,
 ): Promise<string | null> {
   // Same gate as the plain signer — this path also reaches storage with the
   // service-role client, just with transform params folded into the signature.
@@ -245,8 +258,34 @@ async function getCachedItemImageTransformedSignedUrl(
     console.warn(
       `[item-image] transform sign failed (${storagePath}): ${err instanceof Error ? err.message : String(err)}`,
     );
+    onFailure?.(err);
     return null;
   }
+}
+
+/**
+ * Report the images a call could not sign, once per call, with counts only.
+ * A failed sign still degrades to "no photo" for that item (the page or
+ * export goes on), but it used to do so with nothing but a console line per
+ * path, so a cold run that dropped 112 of 356 thumbnails looked like success.
+ */
+function reportSignFailures(
+  method: string,
+  requested: number,
+  failed: number,
+  firstError: unknown,
+): void {
+  if (failed === 0) return;
+  void reportError(new Error('Item image signing failed; those images are missing'), {
+    tag: 'item_images.sign_failed',
+    level: 'warning',
+    extra: {
+      method,
+      requested,
+      failed,
+      detail: firstError instanceof Error ? firstError.message : String(firstError),
+    },
+  });
 }
 
 // NOTE (2026-07-01, media audit): a "width-only on-demand transform of the
@@ -305,10 +344,16 @@ export class ItemImagesService {
     // latency ≈ max(dataCacheReads, batchSign) instead of their sum.
     const batchPromise = batchSignPaths(unmemoized);
     for (const path of unmemoized) pendingBatchSigns.set(path, batchPromise);
+    let failed = 0;
+    let firstError: unknown = null;
+    const onFailure: SignFailureSink = (err) => {
+      failed += 1;
+      firstError ??= err;
+    };
     try {
       const entries = await Promise.all(
         unmemoized.map(async (path) => {
-          const url = await getCachedItemImageSignedUrl(path);
+          const url = await getCachedItemImageSignedUrl(path, onFailure);
           return [path, url] as const;
         }),
       );
@@ -328,15 +373,58 @@ export class ItemImagesService {
         if (pendingBatchSigns.get(path) === batchPromise) pendingBatchSigns.delete(path);
       }
     }
+    reportSignFailures('signedUrls', paths.length, failed, firstError);
     return map;
   }
 
   /**
+   * Fallback for items with no `item_images` row (bulk-imported books keep an
+   * external cover URL in `custom_fields.thumbnail_url`): adds each one found
+   * to `result`. Throws on a failed read, as the image reads above do.
+   */
+  private async addCustomFieldThumbnails(
+    unresolved: string[],
+    result: Map<string, string>,
+  ): Promise<void> {
+    const ctx = this.ctx;
+    const rows = await fetchAllRowsByIds<{
+      id: string;
+      custom_fields: unknown;
+    }>(
+      unresolved,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('inventory_items')
+          .select('id, custom_fields')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+    );
+    for (const row of rows) {
+      const cf = row.custom_fields;
+      if (cf && typeof cf === 'object') {
+        const url = (cf as { thumbnail_url?: unknown }).thumbnail_url;
+        if (typeof url === 'string' && url.length > 0 && url.length < 2000) {
+          result.set(row.id, url);
+        }
+      }
+    }
+  }
+
+  /**
    * Returns a Map<itemId, masterSignedUrl> for the primary (or first)
-   * image per item across the given list. Two round trips total: one
-   * `item_images IN (...)` query, one `createSignedUrls` for all
-   * matched paths. Used by PDF + JSON-API surfaces that want the full
-   * image URL.
+   * image per item across the given list. Two round trips for up to 100
+   * items: the `item_images` read, one `createSignedUrls` for all matched
+   * paths. Used by PDF + JSON-API surfaces that want the full image URL.
+   *
+   * Every `item_images` read in this class is BATCHED through
+   * `fetchAllRowsByIds` (100 ids per request, each batch paged past the
+   * 1000-row cap): the catalog thumbnails and exports pass up to 1000 ids,
+   * and one `.in()` past ~215 uuids answers 414 locally and fails as "fetch
+   * failed" in production after ~7 s of retries. Values are deduped, so all
+   * of one item's rows sit in one batch and the primary-first pick is
+   * unchanged; the `id` tie-break keeps pages stable.
    *
    * For list-page row thumbnails — which want the 200px pre-resized
    * thumb + LQIP blur placeholder — use {@link primaryImagesWithThumbsForItems}
@@ -345,20 +433,23 @@ export class ItemImagesService {
   async primaryImagesForItems(itemIds: string[]): Promise<Map<string, string>> {
     if (itemIds.length === 0) return new Map();
 
-    const { data, error } = await this.ctx.supabase
-      .from('item_images')
-      .select('item_id, storage_path, is_primary, sort_order')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', itemIds)
-      .order('is_primary', { ascending: false })
-      .order('sort_order', { ascending: true });
-    if (error) throw new ServiceError('internal_error', error.message);
+    const ctx = this.ctx;
+    const data = await fetchAllRowsByIds<{ item_id: string; storage_path: string }>(
+      itemIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('item_images')
+          .select('item_id, storage_path, is_primary, sort_order')
+          .eq('organization_id', ctx.organizationId)
+          .in('item_id', batch)
+          .order('is_primary', { ascending: false })
+          .order('sort_order', { ascending: true })
+          .order('id')
+          .range(from, to),
+    );
 
     const pathByItem = new Map<string, string>();
-    for (const row of (data ?? []) as Array<{
-      item_id: string;
-      storage_path: string;
-    }>) {
+    for (const row of data) {
       if (!pathByItem.has(row.item_id)) {
         pathByItem.set(row.item_id, row.storage_path);
       }
@@ -396,23 +487,29 @@ export class ItemImagesService {
   > {
     if (itemIds.length === 0) return new Map();
 
-    const { data, error } = await this.ctx.supabase
-      .from('item_images')
-      .select('item_id, storage_path, thumb_path, lqip, is_primary, sort_order')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', itemIds)
-      .order('is_primary', { ascending: false })
-      .order('sort_order', { ascending: true });
-    if (error) throw new ServiceError('internal_error', error.message);
-
     type Row = {
       item_id: string;
       storage_path: string;
       thumb_path: string | null;
       lqip: string | null;
     };
+    const ctx = this.ctx;
+    const data = await fetchAllRowsByIds<Row>(
+      itemIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('item_images')
+          .select('item_id, storage_path, thumb_path, lqip, is_primary, sort_order')
+          .eq('organization_id', ctx.organizationId)
+          .in('item_id', batch)
+          .order('is_primary', { ascending: false })
+          .order('sort_order', { ascending: true })
+          .order('id')
+          .range(from, to),
+    );
+
     const pickByItem = new Map<string, Row>();
-    for (const row of (data ?? []) as Row[]) {
+    for (const row of data) {
       if (!pickByItem.has(row.item_id)) pickByItem.set(row.item_id, row);
     }
 
@@ -450,31 +547,41 @@ export class ItemImagesService {
    * one thing passed in as `resolveRow` rather than duplicated per method.
    */
   private async resolvePrimaryImageUrls(
+    method: string,
     itemIds: string[],
-    resolveRow: (row: {
-      item_id: string;
-      storage_path: string;
-      thumb_path: string | null;
-    }) => Promise<string | null>,
+    resolveRow: (
+      row: {
+        item_id: string;
+        storage_path: string;
+        thumb_path: string | null;
+      },
+      onFailure: SignFailureSink,
+    ) => Promise<string | null>,
   ): Promise<Map<string, string>> {
     if (itemIds.length === 0) return new Map();
-
-    const { data, error } = await this.ctx.supabase
-      .from('item_images')
-      .select('item_id, storage_path, thumb_path, is_primary, sort_order')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', itemIds)
-      .order('is_primary', { ascending: false })
-      .order('sort_order', { ascending: true });
-    if (error) throw new ServiceError('internal_error', error.message);
 
     type Row = {
       item_id: string;
       storage_path: string;
       thumb_path: string | null;
     };
+    const ctx = this.ctx;
+    const data = await fetchAllRowsByIds<Row>(
+      itemIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('item_images')
+          .select('item_id, storage_path, thumb_path, is_primary, sort_order')
+          .eq('organization_id', ctx.organizationId)
+          .in('item_id', batch)
+          .order('is_primary', { ascending: false })
+          .order('sort_order', { ascending: true })
+          .order('id')
+          .range(from, to),
+    );
+
     const pickByItem = new Map<string, Row>();
-    for (const row of (data ?? []) as Row[]) {
+    for (const row of data) {
       if (!pickByItem.has(row.item_id)) pickByItem.set(row.item_id, row);
     }
 
@@ -483,9 +590,16 @@ export class ItemImagesService {
     // browsers — see the two public wrappers below for why they differ).
     // `targetWidth` isn't a parameter here — each public wrapper closes over
     // its own in `resolveRow` since only their transform legs need it.
+    // An item counts as failed when a sign attempt for it failed and it
+    // ended with no URL; a failed transform leg rescued by the next leg is not.
+    const signFailedItems = new Set<string>();
+    let firstError: unknown = null;
     const signed = await Promise.all(
       [...pickByItem.entries()].map(async ([itemId, row]) => {
-        const url = await resolveRow(row);
+        const url = await resolveRow(row, (err) => {
+          signFailedItems.add(itemId);
+          firstError ??= err;
+        });
         return url ? ([itemId, url] as const) : null;
       }),
     );
@@ -506,25 +620,11 @@ export class ItemImagesService {
     // Open Library, archive.org); no signing required.
     const unresolved = itemIds.filter((id) => !result.has(id));
     if (unresolved.length > 0) {
-      const { data: cfRows, error: cfErr } = await this.ctx.supabase
-        .from('inventory_items')
-        .select('id, custom_fields')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', unresolved);
-      if (cfErr) throw new ServiceError('internal_error', cfErr.message);
-      for (const row of (cfRows ?? []) as Array<{
-        id: string;
-        custom_fields: Record<string, unknown> | null;
-      }>) {
-        const cf = row.custom_fields;
-        if (cf && typeof cf === 'object') {
-          const url = (cf as { thumbnail_url?: unknown }).thumbnail_url;
-          if (typeof url === 'string' && url.length > 0 && url.length < 2000) {
-            result.set(row.id, url);
-          }
-        }
-      }
+      await this.addCustomFieldThumbnails(unresolved, result);
     }
+    let failed = 0;
+    for (const id of signFailedItems) if (!result.has(id)) failed += 1;
+    reportSignFailures(method, pickByItem.size, failed, firstError);
     return result;
   }
 
@@ -571,15 +671,23 @@ export class ItemImagesService {
     itemIds: string[],
     targetWidth = 200,
   ): Promise<Map<string, string>> {
-    return this.resolvePrimaryImageUrls(itemIds, async (row) => {
-      return (
-        (row.thumb_path
-          ? await getCachedItemImageTransformedSignedUrl(row.thumb_path, targetWidth)
-          : null) ??
-        (await getCachedItemImageTransformedSignedUrl(row.storage_path, targetWidth)) ??
-        (row.thumb_path ? await getCachedItemImageSignedUrl(row.thumb_path) : null)
-      );
-    });
+    return this.resolvePrimaryImageUrls(
+      'primaryImagesForPdfRendering',
+      itemIds,
+      async (row, onFailure) => {
+        return (
+          (row.thumb_path
+            ? await getCachedItemImageTransformedSignedUrl(row.thumb_path, targetWidth, onFailure)
+            : null) ??
+          (await getCachedItemImageTransformedSignedUrl(
+            row.storage_path,
+            targetWidth,
+            onFailure,
+          )) ??
+          (row.thumb_path ? await getCachedItemImageSignedUrl(row.thumb_path, onFailure) : null)
+        );
+      },
+    );
   }
 
   /**
@@ -620,11 +728,15 @@ export class ItemImagesService {
     itemIds: string[],
     targetWidth = 200,
   ): Promise<Map<string, string>> {
-    return this.resolvePrimaryImageUrls(itemIds, async (row) => {
-      return row.thumb_path
-        ? await getCachedItemImageSignedUrl(row.thumb_path)
-        : await getCachedItemImageTransformedSignedUrl(row.storage_path, targetWidth);
-    });
+    return this.resolvePrimaryImageUrls(
+      'primaryImagesForServerDecoding',
+      itemIds,
+      async (row, onFailure) => {
+        return row.thumb_path
+          ? await getCachedItemImageSignedUrl(row.thumb_path, onFailure)
+          : await getCachedItemImageTransformedSignedUrl(row.storage_path, targetWidth, onFailure);
+      },
+    );
   }
 
   /**
@@ -660,11 +772,15 @@ export class ItemImagesService {
     itemIds: string[],
     targetWidth = 200,
   ): Promise<Map<string, string>> {
-    return this.resolvePrimaryImageUrls(itemIds, async (row) => {
-      return row.thumb_path
-        ? await getCachedItemImageSignedUrl(row.thumb_path)
-        : await getCachedItemImageTransformedSignedUrl(row.storage_path, targetWidth);
-    });
+    return this.resolvePrimaryImageUrls(
+      'primaryImagesForBrowserDisplay',
+      itemIds,
+      async (row, onFailure) => {
+        return row.thumb_path
+          ? await getCachedItemImageSignedUrl(row.thumb_path, onFailure)
+          : await getCachedItemImageTransformedSignedUrl(row.storage_path, targetWidth, onFailure);
+      },
+    );
   }
 
   /**
@@ -684,53 +800,44 @@ export class ItemImagesService {
   async primaryMasterUrlsForItems(itemIds: string[]): Promise<Map<string, string>> {
     if (itemIds.length === 0) return new Map();
 
-    const { data, error } = await this.ctx.supabase
-      .from('item_images')
-      .select('item_id, storage_path, is_primary, sort_order')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('item_id', itemIds)
-      .order('is_primary', { ascending: false })
-      .order('sort_order', { ascending: true });
-    if (error) throw new ServiceError('internal_error', error.message);
-
     type Row = { item_id: string; storage_path: string };
+    const ctx = this.ctx;
+    const data = await fetchAllRowsByIds<Row>(
+      itemIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('item_images')
+          .select('item_id, storage_path, is_primary, sort_order')
+          .eq('organization_id', ctx.organizationId)
+          .in('item_id', batch)
+          .order('is_primary', { ascending: false })
+          .order('sort_order', { ascending: true })
+          .order('id')
+          .range(from, to),
+    );
+
     const pickByItem = new Map<string, Row>();
-    for (const row of (data ?? []) as Row[]) {
+    for (const row of data) {
       if (!pickByItem.has(row.item_id)) pickByItem.set(row.item_id, row);
     }
 
-    const signed = await Promise.all(
-      [...pickByItem.entries()].map(async ([itemId, row]) => {
-        const url = await getCachedItemImageSignedUrl(row.storage_path);
-        return url ? ([itemId, url] as const) : null;
-      }),
-    );
+    // Through signedUrls: a cold cache pays ONE batched createSignedUrls for
+    // every path instead of one request per item started all at once (the
+    // cold lab run returned 244 of 356 catalog thumbnails that way), and a
+    // failed sign is reported rather than only logged.
+    const urlByPath = await this.signedUrls([
+      ...new Set([...pickByItem.values()].map((r) => r.storage_path)),
+    ]);
     const result = new Map<string, string>();
-    for (const entry of signed) {
-      if (entry) result.set(entry[0], entry[1]);
+    for (const [itemId, row] of pickByItem) {
+      const url = urlByPath.get(row.storage_path);
+      if (url) result.set(itemId, url);
     }
 
     // Fallback: external ISBN covers stored on the item (no item_images row).
     const unresolved = itemIds.filter((id) => !result.has(id));
     if (unresolved.length > 0) {
-      const { data: cfRows, error: cfErr } = await this.ctx.supabase
-        .from('inventory_items')
-        .select('id, custom_fields')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', unresolved);
-      if (cfErr) throw new ServiceError('internal_error', cfErr.message);
-      for (const row of (cfRows ?? []) as Array<{
-        id: string;
-        custom_fields: Record<string, unknown> | null;
-      }>) {
-        const cf = row.custom_fields;
-        if (cf && typeof cf === 'object') {
-          const url = (cf as { thumbnail_url?: unknown }).thumbnail_url;
-          if (typeof url === 'string' && url.length > 0 && url.length < 2000) {
-            result.set(row.id, url);
-          }
-        }
-      }
+      await this.addCustomFieldThumbnails(unresolved, result);
     }
     return result;
   }

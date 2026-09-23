@@ -11,6 +11,7 @@ import {
 } from '@stockpilot/core';
 
 import { ServiceContext, ServiceError, withContext } from './context';
+import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
 
 export interface ActivityEvent {
   id: string;
@@ -281,9 +282,14 @@ export function collectReceiptLineIds(
 }
 
 /**
- * Batch-resolves receipt ids → purchase_orders.po_number (one query). Errors
- * degrade gracefully to an empty map — displays then fall back to 'PO receipt'
- * rather than leaking the internal 'receipt_line' label or hiding the event.
+ * Batch-resolves receipt ids → purchase_orders.po_number. Errors degrade
+ * gracefully to an empty map (reported) — displays then fall back to
+ * 'PO receipt' rather than leaking the internal 'receipt_line' label or hiding
+ * the event.
+ *
+ * Batched: the movements export reaches up to 50,000 rows, so the id list is
+ * unbounded, and one `.in()` past ~215 ids fails with a 414 (local) or a bare
+ * "fetch failed" (production). The same holds for the three resolvers below.
  */
 export async function resolveReceiptPoNumbers(
   ctx: ServiceContext,
@@ -291,16 +297,24 @@ export async function resolveReceiptPoNumbers(
 ): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   if (receiptIds.length === 0) return map;
-  const { data, error } = await ctx.supabase
-    .from('receipts')
-    .select('id, purchase_orders(po_number)')
-    .eq('organization_id', ctx.organizationId)
-    .in('id', receiptIds);
-  if (error) {
-    console.error('activity: receipt→PO lookup failed', { error: error.message });
+  let data: Array<Record<string, unknown>>;
+  try {
+    data = await fetchAllRowsByIds<Record<string, unknown>>(
+      receiptIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('receipts')
+          .select('id, purchase_orders(po_number)')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+    );
+  } catch (err) {
+    reportDegradedRead('activity.receipt_po_numbers', err, { ids: receiptIds.length });
     return map;
   }
-  for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+  for (const r of data) {
     const poField = r.purchase_orders as
       | { po_number?: string | null }
       | { po_number?: string | null }[]
@@ -314,7 +328,8 @@ export async function resolveReceiptPoNumbers(
 /**
  * Batch-resolves order_request ids → their display "SO-000049" number
  * (stock_movements.reference_type='order_request', written by fulfillment).
- * One query, org-scoped. Errors/missing rows degrade to an empty map — the
+ * Batched (see resolveReceiptPoNumbers), org-scoped. Errors/missing rows
+ * degrade to an empty map (reported) — the
  * feed then falls back to the generic "Order" label rather than breaking.
  * Exported for unit tests.
  */
@@ -324,16 +339,24 @@ export async function resolveOrderNumbers(
 ): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   if (orderRequestIds.length === 0) return map;
-  const { data, error } = await ctx.supabase
-    .from('order_requests')
-    .select('id, order_number')
-    .eq('organization_id', ctx.organizationId)
-    .in('id', orderRequestIds);
-  if (error) {
-    console.error('activity: order_request number lookup failed', { error: error.message });
+  let data: { id: string; order_number: number | null }[];
+  try {
+    data = await fetchAllRowsByIds<{ id: string; order_number: number | null }>(
+      orderRequestIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('order_requests')
+          .select('id, order_number')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+    );
+  } catch (err) {
+    reportDegradedRead('activity.order_numbers', err, { ids: orderRequestIds.length });
     return map;
   }
-  for (const r of (data ?? []) as Array<{ id: string; order_number: number | null }>) {
+  for (const r of data) {
     const n = formatOrderNumber(r.order_number);
     if (n) map.set(r.id, n);
   }
@@ -351,16 +374,24 @@ export async function resolveReturnNumbers(
 ): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   if (returnIds.length === 0) return map;
-  const { data, error } = await ctx.supabase
-    .from('returns')
-    .select('id, return_number')
-    .eq('organization_id', ctx.organizationId)
-    .in('id', returnIds);
-  if (error) {
-    console.error('activity: return number lookup failed', { error: error.message });
+  let data: { id: string; return_number: string | null }[];
+  try {
+    data = await fetchAllRowsByIds<{ id: string; return_number: string | null }>(
+      returnIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('returns')
+          .select('id, return_number')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+    );
+  } catch (err) {
+    reportDegradedRead('activity.return_numbers', err, { ids: returnIds.length });
     return map;
   }
-  for (const r of (data ?? []) as Array<{ id: string; return_number: string | null }>) {
+  for (const r of data) {
     if (r.return_number) map.set(r.id, r.return_number);
   }
   return map;
@@ -377,16 +408,24 @@ export async function resolveBundleNames(
 ): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   if (bundleIds.length === 0) return map;
-  const { data, error } = await ctx.supabase
-    .from('bundles')
-    .select('id, name')
-    .eq('organization_id', ctx.organizationId)
-    .in('id', bundleIds);
-  if (error) {
-    console.error('activity: bundle name lookup failed', { error: error.message });
+  let data: { id: string; name: string | null }[];
+  try {
+    data = await fetchAllRowsByIds<{ id: string; name: string | null }>(
+      bundleIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('bundles')
+          .select('id, name')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+    );
+  } catch (err) {
+    reportDegradedRead('activity.bundle_names', err, { ids: bundleIds.length });
     return map;
   }
-  for (const r of (data ?? []) as Array<{ id: string; name: string | null }>) {
+  for (const r of data) {
     if (r.name) map.set(r.id, r.name);
   }
   return map;

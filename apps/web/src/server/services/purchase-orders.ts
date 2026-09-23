@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 import { createNotification } from './notifications';
 
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
@@ -14,13 +15,23 @@ import {
   type AutoReorderCandidate,
   type AutoReorderSettings,
 } from './auto-reorder';
+import {
+  fetchAllRowsByIds,
+  rawErrorText,
+  reportDegradedRead,
+  writeInIdBatches,
+} from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { fetchAllRows } from './lib/paginate';
-import { audit } from './audit';
+import { audit, auditMany } from './audit';
 import { dispatchEvent } from './integration-events';
 import { ItemImagesService } from './item-images';
 import { InventoryService } from './inventory';
 import { createItemSchema } from '@stockpilot/core';
+
+/** Notifications created at once by one fan-out (maintenance-notify.ts uses
+ *  the same number for the same reason). */
+const PO_NOTIFY_CONCURRENCY = 6;
 
 const lineInputSchema = z
   .object({
@@ -198,6 +209,7 @@ export class PurchaseOrdersService {
       .lt('expected_at', new Date().toISOString());
 
     if (!access.hasAllAccess) {
+      // in-list-bound: the caller's readable warehouses (an org's handful of sites)
       query = query.in('destination.warehouse_id', access.readableIds);
     } else if (params.warehouseId) {
       query = query.eq('destination.warehouse_id', params.warehouseId);
@@ -251,6 +263,7 @@ export class PurchaseOrdersService {
         )
         .eq('organization_id', this.ctx.organizationId);
       if (!access.hasAllAccess) {
+        // in-list-bound: the caller's readable warehouses (an org's handful of sites)
         query = query.in('destination.warehouse_id', access.readableIds);
       } else if (params.warehouseId) {
         query = query.eq('destination.warehouse_id', params.warehouseId);
@@ -715,15 +728,22 @@ export class PurchaseOrdersService {
     // before the PO row existed, so we backfill the link here). Best-effort: a
     // failure here only weakens cancel-time cleanup, it must not fail the PO.
     if (customItemIds.length > 0) {
-      const { error: stampErr } = await this.ctx.supabase
-        .from('inventory_items')
-        .update({ created_from_purchase_order_id: po.id as string })
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', customItemIds);
-      if (stampErr) {
-        void reportError(new Error(stampErr.message), {
+      // Batched: a PO's custom lines have no cap, and one `.in()` past ~215
+      // ids fails. One batch at a time; a failure stops the rest and is
+      // reported with how many items were left unstamped.
+      const ctx = this.ctx;
+      const stamp = await writeInIdBatches(customItemIds, (batch) =>
+        ctx.supabase
+          .from('inventory_items')
+          .update({ created_from_purchase_order_id: po.id as string })
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch),
+      );
+      if (stamp.error !== null) {
+        void reportError(new Error(stamp.error), {
           tag: 'po.create.stamp_custom_items',
           organizationId: this.ctx.organizationId,
+          extra: { stamped: stamp.written.length, unstamped: stamp.notWritten.length },
         });
       }
       // The stamp bumps updated_at (tg_inventory_items_set_updated_at), the
@@ -936,15 +956,22 @@ export class PurchaseOrdersService {
 
     // Stamp any custom items created during this edit with their origin PO.
     if (customItemIds.length > 0) {
-      const { error: stampErr } = await this.ctx.supabase
-        .from('inventory_items')
-        .update({ created_from_purchase_order_id: id })
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', customItemIds);
-      if (stampErr) {
-        void reportError(new Error(stampErr.message), {
+      // Batched: a PO's custom lines have no cap, and one `.in()` past ~215
+      // ids fails. One batch at a time; a failure stops the rest and is
+      // reported with how many items were left unstamped.
+      const ctx = this.ctx;
+      const stamp = await writeInIdBatches(customItemIds, (batch) =>
+        ctx.supabase
+          .from('inventory_items')
+          .update({ created_from_purchase_order_id: id })
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch),
+      );
+      if (stamp.error !== null) {
+        void reportError(new Error(stamp.error), {
           tag: 'po.update.stamp_custom_items',
           organizationId: this.ctx.organizationId,
+          extra: { stamped: stamp.written.length, unstamped: stamp.notWritten.length },
         });
       }
       // Same updated_at bump as the create() stamp.
@@ -994,21 +1021,22 @@ export class PurchaseOrdersService {
           .in('role', ['owner', 'admin'])
           .not('accepted_at', 'is', null)
           .is('impersonation_expires_at', null);
-        // Fan out notifications in parallel — createNotification catches its own
-        // errors, so a serial await-loop only adds latency (N round-trips).
-        await Promise.all(
-          ((members ?? []) as Array<{ user_id: string }>)
-            .filter((m) => m.user_id !== this.ctx.userId) // don't notify the editor
-            .map((m) =>
-              createNotification({
-                organizationId: this.ctx.organizationId,
-                userId: m.user_id,
-                type: 'purchase_order.updated',
-                title: 'Purchase order updated',
-                body: `PO ${poNumber} was edited (${resolvedLines.length} item(s)).`,
-                link: `/dashboard/purchase-orders/${id}`,
-              }),
-            ),
+        // Fan out notifications concurrently — createNotification catches its
+        // own errors, so a serial await-loop only adds latency (N round-trips) —
+        // but at most PO_NOTIFY_CONCURRENCY at once: each one is a profile read
+        // and an INSERT, and this list is every owner and admin of the org.
+        const recipients = ((members ?? []) as Array<{ user_id: string }>).filter(
+          (m) => m.user_id !== this.ctx.userId, // don't notify the editor
+        );
+        await mapWithConcurrency(recipients, PO_NOTIFY_CONCURRENCY, (m) =>
+          createNotification({
+            organizationId: this.ctx.organizationId,
+            userId: m.user_id,
+            type: 'purchase_order.updated',
+            title: 'Purchase order updated',
+            body: `PO ${poNumber} was edited (${resolvedLines.length} item(s)).`,
+            link: `/dashboard/purchase-orders/${id}`,
+          }),
         );
       } catch {
         // Best-effort: notification errors never fail the edit.
@@ -1259,25 +1287,38 @@ export class PurchaseOrdersService {
       // on any line — qoh=0 then just means it was consumed) OR it's still on a
       // non-cancelled PO (this PO is already 'cancelled' here, so it's excluded
       // — and such an item may yet receive stock + auto-unarchive there).
-      const { data: poLines, error: keepErr } = await this.ctx.supabase
-        .from('purchase_order_items')
-        .select('item_id, quantity_received, po:purchase_orders!inner(status)')
-        .eq('organization_id', this.ctx.organizationId) // defense-in-depth: keep the keep-check single-org
-        .in('item_id', candIds);
-      // An unreadable keep-check archives NOTHING. Its error used to be
-      // discarded, so a failed read (statement timeout, pooler hiccup) looked
-      // like "never received, on no live PO" and archived items with real
-      // receipt history, or ones another open PO still expects, off the Items
-      // list. Leaving an unused item active costs nothing.
-      if (keepErr) {
-        void reportError(new Error(keepErr.message), {
+      //
+      // Batched AND paged: an unpaged read was cut at 1000 lines with no
+      // error, and a dropped line that would have said "keep" archived an item
+      // a live PO still needs. One `.in()` past ~215 ids failed outright.
+      const ctx = this.ctx;
+      let poLines: Array<Record<string, unknown>>;
+      try {
+        poLines = await fetchAllRowsByIds<Record<string, unknown>>(
+          candIds,
+          (batch) => (from, to) =>
+            ctx.supabase
+              .from('purchase_order_items')
+              .select('item_id, quantity_received, po:purchase_orders!inner(status)')
+              .eq('organization_id', ctx.organizationId) // defense-in-depth: keep the keep-check single-org
+              .in('item_id', batch)
+              .order('id')
+              .range(from, to),
+        );
+      } catch (keepErr) {
+        // An unreadable keep-check archives NOTHING. Its error used to be
+        // discarded, so a failed read (statement timeout, pooler hiccup) looked
+        // like "never received, on no live PO" and archived items with real
+        // receipt history, or ones another open PO still expects, off the Items
+        // list. Leaving an unused item active costs nothing.
+        void reportError(new Error(rawErrorText(keepErr)), {
           tag: 'po.cancel.archive_custom_items.keep_check',
           organizationId: this.ctx.organizationId,
         });
         return;
       }
       const keep = new Set<string>();
-      for (const row of (poLines ?? []) as Array<Record<string, unknown>>) {
+      for (const row of poLines) {
         const itemId = row.item_id as string;
         if (Number(row.quantity_received) > 0) keep.add(itemId);
         const poField = row.po as { status?: string } | { status?: string }[] | null;
@@ -1288,37 +1329,42 @@ export class PurchaseOrdersService {
       const toArchive = cand.filter((c) => !keep.has(c.id));
       if (toArchive.length === 0) return;
 
-      const { data: flippedRows, error: updErr } = await this.ctx.supabase
-        .from('inventory_items')
-        .update({ status: 'archived' })
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', toArchive.map((c) => c.id))
-        .eq('status', 'active') // race guard
-        .select('id, name');
-      if (updErr) {
-        void reportError(new Error(updErr.message), {
+      // Batched, one batch at a time. A failure stops the rest; whatever
+      // committed is still invalidated and audited before it is reported.
+      const flip = await writeInIdBatches<string, { id: string; name: string }>(
+        toArchive.map((c) => c.id),
+        (batch) =>
+          ctx.supabase
+            .from('inventory_items')
+            .update({ status: 'archived' })
+            .eq('organization_id', ctx.organizationId)
+            .in('id', batch)
+            .eq('status', 'active') // race guard
+            .select('id, name'),
+      );
+      if (flip.error !== null) {
+        void reportError(new Error(flip.error), {
           tag: 'po.cancel.archive_custom_items',
           organizationId: this.ctx.organizationId,
+          extra: { archived: flip.rows.length, notArchived: flip.notWritten.length },
         });
-        return;
       }
+      if (flip.rows.length === 0) return;
       // Archived rows leave the default view.
       invalidateInventoryListAfterWrite(this.ctx.organizationId, 'po.cancel.archive_custom_items');
 
-      await Promise.all(
-        ((flippedRows ?? []) as Array<{ id: string; name: string }>).map((item) =>
-          audit(
-            {
-              event: 'inventory.item.archived',
-              entityType: 'inventory_item',
-              entityId: item.id,
-              after: { status: 'archived' },
-              before: { status: 'active' },
-              extra: { reason: 'po_cancelled', purchaseOrderId: poId, itemName: item.name },
-            },
-            this.ctx,
-          ),
-        ),
+      // Batched INSERTs (auditMany): a Promise.all of one audit() per item
+      // started every INSERT at once, however many items the PO carried.
+      await auditMany(
+        flip.rows.map((item) => ({
+          event: 'inventory.item.archived' as const,
+          entityType: 'inventory_item',
+          entityId: item.id,
+          after: { status: 'archived' },
+          before: { status: 'active' },
+          extra: { reason: 'po_cancelled', purchaseOrderId: poId, itemName: item.name },
+        })),
+        this.ctx,
       );
     } catch (e) {
       void reportError(e, {
@@ -1336,6 +1382,34 @@ export class PurchaseOrdersService {
    */
   private async assertApprovalThreshold(total: number): Promise<void> {
     await assertPoApprovalThreshold(this.ctx, total);
+  }
+
+  /**
+   * Supplier id -> name, for draft names and failure messages. Cosmetic: a
+   * failed read leaves names blank (the callers fall back) and is reported.
+   * Batched: the suppliers on a large selection have no cap.
+   */
+  private async supplierNames(supplierIds: string[], tag: string): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (supplierIds.length === 0) return out;
+    const ctx = this.ctx;
+    try {
+      const rows = await fetchAllRowsByIds<{ id: string; name: string }>(
+        supplierIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('suppliers')
+            .select('id, name')
+            .eq('organization_id', ctx.organizationId)
+            .in('id', batch)
+            .order('id')
+            .range(from, to),
+      );
+      for (const r of rows) out.set(r.id, r.name);
+    } catch (err) {
+      reportDegradedRead(tag, err, { suppliers: supplierIds.length });
+    }
+    return out;
   }
 
   /**
@@ -1362,15 +1436,6 @@ export class PurchaseOrdersService {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
 
-    const { data: rows, error: fetchErr } = await this.ctx.supabase
-      .from('inventory_items')
-      .select(
-        'id, supplier_id, reorder_quantity, reorder_point, quantity_on_hand, unit_cost',
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .in('id', itemIds);
-    if (fetchErr) throw new ServiceError('internal_error', fetchErr.message);
-
     type Row = {
       id: string;
       supplier_id: string | null;
@@ -1379,7 +1444,20 @@ export class PurchaseOrdersService {
       quantity_on_hand: number | null;
       unit_cost: number | null;
     };
-    const items = (rows ?? []) as Row[];
+    // Batched: the selection has no cap here, and one `.in()` past ~215 ids
+    // fails. A failed batch throws rather than drafting from a partial set.
+    const ctx = this.ctx;
+    const items = await fetchAllRowsByIds<Row>(
+      itemIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('inventory_items')
+          .select('id, supplier_id, reorder_quantity, reorder_point, quantity_on_hand, unit_cost')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+    );
     const noSupplier = items.filter((r) => !r.supplier_id);
     const withSupplier = items.filter((r) => !!r.supplier_id);
     const skipped = noSupplier.length + (itemIds.length - items.length);
@@ -1400,15 +1478,10 @@ export class PurchaseOrdersService {
     }
 
     const supplierIds = [...bySupplier.keys()];
-    const { data: suppliersData } = await this.ctx.supabase
-      .from('suppliers')
-      .select('id, name')
-      .eq('organization_id', this.ctx.organizationId)
-      .in('id', supplierIds);
-    const supplierName = new Map<string, string>();
-    for (const s of (suppliersData ?? []) as Array<{ id: string; name: string }>) {
-      supplierName.set(s.id, s.name);
-    }
+    const supplierName = await this.supplierNames(
+      supplierIds,
+      'po.drafts_from_items.supplier_names',
+    );
 
     const createdPoIds: string[] = [];
     const supplierFailures: Array<{
@@ -1555,17 +1628,10 @@ export class PurchaseOrdersService {
 
     // Resolve supplier names for failure messages.
     const supplierIds = [...bySupplier.keys()];
-    const supplierName = new Map<string, string>();
-    if (supplierIds.length > 0) {
-      const { data: suppliersData } = await this.ctx.supabase
-        .from('suppliers')
-        .select('id, name')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', supplierIds);
-      for (const s of (suppliersData ?? []) as Array<{ id: string; name: string }>) {
-        supplierName.set(s.id, s.name);
-      }
-    }
+    const supplierName = await this.supplierNames(
+      supplierIds,
+      'po.drafts_from_lines.supplier_names',
+    );
 
     const createdPoIds: string[] = [];
     const supplierFailures: Array<{

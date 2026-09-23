@@ -2,10 +2,12 @@ import 'server-only';
 
 import { z } from 'zod';
 
+import { reportError } from '@/lib/error-reporter';
 import type { createAdminClient } from '@/lib/supabase/admin';
 
-import { audit } from './audit';
+import { auditMany } from './audit';
 import { ServiceError, type ServiceContext } from './context';
+import { fetchAllRowsByIds, reportDegradedRead, writeInIdBatches } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { createNotification } from './notifications';
 
@@ -103,16 +105,28 @@ async function selectAutoArchiveCandidates(
  * (approved-unpicked order or an open rental checkout) — excluded from
  * auto-archive. Shared by the archive pass and the preview count so the
  * exclusion can never drift between the two.
+ *
+ * Batched and paged: a run passes up to ARCHIVE_BATCH_LIMIT (500) ids, and
+ * one `.in()` of 500 uuids fails in production (and answers 414 locally), so
+ * every run for an org with that many candidates failed, forever. A failed
+ * batch THROWS: this read decides what may be archived, so it must never read
+ * as "nothing reserved". Scoped to the org like every other read here.
  */
 async function fetchReservedItemIds(ctx: ServiceContext, ids: string[]): Promise<Set<string>> {
   if (ids.length === 0) return new Set();
-  const { data, error } = await ctx.supabase
-    .from('stock_reservations')
-    .select('item_id')
-    .in('item_id', ids)
-    .is('released_at', null);
-  if (error) throw new ServiceError('internal_error', error.message);
-  return new Set((data ?? []).map((r) => (r as { item_id: string }).item_id));
+  const rows = await fetchAllRowsByIds<{ item_id: string }>(
+    ids,
+    (batch) => (from, to) =>
+      ctx.supabase
+        .from('stock_reservations')
+        .select('item_id')
+        .eq('organization_id', ctx.organizationId)
+        .in('item_id', batch)
+        .is('released_at', null)
+        .order('id')
+        .range(from, to),
+  );
+  return new Set(rows.map((r) => r.item_id));
 }
 
 /**
@@ -131,6 +145,8 @@ export async function archiveExpiredZeroStockItems(
   ids: string[];
   items: Array<{ id: string; name: string }>;
   truncated: boolean;
+  /** Eligible items a failed write batch left unarchived (reported). */
+  failed: number;
 }> {
   const limit = opts.limit ?? ARCHIVE_BATCH_LIMIT;
 
@@ -139,7 +155,7 @@ export async function archiveExpiredZeroStockItems(
     limit,
   });
   const rows = cand as Array<{ id: string; name: string }>;
-  if (rows.length === 0) return { archived: 0, ids: [], items: [], truncated: false };
+  if (rows.length === 0) return { archived: 0, ids: [], items: [], truncated: false, failed: 0 };
 
   // Exclude items with active reservations (approved-unpicked order / open rental).
   const reserved = await fetchReservedItemIds(
@@ -147,40 +163,66 @@ export async function archiveExpiredZeroStockItems(
     rows.map((r) => r.id),
   );
   const eligible = rows.filter((r) => !reserved.has(r.id));
-  if (eligible.length === 0) return { archived: 0, ids: [], items: [], truncated };
+  if (eligible.length === 0) return { archived: 0, ids: [], items: [], truncated, failed: 0 };
 
-  const { data: done, error: updErr } = await ctx.supabase
-    .from('inventory_items')
-    .update({ status: 'archived', auto_archived: true, updated_by: ctx.userId })
-    .eq('organization_id', ctx.organizationId)
-    .in(
-      'id',
-      eligible.map((r) => r.id),
-    )
-    .eq('status', 'active') // race guard
-    .eq('auto_archived', false)
-    .lte('quantity_on_hand', 0) // race guard: don't archive one restocked mid-run
-    .select('id, name');
-  if (updErr) throw new ServiceError('internal_error', updErr.message);
-  const archived = (done ?? []) as Array<{ id: string; name: string }>;
+  // Batched: up to 500 ids, one batch at a time. Each row's update is
+  // independent (constant values, race-guarded per row), so a batch is
+  // correct on its own; a failure stops the rest, which the next daily run
+  // picks up again (the same candidates still match).
+  const write = await writeInIdBatches<string, { id: string; name: string }>(
+    eligible.map((r) => r.id),
+    (batch) =>
+      ctx.supabase
+        .from('inventory_items')
+        .update({ status: 'archived', auto_archived: true, updated_by: ctx.userId })
+        .eq('organization_id', ctx.organizationId)
+        .in('id', batch)
+        .eq('status', 'active') // race guard
+        .eq('auto_archived', false)
+        .lte('quantity_on_hand', 0) // race guard: don't archive one restocked mid-run
+        .select('id, name'),
+  );
+  if (write.error !== null && write.written.length === 0) {
+    throw new ServiceError('internal_error', write.error);
+  }
+  const archived = write.rows;
   if (archived.length > 0) {
     // Archived rows leave the default (active) view.
     invalidateInventoryListAfterWrite(ctx.organizationId, 'item.auto_archive');
   }
-
-  for (const item of archived) {
-    await audit(
-      {
-        event: 'inventory.item.archived',
-        entityType: 'inventory_item',
-        entityId: item.id,
-        after: { status: 'archived' },
-        extra: { reason: 'auto_zero_stock', dwellDays, itemName: item.name },
+  if (write.error !== null) {
+    // Part of the run committed: audit and return that part (so the cron
+    // notifies about exactly what was archived) and report the rest.
+    void reportError(new Error('Auto-archive stopped partway through a run'), {
+      tag: 'auto_archive.archive.partial',
+      organizationId: ctx.organizationId,
+      extra: {
+        archived: archived.length,
+        failed: write.notWritten.length,
+        detail: write.error,
       },
-      ctx,
-    );
+    });
   }
-  return { archived: archived.length, ids: archived.map((d) => d.id), items: archived, truncated };
+
+  // Up to 500 rows per run: batched INSERTs (auditMany) instead of one
+  // awaited request per archived item.
+  await auditMany(
+    archived.map((item) => ({
+      event: 'inventory.item.archived' as const,
+      entityType: 'inventory_item',
+      entityId: item.id,
+      after: { status: 'archived' },
+      extra: { reason: 'auto_zero_stock', dwellDays, itemName: item.name },
+    })),
+    ctx,
+  );
+  return {
+    archived: archived.length,
+    ids: archived.map((d) => d.id),
+    items: archived,
+    truncated,
+    failed: write.notWritten.length,
+  };
 }
 
 /**
@@ -235,15 +277,28 @@ export async function notifyAutoArchived(
   const userIds = ((members ?? []) as Array<{ user_id: string }>).map((m) => m.user_id);
   if (userIds.length === 0) return;
 
-  const { data: prefRows } = await admin
-    .from('notification_preferences')
-    .select('user_id, push_item_auto_archived')
-    .in('user_id', userIds);
-  const prefById = new Map(
-    (
-      (prefRows ?? []) as Array<{ user_id: string; push_item_auto_archived: boolean | null }>
-    ).map((r) => [r.user_id, r.push_item_auto_archived]),
-  );
+  // Batched: an org's owners, admins and managers have no ceiling. A failed
+  // read keeps the old posture (no row read = default on, so everyone is
+  // notified) but is now reported instead of ignored.
+  let prefRows: Array<{ user_id: string; push_item_auto_archived: boolean | null }> = [];
+  try {
+    prefRows = await fetchAllRowsByIds<{
+      user_id: string;
+      push_item_auto_archived: boolean | null;
+    }>(
+      userIds,
+      (batch) => (from, to) =>
+        admin
+          .from('notification_preferences')
+          .select('user_id, push_item_auto_archived')
+          .in('user_id', batch)
+          .order('user_id')
+          .range(from, to),
+    );
+  } catch (err) {
+    reportDegradedRead('auto_archive.notify.preferences', err, { orgId, users: userIds.length });
+  }
+  const prefById = new Map(prefRows.map((r) => [r.user_id, r.push_item_auto_archived]));
 
   for (const uid of userIds) {
     // Default-on opt-out model (0092 pattern): only an explicit false skips.

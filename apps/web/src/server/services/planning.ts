@@ -2,6 +2,7 @@ import 'server-only';
 
 import { assertModuleEnabled, assertPermission, withContext, type ServiceContext } from './context';
 import { computeReorderSuggestion, getBulkItemVelocities } from './forecasting';
+import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
 import { fetchAllRows } from './lib/paginate';
 import { PurchaseOrdersService } from './purchase-orders';
 
@@ -148,17 +149,30 @@ export class PlanningService {
     );
     if (items.length === 0) return [];
 
-    // Resolve supplier names in one round-trip.
-    const supplierIds = [...new Set(items.map((i) => i.supplier_id).filter((id): id is string => !!id))];
+    // Resolve supplier names. Batched: the candidate set spans every supplier
+    // in the org. Names are labels, so a failed read leaves them blank and is
+    // reported rather than failing the plan.
+    const supplierIds = [
+      ...new Set(items.map((i) => i.supplier_id).filter((id): id is string => !!id)),
+    ];
     const supplierName = new Map<string, string>();
     if (supplierIds.length > 0) {
-      const { data: suppliers } = await this.ctx.supabase
-        .from('suppliers')
-        .select('id, name')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', supplierIds);
-      for (const s of (suppliers ?? []) as Array<{ id: string; name: string }>) {
-        supplierName.set(s.id, s.name);
+      const ctx = this.ctx;
+      try {
+        const suppliers = await fetchAllRowsByIds<{ id: string; name: string }>(
+          supplierIds,
+          (batch) => (from, to) =>
+            ctx.supabase
+              .from('suppliers')
+              .select('id, name')
+              .eq('organization_id', ctx.organizationId)
+              .in('id', batch)
+              .order('id')
+              .range(from, to),
+        );
+        for (const s of suppliers) supplierName.set(s.id, s.name);
+      } catch (err) {
+        reportDegradedRead('planning.supplier_names', err, { suppliers: supplierIds.length });
       }
     }
 

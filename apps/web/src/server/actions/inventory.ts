@@ -11,9 +11,11 @@ import {
   type PlaceDest,
 } from '@/lib/locations/destination-option';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
+import { auditMany, type AuditPayload } from '@/server/services/audit';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { ProductGroupsService } from '@/server/services/product-groups';
+import { MAX_BULK_TAGS } from '@/server/services/tags';
 import { ServiceError, withContext } from '@/server/services/context';
 
 import {
@@ -402,6 +404,14 @@ export async function bulkUpdateInventoryAction(input: {
      * for these books.
      */
     cratePreserved?: number;
+    /**
+     * Items whose batch was not written because an earlier batch failed. A
+     * bulk op of up to 500 items writes 100 at a time and stops at the first
+     * failure; the batches before it committed (and were audited). The
+     * toolbar says how many were left and to run it again. Declared here so it
+     * is not type-erased the way the crate counts once were.
+     */
+    failed?: number;
   }>
 > {
   if (!Array.isArray(input.ids) || input.ids.length === 0) {
@@ -418,6 +428,23 @@ export async function bulkUpdateInventoryAction(input: {
   }
   if (input.op.kind === 'set_location' && !isUuidOrNull(input.op.locationId)) {
     return err('validation_error', 'Invalid location id.');
+  }
+  if (input.op.kind === 'add_tags' || input.op.kind === 'remove_tags') {
+    // The tag list rides in the same URL as every batch of item ids (the
+    // removal is a cross product), so it is capped at MAX_BULK_TAGS; the
+    // service enforces the same cap. Checked here first so a bad list is a
+    // plain validation error before any work, and malformed ids never reach
+    // Postgres.
+    const tagIds = input.op.tagIds;
+    if (!Array.isArray(tagIds) || tagIds.length === 0) {
+      return err('validation_error', 'Pick at least one tag.');
+    }
+    if (new Set(tagIds).size > MAX_BULK_TAGS) {
+      return err('validation_error', `Apply or remove at most ${MAX_BULK_TAGS} tags at a time.`);
+    }
+    if (tagIds.some((id) => typeof id !== 'string' || !UUID_REGEX.test(id))) {
+      return err('validation_error', 'Invalid tag id.');
+    }
   }
   if (input.op.kind === 'set_rack') {
     const rn = input.op.rackNumber;
@@ -1375,27 +1402,38 @@ export async function bulkPlaceStockAction(
     let placed = 0;
     const placedItemIds: string[] = [];
     const failed: Array<{ itemId: string; message: string }> = [];
-    for (const p of data.placements) {
-      try {
-        await invSvc.transferStock({
-          itemId: p.itemId,
-          fromLocationId: p.fromLocationId,
-          toLocationId,
-          quantity: p.quantity,
-          notes: data.notes,
-        });
-        placed += 1;
-        placedItemIds.push(p.itemId);
-      } catch (e) {
-        const insufficient =
-          e instanceof ServiceError &&
-          e.code === 'internal_error' &&
-          (e.internalDetail ?? '').toLowerCase().includes('insufficient_stock');
-        failed.push({
-          itemId: p.itemId,
-          message: insufficient ? 'Not enough available to place.' : 'Could not place this item.',
-        });
+    // Every committed move's stock.transferred row, written in ONE batched
+    // auditMany after the loop instead of one INSERT per placement.
+    const transferAudits: AuditPayload[] = [];
+    try {
+      for (const p of data.placements) {
+        try {
+          await invSvc.transferStock(
+            {
+              itemId: p.itemId,
+              fromLocationId: p.fromLocationId,
+              toLocationId,
+              quantity: p.quantity,
+              notes: data.notes,
+            },
+            { auditInto: transferAudits },
+          );
+          placed += 1;
+          placedItemIds.push(p.itemId);
+        } catch (e) {
+          const insufficient =
+            e instanceof ServiceError &&
+            e.code === 'internal_error' &&
+            (e.internalDetail ?? '').toLowerCase().includes('insufficient_stock');
+          failed.push({
+            itemId: p.itemId,
+            message: insufficient ? 'Not enough available to place.' : 'Could not place this item.',
+          });
+        }
       }
+    } finally {
+      // Never throws, and bounded by its per-INSERT deadline.
+      if (transferAudits.length > 0) await auditMany(transferAudits, ctx);
     }
     // One label-stamp for every item that actually landed on the destination.
     await invSvc.stampPlacementBin(placedItemIds, dest);

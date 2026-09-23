@@ -151,7 +151,7 @@ const ALL_AT_WH = ['a-x', 'a-y', 'b-none', 'b-x', 'b-y', 'g-none', 'g-x', 'g-y']
  * the filters the loader actually applied (eq, is null, in, or-groups), so a
  * test sees the rows the query would return, not a canned answer.
  */
-function makeFilteringAdmin(rows: Row[]) {
+function makeFilteringAdmin(rows: Array<Row & { name?: string }>) {
   const itemQueries: Array<Array<[string, unknown[]]>> = [];
   const matchTerm = (row: Record<string, unknown>, term: string): boolean => {
     const [col, op, ...rest] = term.split('.');
@@ -183,7 +183,7 @@ function makeFilteringAdmin(rows: Row[]) {
   const evaluate = (calls: Array<[string, unknown[]]>) => {
     let out = rows.map((r) => ({
       ...r,
-      name: r.id,
+      name: r.name ?? r.id,
       sku: r.id.toUpperCase(),
       quantity_on_hand: 5,
       item_type: 'product',
@@ -202,6 +202,7 @@ function makeFilteringAdmin(rows: Row[]) {
       is_bundle: null,
     })) as Array<Record<string, unknown>>;
     let limit = Infinity;
+    const orderBy: string[] = [];
     for (const [m, args] of calls) {
       if (m === 'eq') out = out.filter((r) => r[args[0] as string] === args[1]);
       else if (m === 'is') out = out.filter((r) => r[args[0] as string] === args[1]);
@@ -210,8 +211,18 @@ function makeFilteringAdmin(rows: Row[]) {
       else if (m === 'or')
         out = out.filter((r) => splitTop(args[0] as string).some((t) => matchTerm(r, t)));
       else if (m === 'limit') limit = args[0] as number;
-      else if (m !== 'select' && m !== 'order') throw new Error(`fake: unsupported ${m}`);
+      else if (m === 'order') orderBy.push(args[0] as string);
+      else if (m !== 'select') throw new Error(`fake: unsupported ${m}`);
     }
+    // ORDER BY the recorded columns (all ascending here), then LIMIT.
+    out.sort((a, b) => {
+      for (const col of orderBy) {
+        const x = String(a[col]);
+        const y = String(b[col]);
+        if (x !== y) return x < y ? -1 : 1;
+      }
+      return 0;
+    });
     return out.slice(0, limit);
   };
   const client = {
@@ -397,6 +408,144 @@ describe("loadCatalogItems — the catalog is the caller's RLS view of the wareh
       await expect(resolveCatalogScopeKey(viewer(role), WH)).resolves.toBe(FULL_CATALOG_SCOPE_KEY);
     },
   );
+});
+
+/* ---- long scope and name lists stay under the URL limits ---- */
+
+// A viewer may hold up to 500 category grants (user-categories.ts). In one
+// `.in()` that is ~19.5 KB of URL: the local gateway answers 414 past ~8 KB
+// and production fails past ~15 KB after ~7 s of retries. RLS is bypassed in
+// this loader, so the grant list is the security filter and cannot simply be
+// dropped from the query: it goes out in batches and the rows are merged.
+describe('loadCatalogItems — a long category grant list', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const cat = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+  // 160 categories with 4 generic items each and 1 charter-B item each; the
+  // viewer is granted the first 150. Names are scrambled so the overall first
+  // 500 by name are spread across every batch.
+  const LONG_ROWS: Array<Row & { name: string }> = [];
+  for (let c = 0; c < 160; c += 1) {
+    for (let k = 0; k < 4; k += 1) {
+      LONG_ROWS.push({
+        ...item(`g-${c}-${k}`, WH, null, cat(c)),
+        name: `n-${String((c * 37 + k * 101) % 997).padStart(3, '0')}`,
+      });
+    }
+    LONG_ROWS.push({ ...item(`b-${c}`, WH, CHARTER_B, cat(c)), name: 'a-b-charter' });
+  }
+  const granted = new Set(Array.from({ length: 150 }, (_, i) => cat(i)));
+  const caller = () =>
+    makeCallerClient({
+      assigned: [WH],
+      pairs: [{ warehouse_id: WH, charter_id: CHARTER_A }],
+      allowed: [...granted].map((category_id) => ({ organization_id: ORG, category_id })),
+    });
+
+  it('reads the grants in batches that fit the URL with the charter list, and keeps the same first 500 rows', async () => {
+    const admin = makeFilteringAdmin(LONG_ROWS);
+    createAdminClientMock.mockReturnValue(admin.client);
+    createClientMock.mockResolvedValue(caller());
+
+    const items = await loadCatalogItems(viewer('viewer'), WH);
+
+    // What ONE query would return: generic rows (the viewer holds charter A
+    // only) in a granted category, ordered by (name, id), first 500.
+    const expected = LONG_ROWS.filter((r) => r.charter_id === null && granted.has(r.category_id!))
+      .sort((a, b) => (a.name === b.name ? (a.id < b.id ? -1 : 1) : a.name < b.name ? -1 : 1))
+      .slice(0, 500)
+      .map((r) => r.id);
+    expect(items.map((i) => i.id)).toEqual(expected);
+
+    // Two batches (100 + 50 grants), each well inside the character budget
+    // once the charter list that shares the URL is counted.
+    const sent = admin.itemQueries.map(
+      (calls) => calls.find(([m, args]) => m === 'in' && args[0] === 'category_id')![1][1] as string[],
+    );
+    expect(sent.map((l) => l.length)).toEqual([100, 50]);
+    expect(new Set(sent.flat())).toEqual(granted);
+    for (const calls of admin.itemQueries) {
+      const or = calls.find(([m, args]) => m === 'or' && String(args[0]).includes('charter_id'));
+      expect(or?.[1][0]).toBe(`charter_id.is.null,charter_id.in.(${CHARTER_A})`);
+      const categories = calls.find(([m, args]) => m === 'in' && args[0] === 'category_id')![1][1] as string[];
+      const encoded = new URLSearchParams([
+        ['category_id', `in.(${categories.join(',')})`],
+        ['or', `(charter_id.is.null,charter_id.in.(${CHARTER_A}))`],
+      ]).toString().length;
+      expect(encoded).toBeLessThan(4_200);
+    }
+  });
+
+  it('a long charter list shrinks each grant batch so the two lists together still fit', async () => {
+    const admin = makeFilteringAdmin(LONG_ROWS);
+    createAdminClientMock.mockReturnValue(admin.client);
+    const charters = Array.from({ length: 30 }, (_, i) => `00000000-0000-4000-8000-0000000e${String(i).padStart(4, '0')}`);
+    createClientMock.mockResolvedValue(
+      makeCallerClient({
+        assigned: [WH],
+        pairs: charters.map((charter_id) => ({ warehouse_id: WH, charter_id })),
+        allowed: [...granted].map((category_id) => ({ organization_id: ORG, category_id })),
+      }),
+    );
+
+    await loadCatalogItems(viewer('viewer'), WH);
+
+    expect(admin.itemQueries.length).toBeGreaterThan(2);
+    for (const calls of admin.itemQueries) {
+      const categories = calls.find(([m, args]) => m === 'in' && args[0] === 'category_id')![1][1] as string[];
+      const charterFilter = String(calls.find(([m, args]) => m === 'or' && String(args[0]).includes('charter_id'))![1][0]);
+      expect(charterFilter).toBe(`charter_id.is.null,charter_id.in.(${[...charters].sort().join(',')})`);
+      const encoded = (v: string) => new URLSearchParams([['', v]]).toString().length - 1;
+      // Both id lists, with their separators, inside the one 4,000-character
+      // budget (the rest of the URL has its own 3.5 KB of headroom).
+      expect(encoded(categories.join(',')) + encoded(charters.join(','))).toBeLessThanOrEqual(4_000);
+    }
+  });
+
+  it('a short grant list is still one query', async () => {
+    const admin = makeFilteringAdmin(LONG_ROWS);
+    createAdminClientMock.mockReturnValue(admin.client);
+    createClientMock.mockResolvedValue(
+      makeCallerClient({
+        full: [WH],
+        assigned: [WH],
+        allowed: [{ organization_id: ORG, category_id: cat(3) }],
+      }),
+    );
+    const items = await loadCatalogItems(viewer('viewer'), WH);
+    expect(admin.itemQueries).toHaveLength(1);
+    expect(items.map((i) => i.id).sort()).toEqual(['b-3', 'g-3-0', 'g-3-1', 'g-3-2', 'g-3-3']);
+  });
+
+  it('one failed grant batch rejects the catalog (never a partial one)', async () => {
+    const admin = makeFilteringAdmin(LONG_ROWS);
+    let n = 0;
+    const from = admin.client.from;
+    admin.client.from = vi.fn((table: string) => {
+      const builder = from(table);
+      if (table !== 'inventory_items' || ++n !== 2) return builder;
+      return new Proxy(builder as object, {
+        get(target, prop, receiver) {
+          if (prop === 'then') {
+            return (resolve: (v: unknown) => void) =>
+              resolve({ data: null, error: { message: 'fetch failed' } });
+          }
+          const value = Reflect.get(target, prop, receiver) as (...a: unknown[]) => unknown;
+          return (...args: unknown[]) => {
+            value(...args);
+            return new Proxy(target, this);
+          };
+        },
+      });
+    });
+    createAdminClientMock.mockReturnValue(admin.client);
+    createClientMock.mockResolvedValue(caller());
+    await expect(loadCatalogItems(viewer('viewer'), WH)).rejects.toThrow(
+      /catalog items read failed: fetch failed/,
+    );
+  });
 });
 
 // Every read that decides the scope fails CLOSED: supabase-js resolves a
@@ -594,6 +743,63 @@ describe('storefront loaders throw on a failed read instead of caching it', () =
     });
     createAdminClientMock.mockReturnValue(stub.client);
     await expect(loadCatalogItems(owner, WH)).rejects.toThrow(/reservations read failed: fetch failed/);
+  });
+
+  it('catalog items: category and charter names for 250 rows go out in batches of at most 100', async () => {
+    const id = (p: string, i: number) => `${p.repeat(8)}-0000-4000-8000-${String(i).padStart(12, '0')}`;
+    const items = Array.from({ length: 250 }, (_, i) => ({
+      ...ITEM,
+      id: `i-${i}`,
+      category_id: id('d', i),
+      charter_id: id('c', i % 150),
+    }));
+    const listsFor = (table: string) => {
+      const chains = stub.chainsAll.get(`${table}.select`) ?? [];
+      const argsAll = stub.chainArgsAll.get(`${table}.select`) ?? [];
+      return chains.map((c, i) => (argsAll[i]![c.indexOf('in')] as [string, string[]])[1]);
+    };
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: items, error: null },
+      'stock_reservations.select': { data: [], error: null },
+      'categories.select': (call) => {
+        const ids = call.args[call.methods.indexOf('in')]![1] as string[];
+        return { data: ids.map((c) => ({ id: c, name: `cat ${c.slice(-3)}` })), error: null };
+      },
+      'charters.select': (call) => {
+        const ids = call.args[call.methods.indexOf('in')]![1] as string[];
+        return { data: ids.map((c) => ({ id: c, name: `ch ${c.slice(-3)}`, code: null })), error: null };
+      },
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+
+    const cards = await loadCatalogItems(owner, WH);
+
+    expect(listsFor('categories').map((l) => l.length)).toEqual([100, 100, 50]);
+    expect(listsFor('charters').map((l) => l.length)).toEqual([100, 50]);
+    // The last batch's names reach the cards.
+    expect(cards.find((c) => c.id === 'i-249')).toMatchObject({
+      categoryName: 'cat 249',
+      charterName: 'ch 099',
+    });
+  });
+
+  it('catalog items: a failed second category-name batch rejects', async () => {
+    const items = Array.from({ length: 150 }, (_, i) => ({
+      ...ITEM,
+      id: `i-${i}`,
+      category_id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+    }));
+    let n = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: items, error: null },
+      'stock_reservations.select': { data: [], error: null },
+      'categories.select': () => (++n === 2 ? FAILED : { data: [], error: null }),
+      'charters.select': { data: [], error: null },
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+    await expect(loadCatalogItems(owner, WH)).rejects.toThrow(
+      /category names read failed: fetch failed/,
+    );
   });
 
   it('thumb map: a failed image-rows read rejects (was an empty map for 4 h), signs nothing', async () => {

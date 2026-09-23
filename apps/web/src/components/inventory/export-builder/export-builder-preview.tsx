@@ -129,12 +129,18 @@ export function ExportBuilderPreview({
               : ''}
           </p>
           {showCoverReadiness ? (
-            <p>
-              {preview.readiness.withImage} of {preview.readiness.rows} have a cover
-              {preview.readiness.missingImage > 0
-                ? ` · ${preview.readiness.missingImage} missing cover`
-                : ''}
-            </p>
+            preview.readiness.withImage === null ? (
+              // The count failed. Saying "0 have a cover" would be a wrong
+              // answer; the export itself still resolves images on its own.
+              <p>Image check unavailable. Covers are still looked up when the file is built.</p>
+            ) : (
+              <p>
+                {preview.readiness.withImage} of {preview.readiness.rows} have a cover
+                {(preview.readiness.missingImage ?? 0) > 0
+                  ? ` · ${preview.readiness.missingImage} missing cover`
+                  : ''}
+              </p>
+            )
           ) : null}
           {/* Never a blocker: a missing cover or ISBN is a data gap, not an
               export error, and the file prints a placeholder either way. */}

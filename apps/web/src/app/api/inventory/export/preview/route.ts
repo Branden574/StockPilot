@@ -100,7 +100,8 @@ export async function POST(request: NextRequest) {
     const result = await buildInventoryExportSourceRows(ctx, { scope, itemType, ids, filters });
 
     const withIsbn = result.rows.filter((r) => r.isbn.length > 0).length;
-    // Presence only — no signing, no Storage round trip.
+    // Presence only — no signing, no Storage round trip. null = the check
+    // failed; the dialog says so instead of claiming nothing has a cover.
     const withImage = await countRowsWithImages(
       ctx,
       result.rows.map((r) => r.id),
@@ -119,7 +120,7 @@ export async function POST(request: NextRequest) {
           withIsbn,
           missingIsbn: result.rows.length - withIsbn,
           withImage,
-          missingImage: result.rows.length - withImage,
+          missingImage: withImage === null ? null : result.rows.length - withImage,
         },
       },
       { headers: { 'Cache-Control': 'no-store' } },

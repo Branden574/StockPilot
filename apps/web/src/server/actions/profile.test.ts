@@ -493,6 +493,29 @@ describe('deleteOwnAccountAction', () => {
     if (!result.ok) expect(result.error.code).toBe('forbidden');
   });
 
+  // Fails CLOSED: a failed owned-orgs or other-members read used to read as
+  // "owns nothing" / "no other members" and the account was deleted out from
+  // under an org that still had people in it.
+  it.each([
+    ['owned-orgs', 1],
+    ['other-members', 2],
+  ])('a failed %s read refuses the delete and tombstones nothing', async (_label, failAt) => {
+    let n = 0;
+    stubHolder.stub = makeSupabaseStub({
+      'organization_members.select': () => {
+        n += 1;
+        if (n === failAt) return { data: null, error: { message: 'fetch failed' } };
+        return { data: [{ organization_id: 'org-1' }], error: null };
+      },
+      'user_profiles.update': { data: null, error: null },
+    });
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('internal_error');
+    expect(stubHolder.stub.chains.get('user_profiles.update')).toBeUndefined();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
   it('does not revoke sessions on the happy path', async () => {
     const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
     expect(result.ok).toBe(true);

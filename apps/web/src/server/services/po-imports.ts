@@ -3,16 +3,13 @@ import { reportError } from '@/lib/error-reporter';
 
 import { createHash, randomUUID } from 'node:crypto';
 
-import { audit } from './audit';
+import { audit, auditMany, type AuditPayload } from './audit';
 import { InventoryService } from './inventory';
+import { fetchAllRowsByIds, rawErrorText, writeInIdBatches } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
-import {
-  VendorItemMappingsService,
-} from './vendor-item-mappings';
-import {
-  matchByVendorNumber,
-  type MappingRow,
-} from './vendor-item-mappings-match';
+import { fetchAllRows } from './lib/paginate';
+import { VendorItemMappingsService } from './vendor-item-mappings';
+import { matchByVendorNumber, type MappingRow } from './vendor-item-mappings-match';
 import {
   assertModuleEnabled,
   assertPermission,
@@ -54,6 +51,11 @@ import { parsePoFile, type ParseSourceType } from '@/lib/po-parser';
 import { extractPoFromMedia, SCAN_MODEL_NAME } from '@/lib/po-scan/extract';
 import { isValidStoragePath, poImportPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
+import {
+  encodedInValueLength,
+  IN_FILTER_MAX_ENCODED_CHARS,
+  IN_FILTER_MAX_VALUES,
+} from '@/lib/supabase/in-filter';
 
 import {
   flaggedSportsMappings,
@@ -251,6 +253,7 @@ export class PoImportsService {
       )
       .eq('organization_id', this.ctx.organizationId);
     if (params.statuses && params.statuses.length > 0) {
+      // in-list-bound: import statuses are a fixed enum of a few values
       query = query.in('status', params.statuses);
     }
     const orFilter = await this.searchOrFilter(params.q ?? '');
@@ -277,6 +280,7 @@ export class PoImportsService {
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', this.ctx.organizationId);
     if (params.statuses && params.statuses.length > 0) {
+      // in-list-bound: import statuses are a fixed enum of a few values
       query = query.in('status', params.statuses);
     }
     const orFilter = await this.searchOrFilter(params.q ?? '');
@@ -304,9 +308,9 @@ export class PoImportsService {
    * perf sweep: a searched render paid 4 lookup queries instead of 2).
    * Instances are per-request (forCurrentUser), so no staleness.
    */
-  private searchOrFilterCache = new Map<string, Promise<string | null>>();
+  private searchOrFilterCache = new Map<string, Promise<ResolvedSearch>>();
 
-  private searchOrFilter(q: string): Promise<string | null> {
+  private resolvedSearch(q: string): Promise<ResolvedSearch> {
     const key = q.trim();
     let p = this.searchOrFilterCache.get(key);
     if (!p) {
@@ -316,15 +320,36 @@ export class PoImportsService {
     return p;
   }
 
-  private async resolveSearchOrFilter(trimmed: string): Promise<string | null> {
-    if (!trimmed) return null;
+  private async searchOrFilter(q: string): Promise<string | null> {
+    return (await this.resolvedSearch(q)).filter;
+  }
+
+  /**
+   * True when the search matched more suppliers or POs than one filter can
+   * carry, so list() and count() searched only the most recent of them. The
+   * imports page says so ("Showing matches for the most recent suppliers and
+   * POs. Refine the search.") instead of presenting a partial list as complete.
+   * Shares the memoized resolution, so it costs no extra query.
+   */
+  async searchCapped(q: string): Promise<boolean> {
+    assertModuleEnabled(this.ctx, 'po_imports');
+    return (await this.resolvedSearch(q)).capped;
+  }
+
+  private async resolveSearchOrFilter(trimmed: string): Promise<ResolvedSearch> {
+    if (!trimmed) return { filter: null, capped: false };
     // Strip PostgREST .or()-structural metacharacters (,()%*) BEFORE the
     // wildcard escape — a comma/paren in the term ("Smith, Inc") otherwise
     // malforms the .or() logic tree → PostgREST 400 → the whole list page
     // shows the retry banner. Mirrors BundlesService.list / InventoryService
     // .list (audit 2026-06-09). escapeIlike alone only covers LIKE wildcards.
-    const esc = escapeIlike(trimmed.slice(0, 120).replace(/[,()%*]/g, ' ').trim());
-    if (!esc) return null;
+    const esc = escapeIlike(
+      trimmed
+        .slice(0, 120)
+        .replace(/[,()%*]/g, ' ')
+        .trim(),
+    );
+    if (!esc) return { filter: null, capped: false };
     // display_name (mig 0333) sits ALONGSIDE file_name, never in place of it:
     // the name is what a person searches for, the filename is what they
     // remember when the import was never named. Both go through the SAME
@@ -334,29 +359,58 @@ export class PoImportsService {
     // found by their filename exactly as before.
     const orParts = [`display_name.ilike.%${esc}%`, `file_name.ilike.%${esc}%`];
 
-    // Both id-lookups are independent — resolve them in parallel.
-    const [{ data: suppliers }, { data: pos }] = await Promise.all([
+    // Both id-lookups are independent — resolve them in parallel. Each takes
+    // the MOST RECENT matches, one more than a filter can carry so the cap is
+    // detectable. A short search term ("a") used to match every supplier and
+    // PO in the org and put them all in the URL, which failed outright (414
+    // locally, "fetch failed" in production after ~7 s of retries). Their
+    // errors are bound now: an unread lookup would silently drop matches.
+    const [suppliersRes, posRes] = await Promise.all([
       this.ctx.supabase
         .from('suppliers')
         .select('id')
         .eq('organization_id', this.ctx.organizationId)
-        .ilike('name', `%${esc}%`),
+        .ilike('name', `%${esc}%`)
+        .order('created_at', { ascending: false })
+        .order('id')
+        .limit(IN_FILTER_MAX_VALUES + 1),
       this.ctx.supabase
         .from('purchase_orders')
         .select('id')
         .eq('organization_id', this.ctx.organizationId)
-        .ilike('po_number', `%${esc}%`),
+        .ilike('po_number', `%${esc}%`)
+        .order('created_at', { ascending: false })
+        .order('id')
+        .limit(IN_FILTER_MAX_VALUES + 1),
     ]);
-    const supplierIds = ((suppliers ?? []) as Array<{ id: string }>).map((s) => s.id);
-    if (supplierIds.length > 0) {
-      orParts.push(`vendor_id.in.(${supplierIds.join(',')})`);
+    if (suppliersRes.error) throw new ServiceError('internal_error', suppliersRes.error.message);
+    if (posRes.error) throw new ServiceError('internal_error', posRes.error.message);
+    const supplierIds = ((suppliersRes.data ?? []) as Array<{ id: string }>).map((r) => r.id);
+    const poIds = ((posRes.data ?? []) as Array<{ id: string }>).map((r) => r.id);
+
+    // BOTH lists ride in the SAME `or=` parameter, beside the two ilike terms
+    // and list()'s long select, so they share ONE character budget: whatever
+    // the ilike terms leave of IN_FILTER_MAX_ENCODED_CHARS. Taking the two
+    // lists in turns keeps the split fair and hands one list's unused share to
+    // the other. (Capping each list at 100 on its own still put ~8.4 KB in
+    // list()'s URL, over the local gateway's limit.)
+    const termChars = orParts.reduce((n, part) => n + encodedInValueLength(part) + 3, 0);
+    const { taken, capped } = takeInTurns(
+      [supplierIds, poIds],
+      Math.max(0, IN_FILTER_MAX_ENCODED_CHARS - termChars),
+    );
+    const suppliersTaken = taken[0] ?? [];
+    const posTaken = taken[1] ?? [];
+    if (suppliersTaken.length > 0) {
+      // in-list-bound: packed into a shared character budget by takeInTurns above
+      orParts.push(`vendor_id.in.(${suppliersTaken.join(',')})`);
     }
-    const poIds = ((pos ?? []) as Array<{ id: string }>).map((p) => p.id);
-    if (poIds.length > 0) {
-      orParts.push(`approved_po_id.in.(${poIds.join(',')})`);
+    if (posTaken.length > 0) {
+      // in-list-bound: packed into a shared character budget by takeInTurns above
+      orParts.push(`approved_po_id.in.(${posTaken.join(',')})`);
     }
 
-    return orParts.join(',');
+    return { filter: orParts.join(','), capped };
   }
 
   async get(id: string): Promise<{
@@ -461,6 +515,7 @@ export class PoImportsService {
         .from('purchase_orders')
         .select('id, po_number, status')
         .eq('organization_id', this.ctx.organizationId)
+        // in-list-bound: the POs of one import's direct predecessor and successors (a handful)
         .in('id', poIds);
       // Same reasoning: a missing PO number degrades the copy, it does not
       // break the page.
@@ -769,6 +824,7 @@ export class PoImportsService {
       .from('purchase_orders')
       .select('id, status, po_number')
       .eq('organization_id', this.ctx.organizationId)
+      // in-list-bound: POs of earlier imports of this exact file (a handful)
       .in('id', poIds);
     if (poErr) throw new ServiceError('internal_error', poErr.message);
     const poById = new Map(
@@ -1453,19 +1509,27 @@ export class PoImportsService {
     if (ownershipIntent) {
       const linkedIds = [...new Set(inventoryLines.map((l) => l.item_id as string))];
       if (linkedIds.length > 0) {
-        const { data: linkedItems, error: liErr } = await this.ctx.supabase
-          .from('inventory_items')
-          // Same reason as the createItemsFromPoLines sibling branch: an
-          // ownership-charter sibling is the SAME product, so its group and
-          // variant attributes must travel with it or the copy lands ungrouped
-          // and the next import creates a second variant for the same size.
-          .select(
-            'id, sku, name, barcode, charter_id, unit_cost, retail_price, category_id, supplier_id, warehouse_id, unit_of_measure, item_type, tracking_type, group_id, variant_size, variant_size_original, variant_size_system, variant_width, variant_fit, variant_color, jersey_number, player_name',
-          )
-          .eq('organization_id', this.ctx.organizationId)
-          .in('id', linkedIds)
-          .is('deleted_at', null);
-        if (liErr) throw new ServiceError('internal_error', liErr.message);
+        // Batched: an import's lines have no cap, and this select alone is
+        // ~400 characters of URL. A failed batch throws before any write.
+        const ctx = this.ctx;
+        const linkedItems = await fetchAllRowsByIds(
+          linkedIds,
+          (batch) => (from, to) =>
+            ctx.supabase
+              .from('inventory_items')
+              // Same reason as the createItemsFromPoLines sibling branch: an
+              // ownership-charter sibling is the SAME product, so its group and
+              // variant attributes must travel with it or the copy lands ungrouped
+              // and the next import creates a second variant for the same size.
+              .select(
+                'id, sku, name, barcode, charter_id, unit_cost, retail_price, category_id, supplier_id, warehouse_id, unit_of_measure, item_type, tracking_type, group_id, variant_size, variant_size_original, variant_size_system, variant_width, variant_fit, variant_color, jersey_number, player_name',
+              )
+              .eq('organization_id', ctx.organizationId)
+              .in('id', batch)
+              .is('deleted_at', null)
+              .order('id')
+              .range(from, to),
+        );
         type LinkedItem = {
           id: string;
           sku: string;
@@ -1799,21 +1863,48 @@ export class PoImportsService {
     // linked) with their origin PO, so cancelling the PO archives the unused
     // ones via the normal cleanup (archiveOrphanedCustomItems) — otherwise an
     // imported-then-cancelled PO would strand its auto-created items in stock.
-    const { data: createdLines } = await this.ctx.supabase
-      .from('po_import_lines')
-      .select('item_id')
-      .eq('po_import_id', input.poImportId)
-      .eq('item_created', true)
-      .not('item_id', 'is', null);
-    const createdItemIds = ((createdLines ?? []) as Array<{ item_id: string | null }>)
-      .map((r) => r.item_id)
-      .filter((v): v is string => Boolean(v));
+    //
+    // The PO has already committed, so neither step may fail the approve; both
+    // used to ignore their errors, which silently left items unstamped (and
+    // so never cleaned up on a later cancel). Now the lines read pages past
+    // 1000 and binds its error, the stamp is batched, and any shortfall is
+    // reported with how many items were left unstamped.
+    const ctx = this.ctx;
+    let createdItemIds: string[] = [];
+    try {
+      const createdLines = await fetchAllRows<{ item_id: string | null }>((from, to) =>
+        ctx.supabase
+          .from('po_import_lines')
+          .select('item_id')
+          .eq('po_import_id', input.poImportId)
+          .eq('item_created', true)
+          .not('item_id', 'is', null)
+          .order('id')
+          .range(from, to),
+      );
+      createdItemIds = createdLines.map((r) => r.item_id).filter((v): v is string => Boolean(v));
+    } catch (err) {
+      void reportError(new Error(rawErrorText(err)), {
+        tag: 'po_import.approve.stamp_created_items',
+        organizationId: this.ctx.organizationId,
+        extra: { step: 'lines' },
+      });
+    }
     if (createdItemIds.length > 0) {
-      await this.ctx.supabase
-        .from('inventory_items')
-        .update({ created_from_purchase_order_id: po.id as string })
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', createdItemIds);
+      const stamp = await writeInIdBatches(createdItemIds, (batch) =>
+        ctx.supabase
+          .from('inventory_items')
+          .update({ created_from_purchase_order_id: po.id as string })
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch),
+      );
+      if (stamp.error !== null) {
+        void reportError(new Error(stamp.error), {
+          tag: 'po_import.approve.stamp_created_items',
+          organizationId: this.ctx.organizationId,
+          extra: { stamped: stamp.written.length, unstamped: stamp.notWritten.length },
+        });
+      }
       // No list view reads this column, but every inventory_items UPDATE
       // bumps updated_at (tg_inventory_items_set_updated_at, 0242 only spares
       // embedding/search_vector), and updated_at is the default sort key.
@@ -2041,14 +2132,21 @@ export class PoImportsService {
     ];
     const categoryByItem = new Map<string, string | null>();
     if (itemIds.length > 0) {
-      const { data, error } = await this.ctx.supabase
-        .from('inventory_items')
-        .select('id, category_id')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', itemIds)
-        .is('deleted_at', null);
-      if (error) throw new ServiceError('internal_error', error.message);
-      for (const r of (data ?? []) as Array<{ id: string; category_id: string | null }>) {
+      // Batched: an import's lines have no cap. A failed batch throws.
+      const ctx = this.ctx;
+      const data = await fetchAllRowsByIds<{ id: string; category_id: string | null }>(
+        itemIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('inventory_items')
+            .select('id, category_id')
+            .eq('organization_id', ctx.organizationId)
+            .in('id', batch)
+            .is('deleted_at', null)
+            .order('id')
+            .range(from, to),
+      );
+      for (const r of data) {
         categoryByItem.set(r.id, r.category_id);
       }
     }
@@ -2124,63 +2222,68 @@ export class PoImportsService {
 
     const byId = new Map(lines.map((l) => [l.id, l]));
     let confirmed = 0;
-    for (const [lineId, meaning] of Object.entries(input.decisions)) {
-      const line = byId.get(lineId);
-      if (!line) throw new ServiceError('not_found', `Line ${lineId} is not part of this import.`);
+    // One row per confirmed line, written in batches (auditMany) after the
+    // loop instead of one awaited request per line. The finally writes the
+    // rows of every line that was saved even when a later line throws.
+    const auditRows: AuditPayload[] = [];
+    try {
+      for (const [lineId, meaning] of Object.entries(input.decisions)) {
+        const line = byId.get(lineId);
+        if (!line)
+          throw new ServiceError('not_found', `Line ${lineId} is not part of this import.`);
 
-      const sourceValue = line.jersey_number;
-      // EVERY field the extractor mapped on this line — the exact set the modal
-      // renders, from the one shared helper, so a value the reviewer never saw
-      // can never be the one that survives.
-      const flagged = flaggedSportsMappings(line);
-      // 'jersey_number' / 'confirm' confirm what was read; every other meaning
-      // says the value is NOT a number, so it leaves the number field. It is
-      // only ever MOVED to a field that means the same thing — the style
-      // number, or the serial the reviewer says it is — never rewritten into a
-      // quantity. Inventing a quantity is exactly what the requirements forbid.
-      const patch: Record<string, unknown> = { mapping_confidence: 1 };
-      if (!meaningKeepsFlaggedValues(meaning)) {
-        // IGNORE: drop every flagged value. Only the fields that actually
-        // CARRY a value are written, so a field the document said nothing
-        // about stays untouched rather than being re-asserted as null.
-        for (const f of flagged) patch[f.field] = null;
-      } else if (meaning !== 'jersey_number' && meaning !== 'confirm') {
-        patch.jersey_number = null;
-      }
-      if (meaning === 'style_number' && sourceValue && !line.vendor_product_number) {
-        patch.vendor_product_number = sourceValue;
-      }
-      // A reviewer declaring the column to BE a serial is one of the three
-      // ways serial_hint is populated, and the one that makes the
-      // `serial_required` verdict settleable from the review screen. The value
-      // still comes from the DOCUMENT — this only says which field it belongs
-      // in. Nothing is fabricated when there was no value to move.
-      if (meaning === 'serial' && sourceValue && !line.serial_hint) {
-        patch.serial_hint = sourceValue;
-      }
+        const sourceValue = line.jersey_number;
+        // EVERY field the extractor mapped on this line — the exact set the modal
+        // renders, from the one shared helper, so a value the reviewer never saw
+        // can never be the one that survives.
+        const flagged = flaggedSportsMappings(line);
+        // 'jersey_number' / 'confirm' confirm what was read; every other meaning
+        // says the value is NOT a number, so it leaves the number field. It is
+        // only ever MOVED to a field that means the same thing — the style
+        // number, or the serial the reviewer says it is — never rewritten into a
+        // quantity. Inventing a quantity is exactly what the requirements forbid.
+        const patch: Record<string, unknown> = { mapping_confidence: 1 };
+        if (!meaningKeepsFlaggedValues(meaning)) {
+          // IGNORE: drop every flagged value. Only the fields that actually
+          // CARRY a value are written, so a field the document said nothing
+          // about stays untouched rather than being re-asserted as null.
+          for (const f of flagged) patch[f.field] = null;
+        } else if (meaning !== 'jersey_number' && meaning !== 'confirm') {
+          patch.jersey_number = null;
+        }
+        if (meaning === 'style_number' && sourceValue && !line.vendor_product_number) {
+          patch.vendor_product_number = sourceValue;
+        }
+        // A reviewer declaring the column to BE a serial is one of the three
+        // ways serial_hint is populated, and the one that makes the
+        // `serial_required` verdict settleable from the review screen. The value
+        // still comes from the DOCUMENT — this only says which field it belongs
+        // in. Nothing is fabricated when there was no value to move.
+        if (meaning === 'serial' && sourceValue && !line.serial_hint) {
+          patch.serial_hint = sourceValue;
+        }
 
-      const { data: updated, error } = await this.ctx.supabase
-        .from('po_import_lines')
-        .update(patch)
-        .eq('po_import_id', input.poImportId)
-        .eq('id', lineId)
-        .select('id')
-        .maybeSingle();
-      if (error) throw new ServiceError('internal_error', error.message);
-      // FAIL CLOSED. `.update().eq()` reports no error when it matches zero
-      // rows, so ignoring the result meant a confirmation that RLS refused —
-      // or that raced a cancel — still counted as confirmed, told the reviewer
-      // so, and wrote an audit entry for a change that never happened. The
-      // line would then hit the approval gate again with no explanation.
-      if (!updated) {
-        throw new ServiceError(
-          'conflict',
-          `Line ${line.line_number}'s column mapping could not be saved. Reload the import and try again.`,
-        );
-      }
+        const { data: updated, error } = await this.ctx.supabase
+          .from('po_import_lines')
+          .update(patch)
+          .eq('po_import_id', input.poImportId)
+          .eq('id', lineId)
+          .select('id')
+          .maybeSingle();
+        if (error) throw new ServiceError('internal_error', error.message);
+        // FAIL CLOSED. `.update().eq()` reports no error when it matches zero
+        // rows, so ignoring the result meant a confirmation that RLS refused —
+        // or that raced a cancel — still counted as confirmed, told the reviewer
+        // so, and wrote an audit entry for a change that never happened. The
+        // line would then hit the approval gate again with no explanation.
+        if (!updated) {
+          throw new ServiceError(
+            'conflict',
+            `Line ${line.line_number}'s column mapping could not be saved. Reload the import and try again.`,
+          );
+        }
 
-      await audit(
-        {
+        auditRows.push({
           event: 'sports.import.mapping_confirmed',
           entityType: 'po_import_line',
           entityId: lineId,
@@ -2192,10 +2295,11 @@ export class PoImportsService {
             flagged: Object.fromEntries(flagged.map((f) => [f.field, f.value])),
           },
           after: { meaning, appliedTo: patch },
-        },
-        this.ctx,
-      );
-      confirmed++;
+        });
+        confirmed++;
+      }
+    } finally {
+      await auditMany(auditRows, this.ctx);
     }
     return { confirmed };
   }
@@ -2352,47 +2456,75 @@ export class PoImportsService {
       });
     };
     try {
-      const { data: lines, error: linesErr } = await this.ctx.supabase
-        .from('po_import_lines')
-        .select('item_id')
-        .eq('po_import_id', importId)
-        .eq('item_created', true)
-        .not('item_id', 'is', null);
-      if (linesErr) return skip('lines', linesErr.message);
+      // Every read below is paged and batched: an import's lines have no cap,
+      // an unpaged keep-check was cut at 1000 rows (dropping the very line
+      // that said "keep"), and one `.in()` past ~215 ids failed outright. A
+      // failed read or batch still archives NOTHING.
+      const ctx = this.ctx;
+      let lines: Array<{ item_id: string | null }>;
+      try {
+        lines = await fetchAllRows<{ item_id: string | null }>((from, to) =>
+          ctx.supabase
+            .from('po_import_lines')
+            .select('item_id')
+            .eq('po_import_id', importId)
+            .eq('item_created', true)
+            .not('item_id', 'is', null)
+            .order('id')
+            .range(from, to),
+        );
+      } catch (err) {
+        return skip('lines', rawErrorText(err));
+      }
       const ids = Array.from(
-        new Set(
-          ((lines ?? []) as Array<{ item_id: string | null }>)
-            .map((l) => l.item_id)
-            .filter((v): v is string => Boolean(v)),
-        ),
+        new Set(lines.map((l) => l.item_id).filter((v): v is string => Boolean(v))),
       );
       if (ids.length === 0) return;
 
-      const { data: candidates, error: candErr } = await this.ctx.supabase
-        .from('inventory_items')
-        .select('id, name')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', ids)
-        .eq('status', 'active')
-        .eq('quantity_on_hand', 0)
-        .is('deleted_at', null);
-      if (candErr) return skip('candidates', candErr.message);
-      const cand = (candidates ?? []) as Array<{ id: string; name: string }>;
+      let cand: Array<{ id: string; name: string }>;
+      try {
+        cand = await fetchAllRowsByIds<{ id: string; name: string }>(
+          ids,
+          (batch) => (from, to) =>
+            ctx.supabase
+              .from('inventory_items')
+              .select('id, name')
+              .eq('organization_id', ctx.organizationId)
+              .in('id', batch)
+              .eq('status', 'active')
+              .eq('quantity_on_hand', 0)
+              .is('deleted_at', null)
+              .order('id')
+              .range(from, to),
+        );
+      } catch (err) {
+        return skip('candidates', rawErrorText(err));
+      }
       if (cand.length === 0) return;
 
       // Keep any item still referenced by a non-cancelled PO (it may yet receive
       // stock there). The just-cancelled import has no PO, so nothing to exclude
       // on that account.
-      const { data: poLines, error: keepErr } = await this.ctx.supabase
-        .from('purchase_order_items')
-        .select('item_id, po:purchase_orders!inner(status)')
-        .eq('organization_id', this.ctx.organizationId) // defense-in-depth: keep the keep-check single-org
-        .in('item_id', cand.map((c) => c.id));
-      // Unreadable keep-check: we cannot tell which items a live PO still
-      // needs, so archive none of them (see the doc comment).
-      if (keepErr) return skip('keep_check', keepErr.message);
+      let poLines: Array<Record<string, unknown>>;
+      try {
+        poLines = await fetchAllRowsByIds<Record<string, unknown>>(
+          cand.map((c) => c.id),
+          (batch) => (from, to) =>
+            ctx.supabase
+              .from('purchase_order_items')
+              .select('item_id, po:purchase_orders!inner(status)')
+              .eq('organization_id', ctx.organizationId) // defense-in-depth: keep the keep-check single-org
+              .in('item_id', batch)
+              .order('id')
+              .range(from, to),
+        );
+      } catch (err) {
+        // Unreadable keep-check: we cannot tell which items a live PO still
+        // needs, so archive none of them (see the doc comment).
+        return skip('keep_check', rawErrorText(err));
+      }
       const keep = new Set<string>();
-      for (const row of (poLines ?? []) as Array<Record<string, unknown>>) {
+      for (const row of poLines) {
         const poField = row.po as { status?: string } | { status?: string }[] | null;
         const poStatus = Array.isArray(poField) ? poField[0]?.status : poField?.status;
         if (poStatus && poStatus !== 'cancelled') keep.add(row.item_id as string);
@@ -2400,32 +2532,36 @@ export class PoImportsService {
       const toArchive = cand.filter((c) => !keep.has(c.id));
       if (toArchive.length === 0) return;
 
-      const { data: flipped, error: archiveErr } = await this.ctx.supabase
-        .from('inventory_items')
-        .update({ status: 'archived' })
-        .eq('organization_id', this.ctx.organizationId)
-        .in('id', toArchive.map((c) => c.id))
-        .eq('status', 'active') // race guard
-        .select('id, name');
-      // Unconditional: `flipped` is null both when nothing matched and when
-      // the update errored, and an errored response does not prove nothing
-      // committed. cancelPoImportAction and the v1 cancel route revalidated
-      // only the import pages, so these rows stayed in the cached views.
+      // One batch at a time; a failure stops the rest. Whatever committed is
+      // still invalidated and audited before the failure is reported.
+      const flip = await writeInIdBatches<string, { id: string; name: string }>(
+        toArchive.map((c) => c.id),
+        (batch) =>
+          ctx.supabase
+            .from('inventory_items')
+            .update({ status: 'archived' })
+            .eq('organization_id', ctx.organizationId)
+            .in('id', batch)
+            .eq('status', 'active') // race guard
+            .select('id, name'),
+      );
+      // Unconditional: an errored response does not prove nothing committed.
+      // cancelPoImportAction and the v1 cancel route revalidated only the
+      // import pages, so these rows stayed in the cached views.
       invalidateInventoryListAfterWrite(this.ctx.organizationId, 'po_import.cancel');
-      if (archiveErr) return skip('archive', archiveErr.message);
-      for (const item of (flipped ?? []) as Array<{ id: string; name: string }>) {
-        await audit(
-          {
-            event: 'inventory.item.archived',
-            entityType: 'inventory_item',
-            entityId: item.id,
-            before: { status: 'active' },
-            after: { status: 'archived' },
-            extra: { reason: 'po_import_canceled', poImportId: importId, itemName: item.name },
-          },
-          this.ctx,
-        );
-      }
+      // Batched INSERTs (auditMany), not one awaited request per item.
+      await auditMany(
+        flip.rows.map((item) => ({
+          event: 'inventory.item.archived' as const,
+          entityType: 'inventory_item',
+          entityId: item.id,
+          before: { status: 'active' },
+          after: { status: 'archived' },
+          extra: { reason: 'po_import_canceled', poImportId: importId, itemName: item.name },
+        })),
+        this.ctx,
+      );
+      if (flip.error !== null) return skip('archive', flip.error);
     } catch (e) {
       console.warn(
         '[po-import cancel] archive created items failed',
@@ -2433,6 +2569,45 @@ export class PoImportsService {
       );
     }
   }
+}
+
+/** A resolved search: the `.or()` filter, and whether it had to drop matches. */
+interface ResolvedSearch {
+  filter: string | null;
+  capped: boolean;
+}
+
+/**
+ * Take ids from several lists in turns (one from each, round and round)
+ * while their encoded cost (`encodedInValueLength + 3` for the `%2C`
+ * separator) fits `budget`. Returns what was taken per list and whether
+ * anything was left behind. Exported for the URL-length test.
+ */
+export function takeInTurns(
+  lists: readonly string[][],
+  budget: number,
+): { taken: string[][]; capped: boolean } {
+  const taken = lists.map(() => [] as string[]);
+  let spent = 0;
+  let full = false;
+  for (let i = 0; !full; i += 1) {
+    let any = false;
+    for (let l = 0; l < lists.length; l += 1) {
+      const id = lists[l]?.[i];
+      if (id === undefined) continue;
+      any = true;
+      const cost = encodedInValueLength(id) + 3;
+      if (spent + cost > budget) {
+        full = true;
+        break;
+      }
+      spent += cost;
+      taken[l]?.push(id);
+    }
+    if (!any) break;
+  }
+  const capped = lists.some((list, l) => (taken[l]?.length ?? 0) < list.length);
+  return { taken, capped };
 }
 
 /** Escape ILIKE wildcards so a user's %/_/\ in search is literal (pattern #16). */

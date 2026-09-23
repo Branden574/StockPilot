@@ -66,7 +66,7 @@ describe('InventoryService.stagedWorklist', () => {
           {
             item_id: STAGING_ITEM,
             created_at: '2026-06-26T00:00:00Z',
-            notes: 'receipt-1',
+            notes: '11111111-0000-4000-8000-000000000001',
             movement_type: 'receive_po',
           },
           // A stray receive_po movement for the unplaced item must NOT attach a
@@ -74,7 +74,7 @@ describe('InventoryService.stagedWorklist', () => {
           {
             item_id: UNPLACED_ITEM,
             created_at: '2026-06-20T00:00:00Z',
-            notes: 'receipt-2',
+            notes: '11111111-0000-4000-8000-000000000002',
             movement_type: 'receive_po',
           },
         ],
@@ -83,7 +83,7 @@ describe('InventoryService.stagedWorklist', () => {
       'receipts.select': {
         data: [
           {
-            id: 'receipt-1',
+            id: '11111111-0000-4000-8000-000000000001',
             receipt_number: 'R-001',
             received_at: '2026-06-26T00:00:00Z',
             status: 'posted',
@@ -170,7 +170,7 @@ describe('InventoryService.stagedWorklist', () => {
           {
             item_id: COMBINED_ITEM,
             created_at: '2026-06-26T00:00:00Z',
-            notes: 'receipt-c',
+            notes: '11111111-0000-4000-8000-00000000000c',
             movement_type: 'receive_po',
           },
         ],
@@ -179,7 +179,7 @@ describe('InventoryService.stagedWorklist', () => {
       'receipts.select': {
         data: [
           {
-            id: 'receipt-c',
+            id: '11111111-0000-4000-8000-00000000000c',
             receipt_number: 'R-COMBO',
             received_at: '2026-06-26T00:00:00Z',
             status: 'posted',
@@ -253,13 +253,13 @@ function scienceDimensionsStub(receipts: Array<Record<string, unknown>>) {
         {
           item_id: SCIENCE_ITEM,
           created_at: '2026-07-22T17:56:00Z',
-          notes: 'receipt-july',
+          notes: '11111111-0000-4000-8000-000000000007',
           movement_type: 'receive_po',
         },
         {
           item_id: SCIENCE_ITEM,
           created_at: '2026-06-24T21:41:23Z',
-          notes: 'receipt-june',
+          notes: '11111111-0000-4000-8000-000000000006',
           movement_type: 'receive_po',
         },
       ],
@@ -270,14 +270,14 @@ function scienceDimensionsStub(receipts: Array<Record<string, unknown>>) {
 }
 
 const JUNE_RECEIPT = {
-  id: 'receipt-june',
+  id: '11111111-0000-4000-8000-000000000006',
   receipt_number: 'R-20260624-214123-168444',
   received_at: '2026-06-24T21:41:23Z',
   status: 'reversed',
   purchase_orders: { po_number: 'CVW-002202' },
 };
 const JULY_RECEIPT = {
-  id: 'receipt-july',
+  id: '11111111-0000-4000-8000-000000000007',
   receipt_number: 'R-20260722-175600-e56648',
   received_at: '2026-07-22T17:56:00Z',
   status: 'posted',
@@ -630,7 +630,7 @@ describe('InventoryService.stagedWorklist — the 1000-row PostgREST cap', () =>
             id: 'mv-1001',
             item_id: STAGING_ITEM,
             created_at: '2026-06-01T00:00:00Z',
-            notes: 'receipt-old',
+            notes: '11111111-0000-4000-8000-0000000000ff',
             movement_type: 'receive_po',
           },
         ],
@@ -638,14 +638,14 @@ describe('InventoryService.stagedWorklist — the 1000-row PostgREST cap', () =>
           id: `mv-${i}`,
           item_id: `filler-${i}`,
           created_at: '2026-08-01T00:00:00Z',
-          notes: `receipt-${i}`,
+          notes: `22222222-0000-4000-8000-${String(i).padStart(12, '0')}`,
           movement_type: 'receive_po',
         })),
       ),
       'receipts.select': {
         data: [
           {
-            id: 'receipt-old',
+            id: '11111111-0000-4000-8000-0000000000ff',
             receipt_number: 'R-OLD',
             received_at: '2026-06-01T00:00:00Z',
             status: 'posted',
@@ -666,7 +666,7 @@ describe('InventoryService.stagedWorklist — the 1000-row PostgREST cap', () =>
     expect(row.ageDays).not.toBeNull();
   });
 
-  it('chunks the source-movement .in("item_id", …) so a big worklist is not truncated by id count', async () => {
+  it('batches the source-movement .in("item_id", …) at 100 so a big worklist never overflows the URL', async () => {
     const levels = Array.from({ length: 501 }, (_, i) => stagedRow(i));
     const stub = makeSupabaseStub({
       'item_stock_levels.select': { data: levels, error: null },
@@ -680,8 +680,9 @@ describe('InventoryService.stagedWorklist — the 1000-row PostgREST cap', () =>
       .flat()
       .filter((a) => a[0] === 'item_id' && Array.isArray(a[1]));
     expect(inArgs.length).toBeGreaterThan(0);
-    for (const a of inArgs) expect((a[1] as string[]).length).toBeLessThanOrEqual(500);
-    // 501 ids must have been split — one chunk would be the un-fixed shape.
-    expect(inArgs.length).toBeGreaterThanOrEqual(2);
+    // 100 per batch: one `.in()` past ~215 uuids answers 414 locally and past
+    // ~395 fails in production; the old 300-id chunk passed the local limit.
+    for (const a of inArgs) expect((a[1] as string[]).length).toBeLessThanOrEqual(100);
+    expect(inArgs.map((a) => (a[1] as string[]).length)).toEqual([100, 100, 100, 100, 100, 1]);
   });
 });

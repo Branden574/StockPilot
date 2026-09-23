@@ -8,10 +8,21 @@ import { ServiceError } from './context';
 import { linkFamily, suggestFamilies, unlinkItems } from './product-group-linking';
 import type { ProductGroupsService } from './product-groups';
 
-const auditMock = vi.hoisted(() =>
-  vi.fn(async (_payload: Record<string, unknown>, _ctx?: unknown) => {}),
-);
-vi.mock('./audit', () => ({ audit: auditMock }));
+const { auditMock, auditManyMock } = vi.hoisted(() => ({
+  auditMock: vi.fn(async (_payload: Record<string, unknown>, _ctx?: unknown) => {}),
+  auditManyMock: vi.fn(async (rows: readonly Record<string, unknown>[], _ctx?: unknown) => ({
+    written: rows.length,
+    lost: 0,
+  })),
+}));
+vi.mock('./audit', () => ({ audit: auditMock, auditMany: auditManyMock }));
+
+/** The per-item rows, which go out through ONE batched write (auditMany),
+ *  never one audit() call per item. */
+function auditedRows(): Record<string, unknown>[] {
+  expect(auditMock).not.toHaveBeenCalled();
+  return auditManyMock.mock.calls.flatMap(([rows]) => rows);
+}
 
 const SPORTS_MODULES = new Set<ModuleId>(['inventory', 'sports']);
 
@@ -132,6 +143,7 @@ describe('suggestFamilies — proposes, and writes nothing', () => {
     expect(stub.chains.has('product_groups.insert')).toBe(false);
     expect(stub.rpcCalls).toHaveLength(0);
     expect(auditMock).not.toHaveBeenCalled();
+    expect(auditManyMock).not.toHaveBeenCalled();
   });
 
   it('labels every proposal as name-only, and discloses a split category', async () => {
@@ -343,13 +355,33 @@ describe('linkFamily — writes only what a human named', () => {
       { groups: groupsStub(), supabase: stub.client, ctx: sportsCtx(stub.client) },
       { groupId: 'grp-1', members: MEMBERS, reason: 'Walked the rack' },
     );
-    expect(auditMock).toHaveBeenCalledTimes(3);
-    const payload = auditMock.mock.calls[0]![0];
+    expect(auditManyMock).toHaveBeenCalledTimes(1);
+    expect(auditedRows()).toHaveLength(3);
+    const payload = auditedRows()[0]!;
     expect(payload.event).toBe('sports.item.group_matched');
     expect(payload.entityId).toBe('i-l');
     expect(payload.reason).toBe('Walked the rack');
     expect((payload.before as Record<string, unknown>).group_id).toBeNull();
     expect((payload.after as Record<string, unknown>).group_id).toBe('grp-1');
+  });
+
+  it('still audits the items linked before a later item refuses', async () => {
+    let n = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: THREE, error: null },
+      'inventory_items.update': () => {
+        n += 1;
+        // The second row is hidden by RLS: no error, no row.
+        return n === 2 ? { data: null, error: null } : { data: [{ id: 'ok' }], error: null };
+      },
+    });
+    await expect(
+      linkFamily(
+        { groups: groupsStub(), supabase: stub.client, ctx: sportsCtx(stub.client) },
+        { groupId: 'grp-1', members: MEMBERS, reason: 'Walked the rack' },
+      ),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    expect(auditedRows().map((r) => r.entityId)).toEqual(['i-l']);
   });
 
   it('requires a reason, a non-empty selection, and a destination', async () => {
@@ -590,11 +622,35 @@ describe('unlinkItems — the undo', () => {
       { supabase: stub.client, ctx: sportsCtx(stub.client) },
       { itemIds: ['i-l'], reason: 'Wrong family' },
     );
-    const payload = auditMock.mock.calls[0]![0];
+    const payload = auditedRows()[0]!;
     expect(payload.event).toBe('sports.item.group_unlinked');
     expect(payload.reason).toBe('Wrong family');
     expect((payload.before as Record<string, unknown>).group_id).toBe('grp-1');
     expect((payload.after as Record<string, unknown>).group_id).toBeNull();
+  });
+
+  it('still audits the items unlinked before a later item refuses', async () => {
+    let n = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [
+          { id: 'i-l', group_id: 'grp-1', variant_key: 'size=L' },
+          { id: 'i-xl', group_id: 'grp-1', variant_key: 'size=XL' },
+        ],
+        error: null,
+      },
+      'inventory_items.update': () => {
+        n += 1;
+        return n === 2 ? { data: null, error: null } : { data: [{ id: 'ok' }], error: null };
+      },
+    });
+    await expect(
+      unlinkItems(
+        { supabase: stub.client, ctx: sportsCtx(stub.client) },
+        { itemIds: ['i-l', 'i-xl'], reason: 'Wrong family' },
+      ),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    expect(auditedRows().map((r) => r.entityId)).toEqual(['i-l']);
   });
 
   it('is a no-op (no write, no audit) for an item that was never grouped', async () => {
@@ -610,7 +666,7 @@ describe('unlinkItems — the undo', () => {
     );
     expect(out).toEqual({ unlinked: 0 });
     expect(stub.chains.has('inventory_items.update')).toBe(false);
-    expect(auditMock).not.toHaveBeenCalled();
+    expect(auditedRows()).toEqual([]);
   });
 
   it('rejects an item from another org and requires a reason', async () => {

@@ -63,18 +63,16 @@ export default async function CustomersPage() {
     inventorySvc.list({ limit: 1000 }),
   ]);
 
-  // Per-customer detail (users + catalog) and per-list prices, loaded up front —
-  // customer counts are small at this stage; revisit with lazy loads at scale.
+  // Per-customer detail (users + catalog) and per-list prices, loaded up front
+  // with ONE batched read each. This used to be one request per customer (twice)
+  // and one per price list, all started at once: up to 500 × 2 + 200 = 1,200
+  // requests for one page view, the shape that drove 190 of 443 requests to 502
+  // on the lab org.
+  const customerIds = customers.map((c) => c.id);
   const [usersByCustomer, catalogByCustomer, pricesByList] = await Promise.all([
-    Promise.all(customers.map((c) => svc.listUsers(c.id))).then((r) =>
-      Object.fromEntries(customers.map((c, i) => [c.id, r[i] ?? []])),
-    ),
-    Promise.all(customers.map((c) => svc.listCatalog(c.id))).then((r) =>
-      Object.fromEntries(customers.map((c, i) => [c.id, r[i] ?? []])),
-    ),
-    Promise.all(priceLists.map((pl) => svc.listPrices(pl.id))).then((r) =>
-      Object.fromEntries(priceLists.map((pl, i) => [pl.id, r[i] ?? []])),
-    ),
+    svc.listUsersByCustomer(customerIds),
+    svc.listCatalogByCustomer(customerIds),
+    svc.listPricesByList(priceLists.map((pl) => pl.id)),
   ]);
 
   const entitled = planAllowsB2bPortal(

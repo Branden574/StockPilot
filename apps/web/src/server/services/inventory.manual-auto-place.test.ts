@@ -27,9 +27,16 @@ vi.mock('@/lib/auth/warehouse', () => ({
   assertWarehouseAccess: vi.fn(async () => undefined),
   ForbiddenError: class extends Error {},
 }));
-vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
+vi.mock('./audit', () => ({
+  audit: vi.fn(async () => undefined),
+  auditMany: vi.fn(async (payloads: readonly unknown[]) => ({
+    written: payloads.length,
+    lost: 0,
+  })),
+}));
 vi.mock('@/lib/ai/embeddings', () => ({ embedInventoryItem: vi.fn(async () => undefined) }));
 
+import { audit, auditMany } from './audit';
 import { InventoryService } from './inventory';
 
 const BASE = {
@@ -121,6 +128,17 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
       p_to_location_id: 'rack-28a',
       p_quantity: 5,
     });
+    // The move's stock.transferred row goes out with the run's batched audit
+    // write, not as an INSERT of its own.
+    expect(vi.mocked(audit).mock.calls.map(([p]) => p.event)).not.toContain('stock.transferred');
+    expect(vi.mocked(auditMany).mock.calls.flatMap(([rows]) => rows)).toContainEqual(
+      expect.objectContaining({
+        event: 'stock.transferred',
+        entityId: 'item-new',
+        before: { location_id: 'unplaced-wh1' },
+        after: { location_id: 'rack-28a' },
+      }),
+    );
   });
 
   it('(b) no matching location: a rack is created (kind rack, type shelf, parsed number/row) and the seeded holding transfers there', async () => {

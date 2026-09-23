@@ -1,0 +1,18 @@
+{
+  "server/services/inventory.ts": [
+    "in:category_id <- filters.categoryIds",
+    "in:category_id <- filters.categoryIds",
+    "in:category_id <- opts.categoryIds",
+    "in:charter_id <- realIds",
+    "in:charter_id <- realIds",
+    "in:charter_id <- realIds",
+    "in:primary_location_id <- filters.locationIds",
+    "in:primary_location_id <- filters.locationIds",
+    "in:primary_location_id <- opts.locationIds",
+    "in:supplier_id <- filters.supplierIds",
+    "in:supplier_id <- filters.supplierIds",
+    "template:charter_id.is.null,charter_id.in.( <- list",
+    "template:charter_id.is.null,charter_id.in.( <- list",
+    "template:charter_id.is.null,charter_id.in.( <- list"
+  ]
+}
