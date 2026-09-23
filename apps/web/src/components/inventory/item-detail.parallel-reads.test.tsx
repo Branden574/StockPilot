@@ -39,7 +39,18 @@ vi.mock('next/link', async () => {
   };
 });
 
-vi.mock('@/components/inventory/item-activity-panel', () => ({ ItemActivityPanel: () => null }));
+// A marker, so a test can tell the feed rendered from the could-not-load state.
+vi.mock('@/components/inventory/item-activity-panel', async () => {
+  const React = await import('react');
+  return {
+    ItemActivityPanel: () => React.createElement('div', { 'data-testid': 'activity-panel' }),
+  };
+});
+const reportError = vi.fn();
+vi.mock('@/lib/error-reporter', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/error-reporter')>()),
+  reportError: (...args: unknown[]) => reportError(...args),
+}));
 vi.mock('@/components/inventory/placements-breakdown', () => ({ PlacementsBreakdown: () => null }));
 vi.mock('@/components/inventory/barcode-display', () => ({ BarcodeDisplay: () => null }));
 vi.mock('@/components/inventory/duplicate-item-dialog', () => ({ DuplicateItemDialog: () => null }));
@@ -131,10 +142,12 @@ const control: {
   get: () => Promise<unknown>;
   reserved: () => Promise<Map<string, number>>;
   locations: () => Promise<unknown[]>;
+  activity: () => Promise<unknown[]>;
 } = {
   get: async () => ({}),
   reserved: async () => new Map(),
   locations: async () => [],
+  activity: async () => [],
 };
 
 const signedUrls = vi.fn(async (paths: unknown) => {
@@ -154,7 +167,7 @@ vi.mock('@/server/services/inventory', () => ({
 
 vi.mock('@/server/services/activity', () => ({
   ActivityService: {
-    forCurrentUser: vi.fn(async () => ({ forItem: rec('activity', async () => []) })),
+    forCurrentUser: vi.fn(async () => ({ forItem: rec('activity', () => control.activity()) })),
   },
   auditLimitFor: (limit: number) => Math.max(1, Math.ceil(limit / 2)),
 }));
@@ -297,6 +310,7 @@ beforeEach(() => {
   control.get = async () => itemRow();
   control.reserved = async () => new Map();
   control.locations = async () => [];
+  control.activity = async () => [];
   for (const k of Object.keys(tableAnswers)) delete tableAnswers[k];
   tableAnswers.categories = { id: 'cat-1', name: 'HVAC', color: null, public_visibility: 'public' };
   tableAnswers.suppliers = { id: 'sup-1', name: 'Acme Supply' };
@@ -412,5 +426,82 @@ describe('ItemDetail: reads start by what they need, not one after another', () 
     ).rejects.toThrow('reservations read failed');
     await flush();
     expect(unhandled).toEqual([]);
+  });
+});
+
+/**
+ * The activity feed is the one early read whose failure is the TAB's, not the
+ * page's. ActivityService.forItem now throws on a failed read (it used to
+ * return [] for it, which the tabs showed as "no history"); the page must turn
+ * that into a could-not-load state with a retry, and keep everything else.
+ */
+describe('ItemDetail: a failed activity feed is a could-not-load state on its tab', () => {
+  const failFeed = () => {
+    control.activity = async () => {
+      throw new ServiceError('internal_error', 'upstream timeout');
+    };
+  };
+
+  it('Movements tab: says it could not load, offers a retry to the same tab, and the page still renders', async () => {
+    failFeed();
+    render(
+      await ItemDetail({
+        id: ITEM_ID,
+        backHref: '/dashboard/inventory',
+        backLabel: 'Back',
+        tab: 'movements',
+      }),
+    );
+
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toMatch(/Could not load this item.s stock movements/);
+    expect(screen.getByRole('link', { name: 'Try again' }).getAttribute('href')).toBe('?tab=movements');
+    expect(screen.queryByTestId('activity-panel')).toBeNull();
+    // The rest of the page is there.
+    expect(screen.getByText(/Last updated by Dana Editor/)).toBeTruthy();
+    expect(reportError).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'internal_error' }),
+      expect.objectContaining({ tag: 'item-detail.activity' }),
+    );
+    await flush();
+    expect(unhandled).toEqual([]);
+  });
+
+  it('Activity tab: the same, and the retry keeps the validated return target', async () => {
+    failFeed();
+    render(
+      await ItemDetail({
+        id: ITEM_ID,
+        backHref: '/dashboard/inventory?q=hvac',
+        backLabel: 'Back',
+        tab: 'activity',
+        returnParam: '/dashboard/inventory?q=hvac',
+      }),
+    );
+
+    expect(screen.getByRole('alert').textContent).toMatch(/Could not load this item.s activity/);
+    const retry = new URLSearchParams(
+      (screen.getByRole('link', { name: 'Try again' }).getAttribute('href') ?? '').slice(1),
+    );
+    expect(retry.get('tab')).toBe('activity');
+    expect(retry.get('return')).toBe('/dashboard/inventory?q=hvac');
+    expect(screen.queryByTestId('activity-panel')).toBeNull();
+  });
+
+  it('a feed that loads renders the panel, with no could-not-load state', async () => {
+    render(
+      await ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back', tab: 'activity' }),
+    );
+    expect(screen.getByTestId('activity-panel')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('the Overview tab is untouched: it never reads the feed, so a broken feed cannot affect it', async () => {
+    failFeed();
+    render(await ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back' }));
+    expect(started).not.toContain('activity');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByText('HVAC')).toBeTruthy();
+    expect(reportError).not.toHaveBeenCalled();
   });
 });

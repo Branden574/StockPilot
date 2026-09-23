@@ -58,6 +58,7 @@ import { SerialsService } from '@/server/services/serials';
 import { WarehousesService } from '@/server/services/warehouses';
 import { ITEM_ACTIVITY_PAGE_SIZE, nextActivityCursor } from '@/lib/activity-pagination';
 import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage';
+import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
 import { can, holdingsContradictRack, isLikelyIsbn } from '@stockpilot/core';
@@ -149,9 +150,17 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // real cost the Overview tab was paying on every load even though it never
   // renders the feed. Mirrors mobile's item/[id].tsx, which only calls
   // loadMovements() when its Movements tab is active.
-  const activityRead =
+  //
+  // A failed feed read is the tab's to report, not the page's: null here, and
+  // the panel says it could not load (with a retry) instead of the whole item
+  // page failing, or an empty feed that reads as "no history".
+  const activityRead: Promise<ActivityEvent[] | null> =
     activeTab === 'movements' || activeTab === 'activity'
-      ? activitySvc.forItem(id, ITEM_ACTIVITY_PAGE_SIZE)
+      ? activitySvc.forItem(id, ITEM_ACTIVITY_PAGE_SIZE).catch((e: unknown) => {
+          if (isNextControlFlowError(e)) throw e;
+          void reportError(e, { tag: 'item-detail.activity', organizationId: ctx.organizationId });
+          return null;
+        })
       : Promise.resolve<ActivityEvent[]>([]);
   const imageRowsRead = imagesSvc.list(id);
   // Per-supplier unit-cost trend from our own PO + receipt data, rendered as a
@@ -243,7 +252,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
     updatedByProfile,
     locations,
     holdings,
-    activity,
+    activityResult,
     images,
     costHistory,
     customFieldDefs,
@@ -346,6 +355,17 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   const updatedAt = (item as { updated_at?: string | null }).updated_at ?? null;
   const updatedByName: string | null =
     (updatedByProfile?.full_name?.trim() || updatedByProfile?.email?.trim()) ?? null;
+
+  // null: the feed could not be read (see activityRead). Both tabs then show
+  // that state instead of a feed, and the counts below see no events.
+  const activityFailed = activityResult === null;
+  const activity = activityResult ?? [];
+  // Relative, so it keeps this page's path: the same tab, and the validated
+  // return target the page was opened with.
+  const activityRetryHref = `?${new URLSearchParams({
+    tab: activeTab,
+    ...(returnParam ? { return: returnParam } : {}),
+  }).toString()}`;
 
   // Filter for the Movements tab — kind === 'movement' from the unified
   // ActivityService feed is exactly the stock_movements rows.
@@ -995,15 +1015,19 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <ItemActivityPanel
-                itemId={id}
-                initialEvents={movementEvents}
-                initialLocationNames={locationNames}
-                initialCursor={activityInitialCursor}
-                initialExhausted={movementsInitialExhausted}
-                kindFilter="movement"
-                canEditNotes={canEditNotes}
-              />
+              {activityFailed ? (
+                <ActivityUnavailable what="stock movements" retryHref={activityRetryHref} />
+              ) : (
+                <ItemActivityPanel
+                  itemId={id}
+                  initialEvents={movementEvents}
+                  initialLocationNames={locationNames}
+                  initialCursor={activityInitialCursor}
+                  initialExhausted={movementsInitialExhausted}
+                  kindFilter="movement"
+                  canEditNotes={canEditNotes}
+                />
+              )}
             </CardContent>
           </Card>
         </div>
@@ -1022,14 +1046,18 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <ItemActivityPanel
-                itemId={id}
-                initialEvents={activity}
-                initialLocationNames={locationNames}
-                initialCursor={activityInitialCursor}
-                initialExhausted={activityInitialExhausted}
-                canEditNotes={canEditNotes}
-              />
+              {activityFailed ? (
+                <ActivityUnavailable what="activity" retryHref={activityRetryHref} />
+              ) : (
+                <ItemActivityPanel
+                  itemId={id}
+                  initialEvents={activity}
+                  initialLocationNames={locationNames}
+                  initialCursor={activityInitialCursor}
+                  initialExhausted={activityInitialExhausted}
+                  canEditNotes={canEditNotes}
+                />
+              )}
             </CardContent>
           </Card>
         </div>
@@ -1065,6 +1093,27 @@ function DetailRow({
         </p>
         <div className="flex flex-wrap items-center gap-2">{children}</div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The Movements/Activity panel when the feed could not be read. Says so rather
+ * than showing an empty feed, which would read as "nothing ever happened".
+ * The retry links back to this tab, which renders the page on the server again
+ * (a link to the current URL is a refresh in Next).
+ */
+function ActivityUnavailable({ what, retryHref }: { what: string; retryHref: string }) {
+  return (
+    <div role="alert" className="text-muted-foreground py-10 text-center text-sm">
+      <p>Could not load this item&rsquo;s {what}. The history itself is unchanged.</p>
+      <Link
+        href={retryHref}
+        prefetch={false}
+        className="text-foreground mt-2 inline-block font-medium underline underline-offset-4"
+      >
+        Try again
+      </Link>
     </div>
   );
 }
