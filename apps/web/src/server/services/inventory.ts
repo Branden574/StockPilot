@@ -1802,14 +1802,25 @@ export class InventoryService {
     //
     // A PostgREST builder is lazy (the request leaves when `.then` is called),
     // so Promise.resolve is what actually starts the two table reads now.
+    // Two literal selects, not one select with a conditional string: the typed
+    // PostgREST parser cannot read a union of select strings (it types the row
+    // as a ParserError).
     const rowRead = Promise.resolve(
-      this.ctx.supabase
-        .from('inventory_items')
-        .select(opts.withUpdater ? '*, updater:user_profiles!updated_by (full_name, email)' : '*')
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('id', id)
-        .is('deleted_at', null)
-        .maybeSingle(),
+      opts.withUpdater
+        ? this.ctx.supabase
+            .from('inventory_items')
+            .select('*, updater:user_profiles!updated_by (full_name, email)')
+            .eq('organization_id', this.ctx.organizationId)
+            .eq('id', id)
+            .is('deleted_at', null)
+            .maybeSingle()
+        : this.ctx.supabase
+            .from('inventory_items')
+            .select('*')
+            .eq('organization_id', this.ctx.organizationId)
+            .eq('id', id)
+            .is('deleted_at', null)
+            .maybeSingle(),
     );
     // Pass our own ctx so the helper doesn't fall back to
     // requireOrgContext() — that path redirects to /signin and inside an
