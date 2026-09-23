@@ -7,7 +7,7 @@ import {
   CYCLE_COUNT_LINE_UPSERT_SQL,
   CYCLE_COUNT_STALE_LINES_DELETE_SQL,
 } from './cycle-count-snapshot-sql';
-import { getDb, getMeta, setMeta } from './db';
+import { getDb, getMeta, setMeta, withDbTransaction } from './db';
 import { classifyDrainFailure } from './drain-failure';
 import { ENABLED_MODULES_META_KEY, refreshEnabledModules } from './enabled-modules';
 import {
@@ -239,7 +239,7 @@ export async function pullSnapshot(
   const db = await getDb();
   const now = Date.now();
 
-  await db.withTransactionAsync(async () => {
+  await withDbTransaction(db, async () => {
     // Warehouses (full replace for simplicity — small set)
     if (snap.warehouses.length > 0) {
       await db.runAsync('delete from warehouses');

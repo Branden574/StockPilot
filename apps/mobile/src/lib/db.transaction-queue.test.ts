@@ -1,0 +1,110 @@
+import { readFileSync, readdirSync } from 'node:fs';
+import * as path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+
+import { describe, expect, it, vi } from 'vitest';
+
+import { withDbTransaction } from './db';
+
+// db.ts pulls in expo-sqlite (native): mocked wholesale, vitest runs in node.
+// The mock is never exercised; these tests drive withDbTransaction against
+// a real SQLite connection wrapped in expo-sqlite's own transaction code.
+vi.mock('expo-sqlite', () => ({ openDatabaseAsync: vi.fn() }));
+
+/**
+ * One real SQLite connection behind expo-sqlite's async surface. Every call
+ * yields first, as the native bridge does, and withTransactionAsync is
+ * expo-sqlite 57's implementation line for line (SQLiteDatabase.ts):
+ * BEGIN, task, COMMIT, and ROLLBACK on any throw.
+ */
+function expoLikeConnection() {
+  const raw = new DatabaseSync(':memory:');
+  raw.exec('create table t (v text not null)');
+  const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+  const conn = {
+    async execAsync(sql: string) {
+      await tick();
+      raw.exec(sql);
+    },
+    async runAsync(sql: string, params: string[]) {
+      await tick();
+      raw.prepare(sql).run(...params);
+    },
+    async withTransactionAsync(task: () => Promise<void>) {
+      try {
+        await conn.execAsync('BEGIN');
+        await task();
+        await conn.execAsync('COMMIT');
+      } catch (e) {
+        await conn.execAsync('ROLLBACK');
+        throw e;
+      }
+    },
+    rows: () => (raw.prepare('select v from t order by rowid').all() as { v: string }[]).map((r) => r.v),
+  };
+  return conn;
+}
+
+type Conn = ReturnType<typeof expoLikeConnection>;
+
+/** A snapshot-pull-shaped transaction: several statements with awaits between. */
+const pull = (conn: Conn) => async () => {
+  for (const v of ['pull-1', 'pull-2', 'pull-3']) await conn.runAsync('insert into t (v) values (?)', [v]);
+};
+/** A screen caching what it fetched, started while the pull is mid-way. */
+const cache = (conn: Conn) => async () => {
+  await conn.runAsync('insert into t (v) values (?)', ['cache-1']);
+};
+
+describe('two overlapping transactions on one connection', () => {
+  it('without the queue: the second BEGIN fails and its ROLLBACK undoes the first transaction (the simulator log)', async () => {
+    const conn = expoLikeConnection();
+    const results = await Promise.allSettled([
+      conn.withTransactionAsync(pull(conn)),
+      conn.withTransactionAsync(cache(conn)),
+    ]);
+    const errors = results.map((r) => (r.status === 'rejected' ? String((r.reason as Error).message) : 'ok'));
+    expect(errors[1]).toMatch(/cannot start a transaction within a transaction/);
+    expect(errors[0]).toMatch(/no transaction is active/);
+    // pull-1 was rolled back by the other caller; the rest autocommitted.
+    expect(conn.rows()).toEqual(['pull-2', 'pull-3']);
+  });
+
+  it('with withDbTransaction: both commit, whole and in call order', async () => {
+    const conn = expoLikeConnection();
+    await Promise.all([withDbTransaction(conn, pull(conn)), withDbTransaction(conn, cache(conn))]);
+    expect(conn.rows()).toEqual(['pull-1', 'pull-2', 'pull-3', 'cache-1']);
+  });
+
+  it('a failed transaction rolls back only itself and does not block the next one', async () => {
+    const conn = expoLikeConnection();
+    const failing = withDbTransaction(conn, async () => {
+      await conn.runAsync('insert into t (v) values (?)', ['doomed']);
+      throw new Error('boom');
+    });
+    const next = withDbTransaction(conn, cache(conn));
+    await expect(failing).rejects.toThrow('boom');
+    await next;
+    expect(conn.rows()).toEqual(['cache-1']);
+  });
+});
+
+describe('every transaction in the app goes through the queue', () => {
+  const root = path.join(__dirname, '../..');
+  const sources = (dir: string): string[] =>
+    readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap((e) => {
+      const rel = path.join(dir, e.name);
+      if (e.isDirectory()) return e.name === 'node_modules' ? [] : sources(rel);
+      return /\.(ts|tsx)$/.test(e.name) && !/\.test\.tsx?$/.test(e.name) ? [rel] : [];
+    });
+
+  it('only db.ts calls withTransactionAsync, and nothing opens a transaction by hand', () => {
+    const offenders = [...sources('src'), ...sources('app')].filter((f) => {
+      const src = readFileSync(path.join(root, f), 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
+      const direct = /\.withTransactionAsync\(|\.withExclusiveTransactionAsync\(/.test(src) && f !== path.join('src', 'lib', 'db.ts');
+      const manual = /['"`]\s*BEGIN\b/i.test(src);
+      return direct || manual;
+    });
+    expect(offenders).toEqual([]);
+  });
+});

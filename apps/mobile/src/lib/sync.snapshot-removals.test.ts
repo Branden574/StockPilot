@@ -32,6 +32,10 @@ const meta = vi.hoisted(() => ({ store: new Map<string, string>(), db: { current
 
 vi.mock('./db', () => ({
   getDb: async () => meta.db.current,
+  // The queue itself is tested in db.transaction-queue.test.ts; here a
+  // transaction is just the fake db's own.
+  withDbTransaction: (db: { withTransactionAsync: (t: () => Promise<void>) => Promise<void> }, task: () => Promise<void>) =>
+    db.withTransactionAsync(task),
   getMeta: async (k: string) => meta.store.get(k) ?? null,
   setMeta: async (k: string, v: string) => {
     meta.store.set(k, v);

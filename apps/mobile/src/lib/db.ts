@@ -31,6 +31,31 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
 }
 
 /**
+ * Transactions run one at a time. expo-sqlite's withTransactionAsync is
+ * BEGIN / task / COMMIT on the app's ONE connection, so a second caller that
+ * starts while the first is still awaiting fails its BEGIN ("cannot start a
+ * transaction within a transaction") and its catch then runs ROLLBACK, which
+ * rolls back the FIRST caller's open transaction. The first caller's
+ * remaining statements then autocommit one by one and its COMMIT and ROLLBACK
+ * both fail ("no transaction is active"). A snapshot pull and a screen caching
+ * what it just fetched (the cycle-count detail opened from a notification at
+ * cold start) collided exactly like that. Every transaction in the app goes
+ * through this queue instead of calling withTransactionAsync directly.
+ *
+ * A task must not call withDbTransaction itself: it would wait on its own
+ * turn forever. Tasks run plain statements only.
+ */
+type TransactionDb = Pick<SQLite.SQLiteDatabase, 'withTransactionAsync'>;
+let transactionQueue: Promise<void> = Promise.resolve();
+
+export function withDbTransaction(db: TransactionDb, task: () => Promise<void>): Promise<void> {
+  const run = transactionQueue.then(() => db.withTransactionAsync(task));
+  // The next transaction waits for this one to finish, not to succeed.
+  transactionQueue = run.catch(() => undefined);
+  return run;
+}
+
+/**
  * Idempotent app-startup hook — wires DB open + migrations into the
  * root layout effect so any screen that runs `getDb()` after this
  * resolves can assume the schema exists.

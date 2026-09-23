@@ -1,5 +1,5 @@
 import { CACHED_CYCLE_COUNTS_LIST_SQL, CYCLE_COUNT_CACHE_HEADER_SQL } from './cycle-count-snapshot-sql';
-import { getDb } from './db';
+import { getDb, withDbTransaction } from './db';
 import { markRejected } from './queue';
 
 /**
@@ -98,7 +98,7 @@ export async function cacheCycleCount(
 ): Promise<void> {
   const db = await getDb();
   const now = Date.now();
-  await db.withTransactionAsync(async () => {
+  await withDbTransaction(db, async () => {
     // See CYCLE_COUNT_CACHE_HEADER_SQL: the number and notes survive a caller
     // that does not carry them.
     await db.runAsync(
@@ -269,7 +269,7 @@ export async function updateLocalLine(
 
   const idempotencyKey = uuid();
   let outboxId = 0;
-  await db.withTransactionAsync(async () => {
+  await withDbTransaction(db, async () => {
     await db.runAsync(
       `update cycle_count_lines
          set counted = ?, local_dirty = 1
@@ -402,7 +402,7 @@ function isDue(
  */
 export async function outboxAck(id: number): Promise<void> {
   const db = await getDb();
-  await db.withTransactionAsync(async () => {
+  await withDbTransaction(db, async () => {
     const row = await db.getFirstAsync<{ payload_json: string }>(
       'select payload_json from pending_actions where id = ?',
       [id],
@@ -457,7 +457,7 @@ export async function outboxAck(id: number): Promise<void> {
  */
 export async function outboxReject(id: number, error: string): Promise<void> {
   const db = await getDb();
-  await db.withTransactionAsync(async () => {
+  await withDbTransaction(db, async () => {
     const row = await db.getFirstAsync<{ payload_json: string }>(
       'select payload_json from pending_actions where id = ?',
       [id],
