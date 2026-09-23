@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { ItemImagesService } from '@/server/services/item-images';
 
 export const runtime = 'nodejs';
@@ -57,6 +58,7 @@ export async function GET(req: NextRequest) {
   const top = (topRows ?? []) as Array<{ item_id: string; request_count: number }>;
   if (top.length === 0) return NextResponse.json({ items: [] }, { status: 200 });
 
+  // At most MAX_LIMIT (12) ids: the RPC's p_limit is clamped above.
   const itemIds = top.map((r) => r.item_id);
 
   // Items + reservations in parallel — both keyed on the same item_id set.
@@ -65,6 +67,7 @@ export async function GET(req: NextRequest) {
       .from('inventory_items')
       .select('id, sku, name, quantity_on_hand, category_id, item_type')
       .eq('organization_id', ctx.organizationId)
+      // in-list-bound: the RPC's top items, p_limit clamped to MAX_LIMIT (12)
       .in('id', itemIds)
       .is('deleted_at', null)
       .eq('status', 'active')
@@ -74,9 +77,18 @@ export async function GET(req: NextRequest) {
       .from('stock_reservations')
       .select('item_id, quantity')
       .eq('organization_id', ctx.organizationId)
+      // in-list-bound: the RPC's top items, p_limit clamped to MAX_LIMIT (12)
       .in('item_id', itemIds)
       .is('released_at', null),
   ]);
+  // Both decide the "available" number on each row. Read as data, a failed
+  // items read was an empty strip and a failed reservations read was
+  // "nothing reserved", which overstated what can be ordered.
+  const readErr = itemsRes.error ?? resvRes.error;
+  if (readErr) {
+    void reportError(new Error(readErr.message), { tag: 'orders.freq' });
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+  }
 
   type ItemRow = {
     id: string;
@@ -101,6 +113,7 @@ export async function GET(req: NextRequest) {
       .from('categories')
       .select('id, name')
       .eq('organization_id', ctx.organizationId)
+      // in-list-bound: categories of at most MAX_LIMIT (12) items
       .in('id', categoryIds);
     for (const c of (cats ?? []) as Array<{ id: string; name: string }>) {
       categoryNameById.set(c.id, c.name);
