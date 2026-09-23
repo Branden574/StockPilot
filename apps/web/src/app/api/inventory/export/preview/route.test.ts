@@ -135,6 +135,16 @@ describe('POST /api/inventory/export/preview', () => {
     expect(body.readiness.missingImage).toBe(7);
   });
 
+  it('a failed cover count is null in the response, not 0 (and the preview still answers)', async () => {
+    vi.mocked(countRowsWithImages).mockResolvedValueOnce(null);
+    const res = await POST(buildRequest({ scope: 'all', itemType: 'book' }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.readiness.withImage).toBeNull();
+    expect(body.readiness.missingImage).toBeNull();
+    expect(body.readiness.withIsbn).toBe(20);
+  });
+
   it('never returns an image URL in the sample rows', async () => {
     const body = await (await POST(buildRequest({ scope: 'all', itemType: 'book' }))).json();
     for (const row of body.sampleRows) expect(row.image).toBeNull();

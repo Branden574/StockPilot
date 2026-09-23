@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const primaryImagesForServerDecoding = vi.fn();
+const { reportError } = vi.hoisted(() => ({ reportError: vi.fn(async () => {}) }));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
 vi.mock('@/server/services/item-images', () => ({
   ItemImagesService: vi.fn().mockImplementation(function () {
@@ -12,8 +14,11 @@ import { ItemImagesService } from '@/server/services/item-images';
 
 import { readImageDimensions } from '@/lib/inventory-export-xlsx';
 
+import { inFilters, makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
+
 import {
   attachExportImages,
+  countRowsWithImages,
   EXPORT_IMAGE_TARGET_WIDTH_PX,
   EXPORT_TOO_MANY_IMAGES_MESSAGE,
   fetchExportImageBytes,
@@ -166,9 +171,112 @@ describe('attachExportImages', () => {
     expect(rows[0]!.image).toBeNull();
   });
 
+  // Blanking every image cell used to leave no trace: a file with 272
+  // placeholders and nothing in the logs to say why.
+  it('reports the blanked images with a fixed message and the row count', async () => {
+    primaryImagesForServerDecoding.mockRejectedValue(new Error('fetch failed'));
+    const rows = [makeRow('a'), makeRow('b')];
+    await attachExportImages(ctx, rows, { imageSize: 'small' });
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [err, context] = reportError.mock.calls[0] as unknown as [
+      Error,
+      { tag: string; level: string; extra: Record<string, unknown> },
+    ];
+    expect(err.message).toBe('Export image lookup failed; images left blank');
+    expect(context).toMatchObject({
+      tag: 'export.images',
+      level: 'warning',
+      extra: { rows: 2, detail: 'fetch failed' },
+    });
+  });
+
   it('does nothing at all for an empty row set', async () => {
     await attachExportImages(ctx, [], { imageSize: 'small' });
     expect(primaryImagesForServerDecoding).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The preview's "N of M have a cover" covers up to 1000 export rows. One
+ * `.in()` of them all overflowed the URL (the local gateway refuses past ~215
+ * ids, production past ~395), and the error was swallowed as 0.
+ */
+describe('countRowsWithImages', () => {
+  const uuid = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+  const ids = Array.from({ length: 250 }, (_, i) => uuid(i));
+  const inList = (call: MockCall, column: string) =>
+    (inFilters(call).find(([c]) => c === column)?.[1] ?? []) as string[];
+
+  it('counts 250 items in batches of at most 100, with the cover fallback for the rest', async () => {
+    const imageLists: string[][] = [];
+    const itemLists: string[][] = [];
+    const stub = makeSupabaseStub({
+      // Even items have a photo row; items 1, 3 and 249 have only a legacy cover URL.
+      'item_images.select': (call) => {
+        const list = inList(call, 'item_id');
+        imageLists.push(list);
+        return {
+          data: list
+            .filter((id) => Number(id.slice(-4)) % 2 === 0)
+            .map((item_id) => ({ id: `img-${item_id}`, item_id })),
+          error: null,
+        };
+      },
+      'inventory_items.select': (call) => {
+        const list = inList(call, 'id');
+        itemLists.push(list);
+        return {
+          data: list.map((id) => ({
+            id,
+            custom_fields: [1, 3, 249].includes(Number(id.slice(-4)))
+              ? { thumbnail_url: 'https://books.example/cover.jpg' }
+              : {},
+          })),
+          error: null,
+        };
+      },
+    });
+    const n = await countRowsWithImages(makeServiceContext(stub.client) as never, ids);
+    expect(imageLists.map((l) => l.length)).toEqual([100, 100, 50]);
+    // The 125 odd items without a photo row, again 100 at a time.
+    expect(itemLists.map((l) => l.length)).toEqual([100, 25]);
+    expect(n).toBe(125 + 3);
+  });
+
+  it('pages a batch whose items carry more than 1000 photo rows', async () => {
+    let pages = 0;
+    const stub = makeSupabaseStub({
+      'item_images.select': (call) => {
+        pages += 1;
+        const list = inList(call, 'item_id');
+        const [from] = call.args[call.methods.indexOf('range')] as [number, number];
+        // 12 photos per item: 1200 rows for the first 100 items, in two pages.
+        const all = list.flatMap((item_id) =>
+          Array.from({ length: 12 }, (_, k) => ({ id: `${item_id}-${k}`, item_id })),
+        );
+        return { data: all.slice(from, from + 1000), error: null };
+      },
+      'inventory_items.select': { data: [], error: null },
+    });
+    const n = await countRowsWithImages(makeServiceContext(stub.client) as never, ids.slice(0, 100));
+    expect(pages).toBe(2);
+    expect(n).toBe(100);
+  });
+
+  it('a failed batch answers null (not 0) and reports it', async () => {
+    let calls = 0;
+    const stub = makeSupabaseStub({
+      'item_images.select': () =>
+        ++calls === 2 ? { data: null, error: { message: 'fetch failed' } } : { data: [], error: null },
+      'inventory_items.select': { data: [], error: null },
+    });
+    await expect(
+      countRowsWithImages(makeServiceContext(stub.client) as never, ids),
+    ).resolves.toBeNull();
+    expect(reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tag: 'export.preview.image_count', level: 'warning' }),
+    );
   });
 });
 

@@ -126,6 +126,19 @@ describe('ExportBuilderPreview — readiness', () => {
     expect(panel.textContent).toContain('27 missing cover');
   });
 
+  // The count used to swallow a failed read and answer 0, so a selection
+  // full of covers read "0 of 111 have a cover". A failed check is null and
+  // says so.
+  it('says the image check is unavailable when the count failed, never "0 have a cover"', () => {
+    renderPreview({
+      preview: { ...PREVIEW, readiness: { ...PREVIEW.readiness, withImage: null, missingImage: null } },
+    });
+    const panel = screen.getByRole('group', { name: 'Export readiness' });
+    expect(panel.textContent).toContain('Image check unavailable');
+    expect(panel.textContent).not.toContain('have a cover');
+    expect(panel.textContent).not.toContain('missing cover');
+  });
+
   it('never presents readiness as a blocker', () => {
     renderPreview();
     expect(screen.queryByRole('alert')).toBeNull();
