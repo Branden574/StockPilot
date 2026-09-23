@@ -1,0 +1,85 @@
+{
+  "app/(dashboard)/dashboard/orders/[id]/page.tsx": ["in:item_id <- itemIds"],
+  "app/(dashboard)/dashboard/orders/[id]/print/page.tsx": [
+    "in:id <- itemIds.length ? itemIds : ['00000000-0000-0000-0000-000000000000']"
+  ],
+  "app/(dashboard)/dashboard/rentals/new/page.tsx": [
+    "in:id <- categoryIds",
+    "in:item_id <- rentalItemIds"
+  ],
+  "app/(dashboard)/dashboard/returns/[id]/page.tsx": ["in:id <- itemIds"],
+  "app/(dashboard)/dashboard/settings/integrations/page.tsx": ["in:id <- access.writableIds"],
+  "app/(dashboard)/dashboard/settings/migrate/sage50/page.tsx": ["in:id <- access.writableIds"],
+  "app/(dashboard)/dashboard/team/page.tsx": ["in:user_id <- viewerUserIds"],
+  "app/api/cron/maintenance-draft-reminders/route.ts": ["in:organization_id <- enabledOrgIds"],
+  "app/api/cron/prewarm-orders-catalog/route.ts": ["in:organization_id <- [...KNOWN_HOT_ORG_IDS]"],
+  "app/api/cron/schedule-reminders/route.ts": [
+    "in:id <- [...userIds]",
+    "in:id <- orgIds",
+    "in:user_id <- [...userIds]"
+  ],
+  "app/api/cycle-counts/[id]/pdf/route.tsx": ["in:id <- chunk"],
+  "app/api/orders/freq/route.ts": [
+    "in:id <- categoryIds",
+    "in:id <- itemIds",
+    "in:item_id <- itemIds"
+  ],
+  "app/api/reports/inventory-snapshot/pdf/route.tsx": [
+    "in:id <- itemIds",
+    "in:id <- primaryLocIds"
+  ],
+  "app/api/search/route.ts": [
+    "in:destination.warehouse_id <- access.readableIds",
+    "in:warehouse_id <- access.readableIds"
+  ],
+  "app/api/v1/account/delete/route.ts": ["in:organization_id <- ownedOrgIds"],
+  "app/api/v1/mobile/snapshot/route.ts": [
+    "in:bundle_id <- bundleIds",
+    "in:destination.warehouse_id <- scopeIds",
+    "in:id <- phantomIds",
+    "in:id <- scopeIds",
+    "in:warehouse_id <- scopeIds",
+    "template:warehouse_id.is.null,warehouse_id.in.( <- scopeIds.join(',')"
+  ],
+  "app/api/v1/public/order-requests/route.ts": ["in:id <- itemIds", "in:id <- itemIds"],
+  "components/orders/order-timeline.tsx": ["in:id <- userIds"],
+  "lib/ai/tools.ts": [
+    "in:id <- Array.from(actorIds)",
+    "in:id <- rows.map((r) => r.id)",
+    "in:id <- userIds"
+  ],
+  "lib/exports/export-images.ts": ["in:id <- rest", "in:item_id <- itemIds"],
+  "server/actions/item-visibility.ts": ["in:id <- ids", "in:id <- ids"],
+  "server/actions/profile.ts": ["in:organization_id <- ownedOrgIds"],
+  "server/connectors/drainer.ts": ["in:organization_id <- orgIds"],
+  "server/loaders/inventory-list.ts": [
+    "in:item_id <- chunk",
+    "in:item_id <- chunk",
+    "in:item_id <- ids",
+    "in:item_id <- ids"
+  ],
+  "server/loaders/orders-new-catalog.ts": [
+    "in:category_id <- scope.categoryIds",
+    "in:charter_id <- scope.charterIds",
+    "in:id <- categoryIds",
+    "in:id <- charterIds",
+    "in:item_id <- chunk",
+    "template:charter_id.is.null,charter_id.in.( <- scope.charterIds.join(',')"
+  ],
+  "server/services/inventory.ts": [
+    "in:category_id <- filters.categoryIds",
+    "in:category_id <- filters.categoryIds",
+    "in:category_id <- opts.categoryIds",
+    "in:charter_id <- realIds",
+    "in:charter_id <- realIds",
+    "in:charter_id <- realIds",
+    "in:primary_location_id <- filters.locationIds",
+    "in:primary_location_id <- filters.locationIds",
+    "in:primary_location_id <- opts.locationIds",
+    "in:supplier_id <- filters.supplierIds",
+    "in:supplier_id <- filters.supplierIds",
+    "template:charter_id.is.null,charter_id.in.( <- list",
+    "template:charter_id.is.null,charter_id.in.( <- list",
+    "template:charter_id.is.null,charter_id.in.( <- list"
+  ]
+}
