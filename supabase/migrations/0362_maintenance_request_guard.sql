@@ -41,6 +41,8 @@
 -- the guard must see whether the caller supplied a number, not the one the
 -- numbering trigger assigns.
 
+set lock_timeout = '5s';
+
 -- ── Helpers ─────────────────────────────────────────────────────────────────
 
 -- Null-tolerant org membership checks for the two references that had none
@@ -133,6 +135,10 @@ begin
     select c.full_name, c.email into v_name, v_email from public.caller_profile_name_email() c;
     new.requester_name_snapshot := coalesce(v_name, v_email, 'Unknown requester');
     new.requester_email_snapshot := v_email;
+    -- When it was submitted is the database's to say (the MR-YYYY handle, the
+    -- email's "Submitted" line and list order all read it).
+    new.created_at := now();
+    new.updated_at := now();
     if not (public.charter_in_org(new.charter_id, new.organization_id)
             and public.warehouse_in_org(new.warehouse_id, new.organization_id)
             and public.item_in_org(new.related_item_id, new.organization_id)
@@ -286,8 +292,7 @@ comment on function public.tg_maintenance_requests_guard() is
   'cancel, archive and owner changes follow the service''s gates; closed-state '
   'stamps are never cleared; references stay in the org.';
 
-drop trigger if exists trg_aa_maintenance_requests_guard on public.maintenance_requests;
-create trigger trg_aa_maintenance_requests_guard
+create or replace trigger trg_aa_maintenance_requests_guard
   before insert or update on public.maintenance_requests
   for each row execute function public.tg_maintenance_requests_guard();
 
@@ -305,3 +310,5 @@ revoke all on function public.tg_maintenance_requests_guard() from public, anon,
 -- anon writes none.
 revoke delete, truncate, trigger, references on public.maintenance_requests from authenticated, anon;
 revoke insert, update on public.maintenance_requests from anon;
+
+reset lock_timeout;

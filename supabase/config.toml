@@ -5,7 +5,11 @@ project_id = "stockpilot"
 [api]
 enabled = true
 port = 54321
-schemas = ["public", "storage"]
+# Matches production (public + graphql_public). `storage` was exposed here
+# from the initial scaffold only: the app reaches Storage through the storage
+# API, never PostgREST, and exposing it made storage.* functions callable at
+# /rest/v1/rpc (the older local image's search_by_timestamp was injectable).
+schemas = ["public", "graphql_public"]
 extra_search_path = ["public", "extensions"]
 max_rows = 1000
 

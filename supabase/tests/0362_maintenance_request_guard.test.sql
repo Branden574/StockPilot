@@ -10,13 +10,16 @@
 --                refused, and each service transition (edit, draft open,
 --                cancel, assign, resolve, archive) still works for the actor
 --                the service allows, with the database stamping who and when.
+-- PART 4 (34-36) Review hardening: a request's submitted time is the
+--                database's; the real service_role (email and reminder
+--                stamps) is exempt.
 --
 -- Guards key on current_user, so writes run under `set local role
 -- authenticated` with request.jwt.claim.sub. Run via `supabase test db` after
 -- `supabase db reset`.
 
 begin;
-select plan(33);
+select plan(36);
 
 \set orgA   '\'03620000-0000-0000-0000-00000000000a\''
 \set orgB   '\'03620000-0000-0000-0000-00000000000b\''
@@ -227,6 +230,26 @@ reset role;
 select is((select row(status, resolved_by)::text from public.maintenance_requests where id = :mr1),
   row('archived', :u_mgr::uuid)::text,
   '33: archiving kept the resolution record');
+
+-- ═══ PART 4: review hardening ═══════════════════════════════════════════════
+set local "request.jwt.claim.sub" to :u_req;
+set local role to 'authenticated';
+select lives_ok(
+  format($$insert into public.maintenance_requests (id, organization_id, requester_user_id, requester_name_snapshot,
+             subject, description, priority, status, created_at)
+           values ('03620000-0000-0000-0000-0000000000e3', %L, %L, 'x', 'Backdated leak', 'Old news', 'normal', 'saved', '2001-01-01')$$,
+         :orgA, :u_req),
+  '34: a requester submits with a created_at of 2001');
+reset role;
+select ok(
+  (select created_at > now() - interval '1 minute' from public.maintenance_requests
+    where id = '03620000-0000-0000-0000-0000000000e3'),
+  '35: ... and the database records it as submitted now (the MR-YYYY handle and the email read it)');
+set local role to 'service_role';
+select lives_ok(
+  format($$update public.maintenance_requests set resolution_email_sent_at = now() where id = %L$$, :mr1),
+  '36: the service_role stamps the resolution email (the guard exempts it)');
+reset role;
 
 select * from finish();
 rollback;

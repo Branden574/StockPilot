@@ -506,7 +506,9 @@ describe('RentalsService.create', () => {
     expect(vi.mocked(audit)).not.toHaveBeenCalled();
   });
 
-  it('allows a line that fits the remaining availability', async () => {
+  // Availability itself is decided in create_rental (pgTAP 0361); this pins
+  // only that a successful checkout returns the function's rental id.
+  it('returns the rental id the checkout function created', async () => {
     const { ctx } = makeCtx();
     const svc = new RentalsService(ctx);
     await expect(

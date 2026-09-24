@@ -32,8 +32,11 @@
 --
 -- THE APPROVAL THRESHOLD, IN SQL. updateStatus checks the threshold against
 -- purchase_orders.total, a column a draft's editor controls. The guard checks
--- the greater of that and the PO's real value (its lines plus charges), so a
--- manager cannot zero the total and then place a large order.
+-- the greater of that and the PO's real value, so a manager cannot zero the
+-- total and then place a large order. The real value counts every line and
+-- charge that ADDS spend and nothing that subtracts: an API-role line must be
+-- positive (quantity > 0, cost >= 0, as the PO form requires), and a negative
+-- line or charge could otherwise offset a large one.
 --
 -- Sections:
 --   1. Helpers.
@@ -41,6 +44,9 @@
 --   3. purchase_order_items guard.
 --   4. approve_po_import_commit: PO-import approval in one transaction.
 --   5. Grants.
+
+-- Short table locks for the triggers below; fail fast (see 0358).
+set lock_timeout = '5s';
 
 -- ── 1. Helpers ──────────────────────────────────────────────────────────────
 
@@ -96,8 +102,9 @@ end;
 $$;
 
 -- Whether placing this PO needs an owner or admin: the caller is below admin,
--- the org has a threshold, and the greater of p_total and the PO's lines plus
--- charges (its own org's rows only) reaches it. A boolean, so no amount leaks.
+-- the org has a threshold, and the greater of p_total and the PO's spend (its
+-- own org's lines and charges, each counted only when positive) reaches it. A
+-- boolean, so no amount leaks.
 create or replace function public.po_over_approval_threshold(p_po_id uuid, p_total numeric)
 returns boolean
 language plpgsql
@@ -124,11 +131,11 @@ begin
   if v_threshold is null then
     return false;
   end if;
-  v_value := coalesce((select sum(i.quantity_ordered * i.unit_cost)
+  v_value := coalesce((select sum(greatest(i.quantity_ordered * i.unit_cost, 0))
                          from public.purchase_order_items i
                         where i.purchase_order_id = p_po_id
                           and i.organization_id = v_org), 0)
-           + coalesce((select sum(c.amount)
+           + coalesce((select sum(greatest(c.amount, 0))
                          from public.purchase_order_charges c
                         where c.purchase_order_id = p_po_id
                           and c.organization_id = v_org), 0);
@@ -149,7 +156,7 @@ begin
     return new;
   end if;
   -- recompute_po_status inside the receipt RPCs (0359 raises the flag).
-  if coalesce(current_setting('stockpilot.ledger', true), '') = 'on' then
+  if ledger.active() then
     return new;
   end if;
   if tg_op = 'INSERT' then
@@ -223,8 +230,7 @@ comment on function public.tg_purchase_orders_guard() is
   'PO lifecycle and the approval threshold; amounts freeze after draft; '
   'receiving statuses and dates only through the receipt RPCs.';
 
-drop trigger if exists trg_zz_purchase_orders_guard on public.purchase_orders;
-create trigger trg_zz_purchase_orders_guard
+create or replace trigger trg_zz_purchase_orders_guard
   before insert or update on public.purchase_orders
   for each row execute function public.tg_purchase_orders_guard();
 
@@ -241,7 +247,7 @@ begin
     return coalesce(new, old);
   end if;
   -- The receipt RPCs update quantity_received with the flag on.
-  if coalesce(current_setting('stockpilot.ledger', true), '') = 'on' then
+  if ledger.active() then
     return coalesce(new, old);
   end if;
 
@@ -272,6 +278,13 @@ begin
     raise exception 'A new purchase order line starts with nothing received.'
       using errcode = '42501';
   end if;
+  -- The PO form's own rule (quantity > 0, cost >= 0). A negative line would
+  -- offset a real one in the approval threshold and in received-vs-ordered.
+  if new.quantity_ordered is null or new.quantity_ordered <= 0
+     or new.unit_cost is null or new.unit_cost < 0 then
+    raise exception 'A purchase order line needs a quantity above 0 and a cost of 0 or more.'
+      using errcode = '23514';
+  end if;
   return new;
 end;
 $$;
@@ -279,10 +292,10 @@ $$;
 comment on function public.tg_purchase_order_items_guard() is
   'BEFORE INSERT OR UPDATE OR DELETE guard (0360): API-role lines join only '
   'their own org''s PO and item, start unreceived, are never updated directly '
-  '(receiving does that under the ledger flag), and leave only drafts.';
+  '(receiving does that under the ledger flag), leave only drafts, and are '
+  'positive (quantity > 0, cost >= 0).';
 
-drop trigger if exists trg_zz_purchase_order_items_guard on public.purchase_order_items;
-create trigger trg_zz_purchase_order_items_guard
+create or replace trigger trg_zz_purchase_order_items_guard
   before insert or update or delete on public.purchase_order_items
   for each row execute function public.tg_purchase_order_items_guard();
 
@@ -293,14 +306,23 @@ create trigger trg_zz_purchase_order_items_guard
 -- the import could not be approved again). This does all of it in one
 -- transaction; any failure rolls the claim back too.
 --
--- The AMOUNTS come from po_import_lines, not from the caller. p_lines carries
+-- The AMOUNTS come from po_import_lines, not from the call. p_lines carries
 -- only the reviewer's decisions for each kept line (its final item and line
 -- type); quantity, unit cost and line total are read from the stored import
 -- line, and the charges are built from the non-inventory lines exactly as
--- buildPoCharges (lib/po-imports/charges.ts) builds them. So the approval
--- threshold is checked against values the call cannot understate. It uses the
--- greater of the invoice's line totals and quantity x unit cost, because the
--- PO lines this creates are worth quantity x unit cost.
+-- buildPoCharges (lib/po-imports/charges.ts) builds them, float rounding
+-- included, so the PO total matches what the service audits.
+--
+-- THE THRESHOLD counts spend and never subtracts: goods at the greater of the
+-- stored line totals and quantity x unit cost (the PO lines this creates are
+-- worth the latter), plus every positive charge. Discounts and credits still
+-- reduce the PO's total, but not the value the gate sees, because the
+-- reviewer chooses each line's type and could otherwise re-type a line as a
+-- discount to net a large order below the gate. The stored import lines are
+-- editable by the same approver in review; an edited amount is also what the
+-- PO then carries, so the gate and the PO stay consistent. Inventory lines
+-- must be positive (quantity > 0, cost and total >= 0). No org had a
+-- threshold configured when this shipped (preflight 2026-09-24).
 --
 -- p_lines: [{ "line_id": uuid, "item_id": uuid|null, "line_type": text }], in
 -- review order, for the lines that are NOT skipped.
@@ -328,6 +350,7 @@ declare
   v_subtotal  numeric;
   v_goods     numeric;
   v_charges   numeric;
+  v_spend_charges numeric;
   v_threshold numeric;
 begin
   if v_uid is null then
@@ -398,6 +421,16 @@ begin
     raise exception 'line_item_invalid' using errcode = '22023';
   end if;
 
+  if exists (
+       select 1 from jsonb_array_elements(p_lines) e
+         join public.po_import_lines l on l.id = (e.value ->> 'line_id')::uuid
+        where e.value ->> 'line_type' = 'inventory'
+          and (coalesce(l.qty_ordered_original, 1) <= 0
+               or coalesce(l.unit_cost, 0) < 0
+               or coalesce(l.line_total, 0) < 0)) then
+    raise exception 'line_amount_invalid' using errcode = '22023';
+  end if;
+
   -- Amounts, from the stored lines.
   select coalesce(sum(coalesce(l.line_total, 0)), 0),
          coalesce(sum(coalesce(l.qty_ordered_original, 1) * coalesce(l.unit_cost, 0)), 0)
@@ -407,18 +440,24 @@ begin
    where e.value ->> 'line_type' = 'inventory';
 
   -- buildPoCharges: a discount always reduces the total; every other type
-  -- keeps the parser's sign; rounded to cents as Math.round does (ties up).
-  select coalesce(sum(floor(case when e.value ->> 'line_type' = 'discount'
-                                 then -abs(coalesce(l.line_total, 0))
-                                 else coalesce(l.line_total, 0) end * 100 + 0.5) / 100), 0)
-    into v_charges
-    from jsonb_array_elements(p_lines) e
-    join public.po_import_lines l on l.id = (e.value ->> 'line_id')::uuid
-   where e.value ->> 'line_type' <> 'inventory';
+  -- keeps the parser's sign; Math.round(signed * 100) / 100 on doubles, which
+  -- float8 reproduces bit for bit (a numeric half-up would differ by a cent on
+  -- values like 1.005). v_charges is the PO's charge total; v_spend_charges
+  -- is the part the threshold counts (positive charges only).
+  select coalesce(sum(c.amount), 0), coalesce(sum(greatest(c.amount, 0)), 0)
+    into v_charges, v_spend_charges
+    from (
+      select (floor((case when e.value ->> 'line_type' = 'discount'
+                          then -abs(coalesce(l.line_total, 0))
+                          else coalesce(l.line_total, 0) end)::float8 * 100 + 0.5) / 100)::numeric as amount
+        from jsonb_array_elements(p_lines) e
+        join public.po_import_lines l on l.id = (e.value ->> 'line_id')::uuid
+       where e.value ->> 'line_type' <> 'inventory'
+    ) c;
 
   if not public.has_org_role(v_org, 'admin') then
     v_threshold := public._po_approval_threshold(v_org);
-    if v_threshold is not null and greatest(v_subtotal, v_goods) + v_charges >= v_threshold then
+    if v_threshold is not null and greatest(v_subtotal, v_goods) + v_spend_charges >= v_threshold then
       raise exception 'po_over_approval_threshold' using errcode = '42501';
     end if;
   end if;
@@ -451,13 +490,15 @@ begin
   select v_org, v_po,
          case when c.line_type in ('tax', 'freight', 'service', 'fee', 'discount')
               then c.line_type else 'other' end,
-         case when c.description is not null and btrim(c.description) <> ''
+         -- JS trim(): any surrounding whitespace, not just spaces.
+         case when c.description is not null
+               and regexp_replace(c.description, '^\s+|\s+$', '', 'g') <> ''
               then c.description else null end,
          case when c.qty is not null and c.qty <> 1 then c.qty else null end,
          case when c.qty is not null and c.qty <> 1 then c.unit_cost else null end,
-         floor(case when c.line_type = 'discount'
-                    then -abs(coalesce(c.line_total, 0))
-                    else coalesce(c.line_total, 0) end * 100 + 0.5) / 100,
+         (floor((case when c.line_type = 'discount'
+                     then -abs(coalesce(c.line_total, 0))
+                     else coalesce(c.line_total, 0) end)::float8 * 100 + 0.5) / 100)::numeric,
          c.line_number,
          (row_number() over (order by c.ord) - 1)::int
     from (
@@ -479,7 +520,7 @@ $$;
 comment on function public.approve_po_import_commit(uuid, text, uuid, uuid, uuid, timestamptz, text, jsonb) is
   'PO-import approval in one transaction (0360): claim, PO, lines, charges, '
   'link. Amounts come from po_import_lines; the caller supplies only the '
-  'reviewed item and type per kept line. Threshold on goods + charges.';
+  'reviewed item and type per kept line. Threshold on goods + positive charges.';
 
 -- ── 5. Grants ───────────────────────────────────────────────────────────────
 
@@ -506,3 +547,5 @@ revoke truncate, trigger, references on
 revoke insert, update, delete on
   public.purchase_orders, public.purchase_order_items, public.purchase_order_charges
   from anon;
+
+reset lock_timeout;

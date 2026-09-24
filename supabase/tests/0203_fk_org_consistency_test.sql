@@ -107,7 +107,8 @@ set local role to 'authenticated';
 -- stockpilot.ledger flag that only the receipt RPC wrappers raise. These two
 -- tests exercise the WITH CHECK the RPC bodies are still subject to, so they
 -- run with the flag on, as the bodies do.
-set local stockpilot.ledger to 'on';
+-- The flag holds the current transaction's id (0359: ledger.active()).
+do $$ begin perform set_config('stockpilot.ledger', pg_current_xact_id()::text, true); end $$;
 
 -- Test 1a: INSERT receipt with cross-org warehouse_id → 42501
 select throws_ok(
@@ -129,7 +130,8 @@ select throws_ok(
 set local "request.jwt.claim.sub" to 'fc030300-0000-0000-0000-000000000003';
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
-set local stockpilot.ledger to 'on';
+-- The flag holds the current transaction's id (0359: ledger.active()).
+do $$ begin perform set_config('stockpilot.ledger', pg_current_xact_id()::text, true); end $$;
 
 -- Test 1b: INSERT receipt with same-org warehouse_id → lives_ok
 select lives_ok(

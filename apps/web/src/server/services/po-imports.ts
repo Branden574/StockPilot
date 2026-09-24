@@ -1751,11 +1751,11 @@ export class PoImportsService {
     // po_import_lines remaps) is not part of that transaction and stays, as
     // it always did when an approval failed after it.
     //
-    // The RPC reads quantities, costs and totals from the stored import lines;
-    // it takes only this review's decisions (each kept line's final item and
-    // type), so the approval threshold it enforces is checked against values
-    // the caller cannot understate. The friendly check above stays for the
-    // message.
+    // The RPC reads quantities, costs and totals from the stored import lines
+    // and takes only this review's decisions (each kept line's final item and
+    // type). Its approval threshold counts spend only (goods and positive
+    // charges), so re-typing a line as a discount cannot net a large import
+    // under it; the friendly check above stays for the message.
     const { data: poId, error: commitErr } = await this.ctx.supabase.rpc(
       'approve_po_import_commit',
       {
@@ -1789,6 +1789,12 @@ export class PoImportsService {
       }
       if (message.includes('po_import_not_found')) {
         throw new ServiceError('not_found', 'PO import not found.');
+      }
+      if (message.includes('line_amount_invalid')) {
+        throw new ServiceError(
+          'validation_error',
+          'An item line needs a quantity above 0 and a cost and total of 0 or more. Correct it in review, or skip the line.',
+        );
       }
       if (message.includes('line_item_invalid')) {
         throw new ServiceError(

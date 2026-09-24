@@ -18,6 +18,11 @@
 --   unledgered items; the gate; the size cap.
 -- PART 6 (68-70) recompute_po_status ignores lines filed under the PO from
 --   another org.
+-- PART 7 (71-79) Review hardening: the flag is bound to its transaction (a
+--   literal 'on' or another transaction's id opens nothing); no API-callable
+--   function runs dynamic SQL; an item's creator and creation time are the
+--   database's; compensate_opening_stock ignores the caller's older and
+--   soft-deleted items; the real service_role (not only postgres) is exempt.
 --
 -- Roles: table guards key on current_user, so those assertions run under
 -- `set local role authenticated`. Helper gates key on auth.uid(), set with
@@ -28,7 +33,7 @@
 -- Run via `supabase test db` after `supabase db reset`.
 
 begin;
-select plan(70);
+select plan(79);
 
 \set orgA    '\'03590000-0000-0000-0000-00000000000a\''
 \set orgB    '\'03590000-0000-0000-0000-00000000000b\''
@@ -337,11 +342,12 @@ select throws_ok(
 
 -- Nesting: an outer ledger caller (post_receipt_v2 calling adjust_stock) keeps
 -- its flag after the inner wrapper returns.
-set local stockpilot.ledger to 'on';
+-- The flag holds the current transaction's id (0359: ledger.active()).
+do $$ begin perform set_config('stockpilot.ledger', pg_current_xact_id()::text, true); end $$;
 select lives_ok(
   format($$select public.adjust_stock(%L, 1, 'add', null, 'nested', null)$$, :itemS),
   '32: adjust_stock runs inside an outer ledger call');
-select is(current_setting('stockpilot.ledger', true), 'on',
+select is(current_setting('stockpilot.ledger', true), pg_current_xact_id()::text,
   '33: ... and hands the outer caller its flag back');
 set local stockpilot.ledger to '';
 
@@ -504,6 +510,78 @@ select is((select status from public.purchase_orders where id = :poA), 'ordered'
 update public.purchase_order_items set quantity_received = 10 where id = :poLine;
 select is(public.recompute_po_status(:poA), 'received',
   '70: the PO''s own lines still drive it (fully received -> received)');
+
+-- ═══ PART 7: review hardening ═══════════════════════════════════════════════
+set local "request.jwt.claim.sub" to :u_stf;
+set local role to 'authenticated';
+set local stockpilot.ledger to 'on';
+select throws_ok(
+  format($$insert into public.receipt_line_lots (receipt_line_id, lot_number, qty_base) values (%L, 'LOT-ON', 1)$$, :rline),
+  '42501', 'ledger_only',
+  '71: the old literal flag value opens nothing (the flag must hold this transaction''s id)');
+do $$ begin perform set_config('stockpilot.ledger', (pg_current_xact_id()::text::bigint - 1)::text, true); end $$;
+select throws_ok(
+  format($$insert into public.receipt_line_lots (receipt_line_id, lot_number, qty_base) values (%L, 'LOT-OLD', 1)$$, :rline),
+  '42501', 'ledger_only',
+  '72: nor does another transaction''s id (a value left on a pooled connection)');
+set local stockpilot.ledger to '';
+reset role;
+
+select is(
+  (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname in ('public', 'graphql_public', 'ledger')
+      and p.prolang = (select oid from pg_language where lanname = 'plpgsql')
+      and (has_function_privilege('authenticated', p.oid, 'execute')
+           or has_function_privilege('anon', p.oid, 'execute'))
+      and regexp_replace(p.prosrc, '--[^\n]*', '', 'g') ~* '\mexecute\M'),
+  0,
+  '73: no API-callable function in an exposed schema (or ledger) runs dynamic SQL, so none can raise the flag for its caller');
+
+set local "request.jwt.claim.sub" to :u_stf;
+set local role to 'authenticated';
+select lives_ok(
+  format($$insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, status, item_type, created_by, created_at)
+           values ('03590000-0000-0000-0000-0000000000f7', %L, %L, 'L0359-P', 'Pinned', 'active', 'product', %L, '2001-01-01')$$,
+         :orgA, :whA, :u_mgr),
+  '74: staff create an item (naming someone else as creator, in 2001)');
+reset role;
+select is(
+  (select row(created_by, created_at > now() - interval '1 minute')::text from public.inventory_items
+    where id = '03590000-0000-0000-0000-0000000000f7'),
+  row(:u_stf::uuid, true)::text,
+  '75: ... the database records the caller and now instead');
+set local role to 'authenticated';
+select throws_ok(
+  $$update public.inventory_items set created_at = now() - interval '1 day' where id = '03590000-0000-0000-0000-0000000000f7'$$,
+  '42501', 'An item''s creator and creation time cannot be changed.',
+  '76: and neither can be rewritten later (the failed-create rollback trusts both)');
+reset role;
+
+-- The caller's own stocked, unledgered items that are NOT a failed create:
+-- one an hour old, one soft-deleted.
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type, created_by, created_at, deleted_at) values
+  ('03590000-0000-0000-0000-0000000000f8', :orgA, :whA, 'L0359-OLD', 'Hour old', 5, 'active', 'product', :u_stf, now() - interval '1 hour', null),
+  ('03590000-0000-0000-0000-0000000000f9', :orgA, :whA, 'L0359-DEL', 'Deleted', 5, 'archived', 'product', :u_stf, now(), now());
+set local role to 'authenticated';
+select is(
+  array(select public.compensate_opening_stock(:orgA,
+    array['03590000-0000-0000-0000-0000000000f8', '03590000-0000-0000-0000-0000000000f9']::uuid[])),
+  array[]::uuid[],
+  '77: compensation ignores the caller''s older and soft-deleted items');
+reset role;
+select is(
+  (select sum(quantity_on_hand) from public.inventory_items
+    where id in ('03590000-0000-0000-0000-0000000000f8', '03590000-0000-0000-0000-0000000000f9')),
+  10::numeric,
+  '78: ... and their stock is untouched');
+
+-- The server's own client arrives as service_role, not postgres.
+set local role to 'service_role';
+select lives_ok(
+  format($$update public.inventory_items set warehouse_id = %L, unit_cost = 3 where id = %L$$, :whA2, :itemM),
+  '79: the service_role (Model B fan-out, crons) is not held to the API-role rules');
+reset role;
 
 select * from finish();
 rollback;

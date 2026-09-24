@@ -178,17 +178,34 @@ describe('PurchaseOrdersService.updateStatus — cancelled is terminal', () => {
     });
   }
 
-  it('still allows a no-op re-cancel of an already-cancelled PO', async () => {
+  it('treats re-cancelling an already-cancelled PO as a no-op (no write)', async () => {
     const stub = cancelledStub();
     const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
-    await svc.updateStatus('po-1', 'cancelled');
-    expect(stub.chainsAll.get('purchase_orders.update')).toBeDefined();
+    await expect(svc.updateStatus('po-1', 'cancelled')).resolves.toBeUndefined();
+    expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
+  });
+
+  // A second tab or a stale page still showing "Mark as ordered". Writing
+  // ordered_at again is refused by the database for a PO that is not leaving
+  // draft (0360), which surfaced as a 500; the request is already satisfied.
+  it('treats marking an already-ordered PO as ordered as a no-op (no write, no error)', async () => {
+    const stub = makeSupabaseStub({
+      'purchase_orders.select': {
+        data: { id: 'po-1', po_number: 'X', status: 'ordered', total: 0, destination: null },
+        error: null,
+      },
+      'purchase_order_items.select': { data: [], error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+    await expect(svc.updateStatus('po-1', 'ordered')).resolves.toBeUndefined();
+    expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
+    expect(stub.rpcCalls.filter((c) => c.name === 'publish_outbox')).toHaveLength(0);
   });
 
   it('maps a residual partial-index 23505 to a clean conflict (not internal_error)', async () => {
     const stub = makeSupabaseStub({
       'purchase_orders.select': {
-        data: { id: 'po-1', po_number: 'X', status: 'draft', total: 0, destination: null },
+        data: { id: 'po-1', po_number: 'X', status: 'ordered', total: 0, destination: null },
         error: null,
       },
       'purchase_order_items.select': { data: [], error: null },

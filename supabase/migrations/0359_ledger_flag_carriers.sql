@@ -18,10 +18,12 @@
 --     helpers with EXECUTE for authenticated, callable directly to move
 --     holdings with no movement row.
 --
--- THE MECHANISM: a transaction-local flag, stockpilot.ledger = 'on', raised
--- ONLY by the eight ledger RPCs for the duration of their own body. Guards
--- (triggers on the tables, a check inside the SECDEF helpers) refuse ledger
--- writes by the API roles when the flag is not on.
+-- THE MECHANISM: a transaction-local flag, stockpilot.ledger, raised ONLY by
+-- the eight ledger RPCs for the duration of their own body. Its value is the
+-- current transaction's id (pg_current_xact_id), and ledger.active() is true
+-- only when the flag holds THIS transaction's id. Guards (triggers on the
+-- tables, a check inside the SECDEF helpers) refuse ledger writes by the API
+-- roles unless ledger.active().
 --
 -- WHY WRAPPERS, NOT A SET CLAUSE. `ALTER FUNCTION ... SET stockpilot.ledger =
 -- 'on'` would be the idiomatic carrier (restored by Postgres on every exit),
@@ -32,7 +34,7 @@
 -- defaults, return type, SECURITY mode and grants takes its place in public:
 --
 --     v_prev := current_setting('stockpilot.ledger', true);
---     perform set_config('stockpilot.ledger', 'on', true);
+--     perform set_config('stockpilot.ledger', pg_current_xact_id()::text, true);
 --     <call ledger.<same name>(...)>
 --     perform set_config('stockpilot.ledger', coalesce(v_prev, ''), true);
 --
@@ -46,9 +48,24 @@
 --   * On an error nothing is restored by the wrapper, and nothing needs to be:
 --     a caught error rolls back the subtransaction, which reverts set_config
 --     (verified), and an uncaught one aborts the transaction.
---   * Cannot be forged: PostgREST exposes neither pg_catalog.set_config nor
---     the `ledger` schema, authenticated and anon are NOLOGIN, and no
---     exposed function passes caller text to set_config (pgTAP census).
+--   * Bound to its transaction: a value left in the session (set_config with
+--     is_local = false, by anything) does not match the next transaction's
+--     id, so it can never switch the guards off for a later request on the
+--     same pooled connection, whoever that request belongs to.
+--
+-- WHAT THE FLAG RESTS ON. A signed-in user can only reach the database
+-- through PostgREST, which calls functions in the exposed schemas with
+-- arguments. Production exposes `public` and `graphql_public` (a stub: no
+-- pg_graphql), and supabase/config.toml now matches. pg_catalog.set_config is
+-- not exposed, authenticated and anon are NOLOGIN, and no API-callable
+-- function in those schemas, or in `ledger`, runs dynamic SQL or passes
+-- caller text to set_config (pgTAP census, 0359 test). If an exposed
+-- function ever evaluated caller-supplied SQL, that caller could raise the
+-- flag inside their own transaction, which is why the census exists: the
+-- adversarial review found exactly such a function in the older local
+-- storage image (storage.search_by_timestamp), reachable only because the
+-- local config exposed `storage`; production exposes neither the schema nor
+-- that version of the function.
 --
 -- INSTALLED PHONES. The only direct stock call any installed mobile build
 -- makes is supabase.rpc('adjust_stock', {7 named args}) from item/[id].tsx.
@@ -76,6 +93,11 @@
 --   7. compensate_opening_stock: the failed-create rollback, as one SECDEF call.
 --   8. Grant hygiene on the five tables.
 
+-- The trigger and policy statements below take short table locks. Fail fast
+-- instead of queueing every reader behind a long transaction (0358's note:
+-- plain `set`, not `set local`; reset at the end).
+set lock_timeout = '5s';
+
 -- ── 1. Schema and shared guard ──────────────────────────────────────────────
 
 create schema if not exists ledger;
@@ -84,6 +106,24 @@ grant usage on schema ledger to authenticated, service_role;
 comment on schema ledger is
   'Stock-ledger RPC bodies (0359). NOT exposed through PostgREST: the public '
   'wrappers of the same name raise stockpilot.ledger and call these.';
+
+-- True only inside a ledger RPC of THIS transaction. VOLATILE: it reads the
+-- transaction id, which it assigns if the transaction has none yet (every
+-- caller is about to write anyway).
+create or replace function ledger.active()
+returns boolean
+language sql
+volatile
+set search_path = public
+as $$
+  select coalesce(current_setting('stockpilot.ledger', true), '') = pg_current_xact_id()::text;
+$$;
+
+comment on function ledger.active() is
+  'True while a stock-ledger RPC of the current transaction is running (0359).';
+
+revoke all on function ledger.active() from public, anon;
+grant execute on function ledger.active() to authenticated, service_role;
 
 create or replace function public.tg_ledger_only_guard()
 returns trigger
@@ -97,8 +137,7 @@ begin
   -- actions run as the table owner, so none of them is 'authenticated' or
   -- 'anon' here. Never key this on auth.uid() or JWT claims: a SECDEF body
   -- and a cascade still carry the caller's JWT.
-  if current_user in ('authenticated', 'anon')
-     and coalesce(current_setting('stockpilot.ledger', true), '') <> 'on' then
+  if current_user in ('authenticated', 'anon') and not ledger.active() then
     raise exception 'ledger_only'
       using errcode = '42501',
             detail = format('%s rows change only through the stock ledger RPCs.', tg_table_name),
@@ -109,8 +148,8 @@ end;
 $$;
 
 comment on function public.tg_ledger_only_guard() is
-  'BEFORE row guard (0359): API-role writes need stockpilot.ledger = ''on'', '
-  'which only the ledger RPC wrappers raise. SECURITY INVOKER on purpose: a '
+  'BEFORE row guard (0359): API-role writes need ledger.active(), which only '
+  'the ledger RPC wrappers make true. SECURITY INVOKER on purpose: a '
   'DEFINER trigger always sees postgres and would never enforce.';
 
 revoke all on function public.tg_ledger_only_guard() from public, anon, authenticated;
@@ -141,7 +180,7 @@ declare
   v_prev text := current_setting('stockpilot.ledger', true);
   v_row  public.inventory_items;
 begin
-  perform set_config('stockpilot.ledger', 'on', true);
+  perform set_config('stockpilot.ledger', pg_current_xact_id()::text, true);
   v_row := ledger.adjust_stock(
     p_item_id, p_quantity_change, p_movement_type, p_location_id, p_reason, p_notes, p_mode);
   perform set_config('stockpilot.ledger', coalesce(v_prev, ''), true);
@@ -169,7 +208,7 @@ declare
   v_prev text := current_setting('stockpilot.ledger', true);
   v_row  public.inventory_items;
 begin
-  perform set_config('stockpilot.ledger', 'on', true);
+  perform set_config('stockpilot.ledger', pg_current_xact_id()::text, true);
   v_row := ledger.transfer_stock(
     p_item_id, p_from_location_id, p_to_location_id, p_quantity, p_notes);
   perform set_config('stockpilot.ledger', coalesce(v_prev, ''), true);
@@ -191,7 +230,7 @@ declare
   v_prev text := current_setting('stockpilot.ledger', true);
   v_row  public.cycle_counts;
 begin
-  perform set_config('stockpilot.ledger', 'on', true);
+  perform set_config('stockpilot.ledger', pg_current_xact_id()::text, true);
   v_row := ledger.post_cycle_count(p_cycle_count_id);
   perform set_config('stockpilot.ledger', coalesce(v_prev, ''), true);
   return v_row;
@@ -216,7 +255,7 @@ as $$
 declare
   v_prev text := current_setting('stockpilot.ledger', true);
 begin
-  perform set_config('stockpilot.ledger', 'on', true);
+  perform set_config('stockpilot.ledger', pg_current_xact_id()::text, true);
   -- RETURN QUERY runs the body to completion before the next line, so the
   -- flag is restored only after every write inside it has happened.
   return query
@@ -249,7 +288,7 @@ declare
   v_prev text := current_setting('stockpilot.ledger', true);
   v_id   uuid;
 begin
-  perform set_config('stockpilot.ledger', 'on', true);
+  perform set_config('stockpilot.ledger', pg_current_xact_id()::text, true);
   v_id := ledger.distribute_bundle(
     p_bundle_id, p_quantity, p_warehouse_id, p_allow_shortage,
     p_schedule_event_id, p_notes, p_idempotency_key);
@@ -273,7 +312,7 @@ declare
   v_prev text := current_setting('stockpilot.ledger', true);
   v_row  public.returns;
 begin
-  perform set_config('stockpilot.ledger', 'on', true);
+  perform set_config('stockpilot.ledger', pg_current_xact_id()::text, true);
   v_row := ledger.process_return_disposition(p_return_id);
   perform set_config('stockpilot.ledger', coalesce(v_prev, ''), true);
   return v_row;
@@ -301,7 +340,7 @@ declare
   v_prev text := current_setting('stockpilot.ledger', true);
   v_row  public.receipts;
 begin
-  perform set_config('stockpilot.ledger', 'on', true);
+  perform set_config('stockpilot.ledger', pg_current_xact_id()::text, true);
   v_row := ledger.post_receipt_v2(
     p_purchase_order_id, p_warehouse_id, p_lines, p_idempotency_key, p_request_hash, p_notes);
   perform set_config('stockpilot.ledger', coalesce(v_prev, ''), true);
@@ -323,7 +362,7 @@ declare
   v_prev text := current_setting('stockpilot.ledger', true);
   v_row  public.receipts;
 begin
-  perform set_config('stockpilot.ledger', 'on', true);
+  perform set_config('stockpilot.ledger', pg_current_xact_id()::text, true);
   v_row := ledger.reverse_receipt(p_receipt_id, p_reason);
   perform set_config('stockpilot.ledger', coalesce(v_prev, ''), true);
   return v_row;
@@ -406,7 +445,7 @@ begin
     end if;
     -- *** 0359: only from inside a ledger RPC. A direct call would move
     -- holdings with no movement row and no on-hand change. ***
-    if coalesce(current_setting('stockpilot.ledger', true), '') <> 'on' then
+    if not ledger.active() then
       raise exception 'ledger_only' using errcode = '42501';
     end if;
   end if;
@@ -518,7 +557,7 @@ begin
       raise exception 'forbidden' using errcode = '42501';
     end if;
     -- *** 0359: only from inside post_cycle_count. ***
-    if coalesce(current_setting('stockpilot.ledger', true), '') <> 'on' then
+    if not ledger.active() then
       raise exception 'ledger_only' using errcode = '42501';
     end if;
   end if;
@@ -569,18 +608,15 @@ grant execute on function public.apply_cycle_count_location_delta(uuid, uuid, uu
 -- the authenticated DML grants STAY: the INVOKER receipt bodies write these
 -- tables as the user.
 
-drop trigger if exists trg_zz_receipts_guard on public.receipts;
-create trigger trg_zz_receipts_guard
+create or replace trigger trg_zz_receipts_guard
   before insert or update or delete on public.receipts
   for each row execute function public.tg_ledger_only_guard();
 
-drop trigger if exists trg_zz_receipt_lines_guard on public.receipt_lines;
-create trigger trg_zz_receipt_lines_guard
+create or replace trigger trg_zz_receipt_lines_guard
   before insert or update or delete on public.receipt_lines
   for each row execute function public.tg_ledger_only_guard();
 
-drop trigger if exists trg_zz_receipt_line_lots_guard on public.receipt_line_lots;
-create trigger trg_zz_receipt_line_lots_guard
+create or replace trigger trg_zz_receipt_line_lots_guard
   before insert or update or delete on public.receipt_line_lots
   for each row execute function public.tg_ledger_only_guard();
 
@@ -650,7 +686,8 @@ grant execute on function public.recompute_po_status(uuid) to authenticated, ser
 
 -- ── 6. inventory_items: org immutable; cost, charter, warehouse edit rules ──
 -- A direct PATCH of these three columns skipped every rule the item-edit
--- service applies. Rather than force them through a separate RPC (which would
+-- service applies. The guard also records who created an item and when (an
+-- API-role insert cannot choose either, and neither changes afterwards). Rather than force them through a separate RPC (which would
 -- split one item edit into two writes that can half-apply), the guard applies
 -- the SAME rules to the single UPDATE the service already sends:
 --   * items:update (has_permission honours user and role overrides; the RLS
@@ -711,8 +748,21 @@ begin
     return new;
   end if;
 
+  -- Who created an item and when are the database's to record. The
+  -- failed-create rollback (compensate_opening_stock) trusts both.
+  if tg_op = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    return new;
+  end if;
+
   if new.organization_id is distinct from old.organization_id then
     raise exception 'An item cannot be moved to another organization.'
+      using errcode = '42501';
+  end if;
+  if new.created_by is distinct from old.created_by
+     or new.created_at is distinct from old.created_at then
+    raise exception 'An item''s creator and creation time cannot be changed.'
       using errcode = '42501';
   end if;
 
@@ -756,17 +806,17 @@ end;
 $$;
 
 comment on function public.tg_inventory_items_guard() is
-  'BEFORE UPDATE guard (0359): API-role updates cannot change organization_id, '
-  'and cost/charter/warehouse changes follow the item-edit rules. SECURITY '
+  'BEFORE INSERT OR UPDATE guard (0359): API-role inserts get created_by and '
+  'created_at from the database; updates cannot change organization_id or the '
+  'creator, and cost/charter/warehouse changes follow the item-edit rules. SECURITY '
   'INVOKER on purpose (a DEFINER trigger sees postgres and never enforces).';
 
 revoke all on function public.tg_inventory_items_guard() from public, anon, authenticated;
 
-drop trigger if exists trg_zz_inventory_items_guard on public.inventory_items;
 -- No column list: a change made by an earlier BEFORE trigger is still seen,
 -- and 'zz' sorts it after the existing BEFORE triggers.
-create trigger trg_zz_inventory_items_guard
-  before update on public.inventory_items
+create or replace trigger trg_zz_inventory_items_guard
+  before insert or update on public.inventory_items
   for each row execute function public.tg_inventory_items_guard();
 
 -- ── 7. compensate_opening_stock ─────────────────────────────────────────────
@@ -864,3 +914,5 @@ revoke insert, update, delete on
   public.receipts, public.receipt_lines, public.receipt_line_lots
   from anon;
 revoke delete on public.inventory_items from authenticated;
+
+reset lock_timeout;

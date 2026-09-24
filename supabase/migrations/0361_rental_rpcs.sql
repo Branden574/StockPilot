@@ -25,9 +25,52 @@
 -- DEFINER, so they apply the service's own gates explicitly: module enabled,
 -- the permission, and write access to the rental's warehouse.
 --
+-- VISIBILITY. The old checkout read the items through the caller's client, so
+-- inventory_items_select applied: a charter- or category-scoped member could
+-- not rent (or even learn the stock of) an item outside their scope, and got
+-- "not found". A SECURITY DEFINER function reads past RLS, so create_rental
+-- applies the same predicate itself (inventory_items_read_scope below, the
+-- policy's own helpers) before any item-specific check or message.
+--
 -- stock_reservations is already write-locked by policy (USING / WITH CHECK
 -- false); its grants are closed here too. The writers are SECURITY DEFINER
 -- functions and the service role; FK cascades run as the table owner.
+
+set lock_timeout = '5s';
+
+-- The inventory_items_select predicate, for SECURITY DEFINER callers that must
+-- see exactly what the caller's own client would. Keep in step with that
+-- policy (its current shape is 0229's hashed-set form).
+create or replace function public.caller_can_read_item(p_item_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  -- Nobody unauthenticated reads through this (the scope helpers below would
+  -- return nothing for them anyway; this states it where INV-25 can see it).
+  select (select auth.uid()) is not null and exists (
+    select 1
+      from public.inventory_items it
+     where it.id = p_item_id
+       and (it.warehouse_id in (select public.rls_inv_read_full_warehouse_ids())
+            or (it.charter_id is null
+                and it.warehouse_id in (select public.rls_inv_read_assigned_warehouse_ids()))
+            or (it.warehouse_id, it.charter_id) in
+               (select r.warehouse_id, r.charter_id from public.rls_inv_read_warehouse_charter_ids() r))
+       and (it.organization_id in (select public.rls_cat_unrestricted_org_ids())
+            or (it.organization_id, it.category_id) in
+               (select c.organization_id, c.category_id from public.rls_cat_allowed_category_ids() c))
+  );
+$$;
+
+comment on function public.caller_can_read_item(uuid) is
+  'True when inventory_items_select would show the caller this item (0361). '
+  'For SECURITY DEFINER paths that must not read past the caller''s scope.';
+
+revoke all on function public.caller_can_read_item(uuid) from public, anon;
+grant execute on function public.caller_can_read_item(uuid) to authenticated, service_role;
 
 -- ── create_rental ───────────────────────────────────────────────────────────
 -- p_lines: [{ "item_id": uuid, "quantity": number, "notes": text|null }]
@@ -94,12 +137,15 @@ begin
     raise exception 'lines_invalid' using errcode = '22023';
   end if;
 
+  -- An item outside the caller's read scope is "not found", exactly as the
+  -- old user-client read reported it, before its name or stock is read.
   if exists (
        select 1 from jsonb_array_elements(p_lines) e
         where not exists (select 1 from public.inventory_items it
                            where it.id = (e.value ->> 'item_id')::uuid
                              and it.organization_id = v_org
-                             and it.deleted_at is null)) then
+                             and it.deleted_at is null)
+           or not public.caller_can_read_item((e.value ->> 'item_id')::uuid)) then
     raise exception 'One or more items were not found.'
       using errcode = 'P0002', hint = 'rental_invalid';
   end if;
@@ -275,3 +321,5 @@ revoke insert, update, delete, truncate, trigger, references
 -- migration.
 revoke truncate, trigger, references on public.rentals, public.rental_lines from authenticated, anon;
 revoke insert, update, delete on public.rentals, public.rental_lines from anon;
+
+reset lock_timeout;

@@ -11,6 +11,12 @@
 -- PART 4 (34-50) approve_po_import_commit: amounts from the stored import
 --                lines, charges built like buildPoCharges, the threshold, the
 --                claim, and a failure rolling the claim back.
+-- PART 5 (51-59) Review hardening: lines must be positive; negative lines
+--                and charges never lower the threshold value; re-typing a
+--                line as a discount cannot net an import under the gate; the
+--                gate uses quantity x cost when it exceeds the line total;
+--                negative import lines are refused; charge rounding and labels
+--                match buildPoCharges; the real service_role is exempt.
 --
 -- Roles: the guards key on current_user, so writes run under
 -- `set local role authenticated` with request.jwt.claim.sub. Closed grants
@@ -19,7 +25,7 @@
 -- Run via `supabase test db` after `supabase db reset`.
 
 begin;
-select plan(50);
+select plan(59);
 
 \set orgA    '\'03600000-0000-0000-0000-00000000000a\''
 \set orgB    '\'03600000-0000-0000-0000-00000000000b\''
@@ -213,7 +219,8 @@ select lives_ok(
   '21: an ordered PO can be cancelled');
 
 -- The receipt RPCs run with the ledger flag and may set receiving statuses.
-set local stockpilot.ledger to 'on';
+-- The flag holds the current transaction's id (0359: ledger.active()).
+do $$ begin perform set_config('stockpilot.ledger', pg_current_xact_id()::text, true); end $$;
 select lives_ok(
   format($$update public.purchase_orders set status = 'partially_received' where id = %L$$, :poOrd),
   '22: with the ledger flag (inside a receipt RPC) the receiving status is written');
@@ -265,7 +272,8 @@ select lives_ok(
 select lives_ok(
   $$delete from public.purchase_order_items where purchase_order_id = '03600000-0000-0000-0000-0000000000e9'$$,
   '31: ... and removed from it (the draft editor''s full replace)');
-set local stockpilot.ledger to 'on';
+-- The flag holds the current transaction's id (0359: ledger.active()).
+do $$ begin perform set_config('stockpilot.ledger', pg_current_xact_id()::text, true); end $$;
 select lives_ok(
   format($$update public.purchase_order_items set quantity_received = 5 where id = %L$$, :lnOrd),
   '32: with the ledger flag (inside a receipt RPC) quantity_received is written');
@@ -388,6 +396,95 @@ select lives_ok(
 reset role;
 select is((select status from public.po_imports where id = :imp3), 'approved',
   '50: ... and it is claimed');
+
+-- ═══ PART 5: review hardening ═══════════════════════════════════════════════
+reset role;
+insert into public.purchase_orders (id, organization_id, po_number, status, subtotal, total) values
+  ('03600000-0000-0000-0000-0000000000a7', :orgA, 'PO-0360-NEG', 'draft', 0, 0),
+  ('03600000-0000-0000-0000-0000000000a8', :orgA, 'PO-0360-CHG', 'draft', 0, 0),
+  ('03600000-0000-0000-0000-0000000000a9', :orgA, 'PO-0360-SVC', 'draft', 0, 0);
+-- Written as the owner, which the guard exempts: rows only a direct write
+-- could have produced before this migration.
+insert into public.purchase_order_items (organization_id, purchase_order_id, item_id, quantity_ordered, quantity_received, unit_cost) values
+  (:orgA, '03600000-0000-0000-0000-0000000000a7', :itemA, 10, 0, 500),
+  (:orgA, '03600000-0000-0000-0000-0000000000a7', :itemA, -10, 0, 500),
+  (:orgA, '03600000-0000-0000-0000-0000000000a8', :itemA, 1, 0, 1500),
+  (:orgA, '03600000-0000-0000-0000-0000000000a9', :itemA, 10, 0, 500);
+insert into public.purchase_order_charges (organization_id, purchase_order_id, charge_type, amount) values
+  (:orgA, '03600000-0000-0000-0000-0000000000a8', 'discount', -1000);
+
+set local "request.jwt.claim.sub" to :u_mgr;
+set local role to 'authenticated';
+select throws_ok(
+  $$insert into public.purchase_order_items (organization_id, purchase_order_id, item_id, quantity_ordered, unit_cost)
+    values ('03600000-0000-0000-0000-00000000000a', '03600000-0000-0000-0000-0000000000e9', '03600000-0000-0000-0000-0000000000d1', -10, 500)$$,
+  '23514', 'A purchase order line needs a quantity above 0 and a cost of 0 or more.',
+  '51: an API-role line cannot be negative (the PO form''s own rule)');
+select throws_ok(
+  $$update public.purchase_orders set status = 'ordered' where id = '03600000-0000-0000-0000-0000000000a7'$$,
+  '42501', 'This purchase order meets the approval threshold. Ask an owner or admin to place it.',
+  '52: a negative line cannot offset a large one under the threshold (5000 - 5000 counts as 5000)');
+select throws_ok(
+  $$update public.purchase_orders set status = 'ordered' where id = '03600000-0000-0000-0000-0000000000a8'$$,
+  '42501', 'This purchase order meets the approval threshold. Ask an owner or admin to place it.',
+  '53: nor can a negative charge (1500 - 1000 counts as 1500)');
+reset role;
+
+insert into public.po_imports (id, organization_id, uploaded_by, source_type, file_name, file_mime_type,
+                               file_size, storage_path, sha256, status) values
+  ('03600000-0000-0000-0000-000000000105', :orgA, :u_mgr, 'pdf', 'imp5.pdf', 'application/pdf', 1, 'org/imp5.pdf', 'sha-0360-5', 'parsed'),
+  ('03600000-0000-0000-0000-000000000106', :orgA, :u_mgr, 'pdf', 'imp6.pdf', 'application/pdf', 1, 'org/imp6.pdf', 'sha-0360-6', 'parsed'),
+  ('03600000-0000-0000-0000-000000000107', :orgA, :u_mgr, 'pdf', 'imp7.pdf', 'application/pdf', 1, 'org/imp7.pdf', 'sha-0360-7', 'parsed'),
+  ('03600000-0000-0000-0000-000000000108', :orgA, :u_mgr, 'pdf', 'imp8.pdf', 'application/pdf', 1, 'org/imp8.pdf', 'sha-0360-8', 'parsed');
+insert into public.po_import_lines (id, po_import_id, line_number, line_type, qty_ordered_original, unit_cost, line_total, description) values
+  ('03600000-0000-0000-0000-000000001501', '03600000-0000-0000-0000-000000000105', 1, 'inventory', 1, 1200, 1200, 'Laptop'),
+  ('03600000-0000-0000-0000-000000001502', '03600000-0000-0000-0000-000000000105', 2, 'inventory', 1, 1200, 1200, 'Laptop 2'),
+  ('03600000-0000-0000-0000-000000001601', '03600000-0000-0000-0000-000000000106', 1, 'inventory', 100, 20, 500, 'Understated total'),
+  ('03600000-0000-0000-0000-000000001701', '03600000-0000-0000-0000-000000000107', 1, 'inventory', -1, 5, -5, 'Negative'),
+  ('03600000-0000-0000-0000-000000001801', '03600000-0000-0000-0000-000000000108', 1, 'inventory', 1, 1, 1, 'Cable'),
+  ('03600000-0000-0000-0000-000000001802', '03600000-0000-0000-0000-000000000108', 2, 'fee', 1, 1.005, 1.005, E' \n\t');
+
+set local role to 'authenticated';
+select throws_ok(
+  format($$select public.approve_po_import_commit('03600000-0000-0000-0000-000000000105', 'PO-0360-IMP5', %L, %L, null, null, null,
+           jsonb_build_array(jsonb_build_object('line_id', '03600000-0000-0000-0000-000000001501', 'item_id', %L, 'line_type', 'inventory'),
+                             jsonb_build_object('line_id', '03600000-0000-0000-0000-000000001502', 'item_id', null, 'line_type', 'discount')))$$,
+         :supA, :locA, :itemA),
+  '42501', 'po_over_approval_threshold',
+  '54: re-typing a 1200 line as a discount does not net a 1200 import under the gate');
+select throws_ok(
+  format($$select public.approve_po_import_commit('03600000-0000-0000-0000-000000000106', 'PO-0360-IMP6', %L, %L, null, null, null,
+           jsonb_build_array(jsonb_build_object('line_id', '03600000-0000-0000-0000-000000001601', 'item_id', %L, 'line_type', 'inventory')))$$,
+         :supA, :locA, :itemA),
+  '42501', 'po_over_approval_threshold',
+  '55: the gate uses quantity x cost (2000) when the stored line total (500) is lower');
+select throws_ok(
+  format($$select public.approve_po_import_commit('03600000-0000-0000-0000-000000000107', 'PO-0360-IMP7', %L, %L, null, null, null,
+           jsonb_build_array(jsonb_build_object('line_id', '03600000-0000-0000-0000-000000001701', 'item_id', %L, 'line_type', 'inventory')))$$,
+         :supA, :locA, :itemA),
+  '22023', 'line_amount_invalid',
+  '56: a negative inventory line is refused (the RPC runs past the line guard)');
+
+truncate t_po;
+insert into t_po
+select public.approve_po_import_commit('03600000-0000-0000-0000-000000000108', 'PO-0360-IMP8', :supA, :locA, null, null, null,
+  jsonb_build_array(
+    jsonb_build_object('line_id', '03600000-0000-0000-0000-000000001801', 'item_id', :itemA, 'line_type', 'inventory'),
+    jsonb_build_object('line_id', '03600000-0000-0000-0000-000000001802', 'item_id', null, 'line_type', 'fee')));
+reset role;
+select is(
+  (select row(trim_scale(amount), label)::text from public.purchase_order_charges where purchase_order_id = (select id from t_po)),
+  row(1::numeric, null::text)::text,
+  '57: a 1.005 fee rounds to 1.00 as Math.round on doubles does, and a whitespace-only description is no label');
+select is((select trim_scale(total) from public.purchase_orders where id = (select id from t_po)), 2::numeric,
+  '58: ... so the PO total matches the service''s audit (1 + 1.00)');
+
+-- The crons place POs as the service_role.
+set local role to 'service_role';
+select lives_ok(
+  $$update public.purchase_orders set status = 'ordered', ordered_at = now() where id = '03600000-0000-0000-0000-0000000000a9'$$,
+  '59: the service_role (recurring-PO and auto-reorder crons) is not held to the API-role lifecycle');
+reset role;
 
 select * from finish();
 rollback;

@@ -24,6 +24,8 @@
 --    insert a row, including one already 'approved', and approvals_admin_decide
 --    lets an admin rewrite any row. Writes are closed; the SELECT policy stays.
 
+set lock_timeout = '5s';
+
 -- ── 1. order_request_lines ──────────────────────────────────────────────────
 
 alter policy order_request_lines_insert on public.order_request_lines
@@ -65,16 +67,18 @@ begin
   -- The cost snapshot is the item's cost, as the service records it.
   new.unit_cost_at_request := coalesce(
     (select ii.unit_cost from public.inventory_items ii where ii.id = new.item_id), 0);
+  -- The pick-slip staleness check compares line created_at with when the slip
+  -- was printed; a backdated line would hide itself from it.
+  new.created_at := now();
   return new;
 end;
 $$;
 
 comment on function public.tg_order_request_lines_guard() is
   'BEFORE INSERT guard (0363): an API-role order line starts unfulfilled and '
-  'unpriced, with its cost snapshot taken from the item.';
+  'unpriced, with its cost snapshot taken from the item and created now.';
 
-drop trigger if exists trg_zz_order_request_lines_guard on public.order_request_lines;
-create trigger trg_zz_order_request_lines_guard
+create or replace trigger trg_zz_order_request_lines_guard
   before insert on public.order_request_lines
   for each row execute function public.tg_order_request_lines_guard();
 
@@ -87,3 +91,5 @@ revoke insert on public.order_request_lines from anon;
 drop policy if exists approvals_insert on public.approvals;
 drop policy if exists approvals_admin_decide on public.approvals;
 revoke insert, update, delete, truncate, trigger, references on public.approvals from authenticated, anon;
+
+reset lock_timeout;

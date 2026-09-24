@@ -100,7 +100,8 @@ select ok(
 -- RPC wrappers raise (post_cycle_count here). Sections 2 and 3 pin the 0346
 -- gate as that caller reaches it, so the flag is on; the flag-off refusal of
 -- a direct call is pinned in 0359's own test.
-set local stockpilot.ledger to 'on';
+-- The flag holds the current transaction's id (0359: ledger.active()).
+do $$ begin perform set_config('stockpilot.ledger', pg_current_xact_id()::text, true); end $$;
 set local "request.jwt.claim.sub" to :u_out;
 select throws_ok(
   format($$select public.apply_cycle_count_location_delta(%L, %L, %L, 5000)$$, :itemA, :rackA, :orgA),

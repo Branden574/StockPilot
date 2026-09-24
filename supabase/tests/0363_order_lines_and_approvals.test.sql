@@ -8,11 +8,14 @@
 --               a line starts unfulfilled and unpriced; its cost snapshot
 --               is the item's; the owner (service role, SECDEF RPCs) is
 --               exempt.
+-- PART 3 (13-14) Review hardening: a line's created_at is the database's (the
+--               pick-slip staleness check reads it); the real service_role
+--               (portal, public order route) is exempt.
 --
 -- Run via `supabase test db` after `supabase db reset`.
 
 begin;
-select plan(12);
+select plan(14);
 
 \set orgA  '\'03630000-0000-0000-0000-00000000000a\''
 \set u_req '\'03630000-0000-0000-0000-0000000000a1\''
@@ -113,6 +116,23 @@ select is(
      from public.order_request_lines where order_request_id = :oPend and unit_price_at_request is not null),
   row(9::numeric, 19::numeric)::text,
   '12: the owner (portal and public route as service role) is not held to the API-role rules');
+
+-- ═══ PART 3: review hardening ═══════════════════════════════════════════════
+set local "request.jwt.claim.sub" to :u_req;
+set local role to 'authenticated';
+insert into public.order_request_lines (id, order_request_id, item_id, quantity_requested, created_at)
+values ('03630000-0000-0000-0000-0000000000f1', :oAppr, :item, 1, '2001-01-01');
+reset role;
+select ok(
+  (select created_at > now() - interval '1 minute' from public.order_request_lines
+    where id = '03630000-0000-0000-0000-0000000000f1'),
+  '13: a backdated line is recorded as added now (it cannot hide from the pick-slip staleness check)');
+set local role to 'service_role';
+select lives_ok(
+  format($$insert into public.order_request_lines (order_request_id, item_id, quantity_requested, unit_price_at_request)
+           values (%L, %L, 1, 25)$$, :oPend, :item),
+  '14: the service_role (portal pricing) is not held to the API-role rules');
+reset role;
 
 select * from finish();
 rollback;

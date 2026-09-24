@@ -1172,6 +1172,11 @@ export class PurchaseOrdersService {
         'This purchase order was cancelled and cannot be reopened. Create a new one instead.',
       );
     }
+    // Already there (a second tab, a stale page): nothing to change. Writing
+    // it again would re-stamp ordered_at, which the database refuses for a PO
+    // that is not moving out of draft (migration 0360), and re-publish the
+    // outbox event the dedupe key already treats as a no-op.
+    if ((po as { status?: string }).status === status) return;
     if (SPEND_COMMITTING_PO_STATUSES.has(status)) {
       // Spend governance: committing the order is the gated act — drafting
       // and cancelling stay open to everyone with purchase_orders:manage.

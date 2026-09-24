@@ -9,13 +9,19 @@
 -- PART 3 (20-29) return_rental / cancel_rental: out -> returned / cancelled
 --                with the holds released in the same call; idempotent; the
 --                permission and warehouse gates; other orgs see nothing.
+-- PART 4 (30-37) Review hardening: checkout applies the caller's item read
+--                scope (a charter-scoped staffer cannot rent, or read the stock
+--                of, another charter's item); return and cancel refuse a
+--                read-only viewer, a member without the permission, and a
+--                manager-permission holder without write on the warehouse;
+--                all three refuse when the module is off.
 --
 -- Actors are set with request.jwt.claim.sub (the functions are SECURITY
 -- DEFINER and gate on auth.uid()). Run via `supabase test db` after
 -- `supabase db reset`.
 
 begin;
-select plan(29);
+select plan(37);
 
 \set orgA   '\'03610000-0000-0000-0000-00000000000a\''
 \set orgB   '\'03610000-0000-0000-0000-00000000000b\''
@@ -120,12 +126,16 @@ select throws_ok(
            jsonb_build_array(jsonb_build_object('item_id', %L, 'quantity', 1)))$$, :whA, :rA),
   '22023', 'Projector A: only 0 available to rent (5 on hand, 5 already reserved) — 1 requested.',
   '8: the next unit is refused: 5 on hand, 3 + 2 already held');
+-- A manager sees both warehouses, so this reaches the warehouse rule (staff
+-- assigned only to A would get "not found", as the old service answered).
+set local "request.jwt.claim.sub" to :u_mgr;
 select throws_ok(
   format($$select public.create_rental(%L, null, 'Borrower Two', null, now() + interval '1 day', null,
            jsonb_build_array(jsonb_build_object('item_id', %L, 'quantity', 1),
                              jsonb_build_object('item_id', %L, 'quantity', 1)))$$, :whA, :rA2, :rA2),
   '22023', 'All items must be in the rental warehouse.',
   '9: an item from another warehouse is refused');
+set local "request.jwt.claim.sub" to :u_stf;
 select throws_ok(
   format($$select public.create_rental(%L, null, 'Borrower Two', null, now() + interval '1 day', null,
            jsonb_build_array(jsonb_build_object('item_id', %L, 'quantity', 1)))$$, :whA, :nA),
@@ -215,6 +225,80 @@ select throws_ok(
   format($$select public.return_rental(%L, null)$$, :held),
   '42501', 'forbidden',
   '29: an unauthenticated call is refused');
+
+-- ═══ PART 4: review hardening ═══════════════════════════════════════════════
+reset role;
+insert into auth.users (id, email, raw_user_meta_data) values
+  ('03610000-0000-0000-0000-0000000000a5', 'chs-0361@test.local', '{}'::jsonb),
+  ('03610000-0000-0000-0000-0000000000a6', 'nrc-0361@test.local', '{}'::jsonb),
+  ('03610000-0000-0000-0000-0000000000a7', 'mng-0361@test.local', '{}'::jsonb)
+on conflict (id) do nothing;
+insert into public.organization_members (organization_id, user_id, role, accepted_at) values
+  (:orgA, '03610000-0000-0000-0000-0000000000a5', 'staff', now()),
+  (:orgA, '03610000-0000-0000-0000-0000000000a6', 'staff', now()),
+  (:orgA, '03610000-0000-0000-0000-0000000000a7', 'staff', now());
+insert into public.charters (id, organization_id, name) values
+  ('03610000-0000-0000-0000-0000000000f1', :orgA, 'Charter X 0361'),
+  ('03610000-0000-0000-0000-0000000000f2', :orgA, 'Charter Y 0361');
+insert into public.warehouse_charters (organization_id, warehouse_id, charter_id) values
+  (:orgA, :whA, '03610000-0000-0000-0000-0000000000f1'),
+  (:orgA, :whA, '03610000-0000-0000-0000-0000000000f2');
+-- chs: staff scoped to charter X in warehouse A. nrc: staff in A without
+-- rentals:create. mng: rentals:manage, but assigned only to warehouse A2.
+insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, charter_id, is_primary) values
+  (:orgA, '03610000-0000-0000-0000-0000000000a5', :whA, '03610000-0000-0000-0000-0000000000f1', true),
+  (:orgA, '03610000-0000-0000-0000-0000000000a6', :whA, null, true),
+  (:orgA, '03610000-0000-0000-0000-0000000000a7', :whA2, null, true);
+insert into public.user_permission_overrides (organization_id, user_id, permission, granted) values
+  (:orgA, '03610000-0000-0000-0000-0000000000a6', 'rentals:create', false),
+  (:orgA, '03610000-0000-0000-0000-0000000000a7', 'rentals:manage', true);
+insert into public.inventory_items (id, organization_id, warehouse_id, charter_id, sku, name, quantity_on_hand, is_rental, status, item_type) values
+  ('03610000-0000-0000-0000-0000000000d5', :orgA, :whA, '03610000-0000-0000-0000-0000000000f1', 'R0361-X', 'Charter X kit', 3, true, 'active', 'asset'),
+  ('03610000-0000-0000-0000-0000000000d6', :orgA, :whA, '03610000-0000-0000-0000-0000000000f2', 'R0361-Y', 'Charter Y kit', 3, true, 'active', 'asset');
+
+set local "request.jwt.claim.sub" to '03610000-0000-0000-0000-0000000000a5';
+select throws_ok(
+  format($$select public.create_rental(%L, null, 'Charter X borrower', null, now() + interval '1 day', null,
+           jsonb_build_array(jsonb_build_object('item_id', '03610000-0000-0000-0000-0000000000d6', 'quantity', 10000)))$$, :whA),
+  'P0002', 'One or more items were not found.',
+  '30: a charter-scoped staffer cannot rent another charter''s item, or learn its stock from the refusal');
+create temp table t_r2 (id uuid) on commit drop;
+insert into t_r2 select public.create_rental(:whA, null, 'Charter X borrower', null, now() + interval '1 day', null,
+  jsonb_build_array(jsonb_build_object('item_id', '03610000-0000-0000-0000-0000000000d5', 'quantity', 1)));
+select is((select count(*)::int from public.rentals where id = (select id from t_r2)), 1,
+  '31: ... but rents their own charter''s item');
+
+set local "request.jwt.claim.sub" to :u_vwr;
+select throws_ok(
+  format($$select public.return_rental(%L, null)$$, (select id from t_r2)),
+  '42501', 'forbidden',
+  '32: a viewer with read-only access to the warehouse cannot return a rental');
+set local "request.jwt.claim.sub" to '03610000-0000-0000-0000-0000000000a6';
+select throws_ok(
+  format($$select public.return_rental(%L, null)$$, (select id from t_r2)),
+  '42501', 'forbidden',
+  '33: nor can a member without rentals:create');
+set local "request.jwt.claim.sub" to '03610000-0000-0000-0000-0000000000a7';
+select throws_ok(
+  format($$select public.cancel_rental(%L, 'no')$$, (select id from t_r2)),
+  '42501', 'forbidden',
+  '34: rentals:manage without write on the rental''s warehouse cannot cancel it');
+
+update public.organization_modules set enabled = false where organization_id = :orgA and module_id = 'rentals';
+set local "request.jwt.claim.sub" to :u_mgr;
+select throws_ok(
+  format($$select public.create_rental(%L, null, 'Off', null, now() + interval '1 day', null,
+           jsonb_build_array(jsonb_build_object('item_id', %L, 'quantity', 1)))$$, :whA, :rA),
+  '42501', 'forbidden',
+  '35: with the rentals module off, checkout is refused');
+select throws_ok(
+  format($$select public.return_rental(%L, null)$$, (select id from t_r2)),
+  '42501', 'forbidden',
+  '36: ... and so is a return');
+select throws_ok(
+  format($$select public.cancel_rental(%L, 'off')$$, (select id from t_r2)),
+  '42501', 'forbidden',
+  '37: ... and a cancel');
 
 select * from finish();
 rollback;
