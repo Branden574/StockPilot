@@ -264,7 +264,9 @@ export default function RejectedWorkScreen() {
         )}
 
         <Mono size={10} tracking={0.1} color={c.ink4} style={{ marginTop: 18 }}>
-          {`KEPT FOR ${REJECTED_RETENTION_DAYS} DAYS, THEN REMOVED AUTOMATICALLY`}
+          {/* Retention applies to the never-sent record only: work held for
+              another account is never removed except by Discard. */}
+          {`NEVER-SENT RECORDS ARE KEPT FOR ${REJECTED_RETENTION_DAYS} DAYS, THEN REMOVED AUTOMATICALLY`}
         </Mono>
       </ScrollView>
     </View>

@@ -240,6 +240,13 @@ export async function pullSnapshot(
   if (cacheOwnerAction(await getMeta(CACHE_USER_META_KEY), liveUserId) === 'reset') {
     await deleteOrgData();
     force = true;
+    // The live readers still hold the previous account's modules, permissions
+    // and warehouse banner in memory; the persisted values are gone, so they
+    // fall back to their defaults now rather than whenever (or if) this pull
+    // lands. Same as a workspace switch does after its wipe.
+    refreshEnabledModules();
+    refreshEffectivePermissions();
+    refreshWarehouseScope();
   }
 
   if (!(await isOnline())) return null;

@@ -553,6 +553,25 @@ describe('whose cache: a pull for another account resets it first (#242 follow-u
     expect(apiMock.api.mock.calls[0]?.[1]).toEqual({ asUserId: 'u1' });
   });
 
+  it("the live readers drop the previous account's modules, permissions and banner at the reset", async () => {
+    const { refreshEnabledModules } = await import('./enabled-modules');
+    const { refreshEffectivePermissions } = await import('./use-effective-permissions');
+    const { refreshWarehouseScope } = await import('./warehouse-scope');
+    vi.mocked(refreshEnabledModules).mockClear();
+    vi.mocked(refreshEffectivePermissions).mockClear();
+    vi.mocked(refreshWarehouseScope).mockClear();
+    meta.store.set('cache_user_id', 'u0');
+    meta.store.set('effective_permissions', '["items:read"]');
+    apiMock.api.mockRejectedValue(new Error('offline mid-request')); // the pull itself never lands
+
+    await pullSnapshot();
+
+    expect(meta.store.has('effective_permissions')).toBe(false);
+    expect(refreshEnabledModules).toHaveBeenCalled();
+    expect(refreshEffectivePermissions).toHaveBeenCalled();
+    expect(refreshWarehouseScope).toHaveBeenCalled();
+  });
+
   it("this account's own cache keeps its delta cursor and its rows", async () => {
     meta.store.set('cache_user_id', 'u1');
     const path = await deltaPull(emptySnap());
