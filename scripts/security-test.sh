@@ -303,7 +303,9 @@ WEB_TESTS=(
 #
 # Mobile's security surface is narrower by construction: it holds no RLS policy
 # and signs no storage URL. What it does own is the disabled-account eviction
-# path and scope filtering over its offline cache.
+# path, scope filtering over its offline cache, and the offline OUTBOX: whose
+# queued work is sent under which account and workspace, and that it is never
+# lost to a sign-out or a schema change.
 # ═══════════════════════════════════════════════════════════════════════════
 MOBILE_TESTS=(
   src/lib/account-disabled-probe.test.ts
@@ -313,6 +315,27 @@ MOBILE_TESTS=(
   src/lib/remembered-identity.test.ts
   src/lib/cta-gating.test.ts
   src/lib/warehouse-scope.test.ts
+
+  # S4 — the offline outbox. A queued change is sent only under the account
+  # that queued it and the workspace it was queued in, checked before EACH send
+  # (another account's work is held, never sent as someone else); every pending
+  # counter is per account; sign-out honours signOut's result (no wipe, and no
+  # biometric/MFA gate lifted, while a session survives) and keeps queued work;
+  # the outbox survives every schema version; a cache pulled for another account
+  # is reset before use; an unrelated ROLLBACK cannot undo an outbox write.
+  src/lib/outbox-scope.test.ts
+  src/lib/outbox-owner.sqlite.test.ts
+  src/lib/sync.drain.test.ts
+  src/lib/cycle-count-sync.drain.test.ts
+  src/lib/api.outbox-scope.test.ts
+  src/lib/sign-out-flow.test.ts
+  src/lib/db.ensure-schema.test.ts
+  src/lib/db.get-db.test.ts
+  src/lib/db.addColumnIfMissing.test.ts
+  src/lib/db.transaction-queue.test.ts
+  src/lib/cache-owner.test.ts
+  src/lib/sync.snapshot-removals.test.ts
+  src/lib/draft-debouncer.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
