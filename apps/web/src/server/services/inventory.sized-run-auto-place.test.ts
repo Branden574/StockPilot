@@ -226,7 +226,7 @@ describe('InventoryService.bulkCreateSizedVariants — size-run auto-place onto 
     expect(holdingsReadScope()).toEqual(['v-9', 'v-95', 'v-10']);
   });
 
-  it('LANDMINE: primary_location_id stays the SITE the caller passed on every variant — never the rack id', async () => {
+  it('LANDMINE: primary_location_id ends as the SITE the caller passed on every variant — never the rack id — written as a label after an insert that seeds Unplaced', async () => {
     const stub = buildStub();
     const svc = new InventoryService(makeServiceContext(stub.client));
 
@@ -235,22 +235,25 @@ describe('InventoryService.bulkCreateSizedVariants — size-run auto-place onto 
     const rows = insertedRows(stub);
     expect(rows).toHaveLength(3);
     for (const row of rows) {
-      expect(row.primary_location_id).toBe(SITE);
-      expect(row.primary_location_id).not.toBe('rack-28a');
+      // Owner decision 2026-09-24: the insert carries no primary location, so
+      // the opening stock seeds Unplaced, never the SITE.
+      expect(row.primary_location_id).toBeNull();
       // The typed rack still lands where it always did: the text LABEL column.
       expect(row.bin_location).toBe('28-A');
     }
-    // The ledger's opening entries point at the SITE too — byte-unchanged.
+    // The opening entries record Unplaced (null), where the stock really went.
     const movements = insertedMovements(stub);
     expect(movements).toHaveLength(3);
     for (const m of movements) {
       expect(m.movement_type).toBe('initial');
-      expect(m.to_location_id).toBe(SITE);
+      expect(m.to_location_id).toBeNull();
     }
-    // And nothing re-stamps the column afterwards: placement performs NO
-    // inventory_items write at all, so a later "just set primary_location_id to
-    // the rack" can never sneak back in.
-    expect(stub.chainArgs.get('inventory_items.update')).toBeUndefined();
+    // Exactly ONE inventory_items write afterwards: the SITE label, never the
+    // rack id, so "just set primary_location_id to the rack" cannot sneak in.
+    const updates = stub.chainArgsAll.get('inventory_items.update') ?? [];
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.[0]?.[0]).toEqual({ primary_location_id: SITE });
+    expect(JSON.stringify(updates)).not.toContain('rack-28a');
     // The physical move is the only thing that happened, and it went to the rack.
     expect(transfers(stub).map((t) => t.p_to_location_id)).toEqual([
       'rack-28a',
@@ -457,7 +460,10 @@ describe('InventoryService.bulkCreateSizedVariants — size-run auto-place onto 
 
     // The create is never a casualty of placement.
     expect(created.rows).toHaveLength(3);
-    expect(insertedRows(stub).every((r) => r.primary_location_id === SITE)).toBe(true);
+    // Inserted with no primary location (stock seeds Unplaced); the SITE is
+    // written as a label straight after.
+    expect(insertedRows(stub).every((r) => r.primary_location_id === null)).toBe(true);
+    expect(stub.chainArgs.get('inventory_items.update')?.[0]?.[0]).toEqual({ primary_location_id: SITE });
     // Returns before the holdings read when there is nowhere to put anything.
     expect(stub.chainArgs.get('item_stock_levels.select')).toBeUndefined();
     expect(transfers(stub)).toHaveLength(0);

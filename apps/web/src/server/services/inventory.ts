@@ -2535,6 +2535,21 @@ export class InventoryService {
     const isManualCreatePath =
       !opts.awaitingFirstReceipt && opts.source !== 'import' && !opts.planSlot;
     const typedBinLabel = typeof input.binLocation === 'string' ? input.binLocation.trim() : '';
+    // ═══ THE PRIMARY LOCATION IS A LABEL ON A MANUAL CREATE (owner, 2026-09-24) ═══
+    // tg_seed_initial_level seeds the opening stock AT primary_location_id when
+    // one is set. The pickers offer only SITES (the warehouse building, rooms,
+    // vehicles), so an item added from the phone or web with PRIMARY LOCATION
+    // "DC4" and no rack had its stock recorded at the DC4 site: counted as
+    // placed, missing from the put-away list, and printed in the Items Rack
+    // column as if "DC4" were a rack. 67 items at L4L on 2026-09-23/24.
+    // The owner's rule: stock added without a rack lands in Unplaced, awaiting
+    // put-away, and the primary location stays a label. So a manual create
+    // inserts WITHOUT the primary location (the trigger then seeds the
+    // warehouse's Unplaced bucket, exactly as a create with no location always
+    // has) and writes the label straight after. A typed rack still wins: the
+    // auto-place below moves the stock from Unplaced onto it. Imports and the
+    // PO paths keep their behaviour (they are not manual creates).
+    const primaryIsLabelOnly = isManualCreatePath && !!input.primaryLocationId;
 
     const { data, error } = await this.ctx.supabase
       .from('inventory_items')
@@ -2549,7 +2564,8 @@ export class InventoryService {
         description: input.description ?? null,
         category_id: input.categoryId ?? null,
         supplier_id: input.supplierId ?? null,
-        primary_location_id: input.primaryLocationId ?? null,
+        // See primaryIsLabelOnly: written as a label right after the insert.
+        primary_location_id: primaryIsLabelOnly ? null : (input.primaryLocationId ?? null),
         unit_cost: input.unitCost,
         retail_price: input.retailPrice,
         quantity_on_hand: input.quantityOnHand,
@@ -2610,6 +2626,31 @@ export class InventoryService {
     // throw: the row exists from here on whatever happens next.
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.create');
 
+    // The primary location, as a label only (see primaryIsLabelOnly). The stock
+    // is already seeded in Unplaced; nothing reacts to this column changing.
+    // FAIL-SOFT: the item and its stock are saved whatever happens here, so a
+    // refusal (a custom role with items:create but not items:update) costs the
+    // label, which is reported, never the create.
+    if (primaryIsLabelOnly) {
+      const { data: labelled, error: labelErr } = await this.ctx.supabase
+        .from('inventory_items')
+        .update({ primary_location_id: input.primaryLocationId })
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', data.id as string)
+        .select('primary_location_id')
+        .maybeSingle();
+      if (labelErr || !labelled) {
+        void reportError(new Error(labelErr ? rawErrorText(labelErr) : 'no row updated'), {
+          tag: 'inventory.create.primary_location_label',
+          level: 'warning',
+          organizationId: this.ctx.organizationId,
+        });
+      } else {
+        (data as { primary_location_id: string | null }).primary_location_id =
+          (labelled as { primary_location_id: string | null }).primary_location_id;
+      }
+    }
+
     if (input.quantityOnHand && input.quantityOnHand > 0) {
       // The result USED TO BE DISCARDED — no destructuring at all — so an
       // 'initial' movement that RLS or a pooler timeout refused left the item
@@ -2625,7 +2666,9 @@ export class InventoryService {
         previous_quantity: 0,
         new_quantity: input.quantityOnHand,
         user_id: this.ctx.userId,
-        to_location_id: input.primaryLocationId ?? null,
+        // Where the trigger actually seeded it: Unplaced (null here, as for
+        // every create with no location) when the primary is only a label.
+        to_location_id: primaryIsLabelOnly ? null : (input.primaryLocationId ?? null),
       });
       if (movementErr) {
         await compensateOpeningStockOrThrow(this.ctx, [data.id as string], movementErr, {
@@ -3296,7 +3339,10 @@ export class InventoryService {
       supplier_id: input.supplierId,
       warehouse_id: resolvedWarehouseId,
       charter_id: resolvedCharterId,
-      primary_location_id: input.primaryLocationId,
+      // A size run is always a manual create: the primary location is a label,
+      // written after the insert, so the opening stock seeds Unplaced (see
+      // primaryIsLabelOnly in create()).
+      primary_location_id: null,
       bin_location: input.binLocation,
       retail_price: input.retailPrice,
       unit_cost: input.unitCost,
@@ -3357,6 +3403,31 @@ export class InventoryService {
       quantity_on_hand: number;
       primary_location_id: string | null;
     }>;
+
+    // The primary location as a LABEL (owner, 2026-09-24; see create()). One
+    // write for the whole run (at most 60 variants). FAIL-SOFT for the same
+    // reason: the variants and their stock are saved; a refused label is
+    // reported, never fatal.
+    if (input.primaryLocationId && inserted.length > 0) {
+      const { error: labelErr } = await this.ctx.supabase
+        .from('inventory_items')
+        .update({ primary_location_id: input.primaryLocationId })
+        .eq('organization_id', this.ctx.organizationId)
+        // in-list-bound: the ids this call just inserted, at most 60 (schema max)
+        .in(
+          'id',
+          inserted.map((r) => r.id),
+        );
+      if (labelErr) {
+        void reportError(new Error(rawErrorText(labelErr)), {
+          tag: 'inventory.bulk_create_sized.primary_location_label',
+          level: 'warning',
+          organizationId: this.ctx.organizationId,
+        });
+      } else {
+        for (const r of inserted) r.primary_location_id = input.primaryLocationId;
+      }
+    }
 
     // Audited FIRST: the rows exist from here on whatever happens to the
     // movement write below, and an item that exists with no 'created' event is
@@ -3420,7 +3491,8 @@ export class InventoryService {
         previous_quantity: 0,
         new_quantity: r.quantity_on_hand,
         user_id: this.ctx.userId,
-        to_location_id: r.primary_location_id,
+        // Seeded in Unplaced (the insert carried no primary location).
+        to_location_id: null,
       }));
     if (movementRows.length > 0) {
       const { error: movementErr } = await this.ctx.supabase

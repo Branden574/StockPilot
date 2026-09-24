@@ -292,32 +292,53 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
     expect(transferCall(stub)).toBeUndefined();
   });
 
-  it('an explicit primaryLocationId from the caller passes through UNCHANGED — auto-place still runs, transferring FROM the site the trigger seeded', async () => {
+  it('an explicit primaryLocationId is a LABEL: the insert omits it (stock seeds Unplaced), it is written straight after, and auto-place moves from Unplaced', async () => {
+    // Owner decision 2026-09-24: a manual create never seeds stock AT the
+    // primary location (a SITE such as "DC4"); that printed "DC4" in the Items
+    // Rack column and kept the stock out of the put-away list.
     const stub = buildStub({
       'locations.select': { data: [{ id: 'rack-28a', name: '28-A' }], error: null },
-      // Models the trigger seeding at the caller's OWN primaryLocationId
-      // (a real site) rather than the warehouse's Unplaced bucket.
-      'item_stock_levels.select': {
-        data: [{ item_id: 'item-new', location_id: 'site-chosen-by-caller', quantity: 5 }],
-        error: null,
-      },
+      // The trigger saw no primary location, so it seeded the Unplaced bucket.
+      ...SEEDED_AT_UNPLACED,
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
     await svc.create({ ...BASE, primaryLocationId: 'site-chosen-by-caller' });
 
-    // create() never rewrites the caller's explicit choice.
-    expect(insertedItemRow(stub).primary_location_id).toBe('site-chosen-by-caller');
-    expect(insertedMovementRow(stub).to_location_id).toBe('site-chosen-by-caller');
-    // Auto-place is NOT gated on primaryLocationId being unset anymore —
-    // it still moves whatever the trigger seeded onto the typed rack.
+    expect(insertedItemRow(stub).primary_location_id).toBeNull();
+    expect(insertedMovementRow(stub).to_location_id).toBeNull();
+    // The caller's choice is still recorded, as the label, and never as the rack.
+    expect(stub.chainArgs.get('inventory_items.update')?.[0]?.[0]).toEqual({
+      primary_location_id: 'site-chosen-by-caller',
+    });
     const transfer = transferCall(stub);
     expect(transfer).toBeDefined();
-    expect(transfer!.args).toMatchObject({
-      p_from_location_id: 'site-chosen-by-caller',
-      p_to_location_id: 'rack-28a',
-      p_quantity: 5,
+    expect(transfer!.args).toMatchObject({ p_to_location_id: 'rack-28a' });
+    expect(transfer!.args).not.toMatchObject({ p_from_location_id: 'site-chosen-by-caller' });
+  });
+
+  it('with no rack typed, a primaryLocationId still leaves the stock in Unplaced (no transfer anywhere)', async () => {
+    const stub = buildStub({ ...SEEDED_AT_UNPLACED });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.create({ ...BASE, binLocation: null, primaryLocationId: 'site-chosen-by-caller' });
+
+    expect(insertedItemRow(stub).primary_location_id).toBeNull();
+    expect(insertedMovementRow(stub).to_location_id).toBeNull();
+    expect(stub.chainArgs.get('inventory_items.update')?.[0]?.[0]).toEqual({
+      primary_location_id: 'site-chosen-by-caller',
     });
+    expect(transferCall(stub)).toBeUndefined();
+  });
+
+  it('an IMPORT create keeps seeding at the primary location (not a manual create)', async () => {
+    const stub = buildStub({});
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.create({ ...BASE, binLocation: null, primaryLocationId: 'site-chosen-by-caller' }, { source: 'import' } as never);
+
+    expect(insertedItemRow(stub).primary_location_id).toBe('site-chosen-by-caller');
+    expect(stub.chainArgs.get('inventory_items.update')).toBeUndefined();
   });
 
   it('a concurrent identical-rack create (23505 on the unique index) re-resolves instead of failing; still no transfer once resolution truly fails', async () => {

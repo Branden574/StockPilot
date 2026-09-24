@@ -2307,6 +2307,20 @@ export function InventoryTable({
                         // decision 2026-07-08, consistent with the item detail
                         // card and the qty sub-line below).
                         if (item.placement_label !== undefined) {
+                          // A SITE is not a rack. Stock recorded at the
+                          // warehouse's own site location (a NULL-kind row such
+                          // as "DC4") used to print its name here, which read as
+                          // "rack DC4" (owner report 2026-09-24). Say what it is.
+                          if (item.placement_kind === 'site' && item.placement_label) {
+                            return (
+                              <span
+                                className="text-warning"
+                                title={`At ${item.placement_label} (the site), not on a rack. Use Set rack to put it away.`}
+                              >
+                                No rack
+                              </span>
+                            );
+                          }
                           const awaiting =
                             item.placement_kind === 'staging' || item.placement_kind === 'unplaced';
                           return item.placement_label ? (
@@ -2717,6 +2731,9 @@ function rowDisplayQuantity(item: Item, stockView: StockView): number {
  */
 function itemRackLabels(item: Item): string[] {
   if (item.placement_label !== undefined) {
+    // A site holding is not a rack (the cell reads "No rack"), so the group
+    // header must not count it as one.
+    if (item.placement_kind === 'site') return [];
     return item.placement_label ? [item.placement_label] : [];
   }
   if (item.placed_racks !== undefined) return item.placed_racks;
