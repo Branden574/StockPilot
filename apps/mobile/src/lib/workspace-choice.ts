@@ -52,7 +52,16 @@ export function chooseActiveOrg(input: {
   if (activeOrgId === null) return { activeOrgId: null, persist: false, resetCache: false };
 
   // The workspace the API was answering for before this choice.
-  const apiWorkspace = input.stored !== null ? input.stored : isMember(input.profileDefault) ? input.profileDefault : null;
+  // With a single membership the server's own fallback (its oldest membership)
+  // is that org; with several and no default, which one it picked is unknown here.
+  const apiWorkspace =
+    input.stored !== null
+      ? input.stored
+      : isMember(input.profileDefault)
+        ? input.profileDefault
+        : input.orgIds.length === 1
+          ? input.orgIds[0]
+          : null;
   return {
     activeOrgId,
     persist: activeOrgId !== input.stored,

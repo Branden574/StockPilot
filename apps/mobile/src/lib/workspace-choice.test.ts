@@ -32,6 +32,14 @@ describe('chooseActiveOrg', () => {
     });
   });
 
+  it('a single-organization member with no default keeps their cache (the server answers for that one org)', () => {
+    expect(chooseActiveOrg({ orgIds: [A], stored: null, profileDefault: null })).toEqual({
+      activeOrgId: A,
+      persist: true,
+      resetCache: false,
+    });
+  });
+
   it('a stored workspace the user has left is replaced, and its stale cache is reset', () => {
     expect(chooseActiveOrg({ orgIds: [A, B], stored: GONE, profileDefault: B })).toEqual({
       activeOrgId: B,
