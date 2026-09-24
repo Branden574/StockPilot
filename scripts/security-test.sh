@@ -159,6 +159,20 @@ PGTAP_TESTS=(
   supabase/tests/0353_user_release_state.test.sql
   supabase/tests/0354_module_enabled_honours_comp.test.sql
 
+  # Direct-write lockdown (Phase 0 S1/S2, 2026-09-24): the ledger flag and the
+  # guard triggers that refuse direct PostgREST writes to stock, receipts, POs,
+  # rentals, maintenance requests, approvals and order lines.
+  supabase/tests/0359_ledger_flag_carriers.test.sql
+  supabase/tests/0360_purchase_order_guards.test.sql
+  supabase/tests/0361_rental_rpcs.test.sql
+  supabase/tests/0362_maintenance_request_guard.test.sql
+  supabase/tests/0363_order_lines_and_approvals.test.sql
+  supabase/tests/0364_ledger_lockdown_enforce.test.sql
+  supabase/tests/0365_s2_fulfilment_fixes.test.sql
+  # Count lines, AI-scan evidence and count status (S5, 0367): the columns the
+  # post trusts are not client-writable, and a closed count cannot be reopened.
+  supabase/tests/0367_count_line_column_grants.test.sql
+
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
   supabase/tests/0142_order_attachments_read_floor.test.sql
