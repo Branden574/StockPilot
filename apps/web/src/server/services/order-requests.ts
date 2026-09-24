@@ -1,7 +1,5 @@
 import 'server-only';
 
-import { after } from 'next/server';
-
 import {
   can,
   formatOrderNumber,
@@ -32,6 +30,7 @@ import {
   withContext,
   type ServiceContext,
 } from './context';
+import { defer } from './lib/defer';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
@@ -338,44 +337,6 @@ export async function syncOrderScheduleEvent(
       organizationId: organizationId ?? null,
       extra: { orderId, outcome },
     });
-  }
-}
-
-/**
- * Run post-response work so the serverless invocation actually STAYS ALIVE for
- * it.
- *
- * WHAT WENT WRONG (SP-092): every notification tail here was spelled
- * `void this.notifyEmail(...)` / `void this.autoScheduleFromOrder(...)`, i.e. a
- * promise still pending when the action returned and the response flushed. On
- * Vercel the runtime may freeze the instance at that moment, so the approval
- * email was never handed to Resend, the linked schedule_events row was never
- * inserted, and the schedule status sync never ran — silently, with no error
- * anywhere. Fluid compute usually keeps the instance warm, which is why it
- * mostly worked; at ~1 order/day there is frequently no other in-flight request
- * to keep it warm, which is exactly when it would not. `after()` registers the
- * work WITH the request, and the platform waits for it (the same reason
- * actions/auth.ts wraps its new-device alert).
- *
- * WHY THE try/catch: `after` throws synchronously — "`after` was called outside
- * a request scope" (next/dist/server/after/after.js) — whenever this service is
- * driven from a script, a cron worker or vitest. There is no response to
- * outlive in those contexts, so plain fire-and-forget is the correct fallback
- * rather than an exception that would fail the caller's mutation.
- *
- * Deliberately NOT applied to `dispatchEvent`: that writes a durable
- * integration_deliveries row first and a cron drains it, so it is already
- * at-least-once (see integration-events.ts).
- */
-function defer(fn: () => Promise<unknown>): void {
-  // Errors are swallowed on purpose — every caller is best-effort tail work
-  // that must never turn a committed mutation into a failed request. The
-  // helpers themselves log/report.
-  const run = () => fn().catch(() => {});
-  try {
-    after(run);
-  } catch {
-    void run();
   }
 }
 

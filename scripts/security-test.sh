@@ -278,6 +278,20 @@ WEB_TESTS=(
   # MED-27/28 — the emitted header set: no Supabase CSP wildcard, popup-safe
   # COOP, CORP. Asserted as properties, not as the literal strings.
   src/test/security-headers.test.ts
+  # S6-A — rental checkout, return and cancel answer an internal failure with
+  # a fixed sentence, never the raw PostgREST text (the phone and the web
+  # toast both show the message verbatim). The route and action pin the
+  # boundary; rentals.hardening pins the service half (an unmapped function
+  # error keeps its raw text only in internalDetail, S13). The overdue cron
+  # emails people OUTSIDE the organization: a failed module read fails the run
+  # with nothing sent, the explicit rentals row (never the comp) decides, and
+  # a rental is claimed before its email so overlapping runs cannot send twice.
+  # Each file carries the "Security invariant" marker, so PRE-CHECK 2 fails if
+  # one is dropped from this list.
+  src/app/api/v1/rentals/route.test.ts
+  src/server/actions/rentals.test.ts
+  src/server/services/rentals.hardening.test.ts
+  src/app/api/cron/rental-overdue/route.test.ts
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts

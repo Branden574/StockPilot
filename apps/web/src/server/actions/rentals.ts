@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { unstable_rethrow } from 'next/navigation';
 
 import { ServiceError, withContext } from '@/server/services/context';
 import { RentalsService } from '@/server/services/rentals';
@@ -13,6 +14,27 @@ import {
   ok,
   type ActionResult,
 } from '@stockpilot/core';
+
+/**
+ * One error mapping for the three rental actions. An internal_error's public
+ * message is already the generic one (ServiceError, S13); its raw cause is
+ * logged here. Anything that is not a ServiceError used to go back as its own
+ * `message`, which is whatever the thrower wrote (a PostgREST string, a
+ * network error); it now gets a fixed sentence and the cause stays in the
+ * server log. A redirect from the auth context (a signed-out session) is
+ * rethrown so it still redirects instead of reading as a failure.
+ */
+function toActionError<T>(e: unknown): ActionResult<T> {
+  unstable_rethrow(e);
+  if (e instanceof ServiceError) {
+    if (e.code === 'internal_error') {
+      console.error('[rentals] action failed', e.internalDetail ?? e.message);
+    }
+    return err(e.code, e.message);
+  }
+  console.error('[rentals] action failed', e);
+  return err('internal_error', 'Something went wrong. Please try again.');
+}
 
 export async function createRentalAction(
   input: unknown,
@@ -27,9 +49,7 @@ export async function createRentalAction(
     revalidatePath('/dashboard/orders/new');
     return ok(result);
   } catch (e) {
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return toActionError(e);
   }
 }
 
@@ -47,9 +67,7 @@ export async function markRentalReturnedAction(
     revalidatePath('/dashboard/orders/new');
     return ok(undefined);
   } catch (e) {
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return toActionError(e);
   }
 }
 
@@ -67,8 +85,6 @@ export async function cancelRentalAction(
     revalidatePath('/dashboard/orders/new');
     return ok(undefined);
   } catch (e) {
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return toActionError(e);
   }
 }
