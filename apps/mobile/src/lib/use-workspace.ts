@@ -149,29 +149,28 @@ async function loadProfileDefaultOrg(userId: string): Promise<string | null> {
   return ((data as { default_organization_id: string | null } | null)?.default_organization_id ?? null) || null;
 }
 
-/** Bumped by every hydrate and by sign-out: a hydrate that has been overtaken
- *  (another screen mounted, the token refreshed, the user signed out) while its
- *  reads were out applies nothing. */
-let hydrateSeq = 0;
+/** Switches that have started (see hydrate). */
+let switchesStarted = 0;
 
 async function hydrate(userId: string) {
-  const seq = ++hydrateSeq;
-  const [orgs, profileDefault] = await Promise.all([loadOrgs(userId), loadProfileDefaultOrg(userId)]);
-  // Decide, save and publish in the switch queue, reading the saved workspace
-  // there: a switch made while the reads above were out has saved its choice by
-  // then, so the screen and the X-Organization-Id header cannot split (the
-  // screen on the old workspace, every request and the cache on the new one).
-  const run = switchQueue.then(() => (seq === hydrateSeq ? applyHydrate(orgs, profileDefault) : undefined));
-  switchQueue = run.catch(() => undefined);
-  await run;
-}
-
-async function applyHydrate(orgs: OrgOption[], profileDefault: string | null) {
-  const persisted = await AsyncStorage.getItem(ORG_STORAGE_KEY);
+  const switchesAtStart = switchesStarted;
+  const [orgs, persisted, profileDefault] = await Promise.all([
+    loadOrgs(userId),
+    AsyncStorage.getItem(ORG_STORAGE_KEY),
+    loadProfileDefaultOrg(userId),
+  ]);
   // See workspace-choice.ts: the same order the server uses, and the choice is
   // SAVED, so X-Organization-Id on every /api/v1 call names the workspace this
   // screen shows. Before, a choice made after sign-out lived only in memory and
   // the API answered for the default organization instead.
+  // A switch made while these reads were out has already saved, wiped and
+  // published its workspace. Deciding from the value read above would put the
+  // screen back on the old workspace while every request and the cache use the
+  // new one. The switch's choice stands; this only refreshes the memberships.
+  if (switchesStarted !== switchesAtStart) {
+    publish({ loading: false, orgs });
+    return;
+  }
   const choice = chooseActiveOrg({ orgIds: orgs.map((o) => o.id), stored: persisted, profileDefault });
   const activeOrgId = choice.activeOrgId;
   if (activeOrgId && choice.persist) {
@@ -189,10 +188,17 @@ async function applyHydrate(orgs: OrgOption[], profileDefault: string | null) {
   let warehouses: WarehouseOption[] = [];
   let activeWarehouseId: string | null = null;
   if (activeOrgId) {
-    warehouses = await loadWarehousesBounded(activeOrgId);
+    warehouses = await loadWarehouses(activeOrgId);
     const persistedWh = await AsyncStorage.getItem(WAREHOUSE_STORAGE_KEY(activeOrgId));
     activeWarehouseId =
       persistedWh && warehouses.some((w) => w.id === persistedWh) ? persistedWh : null;
+  }
+  if (switchesStarted !== switchesAtStart) {
+    // A switch started during the warehouse read: same as above. A cache wipe
+    // made here may have discarded the switch's own pull, so ask for another.
+    publish({ loading: false, orgs });
+    if (activeOrgId && choice.resetCache) void syncNow(true).then(() => refreshEnabledModules());
+    return;
   }
   const activeOrg = orgs.find((o) => o.id === activeOrgId) ?? null;
   const activeWarehouse = warehouses.find((w) => w.id === activeWarehouseId) ?? null;
@@ -229,6 +235,7 @@ export function setActiveOrg(orgId: string): Promise<void> {
 
 async function switchActiveOrg(orgId: string): Promise<void> {
   if (orgId === cached.activeOrgId) return;
+  switchesStarted += 1;
   await AsyncStorage.setItem(ORG_STORAGE_KEY, orgId);
   // Multi-org device isolation: wipe the prior org's cached SQLite tables and
   // reset the delta cursor BEFORE the pull below. Without this, the local
@@ -308,7 +315,6 @@ export function useWorkspace(): WorkspaceState {
 
   React.useEffect(() => {
     if (!user) {
-      hydrateSeq += 1; // a hydrate still out for the previous user applies nothing
       publish({
         loading: false,
         orgs: [],

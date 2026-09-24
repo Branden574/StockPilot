@@ -93,7 +93,7 @@ const settled = async () => {
 };
 
 describe('hydrate and workspace switches agree on the workspace', () => {
-  it('a hydrate whose reads overlap a switch applies after it: the screen shows the switched workspace', async () => {
+  it('a switch made while hydrate reads memberships stands: the screen shows the switched workspace', async () => {
     store.set('workspace.activeOrgId', 'org-a');
     useWorkspace(); // first mount
     await settled();
@@ -117,7 +117,20 @@ describe('hydrate and workspace switches agree on the workspace', () => {
     expect(published.at(-1)?.activeOrgId).toBe('org-a');
   });
 
-  it('a switch made while hydrate reads warehouses waits for it, then applies', async () => {
+  it('with nothing saved yet, a switch during the reads is not overwritten by the default', async () => {
+    store.delete('workspace.activeOrgId'); // fresh sign-in; the profile default is org-a
+    const release = holdMemberships();
+    useWorkspace();
+    await vi.waitFor(() => expect(storage.getItem).toHaveBeenCalledWith('workspace.activeOrgId'));
+    await setActiveOrg('org-b');
+    release();
+    await settled();
+    expect(store.get('workspace.activeOrgId')).toBe('org-b');
+    expect(published.at(-1)?.activeOrgId).toBe('org-b');
+  });
+
+  it('a switch made while hydrate reads warehouses stands as well', async () => {
+    await setActiveOrg('org-a'); // start from A, whatever the previous test left
     store.set('workspace.activeOrgId', 'org-a');
     let release!: () => void;
     gate.nextWarehouses = new Promise<void>((resolve) => {
@@ -125,26 +138,37 @@ describe('hydrate and workspace switches agree on the workspace', () => {
     });
     useWorkspace(); // hydrate decides A and reads A's warehouses (held)
     await vi.waitFor(() => expect(gate.nextWarehouses).toBeNull());
-    const toB = setActiveOrg('org-b');
-    // Give the switch every chance to finish on its own; it must wait instead.
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(store.get('workspace.activeOrgId')).toBe('org-a');
+    await setActiveOrg('org-b'); // the switch does not wait for the hydrate
+    expect(published.at(-1)?.activeOrgId).toBe('org-b');
     release();
-    await toB;
     await settled();
     expect(published.at(-1)?.activeOrgId).toBe('org-b');
     expect(store.get('workspace.activeOrgId')).toBe('org-b');
   });
 
-  it('a hydrate overtaken by a sign-out publishes nothing afterwards', async () => {
+  it('an older hydrate that finishes clears loading even while a newer one hangs', async () => {
+    const releaseFirst = holdMemberships();
+    useWorkspace(); // older hydrate, reads held
+    const firstGate = gate.memberships;
+    gate.memberships = new Promise<void>(() => {}); // the newer hydrate's read never answers
+    useWorkspace();
+    gate.memberships = firstGate;
+    releaseFirst();
+    await vi.waitFor(() => expect(published.at(-1)?.loading).toBe(false));
+    gate.memberships = Promise.resolve();
+  });
+
+  it('an eviction during a hydrate does not save a workspace back', async () => {
+    store.set('workspace.activeOrgId', 'org-b'); // a valid saved choice, read at the start
     const release = holdMemberships();
-    useWorkspace(); // hydrate for u1, reads held open
-    auth.user = null;
-    useWorkspace(); // signed out: the empty workspace is published
-    expect(published.at(-1)).toMatchObject({ activeOrgId: null, loading: false, orgs: [] });
+    useWorkspace();
+    await vi.waitFor(() => expect(storage.getItem).toHaveBeenCalledWith('workspace.activeOrgId'));
+    // Account eviction clears the account-scoped keys while the reads are out.
+    store.delete('workspace.activeOrgId');
+    storage.setItem.mockClear();
     release();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(published.at(-1)).toMatchObject({ activeOrgId: null, orgs: [] });
-    auth.user = { id: 'u1' };
+    await settled();
+    expect(storage.setItem.mock.calls.filter(([k]) => k === 'workspace.activeOrgId')).toEqual([]);
+    expect(store.has('workspace.activeOrgId')).toBe(false);
   });
 });
