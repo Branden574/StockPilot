@@ -3,6 +3,8 @@ import 'server-only';
 import {
   EXCEPTION_RULES,
   formatStockQuantity,
+  locationNameSitsOnRack,
+  rackPositionOfLocationName,
   type WarehouseException,
 } from '@stockpilot/core';
 
@@ -183,8 +185,10 @@ export class ExceptionsService {
     const staging: WarehouseException[] = [];
     const unplaced: WarehouseException[] = [];
 
-    /** Positive RACK holdings per item, for the label check below. */
-    const rackNamesByItem = new Map<string, Set<string>>();
+    /** Positive rack and crate holdings per item, as location name -> kind,
+     *  for the label check below. The kind travels with the name so the detail
+     *  text can say which RACK a crate stands on (rackPositionOfLocationName). */
+    const rackHoldingsByItem = new Map<string, Map<string, string>>();
 
     for (const r of rows) {
       const loc = r.locations;
@@ -215,13 +219,13 @@ export class ExceptionsService {
         continue;
       }
       if (loc.kind === 'rack' || loc.kind === 'crate') {
-        const set = rackNamesByItem.get(r.item_id) ?? new Set<string>();
-        set.add(loc.name);
-        rackNamesByItem.set(r.item_id, set);
+        const held = rackHoldingsByItem.get(r.item_id) ?? new Map<string, string>();
+        held.set(loc.name, loc.kind);
+        rackHoldingsByItem.set(r.item_id, held);
       }
     }
 
-    const mismatched = this.labelMismatches(rows, rackNamesByItem);
+    const mismatched = this.labelMismatches(rows, rackHoldingsByItem);
 
     const truncated = new Set<string>();
     // The source read stopped at its ceiling, so any of these four rules may
@@ -259,10 +263,22 @@ export class ExceptionsService {
    * Items with NO rack holdings are skipped entirely: their problem is that the
    * stock is in Staging or Unplaced, which the rules above already report, and
    * reporting it twice under a second heading is double-counting.
+   *
+   * ═══ WHY THE RACK SEGMENT IS MATCHED BY THE CORE PREDICATE, NOT BY EQUALITY ═══
+   *
+   * A CRATE SITS ON A RACK, and a positioned crate's rack lives only inside its
+   * name: "Gray #5 on rack 43-B". An exact string comparison read that crate as
+   * "not 43-B" and flagged every book stored in a crate on its own labelled rack
+   * (a pattern L4L uses widely), and it also flagged a legacy rack spelled
+   * "22 - B" against a label "22-B". `locationNameSitsOnRack` understands both
+   * shapes, and it is the SAME predicate the item card and the scan sheet use
+   * (holdingsContradictRack), so this screen and those cards cannot disagree
+   * about whether a label is true. Its canonical comparison is a superset of the
+   * old case-insensitive equality, so nothing that matched before stops matching.
    */
   private labelMismatches(
     rows: readonly HoldingRow[],
-    rackNamesByItem: Map<string, Set<string>>,
+    rackHoldingsByItem: Map<string, Map<string, string>>,
   ): WarehouseException[] {
     const seen = new Set<string>();
     const out: WarehouseException[] = [];
@@ -271,22 +287,30 @@ export class ExceptionsService {
       if (!item || seen.has(r.item_id)) continue;
       const label = (item.bin_location ?? '').trim();
       if (label === '') continue;
-      const racks = rackNamesByItem.get(r.item_id);
-      if (!racks || racks.size === 0) continue;
+      const held = rackHoldingsByItem.get(r.item_id);
+      if (!held || held.size === 0) continue;
 
       const labelRack = label.split('·')[0]!.trim();
       if (labelRack === '') continue;
-      // Case-insensitive: production holds both "42-c" and "42-C" as typed.
-      const lower = labelRack.toLowerCase();
-      const matches = [...racks].some((n) => n.trim().toLowerCase() === lower);
+      const matches = [...held.keys()].some((name) => locationNameSitsOnRack(name, labelRack));
       if (matches) continue;
+
+      // Name the RACKS the stock stands on, once each, the way the Rack column
+      // does (placementPhysicalNames): a crate contributes the rack it sits on,
+      // and a position-less crate ("Blue Shelf") keeps its own name because
+      // that is the only place a picker can walk to.
+      const where = new Set<string>();
+      for (const [name, kind] of held) {
+        const at = rackPositionOfLocationName(name, kind);
+        if (at) where.add(at);
+      }
 
       seen.add(r.item_id);
       out.push({
         rule: 'label_mismatch',
         key: `label:${r.item_id}`,
         title: item.name,
-        detail: `labelled ${labelRack}, stock is on ${[...racks].sort().join(', ')}`,
+        detail: `labelled ${labelRack}, stock is on ${[...where].sort((a, b) => a.localeCompare(b)).join(', ')}`,
         href: `/dashboard/inventory/${r.item_id}`,
       });
     }

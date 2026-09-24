@@ -173,6 +173,90 @@ describe('ExceptionsService — label mismatch', () => {
   });
 });
 
+describe('ExceptionsService — label mismatch: a crate SITS ON a rack', () => {
+  // The shapes production actually holds. A positioned crate's rack lives only
+  // inside its name ("Gray #5 on rack 43-B"), and legacy racks were stored with
+  // spaces around the dash ("22 - B"). An exact string comparison flagged both
+  // as wrong labels, which buried the real mismatches under noise and invited
+  // relabelling of labels that were correct.
+
+  it('does NOT flag a book in a crate that sits on its labelled rack', async () => {
+    const r = await svcWith({
+      holdings: [
+        holding({ bin: '43-B · Gray #5', locName: 'Gray #5 on rack 43-B', kind: 'crate' }),
+      ],
+    }).list();
+    expect(r.exceptions).toEqual([]);
+  });
+
+  it('does NOT flag a crate on the rack when the label is the bare rack', async () => {
+    const r = await svcWith({
+      holdings: [holding({ bin: '38-B', locName: 'Blue #0 on rack 38-B', kind: 'crate' })],
+    }).list();
+    expect(r.exceptions).toEqual([]);
+  });
+
+  it('does NOT flag a label spelled "22 - B" against the rack "22-B"', async () => {
+    const r = await svcWith({
+      holdings: [holding({ bin: '22 - B', locName: '22-B', kind: 'rack' })],
+    }).list();
+    expect(r.exceptions).toEqual([]);
+  });
+
+  it('does NOT flag a label "22-B" against a legacy rack stored "22 - B"', async () => {
+    const r = await svcWith({
+      holdings: [holding({ bin: '22-B · grayBIN', locName: '22 - B', kind: 'rack' })],
+    }).list();
+    expect(r.exceptions).toEqual([]);
+  });
+
+  it('still flags a genuinely different rack, and names the rack the crate is on', async () => {
+    // Label 40-C, stock loose on 39-C and in a crate that also sits on 39-C.
+    // The detail names the RACK once ("39-C"), the way the Rack column does,
+    // rather than leaking the crate's identity into the rack list.
+    const r = await svcWith({
+      holdings: [
+        holding({ item: 'i7', bin: '40-C', loc: 'a', locName: '39-C', kind: 'rack' }),
+        holding({ item: 'i7', bin: '40-C', loc: 'b', locName: 'Blue on rack 39-C', kind: 'crate' }),
+      ],
+    }).list();
+    expect(r.exceptions).toHaveLength(1);
+    expect(r.exceptions[0]!.rule).toBe('label_mismatch');
+    expect(r.exceptions[0]!.detail).toBe('labelled 40-C, stock is on 39-C');
+  });
+
+  it('flags a crate label whose crate sits on a DIFFERENT rack', async () => {
+    // "Gray #BIN" exists on five rack positions. Matching the crate part of the
+    // name alone would call this true; only the rack it sits on counts.
+    const r = await svcWith({
+      holdings: [
+        holding({ bin: '43-C · Gray #BIN', locName: 'Gray #BIN on rack 43-B', kind: 'crate' }),
+      ],
+    }).list();
+    expect(r.exceptions.map((e) => e.rule)).toEqual(['label_mismatch']);
+    expect(r.exceptions[0]!.detail).toBe('labelled 43-C, stock is on 43-B');
+  });
+
+  it('flags a label that is only a substring of the rack the crate sits on', async () => {
+    // "3-B" is inside "…on rack 43-B" but names a different bay. The rack tail
+    // is compared whole, never searched for.
+    const r = await svcWith({
+      holdings: [holding({ bin: '3-B', locName: 'Gray #5 on rack 43-B', kind: 'crate' })],
+    }).list();
+    expect(r.exceptions.map((e) => e.rule)).toEqual(['label_mismatch']);
+  });
+
+  it('flags a position-less crate against a rack label, naming the crate', async () => {
+    // "Blue Shelf" sits on no rack, so it cannot satisfy a label naming 41-C,
+    // and its own name is the only place a picker can walk to.
+    const r = await svcWith({
+      holdings: [holding({ bin: '41-C', locName: 'Blue Shelf', kind: 'crate' })],
+    }).list();
+    expect(r.exceptions.map((e) => e.rule)).toEqual(['label_mismatch']);
+    expect(r.exceptions[0]!.detail).toBe('labelled 41-C, stock is on Blue Shelf');
+  });
+});
+
 describe('ExceptionsService — over-reserved', () => {
   it('reports only when promises exceed stock', async () => {
     const r = await svcWith({
