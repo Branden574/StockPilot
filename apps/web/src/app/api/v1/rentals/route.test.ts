@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { ServiceError } from '@/server/services/context';
 import { RentalsService } from '@/server/services/rentals';
 import { makeSupabaseStub } from '@/test/supabase-mock';
@@ -16,6 +17,17 @@ vi.mock('@/lib/auth/api-context', () => ({
 vi.mock('@/server/services/rentals', () => ({
   RentalsService: vi.fn(),
 }));
+
+vi.mock('@/lib/error-reporter', () => ({
+  reportError: vi.fn(async () => undefined),
+}));
+
+/** The one body every internal failure gets: a fixed sentence (the phone
+ *  shows `message ?? error`), never the error's own text. */
+const INTERNAL_BODY = {
+  error: 'internal_error',
+  message: 'Something went wrong. Please try again.',
+};
 
 const WAREHOUSE = '11111111-1111-1111-1111-111111111111';
 const ITEM = '22222222-2222-2222-2222-222222222222';
@@ -157,6 +169,46 @@ describe('POST /api/v1/rentals', () => {
 
     const res = await POST(buildRequest(validBody()));
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: 'internal_error' });
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual(INTERNAL_BODY);
+    expect(text).not.toContain('rentals_insert');
+    expect(vi.mocked(reportError)).toHaveBeenCalledTimes(1);
+  });
+
+  // S6-A. A ServiceError internal_error carries the raw PostgREST text in
+  // `internalDetail` (its public message is already generic, S13). The body
+  // is the fixed one, and the raw text goes to the reporter, which it never
+  // reached before. Mutation caught: answering `{ error, message:
+  // e.internalDetail ?? e.message }`, or answering without reporting.
+  it('answers an internal ServiceError with the fixed body and reports the raw detail', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+    const raw =
+      'canceling statement due to statement timeout while locking tuple (0,6) in relation "inventory_items"';
+    mockCreate(async () => {
+      throw new ServiceError('internal_error', raw);
+    });
+
+    const res = await POST(buildRequest(validBody()));
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual(INTERNAL_BODY);
+    expect(text).not.toContain('inventory_items');
+    expect(vi.mocked(reportError)).toHaveBeenCalledTimes(1);
+    const reported = vi.mocked(reportError).mock.calls[0]![0] as Error;
+    expect(reported.message).toBe(raw);
+  });
+
+  it('keeps an app-authored conflict sentence (a lock timeout) as a 409 the phone can show', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+    const sentence =
+      'Someone else is checking out or approving these items right now. Try again in a moment.';
+    mockCreate(async () => {
+      throw new ServiceError('conflict', sentence);
+    });
+
+    const res = await POST(buildRequest(validBody()));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'conflict', message: sentence });
+    expect(vi.mocked(reportError)).not.toHaveBeenCalled();
   });
 });

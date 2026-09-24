@@ -613,9 +613,16 @@ describe('RentalsService.markReturned', () => {
   // sailed on and released every reservation via the SERVICE ROLE, audited the
   // return and emailed the borrower while rentals.status stayed 'out'.
   // return_rental answers 'noop' when the rental is no longer out (someone
-  // else closed it first); nothing downstream may run.
-  it('refuses when the status UPDATE matches no row — releases nothing, no audit, no email', async () => {
-    const { ctx, releasedRentalIds } = makeCtx({
+  // else closed it first); nothing downstream may run. A missing write grant
+  // is no longer a 'noop': the function raises 'forbidden' for it.
+  //
+  // S6-A: the 'noop' used to be thrown as 'forbidden' ("you may not have
+  // write access"), so the second of two people returning the same rental got
+  // a permission error for a rental that WAS returned. It is the end state the
+  // pre-read branch already treats as done, so it resolves quietly now.
+  // Mutation caught: keeping the throw, or letting the audit/email run.
+  it('a noop (someone else closed it first) resolves quietly — releases nothing, no audit, no email', async () => {
+    const { ctx, releasedRentalIds, rpcCalls } = makeCtx({
       rentalRow: {
         status: 'out',
         expected_return_at: futureDate,
@@ -624,9 +631,8 @@ describe('RentalsService.markReturned', () => {
       rpcResults: { return_rental: { data: 'noop', error: null } },
     });
     const svc = new RentalsService(ctx);
-    await expect(svc.markReturned({ id: 'rental-id-1' })).rejects.toMatchObject({
-      code: 'forbidden',
-    });
+    await expect(svc.markReturned({ id: 'rental-id-1' })).resolves.toBeUndefined();
+    expect(rpcCalls.map((c) => c.name)).toEqual(['return_rental']);
     expect(releasedRentalIds).toHaveLength(0);
     expect(vi.mocked(audit)).not.toHaveBeenCalled();
     expect(vi.mocked(sendRentalReturnedEmail)).not.toHaveBeenCalled();
@@ -722,16 +728,18 @@ describe('RentalsService.cancel', () => {
     expect(reservationReleases).toHaveLength(0);
   });
 
-  // Same fail-open shape as markReturned (SP-023).
-  it('refuses when the status UPDATE matches no row — releases nothing, no audit', async () => {
-    const { ctx, releasedRentalIds } = makeCtx({
+  // Same shape as markReturned (SP-023, then S6-A): a 'noop' resolves
+  // quietly, with nothing released, audited or emailed.
+  it('a noop (someone else closed it first) resolves quietly — releases nothing, no audit', async () => {
+    const { ctx, releasedRentalIds, rpcCalls } = makeCtx({
       rentalRow: { status: 'out', warehouse_id: '00000000-0000-0000-0000-000000000099' },
       rpcResults: { cancel_rental: { data: 'noop', error: null } },
     });
     const svc = new RentalsService(ctx);
     await expect(
       svc.cancel({ id: 'rental-id-1', reason: 'Changed mind' }),
-    ).rejects.toMatchObject({ code: 'forbidden' });
+    ).resolves.toBeUndefined();
+    expect(rpcCalls.map((c) => c.name)).toEqual(['cancel_rental']);
     expect(releasedRentalIds).toHaveLength(0);
     expect(vi.mocked(audit)).not.toHaveBeenCalled();
   });

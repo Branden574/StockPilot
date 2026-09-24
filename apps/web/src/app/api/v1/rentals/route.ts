@@ -12,6 +12,18 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
+ * The one body for every internal failure, whatever threw it. It is a fixed
+ * sentence, never the error's own text (S13: raw PostgREST text names tables,
+ * columns and policies). It still carries a `message` because the phone shows
+ * `message ?? error` (apps/mobile/src/lib/api.ts): without one, the operator's
+ * alert read the bare code "internal_error".
+ */
+const INTERNAL_ERROR_BODY = {
+  error: 'internal_error',
+  message: 'Something went wrong. Please try again.',
+} as const;
+
+/**
  * Mobile rental checkout — the Bearer twin of createRentalAction (SP-012).
  *
  * WHY THIS ROUTE EXISTS. apps/mobile/app/rentals/new.tsx used to write a
@@ -64,6 +76,18 @@ export async function POST(req: NextRequest) {
     // phone refreshes its own list on return.
     return NextResponse.json(result, { status: 201 });
   } catch (e) {
+    if (e instanceof ServiceError && e.code === 'internal_error') {
+      // ServiceError already swaps an internal_error's public message for a
+      // generic one and keeps the raw text in `internalDetail`. The body is
+      // built from the constant anyway, so no future change to the service's
+      // wording can reach the phone, and the raw text goes to the reporter:
+      // before, an internal ServiceError was answered without being logged.
+      void reportError(new Error(e.internalDetail ?? e.message), {
+        tag: 'api.v1.rentals.create',
+        organizationId: ctx.organizationId,
+      });
+      return NextResponse.json(INTERNAL_ERROR_BODY, { status: 500 });
+    }
     if (e instanceof ServiceError) {
       // Map EVERY code the service can raise. A refusal that falls through to
       // 500 reads to the caller as "the server is broken, retry" — and the
@@ -89,9 +113,10 @@ export async function POST(req: NextRequest) {
     if (e instanceof ForbiddenError) {
       return NextResponse.json({ error: 'forbidden', message: e.message }, { status: 403 });
     }
-    // Deliberately body-less: a raw PostgREST/RLS string names tables, columns
-    // and policies (S13). The detail goes to the reporter, not the phone.
+    // Never the error's own text: a raw PostgREST/RLS string names tables,
+    // columns and policies (S13). The detail goes to the reporter, not the
+    // phone.
     void reportError(e, { tag: 'api.v1.rentals.create', organizationId: ctx.organizationId });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return NextResponse.json(INTERNAL_ERROR_BODY, { status: 500 });
   }
 }

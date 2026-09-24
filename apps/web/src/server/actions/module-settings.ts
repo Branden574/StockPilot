@@ -4,7 +4,8 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { audit } from '@/server/services/audit';
-import { ServiceError, withContext } from '@/server/services/context';
+import { ServiceError, withContext, type ServiceContext } from '@/server/services/context';
+import { postgrestErrorText } from '@/server/services/lib/postgrest-error';
 
 import {
   MODULE_REGISTRY,
@@ -23,6 +24,68 @@ const schema = z.object({
   moduleId: z.string().refine((id): id is ModuleId => id in MODULE_REGISTRY, 'Unknown module'),
   enabled: z.boolean(),
 });
+
+type ServerClient = ServiceContext['supabase'];
+
+/**
+ * Refuse to switch Rentals off while any rental is still out.
+ *
+ * With the module off, nobody can return or cancel a rental: the service
+ * asserts the module and so do return_rental and cancel_rental (0361, pgTAP
+ * 36-37 pin it). Its stock holds stay on, so the items look less available
+ * with no rental in sight to explain it, until someone turns Rentals back on.
+ *
+ * A comped organization is let through. For access the comp wins over an
+ * explicit off row (lib/modules/effective-modules.ts; SQL module_enabled()
+ * since 0354), so its members can still return and cancel after the switch
+ * goes off; the switch then only stops the overdue emails, which is what it is
+ * for. An unreadable comp flag grants nothing: the count below still runs.
+ *
+ * The count read fails CLOSED. A failed read is not "none out": that would
+ * strand exactly the rentals this guard exists for, so nothing is written.
+ * Owners and admins can read every rental in the organization
+ * (user_can_access_warehouse gives both full access), so the count is whole.
+ */
+async function refuseWhileRentalsOut(
+  supabase: ServerClient,
+  organizationId: string,
+): Promise<ActionResult<never> | null> {
+  const { data: org, error: orgError } = await supabase
+    .from('organizations')
+    .select('all_modules_comp')
+    .eq('id', organizationId)
+    .maybeSingle();
+  if (orgError) {
+    console.error('[module-settings] comp read failed', postgrestErrorText(orgError));
+  }
+  const comped =
+    !orgError && (org as { all_modules_comp?: boolean | null } | null)?.all_modules_comp === true;
+  if (comped) return null;
+
+  const res = await supabase
+    .from('rentals')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', organizationId)
+    .eq('status', 'out');
+  if (res.error || typeof res.count !== 'number') {
+    console.error(
+      '[module-settings] rentals-out count failed',
+      res.error ? postgrestErrorText(res.error, res) : 'no count returned',
+    );
+    return err(
+      'internal_error',
+      'Could not check whether any rentals are still out, so Rentals was left on. Try again.',
+    );
+  }
+  const out = res.count;
+  if (out === 0) return null;
+  return err(
+    'conflict',
+    out === 1
+      ? '1 rental is still out. Return or cancel it before turning Rentals off.'
+      : `${out} rentals are still out. Return or cancel them before turning Rentals off.`,
+  );
+}
 
 export async function setModuleEnabledAction(
   input: { moduleId: ModuleId; enabled: boolean },
@@ -67,6 +130,14 @@ export async function setModuleEnabledAction(
 
     const changes = computeModuleChangeSet(current, moduleId, enabled);
     if (changes.length === 0) return ok({ enabled: [...current] });
+
+    // Rentals cannot be switched off while rentals are out. Read the change
+    // set, not `moduleId`, so a cascade that would take Rentals off with it is
+    // caught too.
+    if (changes.some((c) => c.moduleId === 'rentals' && !c.enabled)) {
+      const refusal = await refuseWhileRentalsOut(ctx.supabase, ctx.organizationId);
+      if (refusal) return refusal;
+    }
 
     // Entitlement gate: a premium module (minPlan) may only be ENABLED when the
     // org's EFFECTIVE plan meets it. RLS on organization_modules only checks the

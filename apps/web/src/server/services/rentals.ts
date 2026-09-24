@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { after } from 'next/server';
+
 import { assertWarehouseAccess, ForbiddenError } from '@/lib/auth/warehouse';
 import { sendRentalCheckoutEmail, sendRentalReturnedEmail } from '@/lib/email/rentals';
 
@@ -11,6 +13,7 @@ import {
   ServiceError,
   withContext,
 } from './context';
+import { postgrestErrorText } from './lib/postgrest-error';
 
 import type {
   CreateRentalInput,
@@ -179,11 +182,16 @@ export class RentalsService {
       this.ctx,
     );
 
-    // Checkout confirmation to the borrower (member or external). Awaited but
-    // best-effort — the fn never throws and self-skips with no email on file;
-    // awaiting (vs fire-and-forget) guarantees delivery before the serverless
-    // function can be torn down after the response.
-    await sendRentalCheckoutEmail(rentalId);
+    // Checkout confirmation to the borrower (member or external), sent AFTER
+    // the response. It used to be awaited here, so the caller waited on a
+    // service-role read of the rental plus a Resend call after the checkout had
+    // already committed. The phone gives up after 20 s and lets the operator
+    // press Check out again with the same cart, and there is no idempotency
+    // key yet (S6-B, deferred), so every second spent here after the commit
+    // widened the window for a duplicate rental. after() keeps the function
+    // alive until the send finishes, which is the guarantee the await gave.
+    // The send is best-effort and never throws; it self-skips with no email.
+    deferAfterResponse(() => sendRentalCheckoutEmail(rentalId));
 
     return { id: rentalId };
   }
@@ -233,11 +241,17 @@ export class RentalsService {
       p_return_notes: input.returnNotes ?? null,
     });
     if (returnErr) throw rentalRpcError(returnErr);
+    // 'noop' means the rental stopped being out between the read above and
+    // the function's row lock: someone else returned or cancelled it first.
+    // That is the same end state the pre-read branch already treats as done,
+    // so it is a quiet success, with no second audit row and no second email.
+    // It used to answer 'forbidden' ("you may not have write access"), which
+    // gave the second of two people returning the same rental a permission
+    // error for a rental that WAS returned. A missing write grant does not
+    // reach here: return_rental raises 'forbidden' for that (mapped below).
+    if (outcome === 'noop') return;
     if (outcome !== 'returned') {
-      throw new ServiceError(
-        'forbidden',
-        'Could not mark this rental returned — you may not have write access to its warehouse, or someone else just closed it.',
-      );
+      throw new ServiceError('internal_error', `return_rental answered ${JSON.stringify(outcome)}`);
     }
 
     const expectedTime = new Date(rental.expected_return_at);
@@ -292,11 +306,10 @@ export class RentalsService {
       p_reason: input.reason,
     });
     if (cancelErr) throw rentalRpcError(cancelErr);
+    // Someone else closed it first: a quiet success, as in markReturned.
+    if (outcome === 'noop') return;
     if (outcome !== 'cancelled') {
-      throw new ServiceError(
-        'forbidden',
-        'Could not cancel this rental — you may not have write access to its warehouse, or someone else just closed it.',
-      );
+      throw new ServiceError('internal_error', `cancel_rental answered ${JSON.stringify(outcome)}`);
     }
 
     void audit(
@@ -330,12 +343,52 @@ export class RentalsService {
 }
 
 /**
+ * Run best-effort tail work after the response, keeping the function alive for
+ * it. The same helper as `defer` in order-requests.ts (see the reasoning
+ * there): `after()` throws synchronously outside a request scope (a script, a
+ * cron worker, vitest), where plain fire-and-forget is the right fallback.
+ * Errors are swallowed because the work must never fail a committed mutation;
+ * the email helpers log their own failures.
+ */
+function deferAfterResponse(fn: () => Promise<unknown>): void {
+  const run = () => fn().catch(() => {});
+  try {
+    after(run);
+  } catch {
+    void run();
+  }
+}
+
+/**
+ * Lock and statement timeouts (the `authenticator` role runs with
+ * lock_timeout = 8s and statement_timeout = 8s). create_rental locks the
+ * requested items in id order, and so do order approvals, so a checkout can
+ * wait behind another checkout or an approval and time out. Nothing was
+ * written (the function rolls back as a whole), so it is a retryable conflict,
+ * not a server fault.
+ */
+const RENTAL_TIMEOUT_CODES = new Set(['55P03', '57014']);
+
+/**
  * The rental functions (migration 0361) refuse with the service's own wording
  * and mark those refusals with hint 'rental_invalid'; their gates raise short
- * tokens. Map both onto ServiceErrors.
+ * tokens. Map both onto ServiceErrors. Anything else is an internal_error,
+ * whose public message ServiceError replaces with a generic one; the raw text
+ * stays in `internalDetail` for the server log (S13).
  */
-function rentalRpcError(err: { message?: string; code?: string; hint?: string | null }): ServiceError {
+function rentalRpcError(err: {
+  message?: string;
+  code?: string;
+  details?: string | null;
+  hint?: string | null;
+}): ServiceError {
   const message = err.message ?? '';
+  if (err.code && RENTAL_TIMEOUT_CODES.has(err.code)) {
+    return new ServiceError(
+      'conflict',
+      'Someone else is checking out or approving these items right now. Try again in a moment.',
+    );
+  }
   if (err.hint === 'rental_invalid') {
     return new ServiceError(err.code === 'P0002' ? 'not_found' : 'validation_error', message);
   }
@@ -357,6 +410,6 @@ function rentalRpcError(err: { message?: string; code?: string; hint?: string | 
     case 'lines_invalid':
       return new ServiceError('validation_error', 'Each line needs an item and a quantity from 1 to 10,000.');
     default:
-      return new ServiceError('internal_error', message);
+      return new ServiceError('internal_error', postgrestErrorText(err));
   }
 }

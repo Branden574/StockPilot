@@ -278,6 +278,11 @@ WEB_TESTS=(
   # MED-27/28 — the emitted header set: no Supabase CSP wildcard, popup-safe
   # COOP, CORP. Asserted as properties, not as the literal strings.
   src/test/security-headers.test.ts
+  # S6-A — rental checkout, return and cancel answer an internal failure with
+  # a fixed sentence, never the raw PostgREST text (the phone and the web
+  # toast both show the message verbatim).
+  src/app/api/v1/rentals/route.test.ts
+  src/server/actions/rentals.test.ts
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
