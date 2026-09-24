@@ -149,12 +149,25 @@ async function loadProfileDefaultOrg(userId: string): Promise<string | null> {
   return ((data as { default_organization_id: string | null } | null)?.default_organization_id ?? null) || null;
 }
 
+/** Bumped by every hydrate and by sign-out: a hydrate that has been overtaken
+ *  (another screen mounted, the token refreshed, the user signed out) while its
+ *  reads were out applies nothing. */
+let hydrateSeq = 0;
+
 async function hydrate(userId: string) {
-  const [orgs, persisted, profileDefault] = await Promise.all([
-    loadOrgs(userId),
-    AsyncStorage.getItem(ORG_STORAGE_KEY),
-    loadProfileDefaultOrg(userId),
-  ]);
+  const seq = ++hydrateSeq;
+  const [orgs, profileDefault] = await Promise.all([loadOrgs(userId), loadProfileDefaultOrg(userId)]);
+  // Decide, save and publish in the switch queue, reading the saved workspace
+  // there: a switch made while the reads above were out has saved its choice by
+  // then, so the screen and the X-Organization-Id header cannot split (the
+  // screen on the old workspace, every request and the cache on the new one).
+  const run = switchQueue.then(() => (seq === hydrateSeq ? applyHydrate(orgs, profileDefault) : undefined));
+  switchQueue = run.catch(() => undefined);
+  await run;
+}
+
+async function applyHydrate(orgs: OrgOption[], profileDefault: string | null) {
+  const persisted = await AsyncStorage.getItem(ORG_STORAGE_KEY);
   // See workspace-choice.ts: the same order the server uses, and the choice is
   // SAVED, so X-Organization-Id on every /api/v1 call names the workspace this
   // screen shows. Before, a choice made after sign-out lived only in memory and
@@ -176,7 +189,7 @@ async function hydrate(userId: string) {
   let warehouses: WarehouseOption[] = [];
   let activeWarehouseId: string | null = null;
   if (activeOrgId) {
-    warehouses = await loadWarehouses(activeOrgId);
+    warehouses = await loadWarehousesBounded(activeOrgId);
     const persistedWh = await AsyncStorage.getItem(WAREHOUSE_STORAGE_KEY(activeOrgId));
     activeWarehouseId =
       persistedWh && warehouses.some((w) => w.id === persistedWh) ? persistedWh : null;
@@ -295,6 +308,7 @@ export function useWorkspace(): WorkspaceState {
 
   React.useEffect(() => {
     if (!user) {
+      hydrateSeq += 1; // a hydrate still out for the previous user applies nothing
       publish({
         loading: false,
         orgs: [],
