@@ -67,12 +67,15 @@ function buildStub(
   /** (value, normalized) rows for the category's size scale, when it has one. */
   sizeScaleValues: Array<{ value: string; normalized: string }> = [],
   /** Ledger-invariant tests: make the stock_movements insert (and optionally
-   *  the compensating on-hand rollback) fail. */
+   *  the compensate_opening_stock rollback) fail. */
   failure: {
     movements?: { message: string; code?: string };
+    /** The compensate_opening_stock RPC errors. */
     compensation?: { message: string; code?: string };
-    levelCompensation?: { message: string; code?: string };
-    /** Simulate a fail-open RLS level write: no error, but the rows survive. */
+    /** The RPC succeeds but compensates nothing (the ids were not the
+     *  caller's fresh, unledgered items). */
+    compensationSkipsAll?: boolean;
+    /** The RPC reports success, yet the re-read still finds a placement. */
     levelsSurviveCompensation?: boolean;
   } = {},
 ) {
@@ -80,11 +83,24 @@ function buildStub(
   const insertedMovements: Array<Record<string, unknown>> = [];
   const itemUpdates: Array<Record<string, unknown>> = [];
   const levelUpdates: Array<{ payload: Record<string, unknown>; itemIds: string[] }> = [];
+  /** p_item_ids of every compensate_opening_stock call (migration 0359). */
+  const compensations: string[][] = [];
   return {
     insertedItems,
     insertedMovements,
     itemUpdates,
     levelUpdates,
+    compensations,
+
+    rpc(name: string, args: { p_org_id: string; p_item_ids: string[] }): Promise<unknown> {
+      if (name !== 'compensate_opening_stock') throw new Error(`unexpected rpc: ${name}`);
+      compensations.push(args.p_item_ids);
+      if (failure.compensation) return Promise.resolve({ data: null, error: failure.compensation });
+      return Promise.resolve({
+        data: failure.compensationSkipsAll ? [] : args.p_item_ids,
+        error: null,
+      });
+    },
 
     from(table: string): any {
       if (table === 'categories' || table === 'size_scales' || table === 'size_scale_values') {
@@ -132,24 +148,15 @@ function buildStub(
               }),
             };
           },
-          // The compensating rollback the ledger guard performs when the
-          // movement insert fails.
+          // Recorded so a test can prove the rollback NEVER writes the row
+          // directly: since 0359 compensate_opening_stock does it.
           update: (payload: Record<string, unknown>) => {
             itemUpdates.push(payload);
-            let ids: string[] = [];
             const builder: any = {
               eq: () => builder,
-              in: (_col: string, v: string[]) => {
-                ids = v;
-                return builder;
-              },
+              in: () => builder,
               select: () => builder,
-              then: (cb: any) =>
-                cb(
-                  failure.compensation
-                    ? { data: null, error: failure.compensation }
-                    : { data: ids.map((id) => ({ id })), error: null },
-                ),
+              then: (cb: any) => cb({ data: [], error: null }),
             };
             return builder;
           },
@@ -166,7 +173,8 @@ function buildStub(
       // trg_seed_initial_level (mig 0199, AFTER INSERT) has already seeded one
       // level row per stocked item by the time the movement insert runs, and
       // NOTHING syncs levels on UPDATE — so the compensation has to zero these
-      // too or the failure path leaves phantom PLACED stock.
+      // too or the failure path leaves phantom PLACED stock. It does, inside
+      // compensate_opening_stock; a direct write here would be a regression.
       if (table === 'item_stock_levels') {
         const builder: any = {
           update: (payload: Record<string, unknown>) => {
@@ -177,21 +185,17 @@ function buildStub(
                 return w;
               },
               select: () => w,
-              then: (cb: any) =>
-                cb(
-                  failure.levelCompensation
-                    ? { data: null, error: failure.levelCompensation }
-                    : { data: [], error: null },
-                ),
+              then: (cb: any) => cb({ data: [], error: null }),
             };
             return w;
           },
           // The verification re-read: rows still carrying stock after the
-          // compensation. Empty unless the test asks for a fail-open write.
+          // compensation. The seeded placement survives until the RPC ran,
+          // and afterwards only when the test asks for it.
           select: () => {
             const survivors = failure.levelsSurviveCompensation
               ? [{ id: 'lvl-1' }]
-              : levelUpdates.length > 0
+              : compensations.length > 0 && !failure.compensation && !failure.compensationSkipsAll
                 ? []
                 : [{ id: 'lvl-1' }];
             const r: any = {
@@ -641,8 +645,9 @@ describe('InventoryService.bulkCreateSizedVariants — movement-insert failure',
       })
       .catch(() => undefined);
 
-    expect(stub.itemUpdates).toHaveLength(1);
-    expect(stub.itemUpdates[0]?.quantity_on_hand).toBe(0);
+    // One RPC for the stocked variant; the row itself is never written directly.
+    expect(stub.compensations).toEqual([['i-0']]);
+    expect(stub.itemUpdates).toHaveLength(0);
   });
 
   // trg_seed_initial_level (0199) fires AFTER INSERT on inventory_items and has
@@ -651,7 +656,7 @@ describe('InventoryService.bulkCreateSizedVariants — movement-insert failure',
   // only quantity_on_hand left SUM(levels) = N against on_hand = 0: phantom
   // PLACED stock that blocks the archive stock-guard (which takes
   // max(on_hand, Σholdings)) and is pickable straight into negative on-hand.
-  it('also zeroes the item_stock_levels rows the 0199 trigger already seeded', async () => {
+  it('rolls back the placements the 0199 trigger seeded in the same RPC, never directly', async () => {
     const stub = buildStub([], undefined, [], { movements: { message: 'ledger down' } });
     await makeSvc(stub)
       .bulkCreateSizedVariants({
@@ -663,17 +668,16 @@ describe('InventoryService.bulkCreateSizedVariants — movement-insert failure',
       })
       .catch(() => undefined);
 
-    expect(stub.levelUpdates).toHaveLength(1);
-    expect(stub.levelUpdates[0]?.payload.quantity).toBe(0);
     // Scoped to exactly the variants that were seeded — the zero-quantity one
     // never got a level row and must not be touched.
-    expect(stub.levelUpdates[0]?.itemIds).toEqual(['i-0']);
+    expect(stub.compensations).toEqual([['i-0']]);
+    expect(stub.levelUpdates).toHaveLength(0);
   });
 
-  it('fails loudly when the seeded placements could not be zeroed', async () => {
+  it('fails loudly when the RPC compensated none of the stocked variants', async () => {
     const stub = buildStub([], undefined, [], {
       movements: { message: 'ledger down' },
-      levelCompensation: { message: 'levels down' },
+      compensationSkipsAll: true,
     });
     const err = (await makeSvc(stub)
       .bulkCreateSizedVariants({ ...BASE_INPUT, variants: [{ size: 'S', quantity: 3 }] })
@@ -683,9 +687,9 @@ describe('InventoryService.bulkCreateSizedVariants — movement-insert failure',
     expect(err.message).toMatch(/support/i);
   });
 
-  it('VERIFIES the placements are gone — a fail-open RLS write is not success', async () => {
-    // .update().eq() reports success when RLS matched nothing, so the
-    // compensation is proven by a re-read, not by the absence of an error.
+  it('VERIFIES the placements are gone — the RPC reporting success is not proof', async () => {
+    // The RPC's return says which rows it matched, not what the table holds
+    // now, so the compensation is proven by a re-read.
     const stub = buildStub([], undefined, [], {
       movements: { message: 'ledger down' },
       levelsSurviveCompensation: true,
@@ -705,6 +709,7 @@ describe('InventoryService.bulkCreateSizedVariants — movement-insert failure',
       variants: [{ size: 'S', quantity: 3 }],
     });
     expect(stub.levelUpdates).toHaveLength(0);
+    expect(stub.compensations).toHaveLength(0);
   });
 
   it('says so loudly when even the rollback fails, instead of swallowing both', async () => {
@@ -727,5 +732,6 @@ describe('InventoryService.bulkCreateSizedVariants — movement-insert failure',
       variants: [{ size: 'S', quantity: 3 }],
     });
     expect(stub.itemUpdates).toHaveLength(0);
+    expect(stub.compensations).toHaveLength(0);
   });
 });

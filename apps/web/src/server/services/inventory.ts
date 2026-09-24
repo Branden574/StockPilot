@@ -90,6 +90,7 @@ import {
   writeInIdBatches,
 } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
+import { compensateOpeningStockOrThrow } from './opening-stock-compensation';
 import { fetchAllRows } from './lib/paginate';
 import { audit, auditMany, type AuditEvent, type AuditPayload } from './audit';
 import { dispatchEvent } from './integration-events';
@@ -2609,10 +2610,11 @@ export class InventoryService {
         to_location_id: input.primaryLocationId ?? null,
       });
       if (movementErr) {
-        await this.compensateOpeningStockOrThrow([data.id as string], movementErr, {
+        await compensateOpeningStockOrThrow(this.ctx, [data.id as string], movementErr, {
           tag: '[create]',
           subject: 'This item was',
           pronoun: 'its',
+          invalidateLabel: 'item.compensate_opening_stock',
         });
       }
     }
@@ -3410,10 +3412,16 @@ export class InventoryService {
         // The compensation itself now lives in compensateOpeningStockOrThrow —
         // create() and bulkCreate() were making the OPPOSITE decision on the
         // same failure (pattern #26). It always throws.
-        await this.compensateOpeningStockOrThrow(
+        await compensateOpeningStockOrThrow(
+          this.ctx,
           inserted.filter((r) => r.quantity_on_hand > 0).map((r) => r.id),
           movementErr,
-          { tag: '[bulkCreateSizedVariants]', subject: 'These variants were', pronoun: 'their' },
+          {
+            tag: '[bulkCreateSizedVariants]',
+            subject: 'These variants were',
+            pronoun: 'their',
+            invalidateLabel: 'item.compensate_opening_stock',
+          },
         );
       }
     }
@@ -3494,155 +3502,6 @@ export class InventoryService {
           ? { rackName: placement.rackName, count: placement.failedItemIds.length }
           : null,
     };
-  }
-
-  /**
-   * THE LEDGER INVARIANT IS ABSOLUTE: for every item,
-   * SUM(stock_movements.quantity_change) = quantity_on_hand.
-   *
-   * Call this when an opening ('initial') movement insert FAILED for rows that
-   * were already committed with stock. It compensates, then always throws.
-   *
-   * WHY IT EXISTS IN ONE PLACE (pattern #26). This decision was made once, for
-   * bulkCreateSizedVariants, and its two siblings kept the old one:
-   * `create()` never even destructured the insert result, and `bulkCreate()`
-   * console.warn'd "the audit gap is recoverable" and returned success. That
-   * was true of the ROWS and false of the BOOKS — the item Activity feed, the
-   * 14-day sparklines, the dashboard history reconstruction (currentQty − SUM
-   * of later deltas) and every reconciliation that sums the ledger are then
-   * wrong for those items, forever, with nothing logged.
-   *
-   * Not merely a transient hazard, either: the two RLS floors differ.
-   * inventory_items_insert (0212) admits `items:create`; stock_movements_insert
-   * (0321) requires staff or `stock:adjust`. A viewer granted items:create
-   * through configurable permissions creates stocked items whose ledger row is
-   * refused EVERY time (pattern #4 + #28).
-   *
-   * TWO INVARIANTS, NOT ONE. `trg_seed_initial_level` (0199) is an AFTER INSERT
-   * trigger on inventory_items: by the time the movement insert is even
-   * attempted it has ALREADY written one item_stock_levels row per stocked row,
-   * at the same quantity. Nothing syncs levels on UPDATE, so zeroing only
-   * `quantity_on_hand` would leave Σlevels = N against on_hand = 0 — PHANTOM
-   * PLACED STOCK, which the archive guard (max(on_hand, Σholdings)) refuses to
-   * archive forever and the placed draw-down happily picks straight into a
-   * negative on-hand. So both are restored: levels 0 = on_hand 0 = no movements.
-   *
-   * ORDER: levels FIRST. If the second write then fails the intermediate is
-   * "stock on the row, not placed" — the pre-0199 shape, which blocks picking
-   * and is caught by the same max(). The reverse order's intermediate is the
-   * phantom-placed one, which picks negative.
-   *
-   * Rolling the ITEMS back instead would be a hard DELETE on a table whose whole
-   * convention is soft-delete, and a fail-open `.delete().eq()` under RLS would
-   * leave the worst of both.
-   */
-  private async compensateOpeningStockOrThrow(
-    stockedIds: string[],
-    movementErr: { message: string },
-    opts: { tag: string; subject: string; pronoun: 'its' | 'their' },
-  ): Promise<never> {
-    // Every step is BATCHED (bulkCreate stocks up to 500 items, and one
-    // `.in()` past ~215 uuids fails) and attempts every batch
-    // (stopOnError: false) so one bad batch still lets the rest be rolled back.
-    const ctx = this.ctx;
-
-    // (a) The PLACEMENTS the 0199 trigger seeded.
-    const levels = await writeInIdBatches(
-      stockedIds,
-      (batch) =>
-        ctx.supabase
-          .from('item_stock_levels')
-          .update({ quantity: 0 })
-          .eq('organization_id', ctx.organizationId)
-          .in('item_id', batch),
-      { stopOnError: false },
-    );
-    const levelErr = levels.error;
-
-    // (b) The row quantity — ONLY for items whose placements (a) zeroed. With
-    // batching, a levels batch can fail while every items batch would
-    // succeed; zeroing those items anyway would leave on_hand 0 with placed
-    // levels > 0, the phantom-placed state the ORDER rule above exists to
-    // prevent. Their on_hand stays, the count below comes up short, and the
-    // throw says they could not be rolled back.
-    const items = await writeInIdBatches<string, { id: string }>(
-      levels.written,
-      (batch) =>
-        ctx.supabase
-          .from('inventory_items')
-          .update({ quantity_on_hand: 0, updated_by: ctx.userId })
-          .eq('organization_id', ctx.organizationId)
-          .in('id', batch)
-          .select('id'),
-      { stopOnError: false },
-    );
-    const zeroErr = items.error;
-    // .update().eq() is FAIL-OPEN under RLS: no error, no row (pattern #2). A
-    // partial compensation is still a broken ledger, so it counts as a failure.
-    const compensated = items.rows.length;
-    // Every exit below throws; the zeroed quantities must not be served from
-    // the cache as the opening stock that was just rolled back.
-    invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.compensate_opening_stock');
-
-    // (c) PROVE the placements are gone. Both writes above are filtered updates,
-    // so "no error" is not evidence that anything was matched — and the level
-    // write cannot even use the returned-row trick, because ZERO level rows is a
-    // legitimate outcome (the 0199 trigger swallows its own failures by design).
-    // A re-read is the only unambiguous answer, and it is the answer that
-    // matters: any surviving placement is exactly the phantom-stock state this
-    // compensation exists to prevent.
-    let verifyErr: string | null = null;
-    let survivingPlacements = 0;
-    try {
-      const leftovers = await fetchAllRowsByIds<{ id: string }>(
-        stockedIds,
-        (batch) => (from, to) =>
-          ctx.supabase
-            .from('item_stock_levels')
-            .select('id')
-            .eq('organization_id', ctx.organizationId)
-            .in('item_id', batch)
-            .gt('quantity', 0)
-            .order('id')
-            .range(from, to),
-      );
-      survivingPlacements = leftovers.length;
-    } catch (err) {
-      verifyErr = rawErrorText(err);
-    }
-
-    if (
-      levelErr ||
-      zeroErr ||
-      verifyErr ||
-      compensated !== stockedIds.length ||
-      survivingPlacements > 0
-    ) {
-      console.error(`${opts.tag} opening movements failed AND the rollback failed`, {
-        movementError: movementErr.message,
-        levelError: levelErr,
-        rollbackError: zeroErr,
-        verifyError: verifyErr,
-        survivingPlacements,
-        stockedIds,
-      });
-      throw new ServiceError(
-        'internal_error',
-        `${opts.subject} created, but ${opts.pronoun} opening stock could not be recorded and the quantities could not be rolled back. Contact support to reconcile them before receiving, picking or counting against them.`,
-      );
-    }
-    console.error(`${opts.tag} opening movements failed; on-hand and placements rolled back to 0`, {
-      movementError: movementErr.message,
-      stockedIds,
-    });
-    throw new ServiceError(
-      'internal_error',
-      `${opts.subject} created, but ${opts.pronoun} opening stock could not be recorded, so ${
-        opts.pronoun === 'its' ? 'it was' : 'they were'
-      } saved with zero on hand. Add ${
-        opts.pronoun === 'its' ? 'the quantity' : 'the quantities'
-      } with a stock adjustment.`,
-    );
   }
 
   async bulkCreate(input: {
@@ -3852,12 +3711,18 @@ export class InventoryService {
       // and the sibling sized-variants path had already reversed that decision.
       // COMPENSATE, then fail loudly (the helper always throws).
       if (movementErr) {
-        await this.compensateOpeningStockOrThrow(
+        await compensateOpeningStockOrThrow(
+          this.ctx,
           (inserted ?? [])
             .filter((r: { quantity_on_hand: number }) => r.quantity_on_hand > 0)
             .map((r: { id: string }) => r.id),
           movementErr,
-          { tag: '[bulkCreate]', subject: 'These items were', pronoun: 'their' },
+          {
+            tag: '[bulkCreate]',
+            subject: 'These items were',
+            pronoun: 'their',
+            invalidateLabel: 'item.compensate_opening_stock',
+          },
         );
       }
     }

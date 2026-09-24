@@ -438,9 +438,13 @@ select is((select status from public.cycle_counts where id = :ccWh), 'in_progres
 set local "request.jwt.claim.sub"  to :mgr;
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
+-- Since 0359 the helper runs only inside a ledger RPC (the receipt wrapper
+-- raises stockpilot.ledger); the flag here models that caller.
+set local stockpilot.ledger to 'on';
 select lives_ok(
   $$ select public.apply_level_delta('03420000-0000-0000-0000-0000000000c9'::uuid, 7, 'placed') $$,
   '0342/T6: apply_level_delta still runs for a receipt-shaped increment');
+set local stockpilot.ledger to '';
 reset role;
 
 select is(
@@ -455,6 +459,10 @@ select is((select quantity from public.item_stock_levels where item_id = :itemR 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- 6. THE HELPER, DIRECTLY
 -- ═════════════════════════════════════════════════════════════════════════════
+-- The request still carries :mgr's claim, so auth.uid() is set and 0359's
+-- flag check applies: these probe the helper's internals as post_cycle_count
+-- reaches them, with the flag on.
+set local stockpilot.ledger to 'on';
 select is(
   public.apply_cycle_count_location_delta(:itemI, :rackA, :org, 0),
   0::numeric,

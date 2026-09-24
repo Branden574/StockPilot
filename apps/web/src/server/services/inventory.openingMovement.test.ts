@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 
 /**
  * THE LEDGER INVARIANT IS ABSOLUTE: for every item,
@@ -61,16 +61,29 @@ function compensationStub(over: Record<string, unknown> = {}) {
     'custom_field_definitions.select': { data: [], error: null },
     'inventory_items.insert': { data: { id: 'itm-new', quantity_on_hand: 40 }, error: null },
     'stock_movements.insert': { data: null, error: RLS_REFUSAL },
-    // The compensation's own writes + its re-read proof.
-    'item_stock_levels.update': { data: null, error: null },
-    'inventory_items.update': { data: [{ id: 'itm-new' }], error: null },
+    // The compensation RPC (0359) returns the ids it rolled back, then the
+    // re-read proves no placement survived.
+    'rpc:compensate_opening_stock': (call: MockCall) => ({
+      data: (call.args[0]?.[0] as { p_item_ids: string[] }).p_item_ids,
+      error: null,
+    }),
     'item_stock_levels.select': { data: [], error: null },
     ...over,
   });
 }
 
-function payload(stub: ReturnType<typeof compensationStub>, key: string) {
-  return stub.chainArgs.get(key)?.[0]?.[0] as Record<string, unknown> | undefined;
+/** The ids handed to compensate_opening_stock, across every batch. */
+function compensatedIds(stub: ReturnType<typeof compensationStub>) {
+  return stub.rpcCalls
+    .filter((c) => c.name === 'compensate_opening_stock')
+    .flatMap((c) => (c.args as { p_item_ids: string[] }).p_item_ids);
+}
+
+/** Since 0359 neither table is written directly: the RPC does both. */
+function directLedgerWrites(stub: ReturnType<typeof compensationStub>) {
+  return [...stub.chains.keys()].filter((k) =>
+    /^(item_stock_levels|inventory_items)\.(update|upsert|delete)$/.test(k),
+  );
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -84,9 +97,10 @@ describe('InventoryService.create — a failed opening movement compensates and 
       code: 'internal_error',
     });
 
-    // Both invariants restored: the 0199-seeded placement AND the row qty.
-    expect(payload(stub, 'item_stock_levels.update')).toMatchObject({ quantity: 0 });
-    expect(payload(stub, 'inventory_items.update')).toMatchObject({ quantity_on_hand: 0 });
+    // Both invariants restored — the 0199-seeded placement AND the row qty —
+    // by the one RPC, never by direct writes.
+    expect(compensatedIds(stub)).toEqual(['itm-new']);
+    expect(directLedgerWrites(stub)).toEqual([]);
   });
 
   it('leaves a ZERO-quantity create untouched (no movement, nothing to compensate)', async () => {
@@ -103,9 +117,9 @@ describe('InventoryService.create — a failed opening movement compensates and 
 
   it('throws the harder message when the compensation itself cannot be proved', async () => {
     const stub = compensationStub({
-      // The rollback UPDATE matched nothing (fail-open under RLS) and a
-      // placement survives — the phantom-stock state.
-      'inventory_items.update': { data: [], error: null },
+      // The rollback compensated nothing and a placement survives — the
+      // phantom-stock state.
+      'rpc:compensate_opening_stock': { data: [], error: null },
       'item_stock_levels.select': { data: [{ id: 'lvl-1' }], error: null },
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
@@ -134,7 +148,6 @@ describe('InventoryService.bulkCreate — a failed opening movement compensates 
         ],
         error: null,
       },
-      'inventory_items.update': { data: [{ id: 'itm-1' }, { id: 'itm-2' }], error: null },
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
@@ -142,8 +155,8 @@ describe('InventoryService.bulkCreate — a failed opening movement compensates 
       svc.bulkCreate({ warehouseId: 'wh-1', items: ITEMS }),
     ).rejects.toMatchObject({ code: 'internal_error' });
 
-    expect(payload(stub, 'item_stock_levels.update')).toMatchObject({ quantity: 0 });
-    expect(payload(stub, 'inventory_items.update')).toMatchObject({ quantity_on_hand: 0 });
+    expect(compensatedIds(stub).sort()).toEqual(['itm-1', 'itm-2']);
+    expect(directLedgerWrites(stub)).toEqual([]);
   });
 
   it('a batch with no stocked rows still succeeds (no movement is written at all)', async () => {

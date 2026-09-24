@@ -103,6 +103,12 @@ set local role to 'authenticated';
 -- The receipts_write WITH CHECK now also checks warehouse_in_org(warehouse_id, organization_id).
 -- ─────────────────────────────────────────────────────────────────────────────
 
+-- Since 0359 receipts are ledger-only: an API-role write needs the
+-- stockpilot.ledger flag that only the receipt RPC wrappers raise. These two
+-- tests exercise the WITH CHECK the RPC bodies are still subject to, so they
+-- run with the flag on, as the bodies do.
+set local stockpilot.ledger to 'on';
+
 -- Test 1a: INSERT receipt with cross-org warehouse_id → 42501
 select throws_ok(
   $$ insert into public.receipts
@@ -123,6 +129,7 @@ select throws_ok(
 set local "request.jwt.claim.sub" to 'fc030300-0000-0000-0000-000000000003';
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
+set local stockpilot.ledger to 'on';
 
 -- Test 1b: INSERT receipt with same-org warehouse_id → lives_ok
 select lives_ok(
@@ -138,6 +145,7 @@ select lives_ok(
        'hash-fk-same-1'
      ) $$,
   'receipts: INSERT with same-org warehouse_id lives (no exception)');
+set local stockpilot.ledger to '';
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Shape 2: Location-FK, direct org (purchase_orders) — nullable FK

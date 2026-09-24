@@ -86,7 +86,7 @@ function execStub(opts: {
   insertError?: { message: string; code?: string } | null;
   /** Fail the opening `stock_movements` batch insert (RLS refusal, transient). */
   movementError?: { message: string; code?: string } | null;
-  /** Rows the compensating `inventory_items.update` reports it actually zeroed. */
+  /** Ids compensate_opening_stock (0359) reports it actually rolled back. */
   zeroedItems?: Array<{ id: string }>;
   /** Placements still carrying quantity > 0 after the compensation re-read. */
   survivingPlacements?: Array<{ id: string }>;
@@ -108,10 +108,13 @@ function execStub(opts: {
     'stock_movements.insert': opts.movementError
       ? { data: null, error: opts.movementError }
       : { data: null, error: null },
-    // Compensation path (opening-movement failure): zero the 0199-seeded
-    // placements, zero the row quantity, then re-read for survivors.
-    'item_stock_levels.update': { data: null, error: null },
-    'inventory_items.update': { data: opts.zeroedItems ?? [], error: null },
+    // Compensation path (opening-movement failure): one RPC zeroes the
+    // 0199-seeded placements and the row quantity, then a re-read looks for
+    // survivors.
+    'rpc:compensate_opening_stock': {
+      data: (opts.zeroedItems ?? []).map((r) => r.id),
+      error: null,
+    },
     'item_stock_levels.select': { data: opts.survivingPlacements ?? [], error: null },
     'item_images.insert': { data: null, error: null },
   });
@@ -277,14 +280,16 @@ describe('BooksImportService.execute', () => {
     // InventoryService compensation.
     expect((caught as ServiceError).internalDetail).toMatch(/stock adjustment/i);
 
-    // (a) Placements the 0199 AFTER-INSERT trigger seeded are zeroed FIRST.
-    const levelUpdates = stub.chainArgs.get('item_stock_levels.update') ?? [];
-    expect(levelUpdates[0]![0]).toEqual({ quantity: 0 });
-
-    // (b) The row quantity is zeroed, with .select('id') row-proof (pattern #2).
-    const itemUpdates = stub.chainArgs.get('inventory_items.update') ?? [];
-    expect(itemUpdates[0]![0]).toMatchObject({ quantity_on_hand: 0 });
-    expect(stub.chains.get('inventory_items.update')).toContain('select');
+    // (a)+(b) The 0199-seeded placements and the row quantity are rolled back
+    // by compensate_opening_stock for exactly the inserted books, and never by
+    // a direct write (0359 refuses those).
+    const rpc = stub.rpcCalls.filter((c) => c.name === 'compensate_opening_stock');
+    expect(rpc.flatMap((c) => (c.args as { p_item_ids: string[] }).p_item_ids).sort()).toEqual([
+      'item-1',
+      'item-2',
+    ]);
+    expect(stub.chains.has('item_stock_levels.update')).toBe(false);
+    expect(stub.chains.has('inventory_items.update')).toBe(false);
 
     // (c) Survivors are re-read — "no error" is not proof anything matched.
     expect(stub.chains.get('item_stock_levels.select')).toContain('gt');
@@ -297,7 +302,7 @@ describe('BooksImportService.execute', () => {
         { id: 'item-2', barcode: ISBN_B },
       ],
       movementError: { message: 'boom', code: '42501' },
-      // Only ONE of the two rows was actually zeroed — a partial compensation
+      // The RPC rolled back only ONE of the two rows — a partial compensation
       // is still a broken ledger, so it counts as a failure.
       zeroedItems: [{ id: 'item-1' }],
     });

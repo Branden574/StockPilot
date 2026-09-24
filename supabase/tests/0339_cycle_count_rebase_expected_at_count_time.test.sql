@@ -239,15 +239,16 @@ select ok(
   '0339: authenticated holds EXECUTE on post_cycle_count'
 );
 -- Wiring pins (0327): the Σ still goes through the definer helper and the
--- levels are still reconciled staging_first.
+-- levels are still reconciled staging_first. Since 0359 the body lives in
+-- ledger.post_cycle_count and public.post_cycle_count is its wrapper.
 select ok(
   (select p.prosrc like '%_cycle_count_org_stock_sum%' from pg_proc p
-    where p.oid = 'public.post_cycle_count(uuid)'::regprocedure),
+    where p.oid = 'ledger.post_cycle_count(uuid)'::regprocedure),
   '0339: post_cycle_count computes its reconciliation sum via _cycle_count_org_stock_sum (0327 wiring pin carried)'
 );
 select ok(
   (select p.prosrc like '%apply_level_delta%' and p.prosrc like '%staging_first%' from pg_proc p
-    where p.oid = 'public.post_cycle_count(uuid)'::regprocedure),
+    where p.oid = 'ledger.post_cycle_count(uuid)'::regprocedure),
   '0339: post_cycle_count reconciles item_stock_levels via apply_level_delta(..., staging_first) (0196 wiring pin carried)'
 );
 
@@ -510,7 +511,7 @@ select throws_ok(
 reset role;
 select ok(
   (select p.prosrc like '%has_org_role(v_cc.organization_id, ''manager'')%' from pg_proc p
-    where p.oid = 'public.post_cycle_count(uuid)'::regprocedure),
+    where p.oid = 'ledger.post_cycle_count(uuid)'::regprocedure),
   '0339 guard: post_cycle_count still carries the explicit has_org_role manager gate (0079/0327 forbidden branch)'
 );
 -- Outsider: the count is invisible under RLS (SECURITY INVOKER), so the
