@@ -44,7 +44,14 @@ function rangeOf(call: MockCall): [number, number] {
   return call.args[call.methods.indexOf('range')] as [number, number];
 }
 
-function stubWith(opts: { failComponentBatch?: number } = {}) {
+/** The `.is()` filters on a recorded read, to apply like PostgREST would. */
+function isFilters(call: MockCall): Array<[string, unknown]> {
+  return call.methods
+    .map((m, i) => (m === 'is' ? (call.args[i] as [string, unknown]) : null))
+    .filter((f): f is [string, unknown] => f != null);
+}
+
+function stubWith(opts: { failComponentBatch?: number; deletedPhantoms?: Set<string> } = {}) {
   const componentLists: string[][] = [];
   const phantomLists: string[][] = [];
   const stub = makeSupabaseStub({
@@ -77,8 +84,21 @@ function stubWith(opts: { failComponentBatch?: number } = {}) {
       const ids = inList(call, 'id');
       if (ids.length > 0) {
         phantomLists.push(ids);
+        const rows = ids.map((id) => ({
+          id,
+          quantity_on_hand: 3,
+          warehouse_id: 'wh-1',
+          deleted_at: opts.deletedPhantoms?.has(id) ? '2026-09-20T00:00:00Z' : null,
+        }));
+        const kept = rows.filter((r) =>
+          isFilters(call).every(([col, val]) => (r as Record<string, unknown>)[col] === val),
+        );
         return {
-          data: ids.map((id) => ({ id, quantity_on_hand: 3, warehouse_id: 'wh-1' })),
+          data: kept.map(({ id, quantity_on_hand, warehouse_id }) => ({
+            id,
+            quantity_on_hand,
+            warehouse_id,
+          })),
           error: null,
         };
       }
@@ -114,6 +134,26 @@ describe('mobile snapshot with 250 bundles', () => {
     // 1000-row page and in the last batch.
     expect(body.bundles.every((b) => b.components.length === 12)).toBe(true);
     expect(body.bundles.find((b) => b.id === bundleId(249))?.phantomQty).toBe(3);
+  });
+
+  it("ships a deleted kit item's bundle with phantomQty 0, so its stock never reaches the phone", async () => {
+    // distribute_bundle (0365) reads a deleted kit item as 0 and assemble
+    // refuses it; the phone's cache must not offer those kits.
+    stubWith({ deletedPhantoms: new Set([phantomId(7)]) });
+    const res = await GET(new NextRequest('https://test.local/api/v1/mobile/snapshot'));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      bundles: Array<{ id: string; phantomQty: number; phantomWarehouseId: string | null }>;
+    };
+    expect(body.bundles.find((b) => b.id === bundleId(7))).toMatchObject({
+      phantomQty: 0,
+      phantomWarehouseId: null,
+    });
+    // The bundle itself still ships; a live kit item next to it is unchanged.
+    expect(body.bundles.find((b) => b.id === bundleId(8))).toMatchObject({
+      phantomQty: 3,
+      phantomWarehouseId: 'wh-1',
+    });
   });
 
   it('a failed component batch is the bundle_components 500, as before (the phone keeps its cache)', async () => {

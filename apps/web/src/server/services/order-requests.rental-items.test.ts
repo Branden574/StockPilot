@@ -65,21 +65,24 @@ describe('OrderRequestsService — rental items are never ordered', () => {
     expect((err as Error).message).toBe(
       'MacBook Pro 14" is a rental item. Check it out from Rentals instead of ordering it.',
     );
+    // No write of any kind: create_order_request is the only writer.
+    expect(stub.rpcCalls.map((c) => c.name)).not.toContain('create_order_request');
     expect(stub.chainsAll.get('order_requests.insert')).toBeUndefined();
   });
 
-  it('create lets a non-rental line through to the header insert', async () => {
+  it('create lets a non-rental line through to the write', async () => {
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: [{ ...RENTAL, name: 'Widget', is_rental: false }], error: null },
-      // Sentinel: reaching the header insert proves the line checks passed.
-      'order_requests.insert': { data: null, error: { message: 'sentinel-header-insert' } },
+      // Sentinel: reaching create_order_request proves the line checks passed.
+      'rpc:create_order_request': { data: null, error: { message: 'sentinel-create' } },
     });
     const err = await svc(stub)
       .create({ warehouseId: WH, fulfillmentType: 'pickup', lines: [{ itemId: RENTAL.id, quantity: 1 }] } as never)
       .catch((e: unknown) => e);
 
     expect((err as { code: string }).code).toBe('internal_error');
-    expect(stub.chainsAll.get('order_requests.insert')).toBeDefined();
+    expect((err as { internalDetail?: string }).internalDetail).toBe('sentinel-create');
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['create_order_request']);
   });
 
   it('addLines REFUSES a rental item on an open order, before any write', async () => {

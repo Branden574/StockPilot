@@ -242,3 +242,26 @@ describe('OrderRequestsService.get: read order', () => {
     expect(result.requesterName).toBe('Req User');
   });
 });
+
+describe('OrderRequestsService.get: a failed side read fails the detail', () => {
+  // The reservations and warehouse reads used to drop their error, so a blip
+  // rendered "nothing reserved" (and no warehouse name) on the page a manager
+  // approves and picks from. A wrong picture is worse than a retry.
+  it.each([
+    ['stock_reservations.select', 'reservations'],
+    ['warehouses.select.maybeSingle', 'warehouse'],
+  ])('throws internal_error when the %s read fails (%s)', async (key) => {
+    const stub = makeSupabaseStub({
+      'order_requests.select.maybeSingle': { data: baseHeader({}), error: null },
+      'order_request_lines.select': { data: [], error: null },
+      'stock_reservations.select': { data: [], error: null },
+      'warehouses.select.maybeSingle': { data: { name: 'Main WH' }, error: null },
+      'user_profiles.select.maybeSingle': { data: null, error: null },
+      [key]: { data: null, error: { message: 'connection reset' } },
+    });
+    await expect(svc(stub).get('ord-1')).rejects.toMatchObject({
+      code: 'internal_error',
+      internalDetail: 'connection reset',
+    });
+  });
+});

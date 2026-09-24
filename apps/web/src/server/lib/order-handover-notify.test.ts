@@ -168,6 +168,51 @@ describe('notifyRequesterBackordered (partial)', () => {
     sendEmailMock.mockRejectedValueOnce(new Error('resend down'));
     await expect(notifyRequesterBackordered(backorderedArgs())).resolves.toBeUndefined();
   });
+
+  // The sign route could not read the line totals: the requester is still
+  // told the order is backordered, in words, never as "0 of 0" or "null".
+  it('with null counts: in-app and email go out worded without numbers', async () => {
+    await notifyRequesterBackordered(
+      backorderedArgs({ provided: null, requested: null, owed: null }),
+    );
+
+    expect(createNotificationMock).toHaveBeenCalledTimes(1);
+    const notif = createNotificationMock.mock.calls[0]![0] as {
+      title: string;
+      body: string;
+      metadata: Record<string, unknown>;
+    };
+    expect(notif.title).toBe(`Order ${ORDER_NO}: partially fulfilled`);
+    expect(notif.body).toBe(
+      "Part of your order was provided — the rest is backordered. We'll ship it when stock arrives.",
+    );
+    expect(notif.body).not.toMatch(/\bnull\b|\b0 of\b/);
+    // No count keys at all, rather than nulls a reader might print.
+    expect(notif.metadata).toEqual({ orderId: ORDER_ID });
+
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    const email = sendEmailMock.mock.calls[0]![0] as { subject: string; html: string; text: string };
+    expect(email.subject).toBe(`Order ${ORDER_NO}: partially fulfilled`);
+    expect(email.text).toContain('Part of your order was delivered and signed for.');
+    for (const out of [email.html, email.text]) {
+      expect(out).not.toMatch(/\bnull\b/);
+      expect(out).not.toContain('0 of 0');
+    }
+    // The per-line table still comes from its own read.
+    expect(email.html).toContain('Field Radio');
+  });
+
+  it('with counts: the in-app body and metadata are unchanged', async () => {
+    await notifyRequesterBackordered(backorderedArgs());
+    const notif = createNotificationMock.mock.calls[0]![0] as {
+      body: string;
+      metadata: Record<string, unknown>;
+    };
+    expect(notif.body).toBe(
+      "12 of 20 provided — 8 backordered. We'll ship the rest when stock arrives.",
+    );
+    expect(notif.metadata).toEqual({ orderId: ORDER_ID, provided: 12, requested: 20, owed: 8 });
+  });
 });
 
 describe('notifyRequesterBackorderShipped (back-shipped)', () => {

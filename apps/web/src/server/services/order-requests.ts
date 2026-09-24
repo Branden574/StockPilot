@@ -394,6 +394,26 @@ function rentalItemNotOrderable(name: string): ServiceError {
   );
 }
 
+/**
+ * The refusals the order guards raise (0365) as whole sentences: the
+ * order_requests insert guard (42501) and the order_request_lines guard
+ * (42501 / 23514). They are written for the person placing the order, so they
+ * are passed through as validation errors. Mapped by the code alone, the
+ * 42501 ones read "not allowed" and the 23514 one "internal error".
+ */
+const ORDER_GUARD_SENTENCES: ReadonlySet<string> = new Set([
+  'That item cannot be ordered: it is deleted, a rental item, or not received yet.',
+  'A line needs a real quantity.',
+  'A new order request starts pending approval.',
+  'A new order request cannot carry approval, picking, delivery or signature details.',
+]);
+
+/** The guard's sentence as a validation_error, or null for any other error. */
+function orderGuardRefusal(err: { message?: string | null }): ServiceError | null {
+  const message = err.message ?? '';
+  return ORDER_GUARD_SENTENCES.has(message) ? new ServiceError('validation_error', message) : null;
+}
+
 export class OrderRequestsService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -875,8 +895,13 @@ export class OrderRequestsService {
       };
     });
 
-    const { data: rs } = rsRes;
-    const { data: wh } = whRes;
+    // A failed reservations read used to render as "nothing reserved" (and a
+    // failed warehouse read as no warehouse name) on the detail page a manager
+    // decides from. Fail the read instead of showing a wrong picture.
+    const { data: rs, error: rsErr } = rsRes;
+    if (rsErr) throw new ServiceError('internal_error', rsErr.message);
+    const { data: wh, error: whErr } = whRes;
+    if (whErr) throw new ServiceError('internal_error', whErr.message);
 
     const h = header as OrderRequestRow;
 
@@ -1004,7 +1029,8 @@ export class OrderRequestsService {
       throw new ServiceError('validation_error', 'A request needs at least one line');
     }
 
-    // Validate every item belongs to the chosen warehouse + snapshot unit costs.
+    // Validate every item belongs to the chosen warehouse. (The unit-cost
+    // snapshot is stamped from the item by tg_order_request_lines_guard, 0363.)
     // Batched: a request's lines have no cap, and a failed batch throws (a
     // missing item would otherwise read as "not in this warehouse").
     const itemIds = [...new Set(input.lines.map((l) => l.itemId))];
@@ -1014,7 +1040,6 @@ export class OrderRequestsService {
       {
         name: string;
         warehouse_id: string | null;
-        unit_cost: number;
         awaiting: boolean;
         rental: boolean;
       }
@@ -1023,7 +1048,6 @@ export class OrderRequestsService {
       itemMap.set(row.id, {
         name: row.name,
         warehouse_id: row.warehouse_id,
-        unit_cost: Number(row.unit_cost) || 0,
         awaiting: row.awaiting_first_receipt === true,
         rental: row.is_rental === true,
       });
@@ -1052,13 +1076,16 @@ export class OrderRequestsService {
     // but a friendlier error here saves the user from a generic 23-error.
     // Mirrors the inventory.ts charter pairing check.
     if (input.deliveryCharterId) {
-      const { data: pair } = await this.ctx.supabase
+      // A failed read is not "no such pair": it used to tell the requester the
+      // site was not serviced when the database simply did not answer.
+      const { data: pair, error: pairErr } = await this.ctx.supabase
         .from('warehouse_charters')
         .select('charter_id')
         .eq('organization_id', this.ctx.organizationId)
         .eq('warehouse_id', input.warehouseId)
         .eq('charter_id', input.deliveryCharterId)
         .maybeSingle();
+      if (pairErr) throw new ServiceError('internal_error', pairErr.message);
       if (!pair) {
         throw new ServiceError(
           'validation_error',
@@ -1067,58 +1094,87 @@ export class OrderRequestsService {
       }
     }
 
-    const { data: header, error: hErr } = await this.ctx.supabase
-      .from('order_requests')
-      .insert({
-        organization_id: this.ctx.organizationId,
-        warehouse_id: input.warehouseId,
-        // When `onBehalfOf` is set, treat the row as public-style for
-        // email purposes: requester_user_id stays null, the name+email
-        // columns carry the on-behalf identity, and the email pipeline
-        // (which keys off `requester_user_id IS NULL`) routes the
-        // confirmation / status emails to that external address.
-        // `source` remains 'internal' — this is still a manager-
-        // initiated order.
-        requester_user_id: input.onBehalfOf ? null : this.ctx.userId,
-        requester_name: input.onBehalfOf?.name ?? null,
-        requester_email: input.onBehalfOf?.email ?? null,
-        notes: input.notes ?? null,
-        needed_by: input.neededBy ?? null,
-        fulfillment_type: input.fulfillmentType,
-        requester_phone: input.requesterPhone ?? null,
-        delivery_charter_id: input.deliveryCharterId ?? null,
-        pickup_location_notes: input.pickupLocationNotes ?? null,
-        source: 'internal' as OrderRequestSource,
-        status: 'pending_approval' as OrderRequestStatus,
-      })
-      .select('*')
-      .single();
-    if (hErr) throw new ServiceError('internal_error', hErr.message);
-
-    const linePayload = input.lines.map((l) => ({
-      order_request_id: (header as { id: string }).id,
-      item_id: l.itemId,
-      quantity_requested: l.quantity,
-      unit_cost_at_request: itemMap.get(l.itemId)?.unit_cost ?? 0,
-      notes: l.notes ?? null,
+    // One line per item: duplicates are summed and keep the first non-null
+    // note, the same collapse the public route applies (dedupedLines in
+    // api/v1/public/order-requests). approve_order_request compares an item's
+    // TOTAL across lines anyway (0365); collapsing here keeps the pick slip
+    // to one row per item.
+    const byItem = new Map<string, { quantity: number; notes: string | null }>();
+    for (const l of input.lines) {
+      const prev = byItem.get(l.itemId);
+      byItem.set(l.itemId, {
+        quantity: (prev?.quantity ?? 0) + (Number(l.quantity) || 0),
+        notes: prev?.notes ?? l.notes ?? null,
+      });
+    }
+    const pLines = Array.from(byItem.entries()).map(([itemId, v]) => ({
+      item_id: itemId,
+      quantity: v.quantity,
+      notes: v.notes,
     }));
-    const { error: lErr } = await this.ctx.supabase.from('order_request_lines').insert(linePayload);
-    if (lErr) {
-      // Roll back the header by hand — we don't have a transaction wrapper here.
-      await this.ctx.supabase
-        .from('order_requests')
-        .delete()
-        .eq('id', (header as { id: string }).id);
-      throw new ServiceError('internal_error', lErr.message);
+
+    // Header and lines in ONE transaction (create_order_request, 0365). It used
+    // to be two inserts and a delete-based "rollback", which left a line-less
+    // order behind whenever the delete failed too. SECURITY INVOKER, so RLS
+    // applies exactly as it did to the direct inserts; source and status are
+    // fixed by the function ('internal', 'pending_approval'), and
+    // unit_cost_at_request is stamped by the line guard (0363), so neither is sent.
+    const { data: created, error: createErr } = await this.ctx.supabase.rpc(
+      'create_order_request',
+      {
+        p_header: {
+          organization_id: this.ctx.organizationId,
+          warehouse_id: input.warehouseId,
+          // When `onBehalfOf` is set, treat the row as public-style for
+          // email purposes: requester_user_id stays null, the name+email
+          // columns carry the on-behalf identity, and the email pipeline
+          // (which keys off `requester_user_id IS NULL`) routes the
+          // confirmation / status emails to that external address.
+          // `source` remains 'internal' — this is still a manager-
+          // initiated order.
+          requester_user_id: input.onBehalfOf ? null : this.ctx.userId,
+          requester_name: input.onBehalfOf?.name ?? null,
+          requester_email: input.onBehalfOf?.email ?? null,
+          notes: input.notes ?? null,
+          needed_by: input.neededBy ?? null,
+          fulfillment_type: input.fulfillmentType,
+          requester_phone: input.requesterPhone ?? null,
+          delivery_charter_id: input.deliveryCharterId ?? null,
+          pickup_location_notes: input.pickupLocationNotes ?? null,
+        },
+        p_lines: pLines,
+      },
+    );
+    if (createErr) {
+      // Before the code checks: the guards' 42501 / 23514 carry a sentence for
+      // the requester (an item deleted or received-state changed since the
+      // pre-read above, say), not a permission or server fault.
+      const guard = orderGuardRefusal(createErr);
+      if (guard) throw guard;
+      if (createErr.code === '22023') {
+        throw new ServiceError('validation_error', createErr.message);
+      }
+      if (createErr.code === '42501') {
+        throw new ServiceError('forbidden', 'You are not allowed to create this request.');
+      }
+      throw new ServiceError('internal_error', createErr.message);
+    }
+    if (
+      !created ||
+      typeof created !== 'object' ||
+      Array.isArray(created) ||
+      typeof (created as { id?: unknown }).id !== 'string'
+    ) {
+      throw new ServiceError('internal_error', 'create_order_request returned no order row');
     }
 
-    const row = header as OrderRequestRow;
+    const row = created as OrderRequestRow;
     await audit(
       {
         event: 'order_request.created',
         entityType: 'order_request',
         entityId: row.id,
-        after: { lineCount: linePayload.length, warehouseId: input.warehouseId },
+        after: { lineCount: pLines.length, warehouseId: input.warehouseId },
       },
       this.ctx,
     );
@@ -1129,7 +1185,7 @@ export class OrderRequestsService {
       id: row.id,
       orderNumber: formatOrderNumber(row.order_number) ?? row.id.slice(0, 8).toUpperCase(),
       requester: (row as { requester_name?: string | null }).requester_name ?? null,
-      lineCount: linePayload.length,
+      lineCount: pLines.length,
     });
     return row;
   }
@@ -1332,7 +1388,10 @@ export class OrderRequestsService {
       const { error: insErr } = await this.ctx.supabase
         .from('order_request_lines')
         .insert(toInsert);
-      if (insErr) throw new ServiceError('internal_error', insErr.message);
+      if (insErr) {
+        // The line guard's refusal (0365) is a sentence for the user, not a fault.
+        throw orderGuardRefusal(insErr) ?? new ServiceError('internal_error', insErr.message);
+      }
     }
 
     // A slip printed BEFORE this change no longer matches the order.
@@ -2067,6 +2126,12 @@ export class OrderRequestsService {
         throw new ServiceError('forbidden', 'Only managers can approve requests');
       if (msg.includes('invalid_status_transition'))
         throw new ServiceError('validation_error', 'This request is no longer pending approval');
+      // 0365: an order with no lines would approve into an empty pick slip.
+      if (msg.includes('order_has_no_lines'))
+        throw new ServiceError(
+          'validation_error',
+          'This order has no items. Add at least one before approving.',
+        );
       if (msg.includes('insufficient_stock'))
         throw new ServiceError(
           'validation_error',
@@ -2183,6 +2248,12 @@ export class OrderRequestsService {
         throw new ServiceError('forbidden', 'Only managers can approve requests');
       if (msg.includes('invalid_status_transition'))
         throw new ServiceError('validation_error', 'This request is no longer pending approval');
+      // 0365: approve_partial refuses a line-less order too, as approve does.
+      if (msg.includes('order_has_no_lines'))
+        throw new ServiceError(
+          'validation_error',
+          'This order has no items. Add at least one before approving.',
+        );
       if (msg.includes('item_warehouse_mismatch'))
         throw new ServiceError(
           'validation_error',

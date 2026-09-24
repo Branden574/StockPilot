@@ -175,6 +175,53 @@ describe('partial (Partially Fulfilled)', () => {
     expectClean(r);
   });
 
+  it('unknown counts: no numbers, no stat cards, same subject, still clean', () => {
+    // The sign route could not read the line totals. "0 of 0 delivered" would
+    // be a wrong statement, so the email says it without numbers.
+    const r = renderPartialFulfilledEmail({
+      orderNumber: '#7741-2205',
+      recipientFirstName: 'Dana',
+      recipientEmail: 'dana@example.com',
+      delivered: null,
+      requested: null,
+      backordered: null,
+      items: SAMPLE_ITEMS,
+      orderUrl: 'https://app.example.com/dashboard/orders/abc',
+      urls: URLS,
+    });
+    expect(r.subject).toBe(esEmailById('partial').subject({ orderNumber: '#7741-2205' }));
+    expect(r.preheader).toBe('Part of your order was delivered. The rest is backordered.');
+    expect(r.html).toContain('Part of your order</strong> was delivered and signed for.');
+    expect(r.html).toContain('as soon as they&rsquo;re back in stock');
+    // No stat cards (the kpi grid); the counted email has them.
+    expect(r.html).not.toContain('class="kpi"');
+    expect(samplePartial().html).toContain('class="kpi"');
+    // The per-line table and the footer are kept.
+    expect(r.html).toContain('Field Radio');
+    expect(r.html).toContain('>Unsubscribe</a>');
+    expect(r.text).toContain('Part of your order was delivered and signed for.');
+    expect(r.text).not.toContain('Delivered: ');
+    expectClean(r);
+  });
+
+  it('unknown counts with an ETA keep the ETA clause', () => {
+    const r = renderPartialFulfilledEmail({
+      orderNumber: '#7741-2205',
+      recipientEmail: 'dana@example.com',
+      delivered: null,
+      requested: null,
+      backordered: null,
+      backorderEta: 'within 2 weeks',
+      orderUrl: 'https://app.example.com/dashboard/orders/abc',
+      urls: URLS,
+    });
+    expect(r.preheader).toBe(
+      'Part of your order was delivered. The rest is backordered — expected within 2 weeks.',
+    );
+    expect(r.html).toContain('expected within 2 weeks');
+    expectClean(r);
+  });
+
   it('escapes hostile merge values', () => {
     const r = renderPartialFulfilledEmail({
       orderNumber: '#X',

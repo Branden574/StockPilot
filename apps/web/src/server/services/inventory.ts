@@ -50,6 +50,7 @@ import {
   rackOutcomeBasis,
   isBookCrateChangeAcknowledged,
   isBookRackChangeAcknowledged,
+  isAtLeast,
   isCrateDestination,
   formatArchiveStockBlockMessage,
   formatBulkArchiveStockBlockMessage,
@@ -283,6 +284,23 @@ const RACK_PLACE_CONCURRENCY = 20;
  */
 export const ADJUST_WAREHOUSE_WRITE_REFUSED =
   "You do not have write access to this item's warehouse.";
+
+/**
+ * transferStock's refusal when either end of the move is in a warehouse the
+ * caller (below manager) cannot write to. A sentence for the same reason as
+ * ADJUST_WAREHOUSE_WRITE_REFUSED: the phone shows it verbatim.
+ */
+export const TRANSFER_WAREHOUSE_WRITE_REFUSED =
+  'You can only move stock between warehouses you work in.';
+
+/**
+ * adjustStock's refusal when the adjustment names a location in a warehouse
+ * the caller (below manager) cannot write to. adjust_stock (0365) checks the
+ * LOCATION, which can sit in a different warehouse from the item row, so this
+ * is not ADJUST_WAREHOUSE_WRITE_REFUSED.
+ */
+export const ADJUST_LOCATION_WRITE_REFUSED =
+  'You can only adjust stock at locations in warehouses you work in.';
 
 // Model B — "one product = one SKU": these are the SHARED product columns.
 // Editing any of them on ONE placement (inventory_items row) of a SKU must
@@ -5289,6 +5307,14 @@ export class InventoryService {
         throw new ServiceError('validation_error', 'Insufficient stock for this adjustment');
       }
       if (error.message.includes('forbidden')) {
+        // adjust_stock raises 'forbidden' in two places: the has_org_role
+        // (staff) floor, and (0365) an explicit location in a warehouse the
+        // caller cannot write, below manager. A staff-or-above caller passed
+        // the floor, so with a location sent it is the second: say why. The
+        // location is the one sent, which a location-less add resolves above.
+        if (locationId != null && isAtLeast(this.ctx.role, 'staff')) {
+          throw new ServiceError('forbidden', ADJUST_LOCATION_WRITE_REFUSED);
+        }
         throw new ServiceError('forbidden', 'Permission denied');
       }
       throw new ServiceError('internal_error', error.message);
@@ -5531,6 +5557,12 @@ export class InventoryService {
         'Source and destination are the same location.',
       );
     }
+    // No app-side warehouse check before the RPC: below manager,
+    // transfer_stock (0365) refuses a move unless BOTH ends sit in warehouses
+    // the caller can write, and its 'forbidden' is mapped to a sentence below.
+    // A pre-read of the two locations plus the access list put serial round
+    // trips in front of every staff transfer, bulk put-away included, to
+    // decide what the RPC decides anyway.
     const { data, error } = await this.ctx.supabase.rpc('transfer_stock', {
       p_item_id: input.itemId,
       p_from_location_id: input.fromLocationId,
@@ -5569,11 +5601,17 @@ export class InventoryService {
       if (detail.includes('quantity_must_be_positive')) {
         throw new ServiceError('validation_error', 'Enter a quantity greater than zero.');
       }
-      // The app gate (stock:transfer) is LOOSER than the RPC's floor: the
-      // function requires has_org_role(org, 'staff'), so a VIEWER granted
-      // stock:transfer through user_permission_overrides passes
-      // assertPermission and is then refused by the DB — pattern #4.
+      // 'forbidden' is raised in two places. (1) The org-role floor: the app
+      // gate (stock:transfer) is LOOSER than the function's
+      // has_org_role(org, 'staff'), so a VIEWER granted stock:transfer through
+      // user_permission_overrides passes assertPermission and is then refused
+      // by the DB — pattern #4. (2) Since 0365, below manager, an end of the
+      // move in a warehouse the caller cannot write. A staff-or-above caller
+      // passed (1), so it is (2): name the reason, not a bare refusal.
       if (detail.includes('forbidden')) {
+        if (isAtLeast(this.ctx.role, 'staff')) {
+          throw new ServiceError('forbidden', TRANSFER_WAREHOUSE_WRITE_REFUSED);
+        }
         throw new ServiceError('forbidden', 'Permission denied');
       }
       throw new ServiceError('internal_error', error.message);

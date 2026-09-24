@@ -44,6 +44,7 @@ vi.mock('./audit', () => ({
 import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib/auth/warehouse';
 import { audit, auditMany } from './audit';
 import {
+  ADJUST_LOCATION_WRITE_REFUSED,
   ADJUST_WAREHOUSE_WRITE_REFUSED,
   InventoryService,
   mapMovementTypeToAuditEvent,
@@ -849,6 +850,71 @@ describe('InventoryService.adjustStock — warehouse write refusal is a ServiceE
     } finally {
       vi.mocked(assertWarehouseAccess).mockReset();
     }
+  });
+});
+
+// adjust_stock (0365) raises 'forbidden' below manager when the EXPLICIT
+// location is in a warehouse the caller cannot write — the item's own
+// warehouse can be writable while the rack named is not. Its only other
+// 'forbidden' is the has_org_role(staff) floor, so a staff-or-above caller
+// that sent a location is told which refusal it hit.
+describe('InventoryService.adjustStock — location write refusal from the RPC (0365)', () => {
+  const ITEM = {
+    id: 'itm-1',
+    organization_id: 'org-test',
+    warehouse_id: 'wh-a',
+    status: 'active',
+    quantity_on_hand: 4,
+    reorder_point: 0,
+    name: 'Clipboard',
+    sku: 'CB-1',
+  };
+  const FORBIDDEN = { message: 'forbidden', code: '42501' };
+  function build(role: 'staff' | 'viewer') {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: ITEM, error: null },
+      'item_stock_levels.select': { data: [], error: null },
+      'rpc:adjust_stock': { data: null, error: FORBIDDEN },
+    });
+    // A viewer reaches the RPC only with stock:adjust granted by override.
+    const permissions = role === 'viewer' ? new Set(['stock:adjust']) : undefined;
+    return {
+      stub,
+      svc: new InventoryService(
+        makeServiceContext(stub.client, { role, ...(permissions ? { permissions } : {}) }),
+      ),
+    };
+  }
+
+  it('staff naming a location in another warehouse gets the location sentence', async () => {
+    const { stub, svc } = build('staff');
+    await expect(
+      svc.adjustStock({ itemId: 'itm-1', quantityChange: -1, movementType: 'remove', locationId: 'loc-b-rack' }),
+    ).rejects.toMatchObject({ code: 'forbidden', message: ADJUST_LOCATION_WRITE_REFUSED });
+    expect(ADJUST_LOCATION_WRITE_REFUSED).toBe(
+      'You can only adjust stock at locations in warehouses you work in.',
+    );
+    expect(stub.rpcCalls.find((c) => c.name === 'adjust_stock')!.args).toMatchObject({
+      p_location_id: 'loc-b-rack',
+    });
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("keeps 'Permission denied' when no location was sent (only the org-role floor can refuse)", async () => {
+    const { stub, svc } = build('staff');
+    await expect(
+      svc.adjustStock({ itemId: 'itm-1', quantityChange: -1, movementType: 'remove' }),
+    ).rejects.toMatchObject({ code: 'forbidden', message: 'Permission denied' });
+    expect(stub.rpcCalls.find((c) => c.name === 'adjust_stock')!.args).toMatchObject({
+      p_location_id: null,
+    });
+  });
+
+  it("keeps 'Permission denied' for a viewer even with a location (that is the floor)", async () => {
+    const { svc } = build('viewer');
+    await expect(
+      svc.adjustStock({ itemId: 'itm-1', quantityChange: -1, movementType: 'remove', locationId: 'loc-b-rack' }),
+    ).rejects.toMatchObject({ code: 'forbidden', message: 'Permission denied' });
   });
 });
 

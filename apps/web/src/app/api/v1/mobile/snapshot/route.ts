@@ -500,6 +500,11 @@ async function snapshotGET(req: NextRequest) {
               .from('inventory_items')
               .select('id, quantity_on_hand, warehouse_id')
               .in('id', batch)
+              // A deleted kit item's kits cannot be handed out: distribute
+              // (0365) reads it as 0 and assemble refuses it. Left out here,
+              // the bundle ships phantomQty 0, so its stock never reaches the
+              // phone's cache.
+              .is('deleted_at', null)
               .order('id', { ascending: true })
               .range(from, to),
           ),

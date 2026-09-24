@@ -23,8 +23,7 @@
 --     read-narrowed in the first place (see the staff pin below). The
 --     definer conversion is pinned structurally instead (tests 18/23/24
 --     here, plus 0318's inverted prosecdef pin). transfer_stock FROM a whT2
---     location (outside the caller's assignment) also still works — its
---     conditional UPDATE runs under the unchanged FOR ALL write policy.
+--     location (outside the caller's assignment) is refused since 0365.
 --
 --   • STRUCTURE: apply_level_delta is SECURITY DEFINER with a pinned
 --     search_path, closed to PUBLIC/anon, open to authenticated; and its
@@ -278,30 +277,32 @@ select is(
   '0331 parity: on-hand 12 -> 3 (Σ levels = on-hand invariant holds)'
 );
 
--- transfer_stock FROM a whT2 location (outside the caller's assignment): the
--- conditional draw runs under the UNCHANGED FOR ALL write policy, so it still
--- sees the source row.
+-- transfer_stock FROM a whT2 location (outside the caller's assignment). 0331
+-- pinned that this still worked; 0365 closes it on purpose: below manager,
+-- both ends of a transfer must be in warehouses the caller may write (the
+-- transfer dialog only ever offered those). Nothing moves.
 set local "request.jwt.claim.sub" to :u_stf;
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
-select lives_ok(
+select throws_ok(
   format($$select public.transfer_stock(%L, %L, %L, 4, 'ar2 parity move')$$,
          :itemB, :locW2, :locW1),
-  '0331 parity: staff transfer FROM a whT2 source still works (write policy untouched)'
+  '42501', 'forbidden',
+  '0331/0365: a whT1-scoped staff transfer FROM a whT2 source is refused'
 );
 reset role;
 
 select is(
   (select quantity from public.item_stock_levels
     where item_id = :itemB and location_id = :locW2),
-  2::numeric,
-  '0331 parity: the whT2 source decremented 6 -> 2'
+  6::numeric,
+  '0331/0365: the whT2 source is untouched (6)'
 );
 select is(
-  (select quantity from public.item_stock_levels
+  (select coalesce(sum(quantity), 0) from public.item_stock_levels
     where item_id = :itemB and location_id = :locW1),
-  4::numeric,
-  '0331 parity: the whT1 destination incremented 0 -> 4'
+  0::numeric,
+  '0331/0365: nothing arrived in whT1'
 );
 
 -- ══════════════════════════════════════════════════════════════════════════

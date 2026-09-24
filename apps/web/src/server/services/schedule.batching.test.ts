@@ -259,6 +259,21 @@ describe('ScheduleService distributed flag', () => {
       expect(completedExtra()).toEqual({ autoDistributed: false });
     });
 
+    // 0365: a required component outside the caller's inventory view is
+    // refused with a code. The manager is told why, not 'component_not_visible'.
+    it('names a component_not_visible refusal in words', async () => {
+      const { run } = completeWith({
+        data: null,
+        error: { message: 'component_not_visible', code: 'P0001' },
+      });
+      const err = (await run().catch((e: unknown) => e)) as { code: string; message: string };
+      expect(err.code).toBe('conflict');
+      expect(err.message).toContain(
+        "Event marked complete, but bundle distribution failed: A component of this kit isn't in your inventory view, so the kit can't be built from it. Retry from /dashboard/bundles/",
+      );
+      expect(err.message).not.toContain('component_not_visible');
+    });
+
     it('records a distribution another caller made first (unique violation)', async () => {
       const { run } = completeWith({
         data: null,

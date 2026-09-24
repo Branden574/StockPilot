@@ -80,3 +80,68 @@ describe('sync.ts sendOne — distribute_bundle replay (0347)', () => {
     expect(branch).toMatch(/body:\s*\{\s*\.\.\.payload,\s*idempotencyKey\s*\}/);
   });
 });
+
+/**
+ * WIRING PINS for the warehouse-aware preview (0365).
+ *
+ * distribute_bundle() now draws components and pre-assembled kits only from
+ * the warehouse the kit is handed out at. The rule itself is unit-tested in
+ * bundle-distribute-preview.test.ts; these pins prove the screen actually uses
+ * it: it passes the CHOSEN warehouse and each row's warehouse into the rule,
+ * recomputes when the warehouse changes, and no longer does its own math over
+ * every component's on-hand and every pre-assembled kit wherever they sit.
+ */
+describe('bundles/[id].tsx preview: warehouse-aware (0365)', () => {
+  /** The preview useMemo: from its declaration to its dependency list. */
+  function previewBody(): string {
+    const start = screen.indexOf('const preview: DistributionPreview | null = React.useMemo(');
+    expect(start, 'preview useMemo not found').toBeGreaterThan(-1);
+    const end = screen.indexOf(']);', start);
+    expect(end).toBeGreaterThan(start);
+    return screen.slice(start, end + 3);
+  }
+
+  it('imports the rule from its lib home', () => {
+    expect(screen).toMatch(
+      /import \{\s*computeDistributionPreview,\s*defaultDistributeWarehouseId,\s*type DistributionPreview,\s*\} from '@\/lib\/bundle-distribute-preview'/,
+    );
+  });
+
+  it('computes the preview with the rule, for the chosen warehouse', () => {
+    const body = previewBody();
+    expect(body).toMatch(/return computeDistributionPreview\(\{/);
+    expect(body).toMatch(/\n\s+warehouseId,\n/);
+  });
+
+  it("hands the rule each row's warehouse: the kit phantom and every component item", () => {
+    const body = previewBody();
+    expect(body).toMatch(
+      /phantom: \{ quantityOnHand: bundle\.phantomQty, warehouseId: bundle\.phantomWarehouseId \}/,
+    );
+    expect(body).toMatch(/warehouseId: item\.warehouseId/);
+    expect(body).toMatch(/quantityOnHand: item\.quantityOnHand/);
+  });
+
+  it('recomputes when the warehouse changes', () => {
+    expect(previewBody()).toMatch(/\}, \[bundle, components, items, qty, warehouseId\]\);$/);
+  });
+
+  it('no longer counts stock wherever it sits', () => {
+    // The pre-0365 math: every kit and every component's on-hand, regardless
+    // of the chosen warehouse.
+    expect(screen).not.toMatch(/Math\.min\(n, bundle\.phantomQty\)/);
+    expect(screen).not.toMatch(/Math\.max\(0, item\?\.quantityOnHand \?\? 0\)/);
+  });
+
+  it('starts on the warehouse the kit can be handed out from', () => {
+    expect(screen).not.toMatch(/setWarehouseId\(b\.phantomWarehouseId \?\? whs\[0\]/);
+    const at = screen.indexOf('defaultDistributeWarehouseId({');
+    expect(at).toBeGreaterThan(-1);
+    const call = screen.slice(at, screen.indexOf('}),', at));
+    expect(call).toMatch(/phantomWarehouseId: b\.phantomWarehouseId/);
+    expect(call).toMatch(
+      /componentWarehouseIds: comps\.map\(\(c\) => itemMap\.get\(c\.itemId\)\?\.warehouseId\)/,
+    );
+    expect(call).toMatch(/warehouseIds: whs\.map\(\(w\) => w\.id\)/);
+  });
+});

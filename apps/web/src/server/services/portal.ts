@@ -363,13 +363,25 @@ export async function portalSubmitOrder(
     }
   }
 
+  // One line per item: a cart that names an item twice is summed into one
+  // line, the same collapse internal and public orders apply. Two lines for
+  // one item used to reach the pick slip as two rows.
+  const qtyByItem = new Map<string, number>();
+  for (const l of parsed.lines) {
+    qtyByItem.set(l.itemId, (qtyByItem.get(l.itemId) ?? 0) + l.quantity);
+  }
+  const mergedLines = Array.from(qtyByItem.entries()).map(([itemId, quantity]) => ({
+    itemId,
+    quantity,
+  }));
+
   const admin = createAdminClient();
 
   // Resolve item cost + warehouse for every line (org-scoped). The order header
   // needs ONE warehouse and the approve pipeline rejects mixed-warehouse lines
   // (item_warehouse_mismatch), so a cart spanning warehouses is refused up
   // front with a clear message rather than creating an un-approvable order.
-  const itemIds = [...new Set(parsed.lines.map((l) => l.itemId))];
+  const itemIds = mergedLines.map((l) => l.itemId);
   const { data: itemRows, error: itemErr } = await admin
     .from('inventory_items')
     .select('id, warehouse_id, unit_cost')
@@ -432,7 +444,7 @@ export async function portalSubmitOrder(
   // means "no price yet — to be quoted". That is every line in a no_charge org,
   // and the quotable ones in a priced org. Writing 0 for both would tell anyone
   // reading the history later that a to-be-quoted line had been settled at free.
-  const linePayload = parsed.lines.map((l) => ({
+  const linePayload = mergedLines.map((l) => ({
     order_request_id: header.id as string,
     item_id: l.itemId,
     quantity_requested: l.quantity,

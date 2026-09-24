@@ -3,6 +3,7 @@ import 'server-only';
 import { assertWarehouseAccess, ForbiddenError } from '@/lib/auth/warehouse';
 
 import { audit } from './audit';
+import { BUNDLE_COMPONENT_NOT_VISIBLE } from './bundles';
 import {
   assertModuleEnabled,
   assertPermission,
@@ -568,8 +569,14 @@ export class ScheduleService {
             } else {
               // Status flip already succeeded. Capture the failure
               // so we can surface a soft error to the UI after
-              // emitting audit events.
-              autoDistFailed = { message: distErr.message, bundleId };
+              // emitting audit events. distribute_bundle's 0365 refusal
+              // is a code; the manager reads the sentence instead.
+              autoDistFailed = {
+                message: msg.includes('component_not_visible')
+                  ? BUNDLE_COMPONENT_NOT_VISIBLE
+                  : distErr.message,
+                bundleId,
+              };
             }
           }
         }
@@ -632,7 +639,7 @@ export class ScheduleService {
       throw new ServiceError(
         'conflict',
         `Event marked complete, but bundle distribution failed: ` +
-          `${autoDistFailed.message}. Retry from /dashboard/bundles/${autoDistFailed.bundleId}.`,
+          `${autoDistFailed.message.replace(/\.$/, '')}. Retry from /dashboard/bundles/${autoDistFailed.bundleId}.`,
       );
     }
 
