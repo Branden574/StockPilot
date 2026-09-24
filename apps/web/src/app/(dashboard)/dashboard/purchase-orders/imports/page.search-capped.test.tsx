@@ -28,6 +28,12 @@ vi.mock('next/link', async () => {
 vi.mock('@/lib/modules/module-gate', () => ({
   checkModuleAccess: vi.fn(async () => ({ enabled: true, canManage: true })),
 }));
+vi.mock('@/lib/auth/session', () => ({
+  requireOrgContext: vi.fn(async () => ({ organizationId: 'org-1' })),
+}));
+vi.mock('@/lib/dashboard/request-cache', () => ({
+  getOrgRowForRequest: vi.fn(async () => ({ timezone: 'America/Los_Angeles' })),
+}));
 vi.mock('@/server/services/po-imports', () => ({
   PoImportsService: { forCurrentUser: vi.fn(async () => svc) },
 }));

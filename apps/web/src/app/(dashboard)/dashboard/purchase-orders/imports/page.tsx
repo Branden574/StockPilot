@@ -1,6 +1,9 @@
 import { FileText } from 'lucide-react';
 import Link from 'next/link';
 
+import { requireOrgContext } from '@/lib/auth/session';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { reportError } from '@/lib/error-reporter';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
 import { PoImportSearch } from '@/components/po-imports/po-import-search';
@@ -17,10 +20,11 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { PoImportsService, type PoImportRow } from '@/server/services/po-imports';
-import { formatRelative } from '@/lib/utils';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { PO_IMPORTS_TOUR } from '@/lib/onboarding/tours';
 import { DEFAULT_TAB, isImportTab, TAB_LABELS, TAB_ORDER, TAB_STATUSES, type PoImportTab } from '@/lib/po-imports/tabs';
+
+import { formatOrgDate, formatOrgDateTime, resolveOrgTimezone } from '@stockpilot/core';
 
 export const metadata = { title: 'PO imports' };
 
@@ -44,6 +48,22 @@ export default async function PoImportsPage({
   const tab: PoImportTab = isImportTab(params.status) ? params.status : DEFAULT_TAB;
   const q = (params.q ?? '').trim();
   const page = Math.max(1, Number(params.page) || 1);
+
+  // The Uploaded column prints a calendar day, and whose day it is matters: in
+  // the server's zone (UTC on Vercel) an evening upload in California lands on
+  // the next date. So the org's zone, from the request-cached org row (the same
+  // one the layout and the cycle-counts list read; normally already in hand
+  // from the membership bundle). Started before the list reads rather than
+  // awaited ahead of them, and an unreadable row falls back to the documented
+  // default zone instead of taking the list down (getOrgRowForRequest throws
+  // on a read error).
+  const ctx = await requireOrgContext();
+  const timezoneRead = getOrgRowForRequest(ctx.organizationId)
+    .then((org) => resolveOrgTimezone(org?.timezone))
+    .catch((e: unknown) => {
+      void reportError(e, { tag: 'po_imports.list.org_timezone_failed', level: 'warning' });
+      return resolveOrgTimezone(null);
+    });
 
   let rows: PoImportRow[] = [];
   let total = 0;
@@ -89,6 +109,7 @@ export default async function PoImportsPage({
   }
 
   const totalAcrossTabs = counts.active + counts.approved + counts.cancelled;
+  const tz = await timezoneRead;
 
   // SERIALIZABLE props only: this is a server component rendering a 'use
   // client' pager, and a function prop (hrefForPage) crashes any non-empty
@@ -260,8 +281,20 @@ export default async function PoImportsPage({
                         )}
                       </div>
                     </TableCell>
-                    <TableCell className="text-muted-foreground text-right text-xs">
-                      {formatRelative(i.created_at)}
+                    {/* The date itself, not "2 weeks ago": people track
+                        uploads against a calendar (owner request 2026-09-24).
+                        The hover gives the time as well. */}
+                    <TableCell className="text-muted-foreground whitespace-nowrap text-right text-xs tabular-nums">
+                      <time
+                        dateTime={i.created_at}
+                        title={formatOrgDateTime(
+                          i.created_at,
+                          { dateStyle: 'medium', timeStyle: 'short' },
+                          tz,
+                        )}
+                      >
+                        {formatOrgDate(i.created_at, { dateStyle: 'medium' }, tz)}
+                      </time>
                     </TableCell>
                   </TableRow>
                 ))}
