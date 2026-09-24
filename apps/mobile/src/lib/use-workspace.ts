@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as React from 'react';
 
+import { accountEpoch, endAccountEpoch } from './account-epoch';
 import { useAuth } from './auth-context';
 import { deleteOrgData } from './db';
 import { refreshEnabledModules } from './enabled-modules';
@@ -152,7 +153,19 @@ async function loadProfileDefaultOrg(userId: string): Promise<string | null> {
 /** Switches that have started (see hydrate). */
 let switchesStarted = 0;
 
+// A different account (or none) ends the account epoch the moment auth says
+// so, before any screen reacts: a workspace load or switch still running for
+// the previous account then saves and shows nothing. A token refresh keeps the
+// same user id and ends nothing; the first event only records who is signed in.
+let epochUserId: string | null | undefined;
+supabase.auth.onAuthStateChange((_event, session) => {
+  const id = session?.user?.id ?? null;
+  if (epochUserId !== undefined && id !== epochUserId) endAccountEpoch();
+  epochUserId = id;
+});
+
 async function hydrate(userId: string) {
+  const epochAtStart = accountEpoch();
   const switchesAtStart = switchesStarted;
   const [orgs, persisted, profileDefault] = await Promise.all([
     loadOrgs(userId),
@@ -163,6 +176,9 @@ async function hydrate(userId: string) {
   // SAVED, so X-Organization-Id on every /api/v1 call names the workspace this
   // screen shows. Before, a choice made after sign-out lived only in memory and
   // the API answered for the default organization instead.
+  // The account changed while these reads were out (sign-out, another user,
+  // eviction): this load belongs to an account that is gone.
+  if (accountEpoch() !== epochAtStart) return;
   // A switch made while these reads were out has already saved, wiped and
   // published its workspace. Deciding from the value read above would put the
   // screen back on the old workspace while every request and the cache use the
@@ -174,7 +190,13 @@ async function hydrate(userId: string) {
   const choice = chooseActiveOrg({ orgIds: orgs.map((o) => o.id), stored: persisted, profileDefault });
   const activeOrgId = choice.activeOrgId;
   if (activeOrgId && choice.persist) {
-    await AsyncStorage.setItem(ORG_STORAGE_KEY, activeOrgId);
+    try {
+      await AsyncStorage.setItem(ORG_STORAGE_KEY, activeOrgId);
+    } catch (err) {
+      // Still show the workspace (the server answers for the same default
+      // when no header is saved); a failed save must not leave loading stuck.
+      console.warn('[workspace] saving the chosen workspace failed', err);
+    }
   }
   if (activeOrgId && choice.resetCache) {
     // The cache may hold another workspace's rows; clear the org-scoped
@@ -193,6 +215,7 @@ async function hydrate(userId: string) {
     activeWarehouseId =
       persistedWh && warehouses.some((w) => w.id === persistedWh) ? persistedWh : null;
   }
+  if (accountEpoch() !== epochAtStart) return;
   if (switchesStarted !== switchesAtStart) {
     // A switch started during the warehouse read: same as above. A cache wipe
     // made here may have discarded the switch's own pull, so ask for another.
@@ -228,12 +251,14 @@ let switchQueue: Promise<void> = Promise.resolve();
  * applies: the last choice wins and is published last.
  */
 export function setActiveOrg(orgId: string): Promise<void> {
-  const run = switchQueue.then(() => switchActiveOrg(orgId));
+  // A switch tapped for one account never runs for the next (see account-epoch).
+  const epoch = accountEpoch();
+  const run = switchQueue.then(() => (epoch === accountEpoch() ? switchActiveOrg(orgId, epoch) : undefined));
   switchQueue = run.catch(() => undefined);
   return run;
 }
 
-async function switchActiveOrg(orgId: string): Promise<void> {
+async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
   if (orgId === cached.activeOrgId) return;
   switchesStarted += 1;
   await AsyncStorage.setItem(ORG_STORAGE_KEY, orgId);
@@ -248,6 +273,7 @@ async function switchActiveOrg(orgId: string): Promise<void> {
   } catch (err) {
     console.warn('[workspace] deleteOrgData on org switch failed', err);
   }
+  if (epoch !== accountEpoch()) return; // signed out mid-switch: show nothing
   const orgRow = cached.orgs.find((o) => o.id === orgId) ?? null;
   publish({
     activeOrgId: orgId,
@@ -262,6 +288,7 @@ async function switchActiveOrg(orgId: string): Promise<void> {
   const activeWarehouseId =
     persistedWh && warehouses.some((w) => w.id === persistedWh) ? persistedWh : null;
   const activeWarehouse = warehouses.find((w) => w.id === activeWarehouseId) ?? null;
+  if (epoch !== accountEpoch()) return;
   publish({
     warehouses,
     activeWarehouseId,

@@ -18,7 +18,7 @@ describe('hydrate() saves the workspace it chooses', () => {
   });
 
   it('writes the choice to the key the API header is read from', () => {
-    expect(hydrate).toMatch(/if \(activeOrgId && choice\.persist\) \{\s*await AsyncStorage\.setItem\(ORG_STORAGE_KEY, activeOrgId\);/);
+    expect(hydrate).toMatch(/if \(activeOrgId && choice\.persist\) \{\s*try \{\s*await AsyncStorage\.setItem\(ORG_STORAGE_KEY, activeOrgId\);/);
     expect(src).toMatch(/const ORG_STORAGE_KEY = 'workspace\.activeOrgId';/);
     expect(readFileSync(path.join(__dirname, 'api.ts'), 'utf8')).toMatch(/AsyncStorage\.getItem\('workspace\.activeOrgId'\)/);
   });

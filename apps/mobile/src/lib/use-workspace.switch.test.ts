@@ -37,7 +37,12 @@ vi.mock('./supabase', () => {
       return Promise.resolve({ data: [], error: null });
     },
   };
-  return { supabase: { from: () => query } };
+  return {
+    supabase: {
+      from: () => query,
+      auth: { onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }) },
+    },
+  };
 });
 
 const orgWrites = () =>
