@@ -2,10 +2,8 @@ import 'server-only';
 
 import { assertWarehouseAccess, ForbiddenError } from '@/lib/auth/warehouse';
 import { sendRentalCheckoutEmail, sendRentalReturnedEmail } from '@/lib/email/rentals';
-import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
-import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import {
   assertModuleEnabled,
   assertPermission,
@@ -135,157 +133,36 @@ export class RentalsService {
       if (memberFullName) borrowerName = memberFullName;
     }
 
-    // Validate: every line's item_id must exist + be is_rental=true.
-    // Batched (the service does not cap its lines itself) and error-BOUND: the
-    // read used to ignore its error, so a failed read reported every item as
-    // "not found". It decides what may be lent, so a failed batch throws.
-    const itemIds = input.lines.map((l) => l.itemId);
-    const ctx = this.ctx;
-    const rentalItems = await fetchAllRowsByIds<{
-      id: string;
-      name: string | null;
-      is_rental: boolean;
-      warehouse_id: string;
-      quantity_on_hand: number;
-    }>(
-      itemIds,
-      (batch) => (from, to) =>
-        ctx.supabase
-          .from('inventory_items')
-          // `name` is here for the availability refusal message below — an operator
-          // who is told "Projector B: only 2 available" can go find the open rental.
-          .select('id, name, is_rental, warehouse_id, quantity_on_hand')
-          .eq('organization_id', ctx.organizationId)
-          .in('id', batch)
-          .order('id')
-          .range(from, to),
-    );
-    const itemsById = new Map(rentalItems.map((i) => [i.id, i]));
-    for (const line of input.lines) {
-      const it = itemsById.get(line.itemId);
-      if (!it) throw new ServiceError('not_found', `Item ${line.itemId} not found.`);
-      if (!it.is_rental)
-        throw new ServiceError('validation_error', 'One or more items are not rental items.');
-      if (it.warehouse_id !== input.warehouseId)
-        throw new ServiceError('validation_error', 'All items must be in the rental warehouse.');
-    }
-
-    // Availability guard (SP-052). v1 shipped `TODO availability check — for
-    // v1 we trust the picker UI's filter`, and the picker does NOT enforce it:
-    // it computes `quantityOnHand - reservedQuantity` for its filter/sort chips
-    // but caps the cart's '+' at quantity_on_hand alone. So an item with 5 on
-    // hand and 3 already out on another rental displayed "2 avail" and happily
-    // accepted 5 — 8 units reserved against 5 physical ones, two borrowers
-    // recorded as holding the same stock, and nothing ever refused it (posting
-    // the server action directly was even easier: the only bound was the
-    // schema's max 10_000). Rentals RESERVE rather than decrement on-hand, so
-    // this sum IS the availability model — there is no other layer to catch it
-    // (no DB constraint bounds stock_reservations against on-hand).
+    // ONE TRANSACTION (create_rental, migration 0361). The function locks the
+    // requested items in id order, checks each against on-hand minus every
+    // active hold (order holds and other rentals alike, with duplicate lines
+    // for one item summed), and writes the header, the lines and the holds
+    // together.
     //
-    // Paginated per recurring-pattern #3: PostgREST clamps ANY select to 1000
-    // rows, and a long-lived item accumulates reservation rows from orders AND
-    // rentals; a truncated read would UNDERCOUNT reservations and wave the
-    // over-lend straight through. fetchAllRows throws on a read error, which is
-    // the right posture here — this read guards a WRITE, so it fails closed.
-    const requestedByItem = new Map<string, number>();
-    for (const line of input.lines) {
-      requestedByItem.set(line.itemId, (requestedByItem.get(line.itemId) ?? 0) + line.quantity);
-    }
-    const activeReservations = await fetchAllRowsByIds<{
-      item_id: string;
-      quantity: number | null;
-    }>(
-      itemIds,
-      (batch) => (from, to) =>
-        ctx.supabase
-          .from('stock_reservations')
-          .select('id, item_id, quantity')
-          .eq('organization_id', ctx.organizationId)
-          .in('item_id', batch)
-          .is('released_at', null)
-          .order('id')
-          .range(from, to),
-    );
-    const reservedByItem = new Map<string, number>();
-    for (const r of activeReservations) {
-      reservedByItem.set(r.item_id, (reservedByItem.get(r.item_id) ?? 0) + (r.quantity ?? 0));
-    }
-    for (const [itemId, requested] of requestedByItem) {
-      const it = itemsById.get(itemId)!;
-      const onHand = it.quantity_on_hand ?? 0;
-      const reserved = reservedByItem.get(itemId) ?? 0;
-      const available = Math.max(0, onHand - reserved);
-      if (requested > available) {
-        throw new ServiceError(
-          'validation_error',
-          `${it.name ?? 'Item'}: only ${available} available to rent ` +
-            `(${onHand} on hand, ${reserved} already reserved) — ${requested} requested.`,
-        );
-      }
-    }
-
-    // Insert rental header.
-    const { data: rentalRow, error: rentalErr } = await this.ctx.supabase
-      .from('rentals')
-      .insert({
-        organization_id: this.ctx.organizationId,
-        warehouse_id: input.warehouseId,
-        borrower_user_id: input.borrowerUserId ?? null,
-        borrower_name: borrowerName,
-        borrower_email: input.borrowerEmail ?? null,
-        expected_return_at: input.expectedReturnAt,
-        notes: input.notes ?? null,
-        created_by: this.ctx.userId,
-        status: 'out',
-      })
-      .select('id')
-      .single();
-    if (rentalErr || !rentalRow) {
-      throw new ServiceError('internal_error', rentalErr?.message ?? 'Insert failed.');
-    }
-    const rentalId = (rentalRow as { id: string }).id;
-
-    // Insert lines.
-    const lineRows = input.lines.map((l) => ({
-      rental_id: rentalId,
-      item_id: l.itemId,
-      quantity: l.quantity,
-      notes: l.notes ?? null,
-    }));
-    const { error: linesErr } = await this.ctx.supabase
-      .from('rental_lines')
-      .insert(lineRows);
-    if (linesErr) {
-      // Best-effort rollback — delete the rental header.
-      await this.ctx.supabase.from('rentals').delete().eq('id', rentalId);
-      throw new ServiceError('internal_error', linesErr.message);
-    }
-
-    // Insert stock_reservations so available-to-promise drops for these units.
-    // stock_reservations is RLS write-locked (mig 0119 — only service-role /
-    // SECURITY DEFINER paths write it, same as the order approve RPC), and the
-    // row shape is (org, item, warehouse, quantity, rental_id) per mig 0263.
-    const admin = createAdminClient();
-    const reservationRows = input.lines.map((l) => ({
-      organization_id: this.ctx.organizationId,
-      item_id: l.itemId,
-      warehouse_id: input.warehouseId,
-      quantity: l.quantity,
-      rental_id: rentalId,
-    }));
-    const { error: resvErr } = await admin
-      .from('stock_reservations')
-      .insert(reservationRows);
-    if (resvErr) {
-      // Fail closed. Without the reservation, available-to-promise never
-      // drops (rentals reserve stock instead of decrementing on-hand), so
-      // a silently-unreserved rental is over-rentable. Roll back the just-
-      // created rental — rental_lines cascade-delete with it (0131:
-      // rental_lines.rental_id ON DELETE CASCADE) — and throw so the
-      // checkout fails loudly instead of leaving phantom availability.
-      console.warn('[rentals] reservation insert failed', resvErr.message);
-      await this.ctx.supabase.from('rentals').delete().eq('id', rentalId);
-      throw new ServiceError('internal_error', resvErr.message);
+    // This used to be three requests after an unlocked availability read:
+    // two checkouts at once could both claim the last unit (SP-052), and a
+    // failed hold insert "rolled back" by deleting the header through the
+    // user client. Rentals RESERVE rather than decrement on-hand, so the hold
+    // IS the availability model; it must never be missing for a rental that
+    // is out. The item and availability checks live only in the function now,
+    // so there is one copy of that decision (pattern #26); its refusals carry
+    // the same wording the service used.
+    const { data: rentalId, error: createErr } = await this.ctx.supabase.rpc('create_rental', {
+      p_warehouse_id: input.warehouseId,
+      p_borrower_user_id: input.borrowerUserId ?? null,
+      p_borrower_name: borrowerName,
+      p_borrower_email: input.borrowerEmail ?? null,
+      p_expected_return_at: input.expectedReturnAt,
+      p_notes: input.notes ?? null,
+      p_lines: input.lines.map((l) => ({
+        item_id: l.itemId,
+        quantity: l.quantity,
+        notes: l.notes ?? null,
+      })),
+    });
+    if (createErr) throw rentalRpcError(createErr);
+    if (typeof rentalId !== 'string' || rentalId.length === 0) {
+      throw new ServiceError('internal_error', 'The rental was not created.');
     }
 
     void audit(
@@ -343,44 +220,23 @@ export class RentalsService {
     // access here so that user gets an honest refusal instead.
     await this.assertRentalWriteAccess(rental.warehouse_id);
 
+    // One call flips it off 'out' and releases its holds (return_rental,
+    // migration 0361). It locks the row, so two simultaneous returns cannot
+    // both release and email: the second sees 'noop'. It used to be a user
+    // UPDATE and then a service-role release, and nothing downstream may run
+    // unless the status really changed (recurring pattern #2).
     const now = new Date();
-    // Row-proof the status flip (recurring pattern #2). A 0-row UPDATE — RLS
-    // refusing the write, or a concurrent return/cancel already having moved
-    // it off 'out' — comes back as `error === null` with NO rows. The old
-    // `if (updateErr) throw` guard read that as success and sailed on to
-    // release every reservation via the SERVICE ROLE, write the audit row and
-    // email the borrower "thanks for returning", while rentals.status stayed
-    // 'out': availability over-stated (over-rentable) AND the overdue cron
-    // kept nagging. Nothing downstream may run unless a row actually changed.
-    const { data: updatedRow, error: updateErr } = await this.ctx.supabase
-      .from('rentals')
-      .update({
-        status: 'returned',
-        returned_at: now.toISOString(),
-        returned_by: this.ctx.userId,
-        return_notes: input.returnNotes ?? null,
-      })
-      .eq('id', input.id)
-      .eq('organization_id', this.ctx.organizationId)
-      // Optimistic claim: only the caller who moves it OFF 'out' proceeds, so
-      // two simultaneous returns cannot both release + email.
-      .eq('status', 'out')
-      .select('id')
-      .maybeSingle();
-    if (updateErr) throw new ServiceError('internal_error', updateErr.message);
-    if (!updatedRow) {
+    const { data: outcome, error: returnErr } = await this.ctx.supabase.rpc('return_rental', {
+      p_rental_id: input.id,
+      p_return_notes: input.returnNotes ?? null,
+    });
+    if (returnErr) throw rentalRpcError(returnErr);
+    if (outcome !== 'returned') {
       throw new ServiceError(
         'forbidden',
         'Could not mark this rental returned — you may not have write access to its warehouse, or someone else just closed it.',
       );
     }
-
-    // Release all reservations for this rental (service-role — RLS-locked).
-    await createAdminClient()
-      .from('stock_reservations')
-      .update({ released_at: now.toISOString(), released_reason: 'rental_returned' })
-      .eq('rental_id', input.id)
-      .is('released_at', null);
 
     const expectedTime = new Date(rental.expected_return_at);
     const onTime = now.getTime() <= expectedTime.getTime();
@@ -425,37 +281,19 @@ export class RentalsService {
     // Same RLS floor as markReturned (SP-023) — see the comment there.
     await this.assertRentalWriteAccess(rental.warehouse_id);
 
-    const now = new Date();
-    // Row-proof the status flip — see markReturned. Without it a write RLS
-    // refused still released every reservation via the service role and
-    // audited a cancellation that never happened.
-    const { data: updatedRow, error: updateErr } = await this.ctx.supabase
-      .from('rentals')
-      .update({
-        status: 'cancelled',
-        cancelled_at: now.toISOString(),
-        cancelled_by: this.ctx.userId,
-        cancellation_reason: input.reason,
-      })
-      .eq('id', input.id)
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('status', 'out')
-      .select('id')
-      .maybeSingle();
-    if (updateErr) throw new ServiceError('internal_error', updateErr.message);
-    if (!updatedRow) {
+    // One call: out -> cancelled and the holds released (cancel_rental,
+    // migration 0361). See markReturned.
+    const { data: outcome, error: cancelErr } = await this.ctx.supabase.rpc('cancel_rental', {
+      p_rental_id: input.id,
+      p_reason: input.reason,
+    });
+    if (cancelErr) throw rentalRpcError(cancelErr);
+    if (outcome !== 'cancelled') {
       throw new ServiceError(
         'forbidden',
         'Could not cancel this rental — you may not have write access to its warehouse, or someone else just closed it.',
       );
     }
-
-    // Release all reservations for this rental (service-role — RLS-locked).
-    await createAdminClient()
-      .from('stock_reservations')
-      .update({ released_at: now.toISOString(), released_reason: 'rental_cancelled' })
-      .eq('rental_id', input.id)
-      .is('released_at', null);
 
     void audit(
       {
@@ -484,5 +322,37 @@ export class RentalsService {
       }
       throw e;
     }
+  }
+}
+
+/**
+ * The rental functions (migration 0361) refuse with the service's own wording
+ * and mark those refusals with hint 'rental_invalid'; their gates raise short
+ * tokens. Map both onto ServiceErrors.
+ */
+function rentalRpcError(err: { message?: string; code?: string; hint?: string | null }): ServiceError {
+  const message = err.message ?? '';
+  if (err.hint === 'rental_invalid') {
+    return new ServiceError(err.code === 'P0002' ? 'not_found' : 'validation_error', message);
+  }
+  switch (message) {
+    case 'forbidden':
+      return new ServiceError(
+        'forbidden',
+        "You don't have write access to this rental's warehouse.",
+      );
+    case 'warehouse_not_found':
+      return new ServiceError('not_found', 'Warehouse not found.');
+    case 'rental_not_found':
+      return new ServiceError('not_found', 'Rental not found.');
+    case 'borrower_not_member':
+      return new ServiceError('validation_error', 'The borrower is not a member of this organization.');
+    case 'borrower_required':
+      return new ServiceError('validation_error', 'Enter who is borrowing the items.');
+    case 'lines_required':
+    case 'lines_invalid':
+      return new ServiceError('validation_error', 'Each line needs an item and a quantity from 1 to 10,000.');
+    default:
+      return new ServiceError('internal_error', message);
   }
 }

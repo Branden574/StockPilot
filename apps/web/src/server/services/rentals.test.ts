@@ -80,6 +80,12 @@ interface MakeCtxOpts {
   updatedRentalRow?: { id: string } | null;
   /** ACTIVE (released_at IS NULL) stock_reservations for the create availability guard */
   activeReservations?: Array<{ id?: string; item_id: string; quantity: number }>;
+  /**
+   * Results for the rental functions (migration 0361), by name. Defaults:
+   * create_rental -> 'rental-id-1', return_rental -> 'returned',
+   * cancel_rental -> 'cancelled'.
+   */
+  rpcResults?: Record<string, { data: unknown; error: unknown }>;
 }
 
 function makeCtx(opts: MakeCtxOpts = {}) {
@@ -98,8 +104,21 @@ function makeCtx(opts: MakeCtxOpts = {}) {
   }> = [];
   // Counts rentals-header inserts, so a refusal can assert nothing was written.
   const rentalInsertCalls: unknown[] = [];
+  // Every rpc(name, args) call, in order.
+  const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+  const rpcDefaults: Record<string, { data: unknown; error: unknown }> = {
+    create_rental: { data: insertedRentalId, error: null },
+    return_rental: { data: 'returned', error: null },
+    cancel_rental: { data: 'cancelled', error: null },
+  };
 
   const supabase = {
+    rpc(name: string, args: Record<string, unknown>) {
+      rpcCalls.push({ name, args });
+      const result = opts.rpcResults?.[name] ?? rpcDefaults[name];
+      if (!result) throw new Error(`[rentals.test] unexpected rpc: ${name}`);
+      return Promise.resolve(result);
+    },
     from(table: string) {
       // ----------------------------------------------------------------
       // rentals table
@@ -342,6 +361,7 @@ function makeCtx(opts: MakeCtxOpts = {}) {
     releasedRentalIds,
     reservationReleases,
     rentalInsertCalls,
+    rpcCalls,
   };
 }
 
@@ -365,15 +385,6 @@ const validCreateInput = {
   ],
 };
 
-const validInventoryItems = [
-  {
-    id: '00000000-0000-0000-0000-000000000001',
-    is_rental: true,
-    warehouse_id: '00000000-0000-0000-0000-000000000099',
-    quantity_on_hand: 10,
-  },
-];
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -381,18 +392,34 @@ const validInventoryItems = [
 describe('RentalsService.create', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  // Header, lines and holds are written by ONE call to create_rental
+  // (migration 0361), never by the service's own inserts. Its atomicity and
+  // locking are proven in pgTAP 0361 (5-7, 17-18).
   it('creates rental + lines + reservations atomically', async () => {
-    const { ctx, insertedRentalId } = makeCtx({ inventoryItems: validInventoryItems });
+    const { ctx, insertedRentalId, rpcCalls, rentalInsertCalls, releasedRentalIds } = makeCtx();
     const svc = new RentalsService(ctx);
     const result = await svc.create(validCreateInput);
     expect(result.id).toBe(insertedRentalId);
+    expect(rpcCalls).toEqual([
+      {
+        name: 'create_rental',
+        args: {
+          p_warehouse_id: validCreateInput.warehouseId,
+          p_borrower_user_id: null,
+          p_borrower_name: 'Jane Doe',
+          p_borrower_email: null,
+          p_expected_return_at: futureDate,
+          p_notes: null,
+          p_lines: [{ item_id: '00000000-0000-0000-0000-000000000001', quantity: 2, notes: null }],
+        },
+      },
+    ]);
+    expect(rentalInsertCalls).toHaveLength(0);
+    expect(releasedRentalIds).toHaveLength(0);
   });
 
   it('auto-fills borrower_name from member display name when borrowerUserId is set', async () => {
-    const { ctx } = makeCtx({
-      inventoryItems: validInventoryItems,
-      memberFullName: 'Alice Smith',
-    });
+    const { ctx, rpcCalls } = makeCtx({ memberFullName: 'Alice Smith' });
     const svc = new RentalsService(ctx);
     // We test this indirectly: if the member name lookup returns 'Alice Smith'
     // the service must NOT throw and should use that name (it's stored in DB,
@@ -408,10 +435,11 @@ describe('RentalsService.create', () => {
     expect(auditMock).toHaveBeenCalledOnce();
     const auditCall = auditMock.mock.calls[0]![0];
     expect(auditCall.extra?.borrower).toBe('Alice Smith');
+    expect(rpcCalls[0]!.args.p_borrower_name).toBe('Alice Smith');
   });
 
   it('keeps the provided borrowerName when borrowerUserId is null', async () => {
-    const { ctx } = makeCtx({ inventoryItems: validInventoryItems });
+    const { ctx } = makeCtx();
     const svc = new RentalsService(ctx);
     await svc.create({ ...validCreateInput, borrowerUserId: null, borrowerName: 'External Guy' });
     const auditMock = vi.mocked(audit);
@@ -420,7 +448,7 @@ describe('RentalsService.create', () => {
   });
 
   it('emits rental.created audit event', async () => {
-    const { ctx } = makeCtx({ inventoryItems: validInventoryItems });
+    const { ctx } = makeCtx();
     const svc = new RentalsService(ctx);
     await svc.create(validCreateInput);
     const auditMock = vi.mocked(audit);
@@ -431,41 +459,38 @@ describe('RentalsService.create', () => {
     expect(payload.extra?.line_count).toBe(1);
   });
 
-  it('fails closed when the reservation insert errors — rolls back the rental and throws', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const { ctx, insertedRentalId, deletedRentalIds } = makeCtx({
-      inventoryItems: validInventoryItems,
-      reservationInsertError: { message: 'reservation boom' },
+  // The database rolls a failed checkout back as a whole (pgTAP 0361 17-18);
+  // the service must not try its own user-client rollback, and must not
+  // audit or email a checkout that did not happen.
+  it('fails closed when the checkout function errors — no rollback of its own, no audit', async () => {
+    const { ctx, deletedRentalIds } = makeCtx({
+      rpcResults: { create_rental: { data: null, error: { message: 'reservation boom' } } },
     });
     const svc = new RentalsService(ctx);
     await expect(svc.create(validCreateInput)).rejects.toMatchObject({
       code: 'internal_error',
     });
-    // Just-created rental was rolled back (lines cascade-delete with it).
-    expect(deletedRentalIds).toContain(insertedRentalId);
-    // No success audit event for a failed checkout.
+    expect(deletedRentalIds).toHaveLength(0);
     expect(vi.mocked(audit)).not.toHaveBeenCalled();
-    warnSpy.mockRestore();
   });
 
   // SP-052: v1 shipped `// TODO availability check — for v1 we trust the picker
   // UI's filter`, but the picker's '+' caps at quantity_on_hand and ignores
   // reservations, so 5 on hand with 3 already rented out accepted 5 MORE —
   // 8 units reserved against 5 physical ones, two borrowers holding the same
-  // stock. The service now counts ACTIVE reservations itself.
+  // stock. The check now lives in create_rental, which counts ACTIVE holds
+  // with the items locked (pgTAP 0361 8, 19); the service surfaces its
+  // refusal, wording included.
   it('refuses a line that exceeds availability once active reservations are counted', async () => {
+    const refusal =
+      'Projector: only 2 available to rent (5 on hand, 3 already reserved) — 5 requested.';
     const { ctx, rentalInsertCalls, deletedRentalIds } = makeCtx({
-      inventoryItems: [
-        {
-          id: '00000000-0000-0000-0000-000000000001',
-          is_rental: true,
-          warehouse_id: '00000000-0000-0000-0000-000000000099',
-          quantity_on_hand: 5,
+      rpcResults: {
+        create_rental: {
+          data: null,
+          error: { message: refusal, code: '22023', hint: 'rental_invalid' },
         },
-      ],
-      activeReservations: [
-        { item_id: '00000000-0000-0000-0000-000000000001', quantity: 3 },
-      ],
+      },
     });
     const svc = new RentalsService(ctx);
     await expect(
@@ -475,27 +500,14 @@ describe('RentalsService.create', () => {
           { itemId: '00000000-0000-0000-0000-000000000001', quantity: 5, notes: null },
         ],
       }),
-    ).rejects.toMatchObject({ code: 'validation_error' });
-    // Refused BEFORE any write — no header, no rollback needed.
+    ).rejects.toMatchObject({ code: 'validation_error', message: refusal });
     expect(rentalInsertCalls).toHaveLength(0);
     expect(deletedRentalIds).toHaveLength(0);
     expect(vi.mocked(audit)).not.toHaveBeenCalled();
   });
 
   it('allows a line that fits the remaining availability', async () => {
-    const { ctx } = makeCtx({
-      inventoryItems: [
-        {
-          id: '00000000-0000-0000-0000-000000000001',
-          is_rental: true,
-          warehouse_id: '00000000-0000-0000-0000-000000000099',
-          quantity_on_hand: 5,
-        },
-      ],
-      activeReservations: [
-        { item_id: '00000000-0000-0000-0000-000000000001', quantity: 3 },
-      ],
-    });
+    const { ctx } = makeCtx();
     const svc = new RentalsService(ctx);
     await expect(
       svc.create({
@@ -507,45 +519,56 @@ describe('RentalsService.create', () => {
     ).resolves.toMatchObject({ id: 'rental-id-1' });
   });
 
+  // create_rental sums duplicate lines for one item against one pool (pgTAP
+  // 0361 19). The service must pass them through as sent — merging or
+  // dropping one here would under-reserve.
   it('sums duplicate lines for the same item against one availability pool', async () => {
-    const { ctx, rentalInsertCalls } = makeCtx({
-      inventoryItems: [
-        {
-          id: '00000000-0000-0000-0000-000000000001',
-          is_rental: true,
-          warehouse_id: '00000000-0000-0000-0000-000000000099',
-          quantity_on_hand: 5,
-        },
+    const { ctx, rpcCalls } = makeCtx();
+    const svc = new RentalsService(ctx);
+    await svc.create({
+      ...validCreateInput,
+      lines: [
+        { itemId: '00000000-0000-0000-0000-000000000001', quantity: 3, notes: null },
+        { itemId: '00000000-0000-0000-0000-000000000001', quantity: 3, notes: null },
       ],
     });
-    const svc = new RentalsService(ctx);
-    await expect(
-      svc.create({
-        ...validCreateInput,
-        lines: [
-          { itemId: '00000000-0000-0000-0000-000000000001', quantity: 3, notes: null },
-          { itemId: '00000000-0000-0000-0000-000000000001', quantity: 3, notes: null },
-        ],
-      }),
-    ).rejects.toMatchObject({ code: 'validation_error' });
-    expect(rentalInsertCalls).toHaveLength(0);
+    expect(rpcCalls[0]!.args.p_lines).toEqual([
+      { item_id: '00000000-0000-0000-0000-000000000001', quantity: 3, notes: null },
+      { item_id: '00000000-0000-0000-0000-000000000001', quantity: 3, notes: null },
+    ]);
   });
 
   it('rejects items that are not rental items', async () => {
     const { ctx } = makeCtx({
-      inventoryItems: [
-        {
-          id: '00000000-0000-0000-0000-000000000001',
-          is_rental: false,
-          warehouse_id: '00000000-0000-0000-0000-000000000099',
-          quantity_on_hand: 10,
+      rpcResults: {
+        create_rental: {
+          data: null,
+          error: {
+            message: 'One or more items are not rental items.',
+            code: '22023',
+            hint: 'rental_invalid',
+          },
         },
-      ],
+      },
     });
     const svc = new RentalsService(ctx);
     await expect(svc.create(validCreateInput)).rejects.toMatchObject({
       code: 'validation_error',
+      message: 'One or more items are not rental items.',
     });
+  });
+
+  it('maps an item the function cannot find to not_found', async () => {
+    const { ctx } = makeCtx({
+      rpcResults: {
+        create_rental: {
+          data: null,
+          error: { message: 'One or more items were not found.', code: 'P0002', hint: 'rental_invalid' },
+        },
+      },
+    });
+    const svc = new RentalsService(ctx);
+    await expect(svc.create(validCreateInput)).rejects.toMatchObject({ code: 'not_found' });
   });
 });
 
@@ -553,35 +576,33 @@ describe('RentalsService.markReturned', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('flips status to returned, sets returned_at and returned_by', async () => {
-    const { ctx } = makeCtx({
+    const { ctx, rpcCalls } = makeCtx({
       rentalRow: { status: 'out', expected_return_at: futureDate },
     });
     const svc = new RentalsService(ctx);
-    await expect(svc.markReturned({ id: 'rental-id-1' })).resolves.toBeUndefined();
+    await expect(
+      svc.markReturned({ id: 'rental-id-1', returnNotes: 'scratched lid' }),
+    ).resolves.toBeUndefined();
+    // return_rental (0361) stamps status, returned_at and returned_by itself.
+    expect(rpcCalls).toEqual([
+      { name: 'return_rental', args: { p_rental_id: 'rental-id-1', p_return_notes: 'scratched lid' } },
+    ]);
   });
 
-  // SP-094: this assertion used to be `expect(true).toBe(true)` with the note
-  // "deeper verification would require spy tracking" — so the release block in
-  // markReturned could be deleted, or repointed at `.eq('id', ...)` (which
-  // matches no reservation row), and the suite stayed green. A returned rental
-  // that keeps its reservations depresses available-to-promise forever. The
-  // mock now records the call; pin every part of it.
+  // SP-094 pinned the service-role release (patch AND filters) because a
+  // returned rental that keeps its holds depresses available-to-promise
+  // forever. The release now happens inside return_rental, in the same
+  // transaction as the status flip (pgTAP 0361 22). Pin that the service no
+  // longer writes holds itself: a second, service-role release could only
+  // run against a rental whose status did not change.
   it('releases all stock_reservations for this rental', async () => {
-    const { ctx, reservationReleases } = makeCtx({
+    const { ctx, reservationReleases, rpcCalls } = makeCtx({
       rentalRow: { status: 'out', expected_return_at: futureDate },
     });
     const svc = new RentalsService(ctx);
     await svc.markReturned({ id: 'rental-id-1' });
-    expect(reservationReleases).toHaveLength(1);
-    const release = reservationReleases[0]!;
-    expect(release.patch).toMatchObject({ released_reason: 'rental_returned' });
-    expect(typeof release.patch.released_at).toBe('string');
-    expect(Number.isNaN(Date.parse(release.patch.released_at as string))).toBe(false);
-    // Filtered by rental_id — the whole rental's reservations, not one row.
-    expect(release.eq).toEqual(['rental_id', 'rental-id-1']);
-    // `.is('released_at', null)` — only still-active rows, so an earlier
-    // release is never re-stamped with a later timestamp/reason.
-    expect(release.is).toEqual(['released_at', null]);
+    expect(rpcCalls.map((c) => c.name)).toEqual(['return_rental']);
+    expect(reservationReleases).toHaveLength(0);
   });
 
   // SP-023: the status UPDATE used to be `.eq('id', …)` with only an error
@@ -589,6 +610,8 @@ describe('RentalsService.markReturned', () => {
   // rentals_select only 'read') returns 0 rows and error null — so the service
   // sailed on and released every reservation via the SERVICE ROLE, audited the
   // return and emailed the borrower while rentals.status stayed 'out'.
+  // return_rental answers 'noop' when the rental is no longer out (someone
+  // else closed it first); nothing downstream may run.
   it('refuses when the status UPDATE matches no row — releases nothing, no audit, no email', async () => {
     const { ctx, releasedRentalIds } = makeCtx({
       rentalRow: {
@@ -596,7 +619,7 @@ describe('RentalsService.markReturned', () => {
         expected_return_at: futureDate,
         warehouse_id: '00000000-0000-0000-0000-000000000099',
       },
-      updatedRentalRow: null,
+      rpcResults: { return_rental: { data: 'noop', error: null } },
     });
     const svc = new RentalsService(ctx);
     await expect(svc.markReturned({ id: 'rental-id-1' })).rejects.toMatchObject({
@@ -611,7 +634,7 @@ describe('RentalsService.markReturned', () => {
     vi.mocked(assertWarehouseAccess).mockRejectedValueOnce(
       new ForbiddenError('Read-only auditor cannot perform write operations.'),
     );
-    const { ctx, releasedRentalIds } = makeCtx({
+    const { ctx, releasedRentalIds, rpcCalls } = makeCtx({
       rentalRow: {
         status: 'out',
         expected_return_at: futureDate,
@@ -622,6 +645,7 @@ describe('RentalsService.markReturned', () => {
     await expect(svc.markReturned({ id: 'rental-id-1' })).rejects.toMatchObject({
       code: 'forbidden',
     });
+    expect(rpcCalls).toHaveLength(0);
     expect(vi.mocked(assertWarehouseAccess)).toHaveBeenCalledWith(
       '00000000-0000-0000-0000-000000000099',
       'write',
@@ -632,11 +656,12 @@ describe('RentalsService.markReturned', () => {
   });
 
   it('is idempotent — already-returned rental returns silently', async () => {
-    const { ctx } = makeCtx({
+    const { ctx, rpcCalls } = makeCtx({
       rentalRow: { status: 'returned', expected_return_at: futureDate },
     });
     const svc = new RentalsService(ctx);
     await expect(svc.markReturned({ id: 'rental-id-1' })).resolves.toBeUndefined();
+    expect(rpcCalls).toHaveLength(0);
     // No audit event emitted for no-op
     expect(vi.mocked(audit)).not.toHaveBeenCalled();
   });
@@ -671,37 +696,35 @@ describe('RentalsService.cancel', () => {
   });
 
   it('flips status to cancelled, stores reason, sets cancelled_at and cancelled_by', async () => {
-    const { ctx } = makeCtx({
+    const { ctx, rpcCalls } = makeCtx({
       rentalRow: { status: 'out' },
     });
     const svc = new RentalsService(ctx);
     await expect(
       svc.cancel({ id: 'rental-id-1', reason: 'No longer needed' }),
     ).resolves.toBeUndefined();
+    expect(rpcCalls).toEqual([
+      { name: 'cancel_rental', args: { p_rental_id: 'rental-id-1', p_reason: 'No longer needed' } },
+    ]);
   });
 
-  // SP-094: same vacuous `expect(true).toBe(true)` as the markReturned twin —
-  // see the comment there. Cancel stamps a different reason, so pin that too.
+  // SP-094, cancel twin: the release happens inside cancel_rental, with the
+  // status flip (pgTAP 0361 28); the service writes no holds itself.
   it('releases all stock_reservations for this rental', async () => {
-    const { ctx, reservationReleases } = makeCtx({
+    const { ctx, reservationReleases, rpcCalls } = makeCtx({
       rentalRow: { status: 'out' },
     });
     const svc = new RentalsService(ctx);
     await svc.cancel({ id: 'rental-id-1', reason: 'Test reason' });
-    expect(reservationReleases).toHaveLength(1);
-    const release = reservationReleases[0]!;
-    expect(release.patch).toMatchObject({ released_reason: 'rental_cancelled' });
-    expect(typeof release.patch.released_at).toBe('string');
-    expect(Number.isNaN(Date.parse(release.patch.released_at as string))).toBe(false);
-    expect(release.eq).toEqual(['rental_id', 'rental-id-1']);
-    expect(release.is).toEqual(['released_at', null]);
+    expect(rpcCalls.map((c) => c.name)).toEqual(['cancel_rental']);
+    expect(reservationReleases).toHaveLength(0);
   });
 
   // Same fail-open shape as markReturned (SP-023).
   it('refuses when the status UPDATE matches no row — releases nothing, no audit', async () => {
     const { ctx, releasedRentalIds } = makeCtx({
       rentalRow: { status: 'out', warehouse_id: '00000000-0000-0000-0000-000000000099' },
-      updatedRentalRow: null,
+      rpcResults: { cancel_rental: { data: 'noop', error: null } },
     });
     const svc = new RentalsService(ctx);
     await expect(

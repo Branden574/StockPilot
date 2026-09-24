@@ -27,7 +27,8 @@ import { DEFAULT_MODULE_IDS, type ModuleId, type Permission } from '@stockpilot/
 
 export interface QueryResult<T = unknown> {
   data: T;
-  error: { message: string; code?: string } | null;
+  /** `hint` carries PostgREST's error hint (a function's `using hint = …`). */
+  error: { message: string; code?: string; hint?: string } | null;
   count?: number | null;
 }
 
