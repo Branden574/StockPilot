@@ -15,6 +15,7 @@ const { svc } = vi.hoisted(() => ({
     list: vi.fn(),
     count: vi.fn(),
     searchCapped: vi.fn(),
+    uploaderProfiles: vi.fn(),
   },
 }));
 
@@ -58,6 +59,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   svc.list.mockResolvedValue([row]);
   svc.count.mockResolvedValue(1);
+  svc.uploaderProfiles.mockResolvedValue(new Map());
 });
 
 describe('PO imports page search', () => {

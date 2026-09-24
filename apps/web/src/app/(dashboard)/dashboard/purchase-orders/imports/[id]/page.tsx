@@ -13,6 +13,8 @@ import { PoImportsService } from '@/server/services/po-imports';
 import { SuppliersService } from '@/server/services/suppliers';
 import { WarehousesService } from '@/server/services/warehouses';
 
+import { poImportUploaderLabel } from '@stockpilot/core';
+
 export default async function PoImportDetailPage({
   params,
 }: {
@@ -29,7 +31,7 @@ export default async function PoImportDetailPage({
     throw e;
   }
 
-  const [suppliers, warehouses, items, charters, locations, categories, resolutions] =
+  const [suppliers, warehouses, items, charters, locations, categories, resolutions, uploaders] =
     await Promise.all([
       (await SuppliersService.forCurrentUser()).listForLookups(),
       (await WarehousesService.forCurrentUser()).listNames(),
@@ -42,6 +44,9 @@ export default async function PoImportDetailPage({
       // Task 14: the group/variant verdict per line. Read-only — it resolves
       // identity, it never links or merges anything.
       svc.resolveLineResults(id),
+      // Who uploaded it. Never throws: a failed lookup is reported and the
+      // label reads "—".
+      svc.uploaderProfiles([header.uploaded_by]),
     ]);
 
   // Prefill the expected-delivery picker from the AI-extracted ship/delivery
@@ -90,7 +95,8 @@ export default async function PoImportDetailPage({
           />
         </div>
         <p className="text-muted-foreground mt-1 text-xs">
-          Source file: {header.file_name}
+          Source file: {header.file_name} · Uploaded by{' '}
+          {poImportUploaderLabel(uploaders, header.uploaded_by)}
         </p>
         {/* Lineage sits ABOVE the review UI on purpose: on a superseded import
             it changes how everything below it should be read, so it must not

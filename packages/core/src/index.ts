@@ -13,6 +13,7 @@ export * from './lots/expiry';
 export * from './pricing/google-books';
 export * from './geo/distance';
 export * from './purchasing/recurring';
+export * from './purchasing/po-import-uploader';
 export * from './signature';
 export * from './inventory/size-run';
 export * from './inventory/apparel-sizes';
