@@ -93,7 +93,11 @@ function component(item: ItemRow, perKit = 1, optional = false) {
 
 function previewFor(opts: {
   components: ItemRow[];
-  phantom?: { quantity_on_hand: number; warehouse_id: string | null } | null;
+  phantom?: {
+    quantity_on_hand: number;
+    warehouse_id: string | null;
+    deleted_at?: string | null;
+  } | null;
 }) {
   const stub = makeSupabaseStub({
     'bundles.select.maybeSingle': {
@@ -189,6 +193,29 @@ describe('BundlesService.preview — pre-assembled kits', () => {
     const p = await svc.preview('b-1', 2, WH);
     expect(p.fromPhantom).toBe(2);
     expect(p.fromComponents).toBe(0);
+  });
+
+  it('counts kits on a DELETED kit item as 0, even in the chosen warehouse', async () => {
+    // distribute_bundle (0365) reads a deleted phantom as 0 available and
+    // builds every unit from components; the preview must not promise kits.
+    const { svc } = previewFor({
+      components: [IN_WH],
+      phantom: { quantity_on_hand: 3, warehouse_id: WH, deleted_at: '2026-09-20T00:00:00Z' },
+    });
+    const p = await svc.preview('b-1', 4, WH);
+    expect(p.fromPhantom).toBe(0);
+    expect(p.fromComponents).toBe(4);
+    expect(p.components[0]).toMatchObject({ needed: 4, available: 10, shortage: 0 });
+  });
+
+  it('reads deleted_at on the kit item', async () => {
+    const { stub, svc } = previewFor({
+      components: [IN_WH],
+      phantom: { quantity_on_hand: 3, warehouse_id: WH, deleted_at: null },
+    });
+    await svc.preview('b-1', 1, WH);
+    const phantomRead = (stub.chainArgsAll.get('inventory_items.select') ?? [])[0]!;
+    expect(String(phantomRead[0]?.[0])).toContain('deleted_at');
   });
 
   it('treats a negative kit count as 0, like the RPC', async () => {

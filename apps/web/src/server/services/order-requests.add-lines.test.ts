@@ -201,3 +201,37 @@ describe('addLines top-up fails CLOSED when the write affects no row', () => {
     ).rejects.toMatchObject({ code: 'internal_error' });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 0365: the order_request_lines guard refuses what the pre-read above can miss
+// (an item deleted, made a rental, or reset to awaiting receipt between the
+// read and the insert) with a sentence for the user. It used to reach them as
+// "An internal error occurred."
+// ---------------------------------------------------------------------------
+describe('addLines passes the line guard refusal through as a validation_error', () => {
+  function stubWithInsertError(error: { message: string; code: string }) {
+    return makeSupabaseStub({
+      'order_requests.select': { data: OPEN_HEADER, error: null },
+      'inventory_items.select': { data: [ITEM], error: null },
+      'order_request_lines.select': { data: [], error: null },
+      'order_request_lines.insert': { data: null, error },
+    });
+  }
+
+  it.each([
+    ['That item cannot be ordered: it is deleted, a rental item, or not received yet.', '42501'],
+    ['A line needs a real quantity.', '23514'],
+  ])('"%s" (%s)', async (message, code) => {
+    const stub = stubWithInsertError({ message, code });
+    await expect(
+      svc(stub).addLines('order-1', [{ itemId: 'item-1', quantity: 2 }]),
+    ).rejects.toMatchObject({ code: 'validation_error', message });
+  });
+
+  it('keeps any other insert failure as internal_error', async () => {
+    const stub = stubWithInsertError({ message: 'deadlock detected', code: '40P01' });
+    await expect(
+      svc(stub).addLines('order-1', [{ itemId: 'item-1', quantity: 2 }]),
+    ).rejects.toMatchObject({ code: 'internal_error' });
+  });
+});

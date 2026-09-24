@@ -283,6 +283,41 @@ describe('bulkPlaceStockAction', () => {
     });
   });
 
+  it('5b. a refused move (0365 warehouse write) records its sentence, not "could not place"', async () => {
+    const refusal = 'You can only move stock between warehouses you work in.';
+    mockTransferStock
+      .mockResolvedValueOnce(undefined) // ITEM_A places
+      .mockRejectedValueOnce(new ServiceError('forbidden', refusal)); // ITEM_B refused
+
+    const res = await bulkPlaceStockAction({
+      placements: TWO,
+      destination: { existingLocationId: EXISTING_LOC },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.data.placed).toBe(1);
+      expect(res.data.failed).toEqual([{ itemId: ITEM_B, message: refusal }]);
+    }
+  });
+
+  it('5c. any other failure still reads "Could not place this item."', async () => {
+    mockTransferStock
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new ServiceError('internal_error', 'deadlock detected'));
+
+    const res = await bulkPlaceStockAction({
+      placements: TWO,
+      destination: { existingLocationId: EXISTING_LOC },
+    });
+
+    if (res.ok) {
+      expect(res.data.failed).toEqual([{ itemId: ITEM_B, message: 'Could not place this item.' }]);
+    } else {
+      throw new Error('expected ok');
+    }
+  });
+
   it('6. rejects an empty placement list before touching context', async () => {
     const res = await bulkPlaceStockAction({
       placements: [],

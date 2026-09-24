@@ -241,6 +241,43 @@ describe('OrderRequestsService.create — failures create nothing and announce n
     expect(dispatchEvent).not.toHaveBeenCalled();
   });
 
+  // The 0365 guards raise whole sentences for the requester (42501 / 23514).
+  // Mapped by code alone they read "You are not allowed to create this
+  // request." and "An internal error occurred."
+  it.each([
+    ['That item cannot be ordered: it is deleted, a rental item, or not received yet.', '42501'],
+    ['A line needs a real quantity.', '23514'],
+    ['A new order request starts pending approval.', '42501'],
+    [
+      'A new order request cannot carry approval, picking, delivery or signature details.',
+      '42501',
+    ],
+  ])('passes the guard sentence "%s" (%s) through as a validation_error', async (message, code) => {
+    const err = await svc(failingStub({ message, code }))
+      .create(input)
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: 'validation_error', message });
+    expect(audit).not.toHaveBeenCalled();
+    expect(notifyEmail).not.toHaveBeenCalled();
+    expect(dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it('keeps a 42501 that is not a guard sentence as forbidden', async () => {
+    const err = await svc(
+      failingStub({
+        message:
+          'A new order line starts unfulfilled; picking, packing, fulfilment and pricing are recorded by the order workflow.',
+        code: '42501',
+      }),
+    )
+      .create(input)
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      code: 'forbidden',
+      message: 'You are not allowed to create this request.',
+    });
+  });
+
   it('passes the 22023 message through as the validation message', async () => {
     const err = await svc(
       failingStub({ message: 'A request needs at least one line', code: '22023' }),

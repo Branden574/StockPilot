@@ -57,6 +57,9 @@ interface NotifyCall {
   requesterEmail: string | null;
   requesterName: string | null;
   emailOptedOut: boolean;
+  provided?: number | null;
+  requested?: number | null;
+  owed?: number | null;
 }
 const notifyRequesterBackordered = vi.fn(async (_a: NotifyCall) => undefined);
 const notifyRequesterBackorderShipped = vi.fn(async (_a: NotifyCall) => undefined);
@@ -104,8 +107,8 @@ interface Scenario {
   emailOrderCompleted?: boolean;
   /** How many post-signature status reads fail before one answers. */
   statusReadFailures?: number;
-  /** The post-hand-over line-totals read fails. */
-  lineTotalsFail?: boolean;
+  /** How many post-hand-over line-totals reads fail before one answers. */
+  lineTotalsFailures?: number;
   /** The notification_preferences read fails. */
   prefReadFails?: boolean;
 }
@@ -119,7 +122,7 @@ function buildAdmin(s: Scenario) {
   const linesResult = (): QueryResult => {
     lineCall += 1;
     if (lineCall === 1) return { data: [{ quantity_fulfilled: s.priorFulfilled }], error: null };
-    if (s.lineTotalsFail) return { data: null, error: READ_ERROR };
+    if (lineCall - 1 <= (s.lineTotalsFailures ?? 0)) return { data: null, error: READ_ERROR };
     return {
       data: [{ quantity_requested: s.totalRequested, quantity_fulfilled: s.totalFulfilled }],
       error: null,
@@ -361,19 +364,29 @@ describe('POST /api/orders/sign — reads after the signature is recorded', () =
     expect(args.emailOptedOut).toBe(true);
   });
 
-  it('line totals read fails on a backorder: no "0 of 0" notice or receipt, reported, still 200', async () => {
+  it('line totals read fails twice on a backorder: the requester is still told, without counts', async () => {
     adminHolder.client = buildAdmin({
       status: 'backordered',
       priorFulfilled: 0,
       totalRequested: 5,
       totalFulfilled: 2,
-      lineTotalsFail: true,
+      lineTotalsFailures: 2,
     });
 
     const res = await POST(request());
 
     expect(res.status).toBe(200);
-    expect(notifyRequesterBackordered).not.toHaveBeenCalled();
+    // The one message the requester gets about the fork is not dropped; it
+    // carries no counts rather than "0 of 0".
+    expect(notifyRequesterBackordered).toHaveBeenCalledTimes(1);
+    expect(notifyRequesterBackordered.mock.calls[0]?.[0]).toMatchObject({
+      requesterEmail: 'alice@site.org',
+      provided: null,
+      requested: null,
+      owed: null,
+      emailOptedOut: false,
+    });
+    // The signer's receipt IS its counts, so it is not sent without them.
     expect(sendPartialReceiptEmail).not.toHaveBeenCalled();
     expect(reportedTags()).toContain('orders.sign.line_totals_read');
     // The status change itself is still announced; it carries no counts.
@@ -384,13 +397,37 @@ describe('POST /api/orders/sign — reads after the signature is recorded', () =
     );
   });
 
-  it('line totals read fails on a completed backorder: the shipped notice omits the count', async () => {
+  it('line totals read fails once and the retry answers: the notice carries the counts', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'backordered',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 2,
+      lineTotalsFailures: 1,
+    });
+
+    const res = await POST(request());
+
+    expect(res.status).toBe(200);
+    expect(reportedTags()).not.toContain('orders.sign.line_totals_read');
+    expect(notifyRequesterBackordered.mock.calls[0]?.[0]).toMatchObject({
+      provided: 2,
+      requested: 5,
+      owed: 3,
+    });
+    // Signer (bob) is not the requester (alice), so the receipt goes out.
+    expect(sendPartialReceiptEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ unitsReceived: 2, unitsTotal: 5, unitsPending: 3 }),
+    );
+  });
+
+  it('line totals read fails twice on a completed backorder: the shipped notice omits the count', async () => {
     adminHolder.client = buildAdmin({
       status: 'completed',
       priorFulfilled: 2,
       totalRequested: 5,
       totalFulfilled: 5,
-      lineTotalsFail: true,
+      lineTotalsFailures: 2,
     });
 
     await POST(request());
@@ -400,5 +437,6 @@ describe('POST /api/orders/sign — reads after the signature is recorded', () =
       unitsShipped: number | null;
     };
     expect(args.unitsShipped).toBeNull();
+    expect(reportedTags()).toContain('orders.sign.line_totals_read');
   });
 });

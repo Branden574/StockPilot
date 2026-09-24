@@ -111,9 +111,13 @@ export async function notifyRequesterBackordered(args: {
   requesterEmail: string | null;
   requesterName: string | null;
   appUrl: string;
-  provided: number;
-  requested: number;
-  owed: number;
+  /**
+   * Unit counts, all null when the caller could not read the line totals: the
+   * notice is still sent, worded without numbers (never as "0 of 0").
+   */
+  provided: number | null;
+  requested: number | null;
+  owed: number | null;
   emailOptedOut: boolean;
   /** Formatted SO number (e.g. 'SO-000049'); falls back to the id prefix. */
   orderNumber?: string | null;
@@ -121,7 +125,13 @@ export async function notifyRequesterBackordered(args: {
   const orderNo = orderLabel(args.orderId, args.orderNumber);
   const link = `${args.appUrl.replace(/\/+$/, '')}/dashboard/orders/${args.orderId}`;
   const title = `Order ${orderNo}: partially fulfilled`;
-  const body = `${args.provided} of ${args.requested} provided — ${args.owed} backordered. We'll ship the rest when stock arrives.`;
+  const counts =
+    args.provided != null && args.requested != null && args.owed != null
+      ? { provided: args.provided, requested: args.requested, owed: args.owed }
+      : null;
+  const body = counts
+    ? `${counts.provided} of ${counts.requested} provided — ${counts.owed} backordered. We'll ship the rest when stock arrives.`
+    : "Part of your order was provided — the rest is backordered. We'll ship it when stock arrives.";
   try {
     if (args.requesterUserId) {
       await createNotification({
@@ -131,12 +141,7 @@ export async function notifyRequesterBackordered(args: {
         title,
         body,
         link,
-        metadata: {
-          orderId: args.orderId,
-          provided: args.provided,
-          requested: args.requested,
-          owed: args.owed,
-        },
+        metadata: { orderId: args.orderId, ...(counts ?? {}) },
       });
     }
     if (args.requesterEmail && !args.emailOptedOut) {

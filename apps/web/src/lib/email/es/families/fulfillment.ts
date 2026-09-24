@@ -263,9 +263,15 @@ export interface PartialFulfilledParams {
   orderNumber: string;
   recipientFirstName?: string | null;
   recipientEmail: string;
-  delivered: number;
-  requested: number;
-  backordered: number;
+  /**
+   * Unit counts. All three null when the caller could not read the order's
+   * line totals: the email then says part of the order arrived and the rest
+   * is backordered, with no numbers and no stat cards. "0 of 0 delivered"
+   * would be a wrong statement, not a degraded one.
+   */
+  delivered: number | null;
+  requested: number | null;
+  backordered: number | null;
   /** Short signed date for the Delivered stat card, e.g. "Apr 29". */
   deliveredOn?: string | null;
   /** Backorder ETA (no runtime source today — falls back gracefully). */
@@ -276,6 +282,9 @@ export interface PartialFulfilledParams {
 }
 
 export function renderPartialFulfilledEmail(p: PartialFulfilledParams): RenderedEmail {
+  if (p.delivered == null || p.requested == null || p.backordered == null) {
+    return renderPartialFulfilledWithoutCounts(p);
+  }
   const def = esEmailById('partial');
   const subject = def.subject({ orderNumber: p.orderNumber });
   const preheader = p.backorderEta
@@ -357,6 +366,80 @@ export function renderPartialFulfilledEmail(p: PartialFulfilledParams): Rendered
     '',
     `Delivered: ${p.delivered} units${p.deliveredOn ? ` (signed ${p.deliveredOn})` : ''}`,
     `Backordered: ${p.backordered} units${p.backorderEta ? ` (expected ${p.backorderEta})` : ''}`,
+    ...(p.items && p.items.length > 0 ? ['', ...lineTextRows(p.items, 'Delivered', 'backordered')] : []),
+    '',
+    `View order: ${p.orderUrl}`,
+    '',
+    "No action needed — backordered units ship automatically and you'll get a dispatch note with tracking.",
+    '',
+    prefFooterText(`Order-status updates for orders placed by ${p.recipientEmail}.`, p.urls),
+  ].join('\n');
+
+  return { subject, preheader, html, text };
+}
+
+/**
+ * The `partial` email when the unit counts are unknown. Same subject, badge,
+ * headline, item table (its own best-effort read), CTA and footer; the
+ * numbers are left out of the preheader and body and the stat cards are
+ * dropped, rather than printed as zeros.
+ */
+function renderPartialFulfilledWithoutCounts(p: PartialFulfilledParams): RenderedEmail {
+  const def = esEmailById('partial');
+  const subject = def.subject({ orderNumber: p.orderNumber });
+  const preheader = p.backorderEta
+    ? `Part of your order was delivered. The rest is backordered — expected ${p.backorderEta}.`
+    : 'Part of your order was delivered. The rest is backordered.';
+
+  const hi = greeting(p.recipientFirstName);
+  const backClause = p.backorderEta
+    ? `The remaining units are backordered &mdash; expected ${escapeHtml(p.backorderEta)}.`
+    : 'The remaining units are backordered and will ship as soon as they&rsquo;re back in stock.';
+  const body = `${hi} ${strong('Part of your order')} was delivered and signed for. ${backClause}`;
+
+  const rows = [
+    brandStrip({ tag: def.tag }),
+    section(
+      '36px 36px 24px',
+      `${statusPill({ variant: def.badge.variant, label: def.badge.label({}) })}
+      ${headline({ lead: `Most of ${escapeHtml(p.orderNumber)} has arrived.`, turn: 'The rest is on backorder.' })}
+      ${bodyText(body)}`,
+    ),
+    lineTableSection(p.items, 'Delivered', 'backordered'),
+    section(
+      '0 36px 30px',
+      ctaRow({
+        primary: { label: def.cta, href: p.orderUrl },
+        noteHtml:
+          'No action needed &mdash; backordered units ship automatically and you&rsquo;ll get a dispatch note with tracking.',
+      }),
+    ),
+    footer({
+      kind: def.footer,
+      reasonHtml: `Order-status updates for orders placed by ${escapeHtml(p.recipientEmail)}.`,
+      urls: p.urls,
+    }),
+  ]
+    .filter(Boolean)
+    .join('\n    ');
+
+  const html = emailShell({
+    title: escapeHtml(subject),
+    preheader: escapeHtml(preheader),
+    styles: {
+      darkPills: ['warn', 'ok'],
+      darkCards: '.card',
+    },
+    rows,
+  });
+
+  const backClauseText = p.backorderEta
+    ? `The remaining units are backordered — expected ${p.backorderEta}.`
+    : "The remaining units are backordered and will ship as soon as they're back in stock.";
+  const text = [
+    `${greetingText(p.recipientFirstName)}`,
+    '',
+    `Part of your order was delivered and signed for. ${backClauseText}`,
     ...(p.items && p.items.length > 0 ? ['', ...lineTextRows(p.items, 'Delivered', 'backordered')] : []),
     '',
     `View order: ${p.orderUrl}`,

@@ -66,6 +66,8 @@ export interface BundleDetail {
     id: string;
     quantityOnHand: number;
     warehouseId: string | null;
+    /** Set when the kit's stock item was soft-deleted; its kits cannot be used. */
+    deletedAt: string | null;
   } | null;
 }
 
@@ -152,6 +154,17 @@ export interface DistributeInput {
    */
   idempotencyKey?: string | null;
 }
+
+/**
+ * Refusals assemble_bundle() / distribute_bundle() raise since 0365, as the
+ * sentences the web modal and the phone show verbatim.
+ */
+export const BUNDLE_COMPONENT_NOT_IN_WAREHOUSE =
+  "A component of this kit isn't stocked at this warehouse. Assemble the kit where its components are.";
+export const BUNDLE_PHANTOM_DELETED =
+  "This kit's stock item was deleted, so no more can be assembled.";
+export const BUNDLE_COMPONENT_NOT_VISIBLE =
+  "A component of this kit isn't in your inventory view, so the kit can't be built from it.";
 
 /**
  * Whether stock on an item row can be drawn for a kit at `warehouseId`: the
@@ -304,7 +317,7 @@ export class BundlesService {
     if (phantomId) {
       const { data: ph, error: pErr } = await this.ctx.supabase
         .from('inventory_items')
-        .select('id, quantity_on_hand, warehouse_id')
+        .select('id, quantity_on_hand, warehouse_id, deleted_at')
         .eq('id', phantomId)
         .maybeSingle();
       if (pErr) throw new ServiceError('internal_error', pErr.message);
@@ -313,6 +326,7 @@ export class BundlesService {
           id: ph.id as string,
           quantityOnHand: Number(ph.quantity_on_hand),
           warehouseId: (ph.warehouse_id as string | null) ?? null,
+          deletedAt: (ph.deleted_at as string | null) ?? null,
         };
       }
     }
@@ -334,7 +348,8 @@ export class BundlesService {
    * will not draw: a component counts only when its item row sits in the
    * chosen warehouse (or has no warehouse) and is not soft-deleted, and
    * pre-assembled kits count only when the phantom item sits in the chosen
-   * warehouse (or has none). Anything else counts as 0 available.
+   * warehouse (or has none) and is not soft-deleted. Anything else counts as
+   * 0 available.
    */
   async preview(
     id: string,
@@ -351,11 +366,13 @@ export class BundlesService {
       throw new ServiceError('validation_error', 'Quantity must be positive');
     }
     const detail = await this.get(id);
-    // Kits boxed at another warehouse cannot be handed out from this one: the
-    // RPC reads them as 0 and falls through to components. Negative on-hand
-    // counts as 0, like the RPC's greatest(0, …).
+    // Kits boxed at another warehouse, or on a deleted kit item, cannot be
+    // handed out from this one: the RPC reads them as 0 and falls through to
+    // components. Negative on-hand counts as 0, like the RPC's greatest(0, …).
     const phantomQty =
-      detail.phantom && drawableAtWarehouse(detail.phantom.warehouseId, warehouseId)
+      detail.phantom &&
+      detail.phantom.deletedAt == null &&
+      drawableAtWarehouse(detail.phantom.warehouseId, warehouseId)
         ? Math.max(0, detail.phantom.quantityOnHand)
         : 0;
     const fromPhantom = Math.min(quantity, phantomQty);
@@ -686,6 +703,18 @@ export class BundlesService {
           'Existing pre-assembled stock for this bundle is at a different warehouse. v1 only supports one warehouse per bundle phantom.',
         );
       }
+      // 0365: a required component whose item row is in another warehouse
+      // (or deleted) is refused by name, not reported as a stock shortage the
+      // bundle page would contradict. The detail carries the item id.
+      if (msg.includes('component_not_in_warehouse')) {
+        throw new ServiceError('validation_error', BUNDLE_COMPONENT_NOT_IN_WAREHOUSE);
+      }
+      if (msg.includes('phantom_deleted')) {
+        throw new ServiceError('validation_error', BUNDLE_PHANTOM_DELETED);
+      }
+      if (msg.includes('component_not_visible')) {
+        throw new ServiceError('validation_error', BUNDLE_COMPONENT_NOT_VISIBLE);
+      }
       if (msg.includes('forbidden')) {
         throw new ServiceError('forbidden', 'Permission denied');
       }
@@ -744,6 +773,11 @@ export class BundlesService {
       }
       if (msg.includes('bundle_not_active')) {
         throw new ServiceError('validation_error', 'This bundle is archived or inactive.');
+      }
+      // 0365: a required component the caller's inventory view cannot see
+      // used to be skipped, and the kit went out without it.
+      if (msg.includes('component_not_visible')) {
+        throw new ServiceError('validation_error', BUNDLE_COMPONENT_NOT_VISIBLE);
       }
       if (msg.includes('forbidden')) {
         throw new ServiceError('forbidden', 'Permission denied');

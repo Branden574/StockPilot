@@ -167,6 +167,22 @@ describe('OrderRequestsService.approve — RPC refusals', () => {
     expect(afterCalls).toHaveLength(0);
   });
 
+  it('maps order_has_no_lines on the approve_partial path the same way', async () => {
+    const { stub, svc } = build({
+      'rpc:approve_partial': {
+        data: null,
+        error: { message: 'order_has_no_lines', code: 'P0001' },
+      },
+    });
+    const err = await svc.approvePartial('ord-1').catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      code: 'validation_error',
+      message: 'This order has no items. Add at least one before approving.',
+    });
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['approve_partial']);
+    expect(afterCalls).toHaveLength(0);
+  });
+
   it('still maps insufficient_stock (now totalled across duplicate lines) as before', async () => {
     const { svc } = build({
       'rpc:approve_order_request': {

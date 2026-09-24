@@ -4,30 +4,32 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 /**
  * transfer_stock (0365) refuses a move below manager unless BOTH locations are
- * in warehouses the caller can write, raising a bare 42501 'forbidden'. The
- * service now checks the same thing first, so the caller is told why and no
- * round-trip is spent on a move that cannot happen.
+ * in warehouses the caller can write, raising a bare 42501 'forbidden' — the
+ * same error its has_org_role(staff) floor raises. The service does not repeat
+ * the check before the RPC (a location read plus the access list put serial
+ * round trips in front of every staff transfer, bulk put-away included); it
+ * tells the two refusals apart by role: a staff-or-above caller passed the
+ * floor, so its 'forbidden' is the warehouse refusal and gets a sentence.
  *
- * The real assertWarehouseAccess runs here; only the access list it reads
- * (getWarehouseAccess) is stubbed, so the refusal is decided by the same rule
- * the rest of the app uses.
+ * The warehouse helpers are spied on, not stubbed out, so a test can prove the
+ * transfer path never consults them.
  */
-const { access } = vi.hoisted(() => ({
-  access: {
-    current: {
+vi.mock('@/lib/auth/warehouse', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/warehouse')>();
+  return {
+    ...actual,
+    getWarehouseAccess: vi.fn(async () => ({
       readableIds: ['wh-a'],
       writableIds: ['wh-a'],
       hasAllAccess: false,
       primaryWarehouseId: 'wh-a',
-    },
-  },
-}));
-vi.mock('@/lib/auth/warehouse', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/auth/warehouse')>()),
-  getWarehouseAccess: vi.fn(async () => access.current),
-}));
+    })),
+    assertWarehouseAccess: vi.fn(actual.assertWarehouseAccess),
+  };
+});
 vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
 
+import { assertWarehouseAccess, getWarehouseAccess } from '@/lib/auth/warehouse';
 import { InventoryService, TRANSFER_WAREHOUSE_WRITE_REFUSED } from './inventory';
 
 const INPUT = {
@@ -37,116 +39,84 @@ const INPUT = {
   quantity: 2,
 };
 
+const FORBIDDEN = { message: 'forbidden', code: '42501' };
+
 function build(
   role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer',
-  locations: { data: unknown; error: { message: string } | null },
   rpc: { data: unknown; error: { message: string; code?: string } | null } = {
     data: { ok: true },
     error: null,
   },
 ) {
-  const stub = makeSupabaseStub({
-    'locations.select': locations,
-    'rpc:transfer_stock': rpc,
-  });
-  const svc = new InventoryService(makeServiceContext(stub.client, { role }));
+  const stub = makeSupabaseStub({ 'rpc:transfer_stock': rpc });
+  // A viewer reaches the RPC only with stock:transfer granted by override.
+  const permissions = role === 'viewer' ? new Set(['stock:transfer']) : undefined;
+  const svc = new InventoryService(
+    makeServiceContext(stub.client, { role, ...(permissions ? { permissions } : {}) }),
+  );
   return { stub, svc };
 }
 
-const bothInA = {
-  data: [
-    { id: 'loc-a', warehouse_id: 'wh-a' },
-    { id: 'loc-b', warehouse_id: 'wh-a' },
-  ],
-  error: null,
-};
-const intoB = {
-  data: [
-    { id: 'loc-a', warehouse_id: 'wh-a' },
-    { id: 'loc-b', warehouse_id: 'wh-b' },
-  ],
-  error: null,
-};
-
 beforeEach(() => {
   vi.clearAllMocks();
-  access.current = {
-    readableIds: ['wh-a'],
-    writableIds: ['wh-a'],
-    hasAllAccess: false,
-    primaryWarehouseId: 'wh-a',
-  };
 });
 
-describe('InventoryService.transferStock — warehouse write access below manager', () => {
-  it('refuses staff moving stock INTO a warehouse they cannot write, before any rpc call', async () => {
-    const { stub, svc } = build('staff', intoB);
+describe('InventoryService.transferStock — warehouse write refusal comes from the RPC', () => {
+  it('goes straight to the RPC for staff: no location read, no access-list read', async () => {
+    const { stub, svc } = build('staff');
+    await svc.transferStock(INPUT);
+    expect(stub.fromCalls).not.toContain('locations');
+    expect(getWarehouseAccess).not.toHaveBeenCalled();
+    expect(assertWarehouseAccess).not.toHaveBeenCalled();
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['transfer_stock']);
+    expect(stub.rpcCalls[0]!.args).toMatchObject({
+      p_item_id: INPUT.itemId,
+      p_from_location_id: 'loc-a',
+      p_to_location_id: 'loc-b',
+      p_quantity: 2,
+    });
+  });
+
+  it("maps the RPC's 'forbidden' for staff to the warehouse sentence", async () => {
+    const { stub, svc } = build('staff', { data: null, error: FORBIDDEN });
     await expect(svc.transferStock(INPUT)).rejects.toMatchObject({
       code: 'forbidden',
       message: TRANSFER_WAREHOUSE_WRITE_REFUSED,
     });
-    expect(stub.rpcCalls).toHaveLength(0);
-  });
-
-  it('refuses staff moving stock OUT of a warehouse they cannot write', async () => {
-    const { stub, svc } = build('staff', {
-      data: [
-        { id: 'loc-a', warehouse_id: 'wh-b' },
-        { id: 'loc-b', warehouse_id: 'wh-a' },
-      ],
-      error: null,
-    });
-    await expect(svc.transferStock(INPUT)).rejects.toMatchObject({ code: 'forbidden' });
-    expect(stub.rpcCalls).toHaveLength(0);
-  });
-
-  it('lets staff move stock between locations in a warehouse they work in', async () => {
-    const { stub, svc } = build('staff', bothInA);
-    await svc.transferStock(INPUT);
     expect(stub.rpcCalls.map((c) => c.name)).toEqual(['transfer_stock']);
-    // The location read is scoped to the caller's org and names both ends.
-    const args = stub.chainArgs.get('locations.select') ?? [];
-    expect(args).toContainEqual(['organization_id', 'org-test']);
-    expect(args).toContainEqual(['id', ['loc-a', 'loc-b']]);
   });
 
-  it('fails a failed location read as internal_error, never as "nothing to check"', async () => {
-    const { stub, svc } = build('staff', { data: null, error: { message: 'connection reset' } });
-    await expect(svc.transferStock(INPUT)).rejects.toMatchObject({ code: 'internal_error' });
-    expect(stub.rpcCalls).toHaveLength(0);
-  });
-
-  it('leaves an org-level location (no warehouse) to the RPC', async () => {
-    const { stub, svc } = build('staff', {
-      data: [
-        { id: 'loc-a', warehouse_id: 'wh-a' },
-        { id: 'loc-b', warehouse_id: null },
-      ],
-      error: null,
+  it("keeps 'Permission denied' for a viewer: that 'forbidden' is the org-role floor", async () => {
+    const { stub, svc } = build('viewer', { data: null, error: FORBIDDEN });
+    await expect(svc.transferStock(INPUT)).rejects.toMatchObject({
+      code: 'forbidden',
+      message: 'Permission denied',
     });
-    await svc.transferStock(INPUT);
     expect(stub.rpcCalls.map((c) => c.name)).toEqual(['transfer_stock']);
   });
 
   it.each(['manager', 'admin', 'owner'] as const)(
-    'role %s bypasses the check: no location read, straight to the RPC',
+    'role %s goes straight to the RPC too, with no location read',
     async (role) => {
-      const { stub, svc } = build(role, intoB);
+      const { stub, svc } = build(role);
       await svc.transferStock(INPUT);
       expect(stub.fromCalls).not.toContain('locations');
       expect(stub.rpcCalls.map((c) => c.name)).toEqual(['transfer_stock']);
     },
   );
 
-  it("still maps the RPC's own 'forbidden' when the app check passes", async () => {
-    const { stub, svc } = build('staff', bothInA, {
-      data: null,
-      error: { message: 'forbidden', code: '42501' },
-    });
-    await expect(svc.transferStock(INPUT)).rejects.toMatchObject({
-      code: 'forbidden',
-      message: 'Permission denied',
-    });
-    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['transfer_stock']);
+  it('leaves the other RPC error mappings as they were', async () => {
+    const cases: Array<[string, { code: string; message?: string; internalDetail?: string }]> = [
+      ['same_location', { code: 'validation_error', message: 'Source and destination are the same location.' }],
+      ['item_deleted', { code: 'not_found', message: 'That item has been archived or deleted.' }],
+      ['item_not_found', { code: 'not_found', message: 'Item not found.' }],
+      ['quantity_must_be_positive', { code: 'validation_error', message: 'Enter a quantity greater than zero.' }],
+      // Kept internal_error on purpose: three callers rescue it by substring.
+      ['insufficient_stock', { code: 'internal_error', internalDetail: 'insufficient_stock' }],
+    ];
+    for (const [raised, expected] of cases) {
+      const { svc } = build('staff', { data: null, error: { message: raised } });
+      await expect(svc.transferStock(INPUT)).rejects.toMatchObject(expected);
+    }
   });
 });

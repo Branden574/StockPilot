@@ -394,6 +394,26 @@ function rentalItemNotOrderable(name: string): ServiceError {
   );
 }
 
+/**
+ * The refusals the order guards raise (0365) as whole sentences: the
+ * order_requests insert guard (42501) and the order_request_lines guard
+ * (42501 / 23514). They are written for the person placing the order, so they
+ * are passed through as validation errors. Mapped by the code alone, the
+ * 42501 ones read "not allowed" and the 23514 one "internal error".
+ */
+const ORDER_GUARD_SENTENCES: ReadonlySet<string> = new Set([
+  'That item cannot be ordered: it is deleted, a rental item, or not received yet.',
+  'A line needs a real quantity.',
+  'A new order request starts pending approval.',
+  'A new order request cannot carry approval, picking, delivery or signature details.',
+]);
+
+/** The guard's sentence as a validation_error, or null for any other error. */
+function orderGuardRefusal(err: { message?: string | null }): ServiceError | null {
+  const message = err.message ?? '';
+  return ORDER_GUARD_SENTENCES.has(message) ? new ServiceError('validation_error', message) : null;
+}
+
 export class OrderRequestsService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -1126,6 +1146,11 @@ export class OrderRequestsService {
       },
     );
     if (createErr) {
+      // Before the code checks: the guards' 42501 / 23514 carry a sentence for
+      // the requester (an item deleted or received-state changed since the
+      // pre-read above, say), not a permission or server fault.
+      const guard = orderGuardRefusal(createErr);
+      if (guard) throw guard;
       if (createErr.code === '22023') {
         throw new ServiceError('validation_error', createErr.message);
       }
@@ -1363,7 +1388,10 @@ export class OrderRequestsService {
       const { error: insErr } = await this.ctx.supabase
         .from('order_request_lines')
         .insert(toInsert);
-      if (insErr) throw new ServiceError('internal_error', insErr.message);
+      if (insErr) {
+        // The line guard's refusal (0365) is a sentence for the user, not a fault.
+        throw orderGuardRefusal(insErr) ?? new ServiceError('internal_error', insErr.message);
+      }
     }
 
     // A slip printed BEFORE this change no longer matches the order.
@@ -2220,6 +2248,12 @@ export class OrderRequestsService {
         throw new ServiceError('forbidden', 'Only managers can approve requests');
       if (msg.includes('invalid_status_transition'))
         throw new ServiceError('validation_error', 'This request is no longer pending approval');
+      // 0365: approve_partial refuses a line-less order too, as approve does.
+      if (msg.includes('order_has_no_lines'))
+        throw new ServiceError(
+          'validation_error',
+          'This order has no items. Add at least one before approving.',
+        );
       if (msg.includes('item_warehouse_mismatch'))
         throw new ServiceError(
           'validation_error',

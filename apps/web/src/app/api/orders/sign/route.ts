@@ -266,13 +266,18 @@ export async function POST(req: NextRequest) {
   const isCompleted = newStatus === 'completed';
   const isBackordered = newStatus === 'backordered';
 
-  // Line totals for the notices. A failed read leaves them null (not 0), and
-  // every notice that would print them is skipped or sent without them: "0 of
-  // 0 provided" is a wrong statement, not a degraded one.
-  const { data: aggLines, error: aggErr } = await admin
-    .from('order_request_lines')
-    .select('quantity_requested, quantity_fulfilled')
-    .eq('order_request_id', order.id);
+  // Line totals for the notices. Retried once, like the status read. A read
+  // that still fails leaves them null (not 0), and every notice that would
+  // print them is sent without them or skipped: "0 of 0 provided" is a wrong
+  // statement, not a degraded one.
+  const readLineTotals = () =>
+    admin
+      .from('order_request_lines')
+      .select('quantity_requested, quantity_fulfilled')
+      .eq('order_request_id', order.id);
+  let totalsRead = await readLineTotals();
+  if (totalsRead.error) totalsRead = await readLineTotals();
+  const { data: aggLines, error: aggErr } = totalsRead;
   let totals: { requested: number; fulfilled: number; owed: number } | null = null;
   if (aggErr) {
     await reportError(aggErr, {
@@ -345,25 +350,27 @@ export async function POST(req: NextRequest) {
   // `owed`. Tell the REQUESTER (in-app + email), fire a status_changed event,
   // and stop here — none of the completion side effects apply.
   if (isBackordered) {
-    // Both notices below state the counts ("2 of 5 provided"). Without the
-    // line totals they are skipped (the read failure is reported above)
-    // rather than sent with zeros.
+    // AWAIT — this is the ONLY customer comms for the fork, and a fire-and-forget
+    // promise can be dropped when the serverless function returns. It's internally
+    // best-effort (never throws), so awaiting is safe.
+    // Sent with or without the line totals: the requester must hear that the
+    // order is backordered even when the counts could not be read (the read
+    // failure is reported above). Without them the notice carries no numbers.
+    await notifyRequesterBackordered({
+      organizationId: order.organization_id,
+      orderId: order.id,
+      requesterUserId: order.requester_user_id,
+      requesterEmail: requester.email,
+      requesterName: requester.name,
+      appUrl: env.NEXT_PUBLIC_APP_URL,
+      provided: totals?.fulfilled ?? null,
+      requested: totals?.requested ?? null,
+      owed: totals?.owed ?? null,
+      emailOptedOut: requesterEmailOptedOut,
+    });
+    // The signer's receipt below IS its counts ("received 2 of 5"), so it is
+    // skipped without them rather than sent with zeros.
     if (totals) {
-      // AWAIT — this is the ONLY customer comms for the fork, and a fire-and-forget
-      // promise can be dropped when the serverless function returns. It's internally
-      // best-effort (never throws), so awaiting is safe.
-      await notifyRequesterBackordered({
-        organizationId: order.organization_id,
-        orderId: order.id,
-        requesterUserId: order.requester_user_id,
-        requesterEmail: requester.email,
-        requesterName: requester.name,
-        appUrl: env.NEXT_PUBLIC_APP_URL,
-        provided: totals.fulfilled,
-        requested: totals.requested,
-        owed: totals.owed,
-        emailOptedOut: requesterEmailOptedOut,
-      });
       // The physical SIGNER gets a transactional receipt of what they just signed
       // for — parity with the completed path, where the signer is always emailed.
       // Deduped against the requester notice — but only when that notice was
