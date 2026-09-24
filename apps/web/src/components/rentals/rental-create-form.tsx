@@ -10,6 +10,7 @@ import {
   CartProvider,
   clearCartDraft,
   initialCartState,
+  RENTAL_DRAFT_PREFIX,
   useCart,
 } from '@/components/orders/v2/cart-context';
 import { CatalogGrid } from '@/components/orders/v2/catalog-grid';
@@ -177,10 +178,22 @@ function RentalCreateFormInner({
 
   const lines = state.lines;
   const totalQty = lines.reduce((s, l) => s + l.quantity, 0);
+  // A saved line whose item this catalog no longer lists (no longer a rental,
+  // archived, or moved). The cart used to skip these while drawing and still
+  // submit them, so checkout failed on items nobody could see.
+  const unavailableCount = lines.filter((l) => !itemMap.has(l.itemId)).length;
+  // The catalog on screen is always `warehouseId`'s (the server loads it from
+  // the URL). Between picking another warehouse and its catalog arriving, the
+  // two differ, and checkout waits.
+  const switchingWarehouse = selectedWarehouseId !== warehouseId;
 
   function handleSubmit() {
     if (lines.length === 0) {
       toast.error('Add at least one item before checking out.');
+      return;
+    }
+    if (unavailableCount > 0) {
+      toast.error('Remove the items that are no longer available to rent, then check out.');
       return;
     }
     if (!borrower.borrowerName.trim()) {
@@ -204,7 +217,7 @@ function RentalCreateFormInner({
 
     startTransition(async () => {
       const res = await createRentalAction({
-        warehouseId: selectedWarehouseId,
+        warehouseId,
         borrowerUserId: borrower.borrowerUserId ?? null,
         borrowerName: borrower.borrowerName.trim(),
         borrowerEmail: borrowerEmail || null,
@@ -218,7 +231,7 @@ function RentalCreateFormInner({
         return;
       }
 
-      clearCartDraft(selectedWarehouseId);
+      clearCartDraft(warehouseId, RENTAL_DRAFT_PREFIX);
       toast.success('Rental checked out.');
       router.push(`/dashboard/rentals/${res.data.id}`);
     });
@@ -240,8 +253,13 @@ function RentalCreateFormInner({
               <Select
                 value={selectedWarehouseId}
                 onValueChange={(v) => {
+                  // Load that warehouse's catalog. Changing only the local
+                  // value left the old warehouse's items on screen, and
+                  // checkout then sent them under the new warehouse. The form
+                  // remounts when the new catalog arrives (keyed below), with
+                  // that warehouse's own saved cart.
                   setSelectedWarehouseId(v);
-                  dispatch({ type: 'set-warehouse', warehouseId: v });
+                  router.push(`/dashboard/rentals/new?warehouseId=${encodeURIComponent(v)}`);
                 }}
               >
                 <SelectTrigger id="rental-warehouse">
@@ -340,7 +358,27 @@ function RentalCreateFormInner({
             <ul className="space-y-2">
               {lines.map((line) => {
                 const it = itemMap.get(line.itemId);
-                if (!it) return null;
+                if (!it) {
+                  return (
+                    <li
+                      key={line.itemId}
+                      className="flex items-center gap-2 rounded-md border border-destructive/40 p-2 text-sm"
+                    >
+                      <span className="flex-1 min-w-0 text-muted-foreground">
+                        An item saved in this cart is no longer available to rent here
+                        {line.quantity > 1 ? ` (${line.quantity})` : ''}.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => dispatch({ type: 'remove', itemId: line.itemId })}
+                        className="text-muted-foreground hover:text-destructive transition-colors"
+                        aria-label="Remove unavailable item"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </li>
+                  );
+                }
                 return (
                   <li
                     key={line.itemId}
@@ -400,7 +438,7 @@ function RentalCreateFormInner({
           <Button
             className="w-full"
             onClick={handleSubmit}
-            disabled={isPending || lines.length === 0}
+            disabled={isPending || lines.length === 0 || switchingWarehouse}
           >
             {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
             Check out
@@ -418,7 +456,14 @@ export function RentalCreateForm(props: RentalCreateFormProps) {
   });
 
   return (
-    <CartProvider initial={initial}>
+    // Keyed by the catalog's warehouse: switching warehouses (or going Back)
+    // starts a fresh cart for that warehouse, restored from its own draft,
+    // instead of carrying lines from a catalog that is no longer on screen.
+    <CartProvider
+      key={props.warehouseId}
+      initial={initial}
+      draftPrefix={RENTAL_DRAFT_PREFIX}
+    >
       <RentalCreateFormInner {...props} />
     </CartProvider>
   );

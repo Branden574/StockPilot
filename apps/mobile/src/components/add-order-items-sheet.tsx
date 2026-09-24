@@ -117,6 +117,9 @@ export function AddOrderItemsSheet({
         // mig 0277 phantoms are rejected by addLines ("hasn't been received
         // yet"), so they must never be offerable.
         .eq('awaiting_first_receipt', plan.awaitingFirstReceipt)
+        // Rental items go out through Rentals, never on an order, and
+        // addLines refuses them, so they must never be offerable either.
+        .eq('is_rental', false)
         .is('deleted_at', null)
         .order('name', { ascending: true })
         .range(plan.range.from, plan.range.to);

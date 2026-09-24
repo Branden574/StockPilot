@@ -379,6 +379,21 @@ function defer(fn: () => Promise<unknown>): void {
   }
 }
 
+/**
+ * Rental items circulate through Rentals (a hold on the item, returned later),
+ * never through an order, which ships stock out. Every order picker already
+ * leaves them out; this is the server's own refusal for create() and
+ * addLines(), which used to accept whatever item id a client sent. The New
+ * rental page once shared its saved cart with the Orders page, so a rental
+ * line could reach an order unseen.
+ */
+function rentalItemNotOrderable(name: string): ServiceError {
+  return new ServiceError(
+    'validation_error',
+    `${name} is a rental item. Check it out from Rentals instead of ordering it.`,
+  );
+}
+
 export class OrderRequestsService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -946,7 +961,7 @@ export class OrderRequestsService {
 
   /**
    * The items an order's lines name, for create() and addLines() to validate
-   * (in-org, in the order's warehouse, received). Batched through
+   * (in-org, in the order's warehouse, received, not a rental item). Batched through
    * fetchAllRowsByIds: an order's lines have no cap, and one `.in()` past
    * ~215 ids fails (414 locally, "fetch failed" in production). Throws on a
    * failed batch, so a line is never rejected as "not found" because its
@@ -959,6 +974,7 @@ export class OrderRequestsService {
       warehouse_id: string | null;
       unit_cost: number;
       awaiting_first_receipt: boolean;
+      is_rental: boolean;
     }>
   > {
     const ctx = this.ctx;
@@ -967,7 +983,7 @@ export class OrderRequestsService {
       (batch) => (from, to) =>
         ctx.supabase
           .from('inventory_items')
-          .select('id, name, warehouse_id, unit_cost, awaiting_first_receipt')
+          .select('id, name, warehouse_id, unit_cost, awaiting_first_receipt, is_rental')
           .eq('organization_id', ctx.organizationId)
           .in('id', batch)
           .order('id')
@@ -995,7 +1011,13 @@ export class OrderRequestsService {
     const items = await this.readOrderItems(itemIds);
     const itemMap = new Map<
       string,
-      { name: string; warehouse_id: string | null; unit_cost: number; awaiting: boolean }
+      {
+        name: string;
+        warehouse_id: string | null;
+        unit_cost: number;
+        awaiting: boolean;
+        rental: boolean;
+      }
     >();
     for (const row of items) {
       itemMap.set(row.id, {
@@ -1003,6 +1025,7 @@ export class OrderRequestsService {
         warehouse_id: row.warehouse_id,
         unit_cost: Number(row.unit_cost) || 0,
         awaiting: row.awaiting_first_receipt === true,
+        rental: row.is_rental === true,
       });
     }
     for (const line of input.lines) {
@@ -1021,6 +1044,7 @@ export class OrderRequestsService {
           `This item hasn't been received yet: ${it.name}. It can be ordered once its first stock arrives.`,
         );
       }
+      if (it.rental) throw rentalItemNotOrderable(it.name);
     }
 
     // Defense-in-depth — the FK + CHECK constraint already enforce that
@@ -1237,6 +1261,7 @@ export class OrderRequestsService {
           `This item hasn't been received yet: ${it.name}. It can be ordered once its first stock arrives.`,
         );
       }
+      if (it.is_rental === true) throw rentalItemNotOrderable(it.name);
     }
 
     // Existing lines — an item already on the order is topped up, not duplicated.
