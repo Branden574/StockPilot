@@ -115,19 +115,24 @@ describe('the cache wipes wait their turn', () => {
   const db = readFileSync(path.join(__dirname, 'db.ts'), 'utf8');
   const body = (name: string) => db.slice(db.indexOf(`export async function ${name}`)).split('\n}\n')[0] ?? '';
 
-  it('deleteOrgData (workspace switch) and wipeForSignOut run through the queue', () => {
+  it('deleteOrgData (workspace switch), wipeForSignOut and wipeForEviction run through the queue', () => {
     // A wipe interleaving with a snapshot pull mid-write would let the old
     // workspace's rows land after it (sync.ts checks the workspace inside its
     // own queued transaction).
     expect(body('deleteOrgData')).toContain('await withDbTransaction(db, () => clearOrgScopedTables(db));');
-    expect(body('wipeForSignOut')).toMatch(/await withDbTransaction\(db, async \(\) => \{\s+await clearOrgScopedTables\(db\);[\s\S]*delete from pending_actions/);
+    // Sign-out clears the cache and KEEPS the outbox, held for its account (S4b).
+    expect(body('wipeForSignOut')).toContain('await withDbTransaction(db, () => clearOrgScopedTables(db));');
+    expect(body('wipeForSignOut')).not.toContain('pending_actions');
+    // Only the eviction of a disabled account drops what is left unsent.
+    expect(body('wipeForEviction')).toMatch(/await withDbTransaction\(db, async \(\) => \{\s+await clearOrgScopedTables\(db\);[\s\S]*delete from pending_actions/);
   });
 
-  it('both wipes bump the cache generation first, before they wait in the queue', () => {
+  it('every wipe bumps the cache generation first, before it waits in the queue', () => {
     // sync.ts discards a snapshot whose generation moved; the bump must come
     // before the queue so a pull that is mid-write stops at its next row.
     expect(body('deleteOrgData')).toMatch(/^export async function deleteOrgData\(\): Promise<void> \{\s+cacheGeneration \+= 1;/);
     expect(body('wipeForSignOut')).toMatch(/^export async function wipeForSignOut\(\): Promise<void> \{\s+cacheGeneration \+= 1;/);
+    expect(body('wipeForEviction')).toMatch(/^export async function wipeForEviction\(\): Promise<void> \{\s+cacheGeneration \+= 1;/);
   });
 });
 

@@ -249,9 +249,9 @@ describe('the eviction cannot silently destroy the queued work', () => {
       code(gate).indexOf('clearAccountStorage:'),
     );
     expect(clearCaches).toContain('rejectAllPending');
-    expect(clearCaches).toContain('wipeForSignOut()');
+    expect(clearCaches).toContain('wipeForEviction()');
     expect(clearCaches.indexOf('rejectAllPending')).toBeLessThan(
-      clearCaches.indexOf('wipeForSignOut()'),
+      clearCaches.indexOf('wipeForEviction()'),
     );
   });
 
@@ -269,10 +269,18 @@ describe('the eviction cannot silently destroy the queued work', () => {
     expect(body).toContain("where status in ('pending','sending','failed')");
   });
 
-  it('the sign-out wipe spares rejected rows', () => {
-    const body = code(db).slice(code(db).indexOf('export async function wipeForSignOut'));
+  it('the eviction wipe spares rejected rows', () => {
+    const body = code(db).slice(code(db).indexOf('export async function wipeForEviction'));
     expect(body).toContain("delete from pending_actions where status <> 'rejected'");
     expect(body).not.toContain('delete from pending_actions;');
+  });
+
+  it('the ordinary sign-out wipe deletes no outbox row at all (S4b: queued work is held, not wiped)', () => {
+    const src = code(db);
+    const start = src.indexOf('export async function wipeForSignOut');
+    const body = src.slice(start, src.indexOf('export async function wipeForEviction'));
+    expect(body).toContain('clearOrgScopedTables(db)');
+    expect(body).not.toContain('pending_actions');
   });
 });
 

@@ -224,18 +224,19 @@ describe('only a verdict about THIS device may destroy its queued work', () => {
   });
 
   it('the outbox is rejected before the wipe, even in the eviction that follows a sign-in match', () => {
-    // Task 11's ordering fix: rejectAllPending must run BEFORE wipeForSignOut,
-    // or wipeForSignOut's `delete ... where status <> 'rejected'` destroys the
-    // queued work outright instead of terminally (but visibly) parking it —
-    // exactly the loss this whole feature exists to prevent.
+    // Task 11's ordering fix: rejectAllPending must run BEFORE the eviction
+    // wipe, or its `delete ... where status <> 'rejected'` destroys the queued
+    // work outright instead of terminally (but visibly) parking it — exactly
+    // the loss this whole feature exists to prevent. (The eviction has its own
+    // wipe since S4b: the ordinary sign-out wipe no longer deletes queued work.)
     const clearCaches = gate.slice(
       gate.indexOf('clearCaches: async'),
       gate.indexOf('clearAccountStorage:'),
     );
     expect(clearCaches.indexOf('rejectAllPending')).toBeGreaterThan(-1);
-    expect(clearCaches.indexOf('wipeForSignOut()')).toBeGreaterThan(-1);
+    expect(clearCaches.indexOf('wipeForEviction()')).toBeGreaterThan(-1);
     expect(clearCaches.indexOf('rejectAllPending')).toBeLessThan(
-      clearCaches.indexOf('wipeForSignOut()'),
+      clearCaches.indexOf('wipeForEviction()'),
     );
   });
 });
@@ -363,11 +364,17 @@ describe('the paths that can raise the gate', () => {
     // the device ever had one. The two deliberate exits withdraw the latch so a
     // user who chose to leave still gets the marketing screen.
     expect(authContext).toContain('markSessionEnded();');
-    expect((authContext.match(/clearSessionEnded\(\);/g) ?? []).length).toBe(2);
+    // Both deliberate exits sign out through ONE helper, which withdraws the
+    // latch only when the sign-out call succeeded (a failed one fired no
+    // SIGNED_OUT, so there is nothing to withdraw).
+    expect((authContext.match(/clearSessionEnded\(\);/g) ?? []).length).toBe(1);
+    const helper = authContext.slice(authContext.indexOf('async function signOutDeliberately('));
+    expect(helper.slice(0, 300)).toMatch(/if \(!error\) clearSessionEnded\(\);/);
     const signOutFns = authContext.slice(
       authContext.indexOf("const signOut: AuthState['signOut']"),
+      authContext.indexOf("const unlock: AuthState['unlock']"),
     );
-    expect(signOutFns).toContain('clearSessionEnded();');
+    expect(signOutFns.match(/signOut: signOutDeliberately/g) ?? []).toHaveLength(2);
   });
 
   it('a device that never had a session still gets the MARKETING screen', () => {
@@ -409,7 +416,7 @@ describe('the eviction the gate runs', () => {
   it('does all five things, from the one place that can', () => {
     expect(gate).toContain('abortAllInFlight()');
     expect(gate).toContain("supabase.auth.signOut({ scope: 'local' })");
-    expect(gate).toContain('wipeForSignOut()');
+    expect(gate).toContain('wipeForEviction()');
     expect(gate).toContain('accountScopedStorageKeys(await AsyncStorage.getAllKeys())');
     expect(gate).toContain('resetNavigation: onEvicted');
   });

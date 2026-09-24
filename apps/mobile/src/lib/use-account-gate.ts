@@ -20,7 +20,7 @@ import {
   withTimeout,
 } from './account-eviction';
 import { endAccountEpoch } from './account-epoch';
-import { wipeForSignOut } from './db';
+import { wipeForEviction } from './db';
 import { ACCOUNT_DISABLED_REJECTION } from './drain-failure';
 import { rejectAllPending } from './queue';
 import { abortAllInFlight } from './request-cancellation';
@@ -232,8 +232,10 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
         // drains will never get to classify these rows themselves — and
         // wipeForSignOut used to delete them outright, which meant the queued
         // work vanished with no record and nothing to explain to the user.
-        // Best-effort: if the rejection fails we still wipe, because losing the
-        // record is bad but replaying the writes after a re-enable is worse.
+        // Best-effort: if the rejection fails we still wipe (wipeForEviction
+        // deletes whatever is left unsent), because losing the record is bad
+        // but replaying the writes after a re-enable is worse. The ordinary
+        // sign-out wipe no longer deletes queued work, hence the separate call.
         //
         // THE ONE REJECTION SITE. It hangs off the transition into `disabled`,
         // not off any single discovery path, and that is what makes it reachable
@@ -248,7 +250,7 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
           } catch (e) {
             console.warn('[account-gate] could not park the offline outbox', e);
           }
-          await wipeForSignOut();
+          await wipeForEviction();
         },
         clearAccountStorage: async () => {
           // Before the keys go: a workspace load or switch still running for

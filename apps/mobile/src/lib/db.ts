@@ -486,21 +486,42 @@ export async function deleteOrgData(): Promise<void> {
   await withDbTransaction(db, () => clearOrgScopedTables(db));
 }
 
+/**
+ * SIGN-OUT: clear the cache, KEEP the outbox (owner decision D5).
+ *
+ * This used to delete every pending, failed and sending row, so signing out
+ * with queued counts lost them silently, most often exactly when the queue held
+ * work (offline, weak warehouse Wi-Fi). Every row now carries its account
+ * (outbox-scope.ts), so it can simply stay: held for that account, never sent
+ * as anyone else, and sent when it signs in here again. The one explicit way to
+ * drop it is "Sign out and discard" (sign-out-flow.ts, queue.ts
+ * discardUnsyncedFor), or Discard in Unsent work.
+ */
 export async function wipeForSignOut(): Promise<void> {
+  cacheGeneration += 1;
+  const db = await getDb();
+  await withDbTransaction(db, () => clearOrgScopedTables(db));
+}
+
+/**
+ * ACCOUNT EVICTION (a confirmed disable): the cache, and every unsent row that
+ * is not already rejected. Exactly what wipeForSignOut did before sign-out
+ * stopped deleting queued work, kept for this one path.
+ *
+ * The eviction rejects the outbox immediately beforehand (use-account-gate.ts),
+ * so normally nothing is left to delete. The delete is the fallback for when
+ * that rejection failed: losing the record is bad, but a row left 'pending'
+ * would replay the moment the account is re-enabled, which is worse.
+ *
+ * Rows already 'rejected' are spared: terminal (no drain reads them) and the
+ * only record that the queued work existed, so the operator shown the disabled
+ * screen can still be told what was never sent (listRejected).
+ */
+export async function wipeForEviction(): Promise<void> {
   cacheGeneration += 1;
   const db = await getDb();
   await withDbTransaction(db, async () => {
     await clearOrgScopedTables(db);
-    // Sign-out is a full reset: the user (and any queued writes) are leaving the
-    // device session entirely, so the pending outbox is dropped here too.
-    //
-    // EXCEPT rows already marked 'rejected'. Those are terminal — no drain reads
-    // them, so keeping them cannot replay anything — and they are the only record
-    // that queued work existed at all. This path also runs during the disabled-
-    // account eviction, which rejects the outbox immediately beforehand
-    // (use-account-gate.ts); deleting them here would mean the operator is shown
-    // the disabled screen while the work they thought they had saved disappears
-    // silently, and listRejected() could never return a row.
     await db.execAsync("delete from pending_actions where status <> 'rejected';");
   });
 }

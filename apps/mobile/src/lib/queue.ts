@@ -387,6 +387,44 @@ export async function retry(id: number): Promise<void> {
   );
 }
 
+/**
+ * SIGN-OUT, keep (owner decision D5): every row this account owns stays on
+ * the device, HELD for it, and sends when it signs in here again. Its LEGACY
+ * rows (NULL owner, queued by an older binary) were counted as its own in the
+ * sign-out prompt, so they are stamped as its own now; left unstamped, the
+ * next account to drain would adopt and send them. Rows other accounts own are
+ * never touched. Rejected legacy rows are stamped too, so this account's
+ * record is not shown to the next person.
+ */
+export async function adoptLegacyRows(owner: { userId: string; orgId: string | null }): Promise<number> {
+  const db = await getDb();
+  const result = await db.runAsync(
+    `update pending_actions
+        set user_id = ?,
+            organization_id = coalesce(organization_id, ?)
+      where user_id is null`,
+    [owner.userId, owner.orgId],
+  );
+  return result.changes;
+}
+
+/**
+ * SIGN-OUT, discard: the person chose "Sign out and discard" after a drain
+ * attempt, or deleted their account (its work can never be sent). Removes this
+ * account's unsynced rows (and legacy ones), never another account's held work
+ * and never a rejected record.
+ */
+export async function discardUnsyncedFor(userId: string): Promise<number> {
+  const db = await getDb();
+  const result = await db.runAsync(
+    `delete from pending_actions
+      where status in ('pending','failed','sending')
+        and ${OWNED_BY_USER_SQL}`,
+    [userId],
+  );
+  return result.changes;
+}
+
 function rowFromDb(r: PendingActionDbRow): PendingActionRow {
   return {
     id: r.id,

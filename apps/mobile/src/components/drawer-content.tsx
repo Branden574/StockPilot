@@ -168,7 +168,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
           </View>
         </View>
         <Pressable
-          onPress={signOut}
+          onPress={() => void signOut()}
           style={({ pressed }) => [
             styles.signout,
             {

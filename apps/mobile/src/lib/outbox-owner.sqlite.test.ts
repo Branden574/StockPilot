@@ -210,3 +210,51 @@ describe("another account's held row is never deleted automatically", () => {
     expect(raw.prepare("select local_dirty from cycle_count_lines where id = 'l5'").get()).toEqual({ local_dirty: 0 });
   });
 });
+
+describe('sign-out keeps queued work, held for its account (S4b, owner decision D5)', () => {
+  beforeEach(() => {
+    raw.exec(`insert into items (id, sku, name, last_synced_at) values ('i1', 'SKU-1', 'Chair', 1);`);
+    seed({ id: 1, user: 'u1' }); // mine, pending
+    seed({ id: 2, user: 'u1', status: 'failed' }); // mine, failed
+    seed({ id: 3, user: null, org: null }); // legacy
+    seed({ id: 4, user: 'u2' }); // another account's, held
+    seed({ id: 5, user: 'u1', status: 'rejected' }); // my record
+  });
+
+  it('wipeForSignOut clears the cache and deletes NO outbox row', async () => {
+    const { wipeForSignOut } = await import('./db');
+    await wipeForSignOut();
+    expect(raw.prepare('select count(*) as n from items').get()).toEqual({ n: 0 });
+    expect((raw.prepare('select id from pending_actions order by id').all() as { id: number }[]).map((r) => r.id)).toEqual([
+      1, 2, 3, 4, 5,
+    ]);
+  });
+
+  it('holding stamps only legacy rows with the leaving account; nobody else’s row is touched', async () => {
+    expect(await queue.adoptLegacyRows({ userId: 'u1', orgId: 'org-a' })).toBe(1);
+    expect((owners() as { id: number; user_id: string }[]).map((r) => [r.id, r.user_id])).toEqual([
+      [1, 'u1'],
+      [2, 'u1'],
+      [3, 'u1'],
+      [4, 'u2'],
+      [5, 'u1'],
+    ]);
+    // The next account to sign in holds them instead of adopting them.
+    live.userId = 'u3';
+    expect(await cache.totalPendingCount()).toBe(0);
+    expect(await queue.countHeld()).toBe(4);
+  });
+
+  it('"Sign out and discard" deletes this account’s unsynced rows only: never another account’s, never a rejected record', async () => {
+    expect(await queue.discardUnsyncedFor('u1')).toBe(3); // 1, 2 and the legacy 3
+    expect((raw.prepare('select id from pending_actions order by id').all() as { id: number }[]).map((r) => r.id)).toEqual([
+      4, 5,
+    ]);
+  });
+
+  it('only the eviction of a disabled account drops unsent rows, and it spares rejected ones', async () => {
+    const { wipeForEviction } = await import('./db');
+    await wipeForEviction();
+    expect((raw.prepare('select id from pending_actions order by id').all() as { id: number }[]).map((r) => r.id)).toEqual([5]);
+  });
+});
