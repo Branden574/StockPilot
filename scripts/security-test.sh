@@ -169,9 +169,9 @@ PGTAP_TESTS=(
   supabase/tests/0363_order_lines_and_approvals.test.sql
   supabase/tests/0364_ledger_lockdown_enforce.test.sql
   supabase/tests/0365_s2_fulfilment_fixes.test.sql
-  # Count lines, AI-scan evidence and count status (S5, 0367): the columns the
+  # Count lines, AI-scan evidence and count status (S5, 0368): the columns the
   # post trusts are not client-writable, and a closed count cannot be reopened.
-  supabase/tests/0367_count_line_column_grants.test.sql
+  supabase/tests/0368_count_line_column_grants.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql

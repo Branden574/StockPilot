@@ -1,4 +1,4 @@
--- 0367: cycle-count lines, AI-scan evidence and count status can no longer be
+-- 0368: cycle-count lines, AI-scan evidence and count status can no longer be
 -- forged through direct API writes (Phase 0 S5, security).
 --
 -- THE HOLES (verified against production 2026-09-24, then widened by an

@@ -1,5 +1,5 @@
--- supabase/tests/0367_count_line_column_grants.test.sql
--- pgTAP proof for migration 0367 (Phase 0 S5, security).
+-- supabase/tests/0368_count_line_column_grants.test.sql
+-- pgTAP proof for migration 0368 (Phase 0 S5, security).
 --
 -- A. cycle_count_lines: a direct PATCH of the columns the post trusts
 --    (expected_quantity, item_id, warehouse_id, counted_location_id,
@@ -24,37 +24,37 @@ begin;
 
 select plan(49);
 
-\set org      '\'03670000-0000-0000-0000-00000000000a\''
-\set mgr      '\'03670000-0000-0000-0000-0000000000a1\''
-\set counter  '\'03670000-0000-0000-0000-0000000000a2\''
-\set other    '\'03670000-0000-0000-0000-0000000000a3\''
-\set wh       '\'03670000-0000-0000-0000-0000000000b1\''
-\set wh2      '\'03670000-0000-0000-0000-0000000000b2\''
-\set loc      '\'03670000-0000-0000-0000-0000000000b3\''
-\set itemA    '\'03670000-0000-0000-0000-0000000000c1\''
-\set itemB    '\'03670000-0000-0000-0000-0000000000c2\''
-\set cc       '\'03670000-0000-0000-0000-0000000000d1\''
-\set ccl      '\'03670000-0000-0000-0000-0000000000d2\''
-\set cc2      '\'03670000-0000-0000-0000-0000000000d3\''
-\set cc3      '\'03670000-0000-0000-0000-0000000000d4\''
-\set ccl3     '\'03670000-0000-0000-0000-0000000000d5\''
-\set scan     '\'03670000-0000-0000-0000-0000000000e1\''
-\set scan2    '\'03670000-0000-0000-0000-0000000000e2\''
-\set ccl2     '\'03670000-0000-0000-0000-0000000000d6\''
-\set noadj    '\'03670000-0000-0000-0000-0000000000a4\''
-\set orgB     '\'03670000-0000-0000-0000-00000000000b\''
-\set whB      '\'03670000-0000-0000-0000-0000000000b9\''
-\set itemX    '\'03670000-0000-0000-0000-0000000000c9\''
+\set org      '\'03680000-0000-0000-0000-00000000000a\''
+\set mgr      '\'03680000-0000-0000-0000-0000000000a1\''
+\set counter  '\'03680000-0000-0000-0000-0000000000a2\''
+\set other    '\'03680000-0000-0000-0000-0000000000a3\''
+\set wh       '\'03680000-0000-0000-0000-0000000000b1\''
+\set wh2      '\'03680000-0000-0000-0000-0000000000b2\''
+\set loc      '\'03680000-0000-0000-0000-0000000000b3\''
+\set itemA    '\'03680000-0000-0000-0000-0000000000c1\''
+\set itemB    '\'03680000-0000-0000-0000-0000000000c2\''
+\set cc       '\'03680000-0000-0000-0000-0000000000d1\''
+\set ccl      '\'03680000-0000-0000-0000-0000000000d2\''
+\set cc2      '\'03680000-0000-0000-0000-0000000000d3\''
+\set cc3      '\'03680000-0000-0000-0000-0000000000d4\''
+\set ccl3     '\'03680000-0000-0000-0000-0000000000d5\''
+\set scan     '\'03680000-0000-0000-0000-0000000000e1\''
+\set scan2    '\'03680000-0000-0000-0000-0000000000e2\''
+\set ccl2     '\'03680000-0000-0000-0000-0000000000d6\''
+\set noadj    '\'03680000-0000-0000-0000-0000000000a4\''
+\set orgB     '\'03680000-0000-0000-0000-00000000000b\''
+\set whB      '\'03680000-0000-0000-0000-0000000000b9\''
+\set itemX    '\'03680000-0000-0000-0000-0000000000c9\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
-  (:mgr,     '0367-mgr@test.local',     '{}'::jsonb),
-  (:counter, '0367-counter@test.local', '{}'::jsonb),
-  (:other,   '0367-other@test.local',   '{}'::jsonb),
-  (:noadj,   '0367-noadj@test.local',   '{}'::jsonb)
+  (:mgr,     '0368-mgr@test.local',     '{}'::jsonb),
+  (:counter, '0368-counter@test.local', '{}'::jsonb),
+  (:other,   '0368-other@test.local',   '{}'::jsonb),
+  (:noadj,   '0368-noadj@test.local',   '{}'::jsonb)
   on conflict (id) do nothing;
 insert into public.organizations (id, name, slug)
-  values (:org, '0367 Grants Org', '0367-grants-org') on conflict (id) do nothing;
+  values (:org, '0368 Grants Org', '0368-grants-org') on conflict (id) do nothing;
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   (:org, :mgr,     'manager', now()),
   (:org, :counter, 'staff',   now()),
@@ -62,8 +62,8 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:org, :noadj,   'staff',   now())
   on conflict do nothing;
 insert into public.warehouses (id, organization_id, name, code, status) values
-  (:wh,  :org, '0367 Main',  'WH-0367',  'active'),
-  (:wh2, :org, '0367 Annex', 'WH-0367B', 'active')
+  (:wh,  :org, '0368 Main',  'WH-0368',  'active'),
+  (:wh2, :org, '0368 Annex', 'WH-0368B', 'active')
   on conflict (id) do nothing;
 insert into public.locations (id, organization_id, warehouse_id, name, type, kind)
   values (:loc, :org, :wh, '67-A', 'shelf', 'rack') on conflict (id) do nothing;
@@ -76,29 +76,29 @@ insert into public.user_permission_overrides (organization_id, user_id, permissi
   values (:org, :noadj, 'stock:adjust', false);
 -- A second org with its own item (the cross-org probes).
 insert into public.organizations (id, name, slug)
-  values (:orgB, '0367 Other Org', '0367-other-org') on conflict (id) do nothing;
+  values (:orgB, '0368 Other Org', '0368-other-org') on conflict (id) do nothing;
 insert into public.warehouses (id, organization_id, name, code, status)
-  values (:whB, :orgB, '0367 B Main', 'WH-0367X', 'active') on conflict (id) do nothing;
+  values (:whB, :orgB, '0368 B Main', 'WH-0368X', 'active') on conflict (id) do nothing;
 -- The manager also belongs to org B, so org B's item is VISIBLE to them: only
 -- the policy's same-org check (not RLS visibility) can refuse the probe.
 insert into public.organization_members (organization_id, user_id, role, accepted_at)
   values (:orgB, :mgr, 'manager', now()) on conflict do nothing;
 insert into public.inventory_items (id, organization_id, warehouse_id, name, sku, quantity_on_hand, status)
-  values (:itemX, :orgB, :whB, '0367 Foreign Widget', 'SKU-0367-X', 777, 'active') on conflict (id) do nothing;
+  values (:itemX, :orgB, :whB, '0368 Foreign Widget', 'SKU-0368-X', 777, 'active') on conflict (id) do nothing;
 -- Guard the fixtures themselves: a silently missing row would make the
 -- refusals below pass for the wrong reason.
 do $$ begin
   if (select count(*) from public.user_warehouse_assignments
-       where user_id in ('03670000-0000-0000-0000-0000000000a2','03670000-0000-0000-0000-0000000000a4')) <> 2
-     or not exists (select 1 from public.organization_members where user_id = '03670000-0000-0000-0000-0000000000a4')
-     or not exists (select 1 from public.user_permission_overrides where user_id = '03670000-0000-0000-0000-0000000000a4')
-     or not exists (select 1 from public.inventory_items where id = '03670000-0000-0000-0000-0000000000c9')
-  then raise exception '0367 test fixtures incomplete'; end if;
+       where user_id in ('03680000-0000-0000-0000-0000000000a2','03680000-0000-0000-0000-0000000000a4')) <> 2
+     or not exists (select 1 from public.organization_members where user_id = '03680000-0000-0000-0000-0000000000a4')
+     or not exists (select 1 from public.user_permission_overrides where user_id = '03680000-0000-0000-0000-0000000000a4')
+     or not exists (select 1 from public.inventory_items where id = '03680000-0000-0000-0000-0000000000c9')
+  then raise exception '0368 test fixtures incomplete'; end if;
 end $$;
 insert into public.inventory_items
   (id, organization_id, warehouse_id, name, sku, quantity_on_hand, status) values
-  (:itemA, :org, :wh, '0367 Counted Widget', 'SKU-0367-A', 40, 'active'),
-  (:itemB, :org, :wh, '0367 Other Widget',   'SKU-0367-B',  0, 'active')
+  (:itemA, :org, :wh, '0368 Counted Widget', 'SKU-0368-A', 40, 'active'),
+  (:itemB, :org, :wh, '0368 Other Widget',   'SKU-0368-B',  0, 'active')
   on conflict (id) do nothing;
 
 -- cc: in progress, assigned to the staff counter (sections A and B).
@@ -115,8 +115,8 @@ insert into public.cycle_count_lines (id, cycle_count_id, item_id, warehouse_id,
   (:ccl3, :cc3, :itemA, :wh, 40)
   on conflict (id) do nothing;
 insert into public.cycle_count_ai_scans (id, organization_id, cycle_count_id, created_by, photo_storage_path, gemini_response, model_version)
-  values (:scan, :org, :cc, :counter, 'org/0367/shelf.jpg', '{"items":[{"sku":"SKU-0367-A","count":41}]}'::jsonb, 'test-model'),
-         (:scan2, :org, :cc3, :mgr, 'org/0367/other.jpg', '{}'::jsonb, 'test-model')
+  values (:scan, :org, :cc, :counter, 'org/0368/shelf.jpg', '{"items":[{"sku":"SKU-0368-A","count":41}]}'::jsonb, 'test-model'),
+         (:scan2, :org, :cc3, :mgr, 'org/0368/other.jpg', '{}'::jsonb, 'test-model')
   on conflict (id) do nothing;
 
 -- ═══ A. cycle_count_lines ═════════════════════════════════════════════════
@@ -238,7 +238,7 @@ select lives_ok(
            values (%L, %L, %L, 0)$$, :cc, :itemB, :wh),
   'A24: the start_cycle_count insert shape still works on an open count');
 select lives_ok(
-  format($$select * from public.start_cycle_count(%L::uuid, 'selection', %L::uuid, null, array[%L::uuid], 'started in 0367 test')$$,
+  format($$select * from public.start_cycle_count(%L::uuid, 'selection', %L::uuid, null, array[%L::uuid], 'started in 0368 test')$$,
          :org, :wh, :itemB),
   'A25: start_cycle_count still creates a count with its lines');
 reset role;
@@ -260,10 +260,10 @@ set local "request.jwt.claim.sub"  to :counter;
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
 select throws_ok(
-  format($$update public.cycle_count_ai_scans set gemini_response = '{"items":[{"sku":"SKU-0367-A","count":99}]}' where id = %L$$, :scan),
+  format($$update public.cycle_count_ai_scans set gemini_response = '{"items":[{"sku":"SKU-0368-A","count":99}]}' where id = %L$$, :scan),
   '42501', null, 'B3: the scan creator cannot rewrite what the model saw');
 select throws_ok(
-  format($$update public.cycle_count_ai_scans set photo_storage_path = 'org/0367/other.jpg' where id = %L$$, :scan),
+  format($$update public.cycle_count_ai_scans set photo_storage_path = 'org/0368/other.jpg' where id = %L$$, :scan),
   '42501', null, 'B4: the scan creator cannot swap the photo');
 select throws_ok(
   format($$update public.cycle_count_ai_scans set confirmed_at = now(), confirmed_by = %L where id = %L$$, :other, :scan),
@@ -280,15 +280,15 @@ set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
 select throws_ok(
   format($$insert into public.cycle_count_ai_scans (organization_id, cycle_count_id, created_by, photo_storage_path, gemini_response, model_version, confirmed_at, confirmed_by)
-           values (%L, %L, %L, 'org/0367/fake.jpg', '{}'::jsonb, 'm', now(), %L)$$, :org, :cc, :counter, :mgr),
+           values (%L, %L, %L, 'org/0368/fake.jpg', '{}'::jsonb, 'm', now(), %L)$$, :org, :cc, :counter, :mgr),
   '42501', null, 'B8: a scan cannot be inserted already confirmed');
 select throws_ok(
   format($$insert into public.cycle_count_ai_scans (organization_id, cycle_count_id, created_by, photo_storage_path, gemini_response, model_version)
-           values (%L, %L, %L, 'org/0367/fake.jpg', '{}'::jsonb, 'm')$$, :orgB, :cc, :counter),
+           values (%L, %L, %L, 'org/0368/fake.jpg', '{}'::jsonb, 'm')$$, :orgB, :cc, :counter),
   '42501', null, 'B9: a scan cannot claim another org for this count');
 select lives_ok(
   format($$insert into public.cycle_count_ai_scans (organization_id, cycle_count_id, created_by, photo_storage_path, gemini_response, model_version)
-           values (%L, %L, %L, 'org/0367/new.jpg', '{}'::jsonb, 'm')$$, :org, :cc, :counter),
+           values (%L, %L, %L, 'org/0368/new.jpg', '{}'::jsonb, 'm')$$, :org, :cc, :counter),
   'B10: the createAiScan insert shape still works');
 reset role;
 
