@@ -332,6 +332,11 @@ export async function updateLocalLine(
           cycleCountId: line.count_id,
           lineId: line.id,
           countedQuantity: counted,
+          // When the count was taken (server 0369): a count synced later is
+          // measured against the book at THIS moment, not at arrival, so a
+          // pick in between is not a phantom variance. Device clock; the
+          // server corrects its skew (cycle-count-record-body.ts).
+          capturedAt: new Date(now).toISOString(),
         }),
         now,
         scope.orgId,
@@ -391,6 +396,9 @@ export interface OutboxRow {
   organizationId: string | null;
   /** The account that queued it; NULL on a legacy row (outbox-scope.ts). */
   userId: string | null;
+  /** Enqueue time (ms since epoch, device clock). A record_count row queued
+   *  before capturedAt was stamped into its payload falls back to this. */
+  createdAt?: number | null;
 }
 
 /** A queued outbox row, and whether its retry backoff has elapsed. */
@@ -424,9 +432,10 @@ export async function outboxQueued(now: number = Date.now()): Promise<QueuedOutb
     status: string;
     organization_id: string | null;
     user_id: string | null;
+    created_at: number | null;
   }>(
     `select id, kind, idempotency_key, payload_json, attempts,
-            last_attempt_at, status, organization_id, user_id
+            last_attempt_at, status, organization_id, user_id, created_at
        from pending_actions
       where status in ('pending','failed')
       order by created_at asc`,
@@ -441,6 +450,7 @@ export async function outboxQueued(now: number = Date.now()): Promise<QueuedOutb
     status: r.status,
     organizationId: r.organization_id ?? null,
     userId: r.user_id ?? null,
+    createdAt: r.created_at ?? null,
     due: isDue(r.attempts, r.last_attempt_at, r.status, now),
   }));
 }

@@ -35,7 +35,10 @@ const LINKS: AdminLink[] = [
   { href: '/admin/users', label: 'Users', icon: Users, description: 'Every org member with role and last seen.' },
   { href: '/admin/vendor-mappings', label: 'Vendor mappings', icon: Layers, description: 'Map external supplier codes to our suppliers.' },
   { href: '/admin/uom-conversions', label: 'UoM conversions', icon: ArrowLeftRight, description: 'Cases-to-each, dozens-to-each rules.' },
-  { href: '/admin/reconciliation', label: 'Reconciliation', icon: BarChart3, description: 'Variance reports across cycle counts.' },
+  // Posted counts and their variances live in Cycle counts (filter Completed).
+  // The old Reconciliation screen queried a status and a column that do not
+  // exist and always showed "No posted counts yet", so it was removed (S5-C).
+  { href: '/cycle-counts', label: 'Count history', icon: BarChart3, description: 'Posted cycle counts and their variances: open Cycle counts, filter Completed.' },
   { href: '/admin/audit', label: 'Audit log', icon: FileLock, description: 'Every privileged action with actor and time.' },
 ];
 

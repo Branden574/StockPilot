@@ -120,17 +120,19 @@ insert into public.cycle_count_ai_scans (id, organization_id, cycle_count_id, cr
   on conflict (id) do nothing;
 
 -- ═══ A. cycle_count_lines ═════════════════════════════════════════════════
+-- 0369 adds baseline_at (trigger-written, the post's guard reads it: never
+-- client-writable) and captured_at (the record route writes it: granted).
 select is(
   (select array_agg(c order by c) from unnest(array['expected_quantity','expected_at_start','item_id','warehouse_id',
-      'counted_location_id','cycle_count_id','id','created_at','updated_at']) c
+      'counted_location_id','cycle_count_id','id','created_at','updated_at','baseline_at']) c
     where has_column_privilege('authenticated', 'public.cycle_count_lines', c, 'UPDATE')),
   null::text[],
   'A1: authenticated can UPDATE none of the columns the post trusts');
 select is(
-  (select array_agg(c order by c) from unnest(array['counted_quantity','reason','notes','counted_by','counted_at','ai_scan_id']) c
+  (select array_agg(c order by c) from unnest(array['counted_quantity','reason','notes','counted_by','counted_at','ai_scan_id','captured_at']) c
     where has_column_privilege('authenticated', 'public.cycle_count_lines', c, 'UPDATE')),
-  array['ai_scan_id','counted_at','counted_by','counted_quantity','notes','reason'],
-  'A2: authenticated keeps UPDATE on exactly the columns recordCount/clearCount write');
+  array['ai_scan_id','captured_at','counted_at','counted_by','counted_quantity','notes','reason'],
+  'A2: authenticated keeps UPDATE on exactly the columns recordCount/clearCount write (plus captured_at, 0369)');
 select ok(
   not has_table_privilege('anon', 'public.cycle_count_lines', 'INSERT')
   and not has_table_privilege('anon', 'public.cycle_count_lines', 'UPDATE')

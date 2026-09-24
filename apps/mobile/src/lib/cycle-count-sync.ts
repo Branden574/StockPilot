@@ -12,6 +12,7 @@ import {
   outboxReject,
   totalPendingCount,
 } from './cycle-count-cache';
+import { recordCountBody } from './cycle-count-record-body';
 import { latestRowsPerLine } from './outbox-order';
 import { classifyDrainFailure } from './drain-failure';
 import {
@@ -280,6 +281,7 @@ class CycleCountSyncEngine {
           await this.sendRecordCount(row.payload, controller.signal, {
             orgId: decision.orgId,
             asUserId: decision.userId,
+            createdAt: row.createdAt ?? null,
           });
           await outboxAck(row.id);
         } catch (e) {
@@ -332,7 +334,7 @@ class CycleCountSyncEngine {
   private async sendRecordCount(
     payload: Record<string, unknown>,
     signal: AbortSignal,
-    scope: { orgId: string | null; asUserId: string },
+    scope: { orgId: string | null; asUserId: string; createdAt: number | null },
   ): Promise<void> {
     const lineId = typeof payload.lineId === 'string' ? payload.lineId : '';
     const cycleCountId =
@@ -358,9 +360,15 @@ class CycleCountSyncEngine {
     // succeeded. The endpoint uses .select().maybeSingle(), so a blocked
     // or no-longer-editable line now throws and the outbox retries.
     // (Mirrors the legacy sync.ts record_count drain.)
+    //
+    // The body carries WHEN the count was taken (capturedAt, falling back to
+    // the row's enqueue time for a row queued before the field existed) and
+    // when this send left the phone (clientSentAt): server 0369 measures the
+    // count against the book at the capture moment, correcting the device
+    // clock's skew from the gap between the two.
     await api(`/api/v1/cycle-counts/${cycleCountId}/lines/${lineId}/record`, {
       method: 'POST',
-      body: { ...payload, countedQuantity: counted },
+      body: recordCountBody(payload, counted, scope.createdAt),
       signal,
       // Under the organization the count was queued in, and only as the
       // account that counted it (counted_by is the sender).

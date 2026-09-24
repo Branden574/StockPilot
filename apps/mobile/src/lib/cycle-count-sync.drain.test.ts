@@ -263,3 +263,35 @@ describe('forceSync waits for a drain already running (the sign-out recount depe
     expect(calls.log.indexOf('outboxAck:1')).toBeGreaterThan(-1);
   });
 });
+
+describe('the record body says when the count was taken (server 0369)', () => {
+  const sentBody = () =>
+    (apiMock.api.mock.calls[0]?.[1] as { body: Record<string, unknown> } | undefined)?.body;
+
+  it('a row stamped at enqueue sends its capturedAt and a fresh clientSentAt', async () => {
+    const row = countRow(1, 'l1', { org: 'org-a', user: 'u1' });
+    row.payload = { ...row.payload, capturedAt: '2026-09-24T14:20:00.000Z' };
+    (row as Row & { createdAt: number }).createdAt = Date.parse('2026-09-24T14:20:00.000Z');
+    cacheMock.rows = [row];
+
+    const before = Date.now();
+    await cycleCountSync.forceSync();
+
+    const body = sentBody();
+    expect(body?.capturedAt).toBe('2026-09-24T14:20:00.000Z');
+    expect(Date.parse(String(body?.clientSentAt))).toBeGreaterThanOrEqual(before);
+    expect(body?.countedQuantity).toBe(5);
+  });
+
+  it('a row queued before the field existed falls back to its created_at', async () => {
+    const row = countRow(1, 'l1', { org: 'org-a', user: 'u1' });
+    (row as Row & { createdAt: number }).createdAt = Date.parse('2026-09-24T09:15:00.000Z');
+    cacheMock.rows = [row];
+
+    await cycleCountSync.forceSync();
+
+    const body = sentBody();
+    expect(body?.capturedAt).toBe('2026-09-24T09:15:00.000Z');
+    expect(typeof body?.clientSentAt).toBe('string');
+  });
+});

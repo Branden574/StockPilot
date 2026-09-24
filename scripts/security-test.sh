@@ -172,6 +172,13 @@ PGTAP_TESTS=(
   # Count lines, AI-scan evidence and count status (S5, 0368): the columns the
   # post trusts are not client-writable, and a closed count cannot be reopened.
   supabase/tests/0368_count_line_column_grants.test.sql
+  # Count correctness (S5-C, 0369): stock_movements.via_ledger is stamped by a
+  # trigger, never by the writer, so a movement a signed-in user inserts
+  # directly (claiming via_ledger, a cycle-count reference, a future date)
+  # moves neither an offline count's baseline nor the post's superseded guard;
+  # baseline_at is not client-writable; the guard's read is a SECURITY DEFINER
+  # probe that answers only inside a ledger transaction.
+  supabase/tests/0369_count_correctness.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql

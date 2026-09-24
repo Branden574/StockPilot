@@ -105,10 +105,6 @@ export default function DrawerLayout() {
         options={{ drawerLabel: 'UoM conversions', drawerItemStyle: { display: 'none' } }}
       />
       <Drawer.Screen
-        name="admin/reconciliation"
-        options={{ drawerLabel: 'Reconciliation', drawerItemStyle: { display: 'none' } }}
-      />
-      <Drawer.Screen
         name="admin/audit"
         options={{ drawerLabel: 'Audit log', drawerItemStyle: { display: 'none' } }}
       />

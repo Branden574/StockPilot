@@ -274,6 +274,18 @@ delete from public.item_stock_levels
          and l.kind = 'staging'
     );
 
+-- 0369: count B's line was recorded in the fixtures, BEFORE count A posted a
+-- correction for the same item, so posting B as it stands would apply that
+-- correction again and is refused (cycle_count_line_superseded). Scenario B is
+-- an independent scenario on a reset item, so B is recounted after the reset:
+-- clear, then record 13 against the book of 10.
+update public.cycle_count_lines
+  set counted_quantity = null
+  where cycle_count_id = 'cc990000-0000-0000-0000-000000000007'::uuid;
+update public.cycle_count_lines
+  set counted_quantity = 13
+  where cycle_count_id = 'cc990000-0000-0000-0000-000000000007'::uuid;
+
 -- Re-assert manager context for the second RPC call.
 set local "request.jwt.claim.sub"  to 'cc990000-0000-0000-0000-000000000002';
 set local "request.jwt.claim.role" to 'authenticated';

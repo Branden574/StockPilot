@@ -228,11 +228,15 @@ select is(
       and p.proname in ('adjust_stock','transfer_stock','post_cycle_count','assemble_bundle',
                         'distribute_bundle','process_return_disposition','post_receipt_v2','reverse_receipt')),
   8, '14: all eight bodies live in the ledger schema');
+-- 0369 adds ledger.cycle_count_line_superseded, the post's read of other
+-- counts' movements: SECURITY DEFINER on purpose (an invoker read fails open
+-- under the stock_movements SELECT policy), gated on ledger.active(). The
+-- eight moved bodies keep their kind.
 select is(
   array(select p.proname::text from pg_proc p
          where p.pronamespace = 'ledger'::regnamespace and p.prosecdef order by 1),
-  array['process_return_disposition'],
-  '15: only process_return_disposition''s body is SECURITY DEFINER, as before the move');
+  array['cycle_count_line_superseded', 'process_return_disposition'],
+  '15: only process_return_disposition''s body (and the 0369 superseded probe) is SECURITY DEFINER, as before the move');
 select ok(
   not has_schema_privilege('anon', 'ledger', 'usage')
   and has_schema_privilege('authenticated', 'ledger', 'usage'),
