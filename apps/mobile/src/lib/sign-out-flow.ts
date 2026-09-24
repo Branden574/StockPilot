@@ -75,6 +75,11 @@ export const SIGN_OUT_DRAIN_TIMEOUT_MS = 15_000;
  * inferred from the calls: a transport failure keeps the session whatever the
  * scope. A throw is an error; an unreadable session counts as still present
  * (fail closed: nothing is wiped and no lock is lifted on a guess).
+ *
+ * `hasSession` must read the STORED session (session-scope.ts
+ * hasStoredSession), never getSession(): with the access token expired and no
+ * network, getSession() answers "no session" while auth-js keeps it on the
+ * device, and the sign-out that failed looked like it had worked.
  */
 export async function endSession(deps: EndSessionDeps, scope: SignOutScope): Promise<boolean> {
   const attempt = async (s: SignOutScope): Promise<boolean> => {

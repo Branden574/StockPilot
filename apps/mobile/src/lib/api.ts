@@ -5,6 +5,7 @@ import { notifyUnauthorized } from './account-eviction';
 import { OutboxSessionChangedError } from './outbox-scope';
 import { registerInFlight } from './request-cancellation';
 import { supabase } from './supabase';
+import { ACTIVE_ORG_STORAGE_KEY } from './workspace-keys';
 
 /**
  * Resolve the API base URL once at module load. We deliberately fall
@@ -131,14 +132,13 @@ async function authHeader(asUserId?: string): Promise<Record<string, string>> {
  * or `postMultipart` directly (multipart uploads, streaming chat) instead of
  * `api()`. Without it the server falls back to the user's DEFAULT org, so a
  * multi-org user's AI-scan counts, PO scans and chat questions resolved
- * against the wrong workspace. Key MUST match ORG_STORAGE_KEY in
- * use-workspace.ts ('workspace.activeOrgId') — kept as a literal here to avoid
- * importing use-workspace (which would create a cycle: use-workspace → sync →
- * api). Every raw call site is pinned to spread this by
+ * against the wrong workspace. The key is the ONE constant use-workspace.ts
+ * writes (workspace-keys.ts, a leaf, so there is no cycle through
+ * use-workspace → sync → api). Every raw call site is pinned to spread this by
  * org-header-wiring.test.ts.
  */
 export async function orgHeader(): Promise<Record<string, string>> {
-  const orgId = await AsyncStorage.getItem('workspace.activeOrgId');
+  const orgId = await AsyncStorage.getItem(ACTIVE_ORG_STORAGE_KEY);
   return orgId ? { 'X-Organization-Id': orgId } : {};
 }
 

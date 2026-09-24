@@ -336,6 +336,18 @@ MOBILE_TESTS=(
   src/lib/cache-owner.test.ts
   src/lib/sync.snapshot-removals.test.ts
   src/lib/draft-debouncer.test.ts
+
+  # S4 review — WHO holds the session is read from the stored session, never
+  # from getSession(), which answers "no session" offline once the access token
+  # has expired while auth-js keeps it: a sign-out that failed offline must not
+  # lift the biometric/MFA gate, and offline work keeps its owner (never a NULL
+  # owner another account would adopt). The storage key is pinned to
+  # supabase-js's default. The workspace key has one definition. A count still
+  # in retry backoff never lands after its correction.
+  src/lib/auth-storage.test.ts
+  src/lib/session-scope.test.ts
+  src/lib/workspace-keys.wiring.test.ts
+  src/lib/cycle-count-sync.backoff.sqlite.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

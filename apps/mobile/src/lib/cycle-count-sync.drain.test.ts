@@ -37,11 +37,13 @@ type Row = {
   status: string;
   organizationId: string | null;
   userId: string | null;
+  /** Backoff elapsed (cycle-count-cache outboxQueued). */
+  due: boolean;
 };
 
 const cacheMock = vi.hoisted(() => ({
   rows: [] as unknown[],
-  outboxPending: vi.fn(),
+  outboxQueued: vi.fn(),
   outboxAck: vi.fn(),
   outboxBumpFailure: vi.fn(),
   outboxMarkSending: vi.fn(),
@@ -82,6 +84,7 @@ function countRow(
     status: 'pending',
     organizationId: owner.org,
     userId: owner.user,
+    due: true,
   };
 }
 
@@ -89,7 +92,7 @@ beforeEach(() => {
   calls.log = [];
   live.orgId = 'org-live';
   live.userId = 'u1';
-  cacheMock.outboxPending.mockReset().mockImplementation(async () => cacheMock.rows);
+  cacheMock.outboxQueued.mockReset().mockImplementation(async () => cacheMock.rows);
   for (const name of [
     'outboxAck',
     'outboxBumpFailure',
@@ -191,6 +194,44 @@ describe('CycleCountSyncEngine drain — own org, own account, per row (S4a)', (
     expect(cacheMock.outboxAck).toHaveBeenCalledWith(1);
     expect(cacheMock.outboxAck).not.toHaveBeenCalledWith(2);
     expect(cacheMock.outboxReject).toHaveBeenCalledWith(2, REPLACED_BY_LATER_COUNT);
+  });
+});
+
+describe('newest-wins sees rows still in retry backoff (S4 review, pre-existing)', () => {
+  it('an older count in backoff is superseded by the correction behind it, never sent after it', async () => {
+    // Row 1 (the 5) failed and is backing off; row 2 (the 7) was queued while
+    // row 1 was in flight. Judged among due rows only, row 1 was invisible:
+    // the 7 was sent and acked, then the 5 was sent on its own.
+    cacheMock.rows = [
+      { ...countRow(1, 'l1', { org: 'org-a', user: 'u1' }), status: 'failed', attempts: 3, due: false },
+      countRow(2, 'l1', { org: 'org-a', user: 'u1' }),
+    ];
+
+    await cycleCountSync.forceSync();
+
+    expect(calls.log).toEqual([
+      'outboxAck:1', // superseded without being sent
+      'outboxMarkSending:2',
+      `api:${recordPath('l1')}`,
+      'outboxAck:2',
+    ]);
+  });
+
+  it('the newest row of a line is not sent before its own backoff has elapsed', async () => {
+    cacheMock.rows = [
+      countRow(1, 'l1', { org: 'org-a', user: 'u1' }), // older, due: superseded all the same
+      { ...countRow(2, 'l1', { org: 'org-a', user: 'u1' }), status: 'failed', attempts: 2, due: false },
+      countRow(3, 'l2', { org: 'org-a', user: 'u1' }),
+    ];
+
+    await cycleCountSync.forceSync();
+
+    expect(calls.log).toEqual([
+      'outboxAck:1',
+      'outboxMarkSending:3',
+      `api:${recordPath('l2')}`,
+      'outboxAck:3',
+    ]);
   });
 });
 

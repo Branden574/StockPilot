@@ -30,7 +30,7 @@ import {
   normalizeIdentityEmail,
   rememberIdentity,
 } from './remembered-identity';
-import { liveOutboxScope } from './session-scope';
+import { hasStoredSession, liveOutboxScope } from './session-scope';
 import {
   endSession,
   runSignOutFlow,
@@ -331,7 +331,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signIn: AuthState['signIn'] = async (email, password) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data: signedIn, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
       // GoTrue answers a disabled account with the STRUCTURED code
       // `user_banned`. Never infer it from free text — GoTrue's own sentence
@@ -387,12 +387,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // identity-server blip) is demonstrably stale and must come down, or the
     // healthy user who just signed in would meet the disabled screen.
     resetAccountDisabled();
-    // Refresh this device's remembered identity. Deliberately email-only here
-    // (userId left null) — the fuller record with userId is written at every
-    // hydrate/sign-out, which already has the full user object in hand; this
-    // path only has to guarantee the email is current, and the email is the
-    // only field the match above ever reads (see remembered-identity.ts).
-    await rememberIdentity({ userId: null, email: normalizeIdentityEmail(email) });
+    // Refresh this device's remembered identity. The email is the only field
+    // the match above ever reads (see remembered-identity.ts). The account id
+    // is recorded too when the grant returned it: a disable confirmed later
+    // from the sign-in screen evicts only THAT account's queued work, and after
+    // a relaunch this record is the one place its id is still known
+    // (use-account-gate.ts evictedAccountId).
+    await rememberIdentity({
+      userId: signedIn.user?.id ?? null,
+      email: normalizeIdentityEmail(email),
+    });
     // Password got us to AAL1. If the account has a verified TOTP factor,
     // raise the MFA gate so RootGate shows the code screen instead of the
     // app. Without this a 2FA-enrolled user would be let in on password
@@ -460,7 +464,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             if (userId) await adoptLegacyRows({ userId, orgId: scope.orgId });
           },
           signOut: signOutDeliberately,
-          hasSession,
+          hasSession: hasStoredSession,
           discardUnsynced: async () => {
             if (userId) await discardUnsyncedFor(userId);
           },
@@ -495,7 +499,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // next account's first pull resets a cache that is not its own
     // (sync.ts), and queued work stays held for this account.
     const ended = await endSession(
-      { signOut: signOutDeliberately, hasSession, warn: (m, e) => console.warn(m, e) },
+      {
+        signOut: signOutDeliberately,
+        hasSession: hasStoredSession,
+        warn: (m, e) => console.warn(m, e),
+      },
       'local',
     );
     if (!ended) {
@@ -503,6 +511,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // keeps the session on a transport failure). Lifting the biometric
       // lock or the MFA gate now would open the app on a session that is
       // still here, without the biometric check or the second factor.
+      // "Still here" is read from the STORED session (hasStoredSession):
+      // getSession() answers null for a token it could not refresh offline
+      // while the session stays on the device, which read as "ended" and
+      // unlocked the app once the access token had expired.
       Alert.alert(STILL_SIGNED_IN_TITLE, STILL_SIGNED_IN_MESSAGE);
       return false;
     }
@@ -565,11 +577,6 @@ async function signOutDeliberately(scope: SignOutScope): Promise<{ error: unknow
   const { error } = await supabase.auth.signOut({ scope });
   if (!error) clearSessionEnded();
   return { error };
-}
-
-async function hasSession(): Promise<boolean> {
-  const { data } = await supabase.auth.getSession();
-  return data.session !== null;
 }
 
 /** The unsynced-work question, as an alert (sign-out-flow.ts owns the words). */

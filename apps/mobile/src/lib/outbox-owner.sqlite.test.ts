@@ -9,7 +9,11 @@ import { REPLACED_BY_LATER_COUNT } from './outbox-scope';
  * Outbox ownership in SQL (S4a), run against the REAL schema: db.ts opens a
  * node:sqlite database through the expo-sqlite stand-in and runs its own
  * ensureSchema, then queue.ts and cycle-count-cache.ts run their real
- * statements. Only the live session/workspace is faked.
+ * statements, and session-scope.ts reads the owner as it does in the app.
+ * Only the STORED session and the saved workspace are faked, and
+ * supabase.auth.getSession() is wired to answer what auth-js answers offline
+ * once the access token has expired ("no session", with the session still
+ * stored), so code that asked it instead of the stored session fails here.
  *
  * What is proven here:
  *   - both writers stamp the organization and the account;
@@ -17,14 +21,46 @@ import { REPLACED_BY_LATER_COUNT } from './outbox-scope';
  *     see only the live account's rows (and legacy ones), never another's;
  *   - a legacy row is stamped at its first send, an owned row never re-stamped;
  *   - another account's held row is never deleted automatically, and only a
- *     held row can be discarded from Unsent work.
+ *     held row can be discarded from Unsent work;
+ *   - this code never writes a NULL owner, and a disabled account's eviction
+ *     parks only that account's work (and legacy rows), never another's.
  */
 
 const sqlite = vi.hoisted(() => ({ open: vi.fn() }));
 vi.mock('expo-sqlite', () => ({ openDatabaseAsync: sqlite.open }));
 
-const live = vi.hoisted(() => ({ orgId: 'org-a' as string | null, userId: 'u1' as string | null }));
-vi.mock('./session-scope', () => ({ liveOutboxScope: vi.fn(async () => ({ ...live })) }));
+/**
+ * The device right now: the saved workspace, and the account whose session is
+ * STORED (userId null = none stored; `unreadable` = stored, owner unreadable).
+ */
+const live = vi.hoisted(() => ({
+  orgId: 'org-a' as string | null,
+  userId: 'u1' as string | null,
+  unreadable: false,
+}));
+vi.mock('./supabase', async () => {
+  const { AuthRetryableFetchError } = await import('@supabase/supabase-js');
+  return {
+    // What auth-js answers for an expired token it cannot refresh offline.
+    supabase: {
+      auth: {
+        getSession: async () => ({
+          data: { session: null },
+          error: new AuthRetryableFetchError('Network request failed', 0),
+        }),
+      },
+    },
+    readDeviceAuthSession: async () =>
+      live.unreadable
+        ? { present: true, userId: null }
+        : { present: live.userId !== null, userId: live.userId },
+  };
+});
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: {
+    getItem: async (key: string) => (key === 'workspace.activeOrgId' ? live.orgId : null),
+  },
+}));
 
 type Queue = typeof import('./queue');
 type Cache = typeof import('./cycle-count-cache');
@@ -36,6 +72,7 @@ let cache: Cache;
 beforeEach(async () => {
   live.orgId = 'org-a';
   live.userId = 'u1';
+  live.unreadable = false;
   raw = new DatabaseSync(':memory:');
   const handle = nodeExpoDb(raw);
   sqlite.open.mockReset().mockImplementation(async () => handle);
@@ -144,13 +181,15 @@ describe("counters see the live account's rows only (the critic's correction 4)"
     ]);
   });
 
-  it('signed in as u2 the picture inverts; signed out only legacy rows count and every stamped row is held', async () => {
+  it('signed in as u2 the picture inverts; signed out only legacy rows count, and nothing is offered as "another account\'s"', async () => {
     live.userId = 'u2';
     expect(await cache.pendingCountFor('cc1')).toBe(3);
     expect(await queue.countHeld()).toBe(1);
     live.userId = null;
     expect(await cache.totalPendingCount()).toBe(1);
-    expect(await queue.countHeld()).toBe(3);
+    // With no account, another's work cannot be told from the person's own.
+    expect(await queue.countHeld()).toBe(0);
+    expect(await queue.listHeld()).toEqual([]);
   });
 });
 
@@ -286,14 +325,143 @@ describe('sign-out keeps queued work, held for its account (S4b, owner decision 
     ).toEqual([4, 5]);
   });
 
-  it('only the eviction of a disabled account drops unsent rows, and it spares rejected ones', async () => {
+  it('only the eviction of a disabled account drops unsent rows: ITS rows (and legacy), sparing rejected ones and every other account\'s', async () => {
     const { wipeForEviction } = await import('./db');
-    await wipeForEviction();
+    await wipeForEviction('u1');
     expect(
       (raw.prepare('select id from pending_actions order by id').all() as { id: number }[]).map(
         (r) => r.id,
       ),
-    ).toEqual([5]);
+    ).toEqual([4, 5]);
+  });
+});
+
+describe("a disabled account's eviction parks ITS work only (D4: another account's held work is never touched)", () => {
+  beforeEach(() => {
+    seed({ id: 1, user: 'u1' }); // the disabled account's, pending
+    seed({ id: 2, user: 'u1', status: 'failed' });
+    seed({ id: 3, user: null, org: null }); // legacy
+    seed({ id: 4, user: 'u2' }); // held for another account
+    seed({ id: 5, user: 'u2', status: 'failed' }); // held for another account
+  });
+  const statuses = () =>
+    (owners() as { id: number; status: string }[]).map((r) => [r.id, r.status]);
+
+  it('rejectAllPending rejects the evicted account\'s rows and legacy ones; the other account\'s stay pending/failed', async () => {
+    expect(await queue.rejectAllPending('Account disabled', 'u1')).toBe(3);
+    expect(statuses()).toEqual([
+      [1, 'rejected'],
+      [2, 'rejected'],
+      [3, 'rejected'],
+      [4, 'pending'],
+      [5, 'failed'],
+    ]);
+    // The parked legacy row is the evicted account's record from now on.
+    expect(raw.prepare('select user_id from pending_actions where id = 3').get()).toEqual({
+      user_id: 'u1',
+    });
+    // u2's work still sends when u2 signs in here again.
+    live.userId = 'u2';
+    expect(await cache.totalPendingCount()).toBe(2);
+    expect(await queue.countRejected()).toBe(0);
+  });
+
+  it('the fallback wipe (rejection failed) deletes the evicted account\'s unsent rows only', async () => {
+    const { wipeForEviction } = await import('./db');
+    await wipeForEviction('u1');
+    expect(statuses()).toEqual([
+      [4, 'pending'],
+      [5, 'failed'],
+    ]);
+  });
+
+  it('an account that cannot be named falls back to the whole device (a replay after re-enable is worse)', async () => {
+    expect(await queue.rejectAllPending('Account disabled', null)).toBe(5);
+    const { wipeForEviction } = await import('./db');
+    seed({ id: 6, user: 'u2' });
+    await wipeForEviction(null);
+    expect(statuses().map(([id]) => id)).toEqual([1, 2, 3, 4, 5]);
+  });
+});
+
+describe('offline past token expiry (getSession() says "no session", the session is still stored)', () => {
+  // The S4 review's scenario: u1 counts online, walks into a dead zone, and
+  // keeps counting for more than an hour. The fake getSession() above answers
+  // exactly what auth-js answers then; the owner must come from the stored
+  // session regardless.
+  it('saves stamp u1, u1\'s rows stay u1\'s, and another account\'s held count is parked, not deleted', async () => {
+    cacheLine('l1');
+    cacheLine('l2');
+    seed({ id: 1, user: 'u2', lineId: 'l1' }); // another account's held count of l1
+    await cache.updateLocalLine('l2', 5);
+    await cache.updateLocalLine('l1', 9);
+
+    const rows = owners() as { id: number; status: string; user_id: string | null }[];
+    expect(rows.map((r) => r.user_id)).not.toContain(null);
+    expect(rows.find((r) => r.id === 1)).toMatchObject({ status: 'rejected', user_id: 'u2' });
+    expect(rows.filter((r) => r.status === 'pending').map((r) => r.user_id)).toEqual(['u1', 'u1']);
+
+    // The badge, the Sync-first gate and Unsent work all see them as u1's own.
+    expect(await cache.totalPendingCount()).toBe(2);
+    expect(await cache.pendingCountFor('cc1')).toBe(2);
+    expect(await queue.countHeld()).toBe(0);
+    const own = rows.find((r) => r.status === 'pending')!;
+    expect(await cache.discardHeldAction(own.id)).toBe(false);
+  });
+});
+
+describe('this code never writes a NULL-owner row', () => {
+  it('a count saved just after an involuntary sign-out is stamped with the account that typed it', async () => {
+    cacheLine('l1');
+    expect(await cache.totalPendingCount()).toBe(0); // the screen read its counters as u1
+    live.userId = null; // revoked: auth-js removed the stored session
+    const res = await cache.updateLocalLine('l1', 4);
+    expect(
+      raw.prepare('select user_id from pending_actions where id = ?').get(res?.outboxId ?? -1),
+    ).toEqual({ user_id: 'u1' });
+    // ...so the next account holds it instead of adopting it.
+    live.userId = 'u3';
+    expect(await cache.totalPendingCount()).toBe(0);
+    expect(await queue.countHeld()).toBe(1);
+  });
+
+  it('while the stored entry is unreadable, a save is stamped with the account last seen', async () => {
+    const { id } = await queue.enqueue('distribute_bundle', { bundleId: 'b1', quantity: 1 });
+    live.unreadable = true;
+    const second = await queue.enqueue('distribute_bundle', { bundleId: 'b2', quantity: 1 });
+    expect(
+      (raw.prepare('select id, user_id from pending_actions order by id').all() as unknown[]),
+    ).toEqual([
+      { id, user_id: 'u1' },
+      { id: second.id, user_id: 'u1' },
+    ]);
+  });
+
+  it('with no account at all this run, both writers refuse and write nothing', async () => {
+    live.userId = null;
+    cacheLine('l1');
+    await expect(cache.updateLocalLine('l1', 2)).rejects.toMatchObject({
+      name: 'OutboxOwnerUnknownError',
+    });
+    await expect(
+      queue.enqueue('distribute_bundle', { bundleId: 'b1', quantity: 1 }),
+    ).rejects.toMatchObject({ name: 'OutboxOwnerUnknownError' });
+    expect(raw.prepare('select count(*) as n from pending_actions').get()).toEqual({ n: 0 });
+    expect(raw.prepare("select counted, local_dirty from cycle_count_lines where id = 'l1'").get()).toEqual({
+      counted: null,
+      local_dirty: 0,
+    });
+  });
+
+  it('Unsent work offers nothing for Discard while the owner is unreadable', async () => {
+    seed({ id: 1, user: 'u1' });
+    seed({ id: 2, user: 'u2' });
+    live.unreadable = true;
+    expect(await queue.listHeld()).toEqual([]);
+    expect(await queue.countHeld()).toBe(0);
+    expect(await cache.discardHeldAction(1)).toBe(false);
+    expect(await cache.discardHeldAction(2)).toBe(false);
+    expect(raw.prepare('select count(*) as n from pending_actions').get()).toEqual({ n: 2 });
   });
 });
 

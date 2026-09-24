@@ -1,7 +1,7 @@
 import { getDb, queuedWrite } from './db';
 import { HELD_FOR_OTHER_SQL, OWNED_BY_USER_SQL } from './outbox-scope';
 import { REJECTED_KEEP_MAX, rejectedPruneCutoff } from './rejected-work';
-import { liveOutboxScope } from './session-scope';
+import { liveOutboxScope, outboxWriteScope } from './session-scope';
 
 /**
  * Pending-actions queue. Every offline-capable write goes through
@@ -88,8 +88,9 @@ export async function enqueue(
   const idempotencyKey = opts?.idempotencyKey ?? uuid();
   // Stamped with the workspace and account it is queued under, so the drains
   // send it under that organization and only while that account is signed in
-  // (outbox-scope.ts). Read before the insert, never at send time.
-  const scope = await liveOutboxScope();
+  // (outbox-scope.ts). Read before the insert, never at send time. Never a
+  // NULL owner: with no account to name, this throws instead of queueing.
+  const scope = await outboxWriteScope();
   // Its own queued transaction (db.ts queuedWrite): a plain insert landing
   // inside a snapshot pull's open transaction was undone by that pull's
   // ROLLBACK, after the screen had already said "Queued".
@@ -226,10 +227,19 @@ export async function markRejectedWithin(
 }
 
 /**
- * Reject the WHOLE outbox at once. Called from the account eviction, where the
- * account has been confirmed disabled out of band: nothing queued will ever be
- * accepted, and the drain will not get another chance to say so per row —
- * eviction cancels the in-flight requests and drops the session first.
+ * Reject the DISABLED ACCOUNT'S outbox at once. Called from the account
+ * eviction, where the account has been confirmed disabled out of band: nothing
+ * it queued will ever be accepted, and the drain will not get another chance to
+ * say so per row — eviction cancels the in-flight requests and drops the
+ * session first.
+ *
+ * Only that account's rows, and legacy rows (NULL owner, which would otherwise
+ * be adopted by whoever signs in next). Work held for OTHER accounts on a
+ * shared phone is theirs, never sent under this one, and is left exactly as it
+ * is (owner decision D4: never lost, never removed automatically). Device-wide
+ * ONLY when the disabled account cannot be named at all (`evictedUserId`
+ * null), where rejecting everything is the one way to be sure its work never
+ * replays after a re-enable.
  *
  * Without this, eviction's `wipeForSignOut()` deleted every queued write with
  * no trace, so the operator was never told what became of the work they
@@ -241,16 +251,33 @@ export async function markRejectedWithin(
  *
  * @returns how many rows were rejected (for logging / the hand-test).
  */
-export async function rejectAllPending(error: string): Promise<number> {
+export async function rejectAllPending(
+  error: string,
+  evictedUserId: string | null,
+): Promise<number> {
   const result = await queuedWrite((db) =>
-    db.runAsync(
-      `update pending_actions
-        set status = 'rejected',
-            last_error = ?,
-            last_attempt_at = ?
-      where status in ('pending','sending','failed')`,
-      [error.slice(0, 1000), Date.now()],
-    ),
+    evictedUserId
+      ? // Legacy rows are stamped with the evicted account as they are parked:
+        // the record, and its "account disabled" reason, are that account's,
+        // not shown to whoever signs in next.
+        db.runAsync(
+          `update pending_actions
+            set status = 'rejected',
+                last_error = ?,
+                last_attempt_at = ?,
+                user_id = coalesce(user_id, ?)
+          where status in ('pending','sending','failed')
+            and ${OWNED_BY_USER_SQL}`,
+          [error.slice(0, 1000), Date.now(), evictedUserId, evictedUserId],
+        )
+      : db.runAsync(
+          `update pending_actions
+            set status = 'rejected',
+                last_error = ?,
+                last_attempt_at = ?
+          where status in ('pending','sending','failed')`,
+          [error.slice(0, 1000), Date.now()],
+        ),
   );
   return result.changes;
 }
@@ -360,6 +387,9 @@ export async function listRejected(limit = 100): Promise<PendingActionRow[]> {
 export async function listHeld(limit = 100): Promise<PendingActionRow[]> {
   const db = await getDb();
   const { userId } = await liveOutboxScope();
+  // With no account readable, "another account's" cannot be told from the
+  // person's own: list nothing rather than offer their own work for Discard.
+  if (!userId) return [];
   const rows = await db.getAllAsync<PendingActionDbRow>(
     `select * from pending_actions where status in ('pending','failed')
         and ${HELD_FOR_OTHER_SQL}
@@ -372,6 +402,7 @@ export async function listHeld(limit = 100): Promise<PendingActionRow[]> {
 export async function countHeld(): Promise<number> {
   const db = await getDb();
   const { userId } = await liveOutboxScope();
+  if (!userId) return 0; // see listHeld
   const row = await db.getFirstAsync<{ n: number }>(
     `select count(*) as n from pending_actions where status in ('pending','failed')
         and ${HELD_FOR_OTHER_SQL}`,

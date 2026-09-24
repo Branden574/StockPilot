@@ -131,7 +131,7 @@ describe('a revoked device can still find out what happened', () => {
     // Not from the broadcast handler and not from the sign-in branch: one
     // rejection site, driven by the transition into `disabled`, so neither
     // path can be the one that silently stops rejecting.
-    expect(gate).toContain('rejectAllPending(ACCOUNT_DISABLED_REJECTION)');
+    expect(gate).toContain('rejectAllPending(ACCOUNT_DISABLED_REJECTION, evictedUserId)');
     const evictionEffect = gate.slice(gate.indexOf('shouldRunEviction({'));
     expect(evictionEffect).toContain('rejectAllPending');
     expect(code(revocation)).not.toContain('rejectAllPending');
@@ -234,10 +234,32 @@ describe('only a verdict about THIS device may destroy its queued work', () => {
       gate.indexOf('clearAccountStorage:'),
     );
     expect(clearCaches.indexOf('rejectAllPending')).toBeGreaterThan(-1);
-    expect(clearCaches.indexOf('wipeForEviction()')).toBeGreaterThan(-1);
+    expect(clearCaches.indexOf('wipeForEviction(evictedUserId)')).toBeGreaterThan(-1);
     expect(clearCaches.indexOf('rejectAllPending')).toBeLessThan(
-      clearCaches.indexOf('wipeForEviction()'),
+      clearCaches.indexOf('wipeForEviction(evictedUserId)'),
     );
+  });
+
+  it('parks the DISABLED account\'s work only, named before its session is signed out (D4)', () => {
+    // Work held for other accounts on a shared phone is theirs: a colleague's
+    // disable must neither reject nor delete it. The account is named from the
+    // stored session, the last one seen, then the remembered identity
+    // (account-eviction.ts evictedAccountId), BEFORE runAccountEviction's local
+    // sign-out removes the stored session.
+    const effect = gate.slice(gate.indexOf('evicting.current = true;'));
+    const naming = effect.indexOf('const evictedUserId = evictedAccountId({');
+    expect(naming).toBeGreaterThan(-1);
+    expect(naming).toBeLessThan(effect.indexOf('runAccountEviction({'));
+    const named = effect.slice(naming, effect.indexOf('runAccountEviction({'));
+    expect(named).toContain('readDeviceAuthSession()');
+    expect(named).toContain('lastSeenSessionUserId()');
+    expect(named).toContain('getRememberedIdentity()');
+    const clearCaches = gate.slice(
+      gate.indexOf('clearCaches: async'),
+      gate.indexOf('clearAccountStorage:'),
+    );
+    expect(clearCaches).toContain('rejectAllPending(ACCOUNT_DISABLED_REJECTION, evictedUserId)');
+    expect(clearCaches).toContain('wipeForEviction(evictedUserId)');
   });
 });
 
@@ -416,7 +438,7 @@ describe('the eviction the gate runs', () => {
   it('does all five things, from the one place that can', () => {
     expect(gate).toContain('abortAllInFlight()');
     expect(gate).toContain("supabase.auth.signOut({ scope: 'local' })");
-    expect(gate).toContain('wipeForEviction()');
+    expect(gate).toContain('wipeForEviction(evictedUserId)');
     expect(gate).toContain('accountScopedStorageKeys(await AsyncStorage.getAllKeys())');
     expect(gate).toContain('resetNavigation: onEvicted');
   });
@@ -459,7 +481,15 @@ describe('the remembered identity is not wiped by the paths that clear everythin
 
   it('the eviction only clears AsyncStorage workspace keys, never SecureStore', () => {
     expect(evictionSrc).not.toContain('SecureStore');
-    expect(gate).not.toContain('remembered-identity');
+    expect(code(gate)).not.toContain('SecureStore');
+    // The gate READS the remembered identity (to name whose queued work is
+    // parked) and never writes or clears it.
+    const imported =
+      gate.match(/import \{([^}]*)\} from '\.\/remembered-identity'/)?.[1] ?? '';
+    expect(imported.split(',').map((s) => s.trim()).filter(Boolean)).toEqual([
+      'getRememberedIdentity',
+    ]);
+    expect(code(gate)).not.toMatch(/\brememberIdentity\(/);
   });
 });
 

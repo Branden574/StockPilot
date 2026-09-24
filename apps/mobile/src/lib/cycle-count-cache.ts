@@ -2,7 +2,7 @@ import { CACHED_CYCLE_COUNTS_LIST_SQL, CYCLE_COUNT_CACHE_HEADER_SQL } from './cy
 import { getDb, queuedWrite, withDbTransaction } from './db';
 import { HELD_FOR_OTHER_SQL, OWNED_BY_USER_SQL, REPLACED_BY_LATER_COUNT } from './outbox-scope';
 import { markRejectedWithin } from './queue';
-import { liveOutboxScope } from './session-scope';
+import { liveOutboxScope, outboxWriteScope } from './session-scope';
 
 /**
  * Offline cycle-count cache + outbox helpers.
@@ -270,8 +270,9 @@ export async function updateLocalLine(
   if (!line) return null;
 
   // Whose edit this is (outbox-scope.ts). Read before the transaction: its
-  // task runs statements only.
-  const scope = await liveOutboxScope();
+  // task runs statements only. Never a NULL owner (session-scope.ts): with no
+  // account to name, this throws and nothing is written.
+  const scope = await outboxWriteScope();
   const idempotencyKey = uuid();
   const now = Date.now();
   let outboxId = 0;
@@ -297,26 +298,26 @@ export async function updateLocalLine(
     // overwrite this newer one on the server. So it is superseded like any
     // other earlier edit, but kept as a record for its owner (rejected, with
     // the reason) instead of being deleted: held rows are never removed
-    // automatically. With no session readable (userId null) every earlier
-    // edit is superseded, exactly as before owners existed.
-    if (scope.userId) {
-      await db.runAsync(
-        `update pending_actions
-            set status = 'rejected', last_error = ?, last_attempt_at = ?
-          where kind = 'record_count'
-            and status in ('pending','failed')
-            and json_extract(payload_json, '$.lineId') = ?
-            and ${HELD_FOR_OTHER_SQL}`,
-        [REPLACED_BY_LATER_COUNT, now, lineId, scope.userId],
-      );
-    }
+    // automatically. Only this account's own earlier edits (and legacy ones)
+    // are deleted. The owner is always named here (outboxWriteScope), so the
+    // two statements split the line's rows exactly, with no "nobody" case that
+    // could delete someone else's.
+    await db.runAsync(
+      `update pending_actions
+          set status = 'rejected', last_error = ?, last_attempt_at = ?
+        where kind = 'record_count'
+          and status in ('pending','failed')
+          and json_extract(payload_json, '$.lineId') = ?
+          and ${HELD_FOR_OTHER_SQL}`,
+      [REPLACED_BY_LATER_COUNT, now, lineId, scope.userId],
+    );
     await db.runAsync(
       `delete from pending_actions
         where kind = 'record_count'
           and status in ('pending','failed')
           and json_extract(payload_json, '$.lineId') = ?
-          and (? is null or ${OWNED_BY_USER_SQL})`,
-      [lineId, scope.userId, scope.userId],
+          and ${OWNED_BY_USER_SQL}`,
+      [lineId, scope.userId],
     );
     // Stamped with the workspace and account it was counted under: sent
     // under that organization, and only while that account is signed in.
@@ -392,12 +393,26 @@ export interface OutboxRow {
   userId: string | null;
 }
 
+/** A queued outbox row, and whether its retry backoff has elapsed. */
+export interface QueuedOutboxRow extends OutboxRow {
+  due: boolean;
+}
+
 /**
- * Pending outbox rows that are due for retry. Rows in 'failed' state
- * use exponential backoff: a row with N attempts must wait
- * min(2^N * 1s, 5min) before being eligible again.
+ * EVERY queued (pending or failed) outbox row, oldest first, each marked
+ * `due` once its backoff has elapsed. Rows in 'failed' state use exponential
+ * backoff: a row with N attempts must wait min(2^N * 1s, 5min) before it is
+ * due again.
+ *
+ * Rows still in backoff are returned too, on purpose. The drain's newest-wins
+ * check (outbox-order.ts) must see every row for a line: it used to see only
+ * the due ones, so a count whose send had failed (in backoff) was invisible
+ * while the operator's correction queued behind it was sent and acked, and
+ * then, its backoff over and the only row left for the line, the OLD count was
+ * sent and overwrote the correction on the server. The drain supersedes
+ * across all rows and sends only a due one.
  */
-export async function outboxPending(now: number = Date.now()): Promise<OutboxRow[]> {
+export async function outboxQueued(now: number = Date.now()): Promise<QueuedOutboxRow[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<{
     id: number;
@@ -416,19 +431,18 @@ export async function outboxPending(now: number = Date.now()): Promise<OutboxRow
       where status in ('pending','failed')
       order by created_at asc`,
   );
-  return rows
-    .filter((r) => isDue(r.attempts, r.last_attempt_at, r.status, now))
-    .map((r) => ({
-      id: r.id,
-      kind: r.kind,
-      idempotencyKey: r.idempotency_key,
-      payload: safeParse(r.payload_json),
-      attempts: r.attempts,
-      lastAttemptAt: r.last_attempt_at,
-      status: r.status,
-      organizationId: r.organization_id ?? null,
-      userId: r.user_id ?? null,
-    }));
+  return rows.map((r) => ({
+    id: r.id,
+    kind: r.kind,
+    idempotencyKey: r.idempotency_key,
+    payload: safeParse(r.payload_json),
+    attempts: r.attempts,
+    lastAttemptAt: r.last_attempt_at,
+    status: r.status,
+    organizationId: r.organization_id ?? null,
+    userId: r.user_id ?? null,
+    due: isDue(r.attempts, r.last_attempt_at, r.status, now),
+  }));
 }
 
 function isDue(
@@ -570,6 +584,9 @@ export async function outboxMarkSending(
 export async function discardHeldAction(id: number): Promise<boolean> {
   const db = await getDb();
   const { userId } = await liveOutboxScope();
+  // With no account readable, a row "held for another" cannot be told from the
+  // person's own: discard nothing (queue.ts listHeld lists nothing either).
+  if (!userId) return false;
   let discarded = false;
   await withDbTransaction(db, async () => {
     const held = await db.getFirstAsync<{ id: number }>(

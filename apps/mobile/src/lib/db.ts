@@ -1,5 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 
+import { OWNED_BY_USER_SQL } from './outbox-scope';
+
 /**
  * Local SQLite layer for offline-first reads + queued writes.
  *
@@ -322,6 +324,18 @@ export async function ensureSchema(db: SchemaDb): Promise<void> {
   // sent once under whoever drains them first, as they always were. An older
   // bundle running on this table ignores both columns and keeps working: it
   // names its columns explicitly on insert.
+  //
+  // THE TRADE-OFF, chosen deliberately (S4d; the S4 review raised it): while
+  // this ALTER keeps failing (in practice a full disk on the first launch of
+  // the bundle that adds the columns) getDb() rejects for EVERY caller, cache
+  // reads included, where the old swallowed ALTER let reads carry on. A
+  // degraded mode would hand out a database on which every outbox statement
+  // (enqueue, both drains, every counter, the owner filters) fails on a
+  // missing column one by one, the half-migrated state getDb exists to
+  // prevent. The window is bounded: the rejected open is forgotten, so the
+  // next getDb() retries and completes as soon as the fault clears, with every
+  // queued row kept (db.get-db.test.ts), and once the columns exist no ALTER
+  // runs again.
   await addColumnIfMissing(db, 'pending_actions', 'organization_id', 'text');
   await addColumnIfMissing(db, 'pending_actions', 'user_id', 'text');
 
@@ -536,24 +550,36 @@ export async function wipeForSignOut(): Promise<void> {
 }
 
 /**
- * ACCOUNT EVICTION (a confirmed disable): the cache, and every unsent row that
- * is not already rejected. Exactly what wipeForSignOut did before sign-out
- * stopped deleting queued work, kept for this one path.
+ * ACCOUNT EVICTION (a confirmed disable): the cache, and the DISABLED
+ * ACCOUNT'S unsent rows that are not already rejected.
  *
- * The eviction rejects the outbox immediately beforehand (use-account-gate.ts),
- * so normally nothing is left to delete. The delete is the fallback for when
- * that rejection failed: losing the record is bad, but a row left 'pending'
- * would replay the moment the account is re-enabled, which is worse.
+ * The eviction rejects that account's outbox immediately beforehand
+ * (use-account-gate.ts), so normally nothing is left to delete. The delete is
+ * the fallback for when that rejection failed: losing the record is bad, but a
+ * row left 'pending' would replay the moment the account is re-enabled, which
+ * is worse.
+ *
+ * Scoped like rejectAllPending: the disabled account's rows and legacy ones.
+ * Work held for OTHER accounts on a shared phone is never deleted here (owner
+ * decision D4). Device-wide only when the disabled account cannot be named
+ * (`evictedUserId` null).
  *
  * Rows already 'rejected' are spared: terminal (no drain reads them) and the
  * only record that the queued work existed, so the operator shown the disabled
  * screen can still be told what was never sent (listRejected).
  */
-export async function wipeForEviction(): Promise<void> {
+export async function wipeForEviction(evictedUserId: string | null): Promise<void> {
   cacheGeneration += 1;
   const db = await getDb();
   await withDbTransaction(db, async () => {
     await clearOrgScopedTables(db);
-    await db.execAsync("delete from pending_actions where status <> 'rejected';");
+    if (evictedUserId) {
+      await db.runAsync(
+        `delete from pending_actions where status <> 'rejected' and ${OWNED_BY_USER_SQL}`,
+        [evictedUserId],
+      );
+    } else {
+      await db.execAsync("delete from pending_actions where status <> 'rejected';");
+    }
   });
 }

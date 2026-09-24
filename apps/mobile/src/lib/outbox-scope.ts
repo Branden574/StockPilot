@@ -26,7 +26,8 @@
  *     "Queued by another account" with Discard;
  *   - a LEGACY row (NULL user, written by an older binary or bundle) belongs to
  *     whoever drains it first, as it always has, and is stamped with that
- *     account at its first send so it is never sent under a second one;
+ *     account at its first send so it is never sent under a second one. This
+ *     code never writes one (session-scope.ts outboxWriteScope);
  *   - with no session at all, nothing is sent.
  *
  * The SQL fragments below are the same rule for queries. `IS` / `IS NOT` are
@@ -95,6 +96,19 @@ export class OutboxSessionChangedError extends Error {
   constructor() {
     super('The signed-in account changed before this queued change was sent.');
     this.name = 'OutboxSessionChangedError';
+  }
+}
+
+/**
+ * Thrown by enqueue() and updateLocalLine() when no account can be named as
+ * the owner of the row (nobody is signed in and nobody has been this run).
+ * Refusing is the safe answer: a row queued with no owner is a legacy row,
+ * and the next account to sign in would adopt it and send it as its own.
+ */
+export class OutboxOwnerUnknownError extends Error {
+  constructor() {
+    super('No signed-in account to queue this change for. Sign in and try again.');
+    this.name = 'OutboxOwnerUnknownError';
   }
 }
 

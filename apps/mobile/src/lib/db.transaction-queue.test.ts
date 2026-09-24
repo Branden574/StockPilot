@@ -132,7 +132,7 @@ describe('the cache wipes wait their turn', () => {
     // before the queue so a pull that is mid-write stops at its next row.
     expect(body('deleteOrgData')).toMatch(/^export async function deleteOrgData\(\): Promise<void> \{\s+cacheGeneration \+= 1;/);
     expect(body('wipeForSignOut')).toMatch(/^export async function wipeForSignOut\(\): Promise<void> \{\s+cacheGeneration \+= 1;/);
-    expect(body('wipeForEviction')).toMatch(/^export async function wipeForEviction\(\): Promise<void> \{\s+cacheGeneration \+= 1;/);
+    expect(body('wipeForEviction')).toMatch(/^export async function wipeForEviction\(evictedUserId: string \| null\): Promise<void> \{\s+cacheGeneration \+= 1;/);
   });
 });
 

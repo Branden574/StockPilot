@@ -8,13 +8,14 @@ import { refreshEnabledModules } from './enabled-modules';
 import { syncNow } from './sync';
 import { supabase } from './supabase';
 import { chooseActiveOrg } from './workspace-choice';
+import { ACTIVE_ORG_STORAGE_KEY } from './workspace-keys';
 
 /**
  * Multi-org / multi-warehouse workspace state. Replaces the older
  * single-org assumption baked into `use-org.ts` by adding:
  *
  *   • full list of the user's accepted memberships (one per org),
- *   • the active org id, persisted under `workspace.activeOrgId`,
+ *   • the active org id, persisted under ACTIVE_ORG_STORAGE_KEY (workspace-keys.ts),
  *   • full list of warehouses the user can read in the active org,
  *   • the active warehouse id (or `null` for "all warehouses"),
  *     persisted under `workspace.activeWarehouseId.<orgId>`.
@@ -50,7 +51,6 @@ interface WorkspaceState {
   activeWarehouseName: string | null;
 }
 
-const ORG_STORAGE_KEY = 'workspace.activeOrgId';
 const WAREHOUSE_STORAGE_KEY = (orgId: string) => `workspace.activeWarehouseId.${orgId}`;
 
 const listeners = new Set<(state: WorkspaceState) => void>();
@@ -169,7 +169,7 @@ async function hydrate(userId: string) {
   const switchesAtStart = switchesStarted;
   const [orgs, persisted, profileDefault] = await Promise.all([
     loadOrgs(userId),
-    AsyncStorage.getItem(ORG_STORAGE_KEY),
+    AsyncStorage.getItem(ACTIVE_ORG_STORAGE_KEY),
     loadProfileDefaultOrg(userId),
   ]);
   // See workspace-choice.ts: the same order the server uses, and the choice is
@@ -191,7 +191,7 @@ async function hydrate(userId: string) {
   const activeOrgId = choice.activeOrgId;
   if (activeOrgId && choice.persist) {
     try {
-      await AsyncStorage.setItem(ORG_STORAGE_KEY, activeOrgId);
+      await AsyncStorage.setItem(ACTIVE_ORG_STORAGE_KEY, activeOrgId);
     } catch (err) {
       // Still show the workspace (the server answers for the same default
       // when no header is saved); a failed save must not leave loading stuck.
@@ -261,7 +261,7 @@ export function setActiveOrg(orgId: string): Promise<void> {
 async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
   if (orgId === cached.activeOrgId) return;
   switchesStarted += 1;
-  await AsyncStorage.setItem(ORG_STORAGE_KEY, orgId);
+  await AsyncStorage.setItem(ACTIVE_ORG_STORAGE_KEY, orgId);
   // Multi-org device isolation: wipe the prior org's cached SQLite tables and
   // reset the delta cursor BEFORE the pull below. Without this, the local
   // items/POs/counts/bundles lists would transiently show the previous org's

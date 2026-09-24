@@ -10,6 +10,7 @@ import {
 } from './account-disabled-state';
 import {
   accountScopedStorageKeys,
+  evictedAccountId,
   gateForRevocation,
   probeAndSettle,
   PROBE_TIMEOUT_MS,
@@ -23,8 +24,10 @@ import { endAccountEpoch } from './account-epoch';
 import { wipeForEviction } from './db';
 import { ACCOUNT_DISABLED_REJECTION } from './drain-failure';
 import { rejectAllPending } from './queue';
+import { getRememberedIdentity } from './remembered-identity';
 import { abortAllInFlight } from './request-cancellation';
-import { supabase } from './supabase';
+import { lastSeenSessionUserId } from './session-scope';
+import { readDeviceAuthSession, supabase } from './supabase';
 
 import { isDisableRevocation } from '@stockpilot/core';
 
@@ -217,6 +220,16 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
     }
     evicting.current = true;
     void (async () => {
+      // WHOSE work is parked (account-eviction.ts evictedAccountId), named
+      // before the local sign-out below removes the stored session.
+      const evictedUserId = evictedAccountId({
+        storedSessionUserId: await readDeviceAuthSession().then(
+          (s) => s.userId,
+          () => null,
+        ),
+        lastSeenUserId: lastSeenSessionUserId(),
+        rememberedUserId: (await getRememberedIdentity())?.userId ?? null,
+      });
       const failed = await runAccountEviction({
         cancelRequests: () => {
           abortAllInFlight();
@@ -237,6 +250,11 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
         // but replaying the writes after a re-enable is worse. The ordinary
         // sign-out wipe no longer deletes queued work, hence the separate call.
         //
+        // Both statements touch only the DISABLED account's rows (and legacy
+        // ones). Work held for other accounts on a shared phone is theirs and
+        // stays exactly as it is (D4). Device-wide only when no account could
+        // be named.
+        //
         // THE ONE REJECTION SITE. It hangs off the transition into `disabled`,
         // not off any single discovery path, and that is what makes it reachable
         // from BOTH: the corroborated eviction broadcast (a connected device)
@@ -245,12 +263,17 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
         // revocation had made unreachable, and both queues stayed 'failed' —
         // retryable — instead of terminally rejected.
         clearCaches: async () => {
+          if (!evictedUserId) {
+            console.warn(
+              '[account-gate] the disabled account could not be named; parking every queued change on this device',
+            );
+          }
           try {
-            await rejectAllPending(ACCOUNT_DISABLED_REJECTION);
+            await rejectAllPending(ACCOUNT_DISABLED_REJECTION, evictedUserId);
           } catch (e) {
             console.warn('[account-gate] could not park the offline outbox', e);
           }
-          await wipeForEviction();
+          await wipeForEviction(evictedUserId);
         },
         clearAccountStorage: async () => {
           // Before the keys go: a workspace load or switch still running for

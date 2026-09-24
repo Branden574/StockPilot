@@ -8,7 +8,7 @@ import {
   outboxAck,
   outboxBumpFailure,
   outboxMarkSending,
-  outboxPending,
+  outboxQueued,
   outboxReject,
   totalPendingCount,
 } from './cycle-count-cache';
@@ -40,7 +40,7 @@ import { liveOutboxScope } from './session-scope';
  *
  * Drain strategy: sequential loop (NOT parallel). Each row gets its
  * own AbortController and its own server roundtrip; failures bump
- * `attempts` so the exponential-backoff filter in `outboxPending()`
+ * `attempts` so the exponential backoff (`due` in `outboxQueued()`)
  * holds them off. A row that takes 5 attempts to fail won't retry
  * for ~32s; capped at 5 minutes. This keeps a flapping endpoint from
  * piling up identical retries on every trigger.
@@ -233,16 +233,20 @@ class CycleCountSyncEngine {
     let anyFailed = false;
     let anyRejected = false;
     try {
-      const due = await outboxPending();
-      // Filter to record_count rows only — this engine owns the
-      // cycle-count flow. Other kinds (receive_po_line, etc.) are
-      // drained by the legacy `sync.ts` worker.
-      const cycleRows = due.filter((r) => r.kind === 'record_count');
+      // EVERY queued row, in backoff or not (outboxQueued): the newest-wins
+      // check below must see all of a line's rows. Filter to record_count
+      // rows only — this engine owns the cycle-count flow. Other kinds
+      // (receive_po_line, etc.) are drained by the legacy `sync.ts` worker.
+      const queued = await outboxQueued();
+      const cycleRows = queued.filter((r) => r.kind === 'record_count');
 
       // Newest-wins per line: an older edit that a newer one has replaced
       // is acked WITHOUT being sent, so a retry can never land it after the
-      // correction. outboxAck keeps the line dirty while the newer row is
-      // still live, so nothing shows as synced prematurely.
+      // correction. That holds for an older row still in backoff too: seen
+      // only once due, it used to be sent AFTER the correction had been
+      // acked, and the server kept the old count. outboxAck keeps the line
+      // dirty while the newer row is still live, so nothing shows as synced
+      // prematurely.
       const { send, superseded } = latestRowsPerLine(cycleRows);
       // A superseded row is never sent. The live account's own (or a legacy
       // one) is acked; another account's is held work that must not be
@@ -256,6 +260,8 @@ class CycleCountSyncEngine {
       }
 
       for (const row of send) {
+        // The newest row for its line, but its backoff has not elapsed yet.
+        if (!row.due) continue;
         const cancelled = !(await this.isOnline());
         if (cancelled) {
           this.status = 'offline';

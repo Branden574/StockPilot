@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
  *   - `sync.ts::drainQueue` drains everything EXCEPT `record_count` (it skips
  *     those explicitly at the top of the loop).
  *   - `CycleCountSyncEngine` (cycle-count-sync.ts) drains the `record_count`
- *     rows — the app's flagship offline flow — reading through `outboxPending`
+ *     rows — the app's flagship offline flow — reading through `outboxQueued`
  *     and, on failure, writing status='failed' via `outboxBumpFailure`.
  *
  * Fixing only the first leaves every offline cycle-count edit retrying on 401
@@ -116,7 +116,7 @@ describe('engine 2 — CycleCountSyncEngine (the flagship offline flow)', () => 
 
   it('keeps its exponential backoff for the RETRYABLE path — nothing to add there', () => {
     // Correction to the original plan text: only sync.ts's drainQueue lacks
-    // backoff. This engine already has it, in outboxPending's isDue filter.
+    // backoff. This engine already has it, in outboxQueued's isDue (the `due` flag the drain honours).
     expect(code(cache)).toContain('function isDue(');
     expect(code(cache)).toContain('Math.min(2 ** attempts * 1000, 5 * 60 * 1000)');
   });
@@ -129,7 +129,7 @@ describe('rejected is TERMINAL — no drain may ever re-read it', () => {
   });
 
   it('engine 2 selectors skip it', () => {
-    const pending = code(cache).slice(code(cache).indexOf('export async function outboxPending'));
+    const pending = code(cache).slice(code(cache).indexOf('export async function outboxQueued'));
     expect(pending).toContain("where status in ('pending','failed')");
     expect(code(cache)).not.toMatch(/where status in \([^)]*'rejected'/);
   });
@@ -251,9 +251,9 @@ describe('the eviction cannot silently destroy the queued work', () => {
       code(gate).indexOf('clearAccountStorage:'),
     );
     expect(clearCaches).toContain('rejectAllPending');
-    expect(clearCaches).toContain('wipeForEviction()');
+    expect(clearCaches).toContain('wipeForEviction(evictedUserId)');
     expect(clearCaches.indexOf('rejectAllPending')).toBeLessThan(
-      clearCaches.indexOf('wipeForEviction()'),
+      clearCaches.indexOf('wipeForEviction(evictedUserId)'),
     );
   });
 
