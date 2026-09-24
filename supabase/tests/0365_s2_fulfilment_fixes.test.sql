@@ -13,12 +13,19 @@
 -- PART 5 (23-26) transfer_stock: below manager, both ends must be in the
 --                caller's warehouses; a manager is not limited.
 -- PART 6 (27)    assemble_bundle: a kit built at B cannot use A's component.
+-- PART 7 (28-42) Review hardening: API-role order inserts start pending with
+--                no workflow column; approve_partial refuses an order with no
+--                lines; order lines refuse rental and NaN; adjust_stock at a
+--                location follows the caller's warehouses; bundles skip deleted
+--                components and kit items and refuse a component the caller
+--                cannot see; no shortage row on an item that is not here;
+--                create_order_request ignores a caller's status and source.
 --
 -- Roles: `set local role authenticated` with request.jwt.claim.sub, as the
 -- house tests do. Run via `supabase test db` after `supabase db reset`.
 
 begin;
-select plan(27);
+select plan(42);
 
 \set org     '\'03650000-0000-0000-0000-00000000000a\''
 \set u_mgr   '\'03650000-0000-0000-0000-0000000000a1\''
@@ -44,6 +51,14 @@ select plan(27);
 \set bunA    '\'03650000-0000-0000-0000-0000000000f1\''
 \set bunP    '\'03650000-0000-0000-0000-0000000000f2\''
 \set bunAsm  '\'03650000-0000-0000-0000-0000000000f3\''
+\set bunDel  '\'03650000-0000-0000-0000-0000000000f4\''
+\set bunNull '\'03650000-0000-0000-0000-0000000000f5\''
+\set bunDP   '\'03650000-0000-0000-0000-0000000000f6\''
+\set compDel '\'03650000-0000-0000-0000-0000000000c8\''
+\set compNul '\'03650000-0000-0000-0000-0000000000c9\''
+\set phDel   '\'03650000-0000-0000-0000-0000000000ca\''
+\set ordNon2 '\'03650000-0000-0000-0000-0000000000d7\''
+\set ordLine '\'03650000-0000-0000-0000-0000000000d8\''
 
 -- ── Fixtures (as postgres: RLS bypassed, guards exempt) ─────────────────────
 insert into auth.users (id, email, raw_user_meta_data) values
@@ -82,6 +97,13 @@ insert into public.inventory_items
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type, is_bundle) values
   (:phA, :org, :whA, '__BUNDLE__P0365KIT', 'Kit P (pre-assembled) 0365', 4, 'active', 'product', true);
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type, is_bundle, deleted_at) values
+  (:compDel, :org, :whA, 'S2-CDEL', 'Deleted component 0365', 5, 'active', 'product', false, now()),
+  (:phDel,   :org, :whA, '__BUNDLE__DEL0365', 'Deleted kit item 0365', 3, 'active', 'product', true, now());
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type) values
+  (:compNul, :org, null, 'S2-CNUL', 'No-warehouse component 0365', 5, 'active', 'product');
 
 insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type) values
   (:ordDup,  :org, :whA, 'pending_approval', 'internal', :u_stf, 'pickup'),
@@ -89,7 +111,9 @@ insert into public.order_requests (id, organization_id, warehouse_id, status, so
   (:ordNone, :org, :whA, 'pending_approval', 'internal', :u_stf, 'pickup'),
   (:ordOne,  :org, :whA, 'pending_approval', 'internal', :u_stf, 'pickup'),
   (:ordOver, :org, :whA, 'pending_approval', 'internal', :u_stf, 'pickup'),
-  (:ordPick, :org, :whA, 'pick_slip_generated', 'internal', :u_stf, 'pickup');
+  (:ordPick, :org, :whA, 'pick_slip_generated', 'internal', :u_stf, 'pickup'),
+  (:ordNon2, :org, :whA, 'pending_approval', 'internal', :u_stf, 'pickup'),
+  (:ordLine, :org, :whA, 'pending_approval', 'internal', :u_stf, 'pickup');
 insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values
   (:ordDup,  :itemM, 5), (:ordDup, :itemM, 5),
   (:ordOk,   :itemM, 3), (:ordOk,  :itemM, 4),
@@ -107,11 +131,17 @@ insert into public.stock_reservations (organization_id, item_id, warehouse_id, o
 insert into public.bundles (id, organization_id, name, is_active, preassembly_enabled, phantom_item_id) values
   (:bunA,   :org, 'Kit A 0365',   true, false, null),
   (:bunP,   :org, 'Kit P 0365',   true, true,  :phA),
-  (:bunAsm, :org, 'Kit Asm 0365', true, true,  null);
+  (:bunAsm, :org, 'Kit Asm 0365', true, true,  null),
+  (:bunDel, :org, 'Kit Del 0365', true, false, null),
+  (:bunNull, :org, 'Kit Null 0365', true, false, null),
+  (:bunDP,  :org, 'Kit DP 0365',  true, true,  :phDel);
 insert into public.bundle_components (bundle_id, item_id, quantity, is_optional) values
   (:bunA,   :compA, 1, false),
   (:bunP,   :compB, 1, false),
-  (:bunAsm, :compA, 1, false);
+  (:bunAsm, :compA, 1, false),
+  (:bunDel, :compDel, 1, false),
+  (:bunNull, :compNul, 1, false),
+  (:bunDP,  :compA, 1, false);
 
 -- ═══ PART 1: approve_order_request ══════════════════════════════════════════
 set local "request.jwt.claim.sub"  to :u_mgr;
@@ -275,9 +305,88 @@ set local "request.jwt.claim.sub"  to :u_mgr;
 set local role to 'authenticated';
 select throws_ok(
   format($$select public.assemble_bundle(%L, 1, %L, 'x')$$, :bunAsm, :whB),
-  'P0001', 'insufficient_stock',
-  '27: a kit assembled at B cannot consume a component that is in A');
+  'P0001', 'component_not_in_warehouse',
+  '27: a kit assembled at B cannot consume a component that is in A (said as such)');
 reset role;
+
+-- ═══ PART 7: review hardening ═══════════════════════════════════════════════
+set local "request.jwt.claim.sub"  to :u_stf;
+set local role to 'authenticated';
+select throws_ok(
+  format($$insert into public.order_requests (organization_id, warehouse_id, requester_user_id, source, status, fulfillment_type)
+           values (%L, %L, %L, 'internal', 'approved', 'pickup')$$, :org, :whA, :u_stf),
+  '42501', 'A new order request starts pending approval.',
+  '28: a direct insert cannot arrive approved (it would skip approval and the stock check)');
+select throws_ok(
+  format($$insert into public.order_requests (organization_id, warehouse_id, requester_user_id, source, status, fulfillment_type, approved_by, approved_at)
+           values (%L, %L, %L, 'internal', 'pending_approval', 'pickup', %L, now())$$, :org, :whA, :u_stf, :u_mgr),
+  '42501', 'A new order request cannot carry approval, picking, delivery or signature details.',
+  '29: nor carry a forged approver');
+select lives_ok(
+  format($$insert into public.order_requests (organization_id, warehouse_id, requester_user_id, source, status, fulfillment_type, created_at)
+           values (%L, %L, %L, 'internal', 'pending_approval', 'pickup', '2001-01-01')$$, :org, :whA, :u_stf),
+  '30: a plain pending request still inserts');
+select throws_ok(
+  format($$insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 1)$$, :ordLine, :itemR),
+  '42501', 'That item cannot be ordered: it is deleted, a rental item, or not received yet.',
+  '31: a rental item cannot be put on an order line');
+select throws_ok(
+  format($$insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (%L, %L, 'NaN')$$, :ordLine, :itemN),
+  '23514', 'A line needs a real quantity.',
+  '32: a NaN quantity is refused (it passes quantity > 0)');
+select throws_ok(
+  format($$select public.adjust_stock(%L, 1, 'add', %L, 'x', null)$$, :itemT, :rackB),
+  '42501', 'forbidden',
+  '33: staff scoped to A cannot add stock at a rack in B (the other half of the transfer bypass)');
+select lives_ok(
+  format($$select public.adjust_stock(%L, 1, 'add', %L, 'x', null)$$, :itemT, :rackA2),
+  '34: staff still adjust at a rack in their own warehouse');
+select is(
+  array[public.caller_can_write_location(:rackA2::uuid), public.caller_can_write_location(:rackB::uuid),
+        public.caller_can_write_location(gen_random_uuid())],
+  array[true, false, false],
+  '35: caller_can_write_location: own warehouse yes, another no, unknown no');
+reset role;
+set local "request.jwt.claim.sub"  to :u_mgr;
+set local role to 'authenticated';
+select lives_ok(
+  format($$select public.adjust_stock(%L, 1, 'add', %L, 'x', null)$$, :itemT, :rackB),
+  '36: a manager may adjust at any warehouse''s rack');
+select throws_ok(
+  format($$select public.approve_partial(%L)$$, :ordNon2),
+  'P0001', 'order_has_no_lines',
+  '37: approve_partial refuses an order with no lines too');
+select throws_ok(
+  format($$select public.distribute_bundle(%L, 1, %L, false, null, 'x', null)$$, :bunDel, :whA),
+  'P0001', 'insufficient_stock',
+  '38: a deleted component is never drawn, even with stock in the warehouse');
+select throws_ok(
+  format($$select public.distribute_bundle(%L, 1, %L, false, null, 'x', null)$$, :bunNull, :whB),
+  'P0001', 'component_not_visible',
+  '39: a required component the caller cannot see (RLS hides items with no warehouse) is refused, not skipped');
+select lives_ok(
+  format($$select public.distribute_bundle(%L, 1, %L, false, null, 'x', null)$$, :bunDP, :whA),
+  '40: handing out a kit whose kit item was deleted builds it from components');
+reset role;
+select is(
+  (select trim_scale(quantity_on_hand)::text from public.inventory_items where id = :compDel)
+   || '|' || (select trim_scale(quantity_on_hand)::text from public.inventory_items where id = :compNul)
+   || '|' || (select trim_scale(quantity_on_hand)::text from public.inventory_items where id = :phDel)
+   || '|' || (select count(*)::text from public.stock_movements where item_id = :compA and movement_type = 'bundle_shortage'),
+  '5|5|3|0',
+  '41: deleted component untouched (5), hidden no-warehouse component untouched (5), deleted kit item untouched (3), and no shortage row on A''s component for the handout at B');
+set local "request.jwt.claim.sub"  to :u_stf;
+set local role to 'authenticated';
+insert into created_req
+select (public.create_order_request(
+          jsonb_build_object('organization_id', :org, 'warehouse_id', :whA, 'requester_user_id', :u_stf,
+                             'fulfillment_type', 'pickup', 'status', 'approved', 'source', 'portal'),
+          jsonb_build_array(jsonb_build_object('item_id', :itemN, 'quantity', 1)))).id;
+reset role;
+select is(
+  (select string_agg(distinct o.status || '|' || o.source, ',') from public.order_requests o where o.id in (select id from created_req)),
+  'pending_approval|internal',
+  '42: create_order_request ignores a status or source the caller sends');
 
 select * from finish();
 rollback;
