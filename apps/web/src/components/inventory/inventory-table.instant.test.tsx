@@ -158,6 +158,38 @@ function renderInstant({
   );
 }
 
+describe('InventoryTable Rack column: a SITE is not a rack (owner report 2026-09-24)', () => {
+  it('stock recorded at the warehouse site reads "No rack", never the site name, while a real rack still shows', () => {
+    getSearchParams('');
+    window.history.replaceState(null, '', '/dashboard/inventory');
+    const items = [
+      item({ id: 'site-item', name: 'Site Polo' }),
+      item({ id: 'rack-item', name: 'Racked Polo' }),
+    ];
+    render(
+      <InventoryTable
+        items={items}
+        lookups={EMPTY_LOOKUPS}
+        total={items.length}
+        initialQuery=""
+        pageSize={30}
+        instant={{
+          items,
+          view: 'items',
+          placement: {
+            'site-item': [{ locationId: 'loc-dc4', label: 'DC4', kind: 'site', quantity: 4 }],
+            'rack-item': [{ locationId: 'loc-31c', label: '31-C', kind: 'rack', quantity: 6 }],
+          },
+        }}
+      />,
+    );
+    const noRack = screen.getByText('No rack');
+    expect(noRack).toHaveAttribute('title', expect.stringContaining('At DC4 (the site), not on a rack'));
+    expect(screen.queryByText('DC4')).not.toBeInTheDocument();
+    expect(screen.getByText('31-C')).toBeInTheDocument();
+  });
+});
+
 describe('InventoryTable instant mode', () => {
   const fetchSpy = vi.fn();
 

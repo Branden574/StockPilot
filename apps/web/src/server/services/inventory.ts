@@ -2205,7 +2205,7 @@ export class InventoryService {
     try {
       data = await this.holdingsForItemIds<unknown>(
         itemIds,
-        'item_id, location_id, quantity, locations!inner(name, kind)',
+        'item_id, location_id, quantity, locations!inner(name, kind, type)',
       );
     } catch (e) {
       // Fail-closed, as documented above: an empty map, so the list degrades to
@@ -2222,7 +2222,7 @@ export class InventoryService {
       item_id: string;
       location_id: string;
       quantity: number;
-      locations: { name: string; kind: string | null };
+      locations: { name: string; kind: string | null; type?: string | null };
     }>) {
       // A NULL `locations.kind` IS the Site encoding — 0292/0331 and
       // reference_locations_kind_null_is_a_site: Site rows are created without a
@@ -2235,7 +2235,12 @@ export class InventoryService {
       // A manager then "fixes" it by moving stock that never needed moving.
       // 'site' is its own kind, labelled with the location's real name and
       // ranked with the racks below.
-      const kind = row.locations?.kind ?? 'site';
+      // 2026-09-24, twin of the loader's rule (pattern #26): only the
+      // warehouse's own BUILDING row (type 'warehouse', e.g. "DC4") is 'site'
+      // and reads "No rack"; other NULL-kind places (shelves, bins, rooms,
+      // vehicles) are 'location' and keep printing their name.
+      const kind =
+        row.locations?.kind ?? (row.locations?.type === 'warehouse' ? 'site' : 'location');
       const label =
         kind === 'staging' ? 'Staging' : kind === 'unplaced' ? 'Unplaced' : row.locations.name;
       const arr = out.get(row.item_id) ?? [];
@@ -2535,6 +2540,24 @@ export class InventoryService {
     const isManualCreatePath =
       !opts.awaitingFirstReceipt && opts.source !== 'import' && !opts.planSlot;
     const typedBinLabel = typeof input.binLocation === 'string' ? input.binLocation.trim() : '';
+    // ═══ THE PRIMARY LOCATION IS A LABEL ON A MANUAL CREATE (owner, 2026-09-24) ═══
+    // tg_seed_initial_level seeds the opening stock AT primary_location_id when
+    // one is set. The pickers offer only SITES (the warehouse building, rooms,
+    // vehicles), so an item added from the phone or web with PRIMARY LOCATION
+    // "DC4" and no rack had its stock recorded at the DC4 site: counted as
+    // placed, missing from the put-away list, and printed in the Items Rack
+    // column as if "DC4" were a rack. 67 items at L4L on 2026-09-23/24.
+    // The owner's rule: stock added without a rack lands in Unplaced, awaiting
+    // put-away, and the primary location stays a label. So a manual create
+    // inserts WITHOUT the primary location (the trigger then seeds the
+    // warehouse's Unplaced bucket, exactly as a create with no location always
+    // has) and writes the label straight after. A typed rack still wins: the
+    // auto-place below moves the stock from Unplaced onto it. Imports and the
+    // PO paths keep their behaviour (they are not manual creates).
+    // Only when there is opening stock to seed: with none the trigger does
+    // nothing, and the primary can ride the insert as it always has.
+    const primaryIsLabelOnly =
+      isManualCreatePath && !!input.primaryLocationId && input.quantityOnHand > 0;
 
     const { data, error } = await this.ctx.supabase
       .from('inventory_items')
@@ -2549,7 +2572,8 @@ export class InventoryService {
         description: input.description ?? null,
         category_id: input.categoryId ?? null,
         supplier_id: input.supplierId ?? null,
-        primary_location_id: input.primaryLocationId ?? null,
+        // See primaryIsLabelOnly: written as a label after the opening movement.
+        primary_location_id: primaryIsLabelOnly ? null : (input.primaryLocationId ?? null),
         unit_cost: input.unitCost,
         retail_price: input.retailPrice,
         quantity_on_hand: input.quantityOnHand,
@@ -2625,7 +2649,9 @@ export class InventoryService {
         previous_quantity: 0,
         new_quantity: input.quantityOnHand,
         user_id: this.ctx.userId,
-        to_location_id: input.primaryLocationId ?? null,
+        // Where the trigger actually seeded it: Unplaced (null here, as for
+        // every create with no location) when the primary is only a label.
+        to_location_id: primaryIsLabelOnly ? null : (input.primaryLocationId ?? null),
       });
       if (movementErr) {
         await compensateOpeningStockOrThrow(this.ctx, [data.id as string], movementErr, {
@@ -2637,13 +2663,42 @@ export class InventoryService {
       }
     }
 
+    // The primary location, as a label only (see primaryIsLabelOnly). The stock
+    // is already seeded in Unplaced; nothing reacts to this column changing.
+    // AFTER the opening movement and its compensation: the label is cosmetic,
+    // so it must never sit inside the window where on-hand exists without a
+    // movement (a slow round trip there is a ledger hazard, not a label one).
+    // FAIL-SOFT: the item and its stock are saved whatever happens here, so a
+    // refusal (a custom role with items:create but not items:update) costs the
+    // label, which is reported, never the create.
+    if (primaryIsLabelOnly) {
+      const { data: labelled, error: labelErr } = await this.ctx.supabase
+        .from('inventory_items')
+        .update({ primary_location_id: input.primaryLocationId })
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', data.id as string)
+        .select('primary_location_id')
+        .maybeSingle();
+      if (labelErr || !labelled) {
+        void reportError(new Error(labelErr ? rawErrorText(labelErr) : 'no row updated'), {
+          tag: 'inventory.create.primary_location_label',
+          level: 'warning',
+          organizationId: this.ctx.organizationId,
+        });
+      } else {
+        (data as { primary_location_id: string | null }).primary_location_id =
+          (labelled as { primary_location_id: string | null }).primary_location_id;
+      }
+    }
+
     // ── Manual auto-place (owner request 2026-08-04) ────────────────────────
     // "type a rack, enter a starting quantity, the stock lands on that rack"
     // — no Unplaced/awaiting-put-away chip for a hand-typed item.
     //
-    // Deliberately does NOT touch `primary_location_id` or the 'initial'
-    // movement's `to_location_id` above — both stay exactly what they were
-    // before this feature existed. `primary_location_id` is read far beyond
+    // Never writes a RACK into `primary_location_id` (it stays the caller's
+    // SITE, as a label since 2026-09-24; see primaryIsLabelOnly above, which is
+    // also why the stock is seeded in Unplaced rather than at that site).
+    // `primary_location_id` is read far beyond
     // the seeding trigger: the location FILTER (instant-mode.ts) checks it
     // against a SITES-ONLY set, exports resolve it unscoped into a "Primary
     // location" column, and pickers/forms all assume a site. Stamping a rack
@@ -2652,8 +2707,8 @@ export class InventoryService {
     //
     // Instead: let `tg_seed_initial_level` (migration 0199, the AFTER INSERT
     // trigger that actually seeds the item's first item_stock_levels row)
-    // seed the level exactly as it does today — at `primary_location_id` if
-    // the caller set a real one, else the warehouse's Unplaced bucket — and
+    // seed the level (in the warehouse's Unplaced bucket on this path, since the
+    // insert carries no primary location when there is stock) — and
     // THEN reuse the bulk "Set rack" placement path: resolve-or-create the
     // typed rack (findOrCreateRackLocation — the SAME helper, SAME dedup,
     // SAME 23505-race retry the bulk fix uses) and transferStock the
@@ -2760,7 +2815,7 @@ export class InventoryService {
     // Load the original SKU so we can pass it through to the RPC.
     const { data: original, error: origErr } = await this.ctx.supabase
       .from('inventory_items')
-      .select('sku')
+      .select('sku, warehouse_id')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', input.originalId)
       .maybeSingle();
@@ -2768,6 +2823,7 @@ export class InventoryService {
       throw new ServiceError('not_found', 'Original item no longer exists.');
     }
     const sku = (original as { sku: string }).sku;
+    const originalWarehouseId = (original as { warehouse_id: string | null }).warehouse_id;
 
     // Compose bin_location label + RPC overrides per branch.
     const overrides: Record<string, unknown> = {
@@ -2850,6 +2906,43 @@ export class InventoryService {
     // later import create a second row for the same physical variant.
     if (variantAttributesOverridden) {
       await this.recomputeVariantKey(newId as string);
+    }
+
+    // ═══ PUT THE COPY ON THE RACK THE DIALOG ASKED FOR (2026-09-24) ═══
+    // duplicate_inventory_item (0299) copies the original's primary location
+    // (a SITE such as "DC4"), and tg_seed_initial_level seeds the copy's stock
+    // AT that site: counted as placed, missing from the put-away list, and
+    // shown as "No rack" — the owner's DC4 report, on the Duplicate button.
+    // The dialog REQUIRES a rack, and nothing ever moved the stock onto it.
+    // Same fix as a manual create: move whatever was seeded onto the typed
+    // rack with the shared placement helper. Books keep their crate-aware
+    // path unchanged. FAIL-SOFT: the copy already exists; a placement that
+    // cannot run is reported, never fatal.
+    if (
+      input.itemType !== 'book' &&
+      rackLabel &&
+      originalWarehouseId &&
+      Number(input.quantity) > 0
+    ) {
+      const outcome = await this.placeManualCreateOnRack(
+        [newId as string],
+        originalWarehouseId,
+        rackLabel,
+      ).catch((e: unknown) => {
+        void reportError(new Error(rawErrorText(e)), {
+          tag: 'inventory.duplicate.place_on_rack',
+          level: 'warning',
+          organizationId: this.ctx.organizationId,
+        });
+        return null;
+      });
+      if (outcome && outcome.failedItemIds.length > 0) {
+        void reportError(new Error(`duplicate not placed on ${outcome.rackName}`), {
+          tag: 'inventory.duplicate.place_on_rack',
+          level: 'warning',
+          organizationId: this.ctx.organizationId,
+        });
+      }
     }
 
     void audit(
@@ -3296,7 +3389,11 @@ export class InventoryService {
       supplier_id: input.supplierId,
       warehouse_id: resolvedWarehouseId,
       charter_id: resolvedCharterId,
-      primary_location_id: input.primaryLocationId,
+      // A size run is always a manual create: for a STOCKED size the primary
+      // location is a label, written after the opening movements, so the stock
+      // seeds Unplaced (see primaryIsLabelOnly in create()). A size left at 0
+      // seeds nothing, so it keeps the primary on the insert.
+      primary_location_id: v.quantity > 0 ? null : input.primaryLocationId,
       bin_location: input.binLocation,
       retail_price: input.retailPrice,
       unit_cost: input.unitCost,
@@ -3420,7 +3517,8 @@ export class InventoryService {
         previous_quantity: 0,
         new_quantity: r.quantity_on_hand,
         user_id: this.ctx.userId,
-        to_location_id: r.primary_location_id,
+        // Seeded in Unplaced (the insert carried no primary location).
+        to_location_id: null,
       }));
     if (movementRows.length > 0) {
       const { error: movementErr } = await this.ctx.supabase
@@ -3444,6 +3542,41 @@ export class InventoryService {
       }
     }
 
+    // The primary location as a LABEL for the stocked sizes (owner, 2026-09-24;
+    // see create()). One write for the whole run (at most 60 variants), AFTER
+    // the opening movements and their compensation, for the same ledger reason
+    // as create(). FAIL-SOFT: the variants and their stock are saved; a refused
+    // label is reported, never fatal. `.select('id')` so an update that RLS
+    // filtered to zero rows (no error) is reported too, not assumed.
+    const stockedIds = inserted.filter((r) => r.quantity_on_hand > 0).map((r) => r.id);
+    if (input.primaryLocationId && stockedIds.length > 0) {
+      const { data: labelled, error: labelErr } = await this.ctx.supabase
+        .from('inventory_items')
+        .update({ primary_location_id: input.primaryLocationId })
+        .eq('organization_id', this.ctx.organizationId)
+        // in-list-bound: the ids this call just inserted, at most 60 (schema max)
+        .in('id', stockedIds)
+        .select('id');
+      const labelledIds = new Set(((labelled ?? []) as Array<{ id: string }>).map((r) => r.id));
+      if (labelErr || labelledIds.size !== stockedIds.length) {
+        void reportError(
+          new Error(
+            labelErr
+              ? rawErrorText(labelErr)
+              : `labelled ${labelledIds.size} of ${stockedIds.length} variants`,
+          ),
+          {
+            tag: 'inventory.bulk_create_sized.primary_location_label',
+            level: 'warning',
+            organizationId: this.ctx.organizationId,
+          },
+        );
+      }
+      for (const r of inserted) {
+        if (labelledIds.has(r.id)) r.primary_location_id = input.primaryLocationId;
+      }
+    }
+
     // ── Size-run auto-place (owner report 2026-08-10) ────────────────────────
     // "type a rack, enter quantities per size, the stock lands on that rack" —
     // the exact promise create() has kept since 2026-08-04, which this path
@@ -3458,8 +3591,9 @@ export class InventoryService {
     // Same helper, same semantics as create()'s call site — read the long
     // comment there for the full rationale. The three that matter most:
     //
-    //  1. `primary_location_id` and the 'initial' movements' `to_location_id`
-    //     above are BYTE-UNCHANGED. A rack id must never be written into
+    //  1. `primary_location_id` is the caller's SITE, written as a label after
+    //     the movements (2026-09-24), and the 'initial' movements record
+    //     Unplaced, where the stock really seeded. A rack id must never be written into
     //     `primary_location_id`: the location FILTER (instant-mode.ts) tests it
     //     against a SITES-ONLY set and exports resolve it into a "Primary
     //     location" column, so stamping a rack there makes auto-placed rows
@@ -7399,8 +7533,8 @@ export class InventoryService {
           groups.slice(i, i + RACK_PLACE_CONCURRENCY).map(async ([itemId, itemHoldings]) => {
             try {
               for (const row of itemHoldings) {
-                // Already on the resolved rack (e.g. the caller's own
-                // primaryLocationId happened to BE this rack) — nothing to move.
+                // Already on the resolved rack (a duplicate's copied holding,
+                // or an import that seeded there) — nothing to move.
                 if (row.location_id === rackId) continue;
                 await this.transferStock(
                   {
