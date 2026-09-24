@@ -5,10 +5,16 @@
 --    (expected_quantity, item_id, warehouse_id, counted_location_id,
 --    cycle_count_id) is refused, while every legitimate write shape still
 --    works: recordCount, clearCount and the pre-2026-05-28 phone PATCH.
--- B. cycle_count_ai_scans: the evidence columns cannot be rewritten, and a
+--    The granted columns now carry the app's own checks (stock:adjust,
+--    warehouse write scope, bounds, same-count scan). Manager INSERT/DELETE
+--    cannot forge a location, cross orgs, or touch a closed count, and
+--    start_cycle_count still works.
+-- B. cycle_count_ai_scans: the evidence columns cannot be rewritten, a scan
+--    cannot be inserted pre-confirmed or for a closed/foreign count, and a
 --    scan cannot be confirmed in someone else's name.
--- C. cycle_counts: a closed count cannot be reopened, and a count becomes
---    completed only by posting it, so a variance cannot be applied twice.
+-- C. cycle_counts: a closed count cannot be changed or reopened, a count
+--    becomes completed only by posting it (so a variance cannot be applied
+--    twice), and a count cannot be inserted already closed.
 --
 -- Roles: fixtures as the test superuser; writes under test run with
 -- `set local role authenticated` plus request.jwt.claim.sub, so grants, RLS
@@ -16,7 +22,7 @@
 
 begin;
 
-select plan(32);
+select plan(49);
 
 \set org      '\'03670000-0000-0000-0000-00000000000a\''
 \set mgr      '\'03670000-0000-0000-0000-0000000000a1\''
@@ -33,19 +39,27 @@ select plan(32);
 \set cc3      '\'03670000-0000-0000-0000-0000000000d4\''
 \set ccl3     '\'03670000-0000-0000-0000-0000000000d5\''
 \set scan     '\'03670000-0000-0000-0000-0000000000e1\''
+\set scan2    '\'03670000-0000-0000-0000-0000000000e2\''
+\set ccl2     '\'03670000-0000-0000-0000-0000000000d6\''
+\set noadj    '\'03670000-0000-0000-0000-0000000000a4\''
+\set orgB     '\'03670000-0000-0000-0000-00000000000b\''
+\set whB      '\'03670000-0000-0000-0000-0000000000b9\''
+\set itemX    '\'03670000-0000-0000-0000-0000000000c9\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
   (:mgr,     '0367-mgr@test.local',     '{}'::jsonb),
   (:counter, '0367-counter@test.local', '{}'::jsonb),
-  (:other,   '0367-other@test.local',   '{}'::jsonb)
+  (:other,   '0367-other@test.local',   '{}'::jsonb),
+  (:noadj,   '0367-noadj@test.local',   '{}'::jsonb)
   on conflict (id) do nothing;
 insert into public.organizations (id, name, slug)
   values (:org, '0367 Grants Org', '0367-grants-org') on conflict (id) do nothing;
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   (:org, :mgr,     'manager', now()),
   (:org, :counter, 'staff',   now()),
-  (:org, :other,   'staff',   now())
+  (:org, :other,   'staff',   now()),
+  (:org, :noadj,   'staff',   now())
   on conflict do nothing;
 insert into public.warehouses (id, organization_id, name, code, status) values
   (:wh,  :org, '0367 Main',  'WH-0367',  'active'),
@@ -53,6 +67,34 @@ insert into public.warehouses (id, organization_id, name, code, status) values
   on conflict (id) do nothing;
 insert into public.locations (id, organization_id, warehouse_id, name, type, kind)
   values (:loc, :org, :wh, '67-A', 'shelf', 'rack') on conflict (id) do nothing;
+-- counter and noadj are assigned to the main warehouse; other is assigned nowhere.
+insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary) values
+  (:org, :counter, :wh, true),
+  (:org, :noadj,   :wh, true);
+-- noadj has stock:adjust revoked (0207 user override).
+insert into public.user_permission_overrides (organization_id, user_id, permission, granted)
+  values (:org, :noadj, 'stock:adjust', false);
+-- A second org with its own item (the cross-org probes).
+insert into public.organizations (id, name, slug)
+  values (:orgB, '0367 Other Org', '0367-other-org') on conflict (id) do nothing;
+insert into public.warehouses (id, organization_id, name, code, status)
+  values (:whB, :orgB, '0367 B Main', 'WH-0367X', 'active') on conflict (id) do nothing;
+-- The manager also belongs to org B, so org B's item is VISIBLE to them: only
+-- the policy's same-org check (not RLS visibility) can refuse the probe.
+insert into public.organization_members (organization_id, user_id, role, accepted_at)
+  values (:orgB, :mgr, 'manager', now()) on conflict do nothing;
+insert into public.inventory_items (id, organization_id, warehouse_id, name, sku, quantity_on_hand, status)
+  values (:itemX, :orgB, :whB, '0367 Foreign Widget', 'SKU-0367-X', 777, 'active') on conflict (id) do nothing;
+-- Guard the fixtures themselves: a silently missing row would make the
+-- refusals below pass for the wrong reason.
+do $$ begin
+  if (select count(*) from public.user_warehouse_assignments
+       where user_id in ('03670000-0000-0000-0000-0000000000a2','03670000-0000-0000-0000-0000000000a4')) <> 2
+     or not exists (select 1 from public.organization_members where user_id = '03670000-0000-0000-0000-0000000000a4')
+     or not exists (select 1 from public.user_permission_overrides where user_id = '03670000-0000-0000-0000-0000000000a4')
+     or not exists (select 1 from public.inventory_items where id = '03670000-0000-0000-0000-0000000000c9')
+  then raise exception '0367 test fixtures incomplete'; end if;
+end $$;
 insert into public.inventory_items
   (id, organization_id, warehouse_id, name, sku, quantity_on_hand, status) values
   (:itemA, :org, :wh, '0367 Counted Widget', 'SKU-0367-A', 40, 'active'),
@@ -69,10 +111,12 @@ insert into public.cycle_counts (id, organization_id, warehouse_id, status, star
   on conflict (id) do nothing;
 insert into public.cycle_count_lines (id, cycle_count_id, item_id, warehouse_id, expected_quantity) values
   (:ccl,  :cc,  :itemA, :wh, 40),
+  (:ccl2, :cc2, :itemA, :wh, 40),
   (:ccl3, :cc3, :itemA, :wh, 40)
   on conflict (id) do nothing;
 insert into public.cycle_count_ai_scans (id, organization_id, cycle_count_id, created_by, photo_storage_path, gemini_response, model_version)
-  values (:scan, :org, :cc, :counter, 'org/0367/shelf.jpg', '{"items":[{"sku":"SKU-0367-A","count":41}]}'::jsonb, 'test-model')
+  values (:scan, :org, :cc, :counter, 'org/0367/shelf.jpg', '{"items":[{"sku":"SKU-0367-A","count":41}]}'::jsonb, 'test-model'),
+         (:scan2, :org, :cc3, :mgr, 'org/0367/other.jpg', '{}'::jsonb, 'test-model')
   on conflict (id) do nothing;
 
 -- ═══ A. cycle_count_lines ═════════════════════════════════════════════════
@@ -141,6 +185,64 @@ select is((select expected_quantity from public.cycle_count_lines where id = :cc
 select is((select item_id from public.cycle_count_lines where id = :ccl), :itemA::uuid,
   'A15: the line still points at its own item after all the refused PATCHes');
 
+-- The granted columns carry the app's own checks.
+set local "request.jwt.claim.sub"  to :counter;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+select throws_ok(
+  format($$update public.cycle_count_lines set counted_quantity = -5, counted_by = %L, counted_at = now() where id = %L$$, :counter, :ccl),
+  '23514', null, 'A16: a negative count is refused (it would block the whole post)');
+select throws_ok(
+  format($$update public.cycle_count_lines set reason = repeat('x', 201) where id = %L$$, :ccl),
+  '23514', null, 'A17: a reason longer than the API allows is refused');
+select throws_ok(
+  format($$update public.cycle_count_lines set ai_scan_id = %L where id = %L$$, :scan2, :ccl),
+  '42501', null, 'A18: a line cannot cite another count''s AI scan');
+reset role;
+
+-- Staff with stock:adjust revoked, and staff with no access to the warehouse,
+-- change nothing (RLS USING filters the row; the update touches 0 rows).
+set local "request.jwt.claim.sub"  to :noadj;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+update public.cycle_count_lines set counted_quantity = 4000, counted_by = :noadj, counted_at = now() where id = :ccl2;
+reset role;
+select is((select counted_quantity from public.cycle_count_lines where id = :ccl2), null::numeric,
+  'A19: staff without stock:adjust cannot record a count');
+set local "request.jwt.claim.sub"  to :other;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+update public.cycle_count_lines set counted_quantity = 4000, counted_by = :other, counted_at = now() where id = :ccl2;
+reset role;
+select is((select counted_quantity from public.cycle_count_lines where id = :ccl2), null::numeric,
+  'A20: staff with no access to the line''s warehouse cannot record a count');
+
+-- Manager INSERT / DELETE.
+set local "request.jwt.claim.sub"  to :mgr;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+select throws_ok(
+  format($$insert into public.cycle_count_lines (cycle_count_id, item_id, warehouse_id, expected_quantity, counted_location_id)
+           values (%L, %L, %L, 40, %L)$$, :cc, :itemB, :wh, :loc),
+  '42501', null, 'A21: a manager cannot insert a line with a chosen counted location');
+select throws_ok(
+  format($$insert into public.cycle_count_lines (cycle_count_id, item_id, warehouse_id, expected_quantity)
+           values (%L, %L, null, 0)$$, :cc, :itemB),
+  '42501', null, 'A22: a manager cannot insert a line whose warehouse differs from its item''s');
+select throws_ok(
+  format($$insert into public.cycle_count_lines (cycle_count_id, item_id, warehouse_id, expected_quantity)
+           values (%L, %L, %L, 0)$$, :cc, :itemX, :whB),
+  '42501', null, 'A23: a manager cannot insert another org''s item (the on-hand leak)');
+select lives_ok(
+  format($$insert into public.cycle_count_lines (cycle_count_id, item_id, warehouse_id, expected_quantity)
+           values (%L, %L, %L, 0)$$, :cc, :itemB, :wh),
+  'A24: the start_cycle_count insert shape still works on an open count');
+select lives_ok(
+  format($$select * from public.start_cycle_count(%L::uuid, 'selection', %L::uuid, null, array[%L::uuid], 'started in 0367 test')$$,
+         :org, :wh, :itemB),
+  'A25: start_cycle_count still creates a count with its lines');
+reset role;
+
 -- ═══ B. cycle_count_ai_scans ══════════════════════════════════════════════
 select is(
   (select array_agg(c order by c) from unnest(array['gemini_response','photo_storage_path','model_version','created_by',
@@ -173,6 +275,23 @@ reset role;
 select is((select confirmed_by from public.cycle_count_ai_scans where id = :scan), :counter::uuid,
   'B7: the confirmation landed under the caller');
 
+set local "request.jwt.claim.sub"  to :counter;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+select throws_ok(
+  format($$insert into public.cycle_count_ai_scans (organization_id, cycle_count_id, created_by, photo_storage_path, gemini_response, model_version, confirmed_at, confirmed_by)
+           values (%L, %L, %L, 'org/0367/fake.jpg', '{}'::jsonb, 'm', now(), %L)$$, :org, :cc, :counter, :mgr),
+  '42501', null, 'B8: a scan cannot be inserted already confirmed');
+select throws_ok(
+  format($$insert into public.cycle_count_ai_scans (organization_id, cycle_count_id, created_by, photo_storage_path, gemini_response, model_version)
+           values (%L, %L, %L, 'org/0367/fake.jpg', '{}'::jsonb, 'm')$$, :orgB, :cc, :counter),
+  '42501', null, 'B9: a scan cannot claim another org for this count');
+select lives_ok(
+  format($$insert into public.cycle_count_ai_scans (organization_id, cycle_count_id, created_by, photo_storage_path, gemini_response, model_version)
+           values (%L, %L, %L, 'org/0367/new.jpg', '{}'::jsonb, 'm')$$, :org, :cc, :counter),
+  'B10: the createAiScan insert shape still works');
+reset role;
+
 -- ═══ C. cycle_counts status transitions ═══════════════════════════════════
 select has_trigger('public', 'cycle_counts', 'trg_zz_cycle_counts_status_guard',
   'C1: the status guard is installed');
@@ -190,7 +309,7 @@ select lives_ok(
   'C3: the cancel write shape (in_progress -> canceled) still works');
 select throws_ok(
   format($$update public.cycle_counts set status = 'in_progress' where id = %L$$, :cc2),
-  '42501', 'This count is already canceled, so it cannot be reopened. Start a new count instead.',
+  '42501', 'This count is already canceled, so it cannot be changed or reopened. Start a new count instead.',
   'C4: a canceled count cannot be reopened');
 
 -- Count and post cc3: +5 on top of 40.
@@ -200,16 +319,29 @@ select lives_ok(
   'C5: posting still completes a count (the post sets the ledger flag)');
 select throws_ok(
   format($$update public.cycle_counts set status = 'in_progress' where id = %L$$, :cc3),
-  '42501', 'This count is already completed, so it cannot be reopened. Start a new count instead.',
+  '42501', 'This count is already completed, so it cannot be changed or reopened. Start a new count instead.',
   'C6: a completed count cannot be reopened');
 select throws_ok(
   format($$select public.post_cycle_count(%L::uuid)$$, :cc3),
   null, null,
   'C7: a completed count cannot be posted a second time');
+select throws_ok(
+  format($$update public.cycle_counts set completed_by = %L, completed_at = '2020-01-01' where id = %L$$, :counter, :cc3),
+  '42501', null, 'C11: a closed count''s record cannot be rewritten');
+select throws_ok(
+  format($$insert into public.cycle_counts (organization_id, warehouse_id, status, started_by, completed_at, completed_by)
+           values (%L, %L, 'completed', %L, now(), %L)$$, :org, :wh, :mgr, :mgr),
+  '42501', 'A count starts in progress.', 'C12: a count cannot be inserted already completed');
+delete from public.cycle_count_lines where id = :ccl3;
+select throws_ok(
+  format($$insert into public.cycle_count_lines (cycle_count_id, item_id, warehouse_id, expected_quantity) values (%L, %L, %L, 0)$$, :cc3, :itemB, :wh),
+  '42501', null, 'C14: a line cannot be added to a completed count');
 reset role;
 
 select is((select status from public.cycle_counts where id = :cc3), 'completed',
   'C8: the posted count is completed');
+select is((select count(*) from public.cycle_count_lines where id = :ccl3), 1::bigint,
+  'C13: a completed count''s lines cannot be deleted (its record stands)');
 select is((select quantity_on_hand from public.inventory_items where id = :itemA), 45::numeric,
   'C9: the variance was applied exactly once (40 -> 45)');
 
