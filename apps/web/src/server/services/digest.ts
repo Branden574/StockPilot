@@ -2,6 +2,8 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { cycleCountScopeLabel } from '@stockpilot/core';
+
 import { ServiceError } from './context';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { fetchAllRows } from './lib/paginate';
@@ -28,6 +30,11 @@ export interface DigestOpenPo {
 
 export interface DigestCycleCount {
   id: string;
+  /** Permanent reference number (0358), printed as CC-000042. */
+  countNumber: number | null;
+  /** What the count covers: the warehouse, "All warehouses" (an org-wide
+   *  count) or "Selected items" (a selection with no single warehouse). */
+  scopeLabel: string;
   warehouseName: string | null;
   startedAt: string;
   totalLines: number;
@@ -216,12 +223,17 @@ async function getOpenCycleCounts(
   // don't overlap or skip.
   const counts = await fetchAllRows<{
     id: string;
+    count_number: number | null;
     started_at: string;
+    warehouse_id: string | null;
+    scope: string | null;
     warehouse: { name: string } | { name: string }[] | null;
   }>((from, to) =>
     supabase
       .from('cycle_counts')
-      .select('id, started_at, warehouse:warehouses!warehouse_id (name)')
+      .select(
+        'id, count_number, started_at, warehouse_id, scope, warehouse:warehouses!warehouse_id (name)',
+      )
       .eq('organization_id', orgId)
       .eq('status', 'in_progress')
       .order('started_at', { ascending: true })
@@ -268,6 +280,12 @@ async function getOpenCycleCounts(
     const stats = statsMap.get(row.id) ?? { total: 0, counted: 0 };
     return {
       id: row.id,
+      countNumber: row.count_number ?? null,
+      scopeLabel: cycleCountScopeLabel({
+        warehouseId: row.warehouse_id,
+        warehouseName: wh?.name ?? null,
+        scope: row.scope,
+      }),
       warehouseName: wh?.name ?? null,
       startedAt: row.started_at,
       totalLines: stats.total,

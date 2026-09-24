@@ -395,26 +395,50 @@ async function snapshotGET(req: NextRequest) {
   const posP = scopedRead(seesNoWarehouse, poQ);
 
   // ── Open cycle counts (and their lines) ─────────────────────────
-  let ccQ = ctx.supabase
-    .from('cycle_counts')
-    .select(
-      `id, status, warehouse_id, started_at, assigned_to, notes,
+  const selectCounts = () =>
+    ctx.supabase.from('cycle_counts').select(
+      `id, count_number, status, warehouse_id, started_at, assigned_to, notes,
        lines:cycle_count_lines (
          id, item_id, expected_quantity, counted_quantity
        )`,
-    )
-    .eq('organization_id', ctx.organizationId)
-    .eq('status', 'in_progress')
-    .order('started_at', { ascending: false })
-    .limit(50);
-  if (scopeIds) {
-    // in-list-bound: the caller's readable warehouses (an org's handful of sites)
-    ccQ = ccQ.or(`warehouse_id.is.null,warehouse_id.in.(${scopeIds.join(',')})`);
-  }
+    );
+  const countsQuery = (withNumber: boolean) => {
+    let ccQ = withNumber
+      ? selectCounts()
+      : // Before 0358 (see below): the same read without the column. Its rows
+        // simply lack count_number, which the serializer treats as optional.
+        (ctx.supabase.from('cycle_counts').select(
+          `id, status, warehouse_id, started_at, assigned_to, notes,
+       lines:cycle_count_lines (
+         id, item_id, expected_quantity, counted_quantity
+       )`,
+        ) as unknown as ReturnType<typeof selectCounts>);
+    ccQ = ccQ
+      .eq('organization_id', ctx.organizationId)
+      .eq('status', 'in_progress')
+      .order('started_at', { ascending: false })
+      .limit(50);
+    if (scopeIds) {
+      // in-list-bound: the caller's readable warehouses (an org's handful of sites)
+      ccQ = ccQ.or(`warehouse_id.is.null,warehouse_id.in.(${scopeIds.join(',')})`);
+    }
+    return ccQ;
+  };
   // Narrowed to nothing answers no counts at all, the null-warehouse ones
   // included: the web's CycleCountsService.list() returns [] for a scoped
   // caller with no warehouse, and the phone should not list more than it.
-  const countsP = scopedRead(seesNoWarehouse, ccQ);
+  //
+  // DEPLOY-ORDER SAFETY: count_number arrives with migration 0358. Against a
+  // database that has not run it, the column read fails with 42703
+  // (undefined_column), and failing this read fails the WHOLE snapshot, i.e.
+  // every phone's offline sync. So that one error, and only that one, reads
+  // the counts again without the column: they sync without their references
+  // ("Reference unavailable" on the phone) until the migration lands.
+  const countsP = scopedRead(seesNoWarehouse, countsQuery(true)).then((settled) =>
+    settled.ok && (settled.value as { error?: { code?: string } | null }).error?.code === '42703'
+      ? scopedRead(seesNoWarehouse, countsQuery(false))
+      : settled,
+  );
 
   // ── Bundles ─────────────────────────────────────────────────────
   // Embedded joins to two relations (bundle_components AND the phantom
@@ -698,6 +722,9 @@ async function snapshotGET(req: NextRequest) {
       }>;
       return {
         id: c.id,
+        // The count's permanent reference (0358). The phone stores it beside
+        // the header and renders it with formatCycleCountNumber.
+        countNumber: (c as { count_number?: number | null }).count_number ?? null,
         status: c.status,
         warehouseId: c.warehouse_id,
         startedAt: c.started_at,

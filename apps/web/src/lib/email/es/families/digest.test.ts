@@ -78,6 +78,8 @@ function fullPayload(): DigestPayload {
     openCycleCounts: [
       {
         id: UUIDS.cc,
+        countNumber: 18,
+        scopeLabel: 'CVW — Manchester',
         warehouseName: 'CVW — Manchester',
         startedAt: '2026-07-16T09:00:00Z',
         totalLines: 44,
@@ -162,7 +164,7 @@ describe('weekly digest — full payload', () => {
     expect(html).toContain('PO-2041');
     // In-progress rows (cycle counts).
     expect(html).toContain('In progress');
-    expect(html).toContain('Cycle count — CVW — Manchester');
+    expect(html).toContain('Cycle count CC-000018 — CVW — Manchester');
     expect(html).toContain('18/44 counted');
     // Single CTA to the dashboard.
     expect(html).toContain('Open dashboard &rarr;');
@@ -270,7 +272,7 @@ describe('section gating — extended, not replaced', () => {
     expect(html).not.toContain('PO-2041');
     // Enabled sections still render.
     expect(html).toContain('Low stock');
-    expect(html).toContain('Cycle count — CVW — Manchester');
+    expect(html).toContain('Cycle count CC-000018 — CVW — Manchester');
   });
 
   it('keeps the cron empty-skip contract intact when everything is opted out', () => {
@@ -308,6 +310,8 @@ describe('weight budget (Gmail clip)', () => {
       })),
       openCycleCounts: Array.from({ length: 80 }, (_, i) => ({
         id: `22222222-0000-4000-8000-${String(i).padStart(12, '0')}`,
+        countNumber: 1_000_000 + i,
+        scopeLabel: `Distribution Center ${i} — Extremely Long Warehouse Location Name`,
         warehouseName: `Distribution Center ${i} — Extremely Long Warehouse Location Name`,
         startedAt: '2026-07-01T00:00:00Z',
         totalLines: 500,
@@ -339,5 +343,24 @@ describe('plain-text part (unchanged from the legacy renderer)', () => {
     expect(text).toContain('OPEN PURCHASE ORDERS');
     expect(text).toContain('CYCLE COUNTS IN PROGRESS');
     expect(text).toContain('Manage preferences: https://app.test/dashboard/settings/notifications');
+  });
+
+  it('names each open count by its reference and its real scope', () => {
+    const payload = fullPayload();
+    payload.openCycleCounts = [
+      { ...payload.openCycleCounts[0]!, countNumber: 18, scopeLabel: 'CVW — Manchester' },
+      { ...payload.openCycleCounts[0]!, id: 'cc-sel', countNumber: 19, scopeLabel: 'Selected items', warehouseName: null },
+      { ...payload.openCycleCounts[0]!, id: 'cc-old', countNumber: null, scopeLabel: 'All warehouses', warehouseName: null },
+    ];
+    const text = weeklyDigestText(payload, {
+      orgName: OPTS.orgName,
+      appUrl: OPTS.appUrl,
+      settingsUrl: OPTS.settingsUrl,
+    });
+    expect(text).toMatch(/ {2}CC-000018 · .* · CVW — Manchester · 18\/44 counted/);
+    expect(text).toMatch(/ {2}CC-000019 · .* · Selected items · /);
+    // No number: no made-up reference, and never the old "Unassigned".
+    expect(text).toMatch(/\n {2}\d+\/\d+\/\d+ · All warehouses · /);
+    expect(text).not.toContain('Unassigned');
   });
 });

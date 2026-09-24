@@ -19,6 +19,7 @@ import {
   unverifiedRetryDelayMs,
   withTimeout,
 } from './account-eviction';
+import { endAccountEpoch } from './account-epoch';
 import { wipeForSignOut } from './db';
 import { ACCOUNT_DISABLED_REJECTION } from './drain-failure';
 import { rejectAllPending } from './queue';
@@ -250,6 +251,9 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
           await wipeForSignOut();
         },
         clearAccountStorage: async () => {
+          // Before the keys go: a workspace load or switch still running for
+          // this account must not save one back (account-epoch.ts).
+          endAccountEpoch();
           const keys = accountScopedStorageKeys(await AsyncStorage.getAllKeys());
           if (keys.length > 0) await AsyncStorage.multiRemove(keys);
         },

@@ -275,7 +275,8 @@ describe('the eviction cannot silently destroy the queued work', () => {
 describe('the cycle-count line is not left flagged unsynced forever', () => {
   it('outboxReject clears local_dirty in the SAME transaction as the status write', () => {
     const body = code(cache).slice(code(cache).indexOf('export async function outboxReject'));
-    expect(body).toContain('withTransactionAsync');
+    // One transaction, through db.ts's queue (db.transaction-queue.test.ts).
+    expect(body).toContain('withDbTransaction(db, async () => {');
     expect(body).toContain('update cycle_count_lines set local_dirty = 0 where id = ?');
     expect(body).toContain('markRejected');
   });

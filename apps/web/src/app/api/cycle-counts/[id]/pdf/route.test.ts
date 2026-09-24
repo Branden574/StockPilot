@@ -321,3 +321,53 @@ describe('GET /api/cycle-counts/[id]/pdf — the location lookup batches', () =>
     );
   });
 });
+
+/**
+ * The sheet names the count by its permanent reference (0358) and describes
+ * its scope truthfully: a null-warehouse SELECTION is "Selected items", never
+ * "All warehouses". Every line still reaches the PDF (the reference is a
+ * label, not a page limit).
+ */
+describe('GET /api/cycle-counts/[id]/pdf — the reference and scope label', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(exportRateLimited).mockResolvedValue(null as never);
+    vi.mocked(WarehousesService).mockImplementation(function () {
+      return { list: async () => [] } as never;
+    });
+    vi.mocked(withApiContext).mockResolvedValue(
+      ctxWith(new Set<ModuleId>([...DEFAULT_MODULE_IDS])) as never,
+    );
+  });
+
+  function capturedCycle(): Record<string, unknown> {
+    const call = vi.mocked(renderToStream).mock.calls[0];
+    return (call?.[0] as unknown as { props: { cycle: Record<string, unknown> } }).props.cycle;
+  }
+
+  it('passes the number, scope and timezone, and names the file by the reference', async () => {
+    const lines = Array.from({ length: 60 }, (_, i) => ({ ...groupedLine(), id: `line-${i}` }));
+    vi.mocked(CycleCountsService).mockImplementation(function () {
+      return {
+        get: async () => ({
+          header: { ...header(), count_number: 42, scope: 'selection', warehouse_id: null },
+          lines,
+        }),
+      } as never;
+    });
+    const res = await GET(req(), await paramsFor('cc-1'));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-disposition')).toBe('inline; filename="cycle-count-CC-000042.pdf"');
+    expect(capturedCycle()).toMatchObject({ countNumber: 42, scope: 'selection', warehouseId: null });
+    expect(capturedLines()).toHaveLength(60);
+  });
+
+  it('falls back to the old file name when the number is missing, without inventing one', async () => {
+    vi.mocked(CycleCountsService).mockImplementation(function () {
+      return { get: async () => ({ header: { ...header(), count_number: null }, lines: [groupedLine()] }) } as never;
+    });
+    const res = await GET(req(), await paramsFor('cc-1'));
+    expect(res.headers.get('content-disposition')).toBe('inline; filename="cycle-count-cc-1.pdf"');
+    expect(capturedCycle().countNumber).toBeNull();
+  });
+});

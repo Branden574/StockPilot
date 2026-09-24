@@ -1,17 +1,26 @@
 import { Download } from 'lucide-react';
-import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 
+import { CopyReferenceButton } from '@/components/cycle-counts/copy-reference-button';
 import { CycleCountDetail } from '@/components/cycle-counts/cycle-count-detail';
+import { BackToCycleCounts } from '@/components/cycle-counts/cycle-count-list-memory';
 import { Button } from '@/components/ui/button';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { createClient } from '@/lib/supabase/server';
 import { ServiceError } from '@/server/services/context';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { WarehousesService } from '@/server/services/warehouses';
 import { formatRelative } from '@/lib/utils';
 
-import { can } from '@stockpilot/core';
+import {
+  can,
+  CYCLE_COUNT_REFERENCE_UNAVAILABLE,
+  cycleCountScopeLabel,
+  formatCycleCountNumber,
+  formatOrgDateTime,
+  resolveOrgTimezone,
+} from '@stockpilot/core';
 
 const LINE_PAGE_SIZE = 50;
 
@@ -78,10 +87,20 @@ export default async function CycleCountDetailPage({
     }
   }
 
-  const warehouses = await warehousesSvc.listNames();
+  const [warehouses, orgRow] = await Promise.all([
+    warehousesSvc.listNames(),
+    getOrgRowForRequest(ctx.organizationId),
+  ]);
   const warehouseName = header.warehouse_id
     ? (warehouses.find((w) => w.id === header.warehouse_id)?.name ?? null)
     : null;
+  const tz = resolveOrgTimezone(orgRow?.timezone);
+  const reference = formatCycleCountNumber(header.count_number);
+  const scopeLabel = cycleCountScopeLabel({
+    warehouseId: header.warehouse_id,
+    warehouseName,
+    scope: header.scope ?? null,
+  });
 
   // Manager+ can change the assignee — staff / viewers see it read-only.
   const canAssign = can(ctx, 'cycle_counts:assign');
@@ -138,20 +157,40 @@ export default async function CycleCountDetailPage({
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
       <div className="mb-6">
-        <Link
-          href="/dashboard/cycle-counts"
-          className="text-muted-foreground hover:text-foreground text-sm"
-        >
-          ← Back to cycle counts
-        </Link>
+        <nav aria-label="Breadcrumb" className="text-muted-foreground flex items-center gap-1.5 text-sm">
+          <BackToCycleCounts className="hover:text-foreground" />
+          <span aria-hidden>/</span>
+          <span aria-current="page" className="font-mono tabular-nums">
+            {reference ?? 'Cycle count'}
+          </span>
+        </nav>
         <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">
-              Cycle count · {formatRelative(header.started_at)}
-            </h1>
+            <div className="flex items-center gap-1.5">
+              <h1 className="text-2xl font-semibold tracking-tight">
+                {reference ? (
+                  <>
+                    <span className="sr-only">Cycle count </span>
+                    <span className="font-mono tabular-nums">{reference}</span>
+                  </>
+                ) : (
+                  'Cycle count'
+                )}
+              </h1>
+              {reference ? <CopyReferenceButton reference={reference} /> : null}
+            </div>
+            {reference ? null : (
+              <p className="text-muted-foreground mt-0.5 text-xs">{CYCLE_COUNT_REFERENCE_UNAVAILABLE}</p>
+            )}
             <p className="text-muted-foreground mt-1 text-sm">
-              {warehouseName ?? 'All warehouses'}
+              {scopeLabel}
               {header.notes ? ` · ${header.notes}` : ''}
+            </p>
+            <p className="text-muted-foreground mt-0.5 text-xs">
+              Started {formatRelative(header.started_at)} ·{' '}
+              <time dateTime={header.started_at}>
+                {formatOrgDateTime(header.started_at, { dateStyle: 'medium', timeStyle: 'short' }, tz)}
+              </time>
             </p>
           </div>
           <Button asChild variant="outline">

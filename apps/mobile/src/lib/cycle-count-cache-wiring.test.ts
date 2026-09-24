@@ -3,6 +3,8 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { CACHED_CYCLE_COUNTS_LIST_SQL, CYCLE_COUNT_CACHE_HEADER_SQL } from './cycle-count-snapshot-sql';
+
 /**
  * WIRING PINS for two offline cycle-count fixes. The cache module imports
  * expo-sqlite at the top level and cannot be loaded here (vitest.config.ts
@@ -26,14 +28,21 @@ const engine = readFileSync(path.join(__dirname, 'cycle-count-sync.ts'), 'utf8')
 
 describe('assigned_to round-trips through the cache (SP-003)', () => {
   it('cacheCycleCount writes assigned_to from header.assignedTo', () => {
-    const insert = cache.slice(cache.indexOf('insert or replace into cycle_counts'), cache.indexOf('for (const line of lines)'));
-    expect(insert).toMatch(/assigned_to/);
-    expect(insert).toMatch(/header\.assignedTo \?\? null/);
+    // The statement itself lives in cycle-count-snapshot-sql.ts (so it runs
+    // against a real SQLite in cycle-count-snapshot-sql.test.ts); the params
+    // are still assembled here.
+    expect(CYCLE_COUNT_CACHE_HEADER_SQL).toMatch(/insert or replace into cycle_counts[\s\S]*assigned_to/);
+    const params = cache.slice(cache.indexOf('CYCLE_COUNT_CACHE_HEADER_SQL,'), cache.indexOf('for (const line of lines)'));
+    expect(params).toMatch(/header\.assignedTo \?\? null/);
   });
 
   it('getCycleCount and listCachedCycleCounts select and map assigned_to', () => {
+    // getCycleCount selects inline; listCachedCycleCounts runs the shared
+    // CACHED_CYCLE_COUNTS_LIST_SQL (tested against a real SQLite).
     const selects = cache.match(/select id, organization_id, status, warehouse_id, warehouse_name,\s+started_at, posted_at, assigned_to, cached_at/g) ?? [];
-    expect(selects.length, 'both header selects must read assigned_to').toBe(2);
+    expect(selects.length, 'the detail header select must read assigned_to').toBe(1);
+    expect(CACHED_CYCLE_COUNTS_LIST_SQL).toMatch(/cc\.assigned_to/);
+    expect(cache).toMatch(/\}>\(CACHED_CYCLE_COUNTS_LIST_SQL\);/);
     const maps = cache.match(/assignedTo: (headerRow|r)\.assigned_to \?\? null/g) ?? [];
     expect(maps.length, 'both header mappers must expose assignedTo').toBe(2);
   });

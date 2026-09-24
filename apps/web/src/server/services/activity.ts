@@ -3,6 +3,7 @@ import 'server-only';
 import {
   RECEIPT_NOTE_SENTINEL_RE,
   collectLegacyRefIdsByKind,
+  formatCycleCountNumber,
   formatOrderNumber,
   isMovementNoteEditable,
   legacyOrderRefId,
@@ -432,12 +433,48 @@ export async function resolveBundleNames(
 }
 
 /**
- * Runs all three reference-label batch resolvers in parallel and merges them
+ * Batch-resolves cycle count ids → their reference, CC-000042
+ * (reference_type='cycle_count', written by post_cycle_count). The number is
+ * cycle_counts.count_number (migration 0358). Same shape/degrade-on-error
+ * contract as resolveOrderNumbers: a count whose number cannot be read keeps
+ * the generic "Cycle count" label and its link. Exported for unit tests.
+ */
+export async function resolveCycleCountNumbers(
+  ctx: ServiceContext,
+  cycleCountIds: string[],
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (cycleCountIds.length === 0) return map;
+  let data: { id: string; count_number: number | null }[];
+  try {
+    data = await fetchAllRowsByIds<{ id: string; count_number: number | null }>(
+      cycleCountIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('cycle_counts')
+          .select('id, count_number')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+    );
+  } catch (err) {
+    reportDegradedRead('activity.cycle_count_numbers', err, { ids: cycleCountIds.length });
+    return map;
+  }
+  for (const r of data) {
+    const n = formatCycleCountNumber(r.count_number);
+    if (n) map.set(r.id, n);
+  }
+  return map;
+}
+
+/**
+ * Runs all four reference-label batch resolvers in parallel and merges them
  * into one id → label map. Each resolver already no-ops (no query) on an
  * empty id list, so types absent from this page's movements cost nothing.
- * cycle_count has no cheap display number (the table carries no display
- * field) — it's intentionally NOT queried here; those events fall back to
- * the generic type label in the UI while still linking to a known route.
+ * cycle_count joined the other three once counts had a display number
+ * (0358); before that its events showed only the generic type label.
  * purchase_order/rental resolvers were removed (Movement/Activity P1 review
  * follow-up): no writer ever sets those reference_types on stock_movements,
  * so the equivalent purchase_order resolver here only ever received an empty
@@ -449,13 +486,14 @@ async function resolveReferenceLabels(
   ctx: ServiceContext,
   idsByType: Record<string, string[]>,
 ): Promise<Map<string, string>> {
-  const [order, ret, bundle] = await Promise.all([
+  const [order, ret, bundle, cycleCount] = await Promise.all([
     resolveOrderNumbers(ctx, idsByType.order_request ?? []),
     resolveReturnNumbers(ctx, idsByType.return ?? []),
     resolveBundleNames(ctx, idsByType.bundle ?? []),
+    resolveCycleCountNumbers(ctx, idsByType.cycle_count ?? []),
   ]);
   const merged = new Map<string, string>();
-  for (const m of [order, ret, bundle]) {
+  for (const m of [order, ret, bundle, cycleCount]) {
     for (const [id, label] of m) merged.set(id, label);
   }
   return merged;

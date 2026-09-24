@@ -7,7 +7,7 @@ import {
   CYCLE_COUNT_LINE_UPSERT_SQL,
   CYCLE_COUNT_STALE_LINES_DELETE_SQL,
 } from './cycle-count-snapshot-sql';
-import { getDb, getMeta, setMeta } from './db';
+import { currentCacheGeneration, getDb, getMeta, setMeta, withDbTransaction } from './db';
 import { classifyDrainFailure } from './drain-failure';
 import { ENABLED_MODULES_META_KEY, refreshEnabledModules } from './enabled-modules';
 import {
@@ -82,6 +82,8 @@ interface SnapshotResponse {
   }[];
   openCycleCounts: {
     id: string;
+    /** Permanent reference number (server 0358). Absent from older servers. */
+    countNumber?: number | null;
     status: string;
     warehouseId: string | null;
     startedAt: string;
@@ -207,6 +209,7 @@ export async function isOnline(): Promise<boolean> {
   }
 }
 
+
 /**
  * Pull the org snapshot into local SQLite.
  *
@@ -221,6 +224,10 @@ export async function pullSnapshot(
 ): Promise<{ items: number; pos: number; counts: number; bundles: number } | null> {
   if (!(await isOnline())) return null;
 
+  // Noted before the cursor is read and before api() reads the workspace
+  // header: any cache wipe asked for after this point (a workspace switch or
+  // repair, a sign-out) makes this answer stale. See db.ts cacheGeneration.
+  const generationAtRequest = currentCacheGeneration();
   const since = force ? null : await getMeta('last_synced_at');
   const path = since
     ? `/api/v1/mobile/snapshot?since=${encodeURIComponent(since)}`
@@ -236,12 +243,36 @@ export async function pullSnapshot(
 
   const db = await getDb();
   const now = Date.now();
+  // Once the generation moves (a wipe was asked for), the pull stops writing
+  // and lets its transaction COMMIT what already ran: the wipe is queued right
+  // behind this transaction and clears those rows. A ROLLBACK would also undo
+  // plain writes other flows made on the shared connection meanwhile (the
+  // outbox rejection at account eviction, a receipt queued offline).
+  let stale = false;
+  const moved = () => (stale ||= currentCacheGeneration() !== generationAtRequest);
+  let modulesChanged = false;
+  let permissionsChanged = false;
+  let scopeChanged = false;
 
-  await db.withTransactionAsync(async () => {
+  await withDbTransaction(db, async () => {
+    // A wipe asked for while the request was out (a workspace switch or
+    // repair, a sign-out) means this answer belongs to a cache that no longer
+    // exists: writing it would put the old workspace's rows, cursor, modules
+    // and permissions under the new one, or a signed-out user's under the next.
+    if (moved()) return;
+    // A wipe asked for just BEFORE this pull began can still have run after
+    // the cursor was read: a delta built on a cleared cursor would commit a
+    // partial cache with a fresh cursor that never back-fills.
+    if (since !== null && (await getMeta('last_synced_at')) !== since) {
+      stale = true;
+      return;
+    }
+
     // Warehouses (full replace for simplicity — small set)
     if (snap.warehouses.length > 0) {
       await db.runAsync('delete from warehouses');
       for (const w of snap.warehouses) {
+        if (moved()) return;
         await db.runAsync(
           'insert into warehouses (id, name) values (?, ?)',
           [w.id, w.name],
@@ -251,6 +282,7 @@ export async function pullSnapshot(
 
     // Items (upsert on id)
     for (const i of snap.items) {
+      if (moved()) return;
       await db.runAsync(
         `insert or replace into items
          (id, sku, name, barcode, quantity_on_hand, unit_cost,
@@ -272,6 +304,7 @@ export async function pullSnapshot(
 
     // POs + lines (replace on PO id)
     for (const p of snap.openPOs) {
+      if (moved()) return;
       await db.runAsync(
         `insert or replace into purchase_orders
          (id, po_number, status, warehouse_id, expected_at, last_synced_at)
@@ -280,6 +313,7 @@ export async function pullSnapshot(
       );
       await db.runAsync('delete from po_lines where po_id = ?', [p.id]);
       for (const l of p.lines) {
+        if (moved()) return;
         await db.runAsync(
           `insert into po_lines
            (id, po_id, item_id, qty_ordered, qty_received, unit_cost)
@@ -296,6 +330,7 @@ export async function pullSnapshot(
     // every 60 s, on every open count. The statements and their rules are
     // documented and tested in cycle-count-snapshot-sql.ts.
     for (const c of snap.openCycleCounts) {
+      if (moved()) return;
       await db.runAsync(CYCLE_COUNT_HEADER_UPSERT_SQL, [
         c.id,
         c.status,
@@ -303,9 +338,11 @@ export async function pullSnapshot(
         c.startedAt,
         c.assignedTo,
         c.notes,
+        c.countNumber ?? null,
         now,
       ]);
       for (const l of c.lines) {
+        if (moved()) return;
         await db.runAsync(CYCLE_COUNT_LINE_UPSERT_SQL, [
           l.id,
           c.id,
@@ -322,6 +359,7 @@ export async function pullSnapshot(
 
     // Bundles + components (replace on bundle id)
     for (const b of snap.bundles) {
+      if (moved()) return;
       await db.runAsync(
         `insert or replace into bundles
          (id, name, sku, preassembly_enabled, phantom_item_id,
@@ -340,6 +378,7 @@ export async function pullSnapshot(
       );
       await db.runAsync('delete from bundle_components where bundle_id = ?', [b.id]);
       for (const comp of b.components) {
+        if (moved()) return;
         await db.runAsync(
           `insert into bundle_components
            (bundle_id, item_id, quantity, is_optional)
@@ -351,6 +390,7 @@ export async function pullSnapshot(
 
     // ── Reconcile REMOVALS (SP-081) ────────────────────────────────────
     //
+    if (moved()) return;
     // Everything above only ever UPSERTS. A row that leaves the server's
     // scope — an item archived or deleted, a count posted or cancelled, a
     // bundle deactivated — simply stops appearing in the payload, and the
@@ -416,57 +456,65 @@ export async function pullSnapshot(
         await db.runAsync(STALE_BUNDLES_SWEEP_SQL, [now]);
       }
     }
+
+    if (moved()) return;
+    // The cursor, modules, permissions and warehouse scope are part of the
+    // same answer, so they are written only when the rows were.
+    await setMeta('last_synced_at', snap.serverTime);
+    // Persist the org's enabled modules so the drawer + tab gating can read
+    // them synchronously between syncs (and while offline). Always written —
+    // even an empty array is meaningful (the consumers treat "no persisted
+    // value yet" differently from "explicitly no optional modules").
+    //
+    // If the set CHANGED since the last sync (e.g. an admin toggled a module on
+    // the web control plane), notify the live useEnabledModules() subscribers so
+    // the drawer + bottom tabs add/remove the entry IMMEDIATELY — on the next
+    // foreground/60s sync, no app restart. Compared as JSON so we only re-render
+    // the nav when it actually changed, not on every routine sync.
+    const nextModulesJson = JSON.stringify(
+      Array.isArray(snap.enabledModules) ? snap.enabledModules : [],
+    );
+    const prevModulesJson = await getMeta(ENABLED_MODULES_META_KEY);
+    await setMeta(ENABLED_MODULES_META_KEY, nextModulesJson);
+    modulesChanged = prevModulesJson !== nextModulesJson;
+
+    // Same pattern for the user's EFFECTIVE permissions — drives the drawer's
+    // permission-based nav gating. Re-renders the drawer immediately when an
+    // admin grants/revokes access (next foreground/60s sync, no restart).
+    const nextPermsJson = JSON.stringify(
+      Array.isArray(snap.permissions) ? snap.permissions : [],
+    );
+    const prevPermsJson = await getMeta(EFFECTIVE_PERMISSIONS_META_KEY);
+    await setMeta(EFFECTIVE_PERMISSIONS_META_KEY, nextPermsJson);
+    permissionsChanged = prevPermsJson !== nextPermsJson;
+
+    // Warehouse scope (same persist+notify pattern) — drives the Items
+    // screen's scoped-view banner. Only written when the server actually sent
+    // it: an older server omitting the field must not clobber a previously
+    // persisted scope (and must never read as "no warehouses assigned").
+    if (snap.warehouseScope && typeof snap.warehouseScope.hasAllAccess === 'boolean') {
+      const nextScopeJson = JSON.stringify({
+        hasAllAccess: snap.warehouseScope.hasAllAccess,
+        warehouseNames: Array.isArray(snap.warehouseScope.warehouseNames)
+          ? snap.warehouseScope.warehouseNames.filter((n): n is string => typeof n === 'string')
+          : [],
+      });
+      const prevScopeJson = await getMeta(WAREHOUSE_SCOPE_META_KEY);
+      await setMeta(WAREHOUSE_SCOPE_META_KEY, nextScopeJson);
+      scopeChanged = prevScopeJson !== nextScopeJson;
+    }
   });
 
-  await setMeta('last_synced_at', snap.serverTime);
-  // Persist the org's enabled modules so the drawer + tab gating can read
-  // them synchronously between syncs (and while offline). Always written —
-  // even an empty array is meaningful (the consumers treat "no persisted
-  // value yet" differently from "explicitly no optional modules").
-  //
-  // If the set CHANGED since the last sync (e.g. an admin toggled a module on
-  // the web control plane), notify the live useEnabledModules() subscribers so
-  // the drawer + bottom tabs add/remove the entry IMMEDIATELY — on the next
-  // foreground/60s sync, no app restart. Compared as JSON so we only re-render
-  // the nav when it actually changed, not on every routine sync.
-  const nextModulesJson = JSON.stringify(
-    Array.isArray(snap.enabledModules) ? snap.enabledModules : [],
-  );
-  const prevModulesJson = await getMeta(ENABLED_MODULES_META_KEY);
-  await setMeta(ENABLED_MODULES_META_KEY, nextModulesJson);
-  if (prevModulesJson !== nextModulesJson) {
-    refreshEnabledModules();
+  if (stale) {
+    // The switch, repair or sign-out that wiped the cache gets a fresh pull:
+    // syncNow chains one after this sync.
+    console.warn('[sync] the cache was wiped while the snapshot was loading; it was discarded');
+    return null;
   }
-
-  // Same pattern for the user's EFFECTIVE permissions — drives the drawer's
-  // permission-based nav gating. Re-renders the drawer immediately when an
-  // admin grants/revokes access (next foreground/60s sync, no restart).
-  const nextPermsJson = JSON.stringify(
-    Array.isArray(snap.permissions) ? snap.permissions : [],
-  );
-  const prevPermsJson = await getMeta(EFFECTIVE_PERMISSIONS_META_KEY);
-  await setMeta(EFFECTIVE_PERMISSIONS_META_KEY, nextPermsJson);
-  if (prevPermsJson !== nextPermsJson) {
-    refreshEffectivePermissions();
-  }
-
-  // Warehouse scope (same persist+notify pattern) — drives the Items
-  // screen's scoped-view banner. Only written when the server actually sent
-  // it: an older server omitting the field must not clobber a previously
-  // persisted scope (and must never read as "no warehouses assigned").
-  if (snap.warehouseScope && typeof snap.warehouseScope.hasAllAccess === 'boolean') {
-    const nextScopeJson = JSON.stringify({
-      hasAllAccess: snap.warehouseScope.hasAllAccess,
-      warehouseNames: Array.isArray(snap.warehouseScope.warehouseNames)
-        ? snap.warehouseScope.warehouseNames.filter((n): n is string => typeof n === 'string')
-        : [],
-    });
-    const prevScopeJson = await getMeta(WAREHOUSE_SCOPE_META_KEY);
-    await setMeta(WAREHOUSE_SCOPE_META_KEY, nextScopeJson);
-    if (prevScopeJson !== nextScopeJson) {
-      refreshWarehouseScope();
-    }
-  }
+  // Notify the live readers only after the new values are committed.
+  if (modulesChanged) refreshEnabledModules();
+  if (permissionsChanged) refreshEffectivePermissions();
+  if (scopeChanged) refreshWarehouseScope();
 
   return {
     items: snap.items.length,
@@ -611,6 +659,10 @@ async function sendOne(
  * only one sync runs at a time.
  */
 let inFlightSync: Promise<void> | null = null;
+/** A pull asked for while another sync was running (see syncNow). */
+let forcedAfterInFlight: Promise<void> | null = null;
+/** The cache generation the in-flight sync started under. */
+let inFlightGeneration = 0;
 
 /**
  * Run pull then push. Called on app open + foreground + a 60s timer.
@@ -620,7 +672,20 @@ let inFlightSync: Promise<void> | null = null;
  *   pull. Used on an org switch after the local cache has been wiped.
  */
 export async function syncNow(force = false): Promise<void> {
-  if (inFlightSync) return inFlightSync;
+  if (inFlightSync) {
+    // Join a running sync only when it started against the current cache. A
+    // forced pull (a workspace switch or repair), or any sync after a wipe (a
+    // sign-out, then the next sign-in's first sync), would otherwise join a
+    // pull that discards itself and leave the cache empty until the next
+    // timer. Run a full pull once the running one finishes instead.
+    if (!force && currentCacheGeneration() === inFlightGeneration) return inFlightSync;
+    forcedAfterInFlight ??= inFlightSync.then(() => {
+      forcedAfterInFlight = null;
+      return syncNow(true);
+    });
+    return forcedAfterInFlight;
+  }
+  inFlightGeneration = currentCacheGeneration();
   inFlightSync = (async () => {
     try {
       await pullSnapshot(force);

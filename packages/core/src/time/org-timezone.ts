@@ -146,3 +146,58 @@ export function formatOrgDateTime(
   // default instead of throwing out of a render.
   return d.toLocaleString('en-US', { timeZone: resolveOrgTimezone(tz), ...opts });
 }
+
+/**
+ * The instant the org's current calendar day began: local midnight in `tz`,
+ * as a UTC Date. For "started today" style counts, which must use the
+ * workspace's day and not the server's UTC day or the viewer's browser day.
+ *
+ * Found by asking Intl what wall-clock time `now` is in `tz`, taking that
+ * day's midnight as if it were UTC, then correcting by the zone's offset at
+ * that instant. The offset is measured twice so a day whose midnight sits next
+ * to a daylight-saving change still lands on the right instant.
+ */
+export function startOfOrgDay(now: Date, tz: string = ORG_TIMEZONE_DEFAULT): Date {
+  const zone = resolveOrgTimezone(tz);
+  const parts = zonedParts(now, zone);
+  const midnightAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, 0, 0, 0);
+  const first = midnightAsUtc - zoneOffsetMs(new Date(midnightAsUtc), zone);
+  const second = midnightAsUtc - zoneOffsetMs(new Date(first), zone);
+  // Where the clocks spring forward AT midnight (Santiago, Havana, Asunción),
+  // local midnight does not exist: the day starts at 01:00. The second
+  // correction then lands an hour early, on the PREVIOUS local day; the first
+  // one is the day's real start.
+  const s2 = zonedParts(new Date(second), zone);
+  if (s2.year !== parts.year || s2.month !== parts.month || s2.day !== parts.day) {
+    return new Date(first);
+  }
+  return new Date(second);
+}
+
+function zonedParts(
+  d: Date,
+  zone: string,
+): { year: number; month: number; day: number; hour: number; minute: number; second: number } {
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: zone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+  const out = { year: 0, month: 0, day: 0, hour: 0, minute: 0, second: 0 };
+  for (const p of fmt.formatToParts(d)) {
+    if (p.type in out) out[p.type as keyof typeof out] = Number(p.value);
+  }
+  return out;
+}
+
+/** Milliseconds `zone` is ahead of UTC at instant `d` (negative west of UTC). */
+function zoneOffsetMs(d: Date, zone: string): number {
+  const p = zonedParts(d, zone);
+  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  return asUtc - Math.floor(d.getTime() / 1000) * 1000;
+}

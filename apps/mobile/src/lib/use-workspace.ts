@@ -1,11 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as React from 'react';
 
+import { accountEpoch, endAccountEpoch } from './account-epoch';
 import { useAuth } from './auth-context';
 import { deleteOrgData } from './db';
 import { refreshEnabledModules } from './enabled-modules';
 import { syncNow } from './sync';
 import { supabase } from './supabase';
+import { chooseActiveOrg } from './workspace-choice';
 
 /**
  * Multi-org / multi-warehouse workspace state. Replaces the older
@@ -107,13 +109,104 @@ async function loadWarehouses(orgId: string) {
     .map((w) => ({ id: w.id, name: w.name }));
 }
 
+/** How long a switch waits for the warehouse list. React Native's fetch has
+ *  no timeout of its own, and a switch waits for this read inside the switch
+ *  queue: a stalled request must not hold every later switch. */
+const WAREHOUSE_READ_TIMEOUT_MS = 15_000;
+
+/** loadWarehouses, answered with [] (as its error path does) when it fails or
+ *  takes longer than WAREHOUSE_READ_TIMEOUT_MS. */
+function loadWarehousesBounded(orgId: string): Promise<WarehouseOption[]> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      console.warn('[workspace] loadWarehouses timed out');
+      resolve([]);
+    }, WAREHOUSE_READ_TIMEOUT_MS);
+    loadWarehouses(orgId).then(
+      (rows) => {
+        clearTimeout(timer);
+        resolve(rows);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve([]);
+      },
+    );
+  });
+}
+
+/** The profile's default organization (the server's choice when a request
+ *  names none), or null when unset or unreadable. */
+async function loadProfileDefaultOrg(userId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('user_profiles')
+    .select('default_organization_id')
+    .eq('id', userId)
+    .maybeSingle();
+  if (error) {
+    console.warn('[workspace] default organization read failed:', error.message);
+    return null;
+  }
+  return ((data as { default_organization_id: string | null } | null)?.default_organization_id ?? null) || null;
+}
+
+/** Switches that have started (see hydrate). */
+let switchesStarted = 0;
+
+// A different account (or none) ends the account epoch the moment auth says
+// so, before any screen reacts: a workspace load or switch still running for
+// the previous account then saves and shows nothing. A token refresh keeps the
+// same user id and ends nothing; the first event only records who is signed in.
+let epochUserId: string | null | undefined;
+supabase.auth.onAuthStateChange((_event, session) => {
+  const id = session?.user?.id ?? null;
+  if (epochUserId !== undefined && id !== epochUserId) endAccountEpoch();
+  epochUserId = id;
+});
+
 async function hydrate(userId: string) {
-  const orgs = await loadOrgs(userId);
-  const persisted = await AsyncStorage.getItem(ORG_STORAGE_KEY);
-  const activeOrgId =
-    persisted && orgs.some((o) => o.id === persisted)
-      ? persisted
-      : orgs[0]?.id ?? null;
+  const epochAtStart = accountEpoch();
+  const switchesAtStart = switchesStarted;
+  const [orgs, persisted, profileDefault] = await Promise.all([
+    loadOrgs(userId),
+    AsyncStorage.getItem(ORG_STORAGE_KEY),
+    loadProfileDefaultOrg(userId),
+  ]);
+  // See workspace-choice.ts: the same order the server uses, and the choice is
+  // SAVED, so X-Organization-Id on every /api/v1 call names the workspace this
+  // screen shows. Before, a choice made after sign-out lived only in memory and
+  // the API answered for the default organization instead.
+  // The account changed while these reads were out (sign-out, another user,
+  // eviction): this load belongs to an account that is gone.
+  if (accountEpoch() !== epochAtStart) return;
+  // A switch made while these reads were out has already saved, wiped and
+  // published its workspace. Deciding from the value read above would put the
+  // screen back on the old workspace while every request and the cache use the
+  // new one. The switch's choice stands; this only refreshes the memberships.
+  if (switchesStarted !== switchesAtStart) {
+    publish({ loading: false, orgs });
+    return;
+  }
+  const choice = chooseActiveOrg({ orgIds: orgs.map((o) => o.id), stored: persisted, profileDefault });
+  const activeOrgId = choice.activeOrgId;
+  if (activeOrgId && choice.persist) {
+    try {
+      await AsyncStorage.setItem(ORG_STORAGE_KEY, activeOrgId);
+    } catch (err) {
+      // Still show the workspace (the server answers for the same default
+      // when no header is saved); a failed save must not leave loading stuck.
+      console.warn('[workspace] saving the chosen workspace failed', err);
+    }
+  }
+  if (activeOrgId && choice.resetCache) {
+    // The cache may hold another workspace's rows; clear the org-scoped
+    // tables (never the outbox) and pull this workspace in full below.
+    try {
+      await deleteOrgData();
+    } catch (err) {
+      console.warn('[workspace] deleteOrgData on workspace repair failed', err);
+    }
+  }
   let warehouses: WarehouseOption[] = [];
   let activeWarehouseId: string | null = null;
   if (activeOrgId) {
@@ -121,6 +214,14 @@ async function hydrate(userId: string) {
     const persistedWh = await AsyncStorage.getItem(WAREHOUSE_STORAGE_KEY(activeOrgId));
     activeWarehouseId =
       persistedWh && warehouses.some((w) => w.id === persistedWh) ? persistedWh : null;
+  }
+  if (accountEpoch() !== epochAtStart) return;
+  if (switchesStarted !== switchesAtStart) {
+    // A switch started during the warehouse read: same as above. A cache wipe
+    // made here may have discarded the switch's own pull, so ask for another.
+    publish({ loading: false, orgs });
+    if (activeOrgId && choice.resetCache) void syncNow(true).then(() => refreshEnabledModules());
+    return;
   }
   const activeOrg = orgs.find((o) => o.id === activeOrgId) ?? null;
   const activeWarehouse = warehouses.find((w) => w.id === activeWarehouseId) ?? null;
@@ -134,10 +235,32 @@ async function hydrate(userId: string) {
     activeWarehouseId,
     activeWarehouseName: activeWarehouse?.name ?? null,
   });
+  if (activeOrgId && choice.resetCache) {
+    void syncNow(true).then(() => refreshEnabledModules());
+  }
 }
 
-export async function setActiveOrg(orgId: string): Promise<void> {
+/** Workspace switches in the order they were asked for (see setActiveOrg). */
+let switchQueue: Promise<void> = Promise.resolve();
+
+/**
+ * Switches run one at a time. A switch saves the new workspace, then waits for
+ * the cache wipe and the warehouse read before it publishes, so a second tap
+ * in that window used to be lost (a re-tap of the still-highlighted workspace
+ * returned early) or publish out of order. Now it waits its turn and then
+ * applies: the last choice wins and is published last.
+ */
+export function setActiveOrg(orgId: string): Promise<void> {
+  // A switch tapped for one account never runs for the next (see account-epoch).
+  const epoch = accountEpoch();
+  const run = switchQueue.then(() => (epoch === accountEpoch() ? switchActiveOrg(orgId, epoch) : undefined));
+  switchQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
   if (orgId === cached.activeOrgId) return;
+  switchesStarted += 1;
   await AsyncStorage.setItem(ORG_STORAGE_KEY, orgId);
   // Multi-org device isolation: wipe the prior org's cached SQLite tables and
   // reset the delta cursor BEFORE the pull below. Without this, the local
@@ -150,6 +273,7 @@ export async function setActiveOrg(orgId: string): Promise<void> {
   } catch (err) {
     console.warn('[workspace] deleteOrgData on org switch failed', err);
   }
+  if (epoch !== accountEpoch()) return; // signed out mid-switch: show nothing
   const orgRow = cached.orgs.find((o) => o.id === orgId) ?? null;
   publish({
     activeOrgId: orgId,
@@ -159,11 +283,12 @@ export async function setActiveOrg(orgId: string): Promise<void> {
     activeWarehouseId: null,
     activeWarehouseName: null,
   });
-  const warehouses = await loadWarehouses(orgId);
+  const warehouses = await loadWarehousesBounded(orgId);
   const persistedWh = await AsyncStorage.getItem(WAREHOUSE_STORAGE_KEY(orgId));
   const activeWarehouseId =
     persistedWh && warehouses.some((w) => w.id === persistedWh) ? persistedWh : null;
   const activeWarehouse = warehouses.find((w) => w.id === activeWarehouseId) ?? null;
+  if (epoch !== accountEpoch()) return;
   publish({
     warehouses,
     activeWarehouseId,

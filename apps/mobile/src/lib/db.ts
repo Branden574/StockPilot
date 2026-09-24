@@ -31,6 +31,31 @@ export async function getDb(): Promise<SQLite.SQLiteDatabase> {
 }
 
 /**
+ * Transactions run one at a time. expo-sqlite's withTransactionAsync is
+ * BEGIN / task / COMMIT on the app's ONE connection, so a second caller that
+ * starts while the first is still awaiting fails its BEGIN ("cannot start a
+ * transaction within a transaction") and its catch then runs ROLLBACK, which
+ * rolls back the FIRST caller's open transaction. The first caller's
+ * remaining statements then autocommit one by one and its COMMIT and ROLLBACK
+ * both fail ("no transaction is active"). A snapshot pull and a screen caching
+ * what it just fetched (the cycle-count detail opened from a notification at
+ * cold start) collided exactly like that. Every transaction in the app goes
+ * through this queue instead of calling withTransactionAsync directly.
+ *
+ * A task must not call withDbTransaction itself: it would wait on its own
+ * turn forever. Tasks run plain statements only.
+ */
+type TransactionDb = Pick<SQLite.SQLiteDatabase, 'withTransactionAsync'>;
+let transactionQueue: Promise<void> = Promise.resolve();
+
+export function withDbTransaction(db: TransactionDb, task: () => Promise<void>): Promise<void> {
+  const run = transactionQueue.then(() => db.withTransactionAsync(task));
+  // The next transaction waits for this one to finish, not to succeed.
+  transactionQueue = run.catch(() => undefined);
+  return run;
+}
+
+/**
  * Idempotent app-startup hook — wires DB open + migrations into the
  * root layout effect so any screen that runs `getDb()` after this
  * resolves can assume the schema exists.
@@ -198,6 +223,11 @@ async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
     'item_variant_label',
     'text',
   );
+  // The count's permanent reference, CC-000042 (server migration 0358). A
+  // display column, so it is added in place (never a SCHEMA_VERSION bump, which
+  // would drop the outbox): existing rows read NULL, shown as "Reference
+  // unavailable" until the next snapshot pull or online open fills them.
+  await addColumnIfMissing(db, 'cycle_counts', 'count_number', 'integer');
 }
 
 /**
@@ -301,6 +331,22 @@ async function clearOrgScopedTables(db: SQLite.SQLiteDatabase): Promise<void> {
 }
 
 /**
+ * Bumped the moment a wipe of the org-scoped cache is REQUESTED (workspace
+ * switch, workspace repair, sign-out), before the wipe waits its turn in the
+ * transaction queue. A snapshot pull notes the value before it reads its
+ * cursor and sends its request, and discards its answer if the value has moved
+ * (sync.ts): that answer belongs to a cache that has been, or is about to be,
+ * wiped. Keyed on wipes, not on the workspace id, so the first pull after
+ * sign-in (sent before the workspace was saved, answered for the same default
+ * workspace) is kept.
+ */
+let cacheGeneration = 0;
+
+export function currentCacheGeneration(): number {
+  return cacheGeneration;
+}
+
+/**
  * Wipe the local SQLite cache for an ORG SWITCH (multi-org device isolation).
  *
  * Clears all per-org cached data tables and resets the delta cursor
@@ -334,22 +380,28 @@ async function clearOrgScopedTables(db: SQLite.SQLiteDatabase): Promise<void> {
  * follow-up.
  */
 export async function deleteOrgData(): Promise<void> {
+  cacheGeneration += 1;
   const db = await getDb();
-  await clearOrgScopedTables(db);
+  // Queued like every transaction, so the wipe never interleaves with a
+  // snapshot pull that is mid-write.
+  await withDbTransaction(db, () => clearOrgScopedTables(db));
 }
 
 export async function wipeForSignOut(): Promise<void> {
+  cacheGeneration += 1;
   const db = await getDb();
-  await clearOrgScopedTables(db);
-  // Sign-out is a full reset: the user (and any queued writes) are leaving the
-  // device session entirely, so the pending outbox is dropped here too.
-  //
-  // EXCEPT rows already marked 'rejected'. Those are terminal — no drain reads
-  // them, so keeping them cannot replay anything — and they are the only record
-  // that queued work existed at all. This path also runs during the disabled-
-  // account eviction, which rejects the outbox immediately beforehand
-  // (use-account-gate.ts); deleting them here would mean the operator is shown
-  // the disabled screen while the work they thought they had saved disappears
-  // silently, and listRejected() could never return a row.
-  await db.execAsync("delete from pending_actions where status <> 'rejected';");
+  await withDbTransaction(db, async () => {
+    await clearOrgScopedTables(db);
+    // Sign-out is a full reset: the user (and any queued writes) are leaving the
+    // device session entirely, so the pending outbox is dropped here too.
+    //
+    // EXCEPT rows already marked 'rejected'. Those are terminal — no drain reads
+    // them, so keeping them cannot replay anything — and they are the only record
+    // that queued work existed at all. This path also runs during the disabled-
+    // account eviction, which rejects the outbox immediately beforehand
+    // (use-account-gate.ts); deleting them here would mean the operator is shown
+    // the disabled screen while the work they thought they had saved disappears
+    // silently, and listRejected() could never return a row.
+    await db.execAsync("delete from pending_actions where status <> 'rejected';");
+  });
 }

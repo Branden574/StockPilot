@@ -92,7 +92,21 @@ vi.mock('@/lib/supabase/server', () => ({
 
 // ── Per-page service + client-component mocks ──────────────────────────────
 
-const ccList = vi.fn(async () => []);
+// The cycle-count pages read the org row for the workspace timezone.
+vi.mock('@/lib/dashboard/request-cache', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/dashboard/request-cache')>()),
+  getOrgRowForRequest: vi.fn(async () => ({ timezone: 'America/Los_Angeles' })),
+}));
+
+const ccListPage = vi.fn(async () => ({
+  items: [],
+  page: 1,
+  pageSize: 25,
+  total: 0,
+  totalPages: 1,
+  hasPrevious: false,
+  hasNext: false,
+}));
 const ccGetDetailPage = vi.fn(async () => ({
   header: {
     id: 'cc-1',
@@ -113,7 +127,7 @@ const ccItemsInScope = vi.fn(async () => 0);
 vi.mock('@/server/services/cycle-counts', () => ({
   CycleCountsService: {
     forCurrentUser: vi.fn(async () => ({
-      list: ccList,
+      listPage: ccListPage,
       getDetailPage: ccGetDetailPage,
       itemsInScopeCount: ccItemsInScope,
     })),
@@ -205,11 +219,13 @@ const emptySearchParams = Promise.resolve({});
 describe('cycle counts list (/dashboard/cycle-counts)', () => {
   it('viewer without the grant is redirected', async () => {
     setCtx('viewer', ['items:read']);
-    await expect(CycleCountsPage()).rejects.toThrow('redirect:/dashboard');
+    await expect(CycleCountsPage({ searchParams: emptySearchParams })).rejects.toThrow(
+      'redirect:/dashboard',
+    );
   });
   it('viewer WITH cycle_counts:read renders read-only (no Start-a-count CTA)', async () => {
     setCtx('viewer', ['cycle_counts:read']);
-    render(await CycleCountsPage());
+    render(await CycleCountsPage({ searchParams: emptySearchParams }));
     expect(screen.getByRole('heading', { name: 'Cycle counts' })).toBeInTheDocument();
     expect(screen.queryByText('+ Start a count')).not.toBeInTheDocument();
     // Empty-state CTA is a write affordance too.
@@ -217,7 +233,7 @@ describe('cycle counts list (/dashboard/cycle-counts)', () => {
   });
   it('staff (static defaults) is unchanged: page renders WITH the CTA', async () => {
     setCtx('staff');
-    render(await CycleCountsPage());
+    render(await CycleCountsPage({ searchParams: emptySearchParams }));
     expect(screen.getByText('+ Start a count')).toBeInTheDocument();
   });
 });

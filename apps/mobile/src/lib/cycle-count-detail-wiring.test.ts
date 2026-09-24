@@ -54,3 +54,11 @@ describe('cycle-count/[id].tsx — post goes through the API twin (SP-055)', () 
     expect(screen).toContain('postCycleCountErrorMessage(');
   });
 });
+
+describe('cycle-count/[id].tsx: a failed cache write is shown, not swallowed', () => {
+  it('guards the store-then-read after the fetch and surfaces it when nothing is on screen', () => {
+    expect(screen).toMatch(
+      /try \{\s+await cacheCycleCount\(fetchedHeader, fetchedLines\);\s+const fresh = await getCycleCount\(id\);\s+if \(fresh\) hydrateFromSnapshot\(fresh\);\s+\} catch \(e\) \{[\s\S]*?if \(!cached\) \{\s+setReadError\([^)]*\);\s+setEmptyState\('read-failed'\);/,
+    );
+  });
+});

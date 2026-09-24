@@ -4,6 +4,7 @@ import {
   ORG_TIMEZONE_DEFAULT,
   formatOrgDateTime,
   resolveOrgTimezone,
+  startOfOrgDay,
 } from './org-timezone';
 
 /**
@@ -110,5 +111,81 @@ describe('resolveOrgTimezone — a stored zone must never take a screen down', (
     expect(formatOrgDateTime(instant, opts, 'America/New_York')).not.toBe(
       formatOrgDateTime(instant, opts, ORG_TIMEZONE_DEFAULT),
     );
+  });
+});
+
+describe('startOfOrgDay', () => {
+  it('returns local midnight in the org zone, as a UTC instant', () => {
+    // 2026-09-23 10:00 UTC is 03:00 PDT (UTC-7): the LA day began 07:00 UTC.
+    expect(startOfOrgDay(new Date('2026-09-23T10:00:00Z'), 'America/Los_Angeles').toISOString()).toBe(
+      '2026-09-23T07:00:00.000Z',
+    );
+    // 2026-09-23 03:00 UTC is still Sep 22 in LA (20:00 PDT).
+    expect(startOfOrgDay(new Date('2026-09-23T03:00:00Z'), 'America/Los_Angeles').toISOString()).toBe(
+      '2026-09-22T07:00:00.000Z',
+    );
+  });
+
+  it('handles days that start in standard time and days next to a DST change', () => {
+    // Winter: PST is UTC-8.
+    expect(startOfOrgDay(new Date('2026-01-15T20:00:00Z'), 'America/Los_Angeles').toISOString()).toBe(
+      '2026-01-15T08:00:00.000Z',
+    );
+    // 2026-03-08 is the US spring-forward day; its midnight is still PST.
+    expect(startOfOrgDay(new Date('2026-03-08T20:00:00Z'), 'America/Los_Angeles').toISOString()).toBe(
+      '2026-03-08T08:00:00.000Z',
+    );
+    // 2026-11-01 is the fall-back day; its midnight is still PDT.
+    expect(startOfOrgDay(new Date('2026-11-01T20:00:00Z'), 'America/Los_Angeles').toISOString()).toBe(
+      '2026-11-01T07:00:00.000Z',
+    );
+  });
+
+  it('works east of UTC and for UTC itself, and falls back on a bad zone', () => {
+    expect(startOfOrgDay(new Date('2026-09-23T20:00:00Z'), 'Asia/Tokyo').toISOString()).toBe(
+      '2026-09-23T15:00:00.000Z',
+    );
+    expect(startOfOrgDay(new Date('2026-09-23T20:00:00Z'), 'UTC').toISOString()).toBe(
+      '2026-09-23T00:00:00.000Z',
+    );
+    expect(startOfOrgDay(new Date('2026-09-23T10:00:00Z'), 'Not/AZone').toISOString()).toBe(
+      '2026-09-23T07:00:00.000Z',
+    );
+  });
+});
+
+describe('startOfOrgDay where midnight does not exist', () => {
+  it('starts the day at the first real instant when clocks spring forward at midnight', () => {
+    // 2026-09-06: Santiago moves 00:00 -> 01:00 (UTC-4 -> UTC-3). The day
+    // begins at 01:00 local = 04:00 UTC, never on the evening before.
+    expect(startOfOrgDay(new Date('2026-09-06T15:00:00Z'), 'America/Santiago').toISOString()).toBe(
+      '2026-09-06T04:00:00.000Z',
+    );
+  });
+
+  it('agrees with a brute-force search on every day of 2026, in zones that change clocks', () => {
+    const zones = [
+      'America/Los_Angeles', 'America/Santiago', 'America/Havana', 'America/Asuncion',
+      'Australia/Lord_Howe', 'Pacific/Chatham', 'Asia/Kolkata', 'Europe/London',
+    ];
+    for (const z of zones) {
+      const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: z, year: 'numeric', month: '2-digit', day: '2-digit' });
+      const localDay = (ms: number) => fmt.format(new Date(ms));
+      for (let t = Date.UTC(2026, 0, 1, 15); t < Date.UTC(2027, 0, 1); t += 86_400_000) {
+        const today = localDay(t);
+        // The true start: the earliest minute whose local date is today's.
+        // Local dates only move forward, so a binary search over minutes finds it.
+        let lo = Math.floor((t - 36 * 3_600_000) / 60_000);
+        let hi = Math.floor(t / 60_000);
+        while (lo < hi) {
+          const mid = Math.floor((lo + hi) / 2);
+          if (localDay(mid * 60_000) < today) lo = mid + 1;
+          else hi = mid;
+        }
+        const truth = new Date(lo * 60_000).toISOString();
+        const got = startOfOrgDay(new Date(t), z).toISOString();
+        if (got !== truth) expect({ z, day: today, got }).toEqual({ z, day: today, got: truth });
+      }
+    }
   });
 });

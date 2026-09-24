@@ -58,6 +58,8 @@ vi.mock('./account-disabled-state', () => disabledMock);
 // drain path touches them, so they are stubbed wholesale.
 vi.mock('./db', () => ({
   getDb: vi.fn(),
+  withDbTransaction: vi.fn(),
+  currentCacheGeneration: vi.fn(() => 0),
   getMeta: vi.fn(async () => null),
   setMeta: vi.fn(async () => {}),
 }));

@@ -13,7 +13,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { variantLabel } from '@stockpilot/core';
+import {
+  CYCLE_COUNT_REFERENCE_UNAVAILABLE,
+  cycleCountScopeLabel,
+  formatCycleCountNumber,
+  variantLabel,
+} from '@stockpilot/core';
 
 import { CycleCountReassignSheet } from '@/components/cycle-count-reassign-sheet';
 import { CycleCountReleaseSheet } from '@/components/cycle-count-release-sheet';
@@ -66,6 +71,13 @@ const SAVE_DEBOUNCE_MS = 300;
 
 export default function CycleCountDetail() {
   const router = useRouter();
+  // A cold-start link (a notification tap with the app closed) opens this
+  // screen with no history under it, and going back is then a no-op that
+  // leaves the person stuck here. Fall back to the cycle-count list.
+  const leave = React.useCallback(() => {
+    if (router.canGoBack()) router.back();
+    else router.replace('/cycle-counts');
+  }, [router]);
   // Counting + posting are WRITES (stock:adjust). A cycle_counts:read-only
   // viewer gets a read-only view: inputs frozen, no post footer — mirroring
   // the web detail's canAdjust=false mode. The API enforces server-side;
@@ -107,6 +119,10 @@ export default function CycleCountDetail() {
   /** The server's own message for a refused read, shown instead of an empty
    *  count. Only ever set when there is no cached snapshot to fall back to. */
   const [readError, setReadError] = React.useState<string | null>(null);
+  // The count's scope ('warehouse' | 'selection'), from the online read only:
+  // the offline cache does not store it, so offline the subtitle falls back
+  // to what the cache knows.
+  const [scope, setScope] = React.useState<string | null>(null);
   const [conflictBanner, setConflictBanner] = React.useState<string | null>(null);
 
   const debounceRefs = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -172,8 +188,8 @@ export default function CycleCountDetail() {
       supabase
         .from('cycle_counts')
         .select(
-          `id, organization_id, status, started_at, completed_at, warehouse_id,
-           assigned_to,
+          `id, count_number, organization_id, status, started_at, completed_at,
+           warehouse_id, assigned_to, notes, scope,
            warehouse:warehouses!warehouse_id (name)`,
         )
         .eq('organization_id', orgId)
@@ -208,6 +224,7 @@ export default function CycleCountDetail() {
     const wh = ccRow.warehouse as { name: string } | { name: string }[] | null;
     const whName = Array.isArray(wh) ? wh[0]?.name ?? null : wh?.name ?? null;
 
+    setScope((ccRow.scope as string | null | undefined) ?? null);
     const fetchedHeader = {
       id: ccRow.id as string,
       organizationId: (ccRow.organization_id as string | null) ?? null,
@@ -217,6 +234,10 @@ export default function CycleCountDetail() {
       startedAt: (ccRow.started_at as string | null) ?? new Date().toISOString(),
       postedAt: (ccRow.completed_at as string | null) ?? null,
       assignedTo: (ccRow.assigned_to as string | null) ?? null,
+      // Permanent reference (server 0358). Null from a server without it: the
+      // cache then keeps whatever number it already holds.
+      countNumber: (ccRow.count_number as number | null | undefined) ?? null,
+      notes: (ccRow.notes as string | null | undefined) ?? null,
     };
 
     const fetchedLines = ((lineRows ?? []) as Array<Record<string, unknown>>).map((r) => {
@@ -268,9 +289,21 @@ export default function CycleCountDetail() {
       }
     }
 
-    await cacheCycleCount(fetchedHeader, fetchedLines);
-    const fresh = await getCycleCount(id);
-    if (fresh) hydrateFromSnapshot(fresh);
+    // The screen renders from the phone's cache, so the fetch is stored first.
+    // If that write fails the screen must say so: a throw here used to go
+    // unhandled (load() is fire-and-forget) and leave an uncached count
+    // spinning forever.
+    try {
+      await cacheCycleCount(fetchedHeader, fetchedLines);
+      const fresh = await getCycleCount(id);
+      if (fresh) hydrateFromSnapshot(fresh);
+    } catch (e) {
+      console.warn('[cycle-count] could not store the count on this phone', e);
+      if (!cached) {
+        setReadError('This count could not be saved on this phone.');
+        setEmptyState('read-failed');
+      }
+    }
     setLoading(false);
   }, [id, orgId]);
 
@@ -395,10 +428,13 @@ export default function CycleCountDetail() {
       setPosting(false);
     }
     Alert.alert('Posted', 'Variance adjustments applied.');
-    router.back();
+    leave();
   }
 
   const countedCount = lines.filter((l) => l.counted !== null).length;
+  // The count's permanent reference, from the cache (filled by the snapshot
+  // pull or the fetch above). Never made up when absent.
+  const reference = formatCycleCountNumber(header?.countNumber);
   const allCounted = countedCount === lines.length && lines.length > 0;
   const offline = syncSnapshot.status === 'offline';
   const hasPending = pendingForThis > 0;
@@ -412,7 +448,7 @@ export default function CycleCountDetail() {
       <SafeAreaView style={styles.root} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
         <View style={styles.header}>
-          <Pressable onPress={() => router.back()} style={styles.backBtn}>
+          <Pressable onPress={leave} style={styles.backBtn}>
             <Text style={styles.backText}>← Back</Text>
           </Pressable>
         </View>
@@ -443,7 +479,7 @@ export default function CycleCountDetail() {
       <SafeAreaView style={styles.root} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
         <View style={styles.header}>
-          <Pressable onPress={() => router.back()} style={styles.backBtn}>
+          <Pressable onPress={leave} style={styles.backBtn}>
             <Text style={styles.backText}>← Back</Text>
           </Pressable>
         </View>
@@ -471,14 +507,41 @@ export default function CycleCountDetail() {
     <SafeAreaView style={styles.root} edges={['top']}>
       <Stack.Screen options={{ headerShown: false }} />
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn}>
+        <Pressable onPress={leave} style={styles.backBtn}>
           <Text style={styles.backText}>← Back</Text>
         </Pressable>
         <View style={styles.headerRow}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.title}>Cycle count</Text>
+            {reference ? (
+              <>
+                <Text style={styles.eyebrow}>CYCLE COUNT</Text>
+                {/* Selectable: a long press offers the system Copy, which is the
+                    copy action here (this binary has no clipboard module, so the
+                    app never claims a copy it cannot confirm). */}
+                <Text
+                  style={[styles.title, styles.reference]}
+                  selectable
+                  accessibilityLabel={`Cycle count ${reference}`}
+                  accessibilityHint="Long press to copy the reference"
+                >
+                  {reference}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.title}>Cycle count</Text>
+                <Text style={styles.subtitle}>{CYCLE_COUNT_REFERENCE_UNAVAILABLE}</Text>
+              </>
+            )}
             <Text style={styles.subtitle}>
-              {header?.warehouseName ?? '—'} · {countedCount}/{lines.length} counted
+              {header && scope
+                ? cycleCountScopeLabel({
+                    warehouseId: header.warehouseId,
+                    warehouseName: header.warehouseName,
+                    scope,
+                  })
+                : (header?.warehouseName ?? (header?.warehouseId ? '—' : 'No single warehouse'))}{' '}
+              · {countedCount}/{lines.length} counted
             </Text>
           </View>
           {header && canAdjust && isOpen ? (
@@ -674,7 +737,7 @@ export default function CycleCountDetail() {
           setReleaseOpen(false);
           // The count is no longer assigned to us — return to the list, which
           // reloads with the updated assignment.
-          router.back();
+          leave();
         }}
       />
 
@@ -687,7 +750,7 @@ export default function CycleCountDetail() {
         onReassigned={() => {
           setReassignOpen(false);
           // Reassigned away — reflect the new assignment by reloading the list.
-          router.back();
+          leave();
         }}
       />
     </SafeAreaView>
@@ -715,6 +778,8 @@ const styles = StyleSheet.create({
   backText: { color: theme.primary, fontSize: 14 },
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, marginTop: 4 },
   title: { color: theme.text, fontSize: 22, fontWeight: '700' },
+  eyebrow: { color: theme.textMuted, fontSize: 10.5, letterSpacing: 1.2, fontWeight: '600' },
+  reference: { fontVariant: ['tabular-nums'], letterSpacing: 0.2 },
   subtitle: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
   badgeRow: {
     marginTop: space.sm,

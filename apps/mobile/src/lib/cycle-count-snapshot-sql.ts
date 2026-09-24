@@ -19,7 +19,9 @@
  * THE RULES ENCODED BELOW:
  *   header: update only what the snapshot carries; never touch cached_at,
  *           warehouse_name, organization_id or posted_at (the detail screen's
- *           full cache owns those).
+ *           full cache owns those). count_number (0358) is permanent, so a
+ *           snapshot from a server that does not send it yet never erases one
+ *           already stored.
  *   lines:  server wins for clean lines, LOCAL wins for dirty lines
  *           (counted is kept when local_dirty = 1) — the same policy
  *           cacheCycleCount already applies — and item metadata is never
@@ -31,14 +33,15 @@
 
 export const CYCLE_COUNT_HEADER_UPSERT_SQL = `
   insert into cycle_counts
-    (id, status, warehouse_id, started_at, assigned_to, notes, last_synced_at)
-  values (?, ?, ?, ?, ?, ?, ?)
+    (id, status, warehouse_id, started_at, assigned_to, notes, count_number, last_synced_at)
+  values (?, ?, ?, ?, ?, ?, ?, ?)
   on conflict(id) do update set
     status         = excluded.status,
     warehouse_id   = excluded.warehouse_id,
     started_at     = excluded.started_at,
     assigned_to    = excluded.assigned_to,
     notes          = excluded.notes,
+    count_number   = coalesce(excluded.count_number, cycle_counts.count_number),
     last_synced_at = excluded.last_synced_at`;
 
 export const CYCLE_COUNT_LINE_UPSERT_SQL = `
@@ -59,3 +62,39 @@ export const CYCLE_COUNT_STALE_LINES_DELETE_SQL = `
    where count_id = ?
      and local_dirty = 0
      and id not in (select value from json_each(?))`;
+
+/**
+ * The detail screen's FULL header cache write (cacheCycleCount), here so it
+ * runs against a real SQLite in the test runner too. `insert or replace` is a
+ * DELETE + INSERT, so every column it omits goes NULL; the permanent reference
+ * (count_number, 0358) and the notes are therefore listed, and each falls back
+ * to the value already stored when the caller has none (the subquery reads
+ * the row before the replace removes it).
+ *
+ * Params: id, organization_id, status, warehouse_id, warehouse_name,
+ * started_at, posted_at, assigned_to, last_synced_at, cached_at,
+ * count_number, id, notes, id.
+ */
+export const CYCLE_COUNT_CACHE_HEADER_SQL = `
+  insert or replace into cycle_counts
+    (id, organization_id, status, warehouse_id, warehouse_name,
+     started_at, posted_at, assigned_to, last_synced_at, cached_at,
+     count_number, notes)
+  values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+          coalesce(?, (select count_number from cycle_counts where id = ?)),
+          coalesce(?, (select notes from cycle_counts where id = ?)))`;
+
+/**
+ * The downloaded counts the history screen lists offline (and under a failed
+ * read): open counts only, newest first. The warehouse name falls back to the
+ * synced warehouses table, because a count the snapshot downloaded but nobody
+ * opened has no warehouse_name of its own.
+ */
+export const CACHED_CYCLE_COUNTS_LIST_SQL = `
+  select cc.id, cc.organization_id, cc.status, cc.warehouse_id,
+         coalesce(cc.warehouse_name, w.name) as warehouse_name,
+         cc.started_at, cc.posted_at, cc.assigned_to, cc.cached_at, cc.count_number, cc.notes
+    from cycle_counts cc
+    left join warehouses w on w.id = cc.warehouse_id
+   where cc.status = 'in_progress' or cc.status is null
+   order by cc.started_at desc`;
