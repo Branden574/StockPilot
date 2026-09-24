@@ -23,8 +23,9 @@ import { OrderRequestsService } from './order-requests';
  * Model B design, a placement IS its own `inventory_items` row — same SKU,
  * different charter/rack, each with its own `quantity_on_hand`. Every step
  * of the fulfillment path is keyed by that row's `id`, never by `sku`:
- *   - create()            inserts `order_request_lines.item_id = line.itemId`
- *                          verbatim (per-line, from an itemMap keyed by id).
+ *   - create()            sends `p_lines[].item_id = line.itemId` verbatim to
+ *                          create_order_request (0365), whose line trigger
+ *                          stamps unit_cost_at_request from THAT item row.
  *   - recordPickedLine()   forwards {p_line_id, p_qty} to partial_pick_line;
  *                          no item/sku argument at all.
  *   - completePicking()    forwards {p_order_id} to complete_picking, which
@@ -70,8 +71,7 @@ describe('OrderRequestsService — multi-placement SKU fulfillment (Model B, ver
     // still bind each line by the caller-chosen id, not by SKU.
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: [NORTH_ITEM, SOUTH_ITEM], error: null },
-      'order_requests.insert.single': { data: { id: 'order-1' }, error: null },
-      'order_request_lines.insert': { data: null, error: null },
+      'rpc:create_order_request': { data: { id: 'order-1' }, error: null },
     });
 
     await svc(stub).create({
@@ -83,24 +83,27 @@ describe('OrderRequestsService — multi-placement SKU fulfillment (Model B, ver
       ],
     });
 
-    type LinePayload = { item_id: string; quantity_requested: number; unit_cost_at_request: number };
-    const insertArgs = stub.chainArgs.get('order_request_lines.insert');
-    const payload = insertArgs?.[0]?.[0] as LinePayload[] | undefined;
+    type LinePayload = Record<string, unknown> & { item_id: string; quantity: number };
+    const call = stub.rpcCalls.find((c) => c.name === 'create_order_request');
+    const payload = (call?.args as { p_lines?: LinePayload[] } | undefined)?.p_lines;
     expect(payload).toBeDefined();
+    // Same SKU, different placements: two lines, never merged into one.
     expect(payload).toHaveLength(2);
     const [line1, line2] = payload as [LinePayload, LinePayload];
 
     // Line 1 requested the SOUTH placement — must stay bound to SOUTH's own
-    // id and cost, not fall back to NORTH (its same-SKU sibling).
+    // id, not fall back to NORTH (its same-SKU sibling).
     expect(line1.item_id).toBe(SOUTH_ITEM.id);
-    expect(line1.quantity_requested).toBe(10);
-    expect(line1.unit_cost_at_request).toBe(SOUTH_ITEM.unit_cost);
+    expect(line1.quantity).toBe(10);
 
-    // Line 2 requested the NORTH placement — must stay bound to NORTH's own
-    // id and cost.
+    // Line 2 requested the NORTH placement — must stay bound to NORTH's own id.
     expect(line2.item_id).toBe(NORTH_ITEM.id);
-    expect(line2.quantity_requested).toBe(3);
-    expect(line2.unit_cost_at_request).toBe(NORTH_ITEM.unit_cost);
+    expect(line2.quantity).toBe(3);
+
+    // The cost is the trigger's to stamp from each line's own item row; the
+    // client sends none, so it cannot hand one placement the other's cost.
+    expect(line1).not.toHaveProperty('unit_cost_at_request');
+    expect(line2).not.toHaveProperty('unit_cost_at_request');
   });
 
   it('recordPickedLine() forwards {p_line_id, p_qty} only — no item/SKU resolution in JS', async () => {

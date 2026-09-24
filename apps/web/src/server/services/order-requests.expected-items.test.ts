@@ -57,7 +57,9 @@ describe('OrderRequestsService.create — expected-items guard (mig 0277)', () =
     expect((err as { code: string }).code).toBe('validation_error');
     expect((err as Error).message).toContain("This item hasn't been received yet");
     expect((err as Error).message).toContain('PD 8/7 Lanyard');
-    // Fails BEFORE any write: no order_requests header may exist.
+    // Fails BEFORE any write: create_order_request (the only writer) never
+    // runs, and nothing is inserted directly either.
+    expect(stub.rpcCalls.map((c) => c.name)).not.toContain('create_order_request');
     expect(stub.chainsAll.get('order_requests.insert')).toBeUndefined();
   });
 
@@ -75,9 +77,9 @@ describe('OrderRequestsService.create — expected-items guard (mig 0277)', () =
         ],
         error: null,
       },
-      // Sentinel failure on the header insert: reaching it proves the
-      // expected-items guard passed the unflagged line through.
-      'order_requests.insert': { data: null, error: { message: 'sentinel-header-insert' } },
+      // Sentinel failure on the write: reaching it proves the expected-items
+      // guard passed the unflagged line through.
+      'rpc:create_order_request': { data: null, error: { message: 'sentinel-create' } },
     });
 
     const err = await svc(stub)
@@ -85,9 +87,10 @@ describe('OrderRequestsService.create — expected-items guard (mig 0277)', () =
       .catch((e: unknown) => e);
 
     // NOT the expected-items validation error — the flow ran past the
-    // guard and died on the sentinel header insert instead.
+    // guard and died on the sentinel write instead.
     expect((err as { code: string }).code).toBe('internal_error');
     expect((err as Error).message).not.toContain("hasn't been received yet");
-    expect(stub.chainsAll.get('order_requests.insert')).toBeDefined();
+    expect((err as { internalDetail?: string }).internalDetail).toBe('sentinel-create');
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['create_order_request']);
   });
 });

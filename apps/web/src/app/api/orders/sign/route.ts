@@ -230,37 +230,64 @@ export async function POST(req: NextRequest) {
   // storefront catalog so the Place-an-Order avail pills update immediately.
   revalidateTag('orders-new-v2-catalog', 'max');
 
+  // Live tracking: purge the driver's live GPS point after this leg (best-effort).
+  // Ahead of the status read below: the leg is over whatever the status is,
+  // and a failed status read returns early.
+  try {
+    await admin.from('delivery_locations').delete().eq('order_request_id', order.id);
+  } catch {
+    /* non-fatal */
+  }
+
   // The hand-over either COMPLETED the order (owed 0) or forked it to
   // BACKORDERED (still owed units) — the 0244 fork. Read the resulting status
   // + line totals once and branch every downstream side effect on it: a
   // backordered hand-over is NOT a completion, so it must not mint a return
   // token, send a "completed" email, or fire order.completed.
-  const { data: fullRow } = await admin
-    .from('order_requests')
-    .select('*')
-    .eq('id', order.id)
-    .single();
+  //
+  // The signature is already recorded, so a failed re-read never fails the
+  // signer. It is retried once (a transient blip is the realistic cause), and
+  // if it still fails we report it and skip every status-dependent follow-up:
+  // guessing the status would send a completion receipt for a backordered
+  // order, or the reverse.
+  const readStatusRow = () => admin.from('order_requests').select('*').eq('id', order.id).single();
+  let statusRead = await readStatusRow();
+  if (statusRead.error) statusRead = await readStatusRow();
+  if (statusRead.error) {
+    await reportError(statusRead.error, {
+      tag: 'orders.sign.post_status_read',
+      level: 'warning',
+      extra: { orderId: order.id },
+    });
+    return NextResponse.json({ ok: true, data: { id: order.id } }, { status: 200 });
+  }
+  const fullRow = statusRead.data;
   const newStatus = (fullRow as { status?: string } | null)?.status ?? null;
   const isCompleted = newStatus === 'completed';
   const isBackordered = newStatus === 'backordered';
 
-  const { data: aggLines } = await admin
+  // Line totals for the notices. A failed read leaves them null (not 0), and
+  // every notice that would print them is skipped or sent without them: "0 of
+  // 0 provided" is a wrong statement, not a degraded one.
+  const { data: aggLines, error: aggErr } = await admin
     .from('order_request_lines')
     .select('quantity_requested, quantity_fulfilled')
     .eq('order_request_id', order.id);
-  const aggRows = (aggLines ?? []) as {
-    quantity_requested: number | null;
-    quantity_fulfilled: number | null;
-  }[];
-  const totalRequested = aggRows.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0);
-  const totalFulfilled = aggRows.reduce((s, l) => s + (Number(l.quantity_fulfilled) || 0), 0);
-  const owed = Math.max(0, totalRequested - totalFulfilled);
-
-  // Live tracking: purge the driver's live GPS point after this leg (best-effort).
-  try {
-    await admin.from('delivery_locations').delete().eq('order_request_id', order.id);
-  } catch {
-    /* non-fatal */
+  let totals: { requested: number; fulfilled: number; owed: number } | null = null;
+  if (aggErr) {
+    await reportError(aggErr, {
+      tag: 'orders.sign.line_totals_read',
+      level: 'warning',
+      extra: { orderId: order.id },
+    });
+  } else {
+    const aggRows = (aggLines ?? []) as {
+      quantity_requested: number | null;
+      quantity_fulfilled: number | null;
+    }[];
+    const requested = aggRows.reduce((s, l) => s + (Number(l.quantity_requested) || 0), 0);
+    const fulfilled = aggRows.reduce((s, l) => s + (Number(l.quantity_fulfilled) || 0), 0);
+    totals = { requested, fulfilled, owed: Math.max(0, requested - fulfilled) };
   }
 
   // WHO the requester is, resolved ONCE (see resolveRequesterContact): the
@@ -277,16 +304,28 @@ export async function POST(req: NextRequest) {
   // SP-020: gated on requester_user_id ALONE. The old `&& order.requester_email`
   // conjunct made this a dead branch for exactly the population that CAN opt
   // out (internal members, whose email column is always NULL).
+  // A failed read counts as OPTED OUT (fail closed): these emails are optional
+  // for a member, and mailing someone who muted them is worse than one missed
+  // notice. The in-app notices and the signer's receipt are unaffected.
   let requesterEmailOptedOut = false;
   if (order.requester_user_id) {
-    const { data: prefRow } = await admin
+    const { data: prefRow, error: prefErr } = await admin
       .from('notification_preferences')
       .select('email_order_completed')
       .eq('user_id', order.requester_user_id)
       .maybeSingle();
-    requesterEmailOptedOut =
-      ((prefRow as { email_order_completed?: boolean } | null)?.email_order_completed ?? true) ===
-      false;
+    if (prefErr) {
+      requesterEmailOptedOut = true;
+      await reportError(prefErr, {
+        tag: 'orders.sign.pref_read',
+        level: 'warning',
+        extra: { orderId: order.id },
+      });
+    } else {
+      requesterEmailOptedOut =
+        ((prefRow as { email_order_completed?: boolean } | null)?.email_order_completed ?? true) ===
+        false;
+    }
   }
 
   // Returns Phase B (B4) + returns-access Unit A: ONLY a completed order is
@@ -306,46 +345,51 @@ export async function POST(req: NextRequest) {
   // `owed`. Tell the REQUESTER (in-app + email), fire a status_changed event,
   // and stop here — none of the completion side effects apply.
   if (isBackordered) {
-    // AWAIT — this is the ONLY customer comms for the fork, and a fire-and-forget
-    // promise can be dropped when the serverless function returns. It's internally
-    // best-effort (never throws), so awaiting is safe.
-    await notifyRequesterBackordered({
-      organizationId: order.organization_id,
-      orderId: order.id,
-      requesterUserId: order.requester_user_id,
-      requesterEmail: requester.email,
-      requesterName: requester.name,
-      appUrl: env.NEXT_PUBLIC_APP_URL,
-      provided: totalFulfilled,
-      requested: totalRequested,
-      owed,
-      emailOptedOut: requesterEmailOptedOut,
-    });
-    // The physical SIGNER gets a transactional receipt of what they just signed
-    // for — parity with the completed path, where the signer is always emailed.
-    // Deduped against the requester notice — but only when that notice was
-    // actually SENT: an opted-out requester who signs still gets their
-    // transactional receipt (matching the completed path's semantics).
-    const signerIsRequester =
-      parsed.data.signerEmail.toLowerCase() === (requester.email ?? '').toLowerCase();
-    if (!signerIsRequester || requesterEmailOptedOut) {
-      try {
-        // es `partial-receipt` template: external-recipient receipt from
-        // "<supplier> via StockPilot" — the signer may not be a StockPilot
-        // user, so it carries receipt language and an explainer footer
-        // (no unsubscribe: one-time transactional record).
-        await sendPartialReceiptEmail({
-          organizationId: order.organization_id,
-          orderId: order.id,
-          to: parsed.data.signerEmail,
-          signerName: parsed.data.signerName,
-          unitsReceived: totalFulfilled,
-          unitsTotal: totalRequested,
-          unitsPending: owed,
-          appUrl: env.NEXT_PUBLIC_APP_URL,
-        });
-      } catch {
-        /* best-effort — receipt failure never fails the fulfillment */
+    // Both notices below state the counts ("2 of 5 provided"). Without the
+    // line totals they are skipped (the read failure is reported above)
+    // rather than sent with zeros.
+    if (totals) {
+      // AWAIT — this is the ONLY customer comms for the fork, and a fire-and-forget
+      // promise can be dropped when the serverless function returns. It's internally
+      // best-effort (never throws), so awaiting is safe.
+      await notifyRequesterBackordered({
+        organizationId: order.organization_id,
+        orderId: order.id,
+        requesterUserId: order.requester_user_id,
+        requesterEmail: requester.email,
+        requesterName: requester.name,
+        appUrl: env.NEXT_PUBLIC_APP_URL,
+        provided: totals.fulfilled,
+        requested: totals.requested,
+        owed: totals.owed,
+        emailOptedOut: requesterEmailOptedOut,
+      });
+      // The physical SIGNER gets a transactional receipt of what they just signed
+      // for — parity with the completed path, where the signer is always emailed.
+      // Deduped against the requester notice — but only when that notice was
+      // actually SENT: an opted-out requester who signs still gets their
+      // transactional receipt (matching the completed path's semantics).
+      const signerIsRequester =
+        parsed.data.signerEmail.toLowerCase() === (requester.email ?? '').toLowerCase();
+      if (!signerIsRequester || requesterEmailOptedOut) {
+        try {
+          // es `partial-receipt` template: external-recipient receipt from
+          // "<supplier> via StockPilot" — the signer may not be a StockPilot
+          // user, so it carries receipt language and an explainer footer
+          // (no unsubscribe: one-time transactional record).
+          await sendPartialReceiptEmail({
+            organizationId: order.organization_id,
+            orderId: order.id,
+            to: parsed.data.signerEmail,
+            signerName: parsed.data.signerName,
+            unitsReceived: totals.fulfilled,
+            unitsTotal: totals.requested,
+            unitsPending: totals.owed,
+            appUrl: env.NEXT_PUBLIC_APP_URL,
+          });
+        } catch {
+          /* best-effort — receipt failure never fails the fulfillment */
+        }
       }
     }
     void dispatchEvent(order.organization_id, 'order.status_changed', {
@@ -370,8 +414,9 @@ export async function POST(req: NextRequest) {
         requesterName: requester.name,
         appUrl: env.NEXT_PUBLIC_APP_URL,
         emailOptedOut: requesterEmailOptedOut,
-        // Display-only: how many units the remainder batch carried.
-        unitsShipped: Math.max(0, totalFulfilled - priorFulfilled),
+        // Display-only: how many units the remainder batch carried. Null (the
+        // notice omits the count) when the line totals could not be read.
+        unitsShipped: totals ? Math.max(0, totals.fulfilled - priorFulfilled) : null,
       });
     }
     try {

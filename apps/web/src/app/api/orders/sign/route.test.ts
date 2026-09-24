@@ -8,7 +8,7 @@ import { makeSupabaseStub, type QueryResult } from '@/test/supabase-mock';
  * `OrderRequestsService.create()` writes `requester_email` ONLY for
  * on-behalf-of orders; a member who submits their own order gets
  * `requester_user_id` set and `requester_email`/`requester_name` NULL
- * (order-requests.ts, the insert in create()). This route used to build
+ * (order-requests.ts, the p_header create() sends). This route used to build
  * every notice recipient straight off the `requester_email` column, so an
  * internal requester whose delivery was signed for by someone else got
  * NOTHING by email — no completion receipt, no "partially fulfilled" and no
@@ -75,6 +75,9 @@ vi.mock('@/server/services/order-requests', () => ({
   syncOrderScheduleEvent: vi.fn(async () => undefined),
 }));
 
+import { reportError } from '@/lib/error-reporter';
+import { dispatchEvent } from '@/server/services/integration-events';
+
 import { POST } from './route';
 
 const TOKEN = 'a'.repeat(64);
@@ -99,7 +102,15 @@ interface Scenario {
   totalFulfilled: number;
   profile?: { email: string; full_name: string | null } | null;
   emailOrderCompleted?: boolean;
+  /** How many post-signature status reads fail before one answers. */
+  statusReadFailures?: number;
+  /** The post-hand-over line-totals read fails. */
+  lineTotalsFail?: boolean;
+  /** The notification_preferences read fails. */
+  prefReadFails?: boolean;
 }
+
+const READ_ERROR = { message: 'connection reset' };
 
 function buildAdmin(s: Scenario) {
   // The route reads order_request_lines TWICE: first for the prior-shipped
@@ -107,33 +118,41 @@ function buildAdmin(s: Scenario) {
   let lineCall = 0;
   const linesResult = (): QueryResult => {
     lineCall += 1;
-    return lineCall === 1
-      ? { data: [{ quantity_fulfilled: s.priorFulfilled }], error: null }
-      : {
-          data: [
-            { quantity_requested: s.totalRequested, quantity_fulfilled: s.totalFulfilled },
-          ],
-          error: null,
-        };
+    if (lineCall === 1) return { data: [{ quantity_fulfilled: s.priorFulfilled }], error: null };
+    if (s.lineTotalsFail) return { data: null, error: READ_ERROR };
+    return {
+      data: [{ quantity_requested: s.totalRequested, quantity_fulfilled: s.totalFulfilled }],
+      error: null,
+    };
+  };
+  let statusReads = 0;
+  const statusResult = (): QueryResult => {
+    statusReads += 1;
+    return statusReads <= (s.statusReadFailures ?? 0)
+      ? { data: null, error: READ_ERROR }
+      : { data: { ...INTERNAL_ORDER, status: s.status }, error: null };
   };
 
   return makeSupabaseStub({
     'order_requests.select.maybeSingle': { data: INTERNAL_ORDER, error: null },
-    'order_requests.select.single': {
-      data: { ...INTERNAL_ORDER, status: s.status },
-      error: null,
-    },
+    'order_requests.select.single': statusResult,
     'order_request_lines.select': linesResult,
     'rpc:confirm_order_signature': { data: { id: 'ord-1' }, error: null },
     'user_profiles.select.maybeSingle': {
       data: s.profile === undefined ? { email: 'alice@site.org', full_name: 'Alice' } : s.profile,
       error: null,
     },
-    'notification_preferences.select.maybeSingle': {
-      data: { email_order_completed: s.emailOrderCompleted ?? true },
-      error: null,
-    },
+    'notification_preferences.select.maybeSingle': s.prefReadFails
+      ? { data: null, error: READ_ERROR }
+      : { data: { email_order_completed: s.emailOrderCompleted ?? true }, error: null },
   }).client;
+}
+
+/** The tags reportError was called with, in order. */
+function reportedTags(): string[] {
+  return vi
+    .mocked(reportError)
+    .mock.calls.map((c) => (c[1] as { tag: string } | undefined)?.tag ?? '');
 }
 
 /** Every recipientEmail sendOrderRequestEmail was called with, in order. */
@@ -272,5 +291,114 @@ describe('POST /api/orders/sign — internal requester contact resolution', () =
     const recipients = sentTo();
     expect(recipients).toContain('ext@x.com');
     expect(recipients).toContain('bob@site.org');
+  });
+});
+
+describe('POST /api/orders/sign — reads after the signature is recorded', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const completed: Scenario = {
+    status: 'completed',
+    priorFulfilled: 0,
+    totalRequested: 5,
+    totalFulfilled: 5,
+  };
+
+  it('status read fails twice: the signer still gets 200, it is reported, and nothing is guessed', async () => {
+    adminHolder.client = buildAdmin({ ...completed, statusReadFailures: 2 });
+
+    const res = await POST(request());
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, data: { id: 'ord-1' } });
+    expect(reportError).toHaveBeenCalledWith(
+      READ_ERROR,
+      expect.objectContaining({ tag: 'orders.sign.post_status_read', level: 'warning' }),
+    );
+    // Unknown status: no receipt, no return prompt, no completion event.
+    expect(sendOrderRequestEmail).not.toHaveBeenCalled();
+    expect(maybeSendReturnPrompt).not.toHaveBeenCalled();
+    expect(notifyRequesterBackordered).not.toHaveBeenCalled();
+    expect(dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it('status read fails once and the retry answers: the follow-ups run as normal', async () => {
+    adminHolder.client = buildAdmin({ ...completed, statusReadFailures: 1 });
+
+    const res = await POST(request());
+
+    expect(res.status).toBe(200);
+    expect(reportedTags()).not.toContain('orders.sign.post_status_read');
+    expect(sentTo().sort()).toEqual(['alice@site.org', 'bob@site.org']);
+    expect(maybeSendReturnPrompt).toHaveBeenCalledTimes(1);
+    expect(dispatchEvent).toHaveBeenCalledWith('org-1', 'order.completed', expect.anything());
+  });
+
+  it('preference read fails: the requester gets NO email (fail closed), the signer still does', async () => {
+    adminHolder.client = buildAdmin({ ...completed, prefReadFails: true });
+
+    const res = await POST(request());
+
+    expect(res.status).toBe(200);
+    expect(sentTo()).toEqual(['bob@site.org']);
+    expect(reportedTags()).toContain('orders.sign.pref_read');
+  });
+
+  it('preference read fails on a backorder: the notice goes out with email suppressed', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'backordered',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 2,
+      prefReadFails: true,
+    });
+
+    await POST(request());
+
+    const args = notifyRequesterBackordered.mock.calls[0]?.[0] as NotifyCall;
+    expect(args.emailOptedOut).toBe(true);
+  });
+
+  it('line totals read fails on a backorder: no "0 of 0" notice or receipt, reported, still 200', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'backordered',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 2,
+      lineTotalsFail: true,
+    });
+
+    const res = await POST(request());
+
+    expect(res.status).toBe(200);
+    expect(notifyRequesterBackordered).not.toHaveBeenCalled();
+    expect(sendPartialReceiptEmail).not.toHaveBeenCalled();
+    expect(reportedTags()).toContain('orders.sign.line_totals_read');
+    // The status change itself is still announced; it carries no counts.
+    expect(dispatchEvent).toHaveBeenCalledWith(
+      'org-1',
+      'order.status_changed',
+      expect.objectContaining({ status: 'backordered' }),
+    );
+  });
+
+  it('line totals read fails on a completed backorder: the shipped notice omits the count', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'completed',
+      priorFulfilled: 2,
+      totalRequested: 5,
+      totalFulfilled: 5,
+      lineTotalsFail: true,
+    });
+
+    await POST(request());
+
+    expect(notifyRequesterBackorderShipped).toHaveBeenCalledTimes(1);
+    const args = notifyRequesterBackorderShipped.mock.calls[0]?.[0] as unknown as {
+      unitsShipped: number | null;
+    };
+    expect(args.unitsShipped).toBeNull();
   });
 });

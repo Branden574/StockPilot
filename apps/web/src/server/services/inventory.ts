@@ -51,6 +51,7 @@ import {
   isBookCrateChangeAcknowledged,
   isBookRackChangeAcknowledged,
   isCrateDestination,
+  isManagerOrAbove,
   formatArchiveStockBlockMessage,
   formatBulkArchiveStockBlockMessage,
   formatHoldingLabel,
@@ -283,6 +284,14 @@ const RACK_PLACE_CONCURRENCY = 20;
  */
 export const ADJUST_WAREHOUSE_WRITE_REFUSED =
   "You do not have write access to this item's warehouse.";
+
+/**
+ * transferStock's refusal when either end of the move is in a warehouse the
+ * caller (below manager) cannot write to. A sentence for the same reason as
+ * ADJUST_WAREHOUSE_WRITE_REFUSED: the phone shows it verbatim.
+ */
+export const TRANSFER_WAREHOUSE_WRITE_REFUSED =
+  'You can only move stock between warehouses you work in.';
 
 // Model B — "one product = one SKU": these are the SHARED product columns.
 // Editing any of them on ONE placement (inventory_items row) of a SKU must
@@ -5530,6 +5539,44 @@ export class InventoryService {
         'validation_error',
         'Source and destination are the same location.',
       );
+    }
+    // Below manager, transfer_stock (0365) refuses a move unless BOTH ends sit
+    // in warehouses the caller can write. Checked here too so the refusal
+    // names the reason instead of the RPC's bare 'forbidden', and so no
+    // round-trip is spent on a move that cannot happen. The RPC stays the
+    // authority: a location this read cannot see, or one with no warehouse
+    // (an org-level location), is left to it.
+    if (!isManagerOrAbove(this.ctx.role)) {
+      const { data: locs, error: locErr } = await this.ctx.supabase
+        .from('locations')
+        .select('id, warehouse_id')
+        .eq('organization_id', this.ctx.organizationId)
+        // in-list-bound: exactly two ids, the move's source and destination
+        .in('id', [input.fromLocationId, input.toLocationId]);
+      // A failed read must not pass as "no warehouse to check".
+      if (locErr) throw new ServiceError('internal_error', locErr.message);
+      const warehouseIds = [
+        ...new Set(
+          ((locs ?? []) as Array<{ warehouse_id: string | null }>)
+            .map((l) => l.warehouse_id)
+            .filter((w): w is string => w != null),
+        ),
+      ];
+      if (warehouseIds.length > 0) {
+        // One access read for both ends (see assertWarehouseAccess `started`).
+        const access = getWarehouseAccess(this.ctx);
+        access.catch(() => {});
+        try {
+          for (const wh of warehouseIds) {
+            await assertWarehouseAccess(wh, 'write', this.ctx, access);
+          }
+        } catch (e) {
+          if (e instanceof ForbiddenError) {
+            throw new ServiceError('forbidden', TRANSFER_WAREHOUSE_WRITE_REFUSED);
+          }
+          throw e;
+        }
+      }
     }
     const { data, error } = await this.ctx.supabase.rpc('transfer_stock', {
       p_item_id: input.itemId,

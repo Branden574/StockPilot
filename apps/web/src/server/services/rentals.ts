@@ -192,7 +192,7 @@ export class RentalsService {
     assertModuleEnabled(this.ctx, 'rentals');
     assertPermission(this.ctx, 'rentals:create');
 
-    const { data: row } = await this.ctx.supabase
+    const { data: row, error: readErr } = await this.ctx.supabase
       .from('rentals')
       // warehouse_id feeds the write-access assert below — the SELECT that
       // fetched this row only needed 'read' on that warehouse.
@@ -200,6 +200,8 @@ export class RentalsService {
       .eq('id', input.id)
       .eq('organization_id', this.ctx.organizationId)
       .maybeSingle();
+    // A failed read is not a missing rental ("Rental not found" on a blip).
+    if (readErr) throw new ServiceError('internal_error', readErr.message);
     if (!row) throw new ServiceError('not_found', 'Rental not found.');
     const rental = row as {
       status: RentalStatus;
@@ -265,13 +267,15 @@ export class RentalsService {
     assertModuleEnabled(this.ctx, 'rentals');
     assertPermission(this.ctx, 'rentals:manage');
 
-    const { data: row } = await this.ctx.supabase
+    const { data: row, error: readErr } = await this.ctx.supabase
       .from('rentals')
       // warehouse_id feeds the write-access assert below (read ≠ write, 0131).
       .select('status, warehouse_id')
       .eq('id', input.id)
       .eq('organization_id', this.ctx.organizationId)
       .maybeSingle();
+    // Same as markReturned: a failed read is not a missing rental.
+    if (readErr) throw new ServiceError('internal_error', readErr.message);
     if (!row) throw new ServiceError('not_found', 'Rental not found.');
     const rental = row as { status: RentalStatus; warehouse_id: string };
     if (rental.status !== 'out') {

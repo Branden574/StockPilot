@@ -83,13 +83,18 @@ export async function maybeSendReturnPrompt(
     // additions for the es template render (display handle + the correct
     // unsubscribe-link flavor). The guards, guarded updates, and their
     // ordering below are UNCHANGED.
-    const { data: row } = await admin
+    //
+    // Each guard read below binds its error: a failed read used to look like
+    // "no order", "module off" or "nothing fulfilled" and skip silently. It
+    // now reports and stops with reason 'error', before any token is minted.
+    const { data: row, error: rowErr } = await admin
       .from('order_requests')
       .select(
         'id, organization_id, status, requester_email, requester_name, requester_user_id, order_number, return_token, return_prompt_sent_at',
       )
       .eq('id', orderId)
       .maybeSingle();
+    if (rowErr) return await readFailed(rowErr, 'orders.return-prompt.order_read', orderId);
     if (!row) return { sent: false, reason: 'order_not_found' };
     const order = row as {
       id: string;
@@ -108,21 +113,23 @@ export async function maybeSendReturnPrompt(
     // Off-by-default module — the portal 404s without it (never email a dead
     // link). Mirrors the direct organization_modules check the anonymous
     // surfaces use (no ServiceContext on service-role paths).
-    const { data: modRow } = await admin
+    const { data: modRow, error: modErr } = await admin
       .from('organization_modules')
       .select('module_id')
       .eq('organization_id', order.organization_id)
       .eq('module_id', 'returns')
       .eq('enabled', true)
       .maybeSingle();
+    if (modErr) return await readFailed(modErr, 'orders.return-prompt.module_read', orderId);
     if (!modRow) return { sent: false, reason: 'module_disabled' };
 
     // Nothing was handed over → nothing to return → no prompt. (A close-
     // partial completion still has the earlier batch's fulfilled units.)
-    const { data: lines } = await admin
+    const { data: lines, error: linesErr } = await admin
       .from('order_request_lines')
       .select('quantity_fulfilled')
       .eq('order_request_id', order.id);
+    if (linesErr) return await readFailed(linesErr, 'orders.return-prompt.lines_read', orderId);
     const totalFulfilled = ((lines ?? []) as { quantity_fulfilled: number | null }[]).reduce(
       (s, l) => s + (Number(l.quantity_fulfilled) || 0),
       0,
@@ -237,6 +244,24 @@ export async function maybeSendReturnPrompt(
 }
 
 /**
+ * A guard read failed: report it the way the catch-all above does (reporting
+ * is itself best-effort) and stop with reason 'error'. Nothing has been
+ * written at any of the call sites.
+ */
+async function readFailed(
+  error: unknown,
+  tag: string,
+  orderId: string,
+): Promise<ReturnPromptResult> {
+  try {
+    await reportError(error, { tag, extra: { orderId } });
+  } catch {
+    /* reporting is itself best-effort */
+  }
+  return { sent: false, reason: 'error' };
+}
+
+/**
  * True when this address recorded a public one-click opt-out (mig 0222).
  *
  * Reads through the SERVICE-ROLE client the caller already handed us (this
@@ -244,12 +269,14 @@ export async function maybeSendReturnPrompt(
  * the organization_modules check above) rather than minting another admin
  * client.
  *
- * FAIL-OPEN on any read error — same posture as the order-request choke
- * point's isPublicEmailUnsubscribed: silently dropping a transactional
- * email on a DB blip (or in a dev environment without the table) is worse
- * than one extra send. Note this is the deliberate exception to the
- * "reads fail CLOSED" house rule: here "closed" would mean sending, and the
- * safe default for a SUPPRESSION check is the status quo behaviour.
+ * FAILS CLOSED: an unreadable list counts as unsubscribed. This email is a
+ * prompt, not a receipt, and it advertises one-click unsubscribe; mailing an
+ * address that opted out is a complaint signal against orders@ (Gmail/Yahoo
+ * bulk-sender rules) and breaks a promise we made, while a skipped prompt is
+ * recoverable (the same link is on the tracking page and the requester's
+ * order detail) and, because the skip happens before the 0278 marker is
+ * claimed, a later completion path can still prompt once. This used to fail
+ * open, like the order-request choke point's isPublicEmailUnsubscribed.
  *
  * The lookup uses normalizeUnsubscribeEmail — the same canonical lowercased
  * spelling /unsubscribe stores — so a case-variant address can never dodge
@@ -265,10 +292,22 @@ async function isPublicAddressUnsubscribed(
       .select('email')
       .eq('email', normalizeUnsubscribeEmail(email))
       .maybeSingle();
-    if (error) return false;
+    if (error) {
+      await reportUnsubscribeReadFailure(error);
+      return true;
+    }
     return data != null;
+  } catch (e) {
+    await reportUnsubscribeReadFailure(e);
+    return true;
+  }
+}
+
+async function reportUnsubscribeReadFailure(error: unknown): Promise<void> {
+  try {
+    await reportError(error, { tag: 'orders.return-prompt.unsubscribe_read', level: 'warning' });
   } catch {
-    return false;
+    /* reporting is itself best-effort */
   }
 }
 

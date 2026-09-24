@@ -148,3 +148,35 @@ describe('OrderRequestsService.approve — auto-created schedule event', () => {
     expect(payload.details).not.toContain('9/11/2026');
   });
 });
+
+// ── 0365: approve_order_request refuses an order with no lines ─────────────
+describe('OrderRequestsService.approve — RPC refusals', () => {
+  it('maps order_has_no_lines to a validation error the manager can act on', async () => {
+    const { svc } = build({
+      'rpc:approve_order_request': {
+        data: null,
+        error: { message: 'order_has_no_lines', code: 'P0001' },
+      },
+    });
+    const err = await svc.approve('ord-1').catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      code: 'validation_error',
+      message: 'This order has no items. Add at least one before approving.',
+    });
+    // A refused approval announces nothing.
+    expect(afterCalls).toHaveLength(0);
+  });
+
+  it('still maps insufficient_stock (now totalled across duplicate lines) as before', async () => {
+    const { svc } = build({
+      'rpc:approve_order_request': {
+        data: null,
+        error: { message: 'insufficient_stock', code: 'P0001' },
+      },
+    });
+    await expect(svc.approve('ord-1')).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Not enough stock to approve. Reduce quantities or top up the short items.',
+    });
+  });
+});

@@ -444,6 +444,25 @@ describe('portalSubmitOrder — checkout tracks the catalog exactly', () => {
     // ITEM_B is quotable: to-be-quoted must be distinguishable from agreed-free.
     expect(lines.find((l) => l.item_id === ITEM_B)?.unit_price_at_request).toBeNull();
   });
+
+  it('merges a cart that names the same item twice into ONE summed line', async () => {
+    await portalSubmitOrder(ctxPriced, {
+      lines: [
+        { itemId: ITEM_A, quantity: 5 },
+        { itemId: ITEM_B, quantity: 1 },
+        { itemId: ITEM_A, quantity: 5 },
+      ],
+    });
+    const lines = admin.inserts.find((i) => i.table === 'order_request_lines')!.rows;
+    expect(lines).toHaveLength(2);
+    expect(lines.filter((l) => l.item_id === ITEM_A)).toHaveLength(1);
+    expect(lines.find((l) => l.item_id === ITEM_A)).toMatchObject({
+      quantity_requested: 10,
+      unit_price_at_request: 12.5,
+      unit_cost_at_request: 4.25,
+    });
+    expect(lines.find((l) => l.item_id === ITEM_B)?.quantity_requested).toBe(1);
+  });
 });
 
 describe('resolvePortalContext — the mode comes from the org', () => {

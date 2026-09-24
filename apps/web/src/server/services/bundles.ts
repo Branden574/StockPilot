@@ -153,6 +153,16 @@ export interface DistributeInput {
   idempotencyKey?: string | null;
 }
 
+/**
+ * Whether stock on an item row can be drawn for a kit at `warehouseId`: the
+ * row is in that warehouse, or in none (an org-level item). Since 0365 this is
+ * the test distribute_bundle() and assemble_bundle() apply to component rows,
+ * and distribute_bundle() applies to the pre-assembled (phantom) kits.
+ */
+function drawableAtWarehouse(itemWarehouseId: string | null, warehouseId: string): boolean {
+  return itemWarehouseId == null || itemWarehouseId === warehouseId;
+}
+
 export class BundlesService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -318,14 +328,14 @@ export class BundlesService {
    * drained first, components cover the rest. Optional components are
    * included in the preview but their `shortage` count is informational
    * only — distribution won't fail because an optional is short.
+   *
+   * Availability follows the same rule as distribute_bundle() and
+   * assemble_bundle() (0365), so the preview never promises stock the RPC
+   * will not draw: a component counts only when its item row sits in the
+   * chosen warehouse (or has no warehouse) and is not soft-deleted, and
+   * pre-assembled kits count only when the phantom item sits in the chosen
+   * warehouse (or has none). Anything else counts as 0 available.
    */
-  // The preview math mirrors `distribute_bundle()` (0070) which scopes
-  // component stock to the target warehouse: a component that lives in
-  // warehouse A doesn't count toward a distribution from warehouse B.
-  // detail.components carries the bundle_components rows joined to the
-  // item's global header; we re-query warehouse-scoped inventory_items
-  // rows below to get an accurate per-warehouse `available` count for
-  // each component, matching what the RPC will actually find.
   async preview(
     id: string,
     quantity: number,
@@ -341,15 +351,20 @@ export class BundlesService {
       throw new ServiceError('validation_error', 'Quantity must be positive');
     }
     const detail = await this.get(id);
-    const phantomQty = detail.phantom?.quantityOnHand ?? 0;
+    // Kits boxed at another warehouse cannot be handed out from this one: the
+    // RPC reads them as 0 and falls through to components. Negative on-hand
+    // counts as 0, like the RPC's greatest(0, …).
+    const phantomQty =
+      detail.phantom && drawableAtWarehouse(detail.phantom.warehouseId, warehouseId)
+        ? Math.max(0, detail.phantom.quantityOnHand)
+        : 0;
     const fromPhantom = Math.min(quantity, phantomQty);
     const fromComponents = quantity - fromPhantom;
 
-    // Warehouse-scoped component stock lookup. The RPC's join
-    // (0070) uses `inventory_items.warehouse_id = p_warehouse_id`,
-    // so components whose item row is in a different warehouse
-    // contribute 0 here — accurately surfacing the shortage the
-    // RPC would raise.
+    // Component stock, re-read with the two columns the rule needs
+    // (detail.components carries only the joined item header). The rule is
+    // applied below rather than in the query so it lives in one place, and so
+    // a null-warehouse item counts, which `.eq('warehouse_id', …)` dropped.
     const componentItemIds = detail.components
       .map((c) => c.itemId)
       .filter((v): v is string => Boolean(v));
@@ -358,19 +373,25 @@ export class BundlesService {
       // Batched like every id-list read (a bundle's components are capped at
       // 100 by the form, but older rows are not); a failed batch throws.
       const ctx = this.ctx;
-      const stockRows = await fetchAllRowsByIds<{ id: string; quantity_on_hand: number }>(
+      const stockRows = await fetchAllRowsByIds<{
+        id: string;
+        quantity_on_hand: number;
+        warehouse_id: string | null;
+        deleted_at: string | null;
+      }>(
         componentItemIds,
         (batch) => (from, to) =>
           ctx.supabase
             .from('inventory_items')
-            .select('id, quantity_on_hand')
+            .select('id, quantity_on_hand, warehouse_id, deleted_at')
             .eq('organization_id', ctx.organizationId)
-            .eq('warehouse_id', warehouseId)
             .in('id', batch)
             .order('id')
             .range(from, to),
       );
       for (const row of stockRows) {
+        if (row.deleted_at != null) continue;
+        if (!drawableAtWarehouse(row.warehouse_id, warehouseId)) continue;
         warehouseStock.set(row.id, Number(row.quantity_on_hand) || 0);
       }
     }
@@ -379,8 +400,8 @@ export class BundlesService {
     let totalShortageUnits = 0;
     const componentRows: DistributionPreviewComponent[] = detail.components.map((c) => {
       const needed = c.quantity * fromComponents;
-      // Falls back to 0 when the component's inventory row isn't in
-      // the target warehouse — matches the RPC's LEFT JOIN behavior.
+      // 0 when the component's item row is in another warehouse or is
+      // deleted: the RPC skips those rows the same way.
       const available = Math.max(0, warehouseStock.get(c.itemId) ?? 0);
       const drawn = Math.min(needed, available);
       const shortage = needed - drawn;

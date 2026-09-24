@@ -18,7 +18,9 @@ import { maybeSendReturnPrompt } from './return-prompt';
  *     and the marker stays set after a failed send (at-most-once posture);
  *   • SP-076: a public (account-less) requester who used the RFC 8058
  *     one-click unsubscribe THIS email advertises is suppressed — and the
- *     0278 marker is not burned on that skip, while the lookup fails OPEN.
+ *     0278 marker is not burned on that skip. The lookup fails CLOSED;
+ *   • a failed guard read (order, module, lines) stops with reason 'error'
+ *     before any token is minted, instead of reading as a skip.
  */
 
 const sendEmailMock = vi.hoisted(() => vi.fn());
@@ -306,17 +308,57 @@ describe('maybeSendReturnPrompt', () => {
     expect(headers['List-Unsubscribe-Post']).toBeUndefined();
   });
 
-  it('SUPPRESSION fails OPEN: a lookup error still sends (a DB blip must not drop the prompt)', async () => {
+  it('SUPPRESSION fails CLOSED: a lookup error sends nothing, reports, and leaves the marker unclaimed', async () => {
+    // An unreadable opt-out list counts as opted out: mailing an address that
+    // used the one-click unsubscribe this email advertises is a complaint
+    // signal, while a skipped prompt is recoverable (tracking page, order
+    // detail, and a later completion path can still prompt once).
     const stub = makeStub({
       'public_email_unsubscribes.select.maybeSingle': {
         data: null,
-        error: { message: 'relation does not exist' },
+        error: { message: 'connection reset' },
       },
     });
     const res = await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
-    expect(res).toEqual({ sent: true });
-    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(res).toEqual({ sent: false, reason: 'suppressed' });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(stub.chains.get('order_requests.update')).toBeUndefined();
+    expect(reportErrorMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'orders.return-prompt.unsubscribe_read' }),
+    );
   });
+
+  it.each([
+    ['order_requests', 'order_requests.select.maybeSingle', 'orders.return-prompt.order_read'],
+    [
+      'organization_modules',
+      'organization_modules.select.maybeSingle',
+      'orders.return-prompt.module_read',
+    ],
+    ['order_request_lines', 'order_request_lines.select', 'orders.return-prompt.lines_read'],
+  ])(
+    'a failed %s read stops with reason error, reports, and mints no token',
+    async (_table, key, tag) => {
+      // The order has no token yet, so reaching the mint would show up as an
+      // order_requests update.
+      const stub = makeStub({
+        'order_requests.select': {
+          data: [{ ...COMPLETED_ORDER, return_token: null }],
+          error: null,
+        },
+        [key]: { data: null, error: { message: 'connection reset' } },
+      });
+      const res = await maybeSendReturnPrompt(stub.client, ORDER_ID, { appUrl: APP_URL });
+      expect(res).toEqual({ sent: false, reason: 'error' });
+      expect(stub.chains.get('order_requests.update')).toBeUndefined();
+      expect(sendEmailMock).not.toHaveBeenCalled();
+      expect(reportErrorMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ tag }),
+      );
+    },
+  );
 
   it('skips when the returns module is disabled for the org', async () => {
     const stub = makeStub({
