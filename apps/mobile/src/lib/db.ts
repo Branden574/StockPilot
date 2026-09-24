@@ -21,13 +21,39 @@ import * as SQLite from 'expo-sqlite';
 const DB_NAME = 'stockpilot.db';
 const SCHEMA_VERSION = 2;
 
-let _db: SQLite.SQLiteDatabase | null = null;
+/**
+ * The ONE open of the app's database, shared by every caller.
+ *
+ * It used to be `if (_db) return _db; _db = await open(); await ensureSchema(_db)`,
+ * which handed the connection out BEFORE its schema was ready: a second caller
+ * arriving while ensureSchema ran (the root layout's initDb, useSync and
+ * useEnabledModules all call getDb on their own at launch) got the database
+ * mid-migration ("no such column: count_number" after a column-adding OTA),
+ * and two callers arriving before the open resolved both opened it and both
+ * ran ensureSchema ("table warehouses already exists" on a fresh install).
+ *
+ * Now every caller awaits the same promise, which resolves only once the
+ * schema is complete. A rejected open or migration is forgotten, so the next
+ * caller tries again instead of inheriting the failure for the life of the
+ * process (a full disk that clears, a transient native error).
+ */
+let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
-export async function getDb(): Promise<SQLite.SQLiteDatabase> {
-  if (_db) return _db;
-  _db = await SQLite.openDatabaseAsync(DB_NAME);
-  await ensureSchema(_db);
-  return _db;
+export function getDb(): Promise<SQLite.SQLiteDatabase> {
+  if (!dbPromise) {
+    const opening = openAndMigrate();
+    dbPromise = opening;
+    opening.catch(() => {
+      if (dbPromise === opening) dbPromise = null;
+    });
+  }
+  return dbPromise;
+}
+
+async function openAndMigrate(): Promise<SQLite.SQLiteDatabase> {
+  const db = await SQLite.openDatabaseAsync(DB_NAME);
+  await ensureSchema(db);
+  return db;
 }
 
 /**
@@ -217,17 +243,30 @@ async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
     );
   }
 
-  await addColumnIfMissing(
-    db,
-    'cycle_count_lines',
-    'item_variant_label',
-    'text',
-  );
+  await addDisplayColumn(db, 'cycle_count_lines', 'item_variant_label', 'text');
   // The count's permanent reference, CC-000042 (server migration 0358). A
   // display column, so it is added in place (never a SCHEMA_VERSION bump, which
   // would drop the outbox): existing rows read NULL, shown as "Reference
   // unavailable" until the next snapshot pull or online open fills them.
-  await addColumnIfMissing(db, 'cycle_counts', 'count_number', 'integer');
+  await addDisplayColumn(db, 'cycle_counts', 'count_number', 'integer');
+}
+
+/**
+ * A DISPLAY column stays best-effort: failing to add one must not stop the app
+ * opening its database (the scan, items and outbox paths never name it). The
+ * failure is logged now instead of vanishing; the next launch tries again.
+ */
+async function addDisplayColumn(
+  db: SQLite.SQLiteDatabase,
+  table: string,
+  column: string,
+  type: string,
+): Promise<void> {
+  try {
+    await addColumnIfMissing(db, table, column, type);
+  } catch (e) {
+    console.warn(`[db] could not add display column ${table}.${column}`, e);
+  }
 }
 
 /**
@@ -246,24 +285,35 @@ async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
  * Exported for the pure-module test in db.addColumnIfMissing.test.ts — this
  * one function is what keeps a future display-only column from being "solved"
  * by bumping SCHEMA_VERSION instead, which is the outbox-wiping path.
+ *
+ * FAILS LOUDLY. It used to swallow every error, so an ALTER that failed for a
+ * real reason (a full disk) left the column absent while the app carried on as
+ * if it existed, and every later statement naming it failed instead: for the
+ * outbox's organization_id / user_id that would be every enqueue, so an operator
+ * could not queue work at all. Only "duplicate column name" is success (a
+ * racing add got there first; the error itself proves the column exists), and
+ * a completed ALTER is confirmed by reading table_info back. Callers that can
+ * live without a column (display-only ones) catch; the outbox's do not.
  */
 export async function addColumnIfMissing(
-  db: SQLite.SQLiteDatabase,
+  db: Pick<SQLite.SQLiteDatabase, 'getAllAsync' | 'execAsync'>,
   table: string,
   column: string,
   type: string,
 ): Promise<void> {
-  try {
-    const cols = await db.getAllAsync<{ name: string }>(
-      `pragma table_info(${table})`,
+  const hasColumn = async () =>
+    (await db.getAllAsync<{ name: string }>(`pragma table_info(${table})`)).some(
+      (c) => c.name === column,
     );
-    if (cols.some((c) => c.name === column)) return;
+  if (await hasColumn()) return;
+  try {
     await db.execAsync(`alter table ${table} add column ${column} ${type}`);
-  } catch {
-    // A racing open (two callers hitting getDb at once) can lose the add and
-    // raise "duplicate column name". The column exists either way, which is
-    // the only thing callers need — and a failed DISPLAY column must never
-    // stop the app from opening its database.
+  } catch (e) {
+    if (/duplicate column name/i.test(e instanceof Error ? e.message : String(e))) return;
+    throw e;
+  }
+  if (!(await hasColumn())) {
+    throw new Error(`addColumnIfMissing: ${table}.${column} is still missing after the ALTER`);
   }
 }
 

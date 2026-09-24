@@ -94,7 +94,9 @@ describe('every transaction in the app goes through the queue', () => {
   const sources = (dir: string): string[] =>
     readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap((e) => {
       const rel = path.join(dir, e.name);
-      if (e.isDirectory()) return e.name === 'node_modules' ? [] : sources(rel);
+      // __fixtures__ is test support (the node:sqlite stand-in for expo-sqlite
+      // implements withTransactionAsync itself), never shipped app code.
+      if (e.isDirectory()) return e.name === 'node_modules' || e.name === '__fixtures__' ? [] : sources(rel);
       return /\.(ts|tsx)$/.test(e.name) && !/\.test\.tsx?$/.test(e.name) ? [rel] : [];
     });
 
