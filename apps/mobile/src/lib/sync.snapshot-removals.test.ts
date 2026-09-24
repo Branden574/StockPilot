@@ -55,6 +55,10 @@ vi.mock('./queue', () => ({
   markOk: vi.fn(),
   markFailed: vi.fn(),
   markRejected: vi.fn(),
+  markHeld: vi.fn(),
+}));
+vi.mock('./session-scope', () => ({
+  liveOutboxScope: vi.fn(async () => ({ orgId: 'org-1', userId: 'u1' })),
 }));
 const apiMock = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock('./api', () => apiMock);

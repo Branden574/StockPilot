@@ -11,6 +11,8 @@ const row = (id: number, lineId: string | null, countedQuantity: number): Outbox
   attempts: 0,
   lastAttemptAt: null,
   status: 'pending',
+  organizationId: null,
+  userId: null,
 });
 
 describe('latestRowsPerLine — an older queued count never lands over a newer one', () => {

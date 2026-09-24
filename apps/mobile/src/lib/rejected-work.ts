@@ -78,3 +78,18 @@ export function rejectedWhen(at: number, now: number): string {
   if (days <= REJECTED_RETENTION_DAYS) return `${days} days ago`;
   return new Date(at).toISOString().slice(0, 10);
 }
+
+/**
+ * The Settings > Unsent work row's detail, from the two things that screen
+ * lists: this account's rejected record and the changes HELD for another
+ * account on this device (queued by someone else, waiting for them to sign
+ * in here again; outbox-scope.ts). Held work is not this person's to act on,
+ * but it is on the device and only this screen can discard it, so the row
+ * must not say "None" over it.
+ */
+export function unsentWorkDetail(counts: { rejected: number; held: number }): string {
+  const parts: string[] = [];
+  if (counts.rejected > 0) parts.push(`${counts.rejected} never sent`);
+  if (counts.held > 0) parts.push(`${counts.held} from another account`);
+  return parts.length > 0 ? parts.join(' · ') : 'None';
+}

@@ -53,6 +53,8 @@ describe('raw Bearer call sites carry X-Organization-Id (SP-017)', () => {
   it('api.ts exports orgHeader and uses it itself', () => {
     const api = readFileSync(path.join(__dirname, 'api.ts'), 'utf8');
     expect(api).toMatch(/export async function orgHeader\(\)/);
-    expect(api).toMatch(/\.\.\.\(await orgHeader\(\)\)/);
+    // The saved workspace, unless the caller names the request's own
+    // (the outbox sends each queued row under the org it was queued in).
+    expect(api).toMatch(/\.\.\.\(opts\.orgId \? \{ 'X-Organization-Id': opts\.orgId \} : await orgHeader\(\)\)/);
   });
 });

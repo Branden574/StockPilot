@@ -266,8 +266,10 @@ async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
   // reset the delta cursor BEFORE the pull below. Without this, the local
   // items/POs/counts/bundles lists would transiently show the previous org's
   // rows, and pullSnapshot's `?since` cursor (from the prior org's timeline)
-  // would be wrong. deleteOrgData deliberately preserves pending_actions (the
-  // outbox is not org-keyed — see its doc comment).
+  // would be wrong. deleteOrgData deliberately preserves pending_actions: each
+  // queued row carries its own organization and is sent under it (see
+  // outbox-scope.ts), so nothing queued in the old workspace is lost or
+  // replayed into the new one.
   try {
     await deleteOrgData();
   } catch (err) {

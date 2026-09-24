@@ -133,6 +133,43 @@ describe('ensureSchema keeps every queued row, whatever version the phone is at'
     }
   });
 
+  it('a pre-S4 outbox gains organization_id and user_id in place; every row survives with NULL owners', async () => {
+    // Rows queued by an older binary carry no owner: legacy rows, sent once
+    // under whoever drains them first (outbox-scope.ts).
+    const raw = phoneAt(2);
+
+    await ensureSchema(nodeExpoDb(raw));
+
+    expect(columns(raw, 'pending_actions')).toEqual(expect.arrayContaining(['organization_id', 'user_id']));
+    expect(
+      raw.prepare('select idempotency_key, organization_id, user_id from pending_actions order by id').all(),
+    ).toEqual([
+      { idempotency_key: 'k1', organization_id: null, user_id: null },
+      { idempotency_key: 'k2', organization_id: null, user_id: null },
+      { idempotency_key: 'k3', organization_id: null, user_id: null },
+    ]);
+  });
+
+  it('an OLDER bundle keeps working on the widened outbox (an OTA rollback on the same binary)', async () => {
+    const raw = phoneAt(2);
+    await ensureSchema(nodeExpoDb(raw));
+
+    // The older bundle's own statements, verbatim from db.ts / queue.ts at
+    // 35aa39e0: it names its columns on insert and ignores the new ones.
+    raw
+      .prepare(
+        `insert into pending_actions (kind, idempotency_key, payload_json, created_at)
+         values (?, ?, ?, ?)`,
+      )
+      .run('receive_po_line', 'k-old', '{}', 9);
+    const listed = raw
+      .prepare(`select * from pending_actions where status in ('pending','failed') order by created_at asc`)
+      .all() as { idempotency_key: string; user_id: string | null }[];
+    expect(listed.map((r) => r.idempotency_key)).toEqual(['k1', 'k2', 'k3', 'k-old']);
+    // Its row is a legacy row to this bundle, adopted at its first send.
+    expect(listed.at(-1)?.user_id).toBeNull();
+  });
+
   it('is safe to run on every launch', async () => {
     const raw = phoneAt(2, { cachedItem: true });
 

@@ -7,8 +7,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Card, Hair } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { discardHeldAction } from '@/lib/cycle-count-cache';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
-import { clearRejected, listRejected, type PendingActionRow } from '@/lib/queue';
+import { clearRejected, listHeld, listRejected, type PendingActionRow } from '@/lib/queue';
 import {
   pendingActionLabel,
   REJECTED_KEEP_MAX,
@@ -34,11 +35,19 @@ import { useTheme } from '@/lib/use-theme';
  * mid-shift — is a decision for a person with the current facts, not a button
  * on a phone. What the screen owes the user is the truth about what was not
  * sent, in their own vocabulary, with the reason and the date attached.
+ *
+ * SECOND SECTION: work HELD for another account (outbox-scope.ts). A change
+ * queued on this device by someone else is never sent under the account
+ * signed in now; it waits, untouched, for its owner to sign in here again.
+ * It is listed as "Queued by another account" (kind and age only, never the
+ * payload) with Discard, the one way to remove it when its owner is not
+ * coming back. The rejected record, by contrast, is this account's own.
  */
 export default function RejectedWorkScreen() {
   const { c } = useTheme();
   const router = useRouter();
   const [rows, setRows] = React.useState<PendingActionRow[] | null>(null);
+  const [held, setHeld] = React.useState<PendingActionRow[] | null>(null);
 
   const [now, setNow] = React.useState(() => Date.now());
   const load = React.useCallback(async () => {
@@ -56,6 +65,12 @@ export default function RejectedWorkScreen() {
     } catch (e) {
       console.warn('[rejected-work] could not read the outbox', e);
       setRows([]);
+    }
+    try {
+      setHeld(await listHeld(REJECTED_KEEP_MAX));
+    } catch (e) {
+      console.warn('[rejected-work] could not read the held work', e);
+      setHeld([]);
     }
   }, []);
 
@@ -94,6 +109,33 @@ export default function RejectedWorkScreen() {
     );
   }
 
+  function confirmDiscard(row: PendingActionRow) {
+    Alert.alert(
+      'Discard this change?',
+      'It was saved on this device by another account and has not been sent. Discarding removes it for good: it will not be sent when that account signs in here again.',
+      [
+        { text: 'Keep', style: 'cancel' },
+        {
+          text: 'Discard',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                await discardHeldAction(row.id);
+              } catch (e) {
+                console.warn('[rejected-work] discard failed', e);
+              }
+              await load();
+              void cycleCountSync.refreshPendingCount();
+            })();
+          },
+        },
+      ],
+    );
+  }
+
+  const nothing = rows !== null && held !== null && rows.length === 0 && held.length === 0;
+
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
@@ -119,17 +161,56 @@ export default function RejectedWorkScreen() {
         showsVerticalScrollIndicator={false}
       >
         <Body muted size={14} style={{ marginTop: 6 }}>
-          Changes saved on this device that could never be sent to the server. They were not applied
-          to your inventory. If they still matter, enter them again.
+          Changes saved on this device that were not sent to the server. They were not applied to
+          your inventory. If they still matter, enter them again.
         </Body>
 
-        {rows === null ? (
+        {held !== null && held.length > 0 ? (
+          <View style={{ marginTop: 18 }}>
+            <View style={{ paddingHorizontal: 4, paddingBottom: 10 }}>
+              <Eyebrow>{`QUEUED BY ANOTHER ACCOUNT · ${held.length}`}</Eyebrow>
+            </View>
+            <Card padding={0}>
+              {held.map((row, idx) => (
+                <View key={row.id}>
+                  {idx > 0 ? <Hair /> : null}
+                  <View style={styles.row}>
+                    <View style={styles.rowHead}>
+                      <Body size={15.5} style={{ fontFamily: FONT.display, flexShrink: 1 }}>
+                        {pendingActionLabel(row.kind)}
+                      </Body>
+                      <Mono size={11} color={c.ink4}>
+                        {rejectedWhen(row.createdAt, now)}
+                      </Mono>
+                    </View>
+                    <Body muted size={13.5} style={{ marginTop: 4 }}>
+                      Queued by another account. It sends when that account signs in on this device.
+                    </Body>
+                    <Pressable
+                      onPress={() => confirmDiscard(row)}
+                      hitSlop={10}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Discard ${pendingActionLabel(row.kind)} queued by another account`}
+                      style={({ pressed }) => [styles.discard, { opacity: pressed ? 0.7 : 1 }]}
+                    >
+                      <Body size={14} color={ACCENT.crit} style={{ fontFamily: FONT.display }}>
+                        Discard
+                      </Body>
+                    </Pressable>
+                  </View>
+                </View>
+              ))}
+            </Card>
+          </View>
+        ) : null}
+
+        {rows === null || held === null ? (
           <Card padding={0} style={{ marginTop: 18 }}>
             <View style={styles.empty}>
               <Body muted>Checking…</Body>
             </View>
           </Card>
-        ) : rows.length === 0 ? (
+        ) : nothing ? (
           <Card padding={0} style={{ marginTop: 18 }}>
             <View style={styles.empty}>
               <Body>Nothing was left unsent.</Body>
@@ -139,7 +220,7 @@ export default function RejectedWorkScreen() {
               </Body>
             </View>
           </Card>
-        ) : (
+        ) : rows.length === 0 ? null : (
           <View style={{ marginTop: 18 }}>
             <View style={{ paddingHorizontal: 4, paddingBottom: 10 }}>
               <Eyebrow>{`NEVER SENT · ${rows.length}`}</Eyebrow>
@@ -208,4 +289,5 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   clear: { paddingVertical: 14, paddingHorizontal: 4, alignSelf: 'flex-start' },
+  discard: { paddingTop: 10, alignSelf: 'flex-start' },
 });

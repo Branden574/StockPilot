@@ -144,4 +144,25 @@ describe('getDb — one open, handed out only when the schema is complete', () =
     await expect(getDb()).resolves.toBe(handle);
     expect(sqlite.open).toHaveBeenCalledTimes(2);
   });
+
+  it('a failed migration is forgotten too, and the retry completes it', async () => {
+    const raw = pre0358Phone();
+    let failures = 1;
+    openReturns(raw, {
+      beforeCall: (sql) => {
+        if (/alter table pending_actions add column/i.test(sql) && failures > 0) {
+          failures -= 1;
+          throw new Error('database or disk is full');
+        }
+      },
+    });
+    const { getDb } = await freshDbModule();
+
+    // The outbox columns are REQUIRED: their failure fails the open loudly.
+    await expect(getDb()).rejects.toThrow('database or disk is full');
+    const db = await getDb();
+    const cols = (await db.getAllAsync<{ name: string }>('pragma table_info(pending_actions)')).map((c) => c.name);
+    expect(cols).toEqual(expect.arrayContaining(['organization_id', 'user_id']));
+    expect(raw.prepare('select count(*) as n from pending_actions').get()).toEqual({ n: 3 });
+  });
 });

@@ -173,7 +173,11 @@ describe('the local record survives', () => {
    * and a prune, or "preserved for the user and support" is just a comment.
    */
   it('is actually rendered somewhere the operator can reach', () => {
-    expect(settingsScreen).toContain("import { countRejected } from '@/lib/queue'");
+    expect(settingsScreen).toMatch(/import \{ (countHeld, )?countRejected \} from '@\/lib\/queue'/);
+    // The held work queued by another account is surfaced by the same screen.
+    expect(settingsScreen).toContain('unsentWorkDetail({ rejected: rejectedCount, held: heldCount })');
+    expect(rejectedScreen).toContain('listHeld(REJECTED_KEEP_MAX)');
+    expect(rejectedScreen).toContain('discardHeldAction(row.id)');
     expect(settingsScreen).toContain("router.push('/settings/rejected-work' as never)");
     expect(rejectedScreen).toContain("from '@/lib/queue'");
     // Asks for the true retention ceiling (REJECTED_KEEP_MAX), not
@@ -192,7 +196,7 @@ describe('the local record survives', () => {
     const rejectedAt = badge.indexOf('rejectedCount > 0');
     expect(rejectedAt).toBeGreaterThan(-1);
     expect(rejectedAt).toBeLessThan(allSyncedAt);
-    expect(cycleSync).toContain("import { countRejected } from './queue'");
+    expect(cycleSync).toMatch(/import \{ countRejected(, markHeld)? \} from '\.\/queue'/);
     expect(cycleSync).toContain('rejectedCount: number;');
   });
 
@@ -273,23 +277,35 @@ describe('the eviction cannot silently destroy the queued work', () => {
 });
 
 describe('the cycle-count line is not left flagged unsynced forever', () => {
+  /** One function's body: from its declaration to the next top-level one. */
+  const fnBody = (name: string) => {
+    const src = code(cache);
+    const start = src.indexOf(name);
+    expect(start).toBeGreaterThan(-1);
+    const next = src.slice(start + name.length).search(/\n(export )?async function /);
+    return next === -1 ? src.slice(start) : src.slice(start, start + name.length + next);
+  };
+  /** The ONE copy of the dirty-flag bookkeeping (ack, reject and discard share it). */
+  const helper = fnBody('async function clearLineDirtyUnlessStillQueued(');
+
   it('outboxReject clears local_dirty in the SAME transaction as the status write', () => {
-    const body = code(cache).slice(code(cache).indexOf('export async function outboxReject'));
+    const body = fnBody('export async function outboxReject');
     // One transaction, through db.ts's queue (db.transaction-queue.test.ts).
-    expect(body).toContain('withDbTransaction(db, async () => {');
-    expect(body).toContain('update cycle_count_lines set local_dirty = 0 where id = ?');
-    expect(body).toContain('markRejected');
+    expect(body).toMatch(
+      /withDbTransaction\(db, async \(\) => \{\s+await clearLineDirtyUnlessStillQueued\(db, id\);[\s\S]*markRejected/,
+    );
+    expect(helper).toContain('update cycle_count_lines set local_dirty = 0 where id = ?');
   });
 
   it('keeps the flag while another edit for the same line is still live', () => {
     // Mirrors outboxAck: the user may have edited one line twice offline.
-    const body = code(cache).slice(code(cache).indexOf('export async function outboxReject'));
-    expect(body).toContain("status in ('pending','failed','sending')");
-    expect(body).toContain("json_extract(payload_json, '$.lineId')");
+    expect(helper).toContain("status in ('pending','failed','sending')");
+    expect(helper).toContain("json_extract(payload_json, '$.lineId')");
+    expect(fnBody('export async function outboxAck')).toContain('await clearLineDirtyUnlessStillQueued(db, id);');
   });
 
   it('does not delete the row the way an ack does', () => {
-    const body = code(cache).slice(code(cache).indexOf('export async function outboxReject'));
-    expect(body).not.toContain('delete from pending_actions');
+    expect(fnBody('export async function outboxReject')).not.toContain('delete from pending_actions');
+    expect(helper).not.toContain('delete from pending_actions');
   });
 });

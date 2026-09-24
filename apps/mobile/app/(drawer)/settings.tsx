@@ -48,7 +48,8 @@ import { useAuth } from '@/lib/auth-context';
 import { getBiometricCapability, type BiometricCapability } from '@/lib/biometric';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEnabledModules } from '@/lib/enabled-modules';
-import { countRejected } from '@/lib/queue';
+import { countHeld, countRejected } from '@/lib/queue';
+import { unsentWorkDetail } from '@/lib/rejected-work';
 import { useProfile } from '@/lib/use-profile';
 import { useRole } from '@/lib/use-role';
 import { ACCENT, FONT } from '@/lib/theme';
@@ -98,6 +99,7 @@ export default function Settings() {
   const [cap, setCap] = React.useState<BiometricCapability | null>(null);
   const [pending, setPending] = React.useState(false);
   const [rejectedCount, setRejectedCount] = React.useState(0);
+  const [heldCount, setHeldCount] = React.useState(0);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -123,6 +125,14 @@ export default function Settings() {
           if (!cancelled) setRejectedCount(n);
         } catch (e) {
           console.warn('[settings] rejected count failed', e);
+        }
+        // Work queued here by ANOTHER account, held for them: only the Unsent
+        // work screen can discard it, so the row must not read "None" over it.
+        try {
+          const n = await countHeld();
+          if (!cancelled) setHeldCount(n);
+        } catch (e) {
+          console.warn('[settings] held count failed', e);
         }
       })();
       return () => {
@@ -406,7 +416,7 @@ export default function Settings() {
           <SettingRow
             icon={FileWarning}
             title="Unsent work"
-            detail={rejectedCount > 0 ? `${rejectedCount} never sent` : 'None'}
+            detail={unsentWorkDetail({ rejected: rejectedCount, held: heldCount })}
             chevron
             onPress={() => router.push('/settings/rejected-work' as never)}
           />

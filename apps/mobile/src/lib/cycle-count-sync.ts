@@ -14,7 +14,14 @@ import {
 } from './cycle-count-cache';
 import { latestRowsPerLine } from './outbox-order';
 import { classifyDrainFailure } from './drain-failure';
-import { countRejected } from './queue';
+import {
+  isOwnedBy,
+  OutboxSessionChangedError,
+  outboxSendDecision,
+  REPLACED_BY_LATER_COUNT,
+} from './outbox-scope';
+import { countRejected, markHeld } from './queue';
+import { liveOutboxScope } from './session-scope';
 
 /**
  * Cycle-count sync engine.
@@ -66,6 +73,8 @@ class CycleCountSyncEngine {
   private lastSyncAt: number | null = null;
   private listeners = new Set<Listener>();
   private inFlight = false;
+  /** The drain running now, so forceSync can wait for it instead of skipping. */
+  private drainRun: Promise<void> | null = null;
   private mounted = false;
 
   private appStateSub: { remove(): void } | null = null;
@@ -150,8 +159,14 @@ class CycleCountSyncEngine {
     }
   }
 
-  /** Force a drain attempt now (badge tap, pull-to-refresh). */
+  /**
+   * Force a drain attempt now (badge tap, pull-to-refresh, sign-out). A drain
+   * already running is waited for first, then another pass runs: a caller that
+   * recounts afterwards (the sign-out prompt) must see what that drain did,
+   * not a snapshot taken while it was mid-way.
+   */
   async forceSync(): Promise<void> {
+    if (this.drainRun) await this.drainRun.catch(() => undefined);
     await this.refreshNetworkAndDrain();
   }
 
@@ -199,7 +214,16 @@ class CycleCountSyncEngine {
     }
   }
 
-  private async drainOutbox(): Promise<void> {
+  private drainOutbox(): Promise<void> {
+    if (this.inFlight) return this.drainRun ?? Promise.resolve();
+    const run = this.drainOutboxOnce();
+    this.drainRun = run;
+    return run.finally(() => {
+      if (this.drainRun === run) this.drainRun = null;
+    });
+  }
+
+  private async drainOutboxOnce(): Promise<void> {
     if (this.inFlight) return;
     this.inFlight = true;
     this.status = 'syncing';
@@ -220,8 +244,15 @@ class CycleCountSyncEngine {
       // correction. outboxAck keeps the line dirty while the newer row is
       // still live, so nothing shows as synced prematurely.
       const { send, superseded } = latestRowsPerLine(cycleRows);
-      for (const stale of superseded) {
-        await outboxAck(stale.id);
+      // A superseded row is never sent. The live account's own (or a legacy
+      // one) is acked; another account's is held work that must not be
+      // deleted automatically, so it is parked as a record for its owner.
+      // Signed out, nothing is settled at all: whose rows these are cannot be
+      // told apart from "somebody else's".
+      const staleScope = await liveOutboxScope();
+      for (const stale of staleScope.userId ? superseded : []) {
+        if (isOwnedBy(stale, staleScope.userId)) await outboxAck(stale.id);
+        else await outboxReject(stale.id, REPLACED_BY_LATER_COUNT);
       }
 
       for (const row of send) {
@@ -231,12 +262,27 @@ class CycleCountSyncEngine {
           this.emit();
           break;
         }
+        // WHOSE row, decided now, for THIS row (outbox-scope.ts, the same
+        // predicate engine 1 uses). Another account's queued count, or any row
+        // with nobody signed in, is HELD: skipped, neither failed nor rejected.
+        const decision = outboxSendDecision(row, await liveOutboxScope());
+        if (!decision.send) continue;
         try {
-          await outboxMarkSending(row.id);
+          // Stamps a legacy row with this account, so it is never sent as another.
+          await outboxMarkSending(row.id, { orgId: decision.orgId, userId: decision.userId });
           const controller = new AbortController();
-          await this.sendRecordCount(row.payload, controller.signal);
+          await this.sendRecordCount(row.payload, controller.signal, {
+            orgId: decision.orgId,
+            asUserId: decision.userId,
+          });
           await outboxAck(row.id);
         } catch (e) {
+          // The account changed between the decision and the moment api()
+          // read the bearer: nothing was sent. Back in the queue, untouched.
+          if (e instanceof OutboxSessionChangedError) {
+            await markHeld(row.id);
+            continue;
+          }
           const msg = e instanceof Error ? e.message : String(e);
           this.lastError = msg;
           // A 401 on a known-disabled account is TERMINAL. Bumping the failure
@@ -280,6 +326,7 @@ class CycleCountSyncEngine {
   private async sendRecordCount(
     payload: Record<string, unknown>,
     signal: AbortSignal,
+    scope: { orgId: string | null; asUserId: string },
   ): Promise<void> {
     const lineId = typeof payload.lineId === 'string' ? payload.lineId : '';
     const cycleCountId =
@@ -309,6 +356,10 @@ class CycleCountSyncEngine {
       method: 'POST',
       body: { ...payload, countedQuantity: counted },
       signal,
+      // Under the organization the count was queued in, and only as the
+      // account that counted it (counted_by is the sender).
+      orgId: scope.orgId,
+      asUserId: scope.asUserId,
     });
   }
 

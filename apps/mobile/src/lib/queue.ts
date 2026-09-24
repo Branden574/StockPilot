@@ -1,5 +1,7 @@
 import { getDb } from './db';
+import { HELD_FOR_OTHER_SQL, OWNED_BY_USER_SQL } from './outbox-scope';
 import { REJECTED_KEEP_MAX, rejectedPruneCutoff } from './rejected-work';
+import { liveOutboxScope } from './session-scope';
 
 /**
  * Pending-actions queue. Every offline-capable write goes through
@@ -35,6 +37,25 @@ export interface PendingActionRow {
   lastAttemptAt: number | null;
   lastError: string | null;
   status: 'pending' | 'sending' | 'ok' | 'failed' | 'rejected';
+  /** The organization the row was queued in; NULL on a legacy row. */
+  organizationId: string | null;
+  /** The account that queued it; NULL on a legacy row (outbox-scope.ts). */
+  userId: string | null;
+}
+
+/** A pending_actions row as SQLite returns it. */
+interface PendingActionDbRow {
+  id: number;
+  kind: string;
+  idempotency_key: string;
+  payload_json: string;
+  created_at: number;
+  attempts: number;
+  last_attempt_at: number | null;
+  last_error: string | null;
+  status: string;
+  organization_id?: string | null;
+  user_id?: string | null;
 }
 
 function uuid(): string {
@@ -66,64 +87,73 @@ export async function enqueue(
 ): Promise<{ id: number; idempotencyKey: string }> {
   const db = await getDb();
   const idempotencyKey = opts?.idempotencyKey ?? uuid();
+  // Stamped with the workspace and account it is queued under, so the drains
+  // send it under that organization and only while that account is signed in
+  // (outbox-scope.ts). Read before the insert, never at send time.
+  const scope = await liveOutboxScope();
   const result = await db.runAsync(
-    `insert into pending_actions (kind, idempotency_key, payload_json, created_at)
-     values (?, ?, ?, ?)`,
-    [kind, idempotencyKey, JSON.stringify(payload), Date.now()],
+    `insert into pending_actions
+       (kind, idempotency_key, payload_json, created_at, organization_id, user_id)
+     values (?, ?, ?, ?, ?, ?)`,
+    [kind, idempotencyKey, JSON.stringify(payload), Date.now(), scope.orgId, scope.userId],
   );
   return { id: result.lastInsertRowId as number, idempotencyKey };
 }
 
+/**
+ * Every sendable row on the DEVICE, every account's. The drain decides per row,
+ * immediately before each send, whether the live account may send it
+ * (outboxSendDecision): filtering here would be a check made once per drain.
+ */
 export async function listPending(): Promise<PendingActionRow[]> {
   const db = await getDb();
-  const rows = await db.getAllAsync<{
-    id: number;
-    kind: string;
-    idempotency_key: string;
-    payload_json: string;
-    created_at: number;
-    attempts: number;
-    last_attempt_at: number | null;
-    last_error: string | null;
-    status: string;
-  }>(`select * from pending_actions where status in ('pending','failed')
+  const rows = await db.getAllAsync<PendingActionDbRow>(`select * from pending_actions where status in ('pending','failed')
       order by created_at asc`);
   return rows.map(rowFromDb);
 }
 
 export async function listAll(limit = 100): Promise<PendingActionRow[]> {
   const db = await getDb();
-  const rows = await db.getAllAsync<{
-    id: number;
-    kind: string;
-    idempotency_key: string;
-    payload_json: string;
-    created_at: number;
-    attempts: number;
-    last_attempt_at: number | null;
-    last_error: string | null;
-    status: string;
-  }>(`select * from pending_actions order by created_at desc limit ?`, [limit]);
+  const rows = await db.getAllAsync<PendingActionDbRow>(
+    `select * from pending_actions order by created_at desc limit ?`,
+    [limit],
+  );
   return rows.map(rowFromDb);
 }
 
+/** The live account's sendable rows (legacy rows included); never another's. */
 export async function pendingCount(): Promise<number> {
   const db = await getDb();
+  const { userId } = await liveOutboxScope();
   const row = await db.getFirstAsync<{ n: number }>(
-    `select count(*) as n from pending_actions where status in ('pending','failed')`,
+    `select count(*) as n from pending_actions where status in ('pending','failed')
+        and ${OWNED_BY_USER_SQL}`,
+    [userId],
   );
   return row?.n ?? 0;
 }
 
-export async function markSending(id: number): Promise<void> {
+/**
+ * The row is going on the wire now. `owner` is the send's scope
+ * (outboxSendDecision): a legacy row missing its organization or user is
+ * stamped with it here, in the same statement, so a row is only ever sent
+ * under the first account that sent it. coalesce() never overwrites an owner
+ * already stored.
+ */
+export async function markSending(
+  id: number,
+  owner?: { orgId: string | null; userId: string },
+): Promise<void> {
   const db = await getDb();
   await db.runAsync(
     `update pending_actions
         set status = 'sending',
             attempts = attempts + 1,
-            last_attempt_at = ?
+            last_attempt_at = ?,
+            organization_id = coalesce(organization_id, ?),
+            user_id = coalesce(user_id, ?)
       where id = ?`,
-    [Date.now(), id],
+    [Date.now(), owner?.orgId ?? null, owner?.userId ?? null, id],
   );
 }
 
@@ -214,8 +244,13 @@ export async function rejectAllPending(error: string): Promise<number> {
  */
 export async function countRejected(): Promise<number> {
   const db = await getDb();
+  const { userId } = await liveOutboxScope();
+  // Only the live account's record (and legacy rows): on a shared phone the
+  // next person must not be shown, or badged with, somebody else's work.
   const row = await db.getFirstAsync<{ n: number }>(
-    `select count(*) as n from pending_actions where status = 'rejected'`,
+    `select count(*) as n from pending_actions where status = 'rejected'
+        and ${OWNED_BY_USER_SQL}`,
+    [userId],
   );
   return row?.n ?? 0;
 }
@@ -274,29 +309,68 @@ export async function pruneRejected(now: number = Date.now()): Promise<number> {
  */
 export async function clearRejected(): Promise<number> {
   const db = await getDb();
-  const result = await db.runAsync(`delete from pending_actions where status = 'rejected'`);
+  const { userId } = await liveOutboxScope();
+  // The list the person is looking at: their own record, never another's.
+  const result = await db.runAsync(
+    `delete from pending_actions where status = 'rejected' and ${OWNED_BY_USER_SQL}`,
+    [userId],
+  );
   return result.changes;
 }
 
 /** Rejected rows, newest first — the local record for the user and support. */
 export async function listRejected(limit = 100): Promise<PendingActionRow[]> {
   const db = await getDb();
-  const rows = await db.getAllAsync<{
-    id: number;
-    kind: string;
-    idempotency_key: string;
-    payload_json: string;
-    created_at: number;
-    attempts: number;
-    last_attempt_at: number | null;
-    last_error: string | null;
-    status: string;
-  }>(
+  const { userId } = await liveOutboxScope();
+  const rows = await db.getAllAsync<PendingActionDbRow>(
     `select * from pending_actions where status = 'rejected'
+        and ${OWNED_BY_USER_SQL}
       order by created_at desc limit ?`,
-    [limit],
+    [userId, limit],
   );
   return rows.map(rowFromDb);
+}
+
+/**
+ * Rows HELD for another account: queued on this device by someone else and
+ * waiting, untouched, for them to sign in here again. Never sent under the
+ * live account (outbox-scope.ts). Settings > Unsent work lists them as
+ * "Queued by another account" with Discard; the payload is not shown.
+ */
+export async function listHeld(limit = 100): Promise<PendingActionRow[]> {
+  const db = await getDb();
+  const { userId } = await liveOutboxScope();
+  const rows = await db.getAllAsync<PendingActionDbRow>(
+    `select * from pending_actions where status in ('pending','failed')
+        and ${HELD_FOR_OTHER_SQL}
+      order by created_at desc limit ?`,
+    [userId, limit],
+  );
+  return rows.map(rowFromDb);
+}
+
+export async function countHeld(): Promise<number> {
+  const db = await getDb();
+  const { userId } = await liveOutboxScope();
+  const row = await db.getFirstAsync<{ n: number }>(
+    `select count(*) as n from pending_actions where status in ('pending','failed')
+        and ${HELD_FOR_OTHER_SQL}`,
+    [userId],
+  );
+  return row?.n ?? 0;
+}
+
+/**
+ * Put a row the drain had marked 'sending' back in the queue, untouched, when
+ * api() found the account changed at the moment of sending
+ * (OutboxSessionChangedError). Nothing was sent, so it is not a failure.
+ */
+export async function markHeld(id: number): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `update pending_actions set status = 'pending' where id = ? and status = 'sending'`,
+    [id],
+  );
 }
 
 /**
@@ -313,17 +387,7 @@ export async function retry(id: number): Promise<void> {
   );
 }
 
-function rowFromDb(r: {
-  id: number;
-  kind: string;
-  idempotency_key: string;
-  payload_json: string;
-  created_at: number;
-  attempts: number;
-  last_attempt_at: number | null;
-  last_error: string | null;
-  status: string;
-}): PendingActionRow {
+function rowFromDb(r: PendingActionDbRow): PendingActionRow {
   return {
     id: r.id,
     kind: r.kind as PendingActionKind,
@@ -334,6 +398,8 @@ function rowFromDb(r: {
     lastAttemptAt: r.last_attempt_at,
     lastError: r.last_error,
     status: r.status as PendingActionRow['status'],
+    organizationId: r.organization_id ?? null,
+    userId: r.user_id ?? null,
   };
 }
 

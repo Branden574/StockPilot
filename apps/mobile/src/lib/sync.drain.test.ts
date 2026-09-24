@@ -3,6 +3,7 @@ import * as path from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { OutboxSessionChangedError } from './outbox-scope';
 import { drainQueue } from './sync';
 
 // vi.mock / vi.hoisted are hoisted above these imports by vitest's transform,
@@ -45,8 +46,14 @@ const queueMock = vi.hoisted(() => ({
   markOk: vi.fn(),
   markFailed: vi.fn(),
   markRejected: vi.fn(),
+  markHeld: vi.fn(),
 }));
 vi.mock('./queue', () => queueMock);
+
+/** The workspace and account live on the device, read by the drain per row. */
+const live = vi.hoisted(() => ({ orgId: 'org-live' as string | null, userId: 'u1' as string | null }));
+const scopeMock = vi.hoisted(() => ({ liveOutboxScope: vi.fn() }));
+vi.mock('./session-scope', () => scopeMock);
 
 const apiMock = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock('./api', () => apiMock);
@@ -81,6 +88,8 @@ type Row = {
   kind: string;
   idempotencyKey: string;
   payload: Record<string, unknown>;
+  organizationId?: string | null;
+  userId?: string | null;
 };
 
 function httpError(status: number, message = 'boom'): Error {
@@ -94,7 +103,10 @@ beforeEach(() => {
     isConnected: true,
     isInternetReachable: true,
   });
-  for (const name of ['markSending', 'markOk', 'markFailed', 'markRejected'] as const) {
+  live.orgId = 'org-live';
+  live.userId = 'u1';
+  scopeMock.liveOutboxScope.mockReset().mockImplementation(async () => ({ ...live }));
+  for (const name of ['markSending', 'markOk', 'markFailed', 'markRejected', 'markHeld'] as const) {
     queueMock[name].mockReset().mockImplementation(async (id: number) => {
       calls.log.push(`${name}:${id}`);
     });
@@ -148,6 +160,9 @@ describe('drainQueue — the state machine, executed', () => {
     expect(apiMock.api).toHaveBeenCalledWith('/api/v1/po/po1/receive-line', {
       method: 'POST',
       body: { poId: 'po1', lineId: 'l1', quantity: 2, idempotencyKey: 'k1' },
+      // A legacy row (no owner): the live workspace and account.
+      orgId: 'org-live',
+      asUserId: 'u1',
     });
   });
 
@@ -233,6 +248,67 @@ describe('drainQueue — the state machine, executed', () => {
     const res = await drainQueue();
     expect(calls.log).toEqual(['markSending:7', 'markFailed:7']);
     expect(res).toEqual({ ok: 0, failed: 1, rejected: 0 });
+  });
+});
+
+describe('drainQueue — every row is sent under its own org, and only as its own account (S4a)', () => {
+  const OWN_ROW_ORG_A: Row = { ...RECEIPT, organizationId: 'org-a', userId: 'u1' };
+
+  it('a row queued in org A reaches api() with org A while org B is the active workspace', async () => {
+    live.orgId = 'org-b';
+    pending([OWN_ROW_ORG_A]);
+    expect(await drainQueue()).toEqual({ ok: 1, failed: 0, rejected: 0 });
+    expect(apiMock.api).toHaveBeenCalledWith(
+      '/api/v1/po/po1/receive-line',
+      expect.objectContaining({ orgId: 'org-a', asUserId: 'u1' }),
+    );
+  });
+
+  it("a row queued by U1 is HELD under U2's session: not sent, not failed, not rejected, not touched", async () => {
+    live.userId = 'u2';
+    pending([OWN_ROW_ORG_A]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 0 });
+    expect(apiMock.api).not.toHaveBeenCalled();
+    // Left exactly as it was: no status write of any kind.
+    expect(calls.log).toEqual([]);
+  });
+
+  it('a session change BETWEEN two rows of one drain stops the second row', async () => {
+    // The first send is where the session changes (a sign-out, "Use a
+    // different account", a revoked session): the check is per row, so the
+    // second row is held rather than sent under the next account.
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      live.userId = 'u2';
+    });
+    pending([OWN_ROW_ORG_A, { ...BUNDLE, organizationId: 'org-a', userId: 'u1' }]);
+    expect(await drainQueue()).toEqual({ ok: 1, failed: 0, rejected: 0 });
+    expect(calls.log).toEqual(['markSending:1', 'api:/api/v1/po/po1/receive-line', 'markOk:1']);
+    expect(apiMock.api).not.toHaveBeenCalledWith('/api/v1/bundles/b1/distribute', expect.anything());
+  });
+
+  it('a legacy row is sent under the live context and stamped with it at its first send', async () => {
+    pending([RECEIPT]);
+    await drainQueue();
+    expect(queueMock.markSending).toHaveBeenCalledWith(1, { orgId: 'org-live', userId: 'u1' });
+  });
+
+  it('with nobody signed in nothing is sent and nothing is marked', async () => {
+    live.userId = null;
+    pending([RECEIPT, OWN_ROW_ORG_A]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 0 });
+    expect(apiMock.api).not.toHaveBeenCalled();
+    expect(calls.log).toEqual([]);
+  });
+
+  it('api() refusing because the account changed at the moment of sending puts the row back, unfailed', async () => {
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw new OutboxSessionChangedError();
+    });
+    pending([OWN_ROW_ORG_A]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 0 });
+    expect(calls.log).toEqual(['markSending:1', 'api:/api/v1/po/po1/receive-line', 'markHeld:1']);
   });
 });
 

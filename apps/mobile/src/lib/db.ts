@@ -287,6 +287,15 @@ export async function ensureSchema(db: SchemaDb): Promise<void> {
   // binary is still on v1, but the rebuild that used to supply the column no
   // longer touches this table, so it is added here instead.
   await addColumnIfMissing(db, 'pending_actions', 'last_attempt_at', 'integer');
+  // WHOSE work each row is (outbox-scope.ts): the organization and the user it
+  // was queued under. REQUIRED, so a failure here fails the open loudly (and
+  // the next getDb retries) rather than leaving every enqueue naming a column
+  // that is not there. Rows an older binary queued read NULL: legacy rows,
+  // sent once under whoever drains them first, as they always were. An older
+  // bundle running on this table ignores both columns and keeps working: it
+  // names its columns explicitly on insert.
+  await addColumnIfMissing(db, 'pending_actions', 'organization_id', 'text');
+  await addColumnIfMissing(db, 'pending_actions', 'user_id', 'text');
 
   await addDisplayColumn(db, 'cycle_count_lines', 'item_variant_label', 'text');
   // The count's permanent reference, CC-000042 (server migration 0358). A
@@ -405,8 +414,7 @@ export async function setMeta(key: string, value: string): Promise<void> {
  * db-clear-keys.wiring.test.ts — add a key there, clear it here.
  *
  * Deliberately does NOT touch `pending_actions` — see the note on
- * `deleteOrgData` for the org-keying limitation. Callers that truly want a
- * full reset (sign-out) drop pending separately.
+ * `deleteOrgData`: queued rows carry their own organization and account.
  */
 async function clearOrgScopedTables(db: SQLite.SQLiteDatabase): Promise<void> {
   await db.execAsync(`
@@ -463,16 +471,12 @@ export function currentCacheGeneration(): number {
  * lingers on screen (though no longer on disk) until the forced pull lands or
  * the app is relaunched.
  *
- * KNOWN LIMITATION — pending_actions are NOT org-keyed: the table has no
- * organization_id column, so we cannot reliably know which org a queued
- * offline write (receive_po_line / record_count / distribute_bundle / …)
- * belongs to. Rather than SILENTLY DROP a pending write on switch — which
- * could lose a user's queued PO receipt or count — we PRESERVE the queue as-is.
- * Each drain endpoint is independently server-side gated (assertModuleEnabled
- * + per-warehouse access + RLS), so a stale cross-org row 4xxs and lands in the
- * queue UI as "failed" rather than mutating the wrong org's data. Properly
- * scoping the outbox per org (add organization_id + flush-on-switch) is a
- * follow-up.
+ * The outbox (pending_actions) is deliberately NOT touched. Every row carries
+ * the organization it was queued in (outbox-scope.ts), and the drains send it
+ * under that organization whatever workspace is active, so a switch neither
+ * loses queued work nor replays it into the new workspace. (Before the rows
+ * were org-keyed, a row queued in org A was sent with org B's header after a
+ * switch, refused 404/403, and terminally rejected: the work was lost.)
  */
 export async function deleteOrgData(): Promise<void> {
   cacheGeneration += 1;
