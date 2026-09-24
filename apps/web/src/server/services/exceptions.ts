@@ -271,10 +271,28 @@ export class ExceptionsService {
    * "not 43-B" and flagged every book stored in a crate on its own labelled rack
    * (a pattern L4L uses widely), and it also flagged a legacy rack spelled
    * "22 - B" against a label "22-B". `locationNameSitsOnRack` understands both
-   * shapes, and it is the SAME predicate the item card and the scan sheet use
-   * (holdingsContradictRack), so this screen and those cards cannot disagree
-   * about whether a label is true. Its canonical comparison is a superset of the
-   * old case-insensitive equality, so nothing that matched before stops matching.
+   * shapes. Its canonical comparison is a superset of the old case-insensitive
+   * equality, so nothing that matched before stops matching.
+   *
+   * ═══ THE LABEL IS REDUCED TO THE RACK IT NAMES, FOR THE SAME REASON ═══
+   *
+   * The crate-on-rack shape turns up on BOTH sides of the comparison. A
+   * put-away into a positioned crate stamps the crate's own name as the label
+   * (InventoryService.stampPlacementBin: bin = dest.name), so bin_location can
+   * read "Blue #0 on rack 38-B", and a later move with the transfer dialog does
+   * not stamp it again. `locationNameSitsOnRack` reads the " on rack" tail only
+   * on the HOLDING side, so that label would be flagged against stock loose on
+   * 38-B, with a detail that names 38-B on both sides. The label segment is
+   * therefore passed through `rackPositionOfLocationName` first. It is called
+   * with no kind because a label has none: a " on rack X" tail yields X, and
+   * anything else ("41-C", "22 - B", "Blue Shelf") comes back unchanged.
+   *
+   * The item card and the scan sheet ask the same question with the same
+   * predicate (holdingsContradictRack), but of a different stored fact: the
+   * structured rack pair in custom_fields, not bin_location. So they agree
+   * whenever the label and the pair name the same rack. When those two stored
+   * facts disagree with each other, this screen and the card can give
+   * different answers, because each is checking a different fact.
    */
   private labelMismatches(
     rows: readonly HoldingRow[],
@@ -290,8 +308,12 @@ export class ExceptionsService {
       const held = rackHoldingsByItem.get(r.item_id);
       if (!held || held.size === 0) continue;
 
-      const labelRack = label.split('·')[0]!.trim();
-      if (labelRack === '') continue;
+      const labelSegment = label.split('·')[0]!.trim();
+      if (labelSegment === '') continue;
+      // The rack the label names, so both sides of the comparison and of the
+      // detail text are racks: "Blue #0 on rack 38-B" is compared, and
+      // reported, as "38-B", just as the composite "38-B · Blue0" is.
+      const labelRack = rackPositionOfLocationName(labelSegment);
       const matches = [...held.keys()].some((name) => locationNameSitsOnRack(name, labelRack));
       if (matches) continue;
 

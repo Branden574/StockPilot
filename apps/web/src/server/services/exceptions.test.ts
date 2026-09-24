@@ -255,6 +255,53 @@ describe('ExceptionsService — label mismatch: a crate SITS ON a rack', () => {
     expect(r.exceptions.map((e) => e.rule)).toEqual(['label_mismatch']);
     expect(r.exceptions[0]!.detail).toBe('labelled 41-C, stock is on Blue Shelf');
   });
+
+  it('names a legacy spaced rack and a crate on it as ONE rack, in canonical form', async () => {
+    // The rack row is stored "22 - B" and the crate says "on rack 22-B". Both
+    // are the same rack, so the detail must list it once. Only the row's KIND
+    // lets the rack name be canonicalised: read without it, "22 - B" is kept
+    // as typed and the detail says "22 - B, 22-B", two entries for one rack.
+    const r = await svcWith({
+      holdings: [
+        holding({ item: 'i8', bin: '40-C', loc: 'a', locName: '22 - B', kind: 'rack' }),
+        holding({ item: 'i8', bin: '40-C', loc: 'b', locName: 'Blue on rack 22-B', kind: 'crate' }),
+      ],
+    }).list();
+    expect(r.exceptions.map((e) => e.rule)).toEqual(['label_mismatch']);
+    expect(r.exceptions[0]!.detail).toBe('labelled 40-C, stock is on 22-B');
+  });
+});
+
+describe('ExceptionsService — label mismatch: the LABEL can be a crate on a rack too', () => {
+  // A put-away into a positioned crate stamps the crate's own name as the
+  // label (InventoryService.stampPlacementBin: bin = dest.name), so
+  // bin_location reads "Blue #0 on rack 38-B". A later move with the transfer
+  // dialog does not stamp it again. The label still names rack 38-B, and only
+  // that rack is compared, exactly as for the composite "38-B · Blue0".
+
+  it('does NOT flag a crate-name label when the stock is loose on that rack', async () => {
+    const r = await svcWith({
+      holdings: [holding({ bin: 'Blue #0 on rack 38-B', locName: '38-B', kind: 'rack' })],
+    }).list();
+    expect(r.exceptions).toEqual([]);
+  });
+
+  it('does NOT flag a crate-name label when the stock is in another crate on that rack', async () => {
+    const r = await svcWith({
+      holdings: [
+        holding({ bin: 'Blue #0 on rack 38-B', locName: 'Gray #BIN on rack 38-B', kind: 'crate' }),
+      ],
+    }).list();
+    expect(r.exceptions).toEqual([]);
+  });
+
+  it('still flags a crate-name label whose rack holds none of the stock, naming both racks', async () => {
+    const r = await svcWith({
+      holdings: [holding({ bin: 'Blue #0 on rack 38-B', locName: '39-B', kind: 'rack' })],
+    }).list();
+    expect(r.exceptions.map((e) => e.rule)).toEqual(['label_mismatch']);
+    expect(r.exceptions[0]!.detail).toBe('labelled 38-B, stock is on 39-B');
+  });
 });
 
 describe('ExceptionsService — over-reserved', () => {
