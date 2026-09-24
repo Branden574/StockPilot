@@ -4,7 +4,18 @@ import * as React from 'react';
 
 import type { CartAction, CartState } from './types';
 
-const STORAGE_PREFIX = 'order-draft:';
+// ═══ ONE DRAFT PER PAGE, NOT ONE PER WAREHOUSE ═══
+//
+// The New rental page reuses this cart, and it used to save under the Orders
+// key. Both pages then read and wrote the SAME `order-draft:<warehouse>`
+// draft: an Orders basket opened inside the rental cart, which drew only the
+// lines it could find in its rental catalog and still submitted the rest, so
+// checkout failed with "One or more items are not rental items." (Demo Co,
+// 2026-09-24). The other direction put rental lines in the Orders basket, and
+// a finished rental deleted the Orders draft. Each page now names its own
+// prefix. Orders keeps the original one, so its saved drafts still restore.
+export const ORDER_DRAFT_PREFIX = 'order-draft:';
+export const RENTAL_DRAFT_PREFIX = 'rental-draft:';
 const SAVE_DEBOUNCE_MS = 250;
 
 /**
@@ -163,13 +174,15 @@ const CartContext = React.createContext<CartContextValue | null>(null);
  * mount (so SSR doesn't see device-specific cart data), then
  * debounce-saves on every change. localStorage key is scoped per
  * warehouseId so swapping warehouses doesn't trample the other
- * warehouse's draft.
+ * warehouse's draft, and per page by `draftPrefix` (see above).
  */
 export function CartProvider({
   initial,
+  draftPrefix = ORDER_DRAFT_PREFIX,
   children,
 }: {
   initial: CartState;
+  draftPrefix?: string;
   children: React.ReactNode;
 }) {
   const [state, dispatch] = React.useReducer(cartReducer, initial);
@@ -180,7 +193,7 @@ export function CartProvider({
   // clear with the previous warehouse's draft.
   React.useEffect(() => {
     try {
-      const raw = localStorage.getItem(`${STORAGE_PREFIX}${initial.warehouseId}`);
+      const raw = localStorage.getItem(`${draftPrefix}${initial.warehouseId}`);
       if (raw) {
         const parsed = JSON.parse(raw) as CartState;
         if (parsed && parsed.warehouseId === initial.warehouseId) {
@@ -213,7 +226,7 @@ export function CartProvider({
         // draft. Removing rather than skipping matters: skipping would leave a
         // stale draft on disk when a shopper empties their basket, which is the
         // resurrection bug pointed the other way.
-        const key = `${STORAGE_PREFIX}${state.warehouseId}`;
+        const key = `${draftPrefix}${state.warehouseId}`;
         if (isPristineCart(state)) localStorage.removeItem(key);
         else localStorage.setItem(key, JSON.stringify(state));
       } catch {
@@ -221,7 +234,7 @@ export function CartProvider({
       }
     }, SAVE_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [state]);
+  }, [state, draftPrefix]);
 
   return (
     <CartContext.Provider value={{ state, dispatch, hydrated }}>
@@ -241,11 +254,12 @@ export function useCart() {
 /**
  * Call after a successful submit so the next visit to /orders/new
  * starts from a blank cart instead of resurrecting the just-placed
- * order. Safe to call even if no draft exists.
+ * order. Safe to call even if no draft exists. Pass the same `draftPrefix`
+ * the page's CartProvider uses.
  */
-export function clearCartDraft(warehouseId: string) {
+export function clearCartDraft(warehouseId: string, draftPrefix: string = ORDER_DRAFT_PREFIX) {
   try {
-    localStorage.removeItem(`${STORAGE_PREFIX}${warehouseId}`);
+    localStorage.removeItem(`${draftPrefix}${warehouseId}`);
   } catch {
     /* noop */
   }
