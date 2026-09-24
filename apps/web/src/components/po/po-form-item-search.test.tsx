@@ -167,6 +167,8 @@ describe('PO item picker — server-backed search', () => {
     expect(p.get('slim')).toBe('1');
     expect(p.get('limit')).toBe('25');
     expect(p.get('q')).toBe('web');
+    // A kit's pre-assembled stock is never ordered: the search never offers it.
+    expect(p.get('bundles')).toBe('exclude');
   });
 
   it.each([
@@ -393,5 +395,39 @@ describe('PO item picker — selected-line labels survive an absent result', () 
       expect(screen.getByRole('button', { name: /BK-B · Charlotte's Web/ })).toBeInTheDocument(),
     );
     expect(requests).toEqual([]);
+  });
+});
+
+describe('PO item picker — a line whose item can no longer be ordered says so', () => {
+  const EDIT_INITIAL = {
+    supplierId: '',
+    locationId: '',
+    charterId: '',
+    expectedAt: '',
+    notes: '',
+    poNumber: 'PO-1',
+    lines: [
+      { itemId: 'gone', quantityOrdered: 1, unitCost: 1 },
+      { itemId: 'kit', quantityOrdered: 1, unitCost: 1 },
+      { itemId: 'rent', quantityOrdered: 1, unitCost: 1 },
+    ],
+  };
+
+  it('labels a deleted item "Deleted:" and a kit "Pre-assembled kit:", and resolves a rental, unfiltered', async () => {
+    responses.set('ids:gone,kit,rent', [
+      { ...PRODUCT_A_ROW, id: 'gone', sku: 'BP-1', name: 'Blue pens', deleted: true },
+      { ...PRODUCT_A_ROW, id: 'kit', sku: '__BUNDLE__0a000000', name: 'Reading Kit', is_bundle: true },
+      { ...PRODUCT_A_ROW, id: 'rent', sku: 'CAN-1', name: 'Canopy', is_rental: true },
+    ]);
+    render(<PoForm {...BASE_PROPS} poId="po-1" initial={EDIT_INITIAL} />);
+
+    // The save refuses the first two BY NAME; each line now shows which it is.
+    expect(await screen.findByRole('button', { name: 'Deleted: BP-1 · Blue pens' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pre-assembled kit: __BUNDLE__0a000000 · Reading Kit' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'CAN-1 · Canopy' })).toBeInTheDocument();
+    // The by-id resolve is NOT kit-filtered (the old draft's kit line must
+    // still show what it is so it can be removed).
+    const resolve = requests.find((u) => u.includes('ids='));
+    expect(new URL(resolve!, 'https://example.test').searchParams.get('bundles')).toBeNull();
   });
 });

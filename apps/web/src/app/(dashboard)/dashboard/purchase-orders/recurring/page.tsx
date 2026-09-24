@@ -2,10 +2,12 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { RefreshCw } from 'lucide-react';
 
+import type { RecurringLineLabel } from '@/components/po/recurring-templates-panel';
 import { RecurringTemplatesSeedLoader } from '@/components/po/recurring-templates-seed-loader';
 import { requireOrgContext } from '@/lib/auth/session';
 import { purchaseOrderItemTypes } from '@/lib/purchase-orders/item-types';
 import { InventoryService } from '@/server/services/inventory';
+import { reportDegradedRead } from '@/server/services/lib/fetch-by-ids';
 import { LocationsService } from '@/server/services/locations';
 import { RecurringPoTemplatesService } from '@/server/services/recurring-pos';
 import { SuppliersService } from '@/server/services/suppliers';
@@ -15,6 +17,8 @@ import { createClient } from '@/lib/supabase/server';
 import { withContext } from '@/server/services/context';
 
 import { can, planAllowsRecurringPos, type OrgBillingState } from '@stockpilot/core';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Recurring purchase orders management page.
@@ -68,10 +72,51 @@ export default async function RecurringPosPage() {
     // create/edit pages pass, so a recurring template can order every type a
     // one-off PO can. Without it list() falls back to `item_type = 'product'`
     // and books are invisible here too.
-    inventorySvc.list({ limit: 1000, expected: 'any', itemTypes: purchaseOrderItemTypes() }),
+    //
+    // excludeBundles: a kit's pre-assembled stock is never ordered, and a
+    // template holding one is refused on save (0366 rule), so the picker
+    // never offers it.
+    inventorySvc.list({
+      limit: 1000,
+      expected: 'any',
+      itemTypes: purchaseOrderItemTypes(),
+      excludeBundles: true,
+    }),
     suppliersSvc.listForLookups(),
     locationsSvc.list({ sitesOnly: true }),
   ]);
+
+  // Saved template lines can point at items the picker above does not list:
+  // deleted since, a kit's pre-assembled stock, archived. Resolve those by
+  // id so each line says what it is. Saving a template that holds a deleted
+  // item or a kit is refused by that item's name, and this is how the buyer
+  // finds the line to remove. A label is a convenience: a failed read shows
+  // the page without it (recurring pattern #1), never an error page.
+  const listedIds = new Set(inventory.items.map((i) => i.id as string));
+  const unlistedIds = [
+    ...new Set(
+      templates.flatMap((t) =>
+        (Array.isArray(t.line_items) ? (t.line_items as Array<{ itemId?: unknown }>) : []).map((l) =>
+          typeof l?.itemId === 'string' ? l.itemId : '',
+        ),
+      ),
+    ),
+  ].filter((id) => UUID_RE.test(id) && !listedIds.has(id));
+  let lineLabels: RecurringLineLabel[] = [];
+  if (unlistedIds.length > 0) {
+    try {
+      const rows = await inventorySvc.lineLabelsByIds(unlistedIds, { itemType: 'all' });
+      lineLabels = rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        sku: r.sku,
+        deleted: r.deleted_at != null,
+        kitStock: r.is_bundle === true,
+      }));
+    } catch (err) {
+      reportDegradedRead('recurring_pos.page.line_labels', err, { ids: unlistedIds.length });
+    }
+  }
 
   return (
     <div className="container mx-auto max-w-4xl px-4 py-8 sm:px-6">
@@ -106,6 +151,7 @@ export default async function RecurringPosPage() {
         suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}
         locations={locations.map((l) => ({ id: l.id as string, name: l.name as string }))}
         entitled={entitled}
+        lineLabels={lineLabels}
       />
     </div>
   );

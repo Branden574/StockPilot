@@ -17,6 +17,8 @@ type ItemRow = {
   organization_id: string;
   status: string;
   deleted_at: string | null;
+  /** NOT NULL DEFAULT false in the database (0040): a kit's pre-assembled stock. */
+  is_bundle: boolean;
   sku: string;
   name: string;
   quantity_on_hand: number;
@@ -129,6 +131,7 @@ function filler(i: number, over: Partial<ItemRow> = {}): ItemRow {
     organization_id: 'org-1',
     status: 'active',
     deleted_at: null,
+    is_bundle: false,
     sku: `F-${i}`,
     name: `Filler ${i}`,
     quantity_on_hand: 1,
@@ -144,6 +147,7 @@ const HOT: ItemRow = {
   organization_id: 'org-1',
   status: 'active',
   deleted_at: null,
+  is_bundle: false,
   sku: 'HOT',
   name: 'Fast mover',
   quantity_on_hand: 300,
@@ -222,6 +226,19 @@ describe('getDigestData low stock', () => {
     const payload = await getDigestData(client, 'org-1');
 
     expect(lowStockIds(payload.lowStock)).toEqual(['mine']);
+  });
+
+  it('leaves out a kit whose pre-assembled stock ran out (kits are built from components, never reordered)', async () => {
+    const items = [
+      filler(1, { id: 'drained-kit', sku: '__BUNDLE__0a000000', quantity_on_hand: 0, is_bundle: true }),
+      filler(2, { id: 'kit-with-reorder-point', quantity_on_hand: 1, reorder_point: 3, is_bundle: true }),
+      filler(3, { id: 'out', quantity_on_hand: 0 }),
+    ];
+    const { client } = makeFakeClient(items);
+
+    const payload = await getDigestData(client, 'org-1');
+
+    expect(lowStockIds(payload.lowStock)).toEqual(['out']);
   });
 
   it('omits healthy stock', async () => {

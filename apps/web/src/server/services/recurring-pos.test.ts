@@ -39,7 +39,7 @@ vi.mock('./item-images', () => ({
   },
 }));
 
-import { RecurringPoTemplatesService } from './recurring-pos';
+import { RecurringPoTemplatesService, recurringRunNotice, type RecurringRunSummary } from './recurring-pos';
 
 const NOW = new Date('2026-06-18T07:00:00.000Z');
 const DUE_AT = new Date('2026-06-18T06:00:00.000Z'); // before NOW → due
@@ -651,5 +651,260 @@ describe('RecurringPoTemplatesService.update — supplierId org-verify', () => {
 
     expect(result.id).toBe('tpl-1');
     expect(stub.fromCalls).not.toContain('suppliers');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Template save: a line whose item can never be ordered is refused
+// ─────────────────────────────────────────────────────────────────
+
+const KIT_ID = '00000000-0000-0000-0000-0000000000a1';
+const GONE_ID = '00000000-0000-0000-0000-0000000000a2';
+const PLAIN_ID = '00000000-0000-0000-0000-0000000000a3';
+
+/** inventory_items rows the caller can see, for the name read. */
+const namedItems = servedLikePostgrest([
+  { id: KIT_ID, organization_id: 'org-test', name: 'Reading Kit' },
+  { id: GONE_ID, organization_id: 'org-test', name: 'Blue pens' },
+  { id: PLAIN_ID, organization_id: 'org-test', name: 'Pencils' },
+]);
+
+function lines(...ids: string[]) {
+  return ids.map((itemId) => ({ itemId, quantityOrdered: 1, unitCost: 1 }));
+}
+
+describe('RecurringPoTemplatesService.create/update — lines that can never be ordered', () => {
+  it('refuses a template holding a kit, naming it, and does NOT insert', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:po_line_items_not_orderable': { data: [{ item_id: KIT_ID, refusal: 'po_line_bundle' }], error: null },
+      'inventory_items.select': namedItems,
+      'recurring_po_templates.insert': { data: { id: 'tpl-x' }, error: null },
+    });
+    const svc = new RecurringPoTemplatesService(makeServiceContext(stub.client, { role: 'owner' }) as never);
+
+    await expect(svc.create({ ...CREATE_INPUT_BASE, lineItems: lines(PLAIN_ID, KIT_ID) })).rejects.toMatchObject({
+      code: 'validation_error',
+      message:
+        '"Reading Kit" is a pre-assembled kit, and kits can\'t be ordered on a purchase order: they are built from their components. Order the components instead.',
+    });
+    expect(stub.chainsAll.get('recurring_po_templates.insert')).toBeUndefined();
+    // The database's own rule decides, for this org and these ids.
+    expect(stub.rpcCalls.find((c) => c.name === 'po_line_items_not_orderable')?.args).toEqual({
+      p_org_id: 'org-test',
+      p_item_ids: [PLAIN_ID, KIT_ID],
+    });
+  });
+
+  it('names the FIRST such line in line order, whatever order the database answers in', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:po_line_items_not_orderable': {
+        data: [
+          { item_id: KIT_ID, refusal: 'po_line_bundle' },
+          { item_id: GONE_ID, refusal: 'po_line_deleted' },
+        ],
+        error: null,
+      },
+      'inventory_items.select': namedItems,
+    });
+    const svc = new RecurringPoTemplatesService(makeServiceContext(stub.client, { role: 'owner' }) as never);
+
+    await expect(svc.create({ ...CREATE_INPUT_BASE, lineItems: lines(GONE_ID, KIT_ID) })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: '"Blue pens" was deleted, so it can\'t be ordered. Remove it from the template and save again.',
+    });
+  });
+
+  it('refuses an update the same way and does NOT update', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:po_line_items_not_orderable': { data: [{ item_id: GONE_ID, refusal: 'po_line_deleted' }], error: null },
+      'inventory_items.select': namedItems,
+      'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
+    });
+    const svc = new RecurringPoTemplatesService(makeServiceContext(stub.client, { role: 'owner' }) as never);
+
+    await expect(svc.update('tpl-1', { ...CREATE_INPUT_BASE, lineItems: lines(GONE_ID) })).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(stub.chainsAll.get('recurring_po_templates.update')).toBeUndefined();
+  });
+
+  it('an item the caller cannot see is refused unnamed (the check reads past RLS, the name does not)', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:po_line_items_not_orderable': { data: [{ item_id: KIT_ID, refusal: 'po_line_bundle' }], error: null },
+      'inventory_items.select': { data: null, error: null },
+    });
+    const svc = new RecurringPoTemplatesService(makeServiceContext(stub.client, { role: 'owner' }) as never);
+
+    await expect(svc.create({ ...CREATE_INPUT_BASE, lineItems: lines(KIT_ID) })).rejects.toMatchObject({
+      message: expect.stringMatching(/^An item on this template is a pre-assembled kit/),
+    });
+  });
+
+  it('a failed check refuses the save: "could not check" is never "nothing to refuse"', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:po_line_items_not_orderable': { data: null, error: { message: 'statement timeout' } },
+      'recurring_po_templates.insert': { data: { id: 'tpl-x' }, error: null },
+    });
+    const svc = new RecurringPoTemplatesService(makeServiceContext(stub.client, { role: 'owner' }) as never);
+
+    await expect(svc.create({ ...CREATE_INPUT_BASE, lineItems: lines(PLAIN_ID) })).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+    expect(stub.chainsAll.get('recurring_po_templates.insert')).toBeUndefined();
+  });
+
+  it('saves when nothing is refused (archived and rental items are orderable)', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:po_line_items_not_orderable': { data: [], error: null },
+      'recurring_po_templates.insert': { data: { id: 'tpl-new' }, error: null },
+    });
+    const svc = new RecurringPoTemplatesService(makeServiceContext(stub.client, { role: 'owner' }) as never);
+
+    await expect(svc.create({ ...CREATE_INPUT_BASE, lineItems: lines(PLAIN_ID) })).resolves.toEqual({ id: 'tpl-new' });
+  });
+});
+
+describe('RecurringPoTemplatesService.seedFromPo — lines that can never be ordered', () => {
+  it('leaves out a deleted item and a kit, and says how many', async () => {
+    const stub = makeSupabaseStub({
+      'purchase_orders.select': {
+        data: { id: 'po-src', organization_id: 'org-test', supplier_id: 'sup-abc', destination_location_id: null },
+        error: null,
+      },
+      'purchase_order_items.select': {
+        data: [
+          { item_id: PLAIN_ID, quantity_ordered: 3, unit_cost: 15 },
+          { item_id: GONE_ID, quantity_ordered: 1, unit_cost: 2 },
+          { item_id: KIT_ID, quantity_ordered: 1, unit_cost: 2 },
+        ],
+        error: null,
+      },
+      'rpc:po_line_items_not_orderable': {
+        data: [
+          { item_id: GONE_ID, refusal: 'po_line_deleted' },
+          { item_id: KIT_ID, refusal: 'po_line_bundle' },
+        ],
+        error: null,
+      },
+    });
+    const svc = new RecurringPoTemplatesService(makeServiceContext(stub.client, { role: 'admin' }) as never);
+
+    const seed = await svc.seedFromPo('po-src');
+
+    expect(seed.lineItems).toEqual([{ itemId: PLAIN_ID, quantityOrdered: 3, unitCost: 15 }]);
+    expect(seed.linesLeftOff).toBe(2);
+  });
+});
+
+describe('RecurringPoTemplatesService.runDueTemplates — what was left off reaches the summary', () => {
+  const dbItem = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    organization_id: 'org-test',
+    deleted_at: null,
+    is_bundle: false,
+    ...over,
+  });
+
+  it('counts the lines left off and names the templates, including one that ordered nothing', async () => {
+    const templates = [
+      {
+        ...TEMPLATE_BASE,
+        id: 'tpl-1',
+        name: 'Weekly Supplies',
+        line_items: [
+          { itemId: 'item-1', quantityOrdered: 5, unitCost: 10 },
+          { itemId: 'item-kit', quantityOrdered: 1, unitCost: 1 },
+        ],
+      },
+      {
+        ...TEMPLATE_BASE,
+        id: 'tpl-2',
+        name: 'Monthly Pens',
+        next_run_at: new Date(DUE_AT.getTime() + 1000).toISOString(),
+        line_items: [{ itemId: 'item-gone', quantityOrdered: 1, unitCost: 1 }],
+      },
+    ];
+    const stub = makeSupabaseStub({
+      'recurring_po_templates.select': servedLikePostgrest(templates),
+      'recurring_po_templates.update': { data: { id: 'tpl' }, error: null },
+      'inventory_items.select': servedLikePostgrest([
+        dbItem('item-1'),
+        dbItem('item-gone', { deleted_at: '2026-09-01T00:00:00Z' }),
+        dbItem('item-kit', { is_bundle: true }),
+      ]),
+      'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
+      'rpc:next_po_number': { data: 'PO-100', error: null },
+      'suppliers.select': { data: { id: 'sup-1' }, error: null },
+    });
+    const svc = new RecurringPoTemplatesService(makeServiceContext(stub.client, { role: 'owner' }) as never);
+
+    const summary = await svc.runDueTemplates(NOW);
+
+    expect(summary).toMatchObject({
+      created: 1,
+      failures: 1,
+      linesLeftOff: 2,
+      templatesWithLinesLeftOff: ['Weekly Supplies', 'Monthly Pens'],
+      templatesWithNothingOrderable: ['Monthly Pens'],
+    });
+  });
+});
+
+describe('recurringRunNotice — what the admins are told', () => {
+  const base: RecurringRunSummary = {
+    created: 0,
+    sent: 0,
+    heldForReview: 0,
+    failures: 0,
+    linesLeftOff: 0,
+    templatesWithLinesLeftOff: [],
+    templatesWithNothingOrderable: [],
+  };
+
+  it('nothing created and nothing left off: no notification (as before)', () => {
+    expect(recurringRunNotice(base)).toBeNull();
+  });
+
+  it('a run that created POs, unchanged when nothing was left off', () => {
+    expect(recurringRunNotice({ ...base, created: 2, sent: 1 })).toEqual({
+      title: 'Recurring purchase orders ran',
+      body: 'Recurring purchase orders created 2 purchase orders, 1 sent.',
+    });
+  });
+
+  it('says which template left a line off, even when its PO was created', () => {
+    expect(
+      recurringRunNotice({ ...base, created: 1, sent: 1, linesLeftOff: 1, templatesWithLinesLeftOff: ['Weekly Supplies'] }),
+    ).toEqual({
+      title: 'Recurring purchase orders ran',
+      body:
+        'Recurring purchase orders created 1 purchase order, 1 sent. 1 template line was left off ("Weekly Supplies") because the item was deleted or is a pre-assembled kit, which is never ordered. Edit the template to remove it.',
+    });
+  });
+
+  it('a template with nothing orderable, which created nothing, still notifies', () => {
+    expect(
+      recurringRunNotice({
+        ...base,
+        failures: 1,
+        linesLeftOff: 1,
+        templatesWithLinesLeftOff: ['Monthly Pens'],
+        templatesWithNothingOrderable: ['Monthly Pens'],
+      }),
+    ).toEqual({
+      title: 'Recurring purchase orders need attention',
+      body:
+        '1 template line was left off ("Monthly Pens") because the item was deleted or is a pre-assembled kit, which is never ordered. Edit the template to remove it. "Monthly Pens" created no purchase order: none of its items can be ordered any more. Edit or disable it.',
+    });
+  });
+
+  it('names at most three templates', () => {
+    const notice = recurringRunNotice({
+      ...base,
+      linesLeftOff: 5,
+      templatesWithLinesLeftOff: ['A', 'B', 'C', 'D', 'E'],
+    });
+    expect(notice?.body).toContain('5 template lines were left off ("A", "B", "C" and 2 more)');
+    expect(notice?.body).toContain('Edit the templates to remove them.');
   });
 });

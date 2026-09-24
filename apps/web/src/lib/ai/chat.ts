@@ -449,6 +449,9 @@ export async function buildOrgSnapshot(ctx: ServiceContext): Promise<string> {
         .eq('organization_id', ctx.organizationId)
         .is('deleted_at', null)
         .eq('status', 'active')
+        // A kit's pre-assembled stock never needs reordering (kits are built
+        // from their components, 0366); a drained one is not "out".
+        .eq('is_bundle', false)
         .or('reorder_point.gt.0,quantity_on_hand.lte.0'),
       ctx.supabase
         .from('stock_movements')

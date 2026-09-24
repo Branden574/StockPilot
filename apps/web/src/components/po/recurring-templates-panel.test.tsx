@@ -158,4 +158,37 @@ describe('RecurringTemplatesPanel', () => {
       expect(mockCreate).not.toHaveBeenCalled();
     });
   });
+
+  // ── Saved lines whose item the picker does not list ───────────────────────
+
+  it('an edited template line pointing at a deleted item or a kit says what it is (not blank)', async () => {
+    render(
+      <RecurringTemplatesPanel
+        {...BASE_PROPS}
+        initial={[
+          {
+            ...TEMPLATE,
+            line_items: [
+              { itemId: 'item-1', quantityOrdered: 2, unitCost: 10 },
+              { itemId: 'item-gone', quantityOrdered: 1, unitCost: 1 },
+              { itemId: 'item-kit', quantityOrdered: 1, unitCost: 1 },
+              { itemId: 'item-unknown', quantityOrdered: 1, unitCost: 1 },
+            ],
+          },
+        ]}
+        lineLabels={[
+          { id: 'item-gone', name: 'Blue pens', sku: 'BP-1', deleted: true, kitStock: false },
+          { id: 'item-kit', name: 'Reading Kit', sku: '__BUNDLE__0a000000', deleted: false, kitStock: true },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Edit'));
+
+    // The save refuses the deleted item and the kit BY NAME; the line that
+    // holds each now reads so, and one the page could not resolve says that.
+    await waitFor(() => expect(screen.getAllByText('Deleted: Blue pens (BP-1)').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('Pre-assembled kit: Reading Kit (__BUNDLE__0a000000)').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Item not available').length).toBeGreaterThan(0);
+  });
 });

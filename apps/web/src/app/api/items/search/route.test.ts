@@ -1,10 +1,11 @@
 // apps/web/src/app/api/items/search/route.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { withApiContextMock, inventoryListMock, primaryImagesMock } = vi.hoisted(
+const { withApiContextMock, inventoryListMock, lineLabelsMock, primaryImagesMock } = vi.hoisted(
   () => ({
     withApiContextMock: vi.fn(),
     inventoryListMock: vi.fn(),
+    lineLabelsMock: vi.fn(),
     primaryImagesMock: vi.fn(),
   }),
 );
@@ -16,6 +17,7 @@ vi.mock('@/server/services/inventory', () => ({
   InventoryService: class {
     constructor() {}
     list = inventoryListMock;
+    lineLabelsByIds = lineLabelsMock;
   },
 }));
 vi.mock('@/server/services/item-images', () => ({
@@ -394,37 +396,63 @@ describe('GET /api/items/search — ?ids= (selected-line label resolution)', () 
     primaryImagesMock.mockResolvedValue(new Map());
   });
 
-  it('resolves by id with no q, across lifecycles, and bypasses the 2-char floor', async () => {
-    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+  it('resolves by id with no q through lineLabelsByIds, and bypasses the 2-char floor', async () => {
+    lineLabelsMock.mockResolvedValueOnce([]);
     await GET(makeReq('ids=11111111-1111-4111-8111-111111111111&ids=22222222-2222-4222-8222-222222222222&type=product&type=book'));
-    expect(inventoryListMock).toHaveBeenCalledWith({
-      ids: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'],
-      itemType: undefined,
-      itemTypes: ['product', 'book'],
-      excludeBundles: false,
-      // A line can point at an item archived, or still awaiting its first
-      // receipt, AFTER it was put on the PO. Rendering it blank is the bug
-      // this mode exists to stop.
-      status: 'all',
-      expected: 'any',
-      warehouseId: undefined,
-      limit: 2,
+    // A label lookup filters nothing out for what became of the item
+    // (archived, awaiting receipt, rental, kit, deleted): the line must say.
+    expect(lineLabelsMock).toHaveBeenCalledWith(
+      ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'],
+      { itemType: undefined, itemTypes: ['product', 'book'], warehouseId: undefined },
+    );
+    expect(inventoryListMock).not.toHaveBeenCalled();
+  });
+
+  it('answers each row with what became of the item: deleted, rental, kit stock', async () => {
+    const row = (id: string, over: Record<string, unknown>) => ({
+      id,
+      sku: `SKU-${id}`,
+      name: `Item ${id}`,
+      barcode: null,
+      item_type: 'product',
+      unit_cost: 2,
+      group_id: null,
+      variant_size: null,
+      category_id: null,
+      status: 'active',
+      deleted_at: null,
+      is_rental: false,
+      is_bundle: false,
+      ...over,
     });
+    lineLabelsMock.mockResolvedValueOnce([
+      row('gone', { deleted_at: '2026-09-01T00:00:00Z', status: 'archived' }),
+      row('rent', { is_rental: true }),
+      row('kit', { is_bundle: true }),
+    ]);
+    const res = await GET(makeReq('ids=11111111-1111-4111-8111-111111111111&slim=1'));
+    const body = (await res.json()) as { items: Array<Record<string, unknown>>; total: number };
+    expect(body.total).toBe(3);
+    expect(body.items.map((i) => [i.id, i.deleted, i.is_rental, i.is_bundle])).toEqual([
+      ['gone', true, false, false],
+      ['rent', false, true, false],
+      ['kit', false, false, true],
+    ]);
+    expect(body.items[0]).toMatchObject({ sku: 'SKU-gone', name: 'Item gone', unit_cost: 2, item_type: 'product' });
   });
 
   it('caps at 100 ids per request', async () => {
-    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    lineLabelsMock.mockResolvedValueOnce([]);
     // Real ids are uuids and the route shape-checks them, so the fixture uses
     // 130 distinct well-formed uuids rather than 'i0'..'i129' placeholders.
     const uuid = (n: number) =>
       `${String(n).padStart(8, '0')}-1111-4111-8111-111111111111`;
     const qs = Array.from({ length: 130 }, (_, i) => `ids=${uuid(i)}`).join('&');
     await GET(makeReq(qs));
-    const filters = inventoryListMock.mock.calls[0]?.[0] as { ids: string[]; limit: number };
-    expect(filters.ids).toHaveLength(100);
-    expect(filters.ids[0]).toBe(uuid(0));
-    expect(filters.ids[99]).toBe(uuid(99));
-    expect(filters.limit).toBe(100);
+    const ids = lineLabelsMock.mock.calls[0]?.[0] as string[];
+    expect(ids).toHaveLength(100);
+    expect(ids[0]).toBe(uuid(0));
+    expect(ids[99]).toBe(uuid(99));
   });
 
   it('an empty ?ids list is not id-mode — the 2-char floor still short-circuits', async () => {
@@ -518,23 +546,23 @@ describe('?ids= is UUID-validated before it reaches the filter builder', () => {
   });
 
   it('drops a malformed id and keeps the well-formed one', async () => {
-    inventoryListMock.mockResolvedValue({ items: [], total: 0 });
+    lineLabelsMock.mockResolvedValue([]);
     await GET(
       makeReq('ids=not-a-uuid&ids=11111111-1111-4111-8111-111111111111'),
     );
-    // Only the shape-checked id reaches list(); the junk value never becomes
-    // part of a PostgREST .in() list.
-    expect(inventoryListMock).toHaveBeenCalledWith(
-      expect.objectContaining({ ids: ['11111111-1111-4111-8111-111111111111'] }),
-    );
+    // Only the shape-checked id reaches the read; the junk value never
+    // becomes part of a PostgREST .in() list.
+    expect(lineLabelsMock).toHaveBeenCalledWith(['11111111-1111-4111-8111-111111111111'], expect.anything());
   });
 
   it('an all-malformed ids list does not become resolve-by-id mode', async () => {
     inventoryListMock.mockResolvedValue({ items: [], total: 0 });
+    lineLabelsMock.mockResolvedValue([]);
     const res = await GET(makeReq('ids=drop%20table'));
     // No valid id and no query -> the short-query guard returns empty rather
     // than falling through to an unfiltered org-wide read.
     expect(await res.json()).toEqual({ items: [], total: 0 });
     expect(inventoryListMock).not.toHaveBeenCalled();
+    expect(lineLabelsMock).not.toHaveBeenCalled();
   });
 });

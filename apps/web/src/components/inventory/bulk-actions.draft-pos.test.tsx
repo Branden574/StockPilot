@@ -108,3 +108,24 @@ describe('BulkActions — Create draft POs says why chosen items were skipped', 
     );
   });
 });
+
+describe('BulkActions — Create draft POs counts the suppliers actually drafted', () => {
+  it('leaves a failed supplier out of the count (one draft per supplier)', async () => {
+    vi.mocked(createDraftPosFromItemsAction).mockResolvedValue({
+      ok: true,
+      data: {
+        createdPoIds: ['po-1'],
+        skipped: 0,
+        skippedNoSupplier: 0,
+        skippedNotOrderable: 0,
+        alreadyOnOpenPo: 0,
+        supplierFailures: [
+          { supplierId: 'sup-b', supplierName: 'Beta', error: '"Blue pens" was deleted, so it can\'t be ordered.' },
+        ],
+        supplierCount: 2,
+      },
+    } as never);
+    await clickCreate();
+    expect(toast.success).toHaveBeenCalledWith('Created 1 draft PO across 1 supplier · failed: Beta.');
+  });
+});

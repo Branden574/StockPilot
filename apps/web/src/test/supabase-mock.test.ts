@@ -72,6 +72,31 @@ describe('servedLikePostgrest', () => {
     expect((inList.data as Array<{ id: string }>).map((r) => r.id).sort()).toEqual(['b', 'd']);
   });
 
+  it('several .order() calls sort like PostgREST order=a,b: the FIRST is the primary key', async () => {
+    const due = [
+      { id: 'a', next_run_at: '2026-06-18T09:00:00Z' },
+      { id: 'b', next_run_at: '2026-06-18T06:00:00Z' },
+      { id: 'c', next_run_at: '2026-06-18T06:00:00Z' },
+    ];
+    const stub = makeSupabaseStub({ 'items.select': servedLikePostgrest(due) });
+    const first = await stub.client
+      .from('items')
+      .select('id')
+      .order('next_run_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(0, 0);
+    // The earliest next_run_at, not the lowest id (re-sorting per call made
+    // the last .order() primary and answered 'a').
+    expect((first.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['b']);
+    const all = await stub.client
+      .from('items')
+      .select('id')
+      .order('next_run_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(0, 999);
+    expect((all.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['a', 'c', 'b']);
+  });
+
   it('refuses a filter it cannot evaluate rather than ignoring it', async () => {
     const stub = makeSupabaseStub({ 'items.select': servedLikePostgrest(rows) });
     await expect(

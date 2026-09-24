@@ -53,6 +53,15 @@ interface ItemOption {
   itemType?: string | null;
   /** For a book this IS the ISBN (barcode = ISBN, as the PO importer matches on). */
   barcode?: string | null;
+  /**
+   * Set only on rows resolved BY ID for a line that already points at the
+   * item (never on a search result): the item was deleted, or it is a kit's
+   * pre-assembled stock. Neither can be ordered and the save refuses the
+   * line by the item's name, so the line says what it is instead of
+   * rendering blank; the buyer removes it.
+   */
+  deleted?: boolean;
+  kitStock?: boolean;
 }
 
 // ─── Server-backed item search ─────────────────────────────────────────────
@@ -83,6 +92,9 @@ interface SlimSearchRow {
   unit_cost: number;
   group_id: string | null;
   variant_size: string | null;
+  /** By-id label rows only (`?ids=`): what became of the item. */
+  deleted?: boolean;
+  is_bundle?: boolean;
 }
 
 function toItemOption(r: SlimSearchRow): ItemOption {
@@ -95,6 +107,8 @@ function toItemOption(r: SlimSearchRow): ItemOption {
     variantSize: r.variant_size,
     itemType: r.item_type,
     barcode: r.barcode,
+    ...(r.deleted === true ? { deleted: true } : {}),
+    ...(r.is_bundle === true ? { kitStock: true } : {}),
   };
 }
 
@@ -117,6 +131,10 @@ function buildSearchUrl(q: string): string {
   p.set('expected', 'any');
   p.set('sort', 'name_asc');
   p.set('limit', String(SEARCH_LIMIT));
+  // A kit's pre-assembled stock is never ordered (the save refuses it), so
+  // the picker never offers it. The by-id resolve below is NOT filtered: an
+  // old draft's kit line must still show what it is, so it can be removed.
+  p.set('bundles', 'exclude');
   appendPoItemTypes(p);
   return `/api/items/search?${p.toString()}`;
 }
@@ -127,6 +145,14 @@ function buildResolveByIdsUrl(ids: string[]): string {
   p.set('slim', '1');
   appendPoItemTypes(p);
   return `/api/items/search?${p.toString()}`;
+}
+
+/** What a line's label says before the item when the item can no longer be
+ *  ordered, so the line the save refuses by name is the one that reads so. */
+function lineItemStatePrefix(item: ItemOption): string {
+  if (item.deleted) return 'Deleted: ';
+  if (item.kitStock) return 'Pre-assembled kit: ';
+  return '';
 }
 
 /** Digits + a trailing X check character, for ISBN comparison. */
@@ -254,7 +280,7 @@ function ItemPicker({
     results?.find((i) => i.id === itemId) ??
     null;
   const triggerLabel = selectedItem
-    ? `${selectedItem.sku} · ${selectedItem.name}`
+    ? `${lineItemStatePrefix(selectedItem)}${selectedItem.sku} · ${selectedItem.name}`
     : newItemName
       ? `New: ${newItemName}`
       : null;

@@ -29,12 +29,18 @@ export function MakeRecurringButton({ poId }: Props) {
       toast.error(res.error.message);
       return;
     }
+    // Lines whose item was deleted, or that are a kit's pre-assembled stock,
+    // can never be ordered, so the seed leaves them out; say so rather than
+    // dropping them without a word.
+    const { linesLeftOff, ...seed } = res.data;
+    if (linesLeftOff > 0) {
+      toast.info(
+        `${linesLeftOff} line${linesLeftOff === 1 ? ' was' : 's were'} left out: the item was deleted or is a pre-assembled kit, which is never ordered.`,
+      );
+    }
     // Persist seed in sessionStorage — the recurring page will pick it up on
     // mount (handled inside RecurringTemplatesSeedLoader).
-    sessionStorage.setItem(
-      'recurring-po-seed',
-      JSON.stringify(res.data),
-    );
+    sessionStorage.setItem('recurring-po-seed', JSON.stringify(seed));
     router.push('/dashboard/purchase-orders/recurring');
   }
 

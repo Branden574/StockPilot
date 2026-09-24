@@ -145,7 +145,8 @@
 --
 -- ── Kits and deleted items (po_line_bundle, po_line_deleted) ───────────────
 -- The web filters both out of every path that picks items by itself (the
--- reorder reads, the Items selection, the recurring-PO cron), so a refusal
+-- reorder reads, the Items selection, the recurring-PO cron and template
+-- save), and the PO and template pickers do not offer a kit, so a refusal
 -- here is the backstop, and the one place a hand-made PO meets the rule. The
 -- save is SECURITY INVOKER, and inventory_items RLS hides some items from
 -- some callers (an item with no warehouse, or in a warehouse a staff member
@@ -158,8 +159,40 @@
 -- returns only which of the CALLER'S OWN item ids are deleted or kit stock,
 -- never a name. Anyone else gets 42501. anon and PUBLIC cannot execute it.
 --
--- Deploy: this only adds functions, which the live web does not call, so it
--- ships BEFORE the web build that uses them. Rollback: revert the web first;
+-- ── The same rule where the save is not in the way ─────────────────────────
+-- The save is not the only way a line reaches a PO or stock reaches a line:
+--   * tg_purchase_order_items_guard (0360/0364, restated below with every
+--     earlier check): a signed-in PO writer's direct INSERT of a line for a
+--     deleted item or a kit's pre-assembled stock is refused with the save's
+--     errcode, hint and message. Direct inserts are how the PO editor before
+--     this migration writes lines (still served to old tabs for up to 12 h by
+--     Vercel skew protection), and any raw PostgREST call. An UPDATE of a
+--     line was already refused for the API roles, so item_id cannot be
+--     changed to one either. Asked only of a PO writer: anyone else is
+--     refused by purchase_order_items_write right after the trigger, with the
+--     message they got before. The service role skips the guard as before;
+--     its only line writers are this save and approve_po_import_commit.
+--   * ledger.post_receipt_v2 (the only receipt path): a line for a kit's
+--     pre-assembled stock cannot be received with an accepted quantity above
+--     0 (22023 po_line_bundle). Such a line can already sit on an open PO
+--     (the reorder paths drafted kits before this migration), and receiving
+--     it adds kit stock with no component drawn. The rest of the receipt, and
+--     a 0 on that line, still post. A DELETED item's line stays receivable:
+--     its goods physically arrived, the whole receipt would fail with it,
+--     and nothing restores a deleted item. Rewritten from its current
+--     definition with one block inserted, the way 0367 rewrites it; the
+--     rewrite stops the migration if the anchor line is not there exactly
+--     once.
+--
+-- Deploy: the two functions above are new and the live web does not call
+-- them, so they ship BEFORE the web build that uses them. The guard and the
+-- receipt change apply at once: from then on the live editor's direct write
+-- of a deleted item's or a kit's line fails (it reports "Could not save" and,
+-- being two requests, can leave an empty draft, as any failed line write did
+-- before), and a receipt of kit stock is refused (the live web shows its
+-- generic error until the new build maps the hint; mobile shows the message).
+-- Rollback: revert the web first. Then restore the guard from 0364 and drop
+-- the inserted block from ledger.post_receipt_v2 (the same rewrite, reversed);
 -- the unused functions are harmless and may then be dropped.
 
 set lock_timeout = '5s';
@@ -447,5 +480,146 @@ comment on function public.save_purchase_order_draft(uuid, uuid, text, uuid, uui
 
 revoke all on function public.save_purchase_order_draft(uuid, uuid, text, uuid, uuid, uuid, timestamptz, text, jsonb, uuid[], uuid, boolean) from public, anon;
 grant execute on function public.save_purchase_order_draft(uuid, uuid, text, uuid, uuid, uuid, timestamptz, text, jsonb, uuid[], uuid, boolean) to authenticated, service_role;
+
+-- ── Direct line writes (header, "The same rule where the save is not in the
+--    way"). Restates 0364's guard in full; only the last INSERT check is new.
+create or replace function public.tg_purchase_order_items_guard()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_status  text;
+  v_refusal text;
+  v_label   text;
+begin
+  if current_user not in ('authenticated', 'anon') then
+    return coalesce(new, old);
+  end if;
+  -- The receipt RPCs update quantity_received with the flag on.
+  if ledger.active() then
+    return coalesce(new, old);
+  end if;
+
+  if tg_op = 'UPDATE' then
+    raise exception 'Purchase order lines change through the PO editor or by receiving.'
+      using errcode = '42501';
+  end if;
+
+  if tg_op = 'DELETE' then
+    if public.po_status_for_line_write(old.purchase_order_id, old.organization_id) is distinct from 'draft' then
+      raise exception 'Lines can be removed only from a draft purchase order.'
+        using errcode = '42501';
+    end if;
+    return old;
+  end if;
+
+  -- INSERT. The parent must be this org's PO (the write policy checks the
+  -- row's organization_id only) and still a draft, the item this org's, and
+  -- nothing received.
+  v_status := public.po_status_for_line_write(new.purchase_order_id, new.organization_id);
+  if v_status is null then
+    raise exception 'That purchase order is not part of this organization.'
+      using errcode = '42501';
+  end if;
+  if v_status <> 'draft' then
+    raise exception 'Lines can be added only to a draft purchase order.'
+      using errcode = '42501';
+  end if;
+  if new.item_id is null or not public.item_in_org(new.item_id, new.organization_id) then
+    raise exception 'That item is not part of this organization.'
+      using errcode = '42501';
+  end if;
+  if coalesce(new.quantity_received, 0) <> 0 then
+    raise exception 'A new purchase order line starts with nothing received.'
+      using errcode = '42501';
+  end if;
+  -- The PO form's own rule (quantity > 0, cost >= 0). A negative line would
+  -- offset a real one in the approval threshold and in received-vs-ordered.
+  if new.quantity_ordered is null or new.quantity_ordered <= 0
+     or new.unit_cost is null or new.unit_cost < 0 then
+    raise exception 'A purchase order line needs a quantity above 0 and a cost of 0 or more.'
+      using errcode = '23514';
+  end if;
+  -- 0366: never a deleted item or a kit's pre-assembled stock, as
+  -- save_purchase_order_draft refuses them (same errcode, hint and message).
+  -- Read past RLS through po_line_items_not_orderable, which answers a PO
+  -- writer only; anyone else is left to purchase_order_items_write, which
+  -- refuses them right after this trigger, as before.
+  if public.has_org_role(new.organization_id, 'manager')
+     or public.has_permission(new.organization_id, 'purchase_orders:manage') then
+    select r.refusal into v_refusal
+      from public.po_line_items_not_orderable(new.organization_id, array[new.item_id]) as r;
+    if v_refusal is not null then
+      -- The name only as the caller may read it (RLS); otherwise unnamed.
+      select nullif(btrim(it.name), '') into v_label
+        from public.inventory_items it
+       where it.id = new.item_id and it.organization_id = new.organization_id;
+      v_label := coalesce('"' || v_label || '"', 'An item on this purchase order');
+      if v_refusal = 'po_line_deleted' then
+        raise exception '% was deleted, so it can''t be ordered. Remove it from the purchase order and save again.', v_label
+          using errcode = '22023', hint = 'po_line_deleted';
+      end if;
+      raise exception '% is a pre-assembled kit, and kits can''t be ordered on a purchase order: they are built from their components. Order the components instead.', v_label
+        using errcode = '22023', hint = 'po_line_bundle';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+comment on function public.tg_purchase_order_items_guard() is
+  'BEFORE INSERT OR UPDATE OR DELETE guard (0360, draft rule 0364, orderable rule 0366): API-role '
+  'lines join only a draft PO of their own org (held FOR SHARE to commit) and an item of their own org '
+  'that is neither deleted nor a kit''s pre-assembled stock, start unreceived, are positive '
+  '(quantity > 0, cost >= 0), are never updated directly (receiving does that under the ledger flag), '
+  'and leave only drafts.';
+
+revoke all on function public.tg_purchase_order_items_guard() from public, anon, authenticated;
+
+-- ── Receiving kit stock (header, "The same rule where the save is not in the
+--    way"). One block inserted after the line's item is resolved; everything
+--    else in the function is kept byte for byte.
+do $migration$
+declare
+  v_fn     constant text := 'ledger.post_receipt_v2(uuid,uuid,jsonb,text,text,text)';
+  v_anchor constant text := E'    v_item_id := v_po_line.item_id;\n';
+  v_block  constant text := $block$
+    -- 0366: kit stock is never received. A line for a kit's pre-assembled
+    -- stock (is_bundle) would add kits with no component drawn. Read past RLS
+    -- through po_line_items_not_orderable (the caller is a manager, checked
+    -- above). A 0 on the line still posts, and a DELETED item's line stays
+    -- receivable: its goods arrived, and nothing restores a deleted item.
+    if coalesce(v_line.qty_accepted, 0) > 0
+       and exists (select 1
+                     from public.po_line_items_not_orderable(v_org, array[v_item_id]) as r
+                    where r.refusal = 'po_line_bundle') then
+      raise exception '% is a pre-assembled kit, so it can''t be received: receiving it would add kits without using any of their components. Leave this line at 0 and receive the rest; kits are built from their components.',
+        coalesce('"' || (select nullif(btrim(it.name), '')
+                           from public.inventory_items it
+                          where it.id = v_item_id and it.organization_id = v_org) || '"',
+                 'An item on this purchase order')
+        using errcode = '22023', hint = 'po_line_bundle';
+    end if;
+$block$;
+  v_def    text;
+  v_count  int;
+begin
+  v_def := pg_get_functiondef(v_fn::regprocedure);
+  v_count := (length(v_def) - length(replace(v_def, v_anchor, ''))) / length(v_anchor);
+  if v_count <> 1 then
+    raise exception '0366: expected exactly one "v_item_id := v_po_line.item_id;" line in %, found %', v_fn, v_count;
+  end if;
+  if position('po_line_bundle' in v_def) > 0 then
+    raise exception '0366: % already refuses kit stock', v_fn;
+  end if;
+  execute replace(v_def, v_anchor, v_anchor || v_block);
+  if (select position('po_line_items_not_orderable(v_org, array[v_item_id])' in p.prosrc) = 0
+        from pg_proc p where p.oid = v_fn::regprocedure) then
+    raise exception '0366: % did not take the kit-stock check', v_fn;
+  end if;
+end
+$migration$;
 
 reset lock_timeout;

@@ -37,6 +37,81 @@ export const recurringTemplateSchema = z.object({
 
 export type RecurringTemplateInput = z.infer<typeof recurringTemplateSchema>;
 
+/** Why an item can never go on a purchase order (0366
+ *  po_line_items_not_orderable, the rule save_purchase_order_draft applies). */
+type NotOrderableReason = 'po_line_deleted' | 'po_line_bundle';
+
+/** What one cron run did for one organization. */
+export interface RecurringRunSummary {
+  created: number;
+  sent: number;
+  heldForReview: number;
+  failures: number;
+  /** Template lines left off because their item was deleted or is a kit's
+   *  pre-assembled stock (neither can go on a PO). */
+  linesLeftOff: number;
+  /** Names of the templates that left off at least one line, in run order. */
+  templatesWithLinesLeftOff: string[];
+  /** Names of the templates that created nothing because not one of their
+   *  lines could be ordered (also counted in `failures`). */
+  templatesWithNothingOrderable: string[];
+}
+
+/** At most this many template names are spelled out in a notification. */
+const NOTICE_MAX_NAMES = 3;
+
+function namesForNotice(names: string[]): string {
+  const quoted = names.slice(0, NOTICE_MAX_NAMES).map((n) => `"${n}"`);
+  const more = names.length - quoted.length;
+  if (more > 0) quoted.push(`${more} more`);
+  if (quoted.length === 1) return quoted[0] as string;
+  return `${quoted.slice(0, -1).join(', ')} and ${quoted[quoted.length - 1]}`;
+}
+
+/**
+ * The admins' notification for one organization's cron run, or null when
+ * there is nothing to tell. Before, admins heard only when a PO was created,
+ * so a template whose lines were left off (deleted items, kit stock) ordered
+ * less than it says every period with no word to anyone, and one with
+ * nothing orderable left created nothing and notified nobody.
+ */
+export function recurringRunNotice(summary: RecurringRunSummary): { title: string; body: string } | null {
+  const leftOff = summary.linesLeftOff > 0;
+  if (summary.created === 0 && !leftOff) return null;
+
+  const parts: string[] = [];
+  if (summary.created > 0) {
+    const sentPart = summary.sent > 0 ? `, ${summary.sent} sent` : '';
+    const heldPart = summary.heldForReview > 0 ? `, ${summary.heldForReview} held for review` : '';
+    parts.push(
+      `Recurring purchase orders created ${summary.created} purchase order${
+        summary.created === 1 ? '' : 's'
+      }${sentPart}${heldPart}.`,
+    );
+  }
+  if (leftOff) {
+    const n = summary.linesLeftOff;
+    const names = summary.templatesWithLinesLeftOff;
+    parts.push(
+      `${n} template line${n === 1 ? ' was' : 's were'} left off (${namesForNotice(names)}) because the item was deleted or is a pre-assembled kit, which is never ordered. Edit the template${
+        names.length === 1 ? '' : 's'
+      } to remove ${n === 1 ? 'it' : 'them'}.`,
+    );
+  }
+  const idle = summary.templatesWithNothingOrderable;
+  if (idle.length > 0) {
+    parts.push(
+      `${namesForNotice(idle)} created no purchase order: none of ${
+        idle.length === 1 ? 'its' : 'their'
+      } items can be ordered any more. Edit or disable ${idle.length === 1 ? 'it' : 'them'}.`,
+    );
+  }
+  return {
+    title: summary.created > 0 ? 'Recurring purchase orders ran' : 'Recurring purchase orders need attention',
+    body: parts.join(' '),
+  };
+}
+
 // ── Service ─────────────────────────────────────────────────────────────────
 
 export class RecurringPoTemplatesService {
@@ -108,6 +183,62 @@ export class RecurringPoTemplatesService {
     if (!data) throw new ServiceError('validation_error', 'Supplier not found in your organization.');
   }
 
+  // ── orderability of template lines ───────────────────────────────────────
+
+  /**
+   * Which of `itemIds` can never go on a purchase order, and why: deleted, or
+   * a kit's pre-assembled stock (is_bundle). Asks the database's own rule,
+   * po_line_items_not_orderable (0366): the check save_purchase_order_draft
+   * runs on every PO the cron creates. It reads past RLS, so an item the
+   * caller cannot see (no warehouse, or a warehouse a staff buyer is not
+   * assigned to) is judged the same way the cron's save will judge it. A
+   * failed read throws: "could not check" is never "nothing to refuse".
+   */
+  private async notOrderable(itemIds: string[]): Promise<Map<string, NotOrderableReason>> {
+    const ids = [...new Set(itemIds)];
+    if (ids.length === 0) return new Map();
+    const { data, error } = await this.ctx.supabase.rpc('po_line_items_not_orderable', {
+      p_org_id: this.ctx.organizationId,
+      p_item_ids: ids,
+    });
+    if (error) throw new ServiceError('internal_error', error.message);
+    const rows = (Array.isArray(data) ? data : []) as Array<{ item_id: string; refusal: string }>;
+    const out = new Map<string, NotOrderableReason>();
+    for (const r of rows) {
+      if (r.refusal === 'po_line_deleted' || r.refusal === 'po_line_bundle') out.set(r.item_id, r.refusal);
+    }
+    return out;
+  }
+
+  /**
+   * Refuses a template whose lines include an item that can never be
+   * ordered, naming the first such line's item (line order), the way the PO
+   * save does. Without this the template saved, and every period the cron
+   * had to leave that line off (or, with nothing else on it, create nothing).
+   */
+  private async assertLinesOrderable(lineItems: Array<{ itemId: string }>): Promise<void> {
+    const refused = await this.notOrderable(lineItems.map((l) => l.itemId));
+    if (refused.size === 0) return;
+    const first = lineItems.find((l) => refused.has(l.itemId));
+    if (!first) return;
+    // The name only as the caller may read it; a failed or hidden read just
+    // leaves the item unnamed (the refusal stands either way).
+    const { data } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('name')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', first.itemId)
+      .maybeSingle();
+    const name = ((data as { name?: string | null } | null)?.name ?? '').trim();
+    const label = name ? `"${name}"` : 'An item on this template';
+    throw new ServiceError(
+      'validation_error',
+      refused.get(first.itemId) === 'po_line_deleted'
+        ? `${label} was deleted, so it can't be ordered. Remove it from the template and save again.`
+        : `${label} is a pre-assembled kit, and kits can't be ordered on a purchase order: they are built from their components. Order the components instead.`,
+    );
+  }
+
   // ── create ────────────────────────────────────────────────────────────────
 
   async create(input: RecurringTemplateInput) {
@@ -117,6 +248,7 @@ export class RecurringPoTemplatesService {
     const parsed = recurringTemplateSchema.parse(input);
     await this.assertDestinationLocationInOrg(parsed.destinationLocationId);
     await this.assertSupplierInOrg(parsed.supplierId);
+    await this.assertLinesOrderable(parsed.lineItems);
     const now = new Date();
     const nextRun = nextRunAt(parsed.cadence as RecurringCadence, now, parsed.customDays ?? undefined);
 
@@ -165,6 +297,7 @@ export class RecurringPoTemplatesService {
     const parsed = recurringTemplateSchema.parse(input);
     await this.assertDestinationLocationInOrg(parsed.destinationLocationId);
     await this.assertSupplierInOrg(parsed.supplierId);
+    await this.assertLinesOrderable(parsed.lineItems);
 
     const { data, error } = await this.ctx.supabase
       .from('recurring_po_templates')
@@ -265,11 +398,17 @@ export class RecurringPoTemplatesService {
    * Returns a non-persisted template payload pre-filled from an existing PO's
    * supplier and line items. The UI uses this to open the create form prefilled
    * ("Make recurring"). Does NOT write to the DB.
+   *
+   * A line whose item can never be ordered again (deleted, or a kit's
+   * pre-assembled stock, which the reorder paths drafted before 0366) is left
+   * out: the template save would refuse it. `linesLeftOff` says how many, so
+   * the caller can tell the buyer instead of dropping them silently.
    */
   async seedFromPo(poId: string): Promise<{
     supplierId: string | null;
     destinationLocationId: string | null;
     lineItems: Array<{ itemId: string; quantityOrdered: number; unitCost: number }>;
+    linesLeftOff: number;
   }> {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
@@ -298,18 +437,21 @@ export class RecurringPoTemplatesService {
     if (linesError) throw new ServiceError('internal_error', linesError.message);
 
     type LineRow = { item_id: string | null; quantity_ordered: number; unit_cost: number };
-    const rawLines = (lines ?? []) as LineRow[];
+    const withItem = ((lines ?? []) as LineRow[]).filter(
+      (l): l is LineRow & { item_id: string } => Boolean(l.item_id),
+    );
+    const refused = await this.notOrderable(withItem.map((l) => l.item_id));
+    const orderable = withItem.filter((l) => !refused.has(l.item_id));
 
     return {
       supplierId: poRow.supplier_id,
       destinationLocationId: poRow.destination_location_id,
-      lineItems: rawLines
-        .filter((l): l is LineRow & { item_id: string } => Boolean(l.item_id))
-        .map((l) => ({
-          itemId: l.item_id,
-          quantityOrdered: Number(l.quantity_ordered),
-          unitCost: Number(l.unit_cost),
-        })),
+      lineItems: orderable.map((l) => ({
+        itemId: l.item_id,
+        quantityOrdered: Number(l.quantity_ordered),
+        unitCost: Number(l.unit_cost),
+      })),
+      linesLeftOff: withItem.length - orderable.length,
     };
   }
 
@@ -330,12 +472,7 @@ export class RecurringPoTemplatesService {
    * `purchase_order.ordered` outbox dedupe key is per-PO-id, so two POs mean two
    * connector pushes and real duplicate spend.
    */
-  async runDueTemplates(now: Date): Promise<{
-    created: number;
-    sent: number;
-    heldForReview: number;
-    failures: number;
-  }> {
+  async runDueTemplates(now: Date): Promise<RecurringRunSummary> {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
 
@@ -372,6 +509,9 @@ export class RecurringPoTemplatesService {
     let sent = 0;
     let heldForReview = 0;
     let failures = 0;
+    let linesLeftOff = 0;
+    const templatesWithLinesLeftOff: string[] = [];
+    const templatesWithNothingOrderable: string[] = [];
 
     for (const tpl of templates) {
       // ── CLAIM ────────────────────────────────────────────────────────────
@@ -443,12 +583,17 @@ export class RecurringPoTemplatesService {
         // the save refuses such a line (0366, po_line_deleted /
         // po_line_bundle), and one such line would fail the whole template's
         // PO every period, silently (a failure is only counted). Leave those
-        // lines off, order the rest, and report what was left off. Read as
-        // the cron's service client, which sees every item; a failed read
-        // throws into the catch below (counted as a failure, no PO).
+        // lines off, order the rest, and report what was left off: to the
+        // admins through the run summary (recurringRunNotice), and to error
+        // reporting. Template saves refuse such lines now, so this catches
+        // an item deleted after its template was saved. Read as the cron's
+        // service client, which sees every item; a failed read throws into
+        // the catch below (counted as a failure, no PO).
         const orderableIds = await this.orderableItemIds(lines.map((l) => l.itemId));
         const unorderable = lines.filter((l) => !orderableIds.has(l.itemId));
         if (unorderable.length > 0) {
+          linesLeftOff += unorderable.length;
+          templatesWithLinesLeftOff.push(tpl.name);
           void reportError(
             new Error(
               `recurring PO template left off ${unorderable.length} line(s) whose item is deleted or a pre-assembled kit`,
@@ -465,6 +610,7 @@ export class RecurringPoTemplatesService {
 
         if (lines.length === 0) {
           failures++;
+          if (unorderable.length > 0) templatesWithNothingOrderable.push(tpl.name);
         } else {
           const total = lines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
 
@@ -519,7 +665,15 @@ export class RecurringPoTemplatesService {
       }
     }
 
-    return { created, sent, heldForReview, failures };
+    return {
+      created,
+      sent,
+      heldForReview,
+      failures,
+      linesLeftOff,
+      templatesWithLinesLeftOff,
+      templatesWithNothingOrderable,
+    };
   }
 
   /**

@@ -36,7 +36,16 @@ export default async function NewPoPage() {
     // its `item_type = 'product'` default and NO book ever reaches this form,
     // even though books are demonstrably purchasable. The picker's server
     // search sends the same set, so the two can never disagree.
-    inventorySvc.list({ limit: 1000, expected: 'any', itemTypes: purchaseOrderItemTypes() }),
+    //
+    // excludeBundles: a kit's pre-assembled stock is never ordered (the save
+    // refuses it, 0366), so the picker never offers it. The server search
+    // sends bundles=exclude for the same reason.
+    inventorySvc.list({
+      limit: 1000,
+      expected: 'any',
+      itemTypes: purchaseOrderItemTypes(),
+      excludeBundles: true,
+    }),
     suppliersSvc.listForLookups(),
     locationsSvc.list({ sitesOnly: true }),
     chartersSvc.list(),

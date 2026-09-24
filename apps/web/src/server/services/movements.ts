@@ -1101,7 +1101,11 @@ export async function getLowStockItems(
         .from('inventory_items')
         .select('id')
         .eq('organization_id', ctx.organizationId)
-        .eq('awaiting_first_receipt', true)
+        // Also a kit's pre-assembled stock (is_bundle): kits are built from
+        // their components and never reordered (0366), so one is never "low
+        // stock", even with a reorder point someone set on it. The RPC
+        // cannot filter it either; the same drop-and-widen removes it.
+        .or('awaiting_first_receipt.eq.true,is_bundle.eq.true')
         .eq('status', 'active')
         .is('deleted_at', null)
         .gt('reorder_point', 0)
@@ -1145,6 +1149,10 @@ export async function getLowStockItems(
     // Expected items (mig 0277) are qty-0 phantoms from inbound POs —
     // never "low stock" (mirrors the RPC path's exclusion above).
     .eq('awaiting_first_receipt', false)
+    // Nor is a kit's pre-assembled stock: kits are built from their
+    // components and never reordered (0366); a kit whose assembled stock ran
+    // out (quantity 0) is the normal state. NOT NULL (0040): eq is total.
+    .eq('is_bundle', false)
     .or('reorder_point.gt.0,quantity_on_hand.lte.0')
     .order('quantity_on_hand', { ascending: true })
     .limit(200);

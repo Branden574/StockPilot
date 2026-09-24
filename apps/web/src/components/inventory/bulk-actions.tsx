@@ -283,8 +283,13 @@ export function BulkActions({
       );
       return;
     }
+    // One draft per supplier, so the suppliers drafted are the suppliers
+    // attempted minus the ones that failed: `supplierCount` alone counted a
+    // failed supplier as drafted ("Created 1 draft PO across 2 suppliers ·
+    // failed: Beta").
+    const suppliersDrafted = Math.max(0, supplierCount - supplierFailures.length);
     const parts: string[] = [
-      `Created ${created} draft PO${created === 1 ? '' : 's'} across ${supplierCount} supplier${supplierCount === 1 ? '' : 's'}`,
+      `Created ${created} draft PO${created === 1 ? '' : 's'} across ${suppliersDrafted} supplier${suppliersDrafted === 1 ? '' : 's'}`,
     ];
     if (skippedNoSupplier > 0) {
       parts.push(`${skippedNoSupplier} skipped (no supplier)`);

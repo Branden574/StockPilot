@@ -207,6 +207,18 @@ export class ReceivingService {
       p_notes: input.notes ?? null,
     });
     if (error) {
+      // A line accepting a kit's pre-assembled stock (0366): kits are built
+      // from their components, so receiving one would add kits with no
+      // component drawn. Matched on the hint, which is exact; the message is
+      // written for people and names the kit when the caller can see it, so
+      // it must not reach the substring arms below.
+      if ((error as { hint?: string | null }).hint === 'po_line_bundle') {
+        throw new ServiceError(
+          'validation_error',
+          error.message ||
+            "A pre-assembled kit can't be received: kits are built from their components. Leave that line at 0 and receive the rest.",
+        );
+      }
       // Same key, different request (raised as 55000 since 0367; it was
       // 40001, which PostgREST < 16 retried forever). Matched on the message,
       // never the code.

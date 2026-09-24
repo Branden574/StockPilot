@@ -33,6 +33,18 @@
 --                line is named. An archived item and a rental item still
 --                save. The definer helper that reads past RLS answers only a
 --                PO writer or the service role, and returns no names.
+-- PART 10 (75-77) The helper's purchase_orders:manage branch: a staff member
+--                granted it saves a plain line and is refused a kit by the
+--                kit check, not by the gate; with a deleted line BEFORE a kit
+--                line, the deleted item is the one named (line order).
+-- PART 11 (78-83) Direct line inserts (the editor before 0366, a raw API
+--                call): the line guard refuses a deleted item and kit stock
+--                with the save's errcode, hint and message, reading past RLS;
+--                archived and rental items still insert; a caller who may not
+--                write lines is refused by RLS exactly as before.
+-- PART 12 (84-87) Receipts: an accepted quantity on a kit-stock line is
+--                refused and writes nothing; a 0 on it, a plain line and a
+--                deleted item's line (goods that arrived) still post.
 --
 -- The row lock (edit vs edit, edit vs "Mark as ordered") and the reorder
 -- lock (two reorder runs at once) need two sessions; they are proved by the
@@ -44,7 +56,7 @@
 -- after `supabase db reset`.
 
 begin;
-select plan(74);
+select plan(87);
 
 \set orgA    '\'03660000-0000-0000-0000-00000000000a\''
 \set orgB    '\'03660000-0000-0000-0000-00000000000b\''
@@ -52,6 +64,7 @@ select plan(74);
 \set u_stf   '\'03660000-0000-0000-0000-0000000000a2\''
 \set u_other '\'03660000-0000-0000-0000-0000000000a3\''
 \set u_mgrB  '\'03660000-0000-0000-0000-0000000000a4\''
+\set u_stfPo '\'03660000-0000-0000-0000-0000000000a5\''
 \set whA     '\'03660000-0000-0000-0000-0000000000b1\''
 \set whB     '\'03660000-0000-0000-0000-0000000000b2\''
 \set locA    '\'03660000-0000-0000-0000-0000000000b3\''
@@ -89,13 +102,19 @@ select plan(74);
 \set iHid    '\'03660000-0000-0000-0000-0000000000d6\''
 \set iDelD   '\'03660000-0000-0000-0000-0000000000d7\''
 \set poStale '\'03660000-0000-0000-0000-0000000000e8\''
+\set poDirect '\'03660000-0000-0000-0000-0000000000e9\''
+\set poKitRcv '\'03660000-0000-0000-0000-0000000000ea\''
+\set lnKitR   '\'03660000-0000-0000-0000-0000000000f4\''
+\set lnPlainR '\'03660000-0000-0000-0000-0000000000f5\''
+\set lnDelR   '\'03660000-0000-0000-0000-0000000000f6\''
 
 -- ── Fixtures (as postgres: RLS bypassed, guards exempt) ─────────────────────
 insert into auth.users (id, email, raw_user_meta_data) values
   (:u_mgr,   'mgr-0366@test.local',   '{}'::jsonb),
   (:u_stf,   'stf-0366@test.local',   '{}'::jsonb),
   (:u_other, 'other-0366@test.local', '{}'::jsonb),
-  (:u_mgrB,  'mgrb-0366@test.local',  '{}'::jsonb)
+  (:u_mgrB,  'mgrb-0366@test.local',  '{}'::jsonb),
+  (:u_stfPo, 'stfpo-0366@test.local', '{}'::jsonb)
 on conflict (id) do nothing;
 
 insert into public.organizations (id, name, slug) values
@@ -105,7 +124,12 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgA, :u_mgr,   'manager', now()),
   (:orgA, :u_stf,   'staff',   now()),
   (:orgA, :u_other, 'manager', now()),
-  (:orgB, :u_mgrB,  'manager', now());
+  (:orgB, :u_mgrB,  'manager', now()),
+  (:orgA, :u_stfPo, 'staff',   now());
+-- PART 10: a staff member granted purchase_orders:manage on their own (no
+-- warehouse assignment, so inventory_items RLS shows them no item at all).
+insert into public.user_permission_overrides (organization_id, user_id, permission, granted) values
+  (:orgA, :u_stfPo, 'purchase_orders:manage', true);
 insert into public.organization_modules (organization_id, module_id, enabled, tier, settings) values
   (:orgA, 'purchase_orders', true, 'core', '{}'::jsonb),
   (:orgB, 'purchase_orders', true, 'core', '{}'::jsonb)
@@ -772,6 +796,130 @@ select throws_ok(
   '42501', 'You cannot manage purchase orders in this organization.',
   '74: nor can a manager of another organization');
 reset role;
+
+-- ═══ PART 10: the helper's purchase_orders:manage branch; line order ════════
+set local "request.jwt.claim.sub" to :u_stfPo;
+set local role to 'authenticated';
+select lives_ok(
+  format($$select public.save_purchase_order_draft(%L, null, 'S0366-STFPO', %L, null, null, null, null, %L::jsonb)$$,
+         :orgA, :supA,
+         jsonb_build_array(jsonb_build_object('item_id', :i3, 'quantity_ordered', 1, 'unit_cost', 1))),
+  '75: a staff member granted purchase_orders:manage (not a manager) saves a plain line: the helper answers them');
+select is(
+  pg_temp.refusal(format($$select public.save_purchase_order_draft(%L, null, 'S0366-STFPO-KIT', %L, null, null, null, null, %L::jsonb)$$,
+         :orgA, :supA,
+         jsonb_build_array(jsonb_build_object('item_id', :i3,   'quantity_ordered', 1, 'unit_cost', 1),
+                           jsonb_build_object('item_id', :iKit, 'quantity_ordered', 1, 'unit_cost', 1)))),
+  '22023|po_line_bundle|An item on this purchase order is a pre-assembled kit, and kits can''t be ordered on a purchase order: they are built from their components. Order the components instead.',
+  '76: ... and is refused a kit by the kit check, not by the gate (unnamed: their RLS shows them no item)');
+reset role;
+set local "request.jwt.claim.sub" to :u_mgr;
+set local role to 'authenticated';
+select is(
+  pg_temp.refusal(format($$select public.save_purchase_order_draft(%L, null, 'S0366-FIRST2', %L, null, null, null, null, %L::jsonb)$$,
+         :orgA, :supA,
+         jsonb_build_array(jsonb_build_object('item_id', :i3,   'quantity_ordered', 1, 'unit_cost', 1),
+                           jsonb_build_object('item_id', :iDel, 'quantity_ordered', 1, 'unit_cost', 1),
+                           jsonb_build_object('item_id', :iKit, 'quantity_ordered', 1, 'unit_cost', 1)))),
+  '22023|po_line_deleted|"Deleted item 0366" was deleted, so it can''t be ordered. Remove it from the purchase order and save again.',
+  '77: with the deleted line BEFORE the kit line, the deleted item is named (line order, not the helper''s row order)');
+reset role;
+
+-- ═══ PART 11: direct line inserts (the line guard) ══════════════════════════
+insert into public.purchase_orders
+  (id, organization_id, po_number, status, supplier_id, subtotal, total, created_by, updated_by) values
+  (:poDirect, :orgA, 'S0366-DIRECT', 'draft', :supA, 0, 0, :u_other, :u_other);
+
+set local "request.jwt.claim.sub" to :u_mgr;
+set local role to 'authenticated';
+select is(
+  pg_temp.refusal(format($$insert into public.purchase_order_items (organization_id, purchase_order_id, item_id, quantity_ordered, unit_cost)
+                           values (%L, %L, %L, 9, 1)$$, :orgA, :poDirect, :iKit)),
+  '22023|po_line_bundle|"Reading Kit 0366" is a pre-assembled kit, and kits can''t be ordered on a purchase order: they are built from their components. Order the components instead.',
+  '78: a manager''s direct insert of a kit-stock line is refused with the save''s errcode, hint and message');
+select is(
+  pg_temp.refusal(format($$insert into public.purchase_order_items (organization_id, purchase_order_id, item_id, quantity_ordered, unit_cost)
+                           values (%L, %L, %L, 1, 1)$$, :orgA, :poDirect, :iDel)),
+  '22023|po_line_deleted|"Deleted item 0366" was deleted, so it can''t be ordered. Remove it from the purchase order and save again.',
+  '79: ... so is a deleted item''s line');
+select is(
+  pg_temp.refusal(format($$insert into public.purchase_order_items (organization_id, purchase_order_id, item_id, quantity_ordered, unit_cost)
+                           values (%L, %L, %L, 1, 1)$$, :orgA, :poDirect, :iHid)),
+  '22023|po_line_deleted|An item on this purchase order was deleted, so it can''t be ordered. Remove it from the purchase order and save again.',
+  '80: ... and a deleted item RLS hides from the caller (the check reads past RLS, the name does not)');
+select lives_ok(
+  format($$insert into public.purchase_order_items (organization_id, purchase_order_id, item_id, quantity_ordered, unit_cost)
+           values (%L, %L, %L, 2, 1), (%L, %L, %L, 3, 1)$$,
+         :orgA, :poDirect, :iArc, :orgA, :poDirect, :iRent),
+  '81: an archived and a rental item still insert directly');
+reset role;
+set local "request.jwt.claim.sub" to :u_stf;
+set local role to 'authenticated';
+select is(
+  pg_temp.refusal(format($$insert into public.purchase_order_items (organization_id, purchase_order_id, item_id, quantity_ordered, unit_cost)
+                           values (%L, %L, %L, 1, 1)$$, :orgA, :poDirect, :iKit)),
+  '42501|-|new row violates row-level security policy for table "purchase_order_items"',
+  '82: staff who may not write lines are refused by the write policy, as before (the guard does not ask the helper for them)');
+reset role;
+set local "request.jwt.claim.sub" to :u_stfPo;
+set local role to 'authenticated';
+select is(
+  pg_temp.refusal(format($$insert into public.purchase_order_items (organization_id, purchase_order_id, item_id, quantity_ordered, unit_cost)
+                           values (%L, %L, %L, 1, 1)$$, :orgA, :poDirect, :iKit)),
+  '22023|po_line_bundle|An item on this purchase order is a pre-assembled kit, and kits can''t be ordered on a purchase order: they are built from their components. Order the components instead.',
+  '83: a staff PO writer''s direct insert of a kit line is refused by the same check');
+reset role;
+
+-- ═══ PART 12: receipts ═══════════════════════════════════════════════════════
+-- An ordered PO carrying a kit-stock line and a deleted item's line, as the
+-- reorder paths could draft them before 0366 (written as postgres: the guard
+-- exempts it, like the old service-role drafts).
+insert into public.purchase_orders
+  (id, organization_id, po_number, status, supplier_id, subtotal, total, created_by, updated_by) values
+  (:poKitRcv, :orgA, 'S0366-KITRCV', 'ordered', :supA, 3, 3, :u_other, :u_other);
+insert into public.purchase_order_items
+  (id, organization_id, purchase_order_id, item_id, quantity_ordered, unit_cost) values
+  (:lnKitR,   :orgA, :poKitRcv, :iKit, 5, 1),
+  (:lnPlainR, :orgA, :poKitRcv, :i3,   5, 1),
+  (:lnDelR,   :orgA, :poKitRcv, :iDel, 5, 1);
+create temp table on_hand_before on commit drop as
+  select id, quantity_on_hand from public.inventory_items where id in (:iKit, :i3, :iDel);
+
+set local "request.jwt.claim.sub" to :u_mgr;
+set local role to 'authenticated';
+select is(
+  pg_temp.refusal(format($$select public.post_receipt_v2(%L, %L, %L::jsonb, 'idem-0366-kit', 'hash-0366-kit', null)$$,
+         :poKitRcv, :whA,
+         jsonb_build_array(jsonb_build_object('po_line_id', :lnPlainR, 'qty_received', 1, 'qty_accepted', 1, 'qty_rejected', 0, 'unit_cost', 1),
+                           jsonb_build_object('po_line_id', :lnKitR,   'qty_received', 2, 'qty_accepted', 2, 'qty_rejected', 0, 'unit_cost', 1)))),
+  '22023|po_line_bundle|"Reading Kit 0366" is a pre-assembled kit, so it can''t be received: receiving it would add kits without using any of their components. Leave this line at 0 and receive the rest; kits are built from their components.',
+  '84: a receipt that accepts kit stock is refused, naming the kit');
+reset role;
+select is(
+  (select count(*) from public.receipts where purchase_order_id = :poKitRcv)::text
+    || '|' || (select string_agg(trim_scale(i.quantity_on_hand)::text, ',' order by i.id)
+                 from public.inventory_items i where i.id in (:iKit, :i3, :iDel))
+    || '|' || (select string_agg(trim_scale(b.quantity_on_hand)::text, ',' order by b.id) from on_hand_before b),
+  format('0|%s|%s',
+         (select string_agg(trim_scale(b.quantity_on_hand)::text, ',' order by b.id) from on_hand_before b),
+         (select string_agg(trim_scale(b.quantity_on_hand)::text, ',' order by b.id) from on_hand_before b)),
+  '85: ... and writes nothing: no receipt, no stock on any line (the plain line before it rolled back too)');
+set local "request.jwt.claim.sub" to :u_mgr;
+set local role to 'authenticated';
+select lives_ok(
+  format($$select public.post_receipt_v2(%L, %L, %L::jsonb, 'idem-0366-rest', 'hash-0366-rest', null)$$,
+         :poKitRcv, :whA,
+         jsonb_build_array(jsonb_build_object('po_line_id', :lnPlainR, 'qty_received', 1, 'qty_accepted', 1, 'qty_rejected', 0, 'unit_cost', 1),
+                           jsonb_build_object('po_line_id', :lnKitR,   'qty_received', 0, 'qty_accepted', 0, 'qty_rejected', 0, 'unit_cost', 1),
+                           jsonb_build_object('po_line_id', :lnDelR,   'qty_received', 4, 'qty_accepted', 4, 'qty_rejected', 0, 'unit_cost', 1))),
+  '86: a 0 on the kit line, a plain line and a deleted item''s line (goods that arrived) still post');
+reset role;
+select is(
+  (select string_agg(trim_scale(i.quantity_on_hand - b.quantity_on_hand)::text, ',' order by i.id)
+     from public.inventory_items i join on_hand_before b on b.id = i.id),
+  (select string_agg(case i.id when :i3 then '1' when :iDel then '4' else '0' end, ',' order by i.id)
+     from public.inventory_items i where i.id in (:iKit, :i3, :iDel)),
+  '87: ... the plain item gained 1, the deleted item 4, the kit nothing');
 
 select * from finish();
 rollback;

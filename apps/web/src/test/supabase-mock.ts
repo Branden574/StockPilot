@@ -91,7 +91,9 @@ export function inFilters(call: MockCall): Array<[string, unknown[]]> {
 /**
  * A select result that answers like PostgREST: it applies the query's OWN
  * filters (`eq`, `neq`, `is`, `gt`, `gte`, `lt`, `lte`, `in`), its `.order()`
- * and its `.range()`/`.limit()` window (capped at max_rows, 1000) to `rows`.
+ * calls and its `.range()`/`.limit()` window (capped at max_rows, 1000) to
+ * `rows`. Several `.order()` calls sort as PostgREST's `order=a,b` does: the
+ * FIRST is the primary key and each later one only breaks its ties.
  * So a test fails when the code under test forgets a filter, instead of the
  * stub handing back every row whatever was asked. Any other method in the
  * chain (an `.or()` it cannot evaluate) throws, so nothing is ignored
@@ -104,9 +106,11 @@ export function servedLikePostgrest(
     let out = [...(typeof rows === 'function' ? rows() : rows)];
     let from = 0;
     let to = 999;
+    const cmp = (a: unknown, b: unknown) => (a as number | string) < (b as number | string);
+    /** Sort keys in call order; applied once, after the filters. */
+    const orderKeys: Array<{ col: string; ascending: boolean }> = [];
     call.methods.forEach((method, i) => {
       const [col, value] = (call.args[i] ?? []) as [string, unknown];
-      const cmp = (a: unknown, b: unknown) => (a as number | string) < (b as number | string);
       switch (method) {
         case 'select':
           break;
@@ -134,11 +138,15 @@ export function servedLikePostgrest(
         case 'in':
           out = out.filter((r) => (value as unknown[]).includes(r[col]));
           break;
-        case 'order': {
-          const ascending = (value as { ascending?: boolean } | undefined)?.ascending !== false;
-          out.sort((a, b) => (cmp(a[col], b[col]) ? -1 : cmp(b[col], a[col]) ? 1 : 0) * (ascending ? 1 : -1));
+        case 'order':
+          // Collected, not applied here: re-sorting per call would make the
+          // LAST .order() the primary key (a stable sort keeps only the
+          // earlier keys as tiebreaks), the reverse of PostgREST.
+          orderKeys.push({
+            col,
+            ascending: (value as { ascending?: boolean } | undefined)?.ascending !== false,
+          });
           break;
-        }
         case 'range':
           from = Number(col);
           to = Number(value);
@@ -150,6 +158,15 @@ export function servedLikePostgrest(
           throw new Error(`servedLikePostgrest cannot evaluate .${method}()`);
       }
     });
+    if (orderKeys.length > 0) {
+      out.sort((a, b) => {
+        for (const { col, ascending } of orderKeys) {
+          const c = cmp(a[col], b[col]) ? -1 : cmp(b[col], a[col]) ? 1 : 0;
+          if (c !== 0) return ascending ? c : -c;
+        }
+        return 0;
+      });
+    }
     return { data: out.slice(from, Math.min(to, from + 999) + 1), error: null };
   };
 }

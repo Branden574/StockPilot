@@ -209,6 +209,8 @@ export async function seedRecurringTemplateFromPoAction(poId: string): Promise<
     supplierId: string | null;
     destinationLocationId: string | null;
     lineItems: Array<{ itemId: string; quantityOrdered: number; unitCost: number }>;
+    /** PO lines left out because their item was deleted or is a kit. */
+    linesLeftOff: number;
   }>
 > {
   if (!poId) return err('validation_error', 'Purchase order ID is required.');
