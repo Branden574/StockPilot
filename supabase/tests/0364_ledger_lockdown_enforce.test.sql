@@ -8,13 +8,18 @@
 --                unchanged; compensate_opening_stock still zeroes a failed
 --                create.
 -- PART 3 (15-19) item_stock_levels: direct writes refused, transfer_stock
---                still moves holdings, an FK cascade still clears them.
+--                still moves holdings, and a location holding stock cannot be
+--                deleted (its FK cascade would drop holdings unseen).
 -- PART 4 (20-25) purchase_orders: an API-role insert is a draft with a
 --                database-recorded creator; postgres and service_role exempt.
 -- PART 5 (26-29) purchase_order_items: lines only into a draft; 0360's org and
 --                positive-line rules keep their order.
 -- PART 6 (30-34) purchase_order_charges, rentals, rental_lines closed to the
 --                API roles.
+-- PART 7 (35-39) Review hardening: no warehouse hard delete; an empty PO is
+--                never placed; line writes read the PO through the locking,
+--                org-gated po_status_for_line_write; a PO with lines still
+--                places.
 --
 -- Roles: the guards key on current_user, so writes run under
 -- `set local role authenticated` with request.jwt.claim.sub. Closed grants
@@ -23,7 +28,7 @@
 -- Run via `supabase test db` after `supabase db reset`.
 
 begin;
-select plan(34);
+select plan(39);
 
 \set orgA    '\'03640000-0000-0000-0000-00000000000a\''
 \set orgB    '\'03640000-0000-0000-0000-00000000000b\''
@@ -43,6 +48,7 @@ select plan(34);
 \set poOrd   '\'03640000-0000-0000-0000-0000000000e2\''
 \set poB     '\'03640000-0000-0000-0000-0000000000e3\''
 \set poNew   '\'03640000-0000-0000-0000-0000000000e4\''
+\set poEmpty '\'03640000-0000-0000-0000-0000000000e5\''
 \set rentA   '\'03640000-0000-0000-0000-0000000000f1\''
 
 -- ── Fixtures (as postgres: RLS bypassed, guards exempt) ─────────────────────
@@ -94,7 +100,8 @@ update public.inventory_items set quantity_on_hand = 5 where id = :itemS;
 insert into public.purchase_orders (id, organization_id, po_number, status, supplier_id, subtotal, total) values
   (:poDraft, :orgA, 'PO-0364-D', 'draft',   :supA, 0, 0),
   (:poOrd,   :orgA, 'PO-0364-O', 'ordered', :supA, 0, 0),
-  (:poB,     :orgB, 'PO-0364-X', 'draft',   null,  0, 0);
+  (:poB,     :orgB, 'PO-0364-X', 'draft',   null,  0, 0),
+  (:poEmpty, :orgA, 'PO-0364-E', 'draft',   :supA, 0, 0);
 
 insert into public.rentals (id, organization_id, warehouse_id, borrower_name, expected_return_at, status, created_by)
 values (:rentA, :orgA, :whA, 'Borrower 0364', now() + interval '7 days', 'out', :u_mgr);
@@ -113,9 +120,11 @@ select ok(
 select ok(
   not has_table_privilege('authenticated', 'public.item_stock_levels', 'DELETE')
   and not has_table_privilege('anon', 'public.item_stock_levels', 'DELETE')
+  and not has_table_privilege('authenticated', 'public.locations', 'DELETE')
+  and not has_table_privilege('authenticated', 'public.warehouses', 'DELETE')
   and has_table_privilege('authenticated', 'public.item_stock_levels', 'INSERT')
   and has_table_privilege('authenticated', 'public.item_stock_levels', 'UPDATE'),
-  '3: holdings lose DELETE; INSERT/UPDATE stay for the INVOKER ledger bodies');
+  '3: holdings, locations and warehouses lose DELETE; holdings INSERT/UPDATE stay for the INVOKER ledger bodies');
 select ok(
   not exists (
     select 1 from unnest(array['purchase_order_charges', 'rentals', 'rental_lines']) t,
@@ -208,9 +217,10 @@ select lives_ok(
 reset role;
 set local "request.jwt.claim.sub"  to :u_mgr;
 set local role to 'authenticated';
-with gone as (delete from public.locations where id = :locGone returning 1)
-select is((select count(*)::int from gone), 1,
-  '19: deleting a rack still clears its (empty) holdings row: the FK cascade runs as the owner, so the guard lets it through');
+select throws_ok(
+  format($$delete from public.locations where id = %L$$, :loc1),
+  '42501', null,
+  '19: a rack holding stock cannot be hard-deleted (the cascade would drop its holdings with no movement)');
 reset role;
 
 -- ═══ PART 4: purchase_orders inserts ════════════════════════════════════════
@@ -293,6 +303,35 @@ select throws_ok(
   format($$insert into public.rental_lines (rental_id, item_id, quantity) values (%L, %L, 1)$$, :rentA, :itemS),
   '42501', null,
   '34: rental lines come only from create_rental');
+reset role;
+
+-- ═══ PART 7: review hardening ═══════════════════════════════════════════════
+set local "request.jwt.claim.sub"  to :u_mgr;
+set local role to 'authenticated';
+
+select throws_ok(
+  format($$delete from public.warehouses where id = %L$$, :whA),
+  '42501', null,
+  '35: a warehouse cannot be hard-deleted (it would take holdings, holds and item assignments)');
+select throws_ok(
+  format($$update public.purchase_orders set status = 'ordered' where id = %L$$, :poEmpty),
+  '23514', 'Add at least one line before marking this purchase order as ordered.',
+  '36: an empty PO is never placed (what an edit racing "Mark as ordered" would leave)');
+select lives_ok(
+  format($$update public.purchase_orders set status = 'ordered' where id = %L$$, :poDraft),
+  '37: a draft with lines still places');
+reset role;
+select ok(
+  (select p.prosecdef and p.provolatile = 'v'
+          and pg_get_functiondef(p.oid) ~* 'for\s+share'
+     from pg_proc p where p.oid = 'public.po_status_for_line_write(uuid, uuid)'::regprocedure)
+  and pg_get_functiondef('public.tg_purchase_order_items_guard()'::regprocedure) ~ 'po_status_for_line_write\(new\.'
+  and pg_get_functiondef('public.tg_purchase_order_items_guard()'::regprocedure) ~ 'po_status_for_line_write\(old\.',
+  '38: line inserts and deletes read the PO through the VOLATILE SECURITY DEFINER locking read');
+set local "request.jwt.claim.sub"  to :u_mgrB;
+set local role to 'authenticated';
+select is(public.po_status_for_line_write(:poNew::uuid, :orgA::uuid), null,
+  '39: the locking read answers nothing about another org''s PO');
 reset role;
 
 select * from finish();

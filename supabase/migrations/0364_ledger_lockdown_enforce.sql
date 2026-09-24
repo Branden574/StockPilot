@@ -11,10 +11,15 @@
 -- in 0359:
 --   1. inventory_items: quantity_on_hand changes only inside a ledger RPC. An
 --      insert may still open with stock (see section 1).
---   2. item_stock_levels: written only inside a ledger RPC. DELETE is revoked.
+--   2. item_stock_levels: written only inside a ledger RPC. DELETE is revoked,
+--      and so is DELETE on locations and warehouses, whose FK cascades would
+--      otherwise remove holdings with no movement.
 --   3. purchase_orders: an insert is a draft, with no ordered or received
---      date; the database records who created it and when.
---   4. purchase_order_items: lines are added only to a draft.
+--      date; the database records who created it and when. A PO with no
+--      lines cannot be placed.
+--   4. purchase_order_items: lines are added only to a draft, and a line
+--      write holds the PO until it commits, so "Mark as ordered" and its
+--      approval threshold always see the lines.
 --   5. purchase_order_charges: written only by approve_po_import_commit.
 --   6. rentals, rental_lines: written only by create_rental, return_rental
 --      and cancel_rental.
@@ -26,9 +31,10 @@
 -- rollback, PO-import approval and rental code wrote these tables directly.
 --
 -- Rollback: a follow-up migration that restores tg_inventory_items_guard from
--- 0359 and the two PO guards from 0360, drops trg_zz_item_stock_levels_guard,
--- re-grants DELETE on item_stock_levels and the writes on the charge and
--- rental tables, and re-creates the dropped policies. 0359-0363 stay.
+-- 0359 and the two PO guards from 0360, drops trg_zz_item_stock_levels_guard
+-- and po_status_for_line_write, re-grants DELETE on item_stock_levels,
+-- locations and warehouses and the writes on the charge and rental tables,
+-- and re-creates the dropped policies. 0359-0363 stay.
 
 set lock_timeout = '5s';
 
@@ -135,15 +141,24 @@ revoke all on function public.tg_inventory_items_guard() from public, anon, auth
 
 -- ── 2. item_stock_levels: ledger-only ───────────────────────────────────────
 -- The write policy and the INSERT/UPDATE grants stay: ledger.adjust_stock and
--- ledger.transfer_stock write holdings as the user, with the flag on. Nothing
--- the API roles run deletes a holdings row (the only SQL DELETE is
+-- ledger.transfer_stock write holdings as the user, with the flag on. No
+-- ledger body deletes a holdings row (the only SQL DELETE is
 -- _dedup_rack_locations, executable by postgres alone), so DELETE goes.
+--
+-- Holdings also disappear by cascade: deleting a location deletes its rows
+-- (item_stock_levels_location_id_fkey ON DELETE CASCADE, run as the owner, so
+-- no guard sees it) and nulls the locations on its movements; deleting a
+-- warehouse takes its locations, holds and item assignments with it. The apps
+-- only ever archive locations and warehouses (deleted_at / status), and no
+-- function the API roles run deletes either, so DELETE goes on both. Hard
+-- deletes stay available to the service role.
 
 create or replace trigger trg_zz_item_stock_levels_guard
   before insert or update or delete on public.item_stock_levels
   for each row execute function public.tg_ledger_only_guard();
 
 revoke delete on public.item_stock_levels from authenticated, anon;
+revoke delete on public.locations, public.warehouses from authenticated, anon;
 
 -- ── 3. purchase_orders: an API-role insert is a draft ───────────────────────
 -- 0360's guard with its INSERT branch filled in. The PO form and the recurring
@@ -208,6 +223,14 @@ begin
         raise exception 'Only a draft purchase order can be marked as ordered.'
           using errcode = '42501';
       end if;
+      -- An order with nothing on it is never meant (none exists), and it is
+      -- what a PO edit racing this transition would leave behind.
+      if not exists (select 1 from public.purchase_order_items i
+                      where i.purchase_order_id = new.id
+                        and i.organization_id = new.organization_id) then
+        raise exception 'Add at least one line before marking this purchase order as ordered.'
+          using errcode = '23514';
+      end if;
       if public.po_over_approval_threshold(new.id, new.total) then
         raise exception 'This purchase order meets the approval threshold. Ask an owner or admin to place it.'
           using errcode = '42501';
@@ -245,10 +268,11 @@ end;
 $$;
 
 comment on function public.tg_purchase_orders_guard() is
-  'BEFORE INSERT OR UPDATE guard (0360, insert rule 0364): API-role inserts are '
+  'BEFORE INSERT OR UPDATE guard (0360, insert rules 0364): API-role inserts are '
   'drafts with no ordered/received date and a database-recorded creator; status '
-  'changes follow the PO lifecycle and the approval threshold; amounts freeze '
-  'after draft; receiving statuses and dates only through the receipt RPCs.';
+  'changes follow the PO lifecycle and the approval threshold, and a PO with no '
+  'lines is never placed; amounts freeze after draft; receiving statuses and '
+  'dates only through the receipt RPCs.';
 
 revoke all on function public.tg_purchase_orders_guard() from public, anon, authenticated;
 
@@ -256,6 +280,45 @@ revoke all on function public.tg_purchase_orders_guard() from public, anon, auth
 -- 0360's guard with the draft rule on INSERT. The PO editor adds lines only to
 -- a draft it has just claimed with `status = 'draft'`, and receiving writes
 -- quantity_received under the flag.
+--
+-- The parent's status is read with FOR SHARE and held to the end of the
+-- line's transaction. "Mark as ordered" locks the PO row FOR NO KEY UPDATE,
+-- which conflicts, so it waits for an in-flight line write and then checks
+-- the threshold with that line committed; a line write that arrives after the
+-- PO was placed re-reads 'ordered' and is refused. With a plain read, a line
+-- inserted beside a concurrent "Mark as ordered" escaped both the draft rule
+-- and the approval threshold. The lock needs a VOLATILE function (a STABLE
+-- one may not lock rows), and SECURITY DEFINER so RLS on purchase_orders has
+-- no say in which rows it can hold; it answers only for the caller's org.
+
+create or replace function public.po_status_for_line_write(p_po_id uuid, p_org_id uuid)
+returns text
+language plpgsql
+volatile
+security definer
+set search_path = public
+as $$
+declare
+  v_status text;
+begin
+  if auth.uid() is not null and not public.is_org_member(p_org_id) then
+    return null;
+  end if;
+  select p.status into v_status
+    from public.purchase_orders p
+   where p.id = p_po_id
+     and p.organization_id = p_org_id
+     for share;
+  return v_status;
+end;
+$$;
+
+comment on function public.po_status_for_line_write(uuid, uuid) is
+  'The PO''s status, read FOR SHARE so the calling line write holds the PO until '
+  'it commits (0364). Null for another org''s PO or a non-member.';
+
+revoke all on function public.po_status_for_line_write(uuid, uuid) from public, anon;
+grant execute on function public.po_status_for_line_write(uuid, uuid) to authenticated, service_role;
 
 create or replace function public.tg_purchase_order_items_guard()
 returns trigger
@@ -280,7 +343,7 @@ begin
   end if;
 
   if tg_op = 'DELETE' then
-    if public.po_status_in_org(old.purchase_order_id, old.organization_id) is distinct from 'draft' then
+    if public.po_status_for_line_write(old.purchase_order_id, old.organization_id) is distinct from 'draft' then
       raise exception 'Lines can be removed only from a draft purchase order.'
         using errcode = '42501';
     end if;
@@ -290,7 +353,7 @@ begin
   -- INSERT. The parent must be this org's PO (the write policy checks the
   -- row's organization_id only) and still a draft, the item this org's, and
   -- nothing received.
-  v_status := public.po_status_in_org(new.purchase_order_id, new.organization_id);
+  v_status := public.po_status_for_line_write(new.purchase_order_id, new.organization_id);
   if v_status is null then
     raise exception 'That purchase order is not part of this organization.'
       using errcode = '42501';
@@ -320,7 +383,7 @@ $$;
 
 comment on function public.tg_purchase_order_items_guard() is
   'BEFORE INSERT OR UPDATE OR DELETE guard (0360, draft rule 0364): API-role '
-  'lines join only a draft PO of their own org and an item of their own org, '
+  'lines join only a draft PO of their own org (held FOR SHARE to commit) and an item of their own org, '
   'start unreceived, are positive (quantity > 0, cost >= 0), are never updated '
   'directly (receiving does that under the ledger flag), and leave only drafts.';
 
