@@ -207,8 +207,9 @@ export class ReceivingService {
       p_notes: input.notes ?? null,
     });
     if (error) {
-      // Postgres errcode 40001 = serialization_failure, used for
-      // idempotency conflict above.
+      // Same key, different request (raised as 55000 since 0367; it was
+      // 40001, which PostgREST < 16 retried forever). Matched on the message,
+      // never the code.
       if (error.message.includes('idempotency_conflict')) {
         await audit(
           {

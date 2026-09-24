@@ -69,22 +69,35 @@ type OpenLine = { id: string; item_id: string; purchase_orders: { status: string
 
 /**
  * A purchase_order_items read that behaves like the database: it applies the
- * query's own `.in('purchase_orders.status', …)` filter, orders by id and
- * serves the `.range()` window, capped at PostgREST's 1000 rows. So a test
- * fails if the service asks for the wrong states or stops paging.
+ * query's own `.in('purchase_orders.status', …)` filter and `.gt()` cursor,
+ * orders by the query's `.order()` column (then id), and serves the
+ * `.range()` window or the `.limit()`, capped at PostgREST's 1000 rows. So a
+ * test fails if the service asks for the wrong states or stops paging.
+ * `onRead` runs after each page is served (to change the data between pages,
+ * as a colleague's save would).
  */
-function openLinesRead(lines: () => OpenLine[]) {
+function openLinesRead(lines: () => OpenLine[], onRead?: (page: number) => void) {
+  let page = 0;
   return (call: MockCall) => {
     const statuses = inFilters(call).find(([c]) => c === 'purchase_orders.status')?.[1] as
       | string[]
       | undefined;
+    const gt = callArgs(call, 'gt') as [keyof OpenLine, string] | undefined;
+    const orderCol = ((callArgs(call, 'order') as [keyof OpenLine] | undefined)?.[0] ?? 'id') as
+      | 'id'
+      | 'item_id';
+    const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
     const rows = lines()
       .filter((l) => (statuses ? statuses.includes(l.purchase_orders.status) : true))
-      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      .filter((l) => (gt ? String(l[gt[0]]) > gt[1] : true))
+      .sort((a, b) => cmp(a[orderCol], b[orderCol]) || cmp(a.id, b.id));
     const range = callArgs(call, 'range') as [number, number] | undefined;
+    const limit = (callArgs(call, 'limit') as [number] | undefined)?.[0];
     const from = range?.[0] ?? 0;
-    const to = Math.min(range?.[1] ?? 999, from + 999);
-    return { data: rows.slice(from, to + 1), error: null };
+    const to = range ? Math.min(range[1], from + 999) : Math.min((limit ?? 1000) - 1, 999);
+    const data = rows.slice(from, to + 1);
+    onRead?.(++page);
+    return { data, error: null };
   };
 }
 
@@ -379,19 +392,59 @@ describe('createDraftsFromReorderForecast — items already on an open PO', () =
   it('(d) still skips an item whose open line is row 1001 of the open-PO read', async () => {
     // 1000 open lines for other items, then the target on the 1001st row: a
     // read that stopped at PostgREST's 1000-row cap would miss it.
-    const open = Array.from({ length: 1000 }, (_, i) => openLine(i, `other-${i}`, 'ordered'));
-    open.push(openLine(1000, 'deep', 'ordered'));
-    const stub = stubFor([belowPar('deep'), belowPar('fresh')], [{ id: 'sup-a', name: 'A' }], open);
+    const open = Array.from({ length: 1000 }, (_, i) =>
+      openLine(i, `other-${String(i).padStart(4, '0')}`, 'ordered'),
+    );
+    open.push(openLine(1000, 'zz-deep', 'ordered'));
+    const stub = stubFor([belowPar('zz-deep'), belowPar('fresh')], [{ id: 'sup-a', name: 'A' }], open);
     const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
 
     const result = await svc.createDraftsFromReorderForecast();
 
     expect(result.skippedOnOpenPo).toBe(1);
     expect(savedLines(stub).map((l) => l.item_id)).toEqual(['fresh']);
-    // Two pages were read, with a stable order.
+    // Two pages, ordered by item id, the second after a cursor (keyset).
     const reads = stub.chainsAll.get('purchase_order_items.select') ?? [];
-    expect(reads.length).toBeGreaterThanOrEqual(2);
-    expect(reads[0]).toContain('order');
+    const readArgs = stub.chainArgsAll.get('purchase_order_items.select') ?? [];
+    expect(reads).toHaveLength(2);
+    expect(readArgs[0]![reads[0]!.indexOf('order')]).toEqual(['item_id', { ascending: true }]);
+    expect(reads[1]).toContain('gt');
+    expect(readArgs[1]![reads[1]!.indexOf('gt')]).toEqual(['item_id', 'other-0999']);
+    expect(reads[1]).not.toContain('range');
+  });
+
+  it('(f) a draft saved while the open set is being paged cannot hide an item that is on order', async () => {
+    // 1000 other items' lines (ids line-000000..000999) and the target's line
+    // (id line-001000). Between page 1 and page 2 a colleague saves another
+    // draft: its five lines are deleted and re-inserted under new ids that
+    // sort last. An OFFSET read ordered by id would now find the target at
+    // index 995, inside the window it already served, and skip it on page 2.
+    let open: OpenLine[] = Array.from({ length: 1000 }, (_, i) =>
+      openLine(i, `item-${String(i).padStart(4, '0')}`, 'draft'),
+    );
+    open.push(openLine(1000, 'target', 'ordered'));
+    const colleagueSaves = (page: number) => {
+      if (page !== 1) return;
+      const moved = open.slice(0, 5).map((l, k) => ({ ...l, id: `line-9${String(k).padStart(5, '0')}` }));
+      open = [...open.slice(5), ...moved];
+    };
+    let poSeq = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [belowPar('target'), belowPar('fresh')], error: null },
+      'suppliers.select': { data: [{ id: 'sup-a', name: 'Supplier A' }], error: null },
+      'purchase_order_items.select': openLinesRead(() => open, colleagueSaves),
+      'rpc:next_po_number': () => ({ data: `PO-${poSeq + 1}`, error: null }),
+      'rpc:save_purchase_order_draft': () => {
+        poSeq += 1;
+        return { data: { id: `po-${poSeq}`, stamped: 0, stamp_error: null }, error: null };
+      },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    const result = await svc.createDraftsFromReorderForecast();
+
+    expect(result.skippedOnOpenPo).toBe(1);
+    expect(savedLines(stub).map((l) => l.item_id)).toEqual(['fresh']);
   });
 
   it('(e) a second click drafts nothing: the first click\'s drafts are open POs', async () => {
@@ -421,6 +474,62 @@ describe('createDraftsFromReorderForecast — items already on an open PO', () =
     expect(second.createdPoIds).toHaveLength(0);
     expect(second.skippedOnOpenPo).toBe(2);
     expect(saves(stub)).toHaveLength(2); // only the first click's two drafts
+  });
+
+  it('(g) every reorder draft asks the database to leave out items already on order (the lock-held re-check)', async () => {
+    const stub = stubFor(
+      [belowPar('a-1', 'sup-a'), belowPar('x-1', null)],
+      [{ id: 'sup-a', name: 'Supplier A' }],
+    );
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    await svc.createDraftsFromReorderForecast();
+
+    const flags = stub.rpcCalls
+      .filter((c) => c.name === 'save_purchase_order_draft')
+      .map((c) => (c.args as { p_skip_items_on_open_po?: boolean }).p_skip_items_on_open_po);
+    expect(flags).toEqual([true, true]); // the supplier draft and the unassigned one
+  });
+
+  it('(h) a run at the same moment drafted some items first: the database leaves them off, they count as skipped, and an all-skipped draft is not created', async () => {
+    // Both runs read the open set before either saved. The other run's
+    // drafts committed first, so the save here reports its items as skipped
+    // (supplier A: one of two; unassigned: all, so no PO at all).
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [belowPar('a-1', 'sup-a'), belowPar('a-2', 'sup-a'), belowPar('x-1', null)],
+        error: null,
+      },
+      'suppliers.select': { data: [{ id: 'sup-a', name: 'Supplier A' }], error: null },
+      'purchase_order_items.select': { data: [], error: null },
+      'rpc:next_po_number': { data: 'PO-9', error: null },
+      'rpc:save_purchase_order_draft': (call: MockCall) => {
+        const args = call.args[0]?.[0] as SaveArgs;
+        return args.p_supplier_id === 'sup-a'
+          ? { data: { id: 'po-a', stamped: 0, stamp_error: null, skipped_item_ids: ['a-2'] }, error: null }
+          : { data: { id: null, stamped: 0, stamp_error: null, skipped_item_ids: ['x-1'] }, error: null };
+      },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    const result = await svc.createDraftsFromReorderForecast();
+
+    expect(result.createdPoIds).toEqual(['po-a']);
+    expect(result.skippedOnOpenPo).toBe(2);
+    expect(result.unassignedCount).toBe(0);
+    expect(result.supplierFailures).toEqual([]);
+  });
+
+  it('(i) an explicit Items selection never asks the database to skip anything', async () => {
+    const stub = stubFor([belowPar('a-1', 'sup-a')], [{ id: 'sup-a', name: 'Supplier A' }]);
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    await svc.createDraftsFromItems(['a-1']);
+
+    const args = stub.rpcCalls.find((c) => c.name === 'save_purchase_order_draft')?.args as {
+      p_skip_items_on_open_po?: boolean;
+    };
+    expect(args.p_skip_items_on_open_po).toBe(false);
   });
 
   it("reports one supplier's failed save and still creates the other supplier's draft", async () => {
@@ -519,6 +628,61 @@ describe('runAutoReorder — open-PO dedupe and failed creates', () => {
     // updateStatus reads then updates purchase_orders; neither happened.
     expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
     expect(stub.chainsAll.get('purchase_orders.select')).toBeUndefined();
+  });
+});
+
+describe('runAutoReorder — a run at the same moment (database re-check under the reorder lock)', () => {
+  const line = (id: string, cost: number, supplier = 'sup-a') => ({
+    id,
+    supplier_id: supplier,
+    reorder_point: 1,
+    reorder_quantity: 0,
+    quantity_on_hand: 0,
+    unit_cost: cost,
+  });
+
+  it('an all-skipped group creates nothing and is counted as a duplicate', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [line('a-1', 5)], error: null },
+      'suppliers.select': { data: [{ id: 'sup-a', name: 'Supplier A' }], error: null },
+      'purchase_order_items.select': { data: [], error: null },
+      'rpc:next_po_number': { data: 'PO-1', error: null },
+      'rpc:save_purchase_order_draft': {
+        data: { id: null, stamped: 0, stamp_error: null, skipped_item_ids: ['a-1'] },
+        error: null,
+      },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    const result = await svc.runAutoReorder({ enabled: true, mode: 'draft', maxAutoSendCents: null });
+
+    expect(result.created).toBe(0);
+    expect(result.skippedDuplicate).toBe(1);
+    expect(result.supplierFailures).toBe(0);
+    expect((saves(stub)[0] as unknown as { p_skip_items_on_open_po: boolean }).p_skip_items_on_open_po).toBe(true);
+  });
+
+  it('decides auto-send on what was actually drafted, not on lines the database left off', async () => {
+    // Planned: a-1 ($50) + a-2 ($80) = $130, over the $100 cap. The other run
+    // drafted a-2 first, so this PO carries a-1 alone ($50): under the cap.
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [line('a-1', 50), line('a-2', 80)], error: null },
+      'suppliers.select': { data: [{ id: 'sup-a', name: 'Supplier A' }], error: null },
+      'purchase_order_items.select': { data: [], error: null },
+      'organization_modules.select': { data: { settings: {} }, error: null },
+      'rpc:next_po_number': { data: 'PO-1', error: null },
+      'rpc:save_purchase_order_draft': {
+        data: { id: 'po-1', stamped: 0, stamp_error: null, skipped_item_ids: ['a-2'] },
+        error: null,
+      },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+    const send = vi.spyOn(svc, 'updateStatus').mockResolvedValue(undefined as never);
+
+    const result = await svc.runAutoReorder({ enabled: true, mode: 'send', maxAutoSendCents: 10_000 });
+
+    expect(send).toHaveBeenCalledWith('po-1', 'ordered');
+    expect(result).toMatchObject({ created: 1, sent: 1, heldForReview: 0, skippedDuplicate: 1 });
   });
 });
 

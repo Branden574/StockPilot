@@ -80,7 +80,10 @@
 --   save.
 --
 -- Errors (message for people, errcode + hint for the service to map):
---   22023 po_invalid         no organization or PO number
+--   22023 po_invalid         no organization or PO number, or
+--                            p_skip_items_on_open_po on an edit
+--   42501 (no hint)          p_skip_items_on_open_po from a signed-in caller
+--                            who is not a member of p_org_id
 --   22023 po_lines_required  p_lines is not a non-empty array
 --   22023 po_line_invalid    a line without a uuid item_id, a numeric quantity
 --                            above 0 (after the column's 4-decimal rounding)
@@ -88,11 +91,42 @@
 --                            NaN, Infinity and strings are refused.
 --   P0002 po_not_found       edit: no such PO in this organization (or not
 --                            visible/editable to the caller)
---   40001 po_not_draft       edit: the PO is no longer a draft
+--   55000 po_not_draft       edit: the PO is no longer a draft
+--                            (object_not_in_prerequisite_state). NEVER 40001:
+--                            PostgREST before v16 re-runs a transaction that
+--                            fails with 40001 without limit, so a deterministic
+--                            40001 pins a pool connection and a backend in a
+--                            retry loop forever (reproduced on v14.5 and
+--                            v14.10, about 2,000 rollbacks a second, still
+--                            looping after the client gave up). The service
+--                            maps by hint, never by code.
 --   42501 po_not_in_org      an item, supplier, destination or charter from
 --                            another organization
 --   23505 (unique_violation) the PO number is taken (no hint; raised by
 --                            purchase_orders_org_ponumber_active_key)
+--   40P01 (deadlock)         not raised here, but reachable: an edit locks the
+--                            header, then the lines. A direct API-role DELETE
+--                            of the same draft's lines (the editor before this
+--                            migration, still served to old tabs for up to 12 h
+--                            by Vercel skew protection, or a raw PostgREST call)
+--                            locks a line first and then, in the line guard,
+--                            the header. One of the two is aborted. The whole
+--                            call rolled back, so the service answers "changed
+--                            at the same time, try again" (40P01 and 55P03).
+--
+-- ── Reorder drafts (p_skip_items_on_open_po) ────────────────────────────────
+-- The reorder paths (the "Draft PO from suggestions" button, the AI tool and
+-- the daily auto-reorder) never draft an item that is already on an open PO
+-- (draft, expected_inbound, ordered, partially_received). The service checks
+-- that before it groups the lines, but two runs at once (two buyers, two tabs,
+-- a click during the cron) would both pass that check. With
+-- p_skip_items_on_open_po, a create takes a per-organization transaction
+-- advisory lock FIRST and then re-reads the open set in a fresh snapshot, so
+-- the second run waits for the first to commit and sees its lines. Lines for
+-- items already on an open PO are left off and returned as skipped_item_ids;
+-- if every line is skipped, no purchase order is written and id is null.
+-- Create only (an edit is refused). Only the reorder paths pass it: a
+-- hand-made PO or an explicit Items selection may still order an item twice.
 --
 -- Deploy: this only adds a function, which the live web does not call, so it
 -- ships BEFORE the web build that uses it. Rollback: revert the web first;
@@ -111,7 +145,8 @@ create or replace function public.save_purchase_order_draft(
   p_notes text,
   p_lines jsonb,
   p_custom_item_ids uuid[] default '{}'::uuid[],
-  p_actor uuid default null
+  p_actor uuid default null,
+  p_skip_items_on_open_po boolean default false
 )
 returns jsonb
 language plpgsql
@@ -127,6 +162,8 @@ declare
   v_charges      numeric := 0;
   v_stamped      int := 0;
   v_stamp_error  text;
+  v_lines        jsonb;
+  v_skipped      uuid[] := '{}'::uuid[];
 begin
   if p_org_id is null or nullif(btrim(coalesce(p_po_number, '')), '') is null then
     raise exception 'A purchase order needs an organization and a PO number.'
@@ -157,9 +194,54 @@ begin
       using errcode = '22023', hint = 'po_line_invalid';
   end if;
 
+  v_lines := p_lines;
+
+  if coalesce(p_skip_items_on_open_po, false) then
+    if p_po_id is not null then
+      raise exception 'Only a new purchase order can leave out items already on order.'
+        using errcode = '22023', hint = 'po_invalid';
+    end if;
+    -- Who may take this organization's lock: a member (RLS decides the rest
+    -- at the header insert below). Keeps an outsider from queueing behind or
+    -- in front of another organization's reorder runs.
+    if current_user in ('authenticated', 'anon') and not public.is_org_member(p_org_id) then
+      raise exception 'You are not a member of this organization.'
+        using errcode = '42501';
+    end if;
+    -- One reorder draft at a time per organization, held to commit. Every
+    -- statement below runs in a snapshot taken after the lock is granted, so
+    -- a run that waited here sees the lines the run before it committed.
+    perform pg_advisory_xact_lock(
+      hashtextextended('save_purchase_order_draft:reorder:' || p_org_id::text, 0));
+
+    select coalesce(array_agg(distinct (e.l->>'item_id')::uuid), '{}'::uuid[])
+      into v_skipped
+      from jsonb_array_elements(v_lines) as e(l)
+     where exists (
+             select 1
+               from public.purchase_order_items i
+               join public.purchase_orders p on p.id = i.purchase_order_id
+              where i.organization_id = p_org_id
+                and p.organization_id = p_org_id
+                and i.item_id = (e.l->>'item_id')::uuid
+                and p.status in ('draft', 'expected_inbound', 'ordered', 'partially_received'));
+
+    if cardinality(v_skipped) > 0 then
+      select coalesce(jsonb_agg(e.l order by e.ord), '[]'::jsonb)
+        into v_lines
+        from jsonb_array_elements(v_lines) with ordinality as e(l, ord)
+       where (e.l->>'item_id')::uuid <> all (v_skipped);
+      if jsonb_array_length(v_lines) = 0 then
+        -- Everything is already on order: write nothing.
+        return jsonb_build_object('id', null, 'stamped', 0, 'stamp_error', null,
+                                  'skipped_item_ids', to_jsonb(v_skipped));
+      end if;
+    end if;
+  end if;
+
   select coalesce(sum((l->>'quantity_ordered')::numeric * (l->>'unit_cost')::numeric), 0)
     into v_subtotal
-    from jsonb_array_elements(p_lines) as e(l);
+    from jsonb_array_elements(v_lines) as e(l);
 
   if p_po_id is null then
     -- Create. Under the API role, purchase_orders_write decides who may and
@@ -185,8 +267,9 @@ begin
         using errcode = 'P0002', hint = 'po_not_found';
     end if;
     if v_status is distinct from 'draft' then
+      -- 55000, never 40001: see the header (PostgREST retries 40001 forever).
       raise exception 'This purchase order is no longer a draft (it may have just been ordered).'
-        using errcode = '40001', hint = 'po_not_draft';
+        using errcode = '55000', hint = 'po_not_draft';
     end if;
 
     select coalesce(sum(c.amount), 0) into v_charges
@@ -227,7 +310,7 @@ begin
   if not public.supplier_in_org(p_supplier_id, p_org_id)
      or not public.location_in_org(p_destination_location_id, p_org_id)
      or not public.charter_in_org(p_charter_id, p_org_id)
-     or exists (select 1 from jsonb_array_elements(p_lines) as e(l)
+     or exists (select 1 from jsonb_array_elements(v_lines) as e(l)
                  where not public.item_in_org((l->>'item_id')::uuid, p_org_id)) then
     raise exception 'An item, supplier, destination or charter on this purchase order is not part of this organization.'
       using errcode = '42501', hint = 'po_not_in_org';
@@ -237,7 +320,7 @@ begin
     organization_id, purchase_order_id, item_id, quantity_ordered, unit_cost)
   select p_org_id, v_id, (l->>'item_id')::uuid,
          (l->>'quantity_ordered')::numeric, (l->>'unit_cost')::numeric
-    from jsonb_array_elements(p_lines) with ordinality as e(l, ord)
+    from jsonb_array_elements(v_lines) with ordinality as e(l, ord)
    order by e.ord;
 
   -- Tag the custom items this save created with their PO, so cancelling it
@@ -249,7 +332,7 @@ begin
          set created_from_purchase_order_id = v_id
        where it.organization_id = p_org_id
          and it.id = any(p_custom_item_ids)
-         and exists (select 1 from jsonb_array_elements(p_lines) as e(l)
+         and exists (select 1 from jsonb_array_elements(v_lines) as e(l)
                       where (l->>'item_id')::uuid = it.id);
       get diagnostics v_stamped = row_count;
     exception when others then
@@ -258,15 +341,16 @@ begin
     end;
   end if;
 
-  return jsonb_build_object('id', v_id, 'stamped', v_stamped, 'stamp_error', v_stamp_error);
+  return jsonb_build_object('id', v_id, 'stamped', v_stamped, 'stamp_error', v_stamp_error,
+                            'skipped_item_ids', to_jsonb(v_skipped));
 end;
 $$;
 
-comment on function public.save_purchase_order_draft(uuid, uuid, text, uuid, uuid, uuid, timestamptz, text, jsonb, uuid[], uuid) is
+comment on function public.save_purchase_order_draft(uuid, uuid, text, uuid, uuid, uuid, timestamptz, text, jsonb, uuid[], uuid, boolean) is
   'Create (p_po_id null) or edit a DRAFT purchase order: header, lines and custom-item tags in one transaction (0366). '
   'SECURITY INVOKER: RLS and the PO guards apply to signed-in callers as for direct writes.';
 
-revoke all on function public.save_purchase_order_draft(uuid, uuid, text, uuid, uuid, uuid, timestamptz, text, jsonb, uuid[], uuid) from public, anon;
-grant execute on function public.save_purchase_order_draft(uuid, uuid, text, uuid, uuid, uuid, timestamptz, text, jsonb, uuid[], uuid) to authenticated, service_role;
+revoke all on function public.save_purchase_order_draft(uuid, uuid, text, uuid, uuid, uuid, timestamptz, text, jsonb, uuid[], uuid, boolean) from public, anon;
+grant execute on function public.save_purchase_order_draft(uuid, uuid, text, uuid, uuid, uuid, timestamptz, text, jsonb, uuid[], uuid, boolean) to authenticated, service_role;
 
 reset lock_timeout;

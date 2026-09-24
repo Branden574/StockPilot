@@ -226,22 +226,22 @@ describe('PurchaseOrdersService.update — status gate', () => {
 // ─── concurrent claim race (status-guarded header update) ─────────────────────
 
 describe('PurchaseOrdersService.update — concurrent claim race', () => {
-  it('maps the save refusing a no-longer-draft PO to conflict and archives the custom item it created', async () => {
+  it('maps the save refusing a no-longer-draft PO to conflict and deletes the custom item it created', async () => {
     // get() still sees a draft (passes the early check), but a concurrent
     // "mark as ordered" landed before the save's row lock: the function
-    // refuses with 40001 / hint po_not_draft and writes nothing. The custom
-    // item this call created is on no line, so it is archived again.
+    // refuses with 55000 / hint po_not_draft and writes nothing. The custom
+    // item this call created is on no line, so it is deleted again.
     const stub = makeUpdateStub({
       'rpc:save_purchase_order_draft': {
         data: null,
         error: {
-          code: '40001',
+          code: '55000',
           hint: 'po_not_draft',
           message: 'This purchase order is no longer a draft (it may have just been ordered).',
         },
       },
       // Compensation: the created item is still active with nothing on hand
-      // and on no PO line, so it is archived.
+      // and on no PO line, so it is soft-deleted.
       'inventory_items.select': { data: [{ id: 'new-item-uuid', name: 'Should Not Exist' }], error: null },
       'purchase_order_items.select': { data: [], error: null },
       'inventory_items.update': { data: [{ id: 'new-item-uuid', name: 'Should Not Exist' }], error: null },
@@ -261,7 +261,11 @@ describe('PurchaseOrdersService.update — concurrent claim race', () => {
     expectNoDirectPoWrites(stub);
     const archive = stub.chainArgsAll.get('inventory_items.update') ?? [];
     expect(archive).toHaveLength(1);
-    expect(archive[0]?.[0]?.[0]).toEqual({ status: 'archived' });
+    expect(Object.keys(archive[0]?.[0]?.[0] as object).sort()).toEqual([
+      'deleted_at',
+      'deleted_by',
+      'updated_by',
+    ]);
   });
 });
 

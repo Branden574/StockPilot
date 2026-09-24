@@ -19,17 +19,24 @@
 --                and the checks that do not depend on the guards still hold.
 -- PART 7 (44-47) Custom-item tags: set on success, untouched on failure,
 --                only for items on this PO's lines, only in this org.
+-- PART 8 (48-56) Reorder drafts (p_skip_items_on_open_po): lines for items
+--                already on an open PO are left off and reported, a create
+--                whose every line is on order writes nothing, the per-org
+--                advisory lock is held to commit, and the flag is create-only
+--                and member-only. po_not_draft is 55000, never 40001
+--                (PostgREST retries 40001 forever; 0367 guards the class).
 --
--- The row lock (edit vs edit, edit vs "Mark as ordered") needs two sessions;
--- it is proved by the two-session check recorded with this migration, not
--- here.
+-- The row lock (edit vs edit, edit vs "Mark as ordered") and the reorder
+-- lock (two reorder runs at once) need two sessions; they are proved by the
+-- two-session checks recorded with this migration, not here. PART 8 proves
+-- the reorder lock is taken and held.
 --
 -- Roles: `set local role` with request.jwt.claim.sub, as the house tests do.
 -- Closed grants are asserted from the catalog. Run via `supabase test db`
 -- after `supabase db reset`.
 
 begin;
-select plan(47);
+select plan(56);
 
 \set orgA    '\'03660000-0000-0000-0000-00000000000a\''
 \set orgB    '\'03660000-0000-0000-0000-00000000000b\''
@@ -48,6 +55,12 @@ select plan(47);
 \set i2      '\'03660000-0000-0000-0000-0000000000c2\''
 \set i3      '\'03660000-0000-0000-0000-0000000000c3\''
 \set iB      '\'03660000-0000-0000-0000-0000000000c9\''
+\set i4      '\'03660000-0000-0000-0000-0000000000c4\''
+\set i5      '\'03660000-0000-0000-0000-0000000000c5\''
+\set i6      '\'03660000-0000-0000-0000-0000000000c6\''
+\set i7      '\'03660000-0000-0000-0000-0000000000c7\''
+\set poRcv   '\'03660000-0000-0000-0000-0000000000e6\''
+\set poCan   '\'03660000-0000-0000-0000-0000000000e7\''
 \set cu1     '\'03660000-0000-0000-0000-0000000000ca\''
 \set cu2     '\'03660000-0000-0000-0000-0000000000cb\''
 \set cu3     '\'03660000-0000-0000-0000-0000000000cc\''
@@ -98,6 +111,10 @@ insert into public.inventory_items (id, organization_id, warehouse_id, sku, name
   (:i1, :orgA, :whA, 'S0366-1', 'Save item 1', 'active', 'product'),
   (:i2, :orgA, :whA, 'S0366-2', 'Save item 2', 'active', 'product'),
   (:i3, :orgA, :whA, 'S0366-3', 'Save item 3', 'active', 'product'),
+  (:i4, :orgA, :whA, 'S0366-4', 'On no PO',              'active', 'product'),
+  (:i5, :orgA, :whA, 'S0366-5', 'Only on a received PO', 'active', 'product'),
+  (:i6, :orgA, :whA, 'S0366-6', 'Only on a cancelled PO','active', 'product'),
+  (:i7, :orgA, :whA, 'S0366-7', 'On no PO (cron)',       'active', 'product'),
   (:iB, :orgB, :whB, 'S0366-B', 'Other org item', 'active', 'product');
 -- PO-born custom items, as InventoryService creates them: hidden until the
 -- first receipt, nothing on hand, not yet tagged with a PO.
@@ -114,7 +131,9 @@ insert into public.purchase_orders
   (:poOrd,   :orgA, 'S0366-ORD',   'ordered', :supA, null,              5,  5, :u_other, :u_other),
   (:poChg,   :orgA, 'S0366-CHG',   'draft',   :supA, null,              4,  9, :u_other, :u_other),
   (:poTaken, :orgA, 'S0366-TAKEN', 'draft',   null,  null,              0,  0, :u_other, :u_other),
-  (:poB,     :orgB, 'S0366-B',     'draft',   :supB, 'org B notes',     1,  1, :u_mgrB,  :u_mgrB);
+  (:poB,     :orgB, 'S0366-B',     'draft',   :supB, 'org B notes',     1,  1, :u_mgrB,  :u_mgrB),
+  (:poRcv,   :orgA, 'S0366-RCV',   'received',  :supA, null,            1,  1, :u_other, :u_other),
+  (:poCan,   :orgA, 'S0366-CAN',   'cancelled', :supA, null,            1,  1, :u_other, :u_other);
 insert into public.purchase_order_items
   (id, organization_id, purchase_order_id, item_id, quantity_ordered, unit_cost) values
   (:lnD1,  :orgA, :poDraft, :i1, 2, 3),
@@ -122,7 +141,9 @@ insert into public.purchase_order_items
   (:lnOrd, :orgA, :poOrd,   :i1, 1, 5),
   (gen_random_uuid(), :orgA, :poChg,   :i1, 1, 4),
   (gen_random_uuid(), :orgA, :poTaken, :i1, 1, 0),
-  (gen_random_uuid(), :orgB, :poB,     :iB, 1, 1);
+  (gen_random_uuid(), :orgB, :poB,     :iB, 1, 1),
+  (gen_random_uuid(), :orgA, :poRcv,   :i5, 1, 1),
+  (gen_random_uuid(), :orgA, :poCan,   :i6, 1, 1);
 -- A charge on a draft. None exists today (charges come from PO-import
 -- approvals, which create expected_inbound POs), but a draft's total must
 -- keep them if one ever does.
@@ -155,16 +176,16 @@ select ok(
   (select not p.prosecdef
           and p.proconfig @> array['search_path=public, pg_temp']
      from pg_proc p
-    where p.oid = 'public.save_purchase_order_draft(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,jsonb,uuid[],uuid)'::regprocedure),
+    where p.oid = 'public.save_purchase_order_draft(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,jsonb,uuid[],uuid,boolean)'::regprocedure),
   '1: SECURITY INVOKER (RLS and the PO guards still decide) with search_path pinned');
 select ok(
-  not has_function_privilege('anon', 'public.save_purchase_order_draft(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,jsonb,uuid[],uuid)', 'execute')
+  not has_function_privilege('anon', 'public.save_purchase_order_draft(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,jsonb,uuid[],uuid,boolean)', 'execute')
   and (select p.proacl is not null
                  and not exists (select 1 from aclexplode(p.proacl) a where a.grantee = 0)
             from pg_proc p
-           where p.oid = 'public.save_purchase_order_draft(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,jsonb,uuid[],uuid)'::regprocedure)
-  and has_function_privilege('authenticated', 'public.save_purchase_order_draft(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,jsonb,uuid[],uuid)', 'execute')
-  and has_function_privilege('service_role', 'public.save_purchase_order_draft(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,jsonb,uuid[],uuid)', 'execute'),
+           where p.oid = 'public.save_purchase_order_draft(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,jsonb,uuid[],uuid,boolean)'::regprocedure)
+  and has_function_privilege('authenticated', 'public.save_purchase_order_draft(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,jsonb,uuid[],uuid,boolean)', 'execute')
+  and has_function_privilege('service_role', 'public.save_purchase_order_draft(uuid,uuid,text,uuid,uuid,uuid,timestamptz,text,jsonb,uuid[],uuid,boolean)', 'execute'),
   '2: closed to anon and PUBLIC; open to authenticated and service_role');
 
 -- ═══ PART 2: create as a manager ════════════════════════════════════════════
@@ -352,7 +373,7 @@ select throws_ok(
   format($$select public.save_purchase_order_draft(%L, %L, 'S0366-ORD', null, null, null, null, null, %L::jsonb)$$,
          :orgA, :poOrd,
          jsonb_build_array(jsonb_build_object('item_id', :i2, 'quantity_ordered', 1, 'unit_cost', 1))),
-  '40001', 'This purchase order is no longer a draft (it may have just been ordered).',
+  '55000', 'This purchase order is no longer a draft (it may have just been ordered).',
   '28: an ordered PO is refused ...');
 select throws_ok(
   format($$select public.save_purchase_order_draft(%L, %L, 'S0366-X', null, null, null, null, null, %L::jsonb)$$,
@@ -440,7 +461,7 @@ select throws_ok(
 select throws_ok(
   format($$select public.save_purchase_order_draft(%L, %L, 'S0366-ORD', null, null, null, null, null, %L::jsonb, '{}'::uuid[], %L)$$,
          :orgA, :poOrd, jsonb_build_array(jsonb_build_object('item_id', :i1, 'quantity_ordered', 1, 'unit_cost', 1)), :u_mgr),
-  '40001', 'This purchase order is no longer a draft (it may have just been ordered).',
+  '55000', 'This purchase order is no longer a draft (it may have just been ordered).',
   '42: ... nor edit a PO that is no longer a draft');
 reset role;
 select is(
@@ -480,6 +501,94 @@ select is(
      from public.inventory_items it where it.id in (:cu1, :cu2, :cu3, :cu4, :iB)),
   format('%s:null,%s:true,%s:true,%s:null,%s:null', :iB, :cu1, :cu2, :cu3, :cu4),
   '47: cu1/cu2 tagged; the failed save''s item untouched; an id not on the lines and another org''s item never tagged');
+
+-- ═══ PART 8: reorder drafts (p_skip_items_on_open_po) ═══════════════════════
+-- By now i1 is on open POs (the ordered S0366-ORD among them); i4 and i7 are
+-- on none; i5 only on a received PO; i6 only on a cancelled one.
+set local "request.jwt.claim.sub" to :u_mgr;
+set local role to 'authenticated';
+select lives_ok(
+  format($$insert into saved
+           select 'reorder', public.save_purchase_order_draft(
+             p_org_id => %L, p_po_id => null, p_po_number => 'S0366-REORDER',
+             p_supplier_id => %L, p_destination_location_id => null, p_charter_id => null,
+             p_expected_at => null, p_notes => null, p_lines => %L::jsonb,
+             p_skip_items_on_open_po => true)$$,
+         :orgA, :supA,
+         jsonb_build_array(jsonb_build_object('item_id', :i1, 'quantity_ordered', 7, 'unit_cost', 100),
+                           jsonb_build_object('item_id', :i4, 'quantity_ordered', 1, 'unit_cost', 2),
+                           jsonb_build_object('item_id', :i5, 'quantity_ordered', 2, 'unit_cost', 3),
+                           jsonb_build_object('item_id', :i6, 'quantity_ordered', 3, 'unit_cost', 4))),
+  '48: a reorder draft saves');
+select lives_ok(
+  format($$insert into saved
+           select 'reorder_all_open', public.save_purchase_order_draft(
+             p_org_id => %L, p_po_id => null, p_po_number => 'S0366-REORDER2',
+             p_supplier_id => null, p_destination_location_id => null, p_charter_id => null,
+             p_expected_at => null, p_notes => null, p_lines => %L::jsonb,
+             p_skip_items_on_open_po => true)$$,
+         :orgA,
+         jsonb_build_array(jsonb_build_object('item_id', :i1, 'quantity_ordered', 1, 'unit_cost', 1),
+                           jsonb_build_object('item_id', :i4, 'quantity_ordered', 1, 'unit_cost', 1))),
+  '49: a reorder draft whose items are all on order (i4 now is, via 48) returns without error ...');
+select throws_ok(
+  format($$select public.save_purchase_order_draft(%L, %L, 'S0366-EDITED', null, null, null, null, null, %L::jsonb,
+                                                   '{}'::uuid[], null, true)$$,
+         :orgA, :poDraft, jsonb_build_array(jsonb_build_object('item_id', :i7, 'quantity_ordered', 1, 'unit_cost', 1))),
+  '22023', 'Only a new purchase order can leave out items already on order.',
+  '50: the flag on an edit is refused');
+reset role;
+select is(
+  (select (result->'skipped_item_ids')::text || '|' || p.subtotal::text || '|' || p.total::text || '|' || p.status
+          || '|' || (select string_agg(i.item_id::text, ',' order by i.item_id)
+                       from public.purchase_order_items i where i.purchase_order_id = p.id)
+     from saved s join public.purchase_orders p on p.id = (s.result->>'id')::uuid
+    where s.tag = 'reorder'),
+  format('["%s"]|20.0000|20.0000|draft|%s,%s,%s', :i1, :i4, :i5, :i6),
+  '51: the item on an open PO is left off and reported; items on no PO, a received PO or a cancelled PO are drafted; totals are the drafted lines only (1x2 + 2x3 + 3x4)');
+select is(
+  (select coalesce(result->>'id', 'null') || '|' || (result->'skipped_item_ids')::text
+     from saved where tag = 'reorder_all_open')
+    || '|' || (select count(*) from public.purchase_orders where po_number = 'S0366-REORDER2')::text,
+  format('null|["%s", "%s"]|0', :i1, :i4),
+  '52: ... writes no purchase order (id null) and reports both items as skipped');
+select ok(
+  exists (select 1 from pg_locks l
+           where l.locktype = 'advisory' and l.pid = pg_backend_pid() and l.granted and l.objsubid = 1
+             and l.classid::bigint = ((hashtextextended('save_purchase_order_draft:reorder:' || :orgA, 0) >> 32) & 4294967295)
+             and l.objid::bigint   = (hashtextextended('save_purchase_order_draft:reorder:' || :orgA, 0) & 4294967295)),
+  '53: the reorder saves took the per-organization advisory lock, still held (released at commit, so a waiting run sees these lines)');
+select is(
+  (select result->'skipped_item_ids' from saved where tag = 'create'),
+  '[]'::jsonb,
+  '54: without the flag nothing is skipped (test 3 drafted i1 while it was on the ordered S0366-ORD)');
+
+set local "request.jwt.claim.sub" to :u_mgrB;
+set local role to 'authenticated';
+select throws_ok(
+  format($$select public.save_purchase_order_draft(%L, null, 'S0366-LOCKX', null, null, null, null, null, %L::jsonb,
+                                                   '{}'::uuid[], null, true)$$,
+         :orgA, jsonb_build_array(jsonb_build_object('item_id', :i7, 'quantity_ordered', 1, 'unit_cost', 1))),
+  '42501', 'You are not a member of this organization.',
+  '55: a caller from another organization cannot take this organization''s reorder lock');
+reset role;
+
+set local "request.jwt.claim.sub" to '';
+set local role to 'service_role';
+insert into saved
+  select 'cron_reorder',
+         public.save_purchase_order_draft(:orgA, null, 'S0366-CRON-REORDER', :supA, null, null, null, null,
+                                          jsonb_build_array(jsonb_build_object('item_id', :i1, 'quantity_ordered', 1, 'unit_cost', 1),
+                                                            jsonb_build_object('item_id', :i7, 'quantity_ordered', 1, 'unit_cost', 1)),
+                                          '{}'::uuid[], :u_mgr, true);
+reset role;
+select is(
+  (select (s.result->'skipped_item_ids')::text || '|' || (select string_agg(i.item_id::text, ',')
+                                                            from public.purchase_order_items i
+                                                           where i.purchase_order_id = (s.result->>'id')::uuid)
+     from saved s where s.tag = 'cron_reorder'),
+  format('["%s"]|%s', :i1, :i7),
+  '56: the service role (daily auto-reorder) skips the same way');
 
 select * from finish();
 rollback;

@@ -11,7 +11,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *     save_purchase_order_draft call (no direct PO table write from here);
  *   - custom "new item" lines are still created first (InventoryService owns
  *     item creation), and every item created by a call that then fails is
- *     archived again, so no hidden "Expected" item is left on no PO;
+ *     soft-deleted again (never used, on no PO), so no hidden "Expected"
+ *     item is left behind and none keeps a plan-cap slot; a shortfall
+ *     (RLS hiding or refusing some of them) is reported, never silent;
  *   - the function's refusals map onto the service's existing messages.
  */
 
@@ -119,15 +121,31 @@ function expectNoDirectPoWrites(stub: ReturnType<typeof makeSupabaseStub>) {
   }
 }
 
-/** The ids the compensation archived (the `.in('id', …)` of the status flip). */
-function archivedIds(stub: ReturnType<typeof makeSupabaseStub>): string[] {
-  const flips = stub.chainsAll.get('inventory_items.update') ?? [];
+/** The ids the compensation soft-deleted (the `.in('id', …)` of the delete). */
+function discardedIds(stub: ReturnType<typeof makeSupabaseStub>): string[] {
+  const writes = stub.chainsAll.get('inventory_items.update') ?? [];
   const args = stub.chainArgsAll.get('inventory_items.update') ?? [];
-  return flips.flatMap((methods, i) => {
+  return writes.flatMap((methods, i) => {
     const call: MockCall = { table: 'inventory_items', op: 'update', methods, args: args[i]! };
-    expect(args[i]?.[0]?.[0]).toEqual({ status: 'archived' });
+    const payload = args[i]?.[0]?.[0] as Record<string, unknown>;
+    // A soft delete by this user, never a status flip (an archived item
+    // still holds a plan-cap slot and shows under Expected).
+    expect(Object.keys(payload).sort()).toEqual(['deleted_at', 'deleted_by', 'updated_by']);
+    expect(payload.deleted_by).toBe('user-test');
+    expect(typeof payload.deleted_at).toBe('string');
     return inList(call, 'id');
   });
+}
+
+/** The filters of the Nth compensation delete, as [method, args] pairs. */
+function discardFilters(stub: ReturnType<typeof makeSupabaseStub>, n = 0): Array<[string, unknown[]]> {
+  const methods = stub.chainsAll.get('inventory_items.update')?.[n] ?? [];
+  const args = stub.chainArgsAll.get('inventory_items.update')?.[n] ?? [];
+  return methods.map((m, i) => [m, args[i]!]);
+}
+
+function reportedTags(): string[] {
+  return reportError.mock.calls.map((c) => (c as unknown as [Error, { tag: string }])[1].tag);
 }
 
 /**
@@ -193,7 +211,7 @@ describe('create() — one transaction', () => {
     expect(stub.chainsAll.get('inventory_items.update')).toBeUndefined();
   });
 
-  it('rejects when the save fails, and archives the custom items this call created', async () => {
+  it('rejects when the save fails, and soft-deletes the custom items this call created', async () => {
     const stub = failingSaveStub({ code: '42501', message: 'new row violates row-level security policy' });
     const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
 
@@ -208,18 +226,84 @@ describe('create() — one transaction', () => {
 
     expect(thrown).toBeInstanceOf(ServiceError);
     expect((thrown as ServiceError).code).toBe('internal_error');
-    expect(archivedIds(stub)).toEqual(['custom-1', 'custom-2']);
+    expect(discardedIds(stub)).toEqual(['custom-1', 'custom-2']);
+    // Only the untouched item this save created: still active, nothing on
+    // hand, still awaiting its first receipt, not already deleted. The
+    // candidate read and the delete both say so (a read without the awaiting
+    // filter would count a just-received item as a delete shortfall).
+    const untouched = [
+      ['eq', ['status', 'active']],
+      ['eq', ['quantity_on_hand', 0]],
+      ['eq', ['awaiting_first_receipt', true]],
+      ['is', ['deleted_at', null]],
+    ];
+    expect(discardFilters(stub)).toEqual(expect.arrayContaining(untouched));
+    const candidateRead = (stub.chainsAll.get('inventory_items.select') ?? []).map((methods, i) =>
+      methods.map((m, j) => [m, stub.chainArgsAll.get('inventory_items.select')![i]![j]]),
+    );
+    expect(candidateRead).toHaveLength(1);
+    expect(candidateRead[0]).toEqual(expect.arrayContaining(untouched));
     const audits = vi
       .mocked(auditMany)
-      .mock.calls.flatMap((c) => [...c[0]] as Array<{ extra?: unknown }>);
-    expect(audits.map((a) => a.extra)).toEqual([
-      { reason: 'po_save_failed', purchaseOrderId: null, itemName: 'Item custom-1' },
-      { reason: 'po_save_failed', purchaseOrderId: null, itemName: 'Item custom-2' },
+      .mock.calls.flatMap((c) => [...c[0]] as Array<{ event: string; extra?: unknown }>);
+    expect(audits.map((a) => [a.event, a.extra])).toEqual([
+      ['inventory.item.deleted', { reason: 'po_save_failed', purchaseOrderId: null, itemName: 'Item custom-1' }],
+      ['inventory.item.deleted', { reason: 'po_save_failed', purchaseOrderId: null, itemName: 'Item custom-2' }],
     ]);
+    expect(reportedTags().filter((t) => t.endsWith('.shortfall'))).toEqual([]);
     expectNoDirectPoWrites(stub);
   });
 
-  it('plan_limit_exceeded on the 2nd custom line: archives the 1st and never calls the save', async () => {
+  it('reports a shortfall when RLS hides some of the items this save created (never silent)', async () => {
+    // A category-restricted caller cannot read category-less items: the
+    // candidate read returns one of the two ids.
+    const stub = failingSaveStub(
+      { code: '42501', message: 'new row violates row-level security policy' },
+      {
+        extra: {
+          'inventory_items.select': { data: [{ id: 'custom-1', name: 'Item custom-1' }], error: null },
+        },
+      },
+    );
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    await svc
+      .create({
+        lines: [
+          { newItemName: 'One', quantityOrdered: 1, unitCost: 1 },
+          { newItemName: 'Two', quantityOrdered: 1, unitCost: 1 },
+        ],
+      })
+      .catch(() => undefined);
+
+    expect(discardedIds(stub)).toEqual(['custom-1']);
+    const shortfall = reportError.mock.calls.find(
+      (c) => (c as unknown as [Error, { tag: string }])[1].tag === 'po.create.rollback_custom_items.shortfall',
+    ) as unknown as [Error, { extra: unknown }] | undefined;
+    expect(shortfall?.[1].extra).toEqual({ created: 2, readable: 1 });
+  });
+
+  it('reports a shortfall when the delete matches fewer rows than asked (RLS refusing the UPDATE)', async () => {
+    // items:create without items:update: the UPDATE runs, matches 0 rows and
+    // returns no error. That must not look like success.
+    const stub = failingSaveStub(
+      { code: '42501', message: 'new row violates row-level security policy' },
+      { extra: { 'inventory_items.update': { data: [], error: null } } },
+    );
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    await svc
+      .create({ lines: [{ newItemName: 'One', quantityOrdered: 1, unitCost: 1 }] })
+      .catch(() => undefined);
+
+    const shortfall = reportError.mock.calls.find(
+      (c) => (c as unknown as [Error, { tag: string }])[1].tag === 'po.create.rollback_custom_items.shortfall',
+    ) as unknown as [Error, { extra: unknown }] | undefined;
+    expect(shortfall?.[1].extra).toEqual({ expected: 1, written: 0 });
+    expect(vi.mocked(auditMany)).not.toHaveBeenCalled();
+  });
+
+  it('plan_limit_exceeded on the 2nd custom line: deletes the 1st and never calls the save', async () => {
     invCreate
       .mockImplementationOnce(async () => ({ id: 'custom-1' }))
       .mockImplementationOnce(async () => {
@@ -239,7 +323,7 @@ describe('create() — one transaction', () => {
 
     expect((thrown as ServiceError).code).toBe('plan_limit_exceeded');
     expect(saveCalls(stub)).toHaveLength(0);
-    expect(archivedIds(stub)).toEqual(['custom-1']);
+    expect(discardedIds(stub)).toEqual(['custom-1']);
     expectNoDirectPoWrites(stub);
   });
 
@@ -254,7 +338,7 @@ describe('create() — one transaction', () => {
       .create({ lines: [{ newItemName: 'One', quantityOrdered: 1, unitCost: 1 }] })
       .catch(() => undefined);
 
-    expect(archivedIds(stub)).toEqual([]);
+    expect(discardedIds(stub)).toEqual([]);
   });
 
   it('a failing compensation never replaces the original error', async () => {
@@ -270,9 +354,8 @@ describe('create() — one transaction', () => {
 
     expect((thrown as ServiceError).code).toBe('conflict');
     expect((thrown as ServiceError).message).toBe('That PO number is already in use.');
-    expect(archivedIds(stub)).toEqual([]);
-    const tags = reportError.mock.calls.map((c) => (c as unknown as [Error, { tag: string }])[1].tag);
-    expect(tags).toContain('po.create.rollback_custom_items.candidates');
+    expect(discardedIds(stub)).toEqual([]);
+    expect(reportedTags()).toContain('po.create.rollback_custom_items.candidates');
   });
 
   it('checks the supplier BEFORE creating any custom item (a foreign supplier leaves nothing behind)', async () => {
@@ -318,7 +401,7 @@ describe('update() — one transaction', () => {
     expect((thrown as ServiceError).code).toBe('forbidden');
     expect(saveCalls(stub)).toHaveLength(0);
     expectNoDirectPoWrites(stub);
-    expect(archivedIds(stub)).toEqual(['custom-1']);
+    expect(discardedIds(stub)).toEqual(['custom-1']);
   });
 
   it('saves header and every line in the one call, as an edit of this PO', async () => {
@@ -364,10 +447,24 @@ describe('save_purchase_order_draft refusals map onto the service messages', () 
       message: 'That PO number is already in use.',
     },
     {
-      name: '40001 / po_not_draft',
-      error: { code: '40001', hint: 'po_not_draft', message: 'x' },
+      name: '55000 / po_not_draft',
+      error: { code: '55000', hint: 'po_not_draft', message: 'x' },
       code: 'conflict',
       message: 'This purchase order is no longer a draft (it may have just been ordered).',
+    },
+    {
+      // Header-then-lines (the save) against lines-then-header (an old tab's
+      // direct line DELETE): Postgres aborts one; PostgREST does not retry it.
+      name: '40P01 (deadlock with a concurrent edit)',
+      error: { code: '40P01', hint: 'See server log for query details.', message: 'deadlock detected' },
+      code: 'conflict',
+      message: 'This purchase order was changed at the same time. Reload it and try again.',
+    },
+    {
+      name: '55P03 (lock not available)',
+      error: { code: '55P03', message: 'canceling statement due to lock timeout' },
+      code: 'conflict',
+      message: 'This purchase order was changed at the same time. Reload it and try again.',
     },
     {
       name: 'po_not_found',
