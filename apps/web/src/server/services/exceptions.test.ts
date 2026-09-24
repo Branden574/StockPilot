@@ -173,6 +173,137 @@ describe('ExceptionsService — label mismatch', () => {
   });
 });
 
+describe('ExceptionsService — label mismatch: a crate SITS ON a rack', () => {
+  // The shapes production actually holds. A positioned crate's rack lives only
+  // inside its name ("Gray #5 on rack 43-B"), and legacy racks were stored with
+  // spaces around the dash ("22 - B"). An exact string comparison flagged both
+  // as wrong labels, which buried the real mismatches under noise and invited
+  // relabelling of labels that were correct.
+
+  it('does NOT flag a book in a crate that sits on its labelled rack', async () => {
+    const r = await svcWith({
+      holdings: [
+        holding({ bin: '43-B · Gray #5', locName: 'Gray #5 on rack 43-B', kind: 'crate' }),
+      ],
+    }).list();
+    expect(r.exceptions).toEqual([]);
+  });
+
+  it('does NOT flag a crate on the rack when the label is the bare rack', async () => {
+    const r = await svcWith({
+      holdings: [holding({ bin: '38-B', locName: 'Blue #0 on rack 38-B', kind: 'crate' })],
+    }).list();
+    expect(r.exceptions).toEqual([]);
+  });
+
+  it('does NOT flag a label spelled "22 - B" against the rack "22-B"', async () => {
+    const r = await svcWith({
+      holdings: [holding({ bin: '22 - B', locName: '22-B', kind: 'rack' })],
+    }).list();
+    expect(r.exceptions).toEqual([]);
+  });
+
+  it('does NOT flag a label "22-B" against a legacy rack stored "22 - B"', async () => {
+    const r = await svcWith({
+      holdings: [holding({ bin: '22-B · grayBIN', locName: '22 - B', kind: 'rack' })],
+    }).list();
+    expect(r.exceptions).toEqual([]);
+  });
+
+  it('still flags a genuinely different rack, and names the rack the crate is on', async () => {
+    // Label 40-C, stock loose on 39-C and in a crate that also sits on 39-C.
+    // The detail names the RACK once ("39-C"), the way the Rack column does,
+    // rather than leaking the crate's identity into the rack list.
+    const r = await svcWith({
+      holdings: [
+        holding({ item: 'i7', bin: '40-C', loc: 'a', locName: '39-C', kind: 'rack' }),
+        holding({ item: 'i7', bin: '40-C', loc: 'b', locName: 'Blue on rack 39-C', kind: 'crate' }),
+      ],
+    }).list();
+    expect(r.exceptions).toHaveLength(1);
+    expect(r.exceptions[0]!.rule).toBe('label_mismatch');
+    expect(r.exceptions[0]!.detail).toBe('labelled 40-C, stock is on 39-C');
+  });
+
+  it('flags a crate label whose crate sits on a DIFFERENT rack', async () => {
+    // "Gray #BIN" exists on five rack positions. Matching the crate part of the
+    // name alone would call this true; only the rack it sits on counts.
+    const r = await svcWith({
+      holdings: [
+        holding({ bin: '43-C · Gray #BIN', locName: 'Gray #BIN on rack 43-B', kind: 'crate' }),
+      ],
+    }).list();
+    expect(r.exceptions.map((e) => e.rule)).toEqual(['label_mismatch']);
+    expect(r.exceptions[0]!.detail).toBe('labelled 43-C, stock is on 43-B');
+  });
+
+  it('flags a label that is only a substring of the rack the crate sits on', async () => {
+    // "3-B" is inside "…on rack 43-B" but names a different bay. The rack tail
+    // is compared whole, never searched for.
+    const r = await svcWith({
+      holdings: [holding({ bin: '3-B', locName: 'Gray #5 on rack 43-B', kind: 'crate' })],
+    }).list();
+    expect(r.exceptions.map((e) => e.rule)).toEqual(['label_mismatch']);
+  });
+
+  it('flags a position-less crate against a rack label, naming the crate', async () => {
+    // "Blue Shelf" sits on no rack, so it cannot satisfy a label naming 41-C,
+    // and its own name is the only place a picker can walk to.
+    const r = await svcWith({
+      holdings: [holding({ bin: '41-C', locName: 'Blue Shelf', kind: 'crate' })],
+    }).list();
+    expect(r.exceptions.map((e) => e.rule)).toEqual(['label_mismatch']);
+    expect(r.exceptions[0]!.detail).toBe('labelled 41-C, stock is on Blue Shelf');
+  });
+
+  it('names a legacy spaced rack and a crate on it as ONE rack, in canonical form', async () => {
+    // The rack row is stored "22 - B" and the crate says "on rack 22-B". Both
+    // are the same rack, so the detail must list it once. Only the row's KIND
+    // lets the rack name be canonicalised: read without it, "22 - B" is kept
+    // as typed and the detail says "22 - B, 22-B", two entries for one rack.
+    const r = await svcWith({
+      holdings: [
+        holding({ item: 'i8', bin: '40-C', loc: 'a', locName: '22 - B', kind: 'rack' }),
+        holding({ item: 'i8', bin: '40-C', loc: 'b', locName: 'Blue on rack 22-B', kind: 'crate' }),
+      ],
+    }).list();
+    expect(r.exceptions.map((e) => e.rule)).toEqual(['label_mismatch']);
+    expect(r.exceptions[0]!.detail).toBe('labelled 40-C, stock is on 22-B');
+  });
+});
+
+describe('ExceptionsService — label mismatch: the LABEL can be a crate on a rack too', () => {
+  // A put-away into a positioned crate stamps the crate's own name as the
+  // label (InventoryService.stampPlacementBin: bin = dest.name), so
+  // bin_location reads "Blue #0 on rack 38-B". A later move with the transfer
+  // dialog does not stamp it again. The label still names rack 38-B, and only
+  // that rack is compared, exactly as for the composite "38-B · Blue0".
+
+  it('does NOT flag a crate-name label when the stock is loose on that rack', async () => {
+    const r = await svcWith({
+      holdings: [holding({ bin: 'Blue #0 on rack 38-B', locName: '38-B', kind: 'rack' })],
+    }).list();
+    expect(r.exceptions).toEqual([]);
+  });
+
+  it('does NOT flag a crate-name label when the stock is in another crate on that rack', async () => {
+    const r = await svcWith({
+      holdings: [
+        holding({ bin: 'Blue #0 on rack 38-B', locName: 'Gray #BIN on rack 38-B', kind: 'crate' }),
+      ],
+    }).list();
+    expect(r.exceptions).toEqual([]);
+  });
+
+  it('still flags a crate-name label whose rack holds none of the stock, naming both racks', async () => {
+    const r = await svcWith({
+      holdings: [holding({ bin: 'Blue #0 on rack 38-B', locName: '39-B', kind: 'rack' })],
+    }).list();
+    expect(r.exceptions.map((e) => e.rule)).toEqual(['label_mismatch']);
+    expect(r.exceptions[0]!.detail).toBe('labelled 38-B, stock is on 39-B');
+  });
+});
+
 describe('ExceptionsService — over-reserved', () => {
   it('reports only when promises exceed stock', async () => {
     const r = await svcWith({
