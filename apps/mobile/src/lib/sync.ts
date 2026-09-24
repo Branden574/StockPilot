@@ -7,7 +7,15 @@ import {
   CYCLE_COUNT_LINE_UPSERT_SQL,
   CYCLE_COUNT_STALE_LINES_DELETE_SQL,
 } from './cycle-count-snapshot-sql';
-import { currentCacheGeneration, getDb, getMeta, setMeta, withDbTransaction } from './db';
+import { CACHE_USER_META_KEY, cacheOwnerAction } from './cache-owner';
+import {
+  currentCacheGeneration,
+  deleteOrgData,
+  getDb,
+  getMeta,
+  setMeta,
+  withDbTransaction,
+} from './db';
 import { classifyDrainFailure } from './drain-failure';
 import { ENABLED_MODULES_META_KEY, refreshEnabledModules } from './enabled-modules';
 import {
@@ -224,6 +232,16 @@ export async function isOnline(): Promise<boolean> {
 export async function pullSnapshot(
   force = false,
 ): Promise<{ items: number; pos: number; counts: number; bundles: number } | null> {
+  // WHOSE cache (cache-owner.ts). Checked before the network check: an
+  // offline sign-in as another account must not show the last account's rows
+  // either. Another account's cache is cleared and pulled again in full, never
+  // delta-pulled from their cursor.
+  const { userId: liveUserId } = await liveOutboxScope();
+  if (cacheOwnerAction(await getMeta(CACHE_USER_META_KEY), liveUserId) === 'reset') {
+    await deleteOrgData();
+    force = true;
+  }
+
   if (!(await isOnline())) return null;
 
   // Noted before the cursor is read and before api() reads the workspace
@@ -237,7 +255,9 @@ export async function pullSnapshot(
 
   let snap: SnapshotResponse;
   try {
-    snap = await api<SnapshotResponse>(path);
+    // Answered for the account recorded as the cache's owner below, or not at
+    // all: a session that changed since the check refuses before sending.
+    snap = await api<SnapshotResponse>(path, liveUserId ? { asUserId: liveUserId } : {});
   } catch (e) {
     console.warn('[sync] snapshot pull failed', e);
     return null;
@@ -463,6 +483,8 @@ export async function pullSnapshot(
     // The cursor, modules, permissions and warehouse scope are part of the
     // same answer, so they are written only when the rows were.
     await setMeta('last_synced_at', snap.serverTime);
+    // ...and so is whose answer it was (cache-owner.ts).
+    if (liveUserId) await setMeta(CACHE_USER_META_KEY, liveUserId);
     // Persist the org's enabled modules so the drawer + tab gating can read
     // them synchronously between syncs (and while offline). Always written —
     // even an empty array is meaningful (the consumers treat "no persisted

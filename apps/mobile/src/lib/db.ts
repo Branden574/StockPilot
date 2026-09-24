@@ -438,6 +438,9 @@ export async function setMeta(key: string, value: string): Promise<void> {
  * their first pull. Both readers treat "absent" as not-loaded-yet and fall
  * back to their documented defaults (static role permissions; no banner).
  *
+ * `cache_user_id` (cache-owner.ts) goes with them: an emptied cache belongs to
+ * nobody, and the next account's pull records itself.
+ *
  * The keys are pinned against sync.ts's writers by
  * db-clear-keys.wiring.test.ts — add a key there, clear it here.
  *
@@ -458,6 +461,7 @@ async function clearOrgScopedTables(db: SQLite.SQLiteDatabase): Promise<void> {
     delete from meta where key = 'enabled_modules';
     delete from meta where key = 'effective_permissions';
     delete from meta where key = 'warehouse_scope';
+    delete from meta where key = 'cache_user_id';
   `);
 }
 
