@@ -1,5 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 
+import type { SQLiteDatabase } from 'expo-sqlite';
+
 /**
  * expo-sqlite 57's async database surface over a REAL SQLite (node:sqlite), for
  * tests that must exercise the SQL rather than a mock of it.
@@ -31,7 +33,11 @@ const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 type SqlValue = null | number | bigint | string | Uint8Array;
 
-export function nodeExpoDb(raw: DatabaseSync = new DatabaseSync(':memory:'), hooks: NodeExpoDbHooks = {}): NodeExpoDb {
+/** Typed as expo-sqlite's database too, so it can be handed to app code as-is
+ *  (only the methods above exist; anything else is a test bug and throws). */
+export type ExpoDbStandIn = NodeExpoDb & SQLiteDatabase;
+
+export function nodeExpoDb(raw: DatabaseSync = new DatabaseSync(':memory:'), hooks: NodeExpoDbHooks = {}): ExpoDbStandIn {
   const before = async (sql: string) => {
     await tick();
     await hooks.beforeCall?.(sql);
@@ -66,7 +72,7 @@ export function nodeExpoDb(raw: DatabaseSync = new DatabaseSync(':memory:'), hoo
       }
     },
   };
-  return db;
+  return db as unknown as ExpoDbStandIn;
 }
 
 /** The v2 phone schema as every shipped binary created it (db.ts at 35aa39e0),

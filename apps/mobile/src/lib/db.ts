@@ -7,9 +7,10 @@ import * as SQLite from 'expo-sqlite';
  * warehouses, open POs, open cycle counts, bundles). Snapshots are
  * pulled from the web; mobile is never authoritative.
  *
- * Schema versioning: bumping SCHEMA_VERSION wipes the local DB and
- * re-pulls. Acceptable because the local DB is a cache, not a source
- * of truth.
+ * Schema versioning: bumping SCHEMA_VERSION drops and rebuilds the CACHE
+ * tables and re-pulls. Acceptable because they are a cache, not a source of
+ * truth. The outbox (pending_actions) is NOT a cache: it is created outside
+ * that branch and never dropped (see ensureSchema).
  *
  * v2 (offline cycle counting): cycle_counts gains organization_id,
  * warehouse_name, posted_at, cached_at. cycle_count_lines gains
@@ -19,6 +20,14 @@ import * as SQLite from 'expo-sqlite';
  */
 
 const DB_NAME = 'stockpilot.db';
+/**
+ * DO NOT BUMP this until a store binary carrying the `current < SCHEMA_VERSION`
+ * rule below is the MINIMUM installed version. Every binary and bundle shipped
+ * before it compares with `!==` and drops pending_actions on ANY difference, and
+ * an emergency launch of a binary's embedded bundle, or a republished older OTA,
+ * would run exactly that code against a bumped database and wipe the outbox.
+ * Add columns in place with addColumnIfMissing instead.
+ */
 const SCHEMA_VERSION = 2;
 
 /**
@@ -105,7 +114,30 @@ export async function initDb(): Promise<void> {
   }
 }
 
-async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
+/** The statements ensureSchema needs; expo-sqlite's database satisfies it. */
+export type SchemaDb = Pick<SQLite.SQLiteDatabase, 'execAsync' | 'getFirstAsync' | 'getAllAsync' | 'runAsync'>;
+
+/**
+ * Brings the phone's database up to this bundle's shape. Exported so the
+ * version rules can be executed against a real SQLite (db.ensure-schema.test.ts).
+ *
+ * TWO kinds of table live here, with opposite rules:
+ *
+ *   - the CACHE (items, POs, counts, bundles, warehouses): pulled from the
+ *     server, safe to drop and rebuild, and rebuilt only when the stored
+ *     version is OLDER than this bundle's;
+ *   - the OUTBOX (pending_actions): the operator's unsent work, the one thing
+ *     on the phone that exists nowhere else. It is created unconditionally with
+ *     `if not exists`, outside the destructive branch, and only ever widened in
+ *     place. It used to be the first table dropped whenever the stored version
+ *     differed at all, in either direction.
+ *
+ * `current < SCHEMA_VERSION`, not `!==`: an OLDER bundle running on a database
+ * a newer one already migrated (an expo-updates rollback, an emergency launch
+ * of the embedded bundle, a republished older OTA) must not rebuild the newer
+ * schema. That protects bumps made AFTER this ships; see SCHEMA_VERSION.
+ */
+export async function ensureSchema(db: SchemaDb): Promise<void> {
   await db.execAsync(`
     create table if not exists meta (
       key text primary key,
@@ -117,12 +149,14 @@ async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
     'select value from meta where key = ?',
     ['schema_version'],
   );
-  const current = row?.value ? Number(row.value) : 0;
+  // An unreadable value is treated as a fresh install: rebuild the cache.
+  const stored = row?.value ? Number(row.value) : 0;
+  const current = Number.isFinite(stored) ? stored : 0;
 
-  if (current !== SCHEMA_VERSION) {
-    // Drop everything except meta and rebuild — local DB is a cache.
+  if (current < SCHEMA_VERSION) {
+    // Drop and rebuild the CACHE tables only. pending_actions is deliberately
+    // absent from this list: see the outbox block below.
     await db.execAsync(`
-      drop table if exists pending_actions;
       drop table if exists bundle_components;
       drop table if exists bundles;
       drop table if exists cycle_count_lines;
@@ -221,20 +255,6 @@ async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
         is_optional integer not null default 0,
         primary key (bundle_id, item_id)
       );
-
-      create table pending_actions (
-        id integer primary key autoincrement,
-        kind text not null,
-        idempotency_key text not null unique,
-        payload_json text not null,
-        created_at integer not null,
-        attempts integer not null default 0,
-        last_attempt_at integer,
-        last_error text,
-        status text not null default 'pending'
-      );
-      create index pending_actions_status_idx on pending_actions(status);
-      create index pending_actions_kind_idx on pending_actions(kind);
     `);
 
     await db.runAsync(
@@ -243,10 +263,35 @@ async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
     );
   }
 
+  // ═══ THE OUTBOX — never dropped, only widened ═══
+  //
+  // Unconditional and idempotent: a fresh install creates it, every other
+  // launch finds it and keeps every queued row, whatever version the cache
+  // tables are at. Columns a later bundle needs are added in place below.
+  await db.execAsync(`
+    create table if not exists pending_actions (
+      id integer primary key autoincrement,
+      kind text not null,
+      idempotency_key text not null unique,
+      payload_json text not null,
+      created_at integer not null,
+      attempts integer not null default 0,
+      last_attempt_at integer,
+      last_error text,
+      status text not null default 'pending'
+    );
+    create index if not exists pending_actions_status_idx on pending_actions(status);
+    create index if not exists pending_actions_kind_idx on pending_actions(kind);
+  `);
+  // A v1 outbox (before 2026-05-10) predates last_attempt_at. No shipped
+  // binary is still on v1, but the rebuild that used to supply the column no
+  // longer touches this table, so it is added here instead.
+  await addColumnIfMissing(db, 'pending_actions', 'last_attempt_at', 'integer');
+
   await addDisplayColumn(db, 'cycle_count_lines', 'item_variant_label', 'text');
   // The count's permanent reference, CC-000042 (server migration 0358). A
-  // display column, so it is added in place (never a SCHEMA_VERSION bump, which
-  // would drop the outbox): existing rows read NULL, shown as "Reference
+  // display column, so it is added in place (never a SCHEMA_VERSION bump: older
+  // bundles drop the outbox on one): existing rows read NULL, shown as "Reference
   // unavailable" until the next snapshot pull or online open fills them.
   await addDisplayColumn(db, 'cycle_counts', 'count_number', 'integer');
 }
@@ -257,7 +302,7 @@ async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
  * failure is logged now instead of vanishing; the next launch tries again.
  */
 async function addDisplayColumn(
-  db: SQLite.SQLiteDatabase,
+  db: SchemaDb,
   table: string,
   column: string,
   type: string,
