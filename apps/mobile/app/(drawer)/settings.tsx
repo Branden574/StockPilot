@@ -46,14 +46,19 @@ import { Toggle } from '@/components/ui/toggle';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { getBiometricCapability, type BiometricCapability } from '@/lib/biometric';
+import { deleteOrgData } from '@/lib/db';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEnabledModules } from '@/lib/enabled-modules';
+import { clearOfflineCache } from '@/lib/offline-cache';
 import { countHeld, countRejected } from '@/lib/queue';
 import { unsentWorkDetail } from '@/lib/rejected-work';
+import { isOnline, syncNow } from '@/lib/sync';
+import { refreshEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useProfile } from '@/lib/use-profile';
 import { useRole } from '@/lib/use-role';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+import { refreshWarehouseScope } from '@/lib/warehouse-scope';
 
 /**
  * Live version footer — was a hardcoded string that went stale (shipped
@@ -429,14 +434,39 @@ export default function Settings() {
             onPress={() =>
               Alert.alert(
                 'Clear offline cache?',
-                'Cycle counts and items cached locally will be re-pulled from the server on next sync.',
+                'The items, counts and orders saved on this phone are downloaded again from the server. Changes that have not synced yet are kept.',
                 [
                   { text: 'Cancel', style: 'cancel' },
                   {
                     text: 'Clear',
                     style: 'destructive',
-                    onPress: () =>
-                      Alert.alert('Cleared', 'Local cache reset. Pull-to-refresh on any list to repopulate.'),
+                    // It used to show "Cleared" and delete nothing (2026-09-24).
+                    onPress: () => {
+                      void (async () => {
+                        try {
+                          const res = await clearOfflineCache({
+                            isOnline,
+                            deleteOrgData,
+                            syncNow,
+                            refreshEffectivePermissions,
+                            refreshWarehouseScope,
+                          });
+                          if (!res.ok) {
+                            Alert.alert(
+                              'You are offline',
+                              'Connect to the internet first, so the phone can download a fresh copy. Nothing was cleared.',
+                            );
+                            return;
+                          }
+                          Alert.alert('Cleared', 'A fresh copy was downloaded from the server. Unsynced changes were kept.');
+                        } catch (e) {
+                          Alert.alert(
+                            'Could not clear',
+                            e instanceof Error ? e.message : 'Something went wrong. Try again.',
+                          );
+                        }
+                      })();
+                    },
                   },
                 ],
               )
