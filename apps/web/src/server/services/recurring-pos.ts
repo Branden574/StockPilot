@@ -4,9 +4,13 @@ import { z } from 'zod';
 
 import { nextRunAt, type RecurringCadence } from '@stockpilot/core';
 
+import { reportError } from '@/lib/error-reporter';
+
 import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from './context';
 import { shouldAutoSend } from './auto-reorder';
 import { PurchaseOrdersService } from './purchase-orders';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { whereOrderableItem } from './lib/orderable-items';
 import { fetchAllRows } from './lib/paginate';
 import { audit } from './audit';
 
@@ -421,7 +425,7 @@ export class RecurringPoTemplatesService {
         // schedule was already advanced by the claim above, so a bad template
         // can't retry forever.
         const rawLines = Array.isArray(tpl.line_items) ? tpl.line_items : [];
-        const lines = rawLines
+        let lines = rawLines
           .map((l: unknown) => {
             const o = l as Record<string, unknown>;
             return {
@@ -433,6 +437,31 @@ export class RecurringPoTemplatesService {
           // Defense-in-depth: a row mutated out-of-band can't sneak a negative
           // unitCost (which would lower the total under the auto-send cap).
           .filter((l) => l.itemId && l.quantityOrdered > 0 && l.unitCost >= 0);
+
+        // A template keeps its item ids after the items change. A deleted
+        // item, or a kit's pre-assembled stock, can no longer go on a PO:
+        // the save refuses such a line (0366, po_line_deleted /
+        // po_line_bundle), and one such line would fail the whole template's
+        // PO every period, silently (a failure is only counted). Leave those
+        // lines off, order the rest, and report what was left off. Read as
+        // the cron's service client, which sees every item; a failed read
+        // throws into the catch below (counted as a failure, no PO).
+        const orderableIds = await this.orderableItemIds(lines.map((l) => l.itemId));
+        const unorderable = lines.filter((l) => !orderableIds.has(l.itemId));
+        if (unorderable.length > 0) {
+          void reportError(
+            new Error(
+              `recurring PO template left off ${unorderable.length} line(s) whose item is deleted or a pre-assembled kit`,
+            ),
+            {
+              tag: 'recurring_pos.unorderable_lines',
+              level: 'warning',
+              organizationId: this.ctx.organizationId,
+              extra: { templateId: tpl.id, linesLeftOff: unorderable.length, linesKept: lines.length - unorderable.length },
+            },
+          );
+          lines = lines.filter((l) => orderableIds.has(l.itemId));
+        }
 
         if (lines.length === 0) {
           failures++;
@@ -491,5 +520,24 @@ export class RecurringPoTemplatesService {
     }
 
     return { created, sent, heldForReview, failures };
+  }
+
+  /**
+   * The ids, among `itemIds`, that may still go on a purchase order in this
+   * organization (whereOrderableItem: not deleted, not a kit's pre-assembled
+   * stock). Batched past the URL limit; throws on a failed read, so the
+   * caller never mistakes "could not read" for "nothing is orderable".
+   */
+  private async orderableItemIds(itemIds: string[]): Promise<Set<string>> {
+    const ctx = this.ctx;
+    const rows = await fetchAllRowsByIds<{ id: string }>(
+      itemIds,
+      (batch) => (from, to) =>
+        whereOrderableItem(ctx.supabase.from('inventory_items').select('id'), ctx.organizationId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+    );
+    return new Set(rows.map((r) => r.id));
   }
 }

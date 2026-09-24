@@ -487,6 +487,45 @@ describe('save_purchase_order_draft refusals map onto the service messages', () 
       code: 'validation_error',
     },
     {
+      // 0366: a kit's pre-assembled stock on a line. The database names the item.
+      name: 'po_line_bundle',
+      error: {
+        code: '22023',
+        hint: 'po_line_bundle',
+        message:
+          '"Reading Kit" is a pre-assembled kit, and kits can\'t be ordered on a purchase order: they are built from their components. Order the components instead.',
+      },
+      code: 'validation_error',
+      message:
+        '"Reading Kit" is a pre-assembled kit, and kits can\'t be ordered on a purchase order: they are built from their components. Order the components instead.',
+    },
+    {
+      name: 'po_line_bundle with no message',
+      error: { code: '22023', hint: 'po_line_bundle', message: '' },
+      code: 'validation_error',
+      message:
+        "A pre-assembled kit can't be ordered on a purchase order. Kits are built from their components, so order the components instead.",
+    },
+    {
+      // 0366: a deleted item on a line (an edit of a draft whose item was
+      // deleted since, or a crafted call).
+      name: 'po_line_deleted',
+      error: {
+        code: '22023',
+        hint: 'po_line_deleted',
+        message: '"Blue pens" was deleted, so it can\'t be ordered. Remove it from the purchase order and save again.',
+      },
+      code: 'validation_error',
+      message: '"Blue pens" was deleted, so it can\'t be ordered. Remove it from the purchase order and save again.',
+    },
+    {
+      name: 'po_line_deleted with no message',
+      error: { code: '22023', hint: 'po_line_deleted', message: '' },
+      code: 'validation_error',
+      message:
+        "An item on this purchase order was deleted, so it can't be ordered. Remove it from the purchase order and save again.",
+    },
+    {
       name: 'an unmarked RLS refusal',
       error: { code: '42501', message: 'new row violates row-level security policy' },
       code: 'internal_error',

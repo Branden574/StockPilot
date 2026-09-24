@@ -1389,6 +1389,10 @@ const draftPosTool: ToolExecutor = {
         typeof args.warehouseId === 'string' && args.warehouseId.length > 0
           ? args.warehouseId
           : null,
+      // A kit's pre-assembled stock is never bought from a supplier (it is
+      // built from its components), so it is never a draft candidate here.
+      // Without this a fully drained kit matched lowStock (on hand <= 0).
+      excludeBundles: true,
       limit,
     });
 
@@ -1397,6 +1401,8 @@ const draftPosTool: ToolExecutor = {
         matched: 0,
         createdPoIds: [],
         skipped: 0,
+        skippedNoSupplier: 0,
+        skippedNotOrderable: 0,
         alreadyOnOpenPo: 0,
         supplierFailures: [],
         supplierCount: 0,
@@ -1549,6 +1555,15 @@ const applyReorderPointTool: ToolExecutor = {
     // Fetch first so the reply can show old → new (update() itself asserts
     // items:update and audits).
     const before = await svc.get(itemId);
+    // A kit's pre-assembled stock (is_bundle) changes only through Bundles
+    // (assemble, distribute) and is never bought, so a reorder point on it
+    // would only make the reorder paths suggest buying a kit. get() selects
+    // every column, so is_bundle is read, not assumed.
+    if ((before as { is_bundle?: boolean | null }).is_bundle === true) {
+      throw new Error(
+        "That item is a kit's pre-assembled stock, which is built from its components and never ordered, so it has no reorder point. Set reorder points on the kit's components instead.",
+      );
+    }
     const updated = await svc.update(itemId, patch);
     // Echo what the DB actually holds — never report the input as applied.
     const updatedRow = updated as { name?: string; reorder_point?: number; reorder_quantity?: number };
@@ -1596,11 +1611,24 @@ const suggestReorderPointsTool: ToolExecutor = {
   async execute(args, ctx) {
     const { PlanningService } = await import('@/server/services/planning');
     const svc = new PlanningService(ctx);
-    const suggestions = await svc.getReorderSuggestions({
+    const { suggestions, truncated } = await svc.getReorderSuggestions({
       warehouseId: typeof args.warehouseId === 'string' && args.warehouseId ? args.warehouseId : undefined,
     });
     const topN = Math.min(Math.max(1, Number(args.topN) || 20), 50);
-    return { total: suggestions.length, returned: Math.min(topN, suggestions.length), suggestions: suggestions.slice(0, topN) };
+    return {
+      total: suggestions.length,
+      returned: Math.min(topN, suggestions.length),
+      // The review ranks at most PLANNING_MAX_ITEMS items. Past that `total`
+      // counts only the items ranked, and an urgent item can be missing; the
+      // note tells the model to say so instead of presenting a full review.
+      truncated,
+      ...(truncated
+        ? {
+            note: `This organization has more items than the review ranks (${suggestions.length}), so this is a partial review: an urgent item may be missing and "total" counts only the items reviewed. Suggest narrowing it with a warehouseId.`,
+          }
+        : {}),
+      suggestions: suggestions.slice(0, topN),
+    };
   },
 };
 
@@ -1632,13 +1660,21 @@ const draftPosFromForecastTool: ToolExecutor = {
 /** One plain sentence for the model to relay after draftPos. */
 export function draftPosSummary(r: {
   createdPoIds: string[];
-  skipped: number;
+  skippedNoSupplier: number;
+  skippedNotOrderable: number;
   alreadyOnOpenPo: number | null;
   supplierFailures: unknown[];
 }): string {
   const created = r.createdPoIds.length;
   const parts = [`Created ${created} draft PO${created === 1 ? '' : 's'}.`];
-  if (r.skipped > 0) parts.push(`${r.skipped} item${r.skipped === 1 ? '' : 's'} skipped (no supplier).`);
+  if (r.skippedNoSupplier > 0) {
+    parts.push(`${r.skippedNoSupplier} item${r.skippedNoSupplier === 1 ? '' : 's'} skipped (no supplier).`);
+  }
+  if (r.skippedNotOrderable > 0) {
+    parts.push(
+      `${r.skippedNotOrderable} item${r.skippedNotOrderable === 1 ? '' : 's'} skipped (deleted, or a pre-assembled kit, which is never ordered).`,
+    );
+  }
   if (r.alreadyOnOpenPo === null) {
     parts.push('Could not check whether any of these items are already on open purchase orders.');
   } else if (r.alreadyOnOpenPo > 0) {

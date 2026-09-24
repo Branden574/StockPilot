@@ -124,6 +124,11 @@ PGTAP_TESTS=(
   # removed) and putaway_transfer (never had a caller) closed to every user
   # role, and anon off five INVOKER stock RPCs.
   supabase/tests/0356_stock_rpc_execute_narrowing.test.sql
+  # The PO draft save: RLS and the PO guards still decide for a signed-in
+  # caller (SECURITY INVOKER), and po_line_items_not_orderable, the SECURITY
+  # DEFINER read past RLS behind its kit/deleted-line refusal, answers only a
+  # PO writer or the service role (tests 57, 73, 74).
+  supabase/tests/0366_save_purchase_order_draft.test.sql
 
   # Account disable / session revocation.
   supabase/tests/0308_account_disable.test.sql

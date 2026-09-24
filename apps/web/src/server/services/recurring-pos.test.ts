@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 vi.mock('@/lib/auth/warehouse', () => ({
   getWarehouseAccess: vi.fn(async () => ({
@@ -25,6 +25,9 @@ vi.mock('@/lib/auth/session', () => ({
 }));
 
 vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
+
+const { reportError } = vi.hoisted(() => ({ reportError: vi.fn(async () => {}) }));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
 vi.mock('./integration-events', () => ({ dispatchEvent: vi.fn(async () => {}) }));
 
@@ -63,6 +66,9 @@ const TEMPLATE_BASE = {
   updated_at: '2026-06-01T00:00:00.000Z',
 };
 
+/** The orderable-items read answering that item-1 may still be ordered. */
+const ORDERABLE_ITEM_1 = { data: [{ id: 'item-1' }], error: null };
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -77,6 +83,8 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     const stub = makeSupabaseStub({
       // fetchAllRows issues two selects on recurring_po_templates — first page has data, second is empty
       'recurring_po_templates.select': { data: [template], error: null },
+      // The template's items are still orderable (not deleted, not a kit).
+      'inventory_items.select': ORDERABLE_ITEM_1,
       'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
       'purchase_orders.update': { data: { id: 'po-new' }, error: null },
       'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
@@ -109,6 +117,8 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     };
     const stub = makeSupabaseStub({
       'recurring_po_templates.select': { data: [template], error: null },
+      // The template's items are still orderable (not deleted, not a kit).
+      'inventory_items.select': ORDERABLE_ITEM_1,
       'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
       // updateStatus reads the PO first, then updates it
       'purchase_orders.select': {
@@ -146,6 +156,8 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     };
     const stub = makeSupabaseStub({
       'recurring_po_templates.select': { data: [template], error: null },
+      // The template's items are still orderable (not deleted, not a kit).
+      'inventory_items.select': ORDERABLE_ITEM_1,
       'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
       'organization_modules.select': {
         data: { settings: { approvalThresholdAmount: 500 } },
@@ -175,6 +187,8 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     };
     const stub = makeSupabaseStub({
       'recurring_po_templates.select': { data: [template], error: null },
+      // The template's items are still orderable (not deleted, not a kit).
+      'inventory_items.select': ORDERABLE_ITEM_1,
       'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
       'organization_modules.select': {
         data: { settings: { approvalThresholdAmount: 30 } },
@@ -201,6 +215,8 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     };
     const stub = makeSupabaseStub({
       'recurring_po_templates.select': { data: [template], error: null },
+      // The template's items are still orderable (not deleted, not a kit).
+      'inventory_items.select': ORDERABLE_ITEM_1,
       'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
       'organization_modules.select': { data: null, error: { message: 'DB error' } },
       'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
@@ -254,6 +270,8 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     };
     const stub = makeSupabaseStub({
       'recurring_po_templates.select': { data: [template], error: null },
+      // The template's items are still orderable (not deleted, not a kit).
+      'inventory_items.select': ORDERABLE_ITEM_1,
       // 0 rows matched — another invocation already advanced the schedule.
       'recurring_po_templates.update': { data: null, error: null },
       'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
@@ -295,6 +313,8 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     const template = { ...TEMPLATE_BASE, send_mode: 'draft' as const };
     const stub = makeSupabaseStub({
       'recurring_po_templates.select': { data: [template], error: null },
+      // The template's items are still orderable (not deleted, not a kit).
+      'inventory_items.select': ORDERABLE_ITEM_1,
       'recurring_po_templates.update': { data: null, error: { message: 'advance failed' } },
       'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
       'rpc:next_po_number': { data: 'PO-100', error: null },
@@ -352,6 +372,89 @@ const CREATE_INPUT_BASE = {
   sendMode: 'draft' as const,
   lineItems: [{ itemId: '00000000-0000-0000-0000-000000000001', quantityOrdered: 1, unitCost: 10 }],
 };
+
+// ─────────────────────────────────────────────────────────────────
+// A template line whose item is deleted or a kit's pre-assembled stock
+// ─────────────────────────────────────────────────────────────────
+
+describe('RecurringPoTemplatesService.runDueTemplates — lines that can no longer be ordered', () => {
+  /** inventory_items rows as the database holds them. */
+  const dbItem = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    organization_id: 'org-test',
+    deleted_at: null,
+    is_bundle: false,
+    ...over,
+  });
+
+  function stubWith(lineItems: Array<{ itemId: string; quantityOrdered: number; unitCost: number }>) {
+    const template = { ...TEMPLATE_BASE, send_mode: 'draft' as const, line_items: lineItems };
+    return makeSupabaseStub({
+      'recurring_po_templates.select': { data: [template], error: null },
+      'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
+      'inventory_items.select': servedLikePostgrest([
+        dbItem('item-1'),
+        dbItem('item-gone', { deleted_at: '2026-09-01T00:00:00Z' }),
+        dbItem('item-kit', { is_bundle: true }),
+      ]),
+      'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
+      'rpc:next_po_number': { data: 'PO-100', error: null },
+      'suppliers.select': { data: { id: 'sup-1' }, error: null },
+    });
+  }
+
+  it('orders the rest of the template and leaves off a deleted item and a kit (the save would refuse the whole PO)', async () => {
+    const stub = stubWith([
+      { itemId: 'item-1', quantityOrdered: 5, unitCost: 10 },
+      { itemId: 'item-gone', quantityOrdered: 1, unitCost: 1 },
+      { itemId: 'item-kit', quantityOrdered: 1, unitCost: 1 },
+    ]);
+    const svc = new RecurringPoTemplatesService(makeServiceContext(stub.client, { role: 'owner' }) as never);
+
+    const result = await svc.runDueTemplates(NOW);
+
+    expect(result).toMatchObject({ created: 1, failures: 0 });
+    const save = stub.rpcCalls.find((c) => c.name === 'save_purchase_order_draft');
+    expect((save?.args as { p_lines: Array<{ item_id: string }> }).p_lines.map((l) => l.item_id)).toEqual([
+      'item-1',
+    ]);
+    // ... and reports what it left off (never silent).
+    expect(reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        tag: 'recurring_pos.unorderable_lines',
+        extra: expect.objectContaining({ templateId: 'tpl-1', linesLeftOff: 2, linesKept: 1 }),
+      }),
+    );
+  });
+
+  it('a template with nothing orderable left creates no PO and counts a failure', async () => {
+    const stub = stubWith([{ itemId: 'item-gone', quantityOrdered: 1, unitCost: 1 }]);
+    const svc = new RecurringPoTemplatesService(makeServiceContext(stub.client, { role: 'owner' }) as never);
+
+    const result = await svc.runDueTemplates(NOW);
+
+    expect(result).toMatchObject({ created: 0, failures: 1 });
+    expect(stub.rpcCalls.some((c) => c.name === 'save_purchase_order_draft')).toBe(false);
+  });
+
+  it('a failed item read creates no PO (never mistaken for "all orderable")', async () => {
+    const template = { ...TEMPLATE_BASE, send_mode: 'draft' as const };
+    const stub = makeSupabaseStub({
+      'recurring_po_templates.select': { data: [template], error: null },
+      'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
+      'inventory_items.select': { data: null, error: { message: 'statement timeout' } },
+      'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
+      'rpc:next_po_number': { data: 'PO-100', error: null },
+    });
+    const svc = new RecurringPoTemplatesService(makeServiceContext(stub.client, { role: 'owner' }) as never);
+
+    const result = await svc.runDueTemplates(NOW);
+
+    expect(result).toMatchObject({ created: 0, failures: 1 });
+    expect(stub.rpcCalls.some((c) => c.name === 'save_purchase_order_draft')).toBe(false);
+  });
+});
 
 describe('RecurringPoTemplatesService.create — destinationLocationId org-verify', () => {
   it('rejects a destinationLocationId from a foreign org and does NOT insert', async () => {

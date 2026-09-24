@@ -102,6 +102,21 @@
 --                            maps by hint, never by code.
 --   42501 po_not_in_org      an item, supplier, destination or charter from
 --                            another organization
+--   22023 po_line_bundle     a line for a kit's pre-assembled stock (is_bundle,
+--                            the hidden item assemble_bundle keeps kits in).
+--                            A kit is built from its components, never bought
+--                            as a kit: receiving one would add kit stock with
+--                            no component drawn (owner decision, S3 N2)
+--   22023 po_line_deleted    a line for a deleted item (deleted_at set).
+--                            Checked before po_line_bundle. An ARCHIVED item
+--                            (status 'archived', deleted_at null) is not
+--                            refused, nor is a rental: a buyer may order
+--                            either by choosing it. Both refusals name the
+--                            first such line's item when the caller can see
+--                            it, and apply to every caller, the crons too;
+--                            the check reads through
+--                            po_line_items_not_orderable (below), so an item
+--                            hidden from the caller by RLS is refused as well
 --   23505 (unique_violation) the PO number is taken (no hint; raised by
 --                            purchase_orders_org_ponumber_active_key)
 --   40P01 (deadlock)         not raised here, but reachable: an edit locks the
@@ -128,11 +143,60 @@
 -- Create only (an edit is refused). Only the reorder paths pass it: a
 -- hand-made PO or an explicit Items selection may still order an item twice.
 --
--- Deploy: this only adds a function, which the live web does not call, so it
--- ships BEFORE the web build that uses it. Rollback: revert the web first;
--- the unused function is harmless and may then be dropped.
+-- ── Kits and deleted items (po_line_bundle, po_line_deleted) ───────────────
+-- The web filters both out of every path that picks items by itself (the
+-- reorder reads, the Items selection, the recurring-PO cron), so a refusal
+-- here is the backstop, and the one place a hand-made PO meets the rule. The
+-- save is SECURITY INVOKER, and inventory_items RLS hides some items from
+-- some callers (an item with no warehouse, or in a warehouse a staff member
+-- with purchase_orders:manage is not assigned to). A read here under the
+-- caller's RLS would pass those lines unchecked, so the check calls
+-- po_line_items_not_orderable, a SECURITY DEFINER helper that sees every item
+-- of p_org_id. It answers only the service role (no auth.uid(): the crons)
+-- or a caller who may write this organization's purchase orders (the
+-- purchase_orders_write rule: manager, or purchase_orders:manage), and it
+-- returns only which of the CALLER'S OWN item ids are deleted or kit stock,
+-- never a name. Anyone else gets 42501. anon and PUBLIC cannot execute it.
+--
+-- Deploy: this only adds functions, which the live web does not call, so it
+-- ships BEFORE the web build that uses them. Rollback: revert the web first;
+-- the unused functions are harmless and may then be dropped.
 
 set lock_timeout = '5s';
+
+create or replace function public.po_line_items_not_orderable(p_org_id uuid, p_item_ids uuid[])
+returns table (item_id uuid, refusal text)
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  -- Gate: the service role (the crons; auth.uid() is null), or a caller who
+  -- may write purchase orders in p_org_id (purchase_orders_write).
+  if auth.uid() is not null
+     and not (public.has_org_role(p_org_id, 'manager')
+              or public.has_permission(p_org_id, 'purchase_orders:manage')) then
+    raise exception 'You cannot manage purchase orders in this organization.'
+      using errcode = '42501';
+  end if;
+
+  return query
+    select i.id,
+           case when i.deleted_at is not null then 'po_line_deleted' else 'po_line_bundle' end
+      from public.inventory_items i
+     where i.organization_id = p_org_id
+       and i.id = any(p_item_ids)
+       and (i.deleted_at is not null or i.is_bundle);
+end;
+$$;
+
+comment on function public.po_line_items_not_orderable(uuid, uuid[]) is
+  'Which of these item ids of p_org_id may not go on a purchase order: po_line_deleted (deleted) or po_line_bundle '
+  '(a kit''s pre-assembled stock). Reads past RLS for save_purchase_order_draft (0366); service role or a PO writer only.';
+
+revoke all on function public.po_line_items_not_orderable(uuid, uuid[]) from public, anon;
+grant execute on function public.po_line_items_not_orderable(uuid, uuid[]) to authenticated, service_role;
 
 create or replace function public.save_purchase_order_draft(
   p_org_id uuid,
@@ -164,6 +228,10 @@ declare
   v_stamp_error  text;
   v_lines        jsonb;
   v_skipped      uuid[] := '{}'::uuid[];
+  v_item_ids     uuid[];
+  v_refused_item uuid;
+  v_refusal      text;
+  v_label        text;
 begin
   if p_org_id is null or nullif(btrim(coalesce(p_po_number, '')), '') is null then
     raise exception 'A purchase order needs an organization and a PO number.'
@@ -314,6 +382,33 @@ begin
                  where not public.item_in_org((l->>'item_id')::uuid, p_org_id)) then
     raise exception 'An item, supplier, destination or charter on this purchase order is not part of this organization.'
       using errcode = '42501', hint = 'po_not_in_org';
+  end if;
+
+  -- No line for a deleted item or for a kit's pre-assembled stock (header,
+  -- "Kits and deleted items"). After the org check, so an outsider learns
+  -- nothing; through the definer helper, so RLS cannot hide one. The first
+  -- such line in line order is named; a deleted kit counts as deleted.
+  select coalesce(array_agg((l->>'item_id')::uuid order by ord), '{}'::uuid[])
+    into v_item_ids
+    from jsonb_array_elements(v_lines) with ordinality as e(l, ord);
+  select r.item_id, r.refusal
+    into v_refused_item, v_refusal
+    from public.po_line_items_not_orderable(p_org_id, v_item_ids) as r
+    join unnest(v_item_ids) with ordinality as u(id, ord) on u.id = r.item_id
+   order by u.ord
+   limit 1;
+  if v_refusal is not null then
+    -- The name only as the caller may read it (RLS); otherwise unnamed.
+    select nullif(btrim(it.name), '') into v_label
+      from public.inventory_items it
+     where it.id = v_refused_item and it.organization_id = p_org_id;
+    v_label := coalesce('"' || v_label || '"', 'An item on this purchase order');
+    if v_refusal = 'po_line_deleted' then
+      raise exception '% was deleted, so it can''t be ordered. Remove it from the purchase order and save again.', v_label
+        using errcode = '22023', hint = 'po_line_deleted';
+    end if;
+    raise exception '% is a pre-assembled kit, and kits can''t be ordered on a purchase order: they are built from their components. Order the components instead.', v_label
+      using errcode = '22023', hint = 'po_line_bundle';
   end if;
 
   insert into public.purchase_order_items (

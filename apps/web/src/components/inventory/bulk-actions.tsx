@@ -266,7 +266,14 @@ export function BulkActions({
       toast.error(r.error.message);
       return;
     }
-    const { createdPoIds, skipped, supplierFailures, supplierCount, alreadyOnOpenPo } = r.data;
+    const {
+      createdPoIds,
+      skippedNoSupplier,
+      skippedNotOrderable,
+      supplierFailures,
+      supplierCount,
+      alreadyOnOpenPo,
+    } = r.data;
     const created = createdPoIds.length;
     if (created === 0) {
       toast.error(
@@ -279,8 +286,13 @@ export function BulkActions({
     const parts: string[] = [
       `Created ${created} draft PO${created === 1 ? '' : 's'} across ${supplierCount} supplier${supplierCount === 1 ? '' : 's'}`,
     ];
-    if (skipped > 0) {
-      parts.push(`${skipped} skipped (no supplier)`);
+    if (skippedNoSupplier > 0) {
+      parts.push(`${skippedNoSupplier} skipped (no supplier)`);
+    }
+    // Deleted items and a kit's pre-assembled stock never go on a PO; say how
+    // many of the chosen items that was rather than dropping them silently.
+    if (skippedNotOrderable > 0) {
+      parts.push(`${skippedNotOrderable} skipped (deleted, or a pre-assembled kit)`);
     }
     // The selection is drafted as chosen; say when some of it is already on
     // order so the buyer can remove the duplicates before sending.

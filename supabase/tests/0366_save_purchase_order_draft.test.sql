@@ -25,6 +25,14 @@
 --                advisory lock is held to commit, and the flag is create-only
 --                and member-only. po_not_draft is 55000, never 40001
 --                (PostgREST retries 40001 forever; 0367 guards the class).
+-- PART 9 (57-74) Kits and deleted items: a line for a kit's pre-assembled
+--                stock is refused (22023 po_line_bundle), a line for a deleted
+--                item too (po_line_deleted, which wins for a deleted kit),
+--                for a manager, on an edit and for the service role, even
+--                when RLS hides the item from the caller; the first such
+--                line is named. An archived item and a rental item still
+--                save. The definer helper that reads past RLS answers only a
+--                PO writer or the service role, and returns no names.
 --
 -- The row lock (edit vs edit, edit vs "Mark as ordered") and the reorder
 -- lock (two reorder runs at once) need two sessions; they are proved by the
@@ -36,7 +44,7 @@
 -- after `supabase db reset`.
 
 begin;
-select plan(56);
+select plan(74);
 
 \set orgA    '\'03660000-0000-0000-0000-00000000000a\''
 \set orgB    '\'03660000-0000-0000-0000-00000000000b\''
@@ -73,6 +81,14 @@ select plan(56);
 \set lnD1    '\'03660000-0000-0000-0000-0000000000f1\''
 \set lnD2    '\'03660000-0000-0000-0000-0000000000f2\''
 \set lnOrd   '\'03660000-0000-0000-0000-0000000000f3\''
+\set iKit    '\'03660000-0000-0000-0000-0000000000d1\''
+\set iDel    '\'03660000-0000-0000-0000-0000000000d2\''
+\set iDelKit '\'03660000-0000-0000-0000-0000000000d3\''
+\set iArc    '\'03660000-0000-0000-0000-0000000000d4\''
+\set iRent   '\'03660000-0000-0000-0000-0000000000d5\''
+\set iHid    '\'03660000-0000-0000-0000-0000000000d6\''
+\set iDelD   '\'03660000-0000-0000-0000-0000000000d7\''
+\set poStale '\'03660000-0000-0000-0000-0000000000e8\''
 
 -- ── Fixtures (as postgres: RLS bypassed, guards exempt) ─────────────────────
 insert into auth.users (id, email, raw_user_meta_data) values
@@ -116,6 +132,20 @@ insert into public.inventory_items (id, organization_id, warehouse_id, sku, name
   (:i6, :orgA, :whA, 'S0366-6', 'Only on a cancelled PO','active', 'product'),
   (:i7, :orgA, :whA, 'S0366-7', 'On no PO (cron)',       'active', 'product'),
   (:iB, :orgB, :whB, 'S0366-B', 'Other org item', 'active', 'product');
+-- PART 9: a kit's pre-assembled stock (what assemble_bundle creates: a
+-- hidden is_bundle item named after the kit), deleted items, an archived and
+-- a rental item, and a deleted item with no warehouse, which inventory_items
+-- RLS hides from every signed-in caller.
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, status, item_type, is_bundle, is_rental, deleted_at) values
+  (:iKit,    :orgA, :whA, '__BUNDLE__03660001', 'Reading Kit 0366',   'active',   'product', true,  false, null),
+  (:iDel,    :orgA, :whA, 'S0366-DEL',          'Deleted item 0366',  'active',   'product', false, false, now()),
+  (:iDelKit, :orgA, :whA, '__BUNDLE__03660002', 'Deleted kit 0366',   'active',   'product', true,  false, now()),
+  (:iArc,    :orgA, :whA, 'S0366-ARC',          'Archived item 0366', 'archived', 'product', false, false, null),
+  (:iRent,   :orgA, :whA, 'S0366-RENT',         'Rental item 0366',   'active',   'product', false, true,  null),
+  (:iHid,    :orgA, null, 'S0366-HID',          'Hidden deleted 0366','active',   'product', false, false, now()),
+  (:iDelD,   :orgA, :whA, 'S0366-DELD',         'Deleted since 0366', 'active',   'product', false, false, now());
+
 -- PO-born custom items, as InventoryService creates them: hidden until the
 -- first receipt, nothing on hand, not yet tagged with a PO.
 insert into public.inventory_items
@@ -133,7 +163,8 @@ insert into public.purchase_orders
   (:poTaken, :orgA, 'S0366-TAKEN', 'draft',   null,  null,              0,  0, :u_other, :u_other),
   (:poB,     :orgB, 'S0366-B',     'draft',   :supB, 'org B notes',     1,  1, :u_mgrB,  :u_mgrB),
   (:poRcv,   :orgA, 'S0366-RCV',   'received',  :supA, null,            1,  1, :u_other, :u_other),
-  (:poCan,   :orgA, 'S0366-CAN',   'cancelled', :supA, null,            1,  1, :u_other, :u_other);
+  (:poCan,   :orgA, 'S0366-CAN',   'cancelled', :supA, null,            1,  1, :u_other, :u_other),
+  (:poStale, :orgA, 'S0366-STALE', 'draft',   :supA, 'stale notes',     2,  2, :u_other, :u_other);
 insert into public.purchase_order_items
   (id, organization_id, purchase_order_id, item_id, quantity_ordered, unit_cost) values
   (:lnD1,  :orgA, :poDraft, :i1, 2, 3),
@@ -143,7 +174,10 @@ insert into public.purchase_order_items
   (gen_random_uuid(), :orgA, :poTaken, :i1, 1, 0),
   (gen_random_uuid(), :orgB, :poB,     :iB, 1, 1),
   (gen_random_uuid(), :orgA, :poRcv,   :i5, 1, 1),
-  (gen_random_uuid(), :orgA, :poCan,   :i6, 1, 1);
+  (gen_random_uuid(), :orgA, :poCan,   :i6, 1, 1),
+  -- A draft drafted before its second item was deleted.
+  (gen_random_uuid(), :orgA, :poStale, :i2,   1, 1),
+  (gen_random_uuid(), :orgA, :poStale, :iDelD, 1, 1);
 -- A charge on a draft. None exists today (charges come from PO-import
 -- approvals, which create expected_inbound POs), but a draft's total must
 -- keep them if one ever does.
@@ -168,8 +202,27 @@ grant execute on function pg_temp.po_fingerprint(uuid) to authenticated, service
 create temp table before_edit on commit drop as
   select :poDraft::uuid as id, pg_temp.po_fingerprint(:poDraft) as fp
   union all select :poOrd::uuid, pg_temp.po_fingerprint(:poOrd)
-  union all select :poB::uuid,   pg_temp.po_fingerprint(:poB);
+  union all select :poB::uuid,   pg_temp.po_fingerprint(:poB)
+  union all select :poStale::uuid, pg_temp.po_fingerprint(:poStale);
 grant select on before_edit to authenticated, service_role;
+
+-- The SQLSTATE, hint and message of a refused statement (or 'no error'), so
+-- one assertion pins all three. The block is a savepoint: the refused
+-- statement's writes are rolled back with it.
+create function pg_temp.refusal(p_sql text) returns text language plpgsql as $$
+declare
+  v_state text;
+  v_hint  text;
+  v_msg   text;
+begin
+  execute p_sql;
+  return 'no error';
+exception when others then
+  get stacked diagnostics v_state = returned_sqlstate, v_hint = pg_exception_hint, v_msg = message_text;
+  return v_state || '|' || coalesce(nullif(v_hint, ''), '-') || '|' || v_msg;
+end;
+$$;
+grant execute on function pg_temp.refusal(text) to authenticated, service_role;
 
 -- ═══ PART 1: structure and grants ═══════════════════════════════════════════
 select ok(
@@ -589,6 +642,136 @@ select is(
      from saved s where s.tag = 'cron_reorder'),
   format('["%s"]|%s', :i1, :i7),
   '56: the service role (daily auto-reorder) skips the same way');
+
+-- ═══ PART 9: kits and deleted items ════════════════════════════════════════
+select ok(
+  (select p.prosecdef
+          and p.proconfig @> array['search_path=public, pg_temp']
+     from pg_proc p
+    where p.oid = 'public.po_line_items_not_orderable(uuid,uuid[])'::regprocedure)
+  and not has_function_privilege('anon', 'public.po_line_items_not_orderable(uuid,uuid[])', 'execute')
+  and (select not exists (select 1 from aclexplode(p.proacl) a where a.grantee = 0)
+         from pg_proc p where p.oid = 'public.po_line_items_not_orderable(uuid,uuid[])'::regprocedure)
+  and has_function_privilege('authenticated', 'public.po_line_items_not_orderable(uuid,uuid[])', 'execute')
+  and has_function_privilege('service_role', 'public.po_line_items_not_orderable(uuid,uuid[])', 'execute'),
+  '57: the helper reads past RLS (SECURITY DEFINER, search_path pinned) and is closed to anon and PUBLIC');
+
+set local "request.jwt.claim.sub" to :u_mgr;
+set local role to 'authenticated';
+select is(
+  pg_temp.refusal(format($$select public.save_purchase_order_draft(%L, null, 'S0366-KIT', %L, null, null, null, null, %L::jsonb)$$,
+         :orgA, :supA,
+         jsonb_build_array(jsonb_build_object('item_id', :i3,   'quantity_ordered', 1, 'unit_cost', 1),
+                           jsonb_build_object('item_id', :iKit, 'quantity_ordered', 9, 'unit_cost', 1)))),
+  '22023|po_line_bundle|"Reading Kit 0366" is a pre-assembled kit, and kits can''t be ordered on a purchase order: they are built from their components. Order the components instead.',
+  '58: a manager''s PO with a line for a kit''s pre-assembled stock is refused, naming the kit');
+select is(
+  pg_temp.refusal(format($$select public.save_purchase_order_draft(%L, null, 'S0366-DEL', %L, null, null, null, null, %L::jsonb)$$,
+         :orgA, :supA,
+         jsonb_build_array(jsonb_build_object('item_id', :iDel, 'quantity_ordered', 1, 'unit_cost', 1)))),
+  '22023|po_line_deleted|"Deleted item 0366" was deleted, so it can''t be ordered. Remove it from the purchase order and save again.',
+  '59: ... so is a line for a deleted item');
+select is(
+  pg_temp.refusal(format($$select public.save_purchase_order_draft(%L, null, 'S0366-DELKIT', %L, null, null, null, null, %L::jsonb)$$,
+         :orgA, :supA,
+         jsonb_build_array(jsonb_build_object('item_id', :iDelKit, 'quantity_ordered', 1, 'unit_cost', 1)))),
+  '22023|po_line_deleted|"Deleted kit 0366" was deleted, so it can''t be ordered. Remove it from the purchase order and save again.',
+  '60: a deleted kit is refused as deleted');
+select is(
+  pg_temp.refusal(format($$select public.save_purchase_order_draft(%L, null, 'S0366-FIRST', %L, null, null, null, null, %L::jsonb)$$,
+         :orgA, :supA,
+         jsonb_build_array(jsonb_build_object('item_id', :i3,   'quantity_ordered', 1, 'unit_cost', 1),
+                           jsonb_build_object('item_id', :iKit, 'quantity_ordered', 1, 'unit_cost', 1),
+                           jsonb_build_object('item_id', :iDel, 'quantity_ordered', 1, 'unit_cost', 1)))),
+  '22023|po_line_bundle|"Reading Kit 0366" is a pre-assembled kit, and kits can''t be ordered on a purchase order: they are built from their components. Order the components instead.',
+  '61: with several such lines, the first in line order is the one named');
+select is(
+  pg_temp.refusal(format($$select public.save_purchase_order_draft(%L, null, 'S0366-HID', %L, null, null, null, null, %L::jsonb)$$,
+         :orgA, :supA,
+         jsonb_build_array(jsonb_build_object('item_id', :iHid, 'quantity_ordered', 1, 'unit_cost', 1)))),
+  '22023|po_line_deleted|An item on this purchase order was deleted, so it can''t be ordered. Remove it from the purchase order and save again.',
+  '62: a deleted item RLS hides from the caller (no warehouse) is refused too, unnamed (the check reads past RLS, the name does not)');
+select is(
+  pg_temp.refusal(format($$select public.save_purchase_order_draft(%L, %L, 'S0366-STALE', %L, null, null, null, 'stale edit', %L::jsonb)$$,
+         :orgA, :poStale, :supA,
+         jsonb_build_array(jsonb_build_object('item_id', :i2,    'quantity_ordered', 1, 'unit_cost', 1),
+                           jsonb_build_object('item_id', :iDelD, 'quantity_ordered', 1, 'unit_cost', 1)))),
+  '22023|po_line_deleted|"Deleted since 0366" was deleted, so it can''t be ordered. Remove it from the purchase order and save again.',
+  '63: an edit of a draft whose item was deleted since it was drafted is refused, naming the item to remove ...');
+select lives_ok(
+  format($$insert into saved
+           select 'archived', public.save_purchase_order_draft(%L, null, 'S0366-ARC', %L, null, null, null, null, %L::jsonb)$$,
+         :orgA, :supA,
+         jsonb_build_array(jsonb_build_object('item_id', :iArc, 'quantity_ordered', 2, 'unit_cost', 1))),
+  '64: an ARCHIVED item still saves (a buyer may reorder an archived item by choosing it; archived is not deleted)');
+select lives_ok(
+  format($$insert into saved
+           select 'rental', public.save_purchase_order_draft(%L, null, 'S0366-RENT', %L, null, null, null, null, %L::jsonb)$$,
+         :orgA, :supA,
+         jsonb_build_array(jsonb_build_object('item_id', :iRent, 'quantity_ordered', 3, 'unit_cost', 1))),
+  '65: a rental item still saves (buying more rental units from Rentals > Items)');
+select lives_ok(
+  format($$select public.save_purchase_order_draft(%L, %L, 'S0366-STALE', %L, null, null, null, 'stale edit', %L::jsonb)$$,
+         :orgA, :poStale, :supA,
+         jsonb_build_array(jsonb_build_object('item_id', :i2, 'quantity_ordered', 1, 'unit_cost', 1))),
+  '66: ... and the same edit without the deleted item saves');
+select is(
+  pg_temp.refusal(format($$select public.save_purchase_order_draft(%L, null, 'S0366-REORDER-KIT', null, null, null, null, null, %L::jsonb,
+                                                                    '{}'::uuid[], null, true)$$,
+         :orgA,
+         jsonb_build_array(jsonb_build_object('item_id', :iKit, 'quantity_ordered', 1, 'unit_cost', 1)))),
+  '22023|po_line_bundle|"Reading Kit 0366" is a pre-assembled kit, and kits can''t be ordered on a purchase order: they are built from their components. Order the components instead.',
+  '67: a reorder draft (p_skip_items_on_open_po) refuses a kit too; it is not quietly left off');
+reset role;
+select is(
+  (select count(*) from public.purchase_orders
+    where po_number in ('S0366-KIT', 'S0366-DEL', 'S0366-DELKIT', 'S0366-FIRST', 'S0366-HID', 'S0366-REORDER-KIT'))::text
+    || '|' || (select string_agg(i.item_id::text, ',') from public.purchase_order_items i where i.purchase_order_id = :poStale)
+    || '|' || (select p.notes from public.purchase_orders p where p.id = :poStale),
+  format('0|%s|stale edit', :i2),
+  '68: the refused saves wrote nothing, and the draft took the edit only once its deleted line was removed');
+select is(
+  (select string_agg(s.tag || ':' || i.item_id::text || ':' || trim_scale(i.quantity_ordered)::text, ',' order by s.tag)
+     from saved s join public.purchase_order_items i on i.purchase_order_id = (s.result->>'id')::uuid
+    where s.tag in ('archived', 'rental')),
+  format('archived:%s:2,rental:%s:3', :iArc, :iRent),
+  '69: the archived and the rental item are on their drafts');
+
+set local "request.jwt.claim.sub" to '';
+set local role to 'service_role';
+select is(
+  pg_temp.refusal(format($$select public.save_purchase_order_draft(%L, null, 'S0366-CRON-KIT', %L, null, null, null, null, %L::jsonb, '{}'::uuid[], %L)$$,
+         :orgA, :supA,
+         jsonb_build_array(jsonb_build_object('item_id', :iKit, 'quantity_ordered', 1, 'unit_cost', 1)), :u_mgr)),
+  '22023|po_line_bundle|"Reading Kit 0366" is a pre-assembled kit, and kits can''t be ordered on a purchase order: they are built from their components. Order the components instead.',
+  '70: the service role (the crons, which no guard covers) cannot put a kit on a PO ...');
+select is(
+  pg_temp.refusal(format($$select public.save_purchase_order_draft(%L, null, 'S0366-CRON-DEL', %L, null, null, null, null, %L::jsonb, '{}'::uuid[], %L)$$,
+         :orgA, :supA,
+         jsonb_build_array(jsonb_build_object('item_id', :iHid, 'quantity_ordered', 1, 'unit_cost', 1)), :u_mgr)),
+  '22023|po_line_deleted|"Hidden deleted 0366" was deleted, so it can''t be ordered. Remove it from the purchase order and save again.',
+  '71: ... nor a deleted item (named: the service role reads every row)');
+select is(
+  (select string_agg(r.item_id::text || ':' || r.refusal, ',' order by r.refusal)
+     from public.po_line_items_not_orderable(:orgA, array[:i1, :iKit, :iDel, :iArc, :iRent]::uuid[]) r),
+  format('%s:po_line_bundle,%s:po_line_deleted', :iKit, :iDel),
+  '72: the helper returns only the refused ids and why (no names), and passes archived and rental items');
+reset role;
+
+set local "request.jwt.claim.sub" to :u_stf;
+set local role to 'authenticated';
+select throws_ok(
+  format($$select * from public.po_line_items_not_orderable(%L, array[%L]::uuid[])$$, :orgA, :iKit),
+  '42501', 'You cannot manage purchase orders in this organization.',
+  '73: staff without purchase_orders:manage cannot ask the helper (it reads past RLS)');
+reset role;
+set local "request.jwt.claim.sub" to :u_mgrB;
+set local role to 'authenticated';
+select throws_ok(
+  format($$select * from public.po_line_items_not_orderable(%L, array[%L]::uuid[])$$, :orgA, :iKit),
+  '42501', 'You cannot manage purchase orders in this organization.',
+  '74: nor can a manager of another organization');
+reset role;
 
 select * from finish();
 rollback;

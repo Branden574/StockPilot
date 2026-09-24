@@ -20,7 +20,7 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { formatNumber } from '@/lib/utils';
 import { createClient } from '@/lib/supabase/server';
 import { readAutoReorderSettings } from '@/server/services/auto-reorder';
-import { PlanningService } from '@/server/services/planning';
+import { PLANNING_MAX_ITEMS, PlanningService } from '@/server/services/planning';
 
 import { planAllowsAutoReorder, type OrgBillingState } from '@stockpilot/core';
 
@@ -39,7 +39,7 @@ export default async function PlanningPage() {
   const ctx = await requireOrgContext();
   const supabase = await createClient();
   const svc = await PlanningService.forCurrentUser();
-  const [suggestions, params, autoReorder, orgBillingRes, openPoItems] = await Promise.all([
+  const [plan, params, autoReorder, orgBillingRes, openPoItems] = await Promise.all([
     svc.getReorderSuggestions(),
     svc.readParams(),
     readAutoReorderSettings(supabase, ctx.organizationId),
@@ -64,13 +64,16 @@ export default async function PlanningPage() {
       return null;
     }),
   ]);
+  const { suggestions, truncated } = plan;
   const autoReorderEntitled = planAllowsAutoReorder(
     ((orgBillingRes.data as OrgBillingState | null) ?? { plan: null }) as OrgBillingState,
   );
 
   // The auto-draft path uses the canonical below-par filter (reorder_point > 0,
   // on-hand at/below it) and skips items already on an open PO; count the same
-  // set here so the button mirrors what it will do.
+  // set here so the button mirrors what it will do. When the plan is
+  // truncated this counts only the ranked items (the button itself drafts
+  // from every item), which the coverage note below says.
   const belowPar = suggestions.filter(
     (s) => s.currentReorderPoint > 0 && s.quantityOnHand <= s.currentReorderPoint,
   );
@@ -98,7 +101,7 @@ export default async function PlanningPage() {
             </p>
           </div>
           <div className="flex flex-col items-start gap-1 sm:items-end">
-            <DraftPosFromReorderButton itemCount={draftableCount} />
+            <DraftPosFromReorderButton itemCount={draftableCount} countIsPartial={truncated} />
             {onOpenPoCount === null ? (
               <p role="status" className="text-warning max-w-xs text-xs sm:text-right">
                 Couldn&apos;t check which of the {formatNumber(belowPar.length)} below-par items
@@ -113,6 +116,19 @@ export default async function PlanningPage() {
           </div>
         </div>
       </div>
+
+      {truncated && (
+        <p
+          role="status"
+          data-testid="planning-coverage-note"
+          className="border-warning/40 bg-warning/10 text-foreground mb-4 rounded-md border px-3 py-2 text-sm"
+        >
+          This organization has more than {formatNumber(PLANNING_MAX_ITEMS)} items to plan, so
+          only {formatNumber(PLANNING_MAX_ITEMS)} of them are ranked below, and they are not
+          picked by urgency: an urgent item can be missing here, and the below-par count covers
+          only the items shown. &ldquo;Draft PO from suggestions&rdquo; still checks every item.
+        </p>
+      )}
 
       <Card>
         <CardHeader>

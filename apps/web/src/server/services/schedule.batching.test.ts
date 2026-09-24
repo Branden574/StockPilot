@@ -112,7 +112,7 @@ describe('PlanningService supplier names for 150 suppliers', () => {
       n += 1;
       return n === 2 ? { data: null, error: { message: 'boom' } } : { data: [], error: null };
     }).getReorderSuggestions();
-    expect(out.length).toBeGreaterThan(0);
+    expect(out.suggestions.length).toBeGreaterThan(0);
     expect(tags()).toEqual(['planning.supplier_names']);
   });
 });

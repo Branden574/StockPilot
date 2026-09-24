@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { callArgs, inFilters, makeSupabaseStub, type MockCall } from './supabase-mock';
+import {
+  callArgs,
+  inFilters,
+  makeSupabaseStub,
+  servedLikePostgrest,
+  type MockCall,
+} from './supabase-mock';
 
 describe('makeSupabaseStub function results', () => {
   it('hands a function result the chain being resolved', async () => {
@@ -38,5 +44,38 @@ describe('makeSupabaseStub function results', () => {
     const { data } = await stub.client.from('items').select('id').maybeSingle();
     expect(seen).toEqual(['update']);
     expect(data).toEqual({ id: 'x' });
+  });
+});
+
+describe('servedLikePostgrest', () => {
+  const rows = [
+    { id: 'c', org: 'o1', n: 3, gone: null, flag: false },
+    { id: 'a', org: 'o1', n: 1, gone: null, flag: true },
+    { id: 'b', org: 'o2', n: 2, gone: null, flag: false },
+    { id: 'd', org: 'o1', n: 0, gone: '2026-01-01', flag: false },
+  ];
+
+  it('applies the query\'s own filters, order and window', async () => {
+    const stub = makeSupabaseStub({ 'items.select': servedLikePostgrest(rows) });
+    const { data } = await stub.client
+      .from('items')
+      .select('id')
+      .eq('org', 'o1')
+      .is('gone', null)
+      .gt('n', 0)
+      .order('id', { ascending: true })
+      .range(0, 999);
+    expect((data as Array<{ id: string }>).map((r) => r.id)).toEqual(['a', 'c']);
+    const page2 = await stub.client.from('items').select('id').order('id').range(1, 2);
+    expect((page2.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['b', 'c']);
+    const inList = await stub.client.from('items').select('id').in('id', ['d', 'b']).eq('flag', false);
+    expect((inList.data as Array<{ id: string }>).map((r) => r.id).sort()).toEqual(['b', 'd']);
+  });
+
+  it('refuses a filter it cannot evaluate rather than ignoring it', async () => {
+    const stub = makeSupabaseStub({ 'items.select': servedLikePostgrest(rows) });
+    await expect(
+      Promise.resolve().then(() => stub.client.from('items').select('id').or('a.eq.1,b.eq.2')),
+    ).rejects.toThrow(/cannot evaluate \.or\(\)/);
   });
 });

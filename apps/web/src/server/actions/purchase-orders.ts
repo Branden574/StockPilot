@@ -225,8 +225,13 @@ export async function updatePoStatusAction(id: string, status: 'draft' | 'ordere
 interface DraftPosResultData {
   /** IDs of the draft POs that were successfully created. */
   createdPoIds: string[];
-  /** Selected items that had no supplier_id and were skipped. */
+  /** skippedNoSupplier + skippedNotOrderable. */
   skipped: number;
+  /** Selected items that had no supplier_id and were skipped. */
+  skippedNoSupplier: number;
+  /** Selected ids that cannot go on a PO (deleted, a kit's pre-assembled
+   *  stock, or not found) and were skipped. */
+  skippedNotOrderable: number;
   /** Drafted items that were already on another open PO (drafted anyway —
    *  the user chose them). null = could not be checked. */
   alreadyOnOpenPo: number | null;
@@ -245,7 +250,9 @@ const MAX_DRAFT_POS_BATCH = 200;
  * draft PO is created per supplier, and line quantities are pre-filled from
  * each item's reorder_quantity (fallback: max(1, reorder_point - on_hand)).
  *
- * Items without a supplier_id are skipped and reported back as `skipped`.
+ * Items without a supplier_id are skipped and reported back as
+ * `skippedNoSupplier`; deleted items and a kit's pre-assembled stock as
+ * `skippedNotOrderable` (both summed in `skipped`).
  * Per-supplier failures are reported as `supplierFailures` so the caller
  * can toast a partial-success message; we deliberately do NOT roll back
  * already-created drafts.

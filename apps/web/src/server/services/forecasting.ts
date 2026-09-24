@@ -3,6 +3,7 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { ServiceError } from './context';
+import { fetchAllRows } from './lib/paginate';
 
 export interface VelocitySnapshot {
   itemId: string;
@@ -128,14 +129,23 @@ export async function getItemVelocity(
 ): Promise<VelocitySnapshot> {
   const since = new Date(Date.now() - windowDays * DAY_MS).toISOString();
 
-  const [movesRes, itemRes] = await Promise.all([
-    supabase
-      .from('stock_movements')
-      .select('quantity_change, created_at')
-      .eq('organization_id', orgId)
-      .eq('item_id', itemId)
-      .lt('quantity_change', 0)
-      .gte('created_at', since),
+  // Every outbound movement in the window, PAGED: PostgREST clamps a single
+  // response to max_rows (1000), so the unpaged read silently summed only the
+  // first 1000 movements of a busy item and understated its velocity (and
+  // with it the AI's runout date and suggested reorder point). Stable order
+  // by id, as fetchAllRows requires; throws on a failed page.
+  const [moves, itemRes] = await Promise.all([
+    fetchAllRows<{ quantity_change: number }>((from, to) =>
+      supabase
+        .from('stock_movements')
+        .select('quantity_change')
+        .eq('organization_id', orgId)
+        .eq('item_id', itemId)
+        .lt('quantity_change', 0)
+        .gte('created_at', since)
+        .order('id', { ascending: true })
+        .range(from, to),
+    ),
     supabase
       .from('inventory_items')
       .select('quantity_on_hand, created_at')
@@ -143,15 +153,13 @@ export async function getItemVelocity(
       .eq('id', itemId)
       .maybeSingle(),
   ]);
-  if (movesRes.error) throw new ServiceError('internal_error', movesRes.error.message);
   if (itemRes.error) throw new ServiceError('internal_error', itemRes.error.message);
   if (!itemRes.data) throw new ServiceError('not_found', 'Item not found');
 
-  const moves = movesRes.data ?? [];
   const item = itemRes.data as { quantity_on_hand: number; created_at: string };
 
   const unitsOutTotal = moves.reduce(
-    (s, m) => s + Math.abs(Number((m as { quantity_change: number }).quantity_change) || 0),
+    (s, m) => s + Math.abs(Number(m.quantity_change) || 0),
     0,
   );
 

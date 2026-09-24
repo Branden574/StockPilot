@@ -22,6 +22,7 @@ import {
   writeInIdBatches,
 } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
+import { whereOrderableItem, whereReorderCandidate } from './lib/orderable-items';
 import { fetchAllRows } from './lib/paginate';
 import { postgrestErrorText } from './lib/postgrest-error';
 import { audit, auditMany } from './audit';
@@ -89,6 +90,21 @@ function saveDraftRpcError(err: { message?: string; code?: string; hint?: string
     case 'po_invalid':
     case 'po_not_in_org':
       return new ServiceError('validation_error', message);
+    // A kit's pre-assembled stock or a deleted item on a line (0366). The
+    // database message names the item when the caller can see it; the
+    // fallback says the same without the name.
+    case 'po_line_bundle':
+      return new ServiceError(
+        'validation_error',
+        message ||
+          "A pre-assembled kit can't be ordered on a purchase order. Kits are built from their components, so order the components instead.",
+      );
+    case 'po_line_deleted':
+      return new ServiceError(
+        'validation_error',
+        message ||
+          "An item on this purchase order was deleted, so it can't be ordered. Remove it from the purchase order and save again.",
+      );
     default:
       break;
   }
@@ -1717,9 +1733,13 @@ export class PurchaseOrdersService {
    * supplier with line quantities pre-filled from each item's
    * reorder_quantity (fallback: max(1, reorder_point - quantity_on_hand)).
    *
-   * Items without a supplier_id are skipped. Per-supplier failures are
-   * collected so callers can report partial success — we do NOT roll
-   * back already-created drafts.
+   * Items without a supplier_id are skipped (`skippedNoSupplier`), and so are
+   * ids that cannot go on a purchase order at all (`skippedNotOrderable`):
+   * deleted items, a kit's pre-assembled stock (is_bundle), and ids not found
+   * in this organization. Archived and rental items are drafted: the user
+   * chose them (whereOrderableItem). `skipped` is the sum of the two.
+   * Per-supplier failures are collected so callers can report partial
+   * success — we do NOT roll back already-created drafts.
    *
    * Unlike the reorder paths, an explicit selection is NOT filtered by what
    * is already on order: the user chose these items. `alreadyOnOpenPo`
@@ -1735,7 +1755,13 @@ export class PurchaseOrdersService {
    */
   async createDraftsFromItems(itemIds: string[]): Promise<{
     createdPoIds: string[];
+    /** skippedNoSupplier + skippedNotOrderable. */
     skipped: number;
+    /** Chosen items with no supplier set. */
+    skippedNoSupplier: number;
+    /** Chosen ids that cannot be ordered: deleted, a kit's pre-assembled
+     *  stock, or not found in this organization. */
+    skippedNotOrderable: number;
     /** Drafted items that were already on another open PO; null = unknown. */
     alreadyOnOpenPo: number | null;
     supplierFailures: Array<{ supplierId: string; supplierName: string; error: string }>;
@@ -1754,22 +1780,34 @@ export class PurchaseOrdersService {
     };
     // Batched: the selection has no cap here, and one `.in()` past ~215 ids
     // fails. A failed batch throws rather than drafting from a partial set.
+    // Only orderable items come back (not deleted, not a kit's pre-assembled
+    // stock); every id that does not is counted as not orderable below, never
+    // silently dropped. The database refuses both kinds of line anyway
+    // (0366), and one such line would fail its whole supplier's draft.
     const ctx = this.ctx;
+    const uniqueIds = [...new Set(itemIds)];
     const items = await fetchAllRowsByIds<Row>(
-      itemIds,
-      (batch) => (from, to) =>
-        ctx.supabase
+      uniqueIds,
+      (batch) => (from, to) => {
+        const selection = ctx.supabase
           .from('inventory_items')
           .select('id, supplier_id, reorder_quantity, reorder_point, quantity_on_hand, unit_cost')
-          .eq('organization_id', ctx.organizationId)
-          .in('id', batch)
-          .order('id')
-          .range(from, to),
+          .in('id', batch);
+        return whereOrderableItem(selection, ctx.organizationId).order('id').range(from, to);
+      },
     );
     const noSupplier = items.filter((r) => !r.supplier_id);
     const withSupplier = items.filter((r) => !!r.supplier_id);
-    const skipped = noSupplier.length + (itemIds.length - items.length);
+    const skippedNoSupplier = noSupplier.length;
+    const skippedNotOrderable = uniqueIds.length - items.length;
+    const skipped = skippedNoSupplier + skippedNotOrderable;
 
+    if (items.length === 0) {
+      throw new ServiceError(
+        'validation_error',
+        "None of the selected items can go on a purchase order: they were deleted, or they are pre-assembled kits (order a kit's components instead).",
+      );
+    }
     if (withSupplier.length === 0) {
       throw new ServiceError(
         'validation_error',
@@ -1845,6 +1883,8 @@ export class PurchaseOrdersService {
     return {
       createdPoIds,
       skipped,
+      skippedNoSupplier,
+      skippedNotOrderable,
       alreadyOnOpenPo: openItemIds ? alreadyOnOpenPo : null,
       supplierFailures,
       supplierCount: bySupplier.size,
@@ -1910,24 +1950,23 @@ export class PurchaseOrdersService {
       unit_cost: number | null;
     };
 
-    // Recompute the below-par set with the same filters the reorder-forecast
-    // report uses: active, non-deleted, non-rental, reorder_point > 0.
+    // Recompute the below-par set with the reorder-candidate predicate the
+    // reorder-forecast report and the daily auto-reorder share (active, not
+    // deleted, not a rental, not a kit's pre-assembled stock, reorder_point >
+    // 0; lib/orderable-items).
     // PostgREST clamps any single response to `[api] max_rows = 1000`, so the
     // former `.limit(5_000)` SILENTLY returned at most 1000 candidates — every
     // below-par item past the first 1000 got NO draft PO. Paginate in 1000-row
     // `.range()` windows with a stable `.order('id')` and accumulate the full
     // candidate set (same cap class as forecasting.ts / order-requests.ts).
     const rows = await fetchAllRows<Row>((from, to) =>
-      this.ctx.supabase
-        .from('inventory_items')
-        .select(
-          'id, supplier_id, reorder_point, reorder_quantity, quantity_on_hand, unit_cost',
-        )
-        .eq('organization_id', this.ctx.organizationId)
-        .is('deleted_at', null)
-        .eq('status', 'active')
-        .eq('is_rental', false)
-        .gt('reorder_point', 0)
+      whereReorderCandidate(
+        this.ctx.supabase
+          .from('inventory_items')
+          .select('id, supplier_id, reorder_point, reorder_quantity, quantity_on_hand, unit_cost'),
+        this.ctx.organizationId,
+        { withReorderPoint: true },
+      )
         .order('id', { ascending: true })
         .range(from, to),
     );
@@ -2006,13 +2045,19 @@ export class PurchaseOrdersService {
 
     // One draft for the unassigned bucket (supplier_id null) so no
     // suggestion is silently dropped.
-    let unassignedSkipped = 0;
+    // unassignedCount is how many items are ON that draft: 0 when it was not
+    // created (every line already on order, or the save failed, in which
+    // case its items are counted in `skipped` instead). The toast reads the
+    // unassigned draft's existence from it.
+    let unassignedCount = 0;
     if (unassigned.length > 0) {
       try {
         const po = await this.createReorderDraft(null, unassigned);
-        unassignedSkipped = po.skippedItemIds.length;
-        skippedOnOpenPo += unassignedSkipped;
-        if (po.id !== null) createdPoIds.push(po.id);
+        skippedOnOpenPo += po.skippedItemIds.length;
+        if (po.id !== null) {
+          createdPoIds.push(po.id);
+          unassignedCount = unassigned.length - po.skippedItemIds.length;
+        }
       } catch (e) {
         skipped += unassigned.length;
         supplierFailures.push({
@@ -2025,7 +2070,7 @@ export class PurchaseOrdersService {
 
     return {
       createdPoIds,
-      unassignedCount: unassigned.length - unassignedSkipped,
+      unassignedCount,
       skipped,
       skippedOnOpenPo,
       supplierFailures,
@@ -2067,16 +2112,16 @@ export class PurchaseOrdersService {
       unit_cost: number | null;
     };
 
-    // 1. Below-par candidates — same canonical filter as the reorder forecast.
+    // 1. Below-par candidates — the shared reorder-candidate predicate, the
+    //    same one the reorder forecast and the manual draft button use.
     const rows = await fetchAllRows<Row>((from, to) =>
-      this.ctx.supabase
-        .from('inventory_items')
-        .select('id, supplier_id, reorder_point, reorder_quantity, quantity_on_hand, unit_cost')
-        .eq('organization_id', this.ctx.organizationId)
-        .is('deleted_at', null)
-        .eq('status', 'active')
-        .eq('is_rental', false)
-        .gt('reorder_point', 0)
+      whereReorderCandidate(
+        this.ctx.supabase
+          .from('inventory_items')
+          .select('id, supplier_id, reorder_point, reorder_quantity, quantity_on_hand, unit_cost'),
+        this.ctx.organizationId,
+        { withReorderPoint: true },
+      )
         .order('id', { ascending: true })
         .range(from, to),
     );

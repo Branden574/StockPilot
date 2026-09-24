@@ -3,6 +3,7 @@ import 'server-only';
 import { assertModuleEnabled, assertPermission, withContext, type ServiceContext } from './context';
 import { computeReorderSuggestion, getBulkItemVelocities } from './forecasting';
 import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
+import { whereReorderCandidate } from './lib/orderable-items';
 import { fetchAllRows } from './lib/paginate';
 import { PurchaseOrdersService } from './purchase-orders';
 
@@ -39,16 +40,31 @@ export interface PlanningSuggestion {
   unitCost: number;
 }
 
+/** The planning table: the ranked suggestions and whether the catalog was cut
+ *  off at PLANNING_MAX_ITEMS. */
+export interface PlanningSuggestions {
+  suggestions: PlanningSuggestion[];
+  /**
+   * True when the organization has MORE than PLANNING_MAX_ITEMS candidate
+   * items: only the first PLANNING_MAX_ITEMS by item id were ranked, so an
+   * urgent item past them is missing and every count taken from
+   * `suggestions` (the page's below-par count, the AI tool's total) covers
+   * only part of the catalog. Callers must say so.
+   */
+  truncated: boolean;
+}
+
 /** Coerce a settings value to a positive finite number, else fall back. */
 function posNumber(value: unknown, fallback: number): number {
   const n = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-// Upper bound on items scanned per planning run. The velocity calc is bulk
+// Upper bound on items ranked per planning run. The velocity calc is bulk
 // (one stock_movements query for the whole candidate set), so this bounds row
-// COUNT, not query volume — it mirrors the PO reorder-forecast cap.
-const MAX_ITEMS = 5_000;
+// COUNT, not query volume. Past it the plan is PARTIAL, never silently: the
+// read asks for one more row than this, and finding it sets `truncated`.
+export const PLANNING_MAX_ITEMS = 5_000;
 
 /**
  * PlanningService — velocity-based demand planning. Reads per-org planning
@@ -94,11 +110,13 @@ export class PlanningService {
   }
 
   /**
-   * Compute velocity-based reorder suggestions for the org's active, non-rental,
-   * non-deleted items, sorted by urgency (lowest days-of-cover first; items with
-   * no cover but a positive suggested deficit float to the top).
+   * Compute velocity-based reorder suggestions for the org's reorder
+   * candidates (active, not deleted, not a rental, not a kit's pre-assembled
+   * stock), sorted by urgency (lowest days-of-cover first; items with no
+   * cover but a positive suggested deficit float to the top). At most
+   * PLANNING_MAX_ITEMS are ranked; `truncated` says when there were more.
    */
-  async getReorderSuggestions(params: { warehouseId?: string } = {}): Promise<PlanningSuggestion[]> {
+  async getReorderSuggestions(params: { warehouseId?: string } = {}): Promise<PlanningSuggestions> {
     assertModuleEnabled(this.ctx, 'planning');
     // Defense-in-depth on the registry's dependsOn: ['inventory','purchase_orders']
     // contract. dependsOn is normally enforced at toggle/pack-apply time, but a
@@ -122,32 +140,40 @@ export class PlanningService {
       created_at: string;
     };
 
-    // Fetch the candidate set, optionally sliced to one warehouse (the AI
-    // suggestReorderPoints tool passes warehouseId; velocity math itself stays
-    // per-item so the slice is just a candidate filter).
+    // Fetch the candidate set (the shared reorder-candidate predicate: active,
+    // not deleted, not a rental, not a kit's pre-assembled stock), optionally
+    // sliced to one warehouse (the AI suggestReorderPoints tool passes
+    // warehouseId; velocity math itself stays per-item so the slice is just a
+    // candidate filter). Every item is ranked, with or without a reorder point.
     //
     // PostgREST clamps any single response to `[api] max_rows = 1000`, so the
     // former `.limit(MAX_ITEMS)` SILENTLY returned at most 1000 items — every
     // candidate past the first 1000 got no reorder suggestion. Paginate in
     // 1000-row `.range()` windows with a stable `.order('id')` and accumulate
-    // up to MAX_ITEMS (same cap class as forecasting.ts / order-requests.ts).
-    const items = await fetchAllRows<Row>(
+    // up to the cap (same cap class as forecasting.ts / order-requests.ts).
+    //
+    // The cap reads ONE row past PLANNING_MAX_ITEMS: that row is only a
+    // sentinel. If it exists the plan is partial (`truncated`) and the row is
+    // dropped, so exactly PLANNING_MAX_ITEMS are ranked either way.
+    const fetched = await fetchAllRows<Row>(
       (from, to) => {
-        let q = this.ctx.supabase
-          .from('inventory_items')
-          .select(
-            'id, sku, name, quantity_on_hand, reorder_point, reorder_quantity, unit_cost, supplier_id, created_at',
-          )
-          .eq('organization_id', this.ctx.organizationId)
-          .is('deleted_at', null)
-          .eq('status', 'active')
-          .eq('is_rental', false);
+        let q = whereReorderCandidate(
+          this.ctx.supabase
+            .from('inventory_items')
+            .select(
+              'id, sku, name, quantity_on_hand, reorder_point, reorder_quantity, unit_cost, supplier_id, created_at',
+            ),
+          this.ctx.organizationId,
+          { withReorderPoint: false },
+        );
         if (params.warehouseId) q = q.eq('warehouse_id', params.warehouseId);
         return q.order('id', { ascending: true }).range(from, to);
       },
-      { cap: MAX_ITEMS },
+      { cap: PLANNING_MAX_ITEMS + 1 },
     );
-    if (items.length === 0) return [];
+    const truncated = fetched.length > PLANNING_MAX_ITEMS;
+    const items = truncated ? fetched.slice(0, PLANNING_MAX_ITEMS) : fetched;
+    if (items.length === 0) return { suggestions: [], truncated: false };
 
     // Resolve supplier names. Batched: the candidate set spans every supplier
     // in the org. Names are labels, so a failed read leaves them blank and is
@@ -226,7 +252,7 @@ export class PlanningService {
       return deficit(b) - deficit(a);
     });
 
-    return suggestions;
+    return { suggestions, truncated };
   }
 
   /**

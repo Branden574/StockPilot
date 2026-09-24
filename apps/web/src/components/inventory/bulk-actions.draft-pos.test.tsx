@@ -20,12 +20,19 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: v
 vi.mock('@/server/actions/inventory', () => ({ bulkUpdateInventoryAction: vi.fn() }));
 vi.mock('@/server/actions/purchase-orders', () => ({ createDraftPosFromItemsAction: vi.fn() }));
 
-function resolveWith(alreadyOnOpenPo: number | null) {
+function resolveWith(
+  alreadyOnOpenPo: number | null,
+  skippedBy: { skippedNoSupplier?: number; skippedNotOrderable?: number } = {},
+) {
+  const skippedNoSupplier = skippedBy.skippedNoSupplier ?? 0;
+  const skippedNotOrderable = skippedBy.skippedNotOrderable ?? 0;
   vi.mocked(createDraftPosFromItemsAction).mockResolvedValue({
     ok: true,
     data: {
       createdPoIds: ['po-1'],
-      skipped: 0,
+      skipped: skippedNoSupplier + skippedNotOrderable,
+      skippedNoSupplier,
+      skippedNotOrderable,
       alreadyOnOpenPo,
       supplierFailures: [],
       supplierCount: 1,
@@ -81,5 +88,23 @@ describe('BulkActions — Create draft POs and items already on order', () => {
     resolveWith(0);
     await clickCreate();
     expect(toast.success).toHaveBeenCalledWith('Created 1 draft PO across 1 supplier.');
+  });
+});
+
+describe('BulkActions — Create draft POs says why chosen items were skipped', () => {
+  it('names items left out because they are deleted or a pre-assembled kit', async () => {
+    resolveWith(0, { skippedNotOrderable: 2 });
+    await clickCreate();
+    expect(toast.success).toHaveBeenCalledWith(
+      'Created 1 draft PO across 1 supplier · 2 skipped (deleted, or a pre-assembled kit).',
+    );
+  });
+
+  it('keeps the no-supplier reason separate from it', async () => {
+    resolveWith(0, { skippedNoSupplier: 1, skippedNotOrderable: 1 });
+    await clickCreate();
+    expect(toast.success).toHaveBeenCalledWith(
+      'Created 1 draft PO across 1 supplier · 1 skipped (no supplier) · 1 skipped (deleted, or a pre-assembled kit).',
+    );
   });
 });

@@ -111,4 +111,48 @@ describe('DraftPosFromReorderButton', () => {
     render(<DraftPosFromReorderButton itemCount={0} />);
     expect(screen.getByRole('button', { name: /Draft PO from suggestions/i })).toBeDisabled();
   });
+
+  it('stays enabled at 0 when the count covers only part of the catalog (Planning past its cap)', () => {
+    render(<DraftPosFromReorderButton itemCount={0} countIsPartial />);
+    expect(screen.getByRole('button', { name: /Draft PO from suggestions/i })).toBeEnabled();
+  });
+});
+
+describe('DraftPosFromReorderButton — the created drafts, in words', () => {
+  it('only the no-supplier draft: says so, never "across 0 suppliers"', async () => {
+    resolveWith({ createdPoIds: ['po-u'], unassignedCount: 1, supplierCount: 0 });
+    await click();
+    expect(toast.success).toHaveBeenCalledWith(
+      'Created 1 draft PO for 1 item with no supplier yet (set one on the draft). Review before sending.',
+    );
+    expect(push).toHaveBeenCalledWith('/dashboard/purchase-orders/po-u');
+  });
+
+  it('only the no-supplier draft, several items, some skipped', async () => {
+    resolveWith({ createdPoIds: ['po-u'], unassignedCount: 3, supplierCount: 0, skippedOnOpenPo: 1 });
+    await click();
+    expect(toast.success).toHaveBeenCalledWith(
+      'Created 1 draft PO for 3 items with no supplier yet (set one on the draft) · 1 already on open POs (skipped). Review before sending.',
+    );
+  });
+
+  it('supplier drafts and the no-supplier draft together', async () => {
+    resolveWith({ createdPoIds: ['po-1', 'po-2', 'po-u'], unassignedCount: 4, supplierCount: 2 });
+    await click();
+    expect(toast.success).toHaveBeenCalledWith(
+      'Created 3 draft POs: 2 across 2 suppliers and 1 for 4 items with no supplier yet (set one on the draft). Review before sending.',
+    );
+  });
+
+  it('counts suppliers from the drafts created, not from those attempted (one failed)', async () => {
+    resolveWith({
+      createdPoIds: ['po-1'],
+      supplierCount: 2,
+      supplierFailures: [{ supplierId: 's2', supplierName: 'Beta', error: 'Boom.' }],
+    });
+    await click();
+    expect(toast.success).toHaveBeenCalledWith(
+      'Created 1 draft PO across 1 supplier · failed: Beta. Review before sending.',
+    );
+  });
 });

@@ -5,6 +5,7 @@ import {
   inFilters,
   makeServiceContext,
   makeSupabaseStub,
+  servedLikePostgrest,
   type MockCall,
 } from '@/test/supabase-mock';
 
@@ -753,3 +754,192 @@ describe('createDraftsFromItems — items already on an open PO', () => {
     expect(result.createdPoIds).toEqual(['po-1']);
   });
 });
+
+// ─── Kits, deleted, rental and archived items (S3 leftovers) ─────────────────
+
+/**
+ * An inventory_items row as the database holds it, filter columns included,
+ * below par (reorder point 10, 2 on hand) with a supplier unless overridden.
+ */
+const dbItem = (id: string, over: Record<string, unknown> = {}) => ({
+  id,
+  organization_id: 'org-test',
+  deleted_at: null,
+  status: 'active',
+  is_rental: false,
+  is_bundle: false,
+  supplier_id: 'sup-a',
+  reorder_point: 10,
+  reorder_quantity: 0,
+  quantity_on_hand: 2,
+  unit_cost: 1,
+  ...over,
+});
+
+/** The kinds of item a reorder or a selection can meet. */
+const MIXED = [
+  dbItem('plain'),
+  dbItem('kit', { is_bundle: true }), // a kit's pre-assembled stock, set up to look below par
+  dbItem('kit-no-supplier', { is_bundle: true, supplier_id: null }),
+  dbItem('deleted', { deleted_at: '2026-09-01T00:00:00Z' }),
+  dbItem('archived', { status: 'archived' }),
+  dbItem('rental', { is_rental: true }),
+];
+
+/** A stub whose item read answers like the database for the query's own filters. */
+function dbStub(items: Array<ReturnType<typeof dbItem>>) {
+  let poSeq = 0;
+  return makeSupabaseStub({
+    'inventory_items.select': servedLikePostgrest(items),
+    'suppliers.select': { data: [{ id: 'sup-a', name: 'Supplier A' }], error: null },
+    'purchase_order_items.select': { data: [], error: null },
+    'organization_modules.select': { data: { settings: {} }, error: null },
+    'rpc:save_purchase_order_draft': () => {
+      poSeq += 1;
+      return { data: { id: `po-${poSeq}`, stamped: 0, stamp_error: null }, error: null };
+    },
+    'rpc:next_po_number': () => ({ data: `PO-${poSeq + 1}`, error: null }),
+  });
+}
+
+/** The first inventory_items read's filters, as [method, column, value]. */
+function itemReadFilters(stub: ReturnType<typeof makeSupabaseStub>): unknown[][] {
+  const methods = stub.chainsAll.get('inventory_items.select')![0]!;
+  const args = stub.chainArgsAll.get('inventory_items.select')![0]!;
+  return methods.map((m, i) => [m, ...(args[i] ?? [])]);
+}
+
+describe('reorder paths use the shared reorder-candidate predicate', () => {
+  it('createDraftsFromReorderForecast reads with it (kit, rental, deleted, inactive and no-reorder-point items excluded)', async () => {
+    const stub = dbStub([]);
+    await new PurchaseOrdersService(makeServiceContext(stub.client)).createDraftsFromReorderForecast();
+    const f = itemReadFilters(stub);
+    expect(f).toContainEqual(['eq', 'is_bundle', false]);
+    expect(f).toContainEqual(['eq', 'is_rental', false]);
+    expect(f).toContainEqual(['is', 'deleted_at', null]);
+    expect(f).toContainEqual(['eq', 'status', 'active']);
+    expect(f).toContainEqual(['gt', 'reorder_point', 0]);
+  });
+
+  it('runAutoReorder reads with it too', async () => {
+    const stub = dbStub([]);
+    await new PurchaseOrdersService(makeServiceContext(stub.client)).runAutoReorder({
+      enabled: true,
+      mode: 'draft',
+      maxAutoSendCents: null,
+    });
+    const f = itemReadFilters(stub);
+    expect(f).toContainEqual(['eq', 'is_bundle', false]);
+    expect(f).toContainEqual(['eq', 'is_rental', false]);
+    expect(f).toContainEqual(['is', 'deleted_at', null]);
+    expect(f).toContainEqual(['eq', 'status', 'active']);
+    expect(f).toContainEqual(['gt', 'reorder_point', 0]);
+  });
+
+  it('a below-par kit never becomes a draft line ("Draft PO from suggestions")', async () => {
+    const stub = dbStub(MIXED);
+    const result = await new PurchaseOrdersService(
+      makeServiceContext(stub.client),
+    ).createDraftsFromReorderForecast();
+    expect(savedLines(stub).map((l) => l.item_id)).toEqual(['plain']);
+    // The no-supplier kit would have made an unassigned draft.
+    expect(result.unassignedCount).toBe(0);
+    expect(result.createdPoIds).toHaveLength(1);
+  });
+
+  it('a below-par kit never becomes a draft line (daily auto-reorder)', async () => {
+    const stub = dbStub(MIXED);
+    const result = await new PurchaseOrdersService(makeServiceContext(stub.client)).runAutoReorder({
+      enabled: true,
+      mode: 'draft',
+      maxAutoSendCents: null,
+    });
+    expect(savedLines(stub).map((l) => l.item_id)).toEqual(['plain']);
+    expect(result).toMatchObject({ created: 1, skippedNoSupplier: 0 });
+  });
+});
+
+describe('createDraftsFromItems — only orderable items, and the rest counted with a reason', () => {
+  it('reads with whereOrderableItem: not deleted, not a kit (archived and rental allowed)', async () => {
+    const stub = dbStub([dbItem('plain')]);
+    await new PurchaseOrdersService(makeServiceContext(stub.client)).createDraftsFromItems(['plain']);
+    const f = itemReadFilters(stub);
+    expect(f).toContainEqual(['eq', 'is_bundle', false]);
+    expect(f).toContainEqual(['is', 'deleted_at', null]);
+    expect(f).toContainEqual(['eq', 'organization_id', 'org-test']);
+    // An explicit selection may be archived or a rental.
+    expect(f.some((x) => x[1] === 'status')).toBe(false);
+    expect(f.some((x) => x[1] === 'is_rental')).toBe(false);
+  });
+
+  it('3 ids, 2 rows back: the missing one is skipped as not orderable, with the total in skipped', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [dbItem('a'), dbItem('b', { supplier_id: null })],
+        error: null,
+      },
+      'suppliers.select': { data: [{ id: 'sup-a', name: 'Supplier A' }], error: null },
+      'purchase_order_items.select': { data: [], error: null },
+      'rpc:save_purchase_order_draft': { data: { id: 'po-1', stamped: 0, stamp_error: null }, error: null },
+      'rpc:next_po_number': { data: 'PO-1', error: null },
+    });
+    const result = await new PurchaseOrdersService(makeServiceContext(stub.client)).createDraftsFromItems([
+      'a',
+      'b',
+      'gone',
+    ]);
+    expect(result).toMatchObject({ skipped: 2, skippedNoSupplier: 1, skippedNotOrderable: 1 });
+    expect(savedLines(stub).map((l) => l.item_id)).toEqual(['a']);
+  });
+
+  it('drafts the archived and rental items chosen, and skips the kit and the deleted item', async () => {
+    const stub = dbStub(MIXED);
+    const result = await new PurchaseOrdersService(makeServiceContext(stub.client)).createDraftsFromItems(
+      MIXED.map((i) => i.id),
+    );
+    expect(savedLines(stub).map((l) => l.item_id).sort()).toEqual(['archived', 'plain', 'rental']);
+    expect(result).toMatchObject({ skipped: 3, skippedNoSupplier: 0, skippedNotOrderable: 3 });
+    expect(stub.rpcCalls.filter((c) => c.name === 'save_purchase_order_draft')).toHaveLength(1);
+  });
+
+  it('a selection with nothing orderable says why, not "no supplier"', async () => {
+    const stub = dbStub(MIXED);
+    const thrown = await new PurchaseOrdersService(makeServiceContext(stub.client))
+      .createDraftsFromItems(['kit', 'deleted'])
+      .catch((e: unknown) => e);
+    expect(thrown).toBeInstanceOf(ServiceError);
+    expect((thrown as ServiceError).code).toBe('validation_error');
+    expect((thrown as ServiceError).message).toMatch(/deleted, or they are pre-assembled kits/);
+    expect(saves(stub)).toHaveLength(0);
+  });
+});
+
+describe('createDraftsFromReorderForecast — the unassigned count is what is ON the unassigned draft', () => {
+  it('is 0 when the unassigned draft failed (its items are counted in skipped instead)', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [belowPar('a-1', 'sup-a'), belowPar('x-1', null), belowPar('x-2', null)],
+        error: null,
+      },
+      'suppliers.select': { data: [{ id: 'sup-a', name: 'Supplier A' }], error: null },
+      'purchase_order_items.select': { data: [], error: null },
+      'rpc:next_po_number': { data: 'PO-9', error: null },
+      'rpc:save_purchase_order_draft': (call: MockCall) => {
+        const args = call.args[0]?.[0] as SaveArgs;
+        return args.p_supplier_id === null
+          ? { data: null, error: { code: '22023', hint: 'po_line_deleted', message: 'An item was deleted.' } }
+          : { data: { id: 'po-a', stamped: 0, stamp_error: null }, error: null };
+      },
+    });
+    const result = await new PurchaseOrdersService(
+      makeServiceContext(stub.client),
+    ).createDraftsFromReorderForecast();
+    expect(result.createdPoIds).toEqual(['po-a']);
+    expect(result.unassignedCount).toBe(0);
+    expect(result.skipped).toBe(2);
+    expect(result.supplierFailures).toEqual([
+      { supplierId: null, supplierName: 'Unassigned (no supplier)', error: 'An item was deleted.' },
+    ]);
+  });
+});
+

@@ -4,6 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 import { ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { whereReorderCandidate } from './lib/orderable-items';
 import { fetchAllRows } from './lib/paginate';
 
 export interface ValuationRow {
@@ -613,6 +614,14 @@ export class ReportsService {
     // forecast covers every below-reorder-point item, not just the first
     // 1000. The final rows are re-sorted by deficit, so fetch order is
     // irrelevant — page by id.
+    //
+    // UNCAPPED, like the "Draft PO from suggestions" action this report
+    // mirrors (its button count is this report's totalItems). A cap here
+    // (it was 5,000) silently dropped every below-par item past it from the
+    // page, the CSV and the PDF and understated the totals, with no notice.
+    // Candidates: the shared reorder-candidate predicate (lib/orderable-items),
+    // so the report lists exactly what the draft action and the daily
+    // auto-reorder consider — never a kit's pre-assembled stock.
     type ReorderItemRow = {
       id: string;
       sku: string;
@@ -624,22 +633,19 @@ export class ReportsService {
       warehouse_id: string | null;
       warehouse: { name: string } | { name: string }[] | null;
     };
-    const data = await fetchAllRows<ReorderItemRow>(
-      (from, to) =>
+    const data = await fetchAllRows<ReorderItemRow>((from, to) =>
+      whereReorderCandidate(
         this.ctx.supabase
           .from('inventory_items')
           .select(
             `id, sku, name, quantity_on_hand, reorder_point, reorder_quantity, unit_cost, warehouse_id,
          warehouse:warehouses!warehouse_id (name)`,
-          )
-          .eq('organization_id', this.ctx.organizationId)
-          .is('deleted_at', null)
-          .eq('status', 'active')
-          .eq('is_rental', false)
-          .gt('reorder_point', 0)
-          .order('id', { ascending: true })
-          .range(from, to),
-      { cap: 5_000 },
+          ),
+        this.ctx.organizationId,
+        { withReorderPoint: true },
+      )
+        .order('id', { ascending: true })
+        .range(from, to),
     );
 
     const rows: ReorderRow[] = [];
