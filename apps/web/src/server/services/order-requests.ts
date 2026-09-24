@@ -1010,7 +1010,7 @@ export class OrderRequestsService {
     }
 
     // Validate every item belongs to the chosen warehouse. (The unit-cost
-    // snapshot is stamped by a trigger on the line insert, 0365.)
+    // snapshot is stamped from the item by tg_order_request_lines_guard, 0363.)
     // Batched: a request's lines have no cap, and a failed batch throws (a
     // missing item would otherwise read as "not in this warehouse").
     const itemIds = [...new Set(input.lines.map((l) => l.itemId))];
@@ -1098,7 +1098,7 @@ export class OrderRequestsService {
     // order behind whenever the delete failed too. SECURITY INVOKER, so RLS
     // applies exactly as it did to the direct inserts; source and status are
     // fixed by the function ('internal', 'pending_approval'), and
-    // unit_cost_at_request is stamped by a trigger, so neither is sent.
+    // unit_cost_at_request is stamped by the line guard (0363), so neither is sent.
     const { data: created, error: createErr } = await this.ctx.supabase.rpc(
       'create_order_request',
       {
