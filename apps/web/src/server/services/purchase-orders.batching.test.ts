@@ -88,47 +88,54 @@ beforeEach(() => {
   invCreate.mockImplementation(async () => ({ id: uuid(n++, 'c') }));
 });
 
-describe('create() stamps 150 custom items in batches', () => {
+describe('create() tags 150 custom items inside the one save', () => {
   const lines = Array.from({ length: 150 }, (_, i) => ({
     newItemName: `Custom ${i}`,
     quantityOrdered: 1,
     unitCost: 1,
   }));
 
-  function stubWith(update: (call: MockCall) => { data: unknown; error: unknown }) {
+  function stubWith(saved: { id: string; stamped: number; stamp_error: string | null }) {
     return makeSupabaseStub({
-      'purchase_orders.insert': { data: [{ id: 'po-new' }], error: null },
-      'purchase_order_items.insert': { data: null, error: null },
-      'inventory_items.update': update as never,
+      'rpc:save_purchase_order_draft': { data: saved, error: null },
       'rpc:next_po_number': { data: 'PO-1', error: null },
     });
   }
 
-  it('stamps every custom item, at most 100 per write', async () => {
-    const lists: string[][] = [];
-    const stub = stubWith((call) => {
-      lists.push(inList(call, 'id'));
-      return { data: null, error: null };
-    });
+  // The ids ride in the RPC's JSON body (save_purchase_order_draft, 0366),
+  // not in a URL, so there is no .in() list to batch at all.
+  it('passes every custom item to the save, and writes no .in() tag from the client', async () => {
+    const stub = stubWith({ id: 'po-new', stamped: 150, stamp_error: null });
     await new PurchaseOrdersService(makeServiceContext(stub.client) as never).create({ lines });
-    expect(lists.map((l) => l.length)).toEqual([100, 50]);
+    const save = stub.rpcCalls.find((c) => c.name === 'save_purchase_order_draft');
+    expect((save?.args as { p_custom_item_ids: string[] }).p_custom_item_ids).toHaveLength(150);
+    expect(stub.chainsAll.get('inventory_items.update')).toBeUndefined();
     expect(tagsReported()).not.toContain('po.create.stamp_custom_items');
   });
 
-  it('reports a stamp batch that fails without failing the PO', async () => {
-    let n = 0;
-    const stub = stubWith(() => {
-      n += 1;
-      return n === 2 ? { data: null, error: { message: 'boom' } } : { data: null, error: null };
-    });
+  it('reports a tag shortfall without failing the PO', async () => {
+    const stub = stubWith({ id: 'po-new', stamped: 100, stamp_error: null });
     const po = await new PurchaseOrdersService(makeServiceContext(stub.client) as never).create({
       lines,
     });
-    expect(po).toBeTruthy();
+    expect(po).toEqual({ id: 'po-new', poNumber: 'PO-1' });
     const call = reportError.mock.calls.find(
       (c) => (c as unknown as [Error, { tag: string }])[1].tag === 'po.create.stamp_custom_items',
     ) as unknown as [Error, { extra: Record<string, unknown> }];
     expect(call[1].extra).toMatchObject({ stamped: 100, unstamped: 50 });
+  });
+
+  it('reports a tag error the save caught, without failing the PO', async () => {
+    const stub = stubWith({ id: 'po-new', stamped: 0, stamp_error: 'boom' });
+    const po = await new PurchaseOrdersService(makeServiceContext(stub.client) as never).create({
+      lines,
+    });
+    expect(po.id).toBe('po-new');
+    const call = reportError.mock.calls.find(
+      (c) => (c as unknown as [Error, { tag: string }])[1].tag === 'po.create.stamp_custom_items',
+    ) as unknown as [Error, { extra: Record<string, unknown> }];
+    expect(call[0].message).toBe('boom');
+    expect(call[1].extra).toMatchObject({ stamped: 0, unstamped: 150 });
   });
 });
 

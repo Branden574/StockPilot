@@ -860,6 +860,26 @@ export interface BookCrateSyncResult {
 const INVENTORY_LIST_COLUMNS =
   'id, sku, barcode, model_number, name, description, status, quantity_on_hand, reorder_point, reorder_quantity, unit_cost, retail_price, category_id, supplier_id, primary_location_id, warehouse_id, charter_id, tracking_type, item_type, is_rental, auto_archived, awaiting_first_receipt, custom_fields, group_id, variant_size, variant_size_system, jersey_number, variant_key, created_at, updated_at, created_by, updated_by';
 
+/** One row of lineLabelsByIds: what a form needs to label a line that
+ *  already points at an item, and what became of that item. */
+export interface ItemLineLabelRow {
+  id: string;
+  sku: string;
+  name: string;
+  barcode: string | null;
+  item_type: 'product' | 'book' | 'asset' | 'consumable';
+  unit_cost: number | null;
+  group_id: string | null;
+  variant_size: string | null;
+  category_id: string | null;
+  status: 'active' | 'archived' | 'discontinued';
+  /** Set when the item was deleted (it can no longer go on a PO). */
+  deleted_at: string | null;
+  is_rental: boolean;
+  /** A kit's pre-assembled stock (it can never go on a PO). */
+  is_bundle: boolean;
+}
+
 /** One row of listByIdsForExport: list()'s item row without the placement
  *  columns list() derives from holdings. */
 export interface InventoryExportItemRow {
@@ -1588,6 +1608,81 @@ export class InventoryService {
       (a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? '') || a.id.localeCompare(b.id),
     );
     return { items: visible.slice(0, limit), total: visible.length };
+  }
+
+  /**
+   * LABELS FOR LINES THAT ALREADY POINT AT AN ITEM. A form reopened on a
+   * saved record (a draft PO, a recurring template) has to show what each
+   * line is, whatever became of the item since: archived, still awaiting its
+   * first receipt, a rental bought from Rentals > Items, a kit's pre-assembled
+   * stock drafted before kits were refused, or DELETED. list() hides deleted
+   * items and rentals, so those lines used to render blank, while the save
+   * refused them by name ("... was deleted, remove it") and the buyer had to
+   * guess which blank line that was.
+   *
+   * No lifecycle, deleted, rental or kit filter on purpose: every row comes
+   * back with the flags that say what it is, and the form decides how to
+   * show it. Otherwise list()'s scoping: this organization, the caller's
+   * warehouses for a non-all-access role (or the optional warehouseId for
+   * one with all access), a viewer's category grants (RLS enforces those as
+   * well), and item_type (undefined means 'product', 'all' none; itemTypes
+   * wins). inventory_items RLS lets a member read a deleted row, so this
+   * shows nothing a member could not already read. Batched past the URL
+   * limit; throws on a failed batch.
+   */
+  async lineLabelsByIds(
+    ids: string[],
+    opts: {
+      itemType?: ItemListFilters['itemType'];
+      itemTypes?: ItemListFilters['itemTypes'];
+      warehouseId?: string;
+    } = {},
+  ): Promise<ItemLineLabelRow[]> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return [];
+    const viewerGrantsRead = this.viewerCategoryGrants();
+    const access = await getWarehouseAccess(this.ctx);
+    if (!access.hasAllAccess && access.readableIds.length === 0) return [];
+
+    let grants: Set<string> | null = null;
+    if (this.ctx.role === 'viewer') {
+      try {
+        grants = await viewerGrantsRead;
+        if (grants !== null && grants.size === 0) return [];
+      } catch {
+        // Defense in depth, as in list(): RLS still enforces the grants.
+      }
+    }
+
+    const ctx = this.ctx;
+    const rows = await fetchAllRowsByIds<ItemLineLabelRow>(unique, (batch) => (from, to) => {
+      let query = ctx.supabase
+        .from('inventory_items')
+        .select(
+          'id, sku, name, barcode, item_type, unit_cost, group_id, variant_size, category_id, status, deleted_at, is_rental, is_bundle',
+        )
+        .eq('organization_id', ctx.organizationId)
+        .in('id', batch);
+      if (!access.hasAllAccess) {
+        // in-list-bound: the caller's readable warehouses (an org's handful of sites)
+        query = query.in('warehouse_id', access.readableIds);
+      } else if (opts.warehouseId) {
+        query = query.eq('warehouse_id', opts.warehouseId);
+      }
+      if (opts.itemTypes && opts.itemTypes.length > 0) {
+        // in-list-bound: item types are a fixed enum of four values
+        query = query.in('item_type', opts.itemTypes);
+      } else if (opts.itemType === undefined) {
+        query = query.eq('item_type', 'product');
+      } else if (opts.itemType !== 'all') {
+        query = query.eq('item_type', opts.itemType);
+      }
+      return query.order('id').range(from, to) as unknown as PromiseLike<{
+        data: ItemLineLabelRow[] | null;
+        error: { message: string } | null;
+      }>;
+    });
+    return keepGranted(rows, grants);
   }
 
   /**

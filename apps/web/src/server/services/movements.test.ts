@@ -1026,6 +1026,55 @@ describe('getLowStockItems — expected-items exclusion (mig 0277)', () => {
   });
 });
 
+describe('getLowStockItems — a kit\'s pre-assembled stock is never low stock (0366)', () => {
+  it('RPC path: the ids dropped from the RPC answer include kit stock with a reorder point', async () => {
+    const stub = makeSupabaseStub({
+      // The drop list: rows the RPC could return that must not be shown.
+      'inventory_items.select': { data: [{ id: 'kit-1' }], error: null },
+      'rpc:low_stock_items': {
+        data: [
+          { id: 'kit-1', name: 'Reading Kit', sku: '__BUNDLE__0a000000', quantity_on_hand: 0, reorder_point: 3, reorder_quantity: 0, primary_location: null },
+          { id: 'real-1', name: 'Dell XPS', sku: 'S2', quantity_on_hand: 0, reorder_point: 2, reorder_quantity: 5, primary_location: null },
+        ],
+        error: null,
+      },
+    });
+    mockedCtx.value = makeServiceContext(stub.client);
+
+    const rows = await getLowStockItems(5);
+
+    expect(rows.map((r) => r.id)).toEqual(['real-1']);
+    // The drop list asks for kit stock as well as items awaiting their first
+    // receipt: without the is_bundle term a kit with a reorder point stays.
+    const chain = stub.chains.get('inventory_items.select') ?? [];
+    const args = stub.chainArgs.get('inventory_items.select') ?? [];
+    const ors = chain.map((m, i) => ({ m, a: args[i] })).filter((c) => c.m === 'or').map((c) => c.a?.[0]);
+    expect(ors).toEqual(['awaiting_first_receipt.eq.true,is_bundle.eq.true']);
+  });
+
+  it('warehouse path: the candidates query excludes kit stock (eq is_bundle=false)', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [
+          { id: 'real-1', name: 'Dell XPS', sku: 'S2', quantity_on_hand: 0, reorder_point: 2, reorder_quantity: 5, primary_location: null },
+        ],
+        error: null,
+      },
+    });
+    mockedCtx.value = makeServiceContext(stub.client);
+
+    await getLowStockItems(5, { warehouseId: 'wh-a' });
+
+    // The stub replays rows without filtering, so pin the filter itself: a
+    // drained kit (quantity 0) matches the quantity_on_hand <= 0 half of the
+    // candidate OR, and only this term keeps it out.
+    const chain = stub.chains.get('inventory_items.select') ?? [];
+    const args = stub.chainArgs.get('inventory_items.select') ?? [];
+    const eqs = chain.map((m, i) => ({ m, a: args[i] })).filter((c) => c.m === 'eq').map((c) => c.a);
+    expect(eqs).toContainEqual(['is_bundle', false]);
+  });
+});
+
 describe('getThirtyDayMetrics', () => {
   // Post-0224: getThirtyDayMetrics calls the dashboard_movement_metrics RPC
   // (per day-bucket + movement_type counts) and rolls the rows up in JS. These

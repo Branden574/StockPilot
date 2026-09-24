@@ -15,11 +15,12 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { requireOrgContext } from '@/lib/auth/session';
+import { reportError } from '@/lib/error-reporter';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { formatNumber } from '@/lib/utils';
 import { createClient } from '@/lib/supabase/server';
 import { readAutoReorderSettings } from '@/server/services/auto-reorder';
-import { PlanningService } from '@/server/services/planning';
+import { PLANNING_MAX_ITEMS, PlanningService } from '@/server/services/planning';
 
 import { planAllowsAutoReorder, type OrgBillingState } from '@stockpilot/core';
 
@@ -38,7 +39,7 @@ export default async function PlanningPage() {
   const ctx = await requireOrgContext();
   const supabase = await createClient();
   const svc = await PlanningService.forCurrentUser();
-  const [suggestions, params, autoReorder, orgBillingRes] = await Promise.all([
+  const [plan, params, autoReorder, orgBillingRes, openPoItems] = await Promise.all([
     svc.getReorderSuggestions(),
     svc.readParams(),
     readAutoReorderSettings(supabase, ctx.organizationId),
@@ -49,16 +50,36 @@ export default async function PlanningPage() {
       )
       .eq('id', ctx.organizationId)
       .maybeSingle(),
+    // Items already on an open PO, which the draft button skips. A failed read
+    // is NOT an empty set (that would overstate what the button drafts as if
+    // it were checked): it becomes null, the page keeps the unfiltered count
+    // and says it could not check. The button itself re-reads and fails
+    // closed, so it can never draft a duplicate either way.
+    svc.itemIdsOnOpenPurchaseOrders().catch((err: unknown) => {
+      void reportError(err, {
+        tag: 'planning.open_po_items',
+        organizationId: ctx.organizationId,
+        level: 'warning',
+      });
+      return null;
+    }),
   ]);
+  const { suggestions, truncated } = plan;
   const autoReorderEntitled = planAllowsAutoReorder(
     ((orgBillingRes.data as OrgBillingState | null) ?? { plan: null }) as OrgBillingState,
   );
 
   // The auto-draft path uses the canonical below-par filter (reorder_point > 0,
-  // on-hand at/below it); count those here so the button mirrors what it will do.
-  const belowParCount = suggestions.filter(
+  // on-hand at/below it) and skips items already on an open PO; count the same
+  // set here so the button mirrors what it will do. When the plan is
+  // truncated this counts only the ranked items (the button itself drafts
+  // from every item), which the coverage note below says.
+  const belowPar = suggestions.filter(
     (s) => s.currentReorderPoint > 0 && s.quantityOnHand <= s.currentReorderPoint,
-  ).length;
+  );
+  const onOpenPoCount =
+    openPoItems === null ? null : belowPar.filter((s) => openPoItems.has(s.itemId)).length;
+  const draftableCount = belowPar.length - (onOpenPoCount ?? 0);
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
@@ -79,11 +100,35 @@ export default async function PlanningPage() {
               days-of-cover first; non-moving items sink to the bottom.
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <DraftPosFromReorderButton itemCount={belowParCount} />
+          <div className="flex flex-col items-start gap-1 sm:items-end">
+            <DraftPosFromReorderButton itemCount={draftableCount} countIsPartial={truncated} />
+            {onOpenPoCount === null ? (
+              <p role="status" className="text-warning max-w-xs text-xs sm:text-right">
+                Couldn&apos;t check which of the {formatNumber(belowPar.length)} below-par items
+                are already on open purchase orders. Drafting checks again and skips those.
+              </p>
+            ) : onOpenPoCount > 0 ? (
+              <p className="text-muted-foreground max-w-xs text-xs sm:text-right">
+                {formatNumber(draftableCount)} to draft ·{' '}
+                {formatNumber(onOpenPoCount)} already on open POs (skipped)
+              </p>
+            ) : null}
           </div>
         </div>
       </div>
+
+      {truncated && (
+        <p
+          role="status"
+          data-testid="planning-coverage-note"
+          className="border-warning/40 bg-warning/10 text-foreground mb-4 rounded-md border px-3 py-2 text-sm"
+        >
+          This organization has more than {formatNumber(PLANNING_MAX_ITEMS)} items to plan, so
+          only {formatNumber(PLANNING_MAX_ITEMS)} of them are ranked below, and they are not
+          picked by urgency: an urgent item can be missing here, and the below-par count covers
+          only the items shown. &ldquo;Draft PO from suggestions&rdquo; still checks every item.
+        </p>
+      )}
 
       <Card>
         <CardHeader>

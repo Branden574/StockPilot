@@ -75,9 +75,9 @@ export async function GET(req: Request): Promise<Response> {
   // Resolve-by-id mode (`?ids=<uuid>&ids=<uuid>`). A picker that pages its
   // results server-side still has to render the LABEL of an already-selected
   // row that no longer appears in the current page — an edit-mode PO line
-  // pointing at an off-page item would otherwise render blank. This narrows
-  // to those exact ids (InventoryService.list's `ids` filter only ever
-  // SUBTRACTS from the org/RLS/warehouse-scoped set, so it can't widen
+  // pointing at an off-page item would otherwise render blank. This reads
+  // those exact ids through InventoryService.lineLabelsByIds (org, RLS,
+  // warehouse and viewer-grant scoped like list(), so it can't widen
   // visibility) and, like a label lookup must, ignores `q` entirely.
   // UUID-validated before it reaches PostgREST: `ids` is the one param that
   // flows into a raw `.in('id', ...)` list, and the repo's own precedent
@@ -173,48 +173,57 @@ export async function GET(req: Request): Promise<Response> {
   const offset = Math.min(10_000, Math.max(0, Number(params.get('offset')) || 0));
 
   const inventorySvc = new InventoryService(ctx);
-  const result = await inventorySvc.list(
-    byIds
-      ? {
-          // Label resolution, not search: no q, no chip filters. Lifecycle
-          // and expected predicates are both opened up because a line can
-          // legitimately point at an item that was archived, or that is
-          // still awaiting its first receipt, AFTER it was put on the PO —
-          // rendering that line blank is the bug this mode exists to stop.
-          ids,
-          itemType,
-          itemTypes,
-          excludeBundles,
-          status: 'all',
-          expected: 'any',
-          warehouseId,
-          limit: ids.length,
-        }
-      : {
-          q: raw,
-          itemType,
-          itemTypes,
-          excludeBundles,
-          // The Expected view spans lifecycles (mobile's listStatusPredicate
-          // lifecycle:null; the Items/Books pages pass status:'all' the same
-          // way) — so searching inside the chip view also reaches a flagged
-          // item someone manually archived. `expected: 'any'` is NOT that
-          // view: it must keep the caller's own status filter (default
-          // active-only), or a PO picker would start offering archived rows.
-          status: expected === true ? 'all' : status,
-          lowStock,
-          outOfStock,
-          expected,
-          ...(isbnMatches.length > 0 ? { isbnVariants: isbnMatches } : {}),
-          sort,
-          categoryIds,
-          locationIds,
-          rack,
-          warehouseId,
-          limit,
-          offset,
-        },
-  );
+
+  if (byIds) {
+    // Label resolution, not search: no q, no chip filters, and nothing
+    // filtered out for what became of the item. A line can point at an item
+    // that was archived, is still awaiting its first receipt, is a rental,
+    // is a kit's pre-assembled stock, or was DELETED after it was put on the
+    // PO; rendering that line blank is the bug this mode exists to stop. The
+    // PO save refuses a deleted item's or a kit's line by name, so the form
+    // must be able to show which line that is: each row says what it is
+    // (`deleted`, `is_rental`, `is_bundle`). Always the slim text shape.
+    const rows = await inventorySvc.lineLabelsByIds(ids, { itemType, itemTypes, warehouseId });
+    const items = rows.map((r) => ({
+      id: r.id,
+      sku: r.sku,
+      name: r.name,
+      barcode: r.barcode ?? null,
+      item_type: r.item_type,
+      unit_cost: Number(r.unit_cost) || 0,
+      group_id: r.group_id ?? null,
+      variant_size: r.variant_size ?? null,
+      deleted: r.deleted_at != null,
+      is_rental: r.is_rental === true,
+      is_bundle: r.is_bundle === true,
+    }));
+    return NextResponse.json({ items, total: items.length });
+  }
+
+  const result = await inventorySvc.list({
+    q: raw,
+    itemType,
+    itemTypes,
+    excludeBundles,
+    // The Expected view spans lifecycles (mobile's listStatusPredicate
+    // lifecycle:null; the Items/Books pages pass status:'all' the same
+    // way) — so searching inside the chip view also reaches a flagged
+    // item someone manually archived. `expected: 'any'` is NOT that
+    // view: it must keep the caller's own status filter (default
+    // active-only), or a PO picker would start offering archived rows.
+    status: expected === true ? 'all' : status,
+    lowStock,
+    outOfStock,
+    expected,
+    ...(isbnMatches.length > 0 ? { isbnVariants: isbnMatches } : {}),
+    sort,
+    categoryIds,
+    locationIds,
+    rack,
+    warehouseId,
+    limit,
+    offset,
+  });
 
   // Slim projection (`?slim=1`), for pickers that render a text row and no
   // thumbnail — the PO item picker fires one request per debounced keystroke

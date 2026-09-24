@@ -2,7 +2,11 @@
 
 import * as React from 'react';
 
-import { RecurringTemplatesPanel, type RecurringTemplateRow } from './recurring-templates-panel';
+import {
+  RecurringTemplatesPanel,
+  type RecurringLineLabel,
+  type RecurringTemplateRow,
+} from './recurring-templates-panel';
 
 interface ItemOption {
   id: string;
@@ -27,6 +31,8 @@ interface Props {
   suppliers: SupplierOption[];
   locations: LocationOption[];
   entitled: boolean;
+  /** Labels for items saved template lines point at that `items` lacks. */
+  lineLabels?: RecurringLineLabel[];
 }
 
 type Seed = {

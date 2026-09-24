@@ -148,6 +148,8 @@ describe('PO pages read BOTH product and book (PURCHASE_ORDER_ITEM_TYPES)', () =
       limit: 1000,
       expected: 'any',
       itemTypes: ['product', 'book'],
+      // A kit's pre-assembled stock is never ordered (0366): not offered.
+      excludeBundles: true,
     });
   });
 
@@ -157,6 +159,8 @@ describe('PO pages read BOTH product and book (PURCHASE_ORDER_ITEM_TYPES)', () =
       limit: 1000,
       expected: 'any',
       itemTypes: ['product', 'book'],
+      // A kit's pre-assembled stock is never ordered (0366): not offered.
+      excludeBundles: true,
     });
   });
 

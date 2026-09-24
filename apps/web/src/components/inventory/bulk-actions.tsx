@@ -266,7 +266,14 @@ export function BulkActions({
       toast.error(r.error.message);
       return;
     }
-    const { createdPoIds, skipped, supplierFailures, supplierCount } = r.data;
+    const {
+      createdPoIds,
+      skippedNoSupplier,
+      skippedNotOrderable,
+      supplierFailures,
+      supplierCount,
+      alreadyOnOpenPo,
+    } = r.data;
     const created = createdPoIds.length;
     if (created === 0) {
       toast.error(
@@ -276,11 +283,30 @@ export function BulkActions({
       );
       return;
     }
+    // One draft per supplier, so the suppliers drafted are the suppliers
+    // attempted minus the ones that failed: `supplierCount` alone counted a
+    // failed supplier as drafted ("Created 1 draft PO across 2 suppliers ·
+    // failed: Beta").
+    const suppliersDrafted = Math.max(0, supplierCount - supplierFailures.length);
     const parts: string[] = [
-      `Created ${created} draft PO${created === 1 ? '' : 's'} across ${supplierCount} supplier${supplierCount === 1 ? '' : 's'}`,
+      `Created ${created} draft PO${created === 1 ? '' : 's'} across ${suppliersDrafted} supplier${suppliersDrafted === 1 ? '' : 's'}`,
     ];
-    if (skipped > 0) {
-      parts.push(`${skipped} skipped (no supplier)`);
+    if (skippedNoSupplier > 0) {
+      parts.push(`${skippedNoSupplier} skipped (no supplier)`);
+    }
+    // Deleted items and a kit's pre-assembled stock never go on a PO; say how
+    // many of the chosen items that was rather than dropping them silently.
+    if (skippedNotOrderable > 0) {
+      parts.push(`${skippedNotOrderable} skipped (deleted, or a pre-assembled kit)`);
+    }
+    // The selection is drafted as chosen; say when some of it is already on
+    // order so the buyer can remove the duplicates before sending.
+    if (alreadyOnOpenPo === null) {
+      parts.push("couldn't check which items are already on open POs");
+    } else if (alreadyOnOpenPo > 0) {
+      parts.push(
+        `${alreadyOnOpenPo} ${alreadyOnOpenPo === 1 ? 'was' : 'were'} already on an open PO — review before sending`,
+      );
     }
     if (supplierFailures.length > 0) {
       const names = supplierFailures.map((f) => f.supplierName).join(', ');

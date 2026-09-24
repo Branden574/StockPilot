@@ -7,7 +7,7 @@ import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createNotification } from '@/server/services/notifications';
 import { fetchAllRows } from '@/server/services/lib/paginate';
-import { RecurringPoTemplatesService } from '@/server/services/recurring-pos';
+import { RecurringPoTemplatesService, recurringRunNotice } from '@/server/services/recurring-pos';
 import type { ServiceContext } from '@/server/services/context';
 
 import { planAllowsRecurringPos, type ModuleId, type OrgBillingState } from '@stockpilot/core';
@@ -60,6 +60,7 @@ export async function GET(req: Request) {
     let posCreated = 0;
     let posSent = 0;
     let posHeld = 0;
+    let linesLeftOff = 0;
 
     for (const { organization_id: orgId } of modRows) {
       try {
@@ -82,9 +83,14 @@ export async function GET(req: Request) {
         posCreated += summary.created;
         posSent += summary.sent;
         posHeld += summary.heldForReview;
+        linesLeftOff += summary.linesLeftOff;
 
-        if (summary.created > 0) {
-          await notifyAdmins(admin, orgId, summary);
+        // Admins hear about every run that created a PO, and about every run
+        // that left template lines off (a deleted item, a kit), including one
+        // that created nothing because no line could be ordered.
+        const notice = recurringRunNotice(summary);
+        if (notice) {
+          await notifyAdmins(admin, orgId, notice);
         }
       } catch (e) {
         void reportError(e, { tag: 'cron.recurring-pos.org', extra: { orgId } });
@@ -96,6 +102,7 @@ export async function GET(req: Request) {
       posCreated,
       posSent,
       posHeld,
+      linesLeftOff,
       candidates: modRows.length,
     });
   } catch (e) {
@@ -154,11 +161,11 @@ async function buildSystemContext(
   };
 }
 
-/** Notify the org's owners/admins that recurring POs ran. Best-effort. */
+/** Notify the org's owners/admins about a recurring-PO run. Best-effort. */
 async function notifyAdmins(
   admin: ReturnType<typeof createAdminClient>,
   orgId: string,
-  summary: { created: number; sent: number; heldForReview: number },
+  notice: { title: string; body: string },
 ): Promise<void> {
   const { data: admins } = await admin
     .from('organization_members')
@@ -168,19 +175,13 @@ async function notifyAdmins(
     .not('accepted_at', 'is', null)
     .is('impersonation_expires_at', null);
 
-  const sentPart = summary.sent > 0 ? `, ${summary.sent} sent` : '';
-  const heldPart = summary.heldForReview > 0 ? `, ${summary.heldForReview} held for review` : '';
-  const body = `Recurring purchase orders created ${summary.created} purchase order${
-    summary.created === 1 ? '' : 's'
-  }${sentPart}${heldPart}.`;
-
   for (const m of (admins ?? []) as Array<{ user_id: string }>) {
     await createNotification({
       organizationId: orgId,
       userId: m.user_id,
       type: 'purchase_order.auto_reorder',
-      title: 'Recurring purchase orders ran',
-      body,
+      title: notice.title,
+      body: notice.body,
       link: '/dashboard/purchase-orders',
     });
   }

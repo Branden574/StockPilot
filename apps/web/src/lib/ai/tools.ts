@@ -1319,7 +1319,7 @@ const draftPosTool: ToolExecutor = {
   declaration: {
     name: 'draftPos',
     description:
-      "WRITE TOOL — drafts purchase orders from items matching a filter, auto-grouped by supplier. Use when the user asks to 'draft POs', 'create restock POs', 'order more X', or any phrasing that means 'turn low/needed inventory into purchase orders.' Required confirmation flow: FIRST call searchInventory (or listLowStock) with the same filter to show the user a count + sample of items, then call draftPos only AFTER the user explicitly confirms. Items without supplier_id are skipped. Returns { createdPoIds, skipped, supplierFailures, supplierCount }; echo each new PO and any skips back to the user. Requires purchase_orders:manage permission — viewers cannot use it.",
+      "WRITE TOOL — drafts purchase orders from items matching a filter, auto-grouped by supplier. Use when the user asks to 'draft POs', 'create restock POs', 'order more X', or any phrasing that means 'turn low/needed inventory into purchase orders.' Required confirmation flow: FIRST call searchInventory (or listLowStock) with the same filter to show the user a count + sample of items, then call draftPos only AFTER the user explicitly confirms. Items without supplier_id are skipped. Items already on another open PO are still drafted (the user chose them) but counted in alreadyOnOpenPo (null = could not be checked) — tell the user so they can remove duplicates before sending. Returns { createdPoIds, skipped, alreadyOnOpenPo, supplierFailures, supplierCount, summary }; echo each new PO, any skips and the summary back to the user. Requires purchase_orders:manage permission — viewers cannot use it.",
     parameters: {
       type: SchemaType.OBJECT,
       properties: {
@@ -1389,6 +1389,10 @@ const draftPosTool: ToolExecutor = {
         typeof args.warehouseId === 'string' && args.warehouseId.length > 0
           ? args.warehouseId
           : null,
+      // A kit's pre-assembled stock is never bought from a supplier (it is
+      // built from its components), so it is never a draft candidate here.
+      // Without this a fully drained kit matched lowStock (on hand <= 0).
+      excludeBundles: true,
       limit,
     });
 
@@ -1397,6 +1401,9 @@ const draftPosTool: ToolExecutor = {
         matched: 0,
         createdPoIds: [],
         skipped: 0,
+        skippedNoSupplier: 0,
+        skippedNotOrderable: 0,
+        alreadyOnOpenPo: 0,
         supplierFailures: [],
         supplierCount: 0,
         message: 'No items matched that filter — nothing to draft.',
@@ -1410,6 +1417,7 @@ const draftPosTool: ToolExecutor = {
     return {
       matched: list.items.length,
       ...result,
+      summary: draftPosSummary(result),
     };
   },
 };
@@ -1547,6 +1555,15 @@ const applyReorderPointTool: ToolExecutor = {
     // Fetch first so the reply can show old → new (update() itself asserts
     // items:update and audits).
     const before = await svc.get(itemId);
+    // A kit's pre-assembled stock (is_bundle) changes only through Bundles
+    // (assemble, distribute) and is never bought, so a reorder point on it
+    // would only make the reorder paths suggest buying a kit. get() selects
+    // every column, so is_bundle is read, not assumed.
+    if ((before as { is_bundle?: boolean | null }).is_bundle === true) {
+      throw new Error(
+        "That item is a kit's pre-assembled stock, which is built from its components and never ordered, so it has no reorder point. Set reorder points on the kit's components instead.",
+      );
+    }
     const updated = await svc.update(itemId, patch);
     // Echo what the DB actually holds — never report the input as applied.
     const updatedRow = updated as { name?: string; reorder_point?: number; reorder_quantity?: number };
@@ -1594,11 +1611,24 @@ const suggestReorderPointsTool: ToolExecutor = {
   async execute(args, ctx) {
     const { PlanningService } = await import('@/server/services/planning');
     const svc = new PlanningService(ctx);
-    const suggestions = await svc.getReorderSuggestions({
+    const { suggestions, truncated } = await svc.getReorderSuggestions({
       warehouseId: typeof args.warehouseId === 'string' && args.warehouseId ? args.warehouseId : undefined,
     });
     const topN = Math.min(Math.max(1, Number(args.topN) || 20), 50);
-    return { total: suggestions.length, returned: Math.min(topN, suggestions.length), suggestions: suggestions.slice(0, topN) };
+    return {
+      total: suggestions.length,
+      returned: Math.min(topN, suggestions.length),
+      // The review ranks at most PLANNING_MAX_ITEMS items. Past that `total`
+      // counts only the items ranked, and an urgent item can be missing; the
+      // note tells the model to say so instead of presenting a full review.
+      truncated,
+      ...(truncated
+        ? {
+            note: `This organization has more items than the review ranks (${suggestions.length}), so this is a partial review: an urgent item may be missing and "total" counts only the items reviewed. Suggest narrowing it with a warehouseId.`,
+          }
+        : {}),
+      suggestions: suggestions.slice(0, topN),
+    };
   },
 };
 
@@ -1607,7 +1637,7 @@ const draftPosFromForecastTool: ToolExecutor = {
   declaration: {
     name: 'draftPosFromForecast',
     description:
-      "WRITE TOOL — one call drafts purchase orders for EVERYTHING below its reorder point, using the velocity forecast's deficit math, grouped by supplier (items with no supplier are reported back, not silently dropped). Use for 'draft everything below par', 'create all my restock POs'. Confirmation flow: FIRST call suggestReorderPoints (or listLowStock) to show what would be ordered, then call this only AFTER the user explicitly confirms. Requires planning module + purchase_orders:manage. POs are created as DRAFTS — nothing is sent to suppliers. Echo each created PO and the unassigned-supplier bucket back to the user.",
+      "WRITE TOOL — one call drafts purchase orders for EVERYTHING below its reorder point, using the velocity forecast's deficit math, grouped by supplier (items with no supplier are reported back, not silently dropped). Use for 'draft everything below par', 'create all my restock POs'. Confirmation flow: FIRST call suggestReorderPoints (or listLowStock) to show what would be ordered, then call this only AFTER the user explicitly confirms. Requires planning module + purchase_orders:manage. POs are created as DRAFTS — nothing is sent to suppliers. Items already on an open PO (draft, ordered or in transit) are skipped and counted in skippedOnOpenPo. Echo each created PO, the unassigned-supplier bucket and the summary back to the user.",
     parameters: {
       type: SchemaType.OBJECT,
       properties: {},
@@ -1622,9 +1652,69 @@ const draftPosFromForecastTool: ToolExecutor = {
     assertPermission(ctx, 'purchase_orders:manage');
     const { PlanningService } = await import('@/server/services/planning');
     const svc = new PlanningService(ctx);
-    return svc.autoGenerateDraftPOs();
+    const result = await svc.autoGenerateDraftPOs();
+    return { ...result, summary: draftPosFromForecastSummary(result) };
   },
 };
+
+/** One plain sentence for the model to relay after draftPos. */
+export function draftPosSummary(r: {
+  createdPoIds: string[];
+  skippedNoSupplier: number;
+  skippedNotOrderable: number;
+  alreadyOnOpenPo: number | null;
+  supplierFailures: unknown[];
+}): string {
+  const created = r.createdPoIds.length;
+  const parts = [`Created ${created} draft PO${created === 1 ? '' : 's'}.`];
+  if (r.skippedNoSupplier > 0) {
+    parts.push(`${r.skippedNoSupplier} item${r.skippedNoSupplier === 1 ? '' : 's'} skipped (no supplier).`);
+  }
+  if (r.skippedNotOrderable > 0) {
+    parts.push(
+      `${r.skippedNotOrderable} item${r.skippedNotOrderable === 1 ? '' : 's'} skipped (deleted, or a pre-assembled kit, which is never ordered).`,
+    );
+  }
+  if (r.alreadyOnOpenPo === null) {
+    parts.push('Could not check whether any of these items are already on open purchase orders.');
+  } else if (r.alreadyOnOpenPo > 0) {
+    parts.push(
+      `${r.alreadyOnOpenPo} of the drafted item${r.alreadyOnOpenPo === 1 ? ' was' : 's were'} already on another open purchase order; review the drafts before sending.`,
+    );
+  }
+  if (r.supplierFailures.length > 0) {
+    parts.push(`${r.supplierFailures.length} supplier${r.supplierFailures.length === 1 ? '' : 's'} failed.`);
+  }
+  return parts.join(' ');
+}
+
+/** One plain sentence for the model to relay after draftPosFromForecast. */
+export function draftPosFromForecastSummary(r: {
+  createdPoIds: string[];
+  unassignedCount: number;
+  skippedOnOpenPo: number;
+  supplierFailures: unknown[];
+}): string {
+  const created = r.createdPoIds.length;
+  if (created === 0 && r.supplierFailures.length === 0) {
+    return r.skippedOnOpenPo > 0
+      ? `No drafts created: all ${r.skippedOnOpenPo} below-par item${r.skippedOnOpenPo === 1 ? ' is' : 's are'} already on open purchase orders.`
+      : 'No drafts created: nothing is below its reorder point.';
+  }
+  const parts = [`Created ${created} draft PO${created === 1 ? '' : 's'}.`];
+  if (r.unassignedCount > 0) {
+    parts.push(`${r.unassignedCount} item${r.unassignedCount === 1 ? '' : 's'} on an unassigned draft (set a supplier).`);
+  }
+  if (r.skippedOnOpenPo > 0) {
+    parts.push(
+      `${r.skippedOnOpenPo} below-par item${r.skippedOnOpenPo === 1 ? ' was' : 's were'} skipped because already on an open purchase order.`,
+    );
+  }
+  if (r.supplierFailures.length > 0) {
+    parts.push(`${r.supplierFailures.length} supplier${r.supplierFailures.length === 1 ? '' : 's'} failed.`);
+  }
+  return parts.join(' ');
+}
 
 const VISION_MODEL = env.GEMINI_MODEL;
 const VISION_FETCH_TIMEOUT_MS = 12_000;

@@ -22,7 +22,9 @@ import {
   writeInIdBatches,
 } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
+import { whereOrderableItem, whereReorderCandidate } from './lib/orderable-items';
 import { fetchAllRows } from './lib/paginate';
+import { postgrestErrorText } from './lib/postgrest-error';
 import { audit, auditMany } from './audit';
 import { dispatchEvent } from './integration-events';
 import { ItemImagesService } from './item-images';
@@ -32,6 +34,94 @@ import { createItemSchema } from '@stockpilot/core';
 /** Notifications created at once by one fan-out (maintenance-notify.ts uses
  *  the same number for the same reason). */
 const PO_NOTIFY_CONCURRENCY = 6;
+
+/**
+ * The PO states in which an item is still "on order": a draft (it will be
+ * sent), and every state that still expects goods. An item on a PO in one of
+ * these is not drafted again by the reorder paths. Received and cancelled POs
+ * do not count.
+ */
+const OPEN_PO_STATUSES = ['draft', 'expected_inbound', 'ordered', 'partially_received'] as const;
+
+/** Rows per open-PO read page: PostgREST's max_rows (supabase/config.toml). */
+const OPEN_PO_PAGE_SIZE = 1000;
+
+/** One line as save_purchase_order_draft (0366) takes it. */
+type SaveDraftLine = { itemId: string; quantityOrdered: number; unitCost: number };
+
+/** What save_purchase_order_draft returns. `id` is null only for a reorder
+ *  draft whose every line was already on an open PO (nothing written). */
+type SavedDraft = {
+  id: string | null;
+  stamped: number;
+  stampError: string | null;
+  /** Items left off because they are already on an open PO (reorder only). */
+  skippedItemIds: string[];
+};
+
+/**
+ * Map a save_purchase_order_draft error onto a ServiceError. The function
+ * marks its own refusals with a hint (0366 header); a PO number taken by
+ * another PO surfaces as the unique index's 23505. Anything else (an RLS or
+ * guard refusal, a lost connection) stays an internal error, as the direct
+ * writes it replaces reported it.
+ *
+ * Mapped by hint, never by SQLSTATE: po_not_draft is 55000. A function must
+ * never raise 40001 for a refusal (PostgREST < 16 re-runs the transaction
+ * forever, so the request never answers; 0367 guards the class), so no 40001
+ * reaches this function from the save.
+ */
+function saveDraftRpcError(err: { message?: string; code?: string; hint?: string | null }): ServiceError {
+  const message = err.message ?? '';
+  if (err.code === '23505') {
+    return new ServiceError('conflict', 'That PO number is already in use.');
+  }
+  switch (err.hint) {
+    case 'po_not_draft':
+      return new ServiceError(
+        'conflict',
+        'This purchase order is no longer a draft (it may have just been ordered).',
+      );
+    case 'po_not_found':
+      return new ServiceError('not_found', 'Purchase order not found');
+    case 'po_lines_required':
+      return new ServiceError('validation_error', 'Add at least one line item');
+    case 'po_line_invalid':
+    case 'po_invalid':
+    case 'po_not_in_org':
+      return new ServiceError('validation_error', message);
+    // A kit's pre-assembled stock or a deleted item on a line (0366). The
+    // database message names the item when the caller can see it; the
+    // fallback says the same without the name.
+    case 'po_line_bundle':
+      return new ServiceError(
+        'validation_error',
+        message ||
+          "A pre-assembled kit can't be ordered on a purchase order. Kits are built from their components, so order the components instead.",
+      );
+    case 'po_line_deleted':
+      return new ServiceError(
+        'validation_error',
+        message ||
+          "An item on this purchase order was deleted, so it can't be ordered. Remove it from the purchase order and save again.",
+      );
+    default:
+      break;
+  }
+  // A deadlock or a lock wait the database gave up on. The save locks the
+  // header and then the lines; a direct DELETE of the same draft's lines (the
+  // editor before 0366, still served to old tabs for up to 12 h by Vercel
+  // skew protection, or a raw API call) locks them the other way round, and
+  // Postgres aborts one of the two (40P01; PostgREST does not retry it). The
+  // whole call rolled back, so trying again is safe.
+  if (err.code === '40P01' || err.code === '55P03') {
+    return new ServiceError(
+      'conflict',
+      'This purchase order was changed at the same time. Reload it and try again.',
+    );
+  }
+  return new ServiceError('internal_error', message || 'Could not save the purchase order.');
+}
 
 const lineInputSchema = z
   .object({
@@ -566,7 +656,35 @@ export class PurchaseOrdersService {
     return (charter?.id as string | undefined) ?? null;
   }
 
-  async create(input: CreatePoInput) {
+  async create(input: CreatePoInput): Promise<{ id: string; poNumber: string }> {
+    const res = await this.createDraftPo(input, { skipItemsOnOpenPo: false });
+    // Without the reorder flag the save never skips a line, so it always
+    // returns a PO; anything else is a broken contract, not "nothing to do".
+    if (res.id === null) {
+      throw new ServiceError('internal_error', 'save_purchase_order_draft returned no purchase order id');
+    }
+    return { id: res.id, poNumber: res.poNumber };
+  }
+
+  /**
+   * A reorder draft (the "Draft PO from suggestions" button, the AI tool and
+   * the daily auto-reorder): the database leaves off every line whose item is
+   * already on an open PO, under a per-organization lock, so two runs at once
+   * can never draft the same item twice (0366, p_skip_items_on_open_po). The
+   * callers' own open-PO check only groups and counts; this is the guarantee.
+   * `id` is null when every line was already on order (nothing was written).
+   */
+  private async createReorderDraft(
+    supplierId: string | null,
+    lines: SaveDraftLine[],
+  ): Promise<{ id: string | null; poNumber: string; skippedItemIds: string[] }> {
+    return this.createDraftPo({ supplierId, lines }, { skipItemsOnOpenPo: true });
+  }
+
+  private async createDraftPo(
+    input: CreatePoInput,
+    opts: { skipItemsOnOpenPo: boolean },
+  ): Promise<{ id: string | null; poNumber: string; skippedItemIds: string[] }> {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
 
@@ -598,7 +716,8 @@ export class PurchaseOrdersService {
     // FAST — otherwise we'd create the custom catalog items, then hit the unique
     // constraint on insert, and strand those items as orphans (made more likely
     // now that a duplicate po_number is a real, user-triggerable failure). The
-    // insert below still keeps the 23505 guard for the rare concurrent-dup race.
+    // save below still maps the unique index's 23505 for the rare concurrent
+    // race (and archives the custom items it created).
     const suppliedPoNumber = input.poNumber?.trim();
     let poNumber: string;
     if (suppliedPoNumber) {
@@ -639,17 +758,85 @@ export class PurchaseOrdersService {
       poNumber = (numberRpc as string | null) ?? `PO-${Date.now()}`;
     }
 
-    // For each line that carries a newItemName, create a real catalog item via
-    // InventoryService (which enforces items:create permission, plan limits,
-    // SKU auto-gen, and warehouse access) and replace the line with its new id.
-    // The PO number was already validated as available above, so a clean create
-    // won't strand these as orphans (only the rare concurrent-duplicate race).
-    const invSvc = new InventoryService(this.ctx);
-    const resolvedLines: Array<{ itemId: string; quantityOrdered: number; unitCost: number }> = [];
-    // Catalog items we auto-create for newItemName lines — stamped with this PO
-    // after insert so cancelling the PO can archive the unused ones.
+    // Pure reads, before any custom item exists: a foreign supplier must not
+    // leave items behind (these used to run after the item loop).
+    await this.assertSupplierInOrg(input.supplierId);
+    const billToCharterId = await this.resolveCharterId(input.charterId);
+
+    // Custom "newItemName" lines become real catalog items (InventoryService
+    // enforces items:create, plan limits, SKU auto-gen and warehouse access)
+    // BEFORE the one-transaction save below. Items created here are archived
+    // again if anything after their creation fails, so a failed create leaves
+    // neither a PO nor hidden items behind.
     const customItemIds: string[] = [];
-    for (const l of input.lines) {
+    let saved: SavedDraft;
+    let resolvedLines: SaveDraftLine[];
+    try {
+      resolvedLines = await this.resolveLines(input.lines, customItemWarehouseId, customItemIds);
+      saved = await this.saveDraft({
+        poId: null,
+        poNumber,
+        supplierId: input.supplierId ?? null,
+        destinationLocationId: input.destinationLocationId ?? null,
+        charterId: billToCharterId,
+        expectedAt: input.expectedAt ?? null,
+        notes: input.notes ?? null,
+        lines: resolvedLines,
+        customItemIds,
+        op: 'po.create',
+        skipItemsOnOpenPo: opts.skipItemsOnOpenPo,
+      });
+    } catch (e) {
+      await this.discardCreatedCustomItems(customItemIds, 'po.create.rollback_custom_items');
+      throw e;
+    }
+    const poId = saved.id;
+    // Every line was already on an open PO (reorder drafts only): nothing
+    // was written, so there is nothing to announce. The PO number drawn
+    // above is simply not used.
+    if (poId === null) return { id: null, poNumber, skippedItemIds: saved.skippedItemIds };
+
+    const skipped = new Set(saved.skippedItemIds);
+    const lineCount = resolvedLines.filter((l) => !skipped.has(l.itemId)).length;
+
+    void audit(
+      {
+        event: 'purchase_order.created',
+        entityType: 'purchase_order',
+        entityId: poId,
+        extra: {
+          po_number: poNumber,
+          supplier_id: input.supplierId ?? null,
+          line_count: lineCount,
+        },
+      },
+      this.ctx,
+    );
+    // Fan out to configured webhooks / Slack / Teams (best-effort).
+    void dispatchEvent(this.ctx.organizationId, 'po.created', {
+      id: poId,
+      poNumber,
+      lineCount,
+    });
+
+    return { id: poId, poNumber, skippedItemIds: saved.skippedItemIds };
+  }
+
+  /**
+   * Resolve form lines to item ids, creating a catalog item for every
+   * `newItemName` line (hidden as "Expected" until its first receipt,
+   * migration 0277). Each created id is pushed onto `createdIds` AS IT IS
+   * CREATED, so a failure on a later line still tells the caller which items
+   * to archive.
+   */
+  private async resolveLines(
+    lines: CreatePoInput['lines'],
+    customItemWarehouseId: string | null,
+    createdIds: string[],
+  ): Promise<SaveDraftLine[]> {
+    const invSvc = new InventoryService(this.ctx);
+    const resolved: SaveDraftLine[] = [];
+    for (const l of lines) {
       if (l.newItemName) {
         // Parse through the item schema to apply all Zod defaults (retailPrice,
         // reorderPoint, reorderQuantity, unitOfMeasure, trackingType, etc.)
@@ -663,131 +850,143 @@ export class PurchaseOrdersService {
           quantityOnHand: 0,
           warehouseId: customItemWarehouseId,
         });
-        // awaitingFirstReceipt: a custom item is born FROM this PO at qty
-        // 0 — hidden ("Expected", migration 0277) until the receive flow
-        // raises its quantity and the DB trigger clears the flag.
         const newItem = await invSvc.create(itemInput, { awaitingFirstReceipt: true });
-        customItemIds.push(newItem.id as string);
-        resolvedLines.push({
+        createdIds.push(newItem.id as string);
+        resolved.push({
           itemId: newItem.id as string,
           quantityOrdered: l.quantityOrdered,
           unitCost: l.unitCost,
         });
       } else {
         // itemId is guaranteed present by the refine (validated upstream).
-        resolvedLines.push({
+        resolved.push({
           itemId: l.itemId!,
           quantityOrdered: l.quantityOrdered,
           unitCost: l.unitCost,
         });
       }
     }
+    return resolved;
+  }
 
-    const subtotal = resolvedLines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
-    await this.assertSupplierInOrg(input.supplierId);
-    const billToCharterId = await this.resolveCharterId(input.charterId);
-
-    const { data: po, error } = await this.ctx.supabase
-      .from('purchase_orders')
-      .insert({
-        organization_id: this.ctx.organizationId,
-        po_number: poNumber,
-        supplier_id: input.supplierId ?? null,
-        destination_location_id: input.destinationLocationId ?? null,
-        charter_id: billToCharterId,
-        expected_at: input.expectedAt ?? null,
-        notes: input.notes ?? null,
-        subtotal,
-        total: subtotal,
-        status: 'draft',
-        created_by: this.ctx.userId,
-        updated_by: this.ctx.userId,
-      })
-      .select('id')
-      .single();
-    // Unique-constraint violation on (organization_id, po_number) — surface a
-    // clean user-facing message instead of leaking the raw Postgres error.
-    if (error?.code === '23505') {
-      throw new ServiceError('conflict', 'That PO number is already in use.');
-    }
-    if (error) throw new ServiceError('internal_error', error.message);
-
-    const linesPayload = resolvedLines.map((l) => ({
-      organization_id: this.ctx.organizationId,
-      purchase_order_id: po.id as string,
-      item_id: l.itemId,
-      quantity_ordered: l.quantityOrdered,
-      unit_cost: l.unitCost,
-    }));
-    const { error: linesError } = await this.ctx.supabase
-      .from('purchase_order_items')
-      .insert(linesPayload);
-    if (linesError) throw new ServiceError('internal_error', linesError.message);
-
-    // Stamp auto-created custom items with their origin PO (items were created
-    // before the PO row existed, so we backfill the link here). Best-effort: a
-    // failure here only weakens cancel-time cleanup, it must not fail the PO.
-    if (customItemIds.length > 0) {
-      // Batched: a PO's custom lines have no cap, and one `.in()` past ~215
-      // ids fails. One batch at a time; a failure stops the rest and is
-      // reported with how many items were left unstamped.
-      const ctx = this.ctx;
-      const stamp = await writeInIdBatches(customItemIds, (batch) =>
-        ctx.supabase
-          .from('inventory_items')
-          .update({ created_from_purchase_order_id: po.id as string })
-          .eq('organization_id', ctx.organizationId)
-          .in('id', batch),
-      );
-      if (stamp.error !== null) {
-        void reportError(new Error(stamp.error), {
-          tag: 'po.create.stamp_custom_items',
-          organizationId: this.ctx.organizationId,
-          extra: { stamped: stamp.written.length, unstamped: stamp.notWritten.length },
-        });
+  /**
+   * Write a draft PO — header, lines and custom-item tags — in ONE
+   * transaction (save_purchase_order_draft, migration 0366). `poId` null
+   * creates; otherwise it replaces that draft's header and lines, refusing a
+   * PO that is no longer a draft. The database computes subtotal and total.
+   *
+   * `p_actor` keeps the cron's created_by (a service-role call has no
+   * auth.uid()); for a signed-in caller the function and the 0364 guard use
+   * auth.uid(), so it cannot be spoofed.
+   */
+  private async saveDraft(args: {
+    poId: string | null;
+    poNumber: string;
+    supplierId: string | null;
+    destinationLocationId: string | null;
+    charterId: string | null;
+    expectedAt: string | null;
+    notes: string | null;
+    lines: SaveDraftLine[];
+    customItemIds: string[];
+    /** Names the report and invalidation tags. */
+    op: 'po.create' | 'po.update';
+    /** Reorder drafts only (create): leave off items already on an open PO. */
+    skipItemsOnOpenPo?: boolean;
+  }): Promise<SavedDraft> {
+    const { data, error } = await this.ctx.supabase.rpc('save_purchase_order_draft', {
+      p_org_id: this.ctx.organizationId,
+      p_po_id: args.poId,
+      p_po_number: args.poNumber,
+      p_supplier_id: args.supplierId,
+      p_destination_location_id: args.destinationLocationId,
+      p_charter_id: args.charterId,
+      p_expected_at: args.expectedAt,
+      p_notes: args.notes,
+      p_lines: args.lines.map((l) => ({
+        item_id: l.itemId,
+        quantity_ordered: l.quantityOrdered,
+        unit_cost: l.unitCost,
+      })),
+      p_custom_item_ids: args.customItemIds,
+      p_actor: this.ctx.userId,
+      p_skip_items_on_open_po: args.skipItemsOnOpenPo === true,
+    });
+    if (error) throw saveDraftRpcError(error as { message?: string; code?: string; hint?: string | null });
+    const row = data as {
+      id?: string | null;
+      stamped?: number | null;
+      stamp_error?: string | null;
+      skipped_item_ids?: string[] | null;
+    } | null;
+    const skippedItemIds = Array.isArray(row?.skipped_item_ids) ? row.skipped_item_ids : [];
+    if (!row?.id) {
+      // Only a reorder draft whose every line was already on order may come
+      // back without a PO; anything else is a broken contract.
+      if (args.skipItemsOnOpenPo === true && row && skippedItemIds.length > 0) {
+        return { id: null, stamped: 0, stampError: null, skippedItemIds };
       }
-      // The stamp bumps updated_at (tg_inventory_items_set_updated_at), the
+      throw new ServiceError('internal_error', 'save_purchase_order_draft returned no purchase order id');
+    }
+    const saved = {
+      id: row.id,
+      stamped: Number(row.stamped ?? 0),
+      stampError: row.stamp_error ?? null,
+      skippedItemIds,
+    };
+    if (args.customItemIds.length > 0) {
+      this.reportStampShortfall(`${args.op}.stamp_custom_items`, args.customItemIds.length, saved);
+      // The tag bumps updated_at (tg_inventory_items_set_updated_at), the
       // default view's sort key. The items themselves came from
       // InventoryService.create, which already invalidated.
-      invalidateInventoryListAfterWrite(this.ctx.organizationId, 'po.create');
+      invalidateInventoryListAfterWrite(this.ctx.organizationId, args.op);
     }
+    return saved;
+  }
 
-    void audit(
+  /**
+   * The custom-item tag is best-effort (a shortfall only weakens cancel-time
+   * cleanup), but never silent: RLS filtering some rows, or an error, is
+   * reported with how many items were left untagged.
+   */
+  private reportStampShortfall(
+    tag: string,
+    expected: number,
+    saved: { stamped: number; stampError: string | null },
+  ): void {
+    if (saved.stampError === null && saved.stamped >= expected) return;
+    void reportError(
+      new Error(saved.stampError ?? `tagged ${saved.stamped} of ${expected} custom items`),
       {
-        event: 'purchase_order.created',
-        entityType: 'purchase_order',
-        entityId: po.id as string,
-        extra: {
-          po_number: poNumber,
-          supplier_id: input.supplierId ?? null,
-          line_count: input.lines.length,
-        },
+        tag,
+        organizationId: this.ctx.organizationId,
+        extra: { stamped: saved.stamped, unstamped: Math.max(0, expected - saved.stamped) },
       },
-      this.ctx,
     );
-    // Fan out to configured webhooks / Slack / Teams (best-effort).
-    void dispatchEvent(this.ctx.organizationId, 'po.created', {
-      id: po.id as string,
-      poNumber,
-      lineCount: input.lines.length,
-    });
-
-    return { id: po.id as string, poNumber };
   }
 
 
   /**
    * Edit a DRAFT purchase order in place. The header fields (supplier,
    * destination, expected date, notes, PO number) and the full line-item
-   * list are replaced atomically. Only drafts can be edited — once ordered
-   * the PO is immutable (use receive/cancel flows instead).
+   * list are replaced in ONE database transaction
+   * (save_purchase_order_draft, migration 0366): the header and lines change
+   * together or not at all. Only drafts can be edited — once ordered the PO is
+   * immutable (use receive/cancel flows instead).
+   *
+   * Custom "newItemName" lines are created as catalog items BEFORE that
+   * transaction (InventoryService owns item creation); if anything after
+   * their creation fails, the items created by this call are archived again.
    *
    * Security guarantees:
    *   - assertModuleEnabled + assertPermission gate matches create()
    *   - Every query is scoped to ctx.organizationId (no cross-tenant edit)
-   *   - status !== 'draft' guard is checked BEFORE any write
-   *   - Line-delete is safe: draft POs have no receipt_lines yet
-   *   - Header update is fail-closed: 0-row update throws conflict
+   *   - get() refuses a non-draft BEFORE any item is created (fast pre-check)
+   *   - The function locks the header row and re-reads its status: a PO that
+   *     was ordered after the pre-check is refused ("no longer a draft")
+   *     and nothing is written; two saves of one draft run one after the
+   *     other, never interleaved
+   *   - Line replacement is safe: a draft PO has no receipt_lines yet
    */
   async update(id: string, input: CreatePoInput): Promise<{ id: string; poNumber: string }> {
     assertModuleEnabled(this.ctx, 'purchase_orders');
@@ -854,128 +1053,34 @@ export class PurchaseOrdersService {
       poNumber = suppliedPoNumber ?? currentPoNumber;
     }
 
-    // Subtotal is computable straight from the input lines (qty × unitCost) —
-    // it doesn't depend on resolving item ids — so we can claim the header
-    // BEFORE doing any destructive work.
-    const subtotal = input.lines.reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
     await this.assertSupplierInOrg(input.supplierId);
     const billToCharterId = await this.resolveCharterId(input.charterId);
 
-    // Atomic claim: update the header with a `status = 'draft'` guard. This is the
-    // AUTHORITATIVE draft gate (the get() check above is only a fast pre-check).
-    // If a concurrent "mark as ordered" raced in after our get(), this returns 0
-    // rows and we abort here — BEFORE creating any custom items or touching the
-    // line rows — so a now-ordered PO is never mutated and no items are orphaned.
-    // org + id scope prevents cross-tenant edits.
-    const { data: updatedPo, error: updErr } = await this.ctx.supabase
-      .from('purchase_orders')
-      .update({
-        supplier_id: input.supplierId ?? null,
-        destination_location_id: input.destinationLocationId ?? null,
-        charter_id: billToCharterId,
-        expected_at: input.expectedAt ?? null,
-        notes: input.notes ?? null,
-        po_number: poNumber,
-        subtotal,
-        total: subtotal,
-        updated_by: this.ctx.userId,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id)
-      .eq('status', 'draft')
-      .select('id')
-      .maybeSingle();
-    // A concurrent create/edit could claim this po_number between our pre-check
-    // and this write → partial unique index 23505. Map it to a clean conflict,
-    // mirroring create()'s backstop, instead of leaking the raw Postgres text.
-    if (updErr?.code === '23505') {
-      throw new ServiceError('conflict', 'That PO number is already in use.');
-    }
-    if (updErr) throw new ServiceError('internal_error', updErr.message);
-    if (!updatedPo) {
-      throw new ServiceError(
-        'conflict',
-        'This purchase order is no longer a draft (it may have just been ordered).',
-      );
-    }
-
-    // Header is claimed (still draft). Now resolve lines — creating catalog items
-    // for any newItemName lines — and replace the line set.
-    const invSvc = new InventoryService(this.ctx);
-    const resolvedLines: Array<{ itemId: string; quantityOrdered: number; unitCost: number }> = [];
+    // Create the custom items, then save header + lines in one transaction.
+    // The function's row lock and status re-read are the AUTHORITATIVE draft
+    // gate (the get() check above is only a fast pre-check): a concurrent
+    // "mark as ordered" makes it refuse, and the items this call created are
+    // archived again, so a now-ordered PO is never mutated and no hidden
+    // items are left behind.
     const customItemIds: string[] = [];
-    for (const l of input.lines) {
-      if (l.newItemName) {
-        const itemInput = createItemSchema.parse({
-          name: l.newItemName,
-          itemType: 'product',
-          status: 'active',
-          unitCost: l.unitCost,
-          quantityOnHand: 0,
-          warehouseId: customItemWarehouseId,
-        });
-        // Same as create(): PO-born custom item → hidden ("Expected",
-        // migration 0277) until its first receipt clears the flag.
-        const newItem = await invSvc.create(itemInput, { awaitingFirstReceipt: true });
-        customItemIds.push(newItem.id as string);
-        resolvedLines.push({
-          itemId: newItem.id as string,
-          quantityOrdered: l.quantityOrdered,
-          unitCost: l.unitCost,
-        });
-      } else {
-        resolvedLines.push({
-          itemId: l.itemId!,
-          quantityOrdered: l.quantityOrdered,
-          unitCost: l.unitCost,
-        });
-      }
-    }
-
-    // Replace lines: delete existing, insert resolved set (safe — a draft PO has
-    // no receipt_lines referencing these line rows).
-    const { error: delErr } = await this.ctx.supabase
-      .from('purchase_order_items')
-      .delete()
-      .eq('purchase_order_id', id)
-      .eq('organization_id', this.ctx.organizationId);
-    if (delErr) throw new ServiceError('internal_error', delErr.message);
-
-    const linesPayload = resolvedLines.map((l) => ({
-      organization_id: this.ctx.organizationId,
-      purchase_order_id: id,
-      item_id: l.itemId,
-      quantity_ordered: l.quantityOrdered,
-      unit_cost: l.unitCost,
-    }));
-    const { error: linesErr } = await this.ctx.supabase
-      .from('purchase_order_items')
-      .insert(linesPayload);
-    if (linesErr) throw new ServiceError('internal_error', linesErr.message);
-
-    // Stamp any custom items created during this edit with their origin PO.
-    if (customItemIds.length > 0) {
-      // Batched: a PO's custom lines have no cap, and one `.in()` past ~215
-      // ids fails. One batch at a time; a failure stops the rest and is
-      // reported with how many items were left unstamped.
-      const ctx = this.ctx;
-      const stamp = await writeInIdBatches(customItemIds, (batch) =>
-        ctx.supabase
-          .from('inventory_items')
-          .update({ created_from_purchase_order_id: id })
-          .eq('organization_id', ctx.organizationId)
-          .in('id', batch),
-      );
-      if (stamp.error !== null) {
-        void reportError(new Error(stamp.error), {
-          tag: 'po.update.stamp_custom_items',
-          organizationId: this.ctx.organizationId,
-          extra: { stamped: stamp.written.length, unstamped: stamp.notWritten.length },
-        });
-      }
-      // Same updated_at bump as the create() stamp.
-      invalidateInventoryListAfterWrite(this.ctx.organizationId, 'po.update');
+    let resolvedLines: SaveDraftLine[];
+    try {
+      resolvedLines = await this.resolveLines(input.lines, customItemWarehouseId, customItemIds);
+      await this.saveDraft({
+        poId: id,
+        poNumber,
+        supplierId: input.supplierId ?? null,
+        destinationLocationId: input.destinationLocationId ?? null,
+        charterId: billToCharterId,
+        expectedAt: input.expectedAt ?? null,
+        notes: input.notes ?? null,
+        lines: resolvedLines,
+        customItemIds,
+        op: 'po.update',
+      });
+    } catch (e) {
+      await this.discardCreatedCustomItems(customItemIds, 'po.update.rollback_custom_items');
+      throw e;
     }
 
     void audit(
@@ -1284,99 +1389,235 @@ export class PurchaseOrdersService {
         return;
       }
       const cand = (candidates ?? []) as Array<{ id: string; name: string }>;
-      if (cand.length === 0) return;
-      const candIds = cand.map((c) => c.id);
-
-      // One pass over every PO line referencing these items. Keep (do NOT
-      // archive) an item if EITHER it ever received stock (quantity_received>0
-      // on any line — qoh=0 then just means it was consumed) OR it's still on a
-      // non-cancelled PO (this PO is already 'cancelled' here, so it's excluded
-      // — and such an item may yet receive stock + auto-unarchive there).
-      //
-      // Batched AND paged: an unpaged read was cut at 1000 lines with no
-      // error, and a dropped line that would have said "keep" archived an item
-      // a live PO still needs. One `.in()` past ~215 ids failed outright.
-      const ctx = this.ctx;
-      let poLines: Array<Record<string, unknown>>;
-      try {
-        poLines = await fetchAllRowsByIds<Record<string, unknown>>(
-          candIds,
-          (batch) => (from, to) =>
-            ctx.supabase
-              .from('purchase_order_items')
-              .select('item_id, quantity_received, po:purchase_orders!inner(status)')
-              .eq('organization_id', ctx.organizationId) // defense-in-depth: keep the keep-check single-org
-              .in('item_id', batch)
-              .order('id')
-              .range(from, to),
-        );
-      } catch (keepErr) {
-        // An unreadable keep-check archives NOTHING. Its error used to be
-        // discarded, so a failed read (statement timeout, pooler hiccup) looked
-        // like "never received, on no live PO" and archived items with real
-        // receipt history, or ones another open PO still expects, off the Items
-        // list. Leaving an unused item active costs nothing.
-        void reportError(new Error(rawErrorText(keepErr)), {
-          tag: 'po.cancel.archive_custom_items.keep_check',
-          organizationId: this.ctx.organizationId,
-        });
-        return;
-      }
-      const keep = new Set<string>();
-      for (const row of poLines) {
-        const itemId = row.item_id as string;
-        if (Number(row.quantity_received) > 0) keep.add(itemId);
-        const poField = row.po as { status?: string } | { status?: string }[] | null;
-        const poStatus = Array.isArray(poField) ? poField[0]?.status : poField?.status;
-        if (poStatus && poStatus !== 'cancelled') keep.add(itemId);
-      }
-
-      const toArchive = cand.filter((c) => !keep.has(c.id));
-      if (toArchive.length === 0) return;
-
-      // Batched, one batch at a time. A failure stops the rest; whatever
-      // committed is still invalidated and audited before it is reported.
-      const flip = await writeInIdBatches<string, { id: string; name: string }>(
-        toArchive.map((c) => c.id),
-        (batch) =>
-          ctx.supabase
-            .from('inventory_items')
-            .update({ status: 'archived' })
-            .eq('organization_id', ctx.organizationId)
-            .in('id', batch)
-            .eq('status', 'active') // race guard
-            .select('id, name'),
-      );
-      if (flip.error !== null) {
-        void reportError(new Error(flip.error), {
-          tag: 'po.cancel.archive_custom_items',
-          organizationId: this.ctx.organizationId,
-          extra: { archived: flip.rows.length, notArchived: flip.notWritten.length },
-        });
-      }
-      if (flip.rows.length === 0) return;
-      // Archived rows leave the default view.
-      invalidateInventoryListAfterWrite(this.ctx.organizationId, 'po.cancel.archive_custom_items');
-
-      // Batched INSERTs (auditMany): a Promise.all of one audit() per item
-      // started every INSERT at once, however many items the PO carried.
-      await auditMany(
-        flip.rows.map((item) => ({
-          event: 'inventory.item.archived' as const,
-          entityType: 'inventory_item',
-          entityId: item.id,
-          after: { status: 'archived' },
-          before: { status: 'active' },
-          extra: { reason: 'po_cancelled', purchaseOrderId: poId, itemName: item.name },
-        })),
-        this.ctx,
-      );
+      await this.retireUnusedCandidates(cand, {
+        tag: 'po.cancel.archive_custom_items',
+        reason: 'po_cancelled',
+        purchaseOrderId: poId,
+      });
     } catch (e) {
       void reportError(e, {
         tag: 'po.cancel.archive_custom_items.unhandled',
         organizationId: this.ctx.organizationId,
       });
     }
+  }
+
+  /**
+   * Compensation for a failed create()/update(): SOFT-DELETE the custom items
+   * THIS call created, by id, when they were never used. The failed save
+   * wrote nothing, so these items exist only because of it: on no PO, never
+   * received, hidden as "Expected". Archiving them was not enough: an
+   * archived item still counts toward the plan's item cap (deleted_at is the
+   * only thing the cap and the Expected count exclude), so every failed
+   * retry at the cap used up another slot and added an Expected phantom no
+   * receipt could clear. Deleted, they are as if never created; the audit
+   * row (reason po_save_failed) keeps the trail.
+   *
+   * Same "never used" keep rule as the cancel-time cleanup: an item that ever
+   * received stock, or that is on a non-cancelled PO (e.g. the save actually
+   * committed and only its answer was lost), is kept.
+   *
+   * Never silent: these ids are known to be this call's fresh items, so a
+   * candidate read that returns fewer of them than were created (RLS: a
+   * category-restricted caller cannot see a category-less item) is reported
+   * as a shortfall, as is a delete that matched fewer rows than asked (RLS:
+   * items:create without items:update). Best-effort: never throws, so it
+   * cannot mask the error that triggered it.
+   */
+  private async discardCreatedCustomItems(itemIds: string[], tag: string): Promise<void> {
+    if (itemIds.length === 0) return;
+    try {
+      const ctx = this.ctx;
+      let cand: Array<{ id: string; name: string }>;
+      try {
+        cand = await fetchAllRowsByIds<{ id: string; name: string }>(
+          itemIds,
+          (batch) => (from, to) =>
+            ctx.supabase
+              .from('inventory_items')
+              .select('id, name')
+              .eq('organization_id', ctx.organizationId)
+              .in('id', batch)
+              .eq('status', 'active')
+              .eq('quantity_on_hand', 0)
+              .eq('awaiting_first_receipt', true)
+              .is('deleted_at', null)
+              .order('id')
+              .range(from, to),
+        );
+      } catch (readErr) {
+        void reportError(new Error(rawErrorText(readErr)), {
+          tag: `${tag}.candidates`,
+          organizationId: this.ctx.organizationId,
+          extra: { items: itemIds.length },
+        });
+        return;
+      }
+      if (cand.length < itemIds.length) {
+        void reportError(
+          new Error(`could read ${cand.length} of the ${itemIds.length} custom items this save created`),
+          {
+            tag: `${tag}.shortfall`,
+            organizationId: this.ctx.organizationId,
+            extra: { created: itemIds.length, readable: cand.length },
+          },
+        );
+      }
+      await this.retireUnusedCandidates(cand, {
+        tag,
+        reason: 'po_save_failed',
+        purchaseOrderId: null,
+      });
+    } catch (e) {
+      void reportError(e, { tag: `${tag}.unhandled`, organizationId: this.ctx.organizationId });
+    }
+  }
+
+  /**
+   * The shared "never used" rule: of `cand` (active, zero on-hand, not
+   * deleted), retire the items with no received history on any PO line and
+   * on no non-cancelled PO, then audit each. A failed keep-check retires
+   * nothing. Throws only on a bug; callers catch.
+   *
+   * How an item is retired depends on why:
+   *   - po_cancelled: ARCHIVED (reversible; a later receipt on another PO
+   *     auto-unarchives it). The item may have been on a real PO for a while.
+   *   - po_save_failed: SOFT-DELETED (see discardCreatedCustomItems). Only
+   *     items still awaiting their first receipt; a received item has stock.
+   * A write that matches fewer rows than asked (with no error) is reported:
+   * a 0-row UPDATE is how an RLS refusal looks.
+   */
+  private async retireUnusedCandidates(
+    cand: Array<{ id: string; name: string }>,
+    opts: { tag: string; reason: 'po_cancelled' | 'po_save_failed'; purchaseOrderId: string | null },
+  ): Promise<void> {
+    if (cand.length === 0) return;
+    const candIds = cand.map((c) => c.id);
+
+    // One pass over every PO line referencing these items. Keep (do NOT
+    // retire) an item if EITHER it ever received stock (quantity_received>0
+    // on any line — qoh=0 then just means it was consumed) OR it's still on a
+    // non-cancelled PO (a cancelled PO is excluded — and such an item may yet
+    // receive stock + auto-unarchive there).
+    //
+    // Batched AND paged: an unpaged read was cut at 1000 lines with no
+    // error, and a dropped line that would have said "keep" archived an item
+    // a live PO still needs. One `.in()` past ~215 ids failed outright.
+    const ctx = this.ctx;
+    let poLines: Array<Record<string, unknown>>;
+    try {
+      poLines = await fetchAllRowsByIds<Record<string, unknown>>(
+        candIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('purchase_order_items')
+            .select('item_id, quantity_received, po:purchase_orders!inner(status)')
+            .eq('organization_id', ctx.organizationId) // defense-in-depth: keep the keep-check single-org
+            .in('item_id', batch)
+            .order('id')
+            .range(from, to),
+      );
+    } catch (keepErr) {
+      // An unreadable keep-check retires NOTHING. Its error used to be
+      // discarded, so a failed read (statement timeout, pooler hiccup) looked
+      // like "never received, on no live PO" and archived items with real
+      // receipt history, or ones another open PO still expects, off the Items
+      // list. Leaving an unused item active costs nothing.
+      void reportError(new Error(rawErrorText(keepErr)), {
+        tag: `${opts.tag}.keep_check`,
+        organizationId: this.ctx.organizationId,
+      });
+      return;
+    }
+    const keep = new Set<string>();
+    for (const row of poLines) {
+      const itemId = row.item_id as string;
+      if (Number(row.quantity_received) > 0) keep.add(itemId);
+      const poField = row.po as { status?: string } | { status?: string }[] | null;
+      const poStatus = Array.isArray(poField) ? poField[0]?.status : poField?.status;
+      if (poStatus && poStatus !== 'cancelled') keep.add(itemId);
+    }
+
+    const toRetire = cand.filter((c) => !keep.has(c.id));
+    if (toRetire.length === 0) return;
+
+    const discard = opts.reason === 'po_save_failed';
+    const nowIso = new Date().toISOString();
+    // Batched, one batch at a time. A failure stops the rest; whatever
+    // committed is still invalidated and audited before it is reported.
+    const flip = await writeInIdBatches<string, { id: string; name: string }>(
+      toRetire.map((c) => c.id),
+      (batch) =>
+        discard
+          ? ctx.supabase
+              .from('inventory_items')
+              .update({ deleted_at: nowIso, deleted_by: ctx.userId, updated_by: ctx.userId })
+              .eq('organization_id', ctx.organizationId)
+              .in('id', batch)
+              // race guards: still the untouched item this save created
+              .eq('status', 'active')
+              .eq('quantity_on_hand', 0)
+              .eq('awaiting_first_receipt', true)
+              .is('deleted_at', null)
+              .select('id, name')
+          : ctx.supabase
+              .from('inventory_items')
+              .update({ status: 'archived' })
+              .eq('organization_id', ctx.organizationId)
+              .in('id', batch)
+              .eq('status', 'active') // race guard
+              .select('id, name'),
+    );
+    if (flip.error !== null) {
+      void reportError(new Error(flip.error), {
+        tag: opts.tag,
+        organizationId: this.ctx.organizationId,
+        extra: { retired: flip.rows.length, notRetired: flip.notWritten.length },
+      });
+    } else if (flip.rows.length < toRetire.length) {
+      void reportError(
+        new Error(`${discard ? 'deleted' : 'archived'} ${flip.rows.length} of ${toRetire.length} unused custom items`),
+        {
+          tag: `${opts.tag}.shortfall`,
+          organizationId: this.ctx.organizationId,
+          extra: { expected: toRetire.length, written: flip.rows.length },
+        },
+      );
+    }
+    if (flip.rows.length === 0) return;
+    // Archived and deleted rows both leave the default view.
+    invalidateInventoryListAfterWrite(this.ctx.organizationId, opts.tag);
+
+    // Batched INSERTs (auditMany): a Promise.all of one audit() per item
+    // started every INSERT at once, however many items the PO carried.
+    await auditMany(
+      flip.rows.map((item) =>
+        discard
+          ? {
+              event: 'inventory.item.deleted' as const,
+              entityType: 'inventory_item',
+              entityId: item.id,
+              extra: {
+                reason: opts.reason,
+                purchaseOrderId: opts.purchaseOrderId,
+                itemName: item.name,
+              },
+            }
+          : {
+              event: 'inventory.item.archived' as const,
+              entityType: 'inventory_item',
+              entityId: item.id,
+              after: { status: 'archived' },
+              before: { status: 'active' },
+              extra: {
+                reason: opts.reason,
+                purchaseOrderId: opts.purchaseOrderId,
+                itemName: item.name,
+              },
+            },
+      ),
+      this.ctx,
+    );
   }
 
   /**
@@ -1418,14 +1659,94 @@ export class PurchaseOrdersService {
   }
 
   /**
+   * Ids of the items already on an open PO (OPEN_PO_STATUSES: draft,
+   * expected_inbound, ordered, partially_received) in this org — the set the
+   * reorder paths must not draft again. Shared by runAutoReorder (cron),
+   * createDraftsFromReorderForecast (the manual button and the AI tool), the
+   * Items selection warning and the Planning count, so they can never
+   * disagree about what "already on order" means. (The reorder saves also
+   * re-check in the database under a lock; see createReorderDraft.)
+   *
+   * FAIL CLOSED: a read error THROWS. An unreadable set must never look like
+   * "nothing is on order", which would draft every below-par item again.
+   *
+   * KEYSET-paged on item_id, not OFFSET-paged. Each page is its own
+   * snapshot, and the set changes under it during working hours: saving a
+   * draft deletes and re-inserts every line (new random ids), and a PO that
+   * leaves the open states drops its lines out of the filter. With offset
+   * windows over `order by id`, either shifts later rows back past the
+   * window edge and silently skips them, so an item on order could be
+   * drafted again. The cursor here is the item id itself: a line re-inserted
+   * under a new id keeps its item_id, so it stays on the same side of the
+   * cursor, and once an item is known to be on order its other lines do not
+   * matter (hence `gt`, which also guarantees progress).
+   *
+   * Reads through the caller's client: a signed-in user sees the POs RLS lets
+   * them see (anyone who may manage POs: all of the org's); the cron's
+   * service client sees all.
+   */
+  private async openPoItemIds(): Promise<Set<string>> {
+    const out = new Set<string>();
+    let after: string | null = null;
+    for (;;) {
+      let query = this.ctx.supabase
+        .from('purchase_order_items')
+        .select('item_id, purchase_orders!inner(status)')
+        .eq('organization_id', this.ctx.organizationId)
+        .in('purchase_orders.status', OPEN_PO_STATUSES);
+      if (after !== null) query = query.gt('item_id', after);
+      const res: {
+        data: Array<{ item_id: string }> | null;
+        error: { message: string; code?: string | null } | null;
+        status?: number;
+        statusText?: string;
+      } = await query.order('item_id', { ascending: true }).limit(OPEN_PO_PAGE_SIZE);
+      if (res.error) {
+        throw new ServiceError('internal_error', postgrestErrorText(res.error, res));
+      }
+      const page = res.data ?? [];
+      for (const r of page) out.add(r.item_id);
+      if (page.length < OPEN_PO_PAGE_SIZE) return out;
+      const last = page[page.length - 1]!.item_id;
+      if (after !== null && last <= after) {
+        // The server ignored the cursor: never loop, never return a partial set.
+        throw new ServiceError('internal_error', 'open-PO read did not advance');
+      }
+      after = last;
+    }
+  }
+
+  /**
+   * The open-PO item set for a page that previews what the reorder button
+   * will do (Planning). Gated like a PO read. Throws on a read error; the
+   * caller decides how to say it could not check.
+   */
+  async listOpenPoItemIds(): Promise<Set<string>> {
+    assertModuleEnabled(this.ctx, 'purchase_orders');
+    assertPermission(this.ctx, 'purchase_orders:read');
+    return this.openPoItemIds();
+  }
+
+  /**
    * Bulk-creates draft POs from a list of inventory item IDs. Items are
    * fetched, grouped by supplier_id, and one draft PO is created per
    * supplier with line quantities pre-filled from each item's
    * reorder_quantity (fallback: max(1, reorder_point - quantity_on_hand)).
    *
-   * Items without a supplier_id are skipped. Per-supplier failures are
-   * collected so callers can report partial success — we do NOT roll
-   * back already-created drafts.
+   * Items without a supplier_id are skipped (`skippedNoSupplier`), and so are
+   * ids that cannot go on a purchase order at all (`skippedNotOrderable`):
+   * deleted items, a kit's pre-assembled stock (is_bundle), and ids not found
+   * in this organization. Archived and rental items are drafted: the user
+   * chose them (whereOrderableItem). `skipped` is the sum of the two.
+   * Per-supplier failures are collected so callers can report partial
+   * success — we do NOT roll back already-created drafts.
+   *
+   * Unlike the reorder paths, an explicit selection is NOT filtered by what
+   * is already on order: the user chose these items. `alreadyOnOpenPo`
+   * reports how many of the drafted items were already on another open PO,
+   * so the caller can warn. It is null when that could not be checked (the
+   * read failed): unknown, never a silent 0. The warning is advisory, so a
+   * failed check does not block the drafts.
    *
    * Powers both the BulkActions toolbar button (via
    * createDraftPosFromItemsAction) and the Gemini draftPos tool.
@@ -1434,7 +1755,15 @@ export class PurchaseOrdersService {
    */
   async createDraftsFromItems(itemIds: string[]): Promise<{
     createdPoIds: string[];
+    /** skippedNoSupplier + skippedNotOrderable. */
     skipped: number;
+    /** Chosen items with no supplier set. */
+    skippedNoSupplier: number;
+    /** Chosen ids that cannot be ordered: deleted, a kit's pre-assembled
+     *  stock, or not found in this organization. */
+    skippedNotOrderable: number;
+    /** Drafted items that were already on another open PO; null = unknown. */
+    alreadyOnOpenPo: number | null;
     supplierFailures: Array<{ supplierId: string; supplierName: string; error: string }>;
     supplierCount: number;
   }> {
@@ -1451,22 +1780,34 @@ export class PurchaseOrdersService {
     };
     // Batched: the selection has no cap here, and one `.in()` past ~215 ids
     // fails. A failed batch throws rather than drafting from a partial set.
+    // Only orderable items come back (not deleted, not a kit's pre-assembled
+    // stock); every id that does not is counted as not orderable below, never
+    // silently dropped. The database refuses both kinds of line anyway
+    // (0366), and one such line would fail its whole supplier's draft.
     const ctx = this.ctx;
+    const uniqueIds = [...new Set(itemIds)];
     const items = await fetchAllRowsByIds<Row>(
-      itemIds,
-      (batch) => (from, to) =>
-        ctx.supabase
+      uniqueIds,
+      (batch) => (from, to) => {
+        const selection = ctx.supabase
           .from('inventory_items')
           .select('id, supplier_id, reorder_quantity, reorder_point, quantity_on_hand, unit_cost')
-          .eq('organization_id', ctx.organizationId)
-          .in('id', batch)
-          .order('id')
-          .range(from, to),
+          .in('id', batch);
+        return whereOrderableItem(selection, ctx.organizationId).order('id').range(from, to);
+      },
     );
     const noSupplier = items.filter((r) => !r.supplier_id);
     const withSupplier = items.filter((r) => !!r.supplier_id);
-    const skipped = noSupplier.length + (itemIds.length - items.length);
+    const skippedNoSupplier = noSupplier.length;
+    const skippedNotOrderable = uniqueIds.length - items.length;
+    const skipped = skippedNoSupplier + skippedNotOrderable;
 
+    if (items.length === 0) {
+      throw new ServiceError(
+        'validation_error',
+        "None of the selected items can go on a purchase order: they were deleted, or they are pre-assembled kits (order a kit's components instead).",
+      );
+    }
     if (withSupplier.length === 0) {
       throw new ServiceError(
         'validation_error',
@@ -1487,6 +1828,16 @@ export class PurchaseOrdersService {
       supplierIds,
       'po.drafts_from_items.supplier_names',
     );
+
+    // Read BEFORE the drafts below exist, or they would count themselves.
+    let openItemIds: Set<string> | null;
+    try {
+      openItemIds = await this.openPoItemIds();
+    } catch (err) {
+      reportDegradedRead('po.drafts_from_items.open_po_items', err, { items: withSupplier.length });
+      openItemIds = null;
+    }
+    let alreadyOnOpenPo = 0;
 
     const createdPoIds: string[] = [];
     const supplierFailures: Array<{
@@ -1511,6 +1862,9 @@ export class PurchaseOrdersService {
       try {
         const po = await this.create({ supplierId, lines });
         createdPoIds.push(po.id);
+        if (openItemIds) {
+          for (const r of group) if (openItemIds.has(r.id)) alreadyOnOpenPo++;
+        }
       } catch (e) {
         const msg =
           e instanceof ServiceError
@@ -1529,6 +1883,9 @@ export class PurchaseOrdersService {
     return {
       createdPoIds,
       skipped,
+      skippedNoSupplier,
+      skippedNotOrderable,
+      alreadyOnOpenPo: openItemIds ? alreadyOnOpenPo : null,
       supplierFailures,
       supplierCount: bySupplier.size,
     };
@@ -1550,6 +1907,17 @@ export class PurchaseOrdersService {
    * a supplier during review. `unassignedCount` reports how many landed
    * there.
    *
+   * Items already on an OPEN PO (draft, expected_inbound, ordered,
+   * partially_received) are SKIPPED, exactly as the daily auto-reorder does,
+   * so clicking twice never drafts the same item twice and nothing already
+   * on order is ordered again. `skippedOnOpenPo` counts them. The open-PO
+   * read fails CLOSED: if it errors, this throws before any draft exists.
+   * That read only groups and counts: each draft is saved with the database
+   * re-checking the open set under a per-organization lock
+   * (createReorderDraft), so two runs at the SAME moment (two buyers, two
+   * tabs, a click during the daily cron) still draft each item once; the
+   * later run's copies are left off and counted as skipped.
+   *
    * Drafts are editable and NOT auto-sent — the caller routes the user to
    * the created drafts for review before sending. Per-supplier failures are
    * collected so callers can report partial success; we do NOT roll back
@@ -1564,6 +1932,8 @@ export class PurchaseOrdersService {
     unassignedCount: number;
     /** Items that were below par but couldn't be processed at all. */
     skipped: number;
+    /** Below-par items NOT drafted because they are already on an open PO. */
+    skippedOnOpenPo: number;
     supplierFailures: Array<{ supplierId: string | null; supplierName: string; error: string }>;
     /** Distinct real suppliers (excludes the unassigned bucket). */
     supplierCount: number;
@@ -1580,38 +1950,46 @@ export class PurchaseOrdersService {
       unit_cost: number | null;
     };
 
-    // Recompute the below-par set with the same filters the reorder-forecast
-    // report uses: active, non-deleted, non-rental, reorder_point > 0.
+    // Recompute the below-par set with the reorder-candidate predicate the
+    // reorder-forecast report and the daily auto-reorder share (active, not
+    // deleted, not a rental, not a kit's pre-assembled stock, reorder_point >
+    // 0; lib/orderable-items).
     // PostgREST clamps any single response to `[api] max_rows = 1000`, so the
     // former `.limit(5_000)` SILENTLY returned at most 1000 candidates — every
     // below-par item past the first 1000 got NO draft PO. Paginate in 1000-row
     // `.range()` windows with a stable `.order('id')` and accumulate the full
     // candidate set (same cap class as forecasting.ts / order-requests.ts).
     const rows = await fetchAllRows<Row>((from, to) =>
-      this.ctx.supabase
-        .from('inventory_items')
-        .select(
-          'id, supplier_id, reorder_point, reorder_quantity, quantity_on_hand, unit_cost',
-        )
-        .eq('organization_id', this.ctx.organizationId)
-        .is('deleted_at', null)
-        .eq('status', 'active')
-        .eq('is_rental', false)
-        .gt('reorder_point', 0)
+      whereReorderCandidate(
+        this.ctx.supabase
+          .from('inventory_items')
+          .select('id, supplier_id, reorder_point, reorder_quantity, quantity_on_hand, unit_cost'),
+        this.ctx.organizationId,
+        { withReorderPoint: true },
+      )
         .order('id', { ascending: true })
         .range(from, to),
     );
+
+    // Items already on an open PO are not drafted again (the same set and
+    // rule as the daily auto-reorder). Throws on a read error: fail closed.
+    const openItemIds = await this.openPoItemIds();
 
     // Build a prefilled line for each item that is at or below its reorder
     // point. Quantity = deficit to bring it back to target.
     type PreparedLine = { itemId: string; quantityOrdered: number; unitCost: number };
     const bySupplier = new Map<string, PreparedLine[]>();
     const unassigned: PreparedLine[] = [];
+    let skippedOnOpenPo = 0;
 
     for (const raw of rows) {
       const qty = Number(raw.quantity_on_hand ?? 0);
       const reorderPoint = Number(raw.reorder_point ?? 0);
       if (qty > reorderPoint) continue; // healthy — skip
+      if (openItemIds.has(raw.id)) {
+        skippedOnOpenPo++; // already on order — never draft it twice
+        continue;
+      }
       const reorderQty = Number(raw.reorder_quantity ?? 0);
       const targetQty = Math.max(reorderQty, reorderPoint);
       // Floor at 1 so a flagged item always produces a positive line even
@@ -1646,11 +2024,15 @@ export class PurchaseOrdersService {
     }> = [];
     let skipped = 0;
 
-    // One draft per supplier.
+    // One draft per supplier. The save re-checks the open set in the
+    // database under a per-org lock (createReorderDraft), so a run that
+    // started at the same moment as this one cannot draft these items too:
+    // whatever it drafted first is left off here and counted as skipped.
     for (const [supplierId, lines] of bySupplier) {
       try {
-        const po = await this.create({ supplierId, lines });
-        createdPoIds.push(po.id);
+        const po = await this.createReorderDraft(supplierId, lines);
+        skippedOnOpenPo += po.skippedItemIds.length;
+        if (po.id !== null) createdPoIds.push(po.id);
       } catch (e) {
         skipped += lines.length;
         supplierFailures.push({
@@ -1663,10 +2045,19 @@ export class PurchaseOrdersService {
 
     // One draft for the unassigned bucket (supplier_id null) so no
     // suggestion is silently dropped.
+    // unassignedCount is how many items are ON that draft: 0 when it was not
+    // created (every line already on order, or the save failed, in which
+    // case its items are counted in `skipped` instead). The toast reads the
+    // unassigned draft's existence from it.
+    let unassignedCount = 0;
     if (unassigned.length > 0) {
       try {
-        const po = await this.create({ supplierId: null, lines: unassigned });
-        createdPoIds.push(po.id);
+        const po = await this.createReorderDraft(null, unassigned);
+        skippedOnOpenPo += po.skippedItemIds.length;
+        if (po.id !== null) {
+          createdPoIds.push(po.id);
+          unassignedCount = unassigned.length - po.skippedItemIds.length;
+        }
       } catch (e) {
         skipped += unassigned.length;
         supplierFailures.push({
@@ -1679,8 +2070,9 @@ export class PurchaseOrdersService {
 
     return {
       createdPoIds,
-      unassignedCount: unassigned.length,
+      unassignedCount,
       skipped,
+      skippedOnOpenPo,
       supplierFailures,
       supplierCount: bySupplier.size,
     };
@@ -1720,16 +2112,16 @@ export class PurchaseOrdersService {
       unit_cost: number | null;
     };
 
-    // 1. Below-par candidates — same canonical filter as the reorder forecast.
+    // 1. Below-par candidates — the shared reorder-candidate predicate, the
+    //    same one the reorder forecast and the manual draft button use.
     const rows = await fetchAllRows<Row>((from, to) =>
-      this.ctx.supabase
-        .from('inventory_items')
-        .select('id, supplier_id, reorder_point, reorder_quantity, quantity_on_hand, unit_cost')
-        .eq('organization_id', this.ctx.organizationId)
-        .is('deleted_at', null)
-        .eq('status', 'active')
-        .eq('is_rental', false)
-        .gt('reorder_point', 0)
+      whereReorderCandidate(
+        this.ctx.supabase
+          .from('inventory_items')
+          .select('id, supplier_id, reorder_point, reorder_quantity, quantity_on_hand, unit_cost'),
+        this.ctx.organizationId,
+        { withReorderPoint: true },
+      )
         .order('id', { ascending: true })
         .range(from, to),
     );
@@ -1749,26 +2141,9 @@ export class PurchaseOrdersService {
       });
     }
 
-    // 2. Open-PO item set — FAIL CLOSED: if we can't read it, abort rather than
-    //    risk double-ordering. Paginated via an inner join on PO status. ALL
-    //    genuinely-open states count (an item already on order must not be
-    //    re-ordered): draft + expected_inbound + ordered + partially_received.
-    //    (This is the open set used by overdueCount + the reconciliation views.)
-    const openItems = await fetchAllRows<{ item_id: string }>((from, to) =>
-      this.ctx.supabase
-        .from('purchase_order_items')
-        .select('item_id, id, purchase_orders!inner(status)')
-        .eq('organization_id', this.ctx.organizationId)
-        .in('purchase_orders.status', [
-          'draft',
-          'expected_inbound',
-          'ordered',
-          'partially_received',
-        ])
-        .order('id', { ascending: true })
-        .range(from, to),
-    );
-    const openItemIds = new Set(openItems.map((r) => r.item_id));
+    // 2. Open-PO item set — FAIL CLOSED (openPoItemIds throws): if we can't
+    //    read it, abort rather than risk double-ordering.
+    const openItemIds = await this.openPoItemIds();
 
     // 3. Plan (pure): dedup + group by supplier.
     const plan = planAutoReorder(candidates, openItemIds);
@@ -1806,15 +2181,29 @@ export class PurchaseOrdersService {
     let heldForReview = 0;
     let supplierFailures = 0;
 
+    let skippedDuplicate = plan.skippedDuplicate;
     for (const group of plan.bySupplier) {
       try {
-        const po = await this.create({ supplierId: group.supplierId, lines: group.lines });
+        // The database re-checks the open set under the per-org reorder lock,
+        // so a manual run at the same moment cannot double-draft with this
+        // one: lines it drafted first are left off here.
+        const po = await this.createReorderDraft(group.supplierId, group.lines);
+        skippedDuplicate += po.skippedItemIds.length;
+        if (po.id === null) continue; // everything was already on order
         created++;
         if (settings.mode === 'send') {
+          // The total of what was actually drafted (lines left off above are
+          // not on this PO).
+          const skipped = new Set(po.skippedItemIds);
+          const total = po.skippedItemIds.length === 0
+            ? group.total
+            : group.lines
+                .filter((l) => !skipped.has(l.itemId))
+                .reduce((sum, l) => sum + l.quantityOrdered * l.unitCost, 0);
           // shouldAutoSend never sends unbounded: it requires a ceiling (cap or
           // threshold) and the total under it. sendBlocked (a failed settings
           // read) forces a hold.
-          if (!sendBlocked && shouldAutoSend(group.total, capDollars, threshold)) {
+          if (!sendBlocked && shouldAutoSend(total, capDollars, threshold)) {
             await this.updateStatus(po.id, 'ordered');
             sent++;
           } else {
@@ -1830,7 +2219,7 @@ export class PurchaseOrdersService {
       created,
       sent,
       heldForReview,
-      skippedDuplicate: plan.skippedDuplicate,
+      skippedDuplicate,
       skippedNoSupplier: plan.skippedNoSupplier,
       supplierFailures,
     };

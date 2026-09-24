@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import {
+  callArgs,
+  makeServiceContext,
+  makeSupabaseStub,
+  servedLikePostgrest,
+  type MockCall,
+} from '@/test/supabase-mock';
 
 import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
 
@@ -21,16 +27,19 @@ const createDraftsFromReorderForecast = vi.fn(async () => ({
   createdPoIds: ['po-1'],
   unassignedCount: 0,
   skipped: 0,
+  skippedOnOpenPo: 3,
   supplierFailures: [],
   supplierCount: 1,
 }));
+const listOpenPoItemIds = vi.fn(async () => new Set(['item-on-order']));
 vi.mock('./purchase-orders', () => ({
   PurchaseOrdersService: class {
     createDraftsFromReorderForecast = createDraftsFromReorderForecast;
+    listOpenPoItemIds = listOpenPoItemIds;
   },
 }));
 
-import { PlanningService, DEFAULT_PLANNING_PARAMS } from './planning';
+import { PlanningService, DEFAULT_PLANNING_PARAMS, PLANNING_MAX_ITEMS } from './planning';
 
 /** Module set that INCLUDES planning (an org that opted in). */
 const withPlanning = () => new Set<ModuleId>([...DEFAULT_MODULE_IDS, 'planning']);
@@ -178,7 +187,8 @@ describe('PlanningService.getReorderSuggestions', () => {
     });
 
     const svc = new PlanningService(makeServiceContext(stub.client, { enabledModules: withPlanning() }));
-    const result = await svc.getReorderSuggestions();
+    const { suggestions: result, truncated } = await svc.getReorderSuggestions();
+    expect(truncated).toBe(false);
 
     // Order: lowest cover first -> a (10), b (40), then non-moving c (null).
     expect(result.map((r) => r.itemId)).toEqual(['item-a', 'item-b', 'item-c']);
@@ -213,7 +223,7 @@ describe('PlanningService.getReorderSuggestions', () => {
       'inventory_items.select': { data: [], error: null },
     });
     const svc = new PlanningService(makeServiceContext(stub.client, { enabledModules: withPlanning() }));
-    await expect(svc.getReorderSuggestions()).resolves.toEqual([]);
+    await expect(svc.getReorderSuggestions()).resolves.toEqual({ suggestions: [], truncated: false });
     expect(getBulkItemVelocities).not.toHaveBeenCalled();
   });
 
@@ -260,14 +270,132 @@ describe('PlanningService.getReorderSuggestions', () => {
     );
 
     const svc = new PlanningService(makeServiceContext(stub.client, { enabledModules: withPlanning() }));
-    const result = await svc.getReorderSuggestions();
+    const { suggestions: result, truncated } = await svc.getReorderSuggestions();
 
     // All 2300 candidates surfaced — not just the first 1000.
     expect(result).toHaveLength(TOTAL);
+    expect(truncated).toBe(false);
     expect(result.some((r) => r.itemId === 'item-002299')).toBe(true);
     // At least three .range() pages were issued (1000 + 1000 + 300).
     const ranges = stub.chainArgsAll.get('inventory_items.select') ?? [];
     expect(ranges.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+// ─── The candidate set: the shared reorder-candidate predicate (S3) ───────────
+
+/** A planning candidate row as the database holds it (the filter columns included). */
+const planRow = (id: string, over: Record<string, unknown> = {}) => ({
+  id,
+  sku: id.toUpperCase(),
+  name: `Item ${id}`,
+  quantity_on_hand: 1,
+  reorder_point: 0,
+  reorder_quantity: 0,
+  unit_cost: 1,
+  supplier_id: null,
+  created_at: '2020-01-01T00:00:00.000Z',
+  organization_id: 'org-test',
+  deleted_at: null,
+  status: 'active',
+  is_rental: false,
+  is_bundle: false,
+  ...over,
+});
+
+/** Velocity and forecast mocks that pass every item through. */
+function passThroughForecasting() {
+  getBulkItemVelocities.mockImplementation(async (_s, _o, items: Array<{ id: string }>) => {
+    const m = new Map<string, ReturnType<typeof velocity>>();
+    for (const it of items) m.set(it.id, velocity(it.id, { unitsPerDay: 1, daysOfStock: 3 }));
+    return m;
+  });
+  computeReorderSuggestion.mockImplementation((v: ReturnType<typeof velocity>) =>
+    forecast(v, { suggestedReorderPoint: 5 }),
+  );
+}
+
+describe('PlanningService.getReorderSuggestions — which items are planned', () => {
+  it('reads with the shared predicate: never a kit\'s pre-assembled stock, a rental, a deleted or an inactive item', async () => {
+    const stub = makeSupabaseStub({
+      'organization_modules.select': { data: { settings: {} }, error: null },
+      'inventory_items.select': { data: [], error: null },
+    });
+    const svc = new PlanningService(makeServiceContext(stub.client, { enabledModules: withPlanning() }));
+    await svc.getReorderSuggestions();
+
+    const methods = stub.chainsAll.get('inventory_items.select')![0]!;
+    const args = stub.chainArgsAll.get('inventory_items.select')![0]!;
+    const filters = methods.map((m, i) => [m, ...(args[i] ?? [])]);
+    expect(filters).toContainEqual(['eq', 'is_bundle', false]);
+    expect(filters).toContainEqual(['eq', 'is_rental', false]);
+    expect(filters).toContainEqual(['is', 'deleted_at', null]);
+    expect(filters).toContainEqual(['eq', 'status', 'active']);
+    expect(filters).toContainEqual(['eq', 'organization_id', 'org-test']);
+    // Planning ranks items with no reorder point too (it suggests one).
+    expect(methods).not.toContain('gt');
+  });
+
+  it('a kit\'s pre-assembled stock below par is not on the plan (the stub answers like the database)', async () => {
+    const stub = makeSupabaseStub({
+      'organization_modules.select': { data: { settings: {} }, error: null },
+      'inventory_items.select': servedLikePostgrest([
+        planRow('plain', { reorder_point: 5 }),
+        planRow('kit', { is_bundle: true, reorder_point: 3, quantity_on_hand: 0 }),
+        planRow('rental', { is_rental: true }),
+      ]),
+      'suppliers.select': { data: [], error: null },
+    });
+    passThroughForecasting();
+    const svc = new PlanningService(makeServiceContext(stub.client, { enabledModules: withPlanning() }));
+
+    const { suggestions } = await svc.getReorderSuggestions();
+
+    expect(suggestions.map((s) => s.itemId)).toEqual(['plain']);
+  });
+});
+
+describe('PlanningService.getReorderSuggestions — a catalog past the cap says so', () => {
+  /** A stub serving `total` candidate rows by the query's own .range() window. */
+  function catalogOf(total: number) {
+    return makeSupabaseStub({
+      'organization_modules.select': { data: { settings: {} }, error: null },
+      'inventory_items.select': (call: MockCall) => {
+        const [from, to] = callArgs(call, 'range') as [number, number];
+        const rows: Array<ReturnType<typeof planRow>> = [];
+        for (let i = from; i <= Math.min(to, from + 999, total - 1); i += 1) {
+          rows.push(planRow(`item-${String(i).padStart(6, '0')}`));
+        }
+        return { data: rows, error: null };
+      },
+      'suppliers.select': { data: [], error: null },
+    });
+  }
+
+  it(`${PLANNING_MAX_ITEMS + 1} candidates: truncated, and exactly ${PLANNING_MAX_ITEMS} ranked`, async () => {
+    passThroughForecasting();
+    const stub = catalogOf(PLANNING_MAX_ITEMS + 1);
+    const svc = new PlanningService(makeServiceContext(stub.client, { enabledModules: withPlanning() }));
+
+    const { suggestions, truncated } = await svc.getReorderSuggestions();
+
+    expect(truncated).toBe(true);
+    expect(suggestions).toHaveLength(PLANNING_MAX_ITEMS);
+    // The sentinel row (the one past the cap) is never ranked.
+    expect(suggestions.some((s) => s.itemId === `item-${String(PLANNING_MAX_ITEMS).padStart(6, '0')}`)).toBe(false);
+    // ... and velocity is computed for the ranked items only.
+    expect((getBulkItemVelocities.mock.calls[0]![2] as unknown[]).length).toBe(PLANNING_MAX_ITEMS);
+  });
+
+  it(`exactly ${PLANNING_MAX_ITEMS} candidates: complete, not truncated`, async () => {
+    passThroughForecasting();
+    const stub = catalogOf(PLANNING_MAX_ITEMS);
+    const svc = new PlanningService(makeServiceContext(stub.client, { enabledModules: withPlanning() }));
+
+    const { suggestions, truncated } = await svc.getReorderSuggestions();
+
+    expect(truncated).toBe(false);
+    expect(suggestions).toHaveLength(PLANNING_MAX_ITEMS);
   });
 });
 
@@ -277,12 +405,39 @@ describe('PlanningService.autoGenerateDraftPOs', () => {
     const svc = new PlanningService(makeServiceContext(stub.client, { enabledModules: withPlanning() }));
     const result = await svc.autoGenerateDraftPOs();
     expect(createDraftsFromReorderForecast).toHaveBeenCalledTimes(1);
+    // Takes no arguments (the ignored itemIds parameter is gone) and passes
+    // the service result through, including the open-PO skip count.
+    expect(createDraftsFromReorderForecast).toHaveBeenCalledWith();
     expect(result).toEqual({
       createdPoIds: ['po-1'],
       unassignedCount: 0,
       skipped: 0,
+      skippedOnOpenPo: 3,
       supplierFailures: [],
       supplierCount: 1,
     });
+  });
+});
+
+describe('PlanningService.itemIdsOnOpenPurchaseOrders', () => {
+  it('delegates to the PO service open-PO read (the set the draft button skips)', async () => {
+    const stub = makeSupabaseStub({});
+    const svc = new PlanningService(makeServiceContext(stub.client, { enabledModules: withPlanning() }));
+    await expect(svc.itemIdsOnOpenPurchaseOrders()).resolves.toEqual(new Set(['item-on-order']));
+    expect(listOpenPoItemIds).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates a failed read (the page decides how to say so; never an empty set)', async () => {
+    listOpenPoItemIds.mockRejectedValueOnce(new Error('read failed'));
+    const stub = makeSupabaseStub({});
+    const svc = new PlanningService(makeServiceContext(stub.client, { enabledModules: withPlanning() }));
+    await expect(svc.itemIdsOnOpenPurchaseOrders()).rejects.toThrow('read failed');
+  });
+
+  it('is gated on the planning module', async () => {
+    const stub = makeSupabaseStub({});
+    const svc = new PlanningService(makeServiceContext(stub.client));
+    await expect(svc.itemIdsOnOpenPurchaseOrders()).rejects.toMatchObject({ code: 'module_disabled' });
+    expect(listOpenPoItemIds).not.toHaveBeenCalled();
   });
 });

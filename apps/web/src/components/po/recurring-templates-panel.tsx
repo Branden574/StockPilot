@@ -50,6 +50,28 @@ interface ItemOption {
   unit_cost: number;
 }
 
+/**
+ * The label of an item a saved template line points at that `items` (the
+ * picker's list: active, not deleted, not a kit) does not hold: a deleted
+ * item, a kit's pre-assembled stock, an archived item. The page resolves
+ * them by id, so the line says what it is instead of rendering blank; a
+ * template holding a deleted item or a kit is refused on save by that
+ * item's name, and this is how the buyer finds the line to remove.
+ */
+export interface RecurringLineLabel {
+  id: string;
+  name: string;
+  sku: string;
+  deleted: boolean;
+  kitStock: boolean;
+}
+
+function unlistedLineLabel(label: RecurringLineLabel | undefined): string {
+  if (!label) return 'Item not available';
+  const prefix = label.deleted ? 'Deleted: ' : label.kitStock ? 'Pre-assembled kit: ' : '';
+  return `${prefix}${label.name} (${label.sku})`;
+}
+
 interface SupplierOption {
   id: string;
   name: string;
@@ -84,6 +106,8 @@ interface Props {
   locations: LocationOption[];
   /** Whether the org is entitled to recurring POs (Pro+). */
   entitled: boolean;
+  /** Labels for items saved template lines point at that `items` lacks. */
+  lineLabels?: RecurringLineLabel[];
   /** Pre-filled seed from "Make recurring" on the PO detail page. */
   seed?: {
     supplierId: string | null;
@@ -165,8 +189,14 @@ export function RecurringTemplatesPanel({
   locations,
   entitled,
   seed,
+  lineLabels,
 }: Props) {
   const [templates, setTemplates] = React.useState<RecurringTemplateRow[]>(initial);
+  const listedIds = React.useMemo(() => new Set(items.map((i) => i.id)), [items]);
+  const lineLabelById = React.useMemo(
+    () => new Map((lineLabels ?? []).map((l) => [l.id, l])),
+    [lineLabels],
+  );
   // null = list view; 'new' = new form; '<id>' = editing that template
   const [formMode, setFormMode] = React.useState<null | 'new' | string>(
     seed ? 'new' : null,
@@ -689,6 +719,14 @@ export function RecurringTemplatesPanel({
                             <SelectItem value="__pick" disabled>
                               Pick an item
                             </SelectItem>
+                            {/* A saved line whose item the picker does not
+                                list (deleted, a kit, archived) still shows
+                                what it is, so it can be found and removed. */}
+                            {line.itemId && !listedIds.has(line.itemId) ? (
+                              <SelectItem value={line.itemId} disabled>
+                                {unlistedLineLabel(lineLabelById.get(line.itemId))}
+                              </SelectItem>
+                            ) : null}
                             {items.map((i) => (
                               <SelectItem key={i.id} value={i.id}>
                                 {i.name} —{' '}

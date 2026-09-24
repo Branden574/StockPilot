@@ -94,7 +94,7 @@ set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
 select throws_ok(
   format($$select public.distribute_bundle(%L, 3, %L, false, null, 'edited', 'k1-0347')$$, :bundle, :wh),
-  '40001', 'idempotency_conflict',
+  '55000', 'idempotency_conflict',
   '0347/11: reusing k1 with a different quantity is refused');
 reset role;
 select is((select count(*)::int from public.bundle_distributions where bundle_id = :bundle), 1,

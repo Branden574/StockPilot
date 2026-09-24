@@ -147,6 +147,11 @@ async function getLowStock(
       .eq('organization_id', orgId)
       .eq('status', 'active')
       .is('deleted_at', null)
+      // A kit's pre-assembled stock (is_bundle) is not low stock: kits are
+      // built from their components and never reordered (0366), and a kit
+      // whose assembled stock ran out is the normal state, not an alert.
+      // NOT NULL (0040), so the equality is total.
+      .eq('is_bundle', false)
       .or('quantity_on_hand.lte.0,reorder_point.gt.0')
       // Quantity-ascending keeps the neediest items in the rendered slice; the
       // id tiebreak is what makes the paging windows stable (see paginate.ts).

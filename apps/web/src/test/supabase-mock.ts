@@ -88,6 +88,89 @@ export function inFilters(call: MockCall): Array<[string, unknown[]]> {
   return out;
 }
 
+/**
+ * A select result that answers like PostgREST: it applies the query's OWN
+ * filters (`eq`, `neq`, `is`, `gt`, `gte`, `lt`, `lte`, `in`), its `.order()`
+ * calls and its `.range()`/`.limit()` window (capped at max_rows, 1000) to
+ * `rows`. Several `.order()` calls sort as PostgREST's `order=a,b` does: the
+ * FIRST is the primary key and each later one only breaks its ties.
+ * So a test fails when the code under test forgets a filter, instead of the
+ * stub handing back every row whatever was asked. Any other method in the
+ * chain (an `.or()` it cannot evaluate) throws, so nothing is ignored
+ * silently. `rows` may be a function, to change the data between calls.
+ */
+export function servedLikePostgrest(
+  rows: ReadonlyArray<Record<string, unknown>> | (() => ReadonlyArray<Record<string, unknown>>),
+): (call: MockCall) => QueryResult {
+  return (call) => {
+    let out = [...(typeof rows === 'function' ? rows() : rows)];
+    let from = 0;
+    let to = 999;
+    const cmp = (a: unknown, b: unknown) => (a as number | string) < (b as number | string);
+    /** Sort keys in call order; applied once, after the filters. */
+    const orderKeys: Array<{ col: string; ascending: boolean }> = [];
+    call.methods.forEach((method, i) => {
+      const [col, value] = (call.args[i] ?? []) as [string, unknown];
+      switch (method) {
+        case 'select':
+          break;
+        case 'eq':
+          out = out.filter((r) => r[col] === value);
+          break;
+        case 'neq':
+          out = out.filter((r) => r[col] !== value);
+          break;
+        case 'is':
+          out = out.filter((r) => (r[col] ?? null) === value);
+          break;
+        case 'gt':
+          out = out.filter((r) => r[col] !== null && r[col] !== undefined && cmp(value, r[col]));
+          break;
+        case 'gte':
+          out = out.filter((r) => r[col] !== null && r[col] !== undefined && !cmp(r[col], value));
+          break;
+        case 'lt':
+          out = out.filter((r) => r[col] !== null && r[col] !== undefined && cmp(r[col], value));
+          break;
+        case 'lte':
+          out = out.filter((r) => r[col] !== null && r[col] !== undefined && !cmp(value, r[col]));
+          break;
+        case 'in':
+          out = out.filter((r) => (value as unknown[]).includes(r[col]));
+          break;
+        case 'order':
+          // Collected, not applied here: re-sorting per call would make the
+          // LAST .order() the primary key (a stable sort keeps only the
+          // earlier keys as tiebreaks), the reverse of PostgREST.
+          orderKeys.push({
+            col,
+            ascending: (value as { ascending?: boolean } | undefined)?.ascending !== false,
+          });
+          break;
+        case 'range':
+          from = Number(col);
+          to = Number(value);
+          break;
+        case 'limit':
+          to = from + Number(col) - 1;
+          break;
+        default:
+          throw new Error(`servedLikePostgrest cannot evaluate .${method}()`);
+      }
+    });
+    if (orderKeys.length > 0) {
+      out.sort((a, b) => {
+        for (const { col, ascending } of orderKeys) {
+          const c = cmp(a[col], b[col]) ? -1 : cmp(b[col], a[col]) ? 1 : 0;
+          if (c !== 0) return ascending ? c : -c;
+        }
+        return 0;
+      });
+    }
+    return { data: out.slice(from, Math.min(to, from + 999) + 1), error: null };
+  };
+}
+
 /** A minimal but GENUINE 26-byte PNG — the 8-byte signature, the IHDR
  *  length + tag, then 2x3 dimensions. Every byte is a literal from the PNG
  *  spec, so `sniffImage` classifies it as a real png. Used as the default

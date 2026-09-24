@@ -225,8 +225,16 @@ export async function updatePoStatusAction(id: string, status: 'draft' | 'ordere
 interface DraftPosResultData {
   /** IDs of the draft POs that were successfully created. */
   createdPoIds: string[];
-  /** Selected items that had no supplier_id and were skipped. */
+  /** skippedNoSupplier + skippedNotOrderable. */
   skipped: number;
+  /** Selected items that had no supplier_id and were skipped. */
+  skippedNoSupplier: number;
+  /** Selected ids that cannot go on a PO (deleted, a kit's pre-assembled
+   *  stock, or not found) and were skipped. */
+  skippedNotOrderable: number;
+  /** Drafted items that were already on another open PO (drafted anyway —
+   *  the user chose them). null = could not be checked. */
+  alreadyOnOpenPo: number | null;
   /** Per-supplier failures (other suppliers' POs may still have been created). */
   supplierFailures: Array<{ supplierId: string; supplierName: string; error: string }>;
   /** How many distinct suppliers were attempted. */
@@ -242,7 +250,9 @@ const MAX_DRAFT_POS_BATCH = 200;
  * draft PO is created per supplier, and line quantities are pre-filled from
  * each item's reorder_quantity (fallback: max(1, reorder_point - on_hand)).
  *
- * Items without a supplier_id are skipped and reported back as `skipped`.
+ * Items without a supplier_id are skipped and reported back as
+ * `skippedNoSupplier`; deleted items and a kit's pre-assembled stock as
+ * `skippedNotOrderable` (both summed in `skipped`).
  * Per-supplier failures are reported as `supplierFailures` so the caller
  * can toast a partial-success message; we deliberately do NOT roll back
  * already-created drafts.
@@ -280,6 +290,8 @@ interface ReorderDraftPosResultData {
   unassignedCount: number;
   /** Below-par items that couldn't be processed (a supplier's PO failed). */
   skipped: number;
+  /** Below-par items not drafted because they are already on an open PO. */
+  skippedOnOpenPo: number;
   /** Per-supplier failures (other suppliers' drafts may still exist). */
   supplierFailures: Array<{ supplierId: string | null; supplierName: string; error: string }>;
   /** Distinct real suppliers attempted (excludes the unassigned bucket). */
@@ -292,7 +304,8 @@ interface ReorderDraftPosResultData {
  * creates one editable DRAFT purchase order per supplier with line
  * quantities pre-filled to the deficit needed to bring each item back to
  * target. Items with no supplier are collected onto a single "unassigned"
- * draft so nothing is dropped.
+ * draft so nothing is dropped. Items already on an open PO are skipped
+ * (counted in `skippedOnOpenPo`), as the daily auto-reorder does.
  *
  * Drafts are NOT auto-sent — the reorder-forecast report routes the user to
  * the created drafts for review/edit. Powers the "Draft PO from reorder

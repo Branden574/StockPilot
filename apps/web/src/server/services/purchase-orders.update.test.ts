@@ -101,6 +101,27 @@ const DRAFT_PO = {
   destination: null,
 };
 
+type SaveArgs = {
+  p_po_id: string | null;
+  p_po_number: string;
+  p_lines: Array<{ item_id: string; quantity_ordered: number; unit_cost: number }>;
+  p_custom_item_ids: string[];
+};
+
+/** The args of the (only) save_purchase_order_draft call, if any. */
+function saveArgs(stub: ReturnType<typeof makeSupabaseStub>): SaveArgs | undefined {
+  const calls = stub.rpcCalls.filter((c) => c.name === 'save_purchase_order_draft');
+  expect(calls.length).toBeLessThanOrEqual(1);
+  return calls[0]?.args as SaveArgs | undefined;
+}
+
+/** update() never writes the PO tables directly any more: one RPC does it. */
+function expectNoDirectPoWrites(stub: ReturnType<typeof makeSupabaseStub>) {
+  expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
+  expect(stub.chainsAll.get('purchase_order_items.delete')).toBeUndefined();
+  expect(stub.chainsAll.get('purchase_order_items.insert')).toBeUndefined();
+}
+
 /** Build a standard stub for update() tests. */
 function makeUpdateStub(overrides: Record<string, unknown> = {}) {
   return makeSupabaseStub({
@@ -118,9 +139,10 @@ function makeUpdateStub(overrides: Record<string, unknown> = {}) {
       ],
       error: null,
     },
-    'purchase_order_items.delete': { data: null, error: null },
-    'purchase_order_items.insert': { data: null, error: null },
-    'purchase_orders.update': { data: { id: PO_ID }, error: null },
+    'rpc:save_purchase_order_draft': {
+      data: { id: PO_ID, stamped: 0, stamp_error: null },
+      error: null,
+    },
     ...overrides,
   });
 }
@@ -151,22 +173,17 @@ describe('PurchaseOrdersService.update — happy path', () => {
 
     expect(result).toEqual({ id: PO_ID, poNumber: 'PO-001' });
 
-    // Lines were deleted then re-inserted.
-    expect(stub.chainsAll.get('purchase_order_items.delete')).toBeDefined();
-    const insertArgs = stub.chainArgs.get('purchase_order_items.insert');
-    const linesPayload = insertArgs?.[0]?.[0] as Array<Record<string, unknown>> | undefined;
-    expect(linesPayload).toHaveLength(2);
-    expect(linesPayload?.[0]?.quantity_ordered).toBe(3);
-    expect(linesPayload?.[0]?.unit_cost).toBe(15);
-    expect(linesPayload?.[1]?.quantity_ordered).toBe(2);
-    expect(linesPayload?.[1]?.unit_cost).toBe(10);
-
-    // Header updated with recomputed totals: 3*15 + 2*10 = 65.
-    const updateArgs = stub.chainArgs.get('purchase_orders.update');
-    const updatePayload = updateArgs?.[0]?.[0] as Record<string, unknown> | undefined;
-    expect(updatePayload?.subtotal).toBe(65);
-    expect(updatePayload?.total).toBe(65);
-    expect(updatePayload?.po_number).toBe('PO-001'); // unchanged
+    // Header and the full line set go to the database in ONE call, which
+    // replaces the lines and recomputes subtotal/total there (3*15 + 2*10 =
+    // 65 is asserted in supabase/tests/0366_save_purchase_order_draft).
+    const args = saveArgs(stub);
+    expect(args?.p_po_id).toBe(PO_ID);
+    expect(args?.p_lines).toEqual([
+      { item_id: 'item-uuid-1', quantity_ordered: 3, unit_cost: 15 },
+      { item_id: 'item-uuid-2', quantity_ordered: 2, unit_cost: 10 },
+    ]);
+    expect(args?.p_po_number).toBe('PO-001'); // unchanged
+    expectNoDirectPoWrites(stub);
   });
 });
 
@@ -187,9 +204,8 @@ describe('PurchaseOrdersService.update — status gate', () => {
     expect((thrown as ServiceError).code).toBe('forbidden');
     expect((thrown as ServiceError).message).toMatch(/Only draft/i);
     // No writes should have occurred.
-    expect(stub.chainsAll.get('purchase_order_items.delete')).toBeUndefined();
-    expect(stub.chainsAll.get('purchase_order_items.insert')).toBeUndefined();
-    expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
+    expect(saveArgs(stub)).toBeUndefined();
+    expectNoDirectPoWrites(stub);
   });
 
   it('throws forbidden when PO status is received', async () => {
@@ -210,13 +226,25 @@ describe('PurchaseOrdersService.update — status gate', () => {
 // ─── concurrent claim race (status-guarded header update) ─────────────────────
 
 describe('PurchaseOrdersService.update — concurrent claim race', () => {
-  it('aborts with conflict (no item created, no lines touched) when the draft-guarded header update hits 0 rows', async () => {
-    // get() still sees a draft (passes the early check), but the status-guarded
-    // header update returns 0 rows — i.e. a concurrent "mark as ordered" raced in
-    // between the get() and the claim. The edit must abort BEFORE creating any
-    // custom item or replacing any line.
+  it('maps the save refusing a no-longer-draft PO to conflict and deletes the custom item it created', async () => {
+    // get() still sees a draft (passes the early check), but a concurrent
+    // "mark as ordered" landed before the save's row lock: the function
+    // refuses with 55000 / hint po_not_draft and writes nothing. The custom
+    // item this call created is on no line, so it is deleted again.
     const stub = makeUpdateStub({
-      'purchase_orders.update': { data: null, error: null },
+      'rpc:save_purchase_order_draft': {
+        data: null,
+        error: {
+          code: '55000',
+          hint: 'po_not_draft',
+          message: 'This purchase order is no longer a draft (it may have just been ordered).',
+        },
+      },
+      // Compensation: the created item is still active with nothing on hand
+      // and on no PO line, so it is soft-deleted.
+      'inventory_items.select': { data: [{ id: 'new-item-uuid', name: 'Should Not Exist' }], error: null },
+      'purchase_order_items.select': { data: [], error: null },
+      'inventory_items.update': { data: [{ id: 'new-item-uuid', name: 'Should Not Exist' }], error: null },
     });
     const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
 
@@ -226,10 +254,18 @@ describe('PurchaseOrdersService.update — concurrent claim race', () => {
 
     expect(thrown).toBeInstanceOf(ServiceError);
     expect((thrown as ServiceError).code).toBe('conflict');
-    // The claim failed BEFORE any destructive work — no custom item, no line ops.
-    expect(mockInvCreate).not.toHaveBeenCalled();
-    expect(stub.chainsAll.get('purchase_order_items.delete')).toBeUndefined();
-    expect(stub.chainsAll.get('purchase_order_items.insert')).toBeUndefined();
+    expect((thrown as ServiceError).message).toBe(
+      'This purchase order is no longer a draft (it may have just been ordered).',
+    );
+    expect(mockInvCreate).toHaveBeenCalledTimes(1);
+    expectNoDirectPoWrites(stub);
+    const archive = stub.chainArgsAll.get('inventory_items.update') ?? [];
+    expect(archive).toHaveLength(1);
+    expect(Object.keys(archive[0]?.[0]?.[0] as object).sort()).toEqual([
+      'deleted_at',
+      'deleted_by',
+      'updated_by',
+    ]);
   });
 });
 
@@ -257,12 +293,11 @@ describe('PurchaseOrdersService.update — newItemName lines', () => {
     const invOpts = (mockInvCreate.mock.calls[0] as unknown[])[1] as Record<string, unknown>;
     expect(invOpts).toEqual({ awaitingFirstReceipt: true });
 
-    // Lines insert must use the new item's id.
-    const insertArgs = stub.chainArgs.get('purchase_order_items.insert');
-    const linesPayload = insertArgs?.[0]?.[0] as Array<Record<string, unknown>> | undefined;
-    expect(linesPayload).toHaveLength(1);
-    expect(linesPayload?.[0]?.item_id).toBe('new-item-uuid');
-    expect(linesPayload?.[0]?.quantity_ordered).toBe(4);
+    // The saved line must use the new item's id, and the item is tagged
+    // with this PO inside the same save.
+    const args = saveArgs(stub);
+    expect(args?.p_lines).toEqual([{ item_id: 'new-item-uuid', quantity_ordered: 4, unit_cost: 8 }]);
+    expect(args?.p_custom_item_ids).toEqual(['new-item-uuid']);
   });
 });
 
@@ -306,9 +341,6 @@ describe('PurchaseOrdersService.update — PO number uniqueness', () => {
       // get() will throw not_found because maybeSingle returns null.
       'purchase_orders.select': { data: null, error: null },
       'purchase_order_items.select': { data: [], error: null },
-      'purchase_order_items.delete': { data: null, error: null },
-      'purchase_order_items.insert': { data: null, error: null },
-      'purchase_orders.update': { data: { id: PO_ID }, error: null },
     });
     const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
 
@@ -360,16 +392,16 @@ describe('PurchaseOrdersService.update — PO number uniqueness', () => {
     expect((thrown as ServiceError).code).toBe('conflict');
     expect((thrown as ServiceError).message).toBe('That PO number is already in use.');
     // No writes after the conflict.
-    expect(stub.chainsAll.get('purchase_order_items.delete')).toBeUndefined();
-    expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
+    expect(saveArgs(stub)).toBeUndefined();
+    expectNoDirectPoWrites(stub);
   });
 
-  it('maps a 23505 on the header claim (concurrent number reuse race) to a clean conflict', async () => {
+  it('maps a 23505 from the save (concurrent number reuse race) to a clean conflict', async () => {
     // Pre-check passed (no number change), but a concurrent create/edit claimed
-    // the number before our header UPDATE → partial unique index 23505. It must
+    // the number before the save's header UPDATE → partial unique index 23505. It must
     // surface as a friendly conflict, mirroring create(), not a raw internal_error.
     const stub = makeUpdateStub({
-      'purchase_orders.update': {
+      'rpc:save_purchase_order_draft': {
         data: null,
         error: { code: '23505', message: 'duplicate key value violates unique constraint "purchase_orders_org_ponumber_active_key"' },
       },
@@ -427,10 +459,9 @@ describe('PurchaseOrdersService.update — destination warehouse guard', () => {
     expect(thrown).toBeInstanceOf(ServiceError);
     expect((thrown as ServiceError).code).toBe('validation_error');
     expect((thrown as ServiceError).message).toContain('warehouse');
-    // Guard fires before the destructive header/line writes.
-    expect(stub.chainsAll.get('purchase_order_items.delete')).toBeUndefined();
-    expect(stub.chainsAll.get('purchase_order_items.insert')).toBeUndefined();
-    expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
+    // Guard fires before the save.
+    expect(saveArgs(stub)).toBeUndefined();
+    expectNoDirectPoWrites(stub);
   });
 });
 
