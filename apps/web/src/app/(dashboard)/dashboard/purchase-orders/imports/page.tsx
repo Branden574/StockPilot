@@ -24,7 +24,13 @@ import { PageTour } from '@/components/onboarding/page-tour';
 import { PO_IMPORTS_TOUR } from '@/lib/onboarding/tours';
 import { DEFAULT_TAB, isImportTab, TAB_LABELS, TAB_ORDER, TAB_STATUSES, type PoImportTab } from '@/lib/po-imports/tabs';
 
-import { formatOrgDate, formatOrgDateTime, resolveOrgTimezone } from '@stockpilot/core';
+import {
+  formatOrgDate,
+  formatOrgDateTime,
+  poImportUploaderLabel,
+  resolveOrgTimezone,
+  type PoImportUploaderProfile,
+} from '@stockpilot/core';
 
 export const metadata = { title: 'PO imports' };
 
@@ -66,6 +72,8 @@ export default async function PoImportsPage({
     });
 
   let rows: PoImportRow[] = [];
+  // Who uploaded each row, keyed by user id; null when the lookup failed.
+  let uploaders: ReadonlyMap<string, PoImportUploaderProfile> | null = new Map();
   let total = 0;
   let counts: Record<PoImportTab, number> = { active: 0, approved: 0, cancelled: 0 };
   let loadFailed = false;
@@ -77,14 +85,22 @@ export default async function PoImportsPage({
     // Rows + the current tab's filtered total (pagination) + the three
     // UNFILTERED per-tab totals (pill counts — always reflect the whole
     // bucket, independent of the active search, like an inbox count).
-    const [rowsResult, totalResult, activeCount, approvedCount, cancelledCount, capped] =
+    const [listed, totalResult, activeCount, approvedCount, cancelledCount, capped] =
       await Promise.all([
-        svc.list({
-          statuses: TAB_STATUSES[tab],
-          q,
-          limit: PAGE_SIZE,
-          offset: (page - 1) * PAGE_SIZE,
-        }),
+        // The uploader lookup starts as soon as the rows land, so it runs
+        // beside the counts instead of after them. It never throws: a failed
+        // lookup comes back as null (reported) and the rows show "—".
+        svc
+          .list({
+            statuses: TAB_STATUSES[tab],
+            q,
+            limit: PAGE_SIZE,
+            offset: (page - 1) * PAGE_SIZE,
+          })
+          .then(async (listRows) => ({
+            listRows,
+            profiles: await svc.uploaderProfiles(listRows.map((r) => r.uploaded_by)),
+          })),
         svc.count({ statuses: TAB_STATUSES[tab], q }),
         svc.count({ statuses: TAB_STATUSES.active }),
         svc.count({ statuses: TAB_STATUSES.approved }),
@@ -93,7 +109,8 @@ export default async function PoImportsPage({
         q ? svc.searchCapped(q) : Promise.resolve(false),
       ]);
     searchCapped = capped;
-    rows = rowsResult;
+    rows = listed.listRows;
+    uploaders = listed.profiles;
     total = totalResult;
     counts = { active: activeCount, approved: approvedCount, cancelled: cancelledCount };
   } catch (error) {
@@ -283,7 +300,10 @@ export default async function PoImportsPage({
                     </TableCell>
                     {/* The date itself, not "2 weeks ago": people track
                         uploads against a calendar (owner request 2026-09-24).
-                        The hover gives the time as well. */}
+                        The hover gives the time as well. Who uploaded it is
+                        the second line rather than a column of its own: the
+                        date and the person are one fact, and a fifth column
+                        would take its width from Name on a narrow screen. */}
                     <TableCell className="text-muted-foreground whitespace-nowrap text-right text-xs tabular-nums">
                       <time
                         dateTime={i.created_at}
@@ -295,6 +315,7 @@ export default async function PoImportsPage({
                       >
                         {formatOrgDate(i.created_at, { dateStyle: 'medium' }, tz)}
                       </time>
+                      <UploadedByLine label={poImportUploaderLabel(uploaders, i.uploaded_by)} />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -317,5 +338,15 @@ export default async function PoImportsPage({
         )}
       </div>
     </div>
+  );
+}
+
+/** The Uploaded cell's second line. Truncated so a long name cannot widen the
+ *  column; the hover shows it whole. */
+function UploadedByLine({ label }: { label: string }) {
+  return (
+    <p className="mt-0.5 ml-auto max-w-[12rem] truncate" title={`Uploaded by ${label}`}>
+      by {label}
+    </p>
   );
 }

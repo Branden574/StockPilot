@@ -1,6 +1,7 @@
 import {
   can,
   lineNeedsMappingConfirmation,
+  poImportUploaderLabel,
   type Role,
 } from '@stockpilot/core';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -51,6 +52,7 @@ import {
 } from '@/lib/po-imports-api';
 import { settleIdBatchRead } from '@/lib/id-batches';
 import { readItemRefs } from '@/lib/id-reads';
+import { readPoImportUploaders } from '@/lib/po-import-uploaders';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, SHADOW } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
@@ -193,6 +195,8 @@ export default function PoImportDetailScreen() {
   // blank SKU, so a PO line could be mapped to an item nobody could identify.
   // While set, Approve is withheld. Set by every load that reaches the lookup.
   const [itemNamesError, setItemNamesError] = React.useState<string | null>(null);
+  // Who uploaded it (poImportUploaderLabel): null until the first load reads it.
+  const [uploadedBy, setUploadedBy] = React.useState<string | null>(null);
   const [predecessor, setPredecessor] = React.useState<LineageRef | null>(null);
   const [replacement, setReplacement] = React.useState<LineageRef | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -287,7 +291,7 @@ export default function PoImportDetailScreen() {
         .from('po_imports')
         .select(
           `id, status, source_type, file_name, parse_error, approved_po_id,
-           vendor_id, warehouse_id, created_at, parsed_json,
+           vendor_id, warehouse_id, created_at, parsed_json, uploaded_by,
            reimported_from_id, superseded_at,
            vendor:suppliers!vendor_id (name)`,
         )
@@ -350,10 +354,18 @@ export default function PoImportDetailScreen() {
       total_amount: parsed.totalAmount,
     });
 
-    await loadLineage(
-      (r.reimported_from_id as string | null) ?? null,
-      (r.superseded_at as string | null) != null,
-    );
+    // Who uploaded it (web parity), read beside the lineage rather than after
+    // it. A failed lookup is warned about and reads "—"; it never fails the
+    // screen.
+    const uploaderId = (r.uploaded_by as string | null) ?? null;
+    const [uploaders] = await Promise.all([
+      readPoImportUploaders(supabase, [uploaderId]),
+      loadLineage(
+        (r.reimported_from_id as string | null) ?? null,
+        (r.superseded_at as string | null) != null,
+      ),
+    ]);
+    setUploadedBy(poImportUploaderLabel(uploaders, uploaderId));
 
     const flat: ImportLine[] = (lineRows ?? []).map((row) => {
       const lr = row as Record<string, unknown>;
@@ -575,6 +587,11 @@ export default function PoImportDetailScreen() {
                         })
                       : ''}
                   </Mono>
+                  {uploadedBy !== null ? (
+                    <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
+                      Uploaded by {uploadedBy}
+                    </Mono>
+                  ) : null}
                 </View>
                 {meta ? (
                   meta.status === 'default' ? (

@@ -1,4 +1,4 @@
-import { can, type Role } from '@stockpilot/core';
+import { can, poImportUploaderLabel, type Role } from '@stockpilot/core';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { ScanLine, Upload } from 'lucide-react-native';
 import * as React from 'react';
@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
+import { readPoImportUploaders } from '@/lib/po-import-uploaders';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
@@ -25,6 +26,9 @@ interface ImportRow {
   approved_po_id: string | null;
   created_at: string;
   vendor: { name: string | null } | null;
+  /** Who uploaded it: name, else email, "Former member", or "—" when the
+   *  lookup failed (poImportUploaderLabel). Never an id. */
+  uploader: string;
 }
 
 const STATUS_META: Record<string, { label: string; status: 'ok' | 'warn' | 'crit' | 'default' }> = {
@@ -75,15 +79,21 @@ export default function POImportsScreen() {
       .from('po_imports')
       .select(
         `id, source_type, file_name, file_size, status, parse_error,
-         approved_po_id, created_at,
+         approved_po_id, created_at, uploaded_by,
          vendor:suppliers!vendor_id (name)`,
       )
       .eq('organization_id', orgId)
       .order('created_at', { ascending: false })
       .limit(100);
+    const raw = (data ?? []) as Record<string, unknown>[];
+    // Who uploaded each import (web parity). Batched; a failed lookup is
+    // warned about and labels "—", and the list still shows.
+    const uploaders = await readPoImportUploaders(
+      supabase,
+      raw.map((r) => (r.uploaded_by as string | null) ?? null),
+    );
     setRows(
-      (data ?? []).map((row) => {
-        const r = row as Record<string, unknown>;
+      raw.map((r) => {
         const vendor = r.vendor as { name: string | null } | { name: string | null }[] | null;
         return {
           id: r.id as string,
@@ -95,6 +105,7 @@ export default function POImportsScreen() {
           approved_po_id: (r.approved_po_id as string | null) ?? null,
           created_at: r.created_at as string,
           vendor: Array.isArray(vendor) ? vendor[0] ?? null : vendor,
+          uploader: poImportUploaderLabel(uploaders, (r.uploaded_by as string | null) ?? null),
         };
       }),
     );
@@ -184,6 +195,7 @@ function ImportCard({ row, onPress }: { row: ImportRow; onPress: () => void }) {
             <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
               {row.vendor?.name ? `${row.vendor.name} · ` : ''}
               {new Date(row.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+              {` · by ${row.uploader}`}
             </Mono>
             {row.parse_error ? (
               <Body muted size={12} style={{ marginTop: 6 }}>

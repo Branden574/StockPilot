@@ -5,7 +5,12 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import { audit, auditMany, type AuditPayload } from './audit';
 import { InventoryService } from './inventory';
-import { fetchAllRowsByIds, rawErrorText, writeInIdBatches } from './lib/fetch-by-ids';
+import {
+  fetchAllRowsByIds,
+  rawErrorText,
+  reportDegradedRead,
+  writeInIdBatches,
+} from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { fetchAllRows } from './lib/paginate';
 import { VendorItemMappingsService } from './vendor-item-mappings';
@@ -72,6 +77,7 @@ import type {
   PoImportLineType,
   PoImportMatchStatus,
   PoImportStatus,
+  PoImportUploaderProfile,
 } from '@stockpilot/core';
 
 export interface PoImportRow {
@@ -288,6 +294,45 @@ export class PoImportsService {
     const { count, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
     return count ?? 0;
+  }
+
+  /**
+   * The profiles of the people who uploaded imports, keyed by user id, for the
+   * "Uploaded by" on the list and detail pages (label: poImportUploaderLabel).
+   * Read with the caller's client, under user_profiles_select_orgmates (0003):
+   * a member's profile comes back, a former member's does not, and the label
+   * says so. Same lookup as the receipt history's receiver names
+   * (ReceivingService.listForPurchaseOrder).
+   *
+   * Batched: the ids come off a page of imports, and one `.in()` past ~215
+   * uuids fails. A name is cosmetic, so a failed lookup does not take the page
+   * down: it is reported and comes back as null, which the label shows as "—"
+   * rather than calling every uploader a former member.
+   */
+  async uploaderProfiles(
+    uploaderIds: readonly (string | null | undefined)[],
+  ): Promise<Map<string, PoImportUploaderProfile> | null> {
+    assertModuleEnabled(this.ctx, 'po_imports');
+    type ProfileRow = { id: string; full_name: string | null; email: string | null };
+    const ctx = this.ctx;
+    try {
+      const profiles = await fetchAllRowsByIds<ProfileRow>(
+        uploaderIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('user_profiles')
+            .select('id, full_name, email')
+            .in('id', batch)
+            .order('id')
+            .range(from, to),
+      );
+      return new Map(profiles.map((p) => [p.id, { full_name: p.full_name, email: p.email }]));
+    } catch (err) {
+      reportDegradedRead('po_imports.uploader_names', err, {
+        users: new Set(uploaderIds.filter(Boolean)).size,
+      });
+      return null;
+    }
   }
 
   /**
