@@ -257,8 +257,9 @@ select ok(
 -- behavioral test above. This structural pin closes that surviving
 -- mutation: the reconciliation sum must flow through the definer helper.
 select ok(
+  -- 0359 moved the body to ledger.post_cycle_count; public holds the wrapper.
   (select p.prosrc like '%_cycle_count_org_stock_sum%' from pg_proc p
-    where p.oid = 'public.post_cycle_count(uuid)'::regprocedure),
+    where p.oid = 'ledger.post_cycle_count(uuid)'::regprocedure),
   '0327: post_cycle_count computes its reconciliation sum via _cycle_count_org_stock_sum (wiring pin)'
 );
 

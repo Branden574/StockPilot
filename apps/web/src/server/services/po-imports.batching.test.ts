@@ -31,6 +31,7 @@ import { createClient } from '@supabase/supabase-js';
 import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
 
 import {
+  callArgs,
   inFilters,
   makeServiceContext,
   makeSupabaseStub,
@@ -169,13 +170,12 @@ describe('approve() stamps 150 import-created items in batches', () => {
       },
       'rpc:next_po_number': { data: 'PO-100', error: null },
       'locations.select': { data: { id: 'loc-chosen' }, error: null },
-      'purchase_orders.insert': { data: { id: 'new-po' }, error: null },
-      'purchase_order_items.insert': { data: null, error: null },
+      // The PO is created by the one commit; its id is what the stamp carries.
+      'rpc:approve_po_import_commit': { data: 'new-po', error: null },
       'inventory_items.update': (call) => {
         updates += 1;
         return update(call, updates) as never;
       },
-      'po_imports.update': { data: { id: 'imp-1' }, error: null },
     });
     return stub;
   }
@@ -189,8 +189,10 @@ describe('approve() stamps 150 import-created items in batches', () => {
 
   it('stamps every created item, at most 100 per write', async () => {
     const lists: string[][] = [];
+    const payloads: Array<Record<string, unknown>> = [];
     const stub = approveStub((call) => {
       lists.push(inList(call, 'id'));
+      payloads.push(callArgs(call, 'update')?.[0] as Record<string, unknown>);
       return { data: null, error: null };
     });
     const res = await new PoImportsService(makeServiceContext(stub.client) as never).approve(
@@ -198,6 +200,11 @@ describe('approve() stamps 150 import-created items in batches', () => {
     );
     expect(res.poId).toBe('new-po');
     expect(lists.map((l) => l.length)).toEqual([100, 50]);
+    // Every batch stamps the PO the commit returned, not some other id.
+    expect(payloads).toEqual([
+      { created_from_purchase_order_id: 'new-po' },
+      { created_from_purchase_order_id: 'new-po' },
+    ]);
   });
 
   it('reports a failed stamp batch with the unstamped count and still approves', async () => {
@@ -394,9 +401,7 @@ describe('approve() with an ownership charter and 150 linked lines', () => {
       },
       'rpc:next_po_number': { data: 'PO-100', error: null },
       'locations.select': { data: { id: 'loc-chosen' }, error: null },
-      'purchase_orders.insert': { data: { id: 'new-po' }, error: null },
-      'purchase_order_items.insert': { data: null, error: null },
-      'po_imports.update': { data: { id: 'imp-1' }, error: null },
+      'rpc:approve_po_import_commit': { data: 'new-po', error: null },
     });
     const res = await new PoImportsService(makeServiceContext(stub.client) as never).approve({
       poImportId: 'imp-1',

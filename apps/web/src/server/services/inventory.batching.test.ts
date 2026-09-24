@@ -61,7 +61,6 @@ import {
   type MockCall,
 } from '@/test/supabase-mock';
 
-import type { ServiceError } from './context';
 import { InventoryService } from './inventory';
 
 const uuid = (i: number, p = '0') => `${p.repeat(8)}-0000-4000-8000-${String(i).padStart(12, '0')}`;
@@ -323,67 +322,10 @@ describe('id-list reads that throw', () => {
   });
 });
 
-describe('opening-stock compensation with 150 items', () => {
-  function stubWith(opts: { failLevelsBatch?: number; failVerify?: boolean }) {
-    let levelCalls = 0;
-    const lists = { items: [] as string[][] };
-    const stub = makeSupabaseStub({
-      'item_stock_levels.update': () => {
-        levelCalls += 1;
-        return levelCalls === opts.failLevelsBatch
-          ? { data: null, error: { message: 'boom' } }
-          : { data: null, error: null };
-      },
-      'inventory_items.update': (call) => {
-        const list = inList(call, 'id') ?? [];
-        lists.items.push(list);
-        return { data: list.map((id) => ({ id })), error: null };
-      },
-      'item_stock_levels.select': () =>
-        opts.failVerify ? { data: null, error: { message: 'verify' } } : { data: [], error: null },
-    });
-    return { stub, lists };
-  }
-  async function compensate(client: unknown): Promise<ServiceError> {
-    const s = svc(client) as unknown as {
-      compensateOpeningStockOrThrow(
-        ids: string[],
-        err: { message: string },
-        opts: { tag: string; subject: string; pronoun: 'its' | 'their' },
-      ): Promise<never>;
-    };
-    return s
-      .compensateOpeningStockOrThrow(
-        ids(150),
-        { message: 'refused' },
-        {
-          tag: '[test]',
-          subject: 'These items were',
-          pronoun: 'their',
-        },
-      )
-      .catch((e: unknown) => e as ServiceError);
-  }
-
-  it('rolls back in batches when every batch succeeds', async () => {
-    const { stub, lists } = stubWith({});
-    const err = await compensate(stub.client);
-    expect(lists.items.map((l) => l.length)).toEqual([100, 50]);
-    expect(err.internalDetail).toMatch(/stock adjustment/i);
-  });
-
-  it('never zeroes on-hand for items whose placements batch failed', async () => {
-    const { stub, lists } = stubWith({ failLevelsBatch: 2 });
-    const err = await compensate(stub.client);
-    expect(lists.items.flat()).toEqual(ids(150).slice(0, 100));
-    expect(err.internalDetail).toMatch(/could not be rolled back/i);
-  });
-
-  it('reports "could not be rolled back" when the verify read fails', async () => {
-    const { stub } = stubWith({ failVerify: true });
-    expect((await compensate(stub.client)).internalDetail).toMatch(/could not be rolled back/i);
-  });
-});
+// The opening-stock compensation's batching (150 items across batches, a
+// failed batch, a failed verify read) is covered in
+// opening-stock-compensation.test.ts: since migration 0359 it is one shared
+// function around the compensate_opening_stock RPC, not a private method.
 
 describe('bulkCreate barcode pre-check', () => {
   it('checks 250 barcodes in batches and inserts nothing when a batch fails', async () => {

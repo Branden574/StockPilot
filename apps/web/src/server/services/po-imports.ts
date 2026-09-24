@@ -1411,9 +1411,8 @@ export class PoImportsService {
     // A read-then-act check: it gives the common case a clear message and
     // avoids doing the expensive line/charter work for nothing. It is NOT the
     // guard against a double approval — two overlapping calls both read
-    // 'parsed'. The real gate is the conditional CLAIM immediately before the
-    // purchase_orders insert below; `header.status` is also what that claim
-    // restores if the insert fails.
+    // 'parsed'. The real gate is the claim inside approve_po_import_commit
+    // below, which locks the import row and refuses a second approval.
     if (header.status !== 'parsed' && header.status !== 'needs_review') {
       throw new ServiceError(
         'conflict',
@@ -1738,126 +1737,93 @@ export class PoImportsService {
       input.locationId ?? null,
     );
 
-    // ATOMIC CLAIM — the last gate before a receivable PO exists.
+    // ONE TRANSACTION — the claim, the PO, its lines, its charges and the
+    // import's approved_po_id (approve_po_import_commit, migration 0360).
     //
-    // The status read at the top of this method is a plain read-then-act
-    // check, and every path funnels here: the web action, the Bearer
-    // /api/v1 approve route (maxDuration 60s) and the mobile screen (whose
-    // client gives up at 20s and lets the user retry). A large import can
-    // outlive the client, so "two approvals in flight for one import" is an
-    // ordinary Tuesday — the retry, or a second manager — and both used to
-    // read 'parsed', pass, and INSERT their own purchase_orders row. Two
-    // receivable POs for one vendor document: receivable twice, spend
-    // threshold cleared twice, and the orphan referenced by no import so
-    // cancel-cleanup never touches it.
+    // These used to be five requests. The claim was the serialization point
+    // against double approval (two in-flight approvals for one import are an
+    // ordinary Tuesday: the mobile client gives up at 20s and lets the user
+    // retry), and a failure after the PO insert deliberately kept the claim so
+    // no re-approval could mint a second PO, which left a PO with no lines.
+    // Now a failure inside the call rolls back the claim, the PO, its lines
+    // and charges together, so the import is simply approvable again. The
+    // ownership work ABOVE (re-chartering, qty-0 siblings, orphan archiving,
+    // po_import_lines remaps) is not part of that transaction and stays, as
+    // it always did when an approval failed after it.
     //
-    // This conditional UPDATE is the serialization point. Postgres applies it
-    // to at most one of the racers: `in('status', …)` matches only while the
-    // import is still claimable, and `.select().maybeSingle()` turns the
-    // fail-OPEN 0-row update (pattern #2) into a visible miss. The loser is
-    // refused BEFORE it can mint a PO. Once claimed the import also reads as
-    // 'approved' to cancel(), whose own `not in (approved,canceled)` filter
-    // then refuses to cancel it out from under this call.
-    const claimedAt = new Date().toISOString();
-    const { data: claimed, error: claimErr } = await this.ctx.supabase
-      .from('po_imports')
-      .update({
-        status: 'approved',
-        approved_at: claimedAt,
-        approved_by: this.ctx.userId,
-      })
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('id', input.poImportId)
-      .in('status', ['parsed', 'needs_review'])
-      .select('id')
-      .maybeSingle();
-    if (claimErr) throw new ServiceError('internal_error', claimErr.message);
-    if (!claimed) {
-      throw new ServiceError(
-        'conflict',
-        'This import was just approved (or cancelled) by another request. Refresh to see its purchase order.',
-      );
-    }
-
-    /**
-     * Give the claim back. Only ever called while NO purchase order exists —
-     * once one does, the import must stay claimed or the next Approve mints a
-     * duplicate. Conditional on the claim still being ours (status approved,
-     * no PO stamped) so it can never undo somebody else's approval.
-     */
-    const releaseClaim = async (): Promise<void> => {
-      const { error: relErr } = await this.ctx.supabase
-        .from('po_imports')
-        .update({ status: header.status, approved_at: null, approved_by: null })
-        .eq('organization_id', this.ctx.organizationId)
-        .eq('id', input.poImportId)
-        .eq('status', 'approved')
-        .is('approved_po_id', null)
-        .select('id')
-        .maybeSingle();
-      if (relErr) {
-        // Don't mask the original failure with this one — but say it out loud:
-        // the import is now sitting 'approved' with no PO behind it.
-        console.error(
-          `[po-imports] approve: could not release the claim on import ${input.poImportId}: ${relErr.message}`,
+    // The RPC reads quantities, costs and totals from the stored import lines
+    // and takes only this review's decisions (each kept line's final item and
+    // type). Its approval threshold counts spend only (goods and positive
+    // charges), so re-typing a line as a discount cannot net a large import
+    // under it; the friendly check above stays for the message.
+    const { data: poId, error: commitErr } = await this.ctx.supabase.rpc(
+      'approve_po_import_commit',
+      {
+        p_import_id: input.poImportId,
+        p_po_number: poNumber,
+        p_supplier_id: input.vendorId,
+        p_destination_location_id: destinationLocationId,
+        p_charter_id: billToCharterId,
+        p_expected_at: input.expectedAt ?? null,
+        p_notes: `Imported from PO file (po_import ${input.poImportId})`,
+        p_lines: finalLines.map((l) => ({
+          line_id: l.id,
+          item_id: l.line_type === 'inventory' ? l.item_id : null,
+          line_type: l.line_type,
+        })),
+      },
+    );
+    if (commitErr) {
+      const message = commitErr.message ?? '';
+      if (message.includes('po_import_not_claimable')) {
+        throw new ServiceError(
+          'conflict',
+          'This import was just approved (or cancelled) by another request. Refresh to see its purchase order.',
         );
       }
-    };
-
-    const { data: po, error: poErr } = await this.ctx.supabase
-      .from('purchase_orders')
-      .insert({
-        organization_id: this.ctx.organizationId,
-        po_number: poNumber,
-        supplier_id: input.vendorId,
-        destination_location_id: destinationLocationId,
-        charter_id: billToCharterId,
-        expected_at: input.expectedAt ?? null,
-        notes: `Imported from PO file (po_import ${input.poImportId})`,
-        subtotal,
-        // Total is the TRUE invoice value: goods + every charge. subtotal stays
-        // goods-only so the PDF can print Subtotal → charges → Total.
-        total: subtotal + chargeTotal,
-        status: 'expected_inbound',
-        created_by: this.ctx.userId,
-        updated_by: this.ctx.userId,
-      })
-      .select('id')
-      .single();
-    if (poErr) {
-      // No PO was created, so the import must become approvable again —
-      // otherwise one failed insert strands the document as permanently
-      // "approved" with nothing to receive against.
-      await releaseClaim();
-      throw new ServiceError('internal_error', poErr.message);
-    }
-
-    if (inventoryLines.length > 0) {
-      const { error: lineErr } = await this.ctx.supabase
-        .from('purchase_order_items')
-        .insert(
-          inventoryLines.map((l) => ({
-            organization_id: this.ctx.organizationId,
-            purchase_order_id: po.id as string,
-            item_id: l.item_id!,
-            quantity_ordered: l.qty_ordered_original ?? 1,
-            quantity_received: 0,
-            unit_cost: l.unit_cost ?? 0,
-          })),
+      if (message.includes('po_over_approval_threshold')) {
+        throw new ServiceError(
+          'forbidden',
+          'This import meets the approval threshold. Ask an owner or admin to approve it.',
         );
-      if (lineErr) throw new ServiceError('internal_error', lineErr.message);
-    }
-
-    // Persist the financial-only charges (tax/freight/service/fee/discount/other)
-    // so they render on the PO PDF and reconcile with total. No stock, no items.
-    if (chargeRows.length > 0) {
-      const { error: chargeErr } = await this.ctx.supabase
-        .from('purchase_order_charges')
-        .insert(
-          chargeRows.map((c) => ({ ...c, purchase_order_id: po.id as string })),
+      }
+      if (message.includes('po_import_not_found')) {
+        throw new ServiceError('not_found', 'PO import not found.');
+      }
+      if (message.includes('line_amount_invalid')) {
+        throw new ServiceError(
+          'validation_error',
+          'An item line needs a quantity above 0 and a cost and total of 0 or more. Correct it in review, or skip the line.',
         );
-      if (chargeErr) throw new ServiceError('internal_error', chargeErr.message);
+      }
+      if (message.includes('line_item_invalid')) {
+        throw new ServiceError(
+          'validation_error',
+          'A line is mapped to an item that no longer exists in this organization. Re-map it in review, or skip the line.',
+        );
+      }
+      if (
+        message.includes('lines_invalid') ||
+        message.includes('destination_invalid') ||
+        message.includes('header_reference_invalid')
+      ) {
+        throw new ServiceError(
+          'validation_error',
+          'This import changed while it was being reviewed. Reload it and approve again.',
+        );
+      }
+      if (
+        (commitErr as { code?: string }).code === '23505' &&
+        message.includes('purchase_orders_org_ponumber_active_key')
+      ) {
+        throw new ServiceError('conflict', 'That PO number is already in use. Try approving again.');
+      }
+      throw new ServiceError('internal_error', message);
     }
+    if (typeof poId !== 'string' || poId.length === 0) {
+      throw new ServiceError('internal_error', 'The purchase order was not created.');
+    }
+    const po = { id: poId };
 
     // Stamp the items THIS import created (not pre-existing items the user
     // linked) with their origin PO, so cancelling the PO archives the unused
@@ -1909,31 +1875,6 @@ export class PoImportsService {
       // bumps updated_at (tg_inventory_items_set_updated_at, 0242 only spares
       // embedding/search_vector), and updated_at is the default sort key.
       invalidateInventoryListAfterWrite(this.ctx.organizationId, 'po_import.approve');
-    }
-
-    // Link the import to the PO it produced. status/approved_at/approved_by
-    // were already written by the CLAIM above — this write only carries the id.
-    //
-    // It used to be an unchecked, unscoped `.update().eq('id', …)` whose result
-    // was not even destructured, so a stamp that matched zero rows (RLS
-    // refusal, the 8s statement timeout under load) reported success: the PO
-    // was live, the import still said 'parsed', and the next Approve minted a
-    // second PO for the same invoice. Checked and org-scoped now (pattern #2);
-    // a failure here is surfaced, and because the claim is NOT released once a
-    // PO exists, no re-approval can duplicate it.
-    const { data: stamped, error: stampErr } = await this.ctx.supabase
-      .from('po_imports')
-      .update({ approved_po_id: po.id as string })
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('id', input.poImportId)
-      .select('id')
-      .maybeSingle();
-    if (stampErr) throw new ServiceError('internal_error', stampErr.message);
-    if (!stamped) {
-      throw new ServiceError(
-        'internal_error',
-        `Purchase order ${poNumber} was created but could not be linked back to this import. Open the purchase order to continue receiving.`,
-      );
     }
 
     await audit(

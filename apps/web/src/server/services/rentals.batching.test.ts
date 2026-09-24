@@ -63,53 +63,36 @@ describe('RentalsService.create with 150 lines', () => {
       }) as never,
     );
 
-  it('validates items and reads reservations in batches of at most 100', async () => {
-    const itemLists: string[][] = [];
-    const resvLists: string[][] = [];
+  // The item and availability checks moved into create_rental (migration
+  // 0361), which reads them inside the database: there is no id list in a
+  // URL left to batch. What remains is that all 150 lines reach it in ONE
+  // call, so the check and the writes cover the whole checkout atomically.
+  it('sends every line to create_rental in one call, with no id-list reads of its own', async () => {
     const stub = makeSupabaseStub({
-      'inventory_items.select': (call) => {
-        const list = inList(call, 'id');
-        itemLists.push(list);
-        return {
-          data: list.map((id) => ({
-            id,
-            name: id,
-            is_rental: true,
-            warehouse_id: 'wh-1',
-            quantity_on_hand: 1,
-          })),
-          error: null,
-        };
-      },
-      'stock_reservations.select': (call) => {
-        const list = inList(call, 'item_id');
-        resvLists.push(list);
-        // The last item is already fully out on another rental.
-        return {
-          data: list
-            .filter((id) => id === uuid(149, 'a'))
-            .map((item_id) => ({ item_id, quantity: 1 })),
-          error: null,
-        };
+      'rpc:create_rental': { data: 'rental-150', error: null },
+    });
+    await expect(svcFor(stub.client).create(input as never)).resolves.toEqual({ id: 'rental-150' });
+    const calls = stub.rpcCalls.filter((c) => c.name === 'create_rental');
+    expect(calls).toHaveLength(1);
+    expect((calls[0]!.args as { p_lines: unknown[] }).p_lines).toHaveLength(150);
+    expect(stub.chains.has('inventory_items.select')).toBe(false);
+    expect(stub.chains.has('stock_reservations.select')).toBe(false);
+  });
+
+  it("maps the function's availability refusal to validation_error with its wording", async () => {
+    const stub = makeSupabaseStub({
+      'rpc:create_rental': {
+        data: null,
+        error: {
+          message: 'Item: only 0 available to rent (1 on hand, 1 already reserved) — 1 requested.',
+          code: '22023',
+          hint: 'rental_invalid',
+        },
       },
     });
     await expect(svcFor(stub.client).create(input as never)).rejects.toMatchObject({
       code: 'validation_error',
-    });
-    expect(itemLists.map((l) => l.length)).toEqual([100, 50]);
-    expect(resvLists.map((l) => l.length)).toEqual([100, 50]);
-  });
-
-  it('throws internal_error when an item batch fails, not "not found"', async () => {
-    let n = 0;
-    const stub = makeSupabaseStub({
-      'inventory_items.select': () => {
-        n += 1;
-        return n === 2 ? { data: null, error: { message: 'boom' } } : { data: [], error: null };
-      },
-    });
-    await expect(svcFor(stub.client).create(input as never)).rejects.toMatchObject({
-      code: 'internal_error',
+      message: expect.stringMatching(/only 0 available to rent/),
     });
   });
 });

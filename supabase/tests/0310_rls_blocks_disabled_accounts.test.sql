@@ -31,7 +31,7 @@
 
 begin;
 
-select plan(65);
+select plan(66);
 
 \set org     '\'03100000-0000-0000-0000-000000000001\''
 \set wh      '\'03100000-0000-0000-0000-0000000000b1\''
@@ -219,9 +219,13 @@ select lives_ok(
 update public.inventory_items set name = 'Renamed While Active' where id = :item;
 select is((select name from public.inventory_items where id = :item), 'Renamed While Active',
   'ACTIVE: UPDATE applied');
-delete from public.inventory_items where sku = 'AD10-ACTIVE-INS';
-select is((select count(*) from public.inventory_items where sku = 'AD10-ACTIVE-INS'), 0::bigint,
-  'ACTIVE: DELETE applied');
+-- 0359 revoked DELETE on inventory_items from authenticated: items are
+-- soft-deleted everywhere, and a hard delete cascades movements, holdings and
+-- reservations. So even an active admin is refused, at the grant.
+select throws_ok(
+  $$delete from public.inventory_items where sku = 'AD10-ACTIVE-INS'$$,
+  '42501', null,
+  'ACTIVE: DELETE is refused at the grant (0359: no API role hard-deletes items)');
 select is((select count(*) from public.rentals where id = :rental), 1::bigint,
   'ACTIVE: SELECT on rentals (user_can_access_warehouse sole gate) sees the row');
 
@@ -284,7 +288,10 @@ select throws_ok(
 );
 
 update public.inventory_items set name = 'Renamed While Disabled' where id = :item;
-delete from public.inventory_items where id = :item;
+select throws_ok(
+  $$delete from public.inventory_items where id = '03100000-0000-0000-0000-0000000000c1'$$,
+  '42501', null,
+  'DISABLED: DELETE is refused at the grant (0359)');
 select is((select count(*) from public.rentals where id = :rental), 0::bigint,
   'DISABLED: SELECT on rentals is refused — the sole-gate helper is guarded too');
 

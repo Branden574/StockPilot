@@ -237,16 +237,21 @@ describe('PoImportsService.approve — stamps created items + destination (Fix #
       'rpc:next_po_number': { data: 'PO-100', error: null },
       // resolveDestinationLocation: the preferred-location verification lookup.
       'locations.select': { data: locationRow ?? null, error: null },
-      'purchase_orders.insert': { data: { id: 'new-po' }, error: null },
-      'purchase_order_items.insert': { data: null, error: null },
+      // The claim, the PO, its lines and charges are one database call.
+      'rpc:approve_po_import_commit': { data: 'new-po', error: null },
       'inventory_items.update': { data: null, error: null },
-      // approve() CLAIMS the import (conditional update) before it inserts
-      // the PO, and stamps approved_po_id afterwards. Both are checked
-      // writes, so the stub has to answer with a ROW or every approval
-      // reads as a lost race.
-      'po_imports.update': { data: { id: IMPORT_ID }, error: null },
     });
   }
+
+  /** The arguments of the one approve_po_import_commit call. */
+  function commitArgs(stub: ReturnType<typeof makeSupabaseStub>): Record<string, unknown> {
+    const calls = stub.rpcCalls.filter((c) => c.name === 'approve_po_import_commit');
+    expect(calls).toHaveLength(1);
+    return calls[0]!.args as Record<string, unknown>;
+  }
+
+  const commitWasCalled = (stub: ReturnType<typeof makeSupabaseStub>) =>
+    stub.rpcCalls.some((c) => c.name === 'approve_po_import_commit');
 
   it('creates the PO at the chosen location and stamps created_from on import-created items', async () => {
     const stub = makeApproveStub();
@@ -263,11 +268,13 @@ describe('PoImportsService.approve — stamps created items + destination (Fix #
     expect(result.poId).toBe('new-po');
 
     // Fix #3: the PO was created at the user's chosen destination location.
-    const poInsert = stub.chainArgs.get('purchase_orders.insert')?.[0]?.[0] as Record<string, unknown>;
-    expect(poInsert?.destination_location_id).toBe('loc-chosen');
-    expect(poInsert?.status).toBe('expected_inbound');
-    // expected_at defaults to null when no expectedAt is supplied.
-    expect(poInsert?.expected_at ?? null).toBeNull();
+    // The commit writes it as 'expected_inbound' (pgTAP 0360 assertion 34).
+    const commit = commitArgs(stub);
+    expect(commit.p_destination_location_id).toBe('loc-chosen');
+    // expected_at is sent as an explicit null when no expectedAt is supplied.
+    expect(commit).toHaveProperty('p_expected_at', null);
+    // Never a direct write around the commit.
+    expect(stub.chainsAll.get('purchase_orders.insert')).toBeUndefined();
 
     // Fix #2: created_from_purchase_order_id stamped onto the import-created item,
     // so cancelling the PO later archives it via the normal cleanup.
@@ -295,8 +302,7 @@ describe('PoImportsService.approve — stamps created items + destination (Fix #
       lineOverrides: [],
     } as never);
 
-    const poInsert = stub.chainArgs.get('purchase_orders.insert')?.[0]?.[0] as Record<string, unknown>;
-    expect(poInsert?.expected_at).toBe('2026-07-15T00:00:00.000Z');
+    expect(commitArgs(stub).p_expected_at).toBe('2026-07-15T00:00:00.000Z');
   });
 
   // Owner directive 2026-07-08: the destination location is REQUIRED and the
@@ -321,6 +327,7 @@ describe('PoImportsService.approve — stamps created items + destination (Fix #
       'Pick a destination location for this warehouse.',
     );
     // Nothing was created: no PO, and crucially no synthetic location.
+    expect(commitWasCalled(stub)).toBe(false);
     expect(stub.chainsAll.get('purchase_orders.insert')).toBeUndefined();
     expect(stub.chainsAll.get('locations.insert')).toBeUndefined();
     // The old any-location-in-warehouse fallback never even queried locations.
@@ -356,6 +363,7 @@ describe('PoImportsService.approve — stamps created items + destination (Fix #
     expect(locArgs).toContain('deleted_at');
     // …and on a miss nothing was created: no PO, no synthetic location, and
     // the removed auto-create branch's warehouse-name lookup never ran.
+    expect(commitWasCalled(stub)).toBe(false);
     expect(stub.chainsAll.get('purchase_orders.insert')).toBeUndefined();
     expect(stub.chainsAll.get('locations.insert')).toBeUndefined();
     expect(stub.chainsAll.get('warehouses.select')).toBeUndefined();
@@ -377,6 +385,7 @@ describe('PoImportsService.approve — stamps created items + destination (Fix #
     expect(thrown).toBeInstanceOf(ServiceError);
     expect((thrown as ServiceError).code).toBe('conflict');
     // No PO created.
+    expect(commitWasCalled(approvedStub)).toBe(false);
     expect(approvedStub.chainsAll.get('purchase_orders.insert')).toBeUndefined();
   });
 });

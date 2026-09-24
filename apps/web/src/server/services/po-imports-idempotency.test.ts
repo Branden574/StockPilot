@@ -22,7 +22,9 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
  *      predecessor is NOT recreated.
  *   4. `approve()` — the header's own status is the txn-id guard: a second
  *      approve on an already-approved import is refused before it can touch
- *      the ledger a second time.
+ *      the ledger a second time. Two calls that race past that read are
+ *      separated by the claim inside approve_po_import_commit (pgTAP 0360
+ *      assertion 38), which raises `po_import_not_claimable`.
  */
 
 vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
@@ -486,6 +488,7 @@ describe('PoImportsService.approve — the second call does not double the ledge
   it('approves once, then refuses a second approve on the now-approved import (conflict, not a second PO)', async () => {
     let approved = false;
     let lineSelectCall = 0;
+    let commits = 0;
     const LINE = {
       id: 'line-1',
       po_import_id: IMPORT_ID,
@@ -522,13 +525,15 @@ describe('PoImportsService.approve — the second call does not double the ledge
       },
       'locations.select': { data: { id: 'loc-1' }, error: null },
       'rpc:next_po_number': { data: 'PO-500', error: null },
-      'purchase_orders.insert': { data: { id: 'po-new' }, error: null },
-      'purchase_order_items.insert': { data: null, error: null },
-      // approve() CLAIMS the import (conditional update) before it inserts
-      // the PO, and stamps approved_po_id afterwards. Both are checked
-      // writes, so the stub has to answer with a ROW or every approval
-      // reads as a lost race.
-      'po_imports.update': { data: { id: IMPORT_ID }, error: null },
+      // The claim, the PO, its lines and the import's link are one database
+      // call. It succeeds once; any later call finds the import already
+      // claimed and raises, the way approve_po_import_commit does.
+      'rpc:approve_po_import_commit': () => {
+        commits += 1;
+        return commits === 1
+          ? { data: 'po-new', error: null }
+          : { data: null, error: { message: 'po_import_not_claimable', code: 'P0001' } };
+      },
     });
 
     const APPROVE_INPUT = {
@@ -541,13 +546,20 @@ describe('PoImportsService.approve — the second call does not double the ledge
 
     const first = await svc.approve(APPROVE_INPUT as never);
     expect(first.poId).toBe('po-new');
-    approved = true; // mirrors the po_imports.update the real call just made
+    approved = true; // mirrors the claim the commit just took on the row
 
     await expect(svc.approve(APPROVE_INPUT as never)).rejects.toMatchObject({ code: 'conflict' });
 
-    // The ledger was only ever touched ONCE — the second call never reached
-    // it. Quantity is not doubled because there is no second PO to double it.
-    expect(stub.chainsAll.get('purchase_orders.insert')).toHaveLength(1);
-    expect(stub.chainsAll.get('purchase_order_items.insert')).toHaveLength(1);
+    // The ledger was only ever touched ONCE. Whether the second call stopped
+    // at the status read or at the commit's claim, at most one more commit
+    // was attempted and it minted nothing, so there is no second PO to double
+    // the quantity.
+    const commitCalls = stub.rpcCalls.filter((c) => c.name === 'approve_po_import_commit');
+    expect(commitCalls.length).toBeGreaterThanOrEqual(1);
+    expect(commitCalls.length).toBeLessThanOrEqual(2);
+    // No PO, line or charge is ever written around the commit.
+    expect(stub.chainsAll.get('purchase_orders.insert')).toBeUndefined();
+    expect(stub.chainsAll.get('purchase_order_items.insert')).toBeUndefined();
+    expect(stub.chainsAll.get('purchase_order_charges.insert')).toBeUndefined();
   });
 });

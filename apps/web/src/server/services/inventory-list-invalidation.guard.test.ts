@@ -97,6 +97,7 @@ const STOCK_RPCS: Record<string, string> = {
   inventory_set_rack: 'inventory_items.bin_location + rack custom_fields',
   inventory_set_bin_location: 'inventory_items.bin_location',
   inventory_set_book_placement: 'inventory_items book_crate_* / rack custom_fields',
+  compensate_opening_stock: 'item_stock_levels + inventory_items.quantity_on_hand (failed-create rollback, 0359)',
 };
 
 /**
@@ -321,15 +322,28 @@ const STOCK_TABLE_WRITE =
  * migrations writes a stock table, directly or through any function it calls
  * (fixpoint over the call graph). Bodies are the dollar-quoted text; `--`
  * comments are stripped so prose naming a table does not count.
+ *
+ * Bodies are keyed by SCHEMA-qualified name, and `ALTER FUNCTION public.<n>(…)
+ * SET SCHEMA <s>` moves a body, in statement order. Migration 0359 moved the
+ * eight ledger RPC bodies into `ledger` and put a same-named public wrapper in
+ * front of each (`perform set_config(…); v := ledger.<n>(…)`): an unqualified
+ * key would let the wrapper overwrite the body and read its call to
+ * ledger.<n> as a self-call, classifying every ledger RPC as a non-writer.
+ * Calls resolve `ledger.x(` to the ledger body and `x(` / `public.x(` to the
+ * public one; other schemas (auth., extensions.) are not followed.
  */
 function classifyFunctions(migrations: Array<{ file: string; sql: string }>): Map<string, boolean> {
   const bodies = new Map<string, string>();
   const header =
-    /create\s+(?:or\s+replace\s+)?function\s+(?:public\.)?"?([a-z_][a-z0-9_]*)"?\s*\(/gi;
+    /create\s+(?:or\s+replace\s+)?function\s+(?:(public|ledger)\.)?"?([a-z_][a-z0-9_]*)"?\s*\(/gi;
+  const move =
+    /alter\s+function\s+(?:public\.)?"?([a-z_][a-z0-9_]*)"?\s*\([^)]*\)\s*set\s+schema\s+([a-z_]+)/gi;
   for (const { sql } of migrations) {
+    const events: Array<{ at: number; apply: () => void }> = [];
     header.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = header.exec(sql))) {
+      const key = `${(m[1] ?? 'public').toLowerCase()}.${m[2]!.toLowerCase()}`;
       const tagRe = /\$([a-z_]*)\$/gi;
       tagRe.lastIndex = m.index;
       const open = tagRe.exec(sql);
@@ -337,34 +351,57 @@ function classifyFunctions(migrations: Array<{ file: string; sql: string }>): Ma
       const start = open.index + open[0].length;
       const end = sql.indexOf(open[0], start);
       if (end < 0) continue;
-      bodies.set(m[1]!.toLowerCase(), sql.slice(start, end).replace(/--[^\n]*/g, ''));
+      const body = sql.slice(start, end).replace(/--[^\n]*/g, '');
+      events.push({ at: m.index, apply: () => bodies.set(key, body) });
     }
+    move.lastIndex = 0;
+    while ((m = move.exec(sql))) {
+      const name = m[1]!.toLowerCase();
+      const to = `${m[2]!.toLowerCase()}.${name}`;
+      events.push({
+        at: m.index,
+        apply: () => {
+          const body = bodies.get(`public.${name}`);
+          if (body === undefined) return;
+          bodies.set(to, body);
+          bodies.delete(`public.${name}`);
+        },
+      });
+    }
+    events.sort((a, b) => a.at - b.at).forEach((e) => e.apply());
   }
   const writes = new Map<string, boolean>();
   const calls = new Map<string, Set<string>>();
-  for (const [name, body] of bodies) {
-    writes.set(name, STOCK_TABLE_WRITE.test(body));
+  for (const [key, body] of bodies) {
+    writes.set(key, STOCK_TABLE_WRITE.test(body));
     const called = new Set<string>();
-    const callRe = /\b([a-z_][a-z0-9_]*)\s*\(/gi;
+    const callRe = /\b(?:([a-z_][a-z0-9_]*)\s*\.\s*)?([a-z_][a-z0-9_]*)\s*\(/gi;
     let c: RegExpExecArray | null;
     while ((c = callRe.exec(body))) {
-      const callee = c[1]!.toLowerCase();
-      if (callee !== name && bodies.has(callee)) called.add(callee);
+      const schema = (c[1] ?? 'public').toLowerCase();
+      if (schema !== 'public' && schema !== 'ledger') continue;
+      const callee = `${schema}.${c[2]!.toLowerCase()}`;
+      if (callee !== key && bodies.has(callee)) called.add(callee);
     }
-    calls.set(name, called);
+    calls.set(key, called);
   }
   let changed = true;
   while (changed) {
     changed = false;
-    for (const [name, called] of calls) {
-      if (writes.get(name)) continue;
+    for (const [key, called] of calls) {
+      if (writes.get(key)) continue;
       if ([...called].some((c) => writes.get(c))) {
-        writes.set(name, true);
+        writes.set(key, true);
         changed = true;
       }
     }
   }
-  return writes;
+  // Callers ask about the RPCs PostgREST exposes: public functions, by name.
+  const byName = new Map<string, boolean>();
+  for (const [key, w] of writes) {
+    if (key.startsWith('public.')) byName.set(key.slice('public.'.length), w);
+  }
+  return byName;
 }
 
 let stockWritersMemo: Map<string, boolean> | null = null;
@@ -506,6 +543,36 @@ describe('the scan machinery itself', () => {
     ]);
     expect(w2.get('lvl')).toBe(true);
     expect(w2.get('outer_fn')).toBe(true);
+  });
+
+  it('follows a body moved to the ledger schema behind a same-named wrapper (0359)', () => {
+    const w = classifyFunctions([
+      {
+        file: '0001.sql',
+        sql: `
+          create or replace function public.adjust() returns void language plpgsql as $$
+          begin update public.inventory_items set quantity_on_hand = 1; end; $$;
+          create function public.picker() returns void language plpgsql as $$
+          begin perform public.adjust(); end; $$;
+        `,
+      },
+      {
+        file: '0002.sql',
+        sql: `
+          alter function public.adjust() set schema ledger;
+          create function public.adjust() returns void language plpgsql as $$
+          begin perform set_config('stockpilot.ledger', 'on', true); perform ledger.adjust(); end; $$;
+          create function public.lookalike() returns void language plpgsql as $$
+          begin perform other_schema.adjust(); end; $$;
+        `,
+      },
+    ]);
+    expect(w.get('adjust')).toBe(true);
+    expect(w.get('picker')).toBe(true);
+    // Only public and ledger are followed.
+    expect(w.get('lookalike')).toBe(false);
+    // The moved body is not reported as a public RPC.
+    expect([...w.keys()].filter((k) => k.startsWith('ledger'))).toEqual([]);
   });
 });
 

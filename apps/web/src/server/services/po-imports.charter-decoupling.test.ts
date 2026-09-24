@@ -21,6 +21,12 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
  *   itemCharterId  → inventory_items.charter_id, and nothing else, ever.
  *   itemCharterId absent → NO item's ownership is touched at all.
  *
+ * The PO row itself is written by approve_po_import_commit (migration 0360),
+ * so bill-to reaches the database as its `p_charter_id` and the receiving
+ * location as its `p_destination_location_id`; those arguments are what the
+ * tests below read. Ownership still happens in the service, before the
+ * commit, and reaches it only through each line's item in `p_lines`.
+ *
  * Nothing here may be satisfied by making one value flow into both.
  */
 
@@ -138,16 +144,10 @@ function makeStub(opts: { sibling?: { id: string } | null; locationRow?: { id: s
     },
     'rpc:next_po_number': { data: 'PO-500', error: null },
     'locations.select': { data: locationRow ?? null, error: null },
-    'purchase_orders.insert': { data: { id: 'po-new' }, error: null },
-    'purchase_order_items.insert': { data: null, error: null },
-    'purchase_order_charges.insert': { data: null, error: null },
+    // The claim, the PO, its lines and charges are one database call.
+    'rpc:approve_po_import_commit': { data: 'po-new', error: null },
     'inventory_items.update': { data: null, error: null },
     'po_import_lines.update': { data: { id: 'line-1' }, error: null },
-    // approve() CLAIMS the import (conditional update) before it inserts
-    // the PO, and stamps approved_po_id afterwards. Both are checked
-    // writes, so the stub has to answer with a ROW or every approval
-    // reads as a lost race.
-    'po_imports.update': { data: { id: IMPORT_ID }, error: null },
   });
 }
 
@@ -158,6 +158,18 @@ function svc(stub: ReturnType<typeof makeSupabaseStub>) {
 /** Every argument ever passed to any chain method for a (table, op). */
 function allArgs(stub: ReturnType<typeof makeSupabaseStub>, key: string): unknown[] {
   return (stub.chainArgsAll.get(key) ?? []).flat(Infinity);
+}
+
+/** The arguments of the one approve_po_import_commit call: the PO the database writes. */
+function commitArgs(stub: ReturnType<typeof makeSupabaseStub>): Record<string, unknown> {
+  const calls = stub.rpcCalls.filter((c) => c.name === 'approve_po_import_commit');
+  expect(calls).toHaveLength(1);
+  return calls[0]!.args as Record<string, unknown>;
+}
+
+/** The item each kept line will be received against, as the commit sees it. */
+function committedItems(stub: ReturnType<typeof makeSupabaseStub>): unknown[] {
+  return (commitArgs(stub).p_lines as Array<{ item_id: unknown }>).map((l) => l.item_id);
 }
 
 // ─── TEST 1 (owner-required) ──────────────────────────────────────────────────
@@ -182,21 +194,18 @@ describe('OWNER TEST 1 — operational charter/location A, bill-to B, one import
 
     expect(res.poId).toBe('po-new');
 
-    const poInsert = stub.chainArgs.get('purchase_orders.insert')?.[0]?.[0] as Record<
-      string,
-      unknown
-    >;
+    const commit = commitArgs(stub);
 
     // OPERATIONAL PLACEMENT is A — the receiving location the user picked.
-    expect(poInsert.destination_location_id).toBe(LOC_A);
+    expect(commit.p_destination_location_id).toBe(LOC_A);
     // …and it is NOT any billing value.
-    expect(poInsert.destination_location_id).not.toBe(CHARTER_B);
+    expect(commit.p_destination_location_id).not.toBe(CHARTER_B);
 
     // BILL-TO on the PO document is B, preserved exactly (B1).
-    expect(poInsert.charter_id).toBe(CHARTER_B);
+    expect(commit.p_charter_id).toBe(CHARTER_B);
     // …and specifically NOT the operational charter. Before the fix these two
     // assertions could not both hold: one value served both fields.
-    expect(poInsert.charter_id).not.toBe(CHARTER_A);
+    expect(commit.p_charter_id).not.toBe(CHARTER_A);
 
     // OWNERSHIP resolution named the OPERATIONAL charter. The sibling lookup is
     // the query that decides which item instance receives the stock.
@@ -211,6 +220,9 @@ describe('OWNER TEST 1 — operational charter/location A, bill-to B, one import
       unknown
     >;
     expect(remapPayload.item_id).toBe('itm-sibling-under-A');
+    // …and that instance is what the PO line is committed against, so the
+    // units are received under A.
+    expect(committedItems(stub)).toEqual(['itm-sibling-under-A']);
 
     // Both charter ids were resolved against the org independently — proof the
     // two lookups are two lookups, not one value reused.
@@ -249,12 +261,11 @@ describe('approve — a bill-to charter alone never touches ownership', () => {
     } as never);
 
     // Bill-to still lands (B1 — billing metadata is preserved, not suppressed).
-    const poInsert = stub.chainArgs.get('purchase_orders.insert')?.[0]?.[0] as Record<
-      string,
-      unknown
-    >;
-    expect(poInsert.charter_id).toBe(CHARTER_B);
-    expect(poInsert.destination_location_id).toBe(LOC_A);
+    const commit = commitArgs(stub);
+    expect(commit.p_charter_id).toBe(CHARTER_B);
+    expect(commit.p_destination_location_id).toBe(LOC_A);
+    // The line is committed against the item it already pointed at.
+    expect(committedItems(stub)).toEqual(['itm-preexisting']);
 
     // …and the entire ownership block was SKIPPED: no linked-item read, no
     // sibling lookup, no sibling creation, no line remap.
@@ -305,11 +316,9 @@ describe('approve — a bill-to charter alone never touches ownership', () => {
     expect(mockInvCreate.mock.calls[0]![0]).toMatchObject({ charterId: null });
 
     // Bill-to is untouched by any of it.
-    const poInsert = stub.chainArgs.get('purchase_orders.insert')?.[0]?.[0] as Record<
-      string,
-      unknown
-    >;
-    expect(poInsert.charter_id).toBe(CHARTER_B);
+    expect(commitArgs(stub).p_charter_id).toBe(CHARTER_B);
+    // The line is committed against the Generic sibling, not the old item.
+    expect(committedItems(stub)).toEqual(['itm-new-sibling']);
   });
 });
 
@@ -350,6 +359,9 @@ describe('approve — charter-sibling capability (B7) sources from itemCharterId
       unknown
     >;
     expect(remapPayload.item_id).toBe('itm-new-sibling');
+    // The PO line receives against that sibling, and the PO still bills B.
+    expect(committedItems(stub)).toEqual(['itm-new-sibling']);
+    expect(commitArgs(stub).p_charter_id).toBe(CHARTER_B);
   });
 });
 
@@ -381,6 +393,7 @@ describe('approve — a document that yields only billing info blocks on placeme
 
     // Nothing was placed, nothing was created, and crucially the bill-to
     // charter was NOT substituted for the missing location.
+    expect(stub.rpcCalls.map((c) => c.name)).not.toContain('approve_po_import_commit');
     expect(stub.chainsAll.get('purchase_orders.insert')).toBeUndefined();
     expect(stub.chainsAll.get('locations.insert')).toBeUndefined();
     expect(stub.chainsAll.get('locations.select')).toBeUndefined();
