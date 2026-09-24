@@ -98,6 +98,8 @@ const STOCK_RPCS: Record<string, string> = {
   inventory_set_bin_location: 'inventory_items.bin_location',
   inventory_set_book_placement: 'inventory_items book_crate_* / rack custom_fields',
   compensate_opening_stock: 'item_stock_levels + inventory_items.quantity_on_hand (failed-create rollback, 0359)',
+  save_purchase_order_draft:
+    'inventory_items.created_from_purchase_order_id (tags PO-born custom items, bumping updated_at; 0366)',
 };
 
 /**

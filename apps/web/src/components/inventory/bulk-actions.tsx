@@ -266,7 +266,7 @@ export function BulkActions({
       toast.error(r.error.message);
       return;
     }
-    const { createdPoIds, skipped, supplierFailures, supplierCount } = r.data;
+    const { createdPoIds, skipped, supplierFailures, supplierCount, alreadyOnOpenPo } = r.data;
     const created = createdPoIds.length;
     if (created === 0) {
       toast.error(
@@ -281,6 +281,15 @@ export function BulkActions({
     ];
     if (skipped > 0) {
       parts.push(`${skipped} skipped (no supplier)`);
+    }
+    // The selection is drafted as chosen; say when some of it is already on
+    // order so the buyer can remove the duplicates before sending.
+    if (alreadyOnOpenPo === null) {
+      parts.push("couldn't check which items are already on open POs");
+    } else if (alreadyOnOpenPo > 0) {
+      parts.push(
+        `${alreadyOnOpenPo} ${alreadyOnOpenPo === 1 ? 'was' : 'were'} already on an open PO — review before sending`,
+      );
     }
     if (supplierFailures.length > 0) {
       const names = supplierFailures.map((f) => f.supplierName).join(', ');

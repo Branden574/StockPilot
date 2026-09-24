@@ -103,8 +103,7 @@ describe('PurchaseOrdersService.create — supplier org-verification', () => {
     const stub = makeSupabaseStub({
       // suppliers lookup returns null → not in this org
       'suppliers.select': { data: null, error: null },
-      'purchase_orders.insert': { data: [{ id: 'po-new' }], error: null },
-      'purchase_order_items.insert': { data: null, error: null },
+      'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
       'rpc:next_po_number': { data: 'PO-AUTO-1', error: null },
     });
     const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
@@ -116,7 +115,8 @@ describe('PurchaseOrdersService.create — supplier org-verification', () => {
     expect(thrown).toBeInstanceOf(ServiceError);
     expect((thrown as ServiceError).code).toBe('validation_error');
     expect((thrown as ServiceError).message).toMatch(/supplier/i);
-    // No PO row and no lines were inserted — guard fired first.
+    // No PO row and no lines were written — guard fired first.
+    expect(stub.rpcCalls.some((c) => c.name === 'save_purchase_order_draft')).toBe(false);
     expect(stub.chainsAll.get('purchase_orders.insert')).toBeUndefined();
     expect(stub.chainsAll.get('purchase_order_items.insert')).toBeUndefined();
   });
@@ -125,8 +125,7 @@ describe('PurchaseOrdersService.create — supplier org-verification', () => {
     const stub = makeSupabaseStub({
       // suppliers lookup finds the row → in this org
       'suppliers.select': { data: { id: SUPPLIER_UUID }, error: null },
-      'purchase_orders.insert': { data: [{ id: 'po-new' }], error: null },
-      'purchase_order_items.insert': { data: null, error: null },
+      'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
       'rpc:next_po_number': { data: 'PO-AUTO-2', error: null },
     });
     const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
@@ -134,9 +133,9 @@ describe('PurchaseOrdersService.create — supplier org-verification', () => {
     const result = await svc.create({ lines: MINIMAL_LINE, supplierId: SUPPLIER_UUID });
 
     expect(result.poNumber).toBe('PO-AUTO-2');
-    // PO and lines were written.
-    expect(stub.chainsAll.get('purchase_orders.insert')).toBeDefined();
-    expect(stub.chainsAll.get('purchase_order_items.insert')).toBeDefined();
+    // PO and lines were written, by the one save call, with this supplier.
+    const save = stub.rpcCalls.find((c) => c.name === 'save_purchase_order_draft');
+    expect((save?.args as { p_supplier_id?: string }).p_supplier_id).toBe(SUPPLIER_UUID);
     // The suppliers lookup was org-scoped.
     const supplierArgs = (stub.chainArgsAll.get('suppliers.select') ?? []).flat(Infinity);
     expect(supplierArgs).toContain('organization_id');
@@ -145,8 +144,7 @@ describe('PurchaseOrdersService.create — supplier org-verification', () => {
 
   it('skips the suppliers lookup entirely when supplierId is null', async () => {
     const stub = makeSupabaseStub({
-      'purchase_orders.insert': { data: [{ id: 'po-new' }], error: null },
-      'purchase_order_items.insert': { data: null, error: null },
+      'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
       'rpc:next_po_number': { data: 'PO-AUTO-3', error: null },
     });
     const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
@@ -156,14 +154,13 @@ describe('PurchaseOrdersService.create — supplier org-verification', () => {
     expect(result.poNumber).toBe('PO-AUTO-3');
     // No supplier lookup at all.
     expect(stub.fromCalls).not.toContain('suppliers');
-    // PO inserted successfully.
-    expect(stub.chainsAll.get('purchase_orders.insert')).toBeDefined();
+    // PO saved successfully.
+    expect(stub.rpcCalls.some((c) => c.name === 'save_purchase_order_draft')).toBe(true);
   });
 
   it('skips the suppliers lookup when supplierId is omitted', async () => {
     const stub = makeSupabaseStub({
-      'purchase_orders.insert': { data: [{ id: 'po-new' }], error: null },
-      'purchase_order_items.insert': { data: null, error: null },
+      'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
       'rpc:next_po_number': { data: 'PO-AUTO-4', error: null },
     });
     const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
@@ -187,9 +184,7 @@ describe('PurchaseOrdersService.update — supplier org-verification', () => {
       },
       // suppliers lookup returns null → foreign org
       'suppliers.select': { data: null, error: null },
-      'purchase_order_items.delete': { data: null, error: null },
-      'purchase_order_items.insert': { data: null, error: null },
-      'purchase_orders.update': { data: { id: PO_ID }, error: null },
+      'rpc:save_purchase_order_draft': { data: { id: PO_ID, stamped: 0, stamp_error: null }, error: null },
     });
     const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
 
@@ -201,6 +196,7 @@ describe('PurchaseOrdersService.update — supplier org-verification', () => {
     expect((thrown as ServiceError).code).toBe('validation_error');
     expect((thrown as ServiceError).message).toMatch(/supplier/i);
     // No destructive writes occurred.
+    expect(stub.rpcCalls.some((c) => c.name === 'save_purchase_order_draft')).toBe(false);
     expect(stub.chainsAll.get('purchase_order_items.delete')).toBeUndefined();
     expect(stub.chainsAll.get('purchase_order_items.insert')).toBeUndefined();
     expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
@@ -215,18 +211,17 @@ describe('PurchaseOrdersService.update — supplier org-verification', () => {
       },
       // suppliers lookup finds the row → same org
       'suppliers.select': { data: { id: SUPPLIER_UUID }, error: null },
-      'purchase_order_items.delete': { data: null, error: null },
-      'purchase_order_items.insert': { data: null, error: null },
-      'purchase_orders.update': { data: { id: PO_ID }, error: null },
+      'rpc:save_purchase_order_draft': { data: { id: PO_ID, stamped: 0, stamp_error: null }, error: null },
     });
     const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
 
     const result = await svc.update(PO_ID, { lines: MINIMAL_LINE, supplierId: SUPPLIER_UUID });
 
     expect(result.id).toBe(PO_ID);
-    // Lines were replaced and header was updated.
-    expect(stub.chainsAll.get('purchase_order_items.delete')).toBeDefined();
-    expect(stub.chainsAll.get('purchase_orders.update')).toBeDefined();
+    // Lines were replaced and header was updated, in the one save call.
+    const save = stub.rpcCalls.find((c) => c.name === 'save_purchase_order_draft');
+    expect((save?.args as { p_po_id?: string }).p_po_id).toBe(PO_ID);
+    expect((save?.args as { p_supplier_id?: string }).p_supplier_id).toBe(SUPPLIER_UUID);
   });
 
   it('skips the suppliers lookup when supplierId is null on update', async () => {
@@ -236,9 +231,7 @@ describe('PurchaseOrdersService.update — supplier org-verification', () => {
         data: [{ id: 'l-1', item_id: 'item-uuid-1', quantity_ordered: 2, unit_cost: 10, quantity_received: 0, line_total: 20 }],
         error: null,
       },
-      'purchase_order_items.delete': { data: null, error: null },
-      'purchase_order_items.insert': { data: null, error: null },
-      'purchase_orders.update': { data: { id: PO_ID }, error: null },
+      'rpc:save_purchase_order_draft': { data: { id: PO_ID, stamped: 0, stamp_error: null }, error: null },
     });
     const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
 

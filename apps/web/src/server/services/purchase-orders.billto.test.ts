@@ -122,9 +122,10 @@ function makeStub(overrides: Record<string, unknown> = {}) {
       ],
       error: null,
     },
-    'purchase_order_items.delete': { data: null, error: null },
-    'purchase_order_items.insert': { data: null, error: null },
-    'purchase_orders.update': { data: { id: PO_ID }, error: null },
+    'rpc:save_purchase_order_draft': {
+      data: { id: PO_ID, stamped: 0, stamp_error: null },
+      error: null,
+    },
     ...overrides,
   });
 }
@@ -153,25 +154,26 @@ describe('OWNER TEST 2 — change ONLY the bill-to on a PO placed at location A'
       lines: [{ itemId: 'item-uuid-1', quantityOrdered: 2, unitCost: 10 }],
     });
 
-    const payload = stub.chainArgs.get('purchase_orders.update')?.[0]?.[0] as Record<
-      string,
-      unknown
-    >;
+    // The header goes to the database in the one save call (migration 0366).
+    const saves = stub.rpcCalls.filter((c) => c.name === 'save_purchase_order_draft');
+    expect(saves).toHaveLength(1);
+    const payload = saves[0]!.args as Record<string, unknown>;
+    expect(payload.p_po_id).toBe(PO_ID);
 
     // OPERATIONAL PLACEMENT IS UNCHANGED — still location A.
-    expect(payload.destination_location_id).toBe(LOC_A);
+    expect(payload.p_destination_location_id).toBe(LOC_A);
     // …and specifically was not replaced by any billing value.
-    expect(payload.destination_location_id).not.toBe(CHARTER_C);
-    expect(payload.destination_location_id).not.toBe(CHARTER_B);
+    expect(payload.p_destination_location_id).not.toBe(CHARTER_C);
+    expect(payload.p_destination_location_id).not.toBe(CHARTER_B);
 
     // BILL-TO IS NOW C.
-    expect(payload.charter_id).toBe(CHARTER_C);
+    expect(payload.p_charter_id).toBe(CHARTER_C);
 
     // WAREHOUSE ASSIGNMENT IS UNCHANGED. The PO has no warehouse column of its
     // own: its warehouse IS its destination location's warehouse, and that
     // location did not move. The write carries no warehouse field at all, so
     // there is nothing that could have changed it.
-    expect(payload).not.toHaveProperty('warehouse_id');
+    expect(Object.keys(payload).some((k) => /warehouse/.test(k))).toBe(false);
     const locArgs = (stub.chainArgsAll.get('locations.select') ?? []).flat(Infinity);
     expect(locArgs).toContain(LOC_A);
 

@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import {
+  callArgs,
+  inFilters,
+  makeServiceContext,
+  makeSupabaseStub,
+  type MockCall,
+} from '@/test/supabase-mock';
 
 // Full warehouse access by default — these tests focus on supplier
 // grouping + quantity math, not warehouse scoping.
@@ -38,10 +44,54 @@ vi.mock('./item-images', () => ({
   },
 }));
 
+import { ServiceError } from './context';
 import { PurchaseOrdersService } from './purchase-orders';
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+type SavedLine = { item_id: string; quantity_ordered: number; unit_cost: number };
+type SaveArgs = { p_supplier_id: string | null; p_lines: SavedLine[] };
+
+/** Every save_purchase_order_draft call's args, in order. */
+function saves(stub: ReturnType<typeof makeSupabaseStub>): SaveArgs[] {
+  return stub.rpcCalls
+    .filter((c) => c.name === 'save_purchase_order_draft')
+    .map((c) => c.args as SaveArgs);
+}
+function savedLines(stub: ReturnType<typeof makeSupabaseStub>): SavedLine[] {
+  return saves(stub).flatMap((a) => a.p_lines);
+}
+
+/** One open-PO line row as PostgREST returns the !inner embed. */
+type OpenLine = { id: string; item_id: string; purchase_orders: { status: string } };
+
+/**
+ * A purchase_order_items read that behaves like the database: it applies the
+ * query's own `.in('purchase_orders.status', …)` filter, orders by id and
+ * serves the `.range()` window, capped at PostgREST's 1000 rows. So a test
+ * fails if the service asks for the wrong states or stops paging.
+ */
+function openLinesRead(lines: () => OpenLine[]) {
+  return (call: MockCall) => {
+    const statuses = inFilters(call).find(([c]) => c === 'purchase_orders.status')?.[1] as
+      | string[]
+      | undefined;
+    const rows = lines()
+      .filter((l) => (statuses ? statuses.includes(l.purchase_orders.status) : true))
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const range = callArgs(call, 'range') as [number, number] | undefined;
+    const from = range?.[0] ?? 0;
+    const to = Math.min(range?.[1] ?? 999, from + 999);
+    return { data: rows.slice(from, to + 1), error: null };
+  };
+}
+
+const openLine = (n: number, itemId: string, status: string): OpenLine => ({
+  id: `line-${String(n).padStart(6, '0')}`,
+  item_id: itemId,
+  purchase_orders: { status },
 });
 
 /**
@@ -59,16 +109,17 @@ function stubFor(
     unit_cost: number | null;
   }>,
   suppliers: Array<{ id: string; name: string }>,
+  openLines: OpenLine[] = [],
 ) {
   let poSeq = 0;
   return makeSupabaseStub({
     'inventory_items.select': { data: items, error: null },
     'suppliers.select': { data: suppliers, error: null },
-    'purchase_orders.insert': () => {
+    'purchase_order_items.select': openLinesRead(() => openLines),
+    'rpc:save_purchase_order_draft': () => {
       poSeq += 1;
-      return { data: [{ id: `po-${poSeq}` }], error: null };
+      return { data: { id: `po-${poSeq}`, stamped: 0, stamp_error: null }, error: null };
     },
-    'purchase_order_items.insert': { data: null, error: null },
     'locations.select': { data: null, error: null },
     'rpc:next_po_number': () => ({ data: `PO-${poSeq + 1}`, error: null }),
   });
@@ -132,19 +183,8 @@ describe('PurchaseOrdersService.createDraftsFromReorderForecast', () => {
     expect(result.skipped).toBe(0);
     expect(result.supplierFailures).toHaveLength(0);
 
-    // Inspect the line payloads inserted into purchase_order_items.
-    const insertArgs = stub.chainArgsAll.get('purchase_order_items.insert') ?? [];
-    // Flatten: each insert call's first arg is the rows array.
-    const allLines = insertArgs.flatMap((argsList) => {
-      const rows = argsList[0]?.[0] as Array<{
-        item_id: string;
-        quantity_ordered: number;
-        unit_cost: number;
-      }>;
-      return rows ?? [];
-    });
-
-    const byItem = new Map(allLines.map((l) => [l.item_id, l]));
+    // Inspect the lines handed to the one-transaction save (0366).
+    const byItem = new Map(savedLines(stub).map((l) => [l.item_id, l]));
     // item-4 (healthy) must NOT be ordered.
     expect(byItem.has('item-4')).toBe(false);
     // Deficit math.
@@ -154,12 +194,12 @@ describe('PurchaseOrdersService.createDraftsFromReorderForecast', () => {
     // Unit cost carried through.
     expect(byItem.get('item-1')?.unit_cost).toBe(3);
 
-    // Each created PO is a DRAFT.
-    const poInserts = stub.chainArgsAll.get('purchase_orders.insert') ?? [];
-    for (const argsList of poInserts) {
-      const row = argsList[0]?.[0] as { status: string };
-      expect(row.status).toBe('draft');
-    }
+    // Each created PO is a DRAFT: the save function only ever creates
+    // drafts, and nothing here moves one on.
+    expect(saves(stub)).toHaveLength(2);
+    expect(stub.chainsAll.get('purchase_orders.insert')).toBeUndefined();
+    expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
+    expect(result.skippedOnOpenPo).toBe(0);
   });
 
   it('routes items with no supplier into a single unassigned draft PO', async () => {
@@ -193,20 +233,12 @@ describe('PurchaseOrdersService.createDraftsFromReorderForecast', () => {
     expect(result.unassignedCount).toBe(1);
 
     // The unassigned PO should have supplier_id null.
-    const poInserts = stub.chainArgsAll.get('purchase_orders.insert') ?? [];
-    const supplierIds = poInserts.map(
-      (argsList) => (argsList[0]?.[0] as { supplier_id: string | null }).supplier_id,
-    );
+    const supplierIds = saves(stub).map((a) => a.p_supplier_id);
     expect(supplierIds).toContain(null);
     expect(supplierIds).toContain('sup-a');
 
     // item-x (deficit 10 - 3 = 7) is on the unassigned PO line.
-    const insertArgs = stub.chainArgsAll.get('purchase_order_items.insert') ?? [];
-    const allLines = insertArgs.flatMap((argsList) => {
-      const rows = argsList[0]?.[0] as Array<{ item_id: string; quantity_ordered: number }>;
-      return rows ?? [];
-    });
-    const xLine = allLines.find((l) => l.item_id === 'item-x');
+    const xLine = savedLines(stub).find((l) => l.item_id === 'item-x');
     expect(xLine?.quantity_ordered).toBe(7);
   });
 
@@ -249,11 +281,11 @@ describe('PurchaseOrdersService.createDraftsFromReorderForecast', () => {
         return { data: rows, error: null };
       },
       'suppliers.select': { data: [], error: null },
-      'purchase_orders.insert': () => {
+      'purchase_order_items.select': { data: [], error: null },
+      'rpc:save_purchase_order_draft': () => {
         poSeq += 1;
-        return { data: [{ id: `po-${poSeq}` }], error: null };
+        return { data: { id: `po-${poSeq}`, stamped: 0, stamp_error: null }, error: null };
       },
-      'purchase_order_items.insert': { data: null, error: null },
       'locations.select': { data: null, error: null },
       'rpc:next_po_number': () => ({ data: `PO-${poSeq + 1}`, error: null }),
     });
@@ -266,12 +298,294 @@ describe('PurchaseOrdersService.createDraftsFromReorderForecast', () => {
     // At least three .range() pages were issued (1000 + 1000 + 300).
     const ranges = stub.chainArgsAll.get('inventory_items.select') ?? [];
     expect(ranges.length).toBeGreaterThanOrEqual(3);
-    // The last item (past the 1000 cap) made it onto an inserted line.
-    const insertArgs = stub.chainArgsAll.get('purchase_order_items.insert') ?? [];
-    const allLines = insertArgs.flatMap((argsList) => {
-      const rows = argsList[0]?.[0] as Array<{ item_id: string }>;
-      return rows ?? [];
+    // The last item (past the 1000 cap) made it onto a saved line.
+    expect(savedLines(stub).some((l) => l.item_id === 'item-002299')).toBe(true);
+  });
+});
+
+// ─── Items already on an open PO (S3 F1) ─────────────────────────────────────
+
+/** A below-par item: reorder point 10, 2 on hand (deficit 8). */
+const belowPar = (id: string, supplier: string | null = 'sup-a') => ({
+  id,
+  supplier_id: supplier,
+  reorder_point: 10,
+  reorder_quantity: 0,
+  quantity_on_hand: 2,
+  unit_cost: 1,
+});
+
+describe('createDraftsFromReorderForecast — items already on an open PO', () => {
+  it('(a) skips items on a draft, expected_inbound, ordered or partially_received PO and counts them', async () => {
+    const stub = stubFor(
+      [
+        belowPar('on-draft'),
+        belowPar('on-inbound'),
+        belowPar('on-ordered'),
+        belowPar('on-partial', null),
+        belowPar('fresh'),
+      ],
+      [{ id: 'sup-a', name: 'Supplier A' }],
+      [
+        openLine(1, 'on-draft', 'draft'),
+        openLine(2, 'on-inbound', 'expected_inbound'),
+        openLine(3, 'on-ordered', 'ordered'),
+        openLine(4, 'on-partial', 'partially_received'),
+      ],
+    );
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    const result = await svc.createDraftsFromReorderForecast();
+
+    expect(result.skippedOnOpenPo).toBe(4);
+    // Only the item on no open PO is drafted; the unassigned bucket is empty
+    // because its only item (on-partial) is already on order.
+    expect(savedLines(stub).map((l) => l.item_id)).toEqual(['fresh']);
+    expect(result.createdPoIds).toHaveLength(1);
+    expect(result.unassignedCount).toBe(0);
+  });
+
+  it('(b) drafts items whose only POs are received or cancelled', async () => {
+    const stub = stubFor(
+      [belowPar('was-received'), belowPar('was-cancelled')],
+      [{ id: 'sup-a', name: 'Supplier A' }],
+      [openLine(1, 'was-received', 'received'), openLine(2, 'was-cancelled', 'cancelled')],
+    );
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    const result = await svc.createDraftsFromReorderForecast();
+
+    expect(result.skippedOnOpenPo).toBe(0);
+    expect(savedLines(stub).map((l) => l.item_id).sort()).toEqual(['was-cancelled', 'was-received']);
+  });
+
+  it('(c) throws when the open-PO read fails, and drafts nothing (fail closed)', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [belowPar('i-1')], error: null },
+      'suppliers.select': { data: [{ id: 'sup-a', name: 'Supplier A' }], error: null },
+      'purchase_order_items.select': { data: null, error: { message: 'statement timeout' } },
+      'rpc:save_purchase_order_draft': { data: { id: 'po-1', stamped: 0, stamp_error: null }, error: null },
     });
-    expect(allLines.some((l) => l.item_id === 'item-002299')).toBe(true);
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    const thrown = await svc.createDraftsFromReorderForecast().catch((e: unknown) => e);
+
+    expect(thrown).toBeInstanceOf(ServiceError);
+    expect((thrown as ServiceError).code).toBe('internal_error');
+    expect(saves(stub)).toHaveLength(0);
+    expect(stub.rpcCalls.some((c) => c.name === 'next_po_number')).toBe(false);
+  });
+
+  it('(d) still skips an item whose open line is row 1001 of the open-PO read', async () => {
+    // 1000 open lines for other items, then the target on the 1001st row: a
+    // read that stopped at PostgREST's 1000-row cap would miss it.
+    const open = Array.from({ length: 1000 }, (_, i) => openLine(i, `other-${i}`, 'ordered'));
+    open.push(openLine(1000, 'deep', 'ordered'));
+    const stub = stubFor([belowPar('deep'), belowPar('fresh')], [{ id: 'sup-a', name: 'A' }], open);
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    const result = await svc.createDraftsFromReorderForecast();
+
+    expect(result.skippedOnOpenPo).toBe(1);
+    expect(savedLines(stub).map((l) => l.item_id)).toEqual(['fresh']);
+    // Two pages were read, with a stable order.
+    const reads = stub.chainsAll.get('purchase_order_items.select') ?? [];
+    expect(reads.length).toBeGreaterThanOrEqual(2);
+    expect(reads[0]).toContain('order');
+  });
+
+  it('(e) a second click drafts nothing: the first click\'s drafts are open POs', async () => {
+    // Stateful: every saved line joins the open set as a draft line, which is
+    // what the database does.
+    const open: OpenLine[] = [];
+    let poSeq = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [belowPar('i-1'), belowPar('i-2', null)], error: null },
+      'suppliers.select': { data: [{ id: 'sup-a', name: 'Supplier A' }], error: null },
+      'purchase_order_items.select': openLinesRead(() => open),
+      'rpc:next_po_number': () => ({ data: `PO-${poSeq + 1}`, error: null }),
+      'rpc:save_purchase_order_draft': (call: MockCall) => {
+        poSeq += 1;
+        const args = call.args[0]?.[0] as SaveArgs;
+        for (const l of args.p_lines) open.push(openLine(open.length, l.item_id, 'draft'));
+        return { data: { id: `po-${poSeq}`, stamped: 0, stamp_error: null }, error: null };
+      },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    const first = await svc.createDraftsFromReorderForecast();
+    const second = await svc.createDraftsFromReorderForecast();
+
+    expect(first.createdPoIds).toHaveLength(2);
+    expect(first.skippedOnOpenPo).toBe(0);
+    expect(second.createdPoIds).toHaveLength(0);
+    expect(second.skippedOnOpenPo).toBe(2);
+    expect(saves(stub)).toHaveLength(2); // only the first click's two drafts
+  });
+
+  it("reports one supplier's failed save and still creates the other supplier's draft", async () => {
+    // One supplier's save fails; the other supplier's draft is still created
+    // and the failure is reported, not thrown.
+    let n = 0;
+    const stub = makeSupabaseStub({
+      'inventory_items.select': {
+        data: [belowPar('a-1', 'sup-a'), belowPar('b-1', 'sup-b')],
+        error: null,
+      },
+      'suppliers.select': {
+        data: [
+          { id: 'sup-a', name: 'Supplier A' },
+          { id: 'sup-b', name: 'Supplier B' },
+        ],
+        error: null,
+      },
+      'purchase_order_items.select': { data: [], error: null },
+      'rpc:next_po_number': { data: 'PO-9', error: null },
+      'rpc:save_purchase_order_draft': () => {
+        n += 1;
+        return n === 1
+          ? { data: null, error: { code: '42501', message: 'new row violates row-level security policy' } }
+          : { data: { id: 'po-b', stamped: 0, stamp_error: null }, error: null };
+      },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    const result = await svc.createDraftsFromReorderForecast();
+
+    expect(result.createdPoIds).toEqual(['po-b']);
+    expect(result.supplierFailures).toHaveLength(1);
+    expect(result.supplierFailures[0]?.supplierName).toBe('Supplier A');
+    expect(result.skipped).toBe(1);
+  });
+});
+
+// ─── runAutoReorder shares the open-PO helper ────────────────────────────────
+
+describe('runAutoReorder — open-PO dedupe and failed creates', () => {
+  it('skips items on any open PO state via the shared helper (same read, same states)', async () => {
+    const stub = stubFor(
+      [belowPar('on-partial'), belowPar('on-draft'), belowPar('fresh')],
+      [{ id: 'sup-a', name: 'Supplier A' }],
+      [openLine(1, 'on-partial', 'partially_received'), openLine(2, 'on-draft', 'draft')],
+    );
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    const result = await svc.runAutoReorder({ enabled: true, mode: 'draft', maxAutoSendCents: null });
+
+    expect(result.skippedDuplicate).toBe(2);
+    expect(result.created).toBe(1);
+    expect(savedLines(stub).map((l) => l.item_id)).toEqual(['fresh']);
+    // The one open-PO read asked for exactly the four open states.
+    const statuses = inFilters({
+      table: 'purchase_order_items',
+      op: 'select',
+      methods: stub.chainsAll.get('purchase_order_items.select')![0]!,
+      args: stub.chainArgsAll.get('purchase_order_items.select')![0]!,
+    }).find(([c]) => c === 'purchase_orders.status')?.[1];
+    expect(statuses).toEqual(['draft', 'expected_inbound', 'ordered', 'partially_received']);
+  });
+
+  it('throws when the open-PO read fails, before creating anything', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [belowPar('i-1')], error: null },
+      'purchase_order_items.select': { data: null, error: { message: 'boom' } },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    await expect(
+      svc.runAutoReorder({ enabled: true, mode: 'send', maxAutoSendCents: 100000 }),
+    ).rejects.toBeInstanceOf(ServiceError);
+    expect(saves(stub)).toHaveLength(0);
+  });
+
+  it('never marks anything ordered after a failed create (send mode)', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [belowPar('i-1')], error: null },
+      'purchase_order_items.select': { data: [], error: null },
+      'organization_modules.select': { data: { settings: {} }, error: null },
+      'rpc:next_po_number': { data: 'PO-1', error: null },
+      'rpc:save_purchase_order_draft': {
+        data: null,
+        error: { code: '22023', hint: 'po_line_invalid', message: 'Each line needs…' },
+      },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    const result = await svc.runAutoReorder({ enabled: true, mode: 'send', maxAutoSendCents: 100000 });
+
+    expect(result.created).toBe(0);
+    expect(result.sent).toBe(0);
+    expect(result.supplierFailures).toBe(1);
+    // updateStatus reads then updates purchase_orders; neither happened.
+    expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
+    expect(stub.chainsAll.get('purchase_orders.select')).toBeUndefined();
+  });
+});
+
+// ─── createDraftsFromItems: an explicit selection is warned about, not skipped (D5) ───
+
+describe('createDraftsFromItems — items already on an open PO', () => {
+  const selected = (id: string) => ({
+    id,
+    supplier_id: 'sup-a',
+    reorder_point: 10,
+    reorder_quantity: 4,
+    quantity_on_hand: 2,
+    unit_cost: 1,
+  });
+
+  it('drafts every selected item, and counts the ones already on an open PO', async () => {
+    const stub = stubFor(
+      [selected('on-order'), selected('fresh')],
+      [{ id: 'sup-a', name: 'Supplier A' }],
+      [openLine(1, 'on-order', 'ordered'), openLine(2, 'old', 'received')],
+    );
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    const result = await svc.createDraftsFromItems(['on-order', 'fresh']);
+
+    // The user chose both: both are on the draft, nothing is dropped.
+    expect(savedLines(stub).map((l) => l.item_id).sort()).toEqual(['fresh', 'on-order']);
+    expect(result.alreadyOnOpenPo).toBe(1);
+    expect(result.createdPoIds).toHaveLength(1);
+  });
+
+  it('reads the open set BEFORE drafting, so its own new draft never counts', async () => {
+    const open: OpenLine[] = [];
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [selected('i-1')], error: null },
+      'suppliers.select': { data: [{ id: 'sup-a', name: 'Supplier A' }], error: null },
+      'purchase_order_items.select': openLinesRead(() => open),
+      'rpc:next_po_number': { data: 'PO-1', error: null },
+      'rpc:save_purchase_order_draft': (call: MockCall) => {
+        const args = call.args[0]?.[0] as SaveArgs;
+        for (const l of args.p_lines) open.push(openLine(open.length, l.item_id, 'draft'));
+        return { data: { id: 'po-1', stamped: 0, stamp_error: null }, error: null };
+      },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    const first = await svc.createDraftsFromItems(['i-1']);
+    const second = await svc.createDraftsFromItems(['i-1']);
+
+    expect(first.alreadyOnOpenPo).toBe(0);
+    expect(second.alreadyOnOpenPo).toBe(1); // the first click's draft is open now
+    expect(saves(stub)).toHaveLength(2); // an explicit selection is never skipped
+  });
+
+  it('a failed open-PO read reports "unknown" (null), never 0, and still drafts the selection', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: [selected('i-1')], error: null },
+      'suppliers.select': { data: [{ id: 'sup-a', name: 'Supplier A' }], error: null },
+      'purchase_order_items.select': { data: null, error: { message: 'statement timeout' } },
+      'rpc:next_po_number': { data: 'PO-1', error: null },
+      'rpc:save_purchase_order_draft': { data: { id: 'po-1', stamped: 0, stamp_error: null }, error: null },
+    });
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client));
+
+    const result = await svc.createDraftsFromItems(['i-1']);
+
+    expect(result.alreadyOnOpenPo).toBeNull();
+    expect(result.createdPoIds).toEqual(['po-1']);
   });
 });

@@ -77,8 +77,7 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     const stub = makeSupabaseStub({
       // fetchAllRows issues two selects on recurring_po_templates — first page has data, second is empty
       'recurring_po_templates.select': { data: [template], error: null },
-      'purchase_orders.insert': { data: { id: 'po-new' }, error: null },
-      'purchase_order_items.insert': { data: [], error: null },
+      'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
       'purchase_orders.update': { data: { id: 'po-new' }, error: null },
       'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
       'rpc:next_po_number': { data: 'PO-100', error: null },
@@ -95,6 +94,10 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     expect(result.failures).toBe(0);
     // Schedule must have advanced (update call happened)
     expect(stub.chainsAll.get('recurring_po_templates.update')).toBeDefined();
+    // The PO is saved in one call; the cron's actor rides along as p_actor so
+    // a service-role save keeps its created_by (auth.uid() is null there).
+    const save = stub.rpcCalls.find((c) => c.name === 'save_purchase_order_draft');
+    expect(save?.args).toMatchObject({ p_po_id: null, p_actor: 'user-test', p_supplier_id: 'sup-1' });
   });
 
   it('send mode within cap and approval threshold: auto-sends the PO', async () => {
@@ -106,8 +109,7 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     };
     const stub = makeSupabaseStub({
       'recurring_po_templates.select': { data: [template], error: null },
-      'purchase_orders.insert': { data: { id: 'po-new' }, error: null },
-      'purchase_order_items.insert': { data: [], error: null },
+      'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
       // updateStatus reads the PO first, then updates it
       'purchase_orders.select': {
         data: { id: 'po-new', po_number: 'PO-100', status: 'draft', total: 50, destination: null },
@@ -144,8 +146,7 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     };
     const stub = makeSupabaseStub({
       'recurring_po_templates.select': { data: [template], error: null },
-      'purchase_orders.insert': { data: { id: 'po-new' }, error: null },
-      'purchase_order_items.insert': { data: [], error: null },
+      'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
       'organization_modules.select': {
         data: { settings: { approvalThresholdAmount: 500 } },
         error: null,
@@ -174,8 +175,7 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     };
     const stub = makeSupabaseStub({
       'recurring_po_templates.select': { data: [template], error: null },
-      'purchase_orders.insert': { data: { id: 'po-new' }, error: null },
-      'purchase_order_items.insert': { data: [], error: null },
+      'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
       'organization_modules.select': {
         data: { settings: { approvalThresholdAmount: 30 } },
         error: null,
@@ -201,8 +201,7 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     };
     const stub = makeSupabaseStub({
       'recurring_po_templates.select': { data: [template], error: null },
-      'purchase_orders.insert': { data: { id: 'po-new' }, error: null },
-      'purchase_order_items.insert': { data: [], error: null },
+      'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
       'organization_modules.select': { data: null, error: { message: 'DB error' } },
       'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
       'rpc:next_po_number': { data: 'PO-100', error: null },
@@ -257,8 +256,7 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
       'recurring_po_templates.select': { data: [template], error: null },
       // 0 rows matched — another invocation already advanced the schedule.
       'recurring_po_templates.update': { data: null, error: null },
-      'purchase_orders.insert': { data: { id: 'po-new' }, error: null },
-      'purchase_order_items.insert': { data: [], error: null },
+      'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
       'organization_modules.select': {
         data: { settings: { approvalThresholdAmount: 500 } },
         error: null,
@@ -298,8 +296,7 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     const stub = makeSupabaseStub({
       'recurring_po_templates.select': { data: [template], error: null },
       'recurring_po_templates.update': { data: null, error: { message: 'advance failed' } },
-      'purchase_orders.insert': { data: { id: 'po-new' }, error: null },
-      'purchase_order_items.insert': { data: [], error: null },
+      'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
       'rpc:next_po_number': { data: 'PO-100', error: null },
       'suppliers.select': { data: { id: 'sup-1' }, error: null },
     });
