@@ -13,6 +13,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { api, ApiError } from '@/lib/api';
+import {
+  computeDistributionPreview,
+  defaultDistributeWarehouseId,
+  type DistributionPreview,
+} from '@/lib/bundle-distribute-preview';
 import { showWriteCta } from '@/lib/cta-gating';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import {
@@ -28,27 +33,6 @@ import {
 import { enqueue, newIdempotencyKey } from '@/lib/queue';
 import { syncNow } from '@/lib/sync';
 import { radius, space, theme } from '@/lib/theme';
-
-interface PreviewComponent {
-  itemId: string;
-  itemName: string;
-  itemSku: string;
-  perBundleQty: number;
-  isOptional: boolean;
-  needed: number;
-  available: number;
-  drawnFromComponents: number;
-  shortage: number;
-}
-
-interface Preview {
-  fromPhantom: number;
-  fromComponents: number;
-  components: PreviewComponent[];
-  hasShortage: boolean;
-  totalShortageItems: number;
-  totalShortageUnits: number;
-}
 
 export default function BundleDetail() {
   const router = useRouter();
@@ -84,50 +68,50 @@ export default function BundleDetail() {
       setItems(itemMap);
       const whs = await listWarehouses();
       setWarehouses(whs);
-      setWarehouseId(b.phantomWarehouseId ?? whs[0]?.id ?? null);
+      // Start on the warehouse the kit can actually be handed out from: the
+      // pre-assembled kits' warehouse, else the one warehouse every component
+      // sits in, else the first listed (0365 draws only from the chosen one).
+      setWarehouseId(
+        defaultDistributeWarehouseId({
+          phantomWarehouseId: b.phantomWarehouseId,
+          componentWarehouseIds: comps.map((c) => itemMap.get(c.itemId)?.warehouseId),
+          warehouseIds: whs.map((w) => w.id),
+        }),
+      );
     })();
   }, [id]);
 
-  // Local preview math — mirrors the server's preview.
-  const preview: Preview | null = React.useMemo(() => {
+  // Local preview: the same rule as distribute_bundle() since 0365 (see
+  // bundle-distribute-preview.ts). Only stock in the CHOSEN warehouse counts,
+  // for components and for pre-assembled kits alike, so it is recomputed
+  // whenever the warehouse changes.
+  const preview: DistributionPreview | null = React.useMemo(() => {
     if (!bundle) return null;
-    const n = Number(qty);
-    if (!Number.isFinite(n) || n <= 0) return null;
-    const fromPhantom = Math.min(n, bundle.phantomQty);
-    const fromComponents = n - fromPhantom;
-    let shortItems = 0;
-    let shortUnits = 0;
-    const compRows: PreviewComponent[] = components.map((c) => {
-      const item = items.get(c.itemId);
-      const needed = c.quantity * fromComponents;
-      const available = Math.max(0, item?.quantityOnHand ?? 0);
-      const drawn = Math.min(needed, available);
-      const shortage = needed - drawn;
-      if (shortage > 0 && !c.isOptional) {
-        shortItems += 1;
-        shortUnits += shortage;
-      }
-      return {
-        itemId: c.itemId,
-        itemName: item?.name ?? c.itemId.slice(0, 8),
-        itemSku: item?.sku ?? '',
-        perBundleQty: c.quantity,
-        isOptional: c.isOptional,
-        needed,
-        available,
-        drawnFromComponents: drawn,
-        shortage,
-      };
+    return computeDistributionPreview({
+      quantity: Number(qty),
+      warehouseId,
+      // The snapshot does not send the kit item's deleted_at, so a deleted
+      // kit item's count still shows here; the server then builds the run
+      // from components instead, or refuses it as short.
+      phantom: { quantityOnHand: bundle.phantomQty, warehouseId: bundle.phantomWarehouseId },
+      components: components.map((c) => {
+        const item = items.get(c.itemId);
+        return {
+          itemId: c.itemId,
+          perBundleQty: c.quantity,
+          isOptional: c.isOptional,
+          item: item
+            ? {
+                name: item.name,
+                sku: item.sku,
+                quantityOnHand: item.quantityOnHand,
+                warehouseId: item.warehouseId,
+              }
+            : null,
+        };
+      }),
     });
-    return {
-      fromPhantom,
-      fromComponents,
-      components: compRows,
-      hasShortage: shortItems > 0,
-      totalShortageItems: shortItems,
-      totalShortageUnits: shortUnits,
-    };
-  }, [bundle, components, items, qty]);
+  }, [bundle, components, items, qty, warehouseId]);
 
   async function distribute() {
     if (!bundle || !preview || !warehouseId) return;
