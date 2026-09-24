@@ -44,6 +44,7 @@ select plan(59);
 \set poRecv  '\'03600000-0000-0000-0000-0000000000e4\''
 \set poCanc  '\'03600000-0000-0000-0000-0000000000e5\''
 \set poB     '\'03600000-0000-0000-0000-0000000000e6\''
+\set poOpen  '\'03600000-0000-0000-0000-0000000000e7\''
 \set lnOrd   '\'03600000-0000-0000-0000-0000000000f1\''
 \set lnSmall '\'03600000-0000-0000-0000-0000000000f2\''
 \set imp1    '\'03600000-0000-0000-0000-000000000101\''
@@ -93,7 +94,10 @@ insert into public.purchase_orders (id, organization_id, po_number, status, supp
   (:poOrd,   :orgA, 'PO-0360-O', 'ordered',   :supA, 50,  50),
   (:poRecv,  :orgA, 'PO-0360-R', 'received',  :supA, 10,  10),
   (:poCanc,  :orgA, 'PO-0360-C', 'cancelled', :supA, 10,  10),
-  (:poB,     :orgB, 'PO-0360-X', 'draft',     null,  0,   0);
+  (:poB,     :orgB, 'PO-0360-X', 'draft',     null,  0,   0),
+  -- Stays a draft throughout (poBig is placed in PART 2), so the PART 3 line
+  -- checks meet the rule they test before 0364's draft-only rule.
+  (:poOpen,  :orgA, 'PO-0360-OPEN', 'draft',     :supA, 0,   0);
 insert into public.purchase_order_items (id, organization_id, purchase_order_id, item_id, quantity_ordered, quantity_received, unit_cost) values
   (:lnSmall, :orgA, :poSmall, :itemA, 1,  0, 100),
   (gen_random_uuid(), :orgA, :poBig, :itemA, 10, 0, 500),
@@ -249,12 +253,12 @@ select throws_ok(
   '26: a line cannot be filed under another org''s PO');
 select throws_ok(
   format($$insert into public.purchase_order_items (organization_id, purchase_order_id, item_id, quantity_ordered, unit_cost)
-           values (%L, %L, %L, 1, 1)$$, :orgA, :poBig, :itemB),
+           values (%L, %L, %L, 1, 1)$$, :orgA, :poOpen, :itemB),
   '42501', 'That item is not part of this organization.',
   '27: nor carry another org''s item');
 select throws_ok(
   format($$insert into public.purchase_order_items (organization_id, purchase_order_id, item_id, quantity_ordered, quantity_received, unit_cost)
-           values (%L, %L, %L, 1, 1, 1)$$, :orgA, :poBig, :itemA),
+           values (%L, %L, %L, 1, 1, 1)$$, :orgA, :poOpen, :itemA),
   '42501', 'A new purchase order line starts with nothing received.',
   '28: nor arrive already received');
 select throws_ok(

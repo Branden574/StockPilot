@@ -11,6 +11,12 @@
 --   3. Cross-tenant UPDATE (move existing row's location_id to orgB) → 42501
 --   4. transfer_stock(orgA item, orgA loc1 → orgA loc2)        → lives_ok (RPC no-regression)
 --
+-- 0364: item_stock_levels is ledger-only for the API roles, so a direct write
+-- is refused by the guard before WITH CHECK is reached. Tests 1-3 therefore
+-- run with this transaction's ledger flag on, as the INVOKER ledger bodies
+-- write holdings; that keeps WITH CHECK the thing under test. Test 4 clears
+-- the flag and uses the real RPC.
+--
 -- Wrapped in begin/rollback — nothing leaks.
 
 begin;
@@ -78,6 +84,9 @@ set local "request.jwt.claim.sub" to 'ff020200-0000-0000-0000-000000000003';
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
 
+-- Writes below run as a ledger body would: with this transaction's flag on.
+do $$ begin perform set_config('stockpilot.ledger', pg_current_xact_id()::text, true); end $$;
+
 -- ── Test 1: direct cross-tenant INSERT → WITH CHECK must reject 42501 ─────────
 -- org_id=orgA, item_id=orgA item, but location_id=orgB → cross-tenant hole
 select throws_ok(
@@ -121,6 +130,9 @@ select throws_ok(
   $$,
   '42501', NULL,
   'UPDATE moving location_id to a foreign-org location raises WITH CHECK violation (42501)');
+
+-- The real path: no flag of our own; the wrapper raises it.
+set local stockpilot.ledger to '';
 
 -- ── Test 4: transfer_stock RPC (same org) → lives_ok (no regression) ──────────
 set local "request.jwt.claim.sub" to 'ff020200-0000-0000-0000-000000000003';

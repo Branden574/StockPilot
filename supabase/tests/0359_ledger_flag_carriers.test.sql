@@ -285,10 +285,13 @@ select ok(
      where has_table_privilege('anon', 'public.' || t, p))
   and not has_table_privilege('authenticated', 'public.inventory_items', 'DELETE'),
   '22: anon writes none of the five tables, and no API role hard-deletes an item');
+-- 0364 revoked DELETE on item_stock_levels: no ledger body deletes a holding.
 select ok(
   (select bool_and(has_table_privilege('authenticated', 'public.' || t, p))
-     from unnest(array['item_stock_levels', 'receipts', 'receipt_lines', 'receipt_line_lots']) t,
+     from unnest(array['receipts', 'receipt_lines', 'receipt_line_lots']) t,
           unnest(array['INSERT', 'UPDATE', 'DELETE']) p)
+  and has_table_privilege('authenticated', 'public.item_stock_levels', 'INSERT')
+  and has_table_privilege('authenticated', 'public.item_stock_levels', 'UPDATE')
   and has_table_privilege('authenticated', 'public.inventory_items', 'UPDATE'),
   '23: authenticated keeps the DML the INVOKER ledger bodies perform as the user');
 
