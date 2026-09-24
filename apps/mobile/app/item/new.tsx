@@ -28,6 +28,7 @@ import {
   buildSizedVariantsInput,
   buildSportsGroupPayload,
   collectSizedVariants,
+  deriveRackFields,
   describeFailure,
   sportsGroupFieldsFor,
   sportsProfileLabelFor,
@@ -40,11 +41,13 @@ import {
   submitSizedVariants,
   type ItemFormState,
 } from '@/lib/item-create';
+import { checkCreateRack, rackDestinationHint, type CreateRackCheck } from '@/lib/create-rack-check';
 import { footerReservation, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { supabase } from '@/lib/supabase';
-import { FONT } from '@/lib/theme';
+import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
+import { loadWarehouseRackNames } from '@/lib/warehouse-racks';
 
 /**
  * The home/away choices, matching the web select. `''` is the explicit "no
@@ -66,6 +69,38 @@ function mimeForExt(ext: string): string {
   if (e === 'heic') return 'image/heic';
   if (e === 'webp') return 'image/webp';
   return `image/${e}`;
+}
+
+/**
+ * The New-rack question as an awaitable answer. Near-matches come first as one
+ * tap each ("Use 17-B instead", which creates nothing), then Cancel and the
+ * deliberate create. Android's native dialog shows at most three buttons, so
+ * only one suggestion fits there; iOS shows two. Same shape as the Move stock
+ * sheet's confirmation.
+ */
+function askAboutNewRack(
+  check: Extract<CreateRackCheck, { kind: 'new' | 'unchecked' }>,
+): Promise<'create' | 'cancel' | { use: string }> {
+  return new Promise((resolve) => {
+    const suggestions =
+      check.kind === 'new' ? check.suggestions.slice(0, Platform.OS === 'android' ? 1 : 2) : [];
+    Alert.alert(
+      check.title,
+      check.message,
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve('cancel') },
+        ...suggestions.map((label) => ({
+          text: `Use ${label} instead`,
+          onPress: () => resolve({ use: label }),
+        })),
+        {
+          text: check.kind === 'new' ? 'Create rack and save' : 'Save anyway',
+          onPress: () => resolve('create'),
+        },
+      ],
+      { cancelable: true, onDismiss: () => resolve('cancel') },
+    );
+  });
 }
 
 function PhotosSection({
@@ -286,8 +321,17 @@ export default function NewItem() {
   const [primaryLocationId, setPrimaryLocationId] = React.useState<string | null>(null);
   const [warehouseId, setWarehouseId] = React.useState<string | null>(null);
   const [charterId, setCharterId] = React.useState<string | null>(null);
+  // The rack boxes are UNCONTROLLED, and Save reads these refs, not state.
+  // 2026-09-24: a create typed as 17-B reached the server as "1-B" and minted a
+  // new rack. A controlled input on this form re-renders all ~30 fields per
+  // keystroke, and a lagging `value` round trip can put stale text back into
+  // the native box. The ref takes each onChangeText's full text synchronously,
+  // so what Save sends is what the box last reported. The state copies only
+  // drive the destination line under the boxes.
   const [rackNumber, setRackNumber] = React.useState('');
   const [rackRow, setRackRow] = React.useState('');
+  const rackNumberRef = React.useRef('');
+  const rackRowRef = React.useRef('');
 
   // Pricing + stock
   const [unitCost, setUnitCost] = React.useState('');
@@ -448,6 +492,43 @@ export default function NewItem() {
     };
   }, [orgId, loadCategories]);
 
+  // ── Where the stock will go ──────────────────────────────────────────────
+  // The warehouse the server will create in: the chip, or the only warehouse
+  // this user has (a warehouse-scoped user's is forced server-side anyway).
+  const rackWarehouseId =
+    warehouseId ?? (warehouses.length === 1 ? (warehouses[0]?.id ?? null) : null);
+  const rackWarehouseName = warehouses.find((w) => w.id === rackWarehouseId)?.name ?? null;
+  // That warehouse's racks, for the line under the rack boxes. Keyed by the
+  // warehouse it was read for, so a chip change never shows the old list.
+  // `names` null = the read failed (never treated as "no racks").
+  const [rackNames, setRackNames] = React.useState<{
+    warehouseId: string;
+    names: string[] | null;
+  } | null>(null);
+  React.useEffect(() => {
+    if (!orgId || !rackWarehouseId) return;
+    let cancelled = false;
+    void loadWarehouseRackNames(orgId, rackWarehouseId).then((names) => {
+      if (!cancelled) setRackNames({ warehouseId: rackWarehouseId, names });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [orgId, rackWarehouseId]);
+  const rackHint = rackWarehouseId
+    ? rackDestinationHint({
+        binLocation: deriveRackFields({
+          itemType,
+          modelNumber: '',
+          rackNumber,
+          rackRow,
+          customFields: {},
+        }).binLocation,
+        warehouseName: rackWarehouseName,
+        existingRacks: rackNames?.warehouseId === rackWarehouseId ? rackNames.names : undefined,
+      })
+    : null;
+
   // Load the selected category's size vocabulary. A category that carries its
   // own scale (a shoe category -> US Men's, halves included) uses it VERBATIM;
   // one that only has supports_sizes falls back to the BUILT-IN apparel_alpha
@@ -596,8 +677,9 @@ export default function NewItem() {
       primaryLocationId,
       warehouseId,
       charterId,
-      rackNumber,
-      rackRow,
+      // The refs, not state: see rackNumberRef.
+      rackNumber: rackNumberRef.current,
+      rackRow: rackRowRef.current,
       unitCost,
       retailPrice,
       onHand,
@@ -607,6 +689,44 @@ export default function NewItem() {
       itemType,
       customFields: {},
     };
+  }
+
+  /**
+   * The 2026-07-23 new-rack guard, on the one path that never had it.
+   *
+   * The server's manual-create auto-place resolves-or-CREATES the typed rack
+   * and moves the opening stock onto it, silently. So before sending, a rack
+   * that does not exist in the warehouse is confirmed, with near-matches
+   * offered first ("1-B does not exist in DC4 yet... Did you mean 17-B?").
+   * The racks are read FRESH here, not from the hint's copy, because another
+   * operator may have added one since the screen opened.
+   *
+   * Returns the form to save (the typed one, or one pointed at the near-match
+   * the operator picked), or null when they cancelled.
+   */
+  async function confirmRackForCreate(
+    form: ItemFormState,
+    units: number,
+  ): Promise<ItemFormState | null> {
+    const label = deriveRackFields(form).binLocation;
+    if (!label || !(units > 0) || !orgId) return form;
+    const whId =
+      form.warehouseId ?? (warehouses.length === 1 ? (warehouses[0]?.id ?? null) : null);
+    const existing = whId ? await loadWarehouseRackNames(orgId, whId) : null;
+    const check = checkCreateRack({
+      binLocation: label,
+      units,
+      warehouseName: warehouses.find((w) => w.id === whId)?.name ?? null,
+      existingRacks: existing,
+    });
+    if (check.kind === 'none' || check.kind === 'existing') return form;
+    const choice = await askAboutNewRack(check);
+    if (choice === 'cancel') return null;
+    if (choice === 'create') return form;
+    // The suggestion is an existing rack's own label ("17-B"). The shared
+    // decomposer splits a whole label typed into the number box, so this
+    // rebuilds exactly the fields that label would have produced.
+    return { ...form, rackNumber: choice.use, rackRow: '' };
   }
 
   async function save() {
@@ -636,7 +756,17 @@ export default function NewItem() {
           );
           return;
         }
-        const built = buildSizedVariantsInput(form, variants);
+        const checked = buildSizedVariantsInput(form, variants);
+        if (!checked.ok) {
+          Alert.alert('Check the form', describeFailure(checked));
+          return;
+        }
+        const rackForm = await confirmRackForCreate(
+          form,
+          variants.reduce((sum, v) => sum + v.quantity, 0),
+        );
+        if (!rackForm) return;
+        const built = rackForm === form ? checked : buildSizedVariantsInput(rackForm, variants);
         if (!built.ok) {
           Alert.alert('Check the form', describeFailure(built));
           return;
@@ -667,7 +797,17 @@ export default function NewItem() {
       // No adjust_stock call afterwards: the server writes the `initial`
       // stock movement inside create(), so calling the RPC from here would
       // double-count the opening quantity.
-      const built = buildCreateItemInput(form);
+      const checked = buildCreateItemInput(form);
+      if (!checked.ok) {
+        Alert.alert('Check the form', describeFailure(checked));
+        return;
+      }
+      const rackForm = await confirmRackForCreate(
+        form,
+        Number(checked.input.quantityOnHand) || 0,
+      );
+      if (!rackForm) return;
+      const built = rackForm === form ? checked : buildCreateItemInput(rackForm);
       if (!built.ok) {
         Alert.alert('Check the form', describeFailure(built));
         return;
@@ -902,25 +1042,44 @@ export default function NewItem() {
 
           <Row>
             <Field flex label="RACK NUMBER">
+              {/* Uncontrolled on purpose (no `value`): see rackNumberRef. */}
               <TextInput
-                value={rackNumber}
-                onChangeText={setRackNumber}
+                onChangeText={(t) => {
+                  rackNumberRef.current = t;
+                  setRackNumber(t);
+                }}
                 placeholder="38"
                 placeholderTextColor={c.ink4}
+                autoCorrect={false}
+                spellCheck={false}
                 style={[styles.input, { color: c.ink, borderColor: c.hair }]}
               />
             </Field>
             <Field flex label="RACK ROW">
               <TextInput
-                value={rackRow}
-                onChangeText={setRackRow}
+                onChangeText={(t) => {
+                  rackRowRef.current = t;
+                  setRackRow(t);
+                }}
                 placeholder="A"
                 placeholderTextColor={c.ink4}
                 autoCapitalize="characters"
+                autoCorrect={false}
+                spellCheck={false}
                 style={[styles.input, { color: c.ink, borderColor: c.hair }]}
               />
             </Field>
           </Row>
+          {rackHint ? (
+            <Mono
+              size={12}
+              tracking={0.02}
+              color={rackHint.tone === 'warn' ? ACCENT.warn : rackHint.tone === 'ok' ? c.ink2 : c.ink4}
+              style={{ marginTop: 6 }}
+            >
+              {rackHint.text}
+            </Mono>
+          ) : null}
 
           {/*
             GROUP IDENTITY. These are the slots `buildGroupKey` reads, not
