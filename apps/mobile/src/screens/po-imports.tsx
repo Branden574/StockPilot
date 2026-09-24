@@ -62,6 +62,8 @@ export default function POImportsScreen() {
   const { role } = useRole();
   const permissions = useEffectivePermissions();
   const [rows, setRows] = React.useState<ImportRow[]>([]);
+  // The imports read FAILED: not "No imports yet.". Set by every load.
+  const [loadFailed, setLoadFailed] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
 
@@ -75,7 +77,7 @@ export default function POImportsScreen() {
 
   const load = React.useCallback(async () => {
     if (!orgId) return;
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('po_imports')
       .select(
         `id, source_type, file_name, file_size, status, parse_error,
@@ -85,7 +87,11 @@ export default function POImportsScreen() {
       .eq('organization_id', orgId)
       .order('created_at', { ascending: false })
       .limit(100);
-    const raw = (data ?? []) as Record<string, unknown>[];
+    // An ignored error here read as an empty history ("No imports yet.") for
+    // an org that has imports; the empty state says the load failed instead.
+    if (error) console.warn('po imports list', error);
+    setLoadFailed(Boolean(error));
+    const raw = (error ? [] : (data ?? [])) as Record<string, unknown>[];
     // Who uploaded each import (web parity). Batched; a failed lookup is
     // warned about and labels "—", and the list still shows.
     const uploaders = await readPoImportUploaders(
@@ -131,11 +137,13 @@ export default function POImportsScreen() {
       eyebrow="PROCUREMENT · PO IMPORTS"
       title="Import"
       italic="history."
-      emptyTitle="No imports yet."
+      emptyTitle={loadFailed ? 'Could not load imports.' : 'No imports yet.'}
       emptyBody={
-        canManage
-          ? 'Scan a packing slip or PO with the Scan button above — the parsed import lands here for review and approval.'
-          : 'Scanned POs land here once someone with purchase-order access imports one.'
+        loadFailed
+          ? 'Check your connection and pull down to try again.'
+          : canManage
+            ? 'Scan a packing slip or PO with the Scan button above — the parsed import lands here for review and approval.'
+            : 'Scanned POs land here once someone with purchase-order access imports one.'
       }
       emptyIcon={Upload}
       data={rows}
