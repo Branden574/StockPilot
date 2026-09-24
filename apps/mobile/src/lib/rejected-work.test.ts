@@ -108,6 +108,8 @@ describe('unsentWorkDetail (Settings > Unsent work)', () => {
   it("never says None over another account's held work", () => {
     expect(unsentWorkDetail({ rejected: 0, held: 2 })).toBe('2 from another account');
     expect(unsentWorkDetail({ rejected: 3, held: 0 })).toBe('3 never sent');
-    expect(unsentWorkDetail({ rejected: 3, held: 2 })).toBe('3 never sent · 2 from another account');
+    expect(unsentWorkDetail({ rejected: 3, held: 2 })).toBe(
+      '3 never sent · 2 from another account',
+    );
   });
 });

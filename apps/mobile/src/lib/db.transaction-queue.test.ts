@@ -136,3 +136,36 @@ describe('the cache wipes wait their turn', () => {
   });
 });
 
+describe('every outbox write commits on its own (queued), never inside someone else’s transaction', () => {
+  /**
+   * A plain runAsync issued while another flow's transaction is open executes
+   * INSIDE it on expo-sqlite's single connection, and that flow's ROLLBACK
+   * undoes it (outbox-owner.sqlite.test.ts executes the case). So every
+   * exported function that writes pending_actions must go through the queue:
+   * queuedWrite(...) or its own withDbTransaction(...). The one exception is
+   * markRejectedWithin, which exists to be called from INSIDE a transaction.
+   */
+  const strip = (src: string) => src.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
+  const functions = (file: string) => {
+    const src = strip(readFileSync(path.join(__dirname, file), 'utf8'));
+    return src
+      .split(/\n(?=export async function )/)
+      .filter((chunk) => chunk.startsWith('export async function '))
+      .map((chunk) => ({
+        name: /export async function (\w+)/.exec(chunk)?.[1] ?? '?',
+        body: chunk,
+      }));
+  };
+  const writesOutbox = (body: string) =>
+    /(insert into|update|delete from)\s+pending_actions/.test(body);
+
+  it.each(['queue.ts', 'cycle-count-cache.ts', 'db.ts'])('%s', (file) => {
+    const writers = functions(file).filter((f) => writesOutbox(f.body));
+    expect(writers.length).toBeGreaterThan(0);
+    const unqueued = writers
+      .filter((f) => f.name !== 'markRejectedWithin')
+      .filter((f) => !/queuedWrite\(|withDbTransaction\(db/.test(f.body))
+      .map((f) => f.name);
+    expect(unqueued).toEqual([]);
+  });
+});

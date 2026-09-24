@@ -189,8 +189,7 @@ export function unsyncedPrompt(
   canDiscard: boolean,
 ): { title: string; message: string; buttons: UnsyncedPromptButton[] } {
   const title = `${count} ${count === 1 ? 'change has' : 'changes have'} not synced`;
-  const keep =
-    'If you sign out, they stay on this device and send the next time you sign in here.';
+  const keep = 'If you sign out, they stay on this device and send the next time you sign in here.';
   const message = canDiscard
     ? `They could not be sent just now. ${keep}`
     : `This device is offline, so they could not be sent. ${keep}`;
@@ -198,7 +197,8 @@ export function unsyncedPrompt(
     { choice: 'stay', label: 'Stay signed in', style: 'cancel' },
     { choice: 'sign-out', label: 'Sign out', style: 'default' },
   ];
-  if (canDiscard) buttons.push({ choice: 'discard', label: 'Sign out and discard', style: 'destructive' });
+  if (canDiscard)
+    buttons.push({ choice: 'discard', label: 'Sign out and discard', style: 'destructive' });
   return { title, message, buttons };
 }
 

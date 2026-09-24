@@ -61,10 +61,17 @@ vi.mock('./api', () => apiMock);
 
 vi.mock('./account-disabled-state', () => ({ getAccountDisabled: () => false }));
 
-const live = vi.hoisted(() => ({ orgId: 'org-live' as string | null, userId: 'u1' as string | null }));
+const live = vi.hoisted(() => ({
+  orgId: 'org-live' as string | null,
+  userId: 'u1' as string | null,
+}));
 vi.mock('./session-scope', () => ({ liveOutboxScope: vi.fn(async () => ({ ...live })) }));
 
-function countRow(id: number, lineId: string, owner: { org: string | null; user: string | null }): Row {
+function countRow(
+  id: number,
+  lineId: string,
+  owner: { org: string | null; user: string | null },
+): Row {
   return {
     id,
     kind: 'record_count',
@@ -83,7 +90,12 @@ beforeEach(() => {
   live.orgId = 'org-live';
   live.userId = 'u1';
   cacheMock.outboxPending.mockReset().mockImplementation(async () => cacheMock.rows);
-  for (const name of ['outboxAck', 'outboxBumpFailure', 'outboxMarkSending', 'outboxReject'] as const) {
+  for (const name of [
+    'outboxAck',
+    'outboxBumpFailure',
+    'outboxMarkSending',
+    'outboxReject',
+  ] as const) {
     cacheMock[name].mockReset().mockImplementation(async (id: number) => {
       calls.log.push(`${name}:${id}`);
     });
@@ -143,7 +155,10 @@ describe('CycleCountSyncEngine drain — own org, own account, per row (S4a)', (
 
     await cycleCountSync.forceSync();
 
-    expect(cacheMock.outboxMarkSending).toHaveBeenCalledWith(1, { orgId: 'org-live', userId: 'u1' });
+    expect(cacheMock.outboxMarkSending).toHaveBeenCalledWith(1, {
+      orgId: 'org-live',
+      userId: 'u1',
+    });
     expect(apiMock.api).toHaveBeenCalledWith(
       recordPath('l1'),
       expect.objectContaining({ orgId: 'org-live', asUserId: 'u1' }),

@@ -84,10 +84,12 @@ describe('getDb — one open, handed out only when the schema is complete', () =
     expect(a).toBe(handle);
     expect(b).toBe(handle);
     // The schema was built once, whole.
-    const tables = (raw.prepare("select name from sqlite_master where type = 'table'").all() as { name: string }[]).map(
-      (t) => t.name,
+    const tables = (
+      raw.prepare("select name from sqlite_master where type = 'table'").all() as { name: string }[]
+    ).map((t) => t.name);
+    expect(tables).toEqual(
+      expect.arrayContaining(['meta', 'warehouses', 'items', 'cycle_counts', 'pending_actions']),
     );
-    expect(tables).toEqual(expect.arrayContaining(['meta', 'warehouses', 'items', 'cycle_counts', 'pending_actions']));
   });
 
   it('a caller arriving mid-migration waits for it, then sees the new column', async () => {
@@ -161,7 +163,9 @@ describe('getDb — one open, handed out only when the schema is complete', () =
     // The outbox columns are REQUIRED: their failure fails the open loudly.
     await expect(getDb()).rejects.toThrow('database or disk is full');
     const db = await getDb();
-    const cols = (await db.getAllAsync<{ name: string }>('pragma table_info(pending_actions)')).map((c) => c.name);
+    const cols = (await db.getAllAsync<{ name: string }>('pragma table_info(pending_actions)')).map(
+      (c) => c.name,
+    );
     expect(cols).toEqual(expect.arrayContaining(['organization_id', 'user_id']));
     expect(raw.prepare('select count(*) as n from pending_actions').get()).toEqual({ n: 3 });
   });

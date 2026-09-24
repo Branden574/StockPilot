@@ -1,11 +1,7 @@
 import { CACHED_CYCLE_COUNTS_LIST_SQL, CYCLE_COUNT_CACHE_HEADER_SQL } from './cycle-count-snapshot-sql';
-import { getDb, withDbTransaction } from './db';
-import {
-  HELD_FOR_OTHER_SQL,
-  OWNED_BY_USER_SQL,
-  REPLACED_BY_LATER_COUNT,
-} from './outbox-scope';
-import { markRejected } from './queue';
+import { getDb, queuedWrite, withDbTransaction } from './db';
+import { HELD_FOR_OTHER_SQL, OWNED_BY_USER_SQL, REPLACED_BY_LATER_COUNT } from './outbox-scope';
+import { markRejectedWithin } from './queue';
 import { liveOutboxScope } from './session-scope';
 
 /**
@@ -521,23 +517,26 @@ export async function outboxReject(id: number, error: string): Promise<void> {
   const db = await getDb();
   await withDbTransaction(db, async () => {
     await clearLineDirtyUnlessStillQueued(db, id);
-    // Same terminal write engine 1 uses. Called inside this transaction on the
-    // same memoized connection, so the status change and the dirty clear commit
-    // as one unit.
-    await markRejected(id, error);
+    // Same terminal write engine 1 uses, as the plain statement: this task is
+    // already inside a transaction, so the status change and the dirty clear
+    // commit as one unit (markRejected itself would queue behind this task).
+    await markRejectedWithin(db, id, error);
   });
 }
 
 export async function outboxBumpFailure(id: number, error: string): Promise<void> {
-  const db = await getDb();
-  await db.runAsync(
-    `update pending_actions
-        set status = 'failed',
-            attempts = attempts + 1,
-            last_attempt_at = ?,
-            last_error = ?
-      where id = ?`,
-    [Date.now(), error.slice(0, 1000), id],
+  // Queued like every outbox write (db.ts queuedWrite): a plain statement
+  // inside another flow's open transaction is undone by that flow's ROLLBACK.
+  await queuedWrite((db) =>
+    db.runAsync(
+      `update pending_actions
+          set status = 'failed',
+              attempts = attempts + 1,
+              last_attempt_at = ?,
+              last_error = ?
+        where id = ?`,
+      [Date.now(), error.slice(0, 1000), id],
+    ),
   );
 }
 
@@ -550,15 +549,16 @@ export async function outboxMarkSending(
   id: number,
   owner?: { orgId: string | null; userId: string },
 ): Promise<void> {
-  const db = await getDb();
-  await db.runAsync(
-    `update pending_actions
-        set status = 'sending',
-            last_attempt_at = ?,
-            organization_id = coalesce(organization_id, ?),
-            user_id = coalesce(user_id, ?)
-      where id = ?`,
-    [Date.now(), owner?.orgId ?? null, owner?.userId ?? null, id],
+  await queuedWrite((db) =>
+    db.runAsync(
+      `update pending_actions
+          set status = 'sending',
+              last_attempt_at = ?,
+              organization_id = coalesce(organization_id, ?),
+              user_id = coalesce(user_id, ?)
+        where id = ?`,
+      [Date.now(), owner?.orgId ?? null, owner?.userId ?? null, id],
+    ),
   );
 }
 

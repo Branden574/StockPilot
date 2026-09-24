@@ -579,7 +579,11 @@ function askAboutUnsynced(count: number, opts: { canDiscard: boolean }): Promise
     Alert.alert(
       prompt.title,
       prompt.message,
-      prompt.buttons.map((b) => ({ text: b.label, style: b.style, onPress: () => resolve(b.choice) })),
+      prompt.buttons.map((b) => ({
+        text: b.label,
+        style: b.style,
+        onPress: () => resolve(b.choice),
+      })),
       // Dismissing (Android back, tapping outside) is staying.
       { cancelable: true, onDismiss: () => resolve('stay') },
     );

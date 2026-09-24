@@ -46,7 +46,9 @@ const fetchMock = vi.fn(async () => ({
 }));
 
 function sentHeaders(): Record<string, string> {
-  const init = (fetchMock.mock.calls[0] as unknown as [string, { headers: Record<string, string> }])[1];
+  const init = (
+    fetchMock.mock.calls[0] as unknown as [string, { headers: Record<string, string> }]
+  )[1];
   return init.headers;
 }
 
@@ -83,13 +85,17 @@ describe('api() asUserId', () => {
 
   it('refuses BEFORE anything leaves when another account is signed in', async () => {
     state.session = { access_token: 'token-u2', user: { id: 'u2' } };
-    await expect(api('/api/v1/x', { asUserId: 'u1' })).rejects.toBeInstanceOf(OutboxSessionChangedError);
+    await expect(api('/api/v1/x', { asUserId: 'u1' })).rejects.toBeInstanceOf(
+      OutboxSessionChangedError,
+    );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('refuses when nobody is signed in', async () => {
     state.session = null;
-    await expect(api('/api/v1/x', { asUserId: 'u1' })).rejects.toBeInstanceOf(OutboxSessionChangedError);
+    await expect(api('/api/v1/x', { asUserId: 'u1' })).rejects.toBeInstanceOf(
+      OutboxSessionChangedError,
+    );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

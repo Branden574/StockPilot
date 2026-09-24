@@ -175,7 +175,9 @@ describe('the local record survives', () => {
   it('is actually rendered somewhere the operator can reach', () => {
     expect(settingsScreen).toMatch(/import \{ (countHeld, )?countRejected \} from '@\/lib\/queue'/);
     // The held work queued by another account is surfaced by the same screen.
-    expect(settingsScreen).toContain('unsentWorkDetail({ rejected: rejectedCount, held: heldCount })');
+    expect(settingsScreen).toContain(
+      'unsentWorkDetail({ rejected: rejectedCount, held: heldCount })',
+    );
     expect(rejectedScreen).toContain('listHeld(REJECTED_KEEP_MAX)');
     expect(rejectedScreen).toContain('discardHeldAction(row.id)');
     expect(settingsScreen).toContain("router.push('/settings/rejected-work' as never)");
@@ -309,11 +311,15 @@ describe('the cycle-count line is not left flagged unsynced forever', () => {
     // Mirrors outboxAck: the user may have edited one line twice offline.
     expect(helper).toContain("status in ('pending','failed','sending')");
     expect(helper).toContain("json_extract(payload_json, '$.lineId')");
-    expect(fnBody('export async function outboxAck')).toContain('await clearLineDirtyUnlessStillQueued(db, id);');
+    expect(fnBody('export async function outboxAck')).toContain(
+      'await clearLineDirtyUnlessStillQueued(db, id);',
+    );
   });
 
   it('does not delete the row the way an ack does', () => {
-    expect(fnBody('export async function outboxReject')).not.toContain('delete from pending_actions');
+    expect(fnBody('export async function outboxReject')).not.toContain(
+      'delete from pending_actions',
+    );
     expect(helper).not.toContain('delete from pending_actions');
   });
 });

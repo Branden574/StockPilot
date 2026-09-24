@@ -37,7 +37,10 @@ type SqlValue = null | number | bigint | string | Uint8Array;
  *  (only the methods above exist; anything else is a test bug and throws). */
 export type ExpoDbStandIn = NodeExpoDb & SQLiteDatabase;
 
-export function nodeExpoDb(raw: DatabaseSync = new DatabaseSync(':memory:'), hooks: NodeExpoDbHooks = {}): ExpoDbStandIn {
+export function nodeExpoDb(
+  raw: DatabaseSync = new DatabaseSync(':memory:'),
+  hooks: NodeExpoDbHooks = {},
+): ExpoDbStandIn {
   const before = async (sql: string) => {
     await tick();
     await hooks.beforeCall?.(sql);

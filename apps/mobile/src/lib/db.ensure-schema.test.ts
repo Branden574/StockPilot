@@ -26,17 +26,24 @@ vi.mock('expo-sqlite', () => ({ openDatabaseAsync: vi.fn() }));
  * 2026-05-10; the first bump would have wiped every outbox on update.
  */
 
-function phoneAt(version: number | null, opts: { outbox?: 'v1' | 'v2'; cachedItem?: boolean } = {}): DatabaseSync {
+function phoneAt(
+  version: number | null,
+  opts: { outbox?: 'v1' | 'v2'; cachedItem?: boolean } = {},
+): DatabaseSync {
   const raw = new DatabaseSync(':memory:');
   raw.exec('create table meta (key text primary key, value text);');
   if (version !== null) {
-    raw.prepare('insert into meta (key, value) values (?, ?)').run('schema_version', String(version));
+    raw
+      .prepare('insert into meta (key, value) values (?, ?)')
+      .run('schema_version', String(version));
   }
   raw.exec(V2_CACHE_DDL);
   raw.exec(opts.outbox === 'v1' ? V1_OUTBOX_DDL : V2_OUTBOX_DDL);
   raw.exec(THREE_QUEUED_ROWS);
   if (opts.cachedItem) {
-    raw.exec(`insert into items (id, sku, name, last_synced_at) values ('i1', 'SKU-1', 'Chair', 1);`);
+    raw.exec(
+      `insert into items (id, sku, name, last_synced_at) values ('i1', 'SKU-1', 'Chair', 1);`,
+    );
   }
   return raw;
 }
@@ -54,22 +61,28 @@ const columns = (raw: DatabaseSync, table: string) =>
   (raw.prepare(`pragma table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
 
 const storedVersion = (raw: DatabaseSync) =>
-  (raw.prepare("select value from meta where key = 'schema_version'").get() as { value: string } | undefined)?.value;
+  (
+    raw.prepare("select value from meta where key = 'schema_version'").get() as
+      { value: string } | undefined
+  )?.value;
 
 describe('ensureSchema keeps every queued row, whatever version the phone is at', () => {
   it.each([
     [1, 'v1' as const, 'older: the cache is rebuilt'],
     [2, 'v2' as const, 'current: nothing is rebuilt'],
     [3, 'v2' as const, 'NEWER (an older bundle on a migrated database)'],
-  ])('stored schema_version %i (%s, %s): all 3 queued rows survive', async (version, outbox, _why) => {
-    const raw = phoneAt(version, { outbox });
+  ])(
+    'stored schema_version %i (%s, %s): all 3 queued rows survive',
+    async (version, outbox, _why) => {
+      const raw = phoneAt(version, { outbox });
 
-    await ensureSchema(nodeExpoDb(raw));
+      await ensureSchema(nodeExpoDb(raw));
 
-    expect(queued(raw)).toEqual(THE_THREE);
-    // The drains read last_attempt_at; a v1 outbox gains it in place.
-    expect(columns(raw, 'pending_actions')).toContain('last_attempt_at');
-  });
+      expect(queued(raw)).toEqual(THE_THREE);
+      // The drains read last_attempt_at; a v1 outbox gains it in place.
+      expect(columns(raw, 'pending_actions')).toContain('last_attempt_at');
+    },
+  );
 
   it('an OLDER schema rebuilds the cache tables, and only those', async () => {
     const raw = phoneAt(1, { outbox: 'v1', cachedItem: true });
@@ -97,9 +110,9 @@ describe('ensureSchema keeps every queued row, whatever version the phone is at'
 
     await ensureSchema(nodeExpoDb(raw));
 
-    const tables = (raw.prepare("select name from sqlite_master where type = 'table'").all() as { name: string }[]).map(
-      (t) => t.name,
-    );
+    const tables = (
+      raw.prepare("select name from sqlite_master where type = 'table'").all() as { name: string }[]
+    ).map((t) => t.name);
     expect(tables).toEqual(
       expect.arrayContaining([
         'meta',
@@ -114,10 +127,12 @@ describe('ensureSchema keeps every queued row, whatever version the phone is at'
         'pending_actions',
       ]),
     );
-    const indexes = (raw.prepare("select name from sqlite_master where type = 'index'").all() as { name: string }[]).map(
-      (i) => i.name,
+    const indexes = (
+      raw.prepare("select name from sqlite_master where type = 'index'").all() as { name: string }[]
+    ).map((i) => i.name);
+    expect(indexes).toEqual(
+      expect.arrayContaining(['pending_actions_status_idx', 'pending_actions_kind_idx']),
     );
-    expect(indexes).toEqual(expect.arrayContaining(['pending_actions_status_idx', 'pending_actions_kind_idx']));
     expect(storedVersion(raw)).toBe('2');
   });
 
@@ -140,9 +155,15 @@ describe('ensureSchema keeps every queued row, whatever version the phone is at'
 
     await ensureSchema(nodeExpoDb(raw));
 
-    expect(columns(raw, 'pending_actions')).toEqual(expect.arrayContaining(['organization_id', 'user_id']));
+    expect(columns(raw, 'pending_actions')).toEqual(
+      expect.arrayContaining(['organization_id', 'user_id']),
+    );
     expect(
-      raw.prepare('select idempotency_key, organization_id, user_id from pending_actions order by id').all(),
+      raw
+        .prepare(
+          'select idempotency_key, organization_id, user_id from pending_actions order by id',
+        )
+        .all(),
     ).toEqual([
       { idempotency_key: 'k1', organization_id: null, user_id: null },
       { idempotency_key: 'k2', organization_id: null, user_id: null },
@@ -163,7 +184,9 @@ describe('ensureSchema keeps every queued row, whatever version the phone is at'
       )
       .run('receive_po_line', 'k-old', '{}', 9);
     const listed = raw
-      .prepare(`select * from pending_actions where status in ('pending','failed') order by created_at asc`)
+      .prepare(
+        `select * from pending_actions where status in ('pending','failed') order by created_at asc`,
+      )
       .all() as { idempotency_key: string; user_id: string | null }[];
     expect(listed.map((r) => r.idempotency_key)).toEqual(['k1', 'k2', 'k3', 'k-old']);
     // Its row is a legacy row to this bundle, adopted at its first send.

@@ -91,12 +91,37 @@ export function withDbTransaction(db: TransactionDb, task: () => Promise<void>):
 }
 
 /**
+ * A WRITE on its own, run as a queued transaction and handed its result.
+ *
+ * Why a lone statement needs the queue: expo-sqlite has ONE connection, and a
+ * plain runAsync issued while another flow's transaction is open (a snapshot
+ * pull between its BEGIN and COMMIT) executes INSIDE that transaction. If the
+ * pull then fails and rolls back, the plain write is rolled back with it:
+ * reproduced, enqueue() returned an id ("Queued") and the row was gone after an
+ * unrelated pull's ROLLBACK. Every outbox write (enqueue, the mark* helpers,
+ * rejection, pruning, discard) goes through here, so it commits on its own.
+ *
+ * Same rule as withDbTransaction: never call this from inside a transaction
+ * task (it would wait on its own turn forever). Code already inside one runs
+ * the plain statement, as outboxReject does with markRejectedWithin.
+ */
+export async function queuedWrite<T>(write: (db: SQLite.SQLiteDatabase) => Promise<T>): Promise<T> {
+  const db = await getDb();
+  // Assigned by the task, which withDbTransaction awaits to completion.
+  let value!: T;
+  await withDbTransaction(db, async () => {
+    value = await write(db);
+  });
+  return value;
+}
+
+/**
  * Idempotent app-startup hook — wires DB open + migrations into the
  * root layout effect so any screen that runs `getDb()` after this
  * resolves can assume the schema exists.
  */
 export async function initDb(): Promise<void> {
-  const db = await getDb();
+  await getDb();
   // Reclaim orphaned in-flight outbox rows. A row is flipped to 'sending' only
   // transiently inside a live drain, immediately before the network request; if
   // the JS runtime dies in that window (OS memory-kill of a backgrounded app,
@@ -106,8 +131,8 @@ export async function initDb(): Promise<void> {
   // 'sending' row present at startup is definitionally orphaned (no drain is in
   // flight yet), so reset it to 'pending' to be re-drained.
   try {
-    await db.runAsync(
-      "update pending_actions set status = 'pending' where status = 'sending'",
+    await queuedWrite((db) =>
+      db.runAsync("update pending_actions set status = 'pending' where status = 'sending'"),
     );
   } catch {
     /* best-effort reclaim — never block app startup */
@@ -115,7 +140,10 @@ export async function initDb(): Promise<void> {
 }
 
 /** The statements ensureSchema needs; expo-sqlite's database satisfies it. */
-export type SchemaDb = Pick<SQLite.SQLiteDatabase, 'execAsync' | 'getFirstAsync' | 'getAllAsync' | 'runAsync'>;
+export type SchemaDb = Pick<
+  SQLite.SQLiteDatabase,
+  'execAsync' | 'getFirstAsync' | 'getAllAsync' | 'runAsync'
+>;
 
 /**
  * Brings the phone's database up to this bundle's shape. Exported so the

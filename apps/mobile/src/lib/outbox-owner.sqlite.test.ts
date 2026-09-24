@@ -65,7 +65,11 @@ function seed(row: {
       row.id,
       row.kind ?? 'record_count',
       `k${row.id}`,
-      JSON.stringify({ cycleCountId: row.countId ?? 'cc1', lineId: row.lineId ?? `l${row.id}`, countedQuantity: 3 }),
+      JSON.stringify({
+        cycleCountId: row.countId ?? 'cc1',
+        lineId: row.lineId ?? `l${row.id}`,
+        countedQuantity: 3,
+      }),
       row.id,
       row.status ?? 'pending',
       row.org === undefined ? 'org-a' : row.org,
@@ -83,12 +87,18 @@ function cacheLine(lineId: string, dirty = 0) {
 }
 
 const owners = () =>
-  raw.prepare('select id, status, organization_id, user_id, last_error from pending_actions order by id').all();
+  raw
+    .prepare(
+      'select id, status, organization_id, user_id, last_error from pending_actions order by id',
+    )
+    .all();
 
 describe('both writers stamp the organization and the account', () => {
   it('enqueue() persists organization_id and user_id', async () => {
     const { id } = await queue.enqueue('distribute_bundle', { bundleId: 'b1', quantity: 1 });
-    expect(raw.prepare('select organization_id, user_id from pending_actions where id = ?').get(id)).toEqual({
+    expect(
+      raw.prepare('select organization_id, user_id from pending_actions where id = ?').get(id),
+    ).toEqual({
       organization_id: 'org-a',
       user_id: 'u1',
     });
@@ -97,7 +107,11 @@ describe('both writers stamp the organization and the account', () => {
   it('updateLocalLine() persists organization_id and user_id on the record_count row', async () => {
     cacheLine('l1');
     const res = await cache.updateLocalLine('l1', 7);
-    expect(raw.prepare('select kind, organization_id, user_id from pending_actions where id = ?').get(res?.outboxId ?? -1)).toEqual({
+    expect(
+      raw
+        .prepare('select kind, organization_id, user_id from pending_actions where id = ?')
+        .get(res?.outboxId ?? -1),
+    ).toEqual({
       kind: 'record_count',
       organization_id: 'org-a',
       user_id: 'u1',
@@ -187,11 +201,23 @@ describe("another account's held row is never deleted automatically", () => {
 
     const res = await cache.updateLocalLine('l1', 8);
 
-    const rows = owners() as { id: number; status: string; user_id: string; last_error: string | null }[];
-    expect(rows.find((r) => r.id === 1)).toMatchObject({ status: 'rejected', user_id: 'u2', last_error: REPLACED_BY_LATER_COUNT });
+    const rows = owners() as {
+      id: number;
+      status: string;
+      user_id: string;
+      last_error: string | null;
+    }[];
+    expect(rows.find((r) => r.id === 1)).toMatchObject({
+      status: 'rejected',
+      user_id: 'u2',
+      last_error: REPLACED_BY_LATER_COUNT,
+    });
     expect(rows.find((r) => r.id === 2)).toBeUndefined();
     expect(rows.find((r) => r.id === 3)).toMatchObject({ status: 'pending', user_id: 'u2' });
-    expect(rows.find((r) => r.id === res?.outboxId)).toMatchObject({ status: 'pending', user_id: 'u1' });
+    expect(rows.find((r) => r.id === res?.outboxId)).toMatchObject({
+      status: 'pending',
+      user_id: 'u1',
+    });
     // The parked row is its owner's record, not this person's.
     expect(await queue.countRejected()).toBe(0);
     live.userId = 'u2';
@@ -207,13 +233,17 @@ describe("another account's held row is never deleted automatically", () => {
     expect(await cache.discardHeldAction(1)).toBe(true);
 
     expect(raw.prepare('select id from pending_actions').all()).toEqual([{ id: 2 }]);
-    expect(raw.prepare("select local_dirty from cycle_count_lines where id = 'l5'").get()).toEqual({ local_dirty: 0 });
+    expect(raw.prepare("select local_dirty from cycle_count_lines where id = 'l5'").get()).toEqual({
+      local_dirty: 0,
+    });
   });
 });
 
 describe('sign-out keeps queued work, held for its account (S4b, owner decision D5)', () => {
   beforeEach(() => {
-    raw.exec(`insert into items (id, sku, name, last_synced_at) values ('i1', 'SKU-1', 'Chair', 1);`);
+    raw.exec(
+      `insert into items (id, sku, name, last_synced_at) values ('i1', 'SKU-1', 'Chair', 1);`,
+    );
     seed({ id: 1, user: 'u1' }); // mine, pending
     seed({ id: 2, user: 'u1', status: 'failed' }); // mine, failed
     seed({ id: 3, user: null, org: null }); // legacy
@@ -225,9 +255,11 @@ describe('sign-out keeps queued work, held for its account (S4b, owner decision 
     const { wipeForSignOut } = await import('./db');
     await wipeForSignOut();
     expect(raw.prepare('select count(*) as n from items').get()).toEqual({ n: 0 });
-    expect((raw.prepare('select id from pending_actions order by id').all() as { id: number }[]).map((r) => r.id)).toEqual([
-      1, 2, 3, 4, 5,
-    ]);
+    expect(
+      (raw.prepare('select id from pending_actions order by id').all() as { id: number }[]).map(
+        (r) => r.id,
+      ),
+    ).toEqual([1, 2, 3, 4, 5]);
   });
 
   it('holding stamps only legacy rows with the leaving account; nobody else’s row is touched', async () => {
@@ -247,14 +279,73 @@ describe('sign-out keeps queued work, held for its account (S4b, owner decision 
 
   it('"Sign out and discard" deletes this account’s unsynced rows only: never another account’s, never a rejected record', async () => {
     expect(await queue.discardUnsyncedFor('u1')).toBe(3); // 1, 2 and the legacy 3
-    expect((raw.prepare('select id from pending_actions order by id').all() as { id: number }[]).map((r) => r.id)).toEqual([
-      4, 5,
-    ]);
+    expect(
+      (raw.prepare('select id from pending_actions order by id').all() as { id: number }[]).map(
+        (r) => r.id,
+      ),
+    ).toEqual([4, 5]);
   });
 
   it('only the eviction of a disabled account drops unsent rows, and it spares rejected ones', async () => {
     const { wipeForEviction } = await import('./db');
     await wipeForEviction();
-    expect((raw.prepare('select id from pending_actions order by id').all() as { id: number }[]).map((r) => r.id)).toEqual([5]);
+    expect(
+      (raw.prepare('select id from pending_actions order by id').all() as { id: number }[]).map(
+        (r) => r.id,
+      ),
+    ).toEqual([5]);
+  });
+});
+
+describe("an unrelated transaction's ROLLBACK cannot undo an outbox write (plain writes are queued)", () => {
+  /**
+   * Reproduced before the fix: enqueue() returned an id (the screen said
+   * "Queued"), then a snapshot pull that was mid-transaction failed and rolled
+   * back, and the row was gone. The single expo-sqlite connection ran the
+   * plain insert INSIDE the pull's open transaction.
+   */
+  async function failingPullAround(write: () => Promise<unknown>) {
+    const db = await import('./db');
+    const conn = await db.getDb();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const pull = db.withDbTransaction(conn, async () => {
+      await conn.runAsync(
+        `insert into items (id, sku, name, last_synced_at) values ('p1', 'P', 'Pulled', 1)`,
+      );
+      await gate; // the pull is between BEGIN and COMMIT, waiting on the network
+      throw new Error('pull failed');
+    });
+    const written = write();
+    // Give an UNqueued write every chance to execute inside the open pull.
+    await new Promise((r) => setTimeout(r, 30));
+    release();
+    await expect(pull).rejects.toThrow('pull failed');
+    return written;
+  }
+
+  it('enqueue() survives: the queued row is still there after the pull rolls back', async () => {
+    const res = (await failingPullAround(() =>
+      queue.enqueue('receive_po_line', { poId: 'po1', lineId: 'l1', quantity: 2 }),
+    )) as { id: number };
+    expect(raw.prepare('select id from pending_actions').all()).toEqual([{ id: res.id }]);
+    // The pull's own write was rolled back, as it should be.
+    expect(raw.prepare('select count(*) as n from items').get()).toEqual({ n: 0 });
+  });
+
+  it('markRejected survives: a terminal verdict is not reverted to a replayable row', async () => {
+    seed({ id: 1, user: 'u1', kind: 'receive_po_line' });
+    await failingPullAround(() => queue.markRejected(1, 'refused'));
+    expect(raw.prepare('select status from pending_actions where id = 1').get()).toEqual({
+      status: 'rejected',
+    });
+  });
+
+  it('markOk survives: a sent row is not resurrected to be sent again', async () => {
+    seed({ id: 1, user: 'u1', kind: 'receive_po_line', status: 'sending' });
+    await failingPullAround(() => queue.markOk(1));
+    expect(raw.prepare('select count(*) as n from pending_actions').get()).toEqual({ n: 0 });
   });
 });

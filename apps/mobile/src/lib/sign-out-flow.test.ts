@@ -78,7 +78,9 @@ function harness(overrides: Partial<Harness['state']> = {}): Harness {
   return { deps, log, state };
 }
 
-const OFFLINE = Object.assign(new Error('Network request failed'), { name: 'AuthRetryableFetchError' });
+const OFFLINE = Object.assign(new Error('Network request failed'), {
+  name: 'AuthRetryableFetchError',
+});
 
 describe('runSignOutFlow — honour the result of signOut', () => {
   it('a global sign-out error falls back to local; if the session survives NOTHING is wiped or discarded', async () => {
@@ -141,7 +143,15 @@ describe('runSignOutFlow — unsynced work is never lost silently', () => {
   it('"Sign out" keeps the work: it is held for this account, never discarded', async () => {
     const h = harness({ unsynced: 2, afterDrain: 2, choice: 'sign-out' });
     expect(await runSignOutFlow(h.deps)).toBe('signed-out');
-    expect(h.log).toEqual(['count', 'drain', 'count', 'confirm:2:can-discard', 'hold', 'signOut:global', 'wipe']);
+    expect(h.log).toEqual([
+      'count',
+      'drain',
+      'count',
+      'confirm:2:can-discard',
+      'hold',
+      'signOut:global',
+      'wipe',
+    ]);
     expect(h.deps.discardUnsynced).not.toHaveBeenCalled();
   });
 
@@ -161,7 +171,13 @@ describe('runSignOutFlow — unsynced work is never lost silently', () => {
   });
 
   it('discard chosen but the sign-out failed: the work is kept (the person is still signed in)', async () => {
-    const h = harness({ unsynced: 2, afterDrain: 2, choice: 'discard', globalError: OFFLINE, localError: OFFLINE });
+    const h = harness({
+      unsynced: 2,
+      afterDrain: 2,
+      choice: 'discard',
+      globalError: OFFLINE,
+      localError: OFFLINE,
+    });
     expect(await runSignOutFlow(h.deps)).toBe('still-signed-in');
     expect(h.deps.discardUnsynced).not.toHaveBeenCalled();
   });
@@ -222,7 +238,11 @@ describe('endSession (also used by "Use password instead" / "Use a different acc
 describe('unsyncedPrompt', () => {
   it('offers Discard only after a drain attempt', () => {
     expect(unsyncedPrompt(2, false).buttons.map((b) => b.choice)).toEqual(['stay', 'sign-out']);
-    expect(unsyncedPrompt(2, true).buttons.map((b) => b.choice)).toEqual(['stay', 'sign-out', 'discard']);
+    expect(unsyncedPrompt(2, true).buttons.map((b) => b.choice)).toEqual([
+      'stay',
+      'sign-out',
+      'discard',
+    ]);
     expect(unsyncedPrompt(2, true).buttons.at(-1)).toEqual({
       choice: 'discard',
       label: 'Sign out and discard',
@@ -240,7 +260,8 @@ describe('unsyncedPrompt', () => {
 describe('auth-context wiring', () => {
   const src = readFileSync(path.resolve(__dirname, './auth-context.tsx'), 'utf8');
   const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-  const fn = (name: string) => code.slice(code.indexOf(`const ${name}: AuthState['${name}']`)).split('\n  };\n')[0] ?? '';
+  const fn = (name: string) =>
+    code.slice(code.indexOf(`const ${name}: AuthState['${name}']`)).split('\n  };\n')[0] ?? '';
 
   it('signOut runs the sequence, with the outbox-keeping wipe as its cache wipe', () => {
     const body = fn('signOut');
@@ -255,14 +276,17 @@ describe('auth-context wiring', () => {
     const body = fn('signOutToFallback');
     const ended = body.indexOf('if (!ended)');
     const unlock = body.indexOf('setLocked(false)');
-    expect(body).toContain("endSession(");
+    expect(body).toContain('endSession(');
     expect(ended).toBeGreaterThan(-1);
     expect(unlock).toBeGreaterThan(ended);
     expect(body.slice(ended, unlock)).toContain('return false;');
   });
 
   it('the disabled screen clears its gate only after a sign-out that ended the session', () => {
-    const screen = readFileSync(path.resolve(__dirname, '../components/account-disabled-screen.tsx'), 'utf8');
+    const screen = readFileSync(
+      path.resolve(__dirname, '../components/account-disabled-screen.tsx'),
+      'utf8',
+    );
     const ended = screen.indexOf('const ended = await signOutToFallback();');
     expect(ended).toBeGreaterThan(-1);
     expect(screen.indexOf('setAccountDisabled(false);')).toBeGreaterThan(ended);
