@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { callArgs, inFilters, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 
 /**
- * Overdue-rental reminder cron (S6-A).
+ * Overdue-rental reminder cron (S6-A). Security invariant, listed in
+ * scripts/security-test.sh: it emails people outside the organization.
  *
  *   - MODULE GATE: only organizations whose explicit `organization_modules`
  *     row for rentals is enabled. It is automation that emails people outside

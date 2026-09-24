@@ -22,8 +22,9 @@ vi.mock('@/lib/error-reporter', () => ({
   reportError: vi.fn(async () => undefined),
 }));
 
-/** The one body every internal failure gets: a fixed sentence (the phone
- *  shows `message ?? error`), never the error's own text. */
+/** Security invariant (S6-A, listed in scripts/security-test.sh): the one
+ *  body every internal failure gets is a fixed sentence (the phone shows
+ *  `message ?? error`), never the error's own text. */
 const INTERNAL_BODY = {
   error: 'internal_error',
   message: 'Something went wrong. Please try again.',

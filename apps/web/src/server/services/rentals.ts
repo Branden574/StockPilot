@@ -1,7 +1,5 @@
 import 'server-only';
 
-import { after } from 'next/server';
-
 import { assertWarehouseAccess, ForbiddenError } from '@/lib/auth/warehouse';
 import { sendRentalCheckoutEmail, sendRentalReturnedEmail } from '@/lib/email/rentals';
 
@@ -13,6 +11,7 @@ import {
   ServiceError,
   withContext,
 } from './context';
+import { defer } from './lib/defer';
 import { postgrestErrorText } from './lib/postgrest-error';
 
 import type {
@@ -163,7 +162,7 @@ export class RentalsService {
         notes: l.notes ?? null,
       })),
     });
-    if (createErr) throw rentalRpcError(createErr);
+    if (createErr) throw rentalRpcError(createErr, ITEMS_BUSY);
     if (typeof rentalId !== 'string' || rentalId.length === 0) {
       throw new ServiceError('internal_error', 'The rental was not created.');
     }
@@ -188,10 +187,11 @@ export class RentalsService {
     // already committed. The phone gives up after 20 s and lets the operator
     // press Check out again with the same cart, and there is no idempotency
     // key yet (S6-B, deferred), so every second spent here after the commit
-    // widened the window for a duplicate rental. after() keeps the function
-    // alive until the send finishes, which is the guarantee the await gave.
+    // widened the window for a duplicate rental. defer (lib/defer.ts) registers
+    // the send with next/server after(), which keeps the function alive until
+    // it finishes, the guarantee the await gave.
     // The send is best-effort and never throws; it self-skips with no email.
-    deferAfterResponse(() => sendRentalCheckoutEmail(rentalId));
+    defer(() => sendRentalCheckoutEmail(rentalId));
 
     return { id: rentalId };
   }
@@ -240,7 +240,7 @@ export class RentalsService {
       p_rental_id: input.id,
       p_return_notes: input.returnNotes ?? null,
     });
-    if (returnErr) throw rentalRpcError(returnErr);
+    if (returnErr) throw rentalRpcError(returnErr, RENTAL_BUSY);
     // 'noop' means the rental stopped being out between the read above and
     // the function's row lock: someone else returned or cancelled it first.
     // That is the same end state the pre-read branch already treats as done,
@@ -305,7 +305,7 @@ export class RentalsService {
       p_rental_id: input.id,
       p_reason: input.reason,
     });
-    if (cancelErr) throw rentalRpcError(cancelErr);
+    if (cancelErr) throw rentalRpcError(cancelErr, RENTAL_BUSY);
     // Someone else closed it first: a quiet success, as in markReturned.
     if (outcome === 'noop') return;
     if (outcome !== 'cancelled') {
@@ -343,51 +343,48 @@ export class RentalsService {
 }
 
 /**
- * Run best-effort tail work after the response, keeping the function alive for
- * it. The same helper as `defer` in order-requests.ts (see the reasoning
- * there): `after()` throws synchronously outside a request scope (a script, a
- * cron worker, vitest), where plain fire-and-forget is the right fallback.
- * Errors are swallowed because the work must never fail a committed mutation;
- * the email helpers log their own failures.
- */
-function deferAfterResponse(fn: () => Promise<unknown>): void {
-  const run = () => fn().catch(() => {});
-  try {
-    after(run);
-  } catch {
-    void run();
-  }
-}
-
-/**
  * Lock and statement timeouts (the `authenticator` role runs with
- * lock_timeout = 8s and statement_timeout = 8s). create_rental locks the
- * requested items in id order, and so do order approvals, so a checkout can
- * wait behind another checkout or an approval and time out. Nothing was
- * written (the function rolls back as a whole), so it is a retryable conflict,
- * not a server fault.
+ * lock_timeout = 8s and statement_timeout = 8s). Nothing was written (each
+ * rental function rolls back as a whole), so a timeout is a retryable
+ * conflict, not a server fault. What the call was waiting on differs by
+ * function, so the caller names it:
+ *
+ *   - create_rental locks the requested ITEMS in id order, and so do order
+ *     approvals, so a checkout waits behind another checkout or an approval
+ *     (ITEMS_BUSY);
+ *   - return_rental and cancel_rental lock only the RENTAL row and then touch
+ *     that rental's own holds (0361). Checkouts and approvals never lock
+ *     either, so only another return or cancel of the same rental, or the
+ *     overdue cron's claim of it, can hold them up (RENTAL_BUSY). Telling that
+ *     operator "someone is checking out these items" sent them looking for a
+ *     checkout that does not exist.
  */
 const RENTAL_TIMEOUT_CODES = new Set(['55P03', '57014']);
+const ITEMS_BUSY =
+  'Someone else is checking out or approving these items right now. Try again in a moment.';
+const RENTAL_BUSY = 'Someone else is updating this rental right now. Try again in a moment.';
 
 /**
  * The rental functions (migration 0361) refuse with the service's own wording
  * and mark those refusals with hint 'rental_invalid'; their gates raise short
- * tokens. Map both onto ServiceErrors. Anything else is an internal_error,
+ * tokens. Map both onto ServiceErrors. A lock or statement timeout is a
+ * conflict carrying `timeoutMessage`, the sentence for what this function
+ * waits on (see RENTAL_TIMEOUT_CODES). Anything else is an internal_error,
  * whose public message ServiceError replaces with a generic one; the raw text
  * stays in `internalDetail` for the server log (S13).
  */
-function rentalRpcError(err: {
-  message?: string;
-  code?: string;
-  details?: string | null;
-  hint?: string | null;
-}): ServiceError {
+function rentalRpcError(
+  err: {
+    message?: string;
+    code?: string;
+    details?: string | null;
+    hint?: string | null;
+  },
+  timeoutMessage: string,
+): ServiceError {
   const message = err.message ?? '';
   if (err.code && RENTAL_TIMEOUT_CODES.has(err.code)) {
-    return new ServiceError(
-      'conflict',
-      'Someone else is checking out or approving these items right now. Try again in a moment.',
-    );
+    return new ServiceError('conflict', timeoutMessage);
   }
   if (err.hint === 'rental_invalid') {
     return new ServiceError(err.code === 'P0002' ? 'not_found' : 'validation_error', message);

@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { redirect } from 'next/navigation';
 
 /**
+ * Security invariant (S6-A, listed in scripts/security-test.sh).
+ *
  * The rental server actions answer the web toast. An error that is not a
  * ServiceError used to go back as its own `message` (whatever the thrower
  * wrote: a PostgREST string, a network error); it now gets a fixed sentence.

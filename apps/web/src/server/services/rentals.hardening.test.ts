@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
+ * Security invariant (S6-A, listed in scripts/security-test.sh).
+ *
  * S6-A rentals hardening, against the REAL ServiceError (rentals.test.ts mocks
  * it, so it cannot see the internal_error sanitisation):
  *
  *   - a lock or statement timeout (55P03 / 57014) from the rental functions is
- *     a retryable conflict with an operator sentence, not a 500;
+ *     a retryable conflict, not a 500, with a sentence naming what the call
+ *     waited on (the items for a checkout, the rental for a return or cancel);
  *   - any other function error is an internal_error whose PUBLIC message is
  *     generic, with the raw text only in `internalDetail`;
  *   - an outcome the functions never answer is an internal_error, and nothing
@@ -67,6 +70,7 @@ function service(results: Parameters<typeof makeSupabaseStub>[0]) {
 
 const TIMEOUT_SENTENCE =
   'Someone else is checking out or approving these items right now. Try again in a moment.';
+const RENTAL_BUSY_SENTENCE = 'Someone else is updating this rental right now. Try again in a moment.';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -94,17 +98,39 @@ describe('rental function timeouts are a retryable conflict', () => {
     expect(afterCalls).toHaveLength(0);
   });
 
-  it('return: a lock timeout maps to conflict too, with no audit and no email', async () => {
+  // return_rental and cancel_rental lock only the rental row (0361), which no
+  // checkout or approval touches: the operator is told it is this rental that
+  // is busy, not "these items". Mutation caught: passing ITEMS_BUSY (or one
+  // shared sentence) for return and cancel.
+  it.each([
+    ['55P03', 'canceling statement due to lock timeout'],
+    ['57014', 'canceling statement due to statement timeout'],
+  ])('return: SQLSTATE %s is a conflict naming the rental, with no audit and no email', async (code, message) => {
     const { svc } = service({
       'rentals.select.maybeSingle': { data: OUT_ROW, error: null },
-      'rpc:return_rental': {
-        data: null,
-        error: { code: '55P03', message: 'canceling statement due to lock timeout' },
-      },
+      'rpc:return_rental': { data: null, error: { code, message } },
     });
-    await expect(svc.markReturned({ id: 'r-1' })).rejects.toMatchObject({ code: 'conflict' });
+    await expect(svc.markReturned({ id: 'r-1' })).rejects.toMatchObject({
+      code: 'conflict',
+      message: RENTAL_BUSY_SENTENCE,
+    });
     expect(vi.mocked(audit)).not.toHaveBeenCalled();
     expect(sendRentalReturnedEmail).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['55P03', 'canceling statement due to lock timeout'],
+    ['57014', 'canceling statement due to statement timeout'],
+  ])('cancel: SQLSTATE %s is a conflict naming the rental, with no audit', async (code, message) => {
+    const { svc } = service({
+      'rentals.select.maybeSingle': { data: OUT_ROW, error: null },
+      'rpc:cancel_rental': { data: null, error: { code, message } },
+    });
+    await expect(svc.cancel({ id: 'r-1', reason: 'x' })).rejects.toMatchObject({
+      code: 'conflict',
+      message: RENTAL_BUSY_SENTENCE,
+    });
+    expect(vi.mocked(audit)).not.toHaveBeenCalled();
   });
 });
 
