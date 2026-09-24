@@ -3,6 +3,7 @@ import * as path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { CACHE_USER_META_KEY } from './cache-owner';
 import { ENABLED_MODULES_META_KEY } from './enabled-modules';
 import { EFFECTIVE_PERMISSIONS_META_KEY } from './use-effective-permissions';
 import { WAREHOUSE_SCOPE_META_KEY } from './warehouse-scope';
@@ -59,6 +60,7 @@ function clearBody(src: string): string {
 
 /** Resolve `setMeta(X)` arguments in sync.ts to the literal meta key. */
 const KEY_BY_CONSTANT: Record<string, string> = {
+  CACHE_USER_META_KEY,
   ENABLED_MODULES_META_KEY,
   EFFECTIVE_PERMISSIONS_META_KEY,
   WAREHOUSE_SCOPE_META_KEY,
@@ -86,13 +88,13 @@ describe('clearOrgScopedTables clears every org-scoped meta key sync.ts persists
   const body = clearBody(dbSrc);
   const persisted = persistedMetaKeys(syncSrc);
 
-  it('sync.ts persists the four keys we know about (guard on the guard)', () => {
+  it('sync.ts persists the five keys we know about (guard on the guard)', () => {
     expect(persisted.sort()).toEqual(
-      ['effective_permissions', 'enabled_modules', 'last_synced_at', 'warehouse_scope'].sort(),
+      ['cache_user_id', 'effective_permissions', 'enabled_modules', 'last_synced_at', 'warehouse_scope'].sort(),
     );
   });
 
-  it.each(['last_synced_at', 'enabled_modules', 'effective_permissions', 'warehouse_scope'])(
+  it.each(['last_synced_at', 'enabled_modules', 'effective_permissions', 'warehouse_scope', 'cache_user_id'])(
     'clears %s',
     (key) => {
       expect(body).toContain(`delete from meta where key = '${key}';`);
@@ -111,6 +113,7 @@ describe('the cleared literals are the exported constants', () => {
   const body = clearBody(dbSrc);
 
   it.each([
+    ['cache_user_id', CACHE_USER_META_KEY],
     ['enabled_modules', ENABLED_MODULES_META_KEY],
     ['effective_permissions', EFFECTIVE_PERMISSIONS_META_KEY],
     ['warehouse_scope', WAREHOUSE_SCOPE_META_KEY],

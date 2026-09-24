@@ -101,6 +101,36 @@ export function shouldRunEviction(input: {
 }
 
 /**
+ * WHICH ACCOUNT IS BEING EVICTED? The eviction rejects that account's queued
+ * work (and legacy rows) and nothing else: on a shared phone the outbox also
+ * holds work queued by OTHER accounts, held for them until they sign in here
+ * again, which a colleague's disable must neither reject nor delete (owner
+ * decision D4).
+ *
+ * Read BEFORE the eviction's own local sign-out, in this order:
+ *   1. the session still stored on the device: 'session' evidence is a probe
+ *      of exactly that session;
+ *   2. the account last seen holding the session this run (session-scope.ts):
+ *      a probe that answered 'signed-out' has already dropped the session by
+ *      the time the verdict lands;
+ *   3. the remembered identity (remembered-identity.ts): after a relaunch the
+ *      revoked session is gone before any of this runs, and a sign-in
+ *      rejection earns 'session' evidence only by matching this record.
+ * Null when none of them names an account. The caller then falls back to the
+ * whole device, the only way to be sure the disabled account's work never
+ * replays after a re-enable, and says so in the log.
+ */
+export function evictedAccountId(candidates: {
+  storedSessionUserId: string | null;
+  lastSeenUserId: string | null;
+  rememberedUserId: string | null;
+}): string | null {
+  return (
+    candidates.storedSessionUserId ?? candidates.lastSeenUserId ?? candidates.rememberedUserId ?? null
+  );
+}
+
+/**
  * Does this auth event mean the device LOST a session, as opposed to simply not
  * having one?
  *

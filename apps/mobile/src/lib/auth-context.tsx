@@ -1,6 +1,6 @@
 import type { Session, User } from '@supabase/supabase-js';
 import * as React from 'react';
-import { AppState, type AppStateStatus } from 'react-native';
+import { Alert, AppState, type AppStateStatus } from 'react-native';
 
 import {
   getAccountGateState,
@@ -20,14 +20,28 @@ import {
   promptBiometric,
   setBiometricEnabledForUser,
 } from './biometric';
+import { totalPendingCount } from './cycle-count-cache';
+import { cycleCountSync } from './cycle-count-sync';
 import { wipeForSignOut } from './db';
+import { adoptLegacyRows, discardUnsyncedFor } from './queue';
 import {
   getRememberedIdentity,
   matchesRememberedIdentity,
   normalizeIdentityEmail,
   rememberIdentity,
 } from './remembered-identity';
+import { hasStoredSession, liveOutboxScope } from './session-scope';
+import {
+  endSession,
+  runSignOutFlow,
+  STILL_SIGNED_IN_MESSAGE,
+  STILL_SIGNED_IN_TITLE,
+  unsyncedPrompt,
+  type SignOutScope,
+  type UnsyncedChoice,
+} from './sign-out-flow';
 import { supabase } from './supabase';
+import { isOnline, syncNow } from './sync';
 
 import { ACCOUNT_DISABLED_MESSAGE } from '@stockpilot/core';
 
@@ -59,7 +73,14 @@ interface AuthState {
    */
   verifyMfa: (code: string) => Promise<{ error?: string }>;
   signIn: (email: string, password: string) => Promise<{ error?: string }>;
-  signOut: () => Promise<void>;
+  /**
+   * The deliberate sign-out (drawer, Settings). Tries to send unsynced work
+   * first and asks before leaving any behind (sign-out-flow.ts). Call it with
+   * no argument from a button: `onPress={() => void signOut()}`.
+   * `afterAccountDeleted` skips the question and discards the account's queued
+   * work, which can never be sent.
+   */
+  signOut: (opts?: { afterAccountDeleted?: boolean }) => Promise<void>;
   /**
    * Trigger the biometric prompt to unlock the app. Sets `locked=false`
    * on success. On failure, the lock screen exposes a "use password"
@@ -70,9 +91,10 @@ interface AuthState {
    * Clears the Supabase session locally so the sign-in screen appears.
    * Used when the user can't pass biometric and wants to fall back to
    * email/password. Does NOT revoke global tokens — other devices
-   * remain signed in.
+   * remain signed in. Resolves true once the session is actually gone; false
+   * when it survived (offline), in which case nothing was unlocked.
    */
-  signOutToFallback: () => Promise<void>;
+  signOutToFallback: () => Promise<boolean>;
   enableBiometric: () => Promise<boolean>;
   disableBiometric: () => Promise<void>;
 }
@@ -309,7 +331,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signIn: AuthState['signIn'] = async (email, password) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data: signedIn, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
       // GoTrue answers a disabled account with the STRUCTURED code
       // `user_banned`. Never infer it from free text — GoTrue's own sentence
@@ -365,12 +387,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // identity-server blip) is demonstrably stale and must come down, or the
     // healthy user who just signed in would meet the disabled screen.
     resetAccountDisabled();
-    // Refresh this device's remembered identity. Deliberately email-only here
-    // (userId left null) — the fuller record with userId is written at every
-    // hydrate/sign-out, which already has the full user object in hand; this
-    // path only has to guarantee the email is current, and the email is the
-    // only field the match above ever reads (see remembered-identity.ts).
-    await rememberIdentity({ userId: null, email: normalizeIdentityEmail(email) });
+    // Refresh this device's remembered identity. The email is the only field
+    // the match above ever reads (see remembered-identity.ts). The account id
+    // is recorded too when the grant returned it: a disable confirmed later
+    // from the sign-in screen evicts only THAT account's queued work, and after
+    // a relaunch this record is the one place its id is still known
+    // (use-account-gate.ts evictedAccountId).
+    await rememberIdentity({
+      userId: signedIn.user?.id ?? null,
+      email: normalizeIdentityEmail(email),
+    });
     // Password got us to AAL1. If the account has a verified TOTP factor,
     // raise the MFA gate so RootGate shows the code screen instead of the
     // app. Without this a 2FA-enrolled user would be let in on password
@@ -404,27 +430,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return {};
   };
 
-  const signOut: AuthState['signOut'] = async () => {
-    // Refresh this device's remembered identity BEFORE the session goes —
-    // this is a deliberate exit, but the record must stay current for
-    // whoever this device confirms a disable for next (remembered-identity.ts).
-    if (session?.user) {
-      await rememberIdentity({
-        userId: session.user.id,
-        email: session.user.email ? normalizeIdentityEmail(session.user.email) : null,
-      });
-    }
-    // Global scope revokes every refresh token for the user — kills
-    // sessions on the web tabs + any other devices. Mirrors the
-    // server action's behavior in apps/web/src/server/actions/auth.ts.
-    await supabase.auth.signOut({ scope: 'global' });
-    // DELIBERATE: the marker raised by the SIGNED_OUT above is withdrawn, so a
-    // user who chose to leave lands on the marketing screen, not sign-in.
-    clearSessionEnded();
+  // A second tap while the first sign-out is still draining or asking.
+  const signingOut = React.useRef(false);
+
+  const signOut: AuthState['signOut'] = async (opts) => {
+    if (signingOut.current) return;
+    signingOut.current = true;
     try {
-      await wipeForSignOut();
-    } catch (err) {
-      console.warn('[auth] wipe-on-signout failed', err);
+      // Refresh this device's remembered identity BEFORE the session goes —
+      // this is a deliberate exit, but the record must stay current for
+      // whoever this device confirms a disable for next (remembered-identity.ts).
+      if (session?.user) {
+        await rememberIdentity({
+          userId: session.user.id,
+          email: session.user.email ? normalizeIdentityEmail(session.user.email) : null,
+        });
+      }
+      // Whose queued work this is, read while the session still exists.
+      const scope = await liveOutboxScope();
+      const userId = scope.userId ?? session?.user?.id ?? null;
+      const outcome = await runSignOutFlow(
+        {
+          countUnsynced: () => totalPendingCount(),
+          isOnline,
+          // Both drains: syncNow runs engine 1 (behind its single-flight
+          // guard), forceSync engine 2 (after any drain already running).
+          drain: async () => {
+            await syncNow();
+            await cycleCountSync.forceSync();
+          },
+          confirmUnsynced: askAboutUnsynced,
+          holdForAccount: async () => {
+            if (userId) await adoptLegacyRows({ userId, orgId: scope.orgId });
+          },
+          signOut: signOutDeliberately,
+          hasSession: hasStoredSession,
+          discardUnsynced: async () => {
+            if (userId) await discardUnsyncedFor(userId);
+          },
+          // The cache only: the outbox stays, held for this account.
+          wipeCache: wipeForSignOut,
+          warn: (message, err) => console.warn(message, err),
+        },
+        { discardWithoutAsking: opts?.afterAccountDeleted === true },
+      );
+      if (outcome === 'still-signed-in') {
+        Alert.alert(STILL_SIGNED_IN_TITLE, STILL_SIGNED_IN_MESSAGE);
+      }
+    } finally {
+      signingOut.current = false;
     }
   };
 
@@ -441,13 +495,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // sign-in screen renders, but does NOT revoke the user's other
     // sessions (web, other phone). Used when the user fails the
     // biometric prompt and wants to re-authenticate with password
-    // on this device only.
-    await supabase.auth.signOut({ scope: 'local' });
-    // DELIBERATE, same as signOut above.
-    clearSessionEnded();
+    // on this device only. The cache and the outbox are kept: the
+    // next account's first pull resets a cache that is not its own
+    // (sync.ts), and queued work stays held for this account.
+    const ended = await endSession(
+      {
+        signOut: signOutDeliberately,
+        hasSession: hasStoredSession,
+        warn: (m, e) => console.warn(m, e),
+      },
+      'local',
+    );
+    if (!ended) {
+      // A LOCAL sign-out needs the network too (auth-js POSTs /logout and
+      // keeps the session on a transport failure). Lifting the biometric
+      // lock or the MFA gate now would open the app on a session that is
+      // still here, without the biometric check or the second factor.
+      // "Still here" is read from the STORED session (hasStoredSession):
+      // getSession() answers null for a token it could not refresh offline
+      // while the session stays on the device, which read as "ended" and
+      // unlocked the app once the access token had expired.
+      Alert.alert(STILL_SIGNED_IN_TITLE, STILL_SIGNED_IN_MESSAGE);
+      return false;
+    }
     setLocked(false);
     setMfaRequired(false);
     mfaFactorId.current = null;
+    return true;
   };
 
   const unlock: AuthState['unlock'] = async () => {
@@ -490,6 +564,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       {children}
     </AuthContext.Provider>
   );
+}
+
+/**
+ * A deliberate sign-out call. On success the session is gone and the
+ * SIGNED_OUT it fired latched "the session was taken away"; that marker is
+ * withdrawn at once, so a user who chose to leave lands on the marketing
+ * screen, not sign-in. On failure nothing was signed out, so nothing is
+ * withdrawn.
+ */
+async function signOutDeliberately(scope: SignOutScope): Promise<{ error: unknown }> {
+  const { error } = await supabase.auth.signOut({ scope });
+  if (!error) clearSessionEnded();
+  return { error };
+}
+
+/** The unsynced-work question, as an alert (sign-out-flow.ts owns the words). */
+function askAboutUnsynced(count: number, opts: { canDiscard: boolean }): Promise<UnsyncedChoice> {
+  const prompt = unsyncedPrompt(count, opts.canDiscard);
+  return new Promise((resolve) => {
+    Alert.alert(
+      prompt.title,
+      prompt.message,
+      prompt.buttons.map((b) => ({
+        text: b.label,
+        style: b.style,
+        onPress: () => resolve(b.choice),
+      })),
+      // Dismissing (Android back, tapping outside) is staying.
+      { cancelable: true, onDismiss: () => resolve('stay') },
+    );
+  });
 }
 
 export function useAuth() {

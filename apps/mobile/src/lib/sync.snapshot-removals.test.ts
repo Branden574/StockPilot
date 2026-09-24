@@ -35,6 +35,10 @@ const meta = vi.hoisted(() => ({
   generation: 0,
   // Called before every runAsync, so a test can act mid-write.
   onRun: null as null | ((sql: string) => void),
+  // What db.ts deleteOrgData clears (set per test; see beforeEach).
+  wipe: null as null | (() => void),
+  // The account signed in on the device (session-scope.ts).
+  liveUserId: 'u1' as string | null,
 }));
 
 vi.mock('./db', () => ({
@@ -48,6 +52,11 @@ vi.mock('./db', () => ({
   setMeta: async (k: string, v: string) => {
     meta.store.set(k, v);
   },
+  // db.ts deleteOrgData: bump the generation, then clear the org-scoped cache.
+  deleteOrgData: vi.fn(async () => {
+    meta.generation += 1;
+    meta.wipe?.();
+  }),
 }));
 vi.mock('./queue', () => ({
   listPending: vi.fn(async () => []),
@@ -55,6 +64,10 @@ vi.mock('./queue', () => ({
   markOk: vi.fn(),
   markFailed: vi.fn(),
   markRejected: vi.fn(),
+  markHeld: vi.fn(),
+}));
+vi.mock('./session-scope', () => ({
+  liveOutboxScope: vi.fn(async () => ({ orgId: 'org-1', userId: meta.liveUserId })),
 }));
 const apiMock = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock('./api', () => apiMock);
@@ -192,6 +205,15 @@ beforeEach(() => {
   meta.store = new Map();
   meta.generation = 0;
   meta.onRun = null;
+  meta.liveUserId = 'u1';
+  meta.wipe = () => {
+    sqlite.exec(`delete from items; delete from warehouses; delete from purchase_orders;
+      delete from po_lines; delete from cycle_counts; delete from cycle_count_lines;
+      delete from bundles; delete from bundle_components;`);
+    for (const k of ['last_synced_at', 'enabled_modules', 'effective_permissions', 'warehouse_scope', 'cache_user_id']) {
+      meta.store.delete(k);
+    }
+  };
   apiMock.api.mockReset();
   netMock.getNetworkStateAsync.mockResolvedValue({
     isConnected: true,
@@ -508,5 +530,69 @@ describe('a cache wipe while a snapshot is loading (workspace switch, repair or 
     expect(ids('select id from warehouses')).toEqual(['wh-b']);
     expect(ids('select id from cycle_counts')).toEqual([]);
     warn.mockRestore();
+  });
+});
+
+describe('whose cache: a pull for another account resets it first (#242 follow-up)', () => {
+  /**
+   * "Use password instead", "Use a different account", a revoked session and
+   * refresh-token expiry end a session WITHOUT wiping the cache. A next user
+   * in the same workspace then delta-pulled from the previous user's cursor,
+   * and rows outside their own warehouse scope stayed on the device.
+   */
+  it("another account's cache is cleared and pulled again in FULL, then recorded as this account's", async () => {
+    meta.store.set('cache_user_id', 'u0');
+    const path = await deltaPull(emptySnap({ items: [item('i-mine')] }));
+
+    expect(path).toBe('/api/v1/mobile/snapshot'); // no ?since: the old cursor was u0's
+    // The previous account's rows are gone, the new one's are in.
+    expect(ids('select id from items order by id')).toEqual(['i-mine']);
+    expect(ids('select id from bundles')).toEqual([]);
+    expect(meta.store.get('cache_user_id')).toBe('u1');
+    // The request itself may only be answered for the account recorded above.
+    expect(apiMock.api.mock.calls[0]?.[1]).toEqual({ asUserId: 'u1' });
+  });
+
+  it("the live readers drop the previous account's modules, permissions and banner at the reset", async () => {
+    const { refreshEnabledModules } = await import('./enabled-modules');
+    const { refreshEffectivePermissions } = await import('./use-effective-permissions');
+    const { refreshWarehouseScope } = await import('./warehouse-scope');
+    vi.mocked(refreshEnabledModules).mockClear();
+    vi.mocked(refreshEffectivePermissions).mockClear();
+    vi.mocked(refreshWarehouseScope).mockClear();
+    meta.store.set('cache_user_id', 'u0');
+    meta.store.set('effective_permissions', '["items:read"]');
+    apiMock.api.mockRejectedValue(new Error('offline mid-request')); // the pull itself never lands
+
+    await pullSnapshot();
+
+    expect(meta.store.has('effective_permissions')).toBe(false);
+    expect(refreshEnabledModules).toHaveBeenCalled();
+    expect(refreshEffectivePermissions).toHaveBeenCalled();
+    expect(refreshWarehouseScope).toHaveBeenCalled();
+  });
+
+  it("this account's own cache keeps its delta cursor and its rows", async () => {
+    meta.store.set('cache_user_id', 'u1');
+    const path = await deltaPull(emptySnap());
+    expect(path).toContain('?since=');
+    expect(ids('select id from items order by id')).toEqual(['i-archived', 'i-keep']);
+  });
+
+  it('a cache with no recorded owner (pulled before this change) is adopted, not reset', async () => {
+    const path = await deltaPull(emptySnap());
+    expect(path).toContain('?since=');
+    expect(ids('select id from items order by id')).toEqual(['i-archived', 'i-keep']);
+    expect(meta.store.get('cache_user_id')).toBe('u1');
+  });
+
+  it("offline, another account's cache is still cleared: it must not be readable offline either", async () => {
+    meta.store.set('cache_user_id', 'u0');
+    meta.store.set('last_synced_at', '2026-09-05T11:00:00.000Z');
+    netMock.getNetworkStateAsync.mockResolvedValue({ isConnected: false, isInternetReachable: false });
+
+    expect(await pullSnapshot()).toBeNull();
+    expect(ids('select id from items')).toEqual([]);
+    expect(apiMock.api).not.toHaveBeenCalled();
   });
 });

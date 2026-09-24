@@ -48,7 +48,8 @@ import { useAuth } from '@/lib/auth-context';
 import { getBiometricCapability, type BiometricCapability } from '@/lib/biometric';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEnabledModules } from '@/lib/enabled-modules';
-import { countRejected } from '@/lib/queue';
+import { countHeld, countRejected } from '@/lib/queue';
+import { unsentWorkDetail } from '@/lib/rejected-work';
 import { useProfile } from '@/lib/use-profile';
 import { useRole } from '@/lib/use-role';
 import { ACCENT, FONT } from '@/lib/theme';
@@ -98,6 +99,7 @@ export default function Settings() {
   const [cap, setCap] = React.useState<BiometricCapability | null>(null);
   const [pending, setPending] = React.useState(false);
   const [rejectedCount, setRejectedCount] = React.useState(0);
+  const [heldCount, setHeldCount] = React.useState(0);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -123,6 +125,14 @@ export default function Settings() {
           if (!cancelled) setRejectedCount(n);
         } catch (e) {
           console.warn('[settings] rejected count failed', e);
+        }
+        // Work queued here by ANOTHER account, held for them: only the Unsent
+        // work screen can discard it, so the row must not read "None" over it.
+        try {
+          const n = await countHeld();
+          if (!cancelled) setHeldCount(n);
+        } catch (e) {
+          console.warn('[settings] held count failed', e);
         }
       })();
       return () => {
@@ -406,7 +416,7 @@ export default function Settings() {
           <SettingRow
             icon={FileWarning}
             title="Unsent work"
-            detail={rejectedCount > 0 ? `${rejectedCount} never sent` : 'None'}
+            detail={unsentWorkDetail({ rejected: rejectedCount, held: heldCount })}
             chevron
             onPress={() => router.push('/settings/rejected-work' as never)}
           />
@@ -490,7 +500,7 @@ export default function Settings() {
 
         <View style={styles.signoutBar}>
           <Pressable
-            onPress={signOut}
+            onPress={() => void signOut()}
             hitSlop={10}
             style={({ pressed }) => ({
               flexDirection: 'row',
@@ -611,7 +621,10 @@ function SettingRow({
  * On success, the auth context is torn down via signOut so the app
  * lands back at the sign-in screen.
  */
-function confirmDeleteAccount(signOut: () => Promise<void> | void): void {
+/** useAuth().signOut: after a deletion it is called to discard, not to ask. */
+type SignOutFn = (opts?: { afterAccountDeleted?: boolean }) => Promise<void> | void;
+
+function confirmDeleteAccount(signOut: SignOutFn): void {
   Alert.alert(
     'Delete your account?',
     'This permanently removes your profile, biometric pairing, push tokens, and access to all StockPilot organizations you belong to. Inventory data owned by your organization is retained for org members.\n\nIf you are the sole owner of an organization with other members, transfer ownership first.\n\nThis cannot be undone.',
@@ -626,14 +639,16 @@ function confirmDeleteAccount(signOut: () => Promise<void> | void): void {
   );
 }
 
-async function performDelete(signOut: () => Promise<void> | void) {
+async function performDelete(signOut: SignOutFn) {
   try {
     const { api } = await import('@/lib/api');
     await api<{ ok: true }>('/api/v1/account/delete', {
       method: 'POST',
       body: { confirm: 'DELETE' },
     });
-    await signOut();
+    // The account is gone, so its queued changes can never be sent: nothing
+    // to ask about, they are discarded with the sign-out.
+    await signOut({ afterAccountDeleted: true });
     Alert.alert('Account deleted', 'Your account has been removed. Thanks for trying StockPilot.');
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Unknown error';
@@ -641,7 +656,7 @@ async function performDelete(signOut: () => Promise<void> | void) {
   }
 }
 
-function promptDeleteConfirmation(signOut: () => Promise<void> | void): void {
+function promptDeleteConfirmation(signOut: SignOutFn): void {
   // Alert.prompt is iOS-only — RN's Android impl is a no-op. On
   // Android we substitute a second yes/no confirm with the same
   // safety phrasing (App Store cares about iOS; Android Play Store

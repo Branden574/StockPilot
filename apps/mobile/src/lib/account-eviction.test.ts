@@ -7,6 +7,7 @@ import {
   AUTH_SIGN_IN_ROUTE,
   AUTH_WELCOME_ROUTE,
   EVICTION_STEP_ORDER,
+  evictedAccountId,
   gateForRevocation,
   clearSessionEnded,
   isInvoluntarySessionEnd,
@@ -563,6 +564,32 @@ describe('shouldRunEviction', () => {
  * initialize() via `_removeSession()`, which notifies SIGNED_OUT. That event is
  * the only trace a relaunch has, and it is the one that must latch.
  */
+describe('evictedAccountId: whose queued work the eviction parks', () => {
+  it('the session still stored on the device first (the probe was about it)', () => {
+    expect(
+      evictedAccountId({ storedSessionUserId: 'u1', lastSeenUserId: 'u2', rememberedUserId: 'u3' }),
+    ).toBe('u1');
+  });
+
+  it('then the account last seen this run (a signed-out probe already dropped the session)', () => {
+    expect(
+      evictedAccountId({ storedSessionUserId: null, lastSeenUserId: 'u2', rememberedUserId: 'u3' }),
+    ).toBe('u2');
+  });
+
+  it('then the remembered identity (a relaunch: the revoked session is gone before anything runs)', () => {
+    expect(
+      evictedAccountId({ storedSessionUserId: null, lastSeenUserId: null, rememberedUserId: 'u3' }),
+    ).toBe('u3');
+  });
+
+  it('null when nothing names an account (the caller falls back to the whole device)', () => {
+    expect(
+      evictedAccountId({ storedSessionUserId: null, lastSeenUserId: null, rememberedUserId: null }),
+    ).toBeNull();
+  });
+});
+
 describe('isInvoluntarySessionEnd', () => {
   it('a fresh install is not a lost session', () => {
     expect(isInvoluntarySessionEnd('INITIAL_SESSION', false)).toBe(false);

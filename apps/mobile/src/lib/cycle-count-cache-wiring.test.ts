@@ -65,7 +65,11 @@ describe('one live outbox row per line (SP-021)', () => {
     expect(engine).toMatch(/import \{ latestRowsPerLine \} from '\.\/outbox-order'/);
     const drain = engine.slice(engine.indexOf('private async drainOutbox'), engine.indexOf('private async sendRecordCount'));
     expect(drain).toMatch(/latestRowsPerLine\(cycleRows\)/);
-    expect(drain).toMatch(/for \(const stale of superseded\)[\s\S]*?outboxAck\(stale\.id\)/);
+    // Superseded rows are settled only with an account signed in, and only
+    // the live account's own are acked (another's are parked, outbox-scope.ts).
+    expect(drain).toMatch(
+      /for \(const stale of staleScope\.userId \? superseded : \[\]\)[\s\S]*?isOwnedBy\(stale, staleScope\.userId\)\) await outboxAck\(stale\.id\)/,
+    );
     expect(drain).toMatch(/for \(const row of send\)/);
   });
 });

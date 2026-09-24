@@ -39,6 +39,7 @@ import { fetchAllCycleCountLines } from '@/lib/cycle-count-lines-fetch';
 import { postCycleCountErrorMessage } from '@/lib/cycle-count-post-errors';
 import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
 import { postCycleCount } from '@/lib/cycle-counts-api';
+import { createDraftDebouncer } from '@/lib/draft-debouncer';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
 import { TYPE_CEILING, capTo, radius, space, theme } from '@/lib/theme';
@@ -125,7 +126,31 @@ export default function CycleCountDetail() {
   const [scope, setScope] = React.useState<string | null>(null);
   const [conflictBanner, setConflictBanner] = React.useState<string | null>(null);
 
-  const debounceRefs = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // Debounced local saves (updateLocalLine + the outbox row), FLUSHED on
+  // unmount: a count typed within SAVE_DEBOUNCE_MS of leaving the screen used
+  // to be dropped (see draft-debouncer.ts). Created once; the save touches
+  // only stable state setters and module functions.
+  const [lineSaver] = React.useState(() =>
+    createDraftDebouncer(SAVE_DEBOUNCE_MS, (lineId, raw) => {
+      void (async () => {
+        if (raw.trim() === '') return; // empty input — don't persist a clear here
+        const num = Number.parseFloat(raw);
+        if (!Number.isFinite(num) || num < 0) return;
+
+        await updateLocalLine(lineId, num);
+        setLines((curr) =>
+          curr.map((l) => (l.id === lineId ? { ...l, counted: num, localDirty: true } : l)),
+        );
+        setDraft((d) => {
+          const { [lineId]: _drop, ...rest } = d;
+          return rest;
+        });
+
+        await cycleCountSync.refreshPendingCount();
+        void cycleCountSync.forceSync();
+      })();
+    }),
+  );
 
   // Resolve the user's org once — needed to scope server fetches.
 
@@ -329,44 +354,19 @@ export default function CycleCountDetail() {
     };
   }, [id, syncSnapshot.pendingCount, syncSnapshot.status]);
 
-  // Cancel pending debounce timers on unmount so state-after-unmount
-  // writes don't leak.
+  // On unmount, SAVE what is still waiting for its debounce instead of
+  // cancelling it. The state updates the save makes afterwards land on an
+  // unmounted screen and are ignored; the local write and the outbox row are
+  // what matter.
   React.useEffect(() => {
-    return () => {
-      for (const k of Object.keys(debounceRefs.current)) {
-        clearTimeout(debounceRefs.current[k]);
-      }
-    };
-  }, []);
+    return () => lineSaver.flushAll();
+  }, [lineSaver]);
 
   function setDraftValue(lineId: string, v: string) {
     setDraft((d) => ({ ...d, [lineId]: v }));
 
     // Debounced persist + outbox enqueue. Local-only, no network.
-    if (debounceRefs.current[lineId]) clearTimeout(debounceRefs.current[lineId]);
-    debounceRefs.current[lineId] = setTimeout(() => {
-      void persistLine(lineId, v);
-    }, SAVE_DEBOUNCE_MS);
-  }
-
-  async function persistLine(lineId: string, raw: string) {
-    if (raw.trim() === '') return; // empty input — don't persist a clear here
-    const num = Number.parseFloat(raw);
-    if (!Number.isFinite(num) || num < 0) return;
-
-    await updateLocalLine(lineId, num);
-    setLines((curr) =>
-      curr.map((l) =>
-        l.id === lineId ? { ...l, counted: num, localDirty: true } : l,
-      ),
-    );
-    setDraft((d) => {
-      const { [lineId]: _drop, ...rest } = d;
-      return rest;
-    });
-
-    await cycleCountSync.refreshPendingCount();
-    void cycleCountSync.forceSync();
+    lineSaver.schedule(lineId, v);
   }
 
   async function postCount() {

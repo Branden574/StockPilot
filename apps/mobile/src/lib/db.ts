@@ -1,5 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 
+import { OWNED_BY_USER_SQL } from './outbox-scope';
+
 /**
  * Local SQLite layer for offline-first reads + queued writes.
  *
@@ -7,9 +9,10 @@ import * as SQLite from 'expo-sqlite';
  * warehouses, open POs, open cycle counts, bundles). Snapshots are
  * pulled from the web; mobile is never authoritative.
  *
- * Schema versioning: bumping SCHEMA_VERSION wipes the local DB and
- * re-pulls. Acceptable because the local DB is a cache, not a source
- * of truth.
+ * Schema versioning: bumping SCHEMA_VERSION drops and rebuilds the CACHE
+ * tables and re-pulls. Acceptable because they are a cache, not a source of
+ * truth. The outbox (pending_actions) is NOT a cache: it is created outside
+ * that branch and never dropped (see ensureSchema).
  *
  * v2 (offline cycle counting): cycle_counts gains organization_id,
  * warehouse_name, posted_at, cached_at. cycle_count_lines gains
@@ -19,15 +22,49 @@ import * as SQLite from 'expo-sqlite';
  */
 
 const DB_NAME = 'stockpilot.db';
+/**
+ * DO NOT BUMP this until a store binary carrying the `current < SCHEMA_VERSION`
+ * rule below is the MINIMUM installed version. Every binary and bundle shipped
+ * before it compares with `!==` and drops pending_actions on ANY difference, and
+ * an emergency launch of a binary's embedded bundle, or a republished older OTA,
+ * would run exactly that code against a bumped database and wipe the outbox.
+ * Add columns in place with addColumnIfMissing instead.
+ */
 const SCHEMA_VERSION = 2;
 
-let _db: SQLite.SQLiteDatabase | null = null;
+/**
+ * The ONE open of the app's database, shared by every caller.
+ *
+ * It used to be `if (_db) return _db; _db = await open(); await ensureSchema(_db)`,
+ * which handed the connection out BEFORE its schema was ready: a second caller
+ * arriving while ensureSchema ran (the root layout's initDb, useSync and
+ * useEnabledModules all call getDb on their own at launch) got the database
+ * mid-migration ("no such column: count_number" after a column-adding OTA),
+ * and two callers arriving before the open resolved both opened it and both
+ * ran ensureSchema ("table warehouses already exists" on a fresh install).
+ *
+ * Now every caller awaits the same promise, which resolves only once the
+ * schema is complete. A rejected open or migration is forgotten, so the next
+ * caller tries again instead of inheriting the failure for the life of the
+ * process (a full disk that clears, a transient native error).
+ */
+let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
-export async function getDb(): Promise<SQLite.SQLiteDatabase> {
-  if (_db) return _db;
-  _db = await SQLite.openDatabaseAsync(DB_NAME);
-  await ensureSchema(_db);
-  return _db;
+export function getDb(): Promise<SQLite.SQLiteDatabase> {
+  if (!dbPromise) {
+    const opening = openAndMigrate();
+    dbPromise = opening;
+    opening.catch(() => {
+      if (dbPromise === opening) dbPromise = null;
+    });
+  }
+  return dbPromise;
+}
+
+async function openAndMigrate(): Promise<SQLite.SQLiteDatabase> {
+  const db = await SQLite.openDatabaseAsync(DB_NAME);
+  await ensureSchema(db);
+  return db;
 }
 
 /**
@@ -56,12 +93,37 @@ export function withDbTransaction(db: TransactionDb, task: () => Promise<void>):
 }
 
 /**
+ * A WRITE on its own, run as a queued transaction and handed its result.
+ *
+ * Why a lone statement needs the queue: expo-sqlite has ONE connection, and a
+ * plain runAsync issued while another flow's transaction is open (a snapshot
+ * pull between its BEGIN and COMMIT) executes INSIDE that transaction. If the
+ * pull then fails and rolls back, the plain write is rolled back with it:
+ * reproduced, enqueue() returned an id ("Queued") and the row was gone after an
+ * unrelated pull's ROLLBACK. Every outbox write (enqueue, the mark* helpers,
+ * rejection, pruning, discard) goes through here, so it commits on its own.
+ *
+ * Same rule as withDbTransaction: never call this from inside a transaction
+ * task (it would wait on its own turn forever). Code already inside one runs
+ * the plain statement, as outboxReject does with markRejectedWithin.
+ */
+export async function queuedWrite<T>(write: (db: SQLite.SQLiteDatabase) => Promise<T>): Promise<T> {
+  const db = await getDb();
+  // Assigned by the task, which withDbTransaction awaits to completion.
+  let value!: T;
+  await withDbTransaction(db, async () => {
+    value = await write(db);
+  });
+  return value;
+}
+
+/**
  * Idempotent app-startup hook — wires DB open + migrations into the
  * root layout effect so any screen that runs `getDb()` after this
  * resolves can assume the schema exists.
  */
 export async function initDb(): Promise<void> {
-  const db = await getDb();
+  await getDb();
   // Reclaim orphaned in-flight outbox rows. A row is flipped to 'sending' only
   // transiently inside a live drain, immediately before the network request; if
   // the JS runtime dies in that window (OS memory-kill of a backgrounded app,
@@ -71,15 +133,41 @@ export async function initDb(): Promise<void> {
   // 'sending' row present at startup is definitionally orphaned (no drain is in
   // flight yet), so reset it to 'pending' to be re-drained.
   try {
-    await db.runAsync(
-      "update pending_actions set status = 'pending' where status = 'sending'",
+    await queuedWrite((db) =>
+      db.runAsync("update pending_actions set status = 'pending' where status = 'sending'"),
     );
   } catch {
     /* best-effort reclaim — never block app startup */
   }
 }
 
-async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
+/** The statements ensureSchema needs; expo-sqlite's database satisfies it. */
+export type SchemaDb = Pick<
+  SQLite.SQLiteDatabase,
+  'execAsync' | 'getFirstAsync' | 'getAllAsync' | 'runAsync'
+>;
+
+/**
+ * Brings the phone's database up to this bundle's shape. Exported so the
+ * version rules can be executed against a real SQLite (db.ensure-schema.test.ts).
+ *
+ * TWO kinds of table live here, with opposite rules:
+ *
+ *   - the CACHE (items, POs, counts, bundles, warehouses): pulled from the
+ *     server, safe to drop and rebuild, and rebuilt only when the stored
+ *     version is OLDER than this bundle's;
+ *   - the OUTBOX (pending_actions): the operator's unsent work, the one thing
+ *     on the phone that exists nowhere else. It is created unconditionally with
+ *     `if not exists`, outside the destructive branch, and only ever widened in
+ *     place. It used to be the first table dropped whenever the stored version
+ *     differed at all, in either direction.
+ *
+ * `current < SCHEMA_VERSION`, not `!==`: an OLDER bundle running on a database
+ * a newer one already migrated (an expo-updates rollback, an emergency launch
+ * of the embedded bundle, a republished older OTA) must not rebuild the newer
+ * schema. That protects bumps made AFTER this ships; see SCHEMA_VERSION.
+ */
+export async function ensureSchema(db: SchemaDb): Promise<void> {
   await db.execAsync(`
     create table if not exists meta (
       key text primary key,
@@ -91,12 +179,14 @@ async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
     'select value from meta where key = ?',
     ['schema_version'],
   );
-  const current = row?.value ? Number(row.value) : 0;
+  // An unreadable value is treated as a fresh install: rebuild the cache.
+  const stored = row?.value ? Number(row.value) : 0;
+  const current = Number.isFinite(stored) ? stored : 0;
 
-  if (current !== SCHEMA_VERSION) {
-    // Drop everything except meta and rebuild — local DB is a cache.
+  if (current < SCHEMA_VERSION) {
+    // Drop and rebuild the CACHE tables only. pending_actions is deliberately
+    // absent from this list: see the outbox block below.
     await db.execAsync(`
-      drop table if exists pending_actions;
       drop table if exists bundle_components;
       drop table if exists bundles;
       drop table if exists cycle_count_lines;
@@ -195,20 +285,6 @@ async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
         is_optional integer not null default 0,
         primary key (bundle_id, item_id)
       );
-
-      create table pending_actions (
-        id integer primary key autoincrement,
-        kind text not null,
-        idempotency_key text not null unique,
-        payload_json text not null,
-        created_at integer not null,
-        attempts integer not null default 0,
-        last_attempt_at integer,
-        last_error text,
-        status text not null default 'pending'
-      );
-      create index pending_actions_status_idx on pending_actions(status);
-      create index pending_actions_kind_idx on pending_actions(kind);
     `);
 
     await db.runAsync(
@@ -217,17 +293,76 @@ async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
     );
   }
 
-  await addColumnIfMissing(
-    db,
-    'cycle_count_lines',
-    'item_variant_label',
-    'text',
-  );
+  // ═══ THE OUTBOX — never dropped, only widened ═══
+  //
+  // Unconditional and idempotent: a fresh install creates it, every other
+  // launch finds it and keeps every queued row, whatever version the cache
+  // tables are at. Columns a later bundle needs are added in place below.
+  await db.execAsync(`
+    create table if not exists pending_actions (
+      id integer primary key autoincrement,
+      kind text not null,
+      idempotency_key text not null unique,
+      payload_json text not null,
+      created_at integer not null,
+      attempts integer not null default 0,
+      last_attempt_at integer,
+      last_error text,
+      status text not null default 'pending'
+    );
+    create index if not exists pending_actions_status_idx on pending_actions(status);
+    create index if not exists pending_actions_kind_idx on pending_actions(kind);
+  `);
+  // A v1 outbox (before 2026-05-10) predates last_attempt_at. No shipped
+  // binary is still on v1, but the rebuild that used to supply the column no
+  // longer touches this table, so it is added here instead.
+  await addColumnIfMissing(db, 'pending_actions', 'last_attempt_at', 'integer');
+  // WHOSE work each row is (outbox-scope.ts): the organization and the user it
+  // was queued under. REQUIRED, so a failure here fails the open loudly (and
+  // the next getDb retries) rather than leaving every enqueue naming a column
+  // that is not there. Rows an older binary queued read NULL: legacy rows,
+  // sent once under whoever drains them first, as they always were. An older
+  // bundle running on this table ignores both columns and keeps working: it
+  // names its columns explicitly on insert.
+  //
+  // THE TRADE-OFF, chosen deliberately (S4d; the S4 review raised it): while
+  // this ALTER keeps failing (in practice a full disk on the first launch of
+  // the bundle that adds the columns) getDb() rejects for EVERY caller, cache
+  // reads included, where the old swallowed ALTER let reads carry on. A
+  // degraded mode would hand out a database on which every outbox statement
+  // (enqueue, both drains, every counter, the owner filters) fails on a
+  // missing column one by one, the half-migrated state getDb exists to
+  // prevent. The window is bounded: the rejected open is forgotten, so the
+  // next getDb() retries and completes as soon as the fault clears, with every
+  // queued row kept (db.get-db.test.ts), and once the columns exist no ALTER
+  // runs again.
+  await addColumnIfMissing(db, 'pending_actions', 'organization_id', 'text');
+  await addColumnIfMissing(db, 'pending_actions', 'user_id', 'text');
+
+  await addDisplayColumn(db, 'cycle_count_lines', 'item_variant_label', 'text');
   // The count's permanent reference, CC-000042 (server migration 0358). A
-  // display column, so it is added in place (never a SCHEMA_VERSION bump, which
-  // would drop the outbox): existing rows read NULL, shown as "Reference
+  // display column, so it is added in place (never a SCHEMA_VERSION bump: older
+  // bundles drop the outbox on one): existing rows read NULL, shown as "Reference
   // unavailable" until the next snapshot pull or online open fills them.
-  await addColumnIfMissing(db, 'cycle_counts', 'count_number', 'integer');
+  await addDisplayColumn(db, 'cycle_counts', 'count_number', 'integer');
+}
+
+/**
+ * A DISPLAY column stays best-effort: failing to add one must not stop the app
+ * opening its database (the scan, items and outbox paths never name it). The
+ * failure is logged now instead of vanishing; the next launch tries again.
+ */
+async function addDisplayColumn(
+  db: SchemaDb,
+  table: string,
+  column: string,
+  type: string,
+): Promise<void> {
+  try {
+    await addColumnIfMissing(db, table, column, type);
+  } catch (e) {
+    console.warn(`[db] could not add display column ${table}.${column}`, e);
+  }
 }
 
 /**
@@ -246,24 +381,35 @@ async function ensureSchema(db: SQLite.SQLiteDatabase): Promise<void> {
  * Exported for the pure-module test in db.addColumnIfMissing.test.ts — this
  * one function is what keeps a future display-only column from being "solved"
  * by bumping SCHEMA_VERSION instead, which is the outbox-wiping path.
+ *
+ * FAILS LOUDLY. It used to swallow every error, so an ALTER that failed for a
+ * real reason (a full disk) left the column absent while the app carried on as
+ * if it existed, and every later statement naming it failed instead: for the
+ * outbox's organization_id / user_id that would be every enqueue, so an operator
+ * could not queue work at all. Only "duplicate column name" is success (a
+ * racing add got there first; the error itself proves the column exists), and
+ * a completed ALTER is confirmed by reading table_info back. Callers that can
+ * live without a column (display-only ones) catch; the outbox's do not.
  */
 export async function addColumnIfMissing(
-  db: SQLite.SQLiteDatabase,
+  db: Pick<SQLite.SQLiteDatabase, 'getAllAsync' | 'execAsync'>,
   table: string,
   column: string,
   type: string,
 ): Promise<void> {
-  try {
-    const cols = await db.getAllAsync<{ name: string }>(
-      `pragma table_info(${table})`,
+  const hasColumn = async () =>
+    (await db.getAllAsync<{ name: string }>(`pragma table_info(${table})`)).some(
+      (c) => c.name === column,
     );
-    if (cols.some((c) => c.name === column)) return;
+  if (await hasColumn()) return;
+  try {
     await db.execAsync(`alter table ${table} add column ${column} ${type}`);
-  } catch {
-    // A racing open (two callers hitting getDb at once) can lose the add and
-    // raise "duplicate column name". The column exists either way, which is
-    // the only thing callers need — and a failed DISPLAY column must never
-    // stop the app from opening its database.
+  } catch (e) {
+    if (/duplicate column name/i.test(e instanceof Error ? e.message : String(e))) return;
+    throw e;
+  }
+  if (!(await hasColumn())) {
+    throw new Error(`addColumnIfMissing: ${table}.${column} is still missing after the ALTER`);
   }
 }
 
@@ -306,12 +452,14 @@ export async function setMeta(key: string, value: string): Promise<void> {
  * their first pull. Both readers treat "absent" as not-loaded-yet and fall
  * back to their documented defaults (static role permissions; no banner).
  *
+ * `cache_user_id` (cache-owner.ts) goes with them: an emptied cache belongs to
+ * nobody, and the next account's pull records itself.
+ *
  * The keys are pinned against sync.ts's writers by
  * db-clear-keys.wiring.test.ts — add a key there, clear it here.
  *
  * Deliberately does NOT touch `pending_actions` — see the note on
- * `deleteOrgData` for the org-keying limitation. Callers that truly want a
- * full reset (sign-out) drop pending separately.
+ * `deleteOrgData`: queued rows carry their own organization and account.
  */
 async function clearOrgScopedTables(db: SQLite.SQLiteDatabase): Promise<void> {
   await db.execAsync(`
@@ -327,6 +475,7 @@ async function clearOrgScopedTables(db: SQLite.SQLiteDatabase): Promise<void> {
     delete from meta where key = 'enabled_modules';
     delete from meta where key = 'effective_permissions';
     delete from meta where key = 'warehouse_scope';
+    delete from meta where key = 'cache_user_id';
   `);
 }
 
@@ -368,16 +517,12 @@ export function currentCacheGeneration(): number {
  * lingers on screen (though no longer on disk) until the forced pull lands or
  * the app is relaunched.
  *
- * KNOWN LIMITATION — pending_actions are NOT org-keyed: the table has no
- * organization_id column, so we cannot reliably know which org a queued
- * offline write (receive_po_line / record_count / distribute_bundle / …)
- * belongs to. Rather than SILENTLY DROP a pending write on switch — which
- * could lose a user's queued PO receipt or count — we PRESERVE the queue as-is.
- * Each drain endpoint is independently server-side gated (assertModuleEnabled
- * + per-warehouse access + RLS), so a stale cross-org row 4xxs and lands in the
- * queue UI as "failed" rather than mutating the wrong org's data. Properly
- * scoping the outbox per org (add organization_id + flush-on-switch) is a
- * follow-up.
+ * The outbox (pending_actions) is deliberately NOT touched. Every row carries
+ * the organization it was queued in (outbox-scope.ts), and the drains send it
+ * under that organization whatever workspace is active, so a switch neither
+ * loses queued work nor replays it into the new workspace. (Before the rows
+ * were org-keyed, a row queued in org A was sent with org B's header after a
+ * switch, refused 404/403, and terminally rejected: the work was lost.)
  */
 export async function deleteOrgData(): Promise<void> {
   cacheGeneration += 1;
@@ -387,21 +532,54 @@ export async function deleteOrgData(): Promise<void> {
   await withDbTransaction(db, () => clearOrgScopedTables(db));
 }
 
+/**
+ * SIGN-OUT: clear the cache, KEEP the outbox (owner decision D5).
+ *
+ * This used to delete every pending, failed and sending row, so signing out
+ * with queued counts lost them silently, most often exactly when the queue held
+ * work (offline, weak warehouse Wi-Fi). Every row now carries its account
+ * (outbox-scope.ts), so it can simply stay: held for that account, never sent
+ * as anyone else, and sent when it signs in here again. The one explicit way to
+ * drop it is "Sign out and discard" (sign-out-flow.ts, queue.ts
+ * discardUnsyncedFor), or Discard in Unsent work.
+ */
 export async function wipeForSignOut(): Promise<void> {
+  cacheGeneration += 1;
+  const db = await getDb();
+  await withDbTransaction(db, () => clearOrgScopedTables(db));
+}
+
+/**
+ * ACCOUNT EVICTION (a confirmed disable): the cache, and the DISABLED
+ * ACCOUNT'S unsent rows that are not already rejected.
+ *
+ * The eviction rejects that account's outbox immediately beforehand
+ * (use-account-gate.ts), so normally nothing is left to delete. The delete is
+ * the fallback for when that rejection failed: losing the record is bad, but a
+ * row left 'pending' would replay the moment the account is re-enabled, which
+ * is worse.
+ *
+ * Scoped like rejectAllPending: the disabled account's rows and legacy ones.
+ * Work held for OTHER accounts on a shared phone is never deleted here (owner
+ * decision D4). Device-wide only when the disabled account cannot be named
+ * (`evictedUserId` null).
+ *
+ * Rows already 'rejected' are spared: terminal (no drain reads them) and the
+ * only record that the queued work existed, so the operator shown the disabled
+ * screen can still be told what was never sent (listRejected).
+ */
+export async function wipeForEviction(evictedUserId: string | null): Promise<void> {
   cacheGeneration += 1;
   const db = await getDb();
   await withDbTransaction(db, async () => {
     await clearOrgScopedTables(db);
-    // Sign-out is a full reset: the user (and any queued writes) are leaving the
-    // device session entirely, so the pending outbox is dropped here too.
-    //
-    // EXCEPT rows already marked 'rejected'. Those are terminal — no drain reads
-    // them, so keeping them cannot replay anything — and they are the only record
-    // that queued work existed at all. This path also runs during the disabled-
-    // account eviction, which rejects the outbox immediately beforehand
-    // (use-account-gate.ts); deleting them here would mean the operator is shown
-    // the disabled screen while the work they thought they had saved disappears
-    // silently, and listRejected() could never return a row.
-    await db.execAsync("delete from pending_actions where status <> 'rejected';");
+    if (evictedUserId) {
+      await db.runAsync(
+        `delete from pending_actions where status <> 'rejected' and ${OWNED_BY_USER_SQL}`,
+        [evictedUserId],
+      );
+    } else {
+      await db.execAsync("delete from pending_actions where status <> 'rejected';");
+    }
   });
 }

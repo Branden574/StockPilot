@@ -40,10 +40,17 @@ export function AccountDisabledScreen() {
   async function onSignOut() {
     if (busy) return;
     setBusy(true);
+    // Only once the session is actually gone: clearing the flag first let a
+    // session that survived the sign-out (offline: a local sign-out needs the
+    // network too) straight back into the app past this screen.
+    const ended = await signOutToFallback();
+    if (!ended) {
+      setBusy(false);
+      return;
+    }
     // Clear the flag so a DIFFERENT account can sign in on this device without
     // being met by a stale disabled screen.
     setAccountDisabled(false);
-    await signOutToFallback();
   }
 
   return (

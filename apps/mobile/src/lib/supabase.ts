@@ -2,6 +2,8 @@ import * as SecureStore from 'expo-secure-store';
 import { createClient } from '@supabase/supabase-js';
 import 'react-native-url-polyfill/auto';
 
+import { authStorageKeyFor, readStoredAuthSession, type StoredAuthSession } from './auth-storage';
+
 import type { Database } from '@stockpilot/core';
 
 const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -80,11 +82,32 @@ const ExpoSecureStoreAdapter = {
   },
 };
 
+/**
+ * The key the session is persisted under. Exactly supabase-js's own default
+ * for this URL (auth-storage.test.ts pins that), passed explicitly so the
+ * client and readDeviceAuthSession() below read and write the same entry by
+ * construction rather than by coincidence.
+ */
+const AUTH_STORAGE_KEY = authStorageKeyFor(url);
+
 export const supabase = createClient<Database>(url, anon, {
   auth: {
     storage: ExpoSecureStoreAdapter as never,
+    storageKey: AUTH_STORAGE_KEY,
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: false,
   },
 });
+
+/**
+ * The session persisted on this device and whose it is, WITHOUT a refresh
+ * (auth-storage.ts explains why getSession() cannot answer this offline).
+ * Rejects when SecureStore cannot be read.
+ */
+export function readDeviceAuthSession(): Promise<StoredAuthSession> {
+  return readStoredAuthSession(
+    { head: (key) => SecureStore.getItemAsync(key), full: (key) => ExpoSecureStoreAdapter.getItem(key) },
+    AUTH_STORAGE_KEY,
+  );
+}

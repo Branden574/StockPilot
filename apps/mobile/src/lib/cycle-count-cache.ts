@@ -1,6 +1,8 @@
 import { CACHED_CYCLE_COUNTS_LIST_SQL, CYCLE_COUNT_CACHE_HEADER_SQL } from './cycle-count-snapshot-sql';
-import { getDb, withDbTransaction } from './db';
-import { markRejected } from './queue';
+import { getDb, queuedWrite, withDbTransaction } from './db';
+import { HELD_FOR_OTHER_SQL, OWNED_BY_USER_SQL, REPLACED_BY_LATER_COUNT } from './outbox-scope';
+import { markRejectedWithin } from './queue';
+import { liveOutboxScope, outboxWriteScope } from './session-scope';
 
 /**
  * Offline cycle-count cache + outbox helpers.
@@ -267,7 +269,12 @@ export async function updateLocalLine(
   );
   if (!line) return null;
 
+  // Whose edit this is (outbox-scope.ts). Read before the transaction: its
+  // task runs statements only. Never a NULL owner (session-scope.ts): with no
+  // account to name, this throws and nothing is written.
+  const scope = await outboxWriteScope();
   const idempotencyKey = uuid();
+  const now = Date.now();
   let outboxId = 0;
   await withDbTransaction(db, async () => {
     await db.runAsync(
@@ -285,17 +292,39 @@ export async function updateLocalLine(
     // supersedes every earlier queued edit for the same line; a row already
     // 'sending' is in flight and must not be touched (the drain-side
     // newest-wins check in cycle-count-sync covers that window).
+    //
+    // ACROSS ACCOUNTS TOO. Another account's queued count of this line is
+    // held until they sign in here again; sent then, the OLDER count would
+    // overwrite this newer one on the server. So it is superseded like any
+    // other earlier edit, but kept as a record for its owner (rejected, with
+    // the reason) instead of being deleted: held rows are never removed
+    // automatically. Only this account's own earlier edits (and legacy ones)
+    // are deleted. The owner is always named here (outboxWriteScope), so the
+    // two statements split the line's rows exactly, with no "nobody" case that
+    // could delete someone else's.
+    await db.runAsync(
+      `update pending_actions
+          set status = 'rejected', last_error = ?, last_attempt_at = ?
+        where kind = 'record_count'
+          and status in ('pending','failed')
+          and json_extract(payload_json, '$.lineId') = ?
+          and ${HELD_FOR_OTHER_SQL}`,
+      [REPLACED_BY_LATER_COUNT, now, lineId, scope.userId],
+    );
     await db.runAsync(
       `delete from pending_actions
         where kind = 'record_count'
           and status in ('pending','failed')
-          and json_extract(payload_json, '$.lineId') = ?`,
-      [lineId],
+          and json_extract(payload_json, '$.lineId') = ?
+          and ${OWNED_BY_USER_SQL}`,
+      [lineId, scope.userId],
     );
+    // Stamped with the workspace and account it was counted under: sent
+    // under that organization, and only while that account is signed in.
     const result = await db.runAsync(
       `insert into pending_actions
-         (kind, idempotency_key, payload_json, created_at)
-       values (?, ?, ?, ?)`,
+         (kind, idempotency_key, payload_json, created_at, organization_id, user_id)
+       values (?, ?, ?, ?, ?, ?)`,
       [
         'record_count',
         idempotencyKey,
@@ -304,7 +333,9 @@ export async function updateLocalLine(
           lineId: line.id,
           countedQuantity: counted,
         }),
-        Date.now(),
+        now,
+        scope.orgId,
+        scope.userId,
       ],
     );
     outboxId = result.lastInsertRowId as number;
@@ -314,25 +345,36 @@ export async function updateLocalLine(
 
 /**
  * How many `record_count` outbox rows are pending or failed for a
- * given cycle count? UI uses this for the "N pending" badge.
+ * given cycle count? UI uses this for the "N pending" badge and for the
+ * "Sync first" gate on posting.
+ *
+ * The LIVE account's rows only (and legacy ones). Another account's queued
+ * edits are held until that account signs in again, so counting them would
+ * block this person from posting the count indefinitely.
  */
 export async function pendingCountFor(cycleCountId: string): Promise<number> {
   const db = await getDb();
+  const { userId } = await liveOutboxScope();
   const row = await db.getFirstAsync<{ n: number }>(
     `select count(*) as n from pending_actions
        where kind = 'record_count'
          and status in ('pending','failed','sending')
-         and json_extract(payload_json, '$.cycleCountId') = ?`,
-    [cycleCountId],
+         and json_extract(payload_json, '$.cycleCountId') = ?
+         and ${OWNED_BY_USER_SQL}`,
+    [cycleCountId, userId],
   );
   return row?.n ?? 0;
 }
 
+/** The sync badge's tally: the live account's unsynced rows, never another's. */
 export async function totalPendingCount(): Promise<number> {
   const db = await getDb();
+  const { userId } = await liveOutboxScope();
   const row = await db.getFirstAsync<{ n: number }>(
     `select count(*) as n from pending_actions
-       where status in ('pending','failed','sending')`,
+       where status in ('pending','failed','sending')
+         and ${OWNED_BY_USER_SQL}`,
+    [userId],
   );
   return row?.n ?? 0;
 }
@@ -345,14 +387,32 @@ export interface OutboxRow {
   attempts: number;
   lastAttemptAt: number | null;
   status: string;
+  /** The organization it was queued in; NULL on a legacy row. */
+  organizationId: string | null;
+  /** The account that queued it; NULL on a legacy row (outbox-scope.ts). */
+  userId: string | null;
+}
+
+/** A queued outbox row, and whether its retry backoff has elapsed. */
+export interface QueuedOutboxRow extends OutboxRow {
+  due: boolean;
 }
 
 /**
- * Pending outbox rows that are due for retry. Rows in 'failed' state
- * use exponential backoff: a row with N attempts must wait
- * min(2^N * 1s, 5min) before being eligible again.
+ * EVERY queued (pending or failed) outbox row, oldest first, each marked
+ * `due` once its backoff has elapsed. Rows in 'failed' state use exponential
+ * backoff: a row with N attempts must wait min(2^N * 1s, 5min) before it is
+ * due again.
+ *
+ * Rows still in backoff are returned too, on purpose. The drain's newest-wins
+ * check (outbox-order.ts) must see every row for a line: it used to see only
+ * the due ones, so a count whose send had failed (in backoff) was invisible
+ * while the operator's correction queued behind it was sent and acked, and
+ * then, its backoff over and the only row left for the line, the OLD count was
+ * sent and overwrote the correction on the server. The drain supersedes
+ * across all rows and sends only a due one.
  */
-export async function outboxPending(now: number = Date.now()): Promise<OutboxRow[]> {
+export async function outboxQueued(now: number = Date.now()): Promise<QueuedOutboxRow[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<{
     id: number;
@@ -362,24 +422,27 @@ export async function outboxPending(now: number = Date.now()): Promise<OutboxRow
     attempts: number;
     last_attempt_at: number | null;
     status: string;
+    organization_id: string | null;
+    user_id: string | null;
   }>(
     `select id, kind, idempotency_key, payload_json, attempts,
-            last_attempt_at, status
+            last_attempt_at, status, organization_id, user_id
        from pending_actions
       where status in ('pending','failed')
       order by created_at asc`,
   );
-  return rows
-    .filter((r) => isDue(r.attempts, r.last_attempt_at, r.status, now))
-    .map((r) => ({
-      id: r.id,
-      kind: r.kind,
-      idempotencyKey: r.idempotency_key,
-      payload: safeParse(r.payload_json),
-      attempts: r.attempts,
-      lastAttemptAt: r.last_attempt_at,
-      status: r.status,
-    }));
+  return rows.map((r) => ({
+    id: r.id,
+    kind: r.kind,
+    idempotencyKey: r.idempotency_key,
+    payload: safeParse(r.payload_json),
+    attempts: r.attempts,
+    lastAttemptAt: r.last_attempt_at,
+    status: r.status,
+    organizationId: r.organization_id ?? null,
+    userId: r.user_id ?? null,
+    due: isDue(r.attempts, r.last_attempt_at, r.status, now),
+  }));
 }
 
 function isDue(
@@ -403,35 +466,44 @@ function isDue(
 export async function outboxAck(id: number): Promise<void> {
   const db = await getDb();
   await withDbTransaction(db, async () => {
-    const row = await db.getFirstAsync<{ payload_json: string }>(
-      'select payload_json from pending_actions where id = ?',
-      [id],
-    );
-    if (row) {
-      const payload = safeParse(row.payload_json);
-      const lineId = typeof payload.lineId === 'string' ? payload.lineId : null;
-      if (lineId) {
-        // Only clear dirty if no other outbox row is pending for
-        // this line — handles the case where the user edited the
-        // same line twice while offline.
-        const other = await db.getFirstAsync<{ n: number }>(
-          `select count(*) as n from pending_actions
-             where kind = 'record_count'
-               and id != ?
-               and status in ('pending','failed','sending')
-               and json_extract(payload_json, '$.lineId') = ?`,
-          [id, lineId],
-        );
-        if (!other || other.n === 0) {
-          await db.runAsync(
-            'update cycle_count_lines set local_dirty = 0 where id = ?',
-            [lineId],
-          );
-        }
-      }
-    }
+    await clearLineDirtyUnlessStillQueued(db, id);
     await db.runAsync('delete from pending_actions where id = ?', [id]);
   });
+}
+
+/**
+ * THE one copy of the dirty-flag bookkeeping, shared by every way an outbox
+ * row settles (ack, terminal rejection, discard). Runs INSIDE the caller's
+ * transaction, before the row itself is deleted or parked.
+ *
+ * Clears the edited line's `local_dirty` unless another live row for the same
+ * line is still queued: the user may have edited one line twice offline, and
+ * the flag must stay until the LAST live row settles. Without it the count
+ * screen shows a line flagged unsynced forever with no row left to sync it.
+ */
+async function clearLineDirtyUnlessStillQueued(
+  db: Awaited<ReturnType<typeof getDb>>,
+  id: number,
+): Promise<void> {
+  const row = await db.getFirstAsync<{ payload_json: string }>(
+    'select payload_json from pending_actions where id = ?',
+    [id],
+  );
+  if (!row) return;
+  const payload = safeParse(row.payload_json);
+  const lineId = typeof payload.lineId === 'string' ? payload.lineId : null;
+  if (!lineId) return;
+  const other = await db.getFirstAsync<{ n: number }>(
+    `select count(*) as n from pending_actions
+       where kind = 'record_count'
+         and id != ?
+         and status in ('pending','failed','sending')
+         and json_extract(payload_json, '$.lineId') = ?`,
+    [id, lineId],
+  );
+  if (!other || other.n === 0) {
+    await db.runAsync('update cycle_count_lines set local_dirty = 0 where id = ?', [lineId]);
+  }
 }
 
 /**
@@ -458,59 +530,78 @@ export async function outboxAck(id: number): Promise<void> {
 export async function outboxReject(id: number, error: string): Promise<void> {
   const db = await getDb();
   await withDbTransaction(db, async () => {
-    const row = await db.getFirstAsync<{ payload_json: string }>(
-      'select payload_json from pending_actions where id = ?',
-      [id],
-    );
-    if (row) {
-      const payload = safeParse(row.payload_json);
-      const lineId = typeof payload.lineId === 'string' ? payload.lineId : null;
-      if (lineId) {
-        const other = await db.getFirstAsync<{ n: number }>(
-          `select count(*) as n from pending_actions
-             where kind = 'record_count'
-               and id != ?
-               and status in ('pending','failed','sending')
-               and json_extract(payload_json, '$.lineId') = ?`,
-          [id, lineId],
-        );
-        if (!other || other.n === 0) {
-          await db.runAsync(
-            'update cycle_count_lines set local_dirty = 0 where id = ?',
-            [lineId],
-          );
-        }
-      }
-    }
-    // Same terminal write engine 1 uses. Called inside this transaction on the
-    // same memoized connection, so the status change and the dirty clear commit
-    // as one unit.
-    await markRejected(id, error);
+    await clearLineDirtyUnlessStillQueued(db, id);
+    // Same terminal write engine 1 uses, as the plain statement: this task is
+    // already inside a transaction, so the status change and the dirty clear
+    // commit as one unit (markRejected itself would queue behind this task).
+    await markRejectedWithin(db, id, error);
   });
 }
 
 export async function outboxBumpFailure(id: number, error: string): Promise<void> {
-  const db = await getDb();
-  await db.runAsync(
-    `update pending_actions
-        set status = 'failed',
-            attempts = attempts + 1,
-            last_attempt_at = ?,
-            last_error = ?
-      where id = ?`,
-    [Date.now(), error.slice(0, 1000), id],
+  // Queued like every outbox write (db.ts queuedWrite): a plain statement
+  // inside another flow's open transaction is undone by that flow's ROLLBACK.
+  await queuedWrite((db) =>
+    db.runAsync(
+      `update pending_actions
+          set status = 'failed',
+              attempts = attempts + 1,
+              last_attempt_at = ?,
+              last_error = ?
+        where id = ?`,
+      [Date.now(), error.slice(0, 1000), id],
+    ),
   );
 }
 
-export async function outboxMarkSending(id: number): Promise<void> {
-  const db = await getDb();
-  await db.runAsync(
-    `update pending_actions
-        set status = 'sending',
-            last_attempt_at = ?
-      where id = ?`,
-    [Date.now(), id],
+/**
+ * The row is going on the wire now. A legacy row missing its organization or
+ * user is stamped with the send's scope in the same statement (see queue.ts
+ * markSending): it is only ever sent under the first account that sent it.
+ */
+export async function outboxMarkSending(
+  id: number,
+  owner?: { orgId: string | null; userId: string },
+): Promise<void> {
+  await queuedWrite((db) =>
+    db.runAsync(
+      `update pending_actions
+          set status = 'sending',
+              last_attempt_at = ?,
+              organization_id = coalesce(organization_id, ?),
+              user_id = coalesce(user_id, ?)
+        where id = ?`,
+      [Date.now(), owner?.orgId ?? null, owner?.userId ?? null, id],
+    ),
   );
+}
+
+/**
+ * Settings > Unsent work: "Discard" on a row queued by ANOTHER account. Only
+ * a row that is still held for someone else can be discarded this way (never
+ * the live account's own work, never a row in flight). Returns whether it was.
+ */
+export async function discardHeldAction(id: number): Promise<boolean> {
+  const db = await getDb();
+  const { userId } = await liveOutboxScope();
+  // With no account readable, a row "held for another" cannot be told from the
+  // person's own: discard nothing (queue.ts listHeld lists nothing either).
+  if (!userId) return false;
+  let discarded = false;
+  await withDbTransaction(db, async () => {
+    const held = await db.getFirstAsync<{ id: number }>(
+      `select id from pending_actions
+        where id = ?
+          and status in ('pending','failed')
+          and ${HELD_FOR_OTHER_SQL}`,
+      [id, userId],
+    );
+    if (!held) return;
+    await clearLineDirtyUnlessStillQueued(db, id);
+    await db.runAsync('delete from pending_actions where id = ?', [id]);
+    discarded = true;
+  });
+  return discarded;
 }
 
 /**

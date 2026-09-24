@@ -2,8 +2,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 
 import { notifyUnauthorized } from './account-eviction';
+import { OutboxSessionChangedError } from './outbox-scope';
 import { registerInFlight } from './request-cancellation';
 import { supabase } from './supabase';
+import { ACTIVE_ORG_STORAGE_KEY } from './workspace-keys';
 
 /**
  * Resolve the API base URL once at module load. We deliberately fall
@@ -86,6 +88,22 @@ interface ApiOptions {
   signal?: AbortSignal;
   /** Per-request timeout override in ms. Defaults to DEFAULT_TIMEOUT_MS. */
   timeoutMs?: number;
+  /**
+   * The workspace this request is FOR, overriding the saved active workspace
+   * (orgHeader). The outbox sends each queued row under the organization it
+   * was queued in: after a workspace switch the saved one is somebody else's
+   * context, and the server answered the stale row 404/403 (a terminal
+   * rejection, so the work was lost). Null/absent = the saved workspace.
+   */
+  orgId?: string | null;
+  /**
+   * Send ONLY under this account's bearer token. Checked against the session
+   * at the moment the token is read, so the check and the credential are the
+   * same read: if the live session belongs to anyone else, or to nobody, the
+   * request never leaves and OutboxSessionChangedError is thrown. The outbox
+   * uses it so one account's queued work can never be sent as another's.
+   */
+  asUserId?: string;
 }
 
 // React Native's fetch has NO default timeout. A half-open TCP / captive-portal
@@ -98,10 +116,13 @@ interface ApiOptions {
 // it is ALWAYS guaranteed to settle.
 const DEFAULT_TIMEOUT_MS = 20_000;
 
-async function authHeader(): Promise<Record<string, string>> {
+async function authHeader(asUserId?: string): Promise<Record<string, string>> {
   const {
     data: { session },
   } = await supabase.auth.getSession();
+  if (asUserId !== undefined && session?.user?.id !== asUserId) {
+    throw new OutboxSessionChangedError();
+  }
   if (!session) return {};
   return { Authorization: `Bearer ${session.access_token}` };
 }
@@ -111,14 +132,13 @@ async function authHeader(): Promise<Record<string, string>> {
  * or `postMultipart` directly (multipart uploads, streaming chat) instead of
  * `api()`. Without it the server falls back to the user's DEFAULT org, so a
  * multi-org user's AI-scan counts, PO scans and chat questions resolved
- * against the wrong workspace. Key MUST match ORG_STORAGE_KEY in
- * use-workspace.ts ('workspace.activeOrgId') — kept as a literal here to avoid
- * importing use-workspace (which would create a cycle: use-workspace → sync →
- * api). Every raw call site is pinned to spread this by
+ * against the wrong workspace. The key is the ONE constant use-workspace.ts
+ * writes (workspace-keys.ts, a leaf, so there is no cycle through
+ * use-workspace → sync → api). Every raw call site is pinned to spread this by
  * org-header-wiring.test.ts.
  */
 export async function orgHeader(): Promise<Record<string, string>> {
-  const orgId = await AsyncStorage.getItem('workspace.activeOrgId');
+  const orgId = await AsyncStorage.getItem(ACTIVE_ORG_STORAGE_KEY);
   return orgId ? { 'X-Organization-Id': orgId } : {};
 }
 
@@ -127,8 +147,8 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
   // validates membership and 401s on a bad value.
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(await authHeader()),
-    ...(await orgHeader()),
+    ...(await authHeader(opts.asUserId)),
+    ...(opts.orgId ? { 'X-Organization-Id': opts.orgId } : await orgHeader()),
   };
 
   // Internal timeout, composed with any caller-supplied signal. Either firing

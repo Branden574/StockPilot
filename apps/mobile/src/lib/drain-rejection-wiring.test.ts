@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
  *   - `sync.ts::drainQueue` drains everything EXCEPT `record_count` (it skips
  *     those explicitly at the top of the loop).
  *   - `CycleCountSyncEngine` (cycle-count-sync.ts) drains the `record_count`
- *     rows — the app's flagship offline flow — reading through `outboxPending`
+ *     rows — the app's flagship offline flow — reading through `outboxQueued`
  *     and, on failure, writing status='failed' via `outboxBumpFailure`.
  *
  * Fixing only the first leaves every offline cycle-count edit retrying on 401
@@ -116,7 +116,7 @@ describe('engine 2 — CycleCountSyncEngine (the flagship offline flow)', () => 
 
   it('keeps its exponential backoff for the RETRYABLE path — nothing to add there', () => {
     // Correction to the original plan text: only sync.ts's drainQueue lacks
-    // backoff. This engine already has it, in outboxPending's isDue filter.
+    // backoff. This engine already has it, in outboxQueued's isDue (the `due` flag the drain honours).
     expect(code(cache)).toContain('function isDue(');
     expect(code(cache)).toContain('Math.min(2 ** attempts * 1000, 5 * 60 * 1000)');
   });
@@ -129,7 +129,7 @@ describe('rejected is TERMINAL — no drain may ever re-read it', () => {
   });
 
   it('engine 2 selectors skip it', () => {
-    const pending = code(cache).slice(code(cache).indexOf('export async function outboxPending'));
+    const pending = code(cache).slice(code(cache).indexOf('export async function outboxQueued'));
     expect(pending).toContain("where status in ('pending','failed')");
     expect(code(cache)).not.toMatch(/where status in \([^)]*'rejected'/);
   });
@@ -173,7 +173,13 @@ describe('the local record survives', () => {
    * and a prune, or "preserved for the user and support" is just a comment.
    */
   it('is actually rendered somewhere the operator can reach', () => {
-    expect(settingsScreen).toContain("import { countRejected } from '@/lib/queue'");
+    expect(settingsScreen).toMatch(/import \{ (countHeld, )?countRejected \} from '@\/lib\/queue'/);
+    // The held work queued by another account is surfaced by the same screen.
+    expect(settingsScreen).toContain(
+      'unsentWorkDetail({ rejected: rejectedCount, held: heldCount })',
+    );
+    expect(rejectedScreen).toContain('listHeld(REJECTED_KEEP_MAX)');
+    expect(rejectedScreen).toContain('discardHeldAction(row.id)');
     expect(settingsScreen).toContain("router.push('/settings/rejected-work' as never)");
     expect(rejectedScreen).toContain("from '@/lib/queue'");
     // Asks for the true retention ceiling (REJECTED_KEEP_MAX), not
@@ -192,7 +198,7 @@ describe('the local record survives', () => {
     const rejectedAt = badge.indexOf('rejectedCount > 0');
     expect(rejectedAt).toBeGreaterThan(-1);
     expect(rejectedAt).toBeLessThan(allSyncedAt);
-    expect(cycleSync).toContain("import { countRejected } from './queue'");
+    expect(cycleSync).toMatch(/import \{ countRejected(, markHeld)? \} from '\.\/queue'/);
     expect(cycleSync).toContain('rejectedCount: number;');
   });
 
@@ -245,9 +251,9 @@ describe('the eviction cannot silently destroy the queued work', () => {
       code(gate).indexOf('clearAccountStorage:'),
     );
     expect(clearCaches).toContain('rejectAllPending');
-    expect(clearCaches).toContain('wipeForSignOut()');
+    expect(clearCaches).toContain('wipeForEviction(evictedUserId)');
     expect(clearCaches.indexOf('rejectAllPending')).toBeLessThan(
-      clearCaches.indexOf('wipeForSignOut()'),
+      clearCaches.indexOf('wipeForEviction(evictedUserId)'),
     );
   });
 
@@ -265,31 +271,55 @@ describe('the eviction cannot silently destroy the queued work', () => {
     expect(body).toContain("where status in ('pending','sending','failed')");
   });
 
-  it('the sign-out wipe spares rejected rows', () => {
-    const body = code(db).slice(code(db).indexOf('export async function wipeForSignOut'));
+  it('the eviction wipe spares rejected rows', () => {
+    const body = code(db).slice(code(db).indexOf('export async function wipeForEviction'));
     expect(body).toContain("delete from pending_actions where status <> 'rejected'");
     expect(body).not.toContain('delete from pending_actions;');
+  });
+
+  it('the ordinary sign-out wipe deletes no outbox row at all (S4b: queued work is held, not wiped)', () => {
+    const src = code(db);
+    const start = src.indexOf('export async function wipeForSignOut');
+    const body = src.slice(start, src.indexOf('export async function wipeForEviction'));
+    expect(body).toContain('clearOrgScopedTables(db)');
+    expect(body).not.toContain('pending_actions');
   });
 });
 
 describe('the cycle-count line is not left flagged unsynced forever', () => {
+  /** One function's body: from its declaration to the next top-level one. */
+  const fnBody = (name: string) => {
+    const src = code(cache);
+    const start = src.indexOf(name);
+    expect(start).toBeGreaterThan(-1);
+    const next = src.slice(start + name.length).search(/\n(export )?async function /);
+    return next === -1 ? src.slice(start) : src.slice(start, start + name.length + next);
+  };
+  /** The ONE copy of the dirty-flag bookkeeping (ack, reject and discard share it). */
+  const helper = fnBody('async function clearLineDirtyUnlessStillQueued(');
+
   it('outboxReject clears local_dirty in the SAME transaction as the status write', () => {
-    const body = code(cache).slice(code(cache).indexOf('export async function outboxReject'));
+    const body = fnBody('export async function outboxReject');
     // One transaction, through db.ts's queue (db.transaction-queue.test.ts).
-    expect(body).toContain('withDbTransaction(db, async () => {');
-    expect(body).toContain('update cycle_count_lines set local_dirty = 0 where id = ?');
-    expect(body).toContain('markRejected');
+    expect(body).toMatch(
+      /withDbTransaction\(db, async \(\) => \{\s+await clearLineDirtyUnlessStillQueued\(db, id\);[\s\S]*markRejected/,
+    );
+    expect(helper).toContain('update cycle_count_lines set local_dirty = 0 where id = ?');
   });
 
   it('keeps the flag while another edit for the same line is still live', () => {
     // Mirrors outboxAck: the user may have edited one line twice offline.
-    const body = code(cache).slice(code(cache).indexOf('export async function outboxReject'));
-    expect(body).toContain("status in ('pending','failed','sending')");
-    expect(body).toContain("json_extract(payload_json, '$.lineId')");
+    expect(helper).toContain("status in ('pending','failed','sending')");
+    expect(helper).toContain("json_extract(payload_json, '$.lineId')");
+    expect(fnBody('export async function outboxAck')).toContain(
+      'await clearLineDirtyUnlessStillQueued(db, id);',
+    );
   });
 
   it('does not delete the row the way an ack does', () => {
-    const body = code(cache).slice(code(cache).indexOf('export async function outboxReject'));
-    expect(body).not.toContain('delete from pending_actions');
+    expect(fnBody('export async function outboxReject')).not.toContain(
+      'delete from pending_actions',
+    );
+    expect(helper).not.toContain('delete from pending_actions');
   });
 });

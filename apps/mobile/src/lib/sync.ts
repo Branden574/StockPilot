@@ -7,14 +7,24 @@ import {
   CYCLE_COUNT_LINE_UPSERT_SQL,
   CYCLE_COUNT_STALE_LINES_DELETE_SQL,
 } from './cycle-count-snapshot-sql';
-import { currentCacheGeneration, getDb, getMeta, setMeta, withDbTransaction } from './db';
+import { CACHE_USER_META_KEY, cacheOwnerAction } from './cache-owner';
+import {
+  currentCacheGeneration,
+  deleteOrgData,
+  getDb,
+  getMeta,
+  setMeta,
+  withDbTransaction,
+} from './db';
 import { classifyDrainFailure } from './drain-failure';
 import { ENABLED_MODULES_META_KEY, refreshEnabledModules } from './enabled-modules';
 import {
   EFFECTIVE_PERMISSIONS_META_KEY,
   refreshEffectivePermissions,
 } from './use-effective-permissions';
-import { listPending, markFailed, markOk, markRejected, markSending } from './queue';
+import { OutboxSessionChangedError, outboxSendDecision } from './outbox-scope';
+import { listPending, markFailed, markHeld, markOk, markRejected, markSending } from './queue';
+import { liveOutboxScope } from './session-scope';
 import { WAREHOUSE_SCOPE_META_KEY, refreshWarehouseScope } from './warehouse-scope';
 
 /**
@@ -222,6 +232,23 @@ export async function isOnline(): Promise<boolean> {
 export async function pullSnapshot(
   force = false,
 ): Promise<{ items: number; pos: number; counts: number; bundles: number } | null> {
+  // WHOSE cache (cache-owner.ts). Checked before the network check: an
+  // offline sign-in as another account must not show the last account's rows
+  // either. Another account's cache is cleared and pulled again in full, never
+  // delta-pulled from their cursor.
+  const { userId: liveUserId } = await liveOutboxScope();
+  if (cacheOwnerAction(await getMeta(CACHE_USER_META_KEY), liveUserId) === 'reset') {
+    await deleteOrgData();
+    force = true;
+    // The live readers still hold the previous account's modules, permissions
+    // and warehouse banner in memory; the persisted values are gone, so they
+    // fall back to their defaults now rather than whenever (or if) this pull
+    // lands. Same as a workspace switch does after its wipe.
+    refreshEnabledModules();
+    refreshEffectivePermissions();
+    refreshWarehouseScope();
+  }
+
   if (!(await isOnline())) return null;
 
   // Noted before the cursor is read and before api() reads the workspace
@@ -235,7 +262,9 @@ export async function pullSnapshot(
 
   let snap: SnapshotResponse;
   try {
-    snap = await api<SnapshotResponse>(path);
+    // Answered for the account recorded as the cache's owner below, or not at
+    // all: a session that changed since the check refuses before sending.
+    snap = await api<SnapshotResponse>(path, liveUserId ? { asUserId: liveUserId } : {});
   } catch (e) {
     console.warn('[sync] snapshot pull failed', e);
     return null;
@@ -461,6 +490,8 @@ export async function pullSnapshot(
     // The cursor, modules, permissions and warehouse scope are part of the
     // same answer, so they are written only when the rows were.
     await setMeta('last_synced_at', snap.serverTime);
+    // ...and so is whose answer it was (cache-owner.ts).
+    if (liveUserId) await setMeta(CACHE_USER_META_KEY, liveUserId);
     // Persist the org's enabled modules so the drawer + tab gating can read
     // them synchronously between syncs (and while offline). Always written —
     // even an empty array is meaningful (the consumers treat "no persisted
@@ -542,12 +573,30 @@ export async function drainQueue(): Promise<{
     // workers from racing to push the same edit to Supabase twice.
     if (action.kind === 'record_count') continue;
 
-    await markSending(action.id);
+    // WHOSE row, decided now, for THIS row (outbox-scope.ts): the session can
+    // end or change between two rows of one drain (a sign-out, "Use password
+    // instead", a revoked session, a workspace switch). A row queued by
+    // another account, or any row with nobody signed in, is HELD: skipped and
+    // left exactly as it is, neither failed nor rejected.
+    const decision = outboxSendDecision(action, await liveOutboxScope());
+    if (!decision.send) continue;
+
+    // Stamps a legacy row with this account, so it is never sent as another.
+    await markSending(action.id, { orgId: decision.orgId, userId: decision.userId });
     try {
-      await sendOne(action.kind, action.idempotencyKey, action.payload);
+      await sendOne(action.kind, action.idempotencyKey, action.payload, {
+        orgId: decision.orgId,
+        asUserId: decision.userId,
+      });
       await markOk(action.id);
       ok += 1;
     } catch (e) {
+      // The account changed between the decision above and the moment api()
+      // read the bearer: nothing left the device. Back in the queue, untouched.
+      if (e instanceof OutboxSessionChangedError) {
+        await markHeld(action.id);
+        continue;
+      }
       const msg = e instanceof Error ? e.message : String(e);
       // 4xx (bad payload, validation) and 5xx / network errors both stay in
       // 'failed' and are re-read next tick. The ONE terminal case is a 401 on a
@@ -565,10 +614,17 @@ export async function drainQueue(): Promise<{
   return { ok, failed, rejected };
 }
 
+/** Every queued send goes out under its row's organization and account. */
+interface OutboxSendScope {
+  orgId: string | null;
+  asUserId: string;
+}
+
 async function sendOne(
   kind: string,
   idempotencyKey: string,
   payload: Record<string, unknown>,
+  scope: OutboxSendScope,
 ): Promise<void> {
   switch (kind) {
     case 'receive_po_line': {
@@ -577,6 +633,7 @@ async function sendOne(
       await api(`/api/v1/po/${poId}/receive-line`, {
         method: 'POST',
         body: { ...payload, idempotencyKey },
+        ...scope,
       });
       return;
     }
@@ -599,6 +656,7 @@ async function sendOne(
       await api(`/api/v1/bundles/${bundleId}/distribute`, {
         method: 'POST',
         body: { ...payload, idempotencyKey },
+        ...scope,
       });
       return;
     }
@@ -637,6 +695,7 @@ async function sendOne(
       await api(`/api/v1/size-counts/${sessionId}/events`, {
         method: 'POST',
         body: { events },
+        ...scope,
       });
       return;
     }

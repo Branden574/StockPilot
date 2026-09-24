@@ -1,5 +1,7 @@
-import { getDb } from './db';
+import { getDb, queuedWrite } from './db';
+import { HELD_FOR_OTHER_SQL, OWNED_BY_USER_SQL } from './outbox-scope';
 import { REJECTED_KEEP_MAX, rejectedPruneCutoff } from './rejected-work';
+import { liveOutboxScope, outboxWriteScope } from './session-scope';
 
 /**
  * Pending-actions queue. Every offline-capable write goes through
@@ -35,6 +37,25 @@ export interface PendingActionRow {
   lastAttemptAt: number | null;
   lastError: string | null;
   status: 'pending' | 'sending' | 'ok' | 'failed' | 'rejected';
+  /** The organization the row was queued in; NULL on a legacy row. */
+  organizationId: string | null;
+  /** The account that queued it; NULL on a legacy row (outbox-scope.ts). */
+  userId: string | null;
+}
+
+/** A pending_actions row as SQLite returns it. */
+interface PendingActionDbRow {
+  id: number;
+  kind: string;
+  idempotency_key: string;
+  payload_json: string;
+  created_at: number;
+  attempts: number;
+  last_attempt_at: number | null;
+  last_error: string | null;
+  status: string;
+  organization_id?: string | null;
+  user_id?: string | null;
 }
 
 function uuid(): string {
@@ -64,85 +85,101 @@ export async function enqueue(
     idempotencyKey?: string;
   },
 ): Promise<{ id: number; idempotencyKey: string }> {
-  const db = await getDb();
   const idempotencyKey = opts?.idempotencyKey ?? uuid();
-  const result = await db.runAsync(
-    `insert into pending_actions (kind, idempotency_key, payload_json, created_at)
-     values (?, ?, ?, ?)`,
-    [kind, idempotencyKey, JSON.stringify(payload), Date.now()],
+  // Stamped with the workspace and account it is queued under, so the drains
+  // send it under that organization and only while that account is signed in
+  // (outbox-scope.ts). Read before the insert, never at send time. Never a
+  // NULL owner: with no account to name, this throws instead of queueing.
+  const scope = await outboxWriteScope();
+  // Its own queued transaction (db.ts queuedWrite): a plain insert landing
+  // inside a snapshot pull's open transaction was undone by that pull's
+  // ROLLBACK, after the screen had already said "Queued".
+  const result = await queuedWrite((db) =>
+    db.runAsync(
+      `insert into pending_actions
+         (kind, idempotency_key, payload_json, created_at, organization_id, user_id)
+       values (?, ?, ?, ?, ?, ?)`,
+      [kind, idempotencyKey, JSON.stringify(payload), Date.now(), scope.orgId, scope.userId],
+    ),
   );
   return { id: result.lastInsertRowId as number, idempotencyKey };
 }
 
+/**
+ * Every sendable row on the DEVICE, every account's. The drain decides per row,
+ * immediately before each send, whether the live account may send it
+ * (outboxSendDecision): filtering here would be a check made once per drain.
+ */
 export async function listPending(): Promise<PendingActionRow[]> {
   const db = await getDb();
-  const rows = await db.getAllAsync<{
-    id: number;
-    kind: string;
-    idempotency_key: string;
-    payload_json: string;
-    created_at: number;
-    attempts: number;
-    last_attempt_at: number | null;
-    last_error: string | null;
-    status: string;
-  }>(`select * from pending_actions where status in ('pending','failed')
+  const rows =
+    await db.getAllAsync<PendingActionDbRow>(`select * from pending_actions where status in ('pending','failed')
       order by created_at asc`);
   return rows.map(rowFromDb);
 }
 
 export async function listAll(limit = 100): Promise<PendingActionRow[]> {
   const db = await getDb();
-  const rows = await db.getAllAsync<{
-    id: number;
-    kind: string;
-    idempotency_key: string;
-    payload_json: string;
-    created_at: number;
-    attempts: number;
-    last_attempt_at: number | null;
-    last_error: string | null;
-    status: string;
-  }>(`select * from pending_actions order by created_at desc limit ?`, [limit]);
+  const rows = await db.getAllAsync<PendingActionDbRow>(
+    `select * from pending_actions order by created_at desc limit ?`,
+    [limit],
+  );
   return rows.map(rowFromDb);
 }
 
+/** The live account's sendable rows (legacy rows included); never another's. */
 export async function pendingCount(): Promise<number> {
   const db = await getDb();
+  const { userId } = await liveOutboxScope();
   const row = await db.getFirstAsync<{ n: number }>(
-    `select count(*) as n from pending_actions where status in ('pending','failed')`,
+    `select count(*) as n from pending_actions where status in ('pending','failed')
+        and ${OWNED_BY_USER_SQL}`,
+    [userId],
   );
   return row?.n ?? 0;
 }
 
-export async function markSending(id: number): Promise<void> {
-  const db = await getDb();
-  await db.runAsync(
-    `update pending_actions
+/**
+ * The row is going on the wire now. `owner` is the send's scope
+ * (outboxSendDecision): a legacy row missing its organization or user is
+ * stamped with it here, in the same statement, so a row is only ever sent
+ * under the first account that sent it. coalesce() never overwrites an owner
+ * already stored.
+ */
+export async function markSending(
+  id: number,
+  owner?: { orgId: string | null; userId: string },
+): Promise<void> {
+  await queuedWrite((db) =>
+    db.runAsync(
+      `update pending_actions
         set status = 'sending',
             attempts = attempts + 1,
-            last_attempt_at = ?
+            last_attempt_at = ?,
+            organization_id = coalesce(organization_id, ?),
+            user_id = coalesce(user_id, ?)
       where id = ?`,
-    [Date.now(), id],
+      [Date.now(), owner?.orgId ?? null, owner?.userId ?? null, id],
+    ),
   );
 }
 
 export async function markOk(id: number): Promise<void> {
-  const db = await getDb();
   // Settled-ok rows are deleted to keep the queue tight. If a paper
   // trail is needed later, swap to a soft-delete flag.
-  await db.runAsync(`delete from pending_actions where id = ?`, [id]);
+  await queuedWrite((db) => db.runAsync(`delete from pending_actions where id = ?`, [id]));
 }
 
 export async function markFailed(id: number, error: string): Promise<void> {
-  const db = await getDb();
-  await db.runAsync(
-    `update pending_actions
+  await queuedWrite((db) =>
+    db.runAsync(
+      `update pending_actions
         set status = 'failed',
             last_error = ?,
             last_attempt_at = ?
       where id = ?`,
-    [error.slice(0, 1000), Date.now(), id],
+      [error.slice(0, 1000), Date.now(), id],
+    ),
   );
 }
 
@@ -166,7 +203,19 @@ export async function markFailed(id: number, error: string): Promise<void> {
  * if one were ever needed, would go through db.ts's addColumnIfMissing.
  */
 export async function markRejected(id: number, error: string): Promise<void> {
-  const db = await getDb();
+  await queuedWrite((db) => markRejectedWithin(db, id, error));
+}
+
+/**
+ * The same terminal write, as a plain statement for code ALREADY inside a
+ * transaction (outboxReject): calling markRejected there would wait on its own
+ * turn in the transaction queue forever.
+ */
+export async function markRejectedWithin(
+  db: Awaited<ReturnType<typeof getDb>>,
+  id: number,
+  error: string,
+): Promise<void> {
   await db.runAsync(
     `update pending_actions
         set status = 'rejected',
@@ -178,10 +227,19 @@ export async function markRejected(id: number, error: string): Promise<void> {
 }
 
 /**
- * Reject the WHOLE outbox at once. Called from the account eviction, where the
- * account has been confirmed disabled out of band: nothing queued will ever be
- * accepted, and the drain will not get another chance to say so per row —
- * eviction cancels the in-flight requests and drops the session first.
+ * Reject the DISABLED ACCOUNT'S outbox at once. Called from the account
+ * eviction, where the account has been confirmed disabled out of band: nothing
+ * it queued will ever be accepted, and the drain will not get another chance to
+ * say so per row — eviction cancels the in-flight requests and drops the
+ * session first.
+ *
+ * Only that account's rows, and legacy rows (NULL owner, which would otherwise
+ * be adopted by whoever signs in next). Work held for OTHER accounts on a
+ * shared phone is theirs, never sent under this one, and is left exactly as it
+ * is (owner decision D4: never lost, never removed automatically). Device-wide
+ * ONLY when the disabled account cannot be named at all (`evictedUserId`
+ * null), where rejecting everything is the one way to be sure its work never
+ * replays after a re-enable.
  *
  * Without this, eviction's `wipeForSignOut()` deleted every queued write with
  * no trace, so the operator was never told what became of the work they
@@ -193,15 +251,33 @@ export async function markRejected(id: number, error: string): Promise<void> {
  *
  * @returns how many rows were rejected (for logging / the hand-test).
  */
-export async function rejectAllPending(error: string): Promise<number> {
-  const db = await getDb();
-  const result = await db.runAsync(
-    `update pending_actions
-        set status = 'rejected',
-            last_error = ?,
-            last_attempt_at = ?
-      where status in ('pending','sending','failed')`,
-    [error.slice(0, 1000), Date.now()],
+export async function rejectAllPending(
+  error: string,
+  evictedUserId: string | null,
+): Promise<number> {
+  const result = await queuedWrite((db) =>
+    evictedUserId
+      ? // Legacy rows are stamped with the evicted account as they are parked:
+        // the record, and its "account disabled" reason, are that account's,
+        // not shown to whoever signs in next.
+        db.runAsync(
+          `update pending_actions
+            set status = 'rejected',
+                last_error = ?,
+                last_attempt_at = ?,
+                user_id = coalesce(user_id, ?)
+          where status in ('pending','sending','failed')
+            and ${OWNED_BY_USER_SQL}`,
+          [error.slice(0, 1000), Date.now(), evictedUserId, evictedUserId],
+        )
+      : db.runAsync(
+          `update pending_actions
+            set status = 'rejected',
+                last_error = ?,
+                last_attempt_at = ?
+          where status in ('pending','sending','failed')`,
+          [error.slice(0, 1000), Date.now()],
+        ),
   );
   return result.changes;
 }
@@ -214,8 +290,13 @@ export async function rejectAllPending(error: string): Promise<number> {
  */
 export async function countRejected(): Promise<number> {
   const db = await getDb();
+  const { userId } = await liveOutboxScope();
+  // Only the live account's record (and legacy rows): on a shared phone the
+  // next person must not be shown, or badged with, somebody else's work.
   const row = await db.getFirstAsync<{ n: number }>(
-    `select count(*) as n from pending_actions where status = 'rejected'`,
+    `select count(*) as n from pending_actions where status = 'rejected'
+        and ${OWNED_BY_USER_SQL}`,
+    [userId],
   );
   return row?.n ?? 0;
 }
@@ -245,25 +326,26 @@ export async function countRejected(): Promise<number> {
  * Runs at cold launch (app/_layout.tsx). Returns how many rows it removed.
  */
 export async function pruneRejected(now: number = Date.now()): Promise<number> {
-  const db = await getDb();
-  const aged = await db.runAsync(
-    `delete from pending_actions
-      where status = 'rejected'
-        and coalesce(last_attempt_at, created_at) < ?`,
-    [rejectedPruneCutoff(now)],
-  );
-  const excess = await db.runAsync(
-    `delete from pending_actions
-      where status = 'rejected'
-        and id not in (
-          select id from pending_actions
-           where status = 'rejected'
-           order by coalesce(last_attempt_at, created_at) desc, created_at desc, id desc
-           limit ?
-        )`,
-    [REJECTED_KEEP_MAX],
-  );
-  return aged.changes + excess.changes;
+  return queuedWrite(async (db) => {
+    const aged = await db.runAsync(
+      `delete from pending_actions
+        where status = 'rejected'
+          and coalesce(last_attempt_at, created_at) < ?`,
+      [rejectedPruneCutoff(now)],
+    );
+    const excess = await db.runAsync(
+      `delete from pending_actions
+        where status = 'rejected'
+          and id not in (
+            select id from pending_actions
+             where status = 'rejected'
+             order by coalesce(last_attempt_at, created_at) desc, created_at desc, id desc
+             limit ?
+          )`,
+      [REJECTED_KEEP_MAX],
+    );
+    return aged.changes + excess.changes;
+  });
 }
 
 /**
@@ -273,30 +355,74 @@ export async function pruneRejected(now: number = Date.now()): Promise<number> {
  * them.
  */
 export async function clearRejected(): Promise<number> {
-  const db = await getDb();
-  const result = await db.runAsync(`delete from pending_actions where status = 'rejected'`);
+  const { userId } = await liveOutboxScope();
+  // The list the person is looking at: their own record, never another's.
+  const result = await queuedWrite((db) =>
+    db.runAsync(`delete from pending_actions where status = 'rejected' and ${OWNED_BY_USER_SQL}`, [
+      userId,
+    ]),
+  );
   return result.changes;
 }
 
 /** Rejected rows, newest first — the local record for the user and support. */
 export async function listRejected(limit = 100): Promise<PendingActionRow[]> {
   const db = await getDb();
-  const rows = await db.getAllAsync<{
-    id: number;
-    kind: string;
-    idempotency_key: string;
-    payload_json: string;
-    created_at: number;
-    attempts: number;
-    last_attempt_at: number | null;
-    last_error: string | null;
-    status: string;
-  }>(
+  const { userId } = await liveOutboxScope();
+  const rows = await db.getAllAsync<PendingActionDbRow>(
     `select * from pending_actions where status = 'rejected'
+        and ${OWNED_BY_USER_SQL}
       order by created_at desc limit ?`,
-    [limit],
+    [userId, limit],
   );
   return rows.map(rowFromDb);
+}
+
+/**
+ * Rows HELD for another account: queued on this device by someone else and
+ * waiting, untouched, for them to sign in here again. Never sent under the
+ * live account (outbox-scope.ts). Settings > Unsent work lists them as
+ * "Queued by another account" with Discard; the payload is not shown.
+ */
+export async function listHeld(limit = 100): Promise<PendingActionRow[]> {
+  const db = await getDb();
+  const { userId } = await liveOutboxScope();
+  // With no account readable, "another account's" cannot be told from the
+  // person's own: list nothing rather than offer their own work for Discard.
+  if (!userId) return [];
+  const rows = await db.getAllAsync<PendingActionDbRow>(
+    `select * from pending_actions where status in ('pending','failed')
+        and ${HELD_FOR_OTHER_SQL}
+      order by created_at desc limit ?`,
+    [userId, limit],
+  );
+  return rows.map(rowFromDb);
+}
+
+export async function countHeld(): Promise<number> {
+  const db = await getDb();
+  const { userId } = await liveOutboxScope();
+  if (!userId) return 0; // see listHeld
+  const row = await db.getFirstAsync<{ n: number }>(
+    `select count(*) as n from pending_actions where status in ('pending','failed')
+        and ${HELD_FOR_OTHER_SQL}`,
+    [userId],
+  );
+  return row?.n ?? 0;
+}
+
+/**
+ * Put a row the drain had marked 'sending' back in the queue, untouched, when
+ * api() found the account changed at the moment of sending
+ * (OutboxSessionChangedError). Nothing was sent, so it is not a failure.
+ */
+export async function markHeld(id: number): Promise<void> {
+  await queuedWrite((db) =>
+    db.runAsync(
+      `update pending_actions set status = 'pending' where id = ? and status = 'sending'`,
+      [id],
+    ),
+  );
 }
 
 /**
@@ -305,25 +431,59 @@ export async function listRejected(limit = 100): Promise<PendingActionRow[]> {
  * account being re-enabled.
  */
 export async function retry(id: number): Promise<void> {
-  const db = await getDb();
-  await db.runAsync(
-    `update pending_actions set status = 'pending', last_error = null
+  await queuedWrite((db) =>
+    db.runAsync(
+      `update pending_actions set status = 'pending', last_error = null
      where id = ?`,
-    [id],
+      [id],
+    ),
   );
 }
 
-function rowFromDb(r: {
-  id: number;
-  kind: string;
-  idempotency_key: string;
-  payload_json: string;
-  created_at: number;
-  attempts: number;
-  last_attempt_at: number | null;
-  last_error: string | null;
-  status: string;
-}): PendingActionRow {
+/**
+ * SIGN-OUT, keep (owner decision D5): every row this account owns stays on
+ * the device, HELD for it, and sends when it signs in here again. Its LEGACY
+ * rows (NULL owner, queued by an older binary) were counted as its own in the
+ * sign-out prompt, so they are stamped as its own now; left unstamped, the
+ * next account to drain would adopt and send them. Rows other accounts own are
+ * never touched. Rejected legacy rows are stamped too, so this account's
+ * record is not shown to the next person.
+ */
+export async function adoptLegacyRows(owner: {
+  userId: string;
+  orgId: string | null;
+}): Promise<number> {
+  const result = await queuedWrite((db) =>
+    db.runAsync(
+      `update pending_actions
+        set user_id = ?,
+            organization_id = coalesce(organization_id, ?)
+      where user_id is null`,
+      [owner.userId, owner.orgId],
+    ),
+  );
+  return result.changes;
+}
+
+/**
+ * SIGN-OUT, discard: the person chose "Sign out and discard" after a drain
+ * attempt, or deleted their account (its work can never be sent). Removes this
+ * account's unsynced rows (and legacy ones), never another account's held work
+ * and never a rejected record.
+ */
+export async function discardUnsyncedFor(userId: string): Promise<number> {
+  const result = await queuedWrite((db) =>
+    db.runAsync(
+      `delete from pending_actions
+      where status in ('pending','failed','sending')
+        and ${OWNED_BY_USER_SQL}`,
+      [userId],
+    ),
+  );
+  return result.changes;
+}
+
+function rowFromDb(r: PendingActionDbRow): PendingActionRow {
   return {
     id: r.id,
     kind: r.kind as PendingActionKind,
@@ -334,6 +494,8 @@ function rowFromDb(r: {
     lastAttemptAt: r.last_attempt_at,
     lastError: r.last_error,
     status: r.status as PendingActionRow['status'],
+    organizationId: r.organization_id ?? null,
+    userId: r.user_id ?? null,
   };
 }
 

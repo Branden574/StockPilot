@@ -94,7 +94,9 @@ describe('every transaction in the app goes through the queue', () => {
   const sources = (dir: string): string[] =>
     readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap((e) => {
       const rel = path.join(dir, e.name);
-      if (e.isDirectory()) return e.name === 'node_modules' ? [] : sources(rel);
+      // __fixtures__ is test support (the node:sqlite stand-in for expo-sqlite
+      // implements withTransactionAsync itself), never shipped app code.
+      if (e.isDirectory()) return e.name === 'node_modules' || e.name === '__fixtures__' ? [] : sources(rel);
       return /\.(ts|tsx)$/.test(e.name) && !/\.test\.tsx?$/.test(e.name) ? [rel] : [];
     });
 
@@ -113,19 +115,57 @@ describe('the cache wipes wait their turn', () => {
   const db = readFileSync(path.join(__dirname, 'db.ts'), 'utf8');
   const body = (name: string) => db.slice(db.indexOf(`export async function ${name}`)).split('\n}\n')[0] ?? '';
 
-  it('deleteOrgData (workspace switch) and wipeForSignOut run through the queue', () => {
+  it('deleteOrgData (workspace switch), wipeForSignOut and wipeForEviction run through the queue', () => {
     // A wipe interleaving with a snapshot pull mid-write would let the old
     // workspace's rows land after it (sync.ts checks the workspace inside its
     // own queued transaction).
     expect(body('deleteOrgData')).toContain('await withDbTransaction(db, () => clearOrgScopedTables(db));');
-    expect(body('wipeForSignOut')).toMatch(/await withDbTransaction\(db, async \(\) => \{\s+await clearOrgScopedTables\(db\);[\s\S]*delete from pending_actions/);
+    // Sign-out clears the cache and KEEPS the outbox, held for its account (S4b).
+    expect(body('wipeForSignOut')).toContain('await withDbTransaction(db, () => clearOrgScopedTables(db));');
+    expect(body('wipeForSignOut')).not.toContain('pending_actions');
+    // Only the eviction of a disabled account drops what is left unsent.
+    expect(body('wipeForEviction')).toMatch(/await withDbTransaction\(db, async \(\) => \{\s+await clearOrgScopedTables\(db\);[\s\S]*delete from pending_actions/);
   });
 
-  it('both wipes bump the cache generation first, before they wait in the queue', () => {
+  it('every wipe bumps the cache generation first, before it waits in the queue', () => {
     // sync.ts discards a snapshot whose generation moved; the bump must come
     // before the queue so a pull that is mid-write stops at its next row.
     expect(body('deleteOrgData')).toMatch(/^export async function deleteOrgData\(\): Promise<void> \{\s+cacheGeneration \+= 1;/);
     expect(body('wipeForSignOut')).toMatch(/^export async function wipeForSignOut\(\): Promise<void> \{\s+cacheGeneration \+= 1;/);
+    expect(body('wipeForEviction')).toMatch(/^export async function wipeForEviction\(evictedUserId: string \| null\): Promise<void> \{\s+cacheGeneration \+= 1;/);
   });
 });
 
+describe('every outbox write commits on its own (queued), never inside someone else’s transaction', () => {
+  /**
+   * A plain runAsync issued while another flow's transaction is open executes
+   * INSIDE it on expo-sqlite's single connection, and that flow's ROLLBACK
+   * undoes it (outbox-owner.sqlite.test.ts executes the case). So every
+   * exported function that writes pending_actions must go through the queue:
+   * queuedWrite(...) or its own withDbTransaction(...). The one exception is
+   * markRejectedWithin, which exists to be called from INSIDE a transaction.
+   */
+  const strip = (src: string) => src.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
+  const functions = (file: string) => {
+    const src = strip(readFileSync(path.join(__dirname, file), 'utf8'));
+    return src
+      .split(/\n(?=export async function )/)
+      .filter((chunk) => chunk.startsWith('export async function '))
+      .map((chunk) => ({
+        name: /export async function (\w+)/.exec(chunk)?.[1] ?? '?',
+        body: chunk,
+      }));
+  };
+  const writesOutbox = (body: string) =>
+    /(insert into|update|delete from)\s+pending_actions/.test(body);
+
+  it.each(['queue.ts', 'cycle-count-cache.ts', 'db.ts'])('%s', (file) => {
+    const writers = functions(file).filter((f) => writesOutbox(f.body));
+    expect(writers.length).toBeGreaterThan(0);
+    const unqueued = writers
+      .filter((f) => f.name !== 'markRejectedWithin')
+      .filter((f) => !/queuedWrite\(|withDbTransaction\(db/.test(f.body))
+      .map((f) => f.name);
+    expect(unqueued).toEqual([]);
+  });
+});

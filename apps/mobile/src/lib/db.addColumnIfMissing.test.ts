@@ -82,4 +82,36 @@ describe('addColumnIfMissing', () => {
       addColumnIfMissing(db as never, 'cycle_count_lines', 'item_variant_label', 'text'),
     ).resolves.toBeUndefined();
   });
+
+  /**
+   * S4d. The blanket catch swallowed EVERY error, so a failed ALTER (a full
+   * disk) left the column absent while the app carried on as if it existed —
+   * for the outbox's organization_id that is every later enqueue failing.
+   */
+  it('REJECTS any error other than "duplicate column name"', async () => {
+    const db = {
+      getAllAsync: vi.fn(async () => [{ name: 'id' }]),
+      execAsync: vi.fn(async () => {
+        throw new Error('database or disk is full');
+      }),
+    };
+
+    await expect(
+      addColumnIfMissing(db as never, 'pending_actions', 'organization_id', 'text'),
+    ).rejects.toThrow('database or disk is full');
+  });
+
+  it('confirms a completed ALTER by reading table_info back, and rejects when the column is still absent', async () => {
+    // An ALTER that "succeeds" without the column appearing (a driver that
+    // swallowed the statement) must not be taken on trust.
+    const db = {
+      getAllAsync: vi.fn(async () => [{ name: 'id' }]),
+      execAsync: vi.fn(async () => {}),
+    };
+
+    await expect(
+      addColumnIfMissing(db as never, 'pending_actions', 'user_id', 'text'),
+    ).rejects.toThrow(/pending_actions\.user_id is still missing/);
+    expect(db.getAllAsync).toHaveBeenCalledTimes(2);
+  });
 });
