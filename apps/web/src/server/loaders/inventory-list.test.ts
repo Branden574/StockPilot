@@ -275,7 +275,7 @@ const baseItem = {
  * drift alone — recurring pattern #26.
  */
 const SITE_HOLDINGS_FIXTURE = [
-  { item_id: 'i1', location_id: 'L1', quantity: 4, locations: { name: 'DC4', kind: null } },
+  { item_id: 'i1', location_id: 'L1', quantity: 4, locations: { name: 'DC4', kind: null, type: 'warehouse' } },
   { item_id: 'i1', location_id: 'L2', quantity: 3, locations: { name: 'Stage', kind: 'staging' } },
   { item_id: 'i1', location_id: 'L3', quantity: 2, locations: { name: '1-A', kind: 'rack' } },
 ];
@@ -346,7 +346,8 @@ describe('loadInventoryList (cached payload shape)', () => {
               item_id: 'i1',
               location_id: 'L1',
               quantity: 4,
-              locations: { name: 'Mystery', kind: null },
+              // The warehouse's own BUILDING row: 'site' (2026-09-24).
+              locations: { name: 'Mystery', kind: null, type: 'warehouse' },
             },
             {
               item_id: 'i1',
@@ -377,6 +378,28 @@ describe('loadInventoryList (cached payload shape)', () => {
     expect(payload.placement['i1']).toEqual([
       { locationId: 'L1', label: 'Mystery', kind: 'site', quantity: 4 },
       { locationId: 'L2', label: 'Staging', kind: 'staging', quantity: 3 },
+    ]);
+  });
+
+  it('a NULL-kind place that is NOT the building (a shelf, a room, a van) prints its name as kind "location", never "site" (2026-09-24)', async () => {
+    createAdminClientMock.mockReturnValue(
+      makeAdmin({
+        ...emptyModuleGate,
+        inventory_items: { data: [baseItem], count: 1, error: null },
+        item_stock_levels: {
+          data: [
+            { item_id: 'i1', location_id: 'S7', quantity: 4, locations: { name: 'Shelf 7', kind: null, type: 'shelf' } },
+            { item_id: 'i1', location_id: 'V1', quantity: 6, locations: { name: 'Van', kind: null, type: 'vehicle' } },
+          ],
+          error: null,
+        },
+        item_images: { data: [], error: null },
+      }),
+    );
+    const payload = await loadInventoryList('org-1', 'all', 'items');
+    expect(payload.placement['i1']).toEqual([
+      { locationId: 'S7', label: 'Shelf 7', kind: 'location', quantity: 4 },
+      { locationId: 'V1', label: 'Van', kind: 'location', quantity: 6 },
     ]);
   });
 

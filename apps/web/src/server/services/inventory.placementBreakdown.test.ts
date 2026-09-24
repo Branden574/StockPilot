@@ -50,7 +50,8 @@ describe('InventoryService.placementBreakdown', () => {
       'item_stock_levels.select': {
         data: [
           { item_id: ITEM, location_id: 'stg', quantity: 50, locations: { name: 'PO Buffer', kind: 'staging' } },
-          { item_id: ITEM, location_id: 'site', quantity: 405, locations: { name: 'DC4', kind: null } },
+          { item_id: ITEM, location_id: 'site', quantity: 405, locations: { name: 'DC4', kind: null, type: 'warehouse' } },
+          { item_id: ITEM, location_id: 'shelf', quantity: 5, locations: { name: 'Shelf 7', kind: null, type: 'shelf' } },
           { item_id: ITEM, location_id: 'r1', quantity: 10, locations: { name: '1-A', kind: 'rack' } },
         ],
         error: null,
@@ -64,8 +65,10 @@ describe('InventoryService.placementBreakdown', () => {
       kind: 'site',
       quantity: 405,
     });
+    // A NULL-kind SHELF is a place, not the building: its name, kind 'location'.
+    expect(rows.find((r) => r.locationId === 'shelf')).toMatchObject({ label: 'Shelf 7', kind: 'location' });
     // Ranked with the real placements (before Staging), not with Unplaced.
-    expect(rows.map((r) => r.label)).toEqual(['1-A', 'DC4', 'Staging']);
+    expect(rows.map((r) => r.label)).toEqual(['1-A', 'DC4', 'Shelf 7', 'Staging']);
   });
 
   it('returns an empty map for an empty id list (no round-trip)', async () => {

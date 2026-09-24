@@ -554,7 +554,7 @@ async function loadInventoryRowsUncached(
     ids.length > 0
       ? admin
           .from('item_stock_levels')
-          .select('item_id, location_id, quantity, locations!inner(name, kind)')
+          .select('item_id, location_id, quantity, locations!inner(name, kind, type)')
           .eq('organization_id', organizationId)
           // in-list-bound: one default-view page, DEFAULT_VIEW_PAGE_SIZE (30) ids
           .in('item_id', ids)
@@ -604,7 +604,9 @@ interface HoldingLevelRow {
   item_id: string;
   location_id: string;
   quantity: number;
-  locations: { name: string; kind: string | null };
+  /** `type` separates the warehouse's own building SITE from other NULL-kind
+   *  places (shelves, bins, rooms, vehicles) — see the placement lines below. */
+  locations: { name: string; kind: string | null; type?: string | null };
 }
 
 interface PrimaryImageRow {
@@ -692,7 +694,12 @@ function assembleInventoryRows(
     //
     // Pattern #26: the sibling is InventoryService.placementBreakdown — change
     // one and inventory-list.test.ts's line-for-line parity guard fails.
-    const kind = rawKind ?? 'site';
+    // 2026-09-24: a NULL kind is the Site encoding, but only the warehouse's
+    // own BUILDING row (type 'warehouse', e.g. "DC4") is "the site" a picker
+    // cannot walk to. Shelves, bins, rooms, vehicles and job sites are also
+    // stored with a NULL kind and ARE places: they keep printing their name
+    // (kind 'location'). Only 'site' reads "No rack" in the Items table.
+    const kind = rawKind ?? (lvl.locations?.type === 'warehouse' ? 'site' : 'location');
     const label =
       kind === 'staging' ? 'Staging' : kind === 'unplaced' ? 'Unplaced' : lvl.locations.name;
     (placement[lvl.item_id] ??= []).push({
@@ -895,7 +902,7 @@ async function loadInventoryDatasetUncached(
       (batch) => (from, to) =>
         admin
           .from('item_stock_levels')
-          .select('item_id, location_id, quantity, locations!inner(name, kind)')
+          .select('item_id, location_id, quantity, locations!inner(name, kind, type)')
           .eq('organization_id', organizationId)
           .in('item_id', batch)
           .gt('quantity', 0)

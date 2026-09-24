@@ -7,12 +7,12 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
  * enter starting quantity, the stock should be placed on that rack" — no
  * more Unplaced/awaiting-put-away chip for manually created items.
  *
- * REDESIGNED per review (Minor #3): `create()` does NOT touch
- * `primary_location_id` or the 'initial' movement's `to_location_id` — both
- * pass through exactly as the caller sent them, because `primary_location_id`
- * is read far beyond the seeding trigger (the location filter, exports,
- * pickers all assume a SITE). `tg_seed_initial_level` (migration 0199) seeds
- * the item's first item_stock_levels holding exactly as it does today; THEN
+ * `create()` never writes a RACK into `primary_location_id`: it stays the
+ * caller's SITE, because it is read far beyond the seeding trigger (the
+ * location filter, exports, pickers all assume a site). Since 2026-09-24 (owner
+ * rule: no rack -> Unplaced) a stocked manual create inserts WITHOUT it, so
+ * `tg_seed_initial_level` (0199) seeds the warehouse's Unplaced bucket, and the
+ * site is written back as a label after the opening movement. THEN
  * `InventoryService.create()` reuses the bulk "Set rack" placement path —
  * resolve-or-create the typed rack (findOrCreateRackLocation, shared with
  * placeItemsOntoRackByName) and transferStock the seeded holding onto it.
@@ -329,6 +329,53 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
       primary_location_id: 'site-chosen-by-caller',
     });
     expect(transferCall(stub)).toBeUndefined();
+  });
+
+  it('the label is written AFTER the opening movement, scoped to the new item in this org, and the returned item carries it', async () => {
+    const order: string[] = [];
+    const stub = buildStub({
+      ...SEEDED_AT_UNPLACED,
+      'locations.select': { data: [{ id: 'rack-28a', name: '28-A' }], error: null },
+      'stock_movements.insert': () => {
+        order.push('movement');
+        return { data: null, error: null };
+      },
+      'inventory_items.update': () => {
+        order.push('label');
+        return { data: { primary_location_id: 'site-dc4' }, error: null };
+      },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    const created = (await svc.create({ ...BASE, primaryLocationId: 'site-dc4' })) as unknown as {
+      primary_location_id: string | null;
+    };
+
+    expect(order).toEqual(['movement', 'label']);
+    const args = stub.chainArgsAll.get('inventory_items.update')?.[0] ?? [];
+    expect(args).toContainEqual(['id', 'item-new']);
+    expect(args.some((a) => a[0] === 'organization_id')).toBe(true);
+    expect(created.primary_location_id).toBe('site-dc4');
+  });
+
+  it('a label write that fails never fails the create (the item and its stock are saved)', async () => {
+    const stub = buildStub({
+      ...SEEDED_AT_UNPLACED,
+      'locations.select': { data: [{ id: 'rack-28a', name: '28-A' }], error: null },
+      'inventory_items.update': { data: null, error: { message: 'permission denied for table inventory_items' } },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    await expect(svc.create({ ...BASE, primaryLocationId: 'site-dc4' })).resolves.toBeTruthy();
+    expect(transferCall(stub)).toBeDefined();
+  });
+
+  it('a create with NO opening stock keeps the primary on the insert (the trigger seeds nothing) and writes no label', async () => {
+    const stub = buildStub({});
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    await svc.create({ ...BASE, quantityOnHand: 0, binLocation: null, primaryLocationId: 'site-dc4' });
+    expect(insertedItemRow(stub).primary_location_id).toBe('site-dc4');
+    expect(stub.chainArgs.get('inventory_items.update')).toBeUndefined();
+    expect(stub.chainArgs.get('stock_movements.insert')).toBeUndefined();
   });
 
   it('an IMPORT create keeps seeding at the primary location (not a manual create)', async () => {

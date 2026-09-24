@@ -449,6 +449,27 @@ describe('InventoryService.bulkCreateSizedVariants — size-run auto-place onto 
     for (const row of many) delete SEEDED[row.id];
   });
 
+  it('a size left at 0 keeps the primary on its insert; the label update targets ONLY the stocked sizes and reads them back', async () => {
+    const stub = buildStub({
+      'inventory_items.insert': {
+        data: [...INSERTED, { id: 'v-11', name: 'Nike Vapor - 11', sku: 'SP-VAPOR-11', quantity_on_hand: 0, primary_location_id: SITE }],
+        error: null,
+      },
+      'inventory_items.update': { data: [{ id: 'v-9' }, { id: 'v-95' }, { id: 'v-10' }], error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.bulkCreateSizedVariants({ ...RUN, variants: [...RUN.variants, { size: '11', quantity: 0 }] });
+
+    const rows = insertedRows(stub);
+    expect(rows.find((r) => r.name === 'Nike Vapor - 11')?.primary_location_id).toBe(SITE);
+    expect(rows.filter((r) => r.name !== 'Nike Vapor - 11').every((r) => r.primary_location_id === null)).toBe(true);
+    const upd = stub.chainArgsAll.get('inventory_items.update')?.[0] ?? [];
+    const inArg = upd.find((a) => a[0] === 'id');
+    expect(inArg?.[1]).toEqual(['v-9', 'v-95', 'v-10']);
+    expect(stub.chainsAll.get('inventory_items.update')?.[0]).toContain('select');
+  });
+
   it('the rack never resolving leaves the run created and unplaced, with no transfer attempted', async () => {
     const stub = buildStub({
       'locations.select': { data: [], error: null },
