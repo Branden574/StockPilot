@@ -74,12 +74,14 @@ select is(
   1,
   'select policy exists'
 );
-select is(
+-- 0364 closed direct writes: charges come only from approve_po_import_commit
+-- (SECURITY DEFINER), so the write policy and the INSERT grant are gone.
+select ok(
   (select count(*)::int from pg_policies
      where schemaname = 'public' and tablename = 'purchase_order_charges'
-       and policyname = 'purchase_order_charges_write'),
-  1,
-  'write policy exists'
+       and policyname = 'purchase_order_charges_write') = 0
+  and not has_table_privilege('authenticated', 'public.purchase_order_charges', 'INSERT'),
+  'no write policy and no INSERT grant (0364)'
 );
 
 -- ── 10. charge_type CHECK rejects an unknown class ──────────────────────────

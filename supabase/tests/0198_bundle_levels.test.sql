@@ -202,6 +202,9 @@ select is(
 -- Migration 0198 adds apply_level_delta('placed') which raises
 -- insufficient_placed_stock when placed sum < needed.
 -- ===========================================================================
+-- Fixture writes run as postgres: holdings are ledger-only for the API roles
+-- since 0364, and this block shapes them by hand.
+reset role;
 do $$
 declare
   v_staging_loc uuid;
@@ -392,6 +395,8 @@ select is(
 --   Distribute 1 kit (needs 5), allow_shortage=true:
 --     v_have=1, v_draw=least(5,1)=1, v_short=4 → qoh 1→0, rack isl 1→0.
 -- ===========================================================================
+-- Fixture writes run as postgres (holdings are ledger-only since 0364).
+reset role;
 do $$
 declare
   v_rack2     uuid := 'fb982222-0000-0000-0000-000000000001';
