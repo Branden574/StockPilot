@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { generateSku } from '@/lib/utils';
 import {
   createBundleAction,
   updateBundleAction,
@@ -188,13 +189,28 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
             SKU
             <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
           </Label>
-          <Input
-            id="bundle-sku"
-            value={sku}
-            onChange={(e) => setSku(e.target.value)}
-            placeholder="KIT-READ-3"
-            maxLength={64}
-          />
+          <div className="flex gap-2">
+            <Input
+              id="bundle-sku"
+              value={sku}
+              onChange={(e) => setSku(e.target.value)}
+              placeholder="KIT-READ-3"
+              maxLength={64}
+            />
+            {/* Same generator and button word as the item form's SKU; the KIT
+                prefix matches the placeholder. Unique per organization is
+                still enforced by bundles_org_sku_unique on save. */}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9"
+              title="Generate a SKU"
+              onClick={() => setSku(generateSku('KIT'))}
+            >
+              Auto
+            </Button>
+          </div>
         </div>
         <div className="space-y-1.5">
           <Label className="block">Pre-assembly</Label>
