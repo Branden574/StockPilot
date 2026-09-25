@@ -1,7 +1,13 @@
-import { stockAvailability } from '@stockpilot/core';
+import { rentalItemsPredicate, stockAvailability } from '@stockpilot/core';
 
-import { settleIdBatchRead, type IdReadClient } from './id-batches';
+import {
+  idReadSelect,
+  settleIdBatchRead,
+  type IdReadClient,
+  type PageResult,
+} from './id-batches';
 import { readOpenReservations, readPrimaryPhotos, type PhotoPaths } from './id-reads';
+import { fetchAllRows } from './paginate';
 
 /**
  * The Rentals screen's Items view: the rental inventory itself, twin of web's
@@ -148,6 +154,63 @@ export function rentalItemsViewEyebrow(state: RentalItemsEyebrowState | null): s
 }
 
 // ── New-rental picker ───────────────────────────────────────────────────────
+
+/**
+ * The most rental items the New rental picker reads for one warehouse.
+ * Mirrors the web's CATALOG_ROW_CEILING (apps/web/src/server/loaders/
+ * orders-new-catalog.ts), the ceiling the web New rental page reads to; the
+ * phone cannot import it, so keep the two equal. A safety ceiling, not a page
+ * size: reaching it is logged.
+ */
+export const RENTAL_PICKER_ROW_CEILING = 10_000;
+
+/** One rental item the picker offers. */
+export interface RentalPickerItem {
+  id: string;
+  name: string | null;
+  sku: string | null;
+  quantity_on_hand: number | null;
+}
+
+/**
+ * Every rental item the New rental picker offers in one warehouse: the web New
+ * rental page's read (/dashboard/rentals/new), filter for filter. Org,
+ * warehouse, active, a rental, not deleted; by name then id, in 1000-row pages
+ * to RENTAL_PICKER_ROW_CEILING.
+ *
+ * It was one request with `.limit(500)` by name. The picker searches the rows
+ * it holds, on the phone, so an item past row 500 could not be found at all
+ * (the same limit hid 65 DC4 items from the Orders catalog, 2026-09-25).
+ *
+ * THROWS when any page fails (fetchAllRows): the screen shows its load error
+ * and a retry, never "No rental items in this warehouse", and never the pages
+ * read before the failure as the whole list.
+ */
+export async function readRentalPickerItems(
+  client: IdReadClient,
+  orgId: string,
+  warehouseId: string,
+): Promise<RentalPickerItem[]> {
+  const rows = await fetchAllRows<RentalPickerItem>(
+    (from, to) =>
+      idReadSelect(client, 'inventory_items', 'id, name, sku, quantity_on_hand')
+        .eq('organization_id', orgId)
+        .eq('warehouse_id', warehouseId)
+        .eq('status', 'active')
+        .eq('is_rental', rentalItemsPredicate.isRental)
+        .is('deleted_at', null)
+        .order('name', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to) as PromiseLike<PageResult<RentalPickerItem>>,
+    { cap: RENTAL_PICKER_ROW_CEILING },
+  );
+  if (rows.length >= RENTAL_PICKER_ROW_CEILING) {
+    console.warn(
+      `rental items reached the ${RENTAL_PICKER_ROW_CEILING}-row ceiling for warehouse ${warehouseId}: items past it are not shown`,
+    );
+  }
+  return rows;
+}
 
 /** What the new-rental picker can offer, given which of its reads failed. */
 export interface RentalPickerStatus {

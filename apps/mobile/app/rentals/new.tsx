@@ -63,7 +63,11 @@ import {
   type BorrowerSearch,
   type RentalBorrowerMember,
 } from '@/lib/rental-borrower';
-import { rentalPickerStatus } from '@/lib/rental-items';
+import {
+  readRentalPickerItems,
+  rentalPickerStatus,
+  type RentalPickerItem,
+} from '@/lib/rental-items';
 import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, RADIUS } from '@/lib/theme';
@@ -72,13 +76,6 @@ import { useTheme } from '@/lib/use-theme';
 interface WarehouseRow {
   id: string;
   name: string;
-}
-
-interface RentalItemRow {
-  id: string;
-  name: string | null;
-  sku: string | null;
-  quantity_on_hand: number | null;
 }
 
 /**
@@ -136,7 +133,7 @@ export default function NewRental() {
   const [warehousesLoading, setWarehousesLoading] = React.useState(true);
   const [warehousesError, setWarehousesError] = React.useState<string | null>(null);
   const [warehousesNonce, setWarehousesNonce] = React.useState(0);
-  const [items, setItems] = React.useState<RentalItemRow[]>([]);
+  const [items, setItems] = React.useState<RentalPickerItem[]>([]);
   const [reservedByItem, setReservedByItem] = React.useState<Record<string, number>>({});
   const [itemsLoading, setItemsLoading] = React.useState(false);
   // Why the items or their open reservations did not load. Either one BLOCKS
@@ -248,33 +245,31 @@ export default function NewRental() {
       // whose item is not in the rental warehouse, so keeping it would
       // guarantee a refusal the operator cannot see the cause of.
       setCart({});
-      const { data, error, status } = await supabase
-        .from('inventory_items')
-        .select('id, name, sku, quantity_on_hand')
-        .eq('organization_id', orgId)
-        .eq('warehouse_id', warehouseId)
-        .eq('status', 'active')
-        .eq('is_rental', true)
-        .is('deleted_at', null)
-        .order('name', { ascending: true })
-        .limit(500);
+      // Every rental item, in 1000-row pages, to the web's ceiling: the web New
+      // rental page's read, filter for filter (lib/rental-items.ts). It was
+      // one request with `.limit(500)` by name, and the search below runs over
+      // the rows held here, so an item past row 500 could not be found.
+      const read = await settleIdBatchRead(readRentalPickerItems(supabase, orgId, warehouseId));
       if (cancelled) return;
-      if (error) {
+      if (!read.ok) {
         // Not "No rental items in this warehouse": that sentence sends the
-        // operator to the web to mark items rentable that already are.
-        console.warn('rental items', error);
+        // operator to the web to mark items rentable that already are. A page
+        // that fails after the first one lands here too, never a short list.
+        // The message is never empty: an empty 502 body says its status.
+        console.warn('rental items', read.message);
         setItems([]);
         setReservedByItem({});
-        setItemsError(readErrorMessage(error, status));
+        setItemsError(read.message);
         setItemsLoading(false);
         return;
       }
-      const rows = (data ?? []) as RentalItemRow[];
+      const rows = read.value;
       setItems(rows);
 
-      // Open reservations for up to 500 items, batched (one `.in()` URL with
-      // 500 uuids fails). A failure is NOT "nothing reserved": it blocks the
-      // picker, since every figure would otherwise show on hand as available.
+      // Open reservations for every item read (up to RENTAL_PICKER_ROW_CEILING,
+      // 10,000), batched: one `.in()` URL fails past a few hundred uuids. A
+      // failure is NOT "nothing reserved": it blocks the picker, since every
+      // figure would otherwise show on hand as available.
       const reservations = await settleIdBatchRead(
         readOpenReservations(
           supabase,
@@ -299,7 +294,7 @@ export default function NewRental() {
   }, [orgId, warehouseId, itemsNonce]);
 
   const availableFor = React.useCallback(
-    (item: RentalItemRow) =>
+    (item: RentalPickerItem) =>
       stockAvailability({
         onHand: item.quantity_on_hand ?? 0,
         reserved: reservedByItem[item.id] ?? 0,
@@ -333,7 +328,7 @@ export default function NewRental() {
     return d;
   }, [returnDays]);
 
-  function addOne(item: RentalItemRow) {
+  function addOne(item: RentalPickerItem) {
     const max = availableFor(item);
     setCart((prev) => {
       const next = (prev[item.id] ?? 0) + 1;
@@ -344,7 +339,7 @@ export default function NewRental() {
     });
   }
 
-  function removeOne(item: RentalItemRow) {
+  function removeOne(item: RentalPickerItem) {
     setCart((prev) => {
       const next = (prev[item.id] ?? 0) - 1;
       const copy = { ...prev };

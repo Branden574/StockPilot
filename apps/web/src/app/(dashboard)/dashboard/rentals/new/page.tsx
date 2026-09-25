@@ -210,13 +210,13 @@ export default async function NewRentalPage({
       rentalItemIds,
       warehouseId,
     ),
-    // Reservations decide what is available to rent. Up to 500 items: one
-    // `.in()` of them all fails past ~215 locally and ~395 in production, and
-    // with its error ignored that was "nothing reserved", so an item already
-    // out on another rental looked available. The service batches and pages
-    // the read and THROWS on a failed batch. (Every org member can read the
-    // org's reservations, so the caller's own client sees what the admin
-    // client did.)
+    // Reservations decide what is available to rent. Up to
+    // CATALOG_ROW_CEILING items: one `.in()` of them all fails past ~215
+    // locally and ~395 in production, and with its error ignored that was
+    // "nothing reserved", so an item already out on another rental looked
+    // available. The service batches and pages the read and THROWS on a
+    // failed batch. (Every org member can read the org's reservations, so the
+    // caller's own client sees what the admin client did.)
     InventoryService.forCurrentUser().then((svc) =>
       svc.reservedQuantityByItemIds(rentalItemIds),
     ),

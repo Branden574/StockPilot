@@ -1,13 +1,15 @@
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { fakePostgrest, filterValue, inValues, uuid, type RecordedCall } from './__fixtures__/fake-postgrest';
-import type { PageResult } from './id-batches';
+import { IdBatchReadError, settleIdBatchRead, type PageResult } from './id-batches';
 import {
+  RENTAL_PICKER_ROW_CEILING,
   buildRentalItemRows,
   loadRentalItemsView,
+  readRentalPickerItems,
   rentalItemsEyebrow,
   rentalItemsViewEyebrow,
   rentalPickerStatus,
@@ -145,6 +147,153 @@ describe('rentalPickerStatus (new rental)', () => {
       message: 'Could not load warehouses.',
       detail: 'offline',
     });
+  });
+});
+
+describe('readRentalPickerItems (New rental picker)', () => {
+  // The picker read one request with `.limit(500)` by name and searched the
+  // rows it held, on the phone: an item past row 500 could not be found. It
+  // now reads the web New rental page's query, filter for filter, in pages.
+  const ORG = 'org-1';
+  const WH = 'wh-1';
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** inventory_items as PostgREST answers: the call's own eq/is filters, its
+   *  order keys (the first primary, later ones tiebreaks), its range window,
+   *  never more than max_rows. So dropping a filter or an order fails a test. */
+  function servedLikePostgrest(rows: Record<string, unknown>[], fail?: (call: RecordedCall) => boolean) {
+    return fakePostgrest((call): PageResult<unknown> => {
+      if (fail?.(call)) return { data: null, error: { message: 'fetch failed' }, status: 503 };
+      let out = rows.filter((r) =>
+        call.filters.every(([op, col, val]) => {
+          if (op === 'eq') return r[col] === val;
+          if (op === 'is') return (r[col] ?? null) === val;
+          throw new Error(`cannot evaluate .${op}()`);
+        }),
+      );
+      out = [...out].sort((a, b) => {
+        for (const [col, asc] of call.order) {
+          const x = a[col] as string;
+          const y = b[col] as string;
+          if (x !== y) return (x < y ? -1 : 1) * (asc ? 1 : -1);
+        }
+        return 0;
+      });
+      return { data: out.slice(call.from, Math.min(call.to, call.from + 999) + 1), error: null, status: 200 };
+    });
+  }
+
+  /** A rental item on the page's filters. Names repeat (two items share each)
+   *  and ids run against the names, so only name THEN id gives one order. */
+  function rental(i: number, over: Record<string, unknown> = {}) {
+    return {
+      id: uuid(9000 - i),
+      name: `Rental ${String(Math.floor(((i * 7919) % 1234) / 2)).padStart(4, '0')}`,
+      sku: `R-${i}`,
+      quantity_on_hand: 1,
+      organization_id: ORG,
+      warehouse_id: WH,
+      status: 'active',
+      is_rental: true,
+      deleted_at: null,
+      ...over,
+    };
+  }
+
+  const byNameThenId = (a: { name: string; id: string }, b: { name: string; id: string }) =>
+    a.name === b.name ? (a.id < b.id ? -1 : 1) : a.name < b.name ? -1 : 1;
+
+  it("reads the web page's query, filter for filter, by name then id, 1000 rows a page", async () => {
+    const client = servedLikePostgrest(Array.from({ length: 1234 }, (_, i) => rental(i)));
+    await readRentalPickerItems(client, ORG, WH);
+    expect(client.calls.map((c) => [c.from, c.to])).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ]);
+    for (const c of client.calls) {
+      expect(c.table).toBe('inventory_items');
+      expect(c.select).toBe('id, name, sku, quantity_on_hand');
+      expect(c.filters).toEqual([
+        ['eq', 'organization_id', ORG],
+        ['eq', 'warehouse_id', WH],
+        ['eq', 'status', 'active'],
+        ['eq', 'is_rental', true],
+        ['is', 'deleted_at', null],
+      ]);
+      expect(c.order).toEqual([
+        ['name', true],
+        ['id', true],
+      ]);
+    }
+  });
+
+  it('returns every rental item past row 500, in name-then-id order, and nothing another filter excludes', async () => {
+    const matching = Array.from({ length: 1234 }, (_, i) => rental(i));
+    // Each sorts FIRST by name, so a dropped filter would put it on page one.
+    const excluded = [
+      rental(0, { id: uuid(1), name: 'A other org', organization_id: 'org-2' }),
+      rental(0, { id: uuid(2), name: 'A other warehouse', warehouse_id: 'wh-2' }),
+      rental(0, { id: uuid(3), name: 'A not a rental', is_rental: false }),
+      rental(0, { id: uuid(4), name: 'A archived', status: 'archived' }),
+      rental(0, { id: uuid(5), name: 'A deleted', deleted_at: '2026-09-01T00:00:00Z' }),
+    ];
+    const client = servedLikePostgrest([...excluded, ...matching]);
+
+    const rows = await readRentalPickerItems(client, ORG, WH);
+
+    expect(rows).toHaveLength(1234);
+    expect(rows.map((r) => r.id)).toEqual([...matching].sort(byNameThenId).map((r) => r.id));
+    const excludedIds = new Set(excluded.map((r) => r.id));
+    expect(rows.some((r) => excludedIds.has(r.id))).toBe(false);
+  });
+
+  it('a page that fails AFTER the first rejects the read, never the first page as the list', async () => {
+    const client = servedLikePostgrest(
+      Array.from({ length: 1234 }, (_, i) => rental(i)),
+      (call) => call.from === 1000,
+    );
+    await expect(readRentalPickerItems(client, ORG, WH)).rejects.toBeInstanceOf(IdBatchReadError);
+    // What the screen branches on: a failure with its reason, not a value.
+    expect(await settleIdBatchRead(readRentalPickerItems(client, ORG, WH))).toEqual({
+      ok: false,
+      message: 'fetch failed',
+    });
+  });
+
+  it("stops at RENTAL_PICKER_ROW_CEILING, the web's CATALOG_ROW_CEILING, and says so", async () => {
+    // The phone cannot import the web constant; this keeps the two equal.
+    const loader = readFileSync(
+      path.resolve(__dirname, '../../../web/src/server/loaders/orders-new-catalog.ts'),
+      'utf8',
+    );
+    const web = /export const CATALOG_ROW_CEILING = ([\d_]+);/.exec(loader)?.[1];
+    expect(web, 'CATALOG_ROW_CEILING not found in the web loader').toBeDefined();
+    expect(RENTAL_PICKER_ROW_CEILING).toBe(Number(web!.replace(/_/g, '')));
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const client = servedLikePostgrest(
+      Array.from({ length: RENTAL_PICKER_ROW_CEILING + 50 }, (_, i) => ({
+        ...rental(i),
+        id: uuid(i),
+        name: `Rental ${String(i).padStart(5, '0')}`,
+      })),
+    );
+
+    const rows = await readRentalPickerItems(client, ORG, WH);
+
+    expect(rows).toHaveLength(RENTAL_PICKER_ROW_CEILING);
+    expect(rows.at(-1)?.id).toBe(uuid(RENTAL_PICKER_ROW_CEILING - 1));
+    expect(client.calls).toHaveLength(RENTAL_PICKER_ROW_CEILING / 1000);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`${RENTAL_PICKER_ROW_CEILING}-row ceiling`));
+  });
+
+  it('under the ceiling, says nothing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await readRentalPickerItems(servedLikePostgrest([rental(1)]), ORG, WH);
+    expect(warn).not.toHaveBeenCalled();
   });
 });
 
