@@ -63,6 +63,9 @@ export function Button({
     <Pressable
       onPress={disabled ? undefined : onPress}
       disabled={disabled}
+      // VoiceOver and TalkBack announce it as a button, and as dimmed /
+      // disabled when `disabled` (Pressable maps it into accessibilityState).
+      accessibilityRole="button"
       style={({ pressed }) => [
         styles.base,
         {

@@ -31,6 +31,15 @@ import {
  *    button.
  *  - `accessibilityViewIsModal` on the container keeps VoiceOver inside the
  *    open sheet (iOS; it also stops Fabric flattening the container away).
+ *  - The scrim sets `onAccessibilityTap` to its close handler. In RN 0.86
+ *    Fabric, RCTViewComponentView `accessibilityActivate` returns YES only
+ *    when that prop is set (Pressable does not add it). Otherwise UIKit falls
+ *    back to a synthetic touch at the CENTRE of the scrim's frame, which is
+ *    the container's centre, and hit-testing picks the card whenever the card
+ *    covers that point (every centred dialog; Adjust stock with the keyboard
+ *    up). The "Close" element then did not close. The container sets
+ *    `onAccessibilityEscape` to the same handler (two-finger scrub).
+ *  - Every other control in the card is announced as a button with a name.
  *
  * The defect this pins (simulator walk 2026-09-25): the Adjust stock card was
  * a `Pressable onPress={() => undefined}` inside a scrim Pressable, and
@@ -151,6 +160,9 @@ describe('Adjust stock sheet (app/item/[id].tsx AdjustModalContent)', () => {
     expect(tagOf(scrim, sf)).toBe('Pressable');
     expect(hasContent(scrim)).toBe(false);
     expect(attrText(scrim, 'onPress', sf)).toBe('onClose');
+    // A VoiceOver double-tap calls this directly instead of tapping the
+    // scrim's centre, which this card covers once the keyboard is up.
+    expect(attrText(scrim, 'onAccessibilityTap', sf)).toBe('onClose');
     expect(attrText(scrim, 'accessibilityRole', sf)).toBe('button');
     expect(attrText(scrim, 'accessibilityLabel', sf)).toBe('Close');
     expect(attrText(scrim, 'style', sf)).toContain('StyleSheet.absoluteFill');
@@ -165,6 +177,7 @@ describe('Adjust stock sheet (app/item/[id].tsx AdjustModalContent)', () => {
     const { container } = shapeOf();
     expect(tagOf(container, sf)).toBe('View');
     expect(attrText(container, 'accessibilityViewIsModal', sf)).toBe('true');
+    expect(attrText(container, 'onAccessibilityEscape', sf)).toBe('onClose');
     const style = attrText(container, 'style', sf) ?? '';
     expect(style).toContain('flex: 1');
     expect(style).toContain("justifyContent: 'flex-end'");
@@ -191,11 +204,12 @@ describe('Adjust stock sheet (app/item/[id].tsx AdjustModalContent)', () => {
     }
   });
 
-  it('the Button primitive is itself one element (a Pressable root, never accessible={false})', () => {
+  it('the Button primitive is itself one element (a Pressable root, never accessible={false}) announced as a button', () => {
     const btn = treeOf('src/components/ui/button.tsx');
     const root = btn.nodes.find((n) => n.ancestors.length === 0);
     expect(root && tagOf(root.el, btn.sf)).toBe('Pressable');
     expect(root && attrText(root.el, 'accessible', btn.sf)).toBeUndefined();
+    expect(root && attrText(root.el, 'accessibilityRole', btn.sf)).toBe('button');
   });
 });
 
@@ -250,6 +264,32 @@ describe.each(CONVERTED)('$file — "$heading"', ({ file, heading, layout, close
     expect(style).toContain(scrim);
   });
 
+  it('a VoiceOver double-tap on the scrim closes (onAccessibilityTap), and so does the escape scrub', () => {
+    const shape = shapeOf();
+    // Same handler as onPress: without it iOS injects a tap at the scrim's
+    // centre, and the card sits on that point in this sheet or dialog.
+    expect(attrText(shape.scrim, 'onAccessibilityTap', sf)).toBe(close);
+    expect(attrText(shape.container, 'onAccessibilityEscape', sf)).toBe(close);
+  });
+
+  it('every button in the card is announced as a button with a name', () => {
+    const shape = shapeOf();
+    const buttons = nodes.filter(
+      (n) => n.ancestors.includes(shape.card) && ['Button', 'Pressable'].includes(tagOf(n.el, sf)),
+    );
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const b of buttons) {
+      const tag = tagOf(b.el, sf);
+      const where = `${tag} at line ${sf.getLineAndCharacterOfPosition(b.el.getStart(sf)).line + 1}`;
+      const name = attrText(b.el, 'accessibilityLabel', sf) ?? textOf(b.el, sf);
+      expect(name, `${where} has no accessible name`).not.toBe('');
+      // The Button primitive carries the role itself (pinned above).
+      if (tag === 'Pressable') {
+        expect(attrText(b.el, 'accessibilityRole', sf), `${where} has no button role`).toBe('button');
+      }
+    }
+  });
+
   it('nothing between the container and the card content is a touchable', () => {
     // Checked before the shape lookup, so the pre-fix tree fails HERE with
     // the reason ("inside <Pressable>"), not with a missing container.
@@ -295,6 +335,20 @@ describe.each(CONVERTED)('$file — "$heading"', ({ file, heading, layout, close
       );
     }
   });
+});
+
+it('the Customer signature X is a button named "Close" (an icon has no text to read)', () => {
+  const file = 'app/order/[id].tsx';
+  const { sf, nodes } = treeOf(file);
+  const xs = nodes.filter(
+    (n) =>
+      tagOf(n.el, sf) === 'Pressable' &&
+      attrText(n.el, 'onPress', sf) === '() => setSigOpen(false)' &&
+      jsxChildren(n.el).some((ch) => tagOf(ch, sf) === 'X'),
+  );
+  expect(xs).toHaveLength(1);
+  expect(attrText(xs[0]!.el, 'accessibilityRole', sf)).toBe('button');
+  expect(attrText(xs[0]!.el, 'accessibilityLabel', sf)).toBe('Close');
 });
 
 it('biometric-optin-sheet keeps its bottom-anchored container style', () => {

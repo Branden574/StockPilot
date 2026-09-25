@@ -2437,10 +2437,22 @@ export default function OrderDetail() {
          * layer above it: taps beside the card fall through to the scrim and
          * close, while the card, a plain View, keeps its own touches.
          * accessibilityViewIsModal (iOS) keeps VoiceOver inside the dialog.
+         *
+         * onAccessibilityTap on the scrim: without it a VoiceOver double-tap
+         * is a synthetic touch at the CENTRE of the scrim's frame, and the
+         * centred card covers that point, so "Close" landed on the card and
+         * the dialog stayed open. With it, iOS calls the handler directly.
+         * onAccessibilityEscape on the container makes the two-finger scrub
+         * close the dialog too.
          */}
-        <View style={{ flex: 1 }} accessibilityViewIsModal>
+        <View
+          style={{ flex: 1 }}
+          accessibilityViewIsModal
+          onAccessibilityEscape={() => setSigOpen(false)}
+        >
           <Pressable
             onPress={() => setSigOpen(false)}
+            onAccessibilityTap={() => setSigOpen(false)}
             accessibilityRole="button"
             accessibilityLabel="Close"
             style={[
@@ -2455,7 +2467,12 @@ export default function OrderDetail() {
             <View style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Customer signature</Body>
-                <Pressable onPress={() => setSigOpen(false)} hitSlop={8}>
+                <Pressable
+                  onPress={() => setSigOpen(false)}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close"
+                >
                   <X size={18} color={c.ink4} />
                 </Pressable>
               </View>
@@ -2533,9 +2550,10 @@ export default function OrderDetail() {
       <Modal visible={denyOpen} transparent animationType="fade" onRequestClose={dismissDenyModal}>
         {/* Backdrop is a SIBLING behind the dialog, never its parent — see
             the Customer signature dialog above. */}
-        <View style={{ flex: 1 }} accessibilityViewIsModal>
+        <View style={{ flex: 1 }} accessibilityViewIsModal onAccessibilityEscape={dismissDenyModal}>
           <Pressable
             onPress={dismissDenyModal}
+            onAccessibilityTap={dismissDenyModal}
             accessibilityRole="button"
             accessibilityLabel="Close"
             style={[
@@ -2571,6 +2589,7 @@ export default function OrderDetail() {
               <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end' }}>
                 <Pressable
                   onPress={dismissDenyModal}
+                  accessibilityRole="button"
                   style={[styles.addBtn, { backgroundColor: 'transparent', borderWidth: 1, borderColor: c.hair, paddingHorizontal: 18 }]}
                 >
                   <Mono size={13} color={c.ink}>Cancel</Mono>
@@ -2578,6 +2597,7 @@ export default function OrderDetail() {
                 <Pressable
                   onPress={() => void submitDeny()}
                   disabled={acting !== null}
+                  accessibilityRole="button"
                   style={[
                     styles.addBtn,
                     { backgroundColor: '#b42318', paddingHorizontal: 18, opacity: acting !== null ? 0.5 : 1 },
@@ -2604,9 +2624,10 @@ export default function OrderDetail() {
       >
         {/* Backdrop is a SIBLING behind the dialog, never its parent — see
             the Customer signature dialog above. */}
-        <View style={{ flex: 1 }} accessibilityViewIsModal>
+        <View style={{ flex: 1 }} accessibilityViewIsModal onAccessibilityEscape={dismissReopenModal}>
           <Pressable
             onPress={dismissReopenModal}
+            onAccessibilityTap={dismissReopenModal}
             accessibilityRole="button"
             accessibilityLabel="Close"
             style={[
@@ -2651,6 +2672,7 @@ export default function OrderDetail() {
               <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end' }}>
                 <Pressable
                   onPress={dismissReopenModal}
+                  accessibilityRole="button"
                   style={[styles.addBtn, { backgroundColor: 'transparent', borderWidth: 1, borderColor: c.hair, paddingHorizontal: 18 }]}
                 >
                   <Mono size={13} color={c.ink}>Cancel</Mono>
@@ -2658,6 +2680,7 @@ export default function OrderDetail() {
                 <Pressable
                   onPress={() => void reopenPicking()}
                   disabled={!reopenReason.trim() || acting !== null}
+                  accessibilityRole="button"
                   style={[
                     styles.addBtn,
                     {

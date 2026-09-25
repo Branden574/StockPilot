@@ -80,10 +80,14 @@ export function BiometricOptInSheet({
        * and could not reach "Enable Face ID" or "Not now" on their own. See
        * add-order-items-sheet.tsx and src/lib/sheet-backdrop-guard.test.ts.
        * accessibilityViewIsModal (iOS) keeps VoiceOver inside the open sheet.
+       * onAccessibilityTap makes a VoiceOver double-tap on the scrim call
+       * onDismiss directly; without it iOS taps the scrim's centre, which this
+       * card covers. onAccessibilityEscape: the two-finger scrub dismisses.
        */}
-      <View style={styles.container} accessibilityViewIsModal>
+      <View style={styles.container} accessibilityViewIsModal onAccessibilityEscape={onDismiss}>
         <Pressable
           onPress={onDismiss}
+          onAccessibilityTap={onDismiss}
           accessibilityRole="button"
           accessibilityLabel="Close"
           style={[

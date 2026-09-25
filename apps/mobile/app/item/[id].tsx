@@ -2535,9 +2535,14 @@ function MovementNoteModalContent({
         {/* Backdrop is a SIBLING behind the card, never its parent: a
             Pressable ancestor turns the sheet into one VoiceOver element.
             See the note in AdjustModalContent below. */}
-        <View style={{ flex: 1, justifyContent: 'flex-end' }} accessibilityViewIsModal>
+        <View
+          style={{ flex: 1, justifyContent: 'flex-end' }}
+          accessibilityViewIsModal
+          onAccessibilityEscape={onClose}
+        >
           <Pressable
             onPress={onClose}
+            onAccessibilityTap={onClose}
             accessibilityRole="button"
             accessibilityLabel="Close"
             style={[
@@ -2859,10 +2864,22 @@ function AdjustModalContent({
          * VoiceOver inside the open sheet. The sheet guard test
          * (src/lib/sheet-backdrop-guard.test.ts) fails if the old shape
          * comes back anywhere in the app.
+         *
+         * The scrim also sets onAccessibilityTap. Without it, a VoiceOver
+         * double-tap on "Close" is a synthetic touch at the CENTRE of the
+         * scrim's frame; with the keyboard up this card covers that point
+         * (it lands on the CHANGE field), so "Close" did not close. With it,
+         * iOS calls the handler directly. onAccessibilityEscape on the
+         * container makes the two-finger scrub close the sheet too.
          */}
-        <View style={{ flex: 1, justifyContent: 'flex-end' }} accessibilityViewIsModal>
+        <View
+          style={{ flex: 1, justifyContent: 'flex-end' }}
+          accessibilityViewIsModal
+          onAccessibilityEscape={onClose}
+        >
           <Pressable
             onPress={onClose}
+            onAccessibilityTap={onClose}
             accessibilityRole="button"
             accessibilityLabel="Close"
             style={[
@@ -3399,9 +3416,14 @@ function SerialStatusSheet({
       {/* Backdrop is a SIBLING behind the card, never its parent: a
           Pressable ancestor turns the sheet into one VoiceOver element.
           See the note in AdjustModalContent above. */}
-      <View style={{ flex: 1, justifyContent: 'flex-end' }} accessibilityViewIsModal>
+      <View
+        style={{ flex: 1, justifyContent: 'flex-end' }}
+        accessibilityViewIsModal
+        onAccessibilityEscape={onClose}
+      >
         <Pressable
           onPress={onClose}
+          onAccessibilityTap={onClose}
           accessibilityRole="button"
           accessibilityLabel="Close"
           style={[
@@ -3648,9 +3670,14 @@ function AddSerialsModalContent({
         {/* Backdrop is a SIBLING behind the card, never its parent: a
             Pressable ancestor turns the sheet into one VoiceOver element.
             See the note in AdjustModalContent above. */}
-        <View style={{ flex: 1, justifyContent: 'flex-end' }} accessibilityViewIsModal>
+        <View
+          style={{ flex: 1, justifyContent: 'flex-end' }}
+          accessibilityViewIsModal
+          onAccessibilityEscape={onClose}
+        >
           <Pressable
             onPress={onClose}
+            onAccessibilityTap={onClose}
             accessibilityRole="button"
             accessibilityLabel="Close"
             style={[
