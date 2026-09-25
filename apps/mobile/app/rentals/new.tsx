@@ -21,6 +21,7 @@ import {
   StyleSheet,
   TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -38,15 +39,19 @@ import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { showWriteCta } from '@/lib/cta-gating';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { readErrorMessage, settleIdBatchRead } from '@/lib/id-batches';
 import { readOpenReservations, sumReservedByItem } from '@/lib/id-reads';
 import {
   BORROWER_EMAIL_FORMAT_ERROR,
+  BORROWER_SUGGESTION_A11Y_HINT,
   EMPTY_BORROWER,
+  borrowerEmailErrorShown,
   borrowerEmailInvalid,
   borrowerRequestFields,
   borrowerSearchFailure,
+  borrowerSuggestionA11yLabel,
   keepPickedMember,
   listRentalBorrowers,
   matchBorrowers,
@@ -147,6 +152,13 @@ export default function NewRental() {
   // The borrower: a picked team member, or anyone else by typed name and
   // email (lib/rental-borrower.ts holds the rules, the web picker's).
   const [borrower, setBorrower] = React.useState<BorrowerDraft>(EMPTY_BORROWER);
+  // The email's format error shows only after the field is left, as on the
+  // web (borrowerEmailErrorShown). A pick or Change starts it over.
+  const [emailTouched, setEmailTouched] = React.useState(false);
+  // At the accessibility text sizes the picked member's name and the Change
+  // chip no longer fit one row: the chip moves under the name, which keeps
+  // the full width (the Dynamic Type policy: stack, never break mid-word).
+  const stackPickedBorrower = shouldStackRow(useWindowDimensions().fontScale);
   // The team members to search. A failed load never blocks the form: a typed
   // name and email still check out (see borrowerSearchFailure).
   const [borrowerSearch, setBorrowerSearch] = React.useState<BorrowerSearch>({ status: 'loading' });
@@ -591,21 +603,24 @@ export default function NewRental() {
                       {RENTAL_BORROWER_TEAM_MEMBER}
                     </Body>
                   </View>
-                  <Pressable
-                    onPress={() => setBorrower(someoneElse(borrower))}
-                    accessibilityRole="button"
-                    accessibilityLabel="Change borrower"
-                    hitSlop={8}
-                    style={({ pressed }) => [
-                      styles.chip,
-                      { borderColor: c.hair, backgroundColor: c.card, opacity: pressed ? 0.85 : 1 },
-                    ]}
-                  >
-                    <Body size={13} color={c.ink2} style={{ fontFamily: FONT.display }}>
-                      Change
-                    </Body>
-                  </Pressable>
+                  {stackPickedBorrower ? null : (
+                    <ChangeBorrowerChip
+                      onPress={() => {
+                        setBorrower(someoneElse(borrower));
+                        setEmailTouched(false);
+                      }}
+                    />
+                  )}
                 </View>
+                {stackPickedBorrower ? (
+                  <ChangeBorrowerChip
+                    stacked
+                    onPress={() => {
+                      setBorrower(someoneElse(borrower));
+                      setEmailTouched(false);
+                    }}
+                  />
+                ) : null}
                 <Body size={12} muted>
                   {borrower.email.trim()
                     ? `Rental emails go to ${borrower.email.trim()}.`
@@ -628,7 +643,10 @@ export default function NewRental() {
                   <BorrowerSuggestions
                     search={borrowerSearch}
                     draft={borrower}
-                    onPick={(member) => setBorrower(pickMember(member))}
+                    onPick={(member) => {
+                      setBorrower(pickMember(member));
+                      setEmailTouched(false);
+                    }}
                     onRetry={() => setBorrowerNonce((n) => n + 1)}
                   />
                 ) : null}
@@ -636,12 +654,13 @@ export default function NewRental() {
                   label="EMAIL (OPTIONAL)"
                   value={borrower.email}
                   onChangeText={(text) => setBorrower((d) => typeEmail(d, text))}
+                  onBlur={() => setEmailTouched(true)}
                   placeholder="borrower@company.com"
                   keyboardType="email-address"
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
-                {borrowerEmailInvalid(borrower) ? (
+                {borrowerEmailErrorShown(borrower, emailTouched) ? (
                   <Body size={12} color={ACCENT.warn}>
                     {BORROWER_EMAIL_FORMAT_ERROR}
                   </Body>
@@ -702,11 +721,16 @@ export default function NewRental() {
             old copy disclosed that nothing was reserved — true of the direct
             insert, false of this path, and leaving it would teach operators to
             distrust a checkout that does hold the stock.
+            Nothing about emails here: the BORROWER section already says where
+            they go (the shared help text, or "Rental emails go to ..." for a
+            picked member). This line used to say "emailed a confirmation when
+            you add their email", which named the checkout receipt after the
+            return confirmation and was wrong for a picked member, whose
+            account email is used without anyone adding it.
           */}
           <Body size={12.5} muted style={{ marginTop: 8 }}>
             Checking out reserves these units, so they stop showing as available to rent
-            elsewhere. The borrower is emailed a confirmation when you add their email. Mark the
-            rental returned to release the stock.
+            elsewhere. Mark the rental returned to release the stock.
           </Body>
 
           {!canCreate ? (
@@ -789,7 +813,8 @@ function BorrowerSuggestions({
           key={member.userId}
           onPress={() => onPick(member)}
           accessibilityRole="button"
-          accessibilityLabel={`Check out to ${member.displayName}, team member`}
+          accessibilityLabel={borrowerSuggestionA11yLabel(member)}
+          accessibilityHint={BORROWER_SUGGESTION_A11Y_HINT}
           style={({ pressed }) => [
             styles.suggestion,
             { borderColor: c.hair, backgroundColor: pressed ? c.paper2 : c.card },
@@ -815,6 +840,35 @@ function BorrowerSuggestions({
         Not on the list? Keep the name as typed: they are someone not in StockPilot.
       </Body>
     </View>
+  );
+}
+
+/**
+ * Change, next to a picked member. `stacked` (large text) puts it on its own
+ * line under the name, sized to its label rather than stretched.
+ */
+function ChangeBorrowerChip({ onPress, stacked = false }: { onPress: () => void; stacked?: boolean }) {
+  const { c } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel="Change borrower"
+      hitSlop={8}
+      style={({ pressed }) => [
+        styles.chip,
+        {
+          borderColor: c.hair,
+          backgroundColor: c.card,
+          opacity: pressed ? 0.85 : 1,
+          alignSelf: stacked ? 'flex-start' : 'auto',
+        },
+      ]}
+    >
+      <Body size={13} color={c.ink2} style={{ fontFamily: FONT.display }}>
+        Change
+      </Body>
+    </Pressable>
   );
 }
 

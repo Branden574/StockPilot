@@ -63,6 +63,21 @@ describe('app/rentals/[id].tsx', () => {
   it('never describes a reminder before the return date', () => {
     expect(DETAIL).not.toMatch(/due soon|before (it is|the rental is) due|upcoming reminder|day before/i);
   });
+
+  // Mutation caught: the button on `rental.status === 'out'` alone (the old
+  // screen), which offered a rentals:read viewer "Mark returned or cancel on
+  // the web" and sent them to a web page with neither.
+  it('offers the web actions only to a viewer the web page gives them to, worded for what they can do', () => {
+    const src = code(DETAIL);
+    expect(src).toContain('const perms = useEffectivePermissions();');
+    expect(src).toContain('const webAction = rentalWebActionLabel(rental.status, perms);');
+    expect(src).toMatch(/\{webAction \? \(/);
+    expect(src).toContain('{webAction}');
+    expect(src).not.toMatch(/\{rental\.status === 'out' \? \(/);
+    expect(src).not.toContain('Mark returned or cancel on the web');
+    // The hook runs before any early return (rules of hooks).
+    expect(src.indexOf('const perms = useEffectivePermissions();')).toBeLessThan(src.indexOf('if (!enabled) {'));
+  });
 });
 
 describe('src/screens/rentals.tsx: the list', () => {
@@ -78,6 +93,16 @@ describe('src/screens/rentals.tsx: the list', () => {
     expect(src).toContain('loadRentalReminderContext(supabase, orgId),');
     expect(src).toContain('overdue_reminder_sent_at: (r.overdue_reminder_sent_at as string | null) ?? null,');
     expect(src).toContain('borrower_user_id: (r.borrower_user_id as string | null) ?? null,');
+  });
+
+  // Mutation caught: toLocaleDateString(undefined, ...) (the old card), the
+  // device's zone, beside a mark and a detail screen in the organization's.
+  it("prints the card's dates in the organization's zone, like its mark and the detail", () => {
+    const src = code(LIST);
+    expect(src).toContain('timeZone={reminderContext.timeZone}');
+    expect(src).toContain('out {rentalDayLabel(rental.checked_out_at, timeZone)}');
+    expect(src).toContain('{rentalDayLabel(rental.expected_return_at, timeZone)}');
+    expect(src).not.toMatch(/toLocaleDateString\(/);
   });
 
   it('marks overdue rows with the shared rule and the snapshot clock', () => {

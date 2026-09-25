@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 
 import { NextResponse } from 'next/server';
 
-import { sendRentalOverdueEmail } from '@/lib/email/rentals';
+import { sendRentalOverdueEmail, type RentalEmailOutcome } from '@/lib/email/rentals';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -57,9 +57,27 @@ type OverdueRow = {
  * not yet reminded) that returns the row only to the run that won it, and the
  * email goes out only for a claimed row. It used to send first and stamp
  * after, so two overlapping runs (a retried invocation, a manual trigger)
- * could both email the same borrower. A crash between the claim and the send
- * loses that one reminder, the same trade the other reminder crons make: one
- * missed nudge beats a duplicate to an outsider.
+ * could both email the same borrower.
+ *
+ * A SEND THAT DID NOT GO OUT GIVES THE CLAIM BACK. The stamp is what the
+ * rental pages print as "Overdue reminder: Sent <time>", so it must not stay
+ * on a rental whose reminder never left. When sendRentalOverdueEmail answers
+ * 'failed' (the rental read failed, or Resend refused the message or could not
+ * be reached: sendEmail reports that as ok:false and never throws), the run
+ * clears the stamp with an update guarded on the exact value it wrote, and the
+ * next daily run tries again while the rental is still out. It used to ignore
+ * the send's result, so a refused address or a Resend outage left the rental
+ * stamped, and the pages said "Sent" for an email nobody received.
+ *   - 'no_email' keeps the stamp: nothing can be sent, the pages say "Not
+ *     sent: no email on file" whatever the stamp says, and it is not re-read
+ *     every day.
+ *   - What is left: a crash between the claim and the send, or a failed
+ *     release (reported), leaves a stamp without a send. That is one rental
+ *     per crash, and still the trade the other reminder crons make: one missed
+ *     nudge beats a duplicate to an outsider. A send Resend accepted but whose
+ *     answer was lost is released too and may be sent again the next day; that
+ *     is rarer than a refusal, and a page claiming a send that never happened
+ *     is the worse error.
  *
  * ONE RULE WITH THE PAGES: the rental detail and list pages (web and phone)
  * tell the operator whether this reminder was sent or when it will be. They
@@ -153,10 +171,12 @@ export async function GET(req: Request) {
 
   for (const { id: rentalId } of candidates) {
     // Claim FIRST. `status = 'out'` in the guard too: a rental returned since
-    // the read above must not get an overdue email.
+    // the read above must not get an overdue email. The value is kept: a
+    // failed send gives back exactly this claim and nothing newer.
+    const claimedAt = new Date().toISOString();
     const { data: claimed, error: claimErr } = await admin
       .from('rentals')
-      .update({ overdue_reminder_sent_at: new Date().toISOString() })
+      .update({ overdue_reminder_sent_at: claimedAt })
       .eq('id', rentalId)
       .eq('status', RENTAL_OVERDUE_SWEEP.status)
       .is('overdue_reminder_sent_at', null)
@@ -175,14 +195,40 @@ export async function GET(req: Request) {
       skipped += 1;
       continue;
     }
+    let outcome: RentalEmailOutcome;
+    let thrown: unknown = null;
     try {
-      // Best-effort email (never throws; self-skips when no borrower email).
-      await sendRentalOverdueEmail(rentalId);
-      sent += 1;
+      // Never throws by contract; answers how the send ended.
+      outcome = await sendRentalOverdueEmail(rentalId);
     } catch (e) {
-      failed += 1;
-      void reportError(e, { tag: 'cron/rental-overdue', extra: { step: 'send', rentalId } });
+      outcome = 'failed';
+      thrown = e;
     }
+    if (outcome === 'sent') {
+      sent += 1;
+      continue;
+    }
+    if (outcome === 'no_email' || outcome === 'not_found') {
+      // Nothing to send, now or later: the stamp stays (see the header).
+      skipped += 1;
+      continue;
+    }
+    // Not sent: give the claim back so the next run retries, guarded on the
+    // stamp this run wrote.
+    failed += 1;
+    const { error: releaseErr } = await admin
+      .from('rentals')
+      .update({ overdue_reminder_sent_at: null })
+      .eq('id', rentalId)
+      .eq('overdue_reminder_sent_at', claimedAt);
+    // One report per rental: the release failure when there is one (the stamp
+    // then stays on a reminder that did not go out), else the send failure.
+    void reportError(
+      releaseErr
+        ? new Error(`overdue reminder not sent, and the claim could not be released: ${releaseErr.message}`)
+        : (thrown ?? new Error('overdue reminder not sent; released for the next run')),
+      { tag: 'cron/rental-overdue', extra: { step: releaseErr ? 'release' : 'send', rentalId } },
+    );
   }
 
   return NextResponse.json({ ok: true, considered: candidates.length, sent, skipped, failed });

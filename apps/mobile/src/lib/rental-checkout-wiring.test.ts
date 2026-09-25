@@ -280,10 +280,17 @@ describe('rentals/new.tsx — a borrower who is not in StockPilot (2026-09-25)',
     expect(submitBody()).not.toMatch(/borrowerEmail:\s*borrowerEmail/);
   });
 
-  it('does not promise a confirmation email when none will be sent', () => {
-    const jsx = source.slice(source.indexOf('return ('));
-    expect(jsx).not.toMatch(/The borrower is emailed a confirmation\.\s/);
-    expect(jsx).toMatch(/emailed a confirmation when you add their email/);
+  // The footer used to say "emailed a confirmation when you add their email":
+  // it named the checkout receipt after the return confirmation (the detail
+  // pages list both, by those names), and was wrong for a picked member, whose
+  // account email is used without anyone adding it. The BORROWER section says
+  // where the emails go; the footer says nothing about them.
+  it('the footer says nothing about emails, and never calls the receipt a confirmation', () => {
+    const src = code();
+    const jsx = src.slice(src.indexOf('return ('));
+    expect(jsx).not.toMatch(/emailed a confirmation/i);
+    const footer = jsx.slice(jsx.indexOf('Checking out reserves these units'));
+    expect(footer.slice(0, footer.indexOf('</Body>'))).not.toMatch(/email/i);
   });
 });
 
@@ -312,11 +319,45 @@ describe('rentals/new.tsx: team member search (2026-09-25, the web BorrowerPicke
 
   it('pick, type over and Change go through the shared rules', () => {
     const src = code();
-    expect(src).toMatch(/onPick=\{\(member\) => setBorrower\(pickMember\(member\)\)\}/);
+    expect(src).toMatch(/onPick=\{\(member\) => \{\s*setBorrower\(pickMember\(member\)\);/);
     expect(src).toMatch(/onChangeText=\{\(text\) => setBorrower\(\(d\) => typeName\(d, text\)\)\}/);
     expect(src).toMatch(/onChangeText=\{\(text\) => setBorrower\(\(d\) => typeEmail\(d, text\)\)\}/);
-    expect(src).toMatch(/onPress=\{\(\) => setBorrower\(someoneElse\(borrower\)\)\}/);
+    expect(src).toMatch(/onPress=\{\(\) => \{\s*setBorrower\(someoneElse\(borrower\)\);/);
     expect(src).toMatch(/setBorrower\(\(d\) => keepPickedMember\(d, members\)\)/);
+  });
+
+  // Mutation caught: the error on every render (the old screen), which flagged
+  // "Enter a full email address..." from the first letter typed. The web picker
+  // shows it only after the field is left.
+  it('the email format error waits until the field is left, and a pick or Change starts it over', () => {
+    const src = code();
+    expect(src).toContain('onBlur={() => setEmailTouched(true)}');
+    expect(src).toContain('{borrowerEmailErrorShown(borrower, emailTouched) ? (');
+    expect(src).not.toMatch(/\{borrowerEmailInvalid\(borrower\) \? \(/);
+    expect(src).toMatch(/setBorrower\(pickMember\(member\)\);\s*setEmailTouched\(false\);/);
+    expect(src.match(/setBorrower\(someoneElse\(borrower\)\);\s*setEmailTouched\(false\);/g)).toHaveLength(2);
+  });
+
+  // Mutation caught: "Check out to <name>, team member" (the old label), which
+  // replaced the email shown in the row for VoiceOver, so two members with
+  // one name read the same, and sounded as if the tap checked out.
+  it('a suggestion reads its email to VoiceOver and says the tap picks the borrower', () => {
+    const src = code();
+    expect(src).toContain('accessibilityLabel={borrowerSuggestionA11yLabel(member)}');
+    expect(src).toContain('accessibilityHint={BORROWER_SUGGESTION_A11Y_HINT}');
+    expect(src).not.toMatch(/Check out to \$\{member/);
+  });
+
+  // The Dynamic Type policy: a name beside a control stacks at the
+  // accessibility sizes (mid-word breaks are a width problem). Mutation
+  // caught: the old fixed row, which left a long name ~100pt at AX5.
+  it('the picked member row stacks its Change chip under the name at large text sizes', () => {
+    const src = code();
+    expect(src).toContain("import { shouldStackRow } from '@/lib/dynamic-type-layout';");
+    expect(src).toContain('const stackPickedBorrower = shouldStackRow(useWindowDimensions().fontScale);');
+    expect(src).toMatch(/\{stackPickedBorrower \? null : \(\s*<ChangeBorrowerChip/);
+    expect(src).toMatch(/\{stackPickedBorrower \? \(\s*<ChangeBorrowerChip\s+stacked/);
+    expect(src).toContain("alignSelf: stacked ? 'flex-start' : 'auto',");
   });
 
   it('a picked member shows where the emails go, or the no-email note; a typed bad email blocks Check out', () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { RENTAL_BORROWER_EMAIL_HELP } from './borrower';
 import {
-  RENTAL_BORROWER_NOT_IN_STOCKPILOT,
+  RENTAL_BORROWER_NOT_LINKED,
   RENTAL_BORROWER_TEAM_MEMBER,
   RENTAL_EMAILS_RECORD_NOTE,
   RENTAL_NO_EMAIL_NOTE,
@@ -336,7 +336,7 @@ describe('no reminder BEFORE the return date is described anywhere', () => {
   it('in any fixed sentence', () => {
     for (const text of [
       RENTAL_BORROWER_TEAM_MEMBER,
-      RENTAL_BORROWER_NOT_IN_STOCKPILOT,
+      RENTAL_BORROWER_NOT_LINKED,
       RENTAL_NO_EMAIL_NOTE,
       RENTAL_NON_MEMBER_EMAIL_NOTE,
       RENTAL_EMAILS_RECORD_NOTE,
@@ -375,5 +375,16 @@ describe('no reminder BEFORE the return date is described anywhere', () => {
     expect(state.kind).toBe('scheduled');
     if (state.kind !== 'scheduled') return;
     expect(state.at.getTime()).toBeGreaterThanOrEqual(Date.parse(rental().expected_return_at));
+  });
+});
+
+describe('the borrower label says only what the rental records', () => {
+  // borrower_user_id null means the rental is not tied to an account, not that
+  // the person has none: every phone checkout before 2026-09-25 was a typed
+  // name, co-workers included. Mutation caught: "Not in StockPilot", which is
+  // false about those co-workers on every web and phone detail page.
+  it('a rental without a linked account is never called "Not in StockPilot"', () => {
+    expect(RENTAL_BORROWER_NOT_LINKED).toBe('Not linked to a StockPilot account');
+    expect(RENTAL_BORROWER_NOT_LINKED).not.toMatch(/not in stockpilot/i);
   });
 });

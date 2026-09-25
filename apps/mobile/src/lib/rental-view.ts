@@ -4,16 +4,19 @@ import {
   overdueReminderListMark,
   overdueReminderState,
   overdueRemindersOn,
-  RENTAL_BORROWER_NOT_IN_STOCKPILOT,
+  RENTAL_BORROWER_NOT_LINKED,
   RENTAL_BORROWER_TEAM_MEMBER,
   RENTAL_NO_EMAIL_NOTE,
   RENTAL_NON_MEMBER_EMAIL_NOTE,
   RENTAL_OVERDUE_SWEEP,
   rentalEmailOnFile,
+  formatOrgDate,
   resolveOrgTimezone,
+  type Permission,
   type RentalEmailFacts,
 } from '@stockpilot/core';
 
+import { showWriteCta } from './cta-gating';
 import { readErrorMessage } from './id-batches';
 
 /**
@@ -244,7 +247,7 @@ export async function loadRentalDetail(
 /** Who borrowed it, as the detail's borrower card says it. */
 export interface RentalBorrowerView {
   name: string;
-  /** "Team member" or "Not in StockPilot". */
+  /** "Team member" or "Not linked to a StockPilot account". */
   kind: string;
   isMember: boolean;
   /** The address the rental emails go to, or null. */
@@ -262,7 +265,7 @@ export function rentalBorrowerView(rental: {
   const email = rentalEmailOnFile(rental.borrower_email);
   return {
     name: rental.borrower_name.trim() || 'Unnamed borrower',
-    kind: isMember ? RENTAL_BORROWER_TEAM_MEMBER : RENTAL_BORROWER_NOT_IN_STOCKPILOT,
+    kind: isMember ? RENTAL_BORROWER_TEAM_MEMBER : RENTAL_BORROWER_NOT_LINKED,
     isMember,
     email,
     note: email === null ? RENTAL_NO_EMAIL_NOTE : isMember ? null : RENTAL_NON_MEMBER_EMAIL_NOTE,
@@ -288,4 +291,45 @@ export function rentalTimeLabel(iso: string | null | undefined, timeZone: string
   if (Number.isNaN(d.getTime())) return '—';
   if (timeZone) return formatOrgDateTime(d, TIME_LABEL_OPTIONS, timeZone);
   return d.toLocaleString('en-US', TIME_LABEL_OPTIONS);
+}
+
+const DAY_LABEL_OPTIONS: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+
+/**
+ * "Sep 25": the list card's out and due dates, in the organization's zone when
+ * it is known, else the device's. The reminder mark under them and the detail
+ * screen's EXPECTED RETURN use the organization's zone, so the card does too:
+ * with the organization on UTC and the phone in California, a rental due
+ * 2026-09-26T00:00Z used to read "due Sep 25" on the card and "Sep 26" one tap
+ * away. An em dash for a missing or unreadable value.
+ */
+export function rentalDayLabel(iso: string | null | undefined, timeZone: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  if (timeZone) return formatOrgDate(d, DAY_LABEL_OPTIONS, timeZone);
+  return d.toLocaleDateString('en-US', DAY_LABEL_OPTIONS);
+}
+
+/**
+ * The detail's button to the web rental page, where returns and cancels
+ * happen, worded for what this viewer can do there; null when the web page
+ * would offer them nothing. The web shows its actions panel only with
+ * rentals:create (Mark returned), and Cancel only with rentals:manage as well
+ * (apps/web/src/app/(dashboard)/dashboard/rentals/[id]/page.tsx and
+ * components/rentals/rental-actions-panel.tsx). A rentals:read viewer (an
+ * auditor, say) used to be offered "Mark returned or cancel on the web" and
+ * land on a page with neither. showWriteCta shows the button while the
+ * permission set is still loading, like every other write button on the phone;
+ * the web page and the server decide.
+ */
+export function rentalWebActionLabel(
+  status: string,
+  perms: ReadonlySet<Permission> | undefined,
+): string | null {
+  if (status !== 'out') return null;
+  if (!showWriteCta(perms, 'rentals:create')) return null;
+  return showWriteCta(perms, 'rentals:manage')
+    ? 'Mark returned or cancel on the web'
+    : 'Mark returned on the web';
 }

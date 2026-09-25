@@ -11,9 +11,14 @@ import type { RentalRow } from '@/server/services/rentals';
 import { RentalDetailHeader } from './rental-detail-header';
 
 /**
- * The borrower block on the rental detail page: who, whether they are a team
- * member or not in StockPilot, and the email on file (or that there is none,
- * which means no receipt and no reminders).
+ * The borrower block on the rental detail page: who, whether the rental is
+ * linked to a team member's account or not, and the email on file (or that
+ * there is none, which means no receipt and no reminders).
+ *
+ * "Not linked to a StockPilot account", never "Not in StockPilot": a null
+ * borrower_user_id says the rental is not tied to an account, not that the
+ * person has none (every phone checkout before 2026-09-25 was a typed name,
+ * co-workers included).
  */
 
 function rental(over: Partial<RentalRow> = {}): RentalRow {
@@ -52,10 +57,11 @@ function renderHeader(r: RentalRow) {
 }
 
 describe('RentalDetailHeader borrower block', () => {
-  it('a borrower not in StockPilot, with an email: the email and that their emails carry no app link', () => {
+  it('a borrower not linked to an account, with an email: the email and that their emails carry no app link', () => {
     renderHeader(rental());
     expect(screen.getByRole('heading', { name: 'Sam Ortiz' })).toBeTruthy();
-    expect(screen.getByTestId('borrower-kind').textContent).toBe('Not in StockPilot');
+    expect(screen.getByTestId('borrower-kind').textContent).toBe('Not linked to a StockPilot account');
+    expect(screen.queryByText(/not in stockpilot/i)).toBeNull();
     expect(screen.getByText('sam@school.org')).toBeTruthy();
     expect(screen.getByText(RENTAL_NON_MEMBER_EMAIL_NOTE)).toBeTruthy();
     expect(screen.queryByText(RENTAL_NO_EMAIL_NOTE)).toBeNull();

@@ -37,10 +37,12 @@ import {
   rentalBorrowerView,
   rentalStatusPill,
   rentalTimeLabel,
+  rentalWebActionLabel,
   type RentalDetailLoad,
 } from '@/lib/rental-view';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useTheme } from '@/lib/use-theme';
 
@@ -56,7 +58,8 @@ const TONE_ICON: Record<RentalEmailTone, typeof Mail> = {
  * One rental on the phone: the twin of web's /dashboard/rentals/[id]
  * (2026-09-25). Before this the list's cards opened the web page in a browser.
  *
- * It says who borrowed it (a team member or someone not in StockPilot), the
+ * It says who borrowed it (a team member, or a borrower not linked to an
+ * account: a typed name, which is every phone rental before 2026-09-25), the
  * email on file or that there is none, and which emails that borrower gets:
  * the receipt and the return confirmation by their rule (nothing records
  * them), and the overdue reminder's real state (sent, when it will be sent,
@@ -64,7 +67,8 @@ const TONE_ICON: Record<RentalEmailTone, typeof Mail> = {
  * rule. See lib/rental-view.ts for the reads.
  *
  * Returning or cancelling a rental is still done on the web; the button at the
- * bottom opens this rental there.
+ * bottom opens this rental there, only for a viewer the web page gives an
+ * action to, and worded for what they can do there (rentalWebActionLabel).
  */
 export default function RentalDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -73,6 +77,7 @@ export default function RentalDetailScreen() {
   const { c } = useTheme();
   const enabledModules = useEnabledModules();
   const enabled = enabledModules.has('rentals');
+  const perms = useEffectivePermissions();
   const [load, setLoad] = React.useState<RentalDetailLoad | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
   const [nonce, setNonce] = React.useState(0);
@@ -138,6 +143,7 @@ export default function RentalDetailScreen() {
   const borrower = rentalBorrowerView(rental);
   const emails = rentalEmailLines(rental, context.remindersOn, nowMs, context.timeZone);
   const overdue = pill.label === 'OVERDUE';
+  const webAction = rentalWebActionLabel(rental.status, perms);
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
@@ -279,7 +285,7 @@ export default function RentalDetailScreen() {
           )}
         </Card>
 
-        {rental.status === 'out' ? (
+        {webAction ? (
           <View style={{ marginTop: 18, gap: 8 }}>
             <Button
               block
@@ -288,7 +294,7 @@ export default function RentalDetailScreen() {
                 Linking.openURL(`https://stockpilotusa.com/dashboard/rentals/${rental.id}`).catch(() => undefined);
               }}
             >
-              Mark returned or cancel on the web
+              {webAction}
             </Button>
           </View>
         ) : null}
