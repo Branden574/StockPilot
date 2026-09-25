@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 
 import ts from 'typescript';
@@ -354,4 +355,12 @@ it('the Customer signature X is a button named "Close" (an icon has no text to r
 it('biometric-optin-sheet keeps its bottom-anchored container style', () => {
   const src = readSource(path.join(MOBILE_ROOT, 'src/components/biometric-optin-sheet.tsx'));
   expect(src).toMatch(/container: \{\s*flex: 1,\s*justifyContent: 'flex-end',\s*\}/);
+});
+
+describe('Adjust stock sheet: text fields have spoken names', () => {
+  it('CHANGE and REASON fields carry accessibilityLabel, so VoiceOver does not read the placeholder', () => {
+    const src = readFileSync(path.resolve(__dirname, '../../app/item/[id].tsx'), 'utf8');
+    expect(src).toMatch(/placeholder="e\.g\. -3 or 12"\s*\n\s*accessibilityLabel="Change, plus adds, minus removes"/);
+    expect(src).toMatch(/placeholder="Cycle count variance, damage, etc\."\s*\n\s*accessibilityLabel="Reason, optional"/);
+  });
 });

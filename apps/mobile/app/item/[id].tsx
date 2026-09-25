@@ -2937,6 +2937,7 @@ function AdjustModalContent({
                   value={delta}
                   onChangeText={setDelta}
                   placeholder="e.g. -3 or 12"
+                  accessibilityLabel="Change, plus adds, minus removes"
                   placeholderTextColor={c.ink5}
                   keyboardType="numbers-and-punctuation"
                   autoFocus
@@ -2965,6 +2966,7 @@ function AdjustModalContent({
                   value={reason}
                   onChangeText={setReason}
                   placeholder="Cycle count variance, damage, etc."
+                  accessibilityLabel="Reason, optional"
                   placeholderTextColor={c.ink5}
                   // The /adjust route refuses a reason over 500 characters;
                   // stop the typing there instead of failing the whole save.
