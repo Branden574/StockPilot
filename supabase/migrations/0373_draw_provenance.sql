@@ -35,7 +35,11 @@
 --      after every draw succeeded, and a failed draw records nothing.
 --   3. ledger._record_holdings: the only writer of the table. SECURITY
 --      INVOKER and not executable by any API role: it runs only as the
---      engine's owner. A NULL movement id records nothing.
+--      engine's owner. A NULL movement id records nothing. It records each
+--      share as its numeric(14,4) holding moved and skips a share that
+--      rounds to zero, so a quantity with more than four decimals (which
+--      adjust_stock and the API accept) records the truth and never trips
+--      the table's CHECK (review, 2026-09-25).
 --   4. public.apply_level_delta keeps its signature, default, SECURITY
 --      DEFINER, search_path, ACL and comment. It keeps its own gate verbatim
 --      and then calls the engine with a NULL movement id, so it moves
@@ -121,14 +125,22 @@
 -- CHECK and FK constraints fail loudly (23514 / 23503) only on a bug. This
 -- file raises 55000 at push time if a body it restates has drifted from the
 -- text it was built from, if 0373 is already applied, if authenticated
--- cannot INSERT stock_movements.id, or if a post-check fails. Never
--- 40001/40P01 (0367).
+-- cannot INSERT stock_movements.id, or if a post-check fails, and fails
+-- with 55P03 when it cannot take its two table locks (PROD PUSH NOTE).
+-- Never 40001/40P01 (0367).
 --
 -- ── PROD PUSH NOTE ──────────────────────────────────────────────────────────
--- create unique index on stock_movements holds SHARE on the table while it
--- builds, which blocks movement inserts for that time. lock_timeout makes the
--- push fail fast (55P03) instead of queueing behind an open transaction;
--- retry is the remedy (the 0370/0371 pattern). Push off-peak.
+-- The push holds SHARE ROW EXCLUSIVE on stock_movements and locations from
+-- the lock prelude (after the preflight) to COMMIT, so movement inserts and
+-- location writes wait for the index build and the rest of this file. The
+-- prelude waits for stock_movements holding nothing, then takes locations
+-- NOWAIT, so the push never waits while holding a lock a stock write needs:
+-- no deadlock (40P01) either way round. Without it, a null-location +1 that
+-- started during the index build deadlocked with the FK step (review,
+-- 2026-09-25; scripts/db-concurrency/0373_push_lock_order.sh). The push
+-- fails fast with 55P03 (lock_timeout on stock_movements, or NOWAIT on
+-- locations while a write holds it); retry is the remedy (the 0370/0371
+-- pattern). Push off-peak.
 -- ============================================================================
 
 -- PLAIN `set`, not `set local` (0303/0358/0370/0371): the CLI batch is atomic
@@ -184,6 +196,23 @@ begin
     raise exception '0373: authenticated cannot INSERT stock_movements.id' using errcode = '55000';
   end if;
 end $pre$;
+
+-- The lock prelude (see PROD PUSH NOTE). Sections 1 and 2 need SHARE ROW
+-- EXCLUSIVE on stock_movements and locations until COMMIT. User paths take
+-- ROW EXCLUSIVE on the two in BOTH orders (a null-location increment:
+-- locations via ensure_*, then its movement; a return restock: its movement,
+-- then locations), so any push that WAITS for one while holding the other can
+-- deadlock (40P01). This waits (lock_timeout) for stock_movements while it
+-- holds nothing a user transaction needs, then takes locations NOWAIT: 55P03
+-- at once if a write holds it, and after that every lock this file needs is
+-- already held. Inside DO because the CLI batch is not a transaction block
+-- (a top-level LOCK TABLE refuses there); the locks last until the batch
+-- commits. Proven by scripts/db-concurrency/0373_push_lock_order.sh.
+do $lock$
+begin
+  lock table public.stock_movements in share row exclusive mode;
+  lock table public.locations in share row exclusive mode nowait;
+end $lock$;
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -257,7 +286,7 @@ grant select on table public.stock_movement_holdings to authenticated, service_r
 comment on table public.stock_movement_holdings is
   '0373: which holdings a null-location stock change took from (quantity < 0) or landed in (quantity > 0: a Staging location), one row per holding in draw order (seq). The only writer is ledger._record_holdings, called from ledger.apply_level_delta_for with the movement id its caller generated; the composite FK (deferred to COMMIT, cascades) pins the row to its movement''s org and item. History starts at the 0373 push: no backfill. Not covered: post_cycle_count''s residual draw (public.apply_level_delta records nothing) and explicit-location paths, whose single holding is in stock_movements.from_location_id / to_location_id (an empty set means "use from/to"). location_kind, location_warehouse_id, item_warehouse_id and actor_scope are facts at draw time. A source "crosses warehouses" when location_warehouse_id and item_warehouse_id are both non-null and differ (NULL means org-level, never foreign; the 0343 rule). SELECT mirrors the parent movement''s visibility; no API role can write. A future location dedupe must repoint location_id, as 0270 did for from/to.';
 comment on column public.stock_movement_holdings.quantity is
-  '0373: < 0 taken from this holding, > 0 landed in it (increments land in Staging). Rows of one movement sum to its quantity_change for the recorded paths.';
+  '0373: < 0 taken from this holding, > 0 landed in it (increments land in Staging), exactly as the numeric(14,4) holding moved; a share that rounds to zero records no row. Rows of one movement sum to the holdings difference it made, which is its quantity_change on the recorded paths, except for a removal given with more than four decimals that ends in an exact half (e.g. -0.00005): the movement row rounds that away from zero, the holding (and so the rows) toward zero.';
 comment on column public.stock_movement_holdings.step is
   '0373: which loop of the draw engine touched the holding: increment, staging_first (the Staging pre-pass), placed (racks/crates/areas/Sites by location age, Unplaced last), any_staging (0341 manual removal spilling into Staging).';
 comment on column public.stock_movement_holdings.mode is
@@ -304,20 +333,33 @@ begin
   end if;
   v_mgr := v_uid is not null and public.has_org_role(p_org, 'manager');
 
+  -- Each share is recorded as its holding actually moved. The engine's shares
+  -- carry the caller's full precision (adjust_stock takes an unconstrained
+  -- numeric; the API accepts any finite value), but item_stock_levels.quantity
+  -- is numeric(14,4). An increment lands round(p_qty, 4) (the upsert's
+  -- EXCLUDED row is already cast); a draw leaves round(q - take, 4) with
+  -- q - take >= 0 and q already at four decimals. Both are the signed share
+  -- rounded half UP: floor(x * 10000 + 0.5) / 10000. A share that rounds to
+  -- zero moved nothing and records no row (only the last share of a draw can
+  -- be fractional), so the CHECK (quantity <> 0) cannot fail and the rows
+  -- equal the holdings difference exactly. seq numbers the kept rows.
   insert into public.stock_movement_holdings (
     movement_id, seq, organization_id, item_id, location_id, quantity, step, mode,
     location_kind, location_warehouse_id, item_warehouse_id, actor_scope)
   select p_movement_id,
          coalesce((select max(h.seq) from public.stock_movement_holdings h
-                    where h.movement_id = p_movement_id), 0) + u.ord::int,
+                    where h.movement_id = p_movement_id), 0)
+           + (row_number() over (order by u.ord))::int,
          p_org, p_item_id, u.loc, u.qty, u.step, p_mode,
          l.kind, l.warehouse_id, p_item_wh,
          case when v_uid is null then 'service'
               when v_mgr then 'manager'
               when public.caller_can_write_location(u.loc) then 'in_scope'
               else 'out_of_scope' end
-    from unnest(p_locs, p_qtys, p_steps) with ordinality as u(loc, qty, step, ord)
+    from (select x.loc, x.step, x.ord, floor(x.qty * 10000 + 0.5) / 10000 as qty
+            from unnest(p_locs, p_qtys, p_steps) with ordinality as x(loc, qty, step, ord)) u
     left join public.locations l on l.id = u.loc
+   where u.qty <> 0
    order by u.ord;
 end;
 $function$;
@@ -326,7 +368,7 @@ revoke all on function ledger._record_holdings(uuid, uuid, uuid, uuid, uuid[], n
   from public, anon, authenticated, service_role;
 
 comment on function ledger._record_holdings(uuid, uuid, uuid, uuid, uuid[], numeric[], text[], text) is
-  '0373: the only writer of public.stock_movement_holdings. Called only by ledger.apply_level_delta_for (SECURITY DEFINER), so it runs as that function''s owner; no API role holds EXECUTE. A NULL movement id or an empty array records nothing. seq continues from the movement''s current max. actor_scope: service / manager / in_scope / out_of_scope (caller_can_write_location).';
+  '0373: the only writer of public.stock_movement_holdings. Called only by ledger.apply_level_delta_for (SECURITY DEFINER), so it runs as that function''s owner; no API role holds EXECUTE. A NULL movement id or an empty array records nothing. Each share is recorded as its numeric(14,4) holding moved (rounded half up to four decimals); a share that rounds to zero records no row. seq continues from the movement''s current max over the kept rows. actor_scope: service / manager / in_scope / out_of_scope (caller_can_write_location).';
 
 
 -- ═══════════════════════════════════════════════════════════════════════════

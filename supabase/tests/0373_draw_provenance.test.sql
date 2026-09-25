@@ -38,6 +38,15 @@
 --   F. SECURITY: no direct writes; the engine's gate; the wrapper's gate;
 --      RLS read parity for every persona (visible rows = rows of visible
 --      movements, with literal counts).
+--   R. SUB-PRECISION QUANTITIES (review 2026-09-25): a share with more than
+--      four decimals (adjust_stock and the API accept any finite value) is
+--      recorded as its numeric(14,4) holding moved, and one that rounds to
+--      zero records no row: the engine still equals the 0359 oracle exactly,
+--      no draw that succeeded before fails (it did, 23514), and rows sum
+--      exactly to the holdings difference and to new - previous quantity.
+--
+-- The push-time lock order (the migration's lock prelude) needs two sessions:
+-- scripts/db-concurrency/0373_push_lock_order.sh.
 --
 -- The recorder's closed EXECUTE is asserted from the catalog (A), not by a
 -- permission-denied call: images before 17.6.1.155 crash on a
@@ -110,6 +119,15 @@
 --        -> C8, D4, D5, D9, D16, D19, E6
 --   M28  table added to the realtime publication
 --        -> A9
+--   M29  recorder: insert the unrounded share (the text before the review fix)
+--        -> R1, R2, R3, R4, R7, R9, R10, R11, R12, R14, R15
+--   M30  recorder: round, but keep shares that round to zero
+--        -> R1, R2, R3, R4, R7, R9, R10, R11, R12, R13, R14, R15
+--   M31  recorder: round half away from zero (round(qty, 4)), not as the holding moved
+--        -> R4, R7, R14, R15
+--   M32  recorder: number seq by array position, not over the kept rows:
+--        EQUIVALENT (only the last share of a draw can be fractional, so a
+--        dropped row is always last); survives by construction.
 --   M23  the migration's drift preflight disabled: not reachable from pgTAP
 --        (the migration is applied before tests run); killed by the live
 --        drift check (drift planted in each of the five restated bodies:
@@ -119,7 +137,7 @@
 
 begin;
 
-select plan(124);
+select plan(139);
 
 \set orgS    '\'03730000-0000-0000-0000-000000000001\''
 \set orgF    '\'03730000-0000-0000-0000-000000000002\''
@@ -418,6 +436,48 @@ begin
   exception
     when sqlstate 'ZX373' then return sqlerrm;
     when others then return sqlstate;
+  end;
+end $f$;
+
+-- Exact (four-decimal) twins of snap/rows/run for the R group: run4 reports
+--   ok|<holdings after, exact>#<rows of p_mv, exact>
+--     #oracle=<per location, the holdings difference equals the recorded rows EXACTLY>
+-- or err|<sqlstate>|<message>, in a subtransaction that is always rolled back.
+create function pg_temp.snap4(p_item uuid) returns text language sql stable as $f$
+  select coalesce(string_agg(pg_temp.tag(s.location_id) || '=' || s.quantity::text, ','
+                             order by pg_temp.tag(s.location_id) collate "C"), '')
+    from public.item_stock_levels s where s.item_id = p_item;
+$f$;
+create function pg_temp.rows4(p_mv uuid) returns text language sql stable as $f$
+  select coalesce(string_agg(h.seq || ':' || pg_temp.tag(h.location_id) || ':' || h.quantity::text
+                             || ':' || h.step, ',' order by h.seq), '')
+    from public.stock_movement_holdings h where h.movement_id = p_mv;
+$f$;
+create function pg_temp.run4(p_call text, p_item uuid, p_mv uuid default null) returns text
+language plpgsql as $f$
+declare
+  v_before jsonb;
+  v_after  jsonb;
+  v_oracle boolean;
+begin
+  select coalesce(jsonb_object_agg(s.location_id::text, s.quantity), '{}'::jsonb) into v_before
+    from public.item_stock_levels s where s.item_id = p_item;
+  begin
+    execute p_call;
+    select coalesce(jsonb_object_agg(s.location_id::text, s.quantity), '{}'::jsonb) into v_after
+      from public.item_stock_levels s where s.item_id = p_item;
+    select coalesce(bool_and(coalesce(d.d, 0) = coalesce(r.q, 0)), true) into v_oracle
+      from (select k.k::uuid as loc,
+                   coalesce((v_after ->> k.k)::numeric, 0) - coalesce((v_before ->> k.k)::numeric, 0) as d
+              from jsonb_object_keys(v_before || v_after) as k(k)) d
+      full join (select h.location_id as loc, sum(h.quantity) as q
+                   from public.stock_movement_holdings h where h.movement_id = p_mv
+                  group by h.location_id) r on r.loc = d.loc;
+    raise exception using errcode = 'ZX373', message =
+      'ok|' || pg_temp.snap4(p_item) || '#' || pg_temp.rows4(p_mv) || '#oracle=' || v_oracle::text;
+  exception
+    when sqlstate 'ZX373' then return sqlerrm;
+    when others then return 'err|' || sqlstate || '|' || sqlerrm;
   end;
 end $f$;
 
@@ -923,6 +983,46 @@ select set_config('stockpilot.ledger', '', true);
 set local "request.jwt.claim.sub" to '';
 
 -- ══════════════════════════════════════════════════════════════════════════
+-- R. SUB-PRECISION QUANTITIES (review 2026-09-25). adjust_stock takes an
+-- unconstrained numeric and the API accepts any finite value, but holdings
+-- are numeric(14,4). Before the fix the recorder inserted the unrounded
+-- share: a share under 0.00005 became a 0.0000 row and the CHECK failed the
+-- whole draw (23514) where 0359 succeeded, and a half-way take recorded
+-- 0.0001 against a holding that did not move. Each case: the engine's
+-- holdings equal the 0359 oracle's EXACTLY, the rows are literal, and per
+-- location the rows equal the holdings difference exactly. Service path.
+-- ══════════════════════════════════════════════════════════════════════════
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, -0.00001, ''placed'')', :mvB, :itX), :itX, :mvB),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -0.00001, ''placed'')', :itX), :itX), '#', 1) || '##oracle=true',
+  'R1: -0.00001 moves nothing (as 0359) and records no row (was 23514)');
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, 0.00004, ''placed'')', :mvB, :itX), :itX, :mvB),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, 0.00004, ''placed'')', :itX), :itX), '#', 1) || '##oracle=true',
+  'R2: +0.00004 lands nothing (as 0359) and records no row (was 23514)');
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, -1.00001, ''placed'')', :mvB, :itX), :itX, :mvB),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -1.00001, ''placed'')', :itX), :itX), '#', 1) || '#1:A1:-1.0000:placed#oracle=true',
+  'R3: -1.00001 empties A1; the 0.00001 remainder on the Site moves nothing and records no row (was 23514)');
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, -0.00005, ''placed'')', :mvB, :itX), :itX, :mvB),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -0.00005, ''placed'')', :itX), :itX), '#', 1) || '##oracle=true',
+  'R4: -0.00005 (an exact half) leaves A1 at 1.0000, so no row (was a -0.0001 row against an unchanged holding)');
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, -0.00006, ''placed'')', :mvB, :itX), :itX, :mvB),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -0.00006, ''placed'')', :itX), :itX), '#', 1) || '#1:A1:-0.0001:placed#oracle=true',
+  'R5: -0.00006 takes A1 to 0.9999: one -0.0001 row');
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, 0.00005, ''placed'')', :mvB, :itX), :itX, :mvB),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, 0.00005, ''placed'')', :itX), :itX), '#', 1) || '#1:SA:0.0001:increment#oracle=true',
+  'R6: +0.00005 (an exact half) lands 0.0001 in WA Staging: one 0.0001 row');
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, -5.00005, ''staging_first'')', :mvB, :itX), :itX, :mvB),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -5.00005, ''staging_first'')', :itX), :itX), '#', 1) || '#1:SA:-5.0000:staging_first#oracle=true',
+  'R7: staging_first -5.00005 empties WA Staging; the half on WB Staging moves nothing and records no row');
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, -10.00006, ''any'')', :mvB, :itX), :itX, :mvB),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -10.00006, ''any'')', :itX), :itX), '#', 1)
+          || '#1:A1:-1.0000:placed,2:S:-2.0000:placed,3:B1:-4.0000:placed,4:A2:-1.0000:placed,5:UA:-2.0000:placed,6:SA:-0.0001:any_staging#oracle=true',
+  'R8: any -10.00006: every placed holding, then 0.0001 off WA Staging (any_staging kept: it moved)');
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, -10.00001, ''any'')', :mvB, :itX), :itX, :mvB),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -10.00001, ''any'')', :itX), :itX), '#', 1)
+          || '#1:A1:-1.0000:placed,2:S:-2.0000:placed,3:B1:-4.0000:placed,4:A2:-1.0000:placed,5:UA:-2.0000:placed#oracle=true',
+  'R9: any -10.00001: every placed holding; the 0.00001 Staging remainder moves nothing and records no row');
+
+-- ══════════════════════════════════════════════════════════════════════════
 -- D. PER CALLER, AS REAL PERSONAS
 -- ══════════════════════════════════════════════════════════════════════════
 
@@ -1273,6 +1373,39 @@ set local role to 'anon';
 select throws_ok($$select count(*) from public.stock_movement_holdings$$,
   '42501', null, 'F15: anon cannot read the table at all');
 reset role;
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- R (continued). The reachable path: WA staff through public.adjust_stock,
+-- the phone and API shape. After F so the parity counts above are untouched.
+-- itX holds A1=1, S=1, SA=4, SB=3 (on hand 9) here.
+-- ══════════════════════════════════════════════════════════════════════════
+set local "request.jwt.claim.sub" to :u_stf;
+set local role to 'authenticated';
+select lives_ok(format($$select public.adjust_stock(%L, -0.00001, 'remove', null, 'R tiny minus', null, 'any')$$, :itX),
+  'R10: WA staff removes 0.00001 in mode any (was 23514 at the recorder''s CHECK)');
+select lives_ok(format($$select public.adjust_stock(%L, 0.00004, 'adjust', null, 'R tiny plus', null)$$, :itX),
+  'R11: WA staff adds 0.00004 with no location (was 23514)');
+select lives_ok(format($$select public.adjust_stock(%L, -1.00001, 'remove', null, 'R spill', null)$$, :itX),
+  'R12: WA staff removes 1.00001: A1 empties, the remainder spills onto the Site (was 23514)');
+select lives_ok(format($$select public.adjust_stock(%L, -0.00005, 'remove', null, 'R half', null, 'any')$$, :itX),
+  'R13: WA staff removes an exact half (0.00005)');
+reset role;
+select is(
+  (select string_agg(m.reason || ':' || m.quantity_change::text || ':' || (m.new_quantity - m.previous_quantity)::text
+                     || '[' || pg_temp.rows4(m.id) || ']', ' ' order by m.reason collate "C")
+     from public.stock_movements m where m.item_id = :itX and m.reason like 'R %')
+  || ' | ' || pg_temp.snap4(:itX) || ' | ' || pg_temp.fk_ok(),
+  'R half:-0.0001:0.0000[] R spill:-1.0000:-1.0000[1:A1:-1.0000:placed] R tiny minus:0.0000:0.0000[] R tiny plus:0.0000:0.0000[] | A1=0.0000,A2=0.0000,B1=0.0000,S=1.0000,SA=4.0000,SB=3.0000,UA=0.0000 | fk ok',
+  'R14: the four movements exist as before 0373; only the spill records a row (A1 -1); the Site, touched by 0.00001 and 0.00005, never moved; the deferred FK holds');
+select is(
+  (select count(*)::int || '|' || bool_and(x.q = x.d)::text
+     from (select m.id, m.new_quantity - m.previous_quantity as d,
+                  (select sum(h.quantity) from public.stock_movement_holdings h where h.movement_id = m.id) as q
+             from public.stock_movements m
+            where m.organization_id = :orgS
+              and exists (select 1 from public.stock_movement_holdings h where h.movement_id = m.id)) x),
+  '19|true',
+  'R15: every movement with provenance rows in this file: the rows sum EXACTLY to its new_quantity - previous_quantity');
 
 select * from finish();
 rollback;
