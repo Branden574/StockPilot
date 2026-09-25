@@ -57,7 +57,7 @@
 -- INV-29 and INV-30 need no hand recipe: they plant their own probes and are
 -- the standing proof that INV-25/26 can still fail. The same holds for
 -- INV-32, INV-34 and INV-36 (0371), the controls for INV-31, INV-33 and
--- INV-35.
+-- INV-35, and for INV-39 (0373), the control for INV-37 and INV-38.
 --
 -- Pure catalog introspection — no fixtures, no seeded rows, no roles switched.
 -- `begin`/`rollback` for house consistency and so the temporary allowlist
@@ -66,7 +66,7 @@
 
 begin;
 
-select plan(36);
+select plan(39);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -230,6 +230,31 @@ create temporary table _sec_inv_forall_on_scoped_allow (relname text primary key
 insert into _sec_inv_forall_on_scoped_allow (relname, why) values
   ('warehouses',      'warehouses_admin_write USING is has_org_role(admin), narrower than warehouses_select (member AND (manager+ OR user_can_access_warehouse read)), so it cannot widen reads'),
   ('purchase_orders', 'KNOWN GAP, deferred to 0372: purchase_orders_write (manager OR purchase_orders:manage) widens reads past purchase_orders:read and the warehouse scope. A plain split breaks PO numbering (next_po_number is INVOKER and counts only visible POs), so it needs its own prerequisite');
+
+-- ── H. Functions that still call the NON-recording public.apply_level_delta
+--       (0373) ──────────────────────────────────────────────────────────────
+--
+-- Since 0373 every null-location draw goes through ONE engine,
+-- ledger.apply_level_delta_for, which records which holdings it touched for
+-- the movement id its caller passes. public.apply_level_delta passes a NULL
+-- id, so a caller of it moves stock with no provenance. INV-37 makes every
+-- such caller a visible, defended exception.
+create temporary table _sec_inv_ald_caller_allow (fn text primary key, why text not null);
+insert into _sec_inv_ald_caller_allow (fn, why) values
+  ('ledger.post_cycle_count', 'F1-frozen: its residual null-location draw stays unrecorded (0373 owner Q4); pgTAP 0373 D30 pins the gap so it flips on purpose when the count slice passes a movement id');
+
+-- ── I. Callers of the draw engine, and the movement id each passes (0373) ──
+--
+-- A recorded draw is only true if the id it records under is the id of the
+-- one stock_movements row the same caller inserts. INV-38 holds every caller
+-- to that shape; a new caller must be listed here with the id it passes.
+create temporary table _sec_inv_engine_caller_allow (fn text primary key, id_arg text not null, why text not null);
+insert into _sec_inv_engine_caller_allow (fn, id_arg, why) values
+  ('public.apply_level_delta',          'null',    'the non-recording wrapper: moves holdings exactly as before, records nothing (its callers are INV-37''s list)'),
+  ('ledger.adjust_stock',               'v_mv_id', 'every null-location adjust (phone, web, AI, restore, picking, reversal, cancel restock, receipt fallback)'),
+  ('ledger.distribute_bundle',          'v_mv_id', 'the pre-assembled kit drain and each component draw'),
+  ('ledger.assemble_bundle',            'v_mv_id', 'each component draw and the kit''s Staging landing'),
+  ('ledger.process_return_disposition', 'v_mv_id', 'the restock landing and the scrap draw, one id per leg');
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -1188,6 +1213,188 @@ select is(
 
 drop table public._sec_inv_probe_scoped;
 delete from _sec_inv_forall_on_scoped_allow where why like 'control probe:%';
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 14. DRAW PROVENANCE: ONE ENGINE, AND EVERY RECORD PAIRS WITH ITS OWN
+--     MOVEMENT (0373)
+--
+-- ledger.apply_level_delta_for records which holdings a null-location draw
+-- touched under the movement id its caller generated; the caller then inserts
+-- its stock_movements row with that id. Two things can make provenance lie
+-- without any error: a new function drawing through the non-recording
+-- public.apply_level_delta (INV-37), and a caller whose id does not pair with
+-- exactly one of its own movement rows (INV-38: a restock landing recorded on
+-- the scrap row, an insert without the id). The composite deferred FK cannot
+-- catch a pairing mistake within one item and org; this does, from the code
+-- shape. INV-38 also keeps the table read-only to every API role.
+--
+-- The detectors are temporary views so INV-39 exercises the very same text.
+-- Comments are stripped before matching.
+-- ═══════════════════════════════════════════════════════════════════════════
+create temporary view _sec_inv_ald_caller_violations as
+  with src as (
+    select n.nspname || '.' || p.proname as fn,
+           regexp_replace(regexp_replace(p.prosrc, '/\*.*?\*/', '', 'g'), '--[^\n]*', '', 'g') as s
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'ledger')
+  )
+  select 'unlisted caller of public.apply_level_delta: ' || src.fn as x, src.fn
+    from src
+   where src.s ~* '(^|[^a-z0-9_.])(public\s*\.\s*)?apply_level_delta\s*\('
+     and src.fn not in (select a.fn from _sec_inv_ald_caller_allow a)
+  union all
+  select 'stale allowlist-H entry: ' || a.fn, a.fn
+    from _sec_inv_ald_caller_allow a
+   where not exists (select 1 from src
+                      where src.fn = a.fn
+                        and src.s ~* '(^|[^a-z0-9_.])(public\s*\.\s*)?apply_level_delta\s*\(');
+
+create temporary view _sec_inv_engine_violations as
+  with src as (
+    select n.nspname || '.' || p.proname as fn,
+           regexp_replace(regexp_replace(p.prosrc, '/\*.*?\*/', '', 'g'), '--[^\n]*', '', 'g') as s
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'ledger')
+  ),
+  listed as (
+    select a.fn, a.id_arg, src.s
+      from _sec_inv_engine_caller_allow a join src on src.fn = a.fn
+  ),
+  segs as (
+    select l.fn, g.seg, g.ord
+      from listed l
+      cross join lateral regexp_split_to_table(l.s, 'v_mv_id\s*(uuid\s*)?:=\s*gen_random_uuid\s*\(\s*\)')
+           with ordinality as g(seg, ord)
+     where l.id_arg = 'v_mv_id'
+  )
+  -- (a) the engine's callers are exactly the listed ones
+  select 'unlisted engine caller: ' || src.fn as x, src.fn
+    from src
+   where src.s ~* 'apply_level_delta_for\s*\('
+     and src.fn not in (select a.fn from _sec_inv_engine_caller_allow a)
+  union all
+  select 'stale allowlist-I entry: ' || a.fn, a.fn
+    from _sec_inv_engine_caller_allow a
+   where not exists (select 1 from src where src.fn = a.fn and src.s ~* 'apply_level_delta_for\s*\(')
+  union all
+  -- (b1) every engine call passes the listed id
+  select 'engine call not passing ' || l.id_arg || ': ' || l.fn, l.fn
+    from listed l
+   where (select count(*) from regexp_matches(l.s, 'apply_level_delta_for\s*\(', 'gi'))
+      <> (select count(*) from regexp_matches(l.s, 'apply_level_delta_for\s*\(\s*' || l.id_arg || '\s*,', 'gi'))
+  union all
+  -- (b2) an id-passing caller mints v_mv_id at least once ...
+  select 'no movement id minted: ' || l.fn, l.fn
+    from listed l
+   where l.id_arg = 'v_mv_id'
+     and l.s !~* 'v_mv_id\s*(uuid\s*)?:=\s*gen_random_uuid\s*\(\s*\)'
+  union all
+  -- ... and every mint is followed, before the next one, by exactly one
+  -- engine call and exactly one stock_movements insert that lists id first
+  -- and inserts v_mv_id into it; nothing of the kind precedes the first mint.
+  select 'unpaired movement id: ' || s.fn || ' after mint ' || (s.ord - 1), s.fn
+    from segs s
+   where case when s.ord = 1
+              then (select count(*) from regexp_matches(s.seg, 'apply_level_delta_for\s*\(', 'gi')) <> 0
+                or (select count(*) from regexp_matches(s.seg, 'insert\s+into\s+public\.stock_movements\s*\(\s*id\s*,', 'gi')) <> 0
+              else (select count(*) from regexp_matches(s.seg, 'apply_level_delta_for\s*\(', 'gi')) <> 1
+                or (select count(*) from regexp_matches(s.seg, 'insert\s+into\s+public\.stock_movements\s*\(\s*id\s*,', 'gi')) <> 1
+                or (select count(*) from regexp_matches(s.seg, 'insert\s+into\s+public\.stock_movements\s*\(\s*id\s*,[^;]*\)\s*values\s*\(\s*v_mv_id\s*,', 'gi')) <> 1
+         end
+  union all
+  -- (c) no API role can write the provenance table, and PUBLIC holds nothing
+  select 'write privilege on stock_movement_holdings: ' || r.r || ' ' || pv.p, 'public.stock_movement_holdings'
+    from unnest(array['anon', 'authenticated', 'service_role']) as r(r),
+         unnest(array['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN']) as pv(p)
+   where has_table_privilege(r.r, 'public.stock_movement_holdings', pv.p)
+      or (pv.p in ('INSERT', 'UPDATE', 'REFERENCES')
+          and has_any_column_privilege(r.r, 'public.stock_movement_holdings', pv.p))
+  union all
+  select 'PUBLIC grant on stock_movement_holdings: ' || a.privilege_type, 'public.stock_movement_holdings'
+    from pg_class c, aclexplode(c.relacl) a
+   where c.oid = 'public.stock_movement_holdings'::regclass and a.grantee = 0;
+
+-- INV-37. No unlisted function draws through the non-recording wrapper.
+select is(
+  (select coalesce(string_agg(v.x, ', ' order by v.x collate "C"), '') from _sec_inv_ald_caller_violations v),
+  '',
+  'INV-37: every function that still calls the non-recording public.apply_level_delta is allowlisted with a reason (0373)'
+);
+
+-- INV-38. The engine's callers are the listed ones, each passes its listed
+-- id, every minted id pairs with exactly one engine call and one movement row
+-- inserted with that id, and no API role can write the provenance table.
+select is(
+  (select coalesce(string_agg(v.x, ', ' order by v.x collate "C"), '') from _sec_inv_engine_violations v),
+  '',
+  'INV-38: every draw-engine caller records under the id of exactly one movement row it inserts, and no API role can write stock_movement_holdings (0373)'
+);
+
+-- INV-39. VACUITY + MUTATION CONTROL for INV-37 and INV-38: the populations
+-- are non-empty, and each detector fires on a planted probe:
+--   * a new function calling public.apply_level_delta (INV-37), and a stale
+--     allowlist-H entry;
+--   * an unlisted engine caller (INV-38a);
+--   * a listed caller that calls the engine before minting its id, then
+--     without its id, and inserts its movement without the id (INV-38b);
+--   * INSERT granted to authenticated on the table (INV-38c).
+-- Everything planted is removed straight after (and the enclosing rollback
+-- is the second belt).
+create function public._sec_inv_probe_ald_caller() returns void
+  language plpgsql security invoker set search_path = public
+  as $probe$ begin perform public.apply_level_delta(null, 0); end; $probe$;
+revoke all on function public._sec_inv_probe_ald_caller() from public, anon;
+create function ledger._sec_inv_probe_engine_unlisted() returns void
+  language plpgsql security invoker set search_path = public
+  as $probe$ begin perform ledger.apply_level_delta_for(gen_random_uuid(), null, 0, 'placed'); end; $probe$;
+revoke all on function ledger._sec_inv_probe_engine_unlisted() from public, anon;
+create function ledger._sec_inv_probe_engine_unpaired() returns void
+  language plpgsql security invoker set search_path = public
+  as $probe$
+declare
+  v_mv_id uuid;
+begin
+  -- an engine call before any id is minted,
+  perform ledger.apply_level_delta_for(v_mv_id, null, 0, 'placed');
+  v_mv_id := gen_random_uuid();
+  -- then one that does not pass the id, and a movement inserted without it.
+  perform ledger.apply_level_delta_for(null, null, 0, 'placed');
+  insert into public.stock_movements (organization_id, item_id, movement_type, quantity_change,
+                                      previous_quantity, new_quantity)
+  values (null, null, 'adjust', 0, 0, 0);
+end;
+$probe$;
+revoke all on function ledger._sec_inv_probe_engine_unpaired() from public, anon;
+insert into _sec_inv_ald_caller_allow (fn, why) values
+  ('ledger._sec_inv_probe_absent_function', 'control probe: stale entry; deleted below');
+insert into _sec_inv_engine_caller_allow (fn, id_arg, why) values
+  ('ledger._sec_inv_probe_engine_unpaired', 'v_mv_id', 'control probe: listed but unpaired; deleted below');
+grant insert on table public.stock_movement_holdings to authenticated;
+
+select is(
+  (select string_agg(x, ' | ' order by x collate "C") from (
+     select v.x from _sec_inv_ald_caller_violations v
+      where v.fn in ('public._sec_inv_probe_ald_caller', 'ledger._sec_inv_probe_absent_function')
+     union all
+     select v.x from _sec_inv_engine_violations v
+      where v.fn in ('ledger._sec_inv_probe_engine_unlisted', 'ledger._sec_inv_probe_engine_unpaired')
+         or v.x like 'write privilege on stock_movement_holdings: authenticated INSERT'
+     union all
+     select 'populations: ' || (
+       (select count(*) from _sec_inv_engine_caller_allow) >= 5
+       and (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+             where n.nspname in ('public', 'ledger') and p.prosrc ~* 'apply_level_delta') >= 6)::text) q),
+  'engine call not passing v_mv_id: ledger._sec_inv_probe_engine_unpaired | populations: true | stale allowlist-H entry: ledger._sec_inv_probe_absent_function | unlisted caller of public.apply_level_delta: public._sec_inv_probe_ald_caller | unlisted engine caller: ledger._sec_inv_probe_engine_unlisted | unpaired movement id: ledger._sec_inv_probe_engine_unpaired after mint 0 | unpaired movement id: ledger._sec_inv_probe_engine_unpaired after mint 1 | write privilege on stock_movement_holdings: authenticated INSERT',
+  'INV-39 control: the provenance detectors have callers to judge and fire on a planted wrapper caller, a stale entry, an unlisted engine caller, an unpaired id and a write grant'
+);
+
+revoke insert on table public.stock_movement_holdings from authenticated;
+drop function public._sec_inv_probe_ald_caller();
+drop function ledger._sec_inv_probe_engine_unlisted();
+drop function ledger._sec_inv_probe_engine_unpaired();
+delete from _sec_inv_ald_caller_allow where why like 'control probe:%';
+delete from _sec_inv_engine_caller_allow where why like 'control probe:%';
 
 select * from finish();
 rollback;

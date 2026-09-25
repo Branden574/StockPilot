@@ -226,6 +226,16 @@ PGTAP_TESTS=(
   # evaluation; the sync closes a finished recount before resolving, and an
   # item that can no longer be counted resolves as subject_gone.
   supabase/tests/0372_exception_recount_review.test.sql
+  # Draw provenance (0373): which holdings a null-location draw touched is
+  # recorded by the one draw engine, ledger.apply_level_delta_for (SECURITY
+  # DEFINER, gated in its body: staff+ of the item's org, inside a ledger
+  # RPC), under the movement id its caller inserts. stock_movement_holdings
+  # is read-only to every API role (service_role included); its SELECT
+  # mirrors the parent movement's visibility for every persona; its writer,
+  # ledger._record_holdings, is executable by no API role. Every draw still
+  # moves holdings exactly as the 0359 body did (differential oracle).
+  # security_invariants INV-37/38/39 keep the engine's callers honest.
+  supabase/tests/0373_draw_provenance.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
