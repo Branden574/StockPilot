@@ -31,20 +31,20 @@ export const RELEASES: Release[] = [
     id: 'rentals-borrowers-and-emails-2026-09',
     revision: 1,
     status: 'published',
-    title: 'Rent to anyone, see which emails a borrower gets, and faster rental photos',
+    title: 'Rental photos, borrowers outside StockPilot, and which emails a borrower gets',
     summary:
-      'Photos on the New rental page now load with the page. You can rent to someone who is not in StockPilot by typing their name and, if they have one, their email. Each rental now shows which emails its borrower gets and whether the overdue reminder went out. In the mobile app, a rental opens its details in the app, and New rental can search your team members.',
+      'Each rental now shows which emails its borrower gets and whether the overdue reminder went out, and in the mobile app a rental opens its details in the app. People who check out rentals can rent to someone who is not in StockPilot by typing their name and, if they have one, their email; rental photos on the New rental page come with the page; and New rental in the mobile app can search team members.',
     publishedAt: '2026-09-25T21:00:00Z',
     entries: [
       {
         id: 'rental-photos-load-with-page',
         category: 'fixed',
         area: 'Rentals',
-        title: 'Photos on the New rental page appear with the page',
+        title: 'Photos on the New rental page come with the page',
         whatChanged:
-          'Rental item photos on the New rental page now load with the page instead of about five seconds later. When an item’s photo is replaced, the page shows the new one.',
+          'Rental item photos on the New rental page now come with the page instead of arriving after it. A photo added or replaced in the last few hours appears a moment after the page opens, once the page checks for changes.',
         whyItMatters:
-          'To show a handful of rental items, the page fetched photos for every orderable item in the warehouse, up to 500.',
+          'To show a handful of rental items, the page fetched photos for every orderable item in the warehouse, up to 500, after the page had loaded.',
         howItAffectsYou: 'Nothing else about the page changes.',
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/rentals/new', label: 'Open New rental' },
@@ -76,26 +76,40 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Nothing on screen said whether a borrower would hear from StockPilot, or whether an overdue reminder had gone out.',
         howItAffectsYou:
-          'The reminder shows as sent only when the email actually went out. If sending fails, the next daily run tries again while the rental is still out. There is still no reminder before the return date. The receipt and the return confirmation are not recorded, so the card describes when they go out rather than showing a sent time.',
+          'A reminder that fails to send is no longer shown as sent; the next daily run tries again while the rental is still out. There is still no reminder before the return date. The receipt and the return confirmation are not recorded, so the card describes when they go out rather than showing a sent time.',
         whatToDo:
           'No action needed. Overdue reminders go out only while Rentals is switched on in Settings, Modules.',
         link: { href: '/dashboard/rentals', label: 'Open Rentals' },
         audience: { anyPermission: ['rentals:read', 'rentals:create'], modules: ['rentals'] },
       },
       {
-        id: 'phone-rental-detail-and-member-search',
+        id: 'phone-rental-detail',
         category: 'new',
         area: 'Mobile app',
-        title: 'Rental details and team member search in the mobile app',
+        title: 'Rental details in the mobile app',
         whatChanged:
-          'Tapping a rental in the mobile app now opens its details in the app: the borrower, the emails they get, the dates and the items. It used to open the web in a browser. On New rental, typing a borrower’s name suggests matching team members, and picking one links the rental to their account and uses their account email. Anyone else is entered by name, with an optional email.',
-        whyItMatters:
-          'The mobile app had no rental details screen and could not link a rental to a team member, so every rental made on a phone was a typed name.',
+          'Tapping a rental in the mobile app now opens its details in the app: the borrower, the emails they get, the dates and the items. It used to open the web in a browser.',
+        whyItMatters: 'The mobile app had no rental details screen.',
         howItAffectsYou:
-          'Marking a rental returned and cancelling it are still done on the web; if you can do those, the details screen has a button that opens the rental there. Team member search needs a connection. Without one, the screen says so, and you can still type a name and email.',
+          'Marking a rental returned and cancelling it are still done on the web; if you can do those, the details screen has a button that opens the rental there.',
         whatToDo: 'Update the app when it offers the new version.',
         link: { href: '/dashboard/rentals', label: 'Open Rentals' },
         audience: { anyPermission: ['rentals:read', 'rentals:create'], modules: ['rentals'] },
+      },
+      {
+        id: 'phone-rental-member-search',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'Search team members when you check out a rental in the mobile app',
+        whatChanged:
+          'On New rental in the mobile app, typing a borrower’s name suggests matching team members. Picking one links the rental to their account and uses their account email. Anyone else is entered by name, with an optional email.',
+        whyItMatters:
+          'The mobile app could not link a rental to a team member, so every rental made on a phone was a typed name.',
+        howItAffectsYou:
+          'Team member search needs a connection. Without one, the screen says so, and you can still type a name and email.',
+        whatToDo: 'Update the app when it offers the new version.',
+        link: { href: '/dashboard/rentals/new', label: 'Open New rental' },
+        audience: { anyPermission: ['rentals:create'], modules: ['rentals'] },
       },
     ],
   },
