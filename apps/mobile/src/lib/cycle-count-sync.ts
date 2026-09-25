@@ -368,7 +368,10 @@ class CycleCountSyncEngine {
     // clock's skew from the gap between the two.
     await api(`/api/v1/cycle-counts/${cycleCountId}/lines/${lineId}/record`, {
       method: 'POST',
-      body: recordCountBody(payload, counted, scope.createdAt),
+      // A factory, so clientSentAt is stamped after the bearer is resolved
+      // (a token refresh is a network round trip): a late stamp is a late
+      // capture on the server, where a pick in between reads as before it.
+      body: () => recordCountBody(payload, counted, scope.createdAt),
       signal,
       // Under the organization the count was queued in, and only as the
       // account that counted it (counted_by is the sender).

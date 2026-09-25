@@ -94,6 +94,28 @@ describe('POST /api/v1/cycle-counts/[id]/lines/[lineId]/record', () => {
     );
   });
 
+  // The resolved capture is LATE by everything that happens before the route
+  // reads its clock (the error is never early), and the 2026-09-22 stalls put
+  // seconds into the auth read alone. Mutation: read Date.now() after
+  // withApiContext, and the capture lands 5 s late (17:20:05).
+  it('measures against the clock at ARRIVAL, not after a slow auth read', async () => {
+    const recordCount = mockRecord();
+    vi.mocked(withApiContext).mockImplementation(async () => {
+      vi.setSystemTime(NOW + 5_000);
+      return ctx();
+    });
+    const { req, params } = request({
+      countedQuantity: 20,
+      capturedAt: '2026-09-24T14:20:00.000Z',
+      clientSentAt: '2026-09-24T15:00:00.000Z',
+    });
+    const res = await POST(req, params);
+    expect(res.status).toBe(200);
+    expect(recordCount).toHaveBeenCalledWith(
+      expect.objectContaining({ capturedAt: '2026-09-24T17:20:00.000Z' }),
+    );
+  });
+
   it('an old bundle (no capture keys) is an online record: no capturedAt at all', async () => {
     const recordCount = mockRecord();
     const { req, params } = request({ countedQuantity: 7 });

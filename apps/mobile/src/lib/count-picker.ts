@@ -12,7 +12,9 @@ import type { CountPick } from './use-count-selection';
  * predicates as the Items/Books tabs' default views — active lifecycle,
  * not deleted, not awaiting first receipt (mig 0277 phantoms: you cannot
  * count stock that never arrived) — derived from `listStatusPredicate`
- * so the screens can never drift apart.
+ * so the screens can never drift apart. On top of those, the COUNTABLE
+ * predicate the server's start applies (0369): no rental equipment, no kit
+ * phantoms.
  */
 
 export const COUNT_PICKER_PAGE_SIZE = 50;
@@ -42,6 +44,13 @@ export interface CountPickerPlan {
   /** `.eq('status', …)` — always 'active' here (you count live stock;
    *  archived items are unreachable, same as the tabs' default views). */
   lifecycle: 'active' | 'archived' | null;
+  /** `.eq('is_rental', …)` and `.eq('is_bundle', …)` — always false. Rental
+   *  equipment and kit phantoms are never counted (server 0369, owner default
+   *  D8: start_cycle_count leaves them out), so the picker never offers one:
+   *  a ticked rental or kit used to vanish from the started count without a
+   *  word. The Items tab hides rentals too (inventory.tsx ITEMS_VIEW). */
+  isRental: false;
+  isBundle: false;
   /** One PostgREST `.or()` group per query word; PostgREST ANDs the
    *  groups, giving the tabs' word-AND search across name/sku/barcode. */
   orGroups: string[];
@@ -81,6 +90,8 @@ export function countPickerPlan(
     itemType: { op: tab === 'book' ? 'eq' : 'neq', value: 'book' },
     awaitingFirstReceipt: pred.awaitingFirstReceipt,
     lifecycle: pred.lifecycle,
+    isRental: false,
+    isBundle: false,
     orGroups: searchWordGroups(query),
     range: { from: offset, to: offset + COUNT_PICKER_PAGE_SIZE - 1 },
   };

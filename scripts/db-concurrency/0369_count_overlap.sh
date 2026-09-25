@@ -10,7 +10,8 @@
 #      stamps a baseline after the post's movement, so the superseded guard
 #      misses it and the second count applies the same correction again.
 #   2. Two overlapping posts never deadlock (lines are processed in item_id
-#      order). The second one is refused as superseded (P0001), never 40P01.
+#      order). The second one is refused as superseded (P0001), never 40P01,
+#      and the one refusal names every superseded line.
 #
 # Runs against the LOCAL stack only (docker container supabase_db_stockpilot).
 # Fixtures are committed under the 03691111-… namespace and removed at the
@@ -210,8 +211,9 @@ wait "$PID_L" "$PID_1" "$PID_2"
 check "2-: the lock holder held X's holding rows" "$(grep -c ERROR "$TMP/lock.out")" "0"
 check "2a: no session hit a deadlock (40P01)" "$(cat "$TMP/post1.out" "$TMP/post2.out" | grep -c 40P01)" "0"
 check "2b: count 1 posted" "$(grep -c completed "$TMP/post1.out")" "1"
-check "2c: count 2 was refused as superseded (P0001)" \
-  "$(grep -cE 'P0001: cycle_count_line_superseded: SKU-0369-2S-X' "$TMP/post2.out")" "1"
+# One refusal names BOTH superseded lines (the post collects them all).
+check "2c: count 2 was refused as superseded (P0001), naming X and Y" \
+  "$(grep -cE 'P0001: cycle_count_line_superseded: SKU-0369-2S-X, SKU-0369-2S-Y$' "$TMP/post2.out")" "1"
 check "2d: X and Y hold 22 each (each correction applied once)" \
   "$(q "select string_agg(quantity_on_hand::int::text, ',' order by sku) from public.inventory_items where id in ('$X', '$Y')")" "22,22"
 

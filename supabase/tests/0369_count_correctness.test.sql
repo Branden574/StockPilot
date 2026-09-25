@@ -7,16 +7,21 @@
 -- B. Overlapping counts (D6): A and B both record 22 on 20. A posts (22), B is
 --    refused as superseded and nothing moves. B cleared and recounted after A
 --    posts: B posts with no movement. A pick after B's count does not block B.
---    A staff-inserted movement moves neither the guard nor the baseline.
+--    A staff-inserted movement moves neither the guard nor the baseline. A
+--    line that matches its book is never refused. Every superseded line is
+--    named in one refusal. A counted line with no baseline fails closed.
 -- C. Offline capture time (D7): capture at T0, then an adjust of -3: the
 --    variance is 0 and the post leaves 17. Clamps: a future capture is
 --    clamped to now(), a capture before the count started is clamped to
 --    started_at, a transfer after T0 moves nothing (and leaves the location
---    un-inferred), clearing nulls captured_at and baseline_at, and a
---    re-record without a capture time is an online record.
+--    un-inferred), clearing nulls captured_at and baseline_at, a re-record
+--    without a capture time is an online record, and a retry that re-sends
+--    the same capture time keeps it.
 -- D. Rental equipment and kit phantoms are not counted (D8), in either scope;
 --    a rental-only selection raises cycle_count_no_items.
 -- E. Grants: captured_at is client-writable, baseline_at is not.
+-- H. A trusted row dated in the future (a pre-0369 plant) moves neither a
+--    baseline nor the guard.
 --
 -- The mutation each case must catch is named next to it.
 --
@@ -35,7 +40,7 @@
 
 begin;
 
-select plan(71);
+select plan(87);
 
 \set org     '\'03690000-0000-0000-0000-00000000000a\''
 \set mgr     '\'03690000-0000-0000-0000-0000000000a1\''
@@ -59,6 +64,12 @@ select plan(71);
 \set itGP    '\'03690000-0000-0000-0000-0000000000d1\''
 \set itGR    '\'03690000-0000-0000-0000-0000000000d2\''
 \set itGK    '\'03690000-0000-0000-0000-0000000000d3\''
+\set itFD    '\'03690000-0000-0000-0000-0000000000cc\''
+\set itFC    '\'03690000-0000-0000-0000-0000000000cd\''
+\set itRT    '\'03690000-0000-0000-0000-0000000000ce\''
+\set itM1    '\'03690000-0000-0000-0000-0000000000cf\''
+\set itM2    '\'03690000-0000-0000-0000-0000000000da\''
+\set itNB    '\'03690000-0000-0000-0000-0000000000db\''
 \set ccA     '\'03690000-0000-0000-0000-0000000000f1\''
 \set ccB     '\'03690000-0000-0000-0000-0000000000f2\''
 \set ccP     '\'03690000-0000-0000-0000-0000000000f3\''
@@ -67,6 +78,12 @@ select plan(71);
 \set ccC     '\'03690000-0000-0000-0000-0000000000f6\''
 \set ccZ1    '\'03690000-0000-0000-0000-0000000000f7\''
 \set ccZ2    '\'03690000-0000-0000-0000-0000000000f8\''
+\set ccFD    '\'03690000-0000-0000-0000-0000000000f9\''
+\set ccR     '\'03690000-0000-0000-0000-0000000000fa\''
+\set ccM1    '\'03690000-0000-0000-0000-0000000000fb\''
+\set ccM2    '\'03690000-0000-0000-0000-0000000000fc\''
+\set ccN1    '\'03690000-0000-0000-0000-0000000000fd\''
+\set ccN2    '\'03690000-0000-0000-0000-0000000000fe\''
 \set lnA     '\'03690000-0000-0000-0000-000000000101\''
 \set lnB     '\'03690000-0000-0000-0000-000000000102\''
 \set lnP     '\'03690000-0000-0000-0000-000000000103\''
@@ -79,6 +96,15 @@ select plan(71);
 \set lnRE    '\'03690000-0000-0000-0000-00000000010a\''
 \set lnZ1    '\'03690000-0000-0000-0000-00000000010b\''
 \set lnZ2    '\'03690000-0000-0000-0000-00000000010c\''
+\set lnFD    '\'03690000-0000-0000-0000-00000000010d\''
+\set lnFC    '\'03690000-0000-0000-0000-00000000010e\''
+\set lnRT    '\'03690000-0000-0000-0000-00000000010f\''
+\set lnM1a   '\'03690000-0000-0000-0000-000000000110\''
+\set lnM1b   '\'03690000-0000-0000-0000-000000000111\''
+\set lnM2a   '\'03690000-0000-0000-0000-000000000112\''
+\set lnM2b   '\'03690000-0000-0000-0000-000000000113\''
+\set lnN1    '\'03690000-0000-0000-0000-000000000114\''
+\set lnN2    '\'03690000-0000-0000-0000-000000000115\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
@@ -116,6 +142,12 @@ insert into public.inventory_items
   (:itRE, :org, :wh,  'Re-recorded widget',    'SKU-0369-RE', 20, 'active', false, false),
   (:itVL, :org, :wh,  'Ledger stamp widget',   'SKU-0369-VL', 20, 'active', false, false),
   (:itZD, :org, :wh,  'Zero-diff widget',      'SKU-0369-ZD', 20, 'active', false, false),
+  (:itFD, :org, :wh,  'Future-plant widget',   'SKU-0369-FD', 20, 'active', false, false),
+  (:itFC, :org, :wh,  'Future-count widget',   'SKU-0369-FC', 20, 'active', false, false),
+  (:itRT, :org, :wh,  'Retried widget',        'SKU-0369-RT', 20, 'active', false, false),
+  (:itM1, :org, :wh,  'Multi widget one',      'SKU-0369-M1', 20, 'active', false, false),
+  (:itM2, :org, :wh,  'Multi widget two',      'SKU-0369-M2', 20, 'active', false, false),
+  (:itNB, :org, :wh,  'No-baseline widget',    'SKU-0369-NB', 20, 'active', false, false),
   (:itGP, :org, :whG, 'Gear pallet',           'SKU-0369-GP',  4, 'active', false, false),
   (:itGR, :org, :whG, 'Gear projector',        'SKU-0369-GR',  2, 'active', true,  false),
   (:itGK, :org, :whG, 'Gear kit',              '__BUNDLE__0369GK', 3, 'active', false, true)
@@ -125,12 +157,14 @@ insert into public.inventory_items
 -- each holding below is a literal this file controls.
 delete from public.item_stock_levels
  where item_id in (:itAB, :itPK, :itSF, :itCP, :itFU, :itPA, :itTR, :itLC, :itRE, :itVL, :itZD,
-                   :itGP, :itGR, :itGK);
+                   :itGP, :itGR, :itGK, :itFD, :itFC, :itRT, :itM1, :itM2, :itNB);
 insert into public.item_stock_levels (organization_id, item_id, location_id, quantity) values
   (:org, :itAB, :r1, 20), (:org, :itPK, :r1, 20), (:org, :itSF, :r1, 20),
   (:org, :itCP, :r1, 20), (:org, :itFU, :r1, 20), (:org, :itPA, :r1, 20),
   (:org, :itTR, :r1, 20), (:org, :itLC, :r1, 20), (:org, :itRE, :r1, 20),
   (:org, :itVL, :r1, 20), (:org, :itZD, :r1, 20),
+  (:org, :itFD, :r1, 20), (:org, :itFC, :r1, 20), (:org, :itRT, :r1, 20),
+  (:org, :itM1, :r1, 20), (:org, :itM2, :r1, 20), (:org, :itNB, :r1, 20),
   (:org, :itGP, :rG,  4), (:org, :itGR, :rG,  2), (:org, :itGK, :rG, 3);
 
 -- Every count started an hour ago, so capture times can sit inside the window.
@@ -142,7 +176,13 @@ insert into public.cycle_counts (id, organization_id, warehouse_id, status, scop
   (:ccS2, :org, :wh, 'in_progress', 'selection', :mgr, now() - interval '1 hour'),
   (:ccC,  :org, :wh, 'in_progress', 'selection', :mgr, now() - interval '1 hour'),
   (:ccZ1, :org, :wh, 'in_progress', 'selection', :mgr, now() - interval '1 hour'),
-  (:ccZ2, :org, :wh, 'in_progress', 'selection', :mgr, now() - interval '1 hour');
+  (:ccZ2, :org, :wh, 'in_progress', 'selection', :mgr, now() - interval '1 hour'),
+  (:ccFD, :org, :wh, 'in_progress', 'selection', :mgr, now() - interval '1 hour'),
+  (:ccR,  :org, :wh, 'in_progress', 'selection', :mgr, now() - interval '1 hour'),
+  (:ccM1, :org, :wh, 'in_progress', 'selection', :mgr, now() - interval '1 hour'),
+  (:ccM2, :org, :wh, 'in_progress', 'selection', :mgr, now() - interval '1 hour'),
+  (:ccN1, :org, :wh, 'in_progress', 'selection', :mgr, now() - interval '1 hour'),
+  (:ccN2, :org, :wh, 'in_progress', 'selection', :mgr, now() - interval '1 hour');
 insert into public.cycle_count_lines (id, cycle_count_id, item_id, warehouse_id, expected_quantity) values
   (:lnA,  :ccA,  :itAB, :wh, 20),
   (:lnB,  :ccB,  :itAB, :wh, 20),
@@ -155,13 +195,22 @@ insert into public.cycle_count_lines (id, cycle_count_id, item_id, warehouse_id,
   (:lnLC, :ccC,  :itLC, :wh, 20),
   (:lnRE, :ccC,  :itRE, :wh, 20),
   (:lnZ1, :ccZ1, :itZD, :wh, 20),
-  (:lnZ2, :ccZ2, :itZD, :wh, 20);
+  (:lnZ2, :ccZ2, :itZD, :wh, 20),
+  (:lnFD, :ccFD, :itFD, :wh, 20),
+  (:lnFC, :ccFD, :itFC, :wh, 20),
+  (:lnRT, :ccR,  :itRT, :wh, 20),
+  (:lnM1a, :ccM1, :itM1, :wh, 20),
+  (:lnM1b, :ccM1, :itM2, :wh, 20),
+  (:lnM2a, :ccM2, :itM1, :wh, 20),
+  (:lnM2b, :ccM2, :itM2, :wh, 20),
+  (:lnN1, :ccN1, :itNB, :wh, 20),
+  (:lnN2, :ccN2, :itNB, :wh, 20);
 
 -- Guard the fixtures: a silently missing row would let a refusal pass for the
 -- wrong reason.
 do $$ begin
   if (select count(*) from public.cycle_count_lines
-       where cycle_count_id::text like '03690000-%') <> 12
+       where cycle_count_id::text like '03690000-%') <> 21
      or (select count(*) from public.user_warehouse_assignments
           where user_id = '03690000-0000-0000-0000-0000000000a2') <> 1
   then raise exception '0369 test fixtures incomplete'; end if;
@@ -348,9 +397,12 @@ select is(
   0,
   'B17: nothing was posted for the forged difference');
 
--- B18-B20: the guard judges every counted line, even one whose own variance is
--- zero: two counts disagreed about the shelf, and the later post decides only
--- after a recount. Z1 records 21, Z2 records 20 (= book), Z1 posts.
+-- B18-B21: a line that matches its book (variance 0) applies nothing, so it
+-- can never apply a correction twice, and it is never refused (D6 refuses
+-- only the unsafe post; posted first, it would write nothing and could not
+-- refuse the other count either). Z1 records 21, Z2 records 20 (= book), Z1
+-- posts, then Z2 posts and moves nothing. Mutation: judge the guard before
+-- the zero-variance skip, and Z2 is refused.
 set local "request.jwt.claim.sub"  to :stf;
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
@@ -361,13 +413,74 @@ set local "request.jwt.claim.sub"  to :mgr;
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
 select lives_ok(format($$select public.post_cycle_count(%L::uuid)$$, :ccZ1), 'B18: count Z1 posts +1');
-select throws_ok(
-  format($$select public.post_cycle_count(%L::uuid)$$, :ccZ2),
-  'P0001', 'cycle_count_line_superseded: SKU-0369-ZD',
-  'B19: count Z2 is refused for the conflicting line');
+select lives_ok(format($$select public.post_cycle_count(%L::uuid)$$, :ccZ2),
+  'B19: count Z2 posts: its zero-variance line cannot apply anything twice');
 reset role;
 select is((select quantity_on_hand from public.inventory_items where id = :itZD), 21::numeric,
   'B20: on-hand keeps Z1''s posted 21');
+select is(
+  (select count(*)::int from public.stock_movements where reference_id = :ccZ2),
+  0,
+  'B21: and count Z2 wrote no movement');
+
+-- B22-B25: every superseded line is named in ONE refusal. M1 and M2 both
+-- record 21 on two items; M1 posts; M2 is refused naming both SKUs, with the
+-- total in DETAIL. Mutation: raise on the first superseded line, and only
+-- SKU-0369-M1 is named (one post attempt per line to find them all).
+set local "request.jwt.claim.sub"  to :stf;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+update public.cycle_count_lines set counted_quantity = 21, counted_by = :stf, counted_at = now()
+ where id in (:lnM1a, :lnM1b, :lnM2a, :lnM2b);
+reset role;
+set local "request.jwt.claim.sub"  to :mgr;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+select lives_ok(format($$select public.post_cycle_count(%L::uuid)$$, :ccM1), 'B22: count M1 posts +1 on both items');
+select throws_ok(
+  format($$select public.post_cycle_count(%L::uuid)$$, :ccM2),
+  'P0001', 'cycle_count_line_superseded: SKU-0369-M1, SKU-0369-M2',
+  'B23: count M2 is refused once, naming both superseded lines');
+do $$
+declare
+  v_detail text;
+begin
+  perform public.post_cycle_count('03690000-0000-0000-0000-0000000000fc'::uuid);
+exception when others then
+  get stacked diagnostics v_detail = pg_exception_detail;
+  perform set_config('test0369.detail', coalesce(v_detail, ''), true);
+end $$;
+reset role;
+select is(current_setting('test0369.detail', true), 'superseded_lines=2',
+  'B24: DETAIL carries how many lines were superseded');
+select is(
+  (select array_agg(quantity_on_hand order by sku) from public.inventory_items where id in (:itM1, :itM2)),
+  array[21, 21]::numeric[],
+  'B25: each correction applied once (M2 wrote nothing)');
+
+-- B26-B28: a counted line with no baseline (a line counted before 0369 whose
+-- counted_at was nulled, so the backfill had nothing to pin) is judged from
+-- the count's start: fail closed. Mutation: skip the guard for a NULL
+-- baseline, and N2 posts 22 -> 24.
+set local "request.jwt.claim.sub"  to :stf;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+update public.cycle_count_lines set counted_quantity = 22, counted_by = :stf, counted_at = now()
+ where id in (:lnN1, :lnN2);
+reset role;
+-- The pre-0369 shape, written as the owner (neither column fires the trigger).
+update public.cycle_count_lines set baseline_at = null, counted_at = null where id = :lnN2;
+set local "request.jwt.claim.sub"  to :mgr;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+select lives_ok(format($$select public.post_cycle_count(%L::uuid)$$, :ccN1), 'B26: count N1 posts +2');
+select throws_ok(
+  format($$select public.post_cycle_count(%L::uuid)$$, :ccN2),
+  'P0001', 'cycle_count_line_superseded: SKU-0369-NB',
+  'B27: count N2''s line without a baseline is refused, not waved through');
+reset role;
+select is((select quantity_on_hand from public.inventory_items where id = :itNB), 22::numeric,
+  'B28: on-hand is 22 (the correction applied once, not 24)');
 
 -- ═══ C. Offline capture time ══════════════════════════════════════════════
 -- C1-C5: capture at T0 (30 minutes ago), then an adjust of -3. Mutation:
@@ -517,6 +630,33 @@ select is(
 select is((select expected_quantity from public.cycle_count_lines where id = :lnFU), 20::numeric,
   'C25: and the line is re-measured at that moment (nothing moved: still 20)');
 
+-- C26-C27: a retry of the same record (same quantity, same capture time,
+-- e.g. the first attempt committed and its response was lost) keeps its
+-- moment. Mutation: treat an unchanged captured_at as "none sent", and the
+-- retry is re-measured at arrival (expected 17: the -3 becomes a variance).
+set local "request.jwt.claim.sub"  to :stf;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+update public.cycle_count_lines
+   set counted_quantity = 20, counted_by = :stf, counted_at = now(), captured_at = now() - interval '30 minutes'
+ where id = :lnRT;
+reset role;
+set local "request.jwt.claim.sub"  to :mgr;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+select lives_ok(
+  format($$select public.adjust_stock(%L::uuid, -3, 'remove', %L::uuid, 'pick after the offline count')$$, :itRT, :r1),
+  'C25b: a pick of 3 after the offline count');
+set local "request.jwt.claim.sub"  to :stf;
+update public.cycle_count_lines
+   set counted_quantity = 20, counted_by = :stf, counted_at = now(), captured_at = now() - interval '30 minutes'
+ where id = :lnRT;
+reset role;
+select is((select captured_at from public.cycle_count_lines where id = :lnRT), now() - interval '30 minutes',
+  'C26: a retry that re-sends the same capture time keeps it');
+select is((select expected_quantity from public.cycle_count_lines where id = :lnRT), 20::numeric,
+  'C27: and stays measured at that moment (20, not 17)');
+
 -- C21-C23: the count with the captured lines posts: CP 17 counted on 17 (0),
 -- FU 0, PA 0, TR 0, LC 0, RE 19 on 20 (-1).
 set local "request.jwt.claim.sub"  to :mgr;
@@ -600,6 +740,51 @@ select ok(
        and p.proname in ('post_cycle_count', 'cycle_count_line_superseded', 'tg_cycle_count_line_rebase_expected')
        and p.prosrc ~* 'errcode\s*=\s*''(40001|40P01)'''),
   'F6: none of the rewritten bodies raises a retryable SQLSTATE');
+
+select ok(
+  (select pg_get_functiondef('public.tg_cycle_count_line_rebase_expected()'::regprocedure)
+     ~* 'from public\.cycle_counts cc\s+where cc\.id = new\.cycle_count_id\s+for key share[\s\S]*from public\.inventory_items ii\s+where ii\.id = new\.item_id\s+for share'),
+  'F7: the record locks the count header before the item (the post''s order) whatever order the BEFORE triggers fire in');
+
+-- ═══ H. A trusted row dated in the future counts for nothing ══════════════
+-- 0369 marks rows dated after the migration untrusted (a pre-0369 plant: no
+-- ledger writer dates a movement ahead); the readers are also bounded to
+-- their own read. Written here as the owner, so the row is stamped TRUE: the
+-- shape a plant would have if the backfill had missed it. Mutations: drop
+-- the created_at <= clock_timestamp() bound from the baseline sum (expected
+-- becomes -80, and the post would add 100) or from the guard (FC is refused
+-- for good: the row is later than any baseline).
+insert into public.stock_movements
+  (organization_id, item_id, movement_type, quantity_change, previous_quantity, new_quantity, notes, created_at)
+  values (:org, :itFD, 'adjust', 100, 20, 120, '0369 future plant', now() + interval '5 years');
+insert into public.stock_movements
+  (organization_id, item_id, movement_type, quantity_change, previous_quantity, new_quantity,
+   reference_type, reference_id, notes, created_at)
+  values (:org, :itFC, 'adjust', 100, 20, 120, 'cycle_count', :ccA, '0369 future count plant', now() + interval '5 years');
+select is(
+  (select bool_and(via_ledger) from public.stock_movements where notes like '0369 future%'),
+  true,
+  'H0: the planted rows are trusted (the worst case the readers must survive)');
+set local "request.jwt.claim.sub"  to :stf;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+update public.cycle_count_lines
+   set counted_quantity = 20, counted_by = :stf, counted_at = now(), captured_at = now() - interval '10 minutes'
+ where id = :lnFD;
+update public.cycle_count_lines set counted_quantity = 22, counted_by = :stf, counted_at = now() where id = :lnFC;
+reset role;
+select is((select expected_quantity from public.cycle_count_lines where id = :lnFD), 20::numeric,
+  'H1: a future-dated row is not subtracted from a captured record (20, not -80)');
+set local "request.jwt.claim.sub"  to :mgr;
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+select lives_ok(format($$select public.post_cycle_count(%L::uuid)$$, :ccFD),
+  'H2: a future-dated "cycle count" row does not supersede the line');
+reset role;
+select is(
+  (select array_agg(quantity_on_hand order by sku) from public.inventory_items where id in (:itFC, :itFD)),
+  array[22, 20]::numeric[],
+  'H3: FC takes its own +2, FD is unchanged (no forged +100)');
 
 -- ═══ G. The 0368 posture is intact ════════════════════════════════════════
 select is(

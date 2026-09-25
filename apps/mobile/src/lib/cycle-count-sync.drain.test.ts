@@ -265,8 +265,21 @@ describe('forceSync waits for a drain already running (the sign-out recount depe
 });
 
 describe('the record body says when the count was taken (server 0369)', () => {
-  const sentBody = () =>
-    (apiMock.api.mock.calls[0]?.[1] as { body: Record<string, unknown> } | undefined)?.body;
+  // The engine passes a body FACTORY (clientSentAt is stamped as the request
+  // leaves, after the bearer is resolved), which api() calls just before send.
+  const sentBody = () => {
+    const body = (apiMock.api.mock.calls[0]?.[1] as { body: unknown } | undefined)?.body;
+    return (typeof body === 'function' ? (body as () => unknown)() : body) as
+      | Record<string, unknown>
+      | undefined;
+  };
+
+  it('hands api() a body factory, not a body stamped before the send', async () => {
+    cacheMock.rows = [countRow(1, 'l1', { org: 'org-a', user: 'u1' })];
+    await cycleCountSync.forceSync();
+    const body = (apiMock.api.mock.calls[0]?.[1] as { body: unknown } | undefined)?.body;
+    expect(typeof body).toBe('function');
+  });
 
   it('a row stamped at enqueue sends its capturedAt and a fresh clientSentAt', async () => {
     const row = countRow(1, 'l1', { org: 'org-a', user: 'u1' });

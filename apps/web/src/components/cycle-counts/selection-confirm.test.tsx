@@ -2,6 +2,7 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as React from 'react';
+import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
@@ -112,6 +113,27 @@ describe('SelectionConfirm (embedded picker flow)', () => {
       expect(routerMock.push).toHaveBeenCalledWith('/dashboard/cycle-counts/cc-9');
     });
     expect(useCountSelection.getState().picks).toEqual({});
+  });
+
+  // 0369 (D8): a picked rental or kit is dropped at start. The toast used to
+  // blame every drop on "archived or removed". Mutation: restore that copy.
+  it('says why picks were left out, rentals and kits included', async () => {
+    const user = userEvent.setup();
+    useCountSelection.getState().add([
+      { id: 'a', sku: 'SP-A', name: 'Alpha Charger', itemType: 'product' },
+      { id: 'r', sku: 'RENT-1', name: 'Canopy', itemType: 'product' },
+    ]);
+    startActionMock.mockResolvedValue({
+      ok: true,
+      data: { id: 'cc-9', lineCount: 1, skipped: 1 },
+    });
+    render(<SelectionConfirm members={NO_MEMBERS} canAssign={false} warehouses={WAREHOUSES} />);
+    await user.click(screen.getByRole('button', { name: 'Start count' }));
+    await vi.waitFor(() => {
+      expect(toast.message).toHaveBeenCalledWith(
+        'Started with 1 item; 1 was left out. Archived or removed items, rental equipment and kits are not counted.',
+      );
+    });
   });
 
   it('removing a pick from the review list updates the store', async () => {

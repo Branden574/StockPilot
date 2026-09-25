@@ -62,3 +62,19 @@ describe('cycle-count/[id].tsx: a failed cache write is shown, not swallowed', (
     );
   });
 });
+
+describe('cycle-count/[id].tsx: an offline capture is shown in review (0369, D7)', () => {
+  // The web review labels a line counted offline with when it was taken; a
+  // manager reviewing and posting on the phone must see the same. Mutation:
+  // drop the label, and the phone shows a stale capture as a fresh count.
+  it('keeps the capture instant from the server row with the shared rule', () => {
+    expect(screen).toContain('offlineCapturedAt: offlineCaptureAt({');
+    expect(screen).toContain('captured_at: (r.captured_at as string | null | undefined) ?? null');
+  });
+
+  it('renders the shared label, in the organization\'s timezone, only for the server\'s count', () => {
+    expect(screen).toContain('offlineCaptureLabel({ captured_at: l.offlineCapturedAt }, orgTimeZone)');
+    expect(screen).toMatch(/l\.counted !== null && !l\.localDirty && !isDrafting/);
+    expect(screen).toContain('{capturedText ? (');
+  });
+});

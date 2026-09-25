@@ -148,3 +148,45 @@ describe('mapPostCycleCountError — superseded line (0369)', () => {
     expect((e.details as { sku: string }).sku).toHaveLength(120);
   });
 });
+
+/**
+ * 0369: the post names EVERY superseded line in one refusal (the first 20
+ * SKUs, then "(+n more)"), with the total in DETAIL (`superseded_lines=<n>`).
+ * A SKU may contain a comma, so the count comes from DETAIL, never from the
+ * list. Before this a manager found each overlap one post attempt at a time.
+ */
+describe('mapPostCycleCountError — several superseded lines (0369)', () => {
+  it('names every line and says how many', () => {
+    const e = mapPostCycleCountError(
+      'cycle_count_line_superseded: SKU-1, SKU-2, SKU-3',
+      'superseded_lines=3',
+    );
+    expect(e.code).toBe('validation_error');
+    expect(e.message).toBe(
+      'Another count posted corrections for 3 items after this count recorded them, so posting would apply those corrections twice. Clear and recount those lines, then post again. Items: SKU-1, SKU-2, SKU-3.',
+    );
+    expect(e.details).toEqual({
+      reason: 'cycle_count_line_superseded',
+      count: 3,
+      items: 'SKU-1, SKU-2, SKU-3',
+    });
+  });
+
+  it('carries the "(+n more)" tail and cuts a runaway list', () => {
+    const e = mapPostCycleCountError(
+      `cycle_count_line_superseded: ${'S'.repeat(700)} (+5 more)`,
+      'superseded_lines=25',
+    );
+    expect(e.message).toContain('corrections for 25 items');
+    expect((e.details as { items: string }).items).toHaveLength(600);
+  });
+
+  it('one line keeps the single-line copy, with or without DETAIL', () => {
+    for (const detail of ['superseded_lines=1', null, undefined, '']) {
+      const e = mapPostCycleCountError('cycle_count_line_superseded: A, B-KIT', detail);
+      // "A, B-KIT" is ONE SKU with a comma in it: the count is DETAIL's.
+      expect(e.message).toContain('Clear and recount that line');
+      expect(e.details).toEqual({ reason: 'cycle_count_line_superseded', sku: 'A, B-KIT' });
+    }
+  });
+});

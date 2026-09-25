@@ -37,6 +37,12 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; lineId: string }> },
 ) {
+  // The server clock at ARRIVAL, read before anything else (0369). An offline
+  // capture is placed at arrivedAt - (clientSentAt - capturedAt), so every
+  // millisecond spent before this read (auth, the rate limit, the body) would
+  // land the capture that much later than the real count, where a pick of the
+  // item reads as before the count.
+  const arrivedAt = Date.now();
   const ctx = await withApiContext(req);
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
@@ -77,12 +83,12 @@ export async function POST(
   }
 
   // The device's two clock readings, skew-corrected onto the server clock
-  // (only the elapsed time between them is trusted). The database clamps the
-  // result to [count started, now].
+  // (only the elapsed time between them is trusted), against the clock at
+  // arrival. The database clamps the result to [count started, now].
   const capturedAt = resolveCapturedAt({
     capturedAt: parsed.data.capturedAt,
     clientSentAt: parsed.data.clientSentAt,
-    serverNow: Date.now(),
+    serverNow: arrivedAt,
   });
 
   try {

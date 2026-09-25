@@ -17,6 +17,8 @@ import {
   CYCLE_COUNT_REFERENCE_UNAVAILABLE,
   cycleCountScopeLabel,
   formatCycleCountNumber,
+  offlineCaptureAt,
+  offlineCaptureLabel,
   variantLabel,
 } from '@stockpilot/core';
 
@@ -66,6 +68,10 @@ interface UiLine {
   expected: number;
   counted: number | null;
   localDirty: boolean;
+  /** When the server's count was physically taken, for a count synced from
+   *  an offline phone (server 0369): measured against the book at that
+   *  moment, so whoever posts sees when (owner default D7). */
+  offlineCapturedAt: string | null;
 }
 
 const SAVE_DEBOUNCE_MS = 300;
@@ -93,6 +99,30 @@ export default function CycleCountDetail() {
   const syncSnapshot = useSyncStatus();
 
   const { orgId } = useOrg();
+  // The organization's timezone for the "Counted offline <time>" label, so
+  // the phone and the web review name the same moment. Fail-soft: without it
+  // (offline, a refused read) the device's own zone is used.
+  const [orgTimeZone, setOrgTimeZone] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (!orgId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { data } = await supabase
+          .from('organizations')
+          .select('timezone')
+          .eq('id', orgId)
+          .maybeSingle();
+        const tz = (data as { timezone?: unknown } | null)?.timezone;
+        if (!cancelled && typeof tz === 'string' && tz) setOrgTimeZone(tz);
+      } catch {
+        // The label falls back to the device zone.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [orgId]);
   const [header, setHeader] = React.useState<CachedCycleCountHeader | null>(null);
   const [lines, setLines] = React.useState<UiLine[]>([]);
   const [draft, setDraft] = React.useState<Record<string, string>>({});
@@ -139,7 +169,11 @@ export default function CycleCountDetail() {
 
         await updateLocalLine(lineId, num);
         setLines((curr) =>
-          curr.map((l) => (l.id === lineId ? { ...l, counted: num, localDirty: true } : l)),
+          curr.map((l) =>
+            // A new local count replaces the server's, so its capture time
+            // no longer describes this line.
+            l.id === lineId ? { ...l, counted: num, localDirty: true, offlineCapturedAt: null } : l,
+          ),
         );
         setDraft((d) => {
           const { [lineId]: _drop, ...rest } = d;
@@ -167,6 +201,7 @@ export default function CycleCountDetail() {
         expected: l.expected,
         counted: l.counted,
         localDirty: l.localDirty,
+        offlineCapturedAt: l.offlineCapturedAt,
       }))
       .sort((a, b) => a.itemName.localeCompare(b.itemName));
     setLines(ui);
@@ -293,6 +328,12 @@ export default function CycleCountDetail() {
             ? null
             : Number(r.counted_quantity),
         updatedAt,
+        // Kept only for a line counted offline (the shared rule the web
+        // review uses): an online record carries none.
+        offlineCapturedAt: offlineCaptureAt({
+          captured_at: (r.captured_at as string | null | undefined) ?? null,
+          counted_at: (r.counted_at as string | null | undefined) ?? null,
+        }),
       };
     });
 
@@ -641,6 +682,13 @@ export default function CycleCountDetail() {
               : l.counted;
             const variance =
               effectiveCounted !== null ? effectiveCounted - l.expected : null;
+            // A count synced from an offline phone was measured against the
+            // book when it was taken (server 0369); the reviewer sees when.
+            // Not for a pending local edit, which is not the server's count.
+            const capturedText =
+              l.counted !== null && !l.localDirty && !isDrafting
+                ? offlineCaptureLabel({ captured_at: l.offlineCapturedAt }, orgTimeZone)
+                : null;
             return (
               <View key={l.id} style={styles.card}>
                 <View style={{ flex: 1 }}>
@@ -651,6 +699,9 @@ export default function CycleCountDetail() {
                     <Text style={styles.itemVariant}>{l.itemVariantLabel}</Text>
                   ) : null}
                   <Text style={styles.itemSku}>{l.itemSku}</Text>
+                  {capturedText ? (
+                    <Text style={styles.captured}>{capturedText}</Text>
+                  ) : null}
                   <Text style={styles.expected}>
                     Expected: {l.expected}
                     {l.localDirty && (
@@ -837,6 +888,7 @@ const styles = StyleSheet.create({
   },
   itemName: { color: theme.text, fontSize: 14, fontWeight: '600' },
   itemVariant: { color: theme.primary, fontSize: 12, fontWeight: '600', marginTop: 1 },
+  captured: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
   itemSku: {
     color: theme.textMuted,
     fontFamily: 'Menlo',

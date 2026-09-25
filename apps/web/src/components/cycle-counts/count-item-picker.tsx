@@ -115,6 +115,11 @@ export function CountItemPicker({
       p.set('type', tab);
       p.set('sort', 'name_asc');
       p.set('limit', String(PAGE_SIZE));
+      // Kit phantoms are never counted (0369, D8): a kit is verified by
+      // counting its components, and the start drops a picked kit anyway, so
+      // the picker never offers one. Rental equipment is already left out by
+      // the endpoint's default listing (rentals are their own class).
+      p.set('bundles', 'exclude');
       if (offset > 0) p.set('offset', String(offset));
       const needle = q.trim();
       if (needle) p.set('q', needle);

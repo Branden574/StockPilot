@@ -32,6 +32,17 @@ describe('countPickerPlan — embedded cycle-count picker query plan', () => {
     }
   });
 
+  // 0369 (D8): the server never counts rental equipment or kit phantoms, so
+  // the picker must not offer them (a ticked one used to drop silently from
+  // the started count). Mutation: drop the two flags, and they are listed.
+  it('never offers rental equipment or kit phantoms, on either tab', () => {
+    for (const tab of ['product', 'book'] as const) {
+      const plan = countPickerPlan(tab, 'canopy', 0);
+      expect(plan.isRental).toBe(false);
+      expect(plan.isBundle).toBe(false);
+    }
+  });
+
   it('pages 50 at a time from the given offset (SerialsCard load-more convention)', () => {
     expect(COUNT_PICKER_PAGE_SIZE).toBe(50);
     expect(countPickerPlan('product', '', 0).range).toEqual({ from: 0, to: 49 });

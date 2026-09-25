@@ -13,7 +13,11 @@
  *                  at enqueue), so counts already waiting on a phone get their
  *                  real capture time after the update too.
  *   clientSentAt - when this request leaves the phone, set per send (a retry
- *                  sends a new one).
+ *                  sends a new one). The sync engine hands api() this builder
+ *                  as a body FACTORY, so the stamp is taken after the bearer
+ *                  is resolved, right before the send: the server places the
+ *                  capture at its arrival clock minus the gap, so a stamp
+ *                  taken early lands the capture late.
  *
  * The phone's clock may be wrong. The server trusts only the gap between the
  * two readings and places the capture on its own clock, then clamps it to the

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { offlineCaptureLabel, resolveCapturedAt } from './capture-time';
+import { resolveCapturedAt } from './capture-time';
 
 /**
  * 0369 / correction 3: only the ELAPSED device time is trusted. The server
@@ -63,32 +63,28 @@ describe('resolveCapturedAt', () => {
   ])('drops %s (the record is an online record)', (_label, capturedAt, clientSentAt) => {
     expect(resolveCapturedAt({ capturedAt, clientSentAt, serverNow })).toBeUndefined();
   });
-});
 
-describe('offlineCaptureLabel (review, D7)', () => {
-  it('labels a line captured well before it was written, in the org timezone', () => {
-    expect(
-      offlineCaptureLabel(
-        { captured_at: '2026-09-24T17:20:00.000Z', counted_at: '2026-09-25T15:00:00.000Z' },
-        'America/Los_Angeles',
-      ),
-    ).toBe('Counted offline Sep 24, 10:20 AM');
+  // A pair whose gap is longer than any real offline spell used to resolve to
+  // a date Postgres cannot store (a year before 1 AD prints as "-007973-…"):
+  // the record then failed with a 500 on every retry, and the phone's drain
+  // retries a 5xx forever, so the row never settled and "Sync first" blocked
+  // the post. Mutation: drop the floor, and these resolve to such dates.
+  it.each([
+    ['a gap of millennia', '0001-01-01T00:00:00.000Z', '9999-12-31T00:00:00.000Z'],
+    ['a capture in year 1 sent now', '0001-01-01T00:00:00.000Z', '2026-09-24T18:00:00.000Z'],
+    ['an extended negative year', '-000100-01-01T00:00:00.000Z', '2026-09-24T18:00:00.000Z'],
+    ['a gap reaching before 2020', '2019-06-01T00:00:00.000Z', '2026-09-24T18:00:00.000Z'],
+  ])('drops %s instead of resolving before any real count', (_label, capturedAt, clientSentAt) => {
+    expect(resolveCapturedAt({ capturedAt, clientSentAt, serverNow })).toBeUndefined();
   });
 
-  it('shows nothing for an online record (no capture time, or seconds apart)', () => {
-    expect(offlineCaptureLabel({ captured_at: null, counted_at: '2026-09-24T17:20:00.000Z' })).toBeNull();
+  it('keeps a long but real offline spell (days)', () => {
     expect(
-      offlineCaptureLabel({
-        captured_at: '2026-09-24T17:19:30.000Z',
-        counted_at: '2026-09-24T17:20:00.000Z',
+      resolveCapturedAt({
+        capturedAt: '2026-09-20T18:00:00.000Z',
+        clientSentAt: '2026-09-24T18:00:00.000Z',
+        serverNow,
       }),
-    ).toBeNull();
-  });
-
-  it('survives an unreadable value or zone', () => {
-    expect(offlineCaptureLabel({ captured_at: 'nope', counted_at: null })).toBeNull();
-    expect(
-      offlineCaptureLabel({ captured_at: '2026-09-24T17:20:00.000Z', counted_at: null }, 'Not/AZone'),
-    ).toMatch(/^Counted offline Sep 2[45], /);
+    ).toBe('2026-09-20T18:00:00.000Z');
   });
 });

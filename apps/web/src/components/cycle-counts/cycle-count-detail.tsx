@@ -6,7 +6,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { variantLabel } from '@stockpilot/core';
+import { offlineCaptureLabel, variantLabel } from '@stockpilot/core';
 
 import { HelpTip } from '@/components/onboarding/help-tip';
 import { Badge } from '@/components/ui/badge';
@@ -35,7 +35,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { offlineCaptureLabel } from '@/lib/cycle-counts/capture-time';
 import { formatNumber } from '@/lib/utils';
 import {
   assignCycleCountAction,

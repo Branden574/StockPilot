@@ -14,9 +14,12 @@ import {
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 
+import type { ModuleId } from '@stockpilot/core';
+
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Body, Mono } from '@/components/ui/text';
+import { useEnabledModules } from '@/lib/enabled-modules';
 import { useRole } from '@/lib/use-role';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -26,6 +29,8 @@ interface AdminLink {
   label: string;
   description: string;
   icon: LucideIcon;
+  /** Shown only when this module is on for the org (the drawer's own rule). */
+  module?: ModuleId;
 }
 
 const LINKS: AdminLink[] = [
@@ -38,13 +43,20 @@ const LINKS: AdminLink[] = [
   // Posted counts and their variances live in Cycle counts (filter Completed).
   // The old Reconciliation screen queried a status and a column that do not
   // exist and always showed "No posted counts yet", so it was removed (S5-C).
-  { href: '/cycle-counts', label: 'Count history', icon: BarChart3, description: 'Posted cycle counts and their variances: open Cycle counts, filter Completed.' },
+  { href: '/cycle-counts', label: 'Count history', icon: BarChart3, description: 'Posted cycle counts and their variances: open Cycle counts, filter Completed.', module: 'cycle_counts' },
   { href: '/admin/audit', label: 'Audit log', icon: FileLock, description: 'Every privileged action with actor and time.' },
 ];
 
 export default function AdminOverview() {
   const router = useRouter();
   const { isAdmin, loading } = useRole();
+  const enabledModules = useEnabledModules();
+  // A link to a module the org has turned off would open a screen that answers
+  // "module disabled", so it is left out, exactly as the drawer leaves it out.
+  const links = React.useMemo(
+    () => LINKS.filter((l) => !l.module || enabledModules.has(l.module)),
+    [enabledModules],
+  );
 
   if (loading) {
     return (
@@ -85,7 +97,7 @@ export default function AdminOverview() {
       italic="settings."
       emptyTitle=""
       emptyBody=""
-      data={LINKS}
+      data={links}
       loading={false}
       keyExtractor={(l) => l.href}
       renderItem={(l) => (

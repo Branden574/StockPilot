@@ -172,7 +172,7 @@ describe('nav order is frozen to the original static nav', () => {
       '/ai', '/schedule', '/notifications', '/team', '/settings',
       '/scan',
       '/admin', '/admin/charters', '/admin/warehouses', '/admin/bins', '/admin/users',
-      '/admin/vendor-mappings', '/admin/uom-conversions', '/admin/reconciliation', '/admin/audit',
+      '/admin/vendor-mappings', '/admin/uom-conversions', '/admin/audit',
     ]);
   });
 });

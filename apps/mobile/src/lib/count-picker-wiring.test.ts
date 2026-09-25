@@ -33,6 +33,16 @@ describe('cycle-count/new.tsx — embedded picker wiring (mobile twin of 7b738cd
     expect(screen).toContain('.range(plan.range.from, plan.range.to)');
     // Word-AND search: every plan or-group must reach the builder.
     expect(screen).toContain('for (const group of plan.orGroups) req = req.or(group);');
+    // 0369 (D8): the countable predicate, applied from the plan.
+    expect(screen).toContain(".eq('is_rental', plan.isRental)");
+    expect(screen).toContain(".eq('is_bundle', plan.isBundle)");
+  });
+
+  it('tells the counter when the start left picks out (rentals, kits, archived)', () => {
+    // /api/v1/cycle-counts answers `skipped`; the web toasts it, the phone
+    // ignored it and a picked rental or kit just vanished from the count.
+    expect(screen).toContain('cycleCountStartedMessage(res.lineCount, res.skipped)');
+    expect(screen).toMatch(/if \(res\.skipped > 0\)/);
   });
 
   it('scopes to the workspace warehouse, matching the tabs\' select-mode path', () => {

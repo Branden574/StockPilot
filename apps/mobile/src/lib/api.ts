@@ -84,6 +84,15 @@ export class ApiError extends Error {
 
 interface ApiOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  /**
+   * The JSON body, or a function that builds it. A function is called AFTER
+   * the bearer token and the workspace header are resolved (reading the
+   * session can refresh the token over the network), immediately before the
+   * request leaves. It is for a body that says WHEN it was sent: the
+   * cycle-count record's clientSentAt (server 0369) places the offline
+   * capture at arrival minus the gap to it, so every millisecond between the
+   * stamp and the send lands the capture that much later than the count.
+   */
   body?: unknown;
   signal?: AbortSignal;
   /** Per-request timeout override in ms. Defaults to DEFAULT_TIMEOUT_MS. */
@@ -166,10 +175,14 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
   }
 
   try {
+    // Built last (see ApiOptions.body): nothing awaited sits between this and
+    // the send.
+    const payload =
+      typeof opts.body === 'function' ? (opts.body as () => unknown)() : opts.body;
     const res = await fetch(`${API_URL}${path}`, {
       method: opts.method ?? 'GET',
       headers,
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      body: payload ? JSON.stringify(payload) : undefined,
       signal: ctrl.signal,
     });
 

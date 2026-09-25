@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * Phase 0 S5-C (migration 0369), the service half.
  *
- *   recordCount   writes captured_at ONLY when given (the web action and old
- *                 phone bundles send none, and a database before 0369 has no
- *                 such column), and a record that timed out behind an
+ *   recordCount   writes captured_at always: the phone's time, or NULL for
+ *                 the web action and old phone bundles (an online record),
+ *                 and a record that timed out behind an
  *                 in-flight post (55P03 lock_not_available, 57014
  *                 query_canceled) is a RETRYABLE internal error, never a
  *                 conflict or validation error, which the phone's drain would
@@ -81,7 +81,12 @@ describe('recordCount — capture time (0369)', () => {
     expect(update.counted_quantity).toBe(20);
   });
 
-  it('does not touch captured_at when none is given (web action, old phones)', async () => {
+  // A record without a capture time (the web action, an old phone) writes
+  // captured_at NULL, explicitly: the trigger keeps an UNCHANGED capture time
+  // as a retry of the same record, so leaving the column out would let a web
+  // re-record of the same quantity inherit an earlier offline record's moment.
+  // Mutation: write captured_at only when given.
+  it('writes captured_at NULL when none is given (web action, old phones): an online record', async () => {
     const stub = makeSupabaseStub({
       'cycle_counts.select': openCount(),
       'cycle_count_lines.update': { data: { id: 'line-1' }, error: null },
@@ -89,8 +94,9 @@ describe('recordCount — capture time (0369)', () => {
     const svc = new CycleCountsService(makeServiceContext(stub.client));
     await svc.recordCount({ cycleCountId: 'cc-1', lineId: 'line-1', countedQuantity: 20 });
     const update = stub.chainArgs.get('cycle_count_lines.update')?.[0]?.[0] as Record<string, unknown>;
-    expect('captured_at' in update).toBe(false);
-    // The AI-scan link is untouched when no aiScanId is given, too.
+    expect('captured_at' in update).toBe(true);
+    expect(update.captured_at).toBeNull();
+    // The AI-scan link is untouched when no aiScanId is given.
     expect('ai_scan_id' in update).toBe(false);
   });
 
@@ -203,6 +209,52 @@ describe('rental equipment and kit phantoms are not counted (0369, D8)', () => {
     expect(expansion).toContainEqual(['is_bundle', false]);
     const rpc = stub.rpcCalls.find((c) => c.name === 'start_cycle_count');
     expect((rpc?.args as { p_item_ids: string[] }).p_item_ids).toEqual(['plain']);
+  });
+});
+
+describe('post — the superseded refusal names every line (0369)', () => {
+  // The raise's DETAIL (superseded_lines=<n>) must reach the mapper, or a
+  // refusal of several lines reads as one. Mutation: map error.message alone.
+  it('passes the RPC error DETAIL to the mapper', async () => {
+    const stub = makeSupabaseStub({
+      'cycle_counts.select': { data: { warehouse_id: 'wh-a' }, error: null },
+      'rpc:post_cycle_count': {
+        data: null,
+        error: {
+          message: 'cycle_count_line_superseded: SKU-1, SKU-2',
+          details: 'superseded_lines=2',
+          hint: 'cycle_count_line_superseded',
+          code: 'P0001',
+        },
+      },
+    });
+    const svc = new CycleCountsService(makeServiceContext(stub.client));
+    await expect(svc.post('cc-1')).rejects.toMatchObject({
+      code: 'validation_error',
+      message: expect.stringContaining('corrections for 2 items'),
+      details: { reason: 'cycle_count_line_superseded', count: 2, items: 'SKU-1, SKU-2' },
+    });
+  });
+});
+
+describe('a group of only rentals and kits (0369, D8)', () => {
+  it('is refused with copy that says why', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': servedLikePostgrest([
+        { id: 'rental', organization_id: 'org-test', warehouse_id: 'wh-a', deleted_at: null, status: 'active', is_rental: true, is_bundle: false, group_id: 'g2' },
+        { id: 'kit', organization_id: 'org-test', warehouse_id: 'wh-a', deleted_at: null, status: 'active', is_rental: false, is_bundle: true, group_id: 'g2' },
+      ]),
+    });
+    const svc = new CycleCountsService(
+      makeServiceContext(stub.client, {
+        enabledModules: new Set<ModuleId>([...DEFAULT_MODULE_IDS, 'cycle_counts', 'sports']),
+      }),
+    );
+    await expect(svc.start({ scope: 'group', warehouseId: null, groupIds: ['g2'] })).rejects.toMatchObject({
+      code: 'validation_error',
+      message: expect.stringContaining('rental equipment and kits are left out of counts'),
+    });
+    expect(stub.rpcCalls.find((c) => c.name === 'start_cycle_count')).toBeUndefined();
   });
 });
 

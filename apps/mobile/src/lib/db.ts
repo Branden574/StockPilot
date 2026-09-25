@@ -340,6 +340,11 @@ export async function ensureSchema(db: SchemaDb): Promise<void> {
   await addColumnIfMissing(db, 'pending_actions', 'user_id', 'text');
 
   await addDisplayColumn(db, 'cycle_count_lines', 'item_variant_label', 'text');
+  // When a count synced from an offline phone was actually taken (server
+  // 0369, captured_at), kept only for a line counted offline: the count
+  // screen shows "Counted offline <time>" as the web review does. Display
+  // only, added in place like the variant label.
+  await addDisplayColumn(db, 'cycle_count_lines', 'offline_captured_at', 'text');
   // The count's permanent reference, CC-000042 (server migration 0358). A
   // display column, so it is added in place (never a SCHEMA_VERSION bump: older
   // bundles drop the outbox on one): existing rows read NULL, shown as "Reference
