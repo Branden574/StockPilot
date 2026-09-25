@@ -7,6 +7,7 @@ import {
   Plus,
   Search,
   User,
+  UserCheck,
   Warehouse,
 } from 'lucide-react-native';
 import * as React from 'react';
@@ -23,7 +24,12 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { RENTAL_BORROWER_EMAIL_HELP, stockAvailability } from '@stockpilot/core';
+import {
+  RENTAL_BORROWER_EMAIL_HELP,
+  RENTAL_BORROWER_TEAM_MEMBER,
+  RENTAL_NO_EMAIL_NOTE,
+  stockAvailability,
+} from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -35,6 +41,23 @@ import { showWriteCta } from '@/lib/cta-gating';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { readErrorMessage, settleIdBatchRead } from '@/lib/id-batches';
 import { readOpenReservations, sumReservedByItem } from '@/lib/id-reads';
+import {
+  BORROWER_EMAIL_FORMAT_ERROR,
+  EMPTY_BORROWER,
+  borrowerEmailInvalid,
+  borrowerRequestFields,
+  borrowerSearchFailure,
+  keepPickedMember,
+  listRentalBorrowers,
+  matchBorrowers,
+  pickMember,
+  someoneElse,
+  typeEmail,
+  typeName,
+  type BorrowerDraft,
+  type BorrowerSearch,
+  type RentalBorrowerMember,
+} from '@/lib/rental-borrower';
 import { rentalPickerStatus } from '@/lib/rental-items';
 import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
@@ -121,8 +144,13 @@ export default function NewRental() {
   const [search, setSearch] = React.useState('');
   /** itemId → quantity. The cart; each entry becomes one `lines[]` element. */
   const [cart, setCart] = React.useState<Record<string, number>>({});
-  const [borrowerName, setBorrowerName] = React.useState('');
-  const [borrowerEmail, setBorrowerEmail] = React.useState('');
+  // The borrower: a picked team member, or anyone else by typed name and
+  // email (lib/rental-borrower.ts holds the rules, the web picker's).
+  const [borrower, setBorrower] = React.useState<BorrowerDraft>(EMPTY_BORROWER);
+  // The team members to search. A failed load never blocks the form: a typed
+  // name and email still check out (see borrowerSearchFailure).
+  const [borrowerSearch, setBorrowerSearch] = React.useState<BorrowerSearch>({ status: 'loading' });
+  const [borrowerNonce, setBorrowerNonce] = React.useState(0);
   const [returnDays, setReturnDays] = React.useState('7');
   const [notes, setNotes] = React.useState('');
   const [busy, setBusy] = React.useState(false);
@@ -163,6 +191,30 @@ export default function NewRental() {
       cancelled = true;
     };
   }, [orgId, warehousesNonce]);
+
+  // Team members for the borrower search (GET /api/v1/rentals/borrowers, the
+  // web picker's query). Only for someone who may check out: the route answers
+  // 403 otherwise, and the screen already says they cannot. Reloaded for a new
+  // organization and by Try again.
+  React.useEffect(() => {
+    if (!orgId || !canCreate) return;
+    let cancelled = false;
+    void (async () => {
+      setBorrowerSearch({ status: 'loading' });
+      try {
+        const members = await listRentalBorrowers();
+        if (cancelled) return;
+        setBorrowerSearch({ status: 'ready', members });
+        // A member picked before a switch of organization is not this one's.
+        setBorrower((d) => keepPickedMember(d, members));
+      } catch (e) {
+        if (!cancelled) setBorrowerSearch(borrowerSearchFailure(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [orgId, canCreate, borrowerNonce]);
 
   // Rental items for the selected warehouse, plus the OPEN reservations against
   // them. Availability, not on-hand, is what the server enforces (SP-052), so
@@ -299,7 +351,8 @@ export default function NewRental() {
     Boolean(orgId) &&
     Boolean(warehouseId) &&
     lines.length > 0 &&
-    borrowerName.trim().length > 0 &&
+    borrower.name.trim().length > 0 &&
+    !borrowerEmailInvalid(borrower) &&
     Boolean(expectedReturn) &&
     !busy &&
     !picker.blocked &&
@@ -327,14 +380,19 @@ export default function NewRental() {
       Alert.alert('Expected return required', 'Enter the number of days until return.');
       return;
     }
+    if (borrowerEmailInvalid(borrower)) {
+      Alert.alert('Check the email', BORROWER_EMAIL_FORMAT_ERROR);
+      return;
+    }
     setBusy(true);
     try {
       await api<{ id: string }>('/api/v1/rentals', {
         method: 'POST',
         body: {
           warehouseId,
-          borrowerName: borrowerName.trim(),
-          borrowerEmail: borrowerEmail.trim() || null,
+          // borrowerUserId only for a picked team member; a typed name is
+          // someone not in StockPilot (lib/rental-borrower.ts).
+          ...borrowerRequestFields(borrower),
           expectedReturnAt: expectedReturn.toISOString(),
           notes: notes.trim() || null,
           lines,
@@ -519,26 +577,82 @@ export default function NewRental() {
           </FormSection>
 
           <FormSection icon={User} label="BORROWER">
-            <Field
-              label="FULL NAME"
-              value={borrowerName}
-              onChangeText={setBorrowerName}
-              placeholder="Who is checking this out?"
-              autoCapitalize="words"
-            />
-            <Field
-              label="EMAIL (OPTIONAL)"
-              value={borrowerEmail}
-              onChangeText={setBorrowerEmail}
-              placeholder="borrower@company.com"
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-            {/* The web picker's words (shared from core): anyone can borrow,
-                and the email is where the rental emails go. */}
-            <Body size={12} muted>
-              They do not need a StockPilot account. {RENTAL_BORROWER_EMAIL_HELP}
-            </Body>
+            {borrower.userId !== null ? (
+              // A picked team member: their name and the account email the
+              // rental emails will go to. Change starts a fresh borrower.
+              <View style={{ gap: 8 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <UserCheck size={16} color={c.ink} strokeWidth={1.5} />
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Body size={15} style={{ fontFamily: FONT.display }}>
+                      {borrower.name}
+                    </Body>
+                    <Body size={12} muted>
+                      {RENTAL_BORROWER_TEAM_MEMBER}
+                    </Body>
+                  </View>
+                  <Pressable
+                    onPress={() => setBorrower(someoneElse(borrower))}
+                    accessibilityRole="button"
+                    accessibilityLabel="Change borrower"
+                    hitSlop={8}
+                    style={({ pressed }) => [
+                      styles.chip,
+                      { borderColor: c.hair, backgroundColor: c.card, opacity: pressed ? 0.85 : 1 },
+                    ]}
+                  >
+                    <Body size={13} color={c.ink2} style={{ fontFamily: FONT.display }}>
+                      Change
+                    </Body>
+                  </Pressable>
+                </View>
+                <Body size={12} muted>
+                  {borrower.email.trim()
+                    ? `Rental emails go to ${borrower.email.trim()}.`
+                    : RENTAL_NO_EMAIL_NOTE}
+                </Body>
+              </View>
+            ) : (
+              <>
+                <Field
+                  label="FULL NAME"
+                  value={borrower.name}
+                  onChangeText={(text) => setBorrower((d) => typeName(d, text))}
+                  placeholder="Search team members, or type anyone’s name"
+                  autoCapitalize="words"
+                  autoCorrect={false}
+                />
+                {/* Only for someone who may check out (the list is not loaded
+                    otherwise, and the screen says why below). */}
+                {canCreate ? (
+                  <BorrowerSuggestions
+                    search={borrowerSearch}
+                    draft={borrower}
+                    onPick={(member) => setBorrower(pickMember(member))}
+                    onRetry={() => setBorrowerNonce((n) => n + 1)}
+                  />
+                ) : null}
+                <Field
+                  label="EMAIL (OPTIONAL)"
+                  value={borrower.email}
+                  onChangeText={(text) => setBorrower((d) => typeEmail(d, text))}
+                  placeholder="borrower@company.com"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                {borrowerEmailInvalid(borrower) ? (
+                  <Body size={12} color={ACCENT.warn}>
+                    {BORROWER_EMAIL_FORMAT_ERROR}
+                  </Body>
+                ) : null}
+                {/* The web picker's words (shared from core): anyone can borrow,
+                    and the email is where the rental emails go. */}
+                <Body size={12} muted>
+                  They do not need a StockPilot account. {RENTAL_BORROWER_EMAIL_HELP}
+                </Body>
+              </>
+            )}
           </FormSection>
 
           <FormSection icon={Calendar} label="EXPECTED RETURN">
@@ -609,6 +723,97 @@ export default function NewRental() {
           </Button>
         </ScrollView>
       </KeyboardAvoidingView>
+    </View>
+  );
+}
+
+/**
+ * Team members matching the typed name, under the name field. A tap picks the
+ * member; anything else typed stays a borrower not in StockPilot. When the
+ * list could not load, the reason and a retry, and typing still works.
+ */
+function BorrowerSuggestions({
+  search,
+  draft,
+  onPick,
+  onRetry,
+}: {
+  search: BorrowerSearch;
+  draft: BorrowerDraft;
+  onPick: (member: RentalBorrowerMember) => void;
+  onRetry: () => void;
+}) {
+  const { c } = useTheme();
+  if (search.status === 'failed') {
+    return (
+      <View style={{ gap: 8 }}>
+        <Body size={12} muted>
+          {search.message}
+        </Body>
+        <Pressable
+          onPress={onRetry}
+          accessibilityRole="button"
+          accessibilityLabel="Try loading team members again"
+          style={({ pressed }) => [
+            styles.chip,
+            { alignSelf: 'flex-start', borderColor: c.hair, backgroundColor: c.card, opacity: pressed ? 0.85 : 1 },
+          ]}
+        >
+          <Body size={13} color={c.ink2} style={{ fontFamily: FONT.display }}>
+            Try again
+          </Body>
+        </Pressable>
+      </View>
+    );
+  }
+  if (!draft.name.trim()) return null;
+  if (search.status === 'loading') {
+    return (
+      <Body size={12} muted>
+        Looking up team members…
+      </Body>
+    );
+  }
+  const { shown, more } = matchBorrowers(search.members, draft);
+  if (shown.length === 0) {
+    return (
+      <Body size={12} muted>
+        No team member matches. They will be checked out as someone not in StockPilot.
+      </Body>
+    );
+  }
+  return (
+    <View style={{ gap: 6 }}>
+      {shown.map((member) => (
+        <Pressable
+          key={member.userId}
+          onPress={() => onPick(member)}
+          accessibilityRole="button"
+          accessibilityLabel={`Check out to ${member.displayName}, team member`}
+          style={({ pressed }) => [
+            styles.suggestion,
+            { borderColor: c.hair, backgroundColor: pressed ? c.paper2 : c.card },
+          ]}
+        >
+          <UserCheck size={14} color={c.ink3} strokeWidth={1.5} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Body size={14} style={{ fontFamily: FONT.display }}>
+              {member.displayName}
+            </Body>
+            {member.email ? (
+              <Body size={12} muted>
+                {member.email}
+              </Body>
+            ) : null}
+          </View>
+        </Pressable>
+      ))}
+      <Body size={12} muted>
+        {more > 0
+          ? `${more} more ${more === 1 ? 'match' : 'matches'}. Keep typing to narrow the list. `
+          : ''}
+        Not on the list? Keep the name as typed: they are someone not in StockPilot.
+      </Body>
     </View>
   );
 }
@@ -732,6 +937,16 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 999,
     borderWidth: 1,
+  },
+  suggestion: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderRadius: RADIUS.tile,
   },
   step: {
     width: 32,

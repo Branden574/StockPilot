@@ -7,9 +7,17 @@ import { RentalsListTable } from '@/components/rentals/rentals-list-table';
 import { RentalsTabs } from '@/components/rentals/rentals-tabs';
 import { Button } from '@/components/ui/button';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { reportError } from '@/lib/error-reporter';
 import { InventoryService } from '@/server/services/inventory';
-import { RentalsService } from '@/server/services/rentals';
-import { can } from '@stockpilot/core';
+import { RentalsService, type RentalRow } from '@/server/services/rentals';
+import {
+  can,
+  isRentalOverdue,
+  overdueReminderListMark,
+  overdueReminderState,
+  resolveOrgTimezone,
+} from '@stockpilot/core';
 import { cn } from '@/lib/utils';
 
 type StatusParam = 'out' | 'overdue' | 'returned' | 'cancelled' | 'all';
@@ -29,6 +37,28 @@ const SUB_TABS: Array<{ id: StatusParam; label: string }> = [
   { id: 'cancelled', label: 'Cancelled' },
   { id: 'all', label: 'All' },
 ];
+
+/**
+ * The small reminder mark on each OVERDUE row ("Reminder sent Sep 26", "No
+ * email on file", ...), keyed by rental id. Decided here, on the server, with
+ * the rule the daily sweep uses (@stockpilot/core rentals/emails.ts) and in the
+ * organization's zone, and handed to the table as text: the table is a client
+ * component, and a date formatted there would follow the browser's zone.
+ */
+function reminderMarksFor(
+  rentals: RentalRow[],
+  remindersOn: boolean | null,
+  nowMs: number,
+  timeZone: string,
+): Record<string, string> {
+  const marks: Record<string, string> = {};
+  for (const rental of rentals) {
+    if (!isRentalOverdue(rental, nowMs)) continue;
+    const mark = overdueReminderListMark(overdueReminderState(rental, remindersOn, nowMs), timeZone);
+    if (mark) marks[rental.id] = mark;
+  }
+  return marks;
+}
 
 function parseStatus(value: string | undefined): StatusParam {
   return value && VALID_STATUSES.has(value as StatusParam)
@@ -63,7 +93,20 @@ export default async function RentalsPage({
     InventoryService.forCurrentUser(),
   ]);
 
-  const { rentals } = await rentalsSvc.list({ status });
+  // The rows, the organization's Rentals row as the overdue sweep reads it
+  // (null when unreadable: overdue rows then show only the marks that do not
+  // depend on it), and the zone for the marks' dates.
+  const [{ rentals }, remindersOn, timeZone] = await Promise.all([
+    rentalsSvc.list({ status }),
+    rentalsSvc.overdueRemindersOn(),
+    getOrgRowForRequest(ctx.organizationId)
+      .then((org) => resolveOrgTimezone(org?.timezone))
+      .catch((e: unknown) => {
+        void reportError(e, { tag: 'rentals.list.org_timezone_failed', level: 'warning' });
+        return resolveOrgTimezone(null);
+      }),
+  ]);
+  const reminderMarks = reminderMarksFor(rentals, remindersOn, Date.now(), timeZone);
 
   // Build a name map for the first-line item summary in each row.
   const allItemIds = [...new Set(rentals.flatMap((r) => r.lines.map((l) => l.item_id)))];
@@ -116,6 +159,7 @@ export default async function RentalsPage({
         rentals={rentals}
         viewerRole={ctx.role}
         itemNames={itemNames}
+        reminderMarks={reminderMarks}
       />
     </div>
   );

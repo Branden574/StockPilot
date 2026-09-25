@@ -273,13 +273,64 @@ describe('rentals/new.tsx — a borrower who is not in StockPilot (2026-09-25)',
     expect(jsx).toContain('They do not need a StockPilot account.');
   });
 
-  it('sends the typed email, or null when it is blank', () => {
-    expect(submitBody()).toMatch(/borrowerEmail:\s*borrowerEmail\.trim\(\)\s*\|\|\s*null/);
+  it('sends the borrower through the shared request builder (typed email, or null when blank)', () => {
+    // borrowerRequestFields trims the email to null and sends borrowerUserId
+    // only for a picked member (rental-borrower.test.ts pins its rules).
+    expect(submitBody()).toMatch(/\.\.\.borrowerRequestFields\(borrower\)/);
+    expect(submitBody()).not.toMatch(/borrowerEmail:\s*borrowerEmail/);
   });
 
   it('does not promise a confirmation email when none will be sent', () => {
     const jsx = source.slice(source.indexOf('return ('));
     expect(jsx).not.toMatch(/The borrower is emailed a confirmation\.\s/);
     expect(jsx).toMatch(/emailed a confirmation when you add their email/);
+  });
+});
+
+describe('rentals/new.tsx: team member search (2026-09-25, the web BorrowerPicker twin)', () => {
+  // The phone had no member search: every phone rental was a typed name, so a
+  // team member got no borrower_user_id and no account email. The rules live
+  // in lib/rental-borrower.ts (tested there); these pin that the screen uses
+  // them and reads members only through the Bearer route.
+  it('loads members from GET /api/v1/rentals/borrowers, only for someone who may check out', () => {
+    const src = code();
+    expect(src).toMatch(/const members = await listRentalBorrowers\(\);/);
+    expect(src).toMatch(/if \(!orgId \|\| !canCreate\) return;/);
+    expect(src).toContain('}, [orgId, canCreate, borrowerNonce]);');
+    // Never a direct read of the member tables from the phone.
+    expect(src).not.toMatch(/from\(\s*'organization_members'\s*\)/);
+    expect(src).not.toMatch(/from\(\s*'user_profiles'\s*\)/);
+  });
+
+  it('a failed member load never blocks the form: the reason, a retry, and typing still works', () => {
+    const src = code();
+    expect(src).toMatch(/setBorrowerSearch\(borrowerSearchFailure\(e\)\)/);
+    expect(src).toContain('onRetry={() => setBorrowerNonce((n) => n + 1)}');
+    const canSubmit = src.slice(src.indexOf('const canSubmit ='));
+    expect(canSubmit.slice(0, canSubmit.indexOf(';'))).not.toMatch(/borrowerSearch/);
+  });
+
+  it('pick, type over and Change go through the shared rules', () => {
+    const src = code();
+    expect(src).toMatch(/onPick=\{\(member\) => setBorrower\(pickMember\(member\)\)\}/);
+    expect(src).toMatch(/onChangeText=\{\(text\) => setBorrower\(\(d\) => typeName\(d, text\)\)\}/);
+    expect(src).toMatch(/onChangeText=\{\(text\) => setBorrower\(\(d\) => typeEmail\(d, text\)\)\}/);
+    expect(src).toMatch(/onPress=\{\(\) => setBorrower\(someoneElse\(borrower\)\)\}/);
+    expect(src).toMatch(/setBorrower\(\(d\) => keepPickedMember\(d, members\)\)/);
+  });
+
+  it('a picked member shows where the emails go, or the no-email note; a typed bad email blocks Check out', () => {
+    const src = code();
+    expect(src).toContain('`Rental emails go to ${borrower.email.trim()}.`');
+    expect(src).toContain('RENTAL_NO_EMAIL_NOTE');
+    const canSubmit = src.slice(src.indexOf('const canSubmit ='));
+    expect(canSubmit.slice(0, canSubmit.indexOf(';'))).toMatch(/!borrowerEmailInvalid\(borrower\)/);
+    const body = submitBody();
+    expect(body.indexOf('if (borrowerEmailInvalid(borrower))')).toBeGreaterThan(-1);
+    expect(body.indexOf('if (borrowerEmailInvalid(borrower))')).toBeLessThan(body.indexOf("'/api/v1/rentals'"));
+  });
+
+  it('never describes a reminder before the return date', () => {
+    expect(source).not.toMatch(/due soon|before (it is|the rental is) due|upcoming reminder|day before/i);
   });
 });

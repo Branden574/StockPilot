@@ -79,6 +79,15 @@ const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
   // catch-all. Query (the ?tab= filter) is dropped -> the Open list.
   { re: new RegExp(`/dashboard/exceptions/${UUID}`), to: (m) => `/exceptions/${m[1]}` },
   { re: /\/dashboard\/exceptions(\?.*)?$/, to: () => '/exceptions' },
+  // Rentals (2026-09-25): one rental now has a native twin (app/rentals/[id].tsx).
+  // The member's rental emails link to the web detail, so a tap on a phone
+  // with the app opens the rental instead of home. Detail before the bare
+  // list; 'new' can never satisfy the UUID pattern. Rental ITEM pages
+  // (/dashboard/rentals/items/...) have no rule and still open home. Query
+  // (the ?status= filter) is dropped -> the full list.
+  { re: new RegExp(`/dashboard/rentals/${UUID}`), to: (m) => `/rentals/${m[1]}` },
+  { re: /\/dashboard\/rentals\/new$/, to: () => '/rentals/new' },
+  { re: /\/dashboard\/rentals(\?.*)?$/, to: () => '/rentals' },
   { re: /^\/dashboard(\/.*)?$/, to: () => '/' },
 ];
 

@@ -13,12 +13,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * (batched, paged, throws); category names batch too and degrade with a report.
  */
 
-const { adminRef, reserved, formProps, reportError, thumbMap } = vi.hoisted(() => ({
+const { adminRef, reserved, formProps, reportError, thumbMap, borrowerMembers } = vi.hoisted(() => ({
   adminRef: { current: null as unknown },
   reserved: vi.fn(),
   formProps: vi.fn(),
   reportError: vi.fn(async () => {}),
   thumbMap: vi.fn(),
+  borrowerMembers: vi.fn(async () => [] as Array<Record<string, unknown>>),
 }));
 
 vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
@@ -44,8 +45,10 @@ vi.mock('@/server/services/warehouses', () => ({
     forCurrentUser: vi.fn(async () => ({ listNames: async () => [{ id: 'wh-1', name: 'DC4' }] })),
   },
 }));
-vi.mock('@/server/services/team', () => ({
-  TeamService: { forCurrentUser: vi.fn(async () => ({ listMembers: async () => [] })) },
+vi.mock('@/server/services/rentals', () => ({
+  RentalsService: {
+    forCurrentUser: vi.fn(async () => ({ listBorrowerMembers: borrowerMembers })),
+  },
 }));
 vi.mock('@/server/services/rack-holdings', () => ({
   fetchRackHoldingsByItem: vi.fn(async () => new Map()),
@@ -236,5 +239,25 @@ describe('New rental: photos arrive with the page', () => {
     );
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('thumb map unavailable'));
     warn.mockRestore();
+  });
+});
+
+describe('New rental: the borrower picker members', () => {
+  // The phone's picker reads the same list through GET /api/v1/rentals/borrowers
+  // (RentalsService.listBorrowerMembers). The page used to build its own from
+  // TeamService.listMembers, which also offered members who had not accepted
+  // their invite: create_rental refuses them ('borrower_not_member').
+  it('hands the form the shared list, unchanged', async () => {
+    stubWith(() => ({ data: [], error: null }));
+    reserved.mockResolvedValue(new Map());
+    const members = [
+      { userId: 'u-1', displayName: 'Ana Ruiz', email: 'ana@school.org' },
+      { userId: 'u-2', displayName: 'bo@school.org', email: 'bo@school.org' },
+    ];
+    borrowerMembers.mockResolvedValue(members);
+    await renderPage();
+    const props = formProps.mock.calls.at(-1)?.[0] as { members: unknown };
+    expect(borrowerMembers).toHaveBeenCalledTimes(1);
+    expect(props.members).toEqual(members);
   });
 });

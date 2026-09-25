@@ -236,6 +236,7 @@ function RootGate() {
         <Stack.Screen name="bundles/index" options={{ presentation: 'card' }} />
         <Stack.Screen name="bundles/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="rentals/new" options={{ presentation: 'card' }} />
+        <Stack.Screen name="rentals/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="maintenance/new" options={{ presentation: 'card' }} />
         <Stack.Screen name="maintenance/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="exceptions/[id]" options={{ presentation: 'card' }} />

@@ -12,7 +12,10 @@ import {
   withContext,
 } from './context';
 import { defer } from './lib/defer';
+import { fetchAllRows } from './lib/paginate';
 import { postgrestErrorText } from './lib/postgrest-error';
+
+import { overdueRemindersOn as remindersOnFromRow, RENTAL_OVERDUE_SWEEP } from '@stockpilot/core';
 
 import type {
   CreateRentalInput,
@@ -40,8 +43,20 @@ export interface RentalRow {
   cancellation_reason: string | null;
   returned_by: string | null;
   return_notes: string | null;
+  /** When the daily sweep reminded this overdue rental (0264); null = not yet. */
+  overdue_reminder_sent_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * A team member the rental can be checked out to: the borrower picker's row,
+ * on the web New rental page and the phone (GET /api/v1/rentals/borrowers).
+ */
+export interface RentalBorrowerMember {
+  userId: string;
+  displayName: string;
+  email: string | null;
 }
 
 export interface RentalLineRow {
@@ -107,6 +122,89 @@ export class RentalsService {
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     return data as (RentalRow & { lines: RentalLineRow[] }) | null;
+  }
+
+  /**
+   * Whether the daily sweep sends overdue reminders for this organization:
+   * its explicit Rentals row in Settings > Modules, read the way the sweep
+   * reads it (cron/rental-overdue; @stockpilot/core overdueRemindersOn). The
+   * comp is not consulted: it lets people use Rentals, it does not start the
+   * emails (lib/modules/effective-modules.ts).
+   *
+   * Every member may read organization_modules (0144 org_modules_read), so
+   * this is the caller's own client. A failed read is null, and the pages say
+   * they could not check rather than promising or denying a reminder
+   * (recurring pattern #1: a read that feeds a page fails closed, not loud).
+   */
+  async overdueRemindersOn(): Promise<boolean | null> {
+    const { data, error } = await this.ctx.supabase
+      .from('organization_modules')
+      .select('enabled')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('module_id', RENTAL_OVERDUE_SWEEP.moduleId)
+      .maybeSingle();
+    if (error) {
+      console.warn('[rentals] reminders switch unreadable:', postgrestErrorText(error));
+      return null;
+    }
+    return remindersOnFromRow(data as { enabled?: boolean | null } | null);
+  }
+
+  /**
+   * The team members a rental can be checked out to, for the borrower picker
+   * on the web New rental page AND the phone (one query, pattern #26).
+   *
+   * ACCEPTED members only: create_rental (0361) refuses any other borrower_user_id
+   * ('borrower_not_member'), so an invitee offered here could only fail.
+   *
+   * EMAILS: a picked member's rental emails go to their account address, so
+   * the picker shows it. It is read through the caller's OWN client, where
+   * user_profiles_select_orgmates (0003) already lets any accepted member read
+   * a co-member's profile, email included; this shows nobody an address the
+   * database would not already give them. It is gated on rentals:create, the
+   * same gate as the web New rental page, and nothing else is returned (no
+   * role, no warehouse, no account state).
+   *
+   * Paged (pattern #3: a team has no size cap). A failed read throws: the
+   * callers show their own error (the page's boundary, the route's 500).
+   */
+  async listBorrowerMembers(): Promise<RentalBorrowerMember[]> {
+    assertModuleEnabled(this.ctx, 'rentals');
+    assertPermission(this.ctx, 'rentals:create');
+    type MemberRow = {
+      user_id: string;
+      user:
+        | { id: string; full_name: string | null; email: string | null }
+        | Array<{ id: string; full_name: string | null; email: string | null }>
+        | null;
+    };
+    const rows = await fetchAllRows<MemberRow>((from, to) =>
+      this.ctx.supabase
+        .from('organization_members')
+        .select('user_id, user:user_profiles!user_id (id, full_name, email)')
+        .eq('organization_id', this.ctx.organizationId)
+        .not('accepted_at', 'is', null)
+        .order('user_id', { ascending: true })
+        .range(from, to),
+    );
+    const members: RentalBorrowerMember[] = [];
+    for (const row of rows) {
+      const user = Array.isArray(row.user) ? row.user[0] : row.user;
+      // No profile the caller may read: nothing to show, and nothing to pick.
+      if (!user) continue;
+      const fullName = user.full_name?.trim() || null;
+      const email = user.email?.trim() || null;
+      members.push({
+        userId: row.user_id,
+        displayName: fullName ?? email ?? 'Unknown',
+        email,
+      });
+    }
+    return members.sort(
+      (a, b) =>
+        a.displayName.localeCompare(b.displayName, 'en', { sensitivity: 'base' }) ||
+        (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0),
+    );
   }
 
   async create(input: CreateRentalInput): Promise<{ id: string }> {
