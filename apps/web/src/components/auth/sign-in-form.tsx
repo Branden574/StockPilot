@@ -27,6 +27,9 @@ export function SignInForm() {
   const router = useRouter();
   const params = useSearchParams();
   const redirect = safeRedirectPath(params.get('redirect'));
+  // Sent here by app/auth/session-ended after this device's session was ended
+  // elsewhere (revoked, or signed out everywhere).
+  const sessionEnded = params.get('reason') === 'session_ended';
 
   // Cosmetic only — drives the panel beside the form. Never read by any
   // authentication decision, and the flow is identical if it is ignored.
@@ -80,6 +83,11 @@ export function SignInForm() {
 
   return (
     <form onSubmit={onSubmit} className="space-y-4" noValidate>
+      {sessionEnded ? (
+        <p role="status" className="text-sm text-[var(--ed-ink-3)]">
+          You were signed out on this device. Sign in again to continue.
+        </p>
+      ) : null}
       <div className="auth-field space-y-2">
         <Label htmlFor="email">Email</Label>
         <Input

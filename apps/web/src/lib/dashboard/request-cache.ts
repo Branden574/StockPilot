@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { isAuthSessionMissingError } from '@supabase/supabase-js';
 import { cache } from 'react';
 
 import {
@@ -9,6 +10,7 @@ import {
   orgRowFromMembership,
 } from '@/lib/auth/request-context-bundle';
 import { effectiveModules } from '@/lib/modules/effective-modules';
+import { SessionEndedError } from '@/lib/auth/session-ended';
 import { createClient } from '@/lib/supabase/server';
 
 import { type ModuleId } from '@stockpilot/core';
@@ -153,7 +155,12 @@ export interface MfaFactor {
 export const getMfaFactorsForRequest = cache(async (): Promise<MfaFactor[]> => {
   const supabase = await createClient();
   const res = await supabase.auth.mfa.listFactors();
-  if (res.error) throw new Error(`getMfaFactorsForRequest: ${res.error.name || 'unreadable'}`);
+  if (res.error) {
+    // The session is GONE (revoked elsewhere, signed out everywhere): not an
+    // unreadable list. Callers send this to sign-in (lib/auth/session-ended).
+    if (isAuthSessionMissingError(res.error)) throw new SessionEndedError();
+    throw new Error(`getMfaFactorsForRequest: ${res.error.name || 'unreadable'}`);
+  }
   return (res.data?.all ?? []) as MfaFactor[];
 });
 

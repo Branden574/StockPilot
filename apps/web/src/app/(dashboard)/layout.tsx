@@ -17,6 +17,7 @@ import {
   getWarehousesForRequest,
 } from '@/lib/dashboard/request-cache';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
+import { orSessionEnded } from '@/lib/auth/session-ended';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { createClient } from '@/lib/supabase/server';
@@ -97,7 +98,8 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     getWarehouseAccess(),
     getActiveWarehouseFilter(),
     getOrgRowForRequest(ctx.organizationId),
-    mfaFactorsRead,
+    // An ENDED session goes to sign-in; any other failure still fails closed.
+    orSessionEnded(mfaFactorsRead),
     // Rank 8 (query hygiene): derived from loadSessionAndContext's single
     // membership query (requireOrgContext above already resolved it in this
     // render) instead of a THIRD organization_members round trip. Same

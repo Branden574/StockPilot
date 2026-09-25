@@ -36,6 +36,7 @@ import { OrderRequestsService } from '@/server/services/order-requests';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { ReportsService } from '@/server/services/reports';
 import { requireOrgContext } from '@/lib/auth/session';
+import { orSessionEnded } from '@/lib/auth/session-ended';
 import {
   getMfaFactorsForRequest,
   getOrgRowForRequest,
@@ -325,7 +326,7 @@ async function DashboardBody({
     // byWarehouse. The full inventoryValuation() still backs the report page.
     ReportsService.forCurrentUser().then((svc) => svc.inventoryValuationSummary()),
     getWarehousesForRequest(ctx.organizationId),
-    getMfaFactorsForRequest(),
+    orSessionEnded(getMfaFactorsForRequest()),
     getOrgRowForRequest(ctx.organizationId),
     supabase
       .from('user_profiles')
