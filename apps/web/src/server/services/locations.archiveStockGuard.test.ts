@@ -35,7 +35,8 @@ const LOC = 'loc-rack-100a';
 
 function makeService(opts: {
   row?: { id: string; kind: string | null } | null;
-  holdings?: Array<{ quantity: number; inventory_items: { id: string; name: string } }>;
+  /** `inventory_items: null`: a holding the caller can see, of an item they cannot read. */
+  holdings?: Array<{ quantity: number; inventory_items: { id: string; name: string } | null }>;
   holdingsError?: { message: string } | null;
   /**
    * location_stock_census (0371): the org-wide count and total. Defaults to
@@ -155,9 +156,15 @@ describe('LocationsService.archive — the stock guard', () => {
   // C6 of the 0371 design: that read saw 0 rows where the location held 2
   // holdings / 15 units, and the location archived. The census decides now.
 
-  it('refuses on the census even when the caller can read NONE of the stock', async () => {
+  it('refuses on the census even when the caller can name NONE of the stock (items they cannot read)', async () => {
+    // A manager at a location whose holdings are all of items outside their
+    // read scope (category, charter, or no warehouse): the holdings come back,
+    // their items do not.
     const { svc, stub } = makeService({
-      holdings: [],
+      holdings: [
+        { quantity: 9, inventory_items: null },
+        { quantity: 6, inventory_items: null },
+      ],
       census: { data: [{ holding_rows: 2, total_quantity: 15 }], error: null },
     });
     const err = await archiveError(svc);
@@ -175,9 +182,41 @@ describe('LocationsService.archive — the stock guard', () => {
     expect(stub.chains.get('locations.update')).toBeUndefined();
   });
 
+  it("a location in a warehouse the caller doesn't manage: says THAT, not \"items you can't see\"", async () => {
+    // Review finding: a Main staff member with locations:manage archiving the
+    // Annex's Rack QA-2 sees none of its holdings (0371 scopes them by
+    // warehouse), though QA Chrome is on their own Items list and its item
+    // page says "7 in other warehouses". "7 units of items you can't see"
+    // contradicted that.
+    const { svc, stub } = makeService({
+      holdings: [],
+      census: { data: [{ holding_rows: 1, total_quantity: 7 }], error: null },
+    });
+    const err = await archiveError(svc);
+    expect((err as ServiceError).message).toBe(
+      "Cannot archive: This location still holds 7 units in a warehouse you don't manage. " +
+        'Move or write off that stock first — archiving anyway leaves it still counted in on hand but attached to a hidden location.',
+    );
+    expect((err as ServiceError).details).toMatchObject({ locationHoldsStock: true, units: 7, items: 1 });
+    expect(stub.chains.get('locations.update')).toBeUndefined();
+  });
+
+  it('keeps the rows of items the caller cannot read (no inner join), so the two reasons can be told apart', async () => {
+    const { svc, stub } = makeService({
+      holdings: [{ quantity: 7, inventory_items: { id: 'i1', name: 'QA Chrome' } }],
+    });
+    await archiveError(svc);
+    const select = String(stub.chainArgs.get('item_stock_levels.select')?.[0]?.[0] ?? '');
+    expect(select).toContain('inventory_items(');
+    expect(select).not.toContain('!inner');
+  });
+
   it('names what the caller can read and counts the rest', async () => {
     const { svc } = makeService({
-      holdings: [{ quantity: 7, inventory_items: { id: 'i1', name: 'QA Chrome' } }],
+      holdings: [
+        { quantity: 7, inventory_items: { id: 'i1', name: 'QA Chrome' } },
+        { quantity: 8, inventory_items: null },
+      ],
       census: { data: [{ holding_rows: 2, total_quantity: 15 }], error: null },
     });
     const err = await archiveError(svc);

@@ -25,7 +25,8 @@ interface PlacementsBreakdownProps {
   /**
    * PLACED stock in warehouses the viewer cannot see (item_holdings_elsewhere,
    * 0371), as one entry after the visible racks: "7 in other warehouses
-   * (1 location)". A count, never a per-location quantity, and never a
+   * (1 location)". A total and a count of places, never which place (with
+   * one place the total is that unnamed place's quantity), and never a
    * write-off target (the viewer cannot act on it). Null or absent: nothing
    * placed out of view (always, for managers and above).
    */

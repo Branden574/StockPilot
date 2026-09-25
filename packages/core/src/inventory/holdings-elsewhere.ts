@@ -14,8 +14,16 @@
  * The gated `SECURITY DEFINER` RPC `public.item_holdings_elsewhere(uuid[])`
  * answers the missing half as totals: per item the caller can read, the
  * Staging, Unplaced and placed quantities OUTSIDE the caller's holdings scope,
- * plus the ids of the placed locations holding them. Never a per-location
- * quantity. Visible sum + hidden sum = the item's total.
+ * the ids of the placed locations holding them, and how many of those are
+ * fine-grained placements (racks, crates, areas, shelves, bins). Visible sum +
+ * hidden sum = the item's total.
+ *
+ * WHAT THAT DISCLOSES. No field is a per-location quantity, but a total that
+ * covers ONE location is that location's quantity: one hidden placed location
+ * plus the placed total says how many units sit there, and when the hidden
+ * stock is in a single other warehouse, the Staging and Unplaced totals are
+ * that warehouse's Staging and Unplaced quantities. Screens show the totals
+ * ("N in other warehouses"), never the ids.
  *
  * This file is the ONE parser and the ONE vocabulary for that answer, shared by
  * the web service and the phone (which calls the same RPC through its own
@@ -49,6 +57,14 @@ export interface HoldingsElsewhere {
   placed: number;
   /** Sorted ids of the placed locations holding `placed`. Can be empty. */
   placedLocationIds: string[];
+  /**
+   * How many of `placedLocationIds` are fine-grained placements: kind rack,
+   * crate or area, or type shelf or bin (the web's isRackShelfLocation). A
+   * NULL-kind Site in another warehouse is a place stock lives, not a rack,
+   * so it is not counted. Bulk Set rack's split rule and the Items list's
+   * split count read this, exactly as they classify the visible holdings.
+   */
+  rackLocationCount: number;
 }
 
 /** Everything one item holds out of view, in units. 0 for none. */
@@ -104,6 +120,19 @@ function finiteQuantity(value: unknown, field: string): number {
 }
 
 /**
+ * A count column. Missing or not a whole number >= 0 is a malformed answer:
+ * reading it as 0 would under-count a split and let bulk Set rack move stock
+ * it promises never to move.
+ */
+function locationCount(value: unknown, field: string): number {
+  const n = finiteQuantity(value, field);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new Error(`item_holdings_elsewhere returned an invalid ${field}`);
+  }
+  return n;
+}
+
+/**
  * Parse the RPC's rows into a map keyed by item id.
  *
  * THROWS on a payload that is not the documented shape: a caller that cannot
@@ -133,9 +162,13 @@ export function parseHoldingsElsewhereRows(data: unknown): Map<string, HoldingsE
       unplaced: finiteQuantity(row.unplaced, 'unplaced'),
       placed: finiteQuantity(row.placed, 'placed'),
       placedLocationIds: ids,
+      rackLocationCount: locationCount(row.placed_rack_locations, 'placed_rack_locations'),
     };
     // One row per item is the contract; a duplicate (two batches that both
     // named the item) is summed rather than overwritten, so nothing is lost.
+    // The rack count is a count of DISTINCT locations, so it cannot be summed
+    // without the risk of counting one rack twice: the larger of the two is
+    // kept (never fewer than either answer saw).
     const prior = out.get(row.item_id);
     if (prior) {
       out.set(row.item_id, {
@@ -143,6 +176,7 @@ export function parseHoldingsElsewhereRows(data: unknown): Map<string, HoldingsE
         unplaced: prior.unplaced + next.unplaced,
         placed: prior.placed + next.placed,
         placedLocationIds: [...new Set([...prior.placedLocationIds, ...next.placedLocationIds])].sort(),
+        rackLocationCount: Math.max(prior.rackLocationCount, next.rackLocationCount),
       });
     } else {
       out.set(row.item_id, { ...next, placedLocationIds: [...new Set(ids)].sort() });

@@ -34,6 +34,8 @@ const h = vi.hoisted(() => ({
   racksGate: null as null | Promise<string[]>,
   datasetGate: null as null | Promise<void>,
   savedViewsError: null as null | Error,
+  /** Extra fields on the live list's answer (0371: elsewhere figures). */
+  liveExtra: null as null | Record<string, unknown>,
 }));
 
 const m = vi.hoisted(() => ({
@@ -140,6 +142,8 @@ vi.mock('@/server/services/suppliers', () => ({
 vi.mock('@/server/services/tags', () => ({ TagsService: lookupSvc('list') }));
 vi.mock('@/server/services/charters', () => ({ ChartersService: lookupSvc('list') }));
 
+import { ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
+
 import BooksPage from './page';
 
 const BOOK = {
@@ -175,6 +179,7 @@ beforeEach(() => {
   h.racksGate = null;
   h.datasetGate = null;
   h.savedViewsError = null;
+  h.liveExtra = null;
 
   m.checkModuleAccess.mockImplementation((id: string) =>
     logged(`module:${id}`, async () => {
@@ -210,7 +215,12 @@ beforeEach(() => {
     logged('images', async () => items),
   );
   m.inventoryList.mockImplementation(() =>
-    logged('liveList', async () => ({ items: [BOOK], total: 1, valueOnHand: 3 })),
+    logged('liveList', async () => ({
+      items: [BOOK],
+      total: 1,
+      valueOnHand: 3,
+      ...(h.liveExtra ?? {}),
+    })),
   );
 });
 
@@ -332,6 +342,31 @@ describe('Books page: server chain before rows', () => {
     expect(m.loadInventoryList).not.toHaveBeenCalled();
     expect(m.loadInventoryLookups).not.toHaveBeenCalled();
     expect(m.loadInventoryTrendBuckets).not.toHaveBeenCalled();
+  });
+
+  // STOCK IN OTHER WAREHOUSES (0371), as the page wires it.
+  it('staff: the live list asks for the stock in other warehouses (withElsewhere)', async () => {
+    h.role = 'staff';
+    render(await callPage());
+    expect(m.inventoryList).toHaveBeenCalledTimes(1);
+    expect(m.inventoryList.mock.calls[0]![0]).toMatchObject({ withElsewhere: true });
+  });
+
+  it('staff: a failed elsewhere read is SAID above the table, never left as complete figures', async () => {
+    h.role = 'staff';
+    h.liveExtra = { elsewhereUnavailable: true };
+    const { container } = render(await callPage());
+    expect(m.tableProps).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(
+      ELSEWHERE_UNAVAILABLE_NOTE,
+    );
+  });
+
+  it('staff: nothing is added when the elsewhere read succeeded', async () => {
+    h.role = 'staff';
+    h.liveExtra = { elsewhereUnavailable: false };
+    const { container } = render(await callPage());
+    expect(container.querySelector('[role="status"]')).toBeNull();
   });
 
   it('every early rejection is observed: racks and saved views both failing leave nothing unhandled', async () => {

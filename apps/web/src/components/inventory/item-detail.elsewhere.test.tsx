@@ -217,6 +217,7 @@ function chrome(overrides: Record<string, unknown> = {}) {
       unplaced: 0,
       placed: 7,
       placedLocationIds: ['loc-annex-rack'],
+      rackLocationCount: 1,
     },
     updated_by: null,
     updated_at: null,
@@ -301,7 +302,7 @@ describe('the placement breakdown', () => {
 
   it('gets nothing when nothing placed is elsewhere', async () => {
     await renderPage(
-      chrome({ elsewhere: { status: 'some', staged: 5, unplaced: 0, placed: 0, placedLocationIds: [] } }),
+      chrome({ elsewhere: { status: 'some', staged: 5, unplaced: 0, placed: 0, placedLocationIds: [], rackLocationCount: 0 } }),
     );
     expect(breakdownProps.at(-1)?.elsewhere).toBeNull();
   });
@@ -326,7 +327,7 @@ describe('the Rack summary row', () => {
   it('a rack in ANOTHER warehouse that matches the label keeps the row (evidence for it)', async () => {
     locationRows = [{ id: 'loc-39b', name: '39-B', kind: 'rack', warehouse_id: 'wh-annex' }];
     await renderPage(
-      book({ status: 'some', staged: 0, unplaced: 0, placed: 5, placedLocationIds: ['loc-39b'] }),
+      book({ status: 'some', staged: 0, unplaced: 0, placed: 5, placedLocationIds: ['loc-39b'], rackLocationCount: 1 }),
       [mainRack],
     );
     expect(rackRow()).toBe('39-B');

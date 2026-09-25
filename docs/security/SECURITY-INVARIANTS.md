@@ -872,8 +872,12 @@ it must not.
   locations with no warehouse**. An unassigned staff member sees only the
   latter. Two gated `SECURITY DEFINER` read helpers keep screens honest:
   `item_holdings_elsewhere` gives a scoped member, per item they can read, the
-  Staging / Unplaced / placed totals outside their scope (never a per-location
-  number; managers get nothing), and `location_stock_census` gives a manager or
+  Staging / Unplaced / placed totals outside their scope, the ids of the placed
+  locations holding them and how many of those are fine-grained placements
+  (managers get nothing). There is no per-location quantity column, but a
+  total that covers ONE location is that location's quantity (one hidden
+  placed location; or the Staging or Unplaced of a single other warehouse).
+  This is new information for viewers as well as staff. `location_stock_census` gives a manager or
   a `locations:manage` holder the org-wide count and total at one location for
   the archive guard. Holdings are still **charter-blind by design**:
   `my_warehouse_ids()` ignores charter scoping, so a charter-scoped member sees
@@ -882,7 +886,20 @@ it must not.
   open (owner decision, a follow-up)**: a null-location draw (the phone's quick
   −1, a manual removal in 'any' mode, `complete_picking`) goes through the
   frozen `apply_level_delta`, which draws the item's stock from any warehouse;
-  the movement row records no from-location.
+  the movement row records no from-location. **Also open (label-only parity,
+  deferred by design)**: the phone's Books list, the web scanner lookup's rack
+  holdings (item history dialog) and the count-sheet labels still build their
+  placement LABEL from the holdings a staff member can see, with no "+N in
+  other warehouses" and no "could not load" note. They never drive a write,
+  but a book split between a Main crate and an Annex crate reads as Main-only
+  there, while the web Books list says "+N in other warehouses". The phone
+  Books list can reuse `readHoldingsElsewhere` (in parallel with
+  `readRackHoldings`) when this is picked up.
+- **Rollout (0371)**: the file sets `lock_timeout = '5s'` around its policy
+  changes (ACCESS EXCLUSIVE on `item_stock_levels`); a push that meets a
+  long-running reader fails with 55P03 and is retried, instead of queueing
+  every stock read and write behind it (`holdings-migrations.guard.test.ts`
+  pins this for every migration from 0370 that locks the table).
 - **The web app's side (0371)**: `InventoryService.hiddenHoldingsFor` is the
   one caller of `item_holdings_elsewhere` (batches of at most 500 ids, in the
   POST body, started alongside the caller's own holdings read; skipped by
@@ -894,14 +911,27 @@ it must not.
   Items and Books lists, transfer dialog). The location archive guard decides
   from `location_stock_census` and uses its own read only to name items. The
   transfer dialog offers scoped members only destinations they can write
-  (owner decision Q4; `transfer_stock` still enforces it). Every
+  (owner decision Q4; `transfer_stock` still enforces it). `list()` asks only
+  when the caller opts in (`withElsewhere`: the Items, Books and Rentals item
+  lists), so search-as-you-type, pickers, exports and AI tools make no extra
+  request; the pages that render the item tables are pinned to opt in. The
+  bulk Set rack split rule and the list's split count add only hidden
+  fine-grained placements (`placed_rack_locations`, classified with the same
+  lists as `isRackShelfLocation`), so a Site in another warehouse no longer
+  makes a single rack holding look split. The location archive refusal says
+  "units in a warehouse you don't manage" when the caller cannot see the
+  location's holdings at all, and "units of items you can't see" only for
+  visible holdings of unreadable items. Every
   `item_stock_levels` reader under `apps/web/src/server` and `apps/web/src/app`
   is classified in `holdings-readers.guard.test.ts` (folds the hidden totals,
   complete by scope, label only, or service client), so a new reader that adds
   holdings up or decides from them cannot land without folding them in.
 - **The phone's side (0371)**: `apps/mobile/src/lib/holdings-elsewhere.ts` is
   the phone's one caller of `item_holdings_elsewhere`, through the member's
-  own client, with the same rules (skipped by ROLE for managers and above;
+  own client, with the same rules (skipped by ROLE for managers and above,
+  where the role comes from `useRole`, whose shared cache is re-read once it
+  is 30 s old and cleared on sign-out, so a demoted manager's phone does not
+  keep skipping (`role-cache.ts`);
   batches of at most 500 ids in the POST body, started alongside the screen's
   own reads; never throws; a failure is `'unavailable'`, never "nothing
   elsewhere", and is not cached). The item screen and the scan sheet add an

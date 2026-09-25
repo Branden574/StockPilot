@@ -549,7 +549,9 @@ export default function ItemDetail() {
     // rejects; a failure resolves 'unavailable', and the card says so.
     //
     // The role decides whether it is needed at all (managers and above skip
-    // it). It is normally known at mount (useRole serves a per-session cache);
+    // it). It is normally known at mount (useRole serves a shared cache and
+    // re-reads it in the background once it is due, so a demotion reaches
+    // this screen: `role` is a dependency of this load, which then re-runs);
     // a load that runs before it is known makes the call, and a manager's
     // answer is simply empty.
     const elsewhereRead = readItemElsewhere(supabase, id, role);

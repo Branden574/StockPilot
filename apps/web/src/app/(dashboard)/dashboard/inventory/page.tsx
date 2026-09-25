@@ -11,8 +11,9 @@ import { InventoryTable, type InstantAdoptedPayload } from '@/components/invento
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { Button } from '@/components/ui/button';
-import { can, ELSEWHERE_UNAVAILABLE_NOTE, isManagerOrAbove, type Role } from '@stockpilot/core';
-import { ELSEWHERE_PLACEMENT_KIND, ELSEWHERE_PLACEMENT_LABEL } from '@/lib/placements';
+import { can, isManagerOrAbove, type Role } from '@stockpilot/core';
+import { expandPlacementRows } from '@/lib/placements';
+import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-unavailable-notice';
 import { deriveInstantView, instantStateFromPageParams } from '@/lib/inventory/instant-mode';
 import {
   ALL_WAREHOUSES_KEY,
@@ -706,6 +707,9 @@ async function inventoryTableSection({
           sort,
           limit: PAGE_SIZE,
           offset: (page - 1) * PAGE_SIZE,
+          // The placement columns add holdings up next to on hand, so they
+          // need the stock a staff member or viewer cannot see (0371).
+          withElsewhere: true,
         }),
       ),
       // Expected-chip badge count (mig 0277) — one HEAD count on the
@@ -806,55 +810,11 @@ async function inventoryTableSection({
   const placementMap = data.placementMap;
 
   // ONE LINE PER RACK: expand each item into a row per holding location. The
-  // Chromebook placed 250→1-A and 250→2-C becomes two rows. `line_quantity` is
-  // that rack's qty (shown in ON HAND); `quantity_on_hand` is left as the item
-  // TOTAL so status/coverage/sparkline stay item-level and the value footer
-  // (server-computed) isn't double-counted. Items with no holdings fall back to
-  // a single row at their own on-hand. Single-location items stay one row.
-  const placementRows = itemsWithImages.flatMap((item) => {
-    const ps = placementMap.get(item.id) ?? [];
-    // STOCK IN OTHER WAREHOUSES (0371). A staff member or viewer reads holdings
-    // only in their own warehouses, so `ps` lists those; the rest of the item's
-    // stock is one more line, counted and never named, so the lines still add
-    // up to the item's on hand. 0 (and absent) on the manager path.
-    const elsewhere = (item as { elsewhere_quantity?: number }).elsewhere_quantity ?? 0;
-    const elsewhereRow =
-      elsewhere > 0
-        ? [
-            {
-              ...item,
-              rowKey: `${item.id}:${ELSEWHERE_PLACEMENT_KIND}`,
-              line_quantity: elsewhere,
-              placement_label: ELSEWHERE_PLACEMENT_LABEL as string | null,
-              placement_kind: ELSEWHERE_PLACEMENT_KIND as string | undefined,
-            },
-          ]
-        : [];
-    // Both branches return the SAME row shape (same keys + property types) so
-    // the result is a single uniform array, not a union.
-    if (ps.length === 0) {
-      if (elsewhereRow.length > 0) return elsewhereRow;
-      return [
-        {
-          ...item,
-          rowKey: item.id,
-          line_quantity: item.quantity_on_hand,
-          placement_label: null as string | null,
-          placement_kind: undefined as string | undefined,
-        },
-      ];
-    }
-    return [
-      ...ps.map((p) => ({
-        ...item,
-        rowKey: `${item.id}:${p.locationId}`,
-        line_quantity: p.quantity,
-        placement_label: p.label as string | null,
-        placement_kind: p.kind as string | undefined,
-      })),
-      ...elsewhereRow,
-    ];
-  });
+  // Chromebook placed 250→1-A and 250→2-C becomes two rows, and for a staff
+  // member or viewer the stock in warehouses they cannot see is one more
+  // row, counted and never named (0371), so an item's rows add up to its on
+  // hand. See expandPlacementRows.
+  const placementRows = expandPlacementRows(itemsWithImages, placementMap);
 
   const lookups = {
     categories: new Map(data.categories.map((c) => [c.id, { name: c.name, color: c.color }])),
@@ -936,14 +896,10 @@ async function inventoryTableSection({
   );
   // Never the partial figures presented as complete: when the stock in other
   // warehouses could not be read, the page says so above the table (0371).
-  if (!data.elsewhereUnavailable) return table;
   return (
-    <>
-      <p role="status" className="text-muted-foreground mb-2 text-xs">
-        {ELSEWHERE_UNAVAILABLE_NOTE}
-      </p>
+    <ElsewhereUnavailableNotice unavailable={data.elsewhereUnavailable}>
       {table}
-    </>
+    </ElsewhereUnavailableNotice>
   );
 }
 

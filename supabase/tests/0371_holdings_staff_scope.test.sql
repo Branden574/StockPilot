@@ -8,8 +8,9 @@
 --      verbatim. No FOR ALL, no second SELECT, no DELETE policy or grant.
 --   B. NARROWING, per persona, as direct SELECTs.
 --   I. item_holdings_elsewhere: the complement property (visible + hidden =
---      total) for staff, viewer and multi-warehouse staff; literal buckets and
---      placed location ids; one row per item; nothing for managers, for items
+--      total) for staff, viewer and multi-warehouse staff; literal buckets,
+--      placed location ids and the fine-grained placement count (a Site is
+--      not a rack); one row per item; nothing for managers, for items
 --      the caller cannot read, or across orgs; the 500-id bound; structure.
 --   J. location_stock_census: exact org-wide totals for a manager (including
 --      an item the manager cannot read) and for a locations:manage holder;
@@ -56,6 +57,8 @@
 --   * item_holdings_elsewhere: grouped per location     -> I1 I2 I6
 --   * item_holdings_elsewhere: scope negation dropped   -> I1 I3 I6 I7 I8 I9
 --   * item_holdings_elsewhere: item-read gate dropped   -> I4 I5 I6 I12 I13
+--   * placed_rack_locations counts every placed location
+--     (a Site counted as a rack; review fix)            -> I20
 --   * location_stock_census: filtered by item read      -> J1 J4
 --   * location_stock_census: permission gate dropped    -> J5 J6 J7 J8
 --
@@ -63,7 +66,7 @@
 
 begin;
 
-select plan(109);
+select plan(112);
 
 \set orgS    '\'03710000-0000-0000-0000-000000000001\''
 \set orgF    '\'03710000-0000-0000-0000-000000000002\''
@@ -91,6 +94,11 @@ select plan(109);
 \set itemN   '\'03710000-0000-0000-0000-0000000000c3\''
 \set itemP   '\'03710000-0000-0000-0000-0000000000c4\''
 \set itemF   '\'03710000-0000-0000-0000-0000000000c5\''
+\set itemR   '\'03710000-0000-0000-0000-0000000000c6\''
+\set locW2s  '\'03710000-0000-0000-0000-0000000000e9\''
+\set locW2c  '\'03710000-0000-0000-0000-0000000000ea\''
+\set locW2r  '\'03710000-0000-0000-0000-0000000000eb\''
+\set locW2a  '\'03710000-0000-0000-0000-0000000000ec\''
 \set ordP    '\'03710000-0000-0000-0000-0000000000d1\''
 \set nobody  '\'03710000-dead-beef-0000-000000000371\''
 
@@ -159,6 +167,17 @@ insert into public.locations (id, organization_id, warehouse_id, name, type, kin
   (:locF,   :orgF, :whF,  'Foreign F 0371',  'bin',       null, now() - interval '3 minutes')
 on conflict (id) do nothing;
 
+-- For the fine-grained placement count (I19-I21): four placed locations in
+-- whT2, one per shape the app's isRackShelfLocation tells apart. A Site in a
+-- warehouse (type 'warehouse', kind NULL) is a place stock lives, NOT a rack;
+-- a shelf (by type), a crate and an area (by kind) are placements.
+insert into public.locations (id, organization_id, warehouse_id, name, type, kind, created_at) values
+  (:locW2s, :orgS, :whT2, 'Scope Annex Site 0371',  'warehouse', null,    now() - interval '2 minutes'),
+  (:locW2c, :orgS, :whT2, 'Scope Annex Crate 0371', 'other',     'crate', now() - interval '2 minutes'),
+  (:locW2r, :orgS, :whT2, 'Scope Annex Shelf 0371', 'shelf',     null,    now() - interval '2 minutes'),
+  (:locW2a, :orgS, :whT2, 'Scope Annex Area 0371',  'other',     'area',  now() - interval '2 minutes')
+on conflict (id) do nothing;
+
 -- itemA (whT1): split across both warehouses, the Site and whT2's Staging and
 -- Unplaced; a zero row at W2z. itemB (whT2): only in whT2. itemN has NO
 -- warehouse, so no member (manager included) can read it through
@@ -169,12 +188,13 @@ insert into public.inventory_items
   (:itemB, :orgS, :whT2, 'HS-0371-B', 'Other WH Item 0371',      6, 'active', 'none'),
   (:itemN, :orgS, null,  'HS-0371-N', 'No-warehouse Item 0371',  7, 'active', 'none'),
   (:itemP, :orgS, :whT1, 'HS-0371-P', 'Pick Item 0371',          3, 'active', 'none'),
-  (:itemF, :orgF, :whF,  'HS-0371-F', 'Foreign Item 0371',       9, 'active', 'none')
+  (:itemF, :orgF, :whF,  'HS-0371-F', 'Foreign Item 0371',       9, 'active', 'none'),
+  (:itemR, :orgS, :whT1, 'HS-0371-R', 'Rack Count Item 0371',    9, 'active', 'none')
 on conflict (id) do nothing;
 
 -- The 0199 trigger seeds an opening row per item; clear and place explicitly
 -- so every quantity below is a literal this file controls.
-delete from public.item_stock_levels where item_id in (:itemA, :itemB, :itemN, :itemP, :itemF);
+delete from public.item_stock_levels where item_id in (:itemA, :itemB, :itemN, :itemP, :itemF, :itemR);
 insert into public.item_stock_levels (organization_id, item_id, location_id, quantity) values
   (:orgS, :itemA, :locW1,  5),
   (:orgS, :itemA, :locW2,  4),
@@ -186,7 +206,14 @@ insert into public.item_stock_levels (organization_id, item_id, location_id, qua
   (:orgS, :itemB, :locW2,  6),
   (:orgS, :itemN, :locW2,  7),
   (:orgS, :itemP, :locW1c, 3),
-  (:orgF, :itemF, :locF,   9);
+  (:orgF, :itemF, :locF,   9),
+  -- itemR (whT1): all of it in whT2, hidden from whT1 staff: an Annex Site
+  -- 3, crate 1, shelf 2, area 1 and Annex Staging 2.
+  (:orgS, :itemR, :locW2s, 3),
+  (:orgS, :itemR, :locW2c, 1),
+  (:orgS, :itemR, :locW2r, 2),
+  (:orgS, :itemR, :locW2a, 1),
+  (:orgS, :itemR, (select id from public.locations where warehouse_id = :whT2 and kind = 'staging'), 2);
 
 insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type)
 values (:ordP, :orgS, :whT1, 'pick_slip_generated', 'internal', :u_stf, 'pickup');
@@ -328,6 +355,19 @@ select is(
 select is(
   (select string_agg(item_id::text, ',') from public.item_holdings_elsewhere(array[:itemA, :itemB, :itemF, :itemP]::uuid[])),
   :itemA, 'I6: a mixed request returns exactly itemA (itemB unreadable, itemF foreign, itemP has nothing hidden)');
+select is(
+  (select placed_rack_locations from public.item_holdings_elsewhere(array[:itemA::uuid])),
+  2, 'I19: whT1 staff, itemA: both hidden placed locations (W2, W2b) are bins, so 2 fine-grained placements');
+select is(
+  (select staged::int || '/' || unplaced::int || '/' || placed::int || '/'
+          || cardinality(placed_location_ids) || '/' || placed_rack_locations
+     from public.item_holdings_elsewhere(array[:itemR::uuid])),
+  '2/0/7/4/3',
+  'I20: itemR: 7 placed at 4 hidden locations, of which 3 are placements (shelf by type, crate and area by kind); the Annex SITE is not one, and Staging never is');
+select is(
+  (select coalesce(sum(quantity), 0) from public.item_stock_levels where item_id = :itemR)
+  + (select coalesce(sum(staged + unplaced + placed), 0) from public.item_holdings_elsewhere(array[:itemR::uuid])),
+  9::numeric, 'I21: COMPLEMENT (whT1 staff, itemR): visible 0 + hidden 9 = 9');
 reset role;
 
 set local "request.jwt.claim.sub" to :u_vwr;
@@ -382,7 +422,7 @@ select is(
 
 select ok(
   (select p.prosecdef and p.provolatile = 's' and p.proconfig::text like '%search_path=public%'
-          and pg_get_function_result(p.oid) = 'TABLE(item_id uuid, staged numeric, unplaced numeric, placed numeric, placed_location_ids uuid[])'
+          and pg_get_function_result(p.oid) = 'TABLE(item_id uuid, staged numeric, unplaced numeric, placed numeric, placed_location_ids uuid[], placed_rack_locations integer)'
      from pg_proc p where p.oid = 'public.item_holdings_elsewhere(uuid[])'::regprocedure)
   and not exists (select 1 from pg_proc p, aclexplode(p.proacl) a
                    where p.oid = 'public.item_holdings_elsewhere(uuid[])'::regprocedure

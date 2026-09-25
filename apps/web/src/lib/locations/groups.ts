@@ -25,7 +25,10 @@ export interface LocationLike {
 
 // Exported as plain lists so SQL-side mirrors (the sites-only plan-limit count
 // in assertPlanLimit) build their filters from the same values as the
-// classifiers below — one source of truth for "what is a site".
+// classifiers below — one source of truth for "what is a site". One mirror is
+// SQL text: item_holdings_elsewhere's placed_rack_locations (0371) classifies
+// hidden placements with these lists; changing them needs a migration too
+// (holdings-migrations.guard.test.ts fails until it has one).
 export const SYSTEM_KINDS = ['staging', 'unplaced'] as const;
 // `area` is a warehouse subdivision — a placement, not a top-level site.
 export const PLACEMENT_KINDS = ['rack', 'crate', 'area'] as const;

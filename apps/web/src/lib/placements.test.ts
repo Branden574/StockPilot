@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ELSEWHERE_PLACEMENT_KIND,
+  ELSEWHERE_PLACEMENT_LABEL,
   elsewhereSuffix,
+  expandPlacementRows,
   isWritableDestination,
   placementSummary,
 } from './placements';
@@ -17,6 +19,7 @@ describe('placementSummary — the item page line', () => {
     unplaced: 0,
     placed: 7,
     placedLocationIds: ['rack-annex'],
+    rackLocationCount: 1,
   };
 
   it("QA-CHROME, literally: '0 placed + 20 awaiting + 12 in other warehouses = 32'", () => {
@@ -94,5 +97,49 @@ describe('isWritableDestination — owner decision Q4', () => {
   it('an empty list (access unreadable) leaves only locations with no warehouse', () => {
     expect(isWritableDestination({ warehouse_id: 'wh-main' }, [])).toBe(false);
     expect(isWritableDestination({ warehouse_id: null }, [])).toBe(true);
+  });
+});
+
+describe('expandPlacementRows — the Items list, one line per rack', () => {
+  const item = (id: string, onHand: number, elsewhere?: number) => ({
+    id,
+    quantity_on_hand: onHand,
+    ...(elsewhere === undefined ? {} : { elsewhere_quantity: elsewhere }),
+  });
+  const rack = (locationId: string, quantity: number) => ({
+    locationId,
+    label: locationId.toUpperCase(),
+    kind: 'rack',
+    quantity,
+  });
+  const view = (rows: ReturnType<typeof expandPlacementRows>) =>
+    rows.map((r) => [r.rowKey, r.line_quantity, r.placement_label, r.placement_kind]);
+
+  it('a staff member: the visible racks, then ONE row for the rest, and the rows add up to on hand', () => {
+    const rows = expandPlacementRows(
+      [item('i1', 32, 12)],
+      new Map([['i1', [rack('1-a', 15), rack('2-c', 5)]]]),
+    );
+    expect(view(rows)).toEqual([
+      ['i1:1-a', 15, '1-A', 'rack'],
+      ['i1:2-c', 5, '2-C', 'rack'],
+      ['i1:elsewhere', 12, ELSEWHERE_PLACEMENT_LABEL, ELSEWHERE_PLACEMENT_KIND],
+    ]);
+    expect(rows.reduce((sum, r) => sum + r.line_quantity, 0)).toBe(32);
+    // Every row keeps the item's TOTAL for the item-level columns.
+    expect(rows.every((r) => r.quantity_on_hand === 32)).toBe(true);
+  });
+
+  it('all of the stock elsewhere: the elsewhere row alone, never a row claiming it here', () => {
+    expect(view(expandPlacementRows([item('i1', 7, 7)], new Map()))).toEqual([
+      ['i1:elsewhere', 7, ELSEWHERE_PLACEMENT_LABEL, ELSEWHERE_PLACEMENT_KIND],
+    ]);
+  });
+
+  it('nothing elsewhere (a manager, or none hidden): unchanged', () => {
+    expect(view(expandPlacementRows([item('i1', 5, 0)], new Map([['i1', [rack('1-a', 5)]]])))).toEqual([
+      ['i1:1-a', 5, '1-A', 'rack'],
+    ]);
+    expect(view(expandPlacementRows([item('i2', 4)], new Map()))).toEqual([['i2', 4, null, undefined]]);
   });
 });

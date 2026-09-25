@@ -22,6 +22,7 @@ describe('parseHoldingsElsewhereRows', () => {
         unplaced: 0,
         placed: 7,
         placed_location_ids: ['loc-b', 'loc-a'],
+        placed_rack_locations: 1,
       },
     ]);
     expect(map.get('i1')).toEqual({
@@ -29,7 +30,33 @@ describe('parseHoldingsElsewhereRows', () => {
       unplaced: 0,
       placed: 7,
       placedLocationIds: ['loc-a', 'loc-b'],
+      rackLocationCount: 1,
     });
+  });
+
+  it('reads the fine-grained placement count as its own number (a Site is not a rack)', () => {
+    // 2 placed locations in another warehouse: a rack and a Site. The RPC
+    // counts 1 placement; the id list alone cannot say which is which.
+    const map = parseHoldingsElsewhereRows([
+      {
+        item_id: 'i1',
+        staged: 0,
+        unplaced: 0,
+        placed: 7,
+        placed_location_ids: ['rack', 'site'],
+        placed_rack_locations: '1',
+      },
+    ]);
+    expect(map.get('i1')?.placedLocationIds).toHaveLength(2);
+    expect(map.get('i1')?.rackLocationCount).toBe(1);
+  });
+
+  it('THROWS when the placement count is missing or not a count: 0 would under-count a split', () => {
+    const base = { item_id: 'i1', staged: 0, unplaced: 0, placed: 3, placed_location_ids: ['a'] };
+    expect(() => parseHoldingsElsewhereRows([base])).toThrow(/placed_rack_locations/);
+    expect(() => parseHoldingsElsewhereRows([{ ...base, placed_rack_locations: null }])).toThrow();
+    expect(() => parseHoldingsElsewhereRows([{ ...base, placed_rack_locations: 1.5 }])).toThrow();
+    expect(() => parseHoldingsElsewhereRows([{ ...base, placed_rack_locations: -1 }])).toThrow();
   });
 
   it('treats an empty or bodiless answer as nothing hidden', () => {
@@ -39,7 +66,14 @@ describe('parseHoldingsElsewhereRows', () => {
 
   it('keeps an empty placed-location list when the hidden stock is all in Staging', () => {
     const map = parseHoldingsElsewhereRows([
-      { item_id: 'i1', staged: 5, unplaced: 0, placed: 0, placed_location_ids: [] },
+      {
+        item_id: 'i1',
+        staged: 5,
+        unplaced: 0,
+        placed: 0,
+        placed_location_ids: [],
+        placed_rack_locations: 0,
+      },
     ]);
     expect(map.get('i1')?.placedLocationIds).toEqual([]);
   });
@@ -55,14 +89,31 @@ describe('parseHoldingsElsewhereRows', () => {
 
   it('sums a duplicate item rather than letting the later row overwrite the earlier', () => {
     const map = parseHoldingsElsewhereRows([
-      { item_id: 'i1', staged: 1, unplaced: 2, placed: 3, placed_location_ids: ['a'] },
-      { item_id: 'i1', staged: 1, unplaced: 0, placed: 4, placed_location_ids: ['b', 'a'] },
+      {
+        item_id: 'i1',
+        staged: 1,
+        unplaced: 2,
+        placed: 3,
+        placed_location_ids: ['a'],
+        placed_rack_locations: 1,
+      },
+      {
+        item_id: 'i1',
+        staged: 1,
+        unplaced: 0,
+        placed: 4,
+        placed_location_ids: ['b', 'a'],
+        placed_rack_locations: 2,
+      },
     ]);
     expect(map.get('i1')).toEqual({
       staged: 2,
       unplaced: 2,
       placed: 7,
       placedLocationIds: ['a', 'b'],
+      // Distinct locations: the larger count, never a sum that could count
+      // rack 'a' twice.
+      rackLocationCount: 2,
     });
   });
 });
@@ -70,7 +121,13 @@ describe('parseHoldingsElsewhereRows', () => {
 describe('holdingsElsewhereTotal', () => {
   it('adds all three buckets', () => {
     expect(
-      holdingsElsewhereTotal({ staged: 5, unplaced: 1, placed: 7, placedLocationIds: ['a'] }),
+      holdingsElsewhereTotal({
+        staged: 5,
+        unplaced: 1,
+        placed: 7,
+        placedLocationIds: ['a'],
+        rackLocationCount: 1,
+      }),
     ).toBe(13);
   });
   it('is 0 for nothing', () => {
@@ -81,8 +138,8 @@ describe('holdingsElsewhereTotal', () => {
 
 describe('itemElsewhereFrom', () => {
   const byItem = new Map([
-    ['i1', { staged: 5, unplaced: 0, placed: 7, placedLocationIds: ['a'] }],
-    ['i0', { staged: 0, unplaced: 0, placed: 0, placedLocationIds: [] }],
+    ['i1', { staged: 5, unplaced: 0, placed: 7, placedLocationIds: ['a'], rackLocationCount: 1 }],
+    ['i0', { staged: 0, unplaced: 0, placed: 0, placedLocationIds: [], rackLocationCount: 0 }],
   ]);
 
   it('reports the totals for an item with hidden stock', () => {
@@ -92,6 +149,7 @@ describe('itemElsewhereFrom', () => {
       unplaced: 0,
       placed: 7,
       placedLocationIds: ['a'],
+      rackLocationCount: 1,
     });
   });
 

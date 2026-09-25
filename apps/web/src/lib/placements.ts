@@ -48,6 +48,82 @@ export const ELSEWHERE_PLACEMENT_KIND = 'elsewhere';
 /** The label of that row's RACK cell. */
 export const ELSEWHERE_PLACEMENT_LABEL = 'In other warehouses';
 
+/** One holding line of InventoryService.placementBreakdown. */
+export interface PlacementLine {
+  locationId: string;
+  label: string;
+  kind: string;
+  quantity: number;
+}
+
+/** What expandPlacementRows adds to each item it emits. */
+export interface PlacementRowFields {
+  rowKey: string;
+  line_quantity: number;
+  placement_label: string | null;
+  placement_kind: string | undefined;
+}
+
+/**
+ * The Items list's ONE LINE PER RACK expansion: each item becomes a row per
+ * holding location the viewer can see (`placementMap`, from
+ * InventoryService.placementBreakdown), plus, for a staff member or viewer
+ * (0371), one ELSEWHERE row carrying the item's `elsewhere_quantity`, the
+ * stock in warehouses they cannot see. Counted, never named, so an item's
+ * rows still add up to its on hand.
+ *
+ * `line_quantity` is that line's quantity (shown in ON HAND); the item's
+ * `quantity_on_hand` stays the item TOTAL so status, coverage and the value
+ * footer stay item-level. An item with no visible holding and nothing
+ * elsewhere falls back to one row at its own on hand. Every row has the same
+ * shape, so the result is one uniform array.
+ */
+export function expandPlacementRows<
+  T extends { id: string; quantity_on_hand: number; elsewhere_quantity?: number },
+>(
+  items: readonly T[],
+  placementMap: ReadonlyMap<string, readonly PlacementLine[]>,
+): Array<T & PlacementRowFields> {
+  return items.flatMap((item): Array<T & PlacementRowFields> => {
+    const ps = placementMap.get(item.id) ?? [];
+    const elsewhere = item.elsewhere_quantity ?? 0;
+    const elsewhereRow: Array<T & PlacementRowFields> =
+      elsewhere > 0
+        ? [
+            {
+              ...item,
+              rowKey: `${item.id}:${ELSEWHERE_PLACEMENT_KIND}`,
+              line_quantity: elsewhere,
+              placement_label: ELSEWHERE_PLACEMENT_LABEL,
+              placement_kind: ELSEWHERE_PLACEMENT_KIND,
+            },
+          ]
+        : [];
+    if (ps.length === 0) {
+      if (elsewhereRow.length > 0) return elsewhereRow;
+      return [
+        {
+          ...item,
+          rowKey: item.id,
+          line_quantity: item.quantity_on_hand,
+          placement_label: null,
+          placement_kind: undefined,
+        },
+      ];
+    }
+    return [
+      ...ps.map((p) => ({
+        ...item,
+        rowKey: `${item.id}:${p.locationId}`,
+        line_quantity: p.quantity,
+        placement_label: p.label,
+        placement_kind: p.kind,
+      })),
+      ...elsewhereRow,
+    ];
+  });
+}
+
 /**
  * "+12 in other warehouses" for an item whose stock partly sits in warehouses
  * the viewer cannot see, or null. For cells that describe the whole item (the

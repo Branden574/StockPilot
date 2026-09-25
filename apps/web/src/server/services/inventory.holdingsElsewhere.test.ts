@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
+import { callArgs, makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 import { placementSummary } from '@/lib/placements';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -53,6 +53,7 @@ const CHROME_HIDDEN = {
   unplaced: 0,
   placed: 7,
   placed_location_ids: [RACK_ANNEX],
+  placed_rack_locations: 1,
 };
 
 /** An rpc result that answers only for the ids it was asked about, like the RPC. */
@@ -95,6 +96,7 @@ describe('InventoryService.hiddenHoldingsFor', () => {
       unplaced: 0,
       placed: 7,
       placedLocationIds: [RACK_ANNEX],
+      rackLocationCount: 1,
     });
     // The ids travel as the RPC's body argument, never a URL filter.
     expect(elsewhereCalls(stub)).toEqual([
@@ -178,6 +180,7 @@ describe('InventoryService.get({ withElsewhere }) — the item page', () => {
       unplaced: 0,
       placed: 7,
       placedLocationIds: [RACK_ANNEX],
+      rackLocationCount: 1,
     });
     // And the page's line, literally: 0 placed + 20 awaiting + 12 in other
     // warehouses = 32 on hand.
@@ -274,7 +277,7 @@ describe('InventoryService.list — the staff and viewer list path', () => {
       ...listFixture,
       'rpc:item_holdings_elsewhere': elsewhereAnswer([CHROME_HIDDEN]),
     });
-    const res = await svc.list({ limit: 50 });
+    const res = await svc.list({ limit: 50, withElsewhere: true });
     expect(res.items[0]).toMatchObject({
       staged_quantity: 5,
       unplaced_quantity: 20,
@@ -291,13 +294,34 @@ describe('InventoryService.list — the staff and viewer list path', () => {
     ]);
   });
 
+  it('the split count takes hidden RACKS only: a Site in another warehouse is not a rack', async () => {
+    const { svc } = svcFor({
+      ...listFixture,
+      'rpc:item_holdings_elsewhere': elsewhereAnswer([
+        {
+          item_id: ITEM,
+          staged: 0,
+          unplaced: 0,
+          placed: 12,
+          placed_location_ids: ['loc-annex-site', RACK_ANNEX],
+          placed_rack_locations: 1,
+        },
+      ]),
+    });
+    const res = await svc.list({ limit: 50, withElsewhere: true });
+    // Two hidden placed locations, one of them a rack: the Set rack dialog's
+    // split warning (isSplitRackItem > 1) must agree with the server, which
+    // does not count the Site.
+    expect(res.items[0]).toMatchObject({ rackHoldingsCount: 1, elsewhere_quantity: 12 });
+  });
+
   it('a failed read keeps the visible figures and SAYS so', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { svc } = svcFor({
       ...listFixture,
       'rpc:item_holdings_elsewhere': { data: null, error: { message: 'boom' } },
     });
-    const res = await svc.list({ limit: 50 });
+    const res = await svc.list({ limit: 50, withElsewhere: true });
     expect(res.elsewhereUnavailable).toBe(true);
     expect(res.items[0]).toMatchObject({ unplaced_quantity: 20, elsewhere_quantity: 0 });
     errorSpy.mockRestore();
@@ -305,11 +329,27 @@ describe('InventoryService.list — the staff and viewer list path', () => {
 
   it('a manager makes no call', async () => {
     const { svc, stub } = svcFor(listFixture, 'manager');
-    const res = await svc.list({ limit: 50 });
+    const res = await svc.list({ limit: 50, withElsewhere: true });
     expect(elsewhereCalls(stub)).toHaveLength(0);
     expect(res.elsewhereUnavailable).toBe(false);
     expect(res.items[0]).toMatchObject({ elsewhere_quantity: 0 });
   });
+
+  it.each(['staff', 'viewer'] as const)(
+    'OPT-IN: a %s list read WITHOUT withElsewhere makes no call (search, pickers, exports, AI tools)',
+    async (role) => {
+      // Review finding: every list() call asked, including the per-keystroke
+      // item search and the PO picker, which throw the answer away.
+      const { svc, stub } = svcFor(
+        { ...listFixture, 'rpc:item_holdings_elsewhere': elsewhereAnswer([CHROME_HIDDEN]) },
+        role,
+      );
+      const res = await svc.list({ limit: 50 });
+      expect(elsewhereCalls(stub)).toHaveLength(0);
+      expect(res.elsewhereUnavailable).toBe(false);
+      expect(res.items[0]).toMatchObject({ elsewhere_quantity: 0 });
+    },
+  );
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -368,6 +408,43 @@ describe('the archive stock guards', () => {
     expect(stub.chains.has('inventory_items.update')).toBe(false);
     errorSpy.mockRestore();
   });
+
+  it.each(['staff', 'manager'] as const)(
+    'BULK (%s): on hand with NO holdings anywhere still blocks, from the on hand bulkUpdate read',
+    async (role) => {
+      // The max(on hand, visible + hidden) rule: an item whose holdings do
+      // not account for its on hand (drift) is still holding stock. The on
+      // hand comes from bulkUpdate's own item read, so the answer below
+      // carries it only when that read asks for the column.
+      const { svc, stub } = svcFor(
+        {
+          'inventory_items.select': (call) => {
+            const cols = String(callArgs(call, 'select')?.[0] ?? '');
+            return {
+              data: [
+                {
+                  id: ITEM,
+                  warehouse_id: 'wh-main',
+                  ...(cols.includes('quantity_on_hand') ? { quantity_on_hand: 12 } : {}),
+                },
+              ],
+              error: null,
+            };
+          },
+          'item_stock_levels.select': { data: [], error: null },
+          'rpc:item_holdings_elsewhere': elsewhereAnswer([]),
+        },
+        role,
+      );
+      await expect(svc.bulkUpdate({ ids: [ITEM], op: { kind: 'archive' } })).rejects.toMatchObject({
+        code: 'validation_error',
+        message:
+          'Cannot archive: 12 units still on hand. ' +
+          'Remove or move the stock first, or archive it anyway to write it off.',
+      });
+      expect(stub.chains.has('inventory_items.update')).toBe(false);
+    },
+  );
 
   it('BULK: a manager makes no hidden call and is still blocked by what they see', async () => {
     const { svc, stub } = svcFor(
@@ -483,6 +560,35 @@ describe('bulk Set rack — hidden holdings count toward the split rule', () => 
     expect(res.placeFailed).toBeUndefined();
   });
 
+  it('one rack here + a SITE in another warehouse is NOT a split: the rack holding MOVES', async () => {
+    // Review finding: every hidden placed location used to count toward the
+    // split, Sites included. The visible side has never counted a Site (it is
+    // stock that is not yet placed, isRackShelfLocation), so a Main rack plus
+    // an Annex Site read as "split": relabelled, never moved, while a manager
+    // (and staff before 0371) moved the same rack holding. The RPC now says
+    // how many hidden placed locations are racks, and here that is 0.
+    const annexSite = {
+      item_id: ITEM,
+      staged: 0,
+      unplaced: 0,
+      placed: 3,
+      placed_location_ids: ['loc-annex-site'],
+      placed_rack_locations: 0,
+    };
+    const { svc, stub } = setRackFixture([mainRack], elsewhereAnswer([annexSite]));
+    const res = await svc.bulkUpdate({
+      ids: [ITEM],
+      op: { kind: 'set_rack', rackNumber: '1', rackRow: 'A' },
+    });
+    expect(stub.rpcCalls.find((c) => c.name === 'transfer_stock')?.args).toMatchObject({
+      p_from_location_id: 'rack-main',
+      p_to_location_id: 'rack-new',
+    });
+    // The Site's 3 units did not move (another warehouse), and that is said.
+    expect(res).toMatchObject({ ok: 1, placed: 1, placeElsewhere: 1 });
+    expect(res.placeFailed).toBeUndefined();
+  });
+
   it('a single visible rack with nothing elsewhere still MOVES (the rule is unchanged)', async () => {
     const { svc, stub } = setRackFixture([mainRack], elsewhereAnswer([]));
     const res = await svc.bulkUpdate({
@@ -506,6 +612,48 @@ describe('bulk Set rack — hidden holdings count toward the split rule', () => 
     expect(stub.rpcCalls.some((c) => c.name === 'transfer_stock')).toBe(false);
     expect(res).toMatchObject({ placeFailed: 1 });
     errorSpy.mockRestore();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe('single-item edit: a rack change says stock in another warehouse did not move', () => {
+  it('only hidden stock: nothing is moved and the result carries placementFailed', async () => {
+    // The edit form's rack change places the stock (placeItemsOntoRackByName).
+    // Stock in another warehouse cannot be moved by this caller, so the label
+    // is ahead of it: the result must say so, as it does for a refused move.
+    const before = {
+      id: ITEM,
+      organization_id: 'org-test',
+      warehouse_id: 'wh-main',
+      sku: 'QA-CHROME',
+      name: 'QA Chrome',
+      item_type: 'product',
+      tracking_type: 'none',
+      status: 'active',
+      deleted_at: null,
+      quantity_on_hand: 12,
+      custom_fields: {},
+    };
+    const after = { ...before, custom_fields: { rack_number: '7', rack_row: 'B' } };
+    let itemReads = 0;
+    const { svc, stub } = svcFor({
+      'inventory_items.select': () => {
+        itemReads += 1;
+        return itemReads === 1
+          ? { data: before, error: null }
+          : { data: [{ id: ITEM, warehouse_id: 'wh-main' }], error: null };
+      },
+      'inventory_items.update': { data: after, error: null },
+      'item_stock_levels.select': { data: [], error: null },
+      'locations.select': { data: [{ id: 'rack-7b', name: '7-B' }], error: null },
+      'rpc:transfer_stock': { data: null, error: null },
+      'rpc:item_holdings_elsewhere': elsewhereAnswer([CHROME_HIDDEN]),
+      'categories.select': { data: null, error: null },
+      'custom_field_definitions.select': { data: [], error: null },
+    });
+    const res = await svc.update(ITEM, { customFields: { rack_number: '7', rack_row: 'B' } } as never);
+    expect(stub.rpcCalls.some((c) => c.name === 'transfer_stock')).toBe(false);
+    expect(res).toMatchObject({ placementFailed: { rackName: '7-B' } });
   });
 });
 
@@ -549,6 +697,7 @@ describe('the book crate split rule sees every warehouse', () => {
     unplaced: 0,
     placed: 3,
     placed_location_ids: [ANNEX_CRATE],
+    placed_rack_locations: 1,
   };
   const verified = new Map([[BOOK, { name: 'Persepolis', crateColor: 'blue', crateNumber: '4' }]]);
 
@@ -671,6 +820,49 @@ describe('the book crate split rule sees every warehouse', () => {
     const err = (await svc
       .assertBookCratePlacementAllowed(gateArgs[0] as unknown as string[], gateArgs[1] as never, gateArgs[2] as never)
       .catch((e: unknown) => e)) as ServiceError;
+    expect(err.code).toBe('conflict');
+  });
+
+  it('PREDICTION: a hidden location that cannot be read gives NO prediction, so the gate asks', async () => {
+    // From the visible rows alone the book stays split (crate B keeps 2), so
+    // the prediction would be "the sync skips" and the prompt would be
+    // waived. With a hidden placed location whose row cannot be read the
+    // split rule cannot be decided: no prediction, which keeps the prompt
+    // (fail closed), exactly as a failed hidden read does.
+    const { svc } = svcFor({
+      'inventory_items.select': { data: [bookRow], error: null },
+      'item_stock_levels.select': {
+        data: [
+          {
+            item_id: BOOK,
+            location_id: 'loc-staging-main',
+            quantity: 5,
+            locations: { id: 'loc-staging-main', kind: 'staging', type: null },
+          },
+          {
+            item_id: BOOK,
+            location_id: 'loc-crate-b',
+            quantity: 2,
+            locations: {
+              id: 'loc-crate-b',
+              kind: 'crate',
+              type: null,
+              crate_color: 'blue',
+              crate_number: '4',
+              rack_number: null,
+              rack_row: null,
+            },
+          },
+        ],
+        error: null,
+      },
+      'rpc:item_holdings_elsewhere': elsewhereAnswer([annexHidden]),
+      'locations.select': { data: [], error: null },
+    });
+    const err = (await svc
+      .assertBookCratePlacementAllowed(gateArgs[0] as unknown as string[], gateArgs[1] as never, gateArgs[2] as never)
+      .catch((e: unknown) => e)) as ServiceError;
+    expect(err).toBeInstanceOf(ServiceError);
     expect(err.code).toBe('conflict');
   });
 

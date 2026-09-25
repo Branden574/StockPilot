@@ -715,6 +715,7 @@ describe('StockTransferDialog — stock in other warehouses, and where it may go
     unplaced: 0,
     placed: 7,
     placedLocationIds: ['loc-annex'],
+    rackLocationCount: 1,
   };
 
   function renderScoped(opts: {

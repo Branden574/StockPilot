@@ -10,8 +10,9 @@
  * and must say where the rest is, or say that it could not find out.
  *
  * The gated SECURITY DEFINER RPC `item_holdings_elsewhere(uuid[])` answers the
- * missing half as totals per item (Staging, Unplaced, placed, and the placed
- * location ids). The parser, the per-item state and the id batching live in
+ * missing half as totals per item (Staging, Unplaced, placed, the placed
+ * location ids and how many of them are racks). The parser, the per-item
+ * state and the id batching live in
  * @stockpilot/core (holdings-elsewhere.ts), shared with the web; the words live
  * beside them (stock-writeoff.ts). This module is the phone's one caller of the
  * RPC, and the one place the phone decides what a move or remove sheet says.
@@ -22,7 +23,10 @@
  *     the all-warehouses flag. A staff member with that flag still reads by
  *     their assignment rows, so a flag-based skip could show a partial view as
  *     complete. An unknown role (still loading) makes the call: managers get
- *     no rows anyway, so the only cost of not knowing is one request.
+ *     no rows anyway, so the only cost of not knowing is one request. The
+ *     role comes from useRole, whose cache is re-read once it is due and
+ *     cleared on sign-out (role-cache.ts): a demoted manager's phone must not
+ *     keep skipping.
  *   • At most HOLDINGS_ELSEWHERE_MAX_IDS ids per call, all batches in
  *     parallel. The ids go in the POST body of the RPC, never a URL.
  *   • Start it ALONGSIDE the screen's own holdings read, never after it.

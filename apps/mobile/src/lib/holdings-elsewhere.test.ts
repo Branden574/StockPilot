@@ -47,6 +47,7 @@ const CHROME_ROW = {
   unplaced: 0,
   placed: 7,
   placed_location_ids: [RACK_QA2],
+  placed_rack_locations: 1,
 };
 
 type Answer = { data: unknown; error: { message: string; code?: string } | null };
@@ -106,6 +107,7 @@ describe('readHoldingsElsewhere — the call', () => {
       unplaced: 0,
       placed: 7,
       placedLocationIds: [RACK_QA2],
+      rackLocationCount: 1,
     });
   });
 
@@ -254,6 +256,7 @@ describe('readItemElsewhere — the state one screen renders', () => {
       unplaced: 0,
       placed: 7,
       placedLocationIds: [RACK_QA2],
+      rackLocationCount: 1,
     });
   });
 
@@ -282,6 +285,7 @@ const SOME: ItemElsewhere = {
   unplaced: 0,
   placed: 7,
   placedLocationIds: [RACK_QA2],
+  rackLocationCount: 1,
 };
 const MOVE_DEFAULT = 'This item has no stock in any location yet — receive or add stock first.';
 const REMOVE_DEFAULT =
@@ -317,7 +321,14 @@ describe('elsewhereSourcesCopy — Move stock', () => {
     ).toEqual({ empty: MOVE_DEFAULT, note: null });
     expect(
       elsewhereSourcesCopy({
-        elsewhere: { status: 'some', staged: 0, unplaced: 0, placed: 0, placedLocationIds: [] },
+        elsewhere: {
+          status: 'some',
+          staged: 0,
+          unplaced: 0,
+          placed: 0,
+          placedLocationIds: [],
+          rackLocationCount: 0,
+        },
         emptyDefault: MOVE_DEFAULT,
         holdsSomeHere: false,
       }),

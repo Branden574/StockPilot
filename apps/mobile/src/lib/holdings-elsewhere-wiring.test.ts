@@ -95,6 +95,18 @@ describe('Move stock (move-stock-modal.tsx)', () => {
     );
   });
 
+  it('STORES the answers it read: the elsewhere totals and the writable warehouses reach state', () => {
+    // Review finding: dropping these two setters left the empty-state copy
+    // and the Q4 destination narrowing dead, with every test still green.
+    const store = between(
+      moveModal,
+      'setHoldings(hs);\n      setDestinations(ds);',
+      'setStorage(recorded);',
+    );
+    expect(store).toContain('setElsewhere(elsewhereNow);');
+    expect(store).toContain('setDestScope(scopeNow);');
+  });
+
   it('resets both on every open, so one item never shows another item’s answer', () => {
     const reset = between(
       moveModal,
@@ -132,6 +144,11 @@ describe('Remove from rack (remove-from-rack-modal.tsx)', () => {
     expect(removeModal).toContain('{SHEET_HOLDINGS_UNREADABLE_NOTE}');
   });
 
+  it('STORES the elsewhere answer it read (not only the holdings)', () => {
+    const store = between(removeModal, 'setHoldings(hs);', 'setLoading(false);');
+    expect(store).toContain('setElsewhere(elsewhereNow);');
+  });
+
   it('knows whether the member holds ANY stock here, not only placed stock', () => {
     expect(removeModal).toContain('setHoldsSomeHere(all.length > 0);');
     expect(removeModal).toContain(
@@ -154,6 +171,17 @@ describe('item screen (app/item/[id].tsx)', () => {
     const all = between(load, 'await Promise.all([', ']);');
     expect(all).toContain(".from('item_stock_levels')");
     expect(all).toContain('elsewhereRead,');
+  });
+
+  it('stores the AWAITED answer on the item, not a literal', () => {
+    // Review finding: `elsewhere: { status: 'none' }` here made the ELSEWHERE
+    // row and the failed-read note unreachable, and nothing failed.
+    expect(load).toContain(
+      'const [whResp, chResp, serialResp, holdingResp, elsewhere] = await Promise.all([',
+    );
+    const stored = between(load, 'setItem({', '});');
+    expect(stored).toMatch(/^\s*elsewhere,\s*$/m);
+    expect(stored).not.toMatch(/elsewhere\s*:/);
   });
 
   it('hands the answer to the shared row builder and says a failure', () => {

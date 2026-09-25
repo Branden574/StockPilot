@@ -250,6 +250,7 @@ const CHROME_ELSEWHERE: ItemElsewhere = {
   unplaced: 0,
   placed: 7,
   placedLocationIds: ['0a000000-0000-0000-0000-0000000000b2'],
+  rackLocationCount: 1,
 };
 const STAGED_ONLY: ItemElsewhere = {
   status: 'some',
@@ -257,6 +258,7 @@ const STAGED_ONLY: ItemElsewhere = {
   unplaced: 0,
   placed: 0,
   placedLocationIds: [],
+  rackLocationCount: 0,
 };
 const UNAVAILABLE: ItemElsewhere = { status: 'unavailable' };
 const NONE: ItemElsewhere = { status: 'none' };
@@ -273,8 +275,14 @@ describe('0371 — the ELSEWHERE row', () => {
 
   it('keeps a fractional quantity as the column holds it', () => {
     expect(
-      elsewhereRow({ status: 'some', staged: 0, unplaced: 0.5, placed: 2, placedLocationIds: [] })
-        ?.value,
+      elsewhereRow({
+        status: 'some',
+        staged: 0,
+        unplaced: 0.5,
+        placed: 2,
+        placedLocationIds: [],
+        rackLocationCount: 0,
+      })?.value,
     ).toBe('+2.5 in other warehouses');
   });
 
@@ -283,7 +291,14 @@ describe('0371 — the ELSEWHERE row', () => {
     expect(elsewhereRow(null)).toBeNull();
     expect(elsewhereRow(undefined)).toBeNull();
     expect(
-      elsewhereRow({ status: 'some', staged: 0, unplaced: 0, placed: 0, placedLocationIds: [] }),
+      elsewhereRow({
+        status: 'some',
+        staged: 0,
+        unplaced: 0,
+        placed: 0,
+        placedLocationIds: [],
+        rackLocationCount: 0,
+      }),
     ).toBeNull();
   });
 

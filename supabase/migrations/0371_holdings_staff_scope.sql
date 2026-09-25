@@ -54,8 +54,12 @@
 --      narrowed view as complete:
 --        * item_holdings_elsewhere(item ids): per item the caller can read,
 --          the Staging / Unplaced / placed totals OUTSIDE the caller's SELECT
---          scope, and the ids of the placed locations holding them. Never a
---          per-location quantity. Managers and above get no rows.
+--          scope, the ids of the placed locations holding them, and how many
+--          of those are fine-grained placements (racks, crates, areas,
+--          shelves, bins). No per-location quantity column, but see
+--          "WHAT A SCOPED MEMBER LEARNS" below: a bucket that covers one
+--          location states that location's quantity. Managers and above get
+--          no rows.
 --        * location_stock_census(location): the holding count and total
 --          quantity at one location across the whole org, including items the
 --          caller cannot read. Manager, or locations:manage (the
@@ -126,15 +130,42 @@
 -- null-location draw (phone quick -1, manual removal 'any', complete_picking)
 -- still draws through apply_level_delta from ANY warehouse.
 --
+-- ── WHAT A SCOPED MEMBER LEARNS (item_holdings_elsewhere) ──────────────────
+-- Staff and viewers get, per item they can read, three totals (Staging,
+-- Unplaced, placed) of the stock outside their holdings scope, the ids of the
+-- placed locations holding it (locations are readable org-wide), and how many
+-- of those are fine-grained placements. No column is a per-location quantity,
+-- but a total that covers a single location IS that location's quantity:
+-- one hidden placed location plus the placed total says how many units sit
+-- there, and when the hidden stock is in one other warehouse the Staging and
+-- Unplaced totals are that warehouse's Staging and Unplaced quantities. This
+-- is new information for viewers too: 0331 already hid other warehouses'
+-- holdings from them, and nothing told them what was held there.
+--
 -- ── PRODUCTION FACTS (2026-09-25) ───────────────────────────────────────────
 -- No staff-role member in any org, so shipping this narrows nobody's view in
--- production today. L4L has 10 viewers, all warehouse-assigned (already
--- narrowed by 0331; unchanged). Managers and above are unchanged. Before the
--- push, the prod preflight confirms the adjust_stock / transfer_stock bodies
--- are md5-identical to the pre-0371 local text, and that no
--- user_warehouse_assignments row has an organization_id different from its
--- warehouse's org.
+-- production today. L4L has 10 viewers, all warehouse-assigned: their
+-- item_stock_levels SELECT scope is unchanged (0331), but from this migration
+-- on item_holdings_elsewhere answers them as described above. Managers and
+-- above are unchanged. Before the push, the prod preflight confirms the
+-- adjust_stock / transfer_stock bodies are md5-identical to the pre-0371
+-- local text, that no user_warehouse_assignments row has an organization_id
+-- different from its warehouse's org, and that no staff invite is pending.
+--
+-- ── PROD PUSH NOTE ──────────────────────────────────────────────────────────
+-- DROP POLICY and CREATE POLICY on item_stock_levels take ACCESS EXCLUSIVE on
+-- the table until the file commits. Without a lock_timeout the push would
+-- queue behind any open transaction that has read the table (an export, a
+-- sync, an idle-in-transaction session), and every API read and stock write
+-- would queue behind the push: item pages, lists and movements failing at the
+-- 8 s statement_timeout. lock_timeout makes the push fail fast with 55P03
+-- instead; retry is the remedy (the 0370 pattern). The rest is new objects and
+-- two function bodies.
 -- ============================================================================
+
+-- PLAIN `set`, not `set local` (0303/0358/0370): the CLI batch is atomic but
+-- is not a transaction block. Reset at the end.
+set lock_timeout = '5s';
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -433,7 +464,19 @@ comment on policy item_stock_levels_update on public.item_stock_levels is
 -- Staging, Unplaced, and placed (every other kind, NULL included: 0292,
 -- pattern #23), plus the ids of the placed locations holding them. Locations
 -- are readable org-wide already, and the item-level rack summary names them.
--- Never a per-location quantity: one row per item.
+-- One row per item, and no per-location quantity column; a bucket that covers
+-- a single location still states that location's quantity (see "WHAT A
+-- SCOPED MEMBER LEARNS" in the header).
+--
+-- placed_rack_locations counts the placed locations that are fine-grained
+-- placements, the app's isRackShelfLocation (apps/web/src/lib/locations/
+-- groups.ts): kind rack, crate or area, or type shelf or bin, never a system
+-- bucket. A placed location that is none of those (a NULL-kind Site) is a
+-- place stock lives, not a rack. Bulk Set rack's split rule and the Items
+-- list's split count read this number, so a Site in another warehouse no
+-- longer turns a single rack holding into a "split" that is never moved.
+-- A vitest guard (holdings-elsewhere-classifier.guard.test.ts) pins these
+-- lists to groups.ts.
 --
 -- The hidden set is the exact complement of 0331's predicate for a member who
 -- can read the item: not manager+, the location has a warehouse, and that
@@ -447,11 +490,12 @@ comment on policy item_stock_levels_update on public.item_stock_levels is
 -- org, gets no row.
 create function public.item_holdings_elsewhere(p_item_ids uuid[])
 returns table (
-  item_id             uuid,
-  staged              numeric,
-  unplaced            numeric,
-  placed              numeric,
-  placed_location_ids uuid[]
+  item_id               uuid,
+  staged                numeric,
+  unplaced              numeric,
+  placed                numeric,
+  placed_location_ids   uuid[],
+  placed_rack_locations integer
 )
 language plpgsql
 stable
@@ -484,7 +528,12 @@ begin
                                             and l.kind is distinct from 'unplaced'), 0)::numeric,
          coalesce(array_agg(distinct s.location_id order by s.location_id)
                     filter (where l.kind is distinct from 'staging'
-                              and l.kind is distinct from 'unplaced'), '{}'::uuid[])
+                              and l.kind is distinct from 'unplaced'), '{}'::uuid[]),
+         (count(distinct s.location_id)
+            filter (where l.kind is distinct from 'staging'
+                      and l.kind is distinct from 'unplaced'
+                      and (l.kind in ('rack', 'crate', 'area')
+                           or l.type in ('shelf', 'bin'))))::integer
     from readable r
     join public.item_stock_levels s
       on s.item_id = r.id
@@ -502,7 +551,7 @@ revoke all on function public.item_holdings_elsewhere(uuid[]) from public, anon;
 grant execute on function public.item_holdings_elsewhere(uuid[]) to authenticated, service_role;
 
 comment on function public.item_holdings_elsewhere(uuid[]) is
-  '0371: per readable item, the Staging / Unplaced / placed totals of positive holdings OUTSIDE the caller''s item_stock_levels_select scope, and the placed location ids holding them. Never a per-location quantity. Managers+ and null subjects get no rows; unreadable or foreign-org items get no row; more than 500 ids raises 22023 too_many_items. Visible sum + hidden sum = the item''s total.';
+  '0371: per readable item, the Staging / Unplaced / placed totals of positive holdings OUTSIDE the caller''s item_stock_levels_select scope, the placed location ids holding them, and how many of those are fine-grained placements (kind rack/crate/area or type shelf/bin; not a NULL-kind Site). No per-location quantity column, but a bucket that covers a single location states that location''s quantity. Managers+ and null subjects get no rows; unreadable or foreign-org items get no row; more than 500 ids raises 22023 too_many_items. Visible sum + hidden sum = the item''s total.';
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -562,3 +611,5 @@ comment on function public.location_stock_census(uuid) is
 -- ═══════════════════════════════════════════════════════════════════════════
 comment on table public.item_stock_levels is
   'Per-location holdings. SELECT (0331, item_stock_levels_select) requires org membership AND either manager+ or the holding''s location sitting in one of the caller''s warehouses (my_warehouse_ids); holdings at locations with no warehouse stay member-visible. Since 0371 that scope applies to EVERY role below manager, staff included: the INSERT and UPDATE policies (split from the 0202 FOR ALL policy) grant no SELECT. Writes happen only through SECURITY DEFINER code: ledger.apply_holding_delta (adjust_stock / transfer_stock), apply_level_delta, apply_cycle_count_location_delta, tg_seed_initial_level and compensate_opening_stock; tg_ledger_only_guard refuses direct API writes and DELETE is revoked (0364). Charter-blind by design. Scoped members read what they cannot see as totals through item_holdings_elsewhere; location_stock_census answers "is this location empty" org-wide.';
+
+reset lock_timeout;

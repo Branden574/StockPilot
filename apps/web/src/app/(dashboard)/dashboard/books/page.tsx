@@ -15,7 +15,8 @@ import { BooksInventoryTable } from '@/components/books/books-inventory-table';
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { Button } from '@/components/ui/button';
-import { can, ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
+import { can } from '@stockpilot/core';
+import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-unavailable-notice';
 import {
   deriveInstantView,
   instantStateFromPageParams,
@@ -493,6 +494,9 @@ async function booksTableSection({
         sort,
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
+        // The rack cell names where a book is and says "+N in other
+        // warehouses" for a staff member or viewer (0371).
+        withElsewhere: true,
       }),
       // Expected-chip badge count (mig 0277) — one HEAD count on the
       // 0277 partial index, in parallel with the rows query. Carries the
@@ -618,14 +622,10 @@ async function booksTableSection({
     />
   );
   // Never the partial rack figures presented as complete (0371).
-  if (!data.elsewhereUnavailable) return table;
   return (
-    <>
-      <p role="status" className="text-muted-foreground mb-2 text-xs">
-        {ELSEWHERE_UNAVAILABLE_NOTE}
-      </p>
+    <ElsewhereUnavailableNotice unavailable={data.elsewhereUnavailable}>
       {table}
-    </>
+    </ElsewhereUnavailableNotice>
   );
 }
 

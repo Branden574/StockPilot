@@ -297,3 +297,44 @@ describe('holdings readers are classified (0371)', () => {
     }
   });
 });
+
+/**
+ * InventoryService.list folds the hidden stock in only when asked
+ * (`withElsewhere`, a review finding: every other caller threw it away and
+ * still paid for the request). So every page that hands list() rows to the
+ * item tables, whose placement columns add holdings up next to on hand, must
+ * ask. A page that renders a table from list() without it shows a staff
+ * member their own warehouses' figures as the whole.
+ */
+describe('pages that render the item tables from list() ask for the hidden stock', () => {
+  const APP = path.join(WEB_SRC, 'app');
+  const TABLE = /<(InventoryTable|BooksInventoryTable)\b/;
+  const pages = walk(APP)
+    .filter((f) => f.endsWith('.tsx') && !/\.test\.tsx$/.test(f))
+    .map((f) => ({ rel: path.relative(WEB_SRC, f).split(path.sep).join('/'), src: readFileSync(f, 'utf8') }))
+    .filter(({ src }) => TABLE.test(src));
+
+  it('finds the Items, Books and Rentals item pages (the scan works)', () => {
+    expect(pages.map((p) => p.rel).sort()).toEqual([
+      'app/(dashboard)/dashboard/books/page.tsx',
+      'app/(dashboard)/dashboard/inventory/page.tsx',
+      'app/(dashboard)/dashboard/rentals/items/page.tsx',
+    ]);
+  });
+
+  it.each(['books', 'inventory', 'rentals/items'])(
+    'dashboard/%s: every inventory list() call passes withElsewhere: true, and a failed read is said',
+    (page) => {
+      const found = pages.find((p) => p.rel === `app/(dashboard)/dashboard/${page}/page.tsx`)!;
+      const src = found.src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+      const calls = [...src.matchAll(/inventorySvc\.list\(\{/g)];
+      expect(calls.length, 'the page reads through inventorySvc.list').toBeGreaterThan(0);
+      for (const call of calls) {
+        const body = src.slice(call.index!, src.indexOf('})', call.index!));
+        expect(body).toContain('withElsewhere: true');
+      }
+      // The note is driven by list()'s own flag, not a constant.
+      expect(src).toMatch(/<ElsewhereUnavailableNotice unavailable=\{[\w.]+\.elsewhereUnavailable\}>/);
+    },
+  );
+});

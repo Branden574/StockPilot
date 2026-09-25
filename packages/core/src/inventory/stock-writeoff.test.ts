@@ -184,7 +184,9 @@ describe('formatLocationArchiveStockBlockMessage', () => {
   // counts items the caller cannot read. Those units are named as a quantity.
   it('adds the units of items the caller cannot see after the named ones', () => {
     expect(
-      formatLocationArchiveStockBlockMessage('Rack QA-2', 15, [{ name: 'QA Chrome', quantity: 7 }], 8),
+      formatLocationArchiveStockBlockMessage('Rack QA-2', 15, [{ name: 'QA Chrome', quantity: 7 }], {
+        ofItemsNotVisible: 8,
+      }),
     ).toBe(
       "Cannot archive: Rack QA-2 still holds 15 units (7 of QA Chrome, and 8 units of items you can't see). " +
         'Move or write off that stock first — archiving anyway leaves it still counted in on hand but attached to a hidden location.',
@@ -192,15 +194,45 @@ describe('formatLocationArchiveStockBlockMessage', () => {
   });
 
   it('says every unit is of items the caller cannot see when none can be named', () => {
-    expect(formatLocationArchiveStockBlockMessage('Annex Unplaced', 9, [], 9)).toBe(
+    expect(formatLocationArchiveStockBlockMessage('Annex Unplaced', 9, [], { ofItemsNotVisible: 9 })).toBe(
       "Cannot archive: Annex Unplaced still holds 9 units of items you can't see. " +
         'Move or write off that stock first — archiving anyway leaves it still counted in on hand but attached to a hidden location.',
     );
   });
 
+  // Review finding (2026-09-25): a staff member with locations:manage who
+  // archives a rack in ANOTHER warehouse sees none of its holdings (0371), yet
+  // the items on it are often ones they can read; the item page says "7 in
+  // other warehouses". "Items you can't see" contradicted it.
+  it("a location in a warehouse the caller doesn't manage: says so, not \"items you can't see\"", () => {
+    const msg = formatLocationArchiveStockBlockMessage('Rack QA-2', 7, [], { inWarehouseNotManaged: 7 });
+    expect(msg).toBe(
+      "Cannot archive: Rack QA-2 still holds 7 units in a warehouse you don't manage. " +
+        'Move or write off that stock first — archiving anyway leaves it still counted in on hand but attached to a hidden location.',
+    );
+    expect(msg).not.toContain("items you can't see");
+  });
+
+  it('both reasons at once are each named, and the parts add up to the total', () => {
+    expect(
+      formatLocationArchiveStockBlockMessage('Rack QA-2', 10, [{ name: 'QA Chrome', quantity: 5 }], {
+        ofItemsNotVisible: 3,
+        inWarehouseNotManaged: 2,
+      }),
+    ).toContain(
+      "(5 of QA Chrome, and 3 units of items you can't see, and 2 units in a warehouse you don't manage)",
+    );
+    expect(
+      formatLocationArchiveStockBlockMessage('Rack QA-2', 5, [], {
+        ofItemsNotVisible: 3,
+        inWarehouseNotManaged: 2,
+      }),
+    ).toContain("(3 units of items you can't see, and 2 units in a warehouse you don't manage)");
+  });
+
   it('keeps the cap and counts the rest before the hidden units', () => {
     const holders = Array.from({ length: 5 }, (_, i) => ({ name: `Book ${i}`, quantity: 1 }));
-    const msg = formatLocationArchiveStockBlockMessage('22-A', 6, holders, 1);
+    const msg = formatLocationArchiveStockBlockMessage('22-A', 6, holders, { ofItemsNotVisible: 1 });
     expect(msg).toContain('(1 of Book 0, 1 of Book 1, 1 of Book 2, 2 more, and 1 unit of items you can\'t see)');
   });
 });

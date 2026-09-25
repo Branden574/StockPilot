@@ -106,8 +106,9 @@ export const ELSEWHERE_UNAVAILABLE_NOTE =
 
 /**
  * "12 in other warehouses", or with the placed locations counted,
- * "7 in other warehouses (2 locations)". Never a per-location quantity: the
- * caller is told how much and how many places, not which place holds what.
+ * "7 in other warehouses (2 locations)". The caller is told how much and how
+ * many places, never which place: with one place ("(1 location)") the
+ * quantity is that unnamed place's quantity.
  */
 export function formatElsewhereNote(quantity: number, locationCount = 0): string {
   const base = `${formatStockQuantity(quantity)} in other warehouses`;
@@ -155,6 +156,27 @@ export interface LocationStockHolderSummary {
 const MAX_NAMED_HOLDERS = 3;
 
 /**
+ * The units at a location that the archive guard counted (0371's
+ * location_stock_census) but the caller's own read could not name, split by
+ * WHY they could not be named, because the two call for different words:
+ *
+ *   • `ofItemsNotVisible` — the holding is visible but its ITEM is not (a
+ *     category- or charter-scoped member, or an item with no warehouse):
+ *     "units of items you can't see".
+ *   • `inWarehouseNotManaged` — the holding itself is out of the caller's
+ *     view: since 0371 a staff member reads holdings only in their own
+ *     warehouses, and a locations:manage grant lets them archive a location
+ *     in any warehouse. Those items are often ones they CAN read (the item
+ *     page tells them "7 in other warehouses"), so "items you can't see"
+ *     would contradict the item page: "units in a warehouse you don't
+ *     manage".
+ */
+export interface LocationArchiveHiddenStock {
+  ofItemsNotVisible?: number;
+  inWarehouseNotManaged?: number;
+}
+
+/**
  * The message shown when archiving a LOCATION is refused because stock is still
  * sitting in it — the twin of formatArchiveStockBlockMessage, and deliberately
  * NOT the same sentence.
@@ -188,12 +210,10 @@ export function formatLocationArchiveStockBlockMessage(
   total: number,
   holders: readonly LocationStockHolderSummary[],
   /**
-   * Units at this location held by items the caller cannot read (0371's
-   * location_stock_census total minus the named holders). The guard used to be
-   * blind to them and let the location archive; now it blocks and says how
-   * much it cannot name. Omitted or 0: the message is unchanged.
+   * The units the caller could not name (0371), by reason; see
+   * LocationArchiveHiddenStock. Omitted or all 0: the message is unchanged.
    */
-  hiddenQuantity = 0,
+  hidden: LocationArchiveHiddenStock = {},
 ): string {
   const unit = total === 1 ? 'unit' : 'units';
   const tail =
@@ -202,16 +222,30 @@ export function formatLocationArchiveStockBlockMessage(
   const named = holders.slice(0, MAX_NAMED_HOLDERS);
   const rest = holders.length - named.length;
   const namedParts = named.map((h) => `${formatStockQuantity(h.quantity)} of ${h.name}`);
-  if (hiddenQuantity > 0) {
-    const hiddenUnit = hiddenQuantity === 1 ? 'unit' : 'units';
-    const hidden = `${formatStockQuantity(hiddenQuantity)} ${hiddenUnit} of items you can't see`;
-    if (holders.length === 0) {
+  const units = (n: number) => `${formatStockQuantity(n)} ${n === 1 ? 'unit' : 'units'}`;
+  const ofItems = Math.max(0, hidden.ofItemsNotVisible ?? 0);
+  const inWarehouse = Math.max(0, hidden.inWarehouseNotManaged ?? 0);
+  const ITEMS_WORDS = "of items you can't see";
+  const WAREHOUSE_WORDS = "in a warehouse you don't manage";
+  const hiddenParts = [
+    ...(ofItems > 0 ? [`${units(ofItems)} ${ITEMS_WORDS}`] : []),
+    ...(inWarehouse > 0 ? [`${units(inWarehouse)} ${WAREHOUSE_WORDS}`] : []),
+  ];
+  if (hiddenParts.length > 0) {
+    // Nothing named and one reason for all of it: say it once, in the
+    // sentence ("still holds 7 units in a warehouse you don't manage").
+    if (holders.length === 0 && hiddenParts.length === 1) {
+      const words = ofItems > 0 ? ITEMS_WORDS : WAREHOUSE_WORDS;
       return (
         `Cannot archive: ${locationName} still holds ${formatStockQuantity(total)} ${unit}` +
-        ` of items you can't see.${tail}`
+        ` ${words}.${tail}`
       );
     }
-    const parts = [...namedParts, ...(rest > 0 ? [`${rest} more`] : []), `and ${hidden}`];
+    const parts = [
+      ...namedParts,
+      ...(rest > 0 ? [`${rest} more`] : []),
+      ...hiddenParts.map((p, i) => (i === 0 && holders.length === 0 ? p : `and ${p}`)),
+    ];
     return (
       `Cannot archive: ${locationName} still holds ${formatStockQuantity(total)} ${unit}` +
       ` (${parts.join(', ')}).${tail}`

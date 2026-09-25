@@ -409,6 +409,23 @@ export interface ItemListFilters {
   /** Restrict to these item ids — used by 'export selected'. */
   ids?: string[];
   /**
+   * STOCK IN OTHER WAREHOUSES (0371). OPT-IN: pass true from a screen that
+   * adds an item's holdings up or shows where its stock is (the Items, Books
+   * and Rentals item lists). For a staff member or viewer the list then asks
+   * item_holdings_elsewhere, alongside its holdings read, and folds the answer
+   * into `staged_quantity` / `unplaced_quantity` / `placed_quantity`,
+   * `rackHoldingsCount` and `elsewhere_quantity`, and reports a failed read
+   * as `elsewhereUnavailable`. Managers and above never make the call.
+   *
+   * Off (every other caller: search-as-you-type, pickers, exports, AI tools),
+   * no extra request is made, `elsewhere_quantity` is 0 and
+   * `elsewhereUnavailable` false, and for a staff member or viewer the
+   * placement fields describe THEIR OWN warehouses only (`placed_quantity`
+   * then counts the hidden stock as placed). A caller that starts showing
+   * those fields must pass true.
+   */
+  withElsewhere?: boolean;
+  /**
    * Filter by item_type. Common values:
    *   - 'product' (default for the inventory tab)
    *   - 'book' (books tab)
@@ -1439,18 +1456,27 @@ export class InventoryService {
     // location_id so two same-named racks in different warehouses stay two
     // holdings, matching rackHoldingsCount rather than placed_racks.
     const placedHoldingsByItem = new Map<string, Map<string, RackHoldingLike>>();
-    // STOCK IN OTHER WAREHOUSES (0371). A member below manager reads holdings
-    // only in their own warehouses, so the loop below sees part of each item's
-    // stock. Started here, ALONGSIDE the holdings read (it needs only the ids),
-    // and folded in after it: staged/unplaced include the hidden buckets (so
-    // `placed_quantity` is not overstated), `rackHoldingsCount` counts the
-    // hidden placed locations (so the bulk Set-rack split warning agrees with
-    // the server, which counts them too), and `elsewhere_quantity` carries the
-    // hidden total for the "N in other warehouses" suffix. Managers and above
-    // make no call. A failed read leaves the visible figures and says so
+    // STOCK IN OTHER WAREHOUSES (0371), for callers that opt in
+    // (`withElsewhere`: the Items, Books and Rentals lists). A member below
+    // manager reads holdings only in their own warehouses, so the loop below
+    // sees part of each item's stock. Started here, ALONGSIDE the holdings
+    // read (it needs only the ids), and folded in after it: staged/unplaced
+    // include the hidden buckets (so `placed_quantity` is not overstated),
+    // `rackHoldingsCount` counts the hidden fine-grained placements (so the
+    // bulk Set-rack split warning agrees with the server, which counts them
+    // the same way), and `elsewhere_quantity` carries the hidden total for the
+    // "N in other warehouses" suffix. Managers and above make no call. A
+    // failed read leaves the visible figures and says so
     // (`elsewhereUnavailable`), never "nothing elsewhere".
+    //
+    // Every other caller (search on each keystroke, pickers, exports, AI
+    // tools) throws these fields away, so it does not pay for the request: an
+    // extra call on a Promise.all level is one more chance of the gateway's
+    // 1-8 s stall on the critical path.
     const elsewhereRead: Promise<HiddenHoldingsRead> =
-      ids.length > 0 ? this.hiddenHoldingsFor(ids) : Promise.resolve({ ok: true, byItem: new Map() });
+      filters.withElsewhere && ids.length > 0
+        ? this.hiddenHoldingsFor(ids)
+        : Promise.resolve({ ok: true, byItem: new Map() });
     if (ids.length > 0) {
       // CHUNKED + PAGED (see holdingsForItemIds). `ids` is the whole page and
       // `limit` clamps at 1000, so a 1000-item export page with more than one
@@ -1525,8 +1551,11 @@ export class InventoryService {
         ),
         // Sorted for stable display ("1-A, 2-C" not "2-C, 1-A").
         placed_racks: (placedRacksByItem.get(id) ?? []).sort((a, b) => a.localeCompare(b)),
+        // Hidden fine-grained placements only (a Site in another warehouse
+        // is not a rack), matching the server's split rule in
+        // placeItemsOntoRackByName.
         rackHoldingsCount:
-          (rackHoldingsByItem.get(id)?.size ?? 0) + (hidden?.placedLocationIds.length ?? 0),
+          (rackHoldingsByItem.get(id)?.size ?? 0) + (hidden?.rackLocationCount ?? 0),
         placed_holdings: [...(placedHoldingsByItem.get(id)?.values() ?? [])].sort((a, b) =>
           a.name.localeCompare(b.name),
         ),
@@ -7575,11 +7604,15 @@ export class InventoryService {
     //     warehouse IS split, and a split item is never moved (label only).
     //     Seen from the visible rows alone it looked single, so its stock was
     //     moved and its rack label rewritten while copies sat on the other
-    //     warehouse's rack. Every hidden PLACED location counts toward the
-    //     split, whatever its kind: the caller cannot tell a rack from a site
-    //     there, and "split, label only" is the conservative answer (the list's
-    //     rackHoldingsCount counts them the same way, so the dialog's split
-    //     warning agrees).
+    //     warehouse's rack. A hidden placed location counts toward the split
+    //     only when it is a fine-grained placement, exactly as a visible one
+    //     does (isRackShelfLocation below): the RPC classifies them with the
+    //     same kind/type lists (`rackLocationCount`). A Site in another
+    //     warehouse is NOT a rack: counting it made a single rack holding
+    //     here look split, so it was relabelled and never moved, while for a
+    //     manager (and for staff before 0371) the same holding moved. The
+    //     list's rackHoldingsCount counts the same way, so the dialog's split
+    //     warning agrees.
     //   • WHAT DID NOT MOVE. Hidden stock (any bucket) is in a warehouse this
     //     caller cannot move from; the server would refuse it (0365). It is
     //     never attempted, and the item is reported in `elsewhereItemIds` so
@@ -7677,9 +7710,9 @@ export class InventoryService {
       warehouseId: string | null;
     }> = [];
     for (const [itemId, hs] of rackHoldingsByItem) {
-      // Split placement — NEVER move, label-only. Hidden placed locations
-      // count (see the note at the top).
-      const hiddenPlaced = elsewhere.byItem.get(itemId)?.placedLocationIds.length ?? 0;
+      // Split placement — NEVER move, label-only. Hidden fine-grained
+      // placements count; a hidden Site does not (see the note at the top).
+      const hiddenPlaced = elsewhere.byItem.get(itemId)?.rackLocationCount ?? 0;
       if (hs.length + hiddenPlaced !== 1) continue;
       const h = hs[0]!;
       singleRackMoves.push({
