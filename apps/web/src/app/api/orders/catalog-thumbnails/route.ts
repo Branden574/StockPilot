@@ -3,8 +3,10 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { rentalItemsPredicate } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { CATALOG_ROW_CEILING } from '@/server/loaders/orders-new-catalog';
 import type { ServiceContext } from '@/server/services/context';
 import { ItemImagesService } from '@/server/services/item-images';
+import { fetchAllRows } from '@/server/services/lib/paginate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,20 +62,32 @@ export async function GET(req: NextRequest) {
     // applied), so this signs photos for the items on that page and no
     // others. Bundles are NOT excluded here because that page does not
     // exclude them either.
-    const { data: rentalRows, error: rentalRowsError } = await ctx.supabase
-      .from('inventory_items')
-      .select('id')
-      .eq('organization_id', ctx.organizationId)
-      .eq('warehouse_id', warehouseId)
-      .eq('status', 'active')
-      .eq('is_rental', rentalItemsPredicate.isRental)
-      .is('deleted_at', null)
-      .order('name', { ascending: true })
-      .limit(500);
-    // A failed read is not "no photos": answer an error so the page's hook
-    // retries (lib/use-catalog-thumbnails.ts), instead of keeping an empty
-    // map for the session.
-    if (rentalRowsError) {
+    //
+    // Every row, paged past PostgREST's 1000-row max_rows, to the same ceiling
+    // as the page: a 500-row limit here left photos off whatever sorted after
+    // row 500 (the Orders catalog lost 65 DC4 items to its own 500-row limit,
+    // 2026-09-25).
+    let rentalRows: Array<{ id: string }>;
+    try {
+      rentalRows = await fetchAllRows<{ id: string }>(
+        (from, to) =>
+          ctx.supabase
+            .from('inventory_items')
+            .select('id')
+            .eq('organization_id', ctx.organizationId)
+            .eq('warehouse_id', warehouseId)
+            .eq('status', 'active')
+            .eq('is_rental', rentalItemsPredicate.isRental)
+            .is('deleted_at', null)
+            .order('name', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to),
+        { cap: CATALOG_ROW_CEILING },
+      );
+    } catch {
+      // A failed read is not "no photos": answer an error so the page's hook
+      // retries (lib/use-catalog-thumbnails.ts), instead of keeping an empty
+      // map for the session.
       return NextResponse.json(
         { error: 'internal_error', message: 'Could not load rental item photos.' },
         { status: 500 },
@@ -81,7 +95,7 @@ export async function GET(req: NextRequest) {
     }
     return signedUrlsFor(
       ctx,
-      ((rentalRows ?? []) as Array<{ id: string }>).map((i) => i.id),
+      rentalRows.map((i) => i.id),
     );
   }
 
