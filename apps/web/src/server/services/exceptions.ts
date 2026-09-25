@@ -207,7 +207,7 @@ export class ExceptionsService {
     const groups: Array<{ rules: readonly ExceptionRule[]; run: Promise<GroupResult> }> = [
       { rules: PLACEMENT_RULES, run: placementRules(sysCtx, nowMs) },
       { rules: ['over_reserved'], run: overReserved(sysCtx) },
-      { rules: ['count_variance'], run: countVariance(sysCtx, nowMs) },
+      { rules: ['count_variance'], run: countVariance(sysCtx, nowMs, evaluatedAt) },
     ];
     const settled = await Promise.allSettled(groups.map((g) => g.run));
 
@@ -615,19 +615,28 @@ function finiteOrNull(value: number | string | null | undefined): number | null 
  *   - Zero: absent, so an open row CLEARS. It clears only when a later
  *     completed count matches the book exactly; a recount that finds another
  *     difference replaces the facts and keeps the row open.
- *   - Rental equipment, kits, archived and deleted items are left out
- *     (item_countable is start_cycle_count's own predicate): counts never
- *     include them, so a recount could not settle them. An open row for such
- *     an item resolves on this run.
+ *   - Rental equipment, kits, archived, discontinued and deleted items are
+ *     left out (item_countable is start_cycle_count's own predicate): counts
+ *     never include them, so a recount could not settle them. An open row
+ *     for such an item resolves on this run as subject_gone (exceptions_sync,
+ *     0372), never as cleared: no count matched its book.
+ *   - AS OF THE EVALUATION: counts completed after evaluatedAt are not read
+ *     (p_as_of). The sync closes a recount pointer only for a count completed
+ *     at or before evaluatedAt, so a recount posted while this evaluation
+ *     runs is judged by the next one (the post's own follow-up sync).
  *   - A line whose numbers or completion time cannot be read is HELD: it can
  *     be decided neither way.
  */
-async function countVariance(ctx: SystemServiceContext, nowMs: number): Promise<GroupResult> {
+async function countVariance(ctx: SystemServiceContext, nowMs: number, evaluatedAt: string): Promise<GroupResult> {
   const orgId = ctx.organizationId;
   const rows = await fetchAllRows<LatestCountLineRow>(
     (from, to) =>
       ctx.supabase
-        .rpc('_latest_count_lines', { p_org: orgId, p_item_ids: null })
+        // p_as_of: only counts completed at or before this evaluation began.
+        // exceptions_sync closes a recount's pointer only for such a count,
+        // so the evaluator never resolves an exception from a recount whose
+        // pointer the same sync keeps open.
+        .rpc('_latest_count_lines', { p_org: orgId, p_item_ids: null, p_as_of: evaluatedAt })
         .order('item_id', { ascending: true })
         .range(from, to),
     { cap: COUNT_LINES_SOURCE_CAP },

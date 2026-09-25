@@ -88,6 +88,8 @@ function svcFor(
   opts: {
     role?: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer';
     enabledModules?: Set<ModuleId>;
+    mfaRequired?: boolean;
+    mfaSatisfied?: boolean;
   } = {},
 ) {
   const stub = makeSupabaseStub({
@@ -98,6 +100,8 @@ function svcFor(
     organizationId: ORG,
     role: opts.role ?? 'manager',
     ...(opts.enabledModules ? { enabledModules: opts.enabledModules } : {}),
+    ...(opts.mfaRequired !== undefined ? { mfaRequired: opts.mfaRequired } : {}),
+    ...(opts.mfaSatisfied !== undefined ? { mfaSatisfied: opts.mfaSatisfied } : {}),
   });
   return { svc: new ExceptionOccurrencesService(ctx as never), stub };
 }
@@ -140,6 +144,40 @@ describe('canRecount', () => {
       { enabledModules: new Set<ModuleId>(DEFAULT_MODULE_IDS.filter((m) => m !== 'cycle_counts')) },
     );
     expect((await off.svc.list()).occurrences[0]!.canRecount).toBe(false);
+  });
+
+  // Review finding (F1-2): a manager was told "Only a manager ..." when the
+  // real reason was the Cycle Counts module being off. Mutation caught:
+  // report every refusal as not_permitted.
+  it('says WHY Recount is withheld: the module, or the role', async () => {
+    const rows = {
+      'exception_occurrences.select': {
+        data: [
+          occRow(),
+          occRow({ id: 'o3', rule: 'label_mismatch', facts: {} }),
+        ],
+        error: null,
+      },
+    };
+    const off = await svcFor(rows, {
+      enabledModules: new Set<ModuleId>(DEFAULT_MODULE_IDS.filter((m) => m !== 'cycle_counts')),
+    }).svc.list();
+    expect(off.recountUnavailableReason).toBe('module_disabled');
+    // Only on a row a recount could settle.
+    expect(off.occurrences.map((o) => o.recountUnavailableReason)).toEqual(['module_disabled', null]);
+
+    // A session short of a required MFA check cannot read the list at all,
+    // so it is never told a Recount reason.
+    await expect(svcFor(rows, { mfaRequired: true, mfaSatisfied: false }).svc.list()).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+
+    const staff = await svcFor(rows, { role: 'staff' }).svc.list();
+    expect(staff.occurrences[0]!.recountUnavailableReason).toBe('not_permitted');
+
+    const manager = await svcFor(rows).svc.list();
+    expect(manager.recountUnavailableReason).toBeNull();
+    expect(manager.occurrences.map((o) => o.recountUnavailableReason)).toEqual([null, null]);
   });
 
   it('a resolved row cannot be recounted', async () => {
@@ -208,6 +246,39 @@ describe('the recount outcome on the list', () => {
     const args = stub.chainArgsAll.get('cycle_count_lines.select')![0]!;
     expect(args[chain.indexOf('eq')]).toEqual(['cycle_count_id', CC]);
     expect(args[chain.indexOf('in')]).toEqual(['item_id', ['item-1']]);
+  });
+
+  // Review finding (F1-2): a posted recount whose line was counted before a
+  // later count of the item was posted re-checked nothing; it read "Matched
+  // the book" while the exception stayed open. Mutation caught: drop the
+  // computed field from the read.
+  it('a posted recount whose line did not re-check the item never reads "matched"', async () => {
+    const { svc, stub } = svcFor({
+      'exception_occurrences.select': { data: [occRow(recountEmbed('completed'))], error: null },
+      'cycle_counts.select': servedLikePostgrest([{ id: CC, organization_id: ORG, status: 'completed' }]),
+      'cycle_count_lines.select': servedLikePostgrest([
+        { id: 'l1', cycle_count_id: CC, item_id: 'item-1', counted_quantity: 20, expected_quantity: 20, rechecks: false },
+      ]),
+    });
+    const [o] = (await svc.list()).occurrences;
+    expect(o!.recount!.outcome).toEqual({ kind: 'superseded' });
+    const args = stub.chainArgsAll.get('cycle_count_lines.select')![0]!;
+    expect(String(args[0]![0])).toContain('rechecks:cycle_count_line_rechecks');
+  });
+
+  it('an open recount whose counted line can no longer re-check the item says so', async () => {
+    const { svc } = svcFor({
+      'exception_occurrences.select': { data: [occRow(recountEmbed('in_progress'))], error: null },
+      'cycle_counts.select': servedLikePostgrest([{ id: CC, organization_id: ORG, status: 'in_progress' }]),
+      'cycle_count_lines.select': (call: MockCall) =>
+        call.methods.includes('in')
+          ? servedLikePostgrest([
+              { id: 'l1', cycle_count_id: CC, item_id: 'item-1', counted_quantity: 20, expected_quantity: 20, rechecks: false },
+            ])(call)
+          : progress(1, 1)(call),
+    });
+    const [o] = (await svc.list()).occurrences;
+    expect(o!.recount!.outcome).toEqual({ kind: 'superseded' });
   });
 
   // Mutation caught: failing the whole list on an outcome read, or reading a
@@ -326,7 +397,7 @@ describe('listForCount — a count\'s linked exceptions', () => {
     });
   }
 
-  it('lists each linked exception once, in EX order, with its line, outcome and where the difference lands', async () => {
+  it('lists each linked exception once, in EX order, with its line and what the count came to', async () => {
     const { svc } = countStub();
     const res = await svc.listForCount(CC);
     expect(res).toMatchObject({ cycleCountId: CC, countNumber: 31, reference: 'CC-000031', status: 'completed' });
@@ -342,17 +413,81 @@ describe('listForCount — a count\'s linked exceptions', () => {
         countedLocation: { name: 'Rack 12-A', kind: 'rack', archived: false },
       },
       outcome: { kind: 'corrected', from: 10, to: 11, delta: 1 },
-      destination: { kind: 'adds_to_location', location: 'Rack 12-A' },
-      reviewLine: 'Counted 11, book 10 (+1): adds to Rack 12-A',
     });
     expect(a!.occurrence.recount!.outcome).toEqual({ kind: 'corrected', from: 10, to: 11, delta: 1 });
     expect(b).toMatchObject({
       active: false,
       // A line with no counted location says so (null), never a made-up id.
       line: { countedLocationId: null, countedLocation: null },
+    });
+  });
+
+  // Review finding (F1-2): a closed count's lines were still sent with a
+  // future-tense "adds to Rack 12-A" review line, which the phone showed on
+  // cancelled and posted counts. Mutation caught: build the review line
+  // whatever the count's status.
+  it('a closed count carries no destination or review line (it reads its outcome)', async () => {
+    for (const status of ['completed', 'canceled']) {
+      const { svc } = countStub({ header: { id: CC, count_number: 31, status } });
+      for (const e of (await svc.listForCount(CC)).exceptions) {
+        expect(e.destination).toBeNull();
+        expect(e.reviewLine).toBeNull();
+      }
+    }
+  });
+
+  it('while the count is open: where each counted line\'s difference lands', async () => {
+    const { svc } = countStub({ header: { id: CC, count_number: 31, status: 'in_progress' } });
+    const [a, b] = (await svc.listForCount(CC)).exceptions;
+    expect(a).toMatchObject({
+      destination: { kind: 'adds_to_location', location: 'Rack 12-A' },
+      reviewLine: 'Counted 11, book 10 (+1): adds to Rack 12-A',
+    });
+    expect(b).toMatchObject({
       destination: { kind: 'off_staging_then_shelves' },
       reviewLine: 'Counted 4, book 6 (-2): comes off Staging first, then shelf locations',
     });
+  });
+
+  // Review finding (F1-2): a linked line counted BEFORE a later count of the
+  // item was posted cannot re-check it; it must not read as a destination or,
+  // once posted, as "matched the book". Mutation caught: drop the computed
+  // field (or ignore it), and the line reads "no change to stock".
+  it('a line counted before a later posted count says so: no destination, never "matched"', async () => {
+    const stale = [
+      {
+        id: 'l1',
+        cycle_count_id: CC,
+        item_id: 'item-1',
+        counted_quantity: 10,
+        expected_quantity: 10,
+        counted_location_id: null,
+        counted_location: null,
+        rechecks: false,
+      },
+    ];
+    const open = countStub({
+      header: { id: CC, count_number: 31, status: 'in_progress' },
+      occurrences: [occRow(recountEmbed('in_progress'))],
+      links: { data: [{ id: 'e1', occurrence_id: OCC }], error: null },
+      lines: stale,
+    });
+    const [o] = (await open.svc.listForCount(CC)).exceptions;
+    expect(o).toMatchObject({
+      outcome: { kind: 'superseded' },
+      destination: null,
+      reviewLine: 'Counted 10, book 10: counted before a later count of this item, so it does not re-check it',
+    });
+    const select = String(open.stub.chainArgsAll.get('cycle_count_lines.select')?.[0]?.[0]?.[0]);
+    expect(select).toContain('rechecks:cycle_count_line_rechecks');
+
+    const posted = countStub({
+      occurrences: [occRow(recountEmbed('completed'))],
+      links: { data: [{ id: 'e1', occurrence_id: OCC }], error: null },
+      lines: stale,
+    });
+    const [c] = (await posted.svc.listForCount(CC)).exceptions;
+    expect(c!.outcome).toEqual({ kind: 'superseded' });
   });
 
   it('reads the links for THIS count and org only', async () => {

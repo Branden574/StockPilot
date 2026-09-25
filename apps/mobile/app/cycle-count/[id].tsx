@@ -788,20 +788,25 @@ export default function CycleCountDetail() {
                 ? offlineCaptureLabel({ captured_at: l.offlineCapturedAt }, orgTimeZone)
                 : null;
             // The exceptions a recount linked to this line's item, and where
-            // its difference lands (only while the server's answer describes
-            // the line this phone holds).
+            // its difference lands (only while the count is open and the
+            // server's answer describes the line this phone holds); once the
+            // count is closed, what it came to.
             const links =
               linked.kind === 'ready'
                 ? linked.data.exceptions.filter((x) => x.occurrence.itemId === l.itemId)
                 : [];
             const destination =
-              links.length > 0
-                ? linkedLineDestination(links[0]!, {
-                    counted: l.counted,
-                    localDirty: l.localDirty,
-                    drafting: isDrafting,
-                    countedLocationId: serverLocations.get(l.id),
-                  })
+              links.length > 0 && linked.kind === 'ready'
+                ? linkedLineDestination(
+                    links[0]!,
+                    {
+                      counted: l.counted,
+                      localDirty: l.localDirty,
+                      drafting: isDrafting,
+                      countedLocationId: serverLocations.get(l.id),
+                    },
+                    linked.data.status,
+                  )
                 : null;
             return (
               <View key={l.id} style={styles.card}>

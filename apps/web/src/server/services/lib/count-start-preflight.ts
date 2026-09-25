@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { isManagerOrAbove } from '@stockpilot/core';
+import { isManagerOrAbove, type RecountUnavailableReason } from '@stockpilot/core';
 
 import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib/auth/warehouse';
 
@@ -42,17 +42,26 @@ export function assertCountStartFloors(ctx: ServiceContext): void {
 }
 
 /**
- * Whether this caller could start a count at all: exactly step 1, as a
- * yes/no, for the hints a list shows (Recount, Count this item). The action
- * itself still runs the full preflight, and the database re-checks.
+ * Why this caller could NOT start a count, or null when they could: exactly
+ * step 1, as a reason, for the hints a list shows (Recount, Count this item),
+ * so a manager in an org with Cycle Counts turned off is told that, not
+ * "only a manager". Every other refusal is the permission rule (a session
+ * short of a required MFA check cannot read the exceptions in the first
+ * place). The action itself still runs the full preflight, and the database
+ * re-checks.
  */
-export function canStartCount(ctx: ServiceContext): boolean {
+export function countStartBlock(ctx: ServiceContext): RecountUnavailableReason | null {
   try {
     assertCountStartFloors(ctx);
-    return true;
-  } catch {
-    return false;
+    return null;
+  } catch (e) {
+    return e instanceof ServiceError && e.code === 'module_disabled' ? 'module_disabled' : 'not_permitted';
   }
+}
+
+/** countStartBlock as a yes/no. */
+export function canStartCount(ctx: ServiceContext): boolean {
+  return countStartBlock(ctx) === null;
 }
 
 /**

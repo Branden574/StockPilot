@@ -2,6 +2,7 @@ import 'server-only';
 
 import {
   formatCycleCountNumber,
+  formatOccurrenceNumber,
   isRecountableRule,
   isRecountSkipReason,
   RECOUNT_MANAGER_ONLY_COPY,
@@ -51,8 +52,9 @@ import { postgrestErrorText } from './lib/postgrest-error';
  * ═══ ONE COUNT, EVEN WHEN TAPPED TWICE ═══
  *
  * The caller mints an idempotency key once per submission and sends the same
- * key on a retry. The database answers a repeat with the first call's count
- * (replay) instead of creating a second one, and refuses the same key for a
+ * key on a retry. The database answers a repeat with the first call's answer
+ * (replay: its count, links and skips, stored with the key) instead of
+ * creating a second count, and refuses the same key for a
  * different selection (409). A retryable refusal (a lock wait past 5 s, a
  * statement timeout) rolled everything back, so resending the same key is
  * safe.
@@ -101,6 +103,8 @@ export interface RecountPerson {
 export interface RecountSkipped {
   /** The occurrence that was skipped, or null for an explicit item. */
   occurrenceId: string | null;
+  /** "EX-000012" for a skipped occurrence, when it could be read. */
+  occurrenceReference: string | null;
   itemId: string;
   /** The item's name when it could be read. */
   itemName: string | null;
@@ -113,11 +117,12 @@ export interface ExceptionRecountResult {
   cycleCountId: string | null;
   countNumber: number | null;
   reference: string | null;
-  /** Lines in the new count; null on a replay. */
+  /** Lines in the new count (a replay repeats the first call's number). */
   lineCount: number | null;
   created: boolean;
-  /** This key already started a recount: its count is returned, nothing new
-   *  was made and nothing else was linked. */
+  /** This key already started a recount: the FIRST call's answer is
+   *  returned (its count, links and skips, 0372), and nothing new was made
+   *  or linked. */
   replay: boolean;
   /** Who the new count ended up assigned to (null = unassigned). Believe this
    *  over what was asked for. */
@@ -305,6 +310,7 @@ export function mapRecountError(error: {
           });
         case 'recount_count_not_open':
         case 'recount_item_not_in_count':
+        case 'recount_line_already_counted':
         case 'recount_items_changed':
           return retryable('The counts changed while the recount was starting. Try again.', hint);
         default:
@@ -370,6 +376,8 @@ export class ExceptionRecountService {
         reason: 'occurrence_not_found',
       });
     }
+    // "EX-000012", so a skipped exception is named as the exception.
+    const referenceOf = new Map(occurrences.map((o) => [o.id, formatOccurrenceNumber(o.occurrence_number)] as const));
     const recountItemIds = [
       ...new Set([
         ...explicitItemIds,
@@ -427,7 +435,11 @@ export class ExceptionRecountService {
       notes: finalNotes,
       linked: res.linked,
       linkedExisting,
-      skipped: res.skipped.map((s) => ({ ...s, itemName: nameOf(s.itemId) })),
+      skipped: res.skipped.map((s) => ({
+        ...s,
+        itemName: nameOf(s.itemId),
+        occurrenceReference: s.occurrenceId ? (referenceOf.get(s.occurrenceId) ?? null) : null,
+      })),
     };
 
     // ── 7. One audit row (a replay did nothing new) ────────────────────────
@@ -463,16 +475,28 @@ export class ExceptionRecountService {
 
   // ── internals ────────────────────────────────────────────────────────────
 
-  private async readOccurrences(
-    ids: readonly string[],
-  ): Promise<Array<{ id: string; item_id: string; rule: string; resolved_at: string | null }>> {
+  private async readOccurrences(ids: readonly string[]): Promise<
+    Array<{
+      id: string;
+      item_id: string;
+      rule: string;
+      resolved_at: string | null;
+      occurrence_number: number | string | null;
+    }>
+  > {
     const ctx = this.ctx;
-    return fetchAllRowsByIds<{ id: string; item_id: string; rule: string; resolved_at: string | null }>(
+    return fetchAllRowsByIds<{
+      id: string;
+      item_id: string;
+      rule: string;
+      resolved_at: string | null;
+      occurrence_number: number | string | null;
+    }>(
       ids,
       (batch) => (from, to) =>
         ctx.supabase
           .from('exception_occurrences')
-          .select('id, item_id, rule, resolved_at')
+          .select('id, item_id, rule, resolved_at, occurrence_number')
           .eq('organization_id', ctx.organizationId)
           .in('id', batch)
           .order('id', { ascending: true })

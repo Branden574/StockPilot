@@ -219,6 +219,13 @@ PGTAP_TESTS=(
   # holds the item. Neither RPC resolves. _latest_count_lines reads every
   # count of an org past RLS, so EXECUTE is service_role only (catalog).
   supabase/tests/0372_exception_recount.test.sql
+  # 0372 review fixes: a recount links only to an open count whose line can
+  # still re-check the item (cycle_count_line_rechecks, SECURITY INVOKER,
+  # authenticated but not anon); a stale live pointer is replaced; a replay
+  # returns the stored first answer; the evaluator reads counts as of the
+  # evaluation; the sync closes a finished recount before resolving, and an
+  # item that can no longer be counted resolves as subject_gone.
+  supabase/tests/0372_exception_recount_review.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql

@@ -364,7 +364,33 @@ describe('ExceptionRecountService.start — the recount itself', () => {
       },
     });
     const res = await svc.start({ itemIds: [ITEM_2] });
-    expect(res.skipped).toEqual([{ occurrenceId: null, itemId: ITEM_2, itemName: 'Item 2', reason: 'not_countable' }]);
+    expect(res.skipped).toEqual([
+      { occurrenceId: null, occurrenceReference: null, itemId: ITEM_2, itemName: 'Item 2', reason: 'not_countable' },
+    ]);
+  });
+
+  // Review finding (F1-2): an exception skipped as resolved read
+  // "Skipped: <item>: Already resolved" next to "Started CC-..." for the same
+  // item. The skip now carries the exception's EX number, so the result is
+  // worded as the exception. Mutation caught: drop the reference.
+  it('a skipped exception carries its EX number (the result names the exception, not the item)', async () => {
+    const { svc, stub } = setup({
+      occurrences: [occ(OCC_A, ITEM_1, { resolved_at: '2026-09-25T10:00:00Z', occurrence_number: 12 })],
+      rpc: {
+        data: rpcResult({
+          lineCount: 1,
+          linked: [],
+          skipped: [{ occurrenceId: OCC_A, itemId: ITEM_1, reason: 'resolved' }],
+        }),
+        error: null,
+      },
+    });
+    const res = await svc.start({ occurrenceIds: [OCC_A], itemIds: [ITEM_1] });
+    expect(res.skipped).toEqual([
+      { occurrenceId: OCC_A, occurrenceReference: 'EX-000012', itemId: ITEM_1, itemName: 'Item 1', reason: 'resolved' },
+    ]);
+    const select = stub.chainArgsAll.get('exception_occurrences.select')?.[0]?.[0]?.[0];
+    expect(String(select)).toContain('occurrence_number');
   });
 
   it('writes ONE audit row with the id arrays (not one per item)', async () => {

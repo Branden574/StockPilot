@@ -70,6 +70,32 @@ export const RECOUNT_COUNTS_TOTAL_COPY = 'Counts record each item’s total, whe
 export const RECOUNT_MANAGER_ONLY_COPY =
   'Only a manager with permission to assign counts and adjust stock can start a recount.';
 
+/**
+ * Why this reader cannot start a recount (the server's assertCountStartFloors
+ * as a reason, checked in its order):
+ *   - module_disabled: the organization has Cycle Counts turned off (the
+ *     exceptions stay, so a manager must not read "only a manager");
+ *   - not_permitted: not a manager with cycle_counts:assign and stock:adjust.
+ * (A session that has not passed a required MFA check never gets this far:
+ * reading exceptions is refused first.)
+ */
+export type RecountUnavailableReason = 'module_disabled' | 'not_permitted';
+
+export const RECOUNT_UNAVAILABLE_COPY: Record<RecountUnavailableReason, string> = {
+  module_disabled: 'Cycle Counts is turned off for this organization, so a recount cannot be started.',
+  not_permitted: RECOUNT_MANAGER_ONLY_COPY,
+};
+
+export function isRecountUnavailableReason(value: unknown): value is RecountUnavailableReason {
+  return value === 'module_disabled' || value === 'not_permitted';
+}
+
+/** The words for why Recount is withheld. A reason this build does not know
+ *  (or none) reads as the permission rule, the answer that was always shown. */
+export function recountUnavailableCopy(reason: unknown): string {
+  return isRecountUnavailableReason(reason) ? RECOUNT_UNAVAILABLE_COPY[reason] : RECOUNT_MANAGER_ONLY_COPY;
+}
+
 /** Why a requested item was left out of a recount (start_targeted_recount). */
 export type RecountSkipReason = 'resolved' | 'not_recountable' | 'not_countable';
 
@@ -109,6 +135,14 @@ export interface RecountOutcomeLine {
   countedQuantity: number | string | null;
   /** The book at count time (the line's expected quantity). */
   expectedQuantity: number | string | null;
+  /**
+   * Whether this line re-checks the item (cycle_count_line_rechecks, 0372):
+   * once its count is posted it is, or was, the item's latest physical count.
+   * False when it was counted before a later count of the item was posted:
+   * posting it changes nothing for the exception. Null or absent: unknown
+   * (the outcome is then worked out from the numbers alone).
+   */
+  rechecks?: boolean | null;
 }
 
 export type RecountOutcome =
@@ -118,8 +152,16 @@ export type RecountOutcome =
   | { kind: 'not_counted' }
   | { kind: 'matched'; quantity: number }
   | { kind: 'corrected'; from: number; to: number; delta: number }
+  /**
+   * The line was counted before a later count of the item was posted, so it
+   * does not re-check the item: it is never read as "matched the book".
+   */
+  | { kind: 'superseded' }
   /** The count or its line could not be read. Never read as "matched". */
   | { kind: 'unavailable' };
+
+/** Why a counted line says nothing new about its item (outcome `superseded`). */
+export const RECOUNT_SUPERSEDED_COPY = 'Counted before a later count of this item, so it does not re-check it';
 
 /**
  * What came of a recount for one item, derived at display time from the
@@ -128,6 +170,14 @@ export type RecountOutcome =
  *
  * The line's numbers are what the post applied: counted - expected (0339,
  * 0369). A line whose count matched the book applied nothing.
+ *
+ * A line that does not re-check the item (`rechecks === false`: counted
+ * before a later count of it was posted) is `superseded` while its count is
+ * open, and once posted when it applied nothing: "matched the book" would
+ * tell the manager the book was confirmed when nobody counted the item after
+ * the difference was found. A superseded line that still applied a correction
+ * (the ledger allows it when the later count changed nothing) reads as the
+ * correction, which is what happened to the stock.
  */
 export function recountOutcome(
   count: RecountOutcomeCount | null | undefined,
@@ -136,6 +186,9 @@ export function recountOutcome(
   if (!count) return { kind: 'unavailable' };
   switch (count.status) {
     case 'in_progress':
+      if (line && line.rechecks === false && quantity(line.countedQuantity) !== null) {
+        return { kind: 'superseded' };
+      }
       return {
         kind: 'in_progress',
         counted: wholeCount(count.countedLines),
@@ -155,7 +208,9 @@ export function recountOutcome(
       const expected = quantity(line.expectedQuantity);
       if (expected === null) return { kind: 'unavailable' };
       const delta = roundQuantity(counted - expected);
-      if (delta === 0) return { kind: 'matched', quantity: counted };
+      if (delta === 0) {
+        return line.rechecks === false ? { kind: 'superseded' } : { kind: 'matched', quantity: counted };
+      }
       return { kind: 'corrected', from: expected, to: counted, delta };
     }
     default:
@@ -178,6 +233,8 @@ export function recountOutcomeCopy(outcome: RecountOutcome): string {
       return `Matched the book (${formatStockQuantity(outcome.quantity)})`;
     case 'corrected':
       return `Book corrected from ${formatStockQuantity(outcome.from)} to ${formatStockQuantity(outcome.to)} (${signedQuantity(outcome.delta)})`;
+    case 'superseded':
+      return RECOUNT_SUPERSEDED_COPY;
     case 'unavailable':
       return 'Result not available';
   }
@@ -206,8 +263,10 @@ export type VarianceDestination =
  * ledger.post_cycle_count (0342/0343, frozen): the line's counted location is
  * the target when it is recorded, not archived and not Staging;
  *   - more than the book: added to the target, else to Staging;
- *   - less than the book: taken off the target first (never below zero there),
- *     then Staging first and then the shelf locations; with no target,
+ *   - less than the book: taken off the target first (never below zero there,
+ *     apply_cycle_count_location_delta), then the rest through
+ *     apply_level_delta 'staging_first': Staging first, then the other shelf
+ *     locations (racks, areas and crates, Unplaced last); with no target,
  *     Staging first and then the shelf locations.
  * Null when the line is not counted or its numbers cannot be read.
  */
@@ -244,7 +303,7 @@ export function varianceDestinationCopy(destination: VarianceDestination): strin
     case 'adds_to_staging':
       return 'adds to Staging';
     case 'off_location_then_staging':
-      return `comes off ${destination.location} first, then Staging`;
+      return `comes off ${destination.location} first, then Staging, then other shelf locations`;
     case 'off_staging_then_shelves':
       return 'comes off Staging first, then shelf locations';
   }
@@ -254,21 +313,30 @@ export function varianceDestinationCopy(destination: VarianceDestination): strin
  * The review line for a counted line linked to an exception: the counted and
  * book quantities at count time, the difference, and where it lands, e.g.
  * "Counted 11, book 10 (+1): adds to Rack 12-A". Null when not counted.
+ *
+ * A line that cannot re-check its item (`rechecks === false`: counted before
+ * a later count of it was posted) says so instead of where its difference
+ * lands: posting it applies nothing, or is refused as superseded (0369).
  */
 export function varianceReviewLine(input: {
   countedQuantity: number | string | null;
   expectedQuantity: number | string | null;
   countedLocation: VarianceDestinationLocation | null;
+  rechecks?: boolean | null;
 }): string | null {
   const destination = varianceDestination(input);
   if (!destination) return null;
   const counted = quantity(input.countedQuantity)!;
   const expected = quantity(input.expectedQuantity)!;
   const delta = roundQuantity(counted - expected);
-  const numbers = `Counted ${formatStockQuantity(counted)}, book ${formatStockQuantity(expected)}`;
-  return delta === 0
-    ? `${numbers}: ${varianceDestinationCopy(destination)}`
-    : `${numbers} (${signedQuantity(delta)}): ${varianceDestinationCopy(destination)}`;
+  const numbers =
+    delta === 0
+      ? `Counted ${formatStockQuantity(counted)}, book ${formatStockQuantity(expected)}`
+      : `Counted ${formatStockQuantity(counted)}, book ${formatStockQuantity(expected)} (${signedQuantity(delta)})`;
+  if (input.rechecks === false) {
+    return `${numbers}: ${RECOUNT_SUPERSEDED_COPY.charAt(0).toLowerCase()}${RECOUNT_SUPERSEDED_COPY.slice(1)}`;
+  }
+  return `${numbers}: ${varianceDestinationCopy(destination)}`;
 }
 
 // ── Reading an outcome sent as JSON (the phone) ─────────────────────────────
@@ -308,6 +376,8 @@ export function parseRecountOutcome(value: unknown): RecountOutcome {
         ? { kind: 'unavailable' }
         : { kind: 'corrected', from, to, delta };
     }
+    case 'superseded':
+      return { kind: 'superseded' };
     default:
       return { kind: 'unavailable' };
   }
@@ -370,10 +440,15 @@ export function countStartAllowed(input: {
 /**
  * Why a recount cannot be started right now, or null. Permission first: a
  * reader who may not start one is told so even offline, because reconnecting
- * would not change that answer.
+ * would not change that answer. `unavailableReason` is the server's reason
+ * when it withheld Recount (recountUnavailableCopy).
  */
-export function recountDisabledReason(input: { canRecount: boolean; online: boolean }): string | null {
-  if (!input.canRecount) return RECOUNT_MANAGER_ONLY_COPY;
+export function recountDisabledReason(input: {
+  canRecount: boolean;
+  online: boolean;
+  unavailableReason?: RecountUnavailableReason | null;
+}): string | null {
+  if (!input.canRecount) return recountUnavailableCopy(input.unavailableReason);
   if (!input.online) return RECOUNT_OFFLINE_COPY;
   return null;
 }
@@ -434,7 +509,15 @@ export interface RecountResultInput {
     itemIds: readonly string[];
     occurrenceIds: readonly string[];
   }>;
-  skipped: ReadonlyArray<{ itemId: string; itemName: string | null; reason: RecountSkipReason }>;
+  skipped: ReadonlyArray<{
+    itemId: string;
+    itemName: string | null;
+    reason: RecountSkipReason;
+    /** Set when an EXCEPTION was left out (not an item asked for directly). */
+    occurrenceId?: string | null;
+    /** "EX-000012", when the server could read it. */
+    occurrenceReference?: string | null;
+  }>;
 }
 
 export interface RecountResultSummary {
@@ -444,11 +527,20 @@ export interface RecountResultSummary {
   assignment: string | null;
   /** Counts that already held some of the items; they were linked to them. */
   alreadyCounting: Array<{ cycleCountId: string; text: string }>;
-  /** "Skipped: Atlas: Rental equipment, kits and archived items are not counted". */
+  /**
+   * "Skipped: Atlas: Rental equipment, kits and archived items are not
+   * counted" for an item left out; "Not linked: EX-000012 (Atlas): Already
+   * resolved" for an exception left out (its item may still be counted).
+   */
   skipped: string[];
   /** Nothing was started and nothing was already being counted. */
   nothing: string | null;
 }
+
+/** A replay whose answer names nothing (a server that did not keep the
+ *  first answer): never "No count was started". */
+export const RECOUNT_REPLAY_UNKNOWN_COPY =
+  'This request had already been received. Refresh to see which counts the exceptions were linked to.';
 
 /** The result panel's three groups, worded once for the web and the phone. */
 export function recountResultSummary(
@@ -498,22 +590,35 @@ export function recountResultSummary(
     return { cycleCountId: e.cycleCountId, text: `${lead} in ${ref} (${who}${since})${linked}` };
   });
 
+  // An exception left out because it is resolved or not recountable says so
+  // as the EXCEPTION: its item may still be in the count (asked for directly,
+  // or through another exception), so "Skipped: <item>" would contradict
+  // "Started CC-..." for the same item. An item that cannot be counted at all
+  // is worded as the item, however it was asked for.
   const seen = new Set<string>();
   const skipped: string[] = [];
   for (const s of result.skipped) {
-    const key = `${s.itemId}:${s.reason}`;
+    const name = s.itemName?.trim() || null;
+    const exceptionLevel = !!s.occurrenceId && s.reason !== 'not_countable';
+    const key = exceptionLevel ? `occ:${s.occurrenceId}` : `${s.itemId}:${s.reason}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    skipped.push(`Skipped: ${s.itemName?.trim() || 'An item'}: ${RECOUNT_SKIP_REASON_COPY[s.reason]}`);
+    if (exceptionLevel) {
+      const ref = s.occurrenceReference?.trim() || 'An exception';
+      skipped.push(`Not linked: ${ref}${name ? ` (${name})` : ''}: ${RECOUNT_SKIP_REASON_COPY[s.reason]}`);
+    } else {
+      skipped.push(`Skipped: ${name ?? 'An item'}: ${RECOUNT_SKIP_REASON_COPY[s.reason]}`);
+    }
   }
 
-  return {
-    started,
-    assignment,
-    alreadyCounting,
-    skipped,
-    nothing: !started && alreadyCounting.length === 0 ? 'No count was started.' : null,
-  };
+  let nothing: string | null = null;
+  if (!started && alreadyCounting.length === 0) {
+    // A replay answers with the first send's result (0372); one that names
+    // nothing at all cannot say what the first send did, so it says that.
+    nothing = result.replay && skipped.length === 0 ? RECOUNT_REPLAY_UNKNOWN_COPY : 'No count was started.';
+  }
+
+  return { started, assignment, alreadyCounting, skipped, nothing };
 }
 
 // ── A count's linked exceptions (the count screens) ─────────────────────────

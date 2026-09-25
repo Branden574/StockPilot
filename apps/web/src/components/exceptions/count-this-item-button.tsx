@@ -3,7 +3,7 @@
 import { ClipboardCheck } from 'lucide-react';
 import * as React from 'react';
 
-import { COUNT_THIS_ITEM_LABEL, RECOUNT_MANAGER_ONLY_COPY } from '@stockpilot/core';
+import { COUNT_THIS_ITEM_LABEL, recountUnavailableCopy, type RecountUnavailableReason } from '@stockpilot/core';
 
 import { RecountDialog } from '@/components/exceptions/recount-dialog';
 import { Button } from '@/components/ui/button';
@@ -11,7 +11,12 @@ import { listItemRecountTargetsAction } from '@/server/actions/exceptions';
 
 type Targets =
   | { kind: 'loading' }
-  | { kind: 'ready'; occurrenceIds: string[]; canRecount: boolean }
+  | {
+      kind: 'ready';
+      occurrenceIds: string[];
+      canRecount: boolean;
+      unavailableReason: RecountUnavailableReason | null;
+    }
   | { kind: 'failed' };
 
 /**
@@ -36,12 +41,25 @@ export function CountThisItemButton({ itemId, timeZone }: { itemId: string; time
     const seq = ++seqRef.current;
     setTargets({ kind: 'loading' });
     setOpen(true);
-    const res = await listItemRecountTargetsAction(itemId);
+    let res: Awaited<ReturnType<typeof listItemRecountTargetsAction>> | null;
+    try {
+      res = await listItemRecountTargetsAction(itemId);
+    } catch {
+      // The action request itself failed (a dropped connection, a deploy
+      // that no longer has this action): the same as a failed read, never a
+      // dialog stuck on "Checking...".
+      res = null;
+    }
     if (seq !== seqRef.current) return;
     setTargets(
-      'error' in res
+      res === null || 'error' in res
         ? { kind: 'failed' }
-        : { kind: 'ready', occurrenceIds: res.occurrenceIds, canRecount: res.canRecount },
+        : {
+            kind: 'ready',
+            occurrenceIds: res.occurrenceIds,
+            canRecount: res.canRecount,
+            unavailableReason: res.recountUnavailableReason ?? null,
+          },
     );
   }
 
@@ -63,7 +81,9 @@ export function CountThisItemButton({ itemId, timeZone }: { itemId: string; time
         itemIds={[itemId]}
         occurrenceIds={targets.kind === 'ready' ? targets.occurrenceIds : []}
         preparing={targets.kind === 'loading'}
-        blocked={targets.kind === 'ready' && !targets.canRecount ? RECOUNT_MANAGER_ONLY_COPY : null}
+        blocked={
+          targets.kind === 'ready' && !targets.canRecount ? recountUnavailableCopy(targets.unavailableReason) : null
+        }
         note={
           targets.kind === 'failed'
             ? 'This item’s open exceptions could not be read, so the count will not be linked to them. The system still checks them after the count is posted.'

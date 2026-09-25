@@ -120,14 +120,21 @@ function RecountDialogBody({
 
   React.useEffect(() => {
     let cancelled = false;
-    void listCountAssigneesAction().then((res) => {
-      if (cancelled) return;
-      setMembers(
-        'error' in res
-          ? { kind: 'failed', message: res.error.message }
-          : { kind: 'ready', list: res.members },
-      );
-    });
+    listCountAssigneesAction().then(
+      (res) => {
+        if (cancelled) return;
+        setMembers(
+          'error' in res
+            ? { kind: 'failed', message: res.error.message }
+            : { kind: 'ready', list: res.members },
+        );
+      },
+      // The action request itself failed: the same as a failed read (the
+      // recount can still start unassigned), never "Loading..." forever.
+      () => {
+        if (!cancelled) setMembers({ kind: 'failed', message: 'Team members could not be loaded.' });
+      },
+    );
     return () => {
       cancelled = true;
     };
@@ -146,13 +153,25 @@ function RecountDialogBody({
     setPending(true);
     setError(null);
     const assignedTo = assignee === UNASSIGNED ? null : assignee;
-    const res = await startRecountAction({
-      occurrenceIds: [...occurrenceIds],
-      itemIds: [...itemIds],
-      assignedTo,
-      idempotencyKey,
-    });
-    setPending(false);
+    let res: Awaited<ReturnType<typeof startRecountAction>>;
+    try {
+      res = await startRecountAction({
+        occurrenceIds: [...occurrenceIds],
+        itemIds: [...itemIds],
+        assignedTo,
+        idempotencyKey,
+      });
+    } catch {
+      // The action request itself failed (a dropped connection, a proxy
+      // error, a deploy that no longer has this action): the answer is
+      // unknown, so the KEY IS KEPT and Try again resends it. If the first
+      // send did reach the server, the retry is its replay, not a second
+      // count.
+      setError({ message: 'Could not reach the server. Try again.', retryable: true });
+      return;
+    } finally {
+      setPending(false);
+    }
     if ('error' in res) {
       // The key stands for another selection: never send it again.
       if (res.error.reason === 'idempotency_conflict') keyRef.current = null;

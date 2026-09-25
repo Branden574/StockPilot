@@ -20,7 +20,7 @@ import {
   recurrenceBadge,
   OCCURRENCE_RESOLVED_REASON_COPY,
   RECOUNT_COUNTS_TOTAL_COPY,
-  RECOUNT_MANAGER_ONLY_COPY,
+  recountUnavailableCopy,
   type OccurrenceState,
 } from '@stockpilot/core';
 
@@ -445,7 +445,7 @@ function Detail({
             </>
           ) : (
             <Body size={13.5} muted>
-              {RECOUNT_MANAGER_ONLY_COPY}
+              {recountUnavailableCopy(o.recountUnavailableReason)}
             </Body>
           )}
         </Section>

@@ -4,6 +4,8 @@ import {
   EXCEPTION_ACT_NOT_PERMITTED_COPY,
   EXCEPTION_ACT_OFFLINE_COPY,
   EXCEPTION_ACT_RESOLVED_COPY,
+  recountResultSummary,
+  recountUnavailableCopy,
 } from '@stockpilot/core';
 
 import {
@@ -310,6 +312,7 @@ describe('the offline "as of" list', () => {
     syncState: null,
     canCheckNow: false,
     canRecount: false,
+    recountUnavailableReason: null,
     unrecognized: 0,
     timeZone: null,
   };
@@ -454,6 +457,29 @@ describe('recount fields on the list and the detail', () => {
     expect((await listExceptions('open')).canRecount).toBe(false);
   });
 
+  // Review finding (F1-2): the phone said "Only a manager..." when Recount
+  // was withheld because Cycle Counts is off.
+  it('reads why Recount is withheld, and only a reason it knows', async () => {
+    apiMock.api.mockResolvedValueOnce(
+      listBody({
+        canRecount: false,
+        recountUnavailableReason: 'module_disabled',
+        occurrences: [
+          occurrence({ ...VARIANCE, recountUnavailableReason: 'module_disabled' }),
+          occurrence({ id: 'b', ...VARIANCE, recountUnavailableReason: 'a_future_reason' }),
+        ],
+      }),
+    );
+    const list = await listExceptions('open');
+    expect(list.recountUnavailableReason).toBe('module_disabled');
+    expect(list.occurrences.map((o) => o.recountUnavailableReason)).toEqual(['module_disabled', null]);
+    expect(recountUnavailableCopy(list.occurrences[0]!.recountUnavailableReason)).toBe(
+      'Cycle Counts is turned off for this organization, so a recount cannot be started.',
+    );
+    apiMock.api.mockResolvedValueOnce(listBody());
+    expect((await listExceptions('open')).recountUnavailableReason).toBeNull();
+  });
+
   it('reads the recount outcome, and never makes one up', async () => {
     apiMock.api.mockResolvedValueOnce(
       listBody({
@@ -561,7 +587,45 @@ describe('startRecount', () => {
 
   it('keeps an item skipped for a reason this build does not know, with the generic words', () => {
     const res = parseRecountResult({ ...body, skipped: [{ occurrenceId: null, itemId: 'i9', itemName: 'X', reason: 'a_future_reason' }] });
-    expect(res.skipped).toEqual([{ itemId: 'i9', itemName: 'X', reason: 'not_countable' }]);
+    expect(res.skipped).toEqual([
+      { itemId: 'i9', itemName: 'X', reason: 'not_countable', occurrenceId: null, occurrenceReference: null },
+    ]);
+  });
+
+  // Review finding (F1-2): a skipped EXCEPTION must be worded as the
+  // exception, so the phone keeps which one it was.
+  it('keeps which exception a skip names, so the sheet words it as the exception', () => {
+    const res = parseRecountResult({
+      ...body,
+      skipped: [{ occurrenceId: 'o7', occurrenceReference: 'EX-000007', itemId: 'i2', itemName: 'Chromebook', reason: 'resolved' }],
+    });
+    expect(res.skipped).toEqual([
+      { itemId: 'i2', itemName: 'Chromebook', reason: 'resolved', occurrenceId: 'o7', occurrenceReference: 'EX-000007' },
+    ]);
+    expect(recountResultSummary(res).skipped).toEqual(['Not linked: EX-000007 (Chromebook): Already resolved']);
+  });
+
+  // Review finding (F1-2): the retry of a link-only recount (a lost answer)
+  // read "No count was started." The server replays the first answer; the
+  // phone must carry its links through.
+  it('a replay of a link-only recount still names the count it was linked to', () => {
+    const res = parseRecountResult({
+      ...body,
+      cycleCountId: null,
+      countNumber: null,
+      reference: null,
+      lineCount: 0,
+      created: false,
+      replay: true,
+      assignedTo: null,
+      linked: [],
+      skipped: [],
+    });
+    const summary = recountResultSummary(res, { timeZone: 'America/Los_Angeles' });
+    expect(summary.alreadyCounting.map((a) => a.text)).toEqual([
+      'Already being counted in CC-000001 (assigned to Ana, open since Sep 24), linked',
+    ]);
+    expect(summary.nothing).toBeNull();
   });
 });
 
@@ -638,16 +702,51 @@ describe('a count\'s linked exceptions', () => {
   // Mutation caught: showing the server's destination for a line the phone
   // has counted differently (or not yet synced).
   it('shows the server\'s destination only while it describes the line the phone holds', () => {
-    const link = { line: { id: 'l1', countedQuantity: 21, expectedQuantity: 20, countedLocationId: 'loc-1' }, reviewLine: 'Counted 21, book 20 (+1): adds to Rack 12-A' };
+    const link = {
+      line: { id: 'l1', countedQuantity: 21, expectedQuantity: 20, countedLocationId: 'loc-1' },
+      reviewLine: 'Counted 21, book 20 (+1): adds to Rack 12-A',
+      outcome: { kind: 'in_progress', counted: 1, total: 1 } as const,
+    };
     const clean = { counted: 21, localDirty: false, drafting: false, countedLocationId: 'loc-1' };
-    expect(linkedLineDestination(link, clean)).toEqual({ kind: 'review', text: 'Counted 21, book 20 (+1): adds to Rack 12-A' });
+    const open = 'in_progress';
+    expect(linkedLineDestination(link, clean, open)).toEqual({ kind: 'review', text: 'Counted 21, book 20 (+1): adds to Rack 12-A' });
     const pending = { kind: 'pending', text: 'Where the difference lands shows once this count syncs.' };
-    expect(linkedLineDestination(link, { ...clean, localDirty: true })).toEqual(pending);
-    expect(linkedLineDestination(link, { ...clean, drafting: true })).toEqual(pending);
-    expect(linkedLineDestination(link, { ...clean, counted: 22 })).toEqual(pending);
-    expect(linkedLineDestination(link, { ...clean, countedLocationId: 'loc-2' })).toEqual(pending);
-    expect(linkedLineDestination(link, { ...clean, counted: null })).toBeNull();
-    expect(linkedLineDestination({ line: null, reviewLine: null }, clean)).toEqual(pending);
+    expect(linkedLineDestination(link, { ...clean, localDirty: true }, open)).toEqual(pending);
+    expect(linkedLineDestination(link, { ...clean, drafting: true }, open)).toEqual(pending);
+    expect(linkedLineDestination(link, { ...clean, counted: 22 }, open)).toEqual(pending);
+    expect(linkedLineDestination(link, { ...clean, countedLocationId: 'loc-2' }, open)).toEqual(pending);
+    expect(linkedLineDestination(link, { ...clean, counted: null }, open)).toBeNull();
+    expect(linkedLineDestination({ line: null, reviewLine: null, outcome: link.outcome }, clean, open)).toEqual(pending);
+  });
+
+  // Review finding (F1-2): a cancelled or posted recount opened from history
+  // read "Counted 21, book 20 (+1): adds to Rack 12-A", saying stock would
+  // change when nothing more will. Mutation caught: ignore the status.
+  it('a closed count says what it came to, never where a difference lands', () => {
+    const line = { id: 'l1', countedQuantity: 21, expectedQuantity: 20, countedLocationId: 'loc-1' };
+    const phone = { counted: 21, localDirty: false, drafting: false, countedLocationId: 'loc-1' };
+    expect(
+      linkedLineDestination(
+        { line, reviewLine: 'Counted 21, book 20 (+1): adds to Rack 12-A', outcome: { kind: 'cancelled' } },
+        phone,
+        'canceled',
+      ),
+    ).toEqual({ kind: 'review', text: 'Cancelled before it was posted' });
+    expect(
+      linkedLineDestination(
+        { line, reviewLine: null, outcome: { kind: 'corrected', from: 20, to: 21, delta: 1 } },
+        phone,
+        'completed',
+      ),
+    ).toEqual({ kind: 'review', text: 'Book corrected from 20 to 21 (+1)' });
+    // Even with a local edit left over, a closed count's result is the answer.
+    expect(
+      linkedLineDestination(
+        { line, reviewLine: null, outcome: { kind: 'matched', quantity: 21 } },
+        { ...phone, localDirty: true },
+        'completed',
+      ),
+    ).toEqual({ kind: 'review', text: 'Matched the book (21)' });
   });
 });
 

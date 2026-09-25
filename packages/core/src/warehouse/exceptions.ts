@@ -595,11 +595,16 @@ export function signedQuantity(value: number): string {
 
 export type OccurrenceResolvedReason = 'cleared' | 'reclassified' | 'subject_gone';
 
-/** How each resolution reason reads. None of them says a person resolved it. */
+/**
+ * How each resolution reason reads. None of them says a person resolved it.
+ * subject_gone: the item was archived or deleted, or (count_variance, 0372)
+ * it can no longer be counted (discontinued, rental equipment, a kit), so no
+ * count will ever re-check it: never worded as "cleared".
+ */
 export const OCCURRENCE_RESOLVED_REASON_COPY: Record<OccurrenceResolvedReason, string> = {
   cleared: 'Cleared',
   reclassified: 'Now reported under another rule',
-  subject_gone: 'Item archived or deleted',
+  subject_gone: 'Item archived, deleted or no longer counted',
 };
 
 /** The recount linked to an occurrence, as far as the reader can see it. */

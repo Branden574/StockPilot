@@ -9,8 +9,9 @@
 --    inserts a count itself.
 -- R. start_targeted_recount: a manager recount creates exactly the
 --    occurrences' items and links them (header = the shared warehouse, null
---    when mixed); a replay returns the same count with created=false and no
---    second count, also with the ids reordered; the same key with another
+--    when mixed); a replay returns the first answer (same count and links)
+--    with created=false and no second count, also with the ids reordered
+--    (0372_exception_recount_review.test.sql covers skips); the same key with another
 --    payload is idempotency_conflict (mutation: drop the hash check); an item
 --    already in an open count is linked and no count is created; resolved,
 --    holding-rule, label, rental, kit, archived and deleted are skipped with
@@ -409,10 +410,10 @@ select ok(
   (select p.prosecdef and 'search_path=public' = any (p.proconfig)
           and p.proacl is not null
           and not exists (select 1 from unnest(p.proacl) a where a::text like '=%')
-     from pg_proc p where p.oid = 'public._latest_count_lines(uuid, uuid[])'::regprocedure)
-  and has_function_privilege('service_role', 'public._latest_count_lines(uuid, uuid[])', 'EXECUTE')
-  and not has_function_privilege('authenticated', 'public._latest_count_lines(uuid, uuid[])', 'EXECUTE')
-  and not has_function_privilege('anon', 'public._latest_count_lines(uuid, uuid[])', 'EXECUTE'),
+     from pg_proc p where p.oid = 'public._latest_count_lines(uuid, uuid[], timestamptz)'::regprocedure)
+  and has_function_privilege('service_role', 'public._latest_count_lines(uuid, uuid[], timestamptz)', 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public._latest_count_lines(uuid, uuid[], timestamptz)', 'EXECUTE')
+  and not has_function_privilege('anon', 'public._latest_count_lines(uuid, uuid[], timestamptz)', 'EXECUTE'),
   'G2: _latest_count_lines is SECURITY DEFINER with a pinned search_path, executable by service_role only (catalog)');
 select ok(
   (select not p.prosecdef and 'lock_timeout=5s' = any (p.proconfig) and 'search_path=public' = any (p.proconfig)
@@ -428,7 +429,7 @@ select ok(
   'G4: _exc_link_recount is SECURITY DEFINER for authenticated (gated in its body), not anon');
 select is(
   (select count(*)::int from pg_proc p
-    where p.oid in ('public._latest_count_lines(uuid, uuid[])'::regprocedure,
+    where p.oid in ('public._latest_count_lines(uuid, uuid[], timestamptz)'::regprocedure,
                     'public.start_targeted_recount(uuid, uuid[], uuid[], text, text)'::regprocedure,
                     'public._exc_link_recount(uuid, uuid)'::regprocedure)
       and p.prosrc ~ '(40001|40P01|serialization_failure|deadlock_detected)'),
@@ -478,10 +479,8 @@ select is(
 select count(*) as "ccA" from public.cycle_counts where organization_id = :orgA \gset
 select is(
   public.start_targeted_recount(:orgA, array[:'oV1', :'oR2']::uuid[], null, 'Recount: 2 items', 'key-1'),
-  jsonb_build_object('cycleCountId', :'x1'::uuid, 'countNumber', (:'r1'::jsonb->>'countNumber')::bigint,
-                     'lineCount', null, 'created', false, 'replay', true,
-                     'linked', '[]'::jsonb, 'linkedExisting', '[]'::jsonb, 'skipped', '[]'::jsonb),
-  'R5: a replay returns the same count with created=false');
+  :'r1'::jsonb || '{"created": false, "replay": true}'::jsonb,
+  'R5: a replay returns the first answer (same count, line count and links) with created=false');
 select is(
   public.start_targeted_recount(:orgA, array[:'oR2', :'oV1', :'oR2']::uuid[], '{}'::uuid[], null, 'key-1')->>'cycleCountId',
   :'x1',
@@ -517,9 +516,9 @@ select is(
   :'ccA' || '|' || :ccPlain,
   'R10: no count was created and the occurrence points at the open count');
 select is(
-  public.start_targeted_recount(:orgA, array[:'oZ']::uuid[], null, null, 'key-2') - 'countNumber',
-  '{"cycleCountId": null, "lineCount": null, "created": false, "replay": true, "linked": [], "linkedExisting": [], "skipped": []}'::jsonb,
-  'R11: a replay of a request that created no count answers with no count');
+  public.start_targeted_recount(:orgA, array[:'oZ']::uuid[], null, null, 'key-2'),
+  :'r9'::jsonb || '{"replay": true}'::jsonb,
+  'R11: a replay of a request that created no count answers with no count, and still names the count it linked to');
 
 -- R12-R13: mixed: one item already counting, one new.
 select public.start_targeted_recount(:orgA, null, array[:iZ, :iP]::uuid[], 'Recount: 2 items', 'key-3') as "r12" \gset

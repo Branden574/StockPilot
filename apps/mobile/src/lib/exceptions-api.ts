@@ -4,8 +4,10 @@ import {
   formatOrgDateTime,
   isExceptionRule,
   isRecountSkipReason,
+  isRecountUnavailableReason,
   parseRecountOutcome,
   recountOutcome,
+  recountOutcomeCopy,
   VARIANCE_DESTINATION_PENDING_COPY,
   type ExceptionActionKind,
   type ExceptionCheckNotScheduledReason,
@@ -15,7 +17,7 @@ import {
   type OccurrenceResolvedReason,
   type RecountOutcome,
   type RecountResultInput,
-  type RecountSkipReason,
+  type RecountUnavailableReason,
 } from '@stockpilot/core';
 
 import { api } from './api';
@@ -81,6 +83,11 @@ export interface MobileExceptionOccurrence {
    *  (F1-2: an open count_variance / over_reserved exception, a manager who
    *  can start counts). start_targeted_recount re-checks it. */
   canRecount: boolean;
+  /** Why Recount is withheld on this open, recountable row (the Cycle
+   *  Counts module is off, or not a manager with both permissions); null
+   *  otherwise, and from an older server (core recountUnavailableCopy then
+   *  reads as the permission rule). */
+  recountUnavailableReason: RecountUnavailableReason | null;
 }
 
 /** A linked recount as the phone reads it. `outcome` is what that count has
@@ -113,6 +120,8 @@ export interface MobileExceptionList {
   /** This reader may start recounts at all (F1-2): the list offers
    *  multi-select only then, and only on rows whose own canRecount is true. */
   canRecount: boolean;
+  /** Why not, when not (null otherwise, and from an older server). */
+  recountUnavailableReason: RecountUnavailableReason | null;
   /** Open rows neither the server nor this build could word (a newer
    *  build's rule), left out of `occurrences` but COUNTED: a list with any
    *  never shows the all-clear state (core exceptionUnrecognizedCopy). */
@@ -283,6 +292,9 @@ function parseOccurrence(v: unknown): MobileExceptionOccurrence | null {
     // the server did not say this reader may take.
     canAct: v.canAct === true,
     canRecount: v.canRecount === true,
+    recountUnavailableReason: isRecountUnavailableReason(v.recountUnavailableReason)
+      ? v.recountUnavailableReason
+      : null,
   };
 }
 
@@ -308,6 +320,9 @@ export function parseExceptionList(res: unknown): MobileExceptionList {
     syncState: parseSyncState(res.syncState),
     canCheckNow: res.canCheckNow === true,
     canRecount: res.canRecount === true,
+    recountUnavailableReason: isRecountUnavailableReason(res.recountUnavailableReason)
+      ? res.recountUnavailableReason
+      : null,
     unrecognized,
     timeZone: strOrNull(res.timeZone),
   };
@@ -721,7 +736,7 @@ export function parseRecountResult(res: unknown): MobileRecountResult {
       occurrenceIds: strArray(e.occurrenceIds),
     });
   }
-  const skipped: { itemId: string; itemName: string | null; reason: RecountSkipReason }[] = [];
+  const skipped: RecountResultInput['skipped'][number][] = [];
   for (const e of Array.isArray(res.skipped) ? res.skipped : []) {
     if (!isObj(e) || typeof e.itemId !== 'string') throw new ExceptionsResponseError();
     skipped.push({
@@ -729,6 +744,10 @@ export function parseRecountResult(res: unknown): MobileRecountResult {
       itemName: strOrNull(e.itemName),
       // Unknown to this build: the closest honest words.
       reason: isRecountSkipReason(e.reason) ? e.reason : 'not_countable',
+      // An exception left out (its item may still be counted): worded as
+      // the exception by core recountResultSummary.
+      occurrenceId: strOrNull(e.occurrenceId),
+      occurrenceReference: strOrNull(e.occurrenceReference),
     });
   }
   return {
@@ -929,20 +948,28 @@ export async function getCountLinkedExceptions(cycleCountId: string): Promise<Mo
 }
 
 /**
- * What the count screen says under a linked line about where its difference
- * lands, given the line as the PHONE holds it:
- *   - the server's review line, only while it describes that same line (the
- *     same counted quantity and counted location, nothing typed or queued on
- *     the phone since): the server decides the counted location when it
- *     records the count, so the phone never works one out itself;
+ * What the count screen says under a linked line, given the count's status
+ * and the line as the PHONE holds it:
+ *   - once the count is closed (posted or cancelled), what it came to (core
+ *     recountOutcomeCopy, the web's words): never where a difference "lands",
+ *     which would say stock is about to change when nothing more will;
+ *   - while it is open, the server's review line, only while it describes
+ *     that same line (the same counted quantity and counted location, nothing
+ *     typed or queued on the phone since): the server decides the counted
+ *     location when it records the count, so the phone never works one out
+ *     itself;
  *   - "shows once this count syncs" for a count typed or queued here that the
  *     answer does not reflect yet;
  *   - nothing for an uncounted line.
  */
 export function linkedLineDestination(
-  link: Pick<MobileCountLinkedException, 'line' | 'reviewLine'>,
+  link: Pick<MobileCountLinkedException, 'line' | 'reviewLine' | 'outcome'>,
   phone: { counted: number | null; localDirty: boolean; drafting: boolean; countedLocationId: string | null | undefined },
+  countStatus: string,
 ): { kind: 'review' | 'pending'; text: string } | null {
+  if (countStatus !== 'in_progress') {
+    return { kind: 'review', text: recountOutcomeCopy(link.outcome) };
+  }
   if (phone.drafting || phone.localDirty) {
     return { kind: 'pending', text: VARIANCE_DESTINATION_PENDING_COPY };
   }

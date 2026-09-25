@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
-import { can, uuidSchema } from '@stockpilot/core';
+import { can, uuidSchema, type RecountUnavailableReason } from '@stockpilot/core';
 
 import { reportError } from '@/lib/error-reporter';
 import { fetchCountAssignees } from '@/server/lib/count-assignees';
@@ -142,7 +142,15 @@ export async function listCountAssigneesAction(): Promise<
 
 export async function listItemRecountTargetsAction(
   itemId: string,
-): Promise<{ ok: true; canRecount: boolean; occurrenceIds: string[] } | Failure> {
+): Promise<
+  | {
+      ok: true;
+      canRecount: boolean;
+      recountUnavailableReason: RecountUnavailableReason | null;
+      occurrenceIds: string[];
+    }
+  | Failure
+> {
   try {
     if (!uuidSchema.safeParse(itemId).success) {
       throw new ServiceError('validation_error', 'That item id is not valid.');
@@ -152,6 +160,7 @@ export async function listItemRecountTargetsAction(
     return {
       ok: true,
       canRecount: res.canRecount,
+      recountUnavailableReason: res.recountUnavailableReason,
       occurrenceIds: res.occurrences.filter((o) => o.canRecount).map((o) => o.id),
     };
   } catch (e) {

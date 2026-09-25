@@ -571,8 +571,10 @@ describe('occurrenceStateLabel', () => {
     expect(occurrenceStateLabel({ kind: 'resolved', reason: 'cleared', at: 'x' })).toBe(
       'Resolved: Cleared',
     );
+    // Review finding (F1-2): an open count_variance on an item that can no
+    // longer be counted resolves as subject_gone (0372), so the words cover it.
     expect(occurrenceStateLabel({ kind: 'resolved', reason: 'subject_gone', at: 'x' })).toBe(
-      'Resolved: Item archived or deleted',
+      'Resolved: Item archived, deleted or no longer counted',
     );
   });
 });

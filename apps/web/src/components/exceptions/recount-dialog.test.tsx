@@ -225,6 +225,34 @@ describe('RecountDialog', () => {
     expect(screen.queryByRole('button', { name: 'Start recount' })).not.toBeInTheDocument();
   });
 
+  // Review finding (F1-2): a server action that REJECTS (a dropped
+  // connection, "Failed to find Server Action" after a deploy) left the Start
+  // button spinning with Cancel disabled and no error. Mutation caught: no
+  // try/finally around the action.
+  it('a rejected start is an inline, retryable error that resends the SAME key', async () => {
+    startRecountAction
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce({ ok: true, result: result({ replay: true, created: false, lineCount: 1 }) });
+    await renderDialog();
+    await press('Start recount');
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not reach the server. Try again.'));
+    // Not stuck: Cancel works again and Try again is offered.
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    await press('Try again');
+    const [first, second] = startRecountAction.mock.calls.map((c) => (c[0] as { idempotencyKey: string }).idempotencyKey);
+    expect(second).toBe(first);
+    expect(screen.getByTestId('recount-started')).toHaveTextContent('This request had already been received');
+  });
+
+  it('a rejected member read says so instead of loading forever', async () => {
+    listCountAssigneesAction.mockRejectedValue(new TypeError('Failed to fetch'));
+    await renderDialog();
+    await waitFor(() =>
+      expect(screen.getByTestId('recount-members-failed')).toHaveTextContent('Team members could not be loaded.'),
+    );
+    expect(screen.queryByText('Loading team members...')).not.toBeInTheDocument();
+  });
+
   it('shows a non-retryable refusal inline and keeps Start', async () => {
     startRecountAction.mockResolvedValue({
       error: { message: 'Only a manager with permission to assign counts and adjust stock can start a recount.', reason: null },

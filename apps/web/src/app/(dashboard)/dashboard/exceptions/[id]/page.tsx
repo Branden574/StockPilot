@@ -34,7 +34,7 @@ import {
   isRecountableRule,
   OCCURRENCE_RESOLVED_REASON_COPY,
   RECOUNT_COUNTS_TOTAL_COPY,
-  RECOUNT_MANAGER_ONLY_COPY,
+  recountUnavailableCopy,
   resolveOrgTimezone,
   uuidSchema,
   type ExceptionActionKind,
@@ -228,7 +228,7 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
               <p className="text-muted-foreground">No recount is linked to this exception.</p>
             )}
             <p className="text-muted-foreground">
-              {o.canRecount ? RECOUNT_COUNTS_TOTAL_COPY : RECOUNT_MANAGER_ONLY_COPY}
+              {o.canRecount ? RECOUNT_COUNTS_TOTAL_COPY : recountUnavailableCopy(o.recountUnavailableReason)}
             </p>
           </CardContent>
         </Card>

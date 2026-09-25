@@ -71,7 +71,9 @@ describe('recount sheet', () => {
   it('Count this item names the item and only its recountable open exceptions', () => {
     expect(sheet).toContain("listExceptions('open', { itemId })");
     expect(sheet).toContain('list.occurrences.filter((o) => o.canRecount).map((o) => o.id)');
-    expect(sheet).toContain('RECOUNT_MANAGER_ONLY_COPY');
+    // Why it is withheld, as the server says (the module, or the role).
+    expect(sheet).toContain('recountUnavailableCopy(targets.unavailableReason)');
+    expect(sheet).toContain('unavailableReason: list.recountUnavailableReason');
   });
 
   it('words the result through core, like the web dialog', () => {
@@ -103,7 +105,7 @@ describe('exceptions list: Recount selected', () => {
 describe('exception detail: Recount', () => {
   it('Recount only when the server says so; otherwise who can', () => {
     expect(detail).toContain('{o.canRecount ? (');
-    expect(detail).toContain('RECOUNT_MANAGER_ONLY_COPY');
+    expect(detail).toContain('recountUnavailableCopy(o.recountUnavailableReason)');
     expect(detail).toContain('const showRecount = isRecountableRule(o.rule) && !resolved;');
   });
 
@@ -159,7 +161,9 @@ describe('count screen: the Post fix and linked exceptions', () => {
   });
 
   it('shows the destination only while it describes the line on the phone', () => {
-    expect(count).toContain('linkedLineDestination(links[0]!, {');
+    expect(count).toContain('linkedLineDestination(\n                    links[0]!,');
+    // The count's status decides: a closed count reads its outcome.
+    expect(count).toContain('linked.data.status,');
     expect(count).toContain('countedLocationId: serverLocations.get(l.id)');
     expect(count).toContain('localDirty: l.localDirty');
     expect(count).toContain('drafting: isDrafting');

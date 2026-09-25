@@ -15,7 +15,11 @@ import {
   type RecountResultInput,
   isRecountableRule,
   isRecountSkipReason,
+  isRecountUnavailableReason,
   RECOUNT_COUNTS_TOTAL_COPY,
+  RECOUNT_REPLAY_UNKNOWN_COPY,
+  RECOUNT_UNAVAILABLE_COPY,
+  recountUnavailableCopy,
   RECOUNT_MANAGER_ONLY_COPY,
   RECOUNT_MAX_ITEMS,
   RECOUNT_NOTES_MAX,
@@ -142,9 +146,40 @@ describe('recountOutcome', () => {
       [{ kind: 'matched', quantity: 10 }, 'Matched the book (10)'],
       [{ kind: 'corrected', from: 8, to: 10, delta: 2 }, 'Book corrected from 8 to 10 (+2)'],
       [{ kind: 'corrected', from: 10, to: 7, delta: -3 }, 'Book corrected from 10 to 7 (-3)'],
+      [{ kind: 'superseded' }, 'Counted before a later count of this item, so it does not re-check it'],
       [{ kind: 'unavailable' }, 'Result not available'],
     ];
     for (const [o, text] of cases) expect(recountOutcomeCopy(o)).toBe(text);
+  });
+
+  // Review finding (F1-2): a recount line counted BEFORE the posted variance
+  // read "Matched the book" while the exception stayed open. Mutation caught:
+  // ignore `rechecks`, and the completed zero line reads "matched".
+  it('a line that does not re-check the item is never "matched the book"', () => {
+    const stale = { countedQuantity: 20, expectedQuantity: 20, rechecks: false };
+    expect(recountOutcome({ status: 'completed' }, stale)).toEqual({ kind: 'superseded' });
+    expect(recountOutcome({ status: 'in_progress', countedLines: 1, totalLines: 1 }, stale)).toEqual({
+      kind: 'superseded',
+    });
+    // An open line not counted yet, or one that re-checks, is ordinary.
+    expect(
+      recountOutcome({ status: 'in_progress', countedLines: 0, totalLines: 1 }, { ...stale, countedQuantity: null }),
+    ).toEqual({ kind: 'in_progress', counted: 0, total: 1 });
+    expect(recountOutcome({ status: 'completed' }, { ...stale, rechecks: true })).toEqual({
+      kind: 'matched',
+      quantity: 20,
+    });
+    // Unknown (a server that does not say) keeps the numbers.
+    expect(recountOutcome({ status: 'completed' }, { ...stale, rechecks: null })).toEqual({
+      kind: 'matched',
+      quantity: 20,
+    });
+    // A superseded line that still changed the stock says so.
+    expect(recountOutcome({ status: 'completed' }, { countedQuantity: 21, expectedQuantity: 20, rechecks: false })).toEqual(
+      { kind: 'corrected', from: 20, to: 21, delta: 1 },
+    );
+    // A cancelled count is cancelled whatever its line.
+    expect(recountOutcome({ status: 'canceled' }, stale)).toEqual({ kind: 'cancelled' });
   });
 });
 
@@ -205,8 +240,11 @@ describe('varianceDestination (mirrors post_cycle_count routing, 0342/0343)', ()
   it('words each destination and the full review line', () => {
     expect(varianceDestinationCopy({ kind: 'adds_to_location', location: 'Rack 12-A' })).toBe('adds to Rack 12-A');
     expect(varianceDestinationCopy({ kind: 'adds_to_staging' })).toBe('adds to Staging');
+    // Review finding (F1-2): the post drains the target, then Staging, then
+    // continues into the other shelf locations (apply_level_delta
+    // 'staging_first' falls through to the placed draw-down).
     expect(varianceDestinationCopy({ kind: 'off_location_then_staging', location: 'Rack 12-A' })).toBe(
-      'comes off Rack 12-A first, then Staging',
+      'comes off Rack 12-A first, then Staging, then other shelf locations',
     );
     expect(varianceDestinationCopy({ kind: 'off_staging_then_shelves' })).toBe(
       'comes off Staging first, then shelf locations',
@@ -219,6 +257,23 @@ describe('varianceDestination (mirrors post_cycle_count routing, 0342/0343)', ()
       'Counted 10, book 10: no change to stock',
     );
     expect(varianceReviewLine({ countedQuantity: null, expectedQuantity: 10, countedLocation: null })).toBeNull();
+    expect(varianceReviewLine({ countedQuantity: 7, expectedQuantity: 10, countedLocation: rack })).toBe(
+      'Counted 7, book 10 (-3): comes off Rack 12-A first, then Staging, then other shelf locations',
+    );
+  });
+
+  // Review finding (F1-2): a stale line's review line must not say where a
+  // difference lands (posting applies nothing, or is refused as superseded).
+  it('a line that cannot re-check its item says so instead of a destination', () => {
+    expect(
+      varianceReviewLine({ countedQuantity: 10, expectedQuantity: 10, countedLocation: null, rechecks: false }),
+    ).toBe('Counted 10, book 10: counted before a later count of this item, so it does not re-check it');
+    expect(
+      varianceReviewLine({ countedQuantity: 11, expectedQuantity: 10, countedLocation: rack, rechecks: false }),
+    ).toBe('Counted 11, book 10 (+1): counted before a later count of this item, so it does not re-check it');
+    expect(
+      varianceReviewLine({ countedQuantity: 11, expectedQuantity: 10, countedLocation: rack, rechecks: true }),
+    ).toBe('Counted 11, book 10 (+1): adds to Rack 12-A');
   });
 });
 
@@ -262,6 +317,7 @@ describe('parseRecountOutcome', () => {
       to: 11,
       delta: 1,
     });
+    expect(parseRecountOutcome({ kind: 'superseded' })).toEqual({ kind: 'superseded' });
   });
 
   // Mutation caught: a matched outcome with no quantity read as matched.
@@ -357,6 +413,23 @@ describe('recountDisabledReason / selection', () => {
     expect(recountDisabledReason({ canRecount: false, online: false })).toBe(RECOUNT_MANAGER_ONLY_COPY);
     expect(recountDisabledReason({ canRecount: true, online: false })).toBe(RECOUNT_OFFLINE_COPY);
     expect(recountDisabledReason({ canRecount: true, online: true })).toBeNull();
+  });
+
+  // Review finding (F1-2): a manager was told "Only a manager..." when the
+  // real reason was the Cycle Counts module being off.
+  it('says the real reason Recount is withheld', () => {
+    expect(recountUnavailableCopy('module_disabled')).toBe(
+      'Cycle Counts is turned off for this organization, so a recount cannot be started.',
+    );
+    expect(recountUnavailableCopy('not_permitted')).toBe(RECOUNT_MANAGER_ONLY_COPY);
+    // Unknown or missing: the permission rule, as before.
+    expect(recountUnavailableCopy(undefined)).toBe(RECOUNT_MANAGER_ONLY_COPY);
+    expect(recountUnavailableCopy('something_new')).toBe(RECOUNT_MANAGER_ONLY_COPY);
+    expect(
+      recountDisabledReason({ canRecount: false, online: true, unavailableReason: 'module_disabled' }),
+    ).toBe(RECOUNT_UNAVAILABLE_COPY.module_disabled);
+    for (const r of ['module_disabled', 'not_permitted']) expect(isRecountUnavailableReason(r)).toBe(true);
+    expect(isRecountUnavailableReason('x')).toBe(false);
   });
 
   it('labels the selection and refuses an empty or oversized one', () => {
@@ -488,5 +561,57 @@ describe('recountResultSummary', () => {
       'Skipped: An item: Already resolved',
     ]);
     expect(s.nothing).toBe('No count was started.');
+  });
+
+  // Review finding (F1-2): an exception skipped as resolved read
+  // "Skipped: Chromebook: Already resolved" next to "Started CC-000040" for the
+  // same item. Mutation caught: word every skip as the item.
+  it('an exception left out is worded as the exception, not the item', () => {
+    const s = recountResultSummary({
+      ...base,
+      lineCount: 1,
+      skipped: [
+        { itemId: 'i1', itemName: 'Chromebook', reason: 'resolved', occurrenceId: 'o1', occurrenceReference: 'EX-000012' },
+        { itemId: 'i1', itemName: 'Chromebook', reason: 'resolved', occurrenceId: 'o1', occurrenceReference: 'EX-000012' },
+        { itemId: 'i2', itemName: null, reason: 'not_recountable', occurrenceId: 'o2', occurrenceReference: null },
+        { itemId: 'i3', itemName: 'Projector', reason: 'not_countable', occurrenceId: 'o3', occurrenceReference: 'EX-000013' },
+      ],
+    });
+    expect(s.started?.text).toBe('Started CC-000002 (1 item)');
+    expect(s.skipped).toEqual([
+      'Not linked: EX-000012 (Chromebook): Already resolved',
+      'Not linked: An exception: A recount cannot settle this kind of exception',
+      'Skipped: Projector: Rental equipment, kits and archived items are not counted',
+    ]);
+  });
+
+  // Review finding (F1-2): a replay of a link-only request answered
+  // "No count was started." after the exceptions had been linked. The server
+  // now replays the first answer; a replay that names nothing says so.
+  it('a replay repeats the first answer, and never says "No count was started" for a replay that names nothing', () => {
+    const linkOnly = recountResultSummary({
+      ...base,
+      cycleCountId: null,
+      countNumber: null,
+      lineCount: 0,
+      created: false,
+      replay: true,
+      assignedTo: null,
+      linkedExisting: [
+        {
+          cycleCountId: 'cc-5',
+          countNumber: 5,
+          assignedTo: null,
+          startedAt: null,
+          itemIds: ['i1'],
+          occurrenceIds: ['o1'],
+        },
+      ],
+    });
+    expect(linkOnly.alreadyCounting.map((a) => a.text)).toEqual(['Already being counted in CC-000005 (unassigned), linked']);
+    expect(linkOnly.nothing).toBeNull();
+    const empty = recountResultSummary({ ...base, cycleCountId: null, countNumber: null, created: false, replay: true });
+    expect(empty.nothing).toBe(RECOUNT_REPLAY_UNKNOWN_COPY);
+    expect(empty.nothing).not.toBe('No count was started.');
   });
 });

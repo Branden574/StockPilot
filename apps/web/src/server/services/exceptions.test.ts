@@ -807,11 +807,16 @@ describe('evaluateForSync — count_variance (F1-2)', () => {
   });
 
   it('reads through _latest_count_lines for THIS org only, paged by item_id', async () => {
-    const { stub } = await evaluateCounts([countLine({ item: 'a' })]);
+    const { stub, e } = await evaluateCounts([countLine({ item: 'a' })]);
     const calls = stub.rpcCalls.filter((c) => c.name === '_latest_count_lines');
     expect(calls).toHaveLength(1);
     // The p_org argument is this read's tenant boundary under the service role.
-    expect(calls[0]!.args).toEqual({ p_org: ORG, p_item_ids: null });
+    // p_as_of (review finding, F1-2): only counts completed by the moment this
+    // evaluation began, the same bound exceptions_sync closes recount
+    // pointers by. Without it, a recount posted while the evaluation ran
+    // resolved its exception before the sync closed the recount. Mutation
+    // caught: drop p_as_of.
+    expect(calls[0]!.args).toEqual({ p_org: ORG, p_item_ids: null, p_as_of: e.evaluatedAt });
   });
 
   it('emits every variance past the 1000-row page (no per-rule cap)', async () => {

@@ -4,10 +4,11 @@ import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, View } fro
 
 import {
   RECOUNT_COUNTS_TOTAL_COPY,
-  RECOUNT_MANAGER_ONLY_COPY,
   recountDisabledReason,
   recountResultSummary,
+  recountUnavailableCopy,
   type RecountResultSummary,
+  type RecountUnavailableReason,
 } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
@@ -80,7 +81,12 @@ type Members =
 type Targets =
   | { kind: 'none' }
   | { kind: 'loading' }
-  | { kind: 'ready'; occurrenceIds: string[]; canRecount: boolean }
+  | {
+      kind: 'ready';
+      occurrenceIds: string[];
+      canRecount: boolean;
+      unavailableReason: RecountUnavailableReason | null;
+    }
   | { kind: 'failed' };
 
 function SheetContent({
@@ -147,6 +153,7 @@ function SheetContent({
         setTargets({
           kind: 'ready',
           canRecount: list.canRecount,
+          unavailableReason: list.recountUnavailableReason,
           occurrenceIds: list.occurrences.filter((o) => o.canRecount).map((o) => o.id),
         });
       } catch {
@@ -161,7 +168,8 @@ function SheetContent({
   const occurrenceIds =
     targets.kind === 'ready' ? targets.occurrenceIds : targets.kind === 'none' ? [...givenOccurrenceIds] : [];
   const itemIds = itemId ? [itemId] : [];
-  const blocked = targets.kind === 'ready' && !targets.canRecount ? RECOUNT_MANAGER_ONLY_COPY : null;
+  const blocked =
+    targets.kind === 'ready' && !targets.canRecount ? recountUnavailableCopy(targets.unavailableReason) : null;
   // Offline first among the reasons that can change: reconnecting enables it.
   const disabledReason = blocked ?? recountDisabledReason({ canRecount: true, online });
   const preparing = targets.kind === 'loading' && online;
