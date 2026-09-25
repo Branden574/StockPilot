@@ -1,7 +1,13 @@
 import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeServiceContext, makeSupabaseStub, servedLikePostgrest, type MockCall } from '@/test/supabase-mock';
+import {
+  callArgs,
+  makeServiceContext,
+  makeSupabaseStub,
+  servedLikePostgrest,
+  type MockCall,
+} from '@/test/supabase-mock';
 
 /**
  * WHAT THE NEW RENTAL PAGE ASKS FOR ITS PHOTOS.
@@ -18,15 +24,26 @@ import { makeServiceContext, makeSupabaseStub, servedLikePostgrest, type MockCal
  * so the numbers below are the before/after cost of one page load.
  */
 
-const { apiCtx, cacheReads, createSignedUrlsMock, createSignedUrlMock } = vi.hoisted(() => ({
-  apiCtx: { current: null as unknown },
-  cacheReads: { count: 0 },
-  createSignedUrlsMock: vi.fn(),
-  createSignedUrlMock: vi.fn(),
-}));
+const { apiCtx, cacheReads, createSignedUrlsMock, createSignedUrlMock, reportError, ceiling } =
+  vi.hoisted(() => ({
+    apiCtx: { current: null as unknown },
+    cacheReads: { count: 0 },
+    createSignedUrlsMock: vi.fn(),
+    createSignedUrlMock: vi.fn(),
+    reportError: vi.fn(async (_err: unknown, _context: unknown) => undefined),
+    // The loader's CATALOG_ROW_CEILING, lowered by the ceiling test.
+    ceiling: { value: 10_000 },
+  }));
 
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn(async () => apiCtx.current) }));
-vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
+// The route imports only CATALOG_ROW_CEILING from the loader. A getter, so a
+// test can lower it (the route reads the binding on every request).
+vi.mock('@/server/loaders/orders-new-catalog', () => ({
+  get CATALOG_ROW_CEILING() {
+    return ceiling.value;
+  },
+}));
 // Every lookup of a per-path cached signed URL goes through unstable_cache:
 // count them (a cold cache pays one Data Cache round trip for each).
 vi.mock('next/cache', () => ({
@@ -173,6 +190,40 @@ function cost(stub: ReturnType<typeof makeSupabaseStub>, bytes: number, urls: nu
   };
 }
 
+/**
+ * `n` rental items, each with a photo. Names repeat in pairs and the ids run
+ * against the names, so only name THEN id puts them in one order. Every run
+ * gets its own id prefix (the service's in-process URL memo, see warehouse()).
+ */
+let rentalRun = 0;
+function rentalRows(n: number): Fixture[] {
+  rentalRun += 1;
+  const prefix = `f${String(rentalRun).padStart(7, '0')}`;
+  return Array.from({ length: n }, (_, i) => ({
+    id: `${prefix}-0000-4000-8000-${String(n - i).padStart(12, '0')}`,
+    organization_id: ORG,
+    warehouse_id: WH,
+    name: `Rental ${String(Math.floor(i / 2)).padStart(4, '0')}`,
+    status: 'active',
+    deleted_at: null,
+    is_rental: true,
+    is_bundle: null,
+    custom_fields: {},
+  }));
+}
+
+/** A primary photo for each of `rows`. */
+function photosFor(rows: Fixture[]) {
+  return rows.map((r, i) => ({
+    id: `img-${i}`,
+    organization_id: ORG,
+    item_id: r.id,
+    storage_path: `${ORG}/${r.id}/master.webp`,
+    is_primary: true,
+    sort_order: 0,
+  }));
+}
+
 /** The route's own item read: the first inventory_items query it made. */
 function firstChain(stub: ReturnType<typeof makeSupabaseStub>) {
   return {
@@ -184,6 +235,8 @@ function firstChain(stub: ReturnType<typeof makeSupabaseStub>) {
 beforeEach(() => {
   vi.resetModules();
   cacheReads.count = 0;
+  ceiling.value = 10_000;
+  reportError.mockClear();
   createSignedUrlMock.mockReset();
   createSignedUrlsMock.mockReset();
   createSignedUrlsMock.mockImplementation(async (paths: string[]) => ({
@@ -299,29 +352,10 @@ describe('GET /api/orders/catalog-thumbnails', () => {
   });
 
   it('rentalsOnly=1: more than 1000 rental items are all read and signed (no 500-row limit)', async () => {
-    const id = (i: number) => `f${'0'.repeat(7)}-0000-4000-8000-${String(i).padStart(12, '0')}`;
-    const rows: Fixture[] = Array.from({ length: 1234 }, (_, i) => ({
-      id: id(i),
-      organization_id: ORG,
-      warehouse_id: WH,
-      name: `Rental ${String(i).padStart(4, '0')}`,
-      status: 'active',
-      deleted_at: null,
-      is_rental: true,
-      is_bundle: null,
-      custom_fields: {},
-    }));
-    const images = rows.map((r, i) => ({
-      id: `img-${i}`,
-      organization_id: ORG,
-      item_id: r.id,
-      storage_path: `${ORG}/${r.id}/master.webp`,
-      is_primary: true,
-      sort_order: 0,
-    }));
+    const rows = rentalRows(1234);
     const stub = makeSupabaseStub({
       'inventory_items.select': servedItems(rows),
-      'item_images.select': servedLikePostgrest(images),
+      'item_images.select': servedLikePostgrest(photosFor(rows)),
     });
     apiCtx.current = makeServiceContext(stub.client, { organizationId: ORG });
 
@@ -342,6 +376,74 @@ describe('GET /api/orders/catalog-thumbnails', () => {
     expect(body).toEqual({ error: 'internal_error', message: 'Could not load rental item photos.' });
     expect(stub.fromCalls).not.toContain('item_images');
     expect(createSignedUrlsMock).not.toHaveBeenCalled();
+  });
+
+  // The catch used to discard the error: a 500 with nothing in the server log
+  // to say why. The cause goes to the reporter; the answer stays generic.
+  it('rentalsOnly=1: a failed item read reports its cause server-side, and only there', async () => {
+    setup('g', { itemsError: true });
+    const { status, body } = await get(`warehouseId=${WH}&rentalsOnly=1`);
+    expect(status).toBe(500);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [err, context] = reportError.mock.calls[0]!;
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain('fetch failed');
+    expect(context).toEqual({
+      tag: 'orders.catalog-thumbnails.rentals',
+      organizationId: ORG,
+      extra: { warehouseId: WH },
+    });
+    expect(JSON.stringify(body)).not.toContain('fetch failed');
+  });
+
+  it('rentalsOnly=1: a page that fails AFTER the first answers 500, never the first page signed', async () => {
+    const rows = rentalRows(1234);
+    const serve = servedItems(rows);
+    const stub = makeSupabaseStub({
+      'inventory_items.select': (call: MockCall) =>
+        callArgs(call, 'range')?.[0] === 1000
+          ? { data: null, error: { message: 'upstream timeout' } }
+          : serve(call),
+      'item_images.select': servedLikePostgrest(photosFor(rows)),
+    });
+    apiCtx.current = makeServiceContext(stub.client, { organizationId: ORG });
+
+    const { status, body } = await get(`warehouseId=${WH}&rentalsOnly=1`);
+
+    expect(status).toBe(500);
+    expect(body).toEqual({ error: 'internal_error', message: 'Could not load rental item photos.' });
+    expect(stub.chainArgsAll.get('inventory_items.select')?.map((args) => args.at(-1))).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ]);
+    expect(createSignedUrlsMock).not.toHaveBeenCalled();
+    expect((reportError.mock.calls[0]?.[0] as Error | undefined)?.message).toContain('upstream timeout');
+  });
+
+  it('rentalsOnly=1: signing stops at CATALOG_ROW_CEILING, the first rows by name then id', async () => {
+    ceiling.value = 1500;
+    const rows = rentalRows(2000);
+    const stub = makeSupabaseStub({
+      'inventory_items.select': servedItems(rows),
+      'item_images.select': servedLikePostgrest(photosFor(rows)),
+    });
+    apiCtx.current = makeServiceContext(stub.client, { organizationId: ORG });
+
+    const { status, body } = await get(`warehouseId=${WH}&rentalsOnly=1`);
+
+    expect(status).toBe(200);
+    // The last window is cut to the ceiling, and nothing past it is asked for.
+    expect(stub.chainArgsAll.get('inventory_items.select')?.map((args) => args.at(-1))).toEqual([
+      [0, 999],
+      [1000, 1499],
+    ]);
+    const firstByNameThenId = [...rows]
+      .sort((a, b) => (a.name === b.name ? (a.id < b.id ? -1 : 1) : a.name < b.name ? -1 : 1))
+      .slice(0, 1500)
+      .map((r) => r.id);
+    expect(Object.keys(body.urls!).sort()).toEqual([...firstByNameThenId].sort());
+    const signed = createSignedUrlsMock.mock.calls.reduce((n, [paths]) => n + (paths as string[]).length, 0);
+    expect(signed).toBe(1500);
   });
 
   it('asks for a warehouse and a session', async () => {

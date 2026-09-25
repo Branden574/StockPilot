@@ -3,8 +3,9 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { rentalItemsPredicate } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { CATALOG_ROW_CEILING } from '@/server/loaders/orders-new-catalog';
-import type { ServiceContext } from '@/server/services/context';
+import { ServiceError, type ServiceContext } from '@/server/services/context';
 import { ItemImagesService } from '@/server/services/item-images';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
@@ -32,7 +33,8 @@ export const dynamic = 'force-dynamic';
  *     orders picker's set. Unchanged, request for request.
  *   • `rentalsOnly=1`: ONLY rental items, exactly the rows the New rental
  *     page lists (/dashboard/rentals/new: active, is_rental, not deleted,
- *     by name, first 500). The rentals form sends this.
+ *     by name then id, every row up to CATALOG_ROW_CEILING, read in
+ *     1000-row pages). The rentals form sends this.
  *   • `includeRentals=1`, LEGACY: what the rentals form sent before
  *     rentalsOnly. It only DROPPED the is_rental=false filter, so it read
  *     every orderable item in the warehouse (up to 500) and signed a photo
@@ -84,10 +86,19 @@ export async function GET(req: NextRequest) {
             .range(from, to),
         { cap: CATALOG_ROW_CEILING },
       );
-    } catch {
+    } catch (e) {
       // A failed read is not "no photos": answer an error so the page's hook
       // retries (lib/use-catalog-thumbnails.ts), instead of keeping an empty
-      // map for the session.
+      // map for the session. Never the error's own text (S13): the detail
+      // goes to the reporter.
+      void reportError(
+        e instanceof ServiceError ? new Error(e.internalDetail ?? e.message) : e,
+        {
+          tag: 'orders.catalog-thumbnails.rentals',
+          organizationId: ctx.organizationId,
+          extra: { warehouseId },
+        },
+      );
       return NextResponse.json(
         { error: 'internal_error', message: 'Could not load rental item photos.' },
         { status: 500 },

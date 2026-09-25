@@ -103,9 +103,27 @@ describe('rentals/new.tsx — goes through the service, not the table (SP-012)',
 describe('rentals/new.tsx — item selection (SP-012)', () => {
   it('picks real rental items rather than free-text notes', () => {
     // createRentalSchema requires lines.min(1); a notes-only screen cannot
-    // satisfy it, and a rental with no lines is the original defect.
-    expect(source).toMatch(/is_rental/);
-    expect(source).toMatch(/inventory_items/);
+    // satisfy it, and a rental with no lines is the original defect. The read
+    // lives in lib/rental-items.ts (its test pins the table and every filter).
+    expect(code()).toMatch(/readRentalPickerItems\(supabase, orgId, warehouseId\)/);
+    const lib = readFileSync(path.resolve(__dirname, 'rental-items.ts'), 'utf8');
+    expect(lib).toMatch(/idReadSelect\(client, 'inventory_items'/);
+    expect(lib).toMatch(/\.eq\('is_rental', rentalItemsPredicate\.isRental\)/);
+  });
+
+  // 2026-09-25: the read was ONE request with `.limit(500)` by name, and the
+  // search runs over the rows the screen holds, so a rental item past row 500
+  // could not be found on the phone while the web New rental page listed it.
+  it('reads every rental item through the paged reader, never one limited request', () => {
+    const body = itemsEffect();
+    expect(body).toContain(
+      'const read = await settleIdBatchRead(readRentalPickerItems(supabase, orgId, warehouseId));',
+    );
+    const src = code();
+    expect(src).not.toMatch(/\.limit\(/);
+    expect(src).not.toMatch(/from\(\s*'inventory_items'\s*\)/);
+    // The search filters what was read, not a server query of its own.
+    expect(src).toMatch(/const visibleItems = React\.useMemo\(\(\) => \{[\s\S]*?return items\.filter\(/);
   });
 
   it('reads open reservations so availability shown matches what the server enforces', () => {
@@ -149,11 +167,12 @@ describe('rentals/new.tsx — a failed read blocks the picker, never reads as av
 
   it('a failed items read sets its own error instead of "No rental items in this warehouse"', () => {
     const body = itemsEffect();
-    expect(body).toContain('const { data, error, status } = await supabase');
-    // readErrorMessage: never empty. A 502 or 504 with an empty body gives an
-    // empty error.message, which left the failure with no reason under it.
+    // Any failed page (the first or a later one) rejects readRentalPickerItems,
+    // and the settled failure lands here with its reason, which is never
+    // empty: a 502 or 504 with an empty body says its status
+    // (readErrorMessage, in fetchAllRows).
     expect(body).toMatch(
-      /if \(error\) \{[\s\S]*?setItemsError\(readErrorMessage\(error, status\)\);[\s\S]*?return;/,
+      /if \(!read\.ok\) \{[\s\S]*?setItems\(\[\]\);[\s\S]*?setItemsError\(read\.message\);[\s\S]*?return;\s*\}\s*const rows = read\.value;/,
     );
   });
 
