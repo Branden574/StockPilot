@@ -17,10 +17,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * a manager-only Check now.
  */
 
-const { list, ctor } = vi.hoisted(() => {
+const { list, ctor, syncOrg } = vi.hoisted(() => {
   const list = vi.fn();
   const ctor = vi.fn();
-  return { list, ctor };
+  // Any call fails the render: a page view must never run a sync, directly
+  // or through the scheduler (owner decision F1 Q9).
+  const syncOrg = vi.fn(async () => {
+    throw new Error('the Exceptions page must never sync');
+  });
+  return { list, ctor, syncOrg };
 });
 const scheduleExceptionSync = vi.hoisted(() => vi.fn());
 
@@ -43,7 +48,7 @@ vi.mock('@/server/services/exception-occurrences', () => ({
       ctor(ctx);
     }
     list = list;
-    static syncOrg = vi.fn();
+    static syncOrg = syncOrg;
   },
 }));
 vi.mock('@/server/actions/exceptions', () => ({
@@ -107,6 +112,8 @@ function listResult(o: Record<string, unknown> = {}) {
     truncated: false,
     syncState: SYNCED,
     canCheckNow: false,
+    unrecognized: 0,
+    timeZone: 'America/Los_Angeles',
     ...o,
   };
 }
@@ -151,6 +158,28 @@ describe('Exceptions list page', () => {
       'One check could not complete on the last run: Promised more than is owned. What it would show is unknown, not clean.',
     );
     expect(screen.queryByText('Nothing needs attention')).not.toBeInTheDocument();
+  });
+
+  it('a failed rule this build cannot name still withholds the all-clear', async () => {
+    list.mockResolvedValue(listResult({ syncState: { ...SYNCED, unrecognizedUncheckedRules: 1 } }));
+    await renderPage();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'One check could not complete on the last run: 1 check this version cannot name.',
+    );
+    expect(screen.queryByText('Nothing needs attention')).not.toBeInTheDocument();
+  });
+
+  it('open rows of a rule this build cannot word are counted, and the all-clear is withheld', async () => {
+    // After a rollback, rows a newer build wrote (count_variance) are still
+    // open. Mutation caught: rendering the all-clear because every row the
+    // list could word was filtered out.
+    list.mockResolvedValue(listResult({ unrecognized: 2 }));
+    await renderPage();
+    expect(screen.getByTestId('exceptions-unrecognized')).toHaveTextContent(
+      '2 more open exceptions cannot be shown in this version. Update the app, or reload the page, to see them.',
+    );
+    expect(screen.queryByText('Nothing needs attention')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open (2)' })).toBeInTheDocument();
   });
 
   it('with every check complete and nothing open, says nothing needs attention, with Checked at', async () => {
@@ -214,6 +243,9 @@ describe('Exceptions list page', () => {
     expect(list).toHaveBeenCalledTimes(1);
     expect(list).toHaveBeenCalledWith({ status: 'open' });
     expect(scheduleExceptionSync).not.toHaveBeenCalled();
+    // Mutation caught: a bounded wait on ExceptionOccurrencesService.syncOrg
+    // before the read (the plan's original page-view sync, which Q9 removed).
+    expect(syncOrg).not.toHaveBeenCalled();
   });
 
   it('the Resolved tab reads the resolved list and shows each row\'s reason and time', async () => {

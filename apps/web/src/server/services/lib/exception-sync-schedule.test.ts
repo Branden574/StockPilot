@@ -42,6 +42,17 @@ describe('scheduleExceptionSync', () => {
     expect(syncOrg).toHaveBeenCalledWith('org-1', { force: true, reason: 'cycle_count.post' });
   });
 
+  it('Check now schedules an UNFORCED sync, so one that landed in between makes it a no-op', async () => {
+    const tasks: Array<() => unknown> = [];
+    afterMock.mockImplementation((task) => {
+      tasks.push(task as () => unknown);
+    });
+    const schedule = await realScheduler();
+    schedule('org-1', 'check_now', { force: false });
+    await tasks[0]!();
+    expect(syncOrg).toHaveBeenCalledWith('org-1', { force: false, reason: 'check_now' });
+  });
+
   it('outside a request it runs without throwing, and a failing sync never escapes', async () => {
     afterMock.mockImplementation(() => {
       throw new Error('`after` was called outside a request scope.');

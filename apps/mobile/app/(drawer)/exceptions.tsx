@@ -6,6 +6,7 @@ import { FlatList, Pressable, RefreshControl, StyleSheet, View, ActivityIndicato
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
+  EXCEPTION_ALL_CLEAR_BODY,
   EXCEPTION_ALL_CLEAR_TITLE,
   EXCEPTION_FIRST_CHECK_PENDING_COPY,
   EXCEPTION_LIST_UNAVAILABLE_COPY,
@@ -14,6 +15,9 @@ import {
   EXCEPTION_RULES,
   EXCEPTION_SYNC_INTERVAL_MINUTES,
   describeOccurrence,
+  exceptionCheckNowCopy,
+  exceptionUncheckedRulesCopy,
+  exceptionUnrecognizedCopy,
   groupOccurrences,
   occurrenceState,
   occurrenceStateLabel,
@@ -30,6 +34,7 @@ import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import {
   EXCEPTIONS_OFFLINE_NOTHING_LOADED_COPY,
+  describeExceptionsRequestError,
   exceptionTimeLabel,
   isOfflineState,
   listExceptions,
@@ -59,7 +64,12 @@ import { useTheme } from '@/lib/use-theme';
  * this app session last loaded is shown "as of" the time it arrived; with none
  * loaded, the screen says it needs a connection. Words come from core
  * (describeOccurrence, occurrenceStateLabel, the EXCEPTION_* copy), so the phone
- * and the browser read the same for the same row.
+ * and the browser read the same for the same row, and times are printed in the
+ * org's time zone (the server sends it), as the web prints them.
+ *
+ * Rows of a rule this build cannot word (a newer server's rule, while this
+ * bundle waits for its OTA) are counted, never silently dropped: while any
+ * exist, or any check could not complete, the all-clear state is withheld.
  */
 
 /** What the screen shows. `key` is the workspace and tab it answers for: a
@@ -115,7 +125,8 @@ export default function ExceptionsScreen() {
       setView({ kind: 'live', key, list, receivedAt: receivedAt.toISOString() });
     } catch (e) {
       if (seq !== seqRef.current) return;
-      const message = e instanceof Error && e.message ? e.message : EXCEPTION_LIST_UNAVAILABLE_COPY;
+      // Worded by status for a 429 or 5xx, so a bare code never shows.
+      const message = describeExceptionsRequestError(e, 'Pull down to try again.');
       // A failed read is never an empty list. A list this session loaded
       // earlier stays readable under the failure, labelled with its time.
       const kept = recalledList(userId, orgId, status);
@@ -126,7 +137,7 @@ export default function ExceptionsScreen() {
               key,
               list: kept.list,
               receivedAt: kept.receivedAt,
-              banner: `${EXCEPTION_LIST_UNAVAILABLE_COPY} Showing the list as of ${exceptionTimeLabel(kept.receivedAt)}.`,
+              banner: `${EXCEPTION_LIST_UNAVAILABLE_COPY} Showing the list as of ${exceptionTimeLabel(kept.receivedAt, kept.list.timeZone)}.`,
             }
           : { kind: 'error', key, message: `${EXCEPTION_LIST_UNAVAILABLE_COPY} ${message}` },
       );
@@ -159,7 +170,7 @@ export default function ExceptionsScreen() {
           key: viewKey,
           list: kept.list,
           receivedAt: kept.receivedAt,
-          banner: offlineAsOfCopy(kept.receivedAt),
+          banner: offlineAsOfCopy(kept.receivedAt, kept.list.timeZone),
         }
       : { kind: 'error', key: viewKey, message: EXCEPTIONS_OFFLINE_NOTHING_LOADED_COPY };
   } else {
@@ -177,13 +188,10 @@ export default function ExceptionsScreen() {
     setCheckNote(null);
     try {
       const res = await requestExceptionCheck();
-      setCheckNote(
-        res.scheduled
-          ? 'Check started. Pull down in a minute to see the result.'
-          : `Checked less than a minute ago. You can check again in ${res.retryAfterSeconds} seconds.`,
-      );
+      // Core words it, so the phone and the web say the same thing.
+      setCheckNote(exceptionCheckNowCopy(res));
     } catch (e) {
-      setCheckNote(e instanceof Error && e.message ? e.message : 'Could not start a check. Try again.');
+      setCheckNote(describeExceptionsRequestError(e, 'Could not start a check. Try again.'));
     } finally {
       setChecking(false);
     }
@@ -197,11 +205,19 @@ export default function ExceptionsScreen() {
 
   const list = view.kind === 'live' || view.kind === 'remembered' ? view.list : null;
   const items = list ? listItems(list) : [];
+  const timeZone = list?.timeZone ?? null;
+  // The same sentence the web banner shows (core). Null when every check
+  // completed; a rule this build cannot name counts as not completed.
   const unchecked = list?.syncState
-    ? [...new Set([...list.syncState.failedRules, ...list.syncState.truncatedRules])].map(
-        (r) => EXCEPTION_RULES[r].label,
+    ? exceptionUncheckedRulesCopy(
+        [...new Set([...list.syncState.failedRules, ...list.syncState.truncatedRules])].map(
+          (r) => EXCEPTION_RULES[r].label,
+        ),
+        list.syncState.unrecognizedUncheckedRules,
       )
-    : [];
+    : null;
+  // Open rows this build cannot word: shown as a count, never as all clear.
+  const unrecognized = list && list.status === 'open' ? exceptionUnrecognizedCopy(list.unrecognized) : null;
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
@@ -281,14 +297,19 @@ export default function ExceptionsScreen() {
                 </Card>
               ) : (
                 <Body size={12.5} muted>
-                  {`Checked at ${exceptionTimeLabel(list!.syncState.lastSyncedAt)}. The system checks every ${EXCEPTION_SYNC_INTERVAL_MINUTES} minutes and after each posted or cancelled count.`}
+                  {`Checked at ${exceptionTimeLabel(list!.syncState.lastSyncedAt, timeZone)}. The system checks every ${EXCEPTION_SYNC_INTERVAL_MINUTES} minutes and after each posted or cancelled count.`}
                 </Body>
               )}
-              {unchecked.length > 0 ? (
+              {unchecked ? (
                 <Card padding={12}>
                   <Body size={13.5} accessibilityRole="alert">
-                    {`${unchecked.length === 1 ? 'One check' : `${unchecked.length} checks`} could not complete on the last run: ${unchecked.join(', ')}. What ${unchecked.length === 1 ? 'it' : 'they'} would show is unknown, not clean.`}
+                    {unchecked}
                   </Body>
+                </Card>
+              ) : null}
+              {list!.syncState !== null && unrecognized ? (
+                <Card padding={12}>
+                  <Body size={13.5}>{unrecognized}</Body>
                 </Card>
               ) : null}
               {list!.truncated ? (
@@ -299,15 +320,16 @@ export default function ExceptionsScreen() {
             </View>
           }
           ListEmptyComponent={
-            list!.syncState === null || unchecked.length > 0 ? null : (
+            // Never the all-clear while a check could not complete or an
+            // open row could not be shown: either way something is unknown
+            // or open.
+            list!.syncState === null || unchecked !== null || unrecognized !== null ? null : (
               <View style={styles.empty}>
                 <Display size={18}>
                   {status === 'open' ? EXCEPTION_ALL_CLEAR_TITLE : 'Nothing resolved'}
                 </Display>
                 <Body muted style={{ marginTop: 6, textAlign: 'center', maxWidth: 320 }}>
-                  {status === 'open'
-                    ? 'No archived locations holding stock, nothing over-promised, nothing stranded in Staging or Unplaced, and every rack label agrees with where the stock is.'
-                    : EXCEPTION_NONE_RESOLVED_COPY}
+                  {status === 'open' ? EXCEPTION_ALL_CLEAR_BODY : EXCEPTION_NONE_RESOLVED_COPY}
                 </Body>
               </View>
             )
@@ -330,6 +352,7 @@ export default function ExceptionsScreen() {
                   },
                   list!.syncState?.lastEvaluatedAt ?? null,
                 )}
+                timeZone={timeZone}
                 onPress={() => router.push(`/exceptions/${item.occurrence.id}` as Href)}
               />
             )
@@ -399,12 +422,14 @@ function OccurrenceRow({
   title,
   detail,
   state,
+  timeZone,
   onPress,
 }: {
   occurrence: MobileExceptionOccurrence;
   title: string;
   detail: string;
   state: OccurrenceState;
+  timeZone: string | null;
   onPress: () => void;
 }) {
   const { c } = useTheme();
@@ -435,10 +460,10 @@ function OccurrenceRow({
         </View>
         <Mono size={11} color={c.ink4} style={{ marginTop: 8 }}>
           {o.resolvedAt
-            ? `Resolved ${exceptionTimeLabel(o.resolvedAt)}`
+            ? `Resolved ${exceptionTimeLabel(o.resolvedAt, timeZone)}`
             : o.presentWhenTrackingBegan
               ? 'Already present when tracking began'
-              : `First seen ${exceptionTimeLabel(o.firstSeenAt)}`}
+              : `First seen ${exceptionTimeLabel(o.firstSeenAt, timeZone)}`}
         </Mono>
       </Card>
     </Pressable>

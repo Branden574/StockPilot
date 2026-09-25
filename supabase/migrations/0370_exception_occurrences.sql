@@ -24,8 +24,10 @@
 --   5. exception_sync_state: one row per org: when tracking began, the last
 --      evaluation the store reflects, and which rules were complete, failed or
 --      truncated in it (the page's "Checked at" and its banners).
---   6. _exc_occurrence_visible(): THE visibility rule, shared by the RLS
---      policy and every RPC re-check.
+--   6. _exc_occurrence_visible(): THE visibility rule for one row (the RPC
+--      re-checks), and the SELECT policy, the same rule written in a form the
+--      planner evaluates once per query instead of once per row. A pgTAP
+--      test holds the two equal for every reader.
 --   7. exceptions_sync(): the only writer that opens or resolves an
 --      occurrence. service_role only (the cron and the post/cancel follow-up).
 --   8. exception_occurrence_act(): acknowledge / note. The only user write.
@@ -58,8 +60,18 @@
 -- ── RETRYABLE SQLSTATES ────────────────────────────────────────────────────
 -- Never 40001/40P01 (0367: PostgREST < 16 retries 40001 forever). Refusals are
 -- P0001 with a stable hint, or 22023 for a bad argument, P0002 for "not found
--- or not visible", 42501 for "not allowed". A lock wait past lock_timeout
--- (8 s) is 55P03, which the service treats as "try the next run".
+-- or not visible", 42501 for "not allowed". A wait for the org's sync lock
+-- past lock_timeout (5 s) is 55P03, which the service treats as "busy: the
+-- next run applies".
+--
+-- WHY 5 s AND NOT 8 s: the whole RPC, lock wait included, runs under the API
+-- roles' statement_timeout of 8 s (authenticator's setting; service_role has
+-- none of its own, so it inherits 8 s measured from the START of the
+-- statement). With lock_timeout at 8 s the statement timeout always fired
+-- first, so a sync queued behind another one ended as 57014 ("canceling
+-- statement due to statement timeout") and was reported as a failure instead
+-- of "busy". 5 s leaves the 55P03 answer room to arrive first. A 57014 is
+-- still a real failure: the sync itself ran too long.
 --
 -- ── positive_since AND THE LEDGER GUARDS ───────────────────────────────────
 -- trg_item_stock_levels_positive_since is BEFORE INSERT OR UPDATE OF quantity,
@@ -368,10 +380,23 @@ alter table public.exception_sync_state          enable row level security;
 -- charter and category scoping: caller_can_read_item is the
 -- inventory_items_select predicate) and, for a holding rule, who can see that
 -- holding: the item_stock_levels_select rule (a manager, or a location with no
--- warehouse, or one in the caller's warehouses). The policy and every RPC
--- re-check call this one function (pattern #26: one copy). SECURITY DEFINER
--- so the location read is not itself filtered; it answers only for the
--- caller (auth.uid() inside every helper).
+-- warehouse, or one in the caller's warehouses).
+--
+-- It is written twice, and a pgTAP test holds the two equal for every reader
+-- and every row (pattern #26: two copies are allowed only with a test that
+-- they agree):
+--   * _exc_occurrence_visible(): one row at a time, for the RPC re-checks
+--     (exception_occurrence_act locks one row, so per-row cost is nothing).
+--     SECURITY DEFINER so the location read is not itself filtered; it
+--     answers only for the caller (auth.uid() inside every helper).
+--   * the SELECT policy: the same rule as hashed sets the planner computes
+--     ONCE per query (pattern #19). A policy that called the function per row
+--     cost about 0.65 ms a row, since a SECURITY DEFINER function cannot be
+--     inlined: with 5,000 open rows each 1,000-row page of the Open list took
+--     about 3 s (the Seq Scan ran the function on every row before the sort),
+--     and the list reads five pages. The hashed form reads the same page in
+--     a few milliseconds (under 100 ms through PostgREST with the list's
+--     embeds, measured locally at 1,000, 3,000 and 5,000 open rows).
 create or replace function public._exc_occurrence_visible(p_org uuid, p_item uuid, p_location uuid)
 returns boolean
 language sql
@@ -398,12 +423,62 @@ comment on function public._exc_occurrence_visible(uuid, uuid, uuid) is
   'Whether the CALLER may see an exception occurrence (0370): org member, can '
   'read the item (caller_can_read_item), and for a holding rule can see the '
   'holding (manager, org-level location, or a location in my_warehouse_ids). '
-  'Mirrors inventory_items_select and item_stock_levels_select.';
+  'Mirrors inventory_items_select and item_stock_levels_select. The SELECT '
+  'policy on exception_occurrences states the same rule as hashed sets.';
 
+-- The locations whose holdings the caller may see under
+-- item_stock_levels_select, other than through the manager role: a location
+-- in one of the caller's warehouses, or an org-level location (no warehouse)
+-- in an org the caller belongs to. Archived locations included (orphaned
+-- stock sits at them). Ids only, and only in the caller's own orgs, whose
+-- locations locations_select already shows to every member.
+create or replace function public.rls_exc_holding_location_ids()
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select l.id
+    from public.locations l
+   where (select auth.uid()) is not null
+     and l.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
+  union all
+  select l.id
+    from public.locations l
+   where (select auth.uid()) is not null
+     and l.warehouse_id is null
+     and l.organization_id in (select public.rls_member_org_ids());
+$$;
+
+revoke all on function public.rls_exc_holding_location_ids() from public, anon;
+grant execute on function public.rls_exc_holding_location_ids() to authenticated;
+
+comment on function public.rls_exc_holding_location_ids() is
+  'RLS helper (0370): location ids whose holdings the caller may see without '
+  'the manager role (item_stock_levels_select): locations in my_warehouse_ids, '
+  'and org-level locations in the caller''s orgs. For a hashed IN probe in the '
+  'exception_occurrences SELECT policy.';
+
+-- _exc_occurrence_visible, as sets computed once per query:
+--   is_org_member(org)        -> organization_id in rls_member_org_ids()
+--   caller_can_read_item(item) -> EXISTS on inventory_items under ITS OWN
+--                                 policy (inventory_items_select is the only
+--                                 SELECT policy there, and caller_can_read_item
+--                                 is that policy's predicate; the rls_* sets
+--                                 inside it are hashed once)
+--   has_org_role(org,manager) -> organization_id in rls_manager_org_ids()
+--   the location branch       -> location_id in rls_exc_holding_location_ids()
 drop policy if exists exception_occurrences_select on public.exception_occurrences;
 create policy exception_occurrences_select on public.exception_occurrences
   for select to authenticated
-  using (public._exc_occurrence_visible(organization_id, item_id, location_id));
+  using (
+    organization_id in (select public.rls_member_org_ids())
+    and exists (
+      select 1 from public.inventory_items i where i.id = exception_occurrences.item_id)
+    and (location_id is null
+         or organization_id in (select public.rls_manager_org_ids())
+         or location_id in (select public.rls_exc_holding_location_ids())));
 
 -- Events are visible exactly where their occurrence is: the subquery on
 -- exception_occurrences is itself filtered by the policy above.
@@ -438,7 +513,9 @@ create policy exception_sync_state_select on public.exception_sync_state
 -- Returns {"skipped": true, "lastEvaluatedAt": ...} when an evaluation at or
 -- after p_evaluated_at was already applied, else
 -- {"skipped": false, "raised": n, "seen": n, "resolved": n,
---  "recountsClosed": n, "dropped": n}.
+--  "recountsClosed": n, "dropped": n, "factsOmitted": n}.
+-- factsOmitted counts present entries whose facts were too large to store
+-- (see step 2); their rows are applied with empty facts.
 create or replace function public.exceptions_sync(
   p_org               uuid,
   p_evaluated_at      timestamptz,
@@ -452,13 +529,15 @@ returns jsonb
 language plpgsql
 security invoker
 set search_path = public
-set lock_timeout = '8s'
+set lock_timeout = '5s'
 as $$
 declare
   c_rules   constant text[] := array['orphaned_stock', 'over_reserved', 'stale_staging',
                                      'long_unplaced', 'label_mismatch', 'count_variance'];
   c_holding constant text[] := array['orphaned_stock', 'stale_staging', 'long_unplaced'];
   c_uuid    constant text   := '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$';
+  -- The largest facts object a row may hold (exc_occ_facts_shape).
+  c_facts_max constant integer := 16384;
   v_present_in  jsonb := coalesce(p_present, '[]'::jsonb);
   v_hold_in     jsonb := coalesce(p_hold, '[]'::jsonb);
   v_complete_in text[] := coalesce(p_complete_rules, '{}');
@@ -470,6 +549,7 @@ declare
   v_hold        jsonb;
   v_dropped     integer := 0;
   v_dropped_h   integer := 0;
+  v_omitted     integer := 0;
   v_new         integer;
   v_top         bigint;
   v_closed      integer := 0;
@@ -547,7 +627,17 @@ begin
   -- An entry whose item or location is not in p_org is dropped and counted;
   -- the store never holds a cross-org reference. The first entry for an
   -- identity wins; entries keep the evaluator's order (it numbers rows).
-  with raw as (
+  --
+  -- A facts object larger than a row may hold is replaced by an empty one
+  -- and counted (factsOmitted). The evaluator clips every name it copies, so
+  -- this is a backstop, but a necessary one: item names, SKUs and labels have
+  -- no length limit in the database, and one oversized facts object would
+  -- otherwise fail the whole sync with 23514, so no rule would open or
+  -- resolve anything for the org until someone found that item. The row
+  -- itself is still raised, seen and resolved; only its stored words are
+  -- dropped (describeOccurrence renders an empty object, and the page shows
+  -- the item's live name).
+  with raw0 as (
     select x.e->>'rule' as rule,
            (x.e->>'itemId')::uuid as item_id,
            (x.e->>'locationId')::uuid as location_id,
@@ -555,6 +645,13 @@ begin
            (x.e->>'conditionSince')::timestamptz as condition_since,
            x.ord
       from jsonb_array_elements(v_present_in) with ordinality as x(e, ord)
+  ),
+  raw as (
+    select r.rule, r.item_id, r.location_id,
+           case when octet_length(r.facts::text) <= c_facts_max then r.facts else '{}'::jsonb end as facts,
+           octet_length(r.facts::text) > c_facts_max as facts_omitted,
+           r.condition_since, r.ord
+      from raw0 r
   ),
   kept as (
     select r.*,
@@ -573,8 +670,9 @@ begin
            'rule', one.rule, 'item_id', one.item_id, 'location_id', one.location_id,
            'warehouse_id', one.warehouse_id, 'facts', one.facts,
            'condition_since', one.condition_since, 'ord', one.ord) order by one.ord), '[]'::jsonb),
-         (select count(*) from raw) - (select count(*) from kept)
-    into v_present, v_dropped
+         (select count(*) from raw) - (select count(*) from kept),
+         count(*) filter (where one.facts_omitted)
+    into v_present, v_dropped, v_omitted
     from one;
 
   with raw as (
@@ -600,6 +698,13 @@ begin
   -- Runs before resolving so the timeline reads recount_closed, then
   -- resolved. The pointer is cleared in the same UPDATE that reads it, so a
   -- recount linked concurrently (a different count id) is left alone.
+  --
+  -- Only a count that ended AT OR BEFORE this evaluation is closed. The
+  -- evaluation's reads started at p_evaluated_at, so a count posted after
+  -- that instant is not in what it saw: closing its pointer would write
+  -- "recount closed" before any check of that count ran, and would drop the
+  -- occurrence from "Re-checking" back to Open until the next sync. That
+  -- pointer stays for the sync that saw the count (the post's own follow-up).
   with closed as (
     update public.exception_occurrences o
        set recount_cycle_count_id = null,
@@ -608,6 +713,7 @@ begin
      where o.organization_id = p_org
        and o.recount_cycle_count_id = c.id
        and c.status <> 'in_progress'
+       and coalesce(c.completed_at, c.canceled_at, '-infinity'::timestamptz) <= p_evaluated_at
     returning o.id, o.organization_id, c.id as cycle_count_id
   )
   insert into public.exception_occurrence_events (organization_id, occurrence_id, kind, cycle_count_id)
@@ -727,7 +833,10 @@ begin
     update public.exception_occurrences o
        set resolved_at     = p_evaluated_at,
            resolved_reason = case
-             when i.deleted_at is not null or i.status <> 'active' then 'subject_gone'
+             -- Deleted or ARCHIVED only. A discontinued item still exists,
+             -- can hold stock and is evaluated like any other, so its
+             -- condition ending means it cleared.
+             when i.deleted_at is not null or i.status = 'archived' then 'subject_gone'
              when o.location_id is not null and exists (
                     select 1 from p
                      where p.item_id = o.item_id
@@ -778,7 +887,8 @@ begin
     'seen',           v_seen,
     'resolved',       v_resolved,
     'recountsClosed', v_closed,
-    'dropped',        v_dropped + v_dropped_h);
+    'dropped',        v_dropped + v_dropped_h,
+    'factsOmitted',   v_omitted);
 end;
 $$;
 
@@ -802,11 +912,17 @@ comment on function public.exceptions_sync(uuid, timestamptz, text[], text[], te
 --   'acknowledged' event (with the note, if any); a later one only adds its
 --   note as a 'note' event (nothing when there is no note).
 -- p_action 'note': a 'note' event; a note is required.
--- p_client_event_id: a replay (same id, same occurrence) adds nothing and
---   returns the row; the same id on another occurrence is refused.
+-- p_client_event_id: a replay (same id, same occurrence, same note, and an
+--   action that could have written the stored event) adds nothing and returns
+--   the row. The same id with anything else is refused, never answered as a
+--   success: the same id on another occurrence, a different note, or
+--   'note' against a stored acknowledgement. Otherwise a client that kept its
+--   id after a lost answer, then edited the note and sent again, was told
+--   "saved" while the edit was silently dropped.
 -- Refusals: 42501 not signed in / not allowed; P0002 not found or not visible
 -- (existence is not leaked); P0001 hint occurrence_resolved for a resolved
--- row, hint client_event_id_conflict for a reused id; 22023 for a bad
+-- row, hint client_event_id_conflict for a reused id that does not match
+-- what it recorded; 22023 for a bad
 -- argument (hints invalid_action, note_required, note_too_long,
 -- client_event_id_too_long).
 create or replace function public.exception_occurrence_act(
@@ -827,6 +943,8 @@ declare
   v_key    text := nullif(btrim(coalesce(p_client_event_id, '')), '');
   v_charter uuid;
   v_prev   uuid;
+  v_prev_kind text;
+  v_prev_note text;
 begin
   if v_uid is null then
     raise exception 'not_authenticated' using errcode = '42501';
@@ -878,14 +996,20 @@ begin
   end if;
 
   -- A replay of an action that already landed changes nothing, even if the
-  -- row has since been resolved (the phone may retry long after).
+  -- row has since been resolved (the phone may retry long after). It is a
+  -- replay only if it asks for what the stored event records: the same
+  -- occurrence, the same (trimmed) note, and an action that writes that
+  -- kind. 'acknowledged' comes only from 'acknowledge'; 'note' comes from
+  -- 'note' or from a later 'acknowledge' with a note, so either matches it.
   if v_key is not null then
-    select e.occurrence_id into v_prev
+    select e.occurrence_id, e.kind, e.note into v_prev, v_prev_kind, v_prev_note
       from public.exception_occurrence_events e
      where e.organization_id = v_occ.organization_id
        and e.client_event_id = v_key;
     if found then
-      if v_prev is distinct from v_occ.id then
+      if v_prev is distinct from v_occ.id
+         or v_prev_note is distinct from v_note
+         or (v_prev_kind = 'acknowledged' and p_action <> 'acknowledge') then
         raise exception 'client_event_id_conflict'
           using errcode = 'P0001', hint = 'client_event_id_conflict';
       end if;

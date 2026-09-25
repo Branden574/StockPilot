@@ -345,9 +345,21 @@ export interface LabelMismatchOccurrenceFacts {
   sku: string | null;
   /** The rack the label names (the rack segment of a composite label). */
   label: string;
-  /** The racks (or position-less crates) that hold the stock, sorted. */
+  /** The racks (or position-less crates) that hold the stock, sorted: only
+   *  those in the item's own warehouse or with no warehouse, which every
+   *  reader of the item may also see holdings at. At most
+   *  EXCEPTION_FACTS_LIST_MAX names. */
   stockOn: string[];
+  /** How many more such racks there were past the list's cap. */
+  stockOnMore?: number;
 }
+
+/** Longest name the evaluator copies into facts (item name). */
+export const EXCEPTION_FACTS_NAME_MAX = 200;
+/** Longest short label it copies (SKU, rack label, location name). */
+export const EXCEPTION_FACTS_LABEL_MAX = 100;
+/** Most rack names a label-mismatch row lists. */
+export const EXCEPTION_FACTS_LIST_MAX = 10;
 
 export type OccurrenceFacts =
   | HoldingOccurrenceFacts
@@ -462,9 +474,14 @@ export function describeOccurrence(
       const stockOn = Array.isArray(f.stockOn)
         ? f.stockOn.map(str).filter((s): s is string => s !== null)
         : [];
+      const more = num(f.stockOnMore);
+      const where =
+        more !== null && more > 0 && stockOn.length > 0
+          ? `${stockOn.join(', ')} and ${more} more`
+          : stockOn.join(', ');
       const detail =
         label && stockOn.length > 0
-          ? `labelled ${label}, stock is on ${stockOn.join(', ')}`
+          ? `labelled ${label}, stock is on ${where}`
           : label
             ? `labelled ${label}, which holds none of its stock`
             : 'the label does not name where the stock is';
@@ -627,6 +644,59 @@ export const EXCEPTION_LIST_UNAVAILABLE_COPY = 'Exceptions are unavailable right
 
 /** Shown on the Open list when every check completed and nothing is open. */
 export const EXCEPTION_ALL_CLEAR_TITLE = 'Nothing needs attention';
+
+/** The line under EXCEPTION_ALL_CLEAR_TITLE: what "nothing" covers. One copy
+ *  for the web page and the phone; a new rule updates it here. */
+export const EXCEPTION_ALL_CLEAR_BODY =
+  'No archived locations holding stock, nothing over-promised, nothing stranded in Staging or Unplaced, and every rack label agrees with where the stock is.';
+
+/**
+ * Open exceptions this build cannot word: rows of a rule a newer build added
+ * (count_variance, F1-2), which the list leaves out rather than render with
+ * the wrong words. They are still open, so a surface that has any must never
+ * show the all-clear state; it shows this line instead. Null when there are
+ * none.
+ */
+export function exceptionUnrecognizedCopy(count: number): string | null {
+  if (!Number.isFinite(count) || count <= 0) return null;
+  return count === 1
+    ? '1 more open exception cannot be shown in this version. Update the app, or reload the page, to see it.'
+    : `${count} more open exceptions cannot be shown in this version. Update the app, or reload the page, to see them.`;
+}
+
+/**
+ * The banner for checks the last run could not vouch for (failed or
+ * truncated). `labels` are the rules this build knows; `unrecognized` counts
+ * rule names it does not (a newer build's rule), which are just as unknown.
+ * Their silence is unknown, not clean, so while this returns a sentence no
+ * surface shows the all-clear state. Null when every check completed.
+ */
+export function exceptionUncheckedRulesCopy(labels: readonly string[], unrecognized = 0): string | null {
+  const names = [...labels];
+  if (unrecognized > 0) {
+    names.push(unrecognized === 1 ? '1 check this version cannot name' : `${unrecognized} checks this version cannot name`);
+  }
+  const total = labels.length + Math.max(0, unrecognized);
+  if (total === 0) return null;
+  return `${total === 1 ? 'One check' : `${total} checks`} could not complete on the last run: ${names.join(', ')}. What ${total === 1 ? 'it' : 'they'} would show is unknown, not clean.`;
+}
+
+/** Why a manager's "Check now" did not start a check (see requestCheck). */
+export type ExceptionCheckNotScheduledReason = 'recently_checked' | 'already_requested';
+
+/** The note under Check now, the same on the web and the phone. */
+export function exceptionCheckNowCopy(res: {
+  scheduled: boolean;
+  reason?: ExceptionCheckNotScheduledReason | null;
+  retryAfterSeconds: number;
+}): string {
+  if (res.scheduled) return 'Check started. Refresh in a minute to see the result.';
+  const wait = Math.max(1, Math.ceil(res.retryAfterSeconds));
+  const again = `You can check again in ${wait} ${wait === 1 ? 'second' : 'seconds'}.`;
+  return res.reason === 'already_requested'
+    ? `A check was already started less than a minute ago. ${again}`
+    : `Checked less than a minute ago. ${again}`;
+}
 
 /** Shown on the Resolved list when nothing resolved inside the window. */
 export const EXCEPTION_NONE_RESOLVED_COPY = `Nothing was resolved in the last ${EXCEPTION_RESOLVED_WINDOW_DAYS} days.`;

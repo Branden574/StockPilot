@@ -1,8 +1,10 @@
 import {
   EXCEPTION_RULES,
   exceptionActDisabledReason,
+  formatOrgDateTime,
   isExceptionRule,
   type ExceptionActionKind,
+  type ExceptionCheckNotScheduledReason,
   type ExceptionRule,
   type OccurrenceEventKind,
   type OccurrenceRecountRef,
@@ -77,6 +79,10 @@ export interface MobileExceptionSyncState {
   completeRules: ExceptionRule[];
   failedRules: ExceptionRule[];
   truncatedRules: ExceptionRule[];
+  /** Failed or truncated rules this build cannot name: the ones the server
+   *  counted (unknown to the server) plus the ones it sent that are unknown
+   *  to this build. Unknown is not clean: no all-clear while above 0. */
+  unrecognizedUncheckedRules: number;
 }
 
 export type ExceptionListStatus = 'open' | 'resolved';
@@ -88,6 +94,13 @@ export interface MobileExceptionList {
   truncated: boolean;
   syncState: MobileExceptionSyncState | null;
   canCheckNow: boolean;
+  /** Open rows neither the server nor this build could word (a newer
+   *  build's rule), left out of `occurrences` but COUNTED: a list with any
+   *  never shows the all-clear state (core exceptionUnrecognizedCopy). */
+  unrecognized: number;
+  /** The org's time zone, so the phone prints the clock time the web does;
+   *  null from an older server (the device zone is used then). */
+  timeZone: string | null;
 }
 
 export interface MobileExceptionEvent {
@@ -118,10 +131,14 @@ export interface MobileExceptionDetail {
   history: MobileExceptionHistoryEntry[];
   historyTruncated: boolean;
   syncState: MobileExceptionSyncState | null;
+  /** The org's time zone (see MobileExceptionList.timeZone). */
+  timeZone: string | null;
 }
 
 export interface ExceptionCheckResult {
   scheduled: boolean;
+  /** Why not, when not scheduled (core exceptionCheckNowCopy words it). */
+  reason: ExceptionCheckNotScheduledReason | null;
   lastSyncedAt: string | null;
   retryAfterSeconds: number;
 }
@@ -148,6 +165,21 @@ function rules(v: unknown): ExceptionRule[] {
   return Array.isArray(v) ? v.filter(isExceptionRule) : [];
 }
 
+/** A non-negative whole count from the server, or 0. */
+function count(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+}
+
+/** Distinct rule names in the lists that this build does not know. */
+function unknownRuleNames(...lists: unknown[]): number {
+  const names = new Set<string>();
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const r of list) if (typeof r === 'string' && !isExceptionRule(r)) names.add(r);
+  }
+  return names.size;
+}
+
 function parseSyncState(v: unknown): MobileExceptionSyncState | null {
   if (v === null || v === undefined) return null;
   if (!isObj(v) || typeof v.lastSyncedAt !== 'string') throw new ExceptionsResponseError();
@@ -158,6 +190,11 @@ function parseSyncState(v: unknown): MobileExceptionSyncState | null {
     completeRules: rules(v.completeRules),
     failedRules: rules(v.failedRules),
     truncatedRules: rules(v.truncatedRules),
+    // A rule the server did not know it left out and counted; one it sent
+    // that this (older) build does not know is dropped here, so it is counted
+    // here. The two never overlap.
+    unrecognizedUncheckedRules:
+      count(v.unrecognizedUncheckedRules) + unknownRuleNames(v.failedRules, v.truncatedRules),
   };
 }
 
@@ -223,9 +260,14 @@ export function parseExceptionList(res: unknown): MobileExceptionList {
     throw new ExceptionsResponseError();
   }
   const occurrences: MobileExceptionOccurrence[] = [];
+  // Rows this build cannot word are left out but COUNTED: an older bundle
+  // must never read a list of only newer-rule rows as "Nothing needs
+  // attention". The server counts the rows IT could not word the same way.
+  let unrecognized = count(res.unrecognized);
   for (const row of res.occurrences) {
     const o = parseOccurrence(row);
     if (o) occurrences.push(o);
+    else unrecognized += 1;
   }
   return {
     organizationId: res.organizationId,
@@ -234,6 +276,8 @@ export function parseExceptionList(res: unknown): MobileExceptionList {
     truncated: res.truncated === true,
     syncState: parseSyncState(res.syncState),
     canCheckNow: res.canCheckNow === true,
+    unrecognized,
+    timeZone: strOrNull(res.timeZone),
   };
 }
 
@@ -307,6 +351,7 @@ export function parseExceptionDetail(res: unknown): MobileExceptionDetail {
     history,
     historyTruncated: res.historyTruncated === true,
     syncState: parseSyncState(res.syncState),
+    timeZone: strOrNull(res.timeZone),
   };
 }
 
@@ -336,10 +381,10 @@ export async function getException(id: string): Promise<MobileExceptionDetail> {
 }
 
 /**
- * Acknowledge an occurrence or add a note. `clientEventId` is minted ONCE per
- * sheet submission and reused on a retry of the same submission, so a request
- * that reached the server but whose answer was lost (a dropped connection)
- * adds nothing the second time.
+ * Acknowledge an occurrence or add a note. `clientEventId` belongs to the
+ * PAYLOAD (see clientEventIdFor): reused only on a resend of the same action
+ * and note, so a request that reached the server but whose answer was lost
+ * adds nothing the second time, while an edited note is a new request.
  */
 export async function actOnException(
   id: string,
@@ -361,9 +406,27 @@ export async function requestExceptionCheck(): Promise<ExceptionCheckResult> {
   if (!isObj(res) || typeof res.scheduled !== 'boolean') throw new ExceptionsResponseError();
   return {
     scheduled: res.scheduled,
+    reason:
+      res.reason === 'recently_checked' || res.reason === 'already_requested' ? res.reason : null,
     lastSyncedAt: strOrNull(res.lastSyncedAt),
     retryAfterSeconds: typeof res.retryAfterSeconds === 'number' ? res.retryAfterSeconds : 0,
   };
+}
+
+/**
+ * The idempotency key for one act submission. THE KEY BELONGS TO THE
+ * PAYLOAD: the last attempt's key is reused only when the same action and
+ * (trimmed) note are sent again, which is a resend after a lost answer;
+ * anything else gets a fresh key. One key per sheet opening (as before) meant
+ * a lost answer, an edited note and a second tap closed the sheet as "saved"
+ * while the edit was dropped as a replay.
+ */
+export function clientEventIdFor(
+  last: { action: 'acknowledge' | 'note'; note: string | null; id: string } | null,
+  action: 'acknowledge' | 'note',
+  note: string | null,
+): string {
+  return last && last.action === action && last.note === note ? last.id : newClientEventId();
 }
 
 /** A fresh idempotency key for one act submission. */
@@ -393,6 +456,9 @@ export function describeActError(e: unknown): string {
   if (status === 409 && reason === 'occurrence_resolved') {
     return 'This exception has already been resolved. Pull down to refresh.';
   }
+  if (status === 409 && reason === 'client_event_id_conflict') {
+    return 'This could not be saved as sent. Please try again.';
+  }
   if (status === 403) return 'You do not have permission to act on this exception.';
   if (status === 404) return 'This exception is no longer available to you.';
   if (status === 429) return 'Too many requests. Wait a moment and try again.';
@@ -400,6 +466,23 @@ export function describeActError(e: unknown): string {
   if (status === 400 && reason === 'note_too_long') return 'Notes can be at most 1,000 characters.';
   if (status !== null && status >= 500) return 'The server had a problem. Try again in a moment.';
   return message ?? 'Could not save. Check your connection and try again.';
+}
+
+/**
+ * The sentence for a failed list read or Check now. Keyed on the HTTP status
+ * first: a 429 or a 5xx is worded here, because a server answer without a
+ * message would otherwise surface its bare code ("rate_limited",
+ * "internal_error") as the text on screen. Otherwise the server's own
+ * sentence, and a fallback when there is none.
+ */
+export function describeExceptionsRequestError(e: unknown, fallback: string): string {
+  const status = isObj(e) && typeof e.status === 'number' ? e.status : null;
+  if (status === 429) return 'Too many requests. Wait a moment and try again.';
+  if (status !== null && status >= 500) return 'The server had a problem. Try again in a moment.';
+  const message = e instanceof Error && e.message ? e.message : null;
+  // A lone snake_case token is a code, not a sentence.
+  if (!message || /^[a-z0-9_]+$/.test(message)) return fallback;
+  return message;
 }
 
 // ── Where each action goes on the phone ────────────────────────────────────
@@ -479,24 +562,33 @@ export function forgetRememberedExceptions(): void {
   rememberedDetail.clear();
 }
 
-// ── Time labels (device time zone) ─────────────────────────────────────────
+// ── Time labels (the org's time zone) ──────────────────────────────────────
 
-/** "Sep 24, 3:42 PM" in the phone's time zone; an em dash for a bad value. */
-export function exceptionTimeLabel(iso: string | null | undefined): string {
+const TIME_LABEL_OPTIONS: Intl.DateTimeFormatOptions = {
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+};
+
+/**
+ * "Sep 24, 3:42 PM" in the ORG's time zone, as the web page prints it
+ * (formatOrgDateTime, the same options), so "Checked at", first seen and the
+ * timeline name the same clock time on both surfaces. `timeZone` comes from
+ * the server with the list or detail; without it (an older server) the
+ * device's zone is used. An em dash for a bad value.
+ */
+export function exceptionTimeLabel(iso: string | null | undefined, timeZone?: string | null): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  if (timeZone) return formatOrgDateTime(d, TIME_LABEL_OPTIONS, timeZone);
+  return d.toLocaleString('en-US', TIME_LABEL_OPTIONS);
 }
 
 /** The offline banner over a remembered list. */
-export function offlineAsOfCopy(receivedAt: string): string {
-  return `You are offline. Showing the list as of ${exceptionTimeLabel(receivedAt)}.`;
+export function offlineAsOfCopy(receivedAt: string, timeZone?: string | null): string {
+  return `You are offline. Showing the list as of ${exceptionTimeLabel(receivedAt, timeZone)}.`;
 }
 
 /** Offline with nothing remembered: say so, never show an empty list. */

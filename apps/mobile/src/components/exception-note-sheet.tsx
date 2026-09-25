@@ -20,7 +20,7 @@ import {
   describeActError,
   EXCEPTION_NOTE_MAX,
   exceptionSheetSubmit,
-  newClientEventId,
+  clientEventIdFor,
   type ExceptionSheetMode,
   type MobileExceptionOccurrence,
 } from '@/lib/exceptions-api';
@@ -39,9 +39,10 @@ import { useTheme } from '@/lib/use-theme';
  *     `online` state from the screen: turning on airplane mode with the sheet
  *     open disables it, with the reason shown, instead of letting the request
  *     fail.
- *   - One clientEventId per opening of the sheet, reused on a retry of the
- *     same submission, so a request whose answer was lost adds nothing when it
- *     is sent again.
+ *   - The clientEventId belongs to the payload (clientEventIdFor): a resend
+ *     of the same action and note reuses it, so a request whose answer was
+ *     lost adds nothing when it is sent again; an edited note gets a new one,
+ *     so the edit is never dropped as a replay of the lost request.
  */
 export function ExceptionNoteSheet({
   visible,
@@ -60,8 +61,8 @@ export function ExceptionNoteSheet({
 }) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      {/* Remounted per opening (key), so every opening starts blank and mints
-          its own clientEventId. */}
+      {/* Remounted per opening (key), so every opening starts blank with no
+          earlier attempt to resend. */}
       <SheetContent
         key={`${String(visible)}:${mode}`}
         mode={mode}
@@ -91,8 +92,11 @@ function SheetContent({
   const [note, setNote] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  // Minted once per opening (lazy initialiser, not a ref read during render).
-  const [clientEventId] = React.useState(() => newClientEventId());
+  // The last attempt that did not succeed. Its clientEventId is reused ONLY
+  // for a resend of the same action and note (clientEventIdFor); an edited
+  // note is a new request, so it is never dropped as a "replay" of the lost
+  // first one. Read only in the submit handler, never during render.
+  const lastAttempt = React.useRef<{ action: ExceptionSheetMode; note: string | null; id: string } | null>(null);
 
   const submitState = exceptionSheetSubmit({
     mode,
@@ -107,14 +111,21 @@ function SheetContent({
     if (!submitState.enabled) return;
     setSubmitting(true);
     setError(null);
+    const payloadNote = note.trim() || null;
+    const clientEventId = clientEventIdFor(lastAttempt.current, mode, payloadNote);
+    lastAttempt.current = { action: mode, note: payloadNote, id: clientEventId };
     try {
       const updated = await actOnException(occurrence.id, {
         action: mode,
-        note: note.trim() || null,
+        note: payloadNote,
         clientEventId,
       });
       onDone(updated);
     } catch (e) {
+      // A conflict means this id already stands for another request: never
+      // send it again.
+      const reason = (e as { details?: { reason?: unknown } } | null)?.details?.reason;
+      if (reason === 'client_event_id_conflict') lastAttempt.current = null;
       setError(describeActError(e));
       setSubmitting(false);
     }

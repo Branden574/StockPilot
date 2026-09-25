@@ -8,11 +8,14 @@ import {
 
 import {
   actOnException,
+  clientEventIdFor,
   describeActError,
+  describeExceptionsRequestError,
   exceptionActionRoute,
   exceptionSheetSubmit,
   ExceptionsResponseError,
   forgetRememberedExceptions,
+  exceptionTimeLabel,
   getException,
   isOfflineState,
   listExceptions,
@@ -119,12 +122,50 @@ describe('listExceptions', () => {
     expect(list.syncState).toBeNull();
   });
 
-  it('leaves out a rule this build cannot word, and keeps the rest', async () => {
+  it('leaves out a rule this build cannot word, keeps the rest, and COUNTS what it left out', async () => {
+    // A phone on an older bundle once F1-2 writes count_variance rows: if
+    // those are the only open rows, an uncounted drop reads as all clear.
+    // Mutation caught: dropping unknown rows without counting them.
     apiMock.api.mockResolvedValueOnce(
       listBody({ occurrences: [occurrence(), occurrence({ id: 'x', rule: 'count_variance' })] }),
     );
     const list = await listExceptions('open');
     expect(list.occurrences.map((o) => o.id)).toEqual([ID]);
+    expect(list.unrecognized).toBe(1);
+  });
+
+  it('adds the rows the server itself could not word (a web rollback)', async () => {
+    apiMock.api.mockResolvedValueOnce(
+      listBody({ occurrences: [occurrence({ id: 'x', rule: 'count_variance' })], unrecognized: 2 }),
+    );
+    const list = await listExceptions('open');
+    expect(list.occurrences).toEqual([]);
+    expect(list.unrecognized).toBe(3);
+  });
+
+  it('an unchecked rule this build cannot name counts as unchecked, never as clean', async () => {
+    apiMock.api.mockResolvedValueOnce(
+      listBody({
+        occurrences: [],
+        syncState: {
+          ...SYNC,
+          failedRules: ['count_variance', 'stale_staging'],
+          truncatedRules: ['count_variance'],
+          unrecognizedUncheckedRules: 1,
+        },
+      }),
+    );
+    const list = await listExceptions('open');
+    expect(list.syncState?.failedRules).toEqual(['stale_staging']);
+    // One the server counted, plus count_variance (sent, unknown here), once.
+    expect(list.syncState?.unrecognizedUncheckedRules).toBe(2);
+  });
+
+  it('carries the org time zone (null from an older server)', async () => {
+    apiMock.api.mockResolvedValueOnce(listBody({ timeZone: 'America/Los_Angeles' }));
+    expect((await listExceptions('open')).timeZone).toBe('America/Los_Angeles');
+    apiMock.api.mockResolvedValueOnce(listBody());
+    expect((await listExceptions('open')).timeZone).toBeNull();
   });
 
   it('offers an action only when the server said this reader may act', async () => {
@@ -204,9 +245,10 @@ describe('describeActError', () => {
 
 describe('requestExceptionCheck', () => {
   it('returns at once with whether a check was scheduled', async () => {
-    apiMock.api.mockResolvedValueOnce({ scheduled: false, lastSyncedAt: 'x', retryAfterSeconds: 42 });
+    apiMock.api.mockResolvedValueOnce({ scheduled: false, reason: 'already_requested', lastSyncedAt: 'x', retryAfterSeconds: 42 });
     await expect(requestExceptionCheck()).resolves.toEqual({
       scheduled: false,
+      reason: 'already_requested',
       lastSyncedAt: 'x',
       retryAfterSeconds: 42,
     });
@@ -259,6 +301,8 @@ describe('the offline "as of" list', () => {
     truncated: false,
     syncState: null,
     canCheckNow: false,
+    unrecognized: 0,
+    timeZone: null,
   };
 
   it('is kept per account, workspace and tab', () => {
@@ -276,6 +320,65 @@ describe('the offline "as of" list', () => {
 
   it('says it is offline and when the list is from', () => {
     expect(offlineAsOfCopy('2026-09-24T18:00:00Z')).toMatch(/^You are offline\. Showing the list as of .+\.$/);
+    expect(offlineAsOfCopy('2026-09-24T18:00:00Z', 'America/Los_Angeles')).toBe(
+      'You are offline. Showing the list as of Sep 24, 11:00 AM.',
+    );
+  });
+});
+
+describe('exceptionTimeLabel', () => {
+  it('prints the ORG\'s clock time when the server sent its zone, whatever the device zone is', () => {
+    // The web page prints formatOrgDateTime(iso, same options, orgZone).
+    // Mutation caught: ignoring the zone (the device zone differs by hours).
+    expect(exceptionTimeLabel('2026-09-24T23:42:00Z', 'America/Los_Angeles')).toBe('Sep 24, 4:42 PM');
+    expect(exceptionTimeLabel('2026-09-24T23:42:00Z', 'America/New_York')).toBe('Sep 24, 7:42 PM');
+  });
+
+  it('falls back to the device zone without one, and an em dash for a bad value', () => {
+    const iso = '2026-09-24T23:42:00Z';
+    expect(exceptionTimeLabel(iso, null)).toBe(
+      new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }),
+    );
+    expect(exceptionTimeLabel(null, 'America/Los_Angeles')).toBe('—');
+    expect(exceptionTimeLabel('nope', 'America/Los_Angeles')).toBe('—');
+  });
+});
+
+describe('describeExceptionsRequestError', () => {
+  it('never shows a bare code: a 429 and a 5xx are worded by status', () => {
+    // The mobile api() falls back to the body's `error` code as the message
+    // when there is no `message` (older servers). Mutation caught: showing
+    // e.message as is.
+    expect(describeExceptionsRequestError(apiError(429, 'rate_limited'), 'x')).toBe(
+      'Too many requests. Wait a moment and try again.',
+    );
+    expect(describeExceptionsRequestError(apiError(500, 'internal_error'), 'x')).toBe(
+      'The server had a problem. Try again in a moment.',
+    );
+    expect(describeExceptionsRequestError(apiError(400, 'validation_error'), 'Fallback.')).toBe('Fallback.');
+    expect(describeExceptionsRequestError(apiError(403, 'Only a manager can run a check now.'), 'x')).toBe(
+      'Only a manager can run a check now.',
+    );
+    expect(describeExceptionsRequestError('weird', 'Fallback.')).toBe('Fallback.');
+  });
+});
+
+describe('clientEventIdFor (the act request id belongs to the payload)', () => {
+  it('reuses the last id only for a resend of the same action and note', () => {
+    const last = { action: 'acknowledge' as const, note: null, id: 'k-1' };
+    expect(clientEventIdFor(last, 'acknowledge', null)).toBe('k-1');
+    // An edited note, or the other action, is a NEW request. Mutation
+    // caught: one id per sheet opening (the edited note was dropped as a
+    // replay of the lost first request).
+    expect(clientEventIdFor(last, 'acknowledge', 'checking rack 17')).not.toBe('k-1');
+    expect(clientEventIdFor(last, 'note', null)).not.toBe('k-1');
+    expect(clientEventIdFor(null, 'note', 'x')).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('a conflict answer is worded, never shown as a code', () => {
+    expect(describeActError(apiError(409, 'This could not be saved as sent. Please try again.', { reason: 'client_event_id_conflict' }))).toBe(
+      'This could not be saved as sent. Please try again.',
+    );
   });
 });
 

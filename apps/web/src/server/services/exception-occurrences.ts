@@ -8,6 +8,8 @@ import {
   isExceptionRule,
   isManagerOrAbove,
   presentWhenTrackingBegan,
+  resolveOrgTimezone,
+  type ExceptionCheckNotScheduledReason,
   type ExceptionRule,
   type OccurrenceEventKind,
   type OccurrenceRecountRef,
@@ -16,6 +18,7 @@ import {
 
 import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
@@ -52,6 +55,10 @@ import { buildSystemContext } from './lib/system-context';
 
 /** An unforced sync within this long of the last one does nothing. */
 export const EXCEPTION_SYNC_THROTTLE_MS = 60_000;
+
+/** "Check now" starts at most one check per org in this window, whoever asks
+ *  and through whichever surface (the web action and the phone's route). */
+export const EXCEPTION_CHECK_NOW_WINDOW_MS = 60_000;
 
 /** Ceilings on the list reads, disclosed through `truncated`. Open rows are
  *  tens to hundreds in practice. */
@@ -130,6 +137,9 @@ export interface ExceptionSyncState {
   completeRules: ExceptionRule[];
   failedRules: ExceptionRule[];
   truncatedRules: ExceptionRule[];
+  /** Failed or truncated rule names this build does not know (a newer
+   *  build's rule). Unknown means not clean: no all-clear while above 0. */
+  unrecognizedUncheckedRules: number;
 }
 
 export type OccurrenceListStatus = 'open' | 'resolved';
@@ -142,6 +152,12 @@ export interface OccurrenceListResult {
   syncState: ExceptionSyncState | null;
   /** Managers may ask for a check now. */
   canCheckNow: boolean;
+  /** Rows of a rule this build cannot word (a newer build's rule), left out
+   *  of `occurrences`. They are open all the same: a surface never shows the
+   *  all-clear state while this is above 0 (core exceptionUnrecognizedCopy). */
+  unrecognized: number;
+  /** The org's time zone, so every surface prints the same clock time. */
+  timeZone: string;
 }
 
 /** The event kinds, from core (describeOccurrenceEvent words each one). */
@@ -178,6 +194,8 @@ export interface OccurrenceDetail {
   history: OccurrenceHistoryEntry[];
   historyTruncated: boolean;
   syncState: ExceptionSyncState | null;
+  /** The org's time zone, so every surface prints the same clock time. */
+  timeZone: string;
 }
 
 export type OccurrenceAction = 'acknowledge' | 'note';
@@ -191,8 +209,11 @@ export interface OccurrenceActInput {
 }
 
 export interface ExceptionCheckRequest {
-  /** False when the last sync is under a minute old. */
+  /** False when the last sync is under a minute old, or a check was already
+   *  started for this org under a minute ago. */
   scheduled: boolean;
+  /** Why not, when not scheduled (core exceptionCheckNowCopy words it). */
+  reason: ExceptionCheckNotScheduledReason | null;
   lastSyncedAt: string | null;
   /** Seconds until a check can be scheduled again (0 when scheduled). */
   retryAfterSeconds: number;
@@ -206,6 +227,8 @@ export type ExceptionSyncOutcome =
       resolved: number;
       recountsClosed: number;
       dropped: number;
+      /** Rows applied with empty facts because theirs were too large. */
+      factsOmitted: number;
     }
   /** A newer evaluation was already applied. */
   | { status: 'stale' }
@@ -213,7 +236,8 @@ export type ExceptionSyncOutcome =
   | { status: 'throttled'; lastSyncedAt: string }
   /** The org has no accepted owner/admin to act as the system for. */
   | { status: 'no_system_actor' }
-  /** Another sync held the org's lock past lock_timeout; the next run applies. */
+  /** Another sync held the org's lock past lock_timeout (5 s); the next run
+   *  applies. */
   | { status: 'busy' }
   /** Reported as exceptions.sync_failed. */
   | { status: 'failed' };
@@ -293,6 +317,13 @@ function rulesOf(values: string[] | null): ExceptionRule[] {
   return EXCEPTION_RULE_IDS.filter((r) => set.has(r));
 }
 
+/** Distinct failed or truncated rule names this build does not know. */
+function unrecognizedRuleCount(...lists: Array<string[] | null>): number {
+  const names = new Set<string>();
+  for (const list of lists) for (const r of list ?? []) if (!isExceptionRule(r)) names.add(r);
+  return names.size;
+}
+
 function mapSyncState(row: SyncStateRow | null): ExceptionSyncState | null {
   if (!row) return null;
   return {
@@ -302,6 +333,7 @@ function mapSyncState(row: SyncStateRow | null): ExceptionSyncState | null {
     completeRules: rulesOf(row.complete_rules),
     failedRules: rulesOf(row.failed_rules),
     truncatedRules: rulesOf(row.truncated_rules),
+    unrecognizedUncheckedRules: unrecognizedRuleCount(row.failed_rules, row.truncated_rules),
   };
 }
 
@@ -384,7 +416,7 @@ export class ExceptionOccurrencesService {
     const cap = status === 'open' ? OPEN_LIST_CAP : RESOLVED_LIST_CAP;
     const since = new Date(Date.now() - RESOLVED_WINDOW_DAYS * 86_400_000).toISOString();
 
-    const [rows, syncState, gate] = await Promise.all([
+    const [rows, syncState, gate, timeZone] = await Promise.all([
       fetchAllRows<Record<string, unknown>>(
         (from, to) => {
           const q = this.ctx.supabase
@@ -403,6 +435,7 @@ export class ExceptionOccurrencesService {
       ) as Promise<unknown> as Promise<OccurrenceRow[]>,
       this.readSyncState(),
       this.actGate(),
+      this.readOrgTimeZone(),
     ]);
 
     const occurrences: ExceptionOccurrence[] = [];
@@ -420,6 +453,8 @@ export class ExceptionOccurrencesService {
       truncated: rows.length >= cap,
       syncState,
       canCheckNow: isManagerOrAbove(this.ctx.role),
+      unrecognized: unknown,
+      timeZone,
     };
   }
 
@@ -433,7 +468,7 @@ export class ExceptionOccurrencesService {
     if (!UUID.test(id)) throw new ServiceError('not_found', 'Exception not found.');
     const orgId = this.ctx.organizationId;
 
-    const [row, events, syncState, gate] = await Promise.all([
+    const [row, events, syncState, gate, timeZone] = await Promise.all([
       this.readOccurrenceRow(id),
       fetchAllRows<Record<string, unknown>>(
         (from, to) =>
@@ -449,6 +484,7 @@ export class ExceptionOccurrencesService {
       ) as Promise<unknown> as Promise<EventRow[]>,
       this.readSyncState(),
       this.actGate(),
+      this.readOrgTimeZone(),
     ]);
     if (!row) throw new ServiceError('not_found', 'Exception not found.');
     const occurrence = mapOccurrence(row, syncState, gate);
@@ -511,6 +547,7 @@ export class ExceptionOccurrencesService {
       }),
       historyTruncated: chain.length > HISTORY_LIMIT,
       syncState,
+      timeZone,
     };
   }
 
@@ -568,10 +605,21 @@ export class ExceptionOccurrencesService {
   }
 
   /**
-   * "Check now" (managers): schedule a forced sync to run AFTER the response
-   * and return at once. Throttled to one a minute per org, read from the
-   * stored "Checked at" through the caller's own client (members can read
-   * their org's sync state).
+   * "Check now" (managers): schedule a sync to run AFTER the response and
+   * return at once. At most one per org per minute, by two checks:
+   *
+   *   1. the stored "Checked at" (read through the caller's own client;
+   *      members can read their org's sync state): under a minute old, no;
+   *   2. a per-org CLAIM, taken before scheduling. "Checked at" moves only
+   *      when a sync COMMITS, so on its own it let every click made while the
+   *      first check was still running schedule another full org-wide
+   *      evaluation (a double-click, a second manager, or the action called
+   *      in a loop). The claim is shared by the web action and the phone's
+   *      route, because both come through here. It fails CLOSED: if the
+   *      limiter cannot answer, no check is started (the cron still runs).
+   *
+   * The scheduled sync runs UNFORCED, so if another sync landed in between
+   * (the cron, a posted count), it does nothing.
    */
   async requestCheck(): Promise<ExceptionCheckRequest> {
     assertPermission(this.ctx, 'items:read');
@@ -584,12 +632,27 @@ export class ExceptionOccurrencesService {
     if (elapsed < EXCEPTION_SYNC_THROTTLE_MS) {
       return {
         scheduled: false,
+        reason: 'recently_checked',
         lastSyncedAt: last,
         retryAfterSeconds: Math.max(1, Math.ceil((EXCEPTION_SYNC_THROTTLE_MS - elapsed) / 1000)),
       };
     }
-    scheduleExceptionSync(this.ctx.organizationId, 'check_now');
-    return { scheduled: true, lastSyncedAt: last, retryAfterSeconds: 0 };
+    const claim = await checkRateLimit(
+      `exceptions-check-now:org:${this.ctx.organizationId}`,
+      1,
+      EXCEPTION_CHECK_NOW_WINDOW_MS,
+      'closed',
+    );
+    if (!claim.allowed) {
+      return {
+        scheduled: false,
+        reason: 'already_requested',
+        lastSyncedAt: last,
+        retryAfterSeconds: Math.max(1, Math.ceil((claim.resetAt - Date.now()) / 1000)),
+      };
+    }
+    scheduleExceptionSync(this.ctx.organizationId, 'check_now', { force: false });
+    return { scheduled: true, reason: null, lastSyncedAt: last, retryAfterSeconds: 0 };
   }
 
   /**
@@ -620,7 +683,7 @@ export class ExceptionOccurrencesService {
       }
 
       const sysCtx = await buildSystemContext(admin, orgId);
-      if (!sysCtx) return { status: 'no_system_actor' };
+      if (!sysCtx) return await ExceptionOccurrencesService.noSystemActor(admin, orgId, opts);
 
       const ev = await ExceptionsService.evaluateForSync(sysCtx);
       const { data, error } = await admin.rpc('exceptions_sync', {
@@ -633,8 +696,10 @@ export class ExceptionOccurrencesService {
         p_hold: ev.hold,
       });
       if (error) {
-        // lock_timeout: another sync of this org held the lock past 8 s. It is
-        // applying an evaluation of its own; the next run catches up.
+        // lock_timeout: another sync of this org held the lock past 5 s. It
+        // is applying an evaluation of its own; the next run catches up. (The
+        // 5 s is below the API statement timeout of 8 s on purpose, so this
+        // answer arrives before a 57014, which stays a reported failure.)
         if (error.code === '55P03') return { status: 'busy' };
         throw new ServiceError('internal_error', postgrestErrorText(error), {
           code: error.code ?? null,
@@ -648,8 +713,20 @@ export class ExceptionOccurrencesService {
         resolved?: number;
         recountsClosed?: number;
         dropped?: number;
+        factsOmitted?: number;
       };
       if (res.skipped) return { status: 'stale' };
+      const factsOmitted = res.factsOmitted ?? 0;
+      if (factsOmitted > 0) {
+        // The rows applied; only their stored words were dropped. The
+        // evaluator clips every name, so this means a facts shape grew.
+        void reportError(new Error('Exception facts too large to store'), {
+          tag: 'exceptions.facts_omitted',
+          level: 'warning',
+          organizationId: orgId,
+          extra: { count: factsOmitted, reason: opts.reason },
+        });
+      }
       return {
         status: 'applied',
         raised: res.raised ?? 0,
@@ -657,6 +734,7 @@ export class ExceptionOccurrencesService {
         resolved: res.resolved ?? 0,
         recountsClosed: res.recountsClosed ?? 0,
         dropped: res.dropped ?? 0,
+        factsOmitted,
       };
     } catch (err) {
       void reportError(err, {
@@ -668,7 +746,70 @@ export class ExceptionOccurrencesService {
     }
   }
 
+  /**
+   * buildSystemContext came back empty. The shared helper ignores its read
+   * errors (its body is pinned identical to the route copies by the
+   * daily-briefing guard, so it is not changed here), which made a FAILED
+   * members read look exactly like an org with no owner or admin: the sync
+   * was dropped with no report, and a posted count's re-check silently waited
+   * for the cron. So the members read is repeated with its error bound:
+   *   - it fails: thrown, and reported by syncOrg as exceptions.sync_failed;
+   *   - it finds an actor after all (the first read failed transiently):
+   *     thrown the same way;
+   *   - there really is none: reported as a warning
+   *     (exceptions.sync_no_actor) and returned as no_system_actor.
+   */
+  private static async noSystemActor(
+    admin: ReturnType<typeof createAdminClient>,
+    orgId: string,
+    opts: { force?: boolean; reason: ExceptionSyncReason },
+  ): Promise<ExceptionSyncOutcome> {
+    const { data, error } = await admin
+      .from('organization_members')
+      .select('user_id')
+      .eq('organization_id', orgId)
+      .in('role', ['owner', 'admin'])
+      .not('accepted_at', 'is', null)
+      .is('impersonation_expires_at', null)
+      .limit(1);
+    if (error) {
+      throw new ServiceError('internal_error', postgrestErrorText(error), { step: 'system_actor' });
+    }
+    if ((data ?? []).length > 0) {
+      throw new ServiceError('internal_error', 'The system context could not be built.', {
+        step: 'system_context',
+      });
+    }
+    void reportError(new Error('Exception sync skipped: the org has no accepted owner or admin'), {
+      tag: 'exceptions.sync_no_actor',
+      level: 'warning',
+      organizationId: orgId,
+      extra: { reason: opts.reason },
+    });
+    return { status: 'no_system_actor' };
+  }
+
   // ── internals ────────────────────────────────────────────────────────────
+
+  /**
+   * The org's time zone, read through the caller's own client (members read
+   * their org's row). Formatting only, so a failed read falls back to the
+   * shared default (core resolveOrgTimezone, the same fallback the web page
+   * uses) instead of failing the list.
+   */
+  private async readOrgTimeZone(): Promise<string> {
+    try {
+      const { data, error } = await this.ctx.supabase
+        .from('organizations')
+        .select('timezone')
+        .eq('id', this.ctx.organizationId)
+        .maybeSingle();
+      if (error) return resolveOrgTimezone(null);
+      return resolveOrgTimezone((data as { timezone?: string | null } | null)?.timezone ?? null);
+    } catch {
+      return resolveOrgTimezone(null);
+    }
+  }
 
   private async readOccurrenceRow(id: string): Promise<OccurrenceRow | null> {
     const { data, error } = await this.ctx.supabase
@@ -775,7 +916,10 @@ function mapActError(error: { code?: string; message: string; hint?: string | nu
         });
       }
       if (error.hint === 'client_event_id_conflict') {
-        return new ServiceError('conflict', 'This request id was already used for another exception.', {
+        // The id was already used for a different request (another exception,
+        // a different note or action). The client mints a new id and sends
+        // again; nothing was saved by this call.
+        return new ServiceError('conflict', 'This could not be saved as sent. Please try again.', {
           reason: 'client_event_id_conflict',
         });
       }

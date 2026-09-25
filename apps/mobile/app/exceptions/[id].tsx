@@ -27,6 +27,7 @@ import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import {
+  describeExceptionsRequestError,
   exceptionActionRoute,
   exceptionActionsFor,
   exceptionTimeLabel,
@@ -99,14 +100,15 @@ export default function ExceptionDetailScreen() {
         setState({ kind: 'error', message: 'This exception is not available to you, or it no longer exists.' });
         return;
       }
-      const message = e instanceof Error && e.message ? e.message : 'Could not load this exception.';
+      // Worded by status for a 429 or 5xx, so a bare code never shows.
+      const message = describeExceptionsRequestError(e, 'Could not load this exception.');
       setState(
         kept
           ? {
               kind: 'ready',
               detail: kept.detail,
               receivedAt: kept.receivedAt,
-              banner: `Could not refresh. Showing this exception as of ${exceptionTimeLabel(kept.receivedAt)}.`,
+              banner: `Could not refresh. Showing this exception as of ${exceptionTimeLabel(kept.receivedAt, kept.detail.timeZone)}.`,
             }
           : { kind: 'error', message },
       );
@@ -137,7 +139,7 @@ export default function ExceptionDetailScreen() {
           kind: 'ready',
           detail: kept.detail,
           receivedAt: kept.receivedAt,
-          banner: `You are offline. Showing this exception as of ${exceptionTimeLabel(kept.receivedAt)}.`,
+          banner: `You are offline. Showing this exception as of ${exceptionTimeLabel(kept.receivedAt, kept.detail.timeZone)}.`,
         }
       : {
           kind: 'error',
@@ -312,21 +314,21 @@ function Detail({
           label="FIRST SEEN"
           value={
             o.presentWhenTrackingBegan
-              ? `Already present when tracking began, ${exceptionTimeLabel(o.firstSeenAt)}`
-              : exceptionTimeLabel(o.firstSeenAt)
+              ? `Already present when tracking began, ${exceptionTimeLabel(o.firstSeenAt, detail.timeZone)}`
+              : exceptionTimeLabel(o.firstSeenAt, detail.timeZone)
           }
         />
-        {!resolved ? <Fact label="LAST SEEN BY A CHECK" value={exceptionTimeLabel(o.lastSeenAt)} /> : null}
+        {!resolved ? <Fact label="LAST SEEN BY A CHECK" value={exceptionTimeLabel(o.lastSeenAt, detail.timeZone)} /> : null}
         {o.acknowledgedAt ? (
           <Fact
             label="ACKNOWLEDGED"
-            value={`${o.acknowledgedBy?.label ?? 'Former member'}, ${exceptionTimeLabel(o.acknowledgedAt)}`}
+            value={`${o.acknowledgedBy?.label ?? 'Former member'}, ${exceptionTimeLabel(o.acknowledgedAt, detail.timeZone)}`}
           />
         ) : null}
         {o.resolvedAt ? (
           <Fact
             label="RESOLVED"
-            value={`${exceptionTimeLabel(o.resolvedAt)}: ${OCCURRENCE_RESOLVED_REASON_COPY[o.resolvedReason ?? 'cleared']}`}
+            value={`${exceptionTimeLabel(o.resolvedAt, detail.timeZone)}: ${OCCURRENCE_RESOLVED_REASON_COPY[o.resolvedReason ?? 'cleared']}`}
           />
         ) : null}
       </Card>
@@ -393,7 +395,7 @@ function Detail({
                 })}
               </Body>
               <Mono size={11} color={c.ink4}>
-                {exceptionTimeLabel(e.at)}
+                {exceptionTimeLabel(e.at, detail.timeZone)}
               </Mono>
               {e.note ? (
                 <Body size={14} muted>
@@ -420,8 +422,8 @@ function Detail({
               </Body>
               <Mono size={11} color={c.ink4}>
                 {h.resolvedAt
-                  ? `First seen ${exceptionTimeLabel(h.firstSeenAt)}, resolved ${exceptionTimeLabel(h.resolvedAt)}: ${OCCURRENCE_RESOLVED_REASON_COPY[h.resolvedReason ?? 'cleared']}`
-                  : `First seen ${exceptionTimeLabel(h.firstSeenAt)}, still open`}
+                  ? `First seen ${exceptionTimeLabel(h.firstSeenAt, detail.timeZone)}, resolved ${exceptionTimeLabel(h.resolvedAt, detail.timeZone)}: ${OCCURRENCE_RESOLVED_REASON_COPY[h.resolvedReason ?? 'cleared']}`
+                  : `First seen ${exceptionTimeLabel(h.firstSeenAt, detail.timeZone)}, still open`}
               </Mono>
             </Pressable>
           ))}
@@ -435,7 +437,7 @@ function Detail({
 
       <Body size={12.5} muted>
         {detail.syncState
-          ? `Checked at ${exceptionTimeLabel(detail.syncState.lastSyncedAt)}.`
+          ? `Checked at ${exceptionTimeLabel(detail.syncState.lastSyncedAt, detail.timeZone)}.`
           : EXCEPTION_FIRST_CHECK_PENDING_COPY}
       </Body>
     </ScrollView>

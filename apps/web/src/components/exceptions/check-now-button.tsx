@@ -6,6 +6,8 @@ import * as React from 'react';
 import { Button } from '@/components/ui/button';
 import { requestExceptionCheckAction } from '@/server/actions/exceptions';
 
+import { exceptionCheckNowCopy } from '@stockpilot/core';
+
 /**
  * A manager's "Check now" (F1-1, owner decision Q9). It SCHEDULES a check to
  * run on the server after the answer comes back and returns at once: nothing
@@ -28,12 +30,10 @@ export function CheckNowButton() {
         setMessage({ text: res.error.message, failed: true });
         return;
       }
-      setMessage({
-        text: res.scheduled
-          ? 'Check started. Reload the page in a minute to see the result.'
-          : `Checked less than a minute ago. You can check again in ${res.retryAfterSeconds} seconds.`,
-        failed: false,
-      });
+      // Core words it, so the web and the phone say the same thing. The
+      // server allows one check per org a minute (a claim shared by every
+      // manager and both surfaces), so a second click says so.
+      setMessage({ text: exceptionCheckNowCopy(res), failed: false });
     });
   }
 

@@ -181,8 +181,10 @@ PGTAP_TESTS=(
   supabase/tests/0369_count_correctness.test.sql
   # Exception occurrences (F1-1, 0370): signed-in users hold SELECT only on
   # occurrences, events and sync state, filtered by the one visibility rule
-  # (_exc_occurrence_visible: item read scope plus the holdings rule), so
-  # warehouse, charter, category and org scoping carry over; the EX counters
+  # (item read scope plus the holdings rule: _exc_occurrence_visible for the
+  # RPC re-checks, and the same rule as hashed sets in the SELECT policy,
+  # held equal for every reader and row), so warehouse, charter, category
+  # and org scoping carry over; the EX counters
   # are closed to the API roles. Only exceptions_sync opens or resolves, and it
   # is service_role only (asserted from the catalog), drops cross-org ids, never
   # resolves a failed, truncated or held rule, and applies evaluations in order.

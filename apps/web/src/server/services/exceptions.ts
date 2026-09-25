@@ -1,6 +1,9 @@
 import 'server-only';
 
 import {
+  EXCEPTION_FACTS_LABEL_MAX,
+  EXCEPTION_FACTS_LIST_MAX,
+  EXCEPTION_FACTS_NAME_MAX,
   EXCEPTION_RULE_IDS,
   EXCEPTION_RULES,
   locationNameSitsOnRack,
@@ -90,6 +93,28 @@ export const LONG_UNPLACED_DAYS = 30;
 
 const DAY_MS = 86_400_000;
 
+/**
+ * ═══ EVERY NAME COPIED INTO FACTS IS CLIPPED ═══
+ *
+ * Item names, SKUs, labels and location names have no length limit in the
+ * database (the app's form limits are app-only; a direct API write can store
+ * 20,000 characters). A stored facts object is capped at 16 KB
+ * (exc_occ_facts_shape), and exceptions_sync replaces an oversized one with
+ * an empty object rather than fail the org's whole sync, but that loses the
+ * row's words. Clipping here keeps every facts object far below the cap: at
+ * most one 200-character name, three 100-character labels and ten
+ * 100-character rack names. The page shows the item's LIVE name anyway;
+ * facts.itemName is the fallback.
+ */
+export function clipFactText(value: string, max: number): string {
+  const chars = Array.from(value);
+  return chars.length <= max ? value : `${chars.slice(0, max - 1).join('')}…`;
+}
+
+function clipOrNull(value: string | null | undefined, max: number): string | null {
+  return value === null || value === undefined ? null : clipFactText(value, max);
+}
+
 /** One condition the evaluation found, in the shape exceptions_sync takes. */
 export interface SyncPresentEntry {
   rule: ExceptionRule;
@@ -137,6 +162,7 @@ type HoldingRow = {
     name: string;
     sku: string | null;
     bin_location: string | null;
+    warehouse_id: string | null;
   } | null;
   locations: {
     id: string;
@@ -259,7 +285,7 @@ async function placementRules(ctx: SystemServiceContext, nowMs: number): Promise
       ctx.supabase
         .from('item_stock_levels')
         .select(
-          'id, quantity, positive_since, item_id, location_id, inventory_items!inner(name, sku, bin_location), locations!inner(id, name, kind, warehouse_id, deleted_at)',
+          'id, quantity, positive_since, item_id, location_id, inventory_items!inner(name, sku, bin_location, warehouse_id), locations!inner(id, name, kind, warehouse_id, deleted_at)',
         )
         .eq('organization_id', orgId)
         .gt('quantity', 0)
@@ -271,10 +297,12 @@ async function placementRules(ctx: SystemServiceContext, nowMs: number): Promise
   const present: SyncPresentEntry[] = [];
   const hold: SyncHoldEntry[] = [];
 
-  /** Positive rack and crate holdings per item, as location name -> kind,
-   *  for the label check. The kind travels with the name so the facts can say
-   *  which RACK a crate stands on (rackPositionOfLocationName). */
-  const rackHoldingsByItem = new Map<string, Map<string, string>>();
+  /** Positive rack and crate holdings per item, as location name -> its kind
+   *  and warehouse, for the label check. The kind travels with the name so
+   *  the facts can say which RACK a crate stands on
+   *  (rackPositionOfLocationName); the warehouse decides whether the facts
+   *  may name it (labelMismatches). */
+  const rackHoldingsByItem = new Map<string, Map<string, RackHolding>>();
 
   for (const r of rows) {
     const loc = r.locations;
@@ -282,10 +310,10 @@ async function placementRules(ctx: SystemServiceContext, nowMs: number): Promise
     if (!loc || !item) continue;
     const units = Number(r.quantity);
     const facts: HoldingOccurrenceFacts = {
-      itemName: item.name,
-      sku: item.sku ?? null,
+      itemName: clipFactText(item.name, EXCEPTION_FACTS_NAME_MAX),
+      sku: clipOrNull(item.sku, EXCEPTION_FACTS_LABEL_MAX),
       units,
-      locationName: loc.name,
+      locationName: clipFactText(loc.name, EXCEPTION_FACTS_LABEL_MAX),
       locationKind: loc.kind ?? null,
     };
     const entry = (rule: ExceptionRule): SyncPresentEntry => ({
@@ -313,8 +341,8 @@ async function placementRules(ctx: SystemServiceContext, nowMs: number): Promise
       continue;
     }
     if (loc.kind === 'rack' || loc.kind === 'crate') {
-      const held = rackHoldingsByItem.get(r.item_id) ?? new Map<string, string>();
-      held.set(loc.name, loc.kind);
+      const held = rackHoldingsByItem.get(r.item_id) ?? new Map<string, RackHolding>();
+      held.set(loc.name, { kind: loc.kind, warehouseId: loc.warehouse_id ?? null });
       rackHoldingsByItem.set(r.item_id, held);
     }
   }
@@ -378,9 +406,11 @@ async function placementRules(ctx: SystemServiceContext, nowMs: number): Promise
  * predicate (holdingsContradictRack), but of a different stored fact: the
  * structured rack pair in custom_fields, not bin_location.
  */
+type RackHolding = { kind: string; warehouseId: string | null };
+
 function labelMismatches(
   rows: readonly HoldingRow[],
-  rackHoldingsByItem: Map<string, Map<string, string>>,
+  rackHoldingsByItem: Map<string, Map<string, RackHolding>>,
 ): { present: SyncPresentEntry[]; hold: SyncHoldEntry[] } {
   const seen = new Set<string>();
   const present: SyncPresentEntry[] = [];
@@ -411,16 +441,30 @@ function labelMismatches(
     // does (placementPhysicalNames): a crate contributes the rack it sits on,
     // and a position-less crate ("Blue Shelf") keeps its own name because
     // that is the only place a picker can walk to.
+    //
+    // ONLY racks a reader of this occurrence may see holdings at. A label
+    // mismatch is an ITEM-level row, visible to anyone who can read the item,
+    // but item_stock_levels_select hides holdings in warehouses outside the
+    // reader's own. Every reader of the item can see holdings in the item's
+    // own warehouse (that is how they read the item) and at org-level
+    // locations (no warehouse), so only those are named. The comparison above
+    // still uses every rack: a label matching stock anywhere is not a
+    // mismatch.
     const where = new Set<string>();
-    for (const [name, kind] of held) {
-      const at = rackPositionOfLocationName(name, kind);
-      if (at) where.add(at);
+    for (const [name, h] of held) {
+      if (h.warehouseId !== null && h.warehouseId !== (item.warehouse_id ?? null)) continue;
+      const at = rackPositionOfLocationName(name, h.kind);
+      if (at) where.add(clipFactText(at, EXCEPTION_FACTS_LABEL_MAX));
     }
+    const sorted = [...where].sort((a, b) => a.localeCompare(b));
     const facts: LabelMismatchOccurrenceFacts = {
-      itemName: item.name,
-      sku: item.sku ?? null,
-      label: labelRack,
-      stockOn: [...where].sort((a, b) => a.localeCompare(b)),
+      itemName: clipFactText(item.name, EXCEPTION_FACTS_NAME_MAX),
+      sku: clipOrNull(item.sku, EXCEPTION_FACTS_LABEL_MAX),
+      label: clipFactText(labelRack, EXCEPTION_FACTS_LABEL_MAX),
+      stockOn: sorted.slice(0, EXCEPTION_FACTS_LIST_MAX),
+      ...(sorted.length > EXCEPTION_FACTS_LIST_MAX
+        ? { stockOnMore: sorted.length - EXCEPTION_FACTS_LIST_MAX }
+        : {}),
     };
     present.push({
       rule: 'label_mismatch',
@@ -488,8 +532,8 @@ async function overReserved(ctx: SystemServiceContext): Promise<GroupResult> {
     const onHand = Number(it.quantity_on_hand) || 0;
     if (reserved <= onHand) continue;
     const facts: OverReservedOccurrenceFacts = {
-      itemName: it.name,
-      sku: it.sku ?? null,
+      itemName: clipFactText(it.name, EXCEPTION_FACTS_NAME_MAX),
+      sku: clipOrNull(it.sku, EXCEPTION_FACTS_LABEL_MAX),
       promised: reserved,
       onHand,
     };

@@ -9,8 +9,11 @@ import { defer } from './defer';
 export type ExceptionSyncReason = 'cron' | 'cycle_count.post' | 'cycle_count.cancel' | 'check_now';
 
 /**
- * Schedule a FORCED Exception Center sync for one org, to run after the
- * response (defer → after()), and return at once.
+ * Schedule an Exception Center sync for one org, to run after the response
+ * (defer → after()), and return at once. FORCED by default: a posted or
+ * cancelled count must be re-checked even if a sync ran seconds earlier.
+ * "Check now" passes `force: false`, so a sync that landed between the click
+ * and this task (the cron, a posted count) makes it a no-op.
  *
  * ═══ THE CALLER NEVER WAITS ═══
  *
@@ -34,9 +37,14 @@ export type ExceptionSyncReason = 'cron' | 'cycle_count.post' | 'cycle_count.can
  * start a real background sync. exception-sync-schedule.test.ts tests the
  * real one.
  */
-export function scheduleExceptionSync(orgId: string, reason: ExceptionSyncReason): void {
+export function scheduleExceptionSync(
+  orgId: string,
+  reason: ExceptionSyncReason,
+  opts: { force?: boolean } = {},
+): void {
+  const force = opts.force ?? true;
   defer(async () => {
     const { ExceptionOccurrencesService } = await import('../exception-occurrences');
-    await ExceptionOccurrencesService.syncOrg(orgId, { force: true, reason });
+    await ExceptionOccurrencesService.syncOrg(orgId, { force, reason });
   });
 }

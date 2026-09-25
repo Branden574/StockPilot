@@ -31,7 +31,7 @@ vi.mock('@/server/services/exception-occurrences', () => ({
   ExceptionOccurrencesService: { syncOrg },
 }));
 
-import { GET } from './route';
+import { GET, maxDuration } from './route';
 
 function req(auth?: string): NextRequest {
   return new Request('https://test.local/api/cron/exception-occurrences', {
@@ -94,16 +94,44 @@ describe('GET /api/cron/exception-occurrences — secret gate', () => {
 });
 
 describe('GET /api/cron/exception-occurrences — the sweep', () => {
-  it('syncs every org, least recently synced first, never-synced leading, unforced', async () => {
+  it('syncs every org, unforced: due orgs first (least recently synced first), then never synced, then failing, then recent', async () => {
+    const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
     orgsStub({
-      orgs: ['a', 'b', 'c', 'd'],
-      synced: { a: '2026-09-24T18:00:00Z', b: '2026-09-24T17:00:00Z', d: '2026-09-24T18:30:00Z' },
+      orgs: ['a', 'b', 'c', 'd', 'e', 'f', 'g'],
+      synced: {
+        a: minutesAgo(16), // due
+        b: minutesAgo(31), // due, and longer ago
+        d: minutesAgo(2), // synced just now (a posted count)
+        e: minutesAgo(24 * 60), // not synced for a day: failing run after run
+        g: minutesAgo(90), // failing, but more recently than e
+      },
     });
     const res = await GET(req('Bearer test-cron-secret'));
     expect(res.status).toBe(200);
-    expect(syncOrg.mock.calls.map((c) => c[0])).toEqual(['c', 'b', 'a', 'd']);
+    expect(syncOrg.mock.calls.map((c) => c[0])).toEqual(['b', 'a', 'c', 'f', 'e', 'g', 'd']);
     for (const call of syncOrg.mock.calls) expect(call[1]).toEqual({ reason: 'cron' });
-    expect(await res.json()).toMatchObject({ orgs: 4, processed: 4, deferredForTime: 0, applied: 4 });
+    expect(await res.json()).toMatchObject({ orgs: 7, processed: 7, deferredForTime: 0, applied: 7 });
+  });
+
+  it('orgs that never complete a sync cannot use up the budget ahead of due ones', async () => {
+    // Before: never-synced orgs sorted first (epoch 0), so a set of orgs that
+    // always fail (no owner or admin, a persistent RPC error) led every run.
+    // Mutation caught: ordering by last success alone.
+    orgsStub({
+      orgs: ['n1', 'n2', 'due'],
+      synced: { due: new Date(Date.now() - 20 * 60_000).toISOString() },
+    });
+    let now = 1_000_000;
+    const realNow = Date.now();
+    vi.spyOn(Date, 'now').mockImplementation(() => now + realNow);
+    syncOrg.mockImplementation(async () => {
+      now += 30_000;
+      return { status: 'no_system_actor' };
+    });
+    const res = await GET(req('Bearer test-cron-secret'));
+    expect(syncOrg.mock.calls.map((c) => c[0])).toEqual(['due', 'n1']);
+    expect(await res.json()).toMatchObject({ processed: 2, deferredForTime: 1 });
+    vi.mocked(Date.now).mockRestore();
   });
 
   it('one failing org does not stop the rest, and the tally says so', async () => {
@@ -152,6 +180,13 @@ describe('GET /api/cron/exception-occurrences — the sweep', () => {
     const tags = reportError.mock.calls.map((c) => (c as unknown as [unknown, { tag: string }])[1].tag);
     expect(tags).toContain('cron.exception-occurrences.deadline');
     vi.mocked(Date.now).mockRestore();
+  });
+
+  it('the hard limit leaves the org in flight minutes past the 45 s deadline to finish', () => {
+    // The deadline stops orgs from STARTING; b above ran from 30 s to 60 s,
+    // which at maxDuration 60 was the uncatchable kill. Mutation caught:
+    // maxDuration back at 60.
+    expect(maxDuration * 1000 - 45_000).toBeGreaterThanOrEqual(4 * 60_000);
   });
 });
 

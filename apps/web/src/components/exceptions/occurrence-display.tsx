@@ -7,6 +7,8 @@ import {
   EXCEPTION_LIST_UNAVAILABLE_COPY,
   EXCEPTION_RULES,
   EXCEPTION_SYNC_INTERVAL_MINUTES,
+  exceptionUncheckedRulesCopy,
+  exceptionUnrecognizedCopy,
   formatOrgDateTime,
   occurrenceState,
   occurrenceStateLabel,
@@ -101,19 +103,39 @@ export function uncheckedRuleLabels(syncState: ExceptionSyncState): string[] {
   );
 }
 
-export function UncheckedRulesBanner({ labels }: { labels: string[] }) {
-  if (labels.length === 0) return null;
+/** The unchecked-rules sentence (core copy, the phone shows the same), or
+ *  null when every check completed. A failed or truncated rule this build
+ *  cannot name counts too: unknown is not clean. */
+export function uncheckedRulesMessage(syncState: ExceptionSyncState): string | null {
+  return exceptionUncheckedRulesCopy(uncheckedRuleLabels(syncState), syncState.unrecognizedUncheckedRules ?? 0);
+}
+
+export function UncheckedRulesBanner({ message }: { message: string | null }) {
+  if (!message) return null;
   return (
     <div
       role="alert"
       className="border-warning/40 bg-warning/5 flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
     >
       <AlertTriangle className="text-warning mt-0.5 size-4 shrink-0" aria-hidden />
-      <p>
-        {labels.length === 1 ? 'One check' : `${labels.length} checks`} could not complete on the last
-        run: {labels.join(', ')}. What {labels.length === 1 ? 'it' : 'they'} would show is unknown,
-        not clean.
-      </p>
+      <p>{message}</p>
+    </div>
+  );
+}
+
+/** Open rows this build cannot word (a newer build's rule). Shown instead of
+ *  the all-clear state, never alongside it. */
+export function UnrecognizedNotice({ count }: { count: number }) {
+  const text = exceptionUnrecognizedCopy(count);
+  if (!text) return null;
+  return (
+    <div
+      role="status"
+      data-testid="exceptions-unrecognized"
+      className="border-warning/40 bg-warning/5 flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
+    >
+      <AlertTriangle className="text-warning mt-0.5 size-4 shrink-0" aria-hidden />
+      <p>{text}</p>
     </div>
   );
 }

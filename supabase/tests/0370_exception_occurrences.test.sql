@@ -44,6 +44,17 @@
 --    updated_at unchanged (mutation: forget to disable the trigger); zero
 --    rows stay null; stamped rows keep their value; both triggers are back
 --    on afterwards; the helper has no grants.
+-- F. Review fixes: one entry whose facts are too large to store no longer
+--    fails the whole sync (it applies with empty facts and is counted, on
+--    raise and on refresh; mutation: store the facts as sent, and the sync
+--    fails with 23514); a discontinued item's row resolves as cleared, not
+--    subject_gone; a recount pointer is closed only by an evaluation that
+--    started after the count ended (mutation: drop the time check); the sync
+--    waits for the org lock for less than the API statement timeout, so a
+--    queued sync ends as 55P03 and not 57014; a replayed client id with a
+--    different note or action is refused, never answered as saved; the
+--    SELECT policy agrees with _exc_occurrence_visible for every reader and
+--    row, and computes its sets once per query instead of per row.
 --
 -- TIME. now() is the transaction start for the whole file, so "stamped now"
 -- is `= now()` and an older value is planted as 2020-01-01 with the
@@ -58,7 +69,7 @@
 
 begin;
 
-select plan(131);
+select plan(146);
 
 \set orgA    '\'03700000-0000-0000-0000-00000000000a\''
 \set orgB    '\'03700000-0000-0000-0000-00000000000b\''
@@ -122,6 +133,7 @@ select plan(131);
 \set ccDone  '\'03700000-0000-0000-0000-000000000201\''
 \set ccOpen  '\'03700000-0000-0000-0000-000000000202\''
 \set ccW     '\'03700000-0000-0000-0000-000000000203\''
+\set ccLate  '\'03700000-0000-0000-0000-000000000204\''
 \set lnCL1   '\'03700000-0000-0000-0000-000000000211\''
 \set lnCL2   '\'03700000-0000-0000-0000-000000000212\''
 \set lnCS    '\'03700000-0000-0000-0000-000000000213\''
@@ -375,10 +387,10 @@ select ok(
   'G5: exceptions_sync is executable by service_role only (catalog; never called as a denied role)');
 select ok(
   (select not p.prosecdef
-          and 'lock_timeout=8s' = any (p.proconfig)
+          and 'lock_timeout=5s' = any (p.proconfig)
           and 'search_path=public' = any (p.proconfig)
      from pg_proc p where p.oid = 'public.exceptions_sync(uuid, timestamptz, text[], text[], text[], jsonb, jsonb)'::regprocedure),
-  'G6: exceptions_sync is SECURITY INVOKER with lock_timeout 8s and a pinned search_path');
+  'G6: exceptions_sync is SECURITY INVOKER with lock_timeout 5s (below the API statement timeout) and a pinned search_path');
 select ok(
   has_function_privilege('authenticated', 'public.exception_occurrence_act(uuid, text, text, text)', 'EXECUTE')
   and not has_function_privilege('anon', 'public.exception_occurrence_act(uuid, text, text, text)', 'EXECUTE')
@@ -431,7 +443,7 @@ set local role to 'service_role';
 insert into cur_present (tag, entry) values ('L', pg_temp.e('label_mismatch', :iL));
 select is(
   pg_temp.sync(60),
-  '{"skipped": false, "raised": 1, "seen": 0, "resolved": 0, "recountsClosed": 0, "dropped": 0}'::jsonb,
+  '{"skipped": false, "raised": 1, "seen": 0, "resolved": 0, "recountsClosed": 0, "dropped": 0, "factsOmitted": 0}'::jsonb,
   'S1: the first sync raises one occurrence');
 select is(
   (select row(o.occurrence_number, o.rule, o.location_id, o.warehouse_id, o.recurrence_index,
@@ -498,7 +510,7 @@ insert into cur_present (tag, entry) values
   ('Y',    pg_temp.e('orphaned_stock', :iY, :rW2));
 select is(
   pg_temp.sync(57),
-  '{"skipped": false, "raised": 12, "seen": 1, "resolved": 0, "recountsClosed": 0, "dropped": 0}'::jsonb,
+  '{"skipped": false, "raised": 12, "seen": 1, "resolved": 0, "recountsClosed": 0, "dropped": 0, "factsOmitted": 0}'::jsonb,
   'S9: twelve raised, one seen again');
 select is(
   (select array_agg(o.item_id::text order by o.occurrence_number)
@@ -597,7 +609,7 @@ select is(
   pg_temp.sync(53, p_extra => jsonb_build_array(
     pg_temp.e('over_reserved', :itemB),              -- another org's item
     pg_temp.e('orphaned_stock', :iL, :rB))),          -- this org's item at another org's location
-  '{"skipped": false, "raised": 1, "seen": 10, "resolved": 3, "recountsClosed": 1, "dropped": 2}'::jsonb,
+  '{"skipped": false, "raised": 1, "seen": 10, "resolved": 3, "recountsClosed": 1, "dropped": 2, "factsOmitted": 0}'::jsonb,
   'S22: one raised, ten seen, three resolved, one recount closed, two cross-org entries dropped');
 select is(
   (select array_agg(o.rule || ':' || coalesce(o.resolved_reason, 'open') order by o.occurrence_number)
@@ -639,7 +651,7 @@ select is(
 select is(
   public.exceptions_sync(:orgB, now() - interval '50 minutes', array['over_reserved', 'label_mismatch'], '{}', '{}',
     jsonb_build_array(pg_temp.e('over_reserved', :itemB), pg_temp.e('label_mismatch', :iL)), '[]'),
-  '{"skipped": false, "raised": 1, "seen": 0, "resolved": 0, "recountsClosed": 0, "dropped": 1}'::jsonb,
+  '{"skipped": false, "raised": 1, "seen": 0, "resolved": 0, "recountsClosed": 0, "dropped": 1, "factsOmitted": 0}'::jsonb,
   'S30: an org B sync drops org A''s item and raises only its own');
 reset role;
 select is(
@@ -1103,6 +1115,153 @@ select is(
   (select count(*)::int from public.item_stock_levels where quantity > 0 and positive_since is null),
   0,
   'B7: no stocked holding is left without positive_since');
+
+-- ═══ F. Review fixes ══════════════════════════════════════════════════════
+-- Org A has ten open rows here, all in cur_present (U resolved at A20).
+-- Evaluation times continue below A20's 52 minutes.
+
+-- F1-F2: one entry whose facts are too large for a row, among valid ones.
+-- Mutation: store the facts as sent, and the whole sync fails with 23514.
+set local role to 'service_role';
+insert into cur_present (tag, entry) values
+  ('New',  pg_temp.e('label_mismatch', :iNew, null,
+                     jsonb_build_object('itemName', repeat('x', 20000), 'label', '99-Z'))),
+  ('Hold', pg_temp.e('label_mismatch', :iHold, null, '{"label": "70-A"}'::jsonb));
+select is(
+  pg_temp.sync(40),
+  '{"skipped": false, "raised": 2, "seen": 10, "resolved": 0, "recountsClosed": 0, "dropped": 0, "factsOmitted": 1}'::jsonb,
+  'F1: an oversized facts object does not stop the sync: both new rows are raised, the ten open rows seen, one facts object omitted');
+select is(
+  (select row((select o.facts from public.exception_occurrences o
+                where o.organization_id = :orgA and o.item_id = :iNew and o.resolved_at is null),
+              (select o.facts from public.exception_occurrences o
+                where o.organization_id = :orgA and o.item_id = :iHold and o.resolved_at is null))::text),
+  row('{}'::jsonb, '{"label": "70-A"}'::jsonb)::text,
+  'F2: the oversized row is stored with empty facts; the valid one with its own');
+
+-- F3-F5: the refresh path is capped the same way, and a DISCONTINUED item
+-- (it still exists and holds stock) resolves as cleared. Mutation: resolve
+-- any non-active status as subject_gone.
+reset role;
+update public.inventory_items set status = 'discontinued' where id = :iCh1;
+set local role to 'service_role';
+update cur_present set entry = pg_temp.e('label_mismatch', :iNew, null, '{"label": "99-Z"}'::jsonb) where tag = 'New';
+update cur_present set entry = pg_temp.e('label_mismatch', :iHold, null,
+                                         jsonb_build_object('label', repeat('y', 20000))) where tag = 'Hold';
+delete from cur_present where tag = 'Ch1';
+select is(
+  pg_temp.sync(39),
+  '{"skipped": false, "raised": 0, "seen": 11, "resolved": 1, "recountsClosed": 0, "dropped": 0, "factsOmitted": 1}'::jsonb,
+  'F3: a refresh with oversized facts applies too, and counts the omission');
+select is(
+  (select row((select o.facts from public.exception_occurrences o
+                where o.organization_id = :orgA and o.item_id = :iNew and o.resolved_at is null),
+              (select o.facts from public.exception_occurrences o
+                where o.organization_id = :orgA and o.item_id = :iHold and o.resolved_at is null))::text),
+  row('{"label": "99-Z"}'::jsonb, '{}'::jsonb)::text,
+  'F4: the refreshed row takes its new facts; the one now too large keeps its identity with empty facts');
+select is(
+  (select resolved_reason from public.exception_occurrences
+    where organization_id = :orgA and item_id = :iCh1 and resolved_at is not null),
+  'cleared',
+  'F5: a discontinued item''s condition ending resolves as cleared, not subject_gone');
+
+-- F6-F8: a recount pointer is closed only by an evaluation that started
+-- after its count ended. Mutation: drop the time check, and F6 closes it.
+reset role;
+insert into public.cycle_counts (id, organization_id, warehouse_id, status, scope, started_by, started_at, completed_at, completed_by) values
+  (:ccLate, :orgA, :whA2, 'completed', 'selection', :mgr, now() - interval '2 hours', now() - interval '30 minutes', :mgr);
+update public.exception_occurrences set recount_cycle_count_id = :ccLate
+ where organization_id = :orgA and item_id = :iW2 and resolved_at is null;
+set local role to 'service_role';
+select is(
+  (pg_temp.sync(38))->>'recountsClosed', '0',
+  'F6: an evaluation that started before the count completed does not close its pointer');
+select is(
+  (select recount_cycle_count_id from public.exception_occurrences
+    where organization_id = :orgA and item_id = :iW2 and resolved_at is null),
+  :ccLate::uuid,
+  'F7: the pointer is kept, so the row still reads as re-checking');
+select is(
+  (pg_temp.sync(20))->>'recountsClosed', '1',
+  'F8: the first evaluation that started after the count completed closes it');
+reset role;
+
+-- F9: a sync queued behind another one gives up on the lock (55P03, "busy")
+-- before the API roles' statement timeout cancels it (57014, a failure).
+select ok(
+  (select (regexp_match(array_to_string(p.proconfig, ','), 'lock_timeout=(\d+)s'))[1]::int
+     from pg_proc p
+    where p.oid = 'public.exceptions_sync(uuid, timestamptz, text[], text[], text[], jsonb, jsonb)'::regprocedure)
+  < coalesce(
+      (select (regexp_match(array_to_string(r.rolconfig, ','), 'statement_timeout=(\d+)s'))[1]::int
+         from pg_roles r where r.rolname = 'authenticator'),
+      8),
+  'F9: exceptions_sync''s lock_timeout is below the API statement_timeout');
+
+-- F10-F13: a replayed client id must ask for what it recorded. Mutation:
+-- compare only the occurrence, and F10/F11 answer as saved while nothing
+-- is stored.
+set local "request.jwt.claim.sub" to :stf;
+set local role to 'authenticated';
+select throws_ok(
+  format($$select public.exception_occurrence_act(%L, 'acknowledge', 'checking rack 17', 'k1')$$, :'occO'),
+  'P0001', 'client_event_id_conflict',
+  'F10: the same id with a different note is refused');
+select throws_ok(
+  format($$select public.exception_occurrence_act(%L, 'note', 'checking rack', 'k1')$$, :'occO'),
+  'P0001', 'client_event_id_conflict',
+  'F11: the same id as a note against a stored acknowledgement is refused');
+select lives_ok(
+  format($$select public.exception_occurrence_act(%L, 'note', '  moved two to 70-B ', 'k3')$$, :'occO'),
+  'F12: an identical replay (after trimming) still answers');
+reset role;
+select is(
+  (select count(*)::int from public.exception_occurrence_events where client_event_id in ('k1', 'k3')),
+  2,
+  'F13: and none of the three added an event');
+
+-- F14: the SELECT policy and _exc_occurrence_visible agree for every reader
+-- and every row (pattern #26). Mutation: drop the item EXISTS from the
+-- policy, and the charter and category readers disagree.
+create temp table all_occ as
+  select id, organization_id, item_id, location_id from public.exception_occurrences;
+grant select on all_occ to authenticated;
+create temp table vis_mismatch (who text primary key, n integer not null);
+grant insert, select on vis_mismatch to authenticated;
+create function pg_temp.policy_mismatches() returns integer language sql as $$
+  select count(*)::int
+    from all_occ a
+   where public._exc_occurrence_visible(a.organization_id, a.item_id, a.location_id)
+         is distinct from exists (select 1 from public.exception_occurrences o where o.id = a.id)
+$$;
+set local role to 'authenticated';
+set local "request.jwt.claim.sub" to :mgr;    insert into vis_mismatch values ('mgr',    pg_temp.policy_mismatches());
+set local "request.jwt.claim.sub" to :stf;    insert into vis_mismatch values ('stf',    pg_temp.policy_mismatches());
+set local "request.jwt.claim.sub" to :stf2;   insert into vis_mismatch values ('stf2',   pg_temp.policy_mismatches());
+set local "request.jwt.claim.sub" to :vwr;    insert into vis_mismatch values ('vwr',    pg_temp.policy_mismatches());
+set local "request.jwt.claim.sub" to :stfCh;  insert into vis_mismatch values ('stfCh',  pg_temp.policy_mismatches());
+set local "request.jwt.claim.sub" to :vwrCat; insert into vis_mismatch values ('vwrCat', pg_temp.policy_mismatches());
+set local "request.jwt.claim.sub" to :stfNo;  insert into vis_mismatch values ('stfNo',  pg_temp.policy_mismatches());
+set local "request.jwt.claim.sub" to :vwrAdj; insert into vis_mismatch values ('vwrAdj', pg_temp.policy_mismatches());
+set local "request.jwt.claim.sub" to :mgrB;   insert into vis_mismatch values ('mgrB',   pg_temp.policy_mismatches());
+set local "request.jwt.claim.sub" to '';      insert into vis_mismatch values ('nobody', pg_temp.policy_mismatches());
+reset role;
+select is(
+  (select array_agg(who || ':' || n order by who collate "C") from vis_mismatch),
+  array['mgr:0', 'mgrB:0', 'nobody:0', 'stf:0', 'stf2:0', 'stfCh:0', 'stfNo:0', 'vwr:0', 'vwrAdj:0', 'vwrCat:0'],
+  'F14: for every reader, the policy shows exactly the rows _exc_occurrence_visible allows');
+
+-- F15: the policy is the hashed-set form (pattern #19). Mutation: put the
+-- per-row function back, and each 1,000-row page of a 5,000-row Open list
+-- costs seconds again.
+select ok(
+  (select pg_get_expr(p.polqual, p.polrelid) !~ '_exc_occurrence_visible'
+          and pg_get_expr(p.polqual, p.polrelid) ~ 'rls_member_org_ids\(\)'
+          and pg_get_expr(p.polqual, p.polrelid) ~ 'rls_exc_holding_location_ids\(\)'
+     from pg_policy p
+    where p.polrelid = 'public.exception_occurrences'::regclass and p.polname = 'exception_occurrences_select'),
+  'F15: the SELECT policy computes its sets once per query and never calls the per-row function');
 
 select * from finish();
 rollback;

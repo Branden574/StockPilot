@@ -38,6 +38,10 @@ function holding(o: {
   /** Days since the row was last written (updated_at); the evaluator must
    *  ignore it. */
   touched?: number;
+  /** The item's warehouse and the location's (default 'wh-1'; null = none). */
+  itemWh?: string | null;
+  locWh?: string | null;
+  sku?: string | null;
 }) {
   return {
     id: `isl-${o.item ?? 'i1'}-${o.loc ?? 'l1'}`,
@@ -46,12 +50,17 @@ function holding(o: {
     updated_at: daysAgo(o.touched ?? 0),
     item_id: o.item ?? 'i1',
     location_id: o.loc ?? 'l1',
-    inventory_items: { name: o.name ?? 'A book', sku: 'SKU-1', bin_location: o.bin ?? null },
+    inventory_items: {
+      name: o.name ?? 'A book',
+      sku: o.sku === undefined ? 'SKU-1' : o.sku,
+      bin_location: o.bin ?? null,
+      warehouse_id: o.itemWh === undefined ? 'wh-1' : o.itemWh,
+    },
     locations: {
       id: o.loc ?? 'l1',
       name: o.locName ?? 'Rack 1-A',
       kind: o.kind === undefined ? 'rack' : o.kind,
-      warehouse_id: 'wh-1',
+      warehouse_id: o.locWh === undefined ? 'wh-1' : o.locWh,
       deleted_at: o.deleted ?? null,
     },
   };
@@ -338,6 +347,80 @@ describe('evaluateForSync — label mismatch', () => {
     });
     expect(rules(e)).toEqual(['label_mismatch']);
     expect(details(e, 'label_mismatch')).toEqual(['labelled 99-Z, stock is on 12-A, 12-B']);
+  });
+
+  it('names only racks every reader of the item may see holdings at: its own warehouse, or none', async () => {
+    // item_stock_levels_select hides holdings outside the reader's
+    // warehouses, and a label row is visible to anyone who can read the item.
+    // Mutation caught: listing every rack in the org.
+    const e = await evaluate({
+      holdings: [
+        holding({ item: 'i9', bin: '99-Z', loc: 'a', locName: '12-A', locWh: 'wh-1' }),
+        holding({ item: 'i9', bin: '99-Z', loc: 'b', locName: '77-B', locWh: 'wh-other' }),
+        holding({ item: 'i9', bin: '99-Z', loc: 'c', locName: '5-C', locWh: null }),
+      ],
+    });
+    expect(rules(e)).toEqual(['label_mismatch']);
+    expect(e.present[0]!.facts).toMatchObject({ stockOn: ['12-A', '5-C'] });
+    expect(JSON.stringify(e.present[0]!.facts)).not.toContain('77-B');
+  });
+
+  it('stock only in another warehouse still compares (a match there is no mismatch), and names nothing', async () => {
+    const matchElsewhere = await evaluate({
+      holdings: [holding({ item: 'i9', bin: '77-B', loc: 'b', locName: '77-B', locWh: 'wh-other' })],
+    });
+    expect(matchElsewhere.present).toEqual([]);
+    const mismatch = await evaluate({
+      holdings: [holding({ item: 'i9', bin: '99-Z', loc: 'b', locName: '77-B', locWh: 'wh-other' })],
+    });
+    expect(details(mismatch, 'label_mismatch')).toEqual(['labelled 99-Z, which holds none of its stock']);
+  });
+
+  it('lists at most ten racks and counts the rest', async () => {
+    const e = await evaluate({
+      holdings: Array.from({ length: 13 }, (_, i) =>
+        holding({ item: 'i9', bin: '99-Z', loc: `l${i}`, locName: `${String(i + 10)}-A` }),
+      ),
+    });
+    const facts = e.present[0]!.facts as { stockOn: string[]; stockOnMore?: number };
+    expect(facts.stockOn).toHaveLength(10);
+    expect(facts.stockOnMore).toBe(3);
+    expect(details(e, 'label_mismatch')[0]).toMatch(/ and 3 more$/);
+  });
+});
+
+describe('evaluateForSync — facts stay small whatever the names are', () => {
+  it('clips a 20,000-character name, SKU, label and location name', async () => {
+    // Names have no length limit in the database. An unclipped facts object
+    // past 16 KB is stored empty by exceptions_sync (it used to fail the
+    // whole org's sync). Mutation caught: copying the names unclipped.
+    const huge = 'x'.repeat(20_000);
+    const e = await evaluate({
+      holdings: [
+        holding({ item: 'a', loc: 'la', name: huge, sku: huge, bin: `${huge}-Z`, locName: `${huge}-A` }),
+        holding({ item: 'b', loc: 'lb', name: huge, sku: huge, kind: 'staging', locName: huge, age: 30 }),
+      ],
+      reservations: [{ item_id: 'c', quantity: 9 }],
+      items: [{ id: 'c', name: huge, sku: huge, warehouse_id: 'wh-1', quantity_on_hand: 1 }],
+    });
+    expect(rules(e).sort()).toEqual(['label_mismatch', 'over_reserved', 'stale_staging']);
+    for (const p of e.present) {
+      const f = p.facts as unknown as Record<string, unknown>;
+      expect(JSON.stringify(f).length).toBeLessThan(2_000);
+      expect(Array.from(String(f.itemName))).toHaveLength(200);
+      expect(String(f.itemName).endsWith('…')).toBe(true);
+      if (typeof f.sku === 'string') expect(Array.from(f.sku)).toHaveLength(100);
+    }
+    const label = e.present.find((p) => p.rule === 'label_mismatch')!.facts as { label: string; stockOn: string[] };
+    expect(Array.from(label.label).length).toBeLessThanOrEqual(100);
+    for (const r of label.stockOn) expect(Array.from(r).length).toBeLessThanOrEqual(100);
+  });
+
+  it('leaves a name at the limit untouched', async () => {
+    const e = await evaluate({
+      holdings: [holding({ name: 'y'.repeat(200), kind: 'staging', locName: 'Staging', age: 30 })],
+    });
+    expect((e.present[0]!.facts as { itemName: string }).itemName).toBe('y'.repeat(200));
   });
 });
 

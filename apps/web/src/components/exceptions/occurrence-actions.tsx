@@ -23,9 +23,16 @@ function newClientEventId(): string {
  * re-checks on every call). Nothing here resolves an exception: that happens
  * by itself once a check no longer finds the condition.
  *
- * One clientEventId per submission, kept after a failure so a retry of the
- * same submission is recognised as a replay (a request whose answer was lost
- * adds nothing the second time), and replaced once it succeeds.
+ * THE REQUEST ID BELONGS TO THE PAYLOAD. A failed submission keeps its
+ * clientEventId only for a resend of the SAME action and note, which the
+ * server recognises as a replay (a request whose answer was lost adds nothing
+ * the second time). Change the note or the button and it is a new request
+ * with a new id. Reusing one id for everything (as this did) meant: the first
+ * Acknowledge committed but its answer was lost, the reader typed a note and
+ * pressed Acknowledge again, the server answered the replay "ok", the form
+ * cleared, and the note was never stored. The server now also refuses a
+ * reused id with a different payload (client_event_id_conflict); on that
+ * answer the id is dropped so the next press is a fresh request.
  *
  * Failures show inline with role="alert" (recurring pattern #20).
  */
@@ -40,7 +47,13 @@ export function OccurrenceActions({
   const [note, setNote] = React.useState('');
   const [error, setError] = React.useState<string | null>(null);
   const [pending, setPending] = React.useState<'acknowledge' | 'note' | null>(null);
-  const [clientEventId, setClientEventId] = React.useState(newClientEventId);
+  // The last submission that did not succeed: a resend of exactly it reuses
+  // its id; anything else gets a new one. Read only in event handlers.
+  const lastAttempt = React.useRef<{
+    action: 'acknowledge' | 'note';
+    note: string | null;
+    id: string;
+  } | null>(null);
 
   const trimmed = note.trim();
   const tooLong = Array.from(trimmed).length > NOTE_MAX;
@@ -48,20 +61,28 @@ export function OccurrenceActions({
   async function submit(action: 'acknowledge' | 'note') {
     if (pending !== null || tooLong) return;
     if (action === 'note' && trimmed === '') return;
+    const payloadNote = trimmed || null;
+    const last = lastAttempt.current;
+    const clientEventId =
+      last && last.action === action && last.note === payloadNote ? last.id : newClientEventId();
+    lastAttempt.current = { action, note: payloadNote, id: clientEventId };
     setPending(action);
     setError(null);
     const res = await actOnExceptionAction(occurrenceId, {
       action,
-      note: trimmed || null,
+      note: payloadNote,
       clientEventId,
     });
     setPending(null);
     if ('error' in res) {
+      // A conflict means this id already stands for another request: never
+      // send it again.
+      if (res.error.reason === 'client_event_id_conflict') lastAttempt.current = null;
       setError(res.error.message);
       return;
     }
+    lastAttempt.current = null;
     setNote('');
-    setClientEventId(newClientEventId());
     router.refresh();
   }
 

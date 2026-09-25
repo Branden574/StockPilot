@@ -13,7 +13,8 @@ import {
   StateChip,
   stateOf,
   UncheckedRulesBanner,
-  uncheckedRuleLabels,
+  uncheckedRulesMessage,
+  UnrecognizedNotice,
 } from '@/components/exceptions/occurrence-display';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
@@ -28,6 +29,7 @@ import {
 
 import {
   describeOccurrence,
+  EXCEPTION_ALL_CLEAR_BODY,
   EXCEPTION_ALL_CLEAR_TITLE,
   EXCEPTION_NONE_RESOLVED_COPY,
   EXCEPTION_RESOLVED_WINDOW_DAYS,
@@ -65,7 +67,10 @@ export const metadata = { title: 'Exceptions · StockPilot' };
  *   - a failed read renders "unavailable", never an empty list (pattern #1);
  *   - before the org's first check it says so, and never shows all clear;
  *   - a rule the last check could not vouch for (failed or truncated) is
- *     named, and the all-clear state is withheld while any is out.
+ *     named, and the all-clear state is withheld while any is out;
+ *   - an open row of a rule this build cannot word (a newer build's rule,
+ *     seen after a rollback) is counted, and the all-clear state is withheld
+ *     while any exists: an open exception never reads as all clear.
  */
 type SearchParams = { tab?: string | string[] };
 
@@ -124,7 +129,9 @@ export default async function ExceptionsPage({
       <nav aria-label="Exception lists" className="mb-4 flex flex-wrap gap-1">
         <TabLink href="/dashboard/exceptions" active={tab === 'open'}>
           Open
-          {tab === 'open' && result && result.syncState ? ` (${result.occurrences.length})` : ''}
+          {tab === 'open' && result && result.syncState
+            ? ` (${result.occurrences.length + (result.unrecognized ?? 0)})`
+            : ''}
         </TabLink>
         <TabLink href="/dashboard/exceptions?tab=resolved" active={tab === 'resolved'}>
           Resolved, last {EXCEPTION_RESOLVED_WINDOW_DAYS} days
@@ -173,12 +180,14 @@ function OpenList({
   timeZone: string;
 }) {
   const groups = groupOccurrences(result.occurrences);
-  const unchecked = uncheckedRuleLabels(syncState);
+  const unchecked = uncheckedRulesMessage(syncState);
+  const unrecognized = result.unrecognized ?? 0;
 
   return (
     <div className="space-y-4">
       <CheckedAt syncState={syncState} timeZone={timeZone} />
-      <UncheckedRulesBanner labels={unchecked} />
+      <UncheckedRulesBanner message={unchecked} />
+      <UnrecognizedNotice count={unrecognized} />
       {result.truncated && (
         <p className="text-warning text-xs">
           Showing the first {result.occurrences.length} open exceptions. There are more.
@@ -186,16 +195,14 @@ function OpenList({
       )}
 
       {groups.length === 0 ? (
-        // With a rule unchecked, silence is unknown: no all-clear.
-        unchecked.length > 0 ? null : (
+        // With a rule unchecked, silence is unknown; with rows this build
+        // cannot show, something is open. Either way: no all-clear.
+        unchecked !== null || unrecognized > 0 ? null : (
           <Card>
             <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
               <CheckCircle2 className="text-success size-7" aria-hidden />
               <p className="text-base font-medium">{EXCEPTION_ALL_CLEAR_TITLE}</p>
-              <p className="text-muted-foreground max-w-md text-sm">
-                No archived locations holding stock, nothing over-promised, nothing stranded in
-                Staging or Unplaced, and every rack label agrees with where the stock actually is.
-              </p>
+              <p className="text-muted-foreground max-w-md text-sm">{EXCEPTION_ALL_CLEAR_BODY}</p>
             </CardContent>
           </Card>
         )

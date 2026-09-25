@@ -5,7 +5,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { ExceptionOccurrencesService } from '@/server/services/exception-occurrences';
 
-import { exceptionsErrorResponse } from '../../error-response';
+import { exceptionsErrorResponse, exceptionsRateLimitedResponse } from '../../error-response';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -48,15 +48,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   const rl = await checkRateLimit(`exceptions-act:${ctx.userId}`, 60, 60_000);
-  if (!rl.allowed) {
-    return NextResponse.json(
-      { error: 'rate_limited', retryAt: rl.resetAt },
-      {
-        status: 429,
-        headers: { 'Retry-After': String(Math.ceil((rl.resetAt - Date.now()) / 1000)) },
-      },
-    );
-  }
+  if (!rl.allowed) return exceptionsRateLimitedResponse(rl.resetAt);
 
   let body: z.infer<typeof bodySchema>;
   try {

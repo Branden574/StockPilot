@@ -14,6 +14,25 @@ const createAdminClient = vi.hoisted(() =>
 );
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient }));
 
+// The per-org Check now claim: an in-memory stand-in for the
+// rate_limit_buckets RPC (1 per window per key), or a limiter that fails.
+const limiter = vi.hoisted(() => ({
+  counts: new Map<string, number>(),
+  fails: false,
+  keys: [] as Array<{ key: string; limit: number; windowMs: number; mode: string | undefined }>,
+}));
+vi.mock('@/lib/rate-limit', () => ({
+  checkRateLimit: vi.fn(async (key: string, limit: number, windowMs: number, mode?: 'open' | 'closed') => {
+    limiter.keys.push({ key, limit, windowMs, mode });
+    const resetAt = Date.now() + windowMs;
+    // The real helper in 'closed' mode answers "not allowed" when its RPC fails.
+    if (limiter.fails) return { allowed: mode !== 'closed', count: limit, resetAt };
+    const n = (limiter.counts.get(key) ?? 0) + 1;
+    limiter.counts.set(key, n);
+    return { allowed: n <= limit, count: n, resetAt };
+  }),
+}));
+
 const access = vi.hoisted(() => ({
   value: { hasAllAccess: false, readableIds: ['wh-a'], writableIds: ['wh-a'] } as {
     hasAllAccess: boolean;
@@ -85,6 +104,9 @@ function occRow(o: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  limiter.counts.clear();
+  limiter.fails = false;
+  limiter.keys = [];
   adminHolder.throws = false;
   adminHolder.client = null;
   access.value = { hasAllAccess: false, readableIds: ['wh-a'], writableIds: ['wh-a'] };
@@ -100,6 +122,7 @@ describe('syncOrg — throttle, force, and never throwing', () => {
     stateError?: boolean;
     rpc?: { data: unknown; error: { message: string; code?: string; hint?: string } | null };
     actor?: boolean;
+    membersError?: boolean;
   }) {
     const stub = makeSupabaseStub({
       'exception_sync_state.select.maybeSingle': opts.stateError
@@ -108,10 +131,12 @@ describe('syncOrg — throttle, force, and never throwing', () => {
             data: opts.lastSyncedAt ? { last_synced_at: opts.lastSyncedAt } : null,
             error: null,
           },
-      'organization_members.select': {
-        data: opts.actor === false ? [] : [{ user_id: 'u-owner', role: 'owner' }],
-        error: null,
-      },
+      'organization_members.select': opts.membersError
+        ? { data: null, error: { message: 'members read timed out' } }
+        : {
+            data: opts.actor === false ? [] : [{ user_id: 'u-owner', role: 'owner' }],
+            error: null,
+          },
       'organization_modules.select': { data: [], error: null },
       'item_stock_levels.select': {
         data: [
@@ -150,7 +175,15 @@ describe('syncOrg — throttle, force, and never throwing', () => {
   it('unforced, a minute or more after the last sync: evaluates and applies', async () => {
     const stub = adminStub({ lastSyncedAt: secondsAgo(EXCEPTION_SYNC_THROTTLE_MS / 1000 + 1) });
     const out = await ExceptionOccurrencesService.syncOrg(ORG, { reason: 'cron' });
-    expect(out).toEqual({ status: 'applied', raised: 1, seen: 0, resolved: 0, recountsClosed: 0, dropped: 0 });
+    expect(out).toEqual({
+      status: 'applied',
+      raised: 1,
+      seen: 0,
+      resolved: 0,
+      recountsClosed: 0,
+      dropped: 0,
+      factsOmitted: 0,
+    });
     expect(stub.rpcCalls.map((c) => c.name)).toEqual(['exceptions_sync']);
   });
 
@@ -228,11 +261,38 @@ describe('syncOrg — throttle, force, and never throwing', () => {
     expect(out).toEqual({ status: 'stale' });
   });
 
-  it('an org with no accepted owner or admin is skipped without a sync', async () => {
+  it('an org with no accepted owner or admin is skipped without a sync, and says so', async () => {
     const stub = adminStub({ actor: false });
     const out = await ExceptionOccurrencesService.syncOrg(ORG, { force: true, reason: 'cron' });
     expect(out).toEqual({ status: 'no_system_actor' });
     expect(stub.rpcCalls).toEqual([]);
+    // Reported (a warning), not silent.
+    const [, ctx] = reportError.mock.calls[0] as unknown as [unknown, { tag: string; level: string }];
+    expect(ctx).toMatchObject({ tag: 'exceptions.sync_no_actor', level: 'warning' });
+  });
+
+  it('a FAILED members read is a reported failure, never "no system actor"', async () => {
+    // The shared buildSystemContext ignores its read errors, so a transient
+    // failure used to drop a post-count sync with no report at all.
+    const stub = adminStub({ membersError: true });
+    const out = await ExceptionOccurrencesService.syncOrg(ORG, { force: true, reason: 'cycle_count.post' });
+    expect(out).toEqual({ status: 'failed' });
+    expect(stub.rpcCalls).toEqual([]);
+    const tags = reportError.mock.calls.map((c) => (c as unknown as [unknown, { tag: string }])[1].tag);
+    expect(tags).toEqual(['exceptions.sync_failed']);
+  });
+
+  it('facts too large to store are applied empty, counted, and reported as a warning', async () => {
+    adminStub({
+      rpc: {
+        data: { skipped: false, raised: 2, seen: 0, resolved: 0, recountsClosed: 0, dropped: 0, factsOmitted: 1 },
+        error: null,
+      },
+    });
+    const out = await ExceptionOccurrencesService.syncOrg(ORG, { force: true, reason: 'cron' });
+    expect(out).toMatchObject({ status: 'applied', raised: 2, factsOmitted: 1 });
+    const [, ctx] = reportError.mock.calls[0] as unknown as [unknown, { tag: string; level: string }];
+    expect(ctx).toMatchObject({ tag: 'exceptions.facts_omitted', level: 'warning' });
   });
 });
 
@@ -281,7 +341,9 @@ describe('list', () => {
       completeRules: ['over_reserved', 'label_mismatch'],
       failedRules: ['stale_staging'],
       truncatedRules: [],
+      unrecognizedUncheckedRules: 0,
     });
+    expect(res.unrecognized).toBe(0);
     // Every read is scoped to the caller's org as well as RLS.
     const chain = stub.chainsAll.get('exception_occurrences.select')![0]!;
     const args = stub.chainArgsAll.get('exception_occurrences.select')![0]!;
@@ -336,18 +398,51 @@ describe('list', () => {
     expect(stub.fromCalls).toEqual([]);
   });
 
-  it('a row with a rule this build does not know is left out and reported', async () => {
+  it('a row with a rule this build does not know is left out, COUNTED and reported', async () => {
+    // Counted so no surface shows the all-clear state while it is open (a
+    // phone on an older bundle, or the web after a rollback, once F1-2 writes
+    // count_variance rows). Mutation caught: dropping the rows uncounted.
     const { svc } = userSvc({
       'exception_occurrences.select': {
-        data: [occRow(), occRow({ id: 'x', rule: 'count_variance' })],
+        data: [occRow(), occRow({ id: 'x', rule: 'count_variance' }), occRow({ id: 'y', rule: 'count_variance' })],
         error: null,
       },
       'exception_sync_state.select.maybeSingle': { data: SYNC_ROW, error: null },
     });
     const res = await svc.list();
     expect(res.occurrences.map((o) => o.id)).toEqual([OCC]);
+    expect(res.unrecognized).toBe(2);
     const tags = reportError.mock.calls.map((c) => (c as unknown as [unknown, { tag: string }])[1].tag);
     expect(tags).toEqual(['exceptions.unknown_rule']);
+  });
+
+  it('a failed or truncated rule this build does not know counts as unchecked', async () => {
+    const { svc } = userSvc({
+      'exception_occurrences.select': { data: [], error: null },
+      'exception_sync_state.select.maybeSingle': {
+        data: { ...SYNC_ROW, failed_rules: ['count_variance', 'stale_staging'], truncated_rules: ['count_variance', 'x_rule'] },
+        error: null,
+      },
+    });
+    const res = await svc.list();
+    expect(res.syncState).toMatchObject({ failedRules: ['stale_staging'], unrecognizedUncheckedRules: 2 });
+  });
+
+  it('carries the org time zone, read through the caller\'s client, with the shared fallback', async () => {
+    const withZone = userSvc({
+      'exception_occurrences.select': { data: [], error: null },
+      'exception_sync_state.select.maybeSingle': { data: SYNC_ROW, error: null },
+      'organizations.select.maybeSingle': { data: { timezone: 'America/New_York' }, error: null },
+    });
+    expect((await withZone.svc.list()).timeZone).toBe('America/New_York');
+    expect(createAdminClient).not.toHaveBeenCalled();
+    const failed = userSvc({
+      'exception_occurrences.select': { data: [], error: null },
+      'exception_sync_state.select.maybeSingle': { data: SYNC_ROW, error: null },
+      'organizations.select.maybeSingle': { data: null, error: { message: 'timeout' } },
+    });
+    // Formatting only: a failed read never fails the list.
+    expect((await failed.svc.list()).timeZone).toBe('America/Los_Angeles');
   });
 
   it('canAct mirrors the RPC gate: stock:adjust and write access, or a manager when there is no warehouse', async () => {
@@ -548,8 +643,14 @@ describe('requestCheck ("Check now")', () => {
     );
     const res = await svc.requestCheck();
     expect(res.scheduled).toBe(true);
+    expect(res.reason).toBeNull();
     expect(res.retryAfterSeconds).toBe(0);
-    expect(scheduled).toHaveBeenCalledWith(ORG, 'check_now');
+    // Unforced: a sync that lands in between makes the task a no-op.
+    expect(scheduled).toHaveBeenCalledWith(ORG, 'check_now', { force: false });
+    // The claim is per ORG and fails closed.
+    expect(limiter.keys).toEqual([
+      { key: `exceptions-check-now:org:${ORG}`, limit: 1, windowMs: 60_000, mode: 'closed' },
+    ]);
     // Scheduled, not run: nothing touched the service-role client here.
     expect(createAdminClient).not.toHaveBeenCalled();
   });
@@ -561,8 +662,30 @@ describe('requestCheck ("Check now")', () => {
     );
     const res = await svc.requestCheck();
     expect(res.scheduled).toBe(false);
+    expect(res.reason).toBe('recently_checked');
     expect(res.retryAfterSeconds).toBeGreaterThanOrEqual(39);
     expect(res.retryAfterSeconds).toBeLessThanOrEqual(41);
+    expect(scheduled).not.toHaveBeenCalled();
+  });
+
+  it('two requests before the first check lands schedule exactly ONE sync', async () => {
+    // "Checked at" only moves when a sync commits, so it cannot stop a second
+    // click made while the first check runs. Mutation caught: no claim.
+    const stale = { ...SYNC_ROW, last_synced_at: new Date(Date.now() - 10 * 60_000).toISOString() };
+    const a = userSvc({ 'exception_sync_state.select.maybeSingle': { data: stale, error: null } }, 'manager');
+    const b = userSvc({ 'exception_sync_state.select.maybeSingle': { data: stale, error: null } }, 'admin');
+    const results = [await a.svc.requestCheck(), await b.svc.requestCheck(), await a.svc.requestCheck()];
+    expect(results.map((r) => r.scheduled)).toEqual([true, false, false]);
+    expect(results[1]).toMatchObject({ reason: 'already_requested' });
+    expect(results[1]!.retryAfterSeconds).toBeGreaterThan(0);
+    expect(scheduled).toHaveBeenCalledTimes(1);
+  });
+
+  it('a limiter that cannot answer starts no check (fails closed)', async () => {
+    limiter.fails = true;
+    const { svc } = userSvc({ 'exception_sync_state.select.maybeSingle': { data: null, error: null } }, 'manager');
+    const res = await svc.requestCheck();
+    expect(res).toMatchObject({ scheduled: false, reason: 'already_requested' });
     expect(scheduled).not.toHaveBeenCalled();
   });
 

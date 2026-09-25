@@ -24,17 +24,26 @@ async function press() {
 
 describe('CheckNowButton', () => {
   it('says the check started', async () => {
-    requestExceptionCheckAction.mockResolvedValue({ ok: true, scheduled: true, retryAfterSeconds: 0, lastSyncedAt: null });
+    requestExceptionCheckAction.mockResolvedValue({ ok: true, scheduled: true, reason: null, retryAfterSeconds: 0, lastSyncedAt: null });
     render(<CheckNowButton />);
     await press();
-    expect(screen.getByRole('status')).toHaveTextContent('Check started. Reload the page in a minute to see the result.');
+    expect(screen.getByRole('status')).toHaveTextContent('Check started. Refresh in a minute to see the result.');
   });
 
   it('says when the last check was under a minute ago', async () => {
-    requestExceptionCheckAction.mockResolvedValue({ ok: true, scheduled: false, retryAfterSeconds: 37, lastSyncedAt: 'x' });
+    requestExceptionCheckAction.mockResolvedValue({ ok: true, scheduled: false, reason: 'recently_checked', retryAfterSeconds: 37, lastSyncedAt: 'x' });
     render(<CheckNowButton />);
     await press();
-    expect(screen.getByRole('status')).toHaveTextContent('You can check again in 37 seconds.');
+    expect(screen.getByRole('status')).toHaveTextContent('Checked less than a minute ago. You can check again in 37 seconds.');
+  });
+
+  it('says when a check was already started (a second click, or another manager)', async () => {
+    requestExceptionCheckAction.mockResolvedValue({ ok: true, scheduled: false, reason: 'already_requested', retryAfterSeconds: 52, lastSyncedAt: 'x' });
+    render(<CheckNowButton />);
+    await press();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'A check was already started less than a minute ago. You can check again in 52 seconds.',
+    );
   });
 
   it('shows a refusal inline as an alert', async () => {

@@ -8,8 +8,12 @@ import {
   EXCEPTION_ACT_OFFLINE_COPY,
   EXCEPTION_ACT_RESOLVED_COPY,
   EXCEPTION_ACTION_LABELS,
+  EXCEPTION_ALL_CLEAR_BODY,
   EXCEPTION_ALL_CLEAR_TITLE,
   EXCEPTION_LIST_UNAVAILABLE_COPY,
+  exceptionCheckNowCopy,
+  exceptionUncheckedRulesCopy,
+  exceptionUnrecognizedCopy,
   EXCEPTION_NONE_RESOLVED_COPY,
   EXCEPTION_RESOLVED_WINDOW_DAYS,
   exceptionActDisabledReason,
@@ -313,6 +317,22 @@ describe('describeOccurrence', () => {
     expect(d).toEqual({ title: 'Atlas', detail: 'labelled 40-C, stock is on 39-C, 41-A', units: null });
   });
 
+  it('a label mismatch past the list cap says how many more racks there are', () => {
+    const d = describeOccurrence('label_mismatch', {
+      itemName: 'Atlas',
+      label: '40-C',
+      stockOn: ['39-C', '41-A'],
+      stockOnMore: 3,
+    });
+    expect(d.detail).toBe('labelled 40-C, stock is on 39-C, 41-A and 3 more');
+    // A malformed or zero count adds nothing.
+    for (const stockOnMore of [0, -1, 'x', null]) {
+      expect(describeOccurrence('label_mismatch', { label: '40-C', stockOn: ['39-C'], stockOnMore }).detail).toBe(
+        'labelled 40-C, stock is on 39-C',
+      );
+    }
+  });
+
   it('the live item name wins over the stored one', () => {
     const d = describeOccurrence('over_reserved', { itemName: 'Old name', promised: 2, onHand: 1 }, {
       itemName: 'New name',
@@ -583,6 +603,57 @@ describe('shared list copy', () => {
       EXCEPTION_LIST_UNAVAILABLE_COPY,
       EXCEPTION_NONE_RESOLVED_COPY,
       ...Object.values(EXCEPTION_ACTION_LABELS),
+    ]) {
+      expect(text).not.toMatch(/employee|staff|theft|stole|someone|worker|picker/i);
+    }
+  });
+});
+
+describe('copy that keeps the all-clear honest', () => {
+  it('the all-clear body is one shared sentence', () => {
+    expect(EXCEPTION_ALL_CLEAR_BODY).toMatch(/^No archived locations holding stock/);
+  });
+
+  it('rows this build cannot word are counted, never silently dropped', () => {
+    expect(exceptionUnrecognizedCopy(0)).toBeNull();
+    expect(exceptionUnrecognizedCopy(Number.NaN)).toBeNull();
+    expect(exceptionUnrecognizedCopy(1)).toBe(
+      '1 more open exception cannot be shown in this version. Update the app, or reload the page, to see it.',
+    );
+    expect(exceptionUnrecognizedCopy(4)).toMatch(/^4 more open exceptions cannot be shown/);
+  });
+
+  it('an unchecked rule this build cannot name still counts as unchecked', () => {
+    expect(exceptionUncheckedRulesCopy([], 0)).toBeNull();
+    expect(exceptionUncheckedRulesCopy(['Stale in Staging'])).toBe(
+      'One check could not complete on the last run: Stale in Staging. What it would show is unknown, not clean.',
+    );
+    expect(exceptionUncheckedRulesCopy([], 1)).toBe(
+      'One check could not complete on the last run: 1 check this version cannot name. What it would show is unknown, not clean.',
+    );
+    expect(exceptionUncheckedRulesCopy(['A', 'B'], 2)).toBe(
+      '4 checks could not complete on the last run: A, B, 2 checks this version cannot name. What they would show is unknown, not clean.',
+    );
+  });
+
+  it('Check now says whether a check started, and why not', () => {
+    expect(exceptionCheckNowCopy({ scheduled: true, retryAfterSeconds: 0 })).toBe(
+      'Check started. Refresh in a minute to see the result.',
+    );
+    expect(exceptionCheckNowCopy({ scheduled: false, reason: 'recently_checked', retryAfterSeconds: 40 })).toBe(
+      'Checked less than a minute ago. You can check again in 40 seconds.',
+    );
+    expect(exceptionCheckNowCopy({ scheduled: false, reason: 'already_requested', retryAfterSeconds: 1 })).toBe(
+      'A check was already started less than a minute ago. You can check again in 1 second.',
+    );
+  });
+
+  it('none of it names or implies a person', () => {
+    for (const text of [
+      EXCEPTION_ALL_CLEAR_BODY,
+      exceptionUnrecognizedCopy(2)!,
+      exceptionUncheckedRulesCopy(['A'], 1)!,
+      exceptionCheckNowCopy({ scheduled: false, reason: 'already_requested', retryAfterSeconds: 5 }),
     ]) {
       expect(text).not.toMatch(/employee|staff|theft|stole|someone|worker|picker/i);
     }

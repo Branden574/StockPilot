@@ -57,7 +57,7 @@ describe('exceptions list screen', () => {
 
   it('offline shows the remembered list "as of" its time, or says it needs a connection', () => {
     expect(code).toContain('recalledList(userId, orgId, status)');
-    expect(code).toContain('offlineAsOfCopy(kept.receivedAt)');
+    expect(code).toContain('offlineAsOfCopy(kept.receivedAt, kept.list.timeZone)');
     expect(code).toContain('EXCEPTIONS_OFFLINE_NOTHING_LOADED_COPY');
     // The live network state, so going offline or reconnecting reloads.
     expect(code).toContain('isOfflineState(useNetworkState())');
@@ -67,11 +67,36 @@ describe('exceptions list screen', () => {
   it('before the first check it shows the pending copy and never the all-clear', () => {
     expect(code).toContain('EXCEPTION_FIRST_CHECK_PENDING_COPY');
     expect(code).toContain('data={list!.syncState === null ? [] : items}');
-    expect(code).toContain('list!.syncState === null || unchecked.length > 0 ? null');
+  });
+
+  it('never shows the all-clear while a check is unknown or an open row cannot be shown', () => {
+    // Rows of a newer rule (count_variance, before this bundle's OTA) are
+    // counted by parseExceptionList; the empty state must not call them all
+    // clear. Mutation caught: gating the all-clear on syncState and the
+    // unchecked rules only.
+    expect(code).toContain(
+      'list!.syncState === null || unchecked !== null || unrecognized !== null ? null',
+    );
+    expect(code).toContain("list && list.status === 'open' ? exceptionUnrecognizedCopy(list.unrecognized) : null");
+    expect(code).toContain('list.syncState.unrecognizedUncheckedRules');
+    expect(code).toContain('EXCEPTION_ALL_CLEAR_BODY');
+    expect(code).not.toContain('No archived locations holding stock');
+  });
+
+  it('prints times in the org time zone, like the web page', () => {
+    expect(code).toContain('const timeZone = list?.timeZone ?? null;');
+    expect(code).not.toMatch(/exceptionTimeLabel\([^,()]+\)/);
+  });
+
+  it('never shows a bare error code: a 429 or 5xx is worded by status', () => {
+    expect(code).toContain("describeExceptionsRequestError(e, 'Pull down to try again.')");
+    expect(code).toContain("describeExceptionsRequestError(e, 'Could not start a check. Try again.')");
+    expect(code).toContain('setCheckNote(exceptionCheckNowCopy(res))');
+    expect(code).not.toMatch(/e instanceof Error && e\.message \? e\.message/);
   });
 
   it('shows "Checked at" and never runs a check on view; Check now is offered only when the server allows it', () => {
-    expect(code).toContain('Checked at ${exceptionTimeLabel(list!.syncState.lastSyncedAt)}');
+    expect(code).toContain('Checked at ${exceptionTimeLabel(list!.syncState.lastSyncedAt, timeZone)}');
     expect(code).toContain('{list?.canCheckNow ? (');
     expect(code).toContain('disabled={checking || offline}');
   });
@@ -117,6 +142,12 @@ describe('exception detail screen', () => {
     expect(code).toContain('online={!offline}');
   });
 
+  it('prints every time in the org time zone and words a failed read by status', () => {
+    expect(code).not.toMatch(/exceptionTimeLabel\([^,()]+\)/);
+    expect(code).toContain('exceptionTimeLabel(detail.syncState.lastSyncedAt, detail.timeZone)');
+    expect(code).toContain("describeExceptionsRequestError(e, 'Could not load this exception.')");
+  });
+
   it('a failed read is an error on screen; a 404 says the exception is not available', () => {
     expect(code).toContain("'This exception is not available to you, or it no longer exists.'");
     expect(code).toContain("{ kind: 'error', message }");
@@ -135,8 +166,15 @@ describe('acknowledge and note sheet', () => {
     expect(code).toContain('{submitState.reason}');
   });
 
-  it('sends one client event id per opening, through the Bearer route', () => {
-    expect(code).toContain('React.useState(() => newClientEventId())');
+  it('ties the client event id to the payload, through the Bearer route', () => {
+    // Reused only for a resend of the same action and note; an edited note is
+    // a new request (the rule itself is tested in exceptions-api.test.ts).
+    // Mutation caught: one id per opening, which dropped an edited note as a
+    // replay of a lost first request.
+    expect(code).toContain('clientEventIdFor(lastAttempt.current, mode, payloadNote)');
+    expect(code).toContain('lastAttempt.current = { action: mode, note: payloadNote, id: clientEventId }');
+    expect(code).not.toContain('newClientEventId()');
+    expect(code).toContain("if (reason === 'client_event_id_conflict') lastAttempt.current = null;");
     expect(code).toContain('actOnException(occurrence.id, {');
     expect(code).toContain('clientEventId,');
     expect(code).not.toContain('.rpc(');

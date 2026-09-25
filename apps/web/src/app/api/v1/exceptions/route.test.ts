@@ -14,9 +14,10 @@ import { makeSupabaseStub } from '@/test/supabase-mock';
 
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn() }));
-vi.mock('@/lib/rate-limit', () => ({
-  checkRateLimit: vi.fn(async () => ({ allowed: true, resetAt: Date.now() + 60_000 })),
-}));
+const checkRateLimit = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => ({ allowed: true, count: 1, resetAt: Date.now() + 60_000 })),
+);
+vi.mock('@/lib/rate-limit', () => ({ checkRateLimit }));
 const createAdminClient = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient }));
 vi.mock('@/lib/auth/warehouse', () => {
@@ -119,6 +120,7 @@ describe('GET /api/v1/exceptions', () => {
       ctxWith({
         'exception_occurrences.select': { data: [occRow()], error: null },
         'exception_sync_state.select.maybeSingle': { data: SYNC_ROW, error: null },
+        'organizations.select.maybeSingle': { data: { timezone: 'America/Chicago' }, error: null },
       });
       const request = make('https://t.local/api/v1/exceptions');
       const res = await LIST(request);
@@ -129,6 +131,10 @@ describe('GET /api/v1/exceptions', () => {
       expect(body).toMatchObject({ organizationId: 'org-1', status: 'open', truncated: false });
       expect(body.occurrences[0]).toMatchObject({ id: OCC, reference: 'EX-000042', rule: 'over_reserved' });
       expect(body.syncState.lastSyncedAt).toBe(SYNC_ROW.last_synced_at);
+      // The org's zone travels with the list, so the phone prints the same
+      // clock time the web page does.
+      expect(body.timeZone).toBe('America/Chicago');
+      expect(body.unrecognized).toBe(0);
     }
   });
 
@@ -174,6 +180,18 @@ describe('GET /api/v1/exceptions', () => {
     const body = await res.json();
     expect(body.occurrences).toBeUndefined();
     expect(JSON.stringify(body)).not.toContain('relation does not exist');
+  });
+
+  it('an unexpected failure is a 500 with a sentence, never a bare code the phone would print', async () => {
+    ctxWith({
+      'exception_occurrences.select': () => {
+        throw new TypeError('boom');
+      },
+      'exception_sync_state.select.maybeSingle': { data: SYNC_ROW, error: null },
+    });
+    const res = await LIST(bearer('https://t.local/api/v1/exceptions'));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'internal_error', message: 'Something went wrong. Please try again.' });
   });
 });
 
@@ -320,8 +338,8 @@ describe('POST /api/v1/exceptions/check-now', () => {
     );
     const res = await CHECK_NOW(post(cookie));
     expect(res.status).toBe(202);
-    expect(await res.json()).toMatchObject({ scheduled: true, retryAfterSeconds: 0 });
-    expect(scheduled).toHaveBeenCalledWith('org-1', 'check_now');
+    expect(await res.json()).toMatchObject({ scheduled: true, reason: null, retryAfterSeconds: 0 });
+    expect(scheduled).toHaveBeenCalledWith('org-1', 'check_now', { force: false });
     expect(createAdminClient).not.toHaveBeenCalled();
   });
 
@@ -341,5 +359,34 @@ describe('POST /api/v1/exceptions/check-now', () => {
     const res = await CHECK_NOW(post(bearer));
     expect(res.status).toBe(403);
     expect(scheduled).not.toHaveBeenCalled();
+  });
+
+  it('a 429 carries a sentence, not only the code', async () => {
+    ctxWith({}, { role: 'manager' });
+    checkRateLimit.mockResolvedValueOnce({ allowed: false, count: 11, resetAt: Date.now() + 30_000 });
+    const res = await CHECK_NOW(post(bearer));
+    expect(res.status).toBe(429);
+    expect(res.headers.get('retry-after')).toBe('30');
+    expect(await res.json()).toMatchObject({
+      error: 'rate_limited',
+      message: 'Too many requests. Wait a moment and try again.',
+    });
+    expect(scheduled).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/v1/exceptions/[id]/act — rate limit', () => {
+  it('a 429 carries a sentence, not only the code', async () => {
+    ctxWith({});
+    checkRateLimit.mockResolvedValueOnce({ allowed: false, count: 61, resetAt: Date.now() + 5_000 });
+    const res = await ACT(
+      bearer(`https://t.local/api/v1/exceptions/${OCC}/act`, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'acknowledge' }),
+      }),
+      params(OCC),
+    );
+    expect(res.status).toBe(429);
+    expect((await res.json()).message).toBe('Too many requests. Wait a moment and try again.');
   });
 });

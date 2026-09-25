@@ -4,7 +4,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { ExceptionOccurrencesService } from '@/server/services/exception-occurrences';
 
-import { exceptionsErrorResponse } from '../error-response';
+import { exceptionsErrorResponse, exceptionsRateLimitedResponse } from '../error-response';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,15 +24,7 @@ export async function POST(req: NextRequest) {
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
   const rl = await checkRateLimit(`exceptions-check-now:${ctx.userId}`, 10, 60_000);
-  if (!rl.allowed) {
-    return NextResponse.json(
-      { error: 'rate_limited', retryAt: rl.resetAt },
-      {
-        status: 429,
-        headers: { 'Retry-After': String(Math.ceil((rl.resetAt - Date.now()) / 1000)) },
-      },
-    );
-  }
+  if (!rl.allowed) return exceptionsRateLimitedResponse(rl.resetAt);
 
   try {
     const result = await new ExceptionOccurrencesService(ctx).requestCheck();
