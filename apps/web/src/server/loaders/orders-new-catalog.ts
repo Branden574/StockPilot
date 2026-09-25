@@ -84,9 +84,12 @@ export async function loadCatalogBundle(
  * Also carries each item's LQIP blur: image rows change on the same
  * cadence as their thumbnails, so pulling the blurs out of the stock
  * loader saves that loader an entire item_images query.
+ *
+ * One entry per ACTIVE, non-deleted item of the warehouse with a photo.
  */
 export interface CatalogItemMedia {
   url: string | null;
+  /** Only when `url` is null (the blur-up is for a card with no photo URL). */
   lqip: string | null;
 }
 
@@ -109,6 +112,29 @@ const TRANSFORM_SIGN_CONCURRENCY = 20;
  * degrade to lqip-only for just those items.
  */
 const SIGN_FAILURE_THROW_RATIO = 0.1;
+/**
+ * Paths per createSignedUrls call: NEVER more than 1000. storage-js sends
+ * every path of one call in ONE JSON body (POST /object/sign/{bucket}), and
+ * storage-api refuses it past two limits. Its body schema caps `paths` at
+ * maxItems MAX_OBJECTS_PER_REQUEST = 1000 (src/storage/limits.ts, since
+ * v1.60.21, 2026-06-18, supabase/storage#1160; still 1000 in v1.79.20), a 400
+ * for the whole call at the 1,001st photographed item. And its Fastify
+ * server's default 1 MiB body limit (a 413) would stop an older storage at
+ * ~8,450 paths of ~120 bytes (`{org}/items/{item}/{file}`). Either way the
+ * whole map threw: no photos for anyone. 1000 paths is ~120 KB per body.
+ */
+const SIGN_PATHS_PER_CALL = 1000;
+/**
+ * Serialized-size warning for the map. Next 16 does not cache an
+ * unstable_cache entry over 2 MB (incremental-cache/index.js: in production it
+ * console.warns and skips the write; `next dev` throws E1003 instead), so past
+ * that every visit re-pages the
+ * image rows and re-signs every photo. Next measures the entry with the value
+ * JSON-encoded twice (every quote escaped, ~8 more bytes per item than
+ * JSON.stringify(media)); 1.5 MB warns well before the cliff. Each entry is
+ * ~600 bytes, almost all of it the signed URL: ~2,600 photographed items.
+ */
+const THUMB_MAP_WARN_CHARS = 1.5 * 1024 * 1024;
 
 // v2 (FIX 5): value shape changed from Record<string, string> to
 // Record<string, CatalogItemMedia> — key bumped so stale v1 entries
@@ -122,20 +148,69 @@ export const loadCatalogThumbMapCached = unstable_cache(
     const supabase = createAdminClient();
     // Mirror the catalog loader's item scoping with an inner join on
     // inventory_items so only this warehouse's images get signed.
-    const { data, error: rowsError } = await supabase
-      .from('item_images')
-      .select(
-        'item_id, lqip, thumb_path, storage_path, is_primary, sort_order, item:inventory_items!inner(warehouse_id)',
-      )
-      .eq('organization_id', organizationId)
-      .eq('item.warehouse_id', warehouseId)
-      .order('is_primary', { ascending: false })
-      .order('sort_order', { ascending: true });
-    // THROW, never an empty map: a failed read cached as {} would blank every
-    // photo for 4h. loadCatalogBundle catches, so this request goes
-    // photo-less and the next one retries.
-    if (rowsError) {
-      throw new Error(`thumb map image rows read failed: ${rowsError.message}`);
+    //
+    // EVERY image row, paged past PostgREST's 1000-row max_rows. The single
+    // read here was silently cut at 1000 rows, so once a warehouse held more
+    // image rows than that, photos went missing for whatever sorted last (DC4
+    // held 613 on 2026-09-25, the day the item catalog's own 500-row limit
+    // hid 65 items). id breaks ties so every page reads the same global order
+    // and "first row per item" below means the same row it always did.
+    //
+    // NOT-DELETED items only. With only org + warehouse on the join, every
+    // soft-deleted item that ever had a photo kept a map entry and a signed
+    // URL. ARCHIVED items keep theirs, on purpose: an archived item is back in
+    // the catalog within 60 s when it is unarchived or auto-restored by
+    // arriving stock (0266), and this map is cached for 4 h, so dropping them
+    // would show a restored item with no photo for hours. A soft-deleted item
+    // brought back (RecoveryService.restore, rare) waits for the next rebuild,
+    // up to 4 h, the same as a new item. is_rental and is_bundle are NOT
+    // filtered either: rental photos come from this map too.
+    // With `!inner`, a filter on the embed filters the image rows themselves
+    // (PostgREST "top-level filtering"), and each page's builder applies it.
+    //
+    // NOT ONE SNAPSHOT: each page is its own request, so an image row deleted
+    // between two page reads shifts the later rows up and one can be skipped
+    // (an insert can repeat one; the first row per item still wins). Low: it
+    // needs a photo change while the pages are being read, and the next
+    // recompute (within 4 h) heals it. One snapshot would need an RPC, a
+    // migration.
+    type ImageRow = {
+      item_id: string;
+      lqip: string | null;
+      thumb_path: string | null;
+      storage_path: string | null;
+    };
+    let data: ImageRow[];
+    try {
+      data = await fetchAllRows<ImageRow>(
+        (from, to) =>
+          supabase
+            .from('item_images')
+            .select(
+              'item_id, lqip, thumb_path, storage_path, is_primary, sort_order, item:inventory_items!inner(warehouse_id)',
+            )
+            .eq('organization_id', organizationId)
+            .eq('item.warehouse_id', warehouseId)
+            .is('item.deleted_at', null)
+            .order('is_primary', { ascending: false })
+            .order('sort_order', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to) as unknown as PromiseLike<{
+            data: ImageRow[] | null;
+            error: { message: string } | null;
+          }>,
+      );
+    } catch (err) {
+      // THROW, never an empty map: a failed read cached as {} would blank
+      // every photo for 4h. loadCatalogBundle catches, so this request goes
+      // photo-less and the next one retries. Any failed page fails the read.
+      const cause =
+        err instanceof ServiceError
+          ? (err.internalDetail ?? err.message)
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      throw new Error(`thumb map image rows read failed: ${cause}`);
     }
 
     // First row per item wins (is_primary DESC + sort_order ASC).
@@ -143,12 +218,7 @@ export const loadCatalogThumbMapCached = unstable_cache(
       string,
       { lqip: string | null; thumbPath: string | null; storagePath: string | null }
     >();
-    for (const row of (data ?? []) as Array<{
-      item_id: string;
-      lqip: string | null;
-      thumb_path: string | null;
-      storage_path: string | null;
-    }>) {
+    for (const row of data) {
       if (!rowByItem.has(row.item_id)) {
         rowByItem.set(row.item_id, {
           lqip: row.lqip ?? null,
@@ -158,10 +228,14 @@ export const loadCatalogThumbMapCached = unstable_cache(
       }
     }
 
-    // BATCH signing: ONE createSignedUrls call covers every
-    // pre-generated thumb; only legacy rows without a thumb_path
-    // (uploads predating migration 0122) need individual transform
-    // signs, because createSignedUrls doesn't support transforms.
+    // BATCH signing: createSignedUrls calls of up to SIGN_PATHS_PER_CALL
+    // paths cover every pre-generated thumb; only legacy rows without a
+    // thumb_path (uploads predating migration 0122) need individual
+    // transform signs, because createSignedUrls doesn't support transforms.
+    //
+    // PAYLOAD DIET (as loadCatalogBundle): an entry keeps its lqip only
+    // while it has no URL. Every reader drops the blur once a URL exists, so
+    // storing it next to one only made the cached map bigger.
     const media: Record<string, CatalogItemMedia> = {};
     const thumbBatch: Array<{ itemId: string; path: string }> = [];
     const transformBatch: Array<{ itemId: string; path: string }> = [];
@@ -170,7 +244,7 @@ export const loadCatalogThumbMapCached = unstable_cache(
       // card renders through next/image (SfPhoto), whose optimizer downscales
       // the master to the exact retina cell + AVIF/WebP + 24h edge cache.
       // Feeding a 200px thumb to a plain <img> made it upscale (blurry on
-      // retina). One batched createSignedUrls covers all masters — same
+      // retina). The batched createSignedUrls calls cover all masters — same
       // signing cost as before. thumb_path is the fallback if a row somehow
       // lacks a master; the legacy transform branch is now unused.
       const path = row.storagePath ?? row.thumbPath;
@@ -181,29 +255,39 @@ export const loadCatalogThumbMapCached = unstable_cache(
     let failedSigns = 0;
     const attemptedSigns = thumbBatch.length + transformBatch.length;
 
-    if (thumbBatch.length > 0) {
+    // One call at a time: the chunks exist to keep each request body small,
+    // not to add parallel load on storage.
+    for (let i = 0; i < thumbBatch.length; i += SIGN_PATHS_PER_CALL) {
+      const chunk = thumbBatch.slice(i, i + SIGN_PATHS_PER_CALL);
       const { data: signed, error } = await supabase.storage
         .from('item-images')
         .createSignedUrls(
-          thumbBatch.map((t) => t.path),
+          chunk.map((t) => t.path),
           THUMB_SIGNED_URL_TTL_SEC,
         );
       // THROW on whole-batch failure so unstable_cache does NOT persist
       // a photo-less map for 4h (same throw-don't-cache posture as the
       // signers in item-images.ts). loadCatalogBundle catches → the
       // page degrades to glyph/lqip cards and the next visit retries.
+      // Any failed chunk fails the whole map.
       if (error) {
-        throw new Error(`thumb batch sign failed: ${error.message}`);
+        throw new Error(
+          `thumb batch sign failed (paths ${i + 1}-${i + chunk.length} of ${thumbBatch.length}): ${error.message}`,
+        );
       }
       const urlByPath = new Map<string, string>();
       for (const s of signed ?? []) {
         if (s.path && s.signedUrl && !s.error) urlByPath.set(s.path, s.signedUrl);
       }
-      for (const t of thumbBatch) {
+      for (const t of chunk) {
         const row = rowByItem.get(t.itemId)!;
         const url = urlByPath.get(t.path) ?? null;
-        if (!url) failedSigns += 1;
-        if (url || row.lqip) media[t.itemId] = { url, lqip: row.lqip };
+        if (url) {
+          media[t.itemId] = { url, lqip: null };
+        } else {
+          failedSigns += 1;
+          if (row.lqip) media[t.itemId] = { url: null, lqip: row.lqip };
+        }
       }
     }
 
@@ -225,8 +309,12 @@ export const loadCatalogThumbMapCached = unstable_cache(
                 },
               });
             const url = error ? null : (t?.signedUrl ?? null);
-            if (!url) failedSigns += 1;
-            if (url || row.lqip) media[itemId] = { url, lqip: row.lqip };
+            if (url) {
+              media[itemId] = { url, lqip: null };
+            } else {
+              failedSigns += 1;
+              if (row.lqip) media[itemId] = { url: null, lqip: row.lqip };
+            }
           } catch {
             failedSigns += 1;
             if (row.lqip) media[itemId] = { url: null, lqip: row.lqip };
@@ -237,9 +325,20 @@ export const loadCatalogThumbMapCached = unstable_cache(
 
     // FAIL-CLOSED: a mostly-failed sign pass must not become the 4h
     // truth. Throwing skips the cache write; the next request retries.
+    // Counted over every chunk: the ratio is the map's, not one call's.
     if (attemptedSigns > 0 && failedSigns / attemptedSigns > SIGN_FAILURE_THROW_RATIO) {
       throw new Error(
         `thumb map sign failure ratio too high (${failedSigns}/${attemptedSigns}) — not caching`,
+      );
+    }
+
+    // NEVER SILENT: past 2 MB Next drops the cache write with only its own
+    // warning, and every visit then rebuilds the map. Say so first, with the
+    // numbers. The map is still returned whole.
+    const mapChars = JSON.stringify(media).length;
+    if (mapChars > THUMB_MAP_WARN_CHARS) {
+      console.warn(
+        `[orders-new] thumb map for warehouse ${warehouseId}: ${Object.keys(media).length} entries, ${mapChars} chars serialized, past the 1.5 MB warning line; Next does not cache an entry over 2 MB, so past that every visit rebuilds and re-signs it`,
       );
     }
 
