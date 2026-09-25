@@ -113,9 +113,10 @@ export default async function NewRentalPage({
   // one cached entry per warehouse, signed in ONE batched storage call and
   // not per item, kept warm by the prewarm cron for the busiest
   // organizations, and shared with the Orders page. A warm visit makes no
-  // storage call at all. The map is up to 4 hours old, so a photo added since
-  // then (or a map that failed) is filled in by the form's deferred request,
-  // which now asks for rental items only.
+  // storage call at all. The map is up to 4 hours old and nothing refreshes it
+  // when a photo changes, so the form's deferred request (rental items only)
+  // reads the photos fresh and corrects any card whose photo was added,
+  // replaced or removed since the map was built, or whose map failed.
   const supabase = createAdminClient();
   const [
     { data: rentalItemsData, error: rentalItemsError },

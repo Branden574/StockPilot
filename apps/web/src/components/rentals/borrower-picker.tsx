@@ -79,6 +79,9 @@ export function BorrowerPicker({
 
   const isMember = Boolean(value.borrowerUserId);
   const typed = inputValue.trim();
+  // The chosen value, for aria-selected: a picked member, or someone not in
+  // StockPilot once a name is in. The highlight is aria-activedescendant.
+  const someoneElseChosen = !isMember && value.borrowerName.trim().length > 0;
   // With a member picked, the box shows their name: list everyone, so the
   // operator can switch, rather than only the member already chosen.
   const query = isMember && inputValue === value.borrowerName ? '' : typed.toLowerCase();
@@ -212,6 +215,10 @@ export function BorrowerPicker({
               }
               setOpen(true);
             }}
+            // A click opens the list too. Focus alone is not enough: after a
+            // pick (the list keeps focus in this box) or Escape, the box is
+            // still focused, so clicking it fires no focus event.
+            onClick={() => setOpen(true)}
             onKeyDown={handleKeyDown}
             placeholder="Search members, or type anyone's name"
             disabled={disabled}
@@ -234,6 +241,12 @@ export function BorrowerPicker({
               className="max-h-64 overflow-y-auto py-1 text-sm"
               role="listbox"
               aria-label="Borrower suggestions"
+              // Out of the Tab order. Chrome makes a scrolling box with no
+              // focusable children a Tab stop, so with a long member list Tab
+              // from the name box landed here, inside the picker, and the list
+              // stayed open over the email field. The options are reached
+              // with the arrow keys from the name box.
+              tabIndex={-1}
               // Keep focus in the name box while choosing, so the list does
               // not close under the pointer before the click lands.
               onMouseDown={(e) => e.preventDefault()}
@@ -242,7 +255,7 @@ export function BorrowerPicker({
               <li
                 id={optionId(0)}
                 role="option"
-                aria-selected={activeIndex === 0}
+                aria-selected={someoneElseChosen}
                 onClick={() => selectOption(0)}
                 className={cn(
                   'flex items-start gap-2 px-3 py-2 cursor-pointer select-none border-b border-border/50',
@@ -264,6 +277,7 @@ export function BorrowerPicker({
                       : 'Type their name here, then add their email below.'}
                   </span>
                 </span>
+                {someoneElseChosen ? <Check className="mt-0.5 h-3.5 w-3.5 flex-none" /> : null}
               </li>
 
               {filteredMembers.map((member, i) => {
@@ -279,7 +293,12 @@ export function BorrowerPicker({
                     className={cn(
                       'flex items-center gap-2 px-3 py-2 cursor-pointer select-none',
                       isSelected
-                        ? 'bg-primary text-primary-foreground'
+                        ? // The picked member, highlighted: a ring, since the
+                          // picked fill would hide the highlight's.
+                          cn(
+                            'bg-primary text-primary-foreground',
+                            activeIndex === index && 'ring-2 ring-inset ring-primary-foreground/70',
+                          )
                         : activeIndex === index
                           ? 'bg-muted'
                           : 'hover:bg-muted',

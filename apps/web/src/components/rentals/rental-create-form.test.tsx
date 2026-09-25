@@ -211,14 +211,21 @@ describe('RentalCreateForm — the cart checks out only what it shows', () => {
   });
 });
 
-// ═══ RENTAL PHOTOS: WITH THE PAGE, AND ONLY RENTALS ASKED FOR AFTER ═══
+// ═══ RENTAL PHOTOS: WITH THE PAGE, CORRECTED BY A RENTALS-ONLY READ ═══
 //
 // L4L, 2026-09-25: rental photos appeared about five seconds after the page.
 // The form asked for photos of EVERY item in the warehouse (includeRentals=1).
-// The page now ships photos in its HTML; the form asks, for rental items only,
-// just when a card arrived without one, and never replaces a photo it has.
+// The page now ships photos in its HTML from the warehouse photo map, which is
+// up to 4 hours old; the form reads the rental items' photos fresh and changes
+// a card only when that answer names a different image.
 describe('RentalCreateForm — photos', () => {
-  const CANOPY: CatalogItem = { ...TENT, id: 'canopy', name: 'Canopy', imageUrl: 'https://ssr/canopy.webp' };
+  const SIGNED = 'https://proj.supabase.co/storage/v1/object/sign/item-images/org-1';
+  const CANOPY: CatalogItem = {
+    ...TENT,
+    id: 'canopy',
+    name: 'Canopy',
+    imageUrl: `${SIGNED}/canopy/a.webp?token=page`,
+  };
 
   beforeEach(() => {
     localStorage.clear();
@@ -227,23 +234,58 @@ describe('RentalCreateForm — photos', () => {
     gridItems.current = [];
   });
 
-  it('asks for rental items only, and only when a card has no photo yet', () => {
+  const imageById = () => new Map(gridItems.current.map((i) => [i.id, i.imageUrl]));
+
+  it('asks for rental items only', () => {
     renderForm([CANOPY, TENT]);
     expect(thumbs.urls.at(-1)).toBe('/api/orders/catalog-thumbnails?warehouseId=wh-1&rentalsOnly=1');
     expect(thumbs.urls.some((u) => u?.includes('includeRentals'))).toBe(false);
   });
 
-  it('makes no photo request when every card already has its photo', () => {
+  it('asks even when every card already has a photo (the map can be hours old)', () => {
     renderForm([CANOPY]);
+    expect(thumbs.urls.at(-1)).toBe('/api/orders/catalog-thumbnails?warehouseId=wh-1&rentalsOnly=1');
+  });
+
+  it('makes no photo request when there are no rental items', () => {
+    renderForm([]);
     expect(thumbs.urls.length).toBeGreaterThan(0);
     expect(thumbs.urls.every((u) => u === null)).toBe(true);
   });
 
-  it('fills a missing photo and never replaces one the page sent', () => {
-    thumbs.answer = { canopy: 'https://deferred/canopy.webp', tent: 'https://deferred/tent.webp' };
+  it('fills a missing photo; the same image under a new signature is left alone', () => {
+    thumbs.answer = {
+      canopy: `${SIGNED}/canopy/a.webp?token=fresh`,
+      tent: `${SIGNED}/tent/t.webp?token=fresh`,
+    };
     renderForm([CANOPY, TENT]);
-    const byId = new Map(gridItems.current.map((i) => [i.id, i.imageUrl]));
-    expect(byId.get('canopy')).toBe('https://ssr/canopy.webp');
-    expect(byId.get('tent')).toBe('https://deferred/tent.webp');
+    expect(imageById().get('canopy')).toBe(`${SIGNED}/canopy/a.webp?token=page`);
+    expect(imageById().get('tent')).toBe(`${SIGNED}/tent/t.webp?token=fresh`);
+  });
+
+  it('a photo replaced since the map was built: the card shows the new one', () => {
+    thumbs.answer = { canopy: `${SIGNED}/canopy/b.webp?token=fresh` };
+    renderForm([CANOPY]);
+    expect(imageById().get('canopy')).toBe(`${SIGNED}/canopy/b.webp?token=fresh`);
+  });
+
+  it('a book that showed its cover and now has an uploaded photo: the photo', () => {
+    const BOOK: CatalogItem = {
+      ...TENT,
+      id: 'book',
+      imageUrl: 'https://books.google.com/books/content?id=AAA&printsec=frontcover&img=1',
+    };
+    thumbs.answer = { book: `${SIGNED}/book/p.webp?token=fresh` };
+    renderForm([BOOK]);
+    expect(imageById().get('book')).toBe(`${SIGNED}/book/p.webp?token=fresh`);
+  });
+
+  it('keeps a cover that has not changed, and keeps the page photo when the answer has none', () => {
+    const cover = 'https://books.google.com/books/content?id=AAA&printsec=frontcover&img=1';
+    const BOOK: CatalogItem = { ...TENT, id: 'book', imageUrl: cover };
+    thumbs.answer = { book: cover };
+    renderForm([BOOK, CANOPY]);
+    expect(imageById().get('book')).toBe(cover);
+    expect(imageById().get('canopy')).toBe(`${SIGNED}/canopy/a.webp?token=page`);
   });
 });

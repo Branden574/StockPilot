@@ -37,4 +37,14 @@ describe('RENTAL_BORROWER_EMAIL_HELP', () => {
     // No promise of a reminder before the due date: none is sent.
     expect(RENTAL_BORROWER_EMAIL_HELP).not.toMatch(/due soon|before it is due|upcoming/i);
   });
+
+  it('promises the overdue reminder only with its condition: the Rentals switch, not the comp', () => {
+    // cron/rental-overdue sweeps only organizations whose own Rentals row is
+    // on (its tests pin that the comp is ignored). A comped organization can
+    // create rentals with the switch off, and then no reminder goes out.
+    expect(RENTAL_BORROWER_EMAIL_HELP).toMatch(
+      /while Rentals is switched on in Settings > Modules, a reminder if the rental is overdue/,
+    );
+    expect(RENTAL_BORROWER_EMAIL_HELP).not.toMatch(/and a reminder if the rental is overdue/);
+  });
 });
