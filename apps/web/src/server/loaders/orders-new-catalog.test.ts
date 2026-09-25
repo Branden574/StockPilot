@@ -202,6 +202,7 @@ function makeFilteringAdmin(rows: Array<Row & { name?: string }>) {
       is_bundle: null,
     })) as Array<Record<string, unknown>>;
     let limit = Infinity;
+    let range: [number, number] | null = null;
     const orderBy: string[] = [];
     for (const [m, args] of calls) {
       if (m === 'eq') out = out.filter((r) => r[args[0] as string] === args[1]);
@@ -211,10 +212,13 @@ function makeFilteringAdmin(rows: Array<Row & { name?: string }>) {
       else if (m === 'or')
         out = out.filter((r) => splitTop(args[0] as string).some((t) => matchTerm(r, t)));
       else if (m === 'limit') limit = args[0] as number;
+      else if (m === 'range') range = [args[0] as number, args[1] as number];
       else if (m === 'order') orderBy.push(args[0] as string);
       else if (m !== 'select') throw new Error(`fake: unsupported ${m}`);
     }
-    // ORDER BY the recorded columns (all ascending here), then LIMIT.
+    // ORDER BY the recorded columns (all ascending here), then RANGE or
+    // LIMIT, then PostgREST's max_rows: no response carries more than 1000
+    // rows (supabase/config.toml), whatever was asked for.
     out.sort((a, b) => {
       for (const col of orderBy) {
         const x = String(a[col]);
@@ -223,7 +227,8 @@ function makeFilteringAdmin(rows: Array<Row & { name?: string }>) {
       }
       return 0;
     });
-    return out.slice(0, limit);
+    const windowed = range ? out.slice(range[0], range[1] + 1) : out.slice(0, limit);
+    return windowed.slice(0, 1000);
   };
   const client = {
     from: vi.fn((table: string) => {
@@ -410,6 +415,105 @@ describe("loadCatalogItems — the catalog is the caller's RLS view of the wareh
   );
 });
 
+/* ---- every orderable item, not the first 500 by name ---- */
+
+// Production, 2026-09-25: DC4 held 565 orderable items and the catalog read
+// only the first 500 by name, so "The Distance Between Us", "The Hunger Games
+// Book 1" and "The Outsiders" (after "Suitcase") could not be found or ordered.
+// The storefront's search runs over these rows, so a row left out is gone.
+describe('loadCatalogItems — every orderable item in the warehouse', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns items past the old 500-row cut-off (the DC4 shape)', async () => {
+    const rows: Array<Row & { name: string }> = [];
+    for (let i = 0; i < 499; i += 1) {
+      rows.push({ ...item(`a-${i}`, WH, null, CAT_X), name: `A item ${String(i).padStart(3, '0')}` });
+    }
+    rows.push({ ...item('suitcase', WH, null, CAT_X), name: 'Suitcase' });
+    for (const [id, name] of [
+      ['distance', 'The distance between us'],
+      ['hunger', 'The Hunger Games Book 1'],
+      ['outsiders', 'The Outsiders'],
+    ] as const) {
+      rows.push({ ...item(id, WH, null, CAT_Y), name });
+    }
+    const admin = makeFilteringAdmin(rows);
+    createAdminClientMock.mockReturnValue(admin.client);
+
+    const items = await loadCatalogItems(viewer('owner'), WH);
+
+    expect(items).toHaveLength(503);
+    expect(items.map((i) => i.id)).toEqual(
+      expect.arrayContaining(['suitcase', 'distance', 'hunger', 'outsiders']),
+    );
+    // Asked page by page, never capped by a limit.
+    for (const calls of admin.itemQueries) {
+      expect(calls.some(([m]) => m === 'limit')).toBe(false);
+      expect(calls.find(([m]) => m === 'range')?.[1]).toEqual([0, 999]);
+    }
+  });
+
+  it('pages past PostgREST\'s 1000-row response cap: 2,345 items, every one, in (name, id) order', async () => {
+    const rows: Array<Row & { name: string }> = [];
+    for (let i = 0; i < 2345; i += 1) {
+      rows.push({
+        ...item(`i-${String(i).padStart(4, '0')}`, WH, null, CAT_X),
+        name: `n-${String((i * 7919) % 2345).padStart(4, '0')}`,
+      });
+    }
+    const admin = makeFilteringAdmin(rows);
+    createAdminClientMock.mockReturnValue(admin.client);
+
+    const items = await loadCatalogItems(viewer('owner'), WH);
+
+    const expected = [...rows]
+      .sort((a, b) => (a.name === b.name ? (a.id < b.id ? -1 : 1) : a.name < b.name ? -1 : 1))
+      .map((r) => r.id);
+    expect(items.map((i) => i.id)).toEqual(expected);
+    expect(admin.itemQueries.map((calls) => calls.find(([m]) => m === 'range')?.[1])).toEqual([
+      [0, 999],
+      [1000, 1999],
+      [2000, 2999],
+    ]);
+  });
+
+  it('a failed second page rejects the catalog (never a partial one cached as whole)', async () => {
+    const rows: Array<Row & { name: string }> = [];
+    for (let i = 0; i < 1500; i += 1) {
+      rows.push({ ...item(`i-${String(i).padStart(4, '0')}`, WH, null, CAT_X), name: `n-${i}` });
+    }
+    const admin = makeFilteringAdmin(rows);
+    let reads = 0;
+    const realFrom = admin.client.from;
+    admin.client.from = vi.fn((table: string) => {
+      const builder = realFrom(table) as Record<string, unknown>;
+      if (table !== 'inventory_items') return builder;
+      reads += 1;
+      if (reads < 2) return builder;
+      const failing: object = new Proxy(
+        {},
+        {
+          get(_t, prop: string) {
+            if (prop === 'then') {
+              return (resolve: (v: unknown) => void) =>
+                resolve({ data: null, error: { message: 'boom on page 2' } });
+            }
+            return () => failing;
+          },
+        },
+      );
+      return failing;
+    });
+    createAdminClientMock.mockReturnValue(admin.client);
+
+    await expect(loadCatalogItems(viewer('owner'), WH)).rejects.toThrow(
+      /catalog items read failed: .*boom on page 2/,
+    );
+  });
+});
+
 /* ---- long scope and name lists stay under the URL limits ---- */
 
 // A viewer may hold up to 500 category grants (user-categories.ts). In one
@@ -444,19 +548,20 @@ describe('loadCatalogItems — a long category grant list', () => {
       allowed: [...granted].map((category_id) => ({ organization_id: ORG, category_id })),
     });
 
-  it('reads the grants in batches that fit the URL with the charter list, and keeps the same first 500 rows', async () => {
+  it('reads the grants in batches that fit the URL with the charter list, and keeps every row in (name, id) order', async () => {
     const admin = makeFilteringAdmin(LONG_ROWS);
     createAdminClientMock.mockReturnValue(admin.client);
     createClientMock.mockResolvedValue(caller());
 
     const items = await loadCatalogItems(viewer('viewer'), WH);
 
-    // What ONE query would return: generic rows (the viewer holds charter A
-    // only) in a granted category, ordered by (name, id), first 500.
+    // What ONE query would return: every generic row (the viewer holds
+    // charter A only) in a granted category, ordered by (name, id). That is
+    // 600 rows: past the old 500-row cut-off.
     const expected = LONG_ROWS.filter((r) => r.charter_id === null && granted.has(r.category_id!))
       .sort((a, b) => (a.name === b.name ? (a.id < b.id ? -1 : 1) : a.name < b.name ? -1 : 1))
-      .slice(0, 500)
       .map((r) => r.id);
+    expect(expected).toHaveLength(600);
     expect(items.map((i) => i.id)).toEqual(expected);
 
     // Two batches (100 + 50 grants), each well inside the character budget

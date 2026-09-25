@@ -23,6 +23,8 @@ import {
   mapIdBatches,
   settleAsDataError,
 } from '@/server/services/lib/fetch-by-ids';
+import { ServiceError } from '@/server/services/context';
+import { fetchAllRows } from '@/server/services/lib/paginate';
 
 import type { Role } from '@stockpilot/core';
 
@@ -599,8 +601,18 @@ export function rackLabelFor(it: OrdersCatalogRackRow): string | null {
   return row ? `${num}-${row}` : String(num);
 }
 
-/** Rows the storefront catalog holds for one warehouse. */
-const CATALOG_ROW_LIMIT = 500;
+/**
+ * A safety ceiling, NOT a page size: the storefront shows EVERY orderable item
+ * in the warehouse, because its search and category filters run in the browser
+ * over the rows loaded here. An item past a cut-off cannot be found at all.
+ *
+ * This was a 500-row limit by name until 2026-09-25. DC4 passed 500 orderable
+ * items on 2026-09-24 and the 65 items after "Suitcase" (The Distance Between
+ * Us, The Hunger Games, The Outsiders, ...) vanished from the order page. The
+ * largest warehouse then held 565. Reaching this ceiling is reported, never
+ * silent.
+ */
+export const CATALOG_ROW_CEILING = 10_000;
 
 type CatalogItemRow = {
   id: string;
@@ -673,11 +685,10 @@ async function loadCatalogItemsUncached(
       .eq('awaiting_first_receipt', false)
       .is('deleted_at', null)
       .or('is_bundle.is.null,is_bundle.eq.false')
-      // id breaks ties so the rows kept at the limit are the same on every
-      // read, and the same when several category batches are merged below.
+      // id breaks ties so every read pages the rows in the same order, and
+      // the pages and category batches merge without gaps or repeats.
       .order('name', { ascending: true })
-      .order('id', { ascending: true })
-      .limit(CATALOG_ROW_LIMIT);
+      .order('id', { ascending: true });
 
     // RLS is bypassed here, so the scope IS the row filter. It is applied in
     // SQL, before the limit, exactly where the policy would apply. 'ALL'
@@ -712,10 +723,29 @@ async function loadCatalogItemsUncached(
   // stores nothing and the next request retries. Read as data, a failed items
   // read was an empty catalog for 60 s, and a failed reservations read was
   // "nothing reserved", which overstated available-to-promise on every card.
+  //
+  // Every row, paged past PostgREST's 1000-row max_rows (fetchAllRows).
   const readItems = async (batch: string[] | null): Promise<CatalogItemRow[]> => {
-    const { data, error } = await itemsQuery(batch);
-    if (error) throw new Error(`[orders-new] catalog items read failed: ${error.message}`);
-    return (data ?? []) as unknown as CatalogItemRow[];
+    try {
+      return await fetchAllRows<CatalogItemRow>(
+        (from, to) =>
+          itemsQuery(batch).range(from, to) as unknown as PromiseLike<{
+            data: CatalogItemRow[] | null;
+            error: { message: string } | null;
+          }>,
+        { cap: CATALOG_ROW_CEILING },
+      );
+    } catch (err) {
+      // fetchAllRows throws a ServiceError whose public message is generic;
+      // the PostgREST cause is internalDetail. This message stays server side.
+      const cause =
+        err instanceof ServiceError
+          ? (err.internalDetail ?? err.message)
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      throw new Error(`[orders-new] catalog items read failed: ${cause}`);
+    }
   };
 
   let items: CatalogItemRow[];
@@ -726,10 +756,9 @@ async function loadCatalogItemsUncached(
     // 19.5 KB in one `.in()`: past the local gateway's 8 KB and past
     // production's limit, where the read would fail after ~7 s of retries.
     // So the grants go out in batches sized to leave room for the charter
-    // list that shares the URL, each batch keeps its own first 500 rows by
-    // (name, id), and the merge keeps the first 500 of those. That is the
-    // same set one query would return: every row of the overall first 500 is
-    // among the first 500 of its own batch. The usual short grant list is one
+    // list that shares the URL, and the batches' rows are merged in (name,
+    // id) order. An item has one category, so the batches are disjoint; the
+    // merge still drops a repeated id. The usual short grant list is one
     // batch, the same single query as before.
     const charterChars = (scope.charterIds ?? []).reduce(
       (n, id) => n + encodedInValueLength(id) + 3,
@@ -738,10 +767,21 @@ async function loadCatalogItemsUncached(
     const perBatch = await mapIdBatches(scope.categoryIds, (batch) => readItems(batch), {
       maxEncodedChars: IN_FILTER_MAX_ENCODED_CHARS - charterChars,
     });
-    items =
-      perBatch.length === 1
-        ? perBatch[0]!
-        : perBatch.flat().sort(byNameThenId).slice(0, CATALOG_ROW_LIMIT);
+    if (perBatch.length === 1) {
+      items = perBatch[0]!;
+    } else {
+      const seen = new Set<string>();
+      items = perBatch
+        .flat()
+        .filter((row) => (seen.has(row.id) ? false : (seen.add(row.id), true)))
+        .sort(byNameThenId)
+        .slice(0, CATALOG_ROW_CEILING);
+    }
+  }
+  if (items.length >= CATALOG_ROW_CEILING) {
+    console.error(
+      `[orders-new] catalog reached the ${CATALOG_ROW_CEILING}-row ceiling for warehouse ${warehouseId}: items past it are not shown or searchable`,
+    );
   }
   if (items.length === 0) return [];
 
@@ -760,7 +800,7 @@ async function loadCatalogItemsUncached(
   // already sent 15.8 KB (edge logs, 2026-09-22), and the local gateway
   // refused every read past ~215 items. Each batch is paged past the
   // 1000-row cap; any failed batch fails the whole read (throws, not cached).
-  // The category and charter names come from the same up-to-500 rows, so
+  // The category and charter names come from the same rows, so
   // they batch the same way.
   const [rsRes, categoriesRes, chartersRes] = await Promise.all([
     settleAsDataError(

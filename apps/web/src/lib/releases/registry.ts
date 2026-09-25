@@ -28,6 +28,33 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'order-page-every-item-2026-09-25',
+    revision: 1,
+    status: 'published',
+    title: 'Every item can be found and ordered on the New order page',
+    summary:
+      'The New order page showed only the first 500 items in a warehouse, in alphabetical order, so items later in the alphabet, such as The Outsiders and The Hunger Games, could not be found or ordered. It now shows every orderable item.',
+    publishedAt: '2026-09-25T20:15:00Z',
+    entries: [
+      {
+        id: 'order-page-shows-every-item',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Items missing from the New order page are back',
+        whatChanged:
+          'The New order page now lists every orderable item in the warehouse, and its search finds all of them.',
+        whyItMatters:
+          'The page loaded only the first 500 items by name. Once a warehouse held more than 500, the items after that point, such as The Distance Between Us, The Hunger Games and The Outsiders, did not appear and could not be found by searching.',
+        howItAffectsYou:
+          'Nothing else changes. The missing items appear in their usual category with their available stock.',
+        whatToDo:
+          'If an order was left unfinished because an item was missing, open New order and add it now.',
+        link: { href: '/dashboard/orders/new', label: 'Open New order' },
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
     id: 'phone-stock-adjustments-2026-09',
     revision: 1,
     status: 'published',
