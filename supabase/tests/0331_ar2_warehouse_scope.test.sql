@@ -7,23 +7,29 @@
 --     zero-assignment viewer sees only the null-warehouse holding; a manager
 --     sees everything; an outsider sees nothing.
 --
---     HONEST PIN on staff: item_stock_levels_write (0202) is FOR ALL with a
---     staff USING floor, FOR ALL policies apply to SELECT too, and permissive
---     policies OR — so staff+ keep ORG-WIDE visibility through the write
---     policy. That coupling is what keeps the conditional-write RPC paths
---     working, so it is pinned here as intended behavior, not left implicit.
+--     STAFF ARE NARROWED TOO, SINCE 0371 (test 9, inverted). Until 0371,
+--     item_stock_levels_write (0202) was FOR ALL with a staff USING floor;
+--     FOR ALL policies apply to SELECT and permissive policies OR, so staff+
+--     kept org-wide visibility and this file pinned that as intended. 0371
+--     moved the two holdings statements that still ran as the caller into
+--     the SECURITY DEFINER ledger.apply_holding_delta and split the FOR ALL
+--     policy into INSERT + UPDATE policies that grant no SELECT. A
+--     whT1-scoped staff member now sees whT1 + the null-warehouse holding,
+--     exactly like the viewer. 0371's own test carries the rest of the proof.
 --
 --   • RPC PARITY: as a whT1-scoped STAFF caller, an adjust_stock draw that
 --     can only be satisfied by consuming holdings in BOTH warehouses succeeds
 --     and leaves the literal expected quantities — identical to pre-0331
---     behavior. HONEST SCOPE of these pins: they prove the NEW shape (the
---     authorization gate + the narrowed SELECT policy) did not break
---     scoped-staff draws; they are NOT a behavioral kill for an invoker
---     revert of apply_level_delta, because the staff caller is never
---     read-narrowed in the first place (see the staff pin below). The
---     definer conversion is pinned structurally instead (tests 18/23/24
---     here, plus 0318's inverted prosecdef pin). transfer_stock FROM a whT2
---     location (outside the caller's assignment) is refused since 0365.
+--     behavior. Since 0371 the staff caller IS read-narrowed (the whT2
+--     holding is hidden from them), so tests 10-17 are now a BEHAVIORAL kill
+--     for an invoker revert of apply_level_delta: under SECURITY INVOKER its
+--     draw-down loop would skip the hidden whT2 holding and the draw would
+--     raise insufficient_placed_stock. Verified by live mutation when 0371
+--     landed (the 0292 invoker body swapped in: test 10 dies with
+--     insufficient_placed_stock, and 11, 12 and 14 report the untouched
+--     quantities). The structural pins stay (tests 18/23/24 here, plus
+--     0318's inverted prosecdef pin). transfer_stock FROM a whT2 location
+--     (outside the caller's assignment) is refused since 0365.
 --
 --   • STRUCTURE: apply_level_delta is SECURITY DEFINER with a pinned
 --     search_path, closed to PUBLIC/anon, open to authenticated; and its
@@ -202,19 +208,19 @@ select is(
 );
 reset role;
 
--- HONEST PIN: staff are NOT narrowed on direct SELECT. item_stock_levels_write
--- (0202) is FOR ALL with USING (has_org_role staff); FOR ALL policies apply to
--- SELECT and permissive policies OR, so the write floor grants staff+ org-wide
--- visibility. This same coupling is what lets the conditional-write RPC paths
--- below reach rows outside the caller's assignments — pinned so nobody
--- "fixes" one half without understanding the other.
+-- INVERTED BY 0371: staff are narrowed on direct SELECT, like viewers. Until
+-- 0371 the FOR ALL write policy (0202, staff USING floor) ORed into SELECT and
+-- this test pinned 3 of 3. 0371 split it into INSERT + UPDATE policies that
+-- grant no SELECT, after moving the holdings statements of adjust_stock and
+-- transfer_stock into the SECURITY DEFINER ledger.apply_holding_delta, so no
+-- RPC write depends on the caller's row visibility any more.
 set local "request.jwt.claim.sub" to :u_stf;
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
 select is(
   (select count(*) from public.item_stock_levels where item_id = :itemA),
-  3::bigint,
-  '0331: a whT1-scoped STAFF member still sees all 3 holdings (the FOR ALL write policy ORs into SELECT)'
+  2::bigint,
+  '0331/0371: a whT1-scoped STAFF member sees exactly 2 of 3 holdings (whT1 + null-warehouse)'
 );
 reset role;
 
@@ -229,20 +235,17 @@ set local role to 'authenticated';
 -- A draw of 9 can only be satisfied by consuming holdings in BOTH warehouses
 -- (5 in whT1 + 4 in whT2).
 --
--- HONEST NOTE on what tests 10-17 kill (and what they cannot): the staff
--- fixture caller is never read-narrowed — item_stock_levels_write (0202) is
--- FOR ALL with a staff USING floor, and permissive policies OR into SELECT
--- (test 9 pins exactly this) — so reverting apply_level_delta to SECURITY
--- INVOKER does NOT change this call's outcome. Verified by live mutation:
--- with the verbatim 0292 invoker body swapped in, tests 10-17 still pass;
--- only the structural pins fail. A behavioral revert fixture is
--- unconstructible under current policies: viewers cannot reach any draw
--- path, and staff/manager+ are unnarrowed. What these parity tests DO pin
--- is that 0331's NEW gate and narrowed SELECT policy did not break
--- scoped-staff draws — they fail on e.g. a manager-floor authorization gate
--- or an over-narrowed write path. The invoker-revert mutant is killed by
--- the structural pins instead: test 18 (prosecdef), tests 23/24 (the 42501
--- gate), and 0318's inverted prosecdef pin.
+-- WHAT tests 10-17 kill, since 0371: the staff caller is read-narrowed (test
+-- 9), so the whT2 holding this draw must consume is HIDDEN from them. Before
+-- 0371 it was not (the FOR ALL write policy ORed into SELECT), and a revert
+-- of apply_level_delta to SECURITY INVOKER passed these tests; only the
+-- structural pins caught it. Now the revert is killed behaviorally: an
+-- invoker draw-down loop skips the hidden holding and raises
+-- insufficient_placed_stock (verified by live mutation when 0371 landed, with
+-- the 0292 invoker body swapped in). They also still fail on a manager-floor
+-- authorization gate or an over-narrowed write path. The structural pins stay:
+-- test 18 (prosecdef), tests 23/24 (the 42501 gate), and 0318's inverted
+-- prosecdef pin.
 select lives_ok(
   format($$select public.adjust_stock(%L, -9, 'remove', null, 'ar2 parity draw')$$,
          :itemA),

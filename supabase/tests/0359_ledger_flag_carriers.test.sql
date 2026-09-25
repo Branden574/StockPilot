@@ -230,13 +230,16 @@ select is(
   8, '14: all eight bodies live in the ledger schema');
 -- 0369 adds ledger.cycle_count_line_superseded, the post's read of other
 -- counts' movements: SECURITY DEFINER on purpose (an invoker read fails open
--- under the stock_movements SELECT policy), gated on ledger.active(). The
--- eight moved bodies keep their kind.
+-- under the stock_movements SELECT policy), gated on ledger.active(). 0371
+-- adds ledger.apply_holding_delta, the explicit-location holdings write of
+-- adjust_stock and transfer_stock: SECURITY DEFINER on purpose (the write
+-- must not depend on which holdings the caller can SELECT), gated in its
+-- body. The eight moved bodies keep their kind.
 select is(
   array(select p.proname::text from pg_proc p
          where p.pronamespace = 'ledger'::regnamespace and p.prosecdef order by 1),
-  array['cycle_count_line_superseded', 'process_return_disposition'],
-  '15: only process_return_disposition''s body (and the 0369 superseded probe) is SECURITY DEFINER, as before the move');
+  array['apply_holding_delta', 'cycle_count_line_superseded', 'process_return_disposition'],
+  '15: only process_return_disposition''s body (and the 0369 superseded probe and the 0371 holdings writer) is SECURITY DEFINER, as before the move');
 select ok(
   not has_schema_privilege('anon', 'ledger', 'usage')
   and has_schema_privilege('authenticated', 'ledger', 'usage'),
@@ -290,6 +293,9 @@ select ok(
   and not has_table_privilege('authenticated', 'public.inventory_items', 'DELETE'),
   '22: anon writes none of the five tables, and no API role hard-deletes an item');
 -- 0364 revoked DELETE on item_stock_levels: no ledger body deletes a holding.
+-- Since 0371 no ledger body writes holdings as the user either (the
+-- SECURITY DEFINER ledger.apply_holding_delta does); the holdings INSERT and
+-- UPDATE grants stay for the defence-in-depth policies and the guard trigger.
 select ok(
   (select bool_and(has_table_privilege('authenticated', 'public.' || t, p))
      from unnest(array['receipts', 'receipt_lines', 'receipt_line_lots']) t,
@@ -297,7 +303,7 @@ select ok(
   and has_table_privilege('authenticated', 'public.item_stock_levels', 'INSERT')
   and has_table_privilege('authenticated', 'public.item_stock_levels', 'UPDATE')
   and has_table_privilege('authenticated', 'public.inventory_items', 'UPDATE'),
-  '23: authenticated keeps the DML the INVOKER ledger bodies perform as the user');
+  '23: authenticated keeps the receipts DML the INVOKER ledger bodies perform as the user, and the holdings INSERT/UPDATE grants (0371: holdings writes now run in ledger.apply_holding_delta)');
 
 -- 24: recompute_po_status is closed to anon and PUBLIC, open to authenticated.
 select ok(
