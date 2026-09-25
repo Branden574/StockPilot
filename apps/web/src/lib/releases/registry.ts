@@ -28,6 +28,78 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'rentals-borrowers-and-emails-2026-09',
+    revision: 1,
+    status: 'published',
+    title: 'Rent to anyone, see which emails a borrower gets, and faster rental photos',
+    summary:
+      'Photos on the New rental page now load with the page. You can rent to someone who is not in StockPilot by typing their name and, if they have one, their email. Each rental now shows which emails its borrower gets and whether the overdue reminder went out. In the mobile app, a rental opens its details in the app, and New rental can search your team members.',
+    publishedAt: '2026-09-25T21:00:00Z',
+    entries: [
+      {
+        id: 'rental-photos-load-with-page',
+        category: 'fixed',
+        area: 'Rentals',
+        title: 'Photos on the New rental page appear with the page',
+        whatChanged:
+          'Rental item photos on the New rental page now load with the page instead of about five seconds later. When an item’s photo is replaced, the page shows the new one.',
+        whyItMatters:
+          'To show a handful of rental items, the page fetched photos for every orderable item in the warehouse, up to 500.',
+        howItAffectsYou: 'Nothing else about the page changes.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/rentals/new', label: 'Open New rental' },
+        audience: { anyPermission: ['rentals:create'], modules: ['rentals'] },
+      },
+      {
+        id: 'rent-to-non-members',
+        category: 'improved',
+        area: 'Rentals',
+        title: 'Renting to someone who is not in StockPilot is easy to find',
+        whatChanged:
+          'On New rental, the borrower list opens with Someone not in StockPilot at the top, and Borrower email (optional) is always on screen unless you picked a team member. Type the person’s name and, if they have one, their email. A picked team member shows where their rental emails go, with a Rent to someone not in StockPilot button to switch. The list offers only members who have accepted their invitation.',
+        whyItMatters:
+          'The email field appeared only after a name was typed, under the open member list, so it looked as though only team members could borrow. The list also offered members who had not accepted, and checkout refused them.',
+        howItAffectsYou:
+          'A borrower with an email gets the checkout receipt, the return confirmation and, while Rentals is switched on in Settings, Modules, one reminder if the rental is overdue. A borrower with no email gets no emails. Emails to someone outside StockPilot carry no link into the app.',
+        whatToDo:
+          'Add an email when you check out to anyone who should get the receipt and reminders.',
+        link: { href: '/dashboard/rentals/new', label: 'Open New rental' },
+        audience: { anyPermission: ['rentals:create'], modules: ['rentals'] },
+      },
+      {
+        id: 'rental-borrower-emails-shown',
+        category: 'new',
+        area: 'Rentals',
+        title: 'Each rental shows which emails its borrower gets',
+        whatChanged:
+          'A rental’s page now has an Emails to the borrower card listing the checkout receipt, the return confirmation and the overdue reminder. For the reminder it shows when it was sent, when it will be sent, or why it will not be. The borrower section says Team member or Not linked to a StockPilot account, with the email on file. On the Rentals list, overdue rentals carry a short note such as Reminder sent, Reminder goes out, No email on file or Reminders off.',
+        whyItMatters:
+          'Nothing on screen said whether a borrower would hear from StockPilot, or whether an overdue reminder had gone out.',
+        howItAffectsYou:
+          'The reminder shows as sent only when the email actually went out. If sending fails, the next daily run tries again while the rental is still out. There is still no reminder before the return date. The receipt and the return confirmation are not recorded, so the card describes when they go out rather than showing a sent time.',
+        whatToDo:
+          'No action needed. Overdue reminders go out only while Rentals is switched on in Settings, Modules.',
+        link: { href: '/dashboard/rentals', label: 'Open Rentals' },
+        audience: { anyPermission: ['rentals:read', 'rentals:create'], modules: ['rentals'] },
+      },
+      {
+        id: 'phone-rental-detail-and-member-search',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'Rental details and team member search in the mobile app',
+        whatChanged:
+          'Tapping a rental in the mobile app now opens its details in the app: the borrower, the emails they get, the dates and the items. It used to open the web in a browser. On New rental, typing a borrower’s name suggests matching team members, and picking one links the rental to their account and uses their account email. Anyone else is entered by name, with an optional email.',
+        whyItMatters:
+          'The mobile app had no rental details screen and could not link a rental to a team member, so every rental made on a phone was a typed name.',
+        howItAffectsYou:
+          'Marking a rental returned and cancelling it are still done on the web; if you can do those, the details screen has a button that opens the rental there. Team member search needs a connection. Without one, the screen says so, and you can still type a name and email.',
+        whatToDo: 'Update the app when it offers the new version.',
+        link: { href: '/dashboard/rentals', label: 'Open Rentals' },
+        audience: { anyPermission: ['rentals:read', 'rentals:create'], modules: ['rentals'] },
+      },
+    ],
+  },
+  {
     id: 'order-page-card-sizes-2026-09-25',
     revision: 1,
     status: 'published',
