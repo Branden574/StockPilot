@@ -200,6 +200,23 @@ export default function Scan() {
   // SKU under different charters/racks) — the picker sheet renders while
   // this is non-null, and is cleared once the user picks one or cancels.
   const [placementChoices, setPlacementChoices] = React.useState<ScanCandidate[] | null>(null);
+  /**
+   * ONLY THE NEWEST READ MAY PAINT THE CARD. Bumped by every write (adjust)
+   * and every fresh scan; a re-read paints only if nothing bumped it since it
+   * started (rereadShownItem).
+   */
+  const rereadSeq = React.useRef(0);
+  /**
+   * Show a freshly scanned (or just created) item. Every such paint goes
+   * through here, because it is NEWER than any re-read still in flight: scan
+   * an item, adjust it with no answer, tap "Scan next" and scan it again, and
+   * the re-read from the first card could otherwise land after the new scan
+   * and repaint its older on-hand total over it.
+   */
+  function showScannedItem(found: FoundItem) {
+    rereadSeq.current++;
+    setItem(found);
+  }
 
 
   /** Loads an item's rich detail (with image + location name) by id. */
@@ -356,7 +373,7 @@ export default function Scan() {
     setBusy(true);
     const found = await loadItemById(candidate.id);
     setBusy(false);
-    if (found) setItem(found);
+    if (found) showScannedItem(found);
     else reset();
   }
 
@@ -463,7 +480,7 @@ export default function Scan() {
       setBusy(false);
       return;
     }
-    setItem(found);
+    showScannedItem(found);
     setBusy(false);
   }
 
@@ -481,7 +498,6 @@ export default function Scan() {
    * the newest read may paint, and only onto the same item: the operator may
    * have scanned something else, or tapped again, while it was in flight.
    */
-  const rereadSeq = React.useRef(0);
   async function rereadShownItem(itemId: string) {
     const seq = ++rereadSeq.current;
     const found = await loadItemById(itemId);
@@ -754,6 +770,7 @@ export default function Scan() {
    */
   async function capturePhoto() {
     if (!item || !orgId) return;
+    const itemId = item.id;
     const perm = await ImagePicker.requestCameraPermissionsAsync();
     if (!perm.granted) {
       Alert.alert('Camera access needed', 'Allow camera to take photos.');
@@ -771,7 +788,7 @@ export default function Scan() {
       // Resize on-device so the bucket only stores list-friendly sizes
       // (~400 KB JPEGs instead of multi-megapixel phone photos).
       const resized = await resizeForUpload(asset.uri);
-      const path = `${orgId}/items/${item.id}/${cryptoRandom()}.${resized.ext}`;
+      const path = `${orgId}/items/${itemId}/${cryptoRandom()}.${resized.ext}`;
 
       // ArrayBuffer upload — `fetch(uri).blob()` uploads a 0-byte object
       // in React Native/Expo, which is why captured photos never showed
@@ -786,13 +803,13 @@ export default function Scan() {
         .from('item_images')
         .select('id')
         .eq('organization_id', orgId)
-        .eq('item_id', item.id)
+        .eq('item_id', itemId)
         .limit(1);
       const isFirst = !existing || existing.length === 0;
 
       const { error: insErr } = await supabase.from('item_images').insert({
         organization_id: orgId,
-        item_id: item.id,
+        item_id: itemId,
         storage_path: path,
         is_primary: isFirst,
       });
@@ -800,7 +817,11 @@ export default function Scan() {
 
       const signedUrl = await signItemImage(path);
       if (signedUrl) {
-        setItem({ ...item, image_url: signedUrl });
+        // ONLY the photo, merged into the card as it is NOW and only if it
+        // still shows this item. A spread of the copy taken when the upload
+        // started repainted any on-hand total a re-read painted meanwhile
+        // (the bound re-read of an unconfirmed adjustment runs on a timer).
+        setItem((prev) => (prev && prev.id === itemId ? { ...prev, image_url: signedUrl } : prev));
       }
     } catch (e) {
       Alert.alert('Upload failed', e instanceof Error ? e.message : 'Unknown error');
@@ -1170,7 +1191,7 @@ export default function Scan() {
                 setAddBook(null);
                 void (async () => {
                   const found = await loadItemById(id);
-                  if (found) setItem(found);
+                  if (found) showScannedItem(found);
                   else reset();
                 })();
               }}
@@ -1190,7 +1211,7 @@ export default function Scan() {
                 setAddItem(null);
                 void (async () => {
                   const found = await loadItemById(id);
-                  if (found) setItem(found);
+                  if (found) showScannedItem(found);
                   else reset();
                 })();
               }}

@@ -1270,12 +1270,18 @@ export default function ItemDetail() {
   // raw client mutation would silently skip all three.
   async function restoreItem() {
     if (!item || restoring) return;
+    const itemId = item.id;
     setRestoring(true);
     try {
-      await api(`/api/v1/items/${item.id}/restore`, { method: 'POST' });
+      await api(`/api/v1/items/${itemId}/restore`, { method: 'POST' });
       // Optimistic flip — clears both the Archived and Auto-archived
-      // badges immediately rather than waiting on a refetch.
-      setItem({ ...item, status: 'active', auto_archived: false });
+      // badges immediately rather than waiting on a refetch. Merged into the
+      // CURRENT item, not the copy this call started with: a read that
+      // landed while the request was out (the bound re-read, a pull) carries
+      // a newer on-hand total, which a spread of the old copy would repaint.
+      setItem((prev) =>
+        prev && prev.id === itemId ? { ...prev, status: 'active', auto_archived: false } : prev,
+      );
     } catch (e) {
       Alert.alert('Could not restore', e instanceof Error ? e.message : 'Please try again.');
     } finally {
@@ -1347,12 +1353,13 @@ export default function ItemDetail() {
 
   async function uploadAndReplace(uri: string, ext: string) {
     if (!item || !orgId) return;
+    const itemId = item.id;
     setPhotoBusy(true);
     try {
       // Resize on-device so the bucket only stores list-friendly sizes
       // (~400 KB JPEGs instead of multi-megapixel phone photos).
       const resized = await resizeForUpload(uri);
-      const path = `${orgId}/items/${item.id}/${Math.random().toString(36).slice(2, 14)}.${resized.ext}`;
+      const path = `${orgId}/items/${itemId}/${Math.random().toString(36).slice(2, 14)}.${resized.ext}`;
       // ArrayBuffer upload — `fetch(uri).blob()` uploads a 0-byte object
       // to Supabase Storage in RN/Expo, so use arrayBuffer().
       const arrayBuffer = await (await fetch(resized.uri)).arrayBuffer();
@@ -1375,7 +1382,7 @@ export default function ItemDetail() {
       const outcome = await replacePrimaryPhoto({
         supabase,
         orgId,
-        itemId: item.id,
+        itemId,
         newPath: path,
       });
       if (!outcome.ok) {
@@ -1386,7 +1393,14 @@ export default function ItemDetail() {
       // reported as a failed save.
       for (const w of outcome.warnings) console.warn('[item photo]', w);
       const signedUrl = await signItemImage(path);
-      setItem({ ...item, imageUrl: signedUrl });
+      // ONLY the photo changes, merged into the item as it is NOW. This used
+      // to spread the copy of the item taken when the upload started, and an
+      // upload takes seconds on a warehouse link: an adjustment saved in the
+      // meantime (the quick buttons stay live during a photo replace) was
+      // painted back to the on-hand total from before it, with no label.
+      // Merging keeps the quick buttons usable while a slow upload runs,
+      // rather than disabling them on photoBusy.
+      setItem((prev) => (prev && prev.id === itemId ? { ...prev, imageUrl: signedUrl } : prev));
     } catch (e) {
       Alert.alert('Photo error', e instanceof Error ? e.message : 'Upload failed.');
     } finally {

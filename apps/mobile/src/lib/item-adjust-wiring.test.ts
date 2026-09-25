@@ -127,6 +127,26 @@ describe('item screen — manual adjust goes through the server route', () => {
     ).toBeGreaterThanOrEqual(3);
   });
 
+  // Review finding: replacing the photo repainted the item from the copy taken
+  // when the upload started (setItem({ ...item, imageUrl })), so an adjustment
+  // saved during a slow upload was painted back to the old on-hand total.
+  it('a photo replace merges only the photo into the item as it is now', () => {
+    expect(screen).toMatch(
+      /setItem\(\(prev\) => \(prev && prev\.id === itemId \? \{ \.\.\.prev, imageUrl: signedUrl \} : prev\)\);/,
+    );
+    // No handler repaints the item from a copy it captured earlier; the only
+    // whole-item paint is load()'s fresh read.
+    expect(screen).not.toMatch(/setItem\(\{\s*\.\.\.item\b/);
+    expect(screen.match(/setItem\(\{/g)?.length).toBe(1);
+    expect(screen).toMatch(/reportRead\(Number\(r\.quantity_on_hand\) \|\| 0\);\s*setItem\(\{/);
+  });
+
+  it('restore merges its status flip into the item as it is now', () => {
+    expect(screen).toMatch(
+      /setItem\(\(prev\) =>\s*prev && prev\.id === itemId \? \{ \.\.\.prev, status: 'active', auto_archived: false \} : prev,?\s*\);/,
+    );
+  });
+
   it('a failed refresh is not reported as a deleted item', () => {
     expect(screen).toMatch(
       /const \{ data, error \} = await supabase\s*\.from\('inventory_items'\)/,

@@ -90,6 +90,32 @@ describe('scan tab — quick adjust goes through the API, not the RPC', () => {
     expect(scan).toMatch(/setItem\(\(prev\) => \(prev && prev\.id === itemId \? found : prev\)\);/);
   });
 
+  // Review finding: the fresh-scan paths painted with a bare setItem(found),
+  // which never bumped the re-read guard. Scan an item, adjust it with no
+  // answer, tap "Scan next" and scan it again: the first card's re-read could
+  // land after the new scan and repaint its older on-hand total over it.
+  it('every fresh scan paints through showScannedItem, which supersedes a re-read in flight', () => {
+    expect(scan).toMatch(
+      /function showScannedItem\(found: FoundItem\) \{\s*rereadSeq\.current\+\+;\s*setItem\(found\);\s*\}/,
+    );
+    const code = scan.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    // The helper's own call is the only bare paint of a looked-up item...
+    expect(code.match(/setItem\(found\)/g)?.length).toBe(1);
+    // ...and the barcode scan, the placement pick and both "just created"
+    // cards all go through it.
+    expect(code.match(/showScannedItem\(found\)/g)?.length).toBe(4);
+    expect(code).toMatch(/const found = await loadItemById\(candidate\.id\);[\s\S]{0,80}if \(found\) showScannedItem\(found\);/);
+  });
+
+  // Same class as the item screen's photo replace: a spread of the copy taken
+  // when the upload started repainted any on-hand total painted meanwhile.
+  it('the photo upload merges only the photo into the card as it is now', () => {
+    expect(scan).not.toMatch(/setItem\(\{\s*\.\.\.item\b/);
+    expect(scan).toMatch(
+      /setItem\(\(prev\) => \(prev && prev\.id === itemId \? \{ \.\.\.prev, image_url: signedUrl \} : prev\)\);/,
+    );
+  });
+
   it('hides the quick-adjust buttons from a member without stock:adjust', () => {
     // Cosmetic gate only — the route enforces it server-side — but a button
     // that always 403s is a bug report waiting to happen.
