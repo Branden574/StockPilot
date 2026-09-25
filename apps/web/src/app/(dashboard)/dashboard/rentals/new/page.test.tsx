@@ -59,6 +59,7 @@ vi.mock('@/server/services/inventory', () => ({
   },
 }));
 vi.mock('@/server/loaders/orders-new-catalog', () => ({
+  CATALOG_ROW_CEILING: 10_000,
   loadCatalogThumbMapCached: thumbMap,
 }));
 vi.mock('@/components/rentals/rental-create-form', () => ({
@@ -68,7 +69,12 @@ vi.mock('@/components/rentals/rental-create-form', () => ({
   },
 }));
 
-import { inFilters, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
+import {
+  inFilters,
+  makeSupabaseStub,
+  servedLikePostgrest,
+  type MockCall,
+} from '@/test/supabase-mock';
 
 import NewRentalPage from './page';
 
@@ -115,6 +121,36 @@ async function renderPage() {
 beforeEach(() => {
   vi.clearAllMocks();
   thumbMap.mockResolvedValue({});
+});
+
+describe('New rental: every rental item, not the first 500 by name', () => {
+  it('reads 1,234 rental items page by page and shows every one', async () => {
+    const many = Array.from({ length: 1234 }, (_, i) => ({
+      ...items[0]!,
+      id: uuid(i, 'e'),
+      name: `Rental ${String(i).padStart(4, '0')}`,
+      organization_id: 'org-1',
+      status: 'active',
+      is_rental: true,
+      deleted_at: null,
+      category_id: null,
+    }));
+    const stub = makeSupabaseStub({
+      'inventory_items.select': servedLikePostgrest(many as unknown as Array<Record<string, unknown>>),
+      'categories.select': { data: [], error: null },
+    });
+    adminRef.current = stub.client;
+    reserved.mockResolvedValue(new Map());
+
+    const props = await renderPage();
+
+    expect(props.items.map((i) => i.id).sort()).toEqual(many.map((r) => r.id).sort());
+    const windows = stub.chainArgsAll.get('inventory_items.select')?.map((args) => args.at(-1));
+    expect(windows).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ]);
+  });
 });
 
 describe('New rental: 300 rental items', () => {

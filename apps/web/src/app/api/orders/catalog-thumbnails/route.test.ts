@@ -229,9 +229,10 @@ describe('GET /api/orders/catalog-thumbnails', () => {
     const { status, body, bytes } = await get(`warehouseId=${WH}&rentalsOnly=1`);
 
     expect(status).toBe(200);
-    // The page's own query: rentals of any kind (bundles too), by name, 500.
+    // The page's own query: rentals of any kind (bundles too), by name then
+    // id, every row, one 1000-row page at a time.
     expect(firstChain(stub)).toEqual({
-      methods: ['select', 'eq', 'eq', 'eq', 'eq', 'is', 'order', 'limit'],
+      methods: ['select', 'eq', 'eq', 'eq', 'eq', 'is', 'order', 'order', 'range'],
       args: [
         ['id'],
         ['organization_id', ORG],
@@ -240,7 +241,8 @@ describe('GET /api/orders/catalog-thumbnails', () => {
         ['is_rental', true],
         ['deleted_at', null],
         ['name', { ascending: true }],
-        [500],
+        ['id', { ascending: true }],
+        [0, 999],
       ],
     });
     // 4 photos + the rental bundle's photo + 1 cover; the rental with nothing
@@ -294,6 +296,43 @@ describe('GET /api/orders/catalog-thumbnails', () => {
       if (before.body.urls![legacyId]) expect(after.body.urls![id]).toBeTruthy();
     }
     expect(after.bytes).toBeLessThan(before.bytes / 40);
+  });
+
+  it('rentalsOnly=1: more than 1000 rental items are all read and signed (no 500-row limit)', async () => {
+    const id = (i: number) => `f${'0'.repeat(7)}-0000-4000-8000-${String(i).padStart(12, '0')}`;
+    const rows: Fixture[] = Array.from({ length: 1234 }, (_, i) => ({
+      id: id(i),
+      organization_id: ORG,
+      warehouse_id: WH,
+      name: `Rental ${String(i).padStart(4, '0')}`,
+      status: 'active',
+      deleted_at: null,
+      is_rental: true,
+      is_bundle: null,
+      custom_fields: {},
+    }));
+    const images = rows.map((r, i) => ({
+      id: `img-${i}`,
+      organization_id: ORG,
+      item_id: r.id,
+      storage_path: `${ORG}/${r.id}/master.webp`,
+      is_primary: true,
+      sort_order: 0,
+    }));
+    const stub = makeSupabaseStub({
+      'inventory_items.select': servedItems(rows),
+      'item_images.select': servedLikePostgrest(images),
+    });
+    apiCtx.current = makeServiceContext(stub.client, { organizationId: ORG });
+
+    const { status, body } = await get(`warehouseId=${WH}&rentalsOnly=1`);
+
+    expect(status).toBe(200);
+    expect(Object.keys(body.urls!).sort()).toEqual(rows.map((r) => r.id).sort());
+    expect(stub.chainArgsAll.get('inventory_items.select')?.map((args) => args.at(-1))).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ]);
   });
 
   it('rentalsOnly=1: a failed item read answers 500 (the page retries), never an empty map', async () => {

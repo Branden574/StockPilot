@@ -6,11 +6,14 @@ import type { AisleSummary, CatalogItem } from '@/components/orders/v2/types';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
+  CATALOG_ROW_CEILING,
   loadCatalogThumbMapCached,
   type CatalogItemMedia,
 } from '@/server/loaders/orders-new-catalog';
 import { InventoryService } from '@/server/services/inventory';
+import { ServiceError } from '@/server/services/context';
 import { fetchAllRowsByIds, reportDegradedRead } from '@/server/services/lib/fetch-by-ids';
+import { fetchAllRows } from '@/server/services/lib/paginate';
 import { RentalsService } from '@/server/services/rentals';
 import { WarehousesService } from '@/server/services/warehouses';
 import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
@@ -123,18 +126,40 @@ export default async function NewRentalPage({
     mediaByItemId,
     members,
   ] = await Promise.all([
-    supabase
-      .from('inventory_items')
-      .select(
-        'id, name, sku, quantity_on_hand, warehouse_id, item_type, custom_fields, bin_location, category_id, retail_price, unit_cost, reorder_point',
-      )
-      .eq('organization_id', ctx.organizationId)
-      .eq('warehouse_id', warehouseId)
-      .eq('status', 'active')
-      .eq('is_rental', true)
-      .is('deleted_at', null)
-      .order('name', { ascending: true })
-      .limit(500),
+    // Every rental item, paged past PostgREST's 1000-row max_rows. This was a
+    // 500-row limit by name, the same limit that hid 65 DC4 items from the
+    // Orders catalog on 2026-09-25. The rentals-only photo request
+    // (api/orders/catalog-thumbnails) repeats this read filter for filter.
+    fetchAllRows(
+      (from, to) =>
+        supabase
+          .from('inventory_items')
+          .select(
+            'id, name, sku, quantity_on_hand, warehouse_id, item_type, custom_fields, bin_location, category_id, retail_price, unit_cost, reorder_point',
+          )
+          .eq('organization_id', ctx.organizationId)
+          .eq('warehouse_id', warehouseId)
+          .eq('status', 'active')
+          .eq('is_rental', true)
+          .is('deleted_at', null)
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: CATALOG_ROW_CEILING },
+    ).then(
+      (data) => ({ data, error: null }),
+      (err: unknown) => ({
+        data: null,
+        error: {
+          message:
+            err instanceof ServiceError
+              ? (err.internalDetail ?? err.message)
+              : err instanceof Error
+                ? err.message
+                : String(err),
+        },
+      }),
+    ),
     // A failed map is not cached (the loader throws); this visit shows the
     // cards without photos and the form's deferred request fills them.
     loadCatalogThumbMapCached(ctx.organizationId, warehouseId).catch((err: unknown) => {
@@ -152,6 +177,11 @@ export default async function NewRentalPage({
   // warehouse that has them. The error boundary offers a retry instead.
   if (rentalItemsError) {
     throw new Error(`[rentals/new] rental items read failed: ${rentalItemsError.message}`);
+  }
+  if (rentalItemsData.length >= CATALOG_ROW_CEILING) {
+    console.error(
+      `[rentals/new] rental items reached the ${CATALOG_ROW_CEILING}-row ceiling for warehouse ${warehouseId}: items past it are not shown`,
+    );
   }
 
   // Get reservations for these items
