@@ -1,6 +1,6 @@
 import { useNetworkState } from 'expo-network';
 import { type Href, useFocusEffect, useNavigation, useRouter } from 'expo-router';
-import { AlertTriangle, ArrowLeft, Menu } from 'lucide-react-native';
+import { AlertTriangle, ArrowLeft, Check, Menu } from 'lucide-react-native';
 import * as React from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, View, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -21,11 +21,16 @@ import {
   groupOccurrences,
   occurrenceState,
   occurrenceStateLabel,
+  RECOUNT_OFFLINE_COPY,
+  recountOutcomeCopy,
+  recountSelectedLabel,
+  recountSelectionProblem,
   recurrenceBadge,
   type ExceptionRuleMeta,
   type OccurrenceState,
 } from '@stockpilot/core';
 
+import { ExceptionRecountSheet } from '@/components/exception-recount-sheet';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
@@ -70,6 +75,13 @@ import { useTheme } from '@/lib/use-theme';
  * Rows of a rule this build cannot word (a newer server's rule, while this
  * bundle waits for its OTA) are counted, never silently dropped: while any
  * exist, or any check could not complete, the all-clear state is withheld.
+ *
+ * RECOUNT SELECTED (F1-2). A reader the server says may start recounts
+ * (list.canRecount) gets Select on the Open tab; only rows whose own
+ * canRecount is true can be picked, and "Recount selected (n)" opens the
+ * recount sheet. Starting one needs a connection: offline the button is
+ * disabled with the reason. The selection belongs to the workspace and tab it
+ * was made on, so switching either never carries it over.
  */
 
 /** What the screen shows. `key` is the workspace and tab it answers for: a
@@ -102,6 +114,13 @@ export default function ExceptionsScreen() {
   const [checkNote, setCheckNote] = React.useState<string | null>(null);
   const [checking, setChecking] = React.useState(false);
   const seqRef = React.useRef(0);
+  // The recount selection, for the workspace and tab it was made on only.
+  const [selection, setSelection] = React.useState<{ key: string; selecting: boolean; ids: ReadonlySet<string> }>(
+    { key: '', selecting: false, ids: new Set() },
+  );
+  const selecting = selection.key === viewKey && selection.selecting;
+  const picked: ReadonlySet<string> = selection.key === viewKey ? selection.ids : new Set();
+  const [recountOpen, setRecountOpen] = React.useState(false);
 
   const load = React.useCallback(async () => {
     // Offline there is nothing to ask; the view below is derived instead.
@@ -218,6 +237,29 @@ export default function ExceptionsScreen() {
     : null;
   // Open rows this build cannot word: shown as a count, never as all clear.
   const unrecognized = list && list.status === 'open' ? exceptionUnrecognizedCopy(list.unrecognized) : null;
+  // Multi-select recount: a reader who may start recounts, on the Open tab,
+  // with at least one row a recount can settle.
+  const canSelect =
+    !!list && list.status === 'open' && list.canRecount && list.occurrences.some((o) => o.canRecount);
+  const pickedCount = picked.size;
+  const recountReason = recountSelectionProblem(pickedCount) ?? (offline ? RECOUNT_OFFLINE_COPY : null);
+
+  function toggleSelecting() {
+    setSelection((prev) =>
+      prev.key === viewKey && prev.selecting
+        ? { key: viewKey, selecting: false, ids: new Set() }
+        : { key: viewKey, selecting: true, ids: new Set() },
+    );
+  }
+
+  function togglePicked(id: string) {
+    setSelection((prev) => {
+      const ids = new Set(prev.key === viewKey ? prev.ids : []);
+      if (ids.has(id)) ids.delete(id);
+      else ids.add(id);
+      return { key: viewKey, selecting: true, ids };
+    });
+  }
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
@@ -227,11 +269,18 @@ export default function ExceptionsScreen() {
             <IconChip icon={ArrowLeft} onPress={goBack} />
             <IconChip icon={Menu} onPress={openDrawer} />
           </View>
-          {list?.canCheckNow ? (
-            <Button size="sm" variant="outline" disabled={checking || offline} onPress={() => void checkNow()}>
-              {checking ? 'Starting...' : 'Check now'}
-            </Button>
-          ) : null}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {canSelect ? (
+              <Button size="sm" variant="outline" onPress={toggleSelecting}>
+                {selecting ? 'Done' : 'Select'}
+              </Button>
+            ) : null}
+            {list?.canCheckNow ? (
+              <Button size="sm" variant="outline" disabled={checking || offline} onPress={() => void checkNow()}>
+                {checking ? 'Starting...' : 'Check now'}
+              </Button>
+            ) : null}
+          </View>
         </View>
         <View style={styles.head}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -353,12 +402,57 @@ export default function ExceptionsScreen() {
                   list!.syncState?.lastEvaluatedAt ?? null,
                 )}
                 timeZone={timeZone}
-                onPress={() => router.push(`/exceptions/${item.occurrence.id}` as Href)}
+                selecting={selecting && canSelect && item.occurrence.canRecount}
+                picked={picked.has(item.occurrence.id)}
+                onPress={() =>
+                  selecting && canSelect && item.occurrence.canRecount
+                    ? togglePicked(item.occurrence.id)
+                    : router.push(`/exceptions/${item.occurrence.id}` as Href)
+                }
               />
             )
           }
         />
       )}
+
+      {selecting && canSelect ? (
+        <SafeAreaView edges={['bottom']} style={[styles.selectBar, { backgroundColor: c.card, borderTopColor: c.hair }]}>
+          <Body size={13.5} muted>
+            {pickedCount === 0
+              ? 'Tap the exceptions a count can settle to recount them together.'
+              : `${pickedCount} selected`}
+          </Body>
+          {pickedCount > 0 && recountReason ? (
+            <Body size={13} color={c.ink3}>
+              {recountReason}
+            </Body>
+          ) : null}
+          <Button block disabled={recountReason !== null} onPress={() => setRecountOpen(true)}>
+            {recountSelectedLabel(pickedCount)}
+          </Button>
+        </SafeAreaView>
+      ) : null}
+
+      <ExceptionRecountSheet
+        visible={recountOpen}
+        title={`Recount ${pickedCount} exception${pickedCount === 1 ? '' : 's'}`}
+        occurrenceIds={[...picked]}
+        orgId={orgId ?? null}
+        online={!offline}
+        timeZone={timeZone}
+        onClose={() => setRecountOpen(false)}
+        onDone={() => {
+          setRecountOpen(false);
+          setSelection({ key: viewKey, selecting: false, ids: new Set() });
+          // Re-read, so the rows show their recount.
+          void load();
+        }}
+        onOpenCount={(cycleCountId) => {
+          setRecountOpen(false);
+          setSelection({ key: viewKey, selecting: false, ids: new Set() });
+          router.push(`/cycle-count/${cycleCountId}` as Href);
+        }}
+      />
     </View>
   );
 }
@@ -423,6 +517,8 @@ function OccurrenceRow({
   detail,
   state,
   timeZone,
+  selecting = false,
+  picked = false,
   onPress,
 }: {
   occurrence: MobileExceptionOccurrence;
@@ -430,13 +526,41 @@ function OccurrenceRow({
   detail: string;
   state: OccurrenceState;
   timeZone: string | null;
+  /** In select mode and this row can be recounted: a tap picks it. */
+  selecting?: boolean;
+  picked?: boolean;
   onPress: () => void;
 }) {
   const { c } = useTheme();
   const recurred = recurrenceBadge(o.recurrenceIndex);
+  // What the linked recount has come to so far.
+  const recountNote =
+    o.recount && (state.kind === 'recount_in_progress' || state.kind === 'rechecking')
+      ? recountOutcomeCopy(o.recount.outcome)
+      : null;
   return (
-    <Pressable onPress={onPress} accessibilityRole="button" style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}>
+    <Pressable
+      onPress={onPress}
+      accessibilityRole={selecting ? 'checkbox' : 'button'}
+      accessibilityState={selecting ? { checked: picked } : undefined}
+      style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+    >
       <Card padding={14}>
+        {selecting ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <View
+              style={[
+                styles.checkBox,
+                { borderColor: picked ? c.ink : c.hair, backgroundColor: picked ? c.ink : 'transparent' },
+              ]}
+            >
+              {picked ? <Check size={14} color={c.paper} strokeWidth={2.5} /> : null}
+            </View>
+            <Body size={13} muted>
+              {picked ? 'Selected for a recount' : 'Tap to select for a recount'}
+            </Body>
+          </View>
+        ) : null}
         {o.reference ? (
           <Mono size={11} color={c.ink4}>
             {o.reference}
@@ -458,6 +582,11 @@ function OccurrenceRow({
             </Pill>
           ) : null}
         </View>
+        {recountNote ? (
+          <Body size={13} muted style={{ marginTop: 6 }}>
+            {recountNote}
+          </Body>
+        ) : null}
         <Mono size={11} color={c.ink4} style={{ marginTop: 8 }}>
           {o.resolvedAt
             ? `Resolved ${exceptionTimeLabel(o.resolvedAt, timeZone)}`
@@ -483,4 +612,22 @@ const styles = StyleSheet.create({
   tabs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 20, paddingTop: 14 },
   list: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 32, gap: 10 },
   empty: { paddingTop: 36, paddingHorizontal: 24, alignItems: 'center' },
+  // Pinned under the list in select mode. Its height follows its text (it is
+  // not absolutely positioned), so larger text sizes push the list up instead
+  // of covering it.
+  selectBar: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 12,
+    gap: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  checkBox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });

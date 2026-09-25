@@ -310,6 +310,7 @@ describe('listForCount — a count\'s linked exceptions', () => {
             item_id: 'item-1',
             counted_quantity: 11,
             expected_quantity: 10,
+            counted_location_id: 'loc-12a',
             counted_location: { name: 'Rack 12-A', kind: 'rack', deleted_at: null },
           },
           {
@@ -337,6 +338,7 @@ describe('listForCount — a count\'s linked exceptions', () => {
         id: 'l1',
         countedQuantity: 11,
         expectedQuantity: 10,
+        countedLocationId: 'loc-12a',
         countedLocation: { name: 'Rack 12-A', kind: 'rack', archived: false },
       },
       outcome: { kind: 'corrected', from: 10, to: 11, delta: 1 },
@@ -346,6 +348,8 @@ describe('listForCount — a count\'s linked exceptions', () => {
     expect(a!.occurrence.recount!.outcome).toEqual({ kind: 'corrected', from: 10, to: 11, delta: 1 });
     expect(b).toMatchObject({
       active: false,
+      // A line with no counted location says so (null), never a made-up id.
+      line: { countedLocationId: null, countedLocation: null },
       destination: { kind: 'off_staging_then_shelves' },
       reviewLine: 'Counted 4, book 6 (-2): comes off Staging first, then shelf locations',
     });

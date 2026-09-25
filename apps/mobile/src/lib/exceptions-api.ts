@@ -3,12 +3,19 @@ import {
   exceptionActDisabledReason,
   formatOrgDateTime,
   isExceptionRule,
+  isRecountSkipReason,
+  parseRecountOutcome,
+  recountOutcome,
+  VARIANCE_DESTINATION_PENDING_COPY,
   type ExceptionActionKind,
   type ExceptionCheckNotScheduledReason,
   type ExceptionRule,
   type OccurrenceEventKind,
   type OccurrenceRecountRef,
   type OccurrenceResolvedReason,
+  type RecountOutcome,
+  type RecountResultInput,
+  type RecountSkipReason,
 } from '@stockpilot/core';
 
 import { api } from './api';
@@ -61,7 +68,8 @@ export interface MobileExceptionOccurrence {
   presentWhenTrackingBegan: boolean;
   acknowledgedAt: string | null;
   acknowledgedBy: ExceptionPerson | null;
-  recount: OccurrenceRecountRef | null;
+  /** The active recount (F1-2) and what it has come to so far. */
+  recount: MobileRecountRef | null;
   resolvedAt: string | null;
   resolvedReason: OccurrenceResolvedReason | null;
   previousOccurrenceId: string | null;
@@ -69,7 +77,15 @@ export interface MobileExceptionOccurrence {
   /** The server's hint that this reader may acknowledge or add a note. The
    *  database re-checks it on every action. */
   canAct: boolean;
+  /** The server's hint that this reader may start a recount of this row
+   *  (F1-2: an open count_variance / over_reserved exception, a manager who
+   *  can start counts). start_targeted_recount re-checks it. */
+  canRecount: boolean;
 }
+
+/** A linked recount as the phone reads it. `outcome` is what that count has
+ *  come to for the item (core recountOutcome, worked out by the server). */
+export type MobileRecountRef = OccurrenceRecountRef & { outcome: RecountOutcome };
 
 export interface MobileExceptionSyncState {
   trackingStartedAt: string;
@@ -94,6 +110,9 @@ export interface MobileExceptionList {
   truncated: boolean;
   syncState: MobileExceptionSyncState | null;
   canCheckNow: boolean;
+  /** This reader may start recounts at all (F1-2): the list offers
+   *  multi-select only then, and only on rows whose own canRecount is true. */
+  canRecount: boolean;
   /** Open rows neither the server nor this build could word (a newer
    *  build's rule), left out of `occurrences` but COUNTED: a list with any
    *  never shows the all-clear state (core exceptionUnrecognizedCopy). */
@@ -110,7 +129,9 @@ export interface MobileExceptionEvent {
   /** null = the system. */
   actor: ExceptionPerson | null;
   note: string | null;
-  cycleCount: { id: string; countNumber: number | null } | null;
+  /** For recount_closed, `outcome` is what that count came to for the item
+   *  (null for other kinds, or from an older server). */
+  cycleCount: { id: string; countNumber: number | null; outcome: RecountOutcome | null } | null;
 }
 
 export interface MobileExceptionHistoryEntry {
@@ -217,13 +238,22 @@ function parseOccurrence(v: unknown): MobileExceptionOccurrence | null {
   const location = isObj(v.location) && typeof v.location.name === 'string'
     ? { name: v.location.name, kind: strOrNull(v.location.kind), archived: v.location.archived === true }
     : null;
-  const rc = isObj(v.recount) && typeof v.recount.cycleCountId === 'string'
-    ? {
-        cycleCountId: v.recount.cycleCountId,
-        countNumber: typeof v.recount.countNumber === 'number' ? v.recount.countNumber : null,
-        status: typeof v.recount.status === 'string' ? v.recount.status : 'unknown',
-        completedAt: strOrNull(v.recount.completedAt),
-      }
+  const rc: MobileRecountRef | null = isObj(v.recount) && typeof v.recount.cycleCountId === 'string'
+    ? (() => {
+        const status = typeof v.recount.status === 'string' ? v.recount.status : 'unknown';
+        return {
+          cycleCountId: v.recount.cycleCountId,
+          countNumber: typeof v.recount.countNumber === 'number' ? v.recount.countNumber : null,
+          status,
+          completedAt: strOrNull(v.recount.completedAt),
+          // What the server worked out; from a server that sends none, only
+          // what the status alone says (never "matched").
+          outcome:
+            v.recount.outcome === undefined
+              ? recountOutcome({ status }, null)
+              : parseRecountOutcome(v.recount.outcome),
+        };
+      })()
     : null;
   const reason = v.resolvedReason;
   return {
@@ -252,6 +282,7 @@ function parseOccurrence(v: unknown): MobileExceptionOccurrence | null {
     // Anything but an explicit true is "no": the phone never offers an action
     // the server did not say this reader may take.
     canAct: v.canAct === true,
+    canRecount: v.canRecount === true,
   };
 }
 
@@ -276,6 +307,7 @@ export function parseExceptionList(res: unknown): MobileExceptionList {
     truncated: res.truncated === true,
     syncState: parseSyncState(res.syncState),
     canCheckNow: res.canCheckNow === true,
+    canRecount: res.canRecount === true,
     unrecognized,
     timeZone: strOrNull(res.timeZone),
   };
@@ -317,6 +349,8 @@ export function parseExceptionDetail(res: unknown): MobileExceptionDetail {
           ? {
               id: e.cycleCount.id,
               countNumber: typeof e.cycleCount.countNumber === 'number' ? e.cycleCount.countNumber : null,
+              outcome:
+                e.cycleCount.outcome === undefined ? null : parseRecountOutcome(e.cycleCount.outcome),
             }
           : null,
     });
@@ -359,16 +393,19 @@ export function parseExceptionDetail(res: unknown): MobileExceptionDetail {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function exceptionListPath(status: ExceptionListStatus): string {
-  return `/api/v1/exceptions?status=${status}`;
+export function exceptionListPath(status: ExceptionListStatus, itemId?: string | null): string {
+  const base = `/api/v1/exceptions?status=${status}`;
+  return itemId ? `${base}&itemId=${encodeURIComponent(itemId)}` : base;
 }
 
-/** The stored Open or Resolved list. Throws on any failure. */
+/** The stored Open or Resolved list (optionally one item's). Throws on any
+ *  failure. */
 export async function listExceptions(
   status: ExceptionListStatus,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; itemId?: string | null } = {},
 ): Promise<MobileExceptionList> {
-  const res = await api<unknown>(exceptionListPath(status), { signal: opts.signal });
+  if (opts.itemId && !UUID.test(opts.itemId)) throw new ExceptionsResponseError();
+  const res = await api<unknown>(exceptionListPath(status, opts.itemId), { signal: opts.signal });
   return parseExceptionList(res);
 }
 
@@ -638,4 +675,286 @@ export function exceptionSheetSubmit(input: {
   }
   if (input.mode === 'note' && trimmed === '') return { enabled: false, reason: null };
   return { enabled: !input.submitting, reason: null };
+}
+
+
+// ── Targeted recounts (F1-2) ───────────────────────────────────────────────
+
+/** POST /api/v1/exceptions/recount's answer, as the phone reads it. */
+export interface MobileRecountResult extends RecountResultInput {
+  reference: string | null;
+  notes: string | null;
+  /** Exceptions linked to the new count. */
+  linked: string[];
+}
+
+function strArray(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+}
+
+function intOrNull(v: unknown): number | null {
+  return typeof v === 'number' && Number.isSafeInteger(v) ? v : null;
+}
+
+/**
+ * The recount answer, checked. A shape the phone cannot trust is a failure:
+ * the count may exist, so it is never read as "nothing was started". A skip
+ * reason this build does not know is kept with the generic words rather than
+ * dropped (an item left out must still be named).
+ */
+export function parseRecountResult(res: unknown): MobileRecountResult {
+  if (!isObj(res) || typeof res.created !== 'boolean' || typeof res.replay !== 'boolean') {
+    throw new ExceptionsResponseError();
+  }
+  const linkedExisting: RecountResultInput['linkedExisting'][number][] = [];
+  for (const e of Array.isArray(res.linkedExisting) ? res.linkedExisting : []) {
+    if (!isObj(e) || typeof e.cycleCountId !== 'string') throw new ExceptionsResponseError();
+    linkedExisting.push({
+      cycleCountId: e.cycleCountId,
+      countNumber: intOrNull(e.countNumber),
+      assignedTo:
+        isObj(e.assignedTo) && typeof e.assignedTo.id === 'string'
+          ? { id: e.assignedTo.id, label: strOrNull(e.assignedTo.label) }
+          : null,
+      startedAt: strOrNull(e.startedAt),
+      itemIds: strArray(e.itemIds),
+      occurrenceIds: strArray(e.occurrenceIds),
+    });
+  }
+  const skipped: { itemId: string; itemName: string | null; reason: RecountSkipReason }[] = [];
+  for (const e of Array.isArray(res.skipped) ? res.skipped : []) {
+    if (!isObj(e) || typeof e.itemId !== 'string') throw new ExceptionsResponseError();
+    skipped.push({
+      itemId: e.itemId,
+      itemName: strOrNull(e.itemName),
+      // Unknown to this build: the closest honest words.
+      reason: isRecountSkipReason(e.reason) ? e.reason : 'not_countable',
+    });
+  }
+  return {
+    cycleCountId: strOrNull(res.cycleCountId),
+    countNumber: intOrNull(res.countNumber),
+    reference: strOrNull(res.reference),
+    lineCount: intOrNull(res.lineCount),
+    created: res.created,
+    replay: res.replay,
+    assignedTo: strOrNull(res.assignedTo),
+    assignmentFailed: res.assignmentFailed === true,
+    notes: strOrNull(res.notes),
+    linked: strArray(res.linked),
+    linkedExisting,
+    skipped,
+  };
+}
+
+/**
+ * Start (or replay) a targeted recount. Online only: the recount is created
+ * by the server in one transaction, and there is no offline queue for it.
+ * `idempotencyKey` belongs to the SELECTION (recountKeyFor): the same key is
+ * sent on every retry of the same selection, so a request whose answer was
+ * lost returns the first count instead of starting a second.
+ */
+export async function startRecount(input: {
+  occurrenceIds: readonly string[];
+  itemIds: readonly string[];
+  assignedTo: string | null;
+  idempotencyKey: string;
+}): Promise<MobileRecountResult> {
+  const res = await api<unknown>('/api/v1/exceptions/recount', {
+    method: 'POST',
+    body: {
+      occurrenceIds: [...input.occurrenceIds],
+      itemIds: [...input.itemIds],
+      assignedTo: input.assignedTo,
+      idempotencyKey: input.idempotencyKey,
+    },
+  });
+  return parseRecountResult(res);
+}
+
+/** A selection's signature: the sorted ids the server hashes the key over. */
+export function recountSelectionSignature(
+  occurrenceIds: readonly string[],
+  itemIds: readonly string[],
+): string {
+  return `${[...occurrenceIds].sort().join(',')}|${[...itemIds].sort().join(',')}`;
+}
+
+/**
+ * The idempotency key for a recount send. THE KEY BELONGS TO THE SELECTION:
+ * the last key is reused while the selection is the same (a retry after a
+ * lost answer or a retryable refusal), and a different selection gets a new
+ * one. Pass null after an idempotency_conflict so the key is never sent again.
+ */
+export function recountKeyFor(
+  last: { signature: string; key: string } | null,
+  occurrenceIds: readonly string[],
+  itemIds: readonly string[],
+): { signature: string; key: string } {
+  const signature = recountSelectionSignature(occurrenceIds, itemIds);
+  return last && last.signature === signature ? last : { signature, key: newClientEventId() };
+}
+
+/**
+ * What a failed recount start means: the sentence, whether sending the SAME
+ * request again is safe (the server said `retryable`, or the request may not
+ * have reached it), and whether the key must be dropped (it stands for
+ * another selection). Keyed on HTTP status and the route's `details`, never
+ * on message text.
+ */
+export function describeRecountError(e: unknown): { message: string; retryable: boolean; dropKey: boolean } {
+  const status = isObj(e) && typeof e.status === 'number' ? e.status : null;
+  const details = isObj(e) ? e.details : undefined;
+  const reason = isObj(details) && typeof details.reason === 'string' ? details.reason : null;
+  const retryableFlag = isObj(details) && details.retryable === true;
+  const message = e instanceof Error && e.message && !/^[a-z0-9_]+$/.test(e.message) ? e.message : null;
+  if (status === 409 && reason === 'idempotency_conflict') {
+    return {
+      message: 'This recount request was already used for a different selection. Try again.',
+      retryable: false,
+      dropKey: true,
+    };
+  }
+  if (status === 409 && retryableFlag) {
+    return {
+      message: message ?? 'The counts changed while the recount was starting. Try again.',
+      retryable: true,
+      dropKey: false,
+    };
+  }
+  if (status === 403) {
+    return {
+      message: message ?? 'Only a manager with permission to assign counts and adjust stock can start a recount.',
+      retryable: false,
+      dropKey: false,
+    };
+  }
+  if (status === 404) {
+    return { message: message ?? 'Something in this recount is no longer available. Pull down to refresh.', retryable: false, dropKey: false };
+  }
+  if (status === 429) return { message: 'Too many requests. Wait a moment and try again.', retryable: true, dropKey: false };
+  if (status !== null && status >= 500) {
+    return { message: 'The server had a problem. Try again in a moment.', retryable: true, dropKey: false };
+  }
+  if (status === null) {
+    // Never reached the server, or the answer was lost: resending the same
+    // key is safe either way.
+    return { message: 'Could not reach the server. Check your connection and try again.', retryable: true, dropKey: false };
+  }
+  return { message: message ?? 'Could not start the recount.', retryable: false, dropKey: false };
+}
+
+// ── A count's linked exceptions (F1-2) ─────────────────────────────────────
+
+export interface MobileCountLinkedLine {
+  id: string;
+  countedQuantity: number | null;
+  expectedQuantity: number | null;
+  countedLocationId: string | null;
+}
+
+export interface MobileCountLinkedException {
+  occurrence: MobileExceptionOccurrence;
+  active: boolean;
+  line: MobileCountLinkedLine | null;
+  outcome: RecountOutcome;
+  /** "Counted 11, book 10 (+1): adds to Rack 12-A" (core varianceReviewLine,
+   *  worked out by the server from the line it read); null when uncounted. */
+  reviewLine: string | null;
+}
+
+export interface MobileCountLinkedExceptions {
+  organizationId: string;
+  cycleCountId: string;
+  status: string;
+  exceptions: MobileCountLinkedException[];
+  /** Linked rows neither the server nor this build could word, counted. */
+  unrecognized: number;
+}
+
+function numOrNull(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+export function parseCountLinkedExceptions(res: unknown): MobileCountLinkedExceptions {
+  if (
+    !isObj(res) ||
+    typeof res.organizationId !== 'string' ||
+    typeof res.cycleCountId !== 'string' ||
+    !Array.isArray(res.exceptions)
+  ) {
+    throw new ExceptionsResponseError();
+  }
+  const exceptions: MobileCountLinkedException[] = [];
+  let unrecognized = count(res.unrecognized);
+  for (const x of res.exceptions) {
+    if (!isObj(x)) throw new ExceptionsResponseError();
+    const occurrence = parseOccurrence(x.occurrence);
+    if (!occurrence) {
+      unrecognized += 1;
+      continue;
+    }
+    const l = x.line;
+    exceptions.push({
+      occurrence,
+      active: x.active === true,
+      line:
+        isObj(l) && typeof l.id === 'string'
+          ? {
+              id: l.id,
+              countedQuantity: numOrNull(l.countedQuantity),
+              expectedQuantity: numOrNull(l.expectedQuantity),
+              countedLocationId: strOrNull(l.countedLocationId),
+            }
+          : null,
+      outcome: parseRecountOutcome(x.outcome),
+      reviewLine: strOrNull(x.reviewLine),
+    });
+  }
+  return {
+    organizationId: res.organizationId,
+    cycleCountId: res.cycleCountId,
+    status: typeof res.status === 'string' ? res.status : 'unknown',
+    exceptions,
+    unrecognized,
+  };
+}
+
+/** The exceptions linked to one count as its recount. Throws on any failure
+ *  (the screen then says they could not be loaded, never "none"). */
+export async function getCountLinkedExceptions(cycleCountId: string): Promise<MobileCountLinkedExceptions> {
+  if (!UUID.test(cycleCountId)) throw new ExceptionsResponseError();
+  const res = await api<unknown>(`/api/v1/cycle-counts/${cycleCountId}/exceptions`);
+  return parseCountLinkedExceptions(res);
+}
+
+/**
+ * What the count screen says under a linked line about where its difference
+ * lands, given the line as the PHONE holds it:
+ *   - the server's review line, only while it describes that same line (the
+ *     same counted quantity and counted location, nothing typed or queued on
+ *     the phone since): the server decides the counted location when it
+ *     records the count, so the phone never works one out itself;
+ *   - "shows once this count syncs" for a count typed or queued here that the
+ *     answer does not reflect yet;
+ *   - nothing for an uncounted line.
+ */
+export function linkedLineDestination(
+  link: Pick<MobileCountLinkedException, 'line' | 'reviewLine'>,
+  phone: { counted: number | null; localDirty: boolean; drafting: boolean; countedLocationId: string | null | undefined },
+): { kind: 'review' | 'pending'; text: string } | null {
+  if (phone.drafting || phone.localDirty) {
+    return { kind: 'pending', text: VARIANCE_DESTINATION_PENDING_COPY };
+  }
+  if (phone.counted === null) return null;
+  const l = link.line;
+  if (
+    l &&
+    link.reviewLine &&
+    l.countedQuantity === phone.counted &&
+    (l.countedLocationId ?? null) === (phone.countedLocationId ?? null)
+  ) {
+    return { kind: 'review', text: link.reviewLine };
+  }
+  return { kind: 'pending', text: VARIANCE_DESTINATION_PENDING_COPY };
 }

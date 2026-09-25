@@ -24,6 +24,13 @@ import {
   recalledList,
   rememberList,
   requestExceptionCheck,
+  describeRecountError,
+  getCountLinkedExceptions,
+  linkedLineDestination,
+  parseCountLinkedExceptions,
+  parseRecountResult,
+  recountKeyFor,
+  startRecount,
 } from './exceptions-api';
 
 // ./api reaches for expo-constants, AsyncStorage and the Supabase client at
@@ -302,6 +309,7 @@ describe('the offline "as of" list', () => {
     truncated: false,
     syncState: null,
     canCheckNow: false,
+    canRecount: false,
     unrecognized: 0,
     timeZone: null,
   };
@@ -407,3 +415,239 @@ describe('small helpers', () => {
     expect(a).not.toBe(b);
   });
 });
+
+// ── F1-2: recounts ─────────────────────────────────────────────────────────
+
+const VARIANCE = {
+  rule: 'count_variance',
+  facts: {
+    itemName: 'QA Chromebook',
+    sku: 'QA-1',
+    cycleCountId: 'cc-1',
+    countNumber: 1,
+    observedAt: '2026-09-24T17:00:00Z',
+    completedAt: '2026-09-24T17:05:00Z',
+    expected: 20,
+    counted: 21,
+    variance: 1,
+    countedLocationName: null,
+    aiAssisted: false,
+    capturedOfflineAt: null,
+  },
+};
+
+describe('recount fields on the list and the detail', () => {
+  it('reads canRecount (only an explicit true) on rows and on the list', async () => {
+    apiMock.api.mockResolvedValueOnce(
+      listBody({
+        canRecount: true,
+        occurrences: [
+          occurrence({ ...VARIANCE, canRecount: true }),
+          occurrence({ id: 'b', ...VARIANCE, canRecount: 'yes' }),
+        ],
+      }),
+    );
+    const list = await listExceptions('open');
+    expect(list.canRecount).toBe(true);
+    expect(list.occurrences.map((o) => o.canRecount)).toEqual([true, false]);
+    apiMock.api.mockResolvedValueOnce(listBody());
+    expect((await listExceptions('open')).canRecount).toBe(false);
+  });
+
+  it('reads the recount outcome, and never makes one up', async () => {
+    apiMock.api.mockResolvedValueOnce(
+      listBody({
+        occurrences: [
+          occurrence({
+            ...VARIANCE,
+            recount: {
+              cycleCountId: 'cc-2',
+              countNumber: 2,
+              status: 'in_progress',
+              completedAt: null,
+              outcome: { kind: 'in_progress', counted: 1, total: 3 },
+            },
+          }),
+          occurrence({
+            id: 'b',
+            ...VARIANCE,
+            recount: { cycleCountId: 'cc-3', countNumber: 3, status: 'completed', completedAt: '2026-09-24T19:00:00Z', outcome: { kind: 'matched' } },
+          }),
+          // An older server without outcomes: only what the status says.
+          occurrence({
+            id: 'c',
+            ...VARIANCE,
+            recount: { cycleCountId: 'cc-4', countNumber: 4, status: 'in_progress', completedAt: null },
+          }),
+        ],
+      }),
+    );
+    const [a, b, c] = (await listExceptions('open')).occurrences;
+    expect(a!.recount?.outcome).toEqual({ kind: 'in_progress', counted: 1, total: 3 });
+    expect(b!.recount?.outcome).toEqual({ kind: 'unavailable' });
+    expect(c!.recount?.outcome).toEqual({ kind: 'in_progress', counted: null, total: null });
+  });
+
+  it('asks for one item\'s exceptions with itemId, and refuses a malformed one without a request', async () => {
+    apiMock.api.mockResolvedValueOnce(listBody());
+    await listExceptions('open', { itemId: '22222222-2222-4222-8222-222222222222' });
+    expect(apiMock.api).toHaveBeenCalledWith(
+      '/api/v1/exceptions?status=open&itemId=22222222-2222-4222-8222-222222222222',
+      { signal: undefined },
+    );
+    apiMock.api.mockClear();
+    await expect(listExceptions('open', { itemId: 'x&status=resolved' })).rejects.toBeInstanceOf(ExceptionsResponseError);
+    expect(apiMock.api).not.toHaveBeenCalled();
+  });
+
+  it('a closed recount in the timeline carries its outcome', async () => {
+    apiMock.api.mockResolvedValueOnce({
+      organizationId: 'org-1',
+      occurrence: occurrence(VARIANCE),
+      timeline: [
+        { id: 'e1', kind: 'recount_closed', at: '2026-09-24T19:00:00Z', actor: null, note: null, cycleCount: { id: 'cc-2', countNumber: 2, outcome: { kind: 'matched', quantity: 21 } } },
+        { id: 'e2', kind: 'recount_linked', at: '2026-09-24T18:00:00Z', actor: null, note: null, cycleCount: { id: 'cc-2', countNumber: 2 } },
+      ],
+      history: [],
+      syncState: SYNC,
+    });
+    const d = await getException(ID);
+    expect(d.timeline[0]!.cycleCount).toEqual({ id: 'cc-2', countNumber: 2, outcome: { kind: 'matched', quantity: 21 } });
+    expect(d.timeline[1]!.cycleCount?.outcome).toBeNull();
+  });
+});
+
+describe('startRecount', () => {
+  const body = {
+    cycleCountId: 'cc-new',
+    countNumber: 2,
+    reference: 'CC-000002',
+    lineCount: 1,
+    created: true,
+    replay: false,
+    assignedTo: 'u-staff',
+    assignmentFailed: false,
+    notes: 'Recount: QA Chromebook',
+    linked: [ID],
+    linkedExisting: [
+      { cycleCountId: 'cc-1', countNumber: 1, reference: 'CC-000001', assignedTo: { id: 'u1', label: 'Ana' }, startedAt: '2026-09-24T18:00:00Z', itemIds: ['i1'], occurrenceIds: ['o1'] },
+    ],
+    skipped: [{ occurrenceId: null, itemId: 'i2', itemName: 'Projector', reason: 'not_countable' }],
+  };
+
+  it('posts the selection, the assignee and the key, and reads the answer', async () => {
+    apiMock.api.mockResolvedValueOnce(body);
+    const res = await startRecount({ occurrenceIds: [ID], itemIds: [], assignedTo: 'u-staff', idempotencyKey: 'k-1' });
+    expect(apiMock.api).toHaveBeenCalledWith('/api/v1/exceptions/recount', {
+      method: 'POST',
+      body: { occurrenceIds: [ID], itemIds: [], assignedTo: 'u-staff', idempotencyKey: 'k-1' },
+    });
+    expect(res).toMatchObject({
+      cycleCountId: 'cc-new',
+      countNumber: 2,
+      created: true,
+      assignedTo: 'u-staff',
+      linkedExisting: [{ cycleCountId: 'cc-1', assignedTo: { id: 'u1', label: 'Ana' }, itemIds: ['i1'], occurrenceIds: ['o1'] }],
+      skipped: [{ itemId: 'i2', itemName: 'Projector', reason: 'not_countable' }],
+    });
+  });
+
+  // Mutation caught: a malformed answer read as "nothing started".
+  it('an answer it cannot trust is a failure (the count may exist)', () => {
+    expect(() => parseRecountResult({ cycleCountId: 'cc' })).toThrow(ExceptionsResponseError);
+    expect(() => parseRecountResult({ ...body, linkedExisting: [{ countNumber: 1 }] })).toThrow(ExceptionsResponseError);
+    expect(() => parseRecountResult({ ...body, skipped: [{ reason: 'resolved' }] })).toThrow(ExceptionsResponseError);
+  });
+
+  it('keeps an item skipped for a reason this build does not know, with the generic words', () => {
+    const res = parseRecountResult({ ...body, skipped: [{ occurrenceId: null, itemId: 'i9', itemName: 'X', reason: 'a_future_reason' }] });
+    expect(res.skipped).toEqual([{ itemId: 'i9', itemName: 'X', reason: 'not_countable' }]);
+  });
+});
+
+describe('recountKeyFor', () => {
+  // Mutation caught: a new key on every send (a retry after a lost answer
+  // would start a second count).
+  it('reuses the key for the same selection in any order, and mints one for another', () => {
+    const first = recountKeyFor(null, ['b', 'a'], []);
+    expect(recountKeyFor(first, ['a', 'b'], [])).toBe(first);
+    expect(recountKeyFor(first, ['a'], []).key).not.toBe(first.key);
+    expect(recountKeyFor(first, ['a', 'b'], ['i']).key).not.toBe(first.key);
+    // After a conflict the caller passes null: a fresh key.
+    expect(recountKeyFor(null, ['a', 'b'], []).key).not.toBe(first.key);
+  });
+});
+
+describe('describeRecountError', () => {
+  it('maps by status and details, never by message text', () => {
+    expect(describeRecountError(apiError(409, 'x', { reason: 'idempotency_conflict' }))).toMatchObject({ retryable: false, dropKey: true });
+    expect(
+      describeRecountError(apiError(409, 'Another recount or check is working on these items right now. Try again in a moment.', { reason: 'recount_busy', retryable: true })),
+    ).toEqual({
+      message: 'Another recount or check is working on these items right now. Try again in a moment.',
+      retryable: true,
+      dropKey: false,
+    });
+    expect(describeRecountError(apiError(409, 'An exception in this recount is already linked to another recount in progress. Refresh to see it.', { reason: 'recount_already_linked' }))).toMatchObject({ retryable: false, dropKey: false });
+    expect(describeRecountError(apiError(403, 'forbidden')).message).toMatch(/Only a manager/);
+    expect(describeRecountError(apiError(500, 'internal_error'))).toMatchObject({ retryable: true });
+    expect(describeRecountError(apiError(429, 'rate_limited'))).toMatchObject({ retryable: true });
+    // No status: the request may not have arrived; the same key is safe.
+    expect(describeRecountError(new Error('Network request failed'))).toMatchObject({ retryable: true, dropKey: false });
+  });
+});
+
+describe('a count\'s linked exceptions', () => {
+  const CC = '33333333-3333-4333-8333-333333333333';
+  const answer = {
+    organizationId: 'org-1',
+    cycleCountId: CC,
+    status: 'in_progress',
+    exceptions: [
+      {
+        occurrence: occurrence(VARIANCE),
+        active: true,
+        line: { id: 'l1', countedQuantity: 21, expectedQuantity: 20, countedLocationId: 'loc-1', countedLocation: { name: '12-A', kind: 'rack', archived: false } },
+        outcome: { kind: 'in_progress', counted: 1, total: 1 },
+        destination: { kind: 'adds_to_location', location: 'Rack 12-A' },
+        reviewLine: 'Counted 21, book 20 (+1): adds to Rack 12-A',
+      },
+      { occurrence: occurrence({ id: 'z', rule: 'a_future_rule' }), active: true, line: null, outcome: { kind: 'unavailable' }, reviewLine: null },
+    ],
+    unrecognized: 1,
+  };
+
+  it('reads the links, and counts the ones it cannot word', async () => {
+    apiMock.api.mockResolvedValueOnce(answer);
+    const res = await getCountLinkedExceptions(CC);
+    expect(apiMock.api).toHaveBeenCalledWith(`/api/v1/cycle-counts/${CC}/exceptions`);
+    expect(res.exceptions).toHaveLength(1);
+    expect(res.exceptions[0]).toMatchObject({
+      active: true,
+      line: { id: 'l1', countedQuantity: 21, expectedQuantity: 20, countedLocationId: 'loc-1' },
+      reviewLine: 'Counted 21, book 20 (+1): adds to Rack 12-A',
+    });
+    expect(res.unrecognized).toBe(2);
+  });
+
+  it('a malformed answer or id is a failure, never "no linked exceptions"', async () => {
+    expect(() => parseCountLinkedExceptions({ organizationId: 'org-1' })).toThrow(ExceptionsResponseError);
+    await expect(getCountLinkedExceptions('nope')).rejects.toBeInstanceOf(ExceptionsResponseError);
+  });
+
+  // Mutation caught: showing the server's destination for a line the phone
+  // has counted differently (or not yet synced).
+  it('shows the server\'s destination only while it describes the line the phone holds', () => {
+    const link = { line: { id: 'l1', countedQuantity: 21, expectedQuantity: 20, countedLocationId: 'loc-1' }, reviewLine: 'Counted 21, book 20 (+1): adds to Rack 12-A' };
+    const clean = { counted: 21, localDirty: false, drafting: false, countedLocationId: 'loc-1' };
+    expect(linkedLineDestination(link, clean)).toEqual({ kind: 'review', text: 'Counted 21, book 20 (+1): adds to Rack 12-A' });
+    const pending = { kind: 'pending', text: 'Where the difference lands shows once this count syncs.' };
+    expect(linkedLineDestination(link, { ...clean, localDirty: true })).toEqual(pending);
+    expect(linkedLineDestination(link, { ...clean, drafting: true })).toEqual(pending);
+    expect(linkedLineDestination(link, { ...clean, counted: 22 })).toEqual(pending);
+    expect(linkedLineDestination(link, { ...clean, countedLocationId: 'loc-2' })).toEqual(pending);
+    expect(linkedLineDestination(link, { ...clean, counted: null })).toBeNull();
+    expect(linkedLineDestination({ line: null, reviewLine: null }, clean)).toEqual(pending);
+  });
+});
+

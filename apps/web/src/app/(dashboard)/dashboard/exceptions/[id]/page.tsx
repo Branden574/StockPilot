@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { OccurrenceActions } from '@/components/exceptions/occurrence-actions';
+import { RecountButton } from '@/components/exceptions/recount-selection';
 import {
   CheckedAt,
   ExceptionsUnavailable,
@@ -23,13 +24,17 @@ import {
 } from '@/server/services/exception-occurrences';
 
 import {
+  activeRecountCopy,
   describeOccurrence,
-  describeOccurrenceEvent,
+  describeTimelineEvent,
   EXCEPTION_ACTION_LABELS,
   EXCEPTION_RULES,
   exceptionActDisabledReason,
   formatCycleCountNumber,
+  isRecountableRule,
   OCCURRENCE_RESOLVED_REASON_COPY,
+  RECOUNT_COUNTS_TOTAL_COPY,
+  RECOUNT_MANAGER_ONLY_COPY,
   resolveOrgTimezone,
   uuidSchema,
   type ExceptionActionKind,
@@ -49,6 +54,12 @@ export const metadata = { title: 'Exception · StockPilot' };
  * when it has none); exception_occurrence_act re-checks on every call.
  * Everyone else sees why the actions are not offered. Nothing here resolves
  * an occurrence: the system does, once a check no longer finds it.
+ *
+ * Recount (F1-2) is offered on a count_variance or over_reserved exception to
+ * a reader the server says can start one (canRecount: a manager with the
+ * cycle_counts module, cycle_counts:assign and stock:adjust). Its linked
+ * recount and what it has come to so far are shown, and a closed recount's
+ * timeline entry says what it found (core describeTimelineEvent).
  *
  * Reads only, never syncs. Not found and not visible are the same answer
  * (404), so existence is not leaked; any other failed read renders
@@ -198,7 +209,30 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
             <Link href={actionHref(kind, o.itemId)}>{EXCEPTION_ACTION_LABELS[kind]}</Link>
           </Button>
         ))}
+        {o.canRecount ? <RecountButton occurrenceId={o.id} reference={o.reference} timeZone={timeZone} /> : null}
       </div>
+
+      {isRecountableRule(o.rule) && !resolved ? (
+        <Card data-testid="recount-card">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Recount</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            {o.recount ? (
+              <p data-testid="active-recount">
+                <Link href={`/dashboard/cycle-counts/${o.recount.cycleCountId}`} className="font-medium hover:underline">
+                  {activeRecountCopy(o.recount)}
+                </Link>
+              </p>
+            ) : (
+              <p className="text-muted-foreground">No recount is linked to this exception.</p>
+            )}
+            <p className="text-muted-foreground">
+              {o.canRecount ? RECOUNT_COUNTS_TOTAL_COPY : RECOUNT_MANAGER_ONLY_COPY}
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card>
         <CardHeader className="pb-2">
@@ -252,11 +286,12 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
                 return (
                   <li key={e.id} className="text-sm">
                     <p className="font-medium">
-                      {describeOccurrenceEvent({
+                      {describeTimelineEvent({
                         kind: e.kind,
                         actorLabel: e.actor?.label ?? null,
                         cycleCountNumber: e.cycleCount?.countNumber ?? null,
                         resolvedReason: o.resolvedReason,
+                        recountOutcome: e.cycleCount?.outcome ?? null,
                       })}
                     </p>
                     <p className="text-muted-foreground text-xs">

@@ -6,7 +6,13 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { offlineCaptureLabel, variantLabel } from '@stockpilot/core';
+import {
+  CYCLE_COUNT_MANAGER_POSTS_COPY,
+  cycleCountCloseGate,
+  offlineCaptureLabel,
+  variantLabel,
+  type Role,
+} from '@stockpilot/core';
 
 import { HelpTip } from '@/components/onboarding/help-tip';
 import { Badge } from '@/components/ui/badge';
@@ -101,6 +107,11 @@ interface Props {
   /** The organization's IANA timezone, for the offline capture time a line
       shows in review (0369). */
   timeZone?: string;
+  /** The reader's role in this org. Post and Cancel follow core
+      cycleCountCloseGate (manager or above with stock:adjust; Cancel also
+      cycle_counts:assign), the rule ledger.post_cycle_count and the
+      cycle_counts UPDATE policy apply. Defaults to viewer (fail closed). */
+  role?: Role;
 }
 
 export function CycleCountDetail({
@@ -118,6 +129,7 @@ export function CycleCountDetail({
   assigneeName = null,
   itemsInScopeCount,
   timeZone,
+  role = 'viewer',
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -138,6 +150,11 @@ export function CycleCountDetail({
   const completed = header.status === 'completed';
   const canceled = header.status === 'canceled';
   const open = header.status === 'in_progress';
+  // WHO MAY POST OR CANCEL (F1-2): the ONE predicate the phone and the
+  // service use too. Staff hold stock:adjust and count, but the post and the
+  // cancel are manager-only in the database, so offering them the buttons
+  // only led to a refusal. They see who does it instead.
+  const { canPost, canCancel } = cycleCountCloseGate({ role, canAdjust, canAssign });
 
   // Search + filter + pagination are ALL server-side now (a >1000-SKU count
   // can't ship every line to the client). Build the target URL for a given
@@ -318,25 +335,34 @@ export function CycleCountDetail({
           {formatNumber(summary.counted)} of {formatNumber(summary.total)} counted ·{' '}
           {formatNumber(summary.varianceCount)} with variance
         </span>
-        {open && canAdjust && (
+        {open && (canPost || canCancel) && (
           <div className="ml-auto flex gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setCancelOpen(true)}
-              disabled={postBusy}
-            >
-              Cancel count
-            </Button>
-            <Button
-              variant="gradient"
-              size="sm"
-              onClick={() => setConfirmOpen(true)}
-              disabled={postBusy || summary.counted === 0}
-            >
-              Review & post
-            </Button>
+            {canCancel && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setCancelOpen(true)}
+                disabled={postBusy}
+              >
+                Cancel count
+              </Button>
+            )}
+            {canPost && (
+              <Button
+                variant="gradient"
+                size="sm"
+                onClick={() => setConfirmOpen(true)}
+                disabled={postBusy || summary.counted === 0}
+              >
+                Review & post
+              </Button>
+            )}
           </div>
+        )}
+        {open && canAdjust && !canPost && (
+          <span className="text-muted-foreground ml-auto text-xs" data-testid="manager-posts">
+            {CYCLE_COUNT_MANAGER_POSTS_COPY}
+          </span>
         )}
       </div>
 
@@ -478,7 +504,7 @@ export function CycleCountDetail({
         </div>
       )}
 
-      {canAdjust && (
+      {canCancel && (
       <DestructiveConfirm
         open={cancelOpen}
         onOpenChange={setCancelOpen}
@@ -491,7 +517,7 @@ export function CycleCountDetail({
       />
       )}
 
-      {canAdjust && (
+      {canPost && (
       <Dialog open={confirmOpen} onOpenChange={(o) => !postBusy && setConfirmOpen(o)}>
         <DialogContent className="max-w-md">
           <DialogHeader>

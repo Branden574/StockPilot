@@ -14,8 +14,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
+  COUNT_LINKED_EXCEPTIONS_UNAVAILABLE_COPY,
   CYCLE_COUNT_REFERENCE_UNAVAILABLE,
   cycleCountScopeLabel,
+  exceptionUnrecognizedCopy,
   formatCycleCountNumber,
   offlineCaptureAt,
   offlineCaptureLabel,
@@ -26,6 +28,12 @@ import { CycleCountReassignSheet } from '@/components/cycle-count-reassign-sheet
 import { CycleCountReleaseSheet } from '@/components/cycle-count-release-sheet';
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
 import { useAuth } from '@/lib/auth-context';
+import {
+  countFooter,
+  fetchCountCloseGate,
+  rememberedCloseGate,
+  type CloseGateState,
+} from '@/lib/count-close-gate';
 import { showWriteCta } from '@/lib/cta-gating';
 import { footerReservation } from '@/lib/dynamic-type-layout';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
@@ -41,6 +49,11 @@ import { fetchAllCycleCountLines } from '@/lib/cycle-count-lines-fetch';
 import { postCycleCountErrorMessage } from '@/lib/cycle-count-post-errors';
 import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
 import { postCycleCount } from '@/lib/cycle-counts-api';
+import {
+  getCountLinkedExceptions,
+  linkedLineDestination,
+  type MobileCountLinkedExceptions,
+} from '@/lib/exceptions-api';
 import { createDraftDebouncer } from '@/lib/draft-debouncer';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
@@ -155,6 +168,32 @@ export default function CycleCountDetail() {
   // to what the cache knows.
   const [scope, setScope] = React.useState<string | null>(null);
   const [conflictBanner, setConflictBanner] = React.useState<string | null>(null);
+
+  // WHO MAY POST (F1-2). Staff count; managers post (ledger.post_cycle_count
+  // is manager-only). The Post footer follows core cycleCountCloseGate, fed
+  // the role and effective permissions from /api/v1/me/permissions, read
+  // when the screen opens online and remembered for this session. Never
+  // guessed: before an answer the footer says so.
+  const userId = user?.id ?? null;
+  const [closeGate, setCloseGate] = React.useState<CloseGateState>(() => {
+    const known = rememberedCloseGate(userId, orgId);
+    return known ? { kind: 'known', gate: known } : { kind: 'loading' };
+  });
+  const [closeGateNonce, setCloseGateNonce] = React.useState(0);
+
+  // THE EXCEPTIONS A RECOUNT LINKED TO THIS COUNT (F1-2): a chip on each
+  // linked line and, while the phone's line matches what the server read,
+  // where its difference lands when posted. Online only; a failed read says
+  // so, never "none".
+  const [linked, setLinked] = React.useState<
+    { kind: 'none' } | { kind: 'ready'; data: MobileCountLinkedExceptions } | { kind: 'failed' }
+  >({ kind: 'none' });
+  // The server's counted_location_id per line, from the online read (the
+  // phone's cache does not keep it): the destination is shown only while it
+  // matches the one the linked answer was worked out from.
+  const [serverLocations, setServerLocations] = React.useState<ReadonlyMap<string, string | null>>(
+    () => new Map(),
+  );
 
   // Debounced local saves (updateLocalLine + the outbox row), FLUSHED on
   // unmount: a count typed within SAVE_DEBOUNCE_MS of leaving the screen used
@@ -337,6 +376,15 @@ export default function CycleCountDetail() {
       };
     });
 
+    setServerLocations(
+      new Map(
+        ((lineRows ?? []) as Record<string, unknown>[]).map((r) => [
+          r.id as string,
+          (r.counted_location_id as string | null | undefined) ?? null,
+        ]),
+      ),
+    );
+
     // Conflict detection: any line we have a pending edit for whose
     // server-side counted_quantity is newer than what we cached AND
     // differs from the value we're about to push? Surface a banner.
@@ -371,6 +419,15 @@ export default function CycleCountDetail() {
       }
     }
     setLoading(false);
+
+    // The linked exceptions, after the count is on screen (it never waits for
+    // them). An answer for another workspace is never shown.
+    try {
+      const links = await getCountLinkedExceptions(id);
+      setLinked(links.organizationId === orgId ? { kind: 'ready', data: links } : { kind: 'failed' });
+    } catch {
+      setLinked({ kind: 'failed' });
+    }
   }, [id, orgId]);
 
 
@@ -395,6 +452,27 @@ export default function CycleCountDetail() {
     };
   }, [id, syncSnapshot.pendingCount, syncSnapshot.status]);
 
+  // The Post gate, read whenever the screen is online (a role changed since
+  // is picked up on the next open). Every set is post-await.
+  const gateOffline = syncSnapshot.status === 'offline';
+  React.useEffect(() => {
+    if (!userId || !orgId || gateOffline) return;
+    let cancelled = false;
+    fetchCountCloseGate(userId, orgId).then(
+      (gate) => {
+        if (!cancelled) setCloseGate({ kind: 'known', gate });
+      },
+      () => {
+        if (cancelled) return;
+        const known = rememberedCloseGate(userId, orgId);
+        setCloseGate(known ? { kind: 'known', gate: known } : { kind: 'unknown', offline: false });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, orgId, gateOffline, closeGateNonce]);
+
   // On unmount, SAVE what is still waiting for its debounce instead of
   // cancelling it. The state updates the save makes afterwards land on an
   // unmounted screen and are ignored; the local write and the outbox row are
@@ -412,6 +490,8 @@ export default function CycleCountDetail() {
 
   async function postCount() {
     if (!header) return;
+    // Only on a known yes (the footer shows no Post otherwise).
+    if (closeGateView.kind !== 'known' || !closeGateView.gate.canPost) return;
     if (syncSnapshot.status === 'offline') {
       Alert.alert(
         'Offline',
@@ -476,13 +556,24 @@ export default function CycleCountDetail() {
   // The count's permanent reference, from the cache (filled by the snapshot
   // pull or the fetch above). Never made up when absent.
   const reference = formatCycleCountNumber(header?.countNumber);
-  const allCounted = countedCount === lines.length && lines.length > 0;
   const offline = syncSnapshot.status === 'offline';
   const hasPending = pendingForThis > 0;
   // Only open (in_progress) counts are editable/postable. Completed or
   // canceled counts are opened from history read-only.
   const isOpen = (header?.status ?? 'in_progress') === 'in_progress';
-  const postDisabled = posting || countedCount === 0 || offline || hasPending;
+  // What the footer shows (count-close-gate.ts): Post only on a known yes.
+  // Offline with nothing known, it says posting needs a connection and who
+  // posts.
+  const closeGateView: CloseGateState =
+    closeGate.kind === 'known' ? closeGate : offline ? { kind: 'unknown', offline: true } : closeGate;
+  const footer = countFooter({
+    gate: closeGateView,
+    posting,
+    offline,
+    hasPending,
+    countedCount,
+    total: lines.length,
+  });
 
   if (emptyState === 'read-failed') {
     return (
@@ -660,6 +751,13 @@ export default function CycleCountDetail() {
               kept when the count is posted.
             </Text>
           ) : null}
+          {linked.kind === 'failed' ? (
+            <Text style={styles.linkedNote} accessibilityRole="alert">
+              {COUNT_LINKED_EXCEPTIONS_UNAVAILABLE_COPY}
+            </Text>
+          ) : linked.kind === 'ready' && exceptionUnrecognizedCopy(linked.data.unrecognized) ? (
+            <Text style={styles.linkedNote}>{exceptionUnrecognizedCopy(linked.data.unrecognized)}</Text>
+          ) : null}
           {lines.map((l) => {
             const draftVal = draft[l.id];
             const isDrafting = draftVal !== undefined;
@@ -689,6 +787,22 @@ export default function CycleCountDetail() {
               l.counted !== null && !l.localDirty && !isDrafting
                 ? offlineCaptureLabel({ captured_at: l.offlineCapturedAt }, orgTimeZone)
                 : null;
+            // The exceptions a recount linked to this line's item, and where
+            // its difference lands (only while the server's answer describes
+            // the line this phone holds).
+            const links =
+              linked.kind === 'ready'
+                ? linked.data.exceptions.filter((x) => x.occurrence.itemId === l.itemId)
+                : [];
+            const destination =
+              links.length > 0
+                ? linkedLineDestination(links[0]!, {
+                    counted: l.counted,
+                    localDirty: l.localDirty,
+                    drafting: isDrafting,
+                    countedLocationId: serverLocations.get(l.id),
+                  })
+                : null;
             return (
               <View key={l.id} style={styles.card}>
                 <View style={{ flex: 1 }}>
@@ -701,6 +815,28 @@ export default function CycleCountDetail() {
                   <Text style={styles.itemSku}>{l.itemSku}</Text>
                   {capturedText ? (
                     <Text style={styles.captured}>{capturedText}</Text>
+                  ) : null}
+                  {links.length > 0 ? (
+                    <View style={styles.linkRow}>
+                      {links.map((x) => (
+                        <Pressable
+                          key={x.occurrence.id}
+                          onPress={() => router.push(`/exceptions/${x.occurrence.id}`)}
+                          style={styles.linkChip}
+                          accessibilityRole="link"
+                          accessibilityLabel={`Recount for exception ${x.occurrence.reference ?? ''}`.trim()}
+                        >
+                          <Text style={styles.linkChipText} maxFontSizeMultiplier={LINK_CHIP_CAP}>
+                            {`Recount for ${x.occurrence.reference ?? 'an exception'}`}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  ) : null}
+                  {destination ? (
+                    <Text style={destination.kind === 'review' ? styles.destination : styles.destinationPending}>
+                      {destination.text}
+                    </Text>
                   ) : null}
                   <Text style={styles.expected}>
                     Expected: {l.expected}
@@ -756,27 +892,37 @@ export default function CycleCountDetail() {
           style={styles.footer}
           onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
         >
-          <Pressable
-            onPress={postCount}
-            disabled={postDisabled}
-            style={({ pressed }) => [
-              styles.postBtn,
-              !allCounted && { backgroundColor: theme.warning },
-              (pressed || postDisabled) && { opacity: 0.6 },
-            ]}
-          >
-            <Text style={styles.postBtnText}>
-              {posting
-                ? 'Posting…'
-                : offline
-                  ? 'Reconnect to post'
-                  : hasPending
-                    ? 'Sync pending edits to post'
-                    : allCounted
-                      ? 'Post cycle count'
-                      : `Post (${countedCount}/${lines.length} counted)`}
-            </Text>
-          </Pressable>
+          {footer.kind === 'post' ? (
+            <Pressable
+              onPress={postCount}
+              disabled={footer.disabled}
+              style={({ pressed }) => [
+                styles.postBtn,
+                footer.partial && { backgroundColor: theme.warning },
+                (pressed || footer.disabled) && { opacity: 0.6 },
+              ]}
+            >
+              <Text style={styles.postBtnText}>{footer.label}</Text>
+            </Pressable>
+          ) : (
+            <View style={{ gap: space.sm }}>
+              <Text style={styles.footerNote} accessibilityRole="text">
+                {footer.text}
+              </Text>
+              {footer.kind === 'unknown' && footer.retry ? (
+                <Pressable
+                  onPress={() => {
+                    setCloseGate({ kind: 'loading' });
+                    setCloseGateNonce((n) => n + 1);
+                  }}
+                  style={styles.footerRetry}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.releaseBtnLabel}>Check again</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          )}
         </View>
       )}
 
@@ -815,6 +961,14 @@ export default function CycleCountDetail() {
  * out of the title.
  */
 const SCAN_LABEL_CAP = capTo(13, TYPE_CEILING.chrome);
+
+/**
+ * Chrome cap for the linked-exception chip ("Recount for EX-000042"). Its box
+ * is a minHeight with wrapping row (never a fixed height), so the capped label
+ * still grows to 20pt and wraps instead of clipping. The destination line
+ * under it is content and is not capped.
+ */
+const LINK_CHIP_CAP = capTo(12, TYPE_CEILING.chrome);
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.bg },
@@ -961,4 +1115,29 @@ const styles = StyleSheet.create({
   },
   conflictText: { color: theme.text, fontSize: 12, flex: 1 },
   conflictDismiss: { color: theme.warning, fontWeight: '700', fontSize: 12 },
+  footerNote: { color: theme.textMuted, fontSize: 14, textAlign: 'center' },
+  footerRetry: {
+    alignSelf: 'center',
+    minHeight: 40,
+    paddingHorizontal: 16,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: theme.border,
+    justifyContent: 'center',
+  },
+  linkedNote: { color: theme.textMuted, fontSize: 12, marginBottom: space.sm },
+  linkRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  linkChip: {
+    minHeight: 24,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radius.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.warning,
+    justifyContent: 'center',
+    flexShrink: 1,
+  },
+  linkChipText: { color: theme.warning, fontSize: 12, fontWeight: '600' },
+  destination: { color: theme.text, fontSize: 13, marginTop: 4 },
+  destinationPending: { color: theme.textMuted, fontSize: 12, marginTop: 4 },
 });

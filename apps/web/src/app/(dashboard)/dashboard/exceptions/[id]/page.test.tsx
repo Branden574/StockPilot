@@ -206,4 +206,85 @@ describe('Exception detail page', () => {
     expect(get).toHaveBeenCalledWith(ID);
     expect(scheduleExceptionSync).not.toHaveBeenCalled();
   });
+
+  // ── F1-2: recount ─────────────────────────────────────────────────────────
+
+  const VARIANCE = {
+    rule: 'count_variance',
+    facts: {
+      itemName: 'QA Chromebook',
+      sku: 'QA-1',
+      cycleCountId: 'cc-1',
+      countNumber: 1,
+      observedAt: '2026-09-24T17:00:00Z',
+      completedAt: '2026-09-24T17:05:00Z',
+      expected: 20,
+      counted: 21,
+      variance: 1,
+      countedLocationName: null,
+      aiAssisted: false,
+      capturedOfflineAt: null,
+    },
+    item: { name: 'QA Chromebook', sku: 'QA-1' },
+  };
+
+  it('offers Recount to a reader the server says can start one', async () => {
+    get.mockResolvedValue(detail({ ...VARIANCE, canRecount: true }));
+    await renderPage();
+    expect(screen.getByTestId('recount-button')).toBeInTheDocument();
+    expect(screen.getByTestId('recount-card')).toHaveTextContent(
+      'Counts record each item’s total, wherever it is stored.',
+    );
+  });
+
+  // Mutation caught: Recount offered on stock:adjust alone (staff).
+  it('a reader who cannot start one sees why, and no button', async () => {
+    get.mockResolvedValue(detail({ ...VARIANCE, canRecount: false }));
+    await renderPage();
+    expect(screen.queryByTestId('recount-button')).not.toBeInTheDocument();
+    expect(screen.getByTestId('recount-card')).toHaveTextContent(
+      'Only a manager with permission to assign counts and adjust stock can start a recount.',
+    );
+  });
+
+  it('a rule a recount cannot settle has no Recount section', async () => {
+    get.mockResolvedValue(detail({ canRecount: false }));
+    await renderPage();
+    expect(screen.queryByTestId('recount-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('recount-button')).not.toBeInTheDocument();
+  });
+
+  it('shows the linked recount and how far it has got, linking to the count', async () => {
+    get.mockResolvedValue(
+      detail({
+        ...VARIANCE,
+        canRecount: true,
+        recount: {
+          cycleCountId: 'cc-2',
+          countNumber: 2,
+          status: 'in_progress',
+          completedAt: null,
+          outcome: { kind: 'in_progress', counted: 1, total: 3 },
+        },
+      }),
+    );
+    await renderPage();
+    const link = screen.getByRole('link', { name: 'Recount CC-000002: In progress: 1 of 3 counted' });
+    expect(link).toHaveAttribute('href', '/dashboard/cycle-counts/cc-2');
+  });
+
+  it('a closed recount in the timeline says what it found', async () => {
+    get.mockResolvedValue(
+      detail({ ...VARIANCE }, {
+        timeline: [
+          { id: 'e1', kind: 'raised', at: '2026-09-24T15:00:00Z', actor: null, note: null, cycleCount: null, maintenanceRequestId: null, evidenceId: null },
+          { id: 'e2', kind: 'recount_linked', at: '2026-09-24T16:00:00Z', actor: { id: 'u1', label: 'Dana Lee' }, note: null, cycleCount: { id: 'cc-2', countNumber: 2 }, maintenanceRequestId: null, evidenceId: null },
+          { id: 'e3', kind: 'recount_closed', at: '2026-09-24T17:00:00Z', actor: null, note: null, cycleCount: { id: 'cc-2', countNumber: 2, outcome: { kind: 'matched', quantity: 21 } }, maintenanceRequestId: null, evidenceId: null },
+        ],
+      }),
+    );
+    await renderPage();
+    expect(screen.getByText('Recount CC-000002 linked by Dana Lee')).toBeInTheDocument();
+    expect(screen.getByText('Recount CC-000002 closed: Matched the book (21)')).toBeInTheDocument();
+  });
 });

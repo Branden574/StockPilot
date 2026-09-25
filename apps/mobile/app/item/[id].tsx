@@ -1,4 +1,5 @@
 import * as ImagePicker from 'expo-image-picker';
+import { useNetworkState } from 'expo-network';
 import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import {
   ArrowLeftRight,
@@ -6,6 +7,7 @@ import {
   Boxes,
   Camera,
   ChevronLeft,
+  ClipboardCheck,
   Edit3,
   History,
   Minus,
@@ -36,7 +38,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   can,
   collectLegacyRefIdsByKind,
+  COUNT_THIS_ITEM_LABEL,
+  countStartAllowed,
   formatCycleCountNumber,
+  isCountableItem,
   formatOrderNumber,
   legacyOrderRefId,
   readDisplayStorage,
@@ -47,6 +52,7 @@ import {
   type Role,
 } from '@stockpilot/core';
 
+import { ExceptionRecountSheet } from '@/components/exception-recount-sheet';
 import { MoveStockModal } from '@/components/move-stock-modal';
 import { PhotoViewer } from '@/components/photo-viewer';
 import { RemoveFromRackModal } from '@/components/remove-from-rack-modal';
@@ -60,6 +66,7 @@ import { api } from '@/lib/api';
 import { showWriteCta } from '@/lib/cta-gating';
 import { canMintPlacementDestination } from '@/lib/move-stock-form';
 import { useEnabledModules } from '@/lib/enabled-modules';
+import { isOfflineState } from '@/lib/exceptions-api';
 import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
@@ -173,6 +180,10 @@ interface Item {
    *  so it hid the correct label to print the stale one. Carries
    *  `locations.kind`, without which the crate rule cannot fire. */
   rackHoldings: RackHoldingLike[];
+  /** Rental equipment and kits are never counted (0369 D8): "Count this
+   *  item" is not offered for them (F1-2). */
+  is_rental: boolean;
+  is_bundle: boolean;
   /** Since 0371 `rackHoldings` are only the holdings this member can SEE (a
    *  staff member or viewer: their own warehouses, plus locations with no
    *  warehouse). This is the rest, as totals from item_holdings_elsewhere:
@@ -532,6 +543,18 @@ export default function ItemDetail() {
   const canReportProblem =
     enabledModules.has('maintenance_requests') &&
     showWriteCta(permissions, 'maintenance_requests:submit');
+  // "Count this item" (F1-2): a manager who can start counts (core
+  // countStartAllowed, the server's floors as a yes/no: the cycle_counts
+  // module, cycle_counts:assign, stock:adjust and the manager role). Cosmetic;
+  // the recount service and the database re-check. The sheet needs a
+  // connection and says so offline.
+  const canStartCounts = countStartAllowed({
+    role: role as Role | null,
+    permissions,
+    cycleCountsEnabled: enabledModules.has('cycle_counts'),
+  });
+  const offline = isOfflineState(useNetworkState());
+  const [countOpen, setCountOpen] = React.useState(false);
 
   // Optimistic reflect of a saved note edit across BOTH movement lists (the
   // Movements tab and the Activity tab keep independent arrays, and the same
@@ -561,7 +584,7 @@ export default function ItemDetail() {
         `id, organization_id, name, sku, barcode, description, quantity_on_hand,
          reorder_point, reorder_quantity, unit_cost, retail_price,
          unit_of_measure, status, auto_archived, awaiting_first_receipt,
-         category_id, item_type, bin_location,
+         category_id, item_type, bin_location, is_rental, is_bundle,
          warehouse_id, charter_id, custom_fields, tracking_type,
          category:categories!category_id (name),
          supplier:suppliers!supplier_id (name),
@@ -710,6 +733,8 @@ export default function ItemDetail() {
       grade,
       imageUrl,
       rackHoldings,
+      is_rental: r.is_rental === true,
+      is_bundle: r.is_bundle === true,
       elsewhere,
     });
   }, [id, router, role]);
@@ -1547,6 +1572,18 @@ export default function ItemDetail() {
                   Remove from rack
                 </Button>
               ) : null}
+              {canStartCounts &&
+              isCountableItem({ status: item.status, is_rental: item.is_rental, is_bundle: item.is_bundle }) ? (
+                <Button
+                  block
+                  variant="outline"
+                  onPress={() => setCountOpen(true)}
+                  leading={<ClipboardCheck size={16} color={c.ink} strokeWidth={1.5} />}
+                  style={{ marginTop: 10 }}
+                >
+                  {COUNT_THIS_ITEM_LABEL}
+                </Button>
+              ) : null}
               {canReportProblem ? (
                 <Button
                   block
@@ -1821,6 +1858,20 @@ export default function ItemDetail() {
           void load();
           if (tab === 'movements') void loadMovements();
           if (tab === 'activity') void loadActivity();
+        }}
+      />
+
+      <ExceptionRecountSheet
+        visible={countOpen}
+        title={COUNT_THIS_ITEM_LABEL}
+        itemId={item.id}
+        orgId={orgId ?? null}
+        online={!offline}
+        onClose={() => setCountOpen(false)}
+        onDone={() => setCountOpen(false)}
+        onOpenCount={(cycleCountId) => {
+          setCountOpen(false);
+          router.push(`/cycle-count/${cycleCountId}` as Href);
         }}
       />
 

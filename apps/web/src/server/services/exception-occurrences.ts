@@ -244,6 +244,9 @@ export interface CountLinkedException {
     countedQuantity: number | null;
     /** The book when the line was counted (its expected quantity). */
     expectedQuantity: number | null;
+    /** cycle_count_lines.counted_location_id: lets the phone tell whether the
+     *  destination below still describes the line it holds. */
+    countedLocationId: string | null;
     /** The shelf location the count was attributed to (read for linked
      *  lines only), or null: not recorded. */
     countedLocation: { name: string; kind: string | null; archived: boolean } | null;
@@ -814,6 +817,7 @@ export class ExceptionOccurrencesService {
       item_id: string;
       counted_quantity: number | string | null;
       expected_quantity: number | string | null;
+      counted_location_id: string | null;
       counted_location: { name: string; kind: string | null; deleted_at: string | null } | null;
     };
     const itemIds = [...new Set(occurrences.map((o) => o.itemId))];
@@ -824,7 +828,7 @@ export class ExceptionOccurrencesService {
           ctx.supabase
             .from('cycle_count_lines')
             .select(
-              'id, item_id, counted_quantity, expected_quantity, counted_location:locations!cycle_count_lines_counted_location_id_fkey(name, kind, deleted_at)',
+              'id, item_id, counted_quantity, expected_quantity, counted_location_id, counted_location:locations!cycle_count_lines_counted_location_id_fkey(name, kind, deleted_at)',
             )
             .eq('cycle_count_id', cycleCountId)
             .in('item_id', batch)
@@ -852,6 +856,7 @@ export class ExceptionOccurrencesService {
             id: l.id,
             countedQuantity: toQuantity(l.counted_quantity),
             expectedQuantity: toQuantity(l.expected_quantity),
+            countedLocationId: l.counted_location_id ?? null,
             countedLocation,
           }
         : null;

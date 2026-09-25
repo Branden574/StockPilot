@@ -118,6 +118,9 @@ vi.mock('@/server/services/context', async (importOriginal) => {
       }
     },
     isModuleEnabled: actual.isModuleEnabled,
+    // The real floors, for canStartCount (Count this item, F1-2).
+    assertModuleEnabled: actual.assertModuleEnabled,
+    assertPermission: actual.assertPermission,
     withContext: vi.fn(async () => ({
       organizationId: 'org-1',
       userId: 'u1',
@@ -376,5 +379,58 @@ describe('ItemDetail host — module flags come from ctx.enabledModules (no modu
     expect(reportProblemButtonProps).toHaveBeenCalledWith(
       expect.objectContaining({ moduleEnabled: false }),
     );
+  });
+});
+
+// ── F1-2: "Count this item" ─────────────────────────────────────────────────
+//
+// Shown to a manager who can start a count (canStartCount: the module,
+// cycle_counts:assign, stock:adjust and the manager role: the floors the
+// recount itself runs), on an item a count can include (active, not rental,
+// not a kit). The button's own behaviour is tested in
+// recount-selection.test.tsx; here, only whether this host renders it.
+
+const countThisItem = vi.hoisted(() => ({ props: vi.fn() }));
+vi.mock('@/components/exceptions/count-this-item-button', () => ({
+  CountThisItemButton: (props: Record<string, unknown>) => {
+    countThisItem.props(props);
+    return null;
+  },
+}));
+
+describe('ItemDetail host — Count this item (F1-2)', () => {
+  function asMember(role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer', perms: string[], modules: string[]) {
+    ctxHolder.current = { role, permissions: new Set(perms), enabledModules: new Set(modules) };
+  }
+  const BOTH = ['cycle_counts:assign', 'stock:adjust'];
+
+  it('a manager who can start counts gets it on a countable item', async () => {
+    asMember('manager', BOTH, ['cycle_counts']);
+    await renderItemDetail();
+    expect(countThisItem.props).toHaveBeenCalledWith({ itemId: ITEM_ID });
+  });
+
+  // Mutation caught: gating on stock:adjust alone (staff hold it).
+  it('staff (even with both keys by override) do not', async () => {
+    asMember('staff', BOTH, ['cycle_counts']);
+    await renderItemDetail();
+    expect(countThisItem.props).not.toHaveBeenCalled();
+  });
+
+  it('not without the cycle_counts module, or without cycle_counts:assign', async () => {
+    asMember('manager', BOTH, []);
+    await renderItemDetail();
+    asMember('manager', ['stock:adjust'], ['cycle_counts']);
+    await renderItemDetail();
+    expect(countThisItem.props).not.toHaveBeenCalled();
+  });
+
+  it('not on rental equipment, a kit or an archived item', async () => {
+    asMember('manager', BOTH, ['cycle_counts']);
+    for (const o of [{ is_rental: true }, { is_bundle: true }, { status: 'archived' }]) {
+      inventoryGet.mockResolvedValue(itemFixture(o));
+      await renderItemDetail();
+    }
+    expect(countThisItem.props).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,19 @@
+import { can, type Permission } from '../constants/permissions';
+import type { Role } from '../constants/roles';
+import { isManagerOrAbove } from '../constants/terminology';
+import { formatCycleCountNumber } from '../cycle-counts/cycle-count-number';
 import { formatStockQuantity, formatHoldingLabel } from '../inventory/stock-writeoff';
+import { formatOrgDateTime } from '../time/org-timezone';
 
-import { EXCEPTION_RULES, isExceptionRule, roundQuantity, signedQuantity } from './exceptions';
+import {
+  describeOccurrenceEvent,
+  EXCEPTION_RULES,
+  isExceptionRule,
+  roundQuantity,
+  signedQuantity,
+  type OccurrenceEventKind,
+  type OccurrenceResolvedReason,
+} from './exceptions';
 
 /**
  * TARGETED RECOUNTS (F1-2, migration 0372) — the shared words and derivations.
@@ -257,3 +270,261 @@ export function varianceReviewLine(input: {
     ? `${numbers}: ${varianceDestinationCopy(destination)}`
     : `${numbers} (${signedQuantity(delta)}): ${varianceDestinationCopy(destination)}`;
 }
+
+// ── Reading an outcome sent as JSON (the phone) ─────────────────────────────
+
+function finiteOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * A RecountOutcome as the server sent it, checked. Anything this build cannot
+ * read (a missing field, a newer kind) is `unavailable`, never "matched": an
+ * outcome that cannot be read must not say the book was right.
+ */
+export function parseRecountOutcome(value: unknown): RecountOutcome {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return { kind: 'unavailable' };
+  const v = value as Record<string, unknown>;
+  switch (v.kind) {
+    case 'in_progress':
+      return {
+        kind: 'in_progress',
+        counted: wholeCount(finiteOrNull(v.counted)),
+        total: wholeCount(finiteOrNull(v.total)),
+      };
+    case 'cancelled':
+      return { kind: 'cancelled' };
+    case 'not_counted':
+      return { kind: 'not_counted' };
+    case 'matched': {
+      const q = finiteOrNull(v.quantity);
+      return q === null ? { kind: 'unavailable' } : { kind: 'matched', quantity: q };
+    }
+    case 'corrected': {
+      const from = finiteOrNull(v.from);
+      const to = finiteOrNull(v.to);
+      const delta = finiteOrNull(v.delta);
+      return from === null || to === null || delta === null
+        ? { kind: 'unavailable' }
+        : { kind: 'corrected', from, to, delta };
+    }
+    default:
+      return { kind: 'unavailable' };
+  }
+}
+
+// ── The words around an occurrence's recount ────────────────────────────────
+
+/** "Recount CC-000031: In progress: 1 of 3 counted" (the active recount). */
+export function activeRecountCopy(recount: { countNumber: number | null; outcome: RecountOutcome }): string {
+  const ref = formatCycleCountNumber(recount.countNumber);
+  return `${ref ? `Recount ${ref}` : 'Recount'}: ${recountOutcomeCopy(recount.outcome)}`;
+}
+
+/**
+ * One timeline event's headline, with what a closed recount came to:
+ * "Recount CC-000031 closed: Matched the book (21)". Every other event reads
+ * exactly as core describeOccurrenceEvent words it. The web page and the
+ * phone both call this, so a closed recount never reads differently on the two.
+ */
+export function describeTimelineEvent(event: {
+  kind: OccurrenceEventKind;
+  actorLabel: string | null;
+  cycleCountNumber?: number | null;
+  resolvedReason?: OccurrenceResolvedReason | null;
+  /** For recount_closed: what that count came to for the item. */
+  recountOutcome?: RecountOutcome | null;
+}): string {
+  const base = describeOccurrenceEvent(event);
+  return event.kind === 'recount_closed' && event.recountOutcome
+    ? `${base}: ${recountOutcomeCopy(event.recountOutcome)}`
+    : base;
+}
+
+// ── Who may start one, and when ─────────────────────────────────────────────
+
+/** Why Recount and Count this item are disabled while the phone is offline. */
+export const RECOUNT_OFFLINE_COPY = 'You are offline. Starting a recount needs a connection.';
+
+/** The item page's button (web and phone). */
+export const COUNT_THIS_ITEM_LABEL = 'Count this item';
+
+/**
+ * Whether this reader could start a count at all, as a DISPLAY hint for the
+ * phone: the cycle_counts module, cycle_counts:assign and stock:adjust (the
+ * effective permissions; the static role defaults while they load), and the
+ * manager role. It is the server's assertCountStartFloors as a yes/no (a web
+ * test pins the two together); the server and the database re-check every
+ * start.
+ */
+export function countStartAllowed(input: {
+  role: Role | null | undefined;
+  permissions?: ReadonlySet<Permission>;
+  cycleCountsEnabled: boolean;
+}): boolean {
+  if (!input.role || !input.cycleCountsEnabled) return false;
+  const ctx = { role: input.role, permissions: input.permissions };
+  return isManagerOrAbove(input.role) && can(ctx, 'cycle_counts:assign') && can(ctx, 'stock:adjust');
+}
+
+/**
+ * Why a recount cannot be started right now, or null. Permission first: a
+ * reader who may not start one is told so even offline, because reconnecting
+ * would not change that answer.
+ */
+export function recountDisabledReason(input: { canRecount: boolean; online: boolean }): string | null {
+  if (!input.canRecount) return RECOUNT_MANAGER_ONLY_COPY;
+  if (!input.online) return RECOUNT_OFFLINE_COPY;
+  return null;
+}
+
+/** The Exceptions list's multi-select button. */
+export function recountSelectedLabel(selected: number): string {
+  return `Recount selected (${selected})`;
+}
+
+/** Why "Recount selected" cannot be pressed for this selection, or null. */
+export function recountSelectionProblem(selected: number): string | null {
+  if (selected <= 0) return 'Select the exceptions to recount.';
+  if (selected > RECOUNT_MAX_ITEMS) {
+    return `A recount can include at most ${RECOUNT_MAX_ITEMS} exceptions. Select fewer.`;
+  }
+  return null;
+}
+
+/** The item fields that decide whether it can be counted at all. */
+export interface CountableItemFields {
+  status?: string | null;
+  deleted_at?: string | null;
+  is_rental?: boolean | null;
+  is_bundle?: boolean | null;
+}
+
+/**
+ * start_cycle_count's own predicate (0369, D8): an active item that is not
+ * deleted, not rental equipment and not a kit. "Count this item" is offered
+ * only for such an item; the database skips any other (not_countable).
+ */
+export function isCountableItem(item: CountableItemFields | null | undefined): boolean {
+  return (
+    !!item &&
+    item.status === 'active' &&
+    !item.deleted_at &&
+    item.is_rental !== true &&
+    item.is_bundle !== true
+  );
+}
+
+// ── The result panel (web dialog and phone sheet) ───────────────────────────
+
+/** What both surfaces get back from a recount start (the service's result). */
+export interface RecountResultInput {
+  cycleCountId: string | null;
+  countNumber: number | null;
+  lineCount: number | null;
+  created: boolean;
+  replay: boolean;
+  assignedTo: string | null;
+  assignmentFailed: boolean;
+  linkedExisting: ReadonlyArray<{
+    cycleCountId: string;
+    countNumber: number | null;
+    assignedTo: { id: string; label: string | null } | null;
+    startedAt: string | null;
+    itemIds: readonly string[];
+    occurrenceIds: readonly string[];
+  }>;
+  skipped: ReadonlyArray<{ itemId: string; itemName: string | null; reason: RecountSkipReason }>;
+}
+
+export interface RecountResultSummary {
+  /** The count this request started (on a replay: started by its first send). */
+  started: { cycleCountId: string; text: string } | null;
+  /** Who the started count is assigned to, or that assigning failed. */
+  assignment: string | null;
+  /** Counts that already held some of the items; they were linked to them. */
+  alreadyCounting: Array<{ cycleCountId: string; text: string }>;
+  /** "Skipped: Atlas: Rental equipment, kits and archived items are not counted". */
+  skipped: string[];
+  /** Nothing was started and nothing was already being counted. */
+  nothing: string | null;
+}
+
+/** The result panel's three groups, worded once for the web and the phone. */
+export function recountResultSummary(
+  result: RecountResultInput,
+  opts: {
+    /** The org's time zone, for "open since". */
+    timeZone?: string | null;
+    /** The chosen assignee's name, when the caller knows it. */
+    assigneeLabel?: string | null;
+  } = {},
+): RecountResultSummary {
+  let started: RecountResultSummary['started'] = null;
+  if (result.cycleCountId && (result.created || result.replay)) {
+    const ref = formatCycleCountNumber(result.countNumber) ?? 'a count';
+    const items =
+      result.lineCount !== null && Number.isSafeInteger(result.lineCount)
+        ? ` (${result.lineCount} item${result.lineCount === 1 ? '' : 's'})`
+        : '';
+    started = {
+      cycleCountId: result.cycleCountId,
+      text: result.replay
+        ? `Started ${ref}. This request had already been received, so no second count was made.`
+        : `Started ${ref}${items}`,
+    };
+  }
+
+  let assignment: string | null = null;
+  if (started) {
+    if (result.assignmentFailed) {
+      assignment = 'It was started unassigned and nobody was notified. Assign it from the count.';
+    } else if (result.assignedTo) {
+      const who = opts.assigneeLabel?.trim();
+      assignment = who ? `Assigned to ${who}, who gets a notification.` : 'Assigned.';
+    } else {
+      assignment = 'Not assigned to anyone yet. Assign it from the count.';
+    }
+  }
+
+  const alreadyCounting = result.linkedExisting.map((e) => {
+    const ref = formatCycleCountNumber(e.countNumber) ?? 'another count';
+    const who = e.assignedTo ? `assigned to ${e.assignedTo.label?.trim() || 'a team member'}` : 'unassigned';
+    const since = e.startedAt
+      ? `, open since ${formatOrgDateTime(e.startedAt, { month: 'short', day: 'numeric' }, opts.timeZone ?? undefined)}`
+      : '';
+    const lead = e.itemIds.length > 1 ? `${e.itemIds.length} items already being counted` : 'Already being counted';
+    const linked = e.occurrenceIds.length > 0 ? ', linked' : '';
+    return { cycleCountId: e.cycleCountId, text: `${lead} in ${ref} (${who}${since})${linked}` };
+  });
+
+  const seen = new Set<string>();
+  const skipped: string[] = [];
+  for (const s of result.skipped) {
+    const key = `${s.itemId}:${s.reason}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    skipped.push(`Skipped: ${s.itemName?.trim() || 'An item'}: ${RECOUNT_SKIP_REASON_COPY[s.reason]}`);
+  }
+
+  return {
+    started,
+    assignment,
+    alreadyCounting,
+    skipped,
+    nothing: !started && alreadyCounting.length === 0 ? 'No count was started.' : null,
+  };
+}
+
+// ── A count's linked exceptions (the count screens) ─────────────────────────
+
+/** Shown when a count's linked exceptions could not be read. Never "none". */
+export const COUNT_LINKED_EXCEPTIONS_UNAVAILABLE_COPY = 'Linked exceptions are unavailable right now.';
+
+/**
+ * Shown on the phone for a linked line whose count has not reached the server
+ * yet (or changed since the server worked out where it lands): the server
+ * decides the counted location when it records the count, so the phone does
+ * not guess.
+ */
+export const VARIANCE_DESTINATION_PENDING_COPY = 'Where the difference lands shows once this count syncs.';

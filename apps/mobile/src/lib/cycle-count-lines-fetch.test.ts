@@ -136,6 +136,10 @@ describe('fetchAllCycleCountLines', () => {
 });
 
 describe('CYCLE_COUNT_LINES_SELECT (0369)', () => {
+  it('reads counted_location_id, so a linked line\'s destination is shown only while it is current (F1-2)', () => {
+    expect(CYCLE_COUNT_LINES_SELECT).toMatch(/\bcounted_location_id\b/);
+  });
+
   it('reads captured_at, so the screen can say when an offline count was taken', () => {
     expect(CYCLE_COUNT_LINES_SELECT).toMatch(/\bcaptured_at\b/);
   });

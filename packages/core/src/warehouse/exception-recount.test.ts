@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  activeRecountCopy,
+  COUNT_THIS_ITEM_LABEL,
+  countStartAllowed,
+  describeTimelineEvent,
+  isCountableItem,
+  parseRecountOutcome,
+  RECOUNT_OFFLINE_COPY,
+  recountDisabledReason,
+  recountResultSummary,
+  recountSelectedLabel,
+  recountSelectionProblem,
+  type RecountResultInput,
   isRecountableRule,
   isRecountSkipReason,
   RECOUNT_COUNTS_TOTAL_COPY,
@@ -224,5 +236,257 @@ describe('shared recount copy', () => {
       expect(text).not.toMatch(PEOPLE_WORDING);
     }
     expect(RECOUNT_MANAGER_ONLY_COPY).toMatch(/manager/);
+  });
+});
+
+// ── F1-2 stage 3: the words the screens share ───────────────────────────────
+
+describe('parseRecountOutcome', () => {
+  it('reads every kind the server sends', () => {
+    expect(parseRecountOutcome({ kind: 'in_progress', counted: 1, total: 3 })).toEqual({
+      kind: 'in_progress',
+      counted: 1,
+      total: 3,
+    });
+    expect(parseRecountOutcome({ kind: 'in_progress', counted: null, total: null })).toEqual({
+      kind: 'in_progress',
+      counted: null,
+      total: null,
+    });
+    expect(parseRecountOutcome({ kind: 'cancelled' })).toEqual({ kind: 'cancelled' });
+    expect(parseRecountOutcome({ kind: 'not_counted' })).toEqual({ kind: 'not_counted' });
+    expect(parseRecountOutcome({ kind: 'matched', quantity: 21 })).toEqual({ kind: 'matched', quantity: 21 });
+    expect(parseRecountOutcome({ kind: 'corrected', from: 10, to: 11, delta: 1 })).toEqual({
+      kind: 'corrected',
+      from: 10,
+      to: 11,
+      delta: 1,
+    });
+  });
+
+  // Mutation caught: a matched outcome with no quantity read as matched.
+  it('never reads an incomplete or unknown outcome as matched', () => {
+    for (const bad of [
+      null,
+      undefined,
+      'matched',
+      [],
+      { kind: 'matched' },
+      { kind: 'matched', quantity: '21' },
+      { kind: 'corrected', from: 10, to: 11 },
+      { kind: 'a_future_kind' },
+    ]) {
+      expect(parseRecountOutcome(bad)).toEqual({ kind: 'unavailable' });
+    }
+  });
+});
+
+describe('activeRecountCopy / describeTimelineEvent', () => {
+  it('names the count and what it came to', () => {
+    expect(activeRecountCopy({ countNumber: 31, outcome: { kind: 'in_progress', counted: 1, total: 3 } })).toBe(
+      'Recount CC-000031: In progress: 1 of 3 counted',
+    );
+    expect(activeRecountCopy({ countNumber: null, outcome: { kind: 'unavailable' } })).toBe(
+      'Recount: Result not available',
+    );
+  });
+
+  it('adds the outcome to a closed recount only', () => {
+    expect(
+      describeTimelineEvent({
+        kind: 'recount_closed',
+        actorLabel: null,
+        cycleCountNumber: 2,
+        recountOutcome: { kind: 'matched', quantity: 21 },
+      }),
+    ).toBe('Recount CC-000002 closed: Matched the book (21)');
+    expect(
+      describeTimelineEvent({
+        kind: 'recount_closed',
+        actorLabel: null,
+        cycleCountNumber: 2,
+        recountOutcome: { kind: 'corrected', from: 10, to: 11, delta: 1 },
+      }),
+    ).toBe('Recount CC-000002 closed: Book corrected from 10 to 11 (+1)');
+    // No outcome known: the plain headline, never a made-up result.
+    expect(describeTimelineEvent({ kind: 'recount_closed', actorLabel: null, cycleCountNumber: 2 })).toBe(
+      'Recount CC-000002 closed',
+    );
+    expect(
+      describeTimelineEvent({
+        kind: 'recount_linked',
+        actorLabel: 'Ana',
+        cycleCountNumber: 2,
+        recountOutcome: { kind: 'matched', quantity: 21 },
+      }),
+    ).toBe('Recount CC-000002 linked by Ana');
+  });
+});
+
+describe('countStartAllowed', () => {
+  const all = new Set(['cycle_counts:assign', 'stock:adjust'] as const);
+
+  it('needs the module, both permissions and the manager role', () => {
+    expect(countStartAllowed({ role: 'manager', permissions: new Set(all), cycleCountsEnabled: true })).toBe(true);
+    expect(countStartAllowed({ role: 'owner', permissions: new Set(all), cycleCountsEnabled: true })).toBe(true);
+    expect(countStartAllowed({ role: 'manager', permissions: new Set(all), cycleCountsEnabled: false })).toBe(false);
+    expect(
+      countStartAllowed({ role: 'manager', permissions: new Set(['stock:adjust'] as const), cycleCountsEnabled: true }),
+    ).toBe(false);
+    expect(
+      countStartAllowed({
+        role: 'manager',
+        permissions: new Set(['cycle_counts:assign'] as const),
+        cycleCountsEnabled: true,
+      }),
+    ).toBe(false);
+    // An override that grants a lower role both keys still stops at the role
+    // (the cycle_counts INSERT policy is manager-only).
+    expect(countStartAllowed({ role: 'staff', permissions: new Set(all), cycleCountsEnabled: true })).toBe(false);
+    expect(countStartAllowed({ role: null, permissions: new Set(all), cycleCountsEnabled: true })).toBe(false);
+  });
+
+  it('falls back to the role defaults while the effective set is unknown', () => {
+    expect(countStartAllowed({ role: 'manager', cycleCountsEnabled: true })).toBe(true);
+    expect(countStartAllowed({ role: 'staff', cycleCountsEnabled: true })).toBe(false);
+  });
+});
+
+describe('recountDisabledReason / selection', () => {
+  it('permission first, then the connection', () => {
+    expect(recountDisabledReason({ canRecount: false, online: false })).toBe(RECOUNT_MANAGER_ONLY_COPY);
+    expect(recountDisabledReason({ canRecount: true, online: false })).toBe(RECOUNT_OFFLINE_COPY);
+    expect(recountDisabledReason({ canRecount: true, online: true })).toBeNull();
+  });
+
+  it('labels the selection and refuses an empty or oversized one', () => {
+    expect(recountSelectedLabel(3)).toBe('Recount selected (3)');
+    expect(recountSelectionProblem(0)).not.toBeNull();
+    expect(recountSelectionProblem(1)).toBeNull();
+    expect(recountSelectionProblem(RECOUNT_MAX_ITEMS)).toBeNull();
+    expect(recountSelectionProblem(RECOUNT_MAX_ITEMS + 1)).toMatch(/at most 200/);
+  });
+});
+
+describe('isCountableItem', () => {
+  it('is start_cycle_count’s predicate', () => {
+    expect(isCountableItem({ status: 'active' })).toBe(true);
+    expect(isCountableItem({ status: 'active', is_rental: false, is_bundle: false, deleted_at: null })).toBe(true);
+    expect(isCountableItem({ status: 'archived' })).toBe(false);
+    expect(isCountableItem({ status: 'discontinued' })).toBe(false);
+    expect(isCountableItem({ status: 'active', is_rental: true })).toBe(false);
+    expect(isCountableItem({ status: 'active', is_bundle: true })).toBe(false);
+    expect(isCountableItem({ status: 'active', deleted_at: '2026-09-01T00:00:00Z' })).toBe(false);
+    expect(isCountableItem(null)).toBe(false);
+    expect(COUNT_THIS_ITEM_LABEL).toBe('Count this item');
+  });
+});
+
+describe('recountResultSummary', () => {
+  const base: RecountResultInput = {
+    cycleCountId: 'cc-new',
+    countNumber: 2,
+    lineCount: 3,
+    created: true,
+    replay: false,
+    assignedTo: 'u-staff',
+    assignmentFailed: false,
+    linkedExisting: [],
+    skipped: [],
+  };
+
+  it('started, assigned', () => {
+    const s = recountResultSummary(base, { assigneeLabel: 'QA Staff' });
+    expect(s.started).toEqual({ cycleCountId: 'cc-new', text: 'Started CC-000002 (3 items)' });
+    expect(s.assignment).toBe('Assigned to QA Staff, who gets a notification.');
+    expect(s.alreadyCounting).toEqual([]);
+    expect(s.skipped).toEqual([]);
+    expect(s.nothing).toBeNull();
+    expect(recountResultSummary({ ...base, lineCount: 1 }).started?.text).toBe('Started CC-000002 (1 item)');
+  });
+
+  // Mutation caught: an assignment failure worded as "Assigned".
+  it('says when assigning failed and when nobody was chosen', () => {
+    expect(recountResultSummary({ ...base, assignedTo: null, assignmentFailed: true }).assignment).toBe(
+      'It was started unassigned and nobody was notified. Assign it from the count.',
+    );
+    expect(recountResultSummary({ ...base, assignedTo: null }).assignment).toBe(
+      'Not assigned to anyone yet. Assign it from the count.',
+    );
+  });
+
+  it('a replay names the first count and says no second one was made', () => {
+    const s = recountResultSummary({ ...base, created: false, replay: true, lineCount: null });
+    expect(s.started?.text).toBe(
+      'Started CC-000002. This request had already been received, so no second count was made.',
+    );
+  });
+
+  it('already being counted: count, assignee, age, and "linked" only when exceptions were linked', () => {
+    const s = recountResultSummary(
+      {
+        ...base,
+        cycleCountId: null,
+        countNumber: null,
+        lineCount: null,
+        created: false,
+        assignedTo: null,
+        linkedExisting: [
+          {
+            cycleCountId: 'cc-1',
+            countNumber: 1,
+            assignedTo: { id: 'u1', label: 'Ana' },
+            startedAt: '2026-09-24T18:00:00Z',
+            itemIds: ['i1'],
+            occurrenceIds: ['o1'],
+          },
+          {
+            cycleCountId: 'cc-3',
+            countNumber: 3,
+            assignedTo: null,
+            startedAt: null,
+            itemIds: ['i2', 'i3'],
+            occurrenceIds: [],
+          },
+          {
+            cycleCountId: 'cc-4',
+            countNumber: 4,
+            assignedTo: { id: 'u2', label: null },
+            startedAt: null,
+            itemIds: ['i4'],
+            occurrenceIds: ['o4'],
+          },
+        ],
+      },
+      { timeZone: 'America/Los_Angeles' },
+    );
+    expect(s.started).toBeNull();
+    expect(s.assignment).toBeNull();
+    expect(s.alreadyCounting.map((a) => a.text)).toEqual([
+      'Already being counted in CC-000001 (assigned to Ana, open since Sep 24), linked',
+      '2 items already being counted in CC-000003 (unassigned)',
+      'Already being counted in CC-000004 (assigned to a team member), linked',
+    ]);
+    expect(s.nothing).toBeNull();
+  });
+
+  it('skipped rows name the item and the reason once, and all-skipped says nothing started', () => {
+    const s = recountResultSummary({
+      ...base,
+      cycleCountId: null,
+      countNumber: null,
+      created: false,
+      assignedTo: null,
+      skipped: [
+        { itemId: 'i1', itemName: 'Projector', reason: 'not_countable' },
+        { itemId: 'i1', itemName: 'Projector', reason: 'not_countable' },
+        { itemId: 'i2', itemName: null, reason: 'resolved' },
+      ],
+    });
+    expect(s.skipped).toEqual([
+      'Skipped: Projector: Rental equipment, kits and archived items are not counted',
+      'Skipped: An item: Already resolved',
+    ]);
+    expect(s.nothing).toBe('No count was started.');
   });
 });

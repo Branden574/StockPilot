@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getModulesForRequest } from '@/lib/dashboard/request-cache';
 import { createClient } from '@/lib/supabase/server';
+import { fetchCountAssignees, type CountAssignee } from '@/server/lib/count-assignees';
 import { WarehousesService } from '@/server/services/warehouses';
 
 import { can } from '@stockpilot/core';
@@ -32,28 +33,11 @@ export default async function NewCycleCountPage() {
   // Manager+ can assign a count to a teammate at creation time. Only
   // fetch the member list when they actually can (mirrors the detail page).
   const canAssign = can(ctx, 'cycle_counts:assign');
-  let members: Array<{ id: string; name: string; email: string }> = [];
+  let members: CountAssignee[] = [];
   if (canAssign) {
-    const { data: rawMembers } = await supabase
-      .from('organization_members')
-      .select('user_id, user:user_profiles!user_id (id, full_name, email)')
-      .eq('organization_id', ctx.organizationId)
-      .not('accepted_at', 'is', null);
-    type MemberRow = {
-      user_id: string;
-      user:
-        | { id: string; full_name: string | null; email: string }
-        | { id: string; full_name: string | null; email: string }[]
-        | null;
-    };
-    members = ((rawMembers ?? []) as MemberRow[])
-      .map((row) => {
-        const u = Array.isArray(row.user) ? row.user[0] : row.user;
-        if (!u) return null;
-        return { id: u.id, name: u.full_name ?? u.email, email: u.email };
-      })
-      .filter((m): m is { id: string; name: string; email: string } => Boolean(m))
-      .sort((a, b) => a.name.localeCompare(b.name));
+    // One member source for every count assignee picker (count-assignees.ts).
+    // A failed read shows no members here, as it always did.
+    members = await fetchCountAssignees(supabase, ctx.organizationId).catch(() => []);
   }
 
   return (

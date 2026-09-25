@@ -285,4 +285,102 @@ describe('Exceptions list page', () => {
     list.mockRejectedValue(new ServiceError('forbidden', 'nope'));
     await expect(renderPage()).rejects.toThrow('NEXT_NOT_FOUND');
   });
+
+  // ── F1-2: multi-select recount ────────────────────────────────────────────
+
+  const VARIANCE = {
+    rule: 'count_variance',
+    facts: {
+      itemName: 'QA Chromebook',
+      sku: 'QA-1',
+      cycleCountId: 'cc-1',
+      countNumber: 1,
+      observedAt: '2026-09-24T17:00:00Z',
+      completedAt: '2026-09-24T17:05:00Z',
+      expected: 20,
+      counted: 21,
+      variance: 1,
+      countedLocationName: null,
+      aiAssisted: false,
+      capturedOfflineAt: null,
+    },
+    item: { name: 'QA Chromebook', sku: 'QA-1' },
+  };
+
+  // Mutation caught: offering checkboxes on every row, or to every reader.
+  it('a manager who can recount gets checkboxes on the recountable rows only', async () => {
+    list.mockResolvedValue(
+      listResult({
+        canRecount: true,
+        occurrences: [
+          occurrence({ id: 'a0000000-0000-4000-8000-000000000001', reference: 'EX-000001', ...VARIANCE, canRecount: true }),
+          occurrence({ id: 'a0000000-0000-4000-8000-000000000002', reference: 'EX-000002', canRecount: false }),
+        ],
+      }),
+    );
+    await renderPage();
+    const boxes = screen.getAllByTestId('recount-checkbox');
+    expect(boxes).toHaveLength(1);
+    expect(boxes[0]).toHaveAccessibleName('Select EX-000001 to recount');
+    expect(screen.getByTestId('recount-hint')).toBeInTheDocument();
+  });
+
+  it('a reader who cannot recount sees the list without checkboxes', async () => {
+    list.mockResolvedValue(
+      listResult({
+        canRecount: false,
+        occurrences: [occurrence({ reference: 'EX-000001', ...VARIANCE, canRecount: false })],
+      }),
+    );
+    await renderPage();
+    expect(screen.queryByTestId('recount-checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('recount-hint')).not.toBeInTheDocument();
+  });
+
+  it('a row with a recount in progress says how far it has got', async () => {
+    list.mockResolvedValue(
+      listResult({
+        occurrences: [
+          occurrence({
+            reference: 'EX-000001',
+            ...VARIANCE,
+            recount: {
+              cycleCountId: 'cc-2',
+              countNumber: 2,
+              status: 'in_progress',
+              completedAt: null,
+              outcome: { kind: 'in_progress', counted: 0, total: 1 },
+            },
+          }),
+        ],
+      }),
+    );
+    await renderPage();
+    expect(screen.getByTestId('occurrence-state')).toHaveTextContent('Recount in progress (CC-000002)');
+    expect(screen.getByTestId('recount-note')).toHaveTextContent('In progress: 0 of 1 counted');
+  });
+
+  it('a posted recount waiting for the check reads Re-checking with what it found', async () => {
+    list.mockResolvedValue(
+      listResult({
+        occurrences: [
+          occurrence({
+            reference: 'EX-000001',
+            ...VARIANCE,
+            recount: {
+              cycleCountId: 'cc-2',
+              countNumber: 2,
+              status: 'completed',
+              // After the last applied evaluation (18:00).
+              completedAt: '2026-09-24T18:30:00Z',
+              outcome: { kind: 'matched', quantity: 21 },
+            },
+          }),
+        ],
+      }),
+    );
+    await renderPage();
+    expect(screen.getByTestId('occurrence-state')).toHaveTextContent('Re-checking');
+    expect(screen.getByTestId('recount-note')).toHaveTextContent('Matched the book (21)');
+  });
 });

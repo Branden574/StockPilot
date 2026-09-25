@@ -39,8 +39,14 @@ export const MAX_CYCLE_COUNT_LINE_PAGES = 50;
  * actually taken; the screen shows "Counted offline <time>" like the web
  * review (owner default D7). This build ships after 0369 (release order:
  * migration, web, then the OTA).
+ *
+ * `counted_location_id` (0342, F1-2) is the shelf location the server
+ * attributed a recorded count to. The screen compares it with the one the
+ * linked-exceptions answer worked out "where the difference lands" from, and
+ * shows that destination only while both describe the same line; otherwise it
+ * says the destination shows once the count syncs, never a stale one.
  */
-export const CYCLE_COUNT_LINES_SELECT = `id, expected_quantity, counted_quantity, counted_at, updated_at, captured_at,
+export const CYCLE_COUNT_LINES_SELECT = `id, expected_quantity, counted_quantity, counted_at, updated_at, captured_at, counted_location_id,
            item:inventory_items!item_id (id, name, sku, barcode, variant_size, jersey_number)`;
 
 /** Minimal shape of a PostgREST query awaited to `{ data, error }`. */
