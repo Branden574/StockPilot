@@ -170,6 +170,26 @@ describe('GET /api/v1/exceptions', () => {
     expect(res.status).toBe(403);
   });
 
+  it('itemId narrows the list to one item; a malformed one is a 400 without a read', async () => {
+    const stub = ctxWith({
+      'exception_occurrences.select': { data: [occRow()], error: null },
+      'exception_sync_state.select.maybeSingle': { data: SYNC_ROW, error: null },
+    });
+    const ok = await LIST(bearer('https://t.local/api/v1/exceptions?itemId=22222222-2222-4222-8222-222222222222'));
+    expect(ok.status).toBe(200);
+    const chain = stub.chainsAll.get('exception_occurrences.select')![0]!;
+    const args = stub.chainArgsAll.get('exception_occurrences.select')![0]!;
+    expect(chain.flatMap((m, i) => (m === 'eq' ? [args[i]] : []))).toContainEqual([
+      'item_id',
+      '22222222-2222-4222-8222-222222222222',
+    ]);
+
+    const bad = ctxWith({});
+    const res = await LIST(bearer('https://t.local/api/v1/exceptions?itemId=nope'));
+    expect(res.status).toBe(400);
+    expect(bad.fromCalls).toEqual([]);
+  });
+
   it('a failed read is a 500 with no list, never an empty 200', async () => {
     ctxWith({
       'exception_occurrences.select': { data: null, error: { message: 'relation does not exist' } },

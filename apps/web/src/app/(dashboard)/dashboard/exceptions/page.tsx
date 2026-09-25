@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { CheckNowButton } from '@/components/exceptions/check-now-button';
+import { RecountCheckbox, RecountSelectionProvider } from '@/components/exceptions/recount-selection';
 import {
   CheckedAt,
   ExceptionsUnavailable,
@@ -35,6 +36,7 @@ import {
   EXCEPTION_RESOLVED_WINDOW_DAYS,
   EXCEPTION_RULES,
   groupOccurrences,
+  recountOutcomeCopy,
   resolveOrgTimezone,
 } from '@stockpilot/core';
 
@@ -182,8 +184,12 @@ function OpenList({
   const groups = groupOccurrences(result.occurrences);
   const unchecked = uncheckedRulesMessage(syncState);
   const unrecognized = result.unrecognized ?? 0;
+  // Multi-select recount (F1-2): a manager who can start counts, and at least
+  // one row the server says a recount can settle.
+  const selectable = result.canRecount && result.occurrences.some((o) => o.canRecount);
 
   return (
+    <RecountSelectionProvider enabled={selectable} timeZone={timeZone}>
     <div className="space-y-4">
       <CheckedAt syncState={syncState} timeZone={timeZone} />
       <UncheckedRulesBanner message={unchecked} />
@@ -191,6 +197,11 @@ function OpenList({
       {result.truncated && (
         <p className="text-warning text-xs">
           Showing the first {result.occurrences.length} open exceptions. There are more.
+        </p>
+      )}
+      {selectable && (
+        <p className="text-muted-foreground text-xs" data-testid="recount-hint">
+          Tick the exceptions a count can settle to recount them together in one count.
         </p>
       )}
 
@@ -227,6 +238,7 @@ function OpenList({
                     detail={r.description.detail}
                     syncState={syncState}
                     timeZone={timeZone}
+                    selectable={r.occurrence.canRecount}
                   />
                 ))}
               </ul>
@@ -235,6 +247,7 @@ function OpenList({
         ))
       )}
     </div>
+    </RecountSelectionProvider>
   );
 }
 
@@ -298,6 +311,7 @@ function OccurrenceRow({
   syncState,
   timeZone,
   showRule = false,
+  selectable = false,
 }: {
   o: ExceptionOccurrence;
   title: string;
@@ -305,17 +319,27 @@ function OccurrenceRow({
   syncState: ExceptionSyncState;
   timeZone: string;
   showRule?: boolean;
+  /** Offer a recount checkbox (renders only inside an enabled selection). */
+  selectable?: boolean;
 }) {
   const when = o.resolvedAt
     ? `Resolved ${exceptionTime(o.resolvedAt, timeZone)}`
     : o.presentWhenTrackingBegan
       ? 'Already present when tracking began'
       : `First seen ${exceptionTime(o.firstSeenAt, timeZone)}`;
+  const state = stateOf(o, syncState);
+  // What the linked recount has come to so far (progress, or once posted,
+  // what it found while the check catches up).
+  const recountNote =
+    o.recount && (state.kind === 'recount_in_progress' || state.kind === 'rechecking')
+      ? recountOutcomeCopy(o.recount.outcome)
+      : null;
   return (
-    <li>
+    <li className="flex items-start gap-2">
+      {selectable ? <RecountCheckbox occurrenceId={o.id} label={o.reference ?? title} /> : null}
       <Link
         href={`/dashboard/exceptions/${o.id}`}
-        className="hover:bg-muted/50 focus-visible:ring-ring block rounded-sm px-1 focus-visible:ring-2 focus-visible:outline-none"
+        className="hover:bg-muted/50 focus-visible:ring-ring block min-w-0 flex-1 rounded-sm px-1 focus-visible:ring-2 focus-visible:outline-none"
       >
         <div className="flex items-center justify-between gap-3 py-2.5">
           <div className="min-w-0 space-y-1">
@@ -330,8 +354,13 @@ function OccurrenceRow({
               {detail}
             </p>
             <div className="flex flex-wrap items-center gap-1.5">
-              <StateChip state={stateOf(o, syncState)} />
+              <StateChip state={state} />
               <RecurrenceChip recurrenceIndex={o.recurrenceIndex} />
+              {recountNote ? (
+                <span className="text-muted-foreground text-xs" data-testid="recount-note">
+                  {recountNote}
+                </span>
+              ) : null}
               <span className="text-muted-foreground text-xs">{when}</span>
             </div>
           </div>

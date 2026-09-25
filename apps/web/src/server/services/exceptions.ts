@@ -1,13 +1,17 @@
 import 'server-only';
 
 import {
+  COUNT_VARIANCE_OPEN_WINDOW_DAYS,
   EXCEPTION_FACTS_LABEL_MAX,
   EXCEPTION_FACTS_LIST_MAX,
   EXCEPTION_FACTS_NAME_MAX,
   EXCEPTION_RULE_IDS,
   EXCEPTION_RULES,
   locationNameSitsOnRack,
+  offlineCaptureAt,
   rackPositionOfLocationName,
+  roundQuantity,
+  type CountVarianceOccurrenceFacts,
   type ExceptionRule,
   type HoldingOccurrenceFacts,
   type LabelMismatchOccurrenceFacts,
@@ -27,7 +31,8 @@ import { assertSystemContext, type SystemServiceContext } from './lib/system-con
  * ═══ CONDITIONS ARE DERIVED; THE LIFECYCLE IS STORED; NO PERSON RESOLVES ═══
  *
  * Every condition here is derived from rows that already exist (holdings,
- * reservations, labels). Nothing about a condition is typed in by a person.
+ * reservations, labels, posted counts). Nothing about a condition is typed in
+ * by a person.
  * What IS stored (migration 0370) is each condition's lifecycle: an
  * exception_occurrences row is raised with an EX number the first time the
  * system sees a condition, refreshed while it stays true, and resolved by the
@@ -85,6 +90,14 @@ export const PLACEMENT_RULES: readonly ExceptionRule[] = [
   'long_unplaced',
   'label_mismatch',
 ];
+
+/**
+ * The same kind of ceiling for count_variance's source: one row per item the
+ * org has ever counted (_latest_count_lines). Hitting it marks count_variance
+ * truncated, so nothing of it resolves on that run. L4L has counted ~100
+ * items.
+ */
+export const COUNT_LINES_SOURCE_CAP = 20_000;
 
 /** Staging is a transit bucket; two days is a normal put-away, a week is not. */
 export const STALE_STAGING_DAYS = 7;
@@ -194,6 +207,7 @@ export class ExceptionsService {
     const groups: Array<{ rules: readonly ExceptionRule[]; run: Promise<GroupResult> }> = [
       { rules: PLACEMENT_RULES, run: placementRules(sysCtx, nowMs) },
       { rules: ['over_reserved'], run: overReserved(sysCtx) },
+      { rules: ['count_variance'], run: countVariance(sysCtx, nowMs, evaluatedAt) },
     ];
     const settled = await Promise.allSettled(groups.map((g) => g.run));
 
@@ -547,4 +561,137 @@ async function overReserved(ctx: SystemServiceContext): Promise<GroupResult> {
     });
   }
   return { present, hold: [], truncatedRules: [] };
+}
+
+/** One row of _latest_count_lines (0372): the latest completed, counted line
+ *  per item, with the item's fields. */
+type LatestCountLineRow = {
+  item_id: string;
+  cycle_count_id: string;
+  count_number: number | string | null;
+  completed_at: string | null;
+  counted_at: string | null;
+  captured_at: string | null;
+  baseline_at: string | null;
+  expected_quantity: number | string | null;
+  counted_quantity: number | string | null;
+  counted_location_name: string | null;
+  ai_assisted: boolean | null;
+  item_name: string | null;
+  item_sku: string | null;
+  item_warehouse_id: string | null;
+  item_countable: boolean | null;
+};
+
+function finiteOrNull(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * The item's latest posted count found a different quantity than the book
+ * (F1-2, owner decision Q2).
+ *
+ * ═══ THE ONE SOURCE OF "LAST PHYSICAL COUNT" ═══
+ *
+ * _latest_count_lines (0372, service_role only) returns, per item, the latest
+ * line of a COMPLETED count where the item was counted, ordered by the moment
+ * its expected quantity is true for (baseline_at, 0369), not by when the count
+ * was posted: a phone that counted offline and synced late holds an older
+ * observation. The p_org argument is this read's tenant boundary (the
+ * function pins every join to that org); a test checks it is always this
+ * org. It is paged like any other source (max_rows = 1000), ordered by
+ * item_id, which is unique per row.
+ *
+ * ═══ WHAT OPENS, WHAT HOLDS, WHAT CLEARS ═══
+ *
+ *   - variance = counted - expected: exactly what the post applied.
+ *   - Not zero, and the count completed within
+ *     COUNT_VARIANCE_OPEN_WINDOW_DAYS: PRESENT (opens, or stays open with
+ *     refreshed facts).
+ *   - Not zero, but older: HELD. An open row never ages out, and nothing new
+ *     opens for an old count.
+ *   - Zero: absent, so an open row CLEARS. It clears only when a later
+ *     completed count matches the book exactly; a recount that finds another
+ *     difference replaces the facts and keeps the row open.
+ *   - Rental equipment, kits, archived, discontinued and deleted items are
+ *     left out (item_countable is start_cycle_count's own predicate): counts
+ *     never include them, so a recount could not settle them. An open row
+ *     for such an item resolves on this run as subject_gone (exceptions_sync,
+ *     0372), never as cleared: no count matched its book.
+ *   - AS OF THE EVALUATION: counts completed after evaluatedAt are not read
+ *     (p_as_of). The sync closes a recount pointer only for a count completed
+ *     at or before evaluatedAt, so a recount posted while this evaluation
+ *     runs is judged by the next one (the post's own follow-up sync).
+ *   - A line whose numbers or completion time cannot be read is HELD: it can
+ *     be decided neither way.
+ */
+async function countVariance(ctx: SystemServiceContext, nowMs: number, evaluatedAt: string): Promise<GroupResult> {
+  const orgId = ctx.organizationId;
+  const rows = await fetchAllRows<LatestCountLineRow>(
+    (from, to) =>
+      ctx.supabase
+        // p_as_of: only counts completed at or before this evaluation began.
+        // exceptions_sync closes a recount's pointer only for such a count,
+        // so the evaluator never resolves an exception from a recount whose
+        // pointer the same sync keeps open.
+        .rpc('_latest_count_lines', { p_org: orgId, p_item_ids: null, p_as_of: evaluatedAt })
+        .order('item_id', { ascending: true })
+        .range(from, to),
+    { cap: COUNT_LINES_SOURCE_CAP },
+  );
+
+  const windowStart = nowMs - COUNT_VARIANCE_OPEN_WINDOW_DAYS * DAY_MS;
+  const present: SyncPresentEntry[] = [];
+  const hold: SyncHoldEntry[] = [];
+  for (const r of rows) {
+    if (r.item_countable !== true) continue;
+    const counted = finiteOrNull(r.counted_quantity);
+    const expected = finiteOrNull(r.expected_quantity);
+    const completedMs = r.completed_at ? Date.parse(r.completed_at) : Number.NaN;
+    if (counted === null || expected === null || !Number.isFinite(completedMs)) {
+      hold.push({ rule: 'count_variance', itemId: r.item_id, locationId: null });
+      continue;
+    }
+    const variance = roundQuantity(counted - expected);
+    if (variance === 0) continue;
+    if (completedMs < windowStart) {
+      hold.push({ rule: 'count_variance', itemId: r.item_id, locationId: null });
+      continue;
+    }
+    const countNumber = finiteOrNull(r.count_number);
+    const facts: CountVarianceOccurrenceFacts = {
+      itemName: clipFactText(r.item_name ?? 'Item', EXCEPTION_FACTS_NAME_MAX),
+      sku: clipOrNull(r.item_sku, EXCEPTION_FACTS_LABEL_MAX),
+      cycleCountId: r.cycle_count_id,
+      countNumber: countNumber !== null && Number.isSafeInteger(countNumber) ? countNumber : null,
+      observedAt: r.baseline_at ?? r.counted_at ?? null,
+      completedAt: r.completed_at,
+      expected,
+      counted,
+      variance,
+      countedLocationName: clipOrNull(r.counted_location_name, EXCEPTION_FACTS_LABEL_MAX),
+      aiAssisted: r.ai_assisted === true,
+      capturedOfflineAt: offlineCaptureAt({ captured_at: r.captured_at, counted_at: r.counted_at }),
+    };
+    present.push({
+      rule: 'count_variance',
+      itemId: r.item_id,
+      locationId: null,
+      warehouseId: r.item_warehouse_id ?? null,
+      facts,
+      // When the counted quantity was observed: coalesce(baseline_at,
+      // counted_at), the same order _latest_count_lines ranks lines by.
+      conditionSince: r.baseline_at ?? r.counted_at ?? null,
+    });
+  }
+  return {
+    present,
+    hold,
+    // Erring toward over-disclosure, as for the holdings read: exactly CAP
+    // rows could be the whole set, but a complete-looking subset would
+    // resolve real rows.
+    truncatedRules: rows.length >= COUNT_LINES_SOURCE_CAP ? ['count_variance'] : [],
+  };
 }

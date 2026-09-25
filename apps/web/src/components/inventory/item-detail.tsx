@@ -38,6 +38,7 @@ import { StockStatusBadge } from '@/components/inventory/stock-status-badge';
 import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
 import { StockTransferDialog } from '@/components/inventory/stock-transfer-dialog';
 import { ReportProblemButton } from '@/components/maintenance/report-problem-button';
+import { CountThisItemButton } from '@/components/exceptions/count-this-item-button';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
@@ -55,6 +56,7 @@ import { LocationsService } from '@/server/services/locations';
 import { PriceTrackingService } from '@/server/services/price-tracking';
 import { ReportsService, type ItemCostHistory } from '@/server/services/reports';
 import { SerialsService, type SerialsPage } from '@/server/services/serials';
+import { canStartCount } from '@/server/services/lib/count-start-preflight';
 import { WarehousesService } from '@/server/services/warehouses';
 import { ITEM_ACTIVITY_PAGE_SIZE, nextActivityCursor } from '@/lib/activity-pagination';
 import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage';
@@ -64,6 +66,7 @@ import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 import {
   can,
   holdingsContradictRack,
+  isCountableItem,
   isLikelyIsbn,
   isManagerOrAbove,
   type CustomFieldDefinition,
@@ -502,6 +505,18 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // feed (managers+, or anyone granted the FULLY_GRANTABLE permission). The
   // server action + SECURITY DEFINER RPC re-gate; this only shows the affordance.
   const canEditNotes = can(ctx, 'movements:edit_notes');
+  // "Count this item" (F1-2): a manager who can start a count (the same
+  // floors the recount runs), on an item a count can include (active, not
+  // rental equipment, not a kit: start_cycle_count's own predicate). The
+  // recount service and the database re-check both.
+  const showCountThisItem =
+    canStartCount(ctx) &&
+    isCountableItem({
+      status: (item.status as string | null) ?? null,
+      deleted_at: (item as { deleted_at?: string | null }).deleted_at ?? null,
+      is_rental: (item as { is_rental?: boolean | null }).is_rental ?? null,
+      is_bundle: (item as { is_bundle?: boolean | null }).is_bundle ?? null,
+    });
   // Gates the transfer dialog's inline "New location…" destination and, for a
   // book, its default path (placing into the recorded crate, minting the row
   // when none exists). The server does that under 'stock:transfer' (or
@@ -655,6 +670,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                   canMintDestination={canMintDestination}
                 />
               )}
+              {showCountThisItem && <CountThisItemButton itemId={id} />}
               <ReportProblemButton
                 moduleEnabled={maintenanceRequestsEnabled}
                 canSubmit={canReportProblem}

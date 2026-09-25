@@ -28,6 +28,62 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'count-differences-and-recounts-2026-09',
+    revision: 1,
+    status: 'published',
+    title: 'Exceptions list count differences, and managers can start a recount',
+    summary:
+      'When a posted cycle count finds a different quantity than the book, Exceptions now lists it, with both numbers and the count reference. Managers can recount those items from Exceptions or an item page, on the web and in the mobile app, and the exception clears only when a later count matches the book. Staff no longer see a Post button on counts they cannot post.',
+    publishedAt: '2026-09-25T19:00:00Z',
+    entries: [
+      {
+        id: 'count-variance-exceptions',
+        category: 'new',
+        area: 'Inventory',
+        title: 'Count differences appear on Exceptions',
+        whatChanged:
+          'When a posted cycle count finds a different quantity than the book for an item, Exceptions lists it as Count did not match the book, with the counted and book quantities and the count reference, for example found +1: counted 21, book 20 (CC-000042). Only counts completed in the last 30 days open one. Rental equipment and kits are left out.',
+        whyItMatters:
+          'Posting a count changes the book to the counted number, and nothing followed up to confirm that number before people relied on it.',
+        howItAffectsYou:
+          'Differences from counts posted in the last 30 days appear on the next check. An exception clears only when a later completed count of the item matches the book exactly. A recount that finds another difference keeps it open with the new numbers.',
+        whatToDo:
+          'Open Exceptions and review the Count did not match the book group.',
+        link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        id: 'targeted-recount',
+        category: 'new',
+        area: 'Cycle counts',
+        title: 'Start a recount from Exceptions or an item',
+        whatChanged:
+          'Managers can select exceptions and choose Recount selected, or use Count this item on an item page, on the web and in the mobile app. This starts a cycle count of just those items, which you can assign to someone who then gets a notification. The count page lists the exceptions it will recheck and where a difference would land.',
+        whyItMatters:
+          'Confirming a single item used to mean starting a count by hand and remembering which problem it was for.',
+        howItAffectsYou:
+          'Pressing Recount twice starts one count, and an item already in an open count is linked to that count instead of getting a second one. Rental equipment and kits cannot be recounted this way. After the count is posted, the system checks the exception again: it resolves when the count matches the book, and stays open with the new numbers when it does not.',
+        whatToDo:
+          'On Exceptions, choose the exceptions to confirm and start a recount, then post the count when it is done.',
+        link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
+        audience: { anyPermission: ['cycle_counts:assign'], modules: ['cycle_counts'] },
+      },
+      {
+        id: 'staff-post-button',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title: 'Only people who can post a count see the Post button',
+        whatChanged:
+          'On a count page in the web app and on the count screen in the mobile app, the Post button (and Cancel on the web) now shows only for managers who can adjust stock. Everyone else sees A manager reviews and posts this count.',
+        whyItMatters: 'Staff saw a Post button that could only fail.',
+        howItAffectsYou: 'Staff still count as before. A manager reviews and posts the count.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/cycle-counts', label: 'Open Cycle counts' },
+        audience: { anyPermission: ['cycle_counts:read', 'stock:adjust'], modules: ['cycle_counts'] },
+      },
+    ],
+  },
+  {
     id: 'bundles-sku-and-component-search-2026-09-25',
     revision: 1,
     status: 'published',

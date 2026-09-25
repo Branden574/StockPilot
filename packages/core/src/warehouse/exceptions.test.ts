@@ -26,7 +26,10 @@ import {
   EXCEPTION_FIRST_CHECK_PENDING_COPY,
   EXCEPTION_RULE_IDS,
   EXCEPTION_RULES,
+  COUNT_VARIANCE_OPEN_WINDOW_DAYS,
   formatOccurrenceNumber,
+  roundQuantity,
+  signedQuantity,
   groupExceptions,
   HOLDING_RULES,
   isExceptionRule,
@@ -184,7 +187,24 @@ describe('EXCEPTION_RULES occurrence metadata', () => {
     // wrong place.
     for (const rule of HOLDING_RULES) expect(EXCEPTION_RULES[rule].recountable).toBe(false);
     expect(EXCEPTION_RULES.over_reserved.recountable).toBe(true);
+    expect(EXCEPTION_RULES.count_variance.recountable).toBe(true);
     expect(EXCEPTION_RULES.label_mismatch.recountable).toBe(false);
+    // Exactly the two item-level rules the database accepts a recount for
+    // (start_targeted_recount's c_recountable, 0372).
+    expect(EXCEPTION_RULE_IDS.filter((r) => EXCEPTION_RULES[r].recountable).sort()).toEqual([
+      'count_variance',
+      'over_reserved',
+    ]);
+  });
+
+  it('count_variance is a warning that says what a recount is for and what clears it', () => {
+    const meta = EXCEPTION_RULES.count_variance;
+    expect(meta.severity).toBe('warning');
+    expect(meta.action).toMatch(/Recount/);
+    // Clears only on an exact later match (owner decision F1 Q2).
+    expect(meta.clearedBy).toMatch(/matches the book exactly/);
+    expect(meta.actions).toEqual(['open_item']);
+    expect(COUNT_VARIANCE_OPEN_WINDOW_DAYS).toBe(30);
   });
 
   it('Staging and Unplaced offer put-away; a label mismatch offers a label edit', () => {
@@ -201,7 +221,8 @@ describe('EXCEPTION_RULES occurrence metadata', () => {
 describe('isExceptionRule / isHoldingRule', () => {
   it('accepts this build\'s rules and refuses anything else, including a newer build\'s rule', () => {
     for (const r of EXCEPTION_RULE_IDS) expect(isExceptionRule(r)).toBe(true);
-    expect(isExceptionRule('count_variance')).toBe(false);
+    expect(isExceptionRule('count_variance')).toBe(true);
+    expect(isExceptionRule('a_future_rule')).toBe(false);
     expect(isExceptionRule('')).toBe(false);
     expect(isExceptionRule(null)).toBe(false);
     expect(isExceptionRule(42)).toBe(false);
@@ -211,6 +232,7 @@ describe('isExceptionRule / isHoldingRule', () => {
     expect([...HOLDING_RULES].sort()).toEqual(['long_unplaced', 'orphaned_stock', 'stale_staging']);
     expect(isHoldingRule('over_reserved')).toBe(false);
     expect(isHoldingRule('label_mismatch')).toBe(false);
+    expect(isHoldingRule('count_variance')).toBe(false);
   });
 });
 
@@ -221,6 +243,7 @@ describe('occurrenceKey', () => {
     expect(occurrenceKey({ rule: 'long_unplaced', itemId: 'i', locationId: 'l' })).toBe('long_unplaced:i:l');
     expect(occurrenceKey({ rule: 'label_mismatch', itemId: 'i', locationId: null })).toBe('label:i');
     expect(occurrenceKey({ rule: 'over_reserved', itemId: 'i', locationId: null })).toBe('over:i');
+    expect(occurrenceKey({ rule: 'count_variance', itemId: 'i', locationId: null })).toBe('variance:i');
     const keys = new Set(
       (['stale_staging', 'orphaned_stock', 'long_unplaced'] as ExceptionRule[]).map((rule) =>
         occurrenceKey({ rule, itemId: 'i', locationId: 'l' }),
@@ -333,6 +356,42 @@ describe('describeOccurrence', () => {
     }
   });
 
+  it('count_variance states what the count found against the book, with the count', () => {
+    const facts = {
+      itemName: 'Atlas',
+      sku: 'A1',
+      cycleCountId: 'cc-1',
+      countNumber: 24,
+      observedAt: '2026-09-20T10:00:00Z',
+      completedAt: '2026-09-20T11:00:00Z',
+      expected: 10,
+      counted: 11,
+      variance: 1,
+      countedLocationName: 'Rack 12-A',
+      aiAssisted: false,
+      capturedOfflineAt: null,
+    };
+    expect(describeOccurrence('count_variance', facts)).toEqual({
+      title: 'Atlas',
+      detail: 'found +1: counted 11, book 10 (CC-000024)',
+      units: 1,
+    });
+    // Fewer than the book: the sign is kept and the units at stake are the size.
+    expect(describeOccurrence('count_variance', { ...facts, counted: 7.5, variance: -2.5 })).toMatchObject({
+      detail: 'found -2.5: counted 7.5, book 10 (CC-000024)',
+      units: 2.5,
+    });
+    // No number yet: no made-up reference.
+    expect(describeOccurrence('count_variance', { ...facts, countNumber: null }).detail).toBe(
+      'found +1: counted 11, book 10',
+    );
+    // A stored variance that is missing is derived from the two quantities,
+    // exactly (10.1 - 10 is 0.1, not 0.0999…).
+    expect(
+      describeOccurrence('count_variance', { itemName: 'A', expected: 10, counted: 10.1 }).detail,
+    ).toBe('found +0.1: counted 10.1, book 10');
+  });
+
   it('the live item name wins over the stored one', () => {
     const d = describeOccurrence('over_reserved', { itemName: 'Old name', promised: 2, onHand: 1 }, {
       itemName: 'New name',
@@ -350,6 +409,16 @@ describe('describeOccurrence', () => {
         expect(d.title).not.toMatch(/undefined|NaN|null/);
       }
     }
+  });
+});
+
+describe('roundQuantity / signedQuantity', () => {
+  it('reads a difference of two 4-dp quantities exactly, with its sign', () => {
+    expect(roundQuantity(10.1 - 10)).toBe(0.1);
+    expect(signedQuantity(2)).toBe('+2');
+    expect(signedQuantity(-1.25)).toBe('-1.25');
+    expect(signedQuantity(0)).toBe('0');
+    expect(signedQuantity(0.00001)).toBe('0');
   });
 });
 
@@ -502,8 +571,10 @@ describe('occurrenceStateLabel', () => {
     expect(occurrenceStateLabel({ kind: 'resolved', reason: 'cleared', at: 'x' })).toBe(
       'Resolved: Cleared',
     );
+    // Review finding (F1-2): an open count_variance on an item that can no
+    // longer be counted resolves as subject_gone (0372), so the words cover it.
     expect(occurrenceStateLabel({ kind: 'resolved', reason: 'subject_gone', at: 'x' })).toBe(
-      'Resolved: Item archived or deleted',
+      'Resolved: Item archived, deleted or no longer counted',
     );
   });
 });
@@ -610,8 +681,9 @@ describe('shared list copy', () => {
 });
 
 describe('copy that keeps the all-clear honest', () => {
-  it('the all-clear body is one shared sentence', () => {
+  it('the all-clear body is one shared sentence that covers every rule, counts included', () => {
     expect(EXCEPTION_ALL_CLEAR_BODY).toMatch(/^No archived locations holding stock/);
+    expect(EXCEPTION_ALL_CLEAR_BODY).toMatch(/count matched the book/);
   });
 
   it('rows this build cannot word are counted, never silently dropped', () => {

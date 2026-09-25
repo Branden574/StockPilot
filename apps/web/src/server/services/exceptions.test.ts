@@ -2,13 +2,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { describeOccurrence, type ExceptionRule } from '@stockpilot/core';
 
-import { makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
+import { makeSupabaseStub, servedLikePostgrest, type MockCall } from '@/test/supabase-mock';
 
 const reportError = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
 import { type ServiceContext } from './context';
-import { ExceptionsService, HOLDINGS_SOURCE_CAP, type SyncEvaluation } from './exceptions';
+import {
+  COUNT_LINES_SOURCE_CAP,
+  ExceptionsService,
+  HOLDINGS_SOURCE_CAP,
+  type SyncEvaluation,
+} from './exceptions';
 import { buildSystemContext, type SystemServiceContext } from './lib/system-context';
 
 /**
@@ -554,6 +559,7 @@ describe('evaluateForSync — uncapped, and complete only when it can vouch', ()
       'stale_staging',
       'long_unplaced',
       'label_mismatch',
+      'count_variance',
     ]);
     expect(e.failedRules).toEqual([]);
     expect(e.truncatedRules).toEqual([]);
@@ -570,7 +576,7 @@ describe('evaluateForSync — uncapped, and complete only when it can vouch', ()
     });
     const e = await ExceptionsService.evaluateForSync(ctx);
     expect(e.failedRules).toEqual(['orphaned_stock', 'stale_staging', 'long_unplaced', 'label_mismatch']);
-    expect(e.completeRules).toEqual(['over_reserved']);
+    expect(e.completeRules).toEqual(['over_reserved', 'count_variance']);
     expect(rules(e)).toEqual(['over_reserved']);
     const tags = reportError.mock.calls.map((c) => (c as unknown as [Error, { tag: string }])[1].tag);
     expect(tags).toEqual(['exceptions.rule_failed']);
@@ -625,7 +631,7 @@ describe('evaluateForSync — the SOURCE read is paginated', () => {
     const e = await ExceptionsService.evaluateForSync(ctx);
 
     expect(e.truncatedRules).toEqual(['orphaned_stock', 'stale_staging', 'long_unplaced', 'label_mismatch']);
-    expect(e.completeRules).toEqual(['over_reserved']);
+    expect(e.completeRules).toEqual(['over_reserved', 'count_variance']);
   });
 
   it('orders by a stable key so a row cannot land on two pages or none', async () => {
@@ -653,5 +659,191 @@ describe('evaluateForSync — the SOURCE read is paginated', () => {
       const at = chain.indexOf('eq');
       expect(allArgs[i]![at]).toEqual(['organization_id', ORG]);
     });
+  });
+});
+
+/** One row of _latest_count_lines (0372), for an item counted `completedDaysAgo`. */
+function countLine(o: {
+  item: string;
+  counted?: number | string | null;
+  expected?: number | string | null;
+  completedDaysAgo?: number | null;
+  countable?: boolean;
+  countNumber?: number | null;
+  location?: string | null;
+  ai?: boolean;
+  capturedMinutesBeforeWrite?: number | null;
+  baselineAt?: string | null;
+  countedAt?: string | null;
+  name?: string;
+}) {
+  const completedAt =
+    o.completedDaysAgo === null ? null : new Date(Date.now() - (o.completedDaysAgo ?? 1) * DAY).toISOString();
+  const countedAt = o.countedAt ?? (completedAt ? new Date(Date.parse(completedAt) - 3_600_000).toISOString() : null);
+  const capturedAt =
+    o.capturedMinutesBeforeWrite == null || !countedAt
+      ? null
+      : new Date(Date.parse(countedAt) - o.capturedMinutesBeforeWrite * 60_000).toISOString();
+  return {
+    item_id: o.item,
+    cycle_count_id: `cc-${o.item}`,
+    count_number: o.countNumber === undefined ? 24 : o.countNumber,
+    scope: 'selection',
+    completed_at: completedAt,
+    completed_by: 'u-mgr',
+    counted_by: 'u-staff',
+    counted_at: countedAt,
+    captured_at: capturedAt,
+    baseline_at: o.baselineAt === undefined ? (capturedAt ?? countedAt) : o.baselineAt,
+    expected_quantity: o.expected === undefined ? 10 : o.expected,
+    expected_at_start: 10,
+    counted_quantity: o.counted === undefined ? 11 : o.counted,
+    counted_location_id: o.location ? `loc-${o.item}` : null,
+    counted_location_name: o.location ?? null,
+    ai_assisted: o.ai ?? false,
+    line_warehouse_id: 'wh-1',
+    item_name: o.name ?? `Item ${o.item}`,
+    item_sku: `SKU-${o.item}`,
+    item_warehouse_id: 'wh-1',
+    item_countable: o.countable ?? true,
+  };
+}
+
+async function evaluateCounts(lines: unknown[]) {
+  const { ctx, stub } = await systemFor({
+    'rpc:_latest_count_lines': servedLikePostgrest(lines as Array<Record<string, unknown>>),
+  });
+  return { e: await ExceptionsService.evaluateForSync(ctx), stub };
+}
+
+const variance = (e: SyncEvaluation) => e.present.filter((p) => p.rule === 'count_variance');
+const varianceHold = (e: SyncEvaluation) => e.hold.filter((h) => h.rule === 'count_variance');
+
+describe('evaluateForSync — count_variance (F1-2)', () => {
+  it('opens for a non-zero variance in a count completed within 30 days, with the count\'s facts', async () => {
+    const { e } = await evaluateCounts([
+      countLine({ item: 'a', counted: 11, expected: 10, completedDaysAgo: 2, location: 'Rack 12-A', ai: true }),
+    ]);
+    const [p] = variance(e);
+    expect(p).toMatchObject({ rule: 'count_variance', itemId: 'a', locationId: null, warehouseId: 'wh-1' });
+    expect(p!.facts).toEqual({
+      itemName: 'Item a',
+      sku: 'SKU-a',
+      cycleCountId: 'cc-a',
+      countNumber: 24,
+      observedAt: expect.any(String),
+      completedAt: expect.any(String),
+      expected: 10,
+      counted: 11,
+      variance: 1,
+      countedLocationName: 'Rack 12-A',
+      aiAssisted: true,
+      capturedOfflineAt: null,
+    });
+    expect(describeOccurrence('count_variance', p!.facts).detail).toBe('found +1: counted 11, book 10 (CC-000024)');
+    expect(e.completeRules).toContain('count_variance');
+  });
+
+  it('the condition started when the counted quantity was observed (baseline, else recorded)', async () => {
+    const baseline = '2026-09-20T10:00:00.000Z';
+    const { e } = await evaluateCounts([
+      countLine({ item: 'a', baselineAt: baseline }),
+      countLine({ item: 'b', baselineAt: null, countedAt: '2026-09-21T09:00:00.000Z' }),
+    ]);
+    const byItem = Object.fromEntries(variance(e).map((p) => [p.itemId, p]));
+    expect(byItem.a!.conditionSince).toBe(baseline);
+    expect((byItem.a!.facts as { observedAt: string }).observedAt).toBe(baseline);
+    expect(byItem.b!.conditionSince).toBe('2026-09-21T09:00:00.000Z');
+  });
+
+  it('a count taken offline and synced later carries its capture time; an online record does not', async () => {
+    const { e } = await evaluateCounts([
+      countLine({ item: 'off', capturedMinutesBeforeWrite: 90 }),
+      countLine({ item: 'on', capturedMinutesBeforeWrite: 0 }),
+    ]);
+    const byItem = Object.fromEntries(variance(e).map((p) => [p.itemId, p.facts as { capturedOfflineAt: string | null }]));
+    expect(byItem.off!.capturedOfflineAt).toEqual(expect.any(String));
+    expect(byItem.on!.capturedOfflineAt).toBeNull();
+  });
+
+  // Mutation caught: opening regardless of age (dropping the window) — 9 old
+  // L4L variances would open on day one; or treating old ones as absent, which
+  // would RESOLVE an open row just because time passed.
+  it('an older variance is HELD: it neither opens nor resolves', async () => {
+    const { e } = await evaluateCounts([
+      countLine({ item: 'old', completedDaysAgo: 31 }),
+      countLine({ item: 'edge', completedDaysAgo: 29 }),
+    ]);
+    expect(variance(e).map((p) => p.itemId)).toEqual(['edge']);
+    expect(varianceHold(e)).toEqual([{ rule: 'count_variance', itemId: 'old', locationId: null }]);
+  });
+
+  it('a count that matched the book is absent, so an open row clears — exactly, not approximately', async () => {
+    const { e } = await evaluateCounts([
+      countLine({ item: 'same', counted: 10, expected: 10 }),
+      countLine({ item: 'str', counted: '10.0000', expected: '10' }),
+      countLine({ item: 'tiny', counted: 10.1, expected: 10 }),
+    ]);
+    expect(variance(e).map((p) => p.itemId)).toEqual(['tiny']);
+    expect((variance(e)[0]!.facts as { variance: number }).variance).toBe(0.1);
+    expect(varianceHold(e)).toEqual([]);
+  });
+
+  // Mutation caught: dropping the item_countable filter (rental equipment and
+  // kits are never counted, so a recount could never settle them).
+  it('rental equipment, kits, archived and deleted items are left out', async () => {
+    const { e } = await evaluateCounts([countLine({ item: 'rental', countable: false })]);
+    expect(variance(e)).toEqual([]);
+    expect(varianceHold(e)).toEqual([]);
+  });
+
+  it('a line it cannot read is held, never guessed either way', async () => {
+    const { e } = await evaluateCounts([
+      countLine({ item: 'nan', counted: 'x' }),
+      countLine({ item: 'nodate', completedDaysAgo: null }),
+    ]);
+    expect(variance(e)).toEqual([]);
+    expect(varianceHold(e).map((h) => h.itemId).sort()).toEqual(['nan', 'nodate']);
+  });
+
+  it('reads through _latest_count_lines for THIS org only, paged by item_id', async () => {
+    const { stub, e } = await evaluateCounts([countLine({ item: 'a' })]);
+    const calls = stub.rpcCalls.filter((c) => c.name === '_latest_count_lines');
+    expect(calls).toHaveLength(1);
+    // The p_org argument is this read's tenant boundary under the service role.
+    // p_as_of (review finding, F1-2): only counts completed by the moment this
+    // evaluation began, the same bound exceptions_sync closes recount
+    // pointers by. Without it, a recount posted while the evaluation ran
+    // resolved its exception before the sync closed the recount. Mutation
+    // caught: drop p_as_of.
+    expect(calls[0]!.args).toEqual({ p_org: ORG, p_item_ids: null, p_as_of: e.evaluatedAt });
+  });
+
+  it('emits every variance past the 1000-row page (no per-rule cap)', async () => {
+    const lines = Array.from({ length: 1150 }, (_, i) => countLine({ item: `i${String(i).padStart(5, '0')}` }));
+    const { e } = await evaluateCounts(lines);
+    expect(variance(e)).toHaveLength(1150);
+    expect(e.truncatedRules).not.toContain('count_variance');
+  });
+
+  it('a read that fails leaves count_variance FAILED and out of complete; the other rules still count', async () => {
+    const { ctx } = await systemFor({
+      'rpc:_latest_count_lines': { data: null, error: { message: 'boom' } },
+    });
+    const e = await ExceptionsService.evaluateForSync(ctx);
+    expect(e.failedRules).toEqual(['count_variance']);
+    expect(e.completeRules).not.toContain('count_variance');
+    expect(e.completeRules).toContain('over_reserved');
+    const tags = reportError.mock.calls.map((c) => (c as unknown as [Error, { tag: string }])[1].tag);
+    expect(tags).toEqual(['exceptions.rule_failed']);
+  });
+
+  it('a read that hits its ceiling marks count_variance truncated and NOT complete', async () => {
+    const lines = Array.from({ length: COUNT_LINES_SOURCE_CAP + 5 }, (_, i) =>
+      countLine({ item: `i${String(i).padStart(6, '0')}`, counted: 10, expected: 10 }),
+    );
+    const { e } = await evaluateCounts(lines);
+    expect(e.truncatedRules).toEqual(['count_variance']);
+    expect(e.completeRules).not.toContain('count_variance');
   });
 });

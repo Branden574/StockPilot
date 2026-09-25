@@ -184,13 +184,14 @@ describe('syncOrg — throttle, force, and never throwing', () => {
       dropped: 0,
       factsOmitted: 0,
     });
-    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['exceptions_sync']);
+    // The evaluator's count read (_latest_count_lines), then the apply.
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['_latest_count_lines', 'exceptions_sync']);
   });
 
   it('unforced, never synced: runs', async () => {
     const stub = adminStub({ lastSyncedAt: null });
     await ExceptionOccurrencesService.syncOrg(ORG, { reason: 'cron' });
-    expect(stub.rpcCalls).toHaveLength(1);
+    expect(stub.rpcCalls.filter((c) => c.name === 'exceptions_sync')).toHaveLength(1);
   });
 
   it('forced: runs even seconds after the last sync, without reading the throttle', async () => {
@@ -203,7 +204,7 @@ describe('syncOrg — throttle, force, and never throwing', () => {
   it('sends the whole evaluation to exceptions_sync, as the system, for this org only', async () => {
     const stub = adminStub({});
     await ExceptionOccurrencesService.syncOrg(ORG, { force: true, reason: 'check_now' });
-    const args = stub.rpcCalls[0]!.args as Record<string, unknown>;
+    const args = stub.rpcCalls.find((c) => c.name === 'exceptions_sync')!.args as Record<string, unknown>;
     expect(args.p_org).toBe(ORG);
     expect(typeof args.p_evaluated_at).toBe('string');
     expect(args.p_complete_rules).toEqual([
@@ -212,6 +213,7 @@ describe('syncOrg — throttle, force, and never throwing', () => {
       'stale_staging',
       'long_unplaced',
       'label_mismatch',
+      'count_variance',
     ]);
     expect(args.p_failed_rules).toEqual([]);
     expect(args.p_truncated_rules).toEqual([]);
@@ -338,7 +340,7 @@ describe('list', () => {
       trackingStartedAt: SYNC_ROW.tracking_started_at,
       lastEvaluatedAt: SYNC_ROW.last_evaluated_at,
       lastSyncedAt: SYNC_ROW.last_synced_at,
-      completeRules: ['over_reserved', 'label_mismatch'],
+      completeRules: ['over_reserved', 'label_mismatch', 'count_variance'],
       failedRules: ['stale_staging'],
       truncatedRules: [],
       unrecognizedUncheckedRules: 0,
@@ -401,10 +403,11 @@ describe('list', () => {
   it('a row with a rule this build does not know is left out, COUNTED and reported', async () => {
     // Counted so no surface shows the all-clear state while it is open (a
     // phone on an older bundle, or the web after a rollback, once F1-2 writes
-    // count_variance rows). Mutation caught: dropping the rows uncounted.
+    // count_variance rows, as it did before F1-2). Mutation caught: dropping
+    // the rows uncounted.
     const { svc } = userSvc({
       'exception_occurrences.select': {
-        data: [occRow(), occRow({ id: 'x', rule: 'count_variance' }), occRow({ id: 'y', rule: 'count_variance' })],
+        data: [occRow(), occRow({ id: 'x', rule: 'a_future_rule' }), occRow({ id: 'y', rule: 'a_future_rule' })],
         error: null,
       },
       'exception_sync_state.select.maybeSingle': { data: SYNC_ROW, error: null },
@@ -420,7 +423,7 @@ describe('list', () => {
     const { svc } = userSvc({
       'exception_occurrences.select': { data: [], error: null },
       'exception_sync_state.select.maybeSingle': {
-        data: { ...SYNC_ROW, failed_rules: ['count_variance', 'stale_staging'], truncated_rules: ['count_variance', 'x_rule'] },
+        data: { ...SYNC_ROW, failed_rules: ['a_future_rule', 'stale_staging'], truncated_rules: ['a_future_rule', 'x_rule'] },
         error: null,
       },
     });

@@ -4,26 +4,36 @@ import {
   can,
   EXCEPTION_RESOLVED_WINDOW_DAYS,
   EXCEPTION_RULE_IDS,
+  formatCycleCountNumber,
   formatOccurrenceNumber,
   isExceptionRule,
   isManagerOrAbove,
+  isRecountableRule,
   presentWhenTrackingBegan,
+  recountOutcome,
   resolveOrgTimezone,
+  varianceDestination,
+  varianceReviewLine,
   type ExceptionCheckNotScheduledReason,
   type ExceptionRule,
   type OccurrenceEventKind,
   type OccurrenceRecountRef,
   type OccurrenceResolvedReason,
+  type RecountOutcome,
+  type RecountUnavailableReason,
+  type VarianceDestination,
 } from '@stockpilot/core';
 
 import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { ExceptionsService } from './exceptions';
-import { rawErrorText } from './lib/fetch-by-ids';
+import { countStartBlock } from './lib/count-start-preflight';
+import { fetchAllRowsByIds, rawErrorText, reportDegradedRead } from './lib/fetch-by-ids';
 import { scheduleExceptionSync, type ExceptionSyncReason } from './lib/exception-sync-schedule';
 import { fetchAllRows } from './lib/paginate';
 import { postgrestErrorText } from './lib/postgrest-error';
@@ -35,9 +45,11 @@ import { buildSystemContext } from './lib/system-context';
  * Conditions are derived by ExceptionsService.evaluateForSync; this service
  * owns what is STORED about them:
  *
- *   - list / get: what a person reads, ALWAYS through their own client, so
- *     exception_occurrences RLS (_exc_occurrence_visible: item and holding
- *     visibility) decides what they see. No service-role read here.
+ *   - list / get / listForCount: what a person reads, ALWAYS through their
+ *     own client, so exception_occurrences RLS (_exc_occurrence_visible: item
+ *     and holding visibility) decides what they see. No service-role read
+ *     here. Each row carries its recount (F1-2) and what that count came to
+ *     for its item (core recountOutcome), and whether Recount is offered.
  *   - act: acknowledge or add a note, through exception_occurrence_act (the
  *     RPC re-checks everything below). Nobody resolves a row.
  *   - syncOrg: the SYSTEM applying one org-wide evaluation through
@@ -70,6 +82,11 @@ const RESOLVED_WINDOW_DAYS = EXCEPTION_RESOLVED_WINDOW_DAYS;
 const HISTORY_LIMIT = 50;
 /** Timeline events read for one occurrence (a backstop far above real use). */
 const TIMELINE_CAP = 2_000;
+/** recount_linked events read for one count (a backstop far above real use:
+ *  a recount holds at most 200 items). */
+const COUNT_LINKS_CAP = 5_000;
+/** Counts whose outcome one read works out at once. */
+const OUTCOME_CONCURRENCY = 4;
 
 // Every embed names its foreign key: exception_occurrence_events links
 // exception_occurrences to user_profiles and cycle_counts as well, and
@@ -116,8 +133,10 @@ export interface ExceptionOccurrence {
   presentWhenTrackingBegan: boolean;
   acknowledgedAt: string | null;
   acknowledgedBy: OccurrencePerson | null;
-  /** The ACTIVE recount (F1-2); feeds core occurrenceState. */
-  recount: OccurrenceRecountRef | null;
+  /** The ACTIVE recount (F1-2); feeds core occurrenceState. `outcome` is
+   *  core recountOutcome for this item in that count (in progress n of m, or
+   *  what the posted count found); worded by recountOutcomeCopy. */
+  recount: ExceptionOccurrenceRecount | null;
   resolvedAt: string | null;
   resolvedReason: OccurrenceResolvedReason | null;
   previousOccurrenceId: string | null;
@@ -126,7 +145,21 @@ export interface ExceptionOccurrence {
    *  gate (stock:adjust and write access to the warehouse, or a manager when
    *  it has none). A hint for the UI; the RPC decides. */
   canAct: boolean;
+  /** Whether Recount is offered for this row (F1-2): open, a recountable
+   *  rule (count_variance, over_reserved), and a reader who may start counts
+   *  (the cycle_counts module, cycle_counts:assign, stock:adjust and the
+   *  manager role; the same preflight the recount runs). A hint for the UI;
+   *  the service and start_targeted_recount decide. */
+  canRecount: boolean;
+  /** Why Recount is withheld from this reader on this open, recountable row
+   *  (the Cycle Counts module is off, or not a manager with both
+   *  permissions); null when it is offered or the row is not one a recount
+   *  could settle. Worded by core recountUnavailableCopy. */
+  recountUnavailableReason: RecountUnavailableReason | null;
 }
+
+/** The recount an occurrence points at, with what came of it for its item. */
+export type ExceptionOccurrenceRecount = OccurrenceRecountRef & { outcome: RecountOutcome };
 
 /** exception_sync_state, or null before the org's first sync. */
 export interface ExceptionSyncState {
@@ -152,6 +185,11 @@ export interface OccurrenceListResult {
   syncState: ExceptionSyncState | null;
   /** Managers may ask for a check now. */
   canCheckNow: boolean;
+  /** This reader may start recounts ("Recount selected", F1-2). Each row's
+   *  own `canRecount` says whether that row can be picked. */
+  canRecount: boolean;
+  /** Why this reader may not (null when they may). */
+  recountUnavailableReason: RecountUnavailableReason | null;
   /** Rows of a rule this build cannot word (a newer build's rule), left out
    *  of `occurrences`. They are open all the same: a surface never shows the
    *  all-clear state while this is above 0 (core exceptionUnrecognizedCopy). */
@@ -170,7 +208,10 @@ export interface OccurrenceEvent {
   /** null = the system (raised, recount_closed, resolved). */
   actor: OccurrencePerson | null;
   note: string | null;
-  cycleCount: { id: string; countNumber: number | null } | null;
+  /** The count the event names. On a recount_closed event, `outcome` is what
+   *  that count came to for this item (recountOutcome): "Matched the book",
+   *  "Book corrected from 10 to 11 (+1)", "Cancelled before it was posted". */
+  cycleCount: { id: string; countNumber: number | null; outcome?: RecountOutcome } | null;
   maintenanceRequestId: string | null;
   evidenceId: string | null;
 }
@@ -195,6 +236,50 @@ export interface OccurrenceDetail {
   historyTruncated: boolean;
   syncState: ExceptionSyncState | null;
   /** The org's time zone, so every surface prints the same clock time. */
+  timeZone: string;
+}
+
+/** One exception linked to a count as its recount (F1-2), with the item's
+ *  line in that count. */
+export interface CountLinkedException {
+  occurrence: ExceptionOccurrence;
+  /** True while this count is the occurrence's active recount; false for a
+   *  link that has since closed (the history still names the count). */
+  active: boolean;
+  /** The item's line in this count; null when it could not be found. */
+  line: {
+    id: string;
+    countedQuantity: number | null;
+    /** The book when the line was counted (its expected quantity). */
+    expectedQuantity: number | null;
+    /** cycle_count_lines.counted_location_id: lets the phone tell whether the
+     *  destination below still describes the line it holds. */
+    countedLocationId: string | null;
+    /** The shelf location the count was attributed to (read for linked
+     *  lines only), or null: not recorded. */
+    countedLocation: { name: string; kind: string | null; archived: boolean } | null;
+  } | null;
+  /** What this count came to for the item (recountOutcome). */
+  outcome: RecountOutcome;
+  /** Where the line's difference lands when the count is posted (core
+   *  varianceDestination, mirroring post_cycle_count); null when uncounted,
+   *  when the count is closed, or when the line cannot re-check the item. */
+  destination: VarianceDestination | null;
+  /** "Counted 11, book 10 (+1): adds to Rack 12-A" (core varianceReviewLine),
+   *  or that the line was counted before a later count of the item; null
+   *  when uncounted or when the count is closed (read `outcome` then). */
+  reviewLine: string | null;
+}
+
+export interface CountLinkedExceptions {
+  cycleCountId: string;
+  countNumber: number | null;
+  reference: string | null;
+  status: string;
+  exceptions: CountLinkedException[];
+  /** Linked rows of a rule this build cannot word, left out but counted. */
+  unrecognized: number;
+  syncState: ExceptionSyncState | null;
   timeZone: string;
 }
 
@@ -301,7 +386,7 @@ type SyncStateRow = {
  *  profile only while its owner still belongs to one of the reader's orgs, so
  *  an invisible profile (or a deleted account, which nulls the id) is a
  *  former member. Same wording as the PO-imports uploader label. */
-function personFor(id: string | null, profile: ProfileEmbed | undefined): OccurrencePerson {
+export function personFor(id: string | null, profile: ProfileEmbed | undefined): OccurrencePerson {
   if (!profile) return { id, label: 'Former member' };
   return { id, label: profile.full_name?.trim() || profile.email?.trim() || 'Unknown' };
 }
@@ -339,13 +424,20 @@ function mapSyncState(row: SyncStateRow | null): ExceptionSyncState | null {
 
 type ActGate = (row: OccurrenceRow) => boolean;
 
+/** The outcome a recount's status alone implies, before its line is read:
+ *  in progress (progress unknown), cancelled, or unavailable until enriched. */
+function outcomeFromStatus(status: string): RecountOutcome {
+  return recountOutcome({ status }, null);
+}
+
 function mapOccurrence(
   row: OccurrenceRow,
   syncState: ExceptionSyncState | null,
   canActOn: ActGate,
+  recountBlock: RecountUnavailableReason | null,
 ): ExceptionOccurrence | null {
-  // A rule a newer build stored (count_variance, F1-2) is not one this build
-  // can describe; the caller reports it instead of rendering a broken row.
+  // A rule a newer build stored is not one this build can describe; the
+  // caller reports it instead of rendering a broken row.
   if (!isExceptionRule(row.rule)) return null;
   const number = toNumber(row.occurrence_number) ?? 0;
   const rc = row.recount ?? null;
@@ -382,6 +474,7 @@ function mapOccurrence(
             countNumber: toNumber(rc.count_number),
             status: rc.status,
             completedAt: rc.completed_at,
+            outcome: outcomeFromStatus(rc.status),
           }
         : null,
     resolvedAt: row.resolved_at,
@@ -389,10 +482,26 @@ function mapOccurrence(
     previousOccurrenceId: row.previous_occurrence_id,
     recurrenceIndex: row.recurrence_index ?? 0,
     canAct: row.resolved_at === null && canActOn(row),
+    canRecount: recountBlock === null && row.resolved_at === null && isRecountableRule(row.rule),
+    recountUnavailableReason:
+      recountBlock !== null && row.resolved_at === null && isRecountableRule(row.rule) ? recountBlock : null,
   };
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The key recountOutcomes answers under. */
+function pairKey(cycleCountId: string, itemId: string): string {
+  return `${cycleCountId}:${itemId}`;
+}
+
+/** A numeric(14,4) quantity from PostgREST (a number, or a string for very
+ *  large values), or null. */
+function toQuantity(value: number | string | null | undefined): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
 
 // ── Service ────────────────────────────────────────────────────────────────
 
@@ -409,20 +518,32 @@ export class ExceptionOccurrencesService {
    * caller renders "unavailable", never an empty list (pattern #1: an empty
    * list here would read as "nothing wrong").
    */
-  async list(opts: { status?: OccurrenceListStatus } = {}): Promise<OccurrenceListResult> {
+  async list(
+    opts: {
+      status?: OccurrenceListStatus;
+      /** Only this item's occurrences (the item page's open issues, and the
+       *  exceptions "Count this item" links to its recount). */
+      itemId?: string | null;
+    } = {},
+  ): Promise<OccurrenceListResult> {
     assertPermission(this.ctx, 'items:read');
     const status: OccurrenceListStatus = opts.status === 'resolved' ? 'resolved' : 'open';
     const orgId = this.ctx.organizationId;
+    const itemId = opts.itemId ?? null;
+    if (itemId !== null && !UUID.test(itemId)) {
+      throw new ServiceError('validation_error', 'That item id is not valid.', { reason: 'invalid_item_id' });
+    }
     const cap = status === 'open' ? OPEN_LIST_CAP : RESOLVED_LIST_CAP;
     const since = new Date(Date.now() - RESOLVED_WINDOW_DAYS * 86_400_000).toISOString();
 
     const [rows, syncState, gate, timeZone] = await Promise.all([
       fetchAllRows<Record<string, unknown>>(
         (from, to) => {
-          const q = this.ctx.supabase
+          const base = this.ctx.supabase
             .from('exception_occurrences')
             .select(OCCURRENCE_SELECT)
             .eq('organization_id', orgId);
+          const q = itemId === null ? base : base.eq('item_id', itemId);
           return status === 'open'
             ? q.is('resolved_at', null).order('occurrence_number', { ascending: true }).range(from, to)
             : q
@@ -438,14 +559,16 @@ export class ExceptionOccurrencesService {
       this.readOrgTimeZone(),
     ]);
 
+    const recountBlock = countStartBlock(this.ctx);
     const occurrences: ExceptionOccurrence[] = [];
     let unknown = 0;
     for (const row of rows) {
-      const mapped = mapOccurrence(row, syncState, gate);
+      const mapped = mapOccurrence(row, syncState, gate, recountBlock);
       if (mapped) occurrences.push(mapped);
       else unknown += 1;
     }
     if (unknown > 0) this.reportUnknownRules(unknown);
+    await this.withRecountOutcomes(occurrences);
 
     return {
       status,
@@ -453,6 +576,8 @@ export class ExceptionOccurrencesService {
       truncated: rows.length >= cap,
       syncState,
       canCheckNow: isManagerOrAbove(this.ctx.role),
+      canRecount: recountBlock === null,
+      recountUnavailableReason: recountBlock,
       unrecognized: unknown,
       timeZone,
     };
@@ -487,10 +612,26 @@ export class ExceptionOccurrencesService {
       this.readOrgTimeZone(),
     ]);
     if (!row) throw new ServiceError('not_found', 'Exception not found.');
-    const occurrence = mapOccurrence(row, syncState, gate);
+    const occurrence = mapOccurrence(row, syncState, gate, countStartBlock(this.ctx));
     if (!occurrence) {
       this.reportUnknownRules(1);
       throw new ServiceError('not_found', 'Exception not found.');
+    }
+    // What each recount came to for this item: the active one, and every
+    // closed one the timeline names ("Recount CC-000031 closed: Matched the
+    // book"). One set of reads for both.
+    const closedCounts = events
+      .filter((e) => e.kind === 'recount_closed' && e.cycle_count_id !== null)
+      .map((e) => e.cycle_count_id as string);
+    const outcomes = await this.recountOutcomes(
+      [
+        ...(occurrence.recount ? [occurrence.recount.cycleCountId] : []),
+        ...closedCounts,
+      ].map((cycleCountId) => ({ cycleCountId, itemId: occurrence.itemId })),
+    );
+    if (occurrence.recount) {
+      occurrence.recount.outcome =
+        outcomes.get(pairKey(occurrence.recount.cycleCountId, occurrence.itemId)) ?? occurrence.recount.outcome;
     }
 
     // The chain is every occurrence of the same identity: at most one is
@@ -527,7 +668,17 @@ export class ExceptionOccurrencesService {
         actor: e.actor_user_id === null ? systemOrFormer(e) : personFor(e.actor_user_id, e.actor),
         note: e.note,
         cycleCount: e.cycle_count_id
-          ? { id: e.cycle_count_id, countNumber: toNumber(e.cycle_count?.count_number) }
+          ? {
+              id: e.cycle_count_id,
+              countNumber: toNumber(e.cycle_count?.count_number),
+              ...(e.kind === 'recount_closed'
+                ? {
+                    outcome: outcomes.get(pairKey(e.cycle_count_id, occurrence.itemId)) ?? {
+                      kind: 'unavailable' as const,
+                    },
+                  }
+                : {}),
+            }
           : null,
         maintenanceRequestId: e.maintenance_request_id,
         evidenceId: e.evidence_id,
@@ -599,9 +750,168 @@ export class ExceptionOccurrencesService {
       this.readSyncState(),
       this.actGate(),
     ]);
-    const mapped = fresh ? mapOccurrence(fresh, syncState, gate) : null;
+    const mapped = fresh ? mapOccurrence(fresh, syncState, gate, countStartBlock(this.ctx)) : null;
     if (!mapped) throw new ServiceError('not_found', 'Exception not found.');
+    await this.withRecountOutcomes([mapped]);
     return mapped;
+  }
+
+  /**
+   * The exceptions linked to one count as its recount (F1-2), for the count's
+   * detail on the web and the phone: every occurrence a recount_linked event
+   * names for this count (the pointer is cleared once the count closes, the
+   * events stay), each with its item's line in the count, what the count came
+   * to for it, and where the line's difference lands when posted.
+   *
+   * Everything is read through the caller's own client, so occurrence RLS
+   * decides which links they see. The counted location is read for these
+   * lines only (the count's line page is unchanged). A failed read THROWS:
+   * the caller shows "unavailable", never "no linked exceptions".
+   */
+  async listForCount(cycleCountId: string): Promise<CountLinkedExceptions> {
+    assertPermission(this.ctx, 'items:read');
+    if (!UUID.test(cycleCountId)) throw new ServiceError('not_found', 'Cycle count not found.');
+    const orgId = this.ctx.organizationId;
+
+    const [header, links, syncState, gate, timeZone] = await Promise.all([
+      this.ctx.supabase
+        .from('cycle_counts')
+        .select('id, count_number, status')
+        .eq('organization_id', orgId)
+        .eq('id', cycleCountId)
+        .maybeSingle(),
+      fetchAllRows<{ occurrence_id: string }>(
+        (from, to) =>
+          this.ctx.supabase
+            .from('exception_occurrence_events')
+            .select('id, occurrence_id')
+            .eq('organization_id', orgId)
+            .eq('cycle_count_id', cycleCountId)
+            .eq('kind', 'recount_linked')
+            .order('id', { ascending: true })
+            .range(from, to),
+        { cap: COUNT_LINKS_CAP },
+      ),
+      this.readSyncState(),
+      this.actGate(),
+      this.readOrgTimeZone(),
+    ]);
+    if (header.error) throw new ServiceError('internal_error', postgrestErrorText(header.error));
+    const count = header.data as { id: string; count_number: number | string | null; status: string } | null;
+    if (!count) throw new ServiceError('not_found', 'Cycle count not found.');
+
+    const occurrenceIds = [...new Set(links.map((l) => l.occurrence_id))];
+    const ctx = this.ctx;
+    const rows = (await fetchAllRowsByIds<Record<string, unknown>>(
+      occurrenceIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('exception_occurrences')
+          .select(OCCURRENCE_SELECT)
+          .eq('organization_id', orgId)
+          .in('id', batch)
+          .order('id', { ascending: true })
+          .range(from, to),
+    )) as unknown as OccurrenceRow[];
+
+    const recountBlock = countStartBlock(this.ctx);
+    const occurrences: ExceptionOccurrence[] = [];
+    let unknown = 0;
+    for (const row of rows) {
+      const mapped = mapOccurrence(row, syncState, gate, recountBlock);
+      if (mapped) occurrences.push(mapped);
+      else unknown += 1;
+    }
+    if (unknown > 0) this.reportUnknownRules(unknown);
+    occurrences.sort((a, b) => a.number - b.number);
+
+    type LineRow = {
+      id: string;
+      item_id: string;
+      counted_quantity: number | string | null;
+      expected_quantity: number | string | null;
+      counted_location_id: string | null;
+      counted_location: { name: string; kind: string | null; deleted_at: string | null } | null;
+      /** cycle_count_line_rechecks (0372), a computed field: false when the
+       *  line was counted before a later count of the item was posted. */
+      rechecks: boolean | null;
+    };
+    const itemIds = [...new Set(occurrences.map((o) => o.itemId))];
+    const [lineRows, progress] = await Promise.all([
+      fetchAllRowsByIds<Record<string, unknown>>(
+        itemIds,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('cycle_count_lines')
+            .select(
+              'id, item_id, counted_quantity, expected_quantity, counted_location_id, counted_location:locations!cycle_count_lines_counted_location_id_fkey(name, kind, deleted_at), rechecks:cycle_count_line_rechecks',
+            )
+            .eq('cycle_count_id', cycleCountId)
+            .in('item_id', batch)
+            .order('id', { ascending: true })
+            .range(from, to),
+      ) as unknown as Promise<LineRow[]>,
+      count.status === 'in_progress' ? this.readProgressSoft(cycleCountId) : Promise.resolve(null),
+    ]);
+    const lineByItem = new Map(lineRows.map((l) => [l.item_id, l]));
+    // The other occurrences' active recounts (a link that has since moved on
+    // to another count), worked out like the list does.
+    await this.withRecountOutcomes(occurrences.filter((o) => o.recount?.cycleCountId !== cycleCountId));
+
+    const exceptions: CountLinkedException[] = occurrences.map((o) => {
+      const l = lineByItem.get(o.itemId) ?? null;
+      const countedLocation = l?.counted_location
+        ? {
+            name: l.counted_location.name,
+            kind: l.counted_location.kind ?? null,
+            archived: l.counted_location.deleted_at !== null,
+          }
+        : null;
+      const line = l
+        ? {
+            id: l.id,
+            countedQuantity: toQuantity(l.counted_quantity),
+            expectedQuantity: toQuantity(l.expected_quantity),
+            countedLocationId: l.counted_location_id ?? null,
+            countedLocation,
+          }
+        : null;
+      const rechecks = typeof l?.rechecks === 'boolean' ? l.rechecks : null;
+      const outcome = recountOutcome(
+        { status: count.status, countedLines: progress?.counted ?? null, totalLines: progress?.total ?? null },
+        line ? { countedQuantity: line.countedQuantity, expectedQuantity: line.expectedQuantity, rechecks } : null,
+      );
+      const active = o.recount?.cycleCountId === cycleCountId;
+      if (active && o.recount) o.recount.outcome = outcome;
+      // Where the difference lands is a statement about posting, so it is made
+      // only while the count is open (a closed count reads its outcome). A
+      // line that cannot re-check the item has no destination: posting it
+      // applies nothing for the exception (or is refused as superseded).
+      const destInput =
+        line && count.status === 'in_progress'
+          ? { countedQuantity: line.countedQuantity, expectedQuantity: line.expectedQuantity, countedLocation, rechecks }
+          : null;
+      return {
+        occurrence: o,
+        active,
+        line,
+        outcome,
+        destination: destInput && rechecks !== false ? varianceDestination(destInput) : null,
+        reviewLine: destInput ? varianceReviewLine(destInput) : null,
+      };
+    });
+
+    const countNumber = toNumber(count.count_number);
+    return {
+      cycleCountId,
+      countNumber,
+      reference: formatCycleCountNumber(countNumber),
+      status: count.status,
+      exceptions,
+      unrecognized: unknown,
+      syncState,
+      timeZone,
+    };
   }
 
   /**
@@ -874,6 +1184,152 @@ export class ExceptionOccurrencesService {
         throw new ServiceError('forbidden', 'You do not have write access to this warehouse.');
       }
       throw e;
+    }
+  }
+
+  /**
+   * Replace each occurrence's recount outcome (from its status alone) with
+   * what the count came to for its item. Cosmetic: see recountOutcomes.
+   */
+  private async withRecountOutcomes(occurrences: ExceptionOccurrence[]): Promise<void> {
+    const withRecount = occurrences.filter((o) => o.recount !== null);
+    if (withRecount.length === 0) return;
+    const outcomes = await this.recountOutcomes(
+      withRecount.map((o) => ({ cycleCountId: o.recount!.cycleCountId, itemId: o.itemId })),
+    );
+    for (const o of withRecount) {
+      const found = outcomes.get(pairKey(o.recount!.cycleCountId, o.itemId));
+      if (found) o.recount!.outcome = found;
+    }
+  }
+
+  /**
+   * What each (count, item) pair came to (core recountOutcome): the count's
+   * status, its progress while in progress (lines counted of lines), and the
+   * item's line (with whether it re-checks the item, 0372) while in progress
+   * and once posted. All read through the caller's client (count headers and
+   * lines are readable by every member).
+   *
+   * COSMETIC, and never a wrong answer: a failed read is reported and every
+   * pair reads "Result not available" (unavailable), never "matched" and
+   * never a failed list. Bounded: one header read, then per count at most
+   * OUTCOME_CONCURRENCY at once, each batched by item.
+   */
+  private async recountOutcomes(
+    pairs: ReadonlyArray<{ cycleCountId: string; itemId: string }>,
+  ): Promise<Map<string, RecountOutcome>> {
+    const out = new Map<string, RecountOutcome>();
+    const byCount = new Map<string, Set<string>>();
+    for (const p of pairs) {
+      const items = byCount.get(p.cycleCountId) ?? new Set<string>();
+      items.add(p.itemId);
+      byCount.set(p.cycleCountId, items);
+    }
+    if (byCount.size === 0) return out;
+    const ctx = this.ctx;
+    try {
+      const counts = await fetchAllRowsByIds<{ id: string; status: string }>(
+        [...byCount.keys()],
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('cycle_counts')
+            .select('id, status')
+            .eq('organization_id', ctx.organizationId)
+            .in('id', batch)
+            .order('id', { ascending: true })
+            .range(from, to),
+      );
+      const statusOf = new Map(counts.map((c) => [c.id, c.status]));
+      type OutcomeLine = {
+        item_id: string;
+        counted_quantity: number | string | null;
+        expected_quantity: number | string | null;
+        rechecks: boolean | null;
+      };
+      // The item's line, with whether it re-checks the item (0372's computed
+      // field): a line counted before a later count of the item was posted
+      // is "counted before a later count", never "matched the book".
+      const readLines = (ccId: string, items: ReadonlySet<string>) =>
+        fetchAllRowsByIds<OutcomeLine>(
+          [...items],
+          (batch) => (from, to) =>
+            ctx.supabase
+              .from('cycle_count_lines')
+              .select('item_id, counted_quantity, expected_quantity, rechecks:cycle_count_line_rechecks')
+              .eq('cycle_count_id', ccId)
+              .in('item_id', batch)
+              .order('id', { ascending: true })
+              .range(from, to),
+        );
+      const lineInput = (l: OutcomeLine | undefined) =>
+        l
+          ? {
+              countedQuantity: l.counted_quantity,
+              expectedQuantity: l.expected_quantity,
+              rechecks: typeof l.rechecks === 'boolean' ? l.rechecks : null,
+            }
+          : null;
+      await mapWithConcurrency([...byCount.entries()], OUTCOME_CONCURRENCY, async ([ccId, items]) => {
+        const status = statusOf.get(ccId);
+        if (status === 'completed' || status === 'in_progress') {
+          const [lines, progress] = await Promise.all([
+            readLines(ccId, items),
+            status === 'in_progress' ? this.readProgress(ccId) : Promise.resolve(null),
+          ]);
+          const byItem = new Map(lines.map((l) => [l.item_id, l]));
+          for (const itemId of items) {
+            out.set(
+              pairKey(ccId, itemId),
+              recountOutcome(
+                { status, countedLines: progress?.counted ?? null, totalLines: progress?.total ?? null },
+                lineInput(byItem.get(itemId)),
+              ),
+            );
+          }
+          return;
+        }
+        for (const itemId of items) {
+          out.set(pairKey(ccId, itemId), recountOutcome(status === undefined ? null : { status }, null));
+        }
+      });
+      return out;
+    } catch (err) {
+      reportDegradedRead('exceptions.recount_outcome', err, { counts: byCount.size });
+      const unavailable = new Map<string, RecountOutcome>();
+      for (const p of pairs) unavailable.set(pairKey(p.cycleCountId, p.itemId), { kind: 'unavailable' });
+      return unavailable;
+    }
+  }
+
+  /** Lines in a count, and lines counted so far. Throws on a failed read. */
+  private async readProgress(cycleCountId: string): Promise<{ total: number; counted: number }> {
+    const [total, counted] = await Promise.all([
+      this.ctx.supabase
+        .from('cycle_count_lines')
+        .select('id', { count: 'exact', head: true })
+        .eq('cycle_count_id', cycleCountId),
+      this.ctx.supabase
+        .from('cycle_count_lines')
+        .select('id', { count: 'exact', head: true })
+        .eq('cycle_count_id', cycleCountId)
+        .not('counted_quantity', 'is', null),
+    ]);
+    if (total.error) throw new ServiceError('internal_error', postgrestErrorText(total.error));
+    if (counted.error) throw new ServiceError('internal_error', postgrestErrorText(counted.error));
+    if (typeof total.count !== 'number' || typeof counted.count !== 'number') {
+      throw new ServiceError('internal_error', 'cycle_count_lines count missing');
+    }
+    return { total: total.count, counted: counted.count };
+  }
+
+  /** readProgress for a display line: a failed read is reported and gives
+   *  null (the outcome then reads "In progress" with no numbers). */
+  private async readProgressSoft(cycleCountId: string): Promise<{ total: number; counted: number } | null> {
+    try {
+      return await this.readProgress(cycleCountId);
+    } catch (err) {
+      reportDegradedRead('exceptions.recount_progress', err, {});
+      return null;
     }
   }
 

@@ -130,6 +130,14 @@ export type AuditEvent =
   | 'cycle_count.assigned'
   | 'cycle_count.released'
   | 'cycle_count.force_reassigned'
+  /**
+   * A manager started a targeted recount from the Exception Center (F1-2).
+   * ONE row per recount (pattern #30), carrying the id arrays: the
+   * occurrences and items asked for, the new count (if any), the occurrences
+   * linked to it or to counts already in progress, and what was skipped and
+   * why. No migration: audit_logs.event is un-CHECKed text.
+   */
+  | 'exception.recount_started'
   | 'size_count.started'
   | 'size_count.completed'
   | 'bundle.created'

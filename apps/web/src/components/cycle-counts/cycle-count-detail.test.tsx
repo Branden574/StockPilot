@@ -117,12 +117,74 @@ describe('CycleCountDetail read-only mode (canAdjust=false)', () => {
 });
 
 describe('CycleCountDetail counting mode (canAdjust=true)', () => {
-  it('keeps the write UI for stock:adjust holders (unchanged behavior)', () => {
-    render(<CycleCountDetail {...baseProps} canAdjust />);
+  it('keeps the write UI for a manager who holds stock:adjust and cycle_counts:assign', () => {
+    render(<CycleCountDetail {...baseProps} canAdjust canAssign role="manager" />);
     expect(screen.getByText('Review & post')).toBeInTheDocument();
     expect(screen.getByText('Cancel count')).toBeInTheDocument();
     // One entry input per line.
     expect(screen.getAllByPlaceholderText('—')).toHaveLength(2);
+    expect(screen.queryByTestId('manager-posts')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * THE POST/CANCEL FIX (F1-2). ledger.post_cycle_count and the cycle_counts
+ * UPDATE policy a cancel runs under are manager-only, but the page used to
+ * show both buttons to anyone with stock:adjust, which staff hold: they
+ * pressed Post and got a refusal. The page now asks core cycleCountCloseGate,
+ * the predicate the phone and the service use.
+ */
+describe('CycleCountDetail: who sees Post and Cancel', () => {
+  // Mutation caught: gating the buttons on stock:adjust (canAdjust) alone.
+  it('staff who can count see neither button, and are told a manager posts', () => {
+    render(<CycleCountDetail {...baseProps} canAdjust canAssign={false} role="staff" />);
+    expect(screen.queryByText('Review & post')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cancel count')).not.toBeInTheDocument();
+    expect(screen.getByTestId('manager-posts')).toHaveTextContent('A manager reviews and posts this count.');
+    // They can still count.
+    expect(screen.getAllByPlaceholderText('—')).toHaveLength(2);
+  });
+
+  it('staff granted cycle_counts:assign by an override still see neither (the role floor)', () => {
+    render(<CycleCountDetail {...baseProps} canAdjust canAssign role="staff" />);
+    expect(screen.queryByText('Review & post')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cancel count')).not.toBeInTheDocument();
+    expect(screen.getByTestId('manager-posts')).toBeInTheDocument();
+  });
+
+  it('a manager without cycle_counts:assign can post but not cancel', () => {
+    render(<CycleCountDetail {...baseProps} canAdjust canAssign={false} role="manager" />);
+    expect(screen.getByText('Review & post')).toBeInTheDocument();
+    expect(screen.queryByText('Cancel count')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('manager-posts')).not.toBeInTheDocument();
+  });
+
+  it('a manager without stock:adjust sees neither and no "manager posts" line (read-only)', () => {
+    render(<CycleCountDetail {...baseProps} canAdjust={false} canAssign role="admin" />);
+    expect(screen.queryByText('Review & post')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cancel count')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('manager-posts')).not.toBeInTheDocument();
+  });
+
+  it('defaults to no Post or Cancel when the role is not passed (fail closed)', () => {
+    render(<CycleCountDetail {...baseProps} canAdjust canAssign />);
+    expect(screen.queryByText('Review & post')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cancel count')).not.toBeInTheDocument();
+  });
+
+  it('a closed count shows neither, even to a manager', () => {
+    render(
+      <CycleCountDetail
+        {...baseProps}
+        header={{ ...header, status: 'completed' } as CycleCountRow}
+        canAdjust
+        canAssign
+        role="owner"
+      />,
+    );
+    expect(screen.queryByText('Review & post')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cancel count')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('manager-posts')).not.toBeInTheDocument();
   });
 });
 

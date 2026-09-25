@@ -2,7 +2,10 @@ import 'server-only';
 
 import {
   can,
+  CYCLE_COUNT_CANCEL_MANAGER_ONLY_COPY,
   CYCLE_COUNT_PAGE_SIZE,
+  CYCLE_COUNT_POST_MANAGER_ONLY_COPY,
+  cycleCountCloseGate,
   isManagerOrAbove,
   parseCycleCountSearch,
   parsePageParam,
@@ -17,6 +20,7 @@ import { reportError } from '@/lib/error-reporter';
 
 import { audit } from './audit';
 import { dispatchEvent } from './integration-events';
+import { assertAcceptedMember, assertCountStartFloors, gateCountItems } from './lib/count-start-preflight';
 import { scheduleExceptionSync } from './lib/exception-sync-schedule';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
@@ -357,7 +361,7 @@ export function mapPostCycleCountError(message: string, detail?: string | null):
 
 /** A selection with nothing countable left: archived, deleted, or (0369, D8)
  *  rental equipment and kit phantoms, which counts never include. */
-const NO_COUNTABLE_PICKS_COPY =
+export const NO_COUNTABLE_PICKS_COPY =
   'None of the selected items can be counted. Archived items, rental equipment and kits are left out of counts. Refresh and try again.';
 
 /**
@@ -551,35 +555,6 @@ export class CycleCountsService {
   }
 
   /**
-   * Cross-org tampering check: an assignee must be an accepted member of THIS
-   * organization, otherwise a caller could route a count to a user_id they
-   * happen to know but who isn't on the team. RLS on organization_members
-   * enforces org scope on the select, so this query is safe.
-   *
-   * `assign_cycle_count` (0282) re-checks the same thing and raises
-   * `invalid_assignee`; this pre-check exists for the clean message AND so
-   * start() can refuse a bad assignee BEFORE it snapshots a whole count
-   * (SP-123). ONE implementation on purpose — pattern #26: two copies of a
-   * rule drift, and this one decides who may touch a count.
-   */
-  private async assertAcceptedMember(userId: string): Promise<void> {
-    const { data: member, error } = await this.ctx.supabase
-      .from('organization_members')
-      .select('id')
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('user_id', userId)
-      .not('accepted_at', 'is', null)
-      .maybeSingle();
-    if (error) throw new ServiceError('internal_error', error.message);
-    if (!member) {
-      throw new ServiceError(
-        'validation_error',
-        'That user is not an active member of this organization.',
-      );
-    }
-  }
-
-  /**
    * Manager+ only — point a cycle count at a specific person on the team
    * (or clear with null). The role gate is the new 'cycle_counts:assign'
    * permission added in the same change set; staff and viewers will get a
@@ -652,9 +627,10 @@ export class CycleCountsService {
 
     let row: unknown;
     if (assignedTo) {
-      // Pre-check for the clean message; the RPC re-checks and raises
+      // Pre-check for the clean message (the one implementation, shared with
+      // start() and the recount; pattern #26); the RPC re-checks and raises
       // invalid_assignee if the membership changed in between.
-      await this.assertAcceptedMember(assignedTo);
+      await assertAcceptedMember(this.ctx, assignedTo);
       // 0282 RPC: row-locks the count, re-checks manager role + warehouse
       // write, re-checks accepted membership, and stamps
       // assigned_to / assignment_claimed_at / assignment_claimed_by /
@@ -1237,19 +1213,20 @@ export class CycleCountsService {
      *  over what they asked for. */
     assignedTo: string | null;
   }> {
-    assertModuleEnabled(this.ctx, 'cycle_counts');
-    // The cycle_counts INSERT RLS requires manager-level access. Gate on the
-    // SAME permission assign() uses for header mutation so a staff caller gets
-    // a clean `forbidden` BEFORE the DB round-trip instead of an opaque
-    // internal_error 500 from the RLS-blocked insert. Keep stock:adjust too:
-    // it's the floor for the line writes + the downstream post() this enables.
-    assertPermission(this.ctx, 'cycle_counts:assign');
-    assertPermission(this.ctx, 'stock:adjust');
-    // Validate the assignee BEFORE the snapshot (SP-123). Doing it after
-    // start_cycle_count would leave a real, unassigned — and therefore
-    // wide-open (0282 `or cc.assigned_to is null`) — count behind whenever
-    // the assignee is bogus. Refusing here creates nothing.
-    if (input.assignedTo) await this.assertAcceptedMember(input.assignedTo);
+    // The shared start preflight (lib/count-start-preflight.ts), in the same
+    // order the Exception Center's recount runs it:
+    //   1. module, cycle_counts:assign + stock:adjust, and the manager role.
+    //      The cycle_counts INSERT RLS requires manager-level access, so a
+    //      caller below it gets a clean `forbidden` BEFORE the DB round-trip
+    //      instead of an opaque internal_error 500 from the RLS-blocked
+    //      insert. stock:adjust is the floor for the line writes + the
+    //      downstream post() this enables.
+    assertCountStartFloors(this.ctx);
+    //   2. the assignee, BEFORE the snapshot (SP-123). Doing it after
+    //      start_cycle_count would leave a real, unassigned — and therefore
+    //      wide-open (0282 `or cc.assigned_to is null`) — count behind
+    //      whenever the assignee is bogus. Refusing here creates nothing.
+    if (input.assignedTo) await assertAcceptedMember(this.ctx, input.assignedTo);
     const requestedScope = input.scope ?? 'warehouse';
 
     // Expand groups to their variants BEFORE anything else, then fall through
@@ -1329,71 +1306,21 @@ export class CycleCountsService {
       if (ids.length === 0) {
         throw new ServiceError('validation_error', 'Pick at least one item to count.');
       }
-      // Fetch the picked items under the caller's RLS to (a) gate write
-      // access per distinct warehouse, (b) derive the header warehouse,
-      // (c) surface the "none active" error before snapshotting. Same org +
-      // deleted_at + status predicate the snapshot RPC re-selects with, so
-      // the gated set and the snapshotted set are the same items.
-      //
-      // PAGINATED via fetchAllRows (Task 17 review fix): `ids` can exceed
-      // 1000 when it came from a group-scope expansion (see above — groupIds
-      // has no 1000 cap), and an unpaginated `.select()` here would silently
-      // re-truncate to PostgREST's max_rows even after the expansion read
-      // above paged past it correctly. A plain hand-picked selection is
-      // capped at 1000 by the action schema, so this only bites group scope
-      // today, but the read has to page regardless of which caller filled it.
-      //
-      // BATCHED as well: up to 1000 picks (or an uncapped group expansion) in
-      // one `.in()` failed outright (414 locally, "fetch failed" in
-      // production), so a large selection could never start. A failed batch
-      // throws, so no count starts on a partial, ungated set.
-      const ctx = this.ctx;
-      const items = await fetchAllRowsByIds<{ id: string; warehouse_id: string | null }>(
-        ids,
-        (batch) => (from, to) =>
-          ctx.supabase
-            .from('inventory_items')
-            .select('id, warehouse_id')
-            .eq('organization_id', ctx.organizationId)
-            .is('deleted_at', null)
-            .eq('status', 'active')
-            // Rental equipment and kit phantoms are never counted (0369, D8):
-            // dropped here they are reported as `skipped`, and a selection of
-            // only such items is refused before anything is created.
-            .eq('is_rental', false)
-            .eq('is_bundle', false)
-            .in('id', batch)
-            .order('id', { ascending: true })
-            .range(from, to),
-      );
-      if (items.length === 0) {
+      //   3. the items, read under the caller's RLS with the snapshot's own
+      //      predicate, gated for WRITE access per distinct warehouse, and the
+      //      header warehouse derived (the shared gateCountItems). It reads
+      //      in batches and pages, so a group expansion past 1000 variants or
+      //      past the URL limit is gated whole, never as a truncated subset.
+      const gate = await gateCountItems(this.ctx, ids);
+      if (gate.items.length === 0) {
         throw new ServiceError('validation_error', NO_COUNTABLE_PICKS_COPY);
-      }
-      // Write-access gate: every distinct warehouse represented must be
-      // writable by the caller. Items with no warehouse require full
-      // (manager+) access since they aren't pinned to an assignment.
-      const distinctWh = new Set<string>();
-      let hasNullWh = false;
-      for (const it of items) {
-        if (it.warehouse_id) distinctWh.add(it.warehouse_id);
-        else hasNullWh = true;
-      }
-      if (hasNullWh) {
-        const access = await getWarehouseAccess(this.ctx);
-        if (!access.hasAllAccess) {
-          throw new ForbiddenError('You cannot count items that have no warehouse.');
-        }
-      }
-      for (const wh of distinctWh) {
-        await assertWarehouseAccess(wh, 'write', this.ctx);
       }
       // Label the count with its warehouse when every pick shares one
       // (the common case — picks usually come from a single warehouse /
       // the active workspace). Mixed- or no-warehouse selections stay null.
-      headerWarehouseId =
-        distinctWh.size === 1 && !hasNullWh ? (Array.from(distinctWh)[0] as string) : null;
+      headerWarehouseId = gate.headerWarehouseId;
       // Snapshot exactly the active picks we just validated + gated.
-      selectionItemIds = items.map((it) => it.id);
+      selectionItemIds = gate.items.map((it) => it.id);
     } else {
       // Defense-in-depth: warehouse-write check so a manager can't
       // start a cycle count for a warehouse they can't write to (the
@@ -1896,6 +1823,18 @@ export class CycleCountsService {
     // too as the established floor for cycle-count mutations.
     assertPermission(this.ctx, 'cycle_counts:assign');
     assertPermission(this.ctx, 'stock:adjust');
+    // Manager or above: the UPDATE policy's floor, which cycle_counts:assign
+    // alone does not guarantee (an override can grant it lower). The same
+    // predicate hides Cancel on the web page and the phone.
+    if (
+      !cycleCountCloseGate({
+        role: this.ctx.role,
+        canAdjust: can(this.ctx, 'stock:adjust'),
+        canAssign: can(this.ctx, 'cycle_counts:assign'),
+      }).canCancel
+    ) {
+      throw new ServiceError('forbidden', CYCLE_COUNT_CANCEL_MANAGER_ONLY_COPY, { reason: 'manager_cancels' });
+    }
     await this.assertSessionAccess(id);
     // Use .select().maybeSingle() so a stale page (someone else
     // posted/canceled it first) returns a clean conflict instead of
@@ -1952,6 +1891,20 @@ export class CycleCountsService {
   async post(id: string): Promise<CycleCountRow> {
     assertModuleEnabled(this.ctx, 'cycle_counts');
     assertPermission(this.ctx, 'stock:adjust');
+    // Manager or above (F1-2's Post/Cancel fix). ledger.post_cycle_count
+    // refuses anyone below manager, and a staff caller's refusal arrives as
+    // "not found" (its FOR UPDATE runs under the manager-only UPDATE policy),
+    // so staff who tapped Post were told the count did not exist. The same
+    // predicate hides Post from them on the web page and the phone.
+    if (
+      !cycleCountCloseGate({
+        role: this.ctx.role,
+        canAdjust: can(this.ctx, 'stock:adjust'),
+        canAssign: can(this.ctx, 'cycle_counts:assign'),
+      }).canPost
+    ) {
+      throw new ServiceError('forbidden', CYCLE_COUNT_POST_MANAGER_ONLY_COPY, { reason: 'manager_posts' });
+    }
     await this.assertSessionAccess(id);
     const { data, error } = await this.ctx.supabase.rpc('post_cycle_count', {
       p_cycle_count_id: id,

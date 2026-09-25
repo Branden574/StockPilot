@@ -9,17 +9,23 @@ import {
   EXCEPTION_ACTION_LABELS,
   EXCEPTION_FIRST_CHECK_PENDING_COPY,
   EXCEPTION_RULES,
+  activeRecountCopy,
   describeOccurrence,
-  describeOccurrenceEvent,
+  describeTimelineEvent,
   exceptionActDisabledReason,
+  isRecountableRule,
   occurrenceState,
   occurrenceStateLabel,
+  recountDisabledReason,
   recurrenceBadge,
   OCCURRENCE_RESOLVED_REASON_COPY,
+  RECOUNT_COUNTS_TOTAL_COPY,
+  recountUnavailableCopy,
   type OccurrenceState,
 } from '@stockpilot/core';
 
 import { ExceptionNoteSheet } from '@/components/exception-note-sheet';
+import { ExceptionRecountSheet } from '@/components/exception-recount-sheet';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
@@ -54,6 +60,12 @@ import { useTheme } from '@/lib/use-theme';
  *
  * A failed read is an error on screen, never a blank page; offline, the copy
  * this session last loaded is shown with its time.
+ *
+ * RECOUNT (F1-2): on a count_variance or over_reserved exception, the linked
+ * recount and how far it has got (tap to open the count), and a Recount button
+ * for a reader the server says can start one (canRecount). It needs a
+ * connection: offline the button is disabled with the reason. A closed
+ * recount's timeline entry says what it found (core describeTimelineEvent).
  */
 
 type Loaded =
@@ -73,6 +85,7 @@ export default function ExceptionDetailScreen() {
   const [stored, setState] = React.useState<Loaded>({ kind: 'loading' });
   const [refreshing, setRefreshing] = React.useState(false);
   const [sheet, setSheet] = React.useState<ExceptionSheetMode | null>(null);
+  const [recountOpen, setRecountOpen] = React.useState(false);
   const seqRef = React.useRef(0);
 
   const load = React.useCallback(async () => {
@@ -192,6 +205,7 @@ export default function ExceptionDetailScreen() {
           refreshing={refreshing}
           onRefresh={() => void refresh()}
           onOpenSheet={setSheet}
+          onRecount={() => setRecountOpen(true)}
           onNavigate={(href) => router.push(href as Href)}
         />
       )}
@@ -207,6 +221,31 @@ export default function ExceptionDetailScreen() {
             setSheet(null);
             // Re-read, so the chip and the timeline show what was just saved.
             void load();
+          }}
+        />
+      ) : null}
+
+      {state.kind === 'ready' ? (
+        <ExceptionRecountSheet
+          visible={recountOpen}
+          title={
+            state.detail.occurrence.reference
+              ? `Recount for ${state.detail.occurrence.reference}`
+              : 'Recount'
+          }
+          occurrenceIds={[state.detail.occurrence.id]}
+          orgId={orgId ?? null}
+          online={!offline}
+          timeZone={state.detail.timeZone}
+          onClose={() => setRecountOpen(false)}
+          onDone={() => {
+            setRecountOpen(false);
+            // Re-read, so the state chip and the timeline show the recount.
+            void load();
+          }}
+          onOpenCount={(cycleCountId) => {
+            setRecountOpen(false);
+            router.push(`/cycle-count/${cycleCountId}` as Href);
           }}
         />
       ) : null}
@@ -227,6 +266,7 @@ function Detail({
   refreshing,
   onRefresh,
   onOpenSheet,
+  onRecount,
   onNavigate,
 }: {
   detail: MobileExceptionDetail;
@@ -235,6 +275,7 @@ function Detail({
   refreshing: boolean;
   onRefresh: () => void;
   onOpenSheet: (mode: ExceptionSheetMode) => void;
+  onRecount: () => void;
   onNavigate: (href: string) => void;
 }) {
   const { c } = useTheme();
@@ -261,6 +302,11 @@ function Detail({
   // buttons stay, DISABLED, with the reason.
   const disabledReason = exceptionActDisabledReason({ resolved, canAct: o.canAct, online: !offline });
   const showActButtons = !resolved && o.canAct;
+  // Recount (F1-2): only where a count can settle the condition. Permission
+  // first (a reader who may not start one is told so, online or not), then
+  // the connection.
+  const showRecount = isRecountableRule(o.rule) && !resolved;
+  const recountReason = o.canRecount ? recountDisabledReason({ canRecount: true, online: !offline }) : null;
 
   return (
     <ScrollView
@@ -366,6 +412,45 @@ function Detail({
         ) : null}
       </View>
 
+      {showRecount ? (
+        <Section title="RECOUNT">
+          {o.recount ? (
+            <Pressable
+              accessibilityRole="link"
+              onPress={() => onNavigate(`/cycle-count/${o.recount!.cycleCountId}`)}
+              style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+            >
+              <Body size={14.5} color={c.ink}>
+                {activeRecountCopy(o.recount)}
+              </Body>
+            </Pressable>
+          ) : (
+            <Body size={14} muted>
+              No recount is linked to this exception.
+            </Body>
+          )}
+          {o.canRecount ? (
+            <>
+              <Body size={13.5} muted>
+                {RECOUNT_COUNTS_TOTAL_COPY}
+              </Body>
+              <Button block variant="outline" disabled={recountReason !== null} onPress={onRecount}>
+                Recount
+              </Button>
+              {recountReason ? (
+                <Body size={13} muted>
+                  {recountReason}
+                </Body>
+              ) : null}
+            </>
+          ) : (
+            <Body size={13.5} muted>
+              {recountUnavailableCopy(o.recountUnavailableReason)}
+            </Body>
+          )}
+        </Section>
+      ) : null}
+
       <Section title="WHAT CAN CAUSE THIS">
         {meta.explanations.map((e) => (
           <Body key={e} size={14}>
@@ -387,11 +472,12 @@ function Detail({
           detail.timeline.map((e) => (
             <View key={e.id} style={{ gap: 2 }}>
               <Body size={14} color={c.ink}>
-                {describeOccurrenceEvent({
+                {describeTimelineEvent({
                   kind: e.kind,
                   actorLabel: e.actor?.label ?? null,
                   cycleCountNumber: e.cycleCount?.countNumber ?? null,
                   resolvedReason: o.resolvedReason,
+                  recountOutcome: e.cycleCount?.outcome ?? null,
                 })}
               </Body>
               <Mono size={11} color={c.ink4}>

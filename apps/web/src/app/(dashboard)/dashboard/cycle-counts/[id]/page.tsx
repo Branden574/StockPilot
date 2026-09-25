@@ -1,13 +1,16 @@
 import { Download } from 'lucide-react';
 import { notFound, redirect } from 'next/navigation';
+import { Suspense } from 'react';
 
 import { CopyReferenceButton } from '@/components/cycle-counts/copy-reference-button';
 import { CycleCountDetail } from '@/components/cycle-counts/cycle-count-detail';
 import { BackToCycleCounts } from '@/components/cycle-counts/cycle-count-list-memory';
+import { LinkedExceptionsBlock } from '@/components/exceptions/linked-exceptions-block';
 import { Button } from '@/components/ui/button';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { createClient } from '@/lib/supabase/server';
+import { fetchCountAssignees, type CountAssignee } from '@/server/lib/count-assignees';
 import { ServiceError } from '@/server/services/context';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { WarehousesService } from '@/server/services/warehouses';
@@ -107,34 +110,11 @@ export default async function CycleCountDetailPage({
 
   // Member list for the assignee picker. Only fetched when the current
   // user can actually assign (saves a round trip for staff/viewers).
-  let members: Array<{ id: string; name: string; email: string }> = [];
+  let members: CountAssignee[] = [];
   if (canAssign) {
-    const { data: rawMembers } = await supabase
-      .from('organization_members')
-      .select(
-        'user_id, user:user_profiles!user_id (id, full_name, email)',
-      )
-      .eq('organization_id', ctx.organizationId)
-      .not('accepted_at', 'is', null);
-    type MemberRow = {
-      user_id: string;
-      user:
-        | { id: string; full_name: string | null; email: string }
-        | { id: string; full_name: string | null; email: string }[]
-        | null;
-    };
-    members = ((rawMembers ?? []) as MemberRow[])
-      .map((row) => {
-        const u = Array.isArray(row.user) ? row.user[0] : row.user;
-        if (!u) return null;
-        return {
-          id: u.id,
-          name: u.full_name ?? u.email,
-          email: u.email,
-        };
-      })
-      .filter((m): m is { id: string; name: string; email: string } => Boolean(m))
-      .sort((a, b) => a.name.localeCompare(b.name));
+    // One member source for every count assignee picker (count-assignees.ts).
+    // A failed read shows no members here, as it always did.
+    members = await fetchCountAssignees(supabase, ctx.organizationId).catch(() => []);
   }
 
   // Resolve the current assignee's display name for the read-only badge
@@ -208,6 +188,14 @@ export default async function CycleCountDetailPage({
         </div>
       </div>
 
+      {/* The exceptions a recount linked to this count (F1-2): streamed, so
+          the count never waits for it; a failed read says unavailable. */}
+      <Suspense fallback={null}>
+        <div className="mb-6 empty:hidden">
+          <LinkedExceptionsBlock cycleCountId={id} />
+        </div>
+      </Suspense>
+
       <CycleCountDetail
         header={header}
         lines={lines}
@@ -223,6 +211,7 @@ export default async function CycleCountDetailPage({
         assigneeName={assigneeName}
         itemsInScopeCount={itemsInScopeCount}
         timeZone={tz}
+        role={ctx.role}
       />
     </div>
   );
