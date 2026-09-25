@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ELSEWHERE_UNAVAILABLE_NOTE,
   RACK_WRITE_OFF_MOVEMENT_TYPE,
   formatArchiveStockBlockMessage,
   formatBulkArchiveStockBlockMessage,
+  formatElsewhereNote,
+  formatElsewherePlacedNote,
+  formatElsewhereSourcesNote,
   formatHoldingLabel,
   formatLocationArchiveStockBlockMessage,
   formatStockQuantity,
@@ -53,6 +57,54 @@ describe('formatArchiveStockBlockMessage', () => {
       'Cannot archive: 5 units still on hand. ' +
         'Remove or move the stock first, or archive it anyway to write it off.',
     );
+  });
+
+  // 0371: a staff member sees only their own warehouses' holdings. The parts
+  // of the message must still add up to the total it names.
+  it('names the units in warehouses the caller cannot see, so the parts add up', () => {
+    expect(formatArchiveStockBlockMessage(32, [{ label: 'Unplaced', quantity: 20 }], 12)).toBe(
+      "Cannot archive: 32 units still on hand (20 in Unplaced, 12 in warehouses you can't see). " +
+        'Remove or move the stock first, or archive it anyway to write it off.',
+    );
+  });
+
+  it('names only the hidden units when the caller can see none of the stock', () => {
+    expect(formatArchiveStockBlockMessage(12, [], 12)).toBe(
+      "Cannot archive: 12 units still on hand (12 in warehouses you can't see). " +
+        'Remove or move the stock first, or archive it anyway to write it off.',
+    );
+  });
+
+  it('is unchanged when nothing is hidden', () => {
+    expect(formatArchiveStockBlockMessage(5, [{ label: 'A', quantity: 5 }], 0)).toBe(
+      formatArchiveStockBlockMessage(5, [{ label: 'A', quantity: 5 }]),
+    );
+  });
+});
+
+describe('stock in other warehouses (0371)', () => {
+  it('formatElsewhereNote: the count, and the places when known', () => {
+    expect(formatElsewhereNote(12)).toBe('12 in other warehouses');
+    expect(formatElsewhereNote(7, 1)).toBe('7 in other warehouses (1 location)');
+    expect(formatElsewhereNote(7, 2)).toBe('7 in other warehouses (2 locations)');
+    expect(formatElsewhereNote(12.5)).toBe('12.5 in other warehouses');
+    expect(formatElsewherePlacedNote(7)).toBe('7 placed in other warehouses');
+    expect(formatElsewherePlacedNote(7, 1)).toBe('7 placed in other warehouses (1 location)');
+    expect(formatElsewherePlacedNote(7, 2)).toBe('7 placed in other warehouses (2 locations)');
+  });
+
+  it('formatElsewhereSourcesNote: whether any of the stock is the caller\'s', () => {
+    expect(formatElsewhereSourcesNote(12, { noneHere: false })).toBe(
+      "The rest of this item's stock (12) is in warehouses you don't manage.",
+    );
+    expect(formatElsewhereSourcesNote(12, { noneHere: true })).toBe(
+      "This item's stock (12) is in warehouses you don't manage.",
+    );
+  });
+
+  it('the unavailable note says the read failed, not that nothing is elsewhere', () => {
+    expect(ELSEWHERE_UNAVAILABLE_NOTE).toMatch(/could not load/i);
+    expect(ELSEWHERE_UNAVAILABLE_NOTE).toMatch(/other warehouses/);
   });
 });
 
@@ -130,5 +182,61 @@ describe('formatLocationArchiveStockBlockMessage', () => {
     const msg = formatLocationArchiveStockBlockMessage('22-A', 5, []);
     expect(msg).toContain('5 units');
     expect(msg).not.toContain('(');
+  });
+
+  // 0371: the guard now takes its total from location_stock_census, which
+  // counts items the caller cannot read. Those units are named as a quantity.
+  it('adds the units of items the caller cannot see after the named ones', () => {
+    expect(
+      formatLocationArchiveStockBlockMessage('Rack QA-2', 15, [{ name: 'QA Chrome', quantity: 7 }], {
+        ofItemsNotVisible: 8,
+      }),
+    ).toBe(
+      "Cannot archive: Rack QA-2 still holds 15 units (7 of QA Chrome, and 8 units of items you can't see). " +
+        'Move or write off that stock first — archiving anyway leaves it still counted in on hand but attached to a hidden location.',
+    );
+  });
+
+  it('says every unit is of items the caller cannot see when none can be named', () => {
+    expect(formatLocationArchiveStockBlockMessage('Annex Unplaced', 9, [], { ofItemsNotVisible: 9 })).toBe(
+      "Cannot archive: Annex Unplaced still holds 9 units of items you can't see. " +
+        'Move or write off that stock first — archiving anyway leaves it still counted in on hand but attached to a hidden location.',
+    );
+  });
+
+  // Review finding (2026-09-25): a staff member with locations:manage who
+  // archives a rack in ANOTHER warehouse sees none of its holdings (0371), yet
+  // the items on it are often ones they can read; the item page says "7 in
+  // other warehouses". "Items you can't see" contradicted it.
+  it("a location in a warehouse the caller doesn't manage: says so, not \"items you can't see\"", () => {
+    const msg = formatLocationArchiveStockBlockMessage('Rack QA-2', 7, [], { inWarehouseNotManaged: 7 });
+    expect(msg).toBe(
+      "Cannot archive: Rack QA-2 still holds 7 units in a warehouse you don't manage. " +
+        'Move or write off that stock first — archiving anyway leaves it still counted in on hand but attached to a hidden location.',
+    );
+    expect(msg).not.toContain("items you can't see");
+  });
+
+  it('both reasons at once are each named, and the parts add up to the total', () => {
+    expect(
+      formatLocationArchiveStockBlockMessage('Rack QA-2', 10, [{ name: 'QA Chrome', quantity: 5 }], {
+        ofItemsNotVisible: 3,
+        inWarehouseNotManaged: 2,
+      }),
+    ).toContain(
+      "(5 of QA Chrome, and 3 units of items you can't see, and 2 units in a warehouse you don't manage)",
+    );
+    expect(
+      formatLocationArchiveStockBlockMessage('Rack QA-2', 5, [], {
+        ofItemsNotVisible: 3,
+        inWarehouseNotManaged: 2,
+      }),
+    ).toContain("(3 units of items you can't see, and 2 units in a warehouse you don't manage)");
+  });
+
+  it('keeps the cap and counts the rest before the hidden units', () => {
+    const holders = Array.from({ length: 5 }, (_, i) => ({ name: `Book ${i}`, quantity: 1 }));
+    const msg = formatLocationArchiveStockBlockMessage('22-A', 6, holders, { ofItemsNotVisible: 1 });
+    expect(msg).toContain('(1 of Book 0, 1 of Book 1, 1 of Book 2, 2 more, and 1 unit of items you can\'t see)');
   });
 });

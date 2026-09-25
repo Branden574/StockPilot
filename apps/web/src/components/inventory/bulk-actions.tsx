@@ -108,6 +108,10 @@ interface BulkActionsProps {
       fromLocationId). Drives an inline warning in the Set rack dialog
       pointing at Transfer. */
   hasSplitRackSelection?: boolean;
+  /** Whether any selected item has stock in warehouses the viewer cannot see
+      (0371: `elsewhere_quantity` > 0). Set rack never moves that stock, so
+      the dialog says so before the run. */
+  hasElsewhereSelection?: boolean;
   /** Push the selected rows into the cycle-count selection and navigate to
       the New cycle count screen. Wired by InventoryTable. */
   onCycleCount: () => void;
@@ -163,6 +167,7 @@ export function BulkActions({
   onClear,
   hasArchivedSelection,
   hasSplitRackSelection,
+  hasElsewhereSelection,
   onCycleCount,
   canSetPublicVisibility = false,
   itemType = 'all',
@@ -388,6 +393,7 @@ export function BulkActions({
     // quietly revert a human instruction), so the honest report is that the
     // label is now ahead of the stock.
     const placeFailed = r.data.placeFailed ?? 0;
+    const placeElsewhere = r.data.placeElsewhere ?? 0;
     const cleared = r.data.crateCleared ?? 0;
     const unchanged = r.data.crateUnchanged ?? 0;
     const changed = r.data.crateChanged ?? 0;
@@ -410,6 +416,18 @@ export function BulkActions({
         placeFailed === 1
           ? 'One item’s stock did not move onto the rack. Its rack label was still set, so the label is ahead of the stock — move it with Transfer.'
           : `${placeFailed} items’ stock did not move onto the rack. Their rack labels were still set, so the labels are ahead of the stock — move them with Transfer.`,
+      );
+    }
+    // ═══ AND THE STOCK THIS OPERATOR COULD NOT MOVE (0371) ═══
+    // Stock in a warehouse the operator does not manage is never moved by
+    // Set rack (the server would refuse it), yet the rack label was set. Said
+    // on its own line, because it is not a failure and "move it with
+    // Transfer" is not something this operator can do there.
+    if (placeElsewhere > 0) {
+      toast.warning(
+        placeElsewhere === 1
+          ? 'One item also has stock in warehouses you don’t manage. That stock was not moved, so its rack label is ahead of it.'
+          : `${placeElsewhere} items also have stock in warehouses you don’t manage. That stock was not moved, so their rack labels are ahead of it.`,
       );
     }
     if (unchanged > 0) {
@@ -877,6 +895,12 @@ export function BulkActions({
               Some selected items have stock split across multiple racks. Set
               rack updates their label only — to physically move stock, use
               Transfer.
+            </p>
+          )}
+          {hasElsewhereSelection && (
+            <p className="rounded-md border border-amber-200 bg-amber-50/30 px-3 py-2 text-[12.5px] text-amber-700 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-400">
+              Some selected items also have stock in warehouses you don&apos;t
+              manage. Set rack does not move that stock.
             </p>
           )}
           <DialogFooter>

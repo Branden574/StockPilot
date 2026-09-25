@@ -75,4 +75,41 @@ describe('PlacementsBreakdown', () => {
     );
     expect(screen.queryByRole('button', { name: /Remove stock from/i })).not.toBeInTheDocument();
   });
+
+  // 0371: a staff member or viewer sees holdings only in their own warehouses.
+  // Placed stock elsewhere is ONE entry: a count and how many places, never a
+  // per-location quantity, and never a remove target.
+  it('adds one "placed in other warehouses" entry after the visible racks', () => {
+    render(
+      <PlacementsBreakdown
+        placements={[{ locationId: 'a', name: '22-B', kind: 'rack', quantity: 12 }]}
+        itemId="item-1"
+        itemName="Persepolis"
+        canRemoveStock
+        elsewhere={{ quantity: 7, locationCount: 1 }}
+      />,
+    );
+    expect(screen.getByTestId('placements-elsewhere')).toHaveTextContent(
+      '7 placed in other warehouses (1 location)',
+    );
+    // Only the visible rack can be written off from here.
+    expect(screen.getAllByRole('button', { name: /Remove stock from/i })).toHaveLength(1);
+  });
+
+  it('renders the entry alone when none of the placed stock is the viewer\'s', () => {
+    render(
+      <PlacementsBreakdown
+        placements={[{ locationId: 'u', name: 'Unplaced', kind: 'unplaced', quantity: 20 }]}
+        elsewhere={{ quantity: 7, locationCount: 2 }}
+      />,
+    );
+    expect(screen.getByText('7 placed in other warehouses (2 locations)')).toBeInTheDocument();
+  });
+
+  it('renders nothing extra when nothing is elsewhere (managers, or a 0 count)', () => {
+    const { container } = render(
+      <PlacementsBreakdown placements={[]} elsewhere={{ quantity: 0, locationCount: 0 }} />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
 });

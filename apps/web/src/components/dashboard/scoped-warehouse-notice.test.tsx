@@ -36,6 +36,7 @@ vi.mock('@/lib/dashboard/request-cache', () => ({
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import {
   buildWarehouseScope,
+  SCOPED_PLACEMENT_NOTE,
   scopedWarehouseMessage,
   WAREHOUSE_ACCESS_UNREADABLE_MESSAGE,
 } from '@/lib/warehouse-scope';
@@ -178,6 +179,47 @@ describe('ScopedWarehouseNotice', () => {
       expect(text).toBe(
         "You're viewing only the warehouses assigned to you. An admin can adjust warehouse access from the Team page.",
       );
+    });
+  });
+
+  // 0371: on the Items list, the scoped line also says what the placement
+  // columns describe. Never on the could-not-load line, and never for anyone
+  // the line is not shown to.
+  describe('placementNote', () => {
+    async function withNote(): Promise<string | null> {
+      const el = await ScopedWarehouseNotice({ placementNote: true });
+      if (el === null) return null;
+      const { container } = render(el);
+      return container.textContent || null;
+    }
+
+    it('a scoped staff member: the scope line, then the placement sentence', async () => {
+      setUp(ROLES[3]!);
+      expect(await withNote()).toBe(
+        "You're viewing North only. An admin can adjust warehouse access from the Team page. " +
+          SCOPED_PLACEMENT_NOTE,
+      );
+      expect(SCOPED_PLACEMENT_NOTE).toBe(
+        'Rack columns show your warehouses\' racks; stock elsewhere shows as "in other warehouses".',
+      );
+    });
+
+    it('not added to the could-not-load line', async () => {
+      setUp(ROLES[3]!);
+      stub = makeSupabaseStub({
+        'user_warehouse_assignments.select': {
+          data: null,
+          error: { message: 'timeout', code: '57014' },
+        },
+        'organization_members.select': { data: [{ all_warehouses: false }], error: null },
+      });
+      holder.supabase = stub.client;
+      expect(await withNote()).toBe(WAREHOUSE_ACCESS_UNREADABLE_MESSAGE);
+    });
+
+    it('managers still get nothing', async () => {
+      setUp(ROLES[2]!);
+      await expect(ScopedWarehouseNotice({ placementNote: true })).resolves.toBeNull();
     });
   });
 });

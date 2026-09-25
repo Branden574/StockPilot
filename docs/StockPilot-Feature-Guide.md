@@ -54,6 +54,7 @@ An **organization** (org) is a tenant — a company's isolated data world. A use
 An org can have **multiple warehouses** (physical sites). Most screens have an **"All warehouses" filter** in the top bar; pick a warehouse to narrow everything (inventory, staging, reports) to that site.
 
 - **Purpose:** run several sites under one org without mixing their stock.
+- **Warehouse users and auditors** (the staff and viewer roles) see stock locations only in their assigned warehouses, plus locations that belong to no warehouse. An item's **on-hand total is still the whole organization's**, so wherever the app shows where that total sits (the item page, the Items and Books lists, the transfer dialog, and on the phone the item screen, the scan result, Move stock and Remove from rack), the part in other warehouses is shown as a count, "N in other warehouses", never as a list of those racks. If that count cannot be loaded, the page says so instead of showing a total that does not add up. Managers and above see every warehouse and are unaffected.
 
 ### Charters (bill-to vs. ownership)
 A **charter** is a billing/ownership entity attached to stock and purchase orders. StockPilot deliberately separates **two** charter ideas:
@@ -145,7 +146,7 @@ This is the heart of warehouse accuracy. (See [the placement model](#locations--
 
 **How to use:** open an item → **Transfer** → choose the **From** location (only racks/crates with stock appear), the **To** location, and the quantity. The total on-hand is unchanged; the movement is logged as a **transfer** (delta 0).
 
-> **Why a transfer can be "blocked":** if all of an item's stock is in **staging/unplaced**, there's nothing *placed* to transfer. Place it first (above), then transfer.
+> **Why a transfer can be "blocked":** if all of an item's stock is in **staging/unplaced**, there's nothing *placed* to transfer. Place it first (above), then transfer. A warehouse user can only move stock in their own warehouses: the **From** list shows those, the **To** list shows their warehouses plus locations that belong to no warehouse, and the dialog says how much of the item is in warehouses they don't manage.
 
 ---
 

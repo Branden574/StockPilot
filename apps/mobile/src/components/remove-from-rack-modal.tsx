@@ -18,9 +18,16 @@ import { Display, Eyebrow, Mono } from '@/components/ui/text';
 // one precedence chain, one vocabulary, both flavours side by side.
 import { removeStockCrateWarning } from '@/lib/move-stock-form';
 import { removeStockFromLocation } from '@/lib/stock-api';
+import {
+  elsewhereSourcesCopy,
+  readItemElsewhere,
+  SHEET_HOLDINGS_UNREADABLE_NOTE,
+} from '@/lib/holdings-elsewhere';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, SHADOW } from '@/lib/theme';
+import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
+import type { ItemElsewhere } from '@stockpilot/core';
 
 interface Holding {
   locationId: string;
@@ -28,6 +35,10 @@ interface Holding {
   kind: string | null;
   quantity: number;
 }
+
+/** What the sheet said, and still says, when there is no placed stock to remove. */
+const NO_PLACED_STOCK =
+  'This item has no placed stock to remove. Anything on hand is still in staging or unplaced — put it away first, or adjust on-hand with a reason.';
 
 /**
  * Native "Remove from rack" — the write-off parity for the web
@@ -106,8 +117,18 @@ function RemoveFromRackContent({
   onRemoved: () => void;
 }) {
   const { c, mode } = useTheme();
+  // 0371: managers and above see every holding and skip the elsewhere read.
+  const { role } = useRole();
   const [loading, setLoading] = React.useState(true);
   const [holdings, setHoldings] = React.useState<Holding[]>([]);
+  // 0371: the item's stock in warehouses this member cannot see, and whether
+  // they can see any of its (unplaced or staged) stock at all. Together they
+  // decide what the empty state says (elsewhereSourcesCopy).
+  const [elsewhere, setElsewhere] = React.useState<ItemElsewhere>({ status: 'none' });
+  const [holdsSomeHere, setHoldsSomeHere] = React.useState(false);
+  // The holdings read itself failed: say so, rather than fall through to an
+  // empty state that would describe stock the sheet never read.
+  const [holdingsUnreadable, setHoldingsUnreadable] = React.useState(false);
   const [fromId, setFromId] = React.useState('');
   const [qty, setQty] = React.useState('');
   const [reason, setReason] = React.useState('');
@@ -118,15 +139,27 @@ function RemoveFromRackContent({
     if (!visible) return;
     let cancelled = false;
     void (async () => {
-      const res = await supabase
-        .from('item_stock_levels')
-        .select('location_id, quantity, locations!inner(id, name, kind)')
-        .eq('organization_id', organizationId)
-        .eq('item_id', itemId)
-        .gt('quantity', 0);
+      // 0371: for a staff member or viewer the holdings below are only those in
+      // their own warehouses (plus locations with no warehouse). The rest of the
+      // item's stock, as totals, is read ALONGSIDE, never after; it never
+      // rejects, and a failure is said, never read as "nothing elsewhere".
+      const [res, elsewhereNow] = await Promise.all([
+        supabase
+          .from('item_stock_levels')
+          .select('location_id, quantity, locations!inner(id, name, kind)')
+          .eq('organization_id', organizationId)
+          .eq('item_id', itemId)
+          .gt('quantity', 0),
+        readItemElsewhere(supabase, itemId, role),
+      ]);
       if (cancelled) return;
+      if (res.error) {
+        setHoldingsUnreadable(true);
+        setLoading(false);
+        return;
+      }
 
-      const hs: Holding[] = ((res.data ?? []) as unknown[])
+      const all: Holding[] = ((res.data ?? []) as unknown[])
         .map((r) => {
           const row = r as {
             location_id: string;
@@ -143,15 +176,19 @@ function RemoveFromRackContent({
             quantity: Number(row.quantity) || 0,
           };
         })
-        // Placed holdings only — staging/unplaced are owned by the put-away
-        // flow, not the write-off (web parity: placements-breakdown excludes
-        // them, and that is where the web dialog is surfaced).
-        .filter((h) => h.quantity > 0 && h.kind !== 'staging' && h.kind !== 'unplaced');
+        .filter((h) => h.quantity > 0);
+      // Placed holdings only — staging/unplaced are owned by the put-away
+      // flow, not the write-off (web parity: placements-breakdown excludes
+      // them, and that is where the web dialog is surfaced).
+      const hs = all.filter((h) => h.kind !== 'staging' && h.kind !== 'unplaced');
 
       // Open on the first placed holding with its whole quantity in the box —
       // the common case is "clear this rack".
       const first = hs[0];
       setHoldings(hs);
+      setHoldingsUnreadable(false);
+      setElsewhere(elsewhereNow);
+      setHoldsSomeHere(all.length > 0);
       setFromId(first?.locationId ?? '');
       setQty(first ? String(first.quantity) : '');
       setLoading(false);
@@ -159,13 +196,20 @@ function RemoveFromRackContent({
     return () => {
       cancelled = true;
     };
-  }, [visible, itemId, organizationId]);
+  }, [visible, itemId, organizationId, role]);
 
   const selected = holdings.find((h) => h.locationId === fromId) ?? null;
   const maxQty = selected?.quantity ?? 0;
   const qtyNum = parseInt(qty, 10);
   const qtyValid = !Number.isNaN(qtyNum) && qtyNum > 0 && qtyNum <= maxQty;
   const canSubmit = !!fromId && qtyValid && reason.trim().length > 0 && !submitting;
+  // What the sheet says about stock this member cannot write off because it is
+  // in warehouses they cannot see (0371), in the web's words.
+  const elsewhereCopy = elsewhereSourcesCopy({
+    elsewhere,
+    emptyDefault: NO_PLACED_STOCK,
+    holdsSomeHere,
+  });
 
   async function submit() {
     if (!canSubmit || !selected) return;
@@ -286,10 +330,13 @@ function RemoveFromRackContent({
               <View style={{ paddingVertical: 40, alignItems: 'center' }}>
                 <ActivityIndicator color={c.ink4} />
               </View>
+            ) : holdingsUnreadable ? (
+              <Mono size={13} color={c.ink4} style={{ marginTop: 18, lineHeight: 20 }}>
+                {SHEET_HOLDINGS_UNREADABLE_NOTE}
+              </Mono>
             ) : holdings.length === 0 ? (
               <Mono size={13} color={c.ink4} style={{ marginTop: 18, lineHeight: 20 }}>
-                This item has no placed stock to remove. Anything on hand is still in staging or
-                unplaced — put it away first, or adjust on-hand with a reason.
+                {elsewhereCopy.empty}
               </Mono>
             ) : (
               <ScrollView
@@ -316,6 +363,14 @@ function RemoveFromRackContent({
                       />
                     ))}
                   </View>
+                  {/* 0371: the rest of the item's stock is in warehouses this
+                      member cannot write off from, or could not be looked up.
+                      Body copy, so no text-size cap. */}
+                  {elsewhereCopy.note ? (
+                    <Mono size={11} color={c.ink4} style={{ lineHeight: 16 }}>
+                      {elsewhereCopy.note}
+                    </Mono>
+                  ) : null}
                 </View>
 
                 <View style={{ gap: 6, marginBottom: 16 }}>

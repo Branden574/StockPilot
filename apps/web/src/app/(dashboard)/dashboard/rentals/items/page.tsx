@@ -5,6 +5,7 @@ import { RentalsTabs } from '@/components/rentals/rentals-tabs';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
 import { EmptyState } from '@/components/ui/empty-state';
 import { InventoryTable } from '@/components/inventory/inventory-table';
+import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-unavailable-notice';
 import { Button } from '@/components/ui/button';
 import { can, isRentalItemRow } from '@stockpilot/core';
 import { CategoriesService } from '@/server/services/categories';
@@ -109,6 +110,9 @@ export default async function RentalItemsPage({
     limit: PAGE_SIZE,
     offset: (page - 1) * PAGE_SIZE,
     rentalsOnly: true,
+    // The table's placement columns add holdings up next to on hand, so they
+    // need the stock a staff member or viewer cannot see (0371).
+    withElsewhere: true,
   });
 
   // Belt and braces: the query already guarantees this, and a row that is
@@ -224,34 +228,36 @@ export default async function RentalItemsPage({
             cta={{ label: 'Clear search', href: '/dashboard/rentals/items' }}
           />
         ) : (
-          <InventoryTable
-            items={itemsWithImages}
-            total={rentalTotal}
-            lookups={lookups}
-            canCreate={canCreate}
-            categories={categories.map((c) => ({
-              id: c.id as string,
-              name: c.name as string,
-            }))}
-            locations={locations.map((l) => ({
-              id: l.id as string,
-              name: l.name as string,
-            }))}
-            suppliers={suppliers.map((s) => ({
-              id: s.id as string,
-              name: s.name as string,
-            }))}
-            tags={tags.map((t) => ({ id: t.id, name: t.name, color: t.color }))}
-            initialQuery={params.q}
-            page={page}
-            pageSize={PAGE_SIZE}
-            trends={trends}
-            rowLinkPrefix="/dashboard/rentals/items"
-            basePath="/dashboard/rentals/items"
-            activeWarehouseId={null}
-            currentUserId={sessionCtx.userId}
-            reservedByItem={reservedByItem}
-          />
+          <ElsewhereUnavailableNotice unavailable={inventory.elsewhereUnavailable}>
+            <InventoryTable
+              items={itemsWithImages}
+              total={rentalTotal}
+              lookups={lookups}
+              canCreate={canCreate}
+              categories={categories.map((c) => ({
+                id: c.id as string,
+                name: c.name as string,
+              }))}
+              locations={locations.map((l) => ({
+                id: l.id as string,
+                name: l.name as string,
+              }))}
+              suppliers={suppliers.map((s) => ({
+                id: s.id as string,
+                name: s.name as string,
+              }))}
+              tags={tags.map((t) => ({ id: t.id, name: t.name, color: t.color }))}
+              initialQuery={params.q}
+              page={page}
+              pageSize={PAGE_SIZE}
+              trends={trends}
+              rowLinkPrefix="/dashboard/rentals/items"
+              basePath="/dashboard/rentals/items"
+              activeWarehouseId={null}
+              currentUserId={sessionCtx.userId}
+              reservedByItem={reservedByItem}
+            />
+          </ElsewhereUnavailableNotice>
         )}
       </div>
     </div>

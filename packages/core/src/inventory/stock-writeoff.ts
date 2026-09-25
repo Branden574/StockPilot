@@ -64,18 +64,84 @@ export interface StockHoldingSummary {
 export function formatArchiveStockBlockMessage(
   total: number,
   holdings: readonly StockHoldingSummary[],
+  /**
+   * Units in warehouses the caller cannot see (item_holdings_elsewhere, 0371).
+   * Named as its own entry so the parts add up to the total: without it a
+   * staff member was told "32 units still on hand (20 in Unplaced)" and left
+   * to wonder where the other 12 were. Omitted or 0: nothing extra is said.
+   */
+  hiddenQuantity = 0,
 ): string {
   const unit = total === 1 ? 'unit' : 'units';
-  const where =
-    holdings.length > 0
-      ? ` (${holdings
-          .map((h) => `${formatStockQuantity(h.quantity)} in ${h.label}`)
-          .join(', ')})`
-      : '';
+  const parts = holdings.map((h) => `${formatStockQuantity(h.quantity)} in ${h.label}`);
+  if (hiddenQuantity > 0) {
+    parts.push(`${formatStockQuantity(hiddenQuantity)} in ${ELSEWHERE_ARCHIVE_LABEL}`);
+  }
+  const where = parts.length > 0 ? ` (${parts.join(', ')})` : '';
   return (
     `Cannot archive: ${formatStockQuantity(total)} ${unit} still on hand${where}. ` +
     `Remove or move the stock first, or archive it anyway to write it off.`
   );
+}
+
+/** How the archive guard names stock the caller cannot see. */
+const ELSEWHERE_ARCHIVE_LABEL = "warehouses you can't see";
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STOCK IN OTHER WAREHOUSES (0371)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// A member below manager sees holdings only in their own warehouses (plus
+// locations with no warehouse). The screens that show where an item's stock
+// is fold in the totals `item_holdings_elsewhere` reports, and say so in
+// these words, on the web and on the phone alike. See holdings-elsewhere.ts.
+
+/**
+ * Shown where the stock-in-other-warehouses read FAILED. The visible figures
+ * are then a partial view, and a screen must say so rather than print them as
+ * if they added up.
+ */
+export const ELSEWHERE_UNAVAILABLE_NOTE =
+  'Could not load stock in other warehouses, so it may not be shown here.';
+
+/**
+ * "12 in other warehouses", or with the placed locations counted,
+ * "7 in other warehouses (2 locations)". The caller is told how much and how
+ * many places, never which place: with one place ("(1 location)") the
+ * quantity is that unnamed place's quantity.
+ */
+export function formatElsewhereNote(quantity: number, locationCount = 0): string {
+  const base = `${formatStockQuantity(quantity)} in other warehouses`;
+  if (locationCount <= 0) return base;
+  return `${base} (${locationCount} location${locationCount === 1 ? '' : 's'})`;
+}
+
+/**
+ * The placed-stock line of an item's placement breakdown, e.g.
+ * "7 placed in other warehouses (1 location)". It sits next to the on-hand
+ * sum, where "12 in other warehouses" counts ALL of the stock elsewhere
+ * (placed, Staging and Unplaced), so the placed figure says "placed" to keep
+ * the two numbers from reading as the same thing.
+ */
+export function formatElsewherePlacedNote(quantity: number, locationCount = 0): string {
+  const base = `${formatStockQuantity(quantity)} placed in other warehouses`;
+  if (locationCount <= 0) return base;
+  return `${base} (${locationCount} location${locationCount === 1 ? '' : 's'})`;
+}
+
+/**
+ * The empty or partial state of a move/remove source list when part of the
+ * item's stock is in warehouses the caller cannot move from. `noneHere` is
+ * true when the caller holds none of the item's stock at all.
+ */
+export function formatElsewhereSourcesNote(
+  quantity: number,
+  opts: { noneHere: boolean },
+): string {
+  const q = formatStockQuantity(quantity);
+  return opts.noneHere
+    ? `This item's stock (${q}) is in warehouses you don't manage.`
+    : `The rest of this item's stock (${q}) is in warehouses you don't manage.`;
 }
 
 /**
@@ -101,6 +167,27 @@ export interface LocationStockHolderSummary {
 
 /** How many holders the location-archive message names before summarising. */
 const MAX_NAMED_HOLDERS = 3;
+
+/**
+ * The units at a location that the archive guard counted (0371's
+ * location_stock_census) but the caller's own read could not name, split by
+ * WHY they could not be named, because the two call for different words:
+ *
+ *   • `ofItemsNotVisible` — the holding is visible but its ITEM is not (a
+ *     category- or charter-scoped member, or an item with no warehouse):
+ *     "units of items you can't see".
+ *   • `inWarehouseNotManaged` — the holding itself is out of the caller's
+ *     view: since 0371 a staff member reads holdings only in their own
+ *     warehouses, and a locations:manage grant lets them archive a location
+ *     in any warehouse. Those items are often ones they CAN read (the item
+ *     page tells them "7 in other warehouses"), so "items you can't see"
+ *     would contradict the item page: "units in a warehouse you don't
+ *     manage".
+ */
+export interface LocationArchiveHiddenStock {
+  ofItemsNotVisible?: number;
+  inWarehouseNotManaged?: number;
+}
 
 /**
  * The message shown when archiving a LOCATION is refused because stock is still
@@ -135,21 +222,54 @@ export function formatLocationArchiveStockBlockMessage(
   locationName: string,
   total: number,
   holders: readonly LocationStockHolderSummary[],
+  /**
+   * The units the caller could not name (0371), by reason; see
+   * LocationArchiveHiddenStock. Omitted or all 0: the message is unchanged.
+   */
+  hidden: LocationArchiveHiddenStock = {},
 ): string {
   const unit = total === 1 ? 'unit' : 'units';
-  const itemNoun = holders.length === 1 ? 'item' : 'items';
+  const tail =
+    ` Move or write off that stock first — archiving anyway leaves it ` +
+    `still counted in on hand but attached to a hidden location.`;
   const named = holders.slice(0, MAX_NAMED_HOLDERS);
   const rest = holders.length - named.length;
-  const detail =
-    named.length > 0
-      ? ` (${named
-          .map((h) => `${formatStockQuantity(h.quantity)} of ${h.name}`)
-          .join(', ')}${rest > 0 ? `, and ${rest} more` : ''})`
-      : '';
+  const namedParts = named.map((h) => `${formatStockQuantity(h.quantity)} of ${h.name}`);
+  const units = (n: number) => `${formatStockQuantity(n)} ${n === 1 ? 'unit' : 'units'}`;
+  const ofItems = Math.max(0, hidden.ofItemsNotVisible ?? 0);
+  const inWarehouse = Math.max(0, hidden.inWarehouseNotManaged ?? 0);
+  const ITEMS_WORDS = "of items you can't see";
+  const WAREHOUSE_WORDS = "in a warehouse you don't manage";
+  const hiddenParts = [
+    ...(ofItems > 0 ? [`${units(ofItems)} ${ITEMS_WORDS}`] : []),
+    ...(inWarehouse > 0 ? [`${units(inWarehouse)} ${WAREHOUSE_WORDS}`] : []),
+  ];
+  if (hiddenParts.length > 0) {
+    // Nothing named and one reason for all of it: say it once, in the
+    // sentence ("still holds 7 units in a warehouse you don't manage").
+    if (holders.length === 0 && hiddenParts.length === 1) {
+      const words = ofItems > 0 ? ITEMS_WORDS : WAREHOUSE_WORDS;
+      return (
+        `Cannot archive: ${locationName} still holds ${formatStockQuantity(total)} ${unit}` +
+        ` ${words}.${tail}`
+      );
+    }
+    const parts = [
+      ...namedParts,
+      ...(rest > 0 ? [`${rest} more`] : []),
+      ...hiddenParts.map((p, i) => (i === 0 && holders.length === 0 ? p : `and ${p}`)),
+    ];
+    return (
+      `Cannot archive: ${locationName} still holds ${formatStockQuantity(total)} ${unit}` +
+      ` (${parts.join(', ')}).${tail}`
+    );
+  }
+  if (rest > 0) namedParts.push(`and ${rest} more`);
+  const itemNoun = holders.length === 1 ? 'item' : 'items';
+  const detail = named.length > 0 ? ` (${namedParts.join(', ')})` : '';
   const across = holders.length > 0 ? ` across ${holders.length} ${itemNoun}` : '';
   return (
     `Cannot archive: ${locationName} still holds ${formatStockQuantity(total)} ${unit}` +
-    `${across}${detail}. Move or write off that stock first — archiving anyway leaves it ` +
-    `still counted in on hand but attached to a hidden location.`
+    `${across}${detail}.${tail}`
   );
 }

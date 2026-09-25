@@ -124,7 +124,7 @@ select ok(
   and not has_table_privilege('authenticated', 'public.warehouses', 'DELETE')
   and has_table_privilege('authenticated', 'public.item_stock_levels', 'INSERT')
   and has_table_privilege('authenticated', 'public.item_stock_levels', 'UPDATE'),
-  '3: holdings, locations and warehouses lose DELETE; holdings INSERT/UPDATE stay for the INVOKER ledger bodies');
+  '3: holdings, locations and warehouses lose DELETE; holdings INSERT/UPDATE grants stay (0371: the ledger bodies write holdings through the SECURITY DEFINER ledger.apply_holding_delta)');
 select ok(
   not exists (
     select 1 from unnest(array['purchase_order_charges', 'rentals', 'rental_lines']) t,

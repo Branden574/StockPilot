@@ -365,6 +365,12 @@ export async function bulkUpdateInventoryAction(input: {
      */
     placeFailed?: number;
     /**
+     * Set rack only: items with stock in warehouses the caller cannot see
+     * (0371). That stock was not moved (the caller cannot move stock out of
+     * those warehouses) while the rack label was set, so the toolbar says so.
+     */
+    placeElsewhere?: number;
+    /**
      * Set rack only: BOOKS whose recorded crate was CLEARED because this op
      * moved their stock onto the rack and nowhere else.
      *

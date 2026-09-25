@@ -16,6 +16,7 @@ import { PerfUseful } from '@/components/perf/perf-useful';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { Button } from '@/components/ui/button';
 import { can } from '@stockpilot/core';
+import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-unavailable-notice';
 import {
   deriveInstantView,
   instantStateFromPageParams,
@@ -244,6 +245,10 @@ type SectionData = {
   /** ACTIVE books awaiting first receipt (mig 0277) — the "Expected"
    *  chip's count badge (server mode; instant mode derives locally). */
   expectedCount: number;
+  /** Live (staff/viewer) path only: the stock-in-other-warehouses read failed
+   *  (0371), so the rack figures cover the viewer's own warehouses only and
+   *  the page says so. */
+  elsewhereUnavailable?: boolean;
 };
 
 /**
@@ -489,6 +494,9 @@ async function booksTableSection({
         sort,
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
+        // The rack cell names where a book is and says "+N in other
+        // warehouses" for a staff member or viewer (0371).
+        withElsewhere: true,
       }),
       // Expected-chip badge count (mig 0277) — one HEAD count on the
       // 0277 partial index, in parallel with the rows query. Carries the
@@ -560,6 +568,7 @@ async function booksTableSection({
       ...lookups,
       trends,
       expectedCount: expectedCountLive,
+      elsewhereUnavailable: inventory.elsewhereUnavailable,
     };
   }
 
@@ -585,7 +594,7 @@ async function booksTableSection({
   // Same as the instant branch: the zero-result view carries its own marker.
   if (emptyState) return <PerfUseful>{emptyState}</PerfUseful>;
 
-  return (
+  const table = (
     <BooksInventoryTable
       items={itemsWithImages}
       total={data.total}
@@ -611,6 +620,12 @@ async function booksTableSection({
       currentUserId={sessionCtx.userId}
       expectedCount={data.expectedCount}
     />
+  );
+  // Never the partial rack figures presented as complete (0371).
+  return (
+    <ElsewhereUnavailableNotice unavailable={data.elsewhereUnavailable}>
+      {table}
+    </ElsewhereUnavailableNotice>
   );
 }
 

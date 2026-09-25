@@ -20,6 +20,8 @@ function makeService(row: { id: string; kind: string | null } | null): {
   const stub = makeSupabaseStub({
     'locations.select': { data: row, error: null },
     'locations.update': { data: row ? { id: row.id } : null, error: null },
+    // The stock guard's org-wide census (0371): an empty location.
+    'rpc:location_stock_census': { data: [{ holding_rows: 0, total_quantity: 0 }], error: null },
   });
   const ctx = {
     supabase: stub.client,

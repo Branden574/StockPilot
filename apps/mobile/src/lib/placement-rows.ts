@@ -44,11 +44,15 @@
  * reintroduce it.
  */
 import {
+  ELSEWHERE_UNAVAILABLE_NOTE,
+  formatElsewhereNote,
   formatPlacementLabel,
   formatRackPosition,
   getCrateColor,
   holdingsContradictRack,
+  holdingsElsewhereTotal,
   resolvePlacement,
+  type ItemElsewhere,
   type RackHoldingLike,
 } from '@stockpilot/core';
 
@@ -92,8 +96,67 @@ export interface PlacementRowsInput {
    * Rack/crate `item_stock_levels` rows for this item — WHERE THE STOCK IS, as
    * opposed to the summary above, which is what the item REMEMBERS. Must carry
    * `kind` or the crate rule cannot fire.
+   *
+   * Since 0371 these are only the holdings the member can SEE: for staff and
+   * viewers, their own warehouses plus locations with no warehouse.
    */
   holdings: readonly RackHoldingLike[];
+  /**
+   * The item's stock in warehouses the member cannot see (0371), from
+   * item_holdings_elsewhere (src/lib/holdings-elsewhere.ts). Absent or null:
+   * nothing elsewhere, which is what a manager's screen passes. It adds an
+   * ELSEWHERE row, and it decides whether `holdings` are known in full (see
+   * holdingsKnownInFull).
+   */
+  elsewhere?: ItemElsewhere | null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STOCK IN WAREHOUSES THE MEMBER CANNOT SEE (0371)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Shared by this card and the scan sheet, so the two say the same thing.
+
+/** The eyebrow of the row that counts stock in other warehouses. */
+export const ELSEWHERE_ROW_LABEL = 'ELSEWHERE';
+
+/**
+ * The ELSEWHERE row: "+12 in other warehouses", the shared web words. Only for
+ * a successful read that found stock; a failed read is a NOTE, never a row
+ * with a number in it (elsewhereUnavailableNote).
+ */
+export function elsewhereRow(elsewhere: ItemElsewhere | null | undefined): PlacementRow | null {
+  if (elsewhere?.status !== 'some') return null;
+  const total = holdingsElsewhereTotal(elsewhere);
+  if (total <= 0) return null;
+  return { label: ELSEWHERE_ROW_LABEL, value: `+${formatElsewhereNote(total)}` };
+}
+
+/**
+ * The line shown when the stock in other warehouses could NOT be read: the
+ * holdings on screen may then be a partial view, and the screen says so
+ * instead of presenting them as the whole. Null otherwise.
+ */
+export function elsewhereUnavailableNote(
+  elsewhere: ItemElsewhere | null | undefined,
+): string | null {
+  return elsewhere?.status === 'unavailable' ? ELSEWHERE_UNAVAILABLE_NOTE : null;
+}
+
+/**
+ * Whether the visible rack/crate holdings are ALL of the item's placed stock,
+ * so they can refute a rack label. False when the read failed, and when some
+ * placed stock sits in a warehouse the member cannot see: a rack there may be
+ * exactly the one the label names. The web card names those racks from its
+ * org-wide location list; this card has no such list, so it never calls the
+ * label false on holdings it knows are incomplete (the web's own rule for a
+ * hidden location it cannot name). Hidden Staging or Unplaced stock is no
+ * evidence about a rack either way, so it does not count.
+ */
+export function holdingsKnownInFull(elsewhere: ItemElsewhere | null | undefined): boolean {
+  if (elsewhere?.status === 'unavailable') return false;
+  if (elsewhere?.status === 'some' && elsewhere.placed > 0) return false;
+  return true;
 }
 
 /**
@@ -127,6 +190,9 @@ export function buildPlacementRows(input: PlacementRowsInput): PlacementRow[] {
       value: formatPlacementLabel(placement) ?? '',
     });
   }
+  // The rest of the stock, beside the part the member can see (0371).
+  const elsewhere = elsewhereRow(input.elsewhere);
+  if (elsewhere) rows.push(elsewhere);
 
   // The rack summary, in both alphabets — see the header. `hasPair` decides
   // which source the two spellings come from, and they always come from the
@@ -148,7 +214,12 @@ export function buildPlacementRows(input: PlacementRowsInput): PlacementRow[] {
   // A pair that canonicalises to nothing (a row with no number) yields an empty
   // rackKey, and an empty label refutes nothing — the row stands, which is the
   // pre-0335 behaviour and the safe direction for malformed data.
-  const rackStands = !!rackDisplay && !holdingsContradictRack(rackKey, input.holdings);
+  //
+  // 0371: holdings that are known to be incomplete refute nothing — see
+  // holdingsKnownInFull.
+  const rackStands =
+    !!rackDisplay &&
+    !(holdingsKnownInFull(input.elsewhere) && holdingsContradictRack(rackKey, input.holdings));
   if (rackStands) rows.push({ label: 'RACK', value: rackDisplay });
 
   if (isBookView && (input.crateColor || input.crateNumber)) {

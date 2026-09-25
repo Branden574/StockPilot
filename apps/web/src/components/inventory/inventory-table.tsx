@@ -23,6 +23,7 @@ import { usePerfUseful } from '@/components/perf/perf-useful';
 import { ExportBuilderDialog } from './export-builder/export-builder-dialog';
 import { GENERIC_CHARTER_LABEL } from '@/lib/charter-display';
 import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
+import { ELSEWHERE_PLACEMENT_KIND, elsewhereSuffix } from '@/lib/placements';
 import {
   countingUnitLabel,
   groupBySizeRun,
@@ -160,6 +161,12 @@ interface Item {
    *  what lets that column apply the crate rule. Optional so older callers
    *  render unchanged. */
   placed_holdings?: RackHoldingLike[];
+  /** Units this item holds in warehouses the viewer cannot see
+   *  (item_holdings_elsewhere, 0371). Staff and viewers read holdings only in
+   *  their own warehouses, so the rack cells above describe those; this is
+   *  the remainder, shown as "+N in other warehouses". Optional: absent or 0
+   *  for managers (who see everything) and for older callers. */
+  elsewhere_quantity?: number;
   /** True only when the SYSTEM auto-archived this item on zero stock
    *  (migration 0266) — drives the "Auto-archived" badge next to the
    *  Archived pill and the Archived view's "Auto-archived only" filter
@@ -181,7 +188,9 @@ interface Item {
   /** The rack/crate name, or "Staging"/"Unplaced", for this split row. When
    *  defined (even null), the RACK column shows it. `null` = no holding. */
   placement_label?: string | null;
-  /** This row's holding kind ('rack' | 'crate' | 'staging' | 'unplaced'). */
+  /** This row's holding kind ('rack' | 'crate' | 'staging' | 'unplaced'), or
+   *  'elsewhere' for the one row carrying the item's stock in warehouses the
+   *  viewer cannot see (0371). */
   placement_kind?: string;
 }
 
@@ -1938,6 +1947,11 @@ export function InventoryTable({
             hasSplitRackSelection={(effectiveInstant?.items ?? items).some(
               (i) => selectedItemIdSet.has(i.id) && isSplitRackItem(i),
             )}
+            // 0371: stock in warehouses the viewer cannot see is never moved by
+            // Set rack; the dialog says so up front.
+            hasElsewhereSelection={(effectiveInstant?.items ?? items).some(
+              (i) => selectedItemIdSet.has(i.id) && (i.elsewhere_quantity ?? 0) > 0,
+            )}
             onCycleCount={() => {
               // Books tab and Items tab share this table; infer the pick
               // type from the base path so the confirm screen can group
@@ -2307,6 +2321,16 @@ export function InventoryTable({
                         // decision 2026-07-08, consistent with the item detail
                         // card and the qty sub-line below).
                         if (item.placement_label !== undefined) {
+                          // 0371: the row carrying this item's stock in
+                          // warehouses the viewer cannot see. Not a rack, and
+                          // never a place they can act on from here.
+                          if (item.placement_kind === ELSEWHERE_PLACEMENT_KIND) {
+                            return (
+                              <span className="text-[var(--ed-ink-4)]">
+                                {item.placement_label}
+                              </span>
+                            );
+                          }
                           // A SITE is not a rack. Stock recorded at the
                           // warehouse's own site location (a NULL-kind row such
                           // as "DC4") used to print its name here, which read as
@@ -2342,16 +2366,28 @@ export function InventoryTable({
                         // stock is unplaced/staged — show "—", not a stale label.
                         const placed = item.placed_racks;
                         if (placed !== undefined) {
+                          const elsewhere = elsewhereSuffix(item);
                           if (placed.length === 0) {
-                            return <span className="text-[var(--ed-ink-4)]">—</span>;
+                            return elsewhere ? (
+                              <span className="text-[var(--ed-ink-4)]">{elsewhere}</span>
+                            ) : (
+                              <span className="text-[var(--ed-ink-4)]">—</span>
+                            );
                           }
                           const shown = placed.slice(0, 2).join(', ');
                           const extra = placed.length - 2;
                           return (
-                            <span className="font-mono tabular-nums" title={placed.join(', ')}>
-                              {shown}
-                              {extra > 0 ? ` +${extra}` : ''}
-                            </span>
+                            <>
+                              <span className="font-mono tabular-nums" title={placed.join(', ')}>
+                                {shown}
+                                {extra > 0 ? ` +${extra}` : ''}
+                              </span>
+                              {elsewhere && (
+                                <div className="mt-0.5 text-[10.5px] leading-tight text-[var(--ed-ink-4)]">
+                                  {elsewhere}
+                                </div>
+                              )}
+                            </>
                           );
                         }
                         // Fallback for callers that don't compute holdings-based
@@ -2385,10 +2421,25 @@ export function InventoryTable({
                           <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
                             {(() => {
                               const rackLabel = bookRackLabelFor(item);
-                              return rackLabel ? (
-                                <span className="font-mono tabular-nums">{rackLabel}</span>
-                              ) : (
-                                <span className="text-[var(--ed-ink-4)]">—</span>
+                              // 0371: this cell describes the viewer's own
+                              // warehouses; the rest is counted, not named.
+                              const elsewhere = elsewhereSuffix(item);
+                              if (!rackLabel) {
+                                return (
+                                  <span className="text-[var(--ed-ink-4)]">
+                                    {elsewhere ?? '—'}
+                                  </span>
+                                );
+                              }
+                              return (
+                                <>
+                                  <span className="font-mono tabular-nums">{rackLabel}</span>
+                                  {elsewhere && (
+                                    <div className="mt-0.5 text-[10.5px] leading-tight text-[var(--ed-ink-4)]">
+                                      {elsewhere}
+                                    </div>
+                                  )}
+                                </>
                               );
                             })()}
                           </td>
@@ -2732,13 +2783,35 @@ function rowDisplayQuantity(item: Item, stockView: StockView): number {
 function itemRackLabels(item: Item): string[] {
   if (item.placement_label !== undefined) {
     // A site holding is not a rack (the cell reads "No rack"), so the group
-    // header must not count it as one.
-    if (item.placement_kind === 'site') return [];
+    // header must not count it as one. Nor is the row carrying stock in other
+    // warehouses (0371): it names no rack at all.
+    if (item.placement_kind === 'site' || item.placement_kind === ELSEWHERE_PLACEMENT_KIND) {
+      return [];
+    }
     return item.placement_label ? [item.placement_label] : [];
   }
   if (item.placed_racks !== undefined) return item.placed_racks;
   const rack = readItemRack(item.custom_fields);
   return rack.rackLabel ? [rack.rackLabel] : [];
+}
+
+/** Units the given ITEMS (one entry per item, not per placement row) hold in
+ *  warehouses the viewer cannot see (0371). */
+function elsewhereUnits(distinctItems: readonly Item[]): number {
+  return distinctItems.reduce((sum, it) => sum + (it.elsewhere_quantity ?? 0), 0);
+}
+
+function hasElsewhere(distinctItems: readonly Item[]): boolean {
+  return elsewhereUnits(distinctItems) > 0;
+}
+
+/** A group header's "+N in other warehouses" line, or nothing. */
+function ElsewhereTail({ items }: { items: readonly Item[] }) {
+  const suffix = elsewhereSuffix({ elsewhere_quantity: elsewhereUnits(items) });
+  if (!suffix) return null;
+  return (
+    <div className="mt-0.5 text-[10.5px] leading-tight text-[var(--ed-ink-4)]">{suffix}</div>
+  );
 }
 
 /**
@@ -3129,11 +3202,20 @@ function SkuGroupHeaderRow({
           // at all their own explicit tail rather than counting them as a
           // location that doesn't exist.
           const labels = Array.from(new Set(items.flatMap(itemRackLabels)));
-          const unset = items.filter((it) => itemRackLabels(it).length === 0).length;
+          // The "In other warehouses" line (0371) names no rack, but it is not
+          // a placement with NO rack set either: it is stock the viewer cannot
+          // see, and it gets its own count below instead of "+1 unset".
+          const unset = items.filter(
+            (it) => it.placement_kind !== ELSEWHERE_PLACEMENT_KIND && itemRackLabels(it).length === 0,
+          ).length;
+          const elsewhereTail = <ElsewhereTail items={distinctItems} />;
           if (labels.length === 0) {
             return (
               <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
-                <span className="text-[var(--ed-ink-4)]">—</span>
+                {unset > 0 || !hasElsewhere(distinctItems) ? (
+                  <span className="text-[var(--ed-ink-4)]">—</span>
+                ) : null}
+                {elsewhereTail}
               </td>
             );
           }
@@ -3141,6 +3223,7 @@ function SkuGroupHeaderRow({
             return (
               <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
                 <span className="font-mono tabular-nums">{labels[0]}</span>
+                {elsewhereTail}
               </td>
             );
           }
@@ -3154,6 +3237,7 @@ function SkuGroupHeaderRow({
                 {labels.length} location{labels.length === 1 ? '' : 's'}
                 {unset > 0 ? ` +${unset} unset` : ''}
               </span>
+              {elsewhereTail}
             </td>
           );
         })()}
@@ -3248,9 +3332,11 @@ function SkuGroupHeaderRow({
                   >
                     {rackCountLabel}
                   </span>
-                ) : (
+                ) : hasElsewhere(distinctItems) ? null : (
                   <span className="text-[var(--ed-ink-4)]">—</span>
                 )}
+                {/* 0371: the members' stock in warehouses the viewer cannot see. */}
+                <ElsewhereTail items={distinctItems} />
               </td>
               <td className="px-3 text-[12px] text-[var(--ed-ink-3)]">
                 {crate.kind === 'same' ? (

@@ -202,15 +202,44 @@ export function initialMoveQuantityForSource(source: MoveSource): string {
  */
 export function moveDestinationChoices(
   destinations: readonly MoveDestination[],
-  opts: { excludeLocationId?: string | null; scope?: MoveDestinationScope } = {},
+  opts: {
+    excludeLocationId?: string | null;
+    scope?: MoveDestinationScope;
+    /**
+     * Warehouses the member may move stock INTO (owner decision Q4, 0371).
+     * Null or absent: unrestricted. See isWritableDestination.
+     */
+    writableWarehouseIds?: readonly string[] | null;
+  } = {},
 ): MoveDestination[] {
   const scope = opts.scope ?? { kind: 'all' };
   if (scope.kind === 'none') return [];
   return destinations.filter((d) => {
     if (opts.excludeLocationId && d.id === opts.excludeLocationId) return false;
     if (scope.kind === 'warehouse' && d.warehouseId !== scope.warehouseId) return false;
+    if (!isWritableDestination(d, opts.writableWarehouseIds)) return false;
     return true;
   });
+}
+
+/**
+ * Whether a scoped member may pick `destination` (owner decision Q4, 0371):
+ * a location with no warehouse, or one in a warehouse they can write.
+ * `writableWarehouseIds` null or absent means unrestricted (managers and
+ * above). The phone twin of the web's isWritableDestination
+ * (apps/web/src/lib/placements.ts), with the same answer for the same input.
+ *
+ * UI ONLY. Offering any other destination can only end in the transfer
+ * route's refusal (0365 caller_can_write_location); the server still decides.
+ */
+export function isWritableDestination(
+  destination: Pick<MoveDestination, 'warehouseId'>,
+  writableWarehouseIds: readonly string[] | null | undefined,
+): boolean {
+  if (!writableWarehouseIds) return true;
+  return (
+    destination.warehouseId === null || writableWarehouseIds.includes(destination.warehouseId)
+  );
 }
 
 // ---------------------------------------------------------------------------

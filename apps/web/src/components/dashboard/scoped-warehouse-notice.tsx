@@ -3,7 +3,11 @@ import 'server-only';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { readWarehousesForRequest } from '@/lib/dashboard/request-cache';
 import { requireOrgContext } from '@/lib/auth/session';
-import { buildWarehouseScope, scopedWarehouseMessage } from '@/lib/warehouse-scope';
+import {
+  buildWarehouseScope,
+  SCOPED_PLACEMENT_NOTE,
+  scopedWarehouseMessage,
+} from '@/lib/warehouse-scope';
 import { isManagerOrAbove, type Role } from '@stockpilot/core';
 
 /**
@@ -31,15 +35,29 @@ import { isManagerOrAbove, type Role } from '@stockpilot/core';
  * failed name list, for someone who does have warehouses, gets a line that
  * names none (buildWarehouseScope).
  */
-export async function ScopedWarehouseNotice({ className }: { className?: string }) {
+export async function ScopedWarehouseNotice({
+  className,
+  placementNote = false,
+}: {
+  className?: string;
+  /**
+   * On a page with placement columns (the Items list): also say that those
+   * columns describe the viewer's own warehouses, and that the rest is shown
+   * as a count (0371: staff and viewers read holdings in their warehouses
+   * only). Only added to a line that named a real scope; never to the
+   * "couldn't load your access" line.
+   */
+  placementNote?: boolean;
+}) {
   const ctx = await requireOrgContext();
   if (isManagerOrAbove(ctx.role as Role)) return null;
   const access = await getWarehouseAccess();
   if (access.hasAllAccess) return null;
   const names = await readWarehousesForRequest(ctx.organizationId);
-  const message = scopedWarehouseMessage(
-    buildWarehouseScope(access, names.failed ? null : names.rows),
-  );
+  const scope = buildWarehouseScope(access, names.failed ? null : names.rows);
+  const message = scopedWarehouseMessage(scope);
   if (!message) return null;
-  return <p className={className ?? 'text-muted-foreground mt-1 text-xs'}>{message}</p>;
+  const withPlacement =
+    placementNote && !scope.unreadable ? `${message} ${SCOPED_PLACEMENT_NOTE}` : message;
+  return <p className={className ?? 'text-muted-foreground mt-1 text-xs'}>{withPlacement}</p>;
 }

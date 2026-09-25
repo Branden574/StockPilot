@@ -432,6 +432,47 @@ describe('BulkActions', () => {
     ).toBeInTheDocument();
   });
 
+  it('Set rack dialog says up front that stock in other warehouses is not moved (0371)', async () => {
+    const user = userEvent.setup();
+    render(
+      <BulkActions
+        selectedIds={['a']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={[]}
+        onClear={() => {}}
+        onCycleCount={() => {}}
+        hasElsewhereSelection
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /Set rack/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(
+      within(dialog).getByText(
+        /Some selected items also have stock in warehouses you don't manage\. Set rack does not move that stock\./,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('Set rack dialog says nothing about other warehouses when nothing is there', async () => {
+    const user = userEvent.setup();
+    render(
+      <BulkActions
+        selectedIds={['a']}
+        categories={categories}
+        suppliers={suppliers}
+        locations={[]}
+        tags={[]}
+        onClear={() => {}}
+        onCycleCount={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /Set rack/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByText(/warehouses you don't manage/)).not.toBeInTheDocument();
+  });
+
   // The bar swaps in over the toolbar when rows are selected, so this
   // leading checked box sits right where the user's attention is after a
   // select-all. It mirrors the table header's select-all: one click
@@ -594,6 +635,35 @@ describe('BulkActions — Set rack reports the crate labels', () => {
 
     expect(toast.warning).toHaveBeenCalledWith(
       '2 books’ stock did not reach the rack, so their crate labels now name the crates that hold them — check those books’ details.',
+    );
+  });
+
+  // 0371: stock in warehouses the operator does not manage is never moved by
+  // Set rack. Not a failure (nothing was refused), and "move it with
+  // Transfer" is not something they can do there, so it gets its own line.
+  it('says so when part of the stock is in warehouses the operator does not manage', async () => {
+    const user = userEvent.setup();
+    vi.mocked(bulkUpdateInventoryAction).mockResolvedValueOnce({
+      ok: true as const,
+      data: { ok: 3, skipped: 0, placed: 1, placeElsewhere: 2 },
+    });
+    await applySetRack(user);
+    expect(toast.success).toHaveBeenCalledWith('Updated 3 items.');
+    expect(toast.warning).toHaveBeenCalledWith(
+      '2 items also have stock in warehouses you don’t manage. That stock was not moved, so their rack labels are ahead of it.',
+    );
+    expect(toast.warning).not.toHaveBeenCalledWith(expect.stringContaining('move them with Transfer'));
+  });
+
+  it('says the elsewhere line in the singular for one item', async () => {
+    const user = userEvent.setup();
+    vi.mocked(bulkUpdateInventoryAction).mockResolvedValueOnce({
+      ok: true as const,
+      data: { ok: 1, skipped: 0, placed: 0, placeElsewhere: 1 },
+    });
+    await applySetRack(user);
+    expect(toast.warning).toHaveBeenCalledWith(
+      'One item also has stock in warehouses you don’t manage. That stock was not moved, so its rack label is ahead of it.',
     );
   });
 

@@ -1,7 +1,13 @@
 -- supabase/tests/0202_item_stock_levels_org_check_test.sql
--- pgTAP proof that the augmented item_stock_levels_write WITH CHECK (mig 0202)
+-- pgTAP proof that the augmented item_stock_levels WITH CHECK (mig 0202)
 -- closes the direct-write cross-tenant hole, while same-org paths and the
 -- transfer_stock RPC still work.
+--
+-- 0371 split the 0202 FOR ALL policy item_stock_levels_write into
+-- item_stock_levels_insert (FOR INSERT) and item_stock_levels_update
+-- (FOR UPDATE) with the same predicates verbatim, so the WITH CHECK under
+-- test here is now carried by those two policies (0371's test pins their
+-- text).
 --
 -- Seeds two orgs (A and B), each with a warehouse + two locations (bin + the
 -- auto-created Staging/Unplaced from the warehouse trigger).  Item is in org A.
@@ -13,9 +19,12 @@
 --
 -- 0364: item_stock_levels is ledger-only for the API roles, so a direct write
 -- is refused by the guard before WITH CHECK is reached. Tests 1-3 therefore
--- run with this transaction's ledger flag on, as the INVOKER ledger bodies
--- write holdings; that keeps WITH CHECK the thing under test. Test 4 clears
--- the flag and uses the real RPC.
+-- run with this transaction's ledger flag on, so the guard lets the write
+-- through and WITH CHECK stays the thing under test. (Until 0371 the INVOKER
+-- ledger bodies wrote holdings as the user this way; since 0371 they write
+-- through the SECURITY DEFINER ledger.apply_holding_delta, and these
+-- policies are defence in depth.) Test 4 clears the flag and uses the real
+-- RPC.
 --
 -- Wrapped in begin/rollback — nothing leaks.
 
@@ -88,6 +97,7 @@ set local role to 'authenticated';
 do $$ begin perform set_config('stockpilot.ledger', pg_current_xact_id()::text, true); end $$;
 
 -- ── Test 1: direct cross-tenant INSERT → WITH CHECK must reject 42501 ─────────
+-- (item_stock_levels_insert's WITH CHECK since 0371)
 -- org_id=orgA, item_id=orgA item, but location_id=orgB → cross-tenant hole
 select throws_ok(
   $$ insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
@@ -118,6 +128,7 @@ select lives_ok(
   'same-org direct INSERT into item_stock_levels lives (no exception)');
 
 -- ── Test 3: cross-tenant UPDATE (move row's location_id to foreign org) → 42501
+-- (item_stock_levels_update's WITH CHECK since 0371)
 set local "request.jwt.claim.sub" to 'ff020200-0000-0000-0000-000000000003';
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';

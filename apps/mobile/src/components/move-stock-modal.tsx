@@ -50,6 +50,16 @@ import {
   placementDestinationsForSource,
 } from '@/components/move-stock-destinations';
 import { transferStock, type NewRack } from '@/lib/stock-api';
+import { useAuth } from '@/lib/auth-context';
+import {
+  DESTINATION_ACCESS_UNREADABLE_NOTE,
+  elsewhereSourcesCopy,
+  readDestinationWarehouseScope,
+  readItemElsewhere,
+  SHEET_HOLDINGS_UNREADABLE_NOTE,
+  type DestinationWarehouseScope,
+} from '@/lib/holdings-elsewhere';
+import { useRole } from '@/lib/use-role';
 import {
   bookCrateAcknowledgementsMatch,
   bookRackAcknowledgementsMatch,
@@ -59,12 +69,20 @@ import {
   type BookCrateAcknowledgedChange,
   type BookRackAcknowledgedChange,
   type BookStorageInfo,
+  type ItemElsewhere,
 } from '@stockpilot/core';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, SHADOW } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 type Holding = MoveHolding;
+
+/** Nothing elsewhere, and no narrowing: the state before the open read lands. */
+const NO_ELSEWHERE: ItemElsewhere = { status: 'none' };
+const UNRESTRICTED: DestinationWarehouseScope = { writableIds: null, unreadable: false };
+
+/** What the free-form sheet said, and still says, for an item with no stock. */
+const NO_STOCK_ANYWHERE = 'This item has no stock in any location yet — receive or add stock first.';
 
 /** Sentinel `toId` value for the inline "create a new rack" branch. */
 const NEW_RACK = '__new__';
@@ -199,8 +217,22 @@ export function MoveStockModal({
   onMoved: () => void;
 }) {
   const { c, mode } = useTheme();
+  // 0371: the role decides whether the stock-in-other-warehouses read is needed
+  // (managers and above skip it) and how far the destinations are narrowed
+  // (owner decision Q4). The user id keys the assignment read.
+  const { role } = useRole();
+  const { user } = useAuth();
   const [loading, setLoading] = React.useState(true);
   const [holdings, setHoldings] = React.useState<Holding[]>([]);
+  // FREE-FORM ONLY (0371). The item's stock in warehouses this member cannot
+  // see, and the warehouses they may move stock INTO. Put-away has a fixed,
+  // visible source whose own warehouse already scopes the destinations, so it
+  // reads neither and keeps these defaults.
+  const [elsewhere, setElsewhere] = React.useState<ItemElsewhere>(NO_ELSEWHERE);
+  const [destScope, setDestScope] = React.useState<DestinationWarehouseScope>(UNRESTRICTED);
+  // The holdings read itself failed: say so, rather than fall through to an
+  // empty state that would describe stock the sheet never read.
+  const [holdingsUnreadable, setHoldingsUnreadable] = React.useState(false);
   const [destinations, setDestinations] = React.useState<MoveDestination[]>([]);
   // Warehouse name for the fixed put-away source — shown verbatim in the
   // new-rack confirmation copy so the phone's words match the web dialog's.
@@ -249,18 +281,44 @@ export function MoveStockModal({
     setSource(null);
     setChosenFromId('');
     setWarehouseName(null);
+    setElsewhere(NO_ELSEWHERE);
+    setDestScope(UNRESTRICTED);
+    setHoldingsUnreadable(false);
+    const freeForm = !putAwaySourceLocationId;
     void (async () => {
       // Source holdings: every location this item has stock in (placed racks +
       // staging/unplaced). location_id → qty, with the location's name, kind
       // and warehouse (the warehouse is what the put-away scope is derived
       // FROM, so it must come off the holding row itself).
-      const holdingsRes = await supabase
-        .from('item_stock_levels')
-        .select('location_id, quantity, locations!inner(id, name, kind, warehouse_id)')
-        .eq('organization_id', organizationId)
-        .eq('item_id', itemId)
-        .gt('quantity', 0);
+      //
+      // 0371: for a staff member or viewer these are only the holdings in their
+      // own warehouses (plus locations with no warehouse). In free-form mode the
+      // rest of the item's stock (totals, never locations) and the member's
+      // writable warehouses are read ALONGSIDE, never after: neither needs the
+      // holdings, and neither ever rejects (a failure is a state the sheet
+      // says out loud, not an empty answer).
+      const [holdingsRes, elsewhereNow, scopeNow] = await Promise.all([
+        supabase
+          .from('item_stock_levels')
+          .select('location_id, quantity, locations!inner(id, name, kind, warehouse_id)')
+          .eq('organization_id', organizationId)
+          .eq('item_id', itemId)
+          .gt('quantity', 0),
+        freeForm ? readItemElsewhere(supabase, itemId, role) : Promise.resolve(NO_ELSEWHERE),
+        freeForm
+          ? readDestinationWarehouseScope(supabase, {
+              role,
+              organizationId,
+              userId: user?.id ?? null,
+            })
+          : Promise.resolve(UNRESTRICTED),
+      ]);
       if (cancelled) return;
+      if (holdingsRes.error) {
+        setHoldingsUnreadable(true);
+        setLoading(false);
+        return;
+      }
 
       const hs: Holding[] = ((holdingsRes.data ?? []) as unknown[])
         .map((r) => {
@@ -387,6 +445,8 @@ export function MoveStockModal({
 
       setHoldings(hs);
       setDestinations(ds);
+      setElsewhere(elsewhereNow);
+      setDestScope(scopeNow);
       setStorage(recorded);
       const seeded = seedDestinationFromStorage(recorded);
       setFields(seeded.fields);
@@ -445,6 +505,10 @@ export function MoveStockModal({
     moveDestinationChoices(destinations, {
       excludeLocationId: fromId,
       scope: source ? moveDestinationScope(source) : { kind: 'none' },
+      // Owner decision Q4 (0371): a scoped member is offered only warehouses
+      // they can write, plus locations with no warehouse. UI only; the
+      // transfer route still refuses anything else.
+      writableWarehouseIds: destScope.writableIds,
     }),
     selected,
     { fixedPutAway: !!putAwaySourceLocationId },
@@ -456,6 +520,15 @@ export function MoveStockModal({
   // and must say so — an operator looking for the safe way off a rack should
   // find it named in the heading, not only in a chip.
   const offersUnplaced = destChoices.some((d) => d.kind === 'unplaced');
+  // STOCK THIS MEMBER CANNOT MOVE (0371): what the item holds in warehouses
+  // they cannot see. The empty state names it instead of "no stock in any
+  // location", and a non-empty FROM list says the rest is elsewhere. The same
+  // decisions and words as the web transfer dialog (elsewhereSourcesCopy).
+  const elsewhereCopy = elsewhereSourcesCopy({
+    elsewhere,
+    emptyDefault: NO_STOCK_ANYWHERE,
+    holdsSomeHere: holdings.length > 0,
+  });
 
   // ═══ WHAT THE FOUR BOXES DESCRIBE (books) ═══
   // The chip by id while the boxes still equal its columns; otherwise a crate
@@ -763,6 +836,10 @@ export function MoveStockModal({
               <View style={{ paddingVertical: 40, alignItems: 'center' }}>
                 <ActivityIndicator color={c.ink4} />
               </View>
+            ) : holdingsUnreadable ? (
+              <Mono size={13} color={c.ink4} style={{ marginTop: 18, lineHeight: 20 }}>
+                {SHEET_HOLDINGS_UNREADABLE_NOTE}
+              </Mono>
             ) : sourceMissing ? (
               // The tapped worklist row is gone — someone else placed it, or it
               // was consumed. That is a REFRESH, not a different move: silently
@@ -780,12 +857,18 @@ export function MoveStockModal({
               </Mono>
             ) : holdings.length === 0 ? (
               <Mono size={13} color={c.ink4} style={{ marginTop: 18, lineHeight: 20 }}>
-                This item has no stock in any location yet — receive or add stock first.
+                {elsewhereCopy.empty}
               </Mono>
             ) : destChoices.length === 0 && !canCreateLocation ? (
               <Mono size={13} color={c.ink4} style={{ marginTop: 18, lineHeight: 20 }}>
-                No racks or crates to move into, and you don&apos;t have permission to create one.
-                Ask an admin, or create a rack on the web.
+                {destScope.unreadable ? (
+                  DESTINATION_ACCESS_UNREADABLE_NOTE
+                ) : (
+                  <>
+                    No racks or crates to move into, and you don&apos;t have permission to create
+                    one. Ask an admin, or create a rack on the web.
+                  </>
+                )}
               </Mono>
             ) : (
               <ScrollView
@@ -857,9 +940,25 @@ export function MoveStockModal({
                       ))}
                     </View>
                   )}
+                  {/* 0371: the rest of the item's stock is in warehouses this
+                      member cannot move from, or could not be looked up. Body
+                      copy, so no text-size cap. */}
+                  {!fixedSource && elsewhereCopy.note ? (
+                    <Mono size={11} color={c.ink4} style={{ lineHeight: 16 }}>
+                      {elsewhereCopy.note}
+                    </Mono>
+                  ) : null}
                 </View>
 
                 <View style={{ gap: 6, marginBottom: 16 }}>
+                  {/* Owner decision Q4 (0371): destinations are narrowed to the
+                      member's writable warehouses. When those could not be read,
+                      the narrowed list is not presented as complete. */}
+                  {destScope.unreadable ? (
+                    <Mono size={11} color={ACCENT.crit} style={{ lineHeight: 16 }}>
+                      {DESTINATION_ACCESS_UNREADABLE_NOTE}
+                    </Mono>
+                  ) : null}
                   <Mono size={10} tracking={0.12} upper color={c.ink4}>
                     {offersUnplaced
                       ? isBook

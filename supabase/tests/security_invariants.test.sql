@@ -55,7 +55,9 @@
 --            (or `alter function ... reset search_path` on an existing one).
 --
 -- INV-29 and INV-30 need no hand recipe: they plant their own probes and are
--- the standing proof that INV-25/26 can still fail.
+-- the standing proof that INV-25/26 can still fail. The same holds for
+-- INV-32, INV-34 and INV-36 (0371), the controls for INV-31, INV-33 and
+-- INV-35.
 --
 -- Pure catalog introspection — no fixtures, no seeded rows, no roles switched.
 -- `begin`/`rollback` for house consistency and so the temporary allowlist
@@ -64,7 +66,7 @@
 
 begin;
 
-select plan(30);
+select plan(36);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -199,6 +201,35 @@ insert into _sec_inv_public_bucket_allow (id, why) values
 -- finding to be defended, never a default.
 create temporary table _sec_inv_path_check_gap (relname text, attname text, why text not null,
   primary key (relname, attname));
+
+-- ── F. SECURITY DEFINER functions in `ledger` that `authenticated` may execute
+--       WITHOUT an authorization token in their own body (0371) ──────────────
+--
+-- INV-25 sweeps `public` only. The `ledger` schema (0359) is not exposed by
+-- PostgREST, but `authenticated` holds USAGE on it and EXECUTE on its bodies,
+-- because the INVOKER public wrappers call into it as the user. A DEFINER
+-- function there is reachable from any INVOKER code path the user can start,
+-- so it needs its own gate exactly as a public one does (the 0346 lesson).
+-- 0371 added the first DEFINER writer there (ledger.apply_holding_delta); INV-31
+-- makes the rule a catalog property. Same discipline as allowlist E: an entry
+-- must be read-only (INV-31 withdraws it the day it writes) and defended here.
+create temporary table _sec_inv_ledger_secdef_nogate_allow (proname text primary key, why text not null);
+insert into _sec_inv_ledger_secdef_nogate_allow (proname, why) values
+  ('cycle_count_line_superseded', 'boolean read of other counts'' movements for ledger.post_cycle_count (0369); answers only inside a ledger transaction (ledger.active()), writes nothing');
+
+-- ── G. Tables whose SELECT is warehouse-scoped but that carry a permissive
+--       FOR ALL policy (0371) ────────────────────────────────────────────────
+--
+-- A FOR ALL policy's USING clause also applies to SELECT, and permissive
+-- policies OR together, so a FOR ALL write policy on a table whose SELECT
+-- policy is warehouse-scoped silently widens that SELECT to everyone the
+-- write policy admits. That is exactly how staff read every warehouse's
+-- item_stock_levels until 0371. INV-35 forbids the shape; an entry here must
+-- say why its FOR ALL USING cannot widen reads, or record a known gap.
+create temporary table _sec_inv_forall_on_scoped_allow (relname text primary key, why text not null);
+insert into _sec_inv_forall_on_scoped_allow (relname, why) values
+  ('warehouses',      'warehouses_admin_write USING is has_org_role(admin), narrower than warehouses_select (member AND (manager+ OR user_can_access_warehouse read)), so it cannot widen reads'),
+  ('purchase_orders', 'KNOWN GAP, deferred to 0372: purchase_orders_write (manager OR purchase_orders:manage) widens reads past purchase_orders:read and the warehouse scope. A plain split breaks PO numbering (next_po_number is INVOKER and counts only visible POs), so it needs its own prerequisite');
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -903,6 +934,260 @@ select is(
 );
 
 delete from _sec_inv_auth_secdef_nogate_allow where why like 'control probe:%';
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 11. THE `ledger` SCHEMA IS SWEPT TOO (0371)
+--
+-- INV-25 looks at `public` only, because that is what PostgREST publishes. The
+-- ledger schema is not published, but it is not private either: authenticated
+-- holds USAGE and EXECUTE there, because the INVOKER public wrappers call the
+-- ledger bodies as the user. A SECURITY DEFINER function in `ledger` with no
+-- authorization in its body is therefore one INVOKER call away from any
+-- signed-in user. 0371's ledger.apply_holding_delta is gated in its body; this
+-- sweep is what keeps the next one honest.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- INV-31. The sweep, plus allowlist F's own audit (no stale entry, no entry
+-- whose body writes). Offenders are named in the failure output.
+select is(
+  (select coalesce(string_agg(x, ', ' order by x collate "C"), '') from (
+     select 'ungated: ledger.' || p.proname as x
+       from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'ledger'
+        and p.prosecdef
+        and p.prorettype <> 'trigger'::regtype
+        and has_function_privilege('authenticated', p.oid, 'execute')
+        and p.prosrc !~* '(auth\.uid|has_org_role|has_permission|is_org_member)'
+        and p.proname not in (select proname from _sec_inv_ledger_secdef_nogate_allow)
+     union all
+     select 'stale or writing allowlist-F entry: ' || a.proname
+       from _sec_inv_ledger_secdef_nogate_allow a
+      where not exists (
+              select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+               where n.nspname = 'ledger' and p.proname = a.proname and p.prosecdef)
+         or exists (
+              select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+               where n.nspname = 'ledger' and p.proname = a.proname and p.prosecdef
+                 and p.prosrc ~* '\m(insert\s+into|update\s+public\.|delete\s+from)\M')) v),
+  '',
+  'INV-31: every authenticated-EXECUTE SECURITY DEFINER function in ledger gates in its body or is an allowlisted read-only predicate'
+);
+
+-- INV-32. VACUITY + MUTATION CONTROL for INV-31: the population is non-empty,
+-- the ungated detector fires on a planted probe of the 0346 shape (in
+-- ledger), and the allowlist audit fires on a planted stale entry. Counts are
+-- narrowed to the probe names so this stays truthful on a day INV-31 is
+-- legitimately red for something else.
+create function ledger._sec_inv_probe_ungated_ledger_secdef() returns int
+  language sql
+  security definer
+  set search_path = public
+  as $probe$ select 1 $probe$;
+revoke all on function ledger._sec_inv_probe_ungated_ledger_secdef() from public, anon;
+grant execute on function ledger._sec_inv_probe_ungated_ledger_secdef() to authenticated;
+insert into _sec_inv_ledger_secdef_nogate_allow (proname, why) values
+  ('_sec_inv_probe_absent_ledger_function', 'control probe: stale entry; deleted below');
+
+select ok(
+  (select count(*)
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'ledger'
+      and p.prosecdef
+      and p.prorettype <> 'trigger'::regtype
+      and has_function_privilege('authenticated', p.oid, 'execute')) >= 3
+  and
+  (select count(*)::int
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'ledger'
+      and p.prosecdef
+      and p.prorettype <> 'trigger'::regtype
+      and has_function_privilege('authenticated', p.oid, 'execute')
+      and p.prosrc !~* '(auth\.uid|has_org_role|has_permission|is_org_member)'
+      and p.proname not in (select proname from _sec_inv_ledger_secdef_nogate_allow)
+      and p.proname = '_sec_inv_probe_ungated_ledger_secdef') = 1
+  and
+  (select count(*)::int
+     from _sec_inv_ledger_secdef_nogate_allow a
+    where a.proname = '_sec_inv_probe_absent_ledger_function'
+      and not exists (
+            select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+             where n.nspname = 'ledger' and p.proname = a.proname and p.prosecdef)) = 1,
+  'INV-32 control: the ledger sweep has definer functions to judge, its ungated detector fires on a planted probe, and its allowlist audit fires on a stale entry'
+);
+
+drop function ledger._sec_inv_probe_ungated_ledger_secdef();
+delete from _sec_inv_ledger_secdef_nogate_allow where why like 'control probe:%';
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 12. NO API-CALLABLE SECURITY INVOKER CODE TOUCHES item_stock_levels (0371)
+--
+-- item_stock_levels_select is warehouse-scoped for every role below manager.
+-- A SECURITY INVOKER function that reads or writes the table runs under that
+-- scope: a conditional UPDATE outside it matches 0 rows (a wrong
+-- 'insufficient_stock'), an ON CONFLICT upsert raises a raw RLS violation, and
+-- a sum comes up short with no error. 0331 made the rule (make every RPC read
+-- of the table independent of the caller's row visibility, then narrow) and
+-- 0371 finished it: ledger.adjust_stock / ledger.transfer_stock write through
+-- the SECURITY DEFINER ledger.apply_holding_delta. This turns the rule into a
+-- catalog property. Comments are stripped first (ledger.post_cycle_count
+-- names the table in a comment only).
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- INV-33. The sweep.
+select is(
+  (select coalesce(string_agg(n.nspname || '.' || p.proname, ', ' order by n.nspname, p.proname), '')
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname in ('public', 'ledger')
+      and not p.prosecdef
+      and has_function_privilege('authenticated', p.oid, 'execute')
+      and regexp_replace(regexp_replace(p.prosrc, '/\*.*?\*/', '', 'g'), '--[^\n]*', '', 'g')
+          ~* '\mitem_stock_levels\M'),
+  '',
+  'INV-33: no SECURITY INVOKER function authenticated can execute (public or ledger) references item_stock_levels'
+);
+
+-- INV-34. VACUITY + MUTATION CONTROL for INV-33, both directions: the
+-- population is non-empty, a planted INVOKER reader of the table IS caught,
+-- and a planted function that names the table only in a comment is NOT (the
+-- comment stripping still works, which is what keeps post_cycle_count off the
+-- list).
+create function public._sec_inv_probe_invoker_holdings() returns bigint
+  language sql
+  security invoker
+  set search_path = public
+  as $probe$ select count(*) from public.item_stock_levels $probe$;
+create function public._sec_inv_probe_invoker_comment_only() returns int
+  language plpgsql
+  security invoker
+  set search_path = public
+  as $probe$
+begin
+  -- names public.item_stock_levels in a comment only
+  return 1;
+end;
+$probe$;
+revoke all on function public._sec_inv_probe_invoker_holdings() from public, anon;
+revoke all on function public._sec_inv_probe_invoker_comment_only() from public, anon;
+grant execute on function public._sec_inv_probe_invoker_holdings() to authenticated;
+grant execute on function public._sec_inv_probe_invoker_comment_only() to authenticated;
+
+select is(
+  (select coalesce(string_agg(p.proname, ', ' order by p.proname), '')
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname in ('public', 'ledger')
+      and not p.prosecdef
+      and has_function_privilege('authenticated', p.oid, 'execute')
+      and regexp_replace(regexp_replace(p.prosrc, '/\*.*?\*/', '', 'g'), '--[^\n]*', '', 'g')
+          ~* '\mitem_stock_levels\M'
+      and p.proname in ('_sec_inv_probe_invoker_holdings', '_sec_inv_probe_invoker_comment_only'))
+  || '|' ||
+  ((select count(*)
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'ledger')
+       and not p.prosecdef
+       and has_function_privilege('authenticated', p.oid, 'execute')) > 20)::text,
+  '_sec_inv_probe_invoker_holdings|true',
+  'INV-34 control: the INVOKER sweep has functions to judge, catches a planted reader, and ignores a comment-only mention'
+);
+
+drop function public._sec_inv_probe_invoker_holdings();
+drop function public._sec_inv_probe_invoker_comment_only();
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 13. NO FOR ALL POLICY WIDENS A WAREHOUSE-SCOPED SELECT (0371)
+--
+-- A permissive FOR ALL policy applies its USING clause to SELECT as well, and
+-- permissive policies OR together. On a table whose SELECT policy is
+-- warehouse-scoped, a FOR ALL write policy therefore hands everyone it admits
+-- an unscoped read. item_stock_levels_write did exactly that for staff until
+-- 0371 split it into INSERT and UPDATE policies. A table counts as
+-- warehouse-scoped when a permissive SELECT policy's qual calls one of the
+-- warehouse-scope helpers. Allowlist G holds the defended exceptions and the
+-- one known gap; an entry that no longer matches the shape is stale.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- INV-35. The sweep, plus allowlist G's stale-entry audit.
+select is(
+  (select coalesce(string_agg(x, ', ' order by x collate "C"), '') from (
+     select 'FOR ALL on a warehouse-scoped table: ' || a.tablename || '.' || a.policyname as x
+       from pg_policies a
+      where a.schemaname = 'public'
+        and a.cmd = 'ALL'
+        and a.permissive = 'PERMISSIVE'
+        and a.roles && array['authenticated', 'public', 'anon']::name[]
+        and exists (
+              select 1 from pg_policies s
+               where s.schemaname = a.schemaname and s.tablename = a.tablename
+                 and s.cmd = 'SELECT' and s.permissive = 'PERMISSIVE'
+                 and s.qual ~* '(my_warehouse_ids|user_can_access_warehouse|user_can_access_inventory|rls_inv_read_|rls_exc_holding_location_ids)')
+        and a.tablename not in (select relname from _sec_inv_forall_on_scoped_allow)
+     union all
+     select 'stale allowlist-G entry: ' || g.relname
+       from _sec_inv_forall_on_scoped_allow g
+      where not exists (
+              select 1 from pg_policies a
+               where a.schemaname = 'public' and a.tablename = g.relname
+                 and a.cmd = 'ALL' and a.permissive = 'PERMISSIVE')
+         or not exists (
+              select 1 from pg_policies s
+               where s.schemaname = 'public' and s.tablename = g.relname
+                 and s.cmd = 'SELECT' and s.permissive = 'PERMISSIVE'
+                 and s.qual ~* '(my_warehouse_ids|user_can_access_warehouse|user_can_access_inventory|rls_inv_read_|rls_exc_holding_location_ids)')) v),
+  '',
+  'INV-35: no permissive FOR ALL policy sits on a table whose SELECT is warehouse-scoped, except the allowlisted ones'
+);
+
+-- INV-36. VACUITY + MUTATION CONTROL for INV-35: the scoped population is
+-- non-empty, a planted table with a warehouse-scoped SELECT and a FOR ALL write
+-- policy IS caught, and a planted stale allowlist entry IS caught. Everything
+-- planted is dropped straight after (and the enclosing rollback is the second
+-- belt).
+create table public._sec_inv_probe_scoped (id uuid primary key, organization_id uuid, warehouse_id uuid);
+alter table public._sec_inv_probe_scoped enable row level security;
+create policy _sec_inv_probe_scoped_select on public._sec_inv_probe_scoped for select to authenticated
+  using (warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw));
+create policy _sec_inv_probe_scoped_write on public._sec_inv_probe_scoped for all to authenticated
+  using ((select public.has_org_role(organization_id, 'staff')));
+insert into _sec_inv_forall_on_scoped_allow (relname, why) values
+  ('_sec_inv_probe_absent_table', 'control probe: stale entry; deleted below');
+
+select is(
+  (select coalesce(string_agg(x, ', ' order by x collate "C"), '') from (
+     select 'caught: ' || a.tablename as x
+       from pg_policies a
+      where a.schemaname = 'public'
+        and a.cmd = 'ALL'
+        and a.permissive = 'PERMISSIVE'
+        and a.roles && array['authenticated', 'public', 'anon']::name[]
+        and exists (
+              select 1 from pg_policies s
+               where s.schemaname = a.schemaname and s.tablename = a.tablename
+                 and s.cmd = 'SELECT' and s.permissive = 'PERMISSIVE'
+                 and s.qual ~* '(my_warehouse_ids|user_can_access_warehouse|user_can_access_inventory|rls_inv_read_|rls_exc_holding_location_ids)')
+        and a.tablename not in (select relname from _sec_inv_forall_on_scoped_allow)
+        and a.tablename = '_sec_inv_probe_scoped'
+     union all
+     select 'stale: ' || g.relname
+       from _sec_inv_forall_on_scoped_allow g
+      where g.relname = '_sec_inv_probe_absent_table'
+        and not exists (
+              select 1 from pg_policies a
+               where a.schemaname = 'public' and a.tablename = g.relname
+                 and a.cmd = 'ALL' and a.permissive = 'PERMISSIVE')
+     union all
+     select 'scoped tables: ' || (count(distinct s.tablename) >= 5)::text
+       from pg_policies s
+      where s.schemaname = 'public' and s.cmd = 'SELECT' and s.permissive = 'PERMISSIVE'
+        and s.qual ~* '(my_warehouse_ids|user_can_access_warehouse|user_can_access_inventory|rls_inv_read_|rls_exc_holding_location_ids)') v),
+  'caught: _sec_inv_probe_scoped, scoped tables: true, stale: _sec_inv_probe_absent_table',
+  'INV-36 control: the FOR ALL sweep has scoped tables to judge, catches a planted FOR ALL on a scoped table, and catches a stale allowlist entry'
+);
+
+drop table public._sec_inv_probe_scoped;
+delete from _sec_inv_forall_on_scoped_allow where why like 'control probe:%';
 
 select * from finish();
 rollback;

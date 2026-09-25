@@ -194,6 +194,16 @@ PGTAP_TESTS=(
   # item_stock_levels.positive_since is stamped by a trigger that ignores
   # supplied values and leaves the S1 ledger guard in force.
   supabase/tests/0370_exception_occurrences.test.sql
+  # Holdings scope for staff (0371): the FOR ALL write policy that gave staff
+  # every warehouse's holdings is split into INSERT + UPDATE policies that
+  # grant no SELECT; adjust_stock / transfer_stock write holdings through the
+  # gated SECURITY DEFINER ledger.apply_holding_delta, so no stock RPC depends
+  # on the caller's row visibility (proved with a SELECT policy that hides
+  # every holding); every staff RPC path keeps its error codes; the read
+  # helpers item_holdings_elsewhere (aggregates only, readable items only, no
+  # rows for managers) and location_stock_census (manager or locations:manage)
+  # disclose nothing across orgs.
+  supabase/tests/0371_holdings_staff_scope.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql

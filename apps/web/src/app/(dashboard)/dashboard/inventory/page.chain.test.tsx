@@ -45,6 +45,10 @@ const h = vi.hoisted(() => ({
   access: null as null | Record<string, unknown>,
   /** Makes the request-cached warehouse NAME read report a failure. */
   namesFailed: false,
+  /** Extra fields on the live list's answer (0371: elsewhere figures). */
+  liveExtra: null as null | Record<string, unknown>,
+  /** The live path's placementBreakdown answer. */
+  placementMap: null as null | Map<string, unknown[]>,
 }));
 
 const m = vi.hoisted(() => ({
@@ -62,6 +66,7 @@ const m = vi.hoisted(() => ({
   loadCountingUnitsForOrg: vi.fn(),
   tableProps: vi.fn(),
   emptyStateProps: vi.fn(),
+  noticeProps: vi.fn(),
 }));
 
 vi.mock('next/link', async () => {
@@ -78,7 +83,10 @@ vi.mock('@/components/ui/button', () => ({
   Button: ({ children }: { children: unknown }) => children,
 }));
 vi.mock('@/components/dashboard/scoped-warehouse-notice', () => ({
-  ScopedWarehouseNotice: () => null,
+  ScopedWarehouseNotice: (props: Record<string, unknown>) => {
+    m.noticeProps(props);
+    return null;
+  },
 }));
 vi.mock('@/components/inventory/clear-warehouse-filter-button', () => ({
   ClearWarehouseFilterButton: () => null,
@@ -144,7 +152,7 @@ vi.mock('@/server/services/inventory', () => ({
       listDistinctRacks: m.listDistinctRacks,
       list: m.inventoryList,
       countExpected: vi.fn(async () => 0),
-      placementBreakdown: vi.fn(async () => new Map()),
+      placementBreakdown: vi.fn(async () => h.placementMap ?? new Map()),
     })),
   },
 }));
@@ -175,6 +183,8 @@ vi.mock('@/server/services/suppliers', () => ({
 }));
 vi.mock('@/server/services/tags', () => ({ TagsService: lookupSvc('list') }));
 vi.mock('@/server/services/charters', () => ({ ChartersService: lookupSvc('list') }));
+
+import { ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
 
 import InventoryPage from './page';
 
@@ -215,6 +225,8 @@ beforeEach(() => {
   h.listTotal = 2;
   h.access = null;
   h.namesFailed = false;
+  h.liveExtra = null;
+  h.placementMap = null;
 
   m.requireOrgContext.mockImplementation(() =>
     logged('ctx', async () => {
@@ -258,6 +270,7 @@ beforeEach(() => {
       items: h.listTotal ? [ROW] : [],
       total: h.listTotal,
       valueOnHand: 10,
+      ...(h.liveExtra ?? {}),
     })),
   );
   m.getWarehouseAccess.mockImplementation(() =>
@@ -341,6 +354,62 @@ describe('Items page: the table starts with the header, not after it', () => {
     expect(m.loadInventoryLookups).not.toHaveBeenCalled();
     expect(m.loadInventoryTrendBuckets).not.toHaveBeenCalled();
     expect(m.tableProps).toHaveBeenCalledTimes(1);
+  });
+
+  // ═══ STOCK IN OTHER WAREHOUSES (0371), as the page wires it ═══
+  // Each of these fails if the page stops doing its part: the list must ask
+  // for the hidden stock, the table must get the "In other warehouses" row,
+  // and a failed read must be said above the table.
+  it('staff: the live list asks for the stock in other warehouses (withElsewhere)', async () => {
+    h.role = 'staff';
+    render(await callPage());
+    expect(m.inventoryList).toHaveBeenCalledTimes(1);
+    expect(m.inventoryList.mock.calls[0]![0]).toMatchObject({ withElsewhere: true });
+  });
+
+  it('staff: the table gets an "In other warehouses" row, and the rows add up to on hand', async () => {
+    h.role = 'staff';
+    h.liveExtra = { items: [{ ...ROW, elsewhere_quantity: 3 }] };
+    h.placementMap = new Map([
+      ['item-1', [{ locationId: 'loc-1a', label: '1-A', kind: 'rack', quantity: 2 }]],
+    ]);
+    render(await callPage());
+    const rows = m.tableProps.mock.calls[0]![0].items as Array<{
+      rowKey: string;
+      line_quantity: number;
+      placement_label: string | null;
+      placement_kind?: string;
+    }>;
+    expect(
+      rows.map((r) => [r.rowKey, r.line_quantity, r.placement_label, r.placement_kind]),
+    ).toEqual([
+      ['item-1:loc-1a', 2, '1-A', 'rack'],
+      ['item-1:elsewhere', 3, 'In other warehouses', 'elsewhere'],
+    ]);
+    expect(rows.reduce((sum, r) => sum + r.line_quantity, 0)).toBe(ROW.quantity_on_hand);
+  });
+
+  it('staff: a failed elsewhere read is SAID above the table, never left as complete figures', async () => {
+    h.role = 'staff';
+    h.liveExtra = { elsewhereUnavailable: true };
+    const { container } = render(await callPage());
+    expect(m.tableProps).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[role="status"]')?.textContent).toBe(
+      ELSEWHERE_UNAVAILABLE_NOTE,
+    );
+  });
+
+  it('staff: nothing is added when the elsewhere read succeeded', async () => {
+    h.role = 'staff';
+    h.liveExtra = { elsewhereUnavailable: false };
+    const { container } = render(await callPage());
+    expect(container.querySelector('[role="status"]')).toBeNull();
+  });
+
+  it('the scoped-warehouse line carries the placement sentence on the Items page', async () => {
+    h.role = 'staff';
+    render(await callPage());
+    expect(m.noticeProps).toHaveBeenCalledWith(expect.objectContaining({ placementNote: true }));
   });
 
   it('shared-cache reads wait for the org context (and its role gate)', async () => {

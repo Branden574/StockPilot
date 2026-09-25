@@ -12,6 +12,8 @@ import { PerfUseful } from '@/components/perf/perf-useful';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { Button } from '@/components/ui/button';
 import { can, isManagerOrAbove, type Role } from '@stockpilot/core';
+import { expandPlacementRows } from '@/lib/placements';
+import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-unavailable-notice';
 import { deriveInstantView, instantStateFromPageParams } from '@/lib/inventory/instant-mode';
 import {
   ALL_WAREHOUSES_KEY,
@@ -205,7 +207,7 @@ export default async function InventoryPage({
           {/* Warehouse-scoped users (staff/viewer): name the scope so an
               empty-looking list reads as "you're narrowed", not "broken".
               Renders null for all-access roles. */}
-          <ScopedWarehouseNotice />
+          <ScopedWarehouseNotice placementNote />
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {/* Inventory pages use ?status=active|archived|discontinued|all
@@ -270,6 +272,11 @@ type SectionData = {
   /** ACTIVE items awaiting first receipt (mig 0277) — the "Expected"
    *  chip's count badge (server mode; instant mode derives locally). */
   expectedCount: number;
+  /** Live (staff/viewer) path only: the stock-in-other-warehouses read failed
+   *  (0371), so the placement figures cover the viewer's own warehouses only
+   *  and the page says so. Absent on the cached manager path, which sees every
+   *  holding. */
+  elsewhereUnavailable?: boolean;
 };
 
 /**
@@ -700,6 +707,9 @@ async function inventoryTableSection({
           sort,
           limit: PAGE_SIZE,
           offset: (page - 1) * PAGE_SIZE,
+          // The placement columns add holdings up next to on hand, so they
+          // need the stock a staff member or viewer cannot see (0371).
+          withElsewhere: true,
         }),
       ),
       // Expected-chip badge count (mig 0277) — one HEAD count on the
@@ -791,6 +801,7 @@ async function inventoryTableSection({
       trends,
       placementMap,
       expectedCount: expectedCountLive,
+      elsewhereUnavailable: inventory.elsewhereUnavailable,
     };
   }
 
@@ -799,34 +810,11 @@ async function inventoryTableSection({
   const placementMap = data.placementMap;
 
   // ONE LINE PER RACK: expand each item into a row per holding location. The
-  // Chromebook placed 250→1-A and 250→2-C becomes two rows. `line_quantity` is
-  // that rack's qty (shown in ON HAND); `quantity_on_hand` is left as the item
-  // TOTAL so status/coverage/sparkline stay item-level and the value footer
-  // (server-computed) isn't double-counted. Items with no holdings fall back to
-  // a single row at their own on-hand. Single-location items stay one row.
-  const placementRows = itemsWithImages.flatMap((item) => {
-    const ps = placementMap.get(item.id) ?? [];
-    // Both branches return the SAME row shape (same keys + property types) so
-    // the result is a single uniform array, not a union.
-    if (ps.length === 0) {
-      return [
-        {
-          ...item,
-          rowKey: item.id,
-          line_quantity: item.quantity_on_hand,
-          placement_label: null as string | null,
-          placement_kind: undefined as string | undefined,
-        },
-      ];
-    }
-    return ps.map((p) => ({
-      ...item,
-      rowKey: `${item.id}:${p.locationId}`,
-      line_quantity: p.quantity,
-      placement_label: p.label as string | null,
-      placement_kind: p.kind as string | undefined,
-    }));
-  });
+  // Chromebook placed 250→1-A and 250→2-C becomes two rows, and for a staff
+  // member or viewer the stock in warehouses they cannot see is one more
+  // row, counted and never named (0371), so an item's rows add up to its on
+  // hand. See expandPlacementRows.
+  const placementRows = expandPlacementRows(itemsWithImages, placementMap);
 
   const lookups = {
     categories: new Map(data.categories.map((c) => [c.id, { name: c.name, color: c.color }])),
@@ -879,7 +867,7 @@ async function inventoryTableSection({
   // instant branch that fell through (over-cap org or loader failure).
   const productGroupUnits = await (countingUnitsPromise ?? loadCountingUnitsForOrg());
 
-  return (
+  const table = (
     <InventoryTable
       items={placementRows}
       total={data.total}
@@ -905,6 +893,13 @@ async function inventoryTableSection({
       expectedCount={data.expectedCount}
       productGroupUnits={productGroupUnits}
     />
+  );
+  // Never the partial figures presented as complete: when the stock in other
+  // warehouses could not be read, the page says so above the table (0371).
+  return (
+    <ElsewhereUnavailableNotice unavailable={data.elsewhereUnavailable}>
+      {table}
+    </ElsewhereUnavailableNotice>
   );
 }
 

@@ -42,6 +42,7 @@ import {
   readDisplayStorage,
   reasonWithoutRefLabel,
   resolveMovementRefReason,
+  type ItemElsewhere,
   type RackHoldingLike,
   type Role,
 } from '@stockpilot/core';
@@ -93,7 +94,8 @@ import {
   applyNoteToMovements,
   normalizeMovementNote,
 } from '@/lib/movement-note';
-import { buildPlacementRows } from '@/lib/placement-rows';
+import { readItemElsewhere } from '@/lib/holdings-elsewhere';
+import { buildPlacementRows, elsewhereUnavailableNote } from '@/lib/placement-rows';
 import {
   SERIAL_STATUSES,
   SERIAL_STATUS_LABELS,
@@ -171,6 +173,12 @@ interface Item {
    *  so it hid the correct label to print the stale one. Carries
    *  `locations.kind`, without which the crate rule cannot fire. */
   rackHoldings: RackHoldingLike[];
+  /** Since 0371 `rackHoldings` are only the holdings this member can SEE (a
+   *  staff member or viewer: their own warehouses, plus locations with no
+   *  warehouse). This is the rest, as totals from item_holdings_elsewhere:
+   *  'none' for a manager (no call is made), 'unavailable' when the read
+   *  failed, which the location card says rather than hiding. */
+  elsewhere: ItemElsewhere;
 }
 
 interface MovementRow {
@@ -535,6 +543,18 @@ export default function ItemDetail() {
 
   const load = React.useCallback(async () => {
     if (!id) return;
+    // STOCK IN WAREHOUSES THIS MEMBER CANNOT SEE (0371). It needs only the id,
+    // so it starts NOW, alongside the item read and well before the holdings
+    // read it completes: never a request chained after another. It never
+    // rejects; a failure resolves 'unavailable', and the card says so.
+    //
+    // The role decides whether it is needed at all (managers and above skip
+    // it). It is normally known at mount (useRole serves a shared cache and
+    // re-reads it in the background once it is due, so a demotion reaches
+    // this screen: `role` is a dependency of this load, which then re-runs);
+    // a load that runs before it is known makes the call, and a manager's
+    // answer is simply empty.
+    const elsewhereRead = readItemElsewhere(supabase, id, role);
     const { data } = await supabase
       .from('inventory_items')
       .select(
@@ -603,7 +623,7 @@ export default function ItemDetail() {
     // Serial count rides the same round trip — a cheap head-only count so
     // the Serials card can show for items that hold registry rows even
     // when tracking_type isn't 'serial' (e.g. tracking switched off later).
-    const [whResp, chResp, serialResp, holdingResp] = await Promise.all([
+    const [whResp, chResp, serialResp, holdingResp, elsewhere] = await Promise.all([
       whId
         ? supabase.from('warehouses').select('name').eq('id', whId).maybeSingle()
         : Promise.resolve(null),
@@ -625,6 +645,7 @@ export default function ItemDetail() {
         .eq('item_id', r.id as string)
         .in('locations.kind', ['rack', 'crate'])
         .gt('quantity', 0),
+      elsewhereRead,
     ]);
     const rackHoldings: RackHoldingLike[] = ((holdingResp?.data ?? []) as unknown as {
       quantity: number;
@@ -689,8 +710,9 @@ export default function ItemDetail() {
       grade,
       imageUrl,
       rackHoldings,
+      elsewhere,
     });
-  }, [id, router]);
+  }, [id, router, role]);
 
   /**
    * Fetches ONE page of `stock_movements` (SerialsCard "Load more" pattern:
@@ -1611,24 +1633,37 @@ export default function ItemDetail() {
                 grade: item.grade,
                 binLocation: item.bin_location,
                 holdings: item.rackHoldings,
+                elsewhere: item.elsewhere,
               });
-              if (rows.length === 0) return null;
+              // 0371: a failed stock-in-other-warehouses read is SAID, never
+              // left for the rows to present a partial view as the whole.
+              const unavailableNote = elsewhereUnavailableNote(item.elsewhere);
+              if (rows.length === 0 && !unavailableNote) return null;
               return (
                 <>
-                  <Card padding={0}>
-                    {rows.map((row, i) => (
-                      <React.Fragment key={row.label}>
-                        {i > 0 ? <Hair inset={20} /> : null}
-                        <MetaRow label={row.label} value={row.value} dot={row.dot} />
-                      </React.Fragment>
-                    ))}
-                  </Card>
+                  {rows.length > 0 ? (
+                    <Card padding={0}>
+                      {rows.map((row, i) => (
+                        <React.Fragment key={row.label}>
+                          {i > 0 ? <Hair inset={20} /> : null}
+                          <MetaRow label={row.label} value={row.value} dot={row.dot} />
+                        </React.Fragment>
+                      ))}
+                    </Card>
+                  ) : null}
+                  {unavailableNote ? (
+                    <Body muted size={12.5} style={{ textAlign: 'center' }}>
+                      {unavailableNote}
+                    </Body>
+                  ) : null}
                   {/* Task 4: warehouse/charter/location/rack are PER-PLACEMENT —
                       they describe just this row, not the whole SKU. */}
-                  <Body muted size={11} style={{ textAlign: 'center' }}>
-                    This placement only — describes just this rack/charter, not other placements of
-                    this SKU.
-                  </Body>
+                  {rows.length > 0 ? (
+                    <Body muted size={11} style={{ textAlign: 'center' }}>
+                      This placement only — describes just this rack/charter, not other placements
+                      of this SKU.
+                    </Body>
+                  ) : null}
                 </>
               );
             })()}

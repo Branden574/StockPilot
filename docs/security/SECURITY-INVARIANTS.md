@@ -17,7 +17,14 @@
      0346/0350 as they stand at that date, NOT out of a live catalog; the
      reproduce query beside INV-B3 is how you check them against one. The
      assertion counts in section 10 were re-derived from `select plan(30)` in
-     the same file. Nothing else in this document was re-verified. -->
+     the same file. Nothing else in this document was re-verified.
+
+     AMENDED 2026-09-25 (0371, staff holdings scope): AR-2's "What it
+     changes" and "Pinned at" were rewritten (staff are now narrowed too), and
+     INV-B4, INV-C3 and INV-C4 were added with their assertions INV-31..36.
+     The catalog facts quoted in those entries were read out of a local
+     Postgres at migration 0371; the assertion count in section 10 was
+     re-derived from `select plan(36)`. -->
 
 # Security invariants
 
@@ -396,6 +403,32 @@ select p.proname,
  order by 3, 1;
 ```
 
+### INV-B4 — the same rule holds in the `ledger` schema
+
+- **Invariant**: every `SECURITY DEFINER` function in `ledger` that
+  `authenticated` can execute names an authorization gate in its own body, or
+  is on **allowlist F** (`_sec_inv_ledger_secdef_nogate_allow`), every entry of
+  which is a read-only predicate.
+- **Why it matters**: PostgREST does not publish `ledger` (0359), but that
+  schema is not private. `authenticated` holds `USAGE` on it and `EXECUTE` on
+  its bodies, because the `SECURITY INVOKER` public wrappers call them as the
+  user. A definer function there is one invoker call away from any signed-in
+  user. 0371 added the first definer WRITER there,
+  `ledger.apply_holding_delta`, and INV-25 sweeps `public` only, so without
+  this a future ungated ledger writer would be invisible to the suite.
+- **Enforced by**: an in-body gate, the INV-B3 shape. `apply_holding_delta`
+  checks, for a user caller: `ledger.active()` (so it runs only inside a
+  ledger RPC), staff+ of the item's own org, the location in that org, and
+  manager+ or `caller_can_write_location`. The one allowlisted entry,
+  `ledger.cycle_count_line_superseded` (0369), returns a boolean, writes
+  nothing, and answers only inside a ledger transaction.
+- **Tested at**: INV-31 (the sweep, plus allowlist F's own audit: no stale
+  entry, no entry whose body writes) and INV-32 (plants an ungated definer
+  probe in `ledger` and a stale allowlist row; both must be caught). The
+  helper's gate is pinned line by line in
+  [`0371_holdings_staff_scope.test.sql`](../../supabase/tests/0371_holdings_staff_scope.test.sql)
+  (section F), each line killed by its own live mutation.
+
 ---
 
 ## 3. RLS-versus-privilege interaction — the hazard that shapes every fix
@@ -451,6 +484,56 @@ actually fire.
   must keep `authenticated` — and that all five `_notify_recipients` callers are
   `SECURITY DEFINER`, which is the reason closing `authenticated` on that helper
   is safe.
+
+### INV-C3 — no API-callable `SECURITY INVOKER` code touches `item_stock_levels`
+
+- **Invariant**: no function in `public` or `ledger` that `authenticated` can
+  execute is `SECURITY INVOKER` and references `item_stock_levels` in its body
+  (comments stripped).
+- **Why it matters**: the table's SELECT is warehouse-scoped for every role
+  below manager (AR-2). Invoker code runs under that scope, and a statement
+  that reads the row fails in the wrong way when the row is outside it: a
+  conditional `UPDATE` matches 0 rows and the RPC raises its own
+  `insufficient_stock`; an `INSERT ... ON CONFLICT` raises a raw "new row
+  violates row-level security policy"; a sum comes up short with no error at
+  all. The failure is silent or misleading, never a clean refusal.
+- **Enforced by**: every holdings statement runs in `SECURITY DEFINER` code:
+  `ledger.apply_holding_delta` (0371, for `adjust_stock`/`transfer_stock`),
+  `apply_level_delta` (0331), `apply_cycle_count_location_delta`,
+  `_cycle_count_org_stock_sum`, `tg_seed_initial_level` and
+  `compensate_opening_stock`. The invoker ledger bodies keep only the item
+  lock, the gates, the on-hand update and the movement row.
+- **Tested at**: INV-33 (the sweep) and INV-34 (plants an invoker reader,
+  which must be caught, and a function that names the table only in a
+  comment, which must not). Behaviourally, section E of
+  [`0371_holdings_staff_scope.test.sql`](../../supabase/tests/0371_holdings_staff_scope.test.sql)
+  replaces the SELECT policy with one that hides every holding from staff and
+  shows staff adjust and transfer still succeed.
+
+### INV-C4 — no `FOR ALL` policy widens a warehouse-scoped SELECT
+
+- **Invariant**: no permissive `FOR ALL` policy exists on a table whose
+  permissive SELECT policy is warehouse-scoped (its qual calls
+  `my_warehouse_ids`, `user_can_access_warehouse`,
+  `user_can_access_inventory`, an `rls_inv_read_*` helper or
+  `rls_exc_holding_location_ids`), except the entries of **allowlist G**.
+- **Why it matters**: a `FOR ALL` policy's `USING` clause also applies to
+  SELECT, and permissive policies OR together. `item_stock_levels_write`
+  (0202, `FOR ALL`, staff floor) therefore gave every staff member every
+  warehouse's holdings while `item_stock_levels_select` looked scoped. Nothing
+  in the catalog flagged it; it was found by review (2026-09-25) and closed by
+  0371, which split it into `FOR INSERT` and `FOR UPDATE` policies.
+- **Enforced by**: write policies on scoped tables are written per command.
+  Allowlist G holds two entries: `warehouses` (its admin `USING` is narrower
+  than its SELECT, so it cannot widen reads) and `purchase_orders`, a **known
+  gap deferred to 0372** (`purchase_orders_write`, manager or
+  `purchase_orders:manage`, widens reads past `purchase_orders:read` and the
+  warehouse scope; a plain split breaks PO numbering, because
+  `next_po_number` is invoker and counts only visible POs).
+- **Tested at**: INV-35 (the sweep, plus a stale-entry audit of allowlist G)
+  and INV-36 (plants a scoped table with a `FOR ALL` policy and a stale
+  allowlist row; both must be caught). 0371's own test pins the exact policy
+  set on `item_stock_levels` (A1-A4).
 
 ---
 
@@ -750,7 +833,7 @@ it must not.
   `insufficient_stock` (P0001), **not** a 23514 from the constraint firing
   first, and an explicit-location over-draw no longer commits a negative row.
 
-### AR-2 — `item_stock_levels_select` stays org-scoped, not warehouse-scoped — **RESOLVED (0331)**
+### AR-2 — `item_stock_levels_select` stays org-scoped, not warehouse-scoped — **RESOLVED (0331, completed for staff by 0371)**
 
 - **The tempting fix**: narrow the policy to the caller's assigned warehouses,
   matching the warehouse scoping applied elsewhere in wave C.
@@ -762,46 +845,136 @@ it must not.
   fixing, and undetectable without reconciling against physical count.
 - **The prerequisite, and how it was met**: make every RPC read of the table
   independent of the caller's row visibility, then narrow the policy in the
-  same change that inverts the pin. Met in two halves: `0327` routed
+  same change that inverts the pin. Met in three steps: `0327` routed
   `post_cycle_count`'s Σ through the `SECURITY DEFINER` helper
-  `_cycle_count_org_stock_sum`; `0331` made `apply_level_delta` (the last
-  caller-scoped reader — its draw-down loops SELECT the holdings they consume)
-  `SECURITY DEFINER` with an internal gate (staff+ member of the org owning
-  the target item, derived from the item row; null-subject connections are the
-  service path — anon EXECUTE is revoked), then recreated
-  `item_stock_levels_select` in `0322`'s prescribed `purchase_orders_select`
-  shape via the holding's location (`is_org_member` AND (manager+ OR the
-  location's warehouse ∈ `my_warehouse_ids()` OR the location has no
-  warehouse)). `adjust_stock`/`transfer_stock` never SELECT the table — their
-  conditional draws run under the untouched FOR ALL write policy.
-- **What it changes, honestly**: because `item_stock_levels_write` (0202) is
-  `FOR ALL` with a **staff** `USING` floor and permissive policies OR, staff+
-  keep org-wide SELECT visibility through the write policy; the narrowing
-  bites **read-only members** (viewers — the actual warehouse-scoped
-  population in production). Holdings are **charter-blind by design**:
-  `my_warehouse_ids()` ignores charter scoping, so a charter-scoped viewer
-  sees all holdings quantities at their warehouse even where item rows are
-  charter-narrowed — 0322's prescription; anonymous quantities only.
-- **Pinned at (inverted)**: `0322`'s test now asserts the **warehouse-scoped**
+  `_cycle_count_org_stock_sum`; `0331` made `apply_level_delta` (its draw-down
+  loops SELECT the holdings they consume) `SECURITY DEFINER` with an internal
+  gate (staff+ member of the org owning the target item, derived from the item
+  row; null-subject connections are the service path — anon EXECUTE is
+  revoked), then recreated `item_stock_levels_select` in `0322`'s prescribed
+  `purchase_orders_select` shape via the holding's location (`is_org_member`
+  AND (manager+ OR the location's warehouse ∈ `my_warehouse_ids()` OR the
+  location has no warehouse)); `0371` moved the last two caller-scoped
+  statements — `adjust_stock`'s explicit-location upsert and conditional draw,
+  and `transfer_stock`'s draw and destination upsert — into the
+  `SECURITY DEFINER` `ledger.apply_holding_delta`, gated in its body
+  (`ledger.active()`, staff+ of the item's org, location in that org, manager+
+  or `caller_can_write_location`). The two ledger bodies stay
+  `SECURITY INVOKER`: their `SELECT inventory_items ... FOR UPDATE` under the
+  caller's RLS is the per-item authorization.
+- **What it changes, honestly**: until 0371, `item_stock_levels_write` (0202)
+  was `FOR ALL` with a **staff** `USING` floor, and permissive policies OR, so
+  staff+ kept org-wide SELECT visibility through the write policy and 0331's
+  narrowing bit only viewers. 0371 split that policy into
+  `item_stock_levels_insert` and `item_stock_levels_update` (0202's predicates
+  verbatim) which grant no SELECT, so **every role below manager, staff
+  included, now sees only holdings in its assigned warehouses plus holdings at
+  locations with no warehouse**. An unassigned staff member sees only the
+  latter. Two gated `SECURITY DEFINER` read helpers keep screens honest:
+  `item_holdings_elsewhere` gives a scoped member, per item they can read, the
+  Staging / Unplaced / placed totals outside their scope, the ids of the placed
+  locations holding them and how many of those are fine-grained placements
+  (managers get nothing). There is no per-location quantity column, but a
+  total that covers ONE location is that location's quantity (one hidden
+  placed location; or the Staging or Unplaced of a single other warehouse).
+  This is new information for viewers as well as staff. `location_stock_census` gives a manager or
+  a `locations:manage` holder the org-wide count and total at one location for
+  the archive guard. Holdings are still **charter-blind by design**:
+  `my_warehouse_ids()` ignores charter scoping, so a charter-scoped member sees
+  all holdings quantities at their warehouse even where item rows are
+  charter-narrowed — 0322's prescription; anonymous quantities only. **Still
+  open (owner decision, a follow-up)**: a null-location draw (the phone's quick
+  −1, a manual removal in 'any' mode, `complete_picking`) goes through the
+  frozen `apply_level_delta`, which draws the item's stock from any warehouse;
+  the movement row records no from-location. **Also open (label-only parity,
+  deferred by design)**: the phone's Books list, the web scanner lookup's rack
+  holdings (item history dialog) and the count-sheet labels still build their
+  placement LABEL from the holdings a staff member can see, with no "+N in
+  other warehouses" and no "could not load" note. They never drive a write,
+  but a book split between a Main crate and an Annex crate reads as Main-only
+  there, while the web Books list says "+N in other warehouses". The phone
+  Books list can reuse `readHoldingsElsewhere` (in parallel with
+  `readRackHoldings`) when this is picked up.
+- **Rollout (0371)**: the file sets `lock_timeout = '5s'` around its policy
+  changes (ACCESS EXCLUSIVE on `item_stock_levels`); a push that meets a
+  long-running reader fails with 55P03 and is retried, instead of queueing
+  every stock read and write behind it (`holdings-migrations.guard.test.ts`
+  pins this for every migration from 0370 that locks the table).
+- **The web app's side (0371)**: `InventoryService.hiddenHoldingsFor` is the
+  one caller of `item_holdings_elsewhere` (batches of at most 500 ids, in the
+  POST body, started alongside the caller's own holdings read; skipped by
+  ROLE for managers and above). It never throws: a failed read is
+  `{ ok: false }`, never "nothing elsewhere". Guards FAIL CLOSED on it (the
+  single and bulk item archive guards, the book crate prediction and
+  reconciliation, bulk Set rack); displays say "Could not load stock in other
+  warehouses" instead of printing a sum that may be missing a part (item page,
+  Items and Books lists, transfer dialog). The location archive guard decides
+  from `location_stock_census` and uses its own read only to name items. The
+  transfer dialog offers scoped members only destinations they can write
+  (owner decision Q4; `transfer_stock` still enforces it). `list()` asks only
+  when the caller opts in (`withElsewhere`: the Items, Books and Rentals item
+  lists), so search-as-you-type, pickers, exports and AI tools make no extra
+  request; the pages that render the item tables are pinned to opt in. The
+  bulk Set rack split rule and the list's split count add only hidden
+  fine-grained placements (`placed_rack_locations`, classified with the same
+  lists as `isRackShelfLocation`), so a Site in another warehouse no longer
+  makes a single rack holding look split. The location archive refusal says
+  "units in a warehouse you don't manage" when the caller cannot see the
+  location's holdings at all, and "units of items you can't see" only for
+  visible holdings of unreadable items. Every
+  `item_stock_levels` reader under `apps/web/src/server` and `apps/web/src/app`
+  is classified in `holdings-readers.guard.test.ts` (folds the hidden totals,
+  complete by scope, label only, or service client), so a new reader that adds
+  holdings up or decides from them cannot land without folding them in.
+- **The phone's side (0371)**: `apps/mobile/src/lib/holdings-elsewhere.ts` is
+  the phone's one caller of `item_holdings_elsewhere`, through the member's
+  own client, with the same rules (skipped by ROLE for managers and above,
+  where the role comes from `useRole`, whose shared cache is re-read once it
+  is 30 s old and cleared on sign-out, so a demoted manager's phone does not
+  keep skipping (`role-cache.ts`);
+  batches of at most 500 ids in the POST body, started alongside the screen's
+  own reads; never throws; a failure is `'unavailable'`, never "nothing
+  elsewhere", and is not cached). The item screen and the scan sheet add an
+  ELSEWHERE row ("+N in other warehouses") or the "Could not load stock in
+  other warehouses" note, and never let holdings they know are incomplete
+  refute the item's rack label. Move stock and Remove from rack name stock in
+  other warehouses in their empty and partial states, say "Could not load this
+  item's stock" when their own holdings read fails, and Move stock offers a
+  scoped member only destinations in their assigned warehouses plus locations
+  with no warehouse (Q4; read from `user_warehouse_assignments`, the rows the
+  server's write check reads; a failed read narrows and says so). The phone
+  writes still go through `/api/v1/items/[id]/transfer` and `remove-stock`,
+  which enforce all of it. `holdings-elsewhere-wiring.test.ts` pins that no
+  other phone file names the RPC.
+- **Pinned at (inverted)**: `0322`'s test asserts the **warehouse-scoped**
   `qual` verbatim;
   [`0331_ar2_warehouse_scope.test.sql`](../../supabase/tests/0331_ar2_warehouse_scope.test.sql)
-  carries the behavioral halves — viewer narrowing (assigned + null-warehouse
-  rows only), RPC parity for a warehouse-scoped caller (a draw spanning a
-  hidden warehouse still succeeds with identical quantities; a transfer out of
-  a hidden location still works), and the definer/grant structure of
-  `apply_level_delta`. `0318`'s test inverted its `prosecdef = false` pin.
+  carries viewer and (since 0371, test 9 inverted) staff narrowing, RPC parity
+  for a warehouse-scoped caller — now a behavioural kill for an invoker revert
+  of `apply_level_delta`, because the staff caller really is narrowed — and the
+  definer/grant structure of `apply_level_delta`. `0318`'s test inverted its
+  `prosecdef = false` pin.
+  [`0371_holdings_staff_scope.test.sql`](../../supabase/tests/0371_holdings_staff_scope.test.sql)
+  pins the exact policy set, narrowing for six personas, both read helpers
+  (including the complement property: visible + hidden = total), every staff
+  RPC path with its error codes, the helper's gate line by line, and the
+  divergence kill (a SELECT policy that hides every holding from staff, under
+  which staff adjust and transfer still succeed). INV-33 and INV-35 turn the
+  rule into catalog properties.
 
 ### Honest note on where these pins live
 
 Both accepted risks are now **resolved and inverted**. AR-1's pins live in the
 `0322`/`0324` tests (exactly one validated `CHECK`, by name) and `0327`'s test
 (behavioral). AR-2's surviving pins live in `0322`'s test (the warehouse-scoped
-`qual`, verbatim) and `0331`'s test (behavioral parity + structure). None are
-duplicated in `security_invariants.test.sql` — duplicating would invite drift.
+`qual`, verbatim), `0331`'s test (behavioral parity + structure) and `0371`'s
+test (the staff half, the helpers and the divergence kill). None are
+duplicated in `security_invariants.test.sql` — duplicating would invite drift;
+INV-33 and INV-35 there state the general rule, not these pins.
 The cost of not duplicating should be named: **deleting a migration test file
 removes its pins, and nothing in the invariant sweep would notice.** There is no
 way to assert "a test file still exists" from inside pgTAP. Treat `0322`'s,
-`0327`'s and `0331`'s test files as load-bearing.
+`0327`'s, `0331`'s and `0371`'s test files as load-bearing.
 
 ---
 
@@ -867,7 +1040,7 @@ checked.
   permanent: the sweep that would have caught it did not exist on the day the
   first P0 was declared closed.
 - **A high-assurance baseline is implemented and covered by executable
-  invariants**: 30 class-wide assertions in
+  invariants**: 36 class-wide assertions in
   `supabase/tests/security_invariants.test.sql`, plus 38 security-focused pgTAP
   files and 56 security-focused vitest files, gated together as
   `pnpm security:test` and wired into CI.
@@ -876,12 +1049,17 @@ checked.
 - **One known gap is recorded**: five storage-path columns lack the database
   traversal floor (INV-D2). They are in the test's allowlist, so they are visible
   in every CI run rather than forgotten.
+- **One more known gap is recorded (0371)**: `purchase_orders_write` is a
+  `FOR ALL` policy on a warehouse-scoped table, so a member holding
+  `purchase_orders:manage` reads every warehouse's POs (INV-C4). It is on
+  allowlist G as deferred to 0372, so it too is visible in every run.
 - **The tests have been mutation-checked**: a deliberate violation of six
   distinct invariants turned 10 of the 23 assertions that existed at the time
   red, and the database was restored afterwards. The recipes for repeating that
   are in the test header. INV-25 and INV-26, added later, do not rely on that
   one-off exercise: INV-29 and INV-30 plant the violating probes themselves, so
-  those two assertions are mutation-checked on every run.
+  those two assertions are mutation-checked on every run. INV-31, INV-33 and
+  INV-35 (0371) follow the same pattern through INV-32, INV-34 and INV-36.
 - **What this does not establish**: no third-party penetration test has been
   performed, there is no SOC 2 or ISO 27001 process, and there is no bug bounty
   (`SECURITY.md`, "Things we haven't done"). Coverage of the invariants above is

@@ -162,7 +162,7 @@ describe('InventoryService.list', () => {
     );
 
     const result = await svc.list();
-    expect(result).toEqual({ items: [], total: 0, valueOnHand: 0 });
+    expect(result).toEqual({ items: [], total: 0, valueOnHand: 0, elsewhereUnavailable: false });
   });
 
   it('warehouse-scoped users get an in() on readableIds', async () => {

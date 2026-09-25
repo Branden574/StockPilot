@@ -29,6 +29,7 @@ import {
   holdingsContradictRack,
   readDisplayStorage,
   resolvePlacement,
+  type ItemElsewhere,
   type RackHoldingLike,
 } from '@stockpilot/core';
 
@@ -40,12 +41,19 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { showWriteCta } from '@/lib/cta-gating';
 import { useEnabledModules } from '@/lib/enabled-modules';
+import { readItemElsewhere } from '@/lib/holdings-elsewhere';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
+import {
+  elsewhereRow,
+  elsewhereUnavailableNote,
+  holdingsKnownInFull,
+} from '@/lib/placement-rows';
 import { resolveScanMatches, sanitizeScanCode } from '@/lib/scan-resolve';
 import { supabase } from '@/lib/supabase';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
+import { useRole } from '@/lib/use-role';
 import { radius, space, theme } from '@/lib/theme';
 
 interface FoundItem {
@@ -77,6 +85,11 @@ interface FoundItem {
    *  is potentially misleading (it names one rack while stock sits on
    *  several) — the location box prefers this breakdown in that case. */
   rackHoldings: RackHoldingLike[];
+  /** Since 0371 `rackHoldings` are only the holdings this member can SEE. This
+   *  is the rest, as totals from item_holdings_elsewhere: 'none' for a manager
+   *  (no call is made), 'unavailable' when the read failed, which the sheet
+   *  says rather than hiding. Same helper and words as the item screen. */
+  elsewhere: ItemElsewhere;
 }
 
 /**
@@ -153,6 +166,9 @@ function mimeForExt(ext: string): string {
 export default function Scan() {
   const router = useRouter();
   const { user } = useAuth();
+  // Decides whether the stock-in-other-warehouses read is needed at all:
+  // managers and above see every holding and skip it (0371).
+  const { role } = useRole();
   const enabledModules = useEnabledModules();
   const permissions = useEffectivePermissions();
   // "Report a problem" launch point (Task 20, master brief §8/§25) — the
@@ -183,6 +199,10 @@ export default function Scan() {
   /** Loads an item's rich detail (with image + location name) by id. */
   async function loadItemById(id: string): Promise<FoundItem | null> {
     if (!orgId) return null;
+    // STOCK IN WAREHOUSES THIS MEMBER CANNOT SEE (0371). It needs only the id,
+    // so it starts NOW, alongside the item read, never chained after the
+    // holdings read below. It never rejects; a failure resolves 'unavailable'.
+    const elsewhereRead = readItemElsewhere(supabase, id, role);
     const { data: row } = await supabase
       .from('inventory_items')
       .select(
@@ -242,6 +262,7 @@ export default function Scan() {
           : null;
       })
       .filter((h): h is RackHoldingLike => h !== null);
+    const elsewhere = await elsewhereRead;
 
     const r = row as Record<string, unknown>;
     const loc = r.primary_location as { name?: string } | { name?: string }[] | null;
@@ -262,6 +283,7 @@ export default function Scan() {
       custom_fields: (r.custom_fields as Record<string, unknown> | null) ?? null,
       image_url: imageUrl,
       rackHoldings,
+      elsewhere,
     };
   }
 
@@ -801,10 +823,22 @@ export default function Scan() {
   // last DASH. Hand it a display string joined any other way ("38 · A") and it
   // parses as a row-less number that matches no holding, quietly reporting
   // every true label as refuted.
+  //
+  // 0371: holdings known to be incomplete (stock placed in a warehouse this
+  // member cannot see, or a failed read of it) refute nothing. The rule is
+  // shared with the item screen's card: holdingsKnownInFull.
   const structuredRack =
-    summaryRack && !holdingsContradictRack(summaryRack, item?.rackHoldings)
+    summaryRack &&
+    !(
+      holdingsKnownInFull(item?.elsewhere) &&
+      holdingsContradictRack(summaryRack, item?.rackHoldings)
+    )
       ? summaryRack
       : null;
+  // The rest of the stock, beside the part this member can see (0371): a row
+  // when the read found some, a plain note when the read failed.
+  const elsewhereLoc = item ? elsewhereRow(item.elsewhere) : null;
+  const elsewhereNote = item ? elsewhereUnavailableNote(item.elsewhere) : null;
   // Resolved through the shared CRATE_COLORS registry, not a local hex map.
   // The map this replaces was keyed lower-case and looked up the RAW stored
   // value, so a row holding "Blue" (a real legacy spelling) matched nothing and
@@ -949,6 +983,8 @@ export default function Scan() {
             {(item.primary_location_name ||
               item.bin_location ||
               placement?.source === 'holdings' ||
+              elsewhereLoc ||
+              elsewhereNote ||
               structuredRack ||
               storage?.crateNumber ||
               storage?.grade) && (
@@ -971,6 +1007,8 @@ export default function Scan() {
                     <LocRow label="Bin/shelf" value={item.bin_location} />
                   )
                 )}
+                {elsewhereLoc && <LocRow label="Elsewhere" value={elsewhereLoc.value} />}
+                {elsewhereNote && <Text style={styles.locNote}>{elsewhereNote}</Text>}
                 {structuredRack && <LocRow label="Rack" value={structuredRack} mono />}
                 {storage?.crateNumber && (
                   <View style={styles.locRow}>
@@ -1195,7 +1233,12 @@ function LocRow({ label, value, mono }: { label: string; value: string; mono?: b
   return (
     <View style={styles.locRow}>
       <Text style={styles.locLabel}>{label}</Text>
-      <Text style={[styles.locValue, mono && { fontFamily: 'Menlo' }]}>{value}</Text>
+      {/* locValueFit: a value longer than the row ("+12 in other warehouses",
+          a long rack name, or any value at a large text size) wraps inside
+          the row instead of running past the sheet's edge. */}
+      <Text style={[styles.locValue, styles.locValueFit, mono && { fontFamily: 'Menlo' }]}>
+        {value}
+      </Text>
     </View>
   );
 }
@@ -1327,6 +1370,8 @@ const styles = StyleSheet.create({
   locRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   locLabel: { color: theme.textMuted, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 },
   locValue: { color: theme.text, fontSize: 13, fontWeight: '600' },
+  locValueFit: { flexShrink: 1, marginLeft: 12, textAlign: 'right' },
+  locNote: { color: theme.textMuted, fontSize: 12, lineHeight: 17 },
   crateDot: {
     width: 12,
     height: 12,
