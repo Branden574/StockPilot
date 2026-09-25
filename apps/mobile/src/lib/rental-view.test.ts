@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   RENTAL_NO_EMAIL_NOTE,
@@ -7,10 +7,16 @@ import {
   overdueReminderState,
 } from '@stockpilot/core';
 
+import { IdBatchReadError } from './id-batches';
 import {
+  RENTAL_CHECKOUT_UNCONFIRMED,
+  RENTAL_CONNECTION_FAILURE,
   RENTAL_DETAIL_SELECT,
   RENTAL_LIST_REMINDER_COLUMNS,
   loadRentalDetail,
+  rentalCheckoutFailure,
+  rentalReadErrorMessage,
+  rentalReadFailureMessage,
   loadRentalReminderContext,
   rentalBorrowerView,
   rentalDayLabel,
@@ -59,8 +65,11 @@ function fakeClient(answers: Record<string, Answer>) {
 // Thu Sep 24 2026, 10:00 AM PDT.
 const NOW = Date.parse('2026-09-24T17:00:00.000Z');
 
+// A rental id as the database makes them (the screen refuses anything else).
+const RID = '87a4ee3a-5b6c-4d7e-8f90-a1b2c3d4e5f6';
+
 const RAW_RENTAL = {
-  id: 'r-1',
+  id: RID,
   status: 'out',
   borrower_user_id: null,
   borrower_name: 'Pat from Site 4',
@@ -130,13 +139,13 @@ describe('loadRentalDetail', () => {
       organization_modules: { data: { enabled: true }, error: null },
       organizations: { data: { timezone: 'America/Los_Angeles' }, error: null },
     });
-    const res = await loadRentalDetail(client, 'org-1', 'r-1');
+    const res = await loadRentalDetail(client, 'org-1', RID);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const rentalRead = calls.find((c) => c.table === 'rentals');
     expect(rentalRead?.select).toBe(RENTAL_DETAIL_SELECT);
     expect(rentalRead?.eq).toEqual([
-      ['id', 'r-1'],
+      ['id', RID],
       ['organization_id', 'org-1'],
     ]);
     // Everything the emails section decides on is selected.
@@ -144,7 +153,7 @@ describe('loadRentalDetail', () => {
       expect(RENTAL_DETAIL_SELECT).toContain(col);
     }
     expect(res.rental).toMatchObject({
-      id: 'r-1',
+      id: RID,
       borrower_name: 'Pat from Site 4',
       warehouseName: 'DC4',
       overdue_reminder_sent_at: null,
@@ -158,21 +167,113 @@ describe('loadRentalDetail', () => {
 
   it('a rental the caller cannot see is not found', async () => {
     const { client } = fakeClient({ rentals: { data: null, error: null } });
-    await expect(loadRentalDetail(client, 'org-1', 'r-1')).resolves.toEqual({ ok: false, notFound: true });
+    await expect(loadRentalDetail(client, 'org-1', RID)).resolves.toEqual({ ok: false, notFound: true });
   });
 
   it('a failed read says so with a reason, never "not found"', async () => {
     const failed = fakeClient({ rentals: { data: null, error: { message: '' }, status: 502 } });
-    await expect(loadRentalDetail(failed.client, 'org-1', 'r-1')).resolves.toEqual({
+    await expect(loadRentalDetail(failed.client, 'org-1', RID)).resolves.toEqual({
       ok: false,
       notFound: false,
       message: 'HTTP 502',
     });
-    const offline = fakeClient({ rentals: new Error('Network request failed') });
-    await expect(loadRentalDetail(offline.client, 'org-1', 'r-1')).resolves.toMatchObject({
+    const refused = fakeClient({ rentals: { data: null, error: { message: 'permission denied' }, status: 403 } });
+    await expect(loadRentalDetail(refused.client, 'org-1', RID)).resolves.toMatchObject({
+      message: 'permission denied',
+    });
+  });
+
+  // Simulator walk 2026-09-25: offline, the screen read "Could not load this
+  // rental. Error: fetch failed: UnexpectedException: Could not connect to the
+  // server. (at ExpoModulesCore/Promise.swift:56)". postgrest-js answers a
+  // request with no HTTP response with status 0 and that text.
+  it('no answer from the server is a connection problem, never the network layer\'s text', async () => {
+    const native =
+      'Error: fetch failed: UnexpectedException: Could not connect to the server. (at ExpoModulesCore/Promise.swift:56)';
+    const offline = fakeClient({ rentals: { data: null, error: { message: native }, status: 0 } });
+    await expect(loadRentalDetail(offline.client, 'org-1', RID)).resolves.toEqual({
       ok: false,
       notFound: false,
-      message: 'Network request failed',
+      message: RENTAL_CONNECTION_FAILURE,
+    });
+    const rejected = fakeClient({ rentals: new Error('Network request failed') });
+    await expect(loadRentalDetail(rejected.client, 'org-1', RID)).resolves.toEqual({
+      ok: false,
+      notFound: false,
+      message: RENTAL_CONNECTION_FAILURE,
+    });
+  });
+
+  // Simulator walk 2026-09-25: stockpot://rentals/not-a-real-id showed
+  // 'invalid input syntax for type uuid: "not-a-real-id"' and a Try again
+  // that could never work.
+  it('an id that is not a uuid is not found, without a request', async () => {
+    for (const bad of ['not-a-real-id', '', 'r-1', `${RID}x`, ` ${RID}`]) {
+      const { client, calls } = fakeClient({
+        rentals: { data: null, error: { message: 'invalid input syntax for type uuid' }, status: 400 },
+      });
+      await expect(loadRentalDetail(client, 'org-1', bad)).resolves.toEqual({ ok: false, notFound: true });
+      expect(calls).toEqual([]);
+    }
+  });
+});
+
+describe('what the rental screens say when a read fails', () => {
+  it('rentalReadErrorMessage: status 0 is no answer; any answer keeps its reason, never empty', () => {
+    expect(rentalReadErrorMessage({ message: 'Error: fetch failed: UnexpectedException' }, 0)).toBe(
+      RENTAL_CONNECTION_FAILURE,
+    );
+    expect(rentalReadErrorMessage({ message: '' }, 504, 'Gateway Timeout')).toBe('HTTP 504 Gateway Timeout');
+    expect(rentalReadErrorMessage({ message: 'JWT expired' }, 401)).toBe('JWT expired');
+    expect(rentalReadErrorMessage({ message: 'denied' })).toBe('denied');
+  });
+
+  it('rentalReadFailureMessage: a paged read with no answer, or its own reason', () => {
+    expect(rentalReadFailureMessage(new IdBatchReadError('TypeError: fetch failed', 0))).toBe(
+      RENTAL_CONNECTION_FAILURE,
+    );
+    expect(rentalReadFailureMessage(new IdBatchReadError('HTTP 502', 502))).toBe('HTTP 502');
+    expect(rentalReadFailureMessage(new IdBatchReadError('Too many rows to load on the phone.', null))).toBe(
+      'Too many rows to load on the phone.',
+    );
+    expect(rentalReadFailureMessage('nope')).toBe('The request failed.');
+  });
+
+  it('the connection sentence is the one the phone already uses', () => {
+    expect(RENTAL_CONNECTION_FAILURE).toBe('Could not reach the server. Check your connection and try again.');
+  });
+});
+
+describe('rentalCheckoutFailure: the Check out alert', () => {
+  // Simulator walk 2026-09-25: the alert body was "fetch failed:
+  // UnexpectedException: Could not connect to the server. (at
+  // ExpoModulesCore/Promise.swift:56)".
+  it('no answer: not confirmed, look before checking out again (never the network text)', () => {
+    const native = new Error(
+      'fetch failed: UnexpectedException: Could not connect to the server. (at ExpoModulesCore/Promise.swift:56)',
+    );
+    expect(rentalCheckoutFailure(native)).toEqual({
+      title: 'Checkout not confirmed',
+      message: RENTAL_CHECKOUT_UNCONFIRMED,
+    });
+    // api()'s own timeout carries no status either: the POST may have landed.
+    expect(rentalCheckoutFailure(new Error('Request timed out. Check your connection and try again.')).title).toBe(
+      'Checkout not confirmed',
+    );
+    expect(rentalCheckoutFailure(new TypeError('Network request failed')).message).not.toMatch(/fetch|Network request/);
+    expect(RENTAL_CHECKOUT_UNCONFIRMED).toMatch(/Rentals list before you check out again/);
+  });
+
+  it("an answer: the service's own sentence, as before", () => {
+    const refused = Object.assign(new Error('Projector B: only 2 available to rent.'), { status: 400 });
+    expect(rentalCheckoutFailure(refused)).toEqual({
+      title: 'Could not check out',
+      message: 'Projector B: only 2 available to rent.',
+    });
+    const blank = Object.assign(new Error(''), { status: 500 });
+    expect(rentalCheckoutFailure(blank)).toEqual({
+      title: 'Could not check out',
+      message: 'Could not check this rental out.',
     });
   });
 });
@@ -261,6 +362,69 @@ describe('rentalTimeLabel', () => {
   it('an em dash for nothing or garbage', () => {
     expect(rentalTimeLabel(null, null)).toBe('—');
     expect(rentalTimeLabel('garbage', null)).toBe('—');
+  });
+
+  // Simulator walk 2026-09-25: EXPECTED RETURN read "Oct 2, 2026 at 9:51 PM"
+  // on the phone and "Oct 2, 2026, 9:51 PM" on the web. Hermes joins a date
+  // and a time with " at "; this stands in for it (core emails.test.ts has
+  // the same stand-in).
+  describe('on an engine that writes "at" (Hermes on iOS)', () => {
+    const REAL_DTF = Intl.DateTimeFormat;
+    afterEach(() => {
+      Object.defineProperty(Intl, 'DateTimeFormat', { value: REAL_DTF, configurable: true, writable: true });
+      vi.restoreAllMocks();
+    });
+
+    function useHermesLikeIntl() {
+      class HermesLike {
+        private readonly real: Intl.DateTimeFormat;
+        constructor(locales?: string | string[], options?: Intl.DateTimeFormatOptions) {
+          this.real = new REAL_DTF(locales, options);
+        }
+        formatToParts(date?: Date | number): Intl.DateTimeFormatPart[] {
+          const parts = this.real.formatToParts(date);
+          return parts.map((p, i) => {
+            const next = parts[i + 1]?.type;
+            if (p.type === 'literal' && next === 'hour') return { ...p, value: ' at ' };
+            if (p.type === 'literal' && next === 'dayPeriod') return { ...p, value: '\u202f' };
+            return p;
+          });
+        }
+        format(date?: Date | number): string {
+          return this.formatToParts(date).map((p) => p.value).join('');
+        }
+        resolvedOptions(): Intl.ResolvedDateTimeFormatOptions {
+          return this.real.resolvedOptions();
+        }
+      }
+      Object.defineProperty(Intl, 'DateTimeFormat', { value: HermesLike, configurable: true, writable: true });
+      vi.spyOn(Date.prototype, 'toLocaleString').mockImplementation(function (
+        this: Date,
+        locales?: Intl.LocalesArgument,
+        options?: Intl.DateTimeFormatOptions,
+      ) {
+        return new HermesLike(locales as string | string[] | undefined, options).format(this);
+      });
+    }
+
+    it('reads as the web does, in the organization zone and the device zone', () => {
+      const due = '2026-10-03T04:51:00.000Z';
+      const device = rentalTimeLabel(due, null);
+      useHermesLikeIntl();
+      expect(
+        new Date(due).toLocaleString('en-US', {
+          timeZone: 'America/Los_Angeles',
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        }),
+      ).toBe('Oct 2, 2026 at 9:51\u202fPM');
+      expect(rentalTimeLabel(due, 'America/Los_Angeles')).toBe('Oct 2, 2026, 9:51 PM');
+      expect(rentalTimeLabel(due, null)).toBe(device);
+      expect(device).not.toMatch(/ at |\u202f/);
+    });
   });
 });
 

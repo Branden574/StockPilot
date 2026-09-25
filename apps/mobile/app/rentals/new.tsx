@@ -36,12 +36,12 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
-import { api, ApiError } from '@/lib/api';
+import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { showWriteCta } from '@/lib/cta-gating';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
-import { readErrorMessage, settleIdBatchRead } from '@/lib/id-batches';
+import { settleIdBatchRead } from '@/lib/id-batches';
 import { readOpenReservations, sumReservedByItem } from '@/lib/id-reads';
 import {
   BORROWER_EMAIL_FORMAT_ERROR,
@@ -68,6 +68,11 @@ import {
   rentalPickerStatus,
   type RentalPickerItem,
 } from '@/lib/rental-items';
+import {
+  rentalCheckoutFailure,
+  rentalReadErrorMessage,
+  rentalReadFailureMessage,
+} from '@/lib/rental-view';
 import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, RADIUS } from '@/lib/theme';
@@ -183,8 +188,10 @@ export default function NewRental() {
         setWarehouseId(null);
         setCart({});
         // Never empty: a gateway 502 or 504 with an empty body gives an empty
-        // error.message, which would leave the failure with no reason.
-        setWarehousesError(readErrorMessage(error, status));
+        // error.message, which would leave the failure with no reason. No
+        // answer at all (offline) is said as a connection problem, never the
+        // network layer's own text (rentalReadErrorMessage).
+        setWarehousesError(rentalReadErrorMessage(error, status));
         setWarehousesLoading(false);
         return;
       }
@@ -249,7 +256,12 @@ export default function NewRental() {
       // rental page's read, filter for filter (lib/rental-items.ts). It was
       // one request with `.limit(500)` by name, and the search below runs over
       // the rows held here, so an item past row 500 could not be found.
-      const read = await settleIdBatchRead(readRentalPickerItems(supabase, orgId, warehouseId));
+      // rentalReadFailureMessage: a page with no answer (offline) is a
+      // connection problem, never "fetch failed: UnexpectedException ...".
+      const read = await settleIdBatchRead(
+        readRentalPickerItems(supabase, orgId, warehouseId),
+        rentalReadFailureMessage,
+      );
       if (cancelled) return;
       if (!read.ok) {
         // Not "No rental items in this warehouse": that sentence sends the
@@ -276,6 +288,7 @@ export default function NewRental() {
           orgId,
           rows.map((r) => r.id),
         ),
+        rentalReadFailureMessage,
       );
       if (cancelled) return;
       if (reservations.ok) {
@@ -407,17 +420,15 @@ export default function NewRental() {
       });
       router.back();
     } catch (e) {
-      // ApiError.message is the service's own sentence ("Projector B: only 2
-      // available to rent…"), already written for an operator — show it as-is
-      // rather than a generic failure, which is the whole point of letting the
-      // checkout be refusable.
-      const message =
-        e instanceof ApiError
-          ? e.message
-          : e instanceof Error
-            ? e.message
-            : 'Could not check this rental out.';
-      Alert.alert('Could not check out', message);
+      // With an answer, ApiError.message is the service's own sentence
+      // ("Projector B: only 2 available to rent…"), already written for an
+      // operator: shown as-is, which is the whole point of letting the
+      // checkout be refusable. With no answer (offline, a dropped connection,
+      // the timeout) the POST may have landed, so the alert says to look on
+      // the Rentals list before checking out again, never the network layer's
+      // own text (rentalCheckoutFailure, lib/rental-view.ts).
+      const failure = rentalCheckoutFailure(e);
+      Alert.alert(failure.title, failure.message);
     } finally {
       setBusy(false);
     }
@@ -427,7 +438,7 @@ export default function NewRental() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={ChevronLeft} onPress={() => router.back()} />
+          <IconChip icon={ChevronLeft} onPress={() => router.back()} accessibilityLabel="Back" />
         </View>
         <View style={styles.head}>
           <Eyebrow>RENTALS · NEW CHECKOUT</Eyebrow>
@@ -467,6 +478,9 @@ export default function NewRental() {
                     <Pressable
                       key={w.id}
                       onPress={() => setWarehouseId(w.id)}
+                      accessibilityRole="button"
+                      accessibilityLabel={w.name}
+                      accessibilityState={{ selected: active }}
                       style={({ pressed }) => [
                         styles.chip,
                         {
@@ -543,20 +557,26 @@ export default function NewRental() {
                 {visibleItems.map((it) => {
                   const avail = availableFor(it);
                   const qty = cart[it.id] ?? 0;
+                  const itemName = it.name ?? 'Untitled item';
                   return (
                     <View key={it.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                       <View style={{ flex: 1 }}>
                         <Body size={14} style={{ fontFamily: FONT.display }}>
-                          {it.name ?? 'Untitled item'}
+                          {itemName}
                         </Body>
                         <Mono size={10} tracking={0.1} upper color={c.ink4} style={{ marginTop: 2 }}>
                           {it.sku ? `${it.sku} · ` : ''}
                           {avail} AVAILABLE
                         </Mono>
                       </View>
+                      {/* The steppers are icons: without a label VoiceOver read
+                          them as unnamed elements (simulator walk 2026-09-25). */}
                       <Pressable
                         onPress={() => removeOne(it)}
                         disabled={qty === 0}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Remove one ${itemName}`}
+                        accessibilityState={{ disabled: qty === 0 }}
                         hitSlop={8}
                         style={[styles.step, { borderColor: c.hair, opacity: qty === 0 ? 0.35 : 1 }]}
                       >
@@ -568,6 +588,9 @@ export default function NewRental() {
                       <Pressable
                         onPress={() => addOne(it)}
                         disabled={qty >= avail}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Add one ${itemName}`}
+                        accessibilityState={{ disabled: qty >= avail }}
                         hitSlop={8}
                         style={[
                           styles.step,

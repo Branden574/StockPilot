@@ -44,6 +44,8 @@ vi.mock('./sync', () => ({ syncNow: vi.fn(async () => {}) }));
 // The membership read can be held open to overlap a switch.
 const gate = vi.hoisted(() => ({
   memberships: Promise.resolve() as Promise<void>,
+  // The membership read answers with an error (offline: postgrest-js status 0).
+  failMemberships: false,
   // Holds only the NEXT warehouse read.
   nextWarehouses: null as Promise<void> | null,
 }));
@@ -53,6 +55,9 @@ vi.mock('./supabase', () => {
     eq: () => members,
     not: async () => {
       await gate.memberships;
+      if (gate.failMemberships) {
+        return { data: null, error: { message: 'TypeError: Network request failed' }, status: 0 };
+      }
       return {
         data: [
           { role: 'staff', organization_id: 'org-a', organizations: { name: 'A' } },
@@ -280,5 +285,58 @@ describe('workspace work for an account that is gone saves and shows nothing', (
     await Promise.all([slow, queued]);
     expect(storage.setItem.mock.calls.filter(([k]) => k === 'workspace.activeOrgId')).toEqual([]);
     emitAuth('u1');
+  });
+});
+
+// Simulator walk 2026-09-25: offline, opening a rental (or New rental) ran this
+// load; its membership read failed, the failure counted as "a member of
+// nothing", and the workspace went null for the whole app. Every rental read
+// stopped asking, so Try again did nothing (or stayed disabled) after the
+// connection came back.
+describe('a failed membership read is not "a member of nothing"', () => {
+  it('keeps the workspace on screen, with its memberships, and saves nothing', async () => {
+    await setActiveOrg('org-b');
+    store.set('workspace.activeOrgId', 'org-b');
+    useWorkspace();
+    await settled();
+    expect(published.at(-1)).toMatchObject({ activeOrgId: 'org-b', loading: false });
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    gate.failMemberships = true; // offline: the next screen that mounts
+    storage.setItem.mockClear();
+    const before = published.length;
+    useWorkspace();
+    await settled();
+    gate.failMemberships = false;
+    warn.mockRestore();
+
+    expect(published.length).toBeGreaterThan(before);
+    expect(published.at(-1)).toMatchObject({ activeOrgId: 'org-b', activeOrgName: 'B', loading: false });
+    expect(published.at(-1)?.orgs).toHaveLength(3);
+    expect(published.slice(before).some((s) => s.activeOrgId === null)).toBe(false);
+    expect(storage.setItem).not.toHaveBeenCalled();
+  });
+
+  it('keeps nothing across a change of account: with no workspace chosen for this one, none is shown', async () => {
+    useWorkspace();
+    await settled();
+    expect(published.at(-1)?.activeOrgId).not.toBeNull();
+    // Signed out and back in: the workspace on screen was chosen for the
+    // previous session's account, and nothing may be kept from it.
+    emitAuth(null);
+    emitAuth('u1');
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    gate.failMemberships = true;
+    useWorkspace();
+    await settled();
+    gate.failMemberships = false;
+    warn.mockRestore();
+    expect(published.at(-1)).toMatchObject({ activeOrgId: null, loading: false });
+
+    // Back online, the next load chooses as usual.
+    useWorkspace();
+    await settled();
+    expect(published.at(-1)?.activeOrgId).not.toBeNull();
   });
 });

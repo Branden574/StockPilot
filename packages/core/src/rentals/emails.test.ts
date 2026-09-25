@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { RENTAL_BORROWER_EMAIL_HELP } from './borrower';
 import {
@@ -8,6 +8,7 @@ import {
   RENTAL_NO_EMAIL_NOTE,
   RENTAL_NON_MEMBER_EMAIL_NOTE,
   RENTAL_OVERDUE_SWEEP,
+  formatRentalDateTime,
   isOverdueReminderCandidate,
   isRentalOverdue,
   nextOverdueSweepAt,
@@ -386,5 +387,130 @@ describe('the borrower label says only what the rental records', () => {
   it('a rental without a linked account is never called "Not in StockPilot"', () => {
     expect(RENTAL_BORROWER_NOT_LINKED).toBe('Not linked to a StockPilot account');
     expect(RENTAL_BORROWER_NOT_LINKED).not.toMatch(/not in stockpilot/i);
+  });
+});
+
+// ─── The same words on the web and the phone ────────────────────────────
+
+/**
+ * An Intl that writes dates the way Hermes on iOS does, from this runtime's
+ * own: the date and the time joined with " at " (the simulator showed "Sent
+ * Sep 23 at 3:00 PM." where the web says "Sent Sep 23, 3:00 PM."), and a
+ * narrow no-break space before AM or PM, as newer locale data writes it. The
+ * parts themselves (month, day, hour, ...) are this runtime's, unchanged.
+ */
+const REAL_DTF = Intl.DateTimeFormat;
+
+function hermesParts(parts: Intl.DateTimeFormatPart[]): Intl.DateTimeFormatPart[] {
+  return parts.map((p, i) => {
+    const next = parts[i + 1];
+    if (p.type === 'literal' && next?.type === 'hour') return { ...p, value: ' at ' };
+    if (p.type === 'literal' && next?.type === 'dayPeriod') return { ...p, value: '\u202f' };
+    return p;
+  });
+}
+
+class HermesLikeDateTimeFormat {
+  private readonly real: Intl.DateTimeFormat;
+  constructor(locales?: string | string[], options?: Intl.DateTimeFormatOptions) {
+    this.real = new REAL_DTF(locales, options);
+  }
+  formatToParts(date?: Date | number): Intl.DateTimeFormatPart[] {
+    return hermesParts(this.real.formatToParts(date));
+  }
+  format(date?: Date | number): string {
+    return this.formatToParts(date).map((p) => p.value).join('');
+  }
+  resolvedOptions(): Intl.ResolvedDateTimeFormatOptions {
+    return this.real.resolvedOptions();
+  }
+}
+
+function useHermesLikeIntl(dtf: unknown = HermesLikeDateTimeFormat) {
+  Object.defineProperty(Intl, 'DateTimeFormat', { value: dtf, configurable: true, writable: true });
+  const hermesFormat = function (this: Date, locales?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions) {
+    return new HermesLikeDateTimeFormat(locales as string | string[] | undefined, options).format(this);
+  };
+  vi.spyOn(Date.prototype, 'toLocaleString').mockImplementation(hermesFormat);
+  vi.spyOn(Date.prototype, 'toLocaleTimeString').mockImplementation(hermesFormat);
+}
+
+describe('rental times read the same on the web and the phone (simulator walk 2026-09-25)', () => {
+  afterEach(() => {
+    Object.defineProperty(Intl, 'DateTimeFormat', { value: REAL_DTF, configurable: true, writable: true });
+    vi.restoreAllMocks();
+  });
+
+  // Wed Sep 23 2026, 3:00 PM PDT.
+  const SENT = '2026-09-23T22:00:04.000Z';
+
+  it('the stand-in engine writes what the phone showed', () => {
+    useHermesLikeIntl();
+    expect(
+      new Date(SENT).toLocaleString('en-US', {
+        timeZone: PT,
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      }),
+    ).toBe('Sep 23 at 3:00\u202fPM');
+  });
+
+  // Mutation caught: the old fmt() (toLocaleString), which printed
+  // "Sent Sep 23 at 3:00 PM." on the phone.
+  it('the sent reminder: web words on a Hermes-like engine, in the zone and the device zone', () => {
+    const web = overdueReminderText({ kind: 'sent', sentAt: SENT }, PT);
+    expect(web).toBe('Sent Sep 23, 3:00 PM.');
+    const webDevice = overdueReminderText({ kind: 'sent', sentAt: SENT });
+    useHermesLikeIntl();
+    expect(overdueReminderText({ kind: 'sent', sentAt: SENT }, PT)).toBe(web);
+    expect(overdueReminderText({ kind: 'sent', sentAt: SENT })).toBe(webDevice);
+    expect(webDevice).not.toMatch(/ at |\u202f/);
+  });
+
+  it('the run time: a plain space before AM, on either engine', () => {
+    const at = new Date('2026-09-26T15:00:00.000Z');
+    const web = overdueReminderText({ kind: 'scheduled', at }, PT);
+    expect(web).toBe('Will be sent Sep 26, around 8:00 AM, if the rental is still out then.');
+    useHermesLikeIntl();
+    expect(overdueReminderText({ kind: 'scheduled', at }, PT)).toBe(web);
+    expect(overdueReminderText({ kind: 'due', at }, PT)).toBe(
+      'Overdue: will be sent with the next daily run, Sep 26, around 8:00 AM, if the rental is still out.',
+    );
+    expect(overdueReminderListMark({ kind: 'sent', sentAt: SENT }, PT)).toBe('Reminder sent Sep 23');
+  });
+
+  it('formatRentalDateTime: the detail pages\' date and time, with or without the year', () => {
+    // Fri Oct 2 2026, 9:51 PM PDT: the phone showed "Oct 2, 2026 at 9:51 PM".
+    const due = '2026-10-03T04:51:00.000Z';
+    expect(formatRentalDateTime(due, PT, { withYear: true })).toBe('Oct 2, 2026, 9:51 PM');
+    expect(formatRentalDateTime(due, PT)).toBe('Oct 2, 9:51 PM');
+    useHermesLikeIntl();
+    expect(formatRentalDateTime(due, PT, { withYear: true })).toBe('Oct 2, 2026, 9:51 PM');
+    expect(formatRentalDateTime(due, PT)).toBe('Oct 2, 9:51 PM');
+    expect(formatRentalDateTime(due, 'UTC', { withYear: true })).toBe('Oct 3, 2026, 4:51 AM');
+  });
+
+  it('formatRentalDateTime: an em dash for nothing or garbage, and an unknown zone never throws', () => {
+    expect(formatRentalDateTime(null, PT)).toBe('—');
+    expect(formatRentalDateTime(undefined)).toBe('—');
+    expect(formatRentalDateTime('garbage', PT)).toBe('—');
+    expect(formatRentalDateTime('2026-10-03T04:51:00.000Z', 'Mars/Olympus', { withYear: true })).toBe(
+      'Oct 2, 2026, 9:51 PM',
+    );
+  });
+
+  it("an engine without formatToParts still gets the engine's own words, never nothing", () => {
+    class NoParts extends HermesLikeDateTimeFormat {
+      override formatToParts(): Intl.DateTimeFormatPart[] {
+        throw new TypeError('formatToParts is not supported');
+      }
+    }
+    useHermesLikeIntl(NoParts);
+    expect(formatRentalDateTime('2026-10-03T04:51:00.000Z', PT, { withYear: true })).toBe(
+      'Oct 2, 2026 at 9:51\u202fPM',
+    );
+    expect(overdueReminderText({ kind: 'sent', sentAt: SENT }, PT)).toBe('Sent Sep 23 at 3:00\u202fPM.');
   });
 });

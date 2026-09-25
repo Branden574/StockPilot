@@ -116,8 +116,8 @@ describe('rentals/new.tsx — item selection (SP-012)', () => {
   // could not be found on the phone while the web New rental page listed it.
   it('reads every rental item through the paged reader, never one limited request', () => {
     const body = itemsEffect();
-    expect(body).toContain(
-      'const read = await settleIdBatchRead(readRentalPickerItems(supabase, orgId, warehouseId));',
+    expect(body).toMatch(
+      /const read = await settleIdBatchRead\(\s*readRentalPickerItems\(supabase, orgId, warehouseId\),\s*rentalReadFailureMessage,\s*\);/,
     );
     const src = code();
     expect(src).not.toMatch(/\.limit\(/);
@@ -188,7 +188,7 @@ describe('rentals/new.tsx — a failed read blocks the picker, never reads as av
     const firstAwait = body.indexOf('await ');
     expect(body.slice(0, firstAwait)).toContain('setWarehousesError(null);');
     expect(body).toContain('const { data, error, status } = await supabase');
-    expect(body).toMatch(/if \(error\) \{[\s\S]*?setWarehousesError\(readErrorMessage\(error, status\)\);/);
+    expect(body).toMatch(/if \(error\) \{[\s\S]*?setWarehousesError\(rentalReadErrorMessage\(error, status\)\);/);
     expect(source).toContain('onRetry={() => setWarehousesNonce((n) => n + 1)}');
     expect(source).toContain('No active warehouses to check out from. Add one on the web first.');
   });
@@ -258,10 +258,23 @@ describe('rentals/new.tsx — refusals are shown, not swallowed (SP-012)', () =>
   it('surfaces the server message on failure', () => {
     // The route can now legitimately REFUSE (over-lend, non-rental item, wrong
     // warehouse) where the direct insert always succeeded. ApiError.message is
-    // the service's own operator-readable sentence — show it verbatim.
+    // the service's own operator-readable sentence — shown verbatim by
+    // rentalCheckoutFailure (rental-view.test.ts pins its rules).
     const body = submitBody();
-    expect(body).toMatch(/ApiError/);
-    expect(body).toMatch(/Alert\.alert/);
+    expect(code()).toContain("from '@/lib/rental-view';");
+    expect(body).toMatch(/const failure = rentalCheckoutFailure\(e\);\s*Alert\.alert\(failure\.title, failure\.message\);/);
+  });
+
+  // Simulator walk 2026-09-25: offline, the alert read "fetch failed:
+  // UnexpectedException: Could not connect to the server. (at
+  // ExpoModulesCore/Promise.swift:56)", and a failed read showed the same
+  // text under "Could not load warehouses.". Mutation caught: the old catch,
+  // which showed any Error's message.
+  it('never shows the network layer\'s text: every failure is worded by the rental helpers', () => {
+    const src = code();
+    expect(submitBody()).not.toMatch(/Alert\.alert\([^)]*\be\.message/);
+    expect(src).not.toMatch(/readErrorMessage\(/);
+    expect(src).toMatch(/readOpenReservations\([\s\S]*?\),\s*rentalReadFailureMessage,\s*\);/);
   });
 
   it('no longer tells the operator that stock is not reserved — it now is', () => {

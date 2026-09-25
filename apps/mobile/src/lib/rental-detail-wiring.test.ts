@@ -29,8 +29,26 @@ describe('app/rentals/[id].tsx', () => {
   it('reads through the shared loader, scoped to the org, and re-reads on refresh', () => {
     const src = code(DETAIL);
     expect(src).toContain('const result = await loadRentalDetail(supabase, orgId, id);');
-    expect(src).toContain('}, [orgId, id, nonce]);');
-    expect(src).toMatch(/refreshControl=\{<RefreshControl refreshing=\{refreshing\} onRefresh=\{reload\} \/>\}/);
+    expect(src).toContain('}, [orgId, id]);');
+    expect(src).toMatch(
+      /refreshControl=\{<RefreshControl refreshing=\{refreshing\} onRefresh=\{\(\) => void reload\(\)\} \/>\}/,
+    );
+  });
+
+  // Simulator walk 2026-09-25: after an offline failure, Try again turned
+  // disabled and stayed disabled once the connection was back. reload() set
+  // `refreshing` and left clearing it to the load effect, which returns early
+  // while the workspace is unset. Mutation caught: that old reload().
+  it('a refresh or Try again ends when its own read ends, never waiting on the effect', () => {
+    const src = code(DETAIL);
+    expect(src).toMatch(
+      /async function reload\(\) \{\s*setRefreshing\(true\);\s*try \{\s*await loadRental\(\);\s*\} finally \{\s*setRefreshing\(false\);\s*\}\s*\}/,
+    );
+    expect(src).not.toMatch(/setNonce|nonce/);
+    // The only other setRefreshing is the one in reload().
+    expect(src.match(/setRefreshing\(/g)).toHaveLength(2);
+    // Try again is disabled only while that read runs.
+    expect(src).toContain('onRetry={load.notFound ? undefined : () => void reload()} retrying={refreshing}');
   });
 
   it('says the emails with core (the sweep rule), never local copy', () => {
@@ -41,12 +59,12 @@ describe('app/rentals/[id].tsx', () => {
     expect(src).toContain('{borrower.kind}');
     expect(src).toContain('{borrower.note}');
     // The clock is taken with the data, not during render.
-    expect(src).toMatch(/if \(cancelled\) return;\s*setNowMs\(Date\.now\(\)\);/);
+    expect(src).toMatch(/if \(seq !== seqRef\.current\) return;\s*setNowMs\(Date\.now\(\)\);/);
   });
 
   it('a failed read is not "not found", and can be retried', () => {
     const src = code(DETAIL);
-    expect(src).toContain('onRetry={load.notFound ? undefined : reload}');
+    expect(src).toContain('onRetry={load.notFound ? undefined : () => void reload()}');
     expect(src).toContain('`Could not load this rental. ${load.message}`');
   });
 
@@ -81,6 +99,19 @@ describe('app/rentals/[id].tsx', () => {
 });
 
 describe('src/screens/rentals.tsx: the list', () => {
+  // Simulator walk 2026-09-25: after a checkout, router.back() showed the list
+  // from before it ("0 OUT", "No rentals yet.") until a pull to refresh. The
+  // list loaded on mount only. Mutation caught: React.useEffect(() => void
+  // load(), [load]), the old mount-only load.
+  it('reloads on focus (back from New rental or a rental), like the PO imports list', () => {
+    const src = code(LIST);
+    expect(src).toContain("import { useFocusEffect, useRouter } from 'expo-router';");
+    expect(src).toMatch(
+      /useFocusEffect\(\s*React\.useCallback\(\(\) => \{\s*void load\(\);\s*\}, \[load\]\),\s*\);/,
+    );
+    expect(src).not.toMatch(/React\.useEffect\(\(\) => \{\s*void load\(\);\s*\}, \[load\]\);/);
+  });
+
   it('a card opens the rental on the phone, not the web', () => {
     const src = code(LIST);
     expect(src).toContain('onPress={() => router.push(`/rentals/${r.id}`)}');

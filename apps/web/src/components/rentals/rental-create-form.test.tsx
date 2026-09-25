@@ -199,6 +199,37 @@ describe('RentalCreateForm — the cart checks out only what it shows', () => {
     });
   });
 
+  // Web walk 2026-09-25: Add, then Check out at once. The action came back
+  // inside the cart's 250 ms save debounce, clearCartDraft ran, and the save
+  // still waiting wrote the checked-out lines back to rental-draft:wh-1, so
+  // the next New rental for that warehouse opened with them. Mutation caught:
+  // clearCartDraft removing the key without cancelling that save.
+  it('a checkout that comes back before the cart saves leaves no draft behind', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      savedCart('rental-draft:wh-1', [{ itemId: 'tent', quantity: 1 }]);
+      renderForm();
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+      createRentalAction.mockResolvedValue({ ok: true, data: { id: 'rental-1' } });
+      fireEvent.change(screen.getByLabelText('Borrower'), { target: { value: 'Ana' } });
+      // A cart change right before Check out: its save waits 250 ms.
+      fireEvent.click(screen.getByRole('button', { name: 'Increase quantity' }));
+      await act(async () => {
+        fireEvent.click(checkOut());
+      });
+      expect(createRentalAction.mock.calls[0]![0]).toMatchObject({ lines: [{ itemId: 'tent', quantity: 2 }] });
+      expect(push).toHaveBeenCalledWith('/dashboard/rentals/rental-1');
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(localStorage.getItem('rental-draft:wh-1')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('switching warehouse loads that warehouse and holds checkout until it arrives', () => {
     savedCart('rental-draft:wh-1', [{ itemId: 'tent', quantity: 1 }]);
     renderForm();

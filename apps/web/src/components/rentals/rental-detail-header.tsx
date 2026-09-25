@@ -2,7 +2,7 @@ import { cn, formatRelative } from '@/lib/utils';
 import type { RentalRow } from '@/server/services/rentals';
 
 import {
-  formatOrgDateTime,
+  formatRentalDateTime,
   isRentalOverdue,
   RENTAL_BORROWER_NOT_LINKED,
   RENTAL_BORROWER_TEAM_MEMBER,
@@ -130,11 +130,9 @@ export function RentalDetailHeader({
               status === 'overdue' ? 'text-red-600 dark:text-red-400 font-medium' : '',
             )}
           >
-            {formatOrgDateTime(
-              rental.expected_return_at,
-              { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' },
-              timeZone,
-            )}
+            {/* Core's rental spelling, which the phone's EXPECTED RETURN uses
+                too: the same words on every engine ("Oct 2, 2026, 9:51 PM"). */}
+            {formatRentalDateTime(rental.expected_return_at, timeZone, { withYear: true })}
           </dd>
         </div>
 

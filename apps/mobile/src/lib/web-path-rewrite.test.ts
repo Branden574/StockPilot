@@ -144,8 +144,10 @@ describe('exceptions deep links', () => {
   });
 });
 
-// Rentals (2026-09-25): the phone has a rental detail now. A team member's
-// rental emails link to /dashboard/rentals/<id>.
+// Rentals (2026-09-25): the phone has a rental detail now, reached by links
+// inside the app, push taps and stockpilot:// links. (The https links in
+// rental emails open Safari: there are no universal links yet, see
+// web-path-rewrite.ts.)
 describe('rentals deep links', () => {
   const ID = '44444444-4444-4444-8444-444444444444';
 

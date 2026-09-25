@@ -1,5 +1,5 @@
 import {
-  formatOrgDateTime,
+  formatRentalDateTime,
   isRentalOverdue,
   overdueReminderListMark,
   overdueReminderState,
@@ -12,12 +12,13 @@ import {
   rentalEmailOnFile,
   formatOrgDate,
   resolveOrgTimezone,
+  uuidSchema,
   type Permission,
   type RentalEmailFacts,
 } from '@stockpilot/core';
 
 import { showWriteCta } from './cta-gating';
-import { readErrorMessage } from './id-batches';
+import { IdBatchReadError, readErrorMessage } from './id-batches';
 
 /**
  * The phone's rental detail and the reminder marks on its rentals list, the
@@ -55,6 +56,68 @@ interface MaybeSingleChain {
 
 function selectFrom(client: RentalViewClient, table: string, columns: string): MaybeSingleChain {
   return (client.from(table) as { select(columns: string): MaybeSingleChain }).select(columns);
+}
+
+// ─── When the server did not answer ──────────────────────────────────────
+
+/**
+ * What the rental screens say when a read got no answer at all: offline, a
+ * dropped connection. Worded as the phone's other screens word it
+ * (exceptions-api.ts, for a request with no HTTP status). The network layer's
+ * own text is never shown: the simulator walk (2026-09-25) found "Could not
+ * load this rental. Error: fetch failed: UnexpectedException: Could not
+ * connect to the server. (at ExpoModulesCore/Promise.swift:56)".
+ */
+export const RENTAL_CONNECTION_FAILURE = 'Could not reach the server. Check your connection and try again.';
+
+/**
+ * The reason a Supabase read failed, as the rental screens say it. Decided on
+ * the status, never on the message text: postgrest-js answers a request that
+ * got no HTTP response with status 0 (and the network layer's words as the
+ * message). Any real answer keeps its own reason, never empty
+ * (readErrorMessage).
+ */
+export function rentalReadErrorMessage(
+  error: { message?: string | null },
+  status?: number | null,
+  statusText?: string | null,
+): string {
+  return status === 0 ? RENTAL_CONNECTION_FAILURE : readErrorMessage(error, status, statusText);
+}
+
+/**
+ * The same for a paged or batched read that threw (settleIdBatchRead's
+ * `describe`): an IdBatchReadError carries the failed page's status.
+ */
+export function rentalReadFailureMessage(err: unknown): string {
+  if (err instanceof IdBatchReadError && err.status === 0) return RENTAL_CONNECTION_FAILURE;
+  if (err instanceof Error && err.message) return err.message;
+  return 'The request failed.';
+}
+
+/** Said when Check out got no answer (see rentalCheckoutFailure). */
+export const RENTAL_CHECKOUT_UNCONFIRMED =
+  'The app did not hear back from the server, so this rental may or may not have been checked out. ' +
+  'Check your connection, then look for it on the Rentals list before you check out again.';
+
+/**
+ * The alert for a Check out that failed. With an answer (api() throws an
+ * ApiError carrying the HTTP status): the service's own sentence, as before,
+ * written for an operator. With no answer (offline, a dropped connection, or
+ * api()'s timeout): the request may have reached the server before the answer
+ * was lost, and a second Check out would lend the same units twice, so it
+ * says to look first, the way the phone's order edits do
+ * (add-order-items.ts, the indeterminate case). Keyed on the status, never on
+ * the message text.
+ */
+export function rentalCheckoutFailure(e: unknown): { title: string; message: string } {
+  const status =
+    e && typeof e === 'object' && typeof (e as { status?: unknown }).status === 'number'
+      ? (e as { status: number }).status
+      : null;
+  if (status === null) return { title: 'Checkout not confirmed', message: RENTAL_CHECKOUT_UNCONFIRMED };
+  const message = e instanceof Error && e.message.trim() ? e.message : 'Could not check this rental out.';
+  return { title: 'Could not check out', message };
 }
 
 /** The switch and the zone every rental screen needs. */
@@ -210,12 +273,19 @@ function toDetail(raw: Record<string, unknown>): RentalDetail {
  * The rental, scoped to the organization, with the reminder context. A failed
  * rental read says so (never "not found"); a rental the caller cannot see is
  * not found, exactly as row level security answers it.
+ *
+ * An id that is not a uuid (a mistyped or mangled link,
+ * stockpilot://rentals/not-a-real-id) is not found without asking: the
+ * database would refuse it with its own text ('invalid input syntax for type
+ * uuid'), shown with a Try again that could never work. Checked with core's
+ * uuidSchema, as the web's detail pages check their ids.
  */
 export async function loadRentalDetail(
   client: RentalViewClient,
   orgId: string,
   rentalId: string,
 ): Promise<RentalDetailLoad> {
+  if (!uuidSchema.safeParse(rentalId).success) return { ok: false, notFound: true };
   const [rentalRes, context] = await Promise.all([
     Promise.resolve(
       selectFrom(client, 'rentals', RENTAL_DETAIL_SELECT)
@@ -224,10 +294,12 @@ export async function loadRentalDetail(
         .maybeSingle(),
     ).then(
       (res) => res,
+      // A request that rejected got no answer: status 0, as postgrest-js
+      // reports a request with no HTTP response.
       (e: unknown) => ({
         data: null,
-        error: { message: e instanceof Error ? e.message : 'Could not reach the server.' },
-        status: null,
+        error: { message: e instanceof Error ? e.message : '' },
+        status: 0,
         statusText: null,
       }),
     ),
@@ -237,7 +309,7 @@ export async function loadRentalDetail(
     return {
       ok: false,
       notFound: false,
-      message: readErrorMessage(rentalRes.error, rentalRes.status, rentalRes.statusText),
+      message: rentalReadErrorMessage(rentalRes.error, rentalRes.status, rentalRes.statusText),
     };
   }
   if (!rentalRes.data) return { ok: false, notFound: true };
@@ -272,25 +344,15 @@ export function rentalBorrowerView(rental: {
   };
 }
 
-const TIME_LABEL_OPTIONS: Intl.DateTimeFormatOptions = {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-};
-
 /**
- * "Sep 25, 2026, 5:00 PM" in the organization's zone when it is known (as the
- * web detail prints the expected return), else the device's. An em dash for a
- * missing or unreadable value.
+ * "Sep 25, 2026, 5:00 PM" in the organization's zone when it is known, else
+ * the device's: core's formatRentalDateTime, the function the web detail
+ * prints the expected return with, so the two read the same. It used to be
+ * toLocaleString, which Hermes writes as "Sep 25, 2026 at 5:00 PM". An em
+ * dash for a missing or unreadable value.
  */
 export function rentalTimeLabel(iso: string | null | undefined, timeZone: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  if (timeZone) return formatOrgDateTime(d, TIME_LABEL_OPTIONS, timeZone);
-  return d.toLocaleString('en-US', TIME_LABEL_OPTIONS);
+  return formatRentalDateTime(iso, timeZone, { withYear: true });
 }
 
 const DAY_LABEL_OPTIONS: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };

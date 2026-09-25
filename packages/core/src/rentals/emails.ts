@@ -1,4 +1,4 @@
-import { formatOrgDate, formatOrgDateTime } from '../time/org-timezone';
+import { formatOrgDate, formatOrgDateTime, resolveOrgTimezone } from '../time/org-timezone';
 
 /**
  * THE RENTAL EMAILS, AS THE SCREENS DESCRIBE THEM.
@@ -238,19 +238,110 @@ const DAY_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
 };
 const TIME_OPTIONS: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' };
 
+/** The pieces a rental date and time are written from. */
+interface ClockParts {
+  month: string;
+  day: string;
+  year: string;
+  hour: string;
+  minute: string;
+  dayPeriod: string;
+}
+
 /**
- * Formats in the organization's zone when the caller has it (the web pages),
- * else in the device's zone (the phone, the same fallback the Exceptions
- * screens use).
+ * ONE SPELLING OF A RENTAL TIME, ON EVERY ENGINE.
+ *
+ * `toLocaleString` joins a date and a time with its own engine's pattern. On
+ * the web (V8) that is "Sep 23, 3:00 PM"; on the phone (Hermes on iOS) it is
+ * "Sep 23 at 3:00 PM", and newer locale data also puts a narrow no-break
+ * space before PM. The rental screens say the web and the phone use the same
+ * words, and they did not (simulator walk, 2026-09-25: "Sent Sep 23 at
+ * 3:00 PM." on the phone beside "Sent Sep 23, 3:00 PM." on the web). So the
+ * words are assembled here from Intl's parts (month, day, year, hour, minute
+ * and AM or PM, which every engine agrees on) with this file's own
+ * separators, never the engine's.
+ *
+ * Null when this runtime cannot give the parts; the caller then falls back to
+ * the engine's own string rather than printing nothing. A phone set to 24-hour
+ * time has no AM or PM part, and gets "15:00".
+ */
+function clockParts(
+  d: Date,
+  timeZone: string | null | undefined,
+  withYear: boolean,
+): ClockParts | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      ...DAY_TIME_OPTIONS,
+      ...(withYear ? { year: 'numeric' } : {}),
+      // resolveOrgTimezone: a zone this runtime cannot format degrades to the
+      // documented default instead of throwing out of a render.
+      ...(timeZone ? { timeZone: resolveOrgTimezone(timeZone) } : {}),
+    }).formatToParts(d);
+    const out: ClockParts = { month: '', day: '', year: '', hour: '', minute: '', dayPeriod: '' };
+    for (const p of parts) {
+      // Older Intl implementations name the AM/PM part "dayperiod".
+      const type = (p.type as string) === 'dayperiod' ? 'dayPeriod' : p.type;
+      if (type in out) out[type as keyof ClockParts] = p.value;
+    }
+    if (!out.month || !out.day || !out.hour || !out.minute || (withYear && !out.year)) return null;
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+function dayOf(p: ClockParts, withYear: boolean): string {
+  return withYear ? `${p.month} ${p.day}, ${p.year}` : `${p.month} ${p.day}`;
+}
+
+function timeOf(p: ClockParts): string {
+  return p.dayPeriod ? `${p.hour}:${p.minute} ${p.dayPeriod}` : `${p.hour}:${p.minute}`;
+}
+
+/**
+ * "Sep 23, 3:00 PM", or with `withYear` "Oct 2, 2026, 9:51 PM": the same
+ * words on the web and the phone (see clockParts). In the organization's zone
+ * when the caller has it (the web pages; the phone once it has read it), else
+ * in the device's zone. An em dash for a missing or unreadable value.
+ */
+export function formatRentalDateTime(
+  input: Date | string | null | undefined,
+  timeZone?: string | null,
+  opts: { withYear?: boolean } = {},
+): string {
+  if (input === null || input === undefined || input === '') return '—';
+  const d = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(d.getTime())) return '—';
+  const withYear = opts.withYear === true;
+  const p = clockParts(d, timeZone, withYear);
+  if (p) return `${dayOf(p, withYear)}, ${timeOf(p)}`;
+  const engineOpts: Intl.DateTimeFormatOptions = withYear
+    ? { ...DAY_TIME_OPTIONS, year: 'numeric' }
+    : DAY_TIME_OPTIONS;
+  return timeZone ? formatOrgDateTime(d, engineOpts, timeZone) : d.toLocaleString('en-US', engineOpts);
+}
+
+/**
+ * A date ("Sep 23"), a date and time ("Sep 23, 3:00 PM") or a time
+ * ("8:00 AM"), assembled from the parts (see clockParts). Formats in the
+ * organization's zone when the caller has it, else in the device's zone (the
+ * same fallback the Exceptions screens use).
  */
 function fmt(
   input: Date | string,
-  opts: Intl.DateTimeFormatOptions,
   timeZone: string | null | undefined,
   kind: 'date' | 'dateTime' | 'time',
 ): string {
   const d = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(d.getTime())) return '—';
+  const p = clockParts(d, timeZone, false);
+  if (p) {
+    if (kind === 'date') return dayOf(p, false);
+    if (kind === 'time') return timeOf(p);
+    return `${dayOf(p, false)}, ${timeOf(p)}`;
+  }
+  const opts = kind === 'date' ? DAY_OPTIONS : kind === 'time' ? TIME_OPTIONS : DAY_TIME_OPTIONS;
   if (timeZone) {
     return kind === 'date' ? formatOrgDate(d, opts, timeZone) : formatOrgDateTime(d, opts, timeZone);
   }
@@ -261,7 +352,7 @@ function fmt(
 
 /** "Sep 27, around 8:00 AM": when a run starts. */
 function runLabel(at: Date, timeZone: string | null | undefined): string {
-  return `${fmt(at, DAY_OPTIONS, timeZone, 'date')}, around ${fmt(at, TIME_OPTIONS, timeZone, 'time')}`;
+  return `${fmt(at, timeZone, 'date')}, around ${fmt(at, timeZone, 'time')}`;
 }
 
 /** The detail line for the overdue reminder. */
@@ -273,7 +364,7 @@ export function overdueReminderText(
     case 'no_email':
       return 'Not sent: no email on file.';
     case 'sent':
-      return `Sent ${fmt(state.sentAt, DAY_TIME_OPTIONS, timeZone, 'dateTime')}.`;
+      return `Sent ${fmt(state.sentAt, timeZone, 'dateTime')}.`;
     case 'returned_on_time':
       return 'Not needed: returned on time.';
     case 'closed_before_reminder':
@@ -362,13 +453,13 @@ export function overdueReminderListMark(
 ): string | null {
   switch (state.kind) {
     case 'sent':
-      return `Reminder sent ${fmt(state.sentAt, DAY_OPTIONS, timeZone, 'date')}`;
+      return `Reminder sent ${fmt(state.sentAt, timeZone, 'date')}`;
     case 'no_email':
       return 'No email on file';
     case 'reminders_off':
       return 'Reminders off';
     case 'due':
-      return `Reminder goes out ${fmt(state.at, DAY_OPTIONS, timeZone, 'date')}`;
+      return `Reminder goes out ${fmt(state.at, timeZone, 'date')}`;
     default:
       return null;
   }

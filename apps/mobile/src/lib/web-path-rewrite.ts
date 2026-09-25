@@ -80,11 +80,17 @@ const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
   { re: new RegExp(`/dashboard/exceptions/${UUID}`), to: (m) => `/exceptions/${m[1]}` },
   { re: /\/dashboard\/exceptions(\?.*)?$/, to: () => '/exceptions' },
   // Rentals (2026-09-25): one rental now has a native twin (app/rentals/[id].tsx).
-  // The member's rental emails link to the web detail, so a tap on a phone
-  // with the app opens the rental instead of home. Detail before the bare
-  // list; 'new' can never satisfy the UUID pattern. Rental ITEM pages
-  // (/dashboard/rentals/items/...) have no rule and still open home. Query
-  // (the ?status= filter) is dropped -> the full list.
+  // This covers the paths that reach the app: links inside the app, push
+  // taps, and stockpilot:// links (stockpilot:///dashboard/rentals/<id>).
+  // It does NOT make the https://stockpilotusa.com links in rental emails
+  // open the app: the iOS build declares no associated domains
+  // (app.config.ts ios.associatedDomains) and the web serves no
+  // apple-app-site-association file, so iOS opens those in Safari, on the
+  // web rental page. Universal links need both plus a native build
+  // (follow-up). Detail before the bare list; 'new' can never satisfy the
+  // UUID pattern. Rental ITEM pages (/dashboard/rentals/items/...) have no
+  // rule and still open home. Query (the ?status= filter) is dropped -> the
+  // full list.
   { re: new RegExp(`/dashboard/rentals/${UUID}`), to: (m) => `/rentals/${m[1]}` },
   { re: /\/dashboard\/rentals\/new$/, to: () => '/rentals/new' },
   { re: /\/dashboard\/rentals(\?.*)?$/, to: () => '/rentals' },

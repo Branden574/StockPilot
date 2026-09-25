@@ -87,7 +87,8 @@ describe('RentalDetailHeader borrower block', () => {
     // Sep 26 00:00 UTC is still Sep 25 in California; the server zone (UTC)
     // used to print the 26th.
     renderHeader(rental({ expected_return_at: '2099-09-26T00:00:00.000Z' }));
-    expect(screen.getByText(/Sep 25, 2099,? 5:00 PM/)).toBeTruthy();
+    // Core's formatRentalDateTime: the phone's EXPECTED RETURN reads the same.
+    expect(screen.getByText('Sep 25, 2099, 5:00 PM')).toBeTruthy();
   });
 
   it('decides Overdue at the page moment it is handed', () => {

@@ -1,5 +1,5 @@
 import { inventoryDefaultLifecycle, rentalItemsPredicate } from '@stockpilot/core';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Boxes, PackageOpen, Plus } from 'lucide-react-native';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
@@ -201,10 +201,15 @@ export default function RentalsScreen() {
     });
   }, [orgId]);
 
-  React.useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await except the deliberate pre-await clock snapshot (setNow, documented in load); the effect synchronizes with the server
-    void load();
-  }, [load]);
+  // Reload on FOCUS, not just mount, like the PO imports list: coming back
+  // from New rental after a checkout (router.back()) showed the list from
+  // before it, "0 OUT" and "No rentals yet.", until a pull to refresh
+  // (simulator walk 2026-09-25). Coming back from a rental refreshes it too.
+  useFocusEffect(
+    React.useCallback(() => {
+      void load();
+    }, [load]),
+  );
 
   // Rows fetched for another organization are not this one's rental items.
   const current = items && items.orgId === orgId ? items : null;
@@ -285,7 +290,11 @@ export default function RentalsScreen() {
       loading={loading}
       refreshing={refreshing}
       onRefresh={refresh}
-      trailing={canCreate ? <IconChip icon={Plus} onPress={() => router.push('/rentals/new')} /> : undefined}
+      trailing={
+        canCreate ? (
+          <IconChip icon={Plus} onPress={() => router.push('/rentals/new')} accessibilityLabel="New rental" />
+        ) : undefined
+      }
       keyExtractor={(r) => r.id}
       renderItem={(r) => (
         <RentalCard

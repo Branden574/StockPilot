@@ -80,34 +80,43 @@ export default function RentalDetailScreen() {
   const perms = useEffectivePermissions();
   const [load, setLoad] = React.useState<RentalDetailLoad | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
-  const [nonce, setNonce] = React.useState(0);
   // The moment the data describes, taken with it (not during render), so
   // "overdue" and the reminder's state agree until the next refresh.
   const [nowMs, setNowMs] = React.useState(() => Date.now());
+  // Only the latest read may land: one for another rental or organization,
+  // or one overtaken by a refresh, is dropped.
+  const seqRef = React.useRef(0);
+
+  const loadRental = React.useCallback(async () => {
+    if (!orgId || !id) return;
+    const seq = ++seqRef.current;
+    const result = await loadRentalDetail(supabase, orgId, id);
+    if (seq !== seqRef.current) return;
+    setNowMs(Date.now());
+    setLoad(result);
+  }, [orgId, id]);
 
   React.useEffect(() => {
-    if (!orgId || !id) return;
-    let cancelled = false;
-    void (async () => {
-      const result = await loadRentalDetail(supabase, orgId, id);
-      if (cancelled) return;
-      setNowMs(Date.now());
-      setLoad(result);
-      setRefreshing(false);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [orgId, id, nonce]);
+    void loadRental();
+  }, [loadRental]);
 
   function goBack() {
     if (router.canGoBack()) router.back();
     else router.replace('/rentals');
   }
 
-  function reload() {
+  // Pull to refresh and Try again. The spinner (and the disabled Try again)
+  // end when THIS read ends, whatever it found, the way the order screen's
+  // retry does. They used to wait for the load effect, which returns early
+  // with no organization, so a Try again tapped while the workspace was unset
+  // stayed disabled for good (simulator walk 2026-09-25).
+  async function reload() {
     setRefreshing(true);
-    setNonce((n) => n + 1);
+    try {
+      await loadRental();
+    } finally {
+      setRefreshing(false);
+    }
   }
 
   if (!enabled) {
@@ -130,7 +139,7 @@ export default function RentalDetailScreen() {
 
   if (!load.ok) {
     return (
-      <Gate onBack={goBack} onRetry={load.notFound ? undefined : reload} retrying={refreshing}>
+      <Gate onBack={goBack} onRetry={load.notFound ? undefined : () => void reload()} retrying={refreshing}>
         {load.notFound
           ? 'This rental is not available. It may belong to a warehouse you cannot see.'
           : `Could not load this rental. ${load.message}`}
@@ -150,7 +159,7 @@ export default function RentalDetailScreen() {
       <TopBar onBack={goBack} />
       <ScrollView
         contentContainerStyle={styles.body}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={reload} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void reload()} />}
       >
         <View style={styles.head}>
           <Eyebrow>{rental.warehouseName ? `RENTAL · ${rental.warehouseName}` : 'RENTAL'}</Eyebrow>
@@ -308,7 +317,7 @@ function TopBar({ onBack }: { onBack: () => void }) {
   return (
     <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
       <View style={styles.topbar}>
-        <IconChip icon={ChevronLeft} onPress={onBack} />
+        <IconChip icon={ChevronLeft} onPress={onBack} accessibilityLabel="Back" />
       </View>
     </SafeAreaView>
   );

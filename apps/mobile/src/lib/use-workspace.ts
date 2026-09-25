@@ -70,7 +70,12 @@ function publish(next: Partial<WorkspaceState>) {
   for (const fn of listeners) fn(cached);
 }
 
-async function loadOrgs(userId: string) {
+/**
+ * The user's accepted memberships, or null when the read FAILED (offline, a
+ * dropped connection, a 5xx). A failed read is not "a member of nothing":
+ * hydrate() keeps the workspace already on screen instead (see there).
+ */
+async function loadOrgs(userId: string): Promise<OrgOption[] | null> {
   const { data, error } = await supabase
     .from('organization_members')
     .select('role, organization_id, organizations:organization_id (name)')
@@ -78,7 +83,7 @@ async function loadOrgs(userId: string) {
     .not('accepted_at', 'is', null);
   if (error) {
     console.warn('[workspace] loadOrgs failed:', error.message);
-    return [] as OrgOption[];
+    return null;
   }
   const rows = (data ?? []) as Array<Record<string, unknown>>;
   return rows
@@ -153,6 +158,14 @@ async function loadProfileDefaultOrg(userId: string): Promise<string | null> {
 /** Switches that have started (see hydrate). */
 let switchesStarted = 0;
 
+/**
+ * The account epoch the workspace on screen was chosen in (by a hydrate or a
+ * switch), or null while none is shown. hydrate() keeps that workspace
+ * through a failed membership read only when it belongs to the account still
+ * signed in.
+ */
+let shownEpoch: number | null = null;
+
 // A different account (or none) ends the account epoch the moment auth says
 // so, before any screen reacts: a workspace load or switch still running for
 // the previous account then saves and shows nothing. A token refresh keeps the
@@ -167,7 +180,7 @@ supabase.auth.onAuthStateChange((_event, session) => {
 async function hydrate(userId: string) {
   const epochAtStart = accountEpoch();
   const switchesAtStart = switchesStarted;
-  const [orgs, persisted, profileDefault] = await Promise.all([
+  const [memberships, persisted, profileDefault] = await Promise.all([
     loadOrgs(userId),
     AsyncStorage.getItem(ACTIVE_ORG_STORAGE_KEY),
     loadProfileDefaultOrg(userId),
@@ -179,6 +192,22 @@ async function hydrate(userId: string) {
   // The account changed while these reads were out (sign-out, another user,
   // eviction): this load belongs to an account that is gone.
   if (accountEpoch() !== epochAtStart) return;
+  // THE MEMBERSHIP READ FAILED (offline, a dropped connection). Every screen
+  // that mounts runs this load, and a failed read used to count as "a member
+  // of nothing": the workspace became null for the WHOLE APP, and every screen
+  // reading with it stopped asking. On the phone's rental screens that was a
+  // Try again that did nothing, or stayed disabled, after the connection came
+  // back, until some other screen mounted online (simulator walk 2026-09-25).
+  // So the workspace this account already has on screen stays, with its
+  // warehouses: nothing new is chosen, saved or wiped, and every read made
+  // with it is still answered by the server under the user's own access. With
+  // no workspace yet for this account (a cold start offline), there is
+  // nothing to keep and none is shown, as before.
+  if (memberships === null && cached.activeOrgId !== null && shownEpoch === epochAtStart) {
+    publish({ loading: false });
+    return;
+  }
+  const orgs = memberships ?? [];
   // A switch made while these reads were out has already saved, wiped and
   // published its workspace. Deciding from the value read above would put the
   // screen back on the old workspace while every request and the cache use the
@@ -225,6 +254,7 @@ async function hydrate(userId: string) {
   }
   const activeOrg = orgs.find((o) => o.id === activeOrgId) ?? null;
   const activeWarehouse = warehouses.find((w) => w.id === activeWarehouseId) ?? null;
+  shownEpoch = activeOrgId ? epochAtStart : null;
   publish({
     loading: false,
     orgs,
@@ -277,6 +307,7 @@ async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
   }
   if (epoch !== accountEpoch()) return; // signed out mid-switch: show nothing
   const orgRow = cached.orgs.find((o) => o.id === orgId) ?? null;
+  shownEpoch = epoch;
   publish({
     activeOrgId: orgId,
     activeOrgName: orgRow?.name ?? null,
@@ -344,6 +375,7 @@ export function useWorkspace(): WorkspaceState {
 
   React.useEffect(() => {
     if (!user) {
+      shownEpoch = null;
       publish({
         loading: false,
         orgs: [],
