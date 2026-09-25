@@ -8,6 +8,7 @@ import {
   ForbiddenError,
   roleSeesEveryWarehouse,
 } from '@/lib/auth/warehouse';
+import { isIsbnSearch } from '@/lib/books/isbn-variants';
 import { rankItemMatches, type ItemMatchTier } from '@/lib/inventory/rank-item-matches';
 import type { PlaceDest } from '@/lib/locations/destination-option';
 import { isRackShelfLocation, isSystemLocation } from '@/lib/locations/groups';
@@ -947,7 +948,8 @@ export interface ItemLineLabelRow {
   is_bundle: boolean;
 }
 
-/** searchForPicker: the most matches it reads and ranks for one search. */
+/** searchForPicker: the most rows each of its reads returns (the matches, the
+ *  name/SKU prefix read, the word read) for one search. */
 export const PICKER_RANK_WINDOW = 200;
 /** searchForPicker: rows returned when the caller names no limit. */
 export const PICKER_DEFAULT_LIMIT = 20;
@@ -996,14 +998,33 @@ export interface ItemPickerRow {
 /**
  * The codes an exact SKU/barcode lookup asks for: the search as typed, upper
  * and lower case (SKUs are usually stored in one case and typed in the
- * other), and the ISBN forms of a typed ISBN. Double quotes and backslashes
- * are dropped because each value is quoted inside the filter string.
+ * other), plus `extra` (the other ISBN form of a typed ISBN, which is only
+ * ever a barcode). Double quotes and backslashes are dropped because each
+ * value is quoted inside the filter string.
  */
-function exactCodeCandidates(term: string, isbnVariants: readonly string[]): string[] {
-  const values = [term, term.toUpperCase(), term.toLowerCase(), ...isbnVariants]
+function exactCodeCandidates(term: string, extra: readonly string[] = []): string[] {
+  const values = [term, term.toUpperCase(), term.toLowerCase(), ...extra]
     .map((v) => v.replace(/["\\]/g, '').trim())
     .filter((v) => v.length > 0);
   return [...new Set(values)];
+}
+
+/**
+ * The search as the body of a LIKE pattern for searchForPicker's prefix and
+ * word reads: whitespace collapsed, and every character the filter string
+ * cannot carry unquoted or LIKE would read as its own syntax (, ( ) % * " \)
+ * turned into `_`, which matches any one character. So "Pen (blue)" still
+ * reads the item named exactly that, and a leading double quote cannot open a
+ * quoted filter value. A wildcard only widens the read; the ranker compares
+ * the literal text, and the reads also carry every word's clause, so they
+ * never return a row the matches would not.
+ */
+function pickerLikeBody(search: string): string {
+  return search
+    .trim()
+    .slice(0, 120)
+    .replace(/\s+/g, ' ')
+    .replace(/[,()%*"\\]/g, '_');
 }
 
 /** One row of listByIdsForExport: list()'s item row without the placement
@@ -1862,7 +1883,15 @@ export class InventoryService {
    *     count (so the picker can say "20 of 143");
    *   - beside it, for a one-word search, an exact SKU/barcode lookup of at
    *     most PICKER_EXACT_LIMIT rows, so the item whose code was typed or
-   *     scanned is found even when more than PICKER_RANK_WINDOW rows match.
+   *     scanned is found even when more than PICKER_RANK_WINDOW rows match;
+   *   - and two reads of the next tiers, name order, at most
+   *     PICKER_RANK_WINDOW each: a name or SKU that starts with the search,
+   *     and a word in the name that does. The matches window is the first
+   *     rows in NAME order, so for a broad search ("pen", "math") the items
+   *     that start with it sort past it, behind "Appendix..." and "Everyday
+   *     Mathematics"; these reads bring them anyway. Both carry every word's
+   *     clause, so each is a subset of the matches and `total` still counts
+   *     every row returned.
    *
    * Then rankItemMatches puts them in relevance order and the first `limit`
    * go back. No holdings, no value sum, no images. A manager or above skips
@@ -1879,8 +1908,11 @@ export class InventoryService {
    * category grants, status (default active), awaiting_first_receipt
    * (default excluded; 'any' = no predicate), item_type (undefined =
    * product, 'all' = none, itemTypes wins), kits when excludeBundles, and
-   * never a rental. Both requests carry the same scope, so the exact lookup
-   * can never widen what the caller sees.
+   * never a rental. Every request carries the same scope, so no extra read
+   * can widen what the caller sees.
+   *
+   * ISBN forms (`isbnVariants`, from the route's isbn=1) count only when the
+   * search IS an ISBN (isIsbnSearch), and only as barcodes.
    */
   async searchForPicker(
     filters: ItemPickerSearchFilters,
@@ -1901,13 +1933,23 @@ export class InventoryService {
     if (term.length < 2) return none;
     const words = [...new Set(term.split(' '))].slice(0, PICKER_MAX_WORDS);
     const oneWord = words.length === 1;
-    // An ISBN is one word; its other form only means something as one.
-    const isbnVariants = oneWord ? (filters.isbnVariants ?? []) : [];
+    // An ISBN is one word, and its other form only means something when the
+    // search is an ISBN. isbnVariants() keeps the digits of whatever it is
+    // given, so without isIsbnSearch the SKU "ABC1234567890" would bring in
+    // the unrelated item whose barcode is "1234567890" and rank it exact.
+    const isbnVariants = oneWord && isIsbnSearch(term) ? (filters.isbnVariants ?? []) : [];
 
     const viewerGrantsRead = this.viewerCategoryGrants();
     const access = roleSeesEveryWarehouse(this.ctx.role)
       ? null
       : await getWarehouseAccess(this.ctx);
+    if (access?.unreadable) {
+      // A failed assignments or membership read is not "no warehouses".
+      // Answering it with an empty list made the picker say "No items match"
+      // when the search had failed; this way it shows its error and Try
+      // again. Access stays denied either way: nothing is read.
+      throw new ServiceError('internal_error', 'Warehouse access could not be read');
+    }
     if (access && !access.hasAllAccess && access.readableIds.length === 0) return none;
 
     let grantsInUrl: string[] | null = null;
@@ -1963,29 +2005,54 @@ export class InventoryService {
       return query.eq('is_rental', false);
     };
 
-    let matchesQuery = scoped(true);
-    for (const word of words) {
-      const clause = buildItemSearchClause(word, isbnVariants);
-      if (clause) matchesQuery = matchesQuery.or(clause);
-    }
-    const matchesRead = matchesQuery
+    // The scope plus every word's clause: what "matches the search" means.
+    const matching = (withCount: boolean) => {
+      let query = scoped(withCount);
+      for (const word of words) {
+        const clause = buildItemSearchClause(word, isbnVariants);
+        if (clause) query = query.or(clause);
+      }
+      return query;
+    };
+
+    const matchesRead = matching(true)
       .order('name', { ascending: true })
       .order('id', { ascending: true })
       .range(0, PICKER_RANK_WINDOW - 1);
 
-    const exactCodes = oneWord ? exactCodeCandidates(term, isbnVariants) : [];
-    const exactList = exactCodes.map((v) => `"${v}"`).join(',');
+    const skuCodes = oneWord ? exactCodeCandidates(term) : [];
+    const barcodeCodes = oneWord ? exactCodeCandidates(term, isbnVariants) : [];
+    const quoted = (codes: string[]) => codes.map((v) => `"${v}"`).join(',');
     const exactRead =
-      exactCodes.length > 0
+      skuCodes.length > 0
         ? scoped(false)
-            // in-list-bound: the search in up to three cases plus two ISBN forms
-            .or(`sku.in.(${exactList}),barcode.in.(${exactList})`)
+            // in-list-bound: the search in up to three cases (plus, for a
+            // barcode, the two forms of a typed ISBN)
+            .or(`sku.in.(${quoted(skuCodes)}),barcode.in.(${quoted(barcodeCodes)})`)
             .limit(PICKER_EXACT_LIMIT)
         : Promise.resolve({ data: [], error: null });
 
-    const [matchesRes, exactRes] = await Promise.all([matchesRead, exactRead]);
-    if (matchesRes.error) throw new ServiceError('internal_error', matchesRes.error.message);
-    if (exactRes.error) throw new ServiceError('internal_error', exactRes.error.message);
+    const like = pickerLikeBody(filters.q);
+    const prefixRead = matching(false)
+      .or(`name.ilike.${like}%,sku.ilike.${like}%`)
+      .order('name', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(PICKER_RANK_WINDOW);
+    const wordRead = matching(false)
+      .ilike('name', `% ${like}%`)
+      .order('name', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(PICKER_RANK_WINDOW);
+
+    const [matchesRes, exactRes, prefixRes, wordRes] = await Promise.all([
+      matchesRead,
+      exactRead,
+      prefixRead,
+      wordRead,
+    ]);
+    for (const res of [matchesRes, exactRes, prefixRes, wordRes]) {
+      if (res.error) throw new ServiceError('internal_error', res.error.message);
+    }
 
     type PickerDbRow = {
       id: string;
@@ -2000,11 +2067,8 @@ export class InventoryService {
       warehouse: { name: string | null } | Array<{ name: string | null }> | null;
     };
     const byId = new Map<string, PickerDbRow>();
-    for (const row of [
-      ...((exactRes.data ?? []) as unknown as PickerDbRow[]),
-      ...((matchesRes.data ?? []) as unknown as PickerDbRow[]),
-    ]) {
-      byId.set(row.id, row);
+    for (const res of [exactRes, prefixRes, wordRes, matchesRes]) {
+      for (const row of (res.data ?? []) as unknown as PickerDbRow[]) byId.set(row.id, row);
     }
     const rows = keepGranted([...byId.values()], grantsAfterRead);
     // Ranked against the search as typed (not the sanitized words), so
@@ -2025,7 +2089,8 @@ export class InventoryService {
           match: r.match,
         };
       }),
-      // Every exact row also matches the words, so the count covers them.
+      // Every row of every read also matches the words, so the count covers
+      // them.
       total: Math.max(matchesRes.count ?? 0, rows.length),
     };
   }

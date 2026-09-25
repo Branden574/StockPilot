@@ -75,6 +75,7 @@ describe('BundleForm components: the search picker', () => {
             quantity_on_hand: 40,
             awaiting_first_receipt: false,
             warehouse_name: 'DC4',
+            match: 'prefix',
           },
         ],
         total: 1,

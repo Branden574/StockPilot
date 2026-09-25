@@ -57,3 +57,16 @@ export function isbnVariants(isbn: string): string[] {
 
   return [...out];
 }
+
+/**
+ * Whether a search term IS an ISBN: ten characters (the last may be X) or
+ * thirteen digits starting 978 or 979, once hyphens and spaces are dropped.
+ *
+ * isbnVariants() keeps only the digits (and X) of whatever it is given, so on
+ * its own it reads the SKU "ABC1234567890" as the ISBN 1234567890. A search
+ * that uses the variants to decide what counts as an exact code checks this
+ * first.
+ */
+export function isIsbnSearch(term: string): boolean {
+  return /^(\d{9}[\dX]|97[89]\d{10})$/i.test((term ?? '').replace(/[\s-]/g, ''));
+}

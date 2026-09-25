@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isbnVariants } from './isbn-variants';
+import { isIsbnSearch, isbnVariants } from './isbn-variants';
 
 describe('isbnVariants', () => {
   it('expands an ISBN-10 to include its 978 ISBN-13 form', () => {
@@ -39,5 +39,27 @@ describe('isbnVariants', () => {
   it('returns [] for anything that is not a 10/13-length ISBN', () => {
     expect(isbnVariants('12345')).toEqual([]);
     expect(isbnVariants('')).toEqual([]);
+  });
+});
+
+describe('isIsbnSearch', () => {
+  it('accepts an ISBN-10 (X check digit too) and a 978/979 ISBN-13, with or without hyphens', () => {
+    expect(isIsbnSearch('0306406152')).toBe(true);
+    expect(isIsbnSearch('014240733X')).toBe(true);
+    expect(isIsbnSearch('014240733x')).toBe(true);
+    expect(isIsbnSearch('9780306406157')).toBe(true);
+    expect(isIsbnSearch('978-0-306-40615-7')).toBe(true);
+    expect(isIsbnSearch('9791234567896')).toBe(true);
+  });
+
+  it('refuses a code that only CONTAINS ten or thirteen digits, which isbnVariants would expand', () => {
+    // The picker's failure case: a SKU mixing letters with exactly 10 digits.
+    expect(isbnVariants('ABC1234567890')).not.toEqual([]);
+    expect(isIsbnSearch('ABC1234567890')).toBe(false);
+    expect(isIsbnSearch('SKU-0306406152')).toBe(false);
+    expect(isIsbnSearch('1234567890123')).toBe(false); // 13 digits, not 978/979
+    expect(isIsbnSearch('03064X6152')).toBe(false); // X only as the check digit
+    expect(isIsbnSearch('pencil')).toBe(false);
+    expect(isIsbnSearch('')).toBe(false);
   });
 });

@@ -33,6 +33,7 @@ function item(
     quantity_on_hand: 3,
     awaiting_first_receipt: false,
     warehouse_name: 'DC4',
+    match: 'prefix',
     ...over,
   };
 }
@@ -113,6 +114,11 @@ function optionNames(): string[] {
   return screen
     .queryAllByRole('option')
     .map((o) => o.querySelector('.font-medium')?.textContent ?? '');
+}
+
+/** The always-present polite live region. */
+function liveRegion(): HTMLElement {
+  return screen.getByRole('status');
 }
 
 function renderPicker(opts: { added?: string[]; onAdd?: (i: ComponentSearchItem) => void } = {}) {
@@ -224,8 +230,13 @@ describe('answers', () => {
     renderPicker();
     type('zzz');
     await settle();
-    expect(screen.getByText('No items match “zzz”.')).toBeInTheDocument();
-    expect(screen.getByText(/Kits, rental equipment and archived items/)).toBeInTheDocument();
+    expect(screen.getByText('No items match “zzz”.', { selector: 'p' })).toBeInTheDocument();
+    // What the list leaves out, including discontinued items (status=active).
+    expect(
+      screen.getByText(
+        "Kits, rental equipment, and archived or discontinued items aren't listed here.",
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
@@ -234,7 +245,9 @@ describe('answers', () => {
     renderPicker();
     type('pen');
     await settle();
-    expect(screen.getByRole('alert')).toHaveTextContent("Couldn't search items.");
+    // A server error is not blamed on the network.
+    expect(screen.getByRole('alert')).toHaveTextContent("Search didn't work. Try again.");
+    expect(screen.getByRole('alert')).not.toHaveTextContent('connection');
     expect(screen.queryByText(/No items match/)).not.toBeInTheDocument();
 
     answers.set('pen', { items: [item('a', 'Pencil')] });
@@ -245,12 +258,26 @@ describe('answers', () => {
     expect(optionNames()).toEqual(['Pencil']);
   });
 
-  it('a network failure is an error too', async () => {
+  it('a network failure is an error too, and says to check the connection', async () => {
     answers.set('pen', { reject: true });
     renderPicker();
     type('pen');
     await settle();
-    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      "Couldn't reach the server. Check your connection and try again.",
+    );
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+  });
+
+  it('an ended session says to sign in again, with no Try again that cannot work', async () => {
+    answers.set('pen', { status: 401 });
+    renderPicker();
+    type('pen');
+    await settle();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Your session has ended. Refresh the page to sign in again.',
+    );
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
   });
 
   it('says how many matches it is not showing', async () => {
@@ -285,6 +312,31 @@ describe('answers', () => {
     expect(row).toHaveTextContent('Book');
     expect(row).toHaveTextContent('Expected');
     expect(row).toHaveTextContent('0 on hand');
+  });
+
+  it('a long name gets two lines and its full text on hover, and the details wrap instead of being cut off', async () => {
+    const long =
+      'Harry Potter and the Sorcerer’s Stone, Grade 5 Classroom Set, Paperback Edition';
+    answers.set('harry', {
+      items: [
+        item('b', long, {
+          item_type: 'book',
+          awaiting_first_receipt: true,
+          warehouse_name: 'Learn4Life Distribution Center 4',
+        }),
+      ],
+    });
+    renderPicker();
+    type('harry');
+    await settle();
+    const row = screen.getByRole('option');
+    const name = row.querySelector('.font-medium')!;
+    expect(name).toHaveAttribute('title', long);
+    expect(name).toHaveClass('line-clamp-2');
+    expect(name).not.toHaveClass('truncate');
+    const details = within(row).getByText('SKU-b').parentElement!;
+    expect(details).toHaveClass('flex-wrap');
+    expect(details).not.toHaveClass('truncate');
   });
 });
 
@@ -363,6 +415,246 @@ describe('keyboard and ARIA', () => {
     await settle();
     fireEvent.click(screen.getAllByRole('option')[2]!);
     expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ id: 'c' }));
+  });
+
+  it('the highlighted row carries a visible marker beyond the faint tint', async () => {
+    renderPicker();
+    type('pen');
+    await settle();
+    const [first, second] = screen.getAllByRole('option');
+    const marker = 'shadow-[inset_3px_0_0_hsl(var(--accent-foreground))]';
+    expect(first).toHaveClass(marker);
+    expect(second).not.toHaveClass(marker);
+  });
+});
+
+describe('the pointer and the keyboard', () => {
+  const ten = Array.from({ length: 10 }, (_, i) => item(`id-${i}`, `Pen ${i}`));
+  const at = { screenX: 400, screenY: 300 };
+
+  function options() {
+    return screen.getAllByRole('option');
+  }
+
+  function highlighted(): string | undefined {
+    return options()
+      .find((o) => o.getAttribute('aria-selected') === 'true')
+      ?.id.replace(/^.*-option-/, '');
+  }
+
+  it('moving the pointer over a row highlights it', async () => {
+    answers.set('pen', { items: ten });
+    renderPicker();
+    type('pen');
+    await settle();
+    fireEvent.mouseEnter(options()[2]!, { screenX: 400, screenY: 280 });
+    fireEvent.mouseMove(options()[2]!, at);
+    expect(highlighted()).toBe('id-2');
+  });
+
+  it('a list the arrow keys scroll under a still pointer keeps the row the keys reached, and Enter adds it', async () => {
+    // Real Chrome, mouse resting on the list: each ArrowDown scrolls the list,
+    // and the browser reports the row now under the pointer (mouseenter, and
+    // a move at the same spot). That row used to take the highlight, so six
+    // presses went id-3 id-4 id-3 id-4 id-5 id-4 and Enter added the wrong item.
+    answers.set('pen', { items: ten });
+    const onAdd = renderPicker();
+    type('pen');
+    await settle();
+    fireEvent.mouseEnter(options()[1]!, { screenX: 400, screenY: 280 });
+    fireEvent.mouseMove(options()[1]!, at);
+    expect(highlighted()).toBe('id-1');
+    for (let press = 1; press <= 6; press += 1) {
+      fireEvent.keyDown(input(), { key: 'ArrowDown' });
+      // The scroll slides another row under the still pointer.
+      const under = options()[1 + Math.ceil(press / 2)]!;
+      fireEvent.mouseEnter(under, at);
+      fireEvent.mouseMove(under, at);
+    }
+    expect(highlighted()).toBe('id-7');
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ id: 'id-7' }));
+  });
+
+  it('the list scrolls for the keys, never for the pointer', async () => {
+    answers.set('pen', { items: ten });
+    const scrolled: string[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.id.replace(/^.*-option-/, ''));
+    };
+    try {
+      renderPicker();
+      type('pen');
+      await settle();
+      scrolled.length = 0;
+      fireEvent.mouseEnter(options()[4]!, { screenX: 400, screenY: 280 });
+      fireEvent.mouseMove(options()[4]!, at);
+      expect(highlighted()).toBe('id-4');
+      expect(scrolled).toEqual([]);
+      fireEvent.keyDown(input(), { key: 'ArrowDown' });
+      expect(scrolled).toEqual(['id-5']);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+});
+
+describe('what a screen reader hears', () => {
+  it('one polite live region is always present, before anything is typed', () => {
+    renderPicker();
+    const region = liveRegion();
+    expect(region).toHaveAttribute('aria-live', 'polite');
+    expect(region).toHaveAttribute('aria-atomic', 'true');
+    expect(region).toHaveTextContent('');
+    // The only status region: the visible messages do not announce twice.
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+  });
+
+  it('says it is searching, then how many items matched and how to choose', async () => {
+    answers.set('pen', {
+      items: Array.from({ length: 20 }, (_, i) => item(`i${i}`, `Pen ${i}`)),
+      total: 143,
+    });
+    renderPicker();
+    type('pen');
+    expect(liveRegion()).toHaveTextContent('Searching…');
+    await settle();
+    expect(liveRegion()).toHaveTextContent(
+      '20 of 143 items. Use the up and down arrows to choose, Enter to add.',
+    );
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+  });
+
+  it('says one item, or all of them, when nothing is left out', async () => {
+    answers.set('pen', { items: [item('a', 'Pen')] });
+    answers.set('penc', { items: [item('a', 'Pen'), item('b', 'Pencil')] });
+    renderPicker();
+    type('pen');
+    await settle();
+    expect(liveRegion()).toHaveTextContent(
+      '1 item. Use the up and down arrows to choose, Enter to add.',
+    );
+    type('penc');
+    await settle();
+    expect(liveRegion()).toHaveTextContent(
+      '2 items. Use the up and down arrows to choose, Enter to add.',
+    );
+  });
+
+  it('says when nothing matches', async () => {
+    answers.set('zzq', { items: [] });
+    renderPicker();
+    type('zzq');
+    await settle();
+    expect(liveRegion()).toHaveTextContent('No items match “zzq”.');
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+  });
+
+  it('says which item was added, after the list closes', async () => {
+    answers.set('pen', { items: [item('a', 'Pen'), item('b', 'Pencil')] });
+    renderPicker();
+    type('pen');
+    await settle();
+    fireEvent.keyDown(input(), { key: 'ArrowDown' });
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    expect(input()).toHaveAttribute('aria-expanded', 'false');
+    expect(liveRegion()).toHaveTextContent('Added Pencil.');
+    // The next search replaces it.
+    type('p');
+    expect(liveRegion()).toHaveTextContent('');
+  });
+
+  it('leaves a failure to its alert', async () => {
+    answers.set('pen', { status: 500 });
+    renderPicker();
+    type('pen');
+    await settle();
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(liveRegion()).toHaveTextContent('');
+  });
+});
+
+describe('a barcode scanner (the code and Enter, faster than the search)', () => {
+  const HP = '9780439708180';
+
+  it('adds the one exact match once the answer arrives, and clears the box for the next scan', async () => {
+    answers.set(HP, {
+      items: [
+        item('hp', "Harry Potter and the Sorcerer's Stone", { barcode: HP, match: 'exact' }),
+        item('x', 'Harry Potter box set', { match: 'contains' }),
+      ],
+    });
+    const onAdd = renderPicker();
+    type(HP);
+    // Enter lands before the search has even been sent.
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    expect(onAdd).not.toHaveBeenCalled();
+    await settle();
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ id: 'hp' }));
+    expect(input().value).toBe('');
+    expect(liveRegion()).toHaveTextContent("Added Harry Potter and the Sorcerer's Stone.");
+  });
+
+  it('with no exact match, adds nothing and selects the code so the next scan replaces it', async () => {
+    answers.set(HP, { items: [item('x', 'Harry Potter box set', { match: 'contains' })] });
+    const onAdd = renderPicker();
+    type(HP);
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    await settle();
+    expect(onAdd).not.toHaveBeenCalled();
+    expect(input().value).toBe(HP);
+    expect(input().selectionStart).toBe(0);
+    expect(input().selectionEnd).toBe(HP.length);
+    // Still there to choose from.
+    expect(optionNames()).toEqual(['Harry Potter box set']);
+  });
+
+  it('two exact matches (one code in two warehouses) are a choice, not a guess', async () => {
+    answers.set(HP, {
+      items: [
+        item('a', 'Harry Potter', { barcode: HP, match: 'exact', warehouse_name: 'DC4' }),
+        item('b', 'Harry Potter', { barcode: HP, match: 'exact', warehouse_name: 'CVW' }),
+      ],
+    });
+    const onAdd = renderPicker();
+    type(HP);
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    await settle();
+    expect(onAdd).not.toHaveBeenCalled();
+    expect(input().selectionEnd).toBe(HP.length);
+  });
+
+  it('an exact match already in the bundle is not added twice', async () => {
+    answers.set(HP, { items: [item('hp', 'Harry Potter', { barcode: HP, match: 'exact' })] });
+    const onAdd = renderPicker({ added: ['hp'] });
+    type(HP);
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    await settle();
+    expect(onAdd).not.toHaveBeenCalled();
+  });
+
+  it('an Enter belongs to the search it was pressed on: typing on drops it', async () => {
+    answers.set('SKU-1', { items: [item('one', 'One', { match: 'exact' })] });
+    answers.set('SKU-12', { items: [item('twelve', 'Twelve', { match: 'exact' })] });
+    const onAdd = renderPicker();
+    type('SKU-1');
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    type('SKU-12');
+    await settle();
+    expect(onAdd).not.toHaveBeenCalled();
+  });
+
+  it('Escape drops a waiting Enter', async () => {
+    answers.set(HP, { items: [item('hp', 'Harry Potter', { barcode: HP, match: 'exact' })] });
+    const onAdd = renderPicker();
+    type(HP);
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    fireEvent.keyDown(input(), { key: 'Escape' });
+    await settle();
+    expect(onAdd).not.toHaveBeenCalled();
   });
 });
 
