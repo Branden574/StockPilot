@@ -30,20 +30,19 @@ export const RELEASES: Release[] = [
   {
     // F1-1 (#260, 0370) and the holdings staff scope (#261, 0371) are LIVE:
     // web deployed 2026-09-25, phone half in OTA bbc7e0c8 the same day. #251
-    // (crate labels) is live on web since 2026-09-24. DRAFT only until the
-    // Demo Co walk (F1-1 rollout step 6) and the owner's go: then set
-    // publishedAt to the real announcement time and status to 'published'.
-    // It sits ABOVE fixes-and-improvements-2026-09-25 on purpose: it holds the
-    // newest changes, and the notice offers only the top unread release. If
-    // the two are published at different times, this one's publishedAt must
-    // stay the later of the two.
+    // (crate labels) is live on web since 2026-09-24. PUBLISHED on the
+    // owner's go of 2026-09-25: the production deployment that contains this
+    // commit announces it. It sits ABOVE fixes-and-improvements-2026-09-25 on
+    // purpose: it holds the newest changes, and the notice offers only the
+    // top unread release, so its publishedAt must never be earlier than that
+    // release's.
     id: 'exception-tracking-2026-09',
     revision: 1,
-    status: 'draft',
+    status: 'published',
     title: 'Exceptions now keep a history, and are in the mobile app',
     summary:
       'Each problem on the Exceptions page now has its own number, a timeline with acknowledgements and notes, and the date it cleared. The system checks every 15 minutes and after each posted or cancelled count, and resolves an exception by itself once the problem is gone. Exceptions are also in the mobile app. Staff and viewers now see stock locations only in the warehouses they are assigned to, with stock elsewhere shown as one figure.',
-    publishedAt: '2026-09-25T20:00:00Z',
+    publishedAt: '2026-09-25T15:00:00Z',
     entries: [
       {
         id: 'exception-occurrences',
@@ -70,7 +69,7 @@ export const RELEASES: Release[] = [
           'The mobile app has an Exceptions screen in the menu, with the same Open and Resolved lists, the same wording and the same detail as the web app. You can acknowledge an exception and add notes from your phone.',
         whyItMatters: 'Most of these problems are fixed at the rack, not at a desk.',
         howItAffectsYou:
-          'Acknowledging and adding notes need a connection. While offline, the screen shows the list as it was when it last loaded, with that time, and the buttons are turned off with the reason.',
+          'Acknowledging and adding notes need a connection, and while offline those buttons are turned off with the reason. Offline, the screen shows the list as it was when it last loaded since you opened the app, with that time. If it has not loaded since then, it says it needs a connection.',
         whatToDo:
           'Open Exceptions from the menu in the mobile app. If it is not in the menu yet, close the app completely and open it again to load the latest update.',
         link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
@@ -84,7 +83,7 @@ export const RELEASES: Release[] = [
         whatChanged:
           'Staff and viewers now see rack, Staging and Unplaced holdings only in the warehouses they are assigned to. Where an item also has stock elsewhere, the item page, the Items, Books and Rentals item lists, the Transfer dialog, and the item, scan, Move stock and Remove from rack screens in the mobile app show it as one figure, such as 12 in other warehouses. Staff can transfer stock, or adjust it at a location, only in their own warehouses.',
         whyItMatters:
-          'Before, staff saw the stock locations of every warehouse while viewers saw only their own, and a viewer was shown a breakdown that did not add up to on hand. Both now see their own warehouses in detail and the rest as a total, so the figures add up.',
+          'Before this, a viewer’s figures counted stock held in other warehouses, including stock waiting in Staging or Unplaced there, as placed on a rack, so the racks listed for an item did not add up to its placed figure. Staff and viewers now see their own warehouses in detail and the rest as one total, so the figures add up.',
         howItAffectsYou:
           'On hand is still the total for the whole organization. Transfer and Move stock offer only locations in your own warehouses, plus locations that belong to no warehouse, and stock going to or coming from another warehouse has to be moved by a manager. If the figure for other warehouses cannot be loaded, the screen says so instead of showing a partial total. Managers, admins and owners see and move stock in every warehouse, as before.',
         whatToDo:
@@ -98,7 +97,7 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: 'Stock in a crate on its labelled rack is no longer flagged as a label problem',
         whatChanged:
-          'The Label will not lead to the stock check on the Exceptions page no longer lists an item whose label names a rack when the stock is in a crate sitting on that rack, for example a label of 43-B · Gray #5 with the stock in Gray #5 on rack 43-B. It also accepts a rack written with spaces, such as 22 - B for 22-B.',
+          'The Exceptions page no longer lists a “Label will not lead to the stock” problem when the label names a rack and the stock is in a crate on that rack, for example a label of 43-B · Gray #5 with the stock in Gray #5 on rack 43-B. It also accepts a rack written with spaces, such as 22 - B for 22-B.',
         whyItMatters:
           'Those labels were correct, so the page listed items that needed no attention, which made the real label problems harder to find.',
         howItAffectsYou:
@@ -116,16 +115,16 @@ export const RELEASES: Release[] = [
     // exception-tracking-2026-09 above, and so is #248's staff transfer rule
     // (folded into stock-in-other-warehouses). Covers #208 #217 #218 #224
     // #225 #228 #229 #233 #235 #236 #238 #239 #241 #242 #244 #245 #246 #248
-    // #249 #252 #253 #254 #255 #256 #257 #259. publishedAt is a placeholder:
-    // set it to the real announcement time with status 'published', no later
-    // than exception-tracking-2026-09's.
+    // #249 #252 #253 #254 #255 #256 #257 #259. PUBLISHED with
+    // exception-tracking-2026-09, on the same go; its publishedAt must never
+    // be later than that release's.
     id: 'fixes-and-improvements-2026-09-25',
     revision: 1,
-    status: 'draft',
+    status: 'published',
     title: 'Fixes to cycle counts, new items, offline work, orders and purchase orders',
     summary:
-      'Fixes and improvements since September 18. Cycle counts apply each correction once, measure offline counts at the time they were taken, and have reference numbers such as CC-000042 with a searchable history. Stock added without a rack now waits in Unplaced. The mobile app keeps work saved offline and asks before signing out with unsent changes. Orders, purchase orders and rentals check stock more carefully. What you see depends on your role and the features your organization uses.',
-    publishedAt: '2026-09-25T20:00:00Z',
+      'Changes since September 18. Cycle counts apply each correction once, measure offline counts at the time they were taken, and have references such as CC-000042. Stock added without a rack waits in Unplaced. The mobile app no longer loses work saved offline. Order approval checks the combined quantity of repeated items, reorder drafts skip items already on order, and the rental cart is kept apart from the Orders basket. What you see depends on your role and the features your organization uses.',
+    publishedAt: '2026-09-25T15:00:00Z',
     entries: [
       {
         id: 'count-corrections-applied-once',
@@ -247,11 +246,11 @@ export const RELEASES: Release[] = [
         title:
           'A screen that cannot load something now says so, and an ended session goes to sign-in',
         whatChanged:
-          'When a read fails for a moment, screens now say so instead of showing a wrong answer. An order that could not be loaded shows an error with Try again, not a page saying it does not exist. An item’s Movements or Activity tab says it could not load the history instead of showing none. In the mobile app, a list that fails to load shows an error with Try again instead of an empty list. If your session in a browser has ended, the next page opens sign-in with a message instead of an error page.',
+          'When a read fails for a moment, screens now say so instead of showing a wrong answer. An order that could not be loaded shows an error with Try again, not a page saying it does not exist. An item’s Movements or Activity tab says it could not load the history instead of showing none. In the mobile app, the Items, Books, Rentals and Team lists say when they could not load, instead of looking empty, and ask you to pull down to try again. If your session in a browser has ended, the next page opens sign-in with a message instead of an error page.',
         whyItMatters:
           'A brief connection problem was shown as a fact, such as a missing order, an empty history or no assigned warehouses, which could make an order look deleted or send people to an admin to fix access that was fine.',
         howItAffectsYou:
-          'If you see one of these messages, nothing was changed. Reload the page or choose Try again. If StockPilot cannot check your two-factor status for a moment, it asks you to reload or try again. A browser you sign out from Active sessions on another device is signed out straight away.',
+          'If you see one of these messages, nothing was changed. Reload the page, choose Try again, or pull down in the mobile app. If StockPilot cannot check your two-factor status for a moment, it asks you to reload or try again. A browser you sign out from Active sessions on another device is signed out straight away.',
         whatToDo:
           'No action needed. If the same message keeps appearing, tell us through Support and feedback.',
         link: { href: '/dashboard/support', label: 'Open Support & feedback' },
@@ -263,7 +262,7 @@ export const RELEASES: Release[] = [
         title:
           'Every rental item is listed, and the rental cart is kept apart from the Orders basket',
         whatChanged:
-          'Rentals, Items in the web app now lists every rental item, and the Rentals screen in the mobile app has an Items view with each item’s units on hand, out and available. The New rental page keeps its own cart, separate from the Orders basket, and choosing another warehouse there loads that warehouse’s rental items. Orders now refuse rental items. Mark returned and Cancel rental finish without an error when someone else closed the rental a moment before.',
+          'Rentals, Items in the web app now lists every rental item, and the Rentals screen in the mobile app has an Items view with each item’s units on hand, out and available. The New rental page keeps its own cart, separate from the Orders basket, and choosing another warehouse there loads that warehouse’s rental items. Orders your team creates in the web app, and items added to an order on the web or in the mobile app, now refuse rental items. Mark returned and Cancel rental finish without an error when someone else closed the rental a moment before.',
         whyItMatters:
           'The web page looked for rentals only among the first 50 items, so some rental items were missing. Items left in the Orders basket were carried into the rental cart without being shown, which could make checkout fail, and finishing a rental emptied the Orders basket. Changing the warehouse left the first warehouse’s items on screen.',
         howItAffectsYou:
@@ -300,7 +299,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'A relative time is hard to match against a delivery or an invoice date, and StockPilot did not show who had uploaded a file.',
         howItAffectsYou:
-          'Dates follow your organization’s time zone. The uploader is shown by name, or by email when no name is set, and someone who has left your organization is shown as Former member. In the mobile app, an imports list that fails to load now says so and asks you to pull down to try again, instead of saying No imports yet.',
+          'In the web app, dates follow your organization’s time zone. The uploader is shown by name, or by email when no name is set, and someone who has left your organization is shown as Former member. In the mobile app, an imports list that fails to load now says so and asks you to pull down to try again, instead of saying No imports yet.',
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/purchase-orders/imports', label: 'Open PO imports' },
         audience: { anyPermission: ['purchase_orders:manage'], modules: ['po_imports'] },
