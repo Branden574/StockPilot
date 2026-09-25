@@ -113,6 +113,15 @@ interface ApiOptions {
    * uses it so one account's queued work can never be sent as another's.
    */
   asUserId?: string;
+  /**
+   * Called synchronously as the request is handed to fetch, after the auth and
+   * org headers are resolved. That can be seconds after api() was called (the
+   * session read may refresh the token), and it is the earliest moment the
+   * server can receive the request: item-adjust.ts starts its "may still
+   * land" window here, not at the tap. The timeout is armed in the same
+   * tick, so a failure is never more than `timeoutMs` after this call.
+   */
+  onSend?: () => void;
 }
 
 // React Native's fetch has NO default timeout. A half-open TCP / captive-portal
@@ -179,6 +188,7 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
     // the send.
     const payload =
       typeof opts.body === 'function' ? (opts.body as () => unknown)() : opts.body;
+    opts.onSend?.();
     const res = await fetch(`${API_URL}${path}`, {
       method: opts.method ?? 'GET',
       headers,

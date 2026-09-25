@@ -258,6 +258,14 @@ export interface AdjustStockResult {
   quantityOnHand?: number;
 }
 
+export interface AdjustSendHooks {
+  /**
+   * Called as the request is handed to fetch (api()'s onSend). The sender
+   * times its "may still land" window from here, not from the tap.
+   */
+  onSend?: () => void;
+}
+
 /**
  * Manually adjust an item's on-hand total — native parity for the web
  * item page's adjust dialog. POSTs to /api/v1/items/<id>/adjust, which routes
@@ -280,10 +288,12 @@ export interface AdjustStockResult {
 export async function adjustItemStock(
   itemId: string,
   body: AdjustStockBody,
+  hooks: AdjustSendHooks = {},
 ): Promise<AdjustStockResult> {
   return ((await api(`/api/v1/items/${itemId}/adjust`, {
     method: 'POST',
     body,
+    onSend: hooks.onSend,
   })) ?? {}) as AdjustStockResult;
 }
 

@@ -1,4 +1,9 @@
-import { adjustItemStock, type AdjustStockBody, type AdjustStockResult } from './stock-api';
+import {
+  adjustItemStock,
+  type AdjustSendHooks,
+  type AdjustStockBody,
+  type AdjustStockResult,
+} from './stock-api';
 import { UNCONFIRMED_SETTLE_MS, unconfirmedStock } from './unconfirmed-stock';
 
 /**
@@ -195,6 +200,13 @@ export interface SubmitItemAdjustOptions {
   shownTotal: number;
 }
 
+/** How a manual adjustment is sent. adjustItemStock in the app; a stub in tests. */
+export type AdjustPost = (
+  itemId: string,
+  body: AdjustStockBody,
+  hooks: AdjustSendHooks,
+) => Promise<AdjustStockResult>;
+
 /**
  * Send one manual adjustment and record what the answer means for the item's
  * on-hand total in unconfirmed-stock.ts, so every screen showing the item
@@ -206,7 +218,7 @@ export async function submitItemAdjust(
   itemId: string,
   delta: number,
   opts: SubmitItemAdjustOptions,
-  post: (itemId: string, body: AdjustStockBody) => Promise<AdjustStockResult> = adjustItemStock,
+  post: AdjustPost = adjustItemStock,
 ): Promise<ItemAdjustOutcome> {
   // The sheet already refuses these; this keeps a zero or NaN from ever
   // costing a round trip (the route would 400 it anyway).
@@ -216,24 +228,40 @@ export async function submitItemAdjust(
       alert: { title: 'Could not adjust', message: 'Enter a non-zero quantity.' },
     };
   }
-  // Taken BEFORE the request leaves: the server can commit any time after
-  // this, so the unconfirmed bound is counted from here, not from the error.
-  const sentAt = Date.now();
+  // Registered before the request leaves: while it is in flight, a read that
+  // shows another write's "base + delta" may be THIS write landing instead.
+  const write = unconfirmedStock.beginWrite(itemId, { shownTotal: opts.shownTotal, delta });
+  // When api() handed the request to fetch: the earliest the server can have
+  // it, so the "may still land" window starts here. NOT at the tap: api()
+  // first awaits the session, and a token refresh there can take seconds, so
+  // a window counted from the tap could close while the write could still
+  // land.
+  let handedOffAt: number | null = null;
   let res: AdjustStockResult;
   try {
-    res = await post(itemId, buildItemAdjustBody(delta, opts.reason, opts.defaultReason));
+    res = await post(itemId, buildItemAdjustBody(delta, opts.reason, opts.defaultReason), {
+      onSend: () => {
+        handedOffAt = Date.now();
+      },
+    });
   } catch (e) {
     const outcome = classifyAdjustFailure(e);
     if (outcome.kind === 'unconfirmed') {
-      unconfirmedStock.markUnconfirmed(itemId, { shownTotal: opts.shownTotal, delta, sentAt });
+      // No hand-off reported (a sender without the hook, or one that failed
+      // before fetch): start from now, the failure. Every hand-off happened
+      // before it, and api() fails at most its own timeout after the hand-off,
+      // so this can only keep the label up longer, by at most that timeout.
+      write.unconfirmed(handedOffAt ?? Date.now());
+    } else {
+      write.refused();
     }
     return outcome;
   }
   const q = res?.quantityOnHand;
   if (typeof q === 'number' && Number.isFinite(q)) {
-    unconfirmedStock.markConfirmed(itemId);
+    write.confirmed();
     return { kind: 'saved', quantityOnHand: q };
   }
-  unconfirmedStock.markCommittedWithoutTotal(itemId, Date.now());
+  write.committedWithoutTotal(Date.now());
   return { kind: 'saved', quantityOnHand: null };
 }

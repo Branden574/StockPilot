@@ -41,6 +41,8 @@ describe('submitItemAdjust — the item screen goes through the server route', (
     expect(apiMock.api).toHaveBeenCalledWith('/api/v1/items/item-1/adjust', {
       method: 'POST',
       body: { quantityChange: 1, movementType: 'add', reason: ITEM_ADJUST_DEFAULT_REASON },
+      // api() calls it as the request is handed to fetch (see below).
+      onSend: expect.any(Function),
     });
   });
 
@@ -57,6 +59,7 @@ describe('submitItemAdjust — the item screen goes through the server route', (
     expect(apiMock.api.mock.calls[0]?.[1]).toEqual({
       method: 'POST',
       body: { quantityChange: delta, movementType: kind, reason: 'Mobile detail' },
+      onSend: expect.any(Function),
     });
   });
 
@@ -68,6 +71,7 @@ describe('submitItemAdjust — the item screen goes through the server route', (
     expect(apiMock.api.mock.calls[0]?.[1]).toEqual({
       method: 'POST',
       body: { quantityChange: -3, movementType: 'remove', reason: 'Damaged in transit' },
+      onSend: expect.any(Function),
     });
   });
 
@@ -209,13 +213,19 @@ describe('submitItemAdjust — errors surface, and say whether anything was writ
 });
 
 describe('submitItemAdjust — records what the answer means for the total on screen', () => {
-  it('an unconfirmed write puts the item in doubt, bounded from when it was SENT', async () => {
+  // Review finding: the window was started before post(), but api() first
+  // awaits the session (a token refresh can take seconds), so it could close
+  // while the write could still land. It starts at api()'s hand-off to fetch.
+  it('an unconfirmed write puts the item in doubt, bounded from when api() HANDED IT TO fetch', async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(1_000_000);
-      // The request hangs for 20 s (api()'s timeout) before failing.
-      apiMock.api.mockImplementationOnce(async () => {
-        vi.setSystemTime(1_020_000);
+      // A 5 s token refresh, then the hand-off, then api()'s 20 s timeout.
+      apiMock.api.mockImplementationOnce(async (..._args: unknown[]) => {
+        const opts = _args[1] as { onSend?: () => void };
+        vi.setSystemTime(1_005_000);
+        opts.onSend?.();
+        vi.setSystemTime(1_025_000);
         throw new Error('Request timed out. Check your connection and try again.');
       });
 
@@ -224,12 +234,37 @@ describe('submitItemAdjust — records what the answer means for the total on sc
       expect(out.kind).toBe('unconfirmed');
       expect(unconfirmedStock.get('item-1')).toEqual({
         expectedTotal: 13,
-        settlesAt: 1_000_000 + UNCONFIRMED_SETTLE_MS,
+        settlesAt: 1_005_000 + UNCONFIRMED_SETTLE_MS,
         mayStillLand: true,
       });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('with no hand-off reported, the window starts at the failure: later, never earlier', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      apiMock.api.mockImplementationOnce(async () => {
+        vi.setSystemTime(1_020_000);
+        throw new TypeError('Network request failed');
+      });
+
+      await submitItemAdjust('item-1', 3, { shownTotal: 10 });
+
+      expect(unconfirmedStock.get('item-1')?.settlesAt).toBe(1_020_000 + UNCONFIRMED_SETTLE_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a refusal leaves no write behind, in flight or in doubt', async () => {
+    apiMock.api.mockRejectedValueOnce(apiError(422, 'Not enough stock.'));
+
+    await submitItemAdjust('item-1', -3, { shownTotal: 1 });
+
+    expect(unconfirmedStock.writes('item-1').size).toBe(0);
   });
 
   it('a saved write with a total leaves no doubt', async () => {
@@ -265,6 +300,39 @@ describe('submitItemAdjust — records what the answer means for the total on sc
     });
   });
 
+  // Review finding: a second write sent while a first was unconfirmed only
+  // switched off the first's "base + delta" proof when its answer arrived, so
+  // a read landing while it was in flight could clear the first write's label.
+  it('a read while a second write is IN FLIGHT cannot clear the first one in doubt', async () => {
+    apiMock.api.mockRejectedValueOnce(apiError(504, 'The server had a problem.'));
+    await submitItemAdjust('item-1', 1, { shownTotal: 10 });
+    expect(unconfirmedStock.get('item-1')).toMatchObject({ expectedTotal: 11 });
+
+    let answer!: (r: unknown) => void;
+    apiMock.api.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    const second = submitItemAdjust('item-1', 1, { shownTotal: 10 });
+
+    // 11 may be the SECOND write landing with the first still running.
+    unconfirmedStock.recordRead('item-1', 11, Date.now());
+    expect(unconfirmedStock.get('item-1')).not.toBeNull();
+
+    answer({ ok: true, quantityOnHand: 11 });
+    await second;
+    unconfirmedStock.recordRead('item-1', 11, Date.now());
+    expect(unconfirmedStock.get('item-1')).toMatchObject({ expectedTotal: null, mayStillLand: true });
+  });
+
+  it('a second write that is REFUSED gives the first its proof back', async () => {
+    apiMock.api.mockRejectedValueOnce(apiError(504, 'The server had a problem.'));
+    await submitItemAdjust('item-1', 1, { shownTotal: 10 });
+    apiMock.api.mockRejectedValueOnce(apiError(403, 'Missing permission: stock:adjust'));
+    await submitItemAdjust('item-1', 1, { shownTotal: 10 });
+
+    unconfirmedStock.recordRead('item-1', 11, Date.now());
+
+    expect(unconfirmedStock.get('item-1')).toBeNull();
+  });
+
   it('the scan tab sends its own history label', async () => {
     apiMock.api.mockResolvedValueOnce({ ok: true, quantityOnHand: 26 });
 
@@ -273,6 +341,7 @@ describe('submitItemAdjust — records what the answer means for the total on sc
     expect(apiMock.api.mock.calls[0]?.[1]).toEqual({
       method: 'POST',
       body: { quantityChange: 25, movementType: 'add', reason: 'Mobile scan' },
+      onSend: expect.any(Function),
     });
   });
 });

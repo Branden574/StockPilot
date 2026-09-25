@@ -1,89 +1,174 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  addOutstanding,
-  afterBound,
-  afterConfirmedWrite,
-  afterRead,
+  answerWrite,
+  boundWrites,
+  readWrites,
+  startWrite,
+  summarize,
   UNCONFIRMED_SETTLE_MS,
   unconfirmedStock,
-  type UnconfirmedStock,
+  type ItemWrites,
 } from './unconfirmed-stock';
 
 /**
- * THE REVIEW FINDING THIS FILE PINS: after an unconfirmed adjustment the item
- * screen re-read the item at once and treated ANY read as the confirmed total.
- * A read that beats a still-running write to the database shows the pre-write
- * total; the label cleared and that total was presented as current. The doubt
- * may only end on a read that shows the write, or one SENT after the write can
- * no longer land.
+ * THE REVIEW FINDINGS THIS FILE PINS:
+ *
+ * 1. After an unconfirmed adjustment the item screen re-read the item at once
+ *    and treated ANY read as the confirmed total. A read that beats a
+ *    still-running write to the database shows the pre-write total; the label
+ *    cleared and that total was presented as current. A write in doubt may
+ *    only end on a read that shows it, or one SENT after it can no longer land.
+ *
+ * 2. A second write sent while a first was unconfirmed only switched off the
+ *    first's "base + delta" proof when its ANSWER arrived. While it was in
+ *    flight, a read showing base + delta — which may have been the SECOND
+ *    write landing — cleared the first write's label. Each write is now its
+ *    own entry, ended only by its own answer, its own proof (while it is the
+ *    item's only write) or its own expiry.
  */
 
 const T0 = 1_000_000;
 const BOUND = T0 + UNCONFIRMED_SETTLE_MS;
+const NONE: ItemWrites = new Map();
+const A = 1;
+const B = 2;
 
-/** An adjustment of +1 on a shown total of 10, sent at T0, answer lost. */
-function oneInDoubt(): UnconfirmedStock {
-  return addOutstanding(null, { expectedTotal: 11, settlesAt: BOUND, now: T0 + 20_000 });
+/** Write A: +1 on a shown total of 10, handed off at T0, answer lost at T0 + 20 s. */
+function aInDoubt(): ItemWrites {
+  return answerWrite(startWrite(NONE, A, { expectedTotal: 11 }), A, {
+    kind: 'unconfirmed',
+    settlesAt: BOUND,
+    now: T0 + 20_000,
+  });
 }
 
-describe('afterRead — which reads may end the doubt', () => {
+describe('readWrites — which reads may end a write in doubt', () => {
   it('a read that still shows the PRE-write total keeps it (the write may still be running)', () => {
-    const u = oneInDoubt();
-    expect(afterRead(u, { total: 10, startedAt: T0 + 20_500 })).toBe(u);
+    const w = aInDoubt();
+    expect(readWrites(w, { total: 10, startedAt: T0 + 20_500 })).toBe(w);
   });
 
   it('a read that shows the write ends it', () => {
-    expect(afterRead(oneInDoubt(), { total: 11, startedAt: T0 + 20_500 })).toBeNull();
+    expect(readWrites(aInDoubt(), { total: 11, startedAt: T0 + 20_500 }).size).toBe(0);
   });
 
   it('a read showing some OTHER total (someone else adjusted) keeps it', () => {
-    const u = oneInDoubt();
-    expect(afterRead(u, { total: 7, startedAt: T0 + 30_000 })).toBe(u);
+    const w = aInDoubt();
+    expect(readWrites(w, { total: 7, startedAt: T0 + 30_000 })).toBe(w);
   });
 
   it('a read SENT after the bound ends it, whatever it shows (nothing can still land)', () => {
-    expect(afterRead(oneInDoubt(), { total: 10, startedAt: BOUND })).toBeNull();
-    expect(afterRead(oneInDoubt(), { total: 10, startedAt: BOUND + 5_000 })).toBeNull();
+    expect(readWrites(aInDoubt(), { total: 10, startedAt: BOUND }).size).toBe(0);
+    expect(readWrites(aInDoubt(), { total: 10, startedAt: BOUND + 5_000 }).size).toBe(0);
   });
 
   it('a read sent BEFORE the bound keeps it even if it returns after: it is judged on when it was sent', () => {
-    const u = oneInDoubt();
-    expect(afterRead(u, { total: 10, startedAt: BOUND - 1 })).toBe(u);
+    const w = aInDoubt();
+    expect(readWrites(w, { total: 10, startedAt: BOUND - 1 })).toBe(w);
   });
 
-  it('no doubt, nothing to end', () => {
-    expect(afterRead(null, { total: 10, startedAt: T0 })).toBeNull();
-  });
-});
-
-describe('addOutstanding / afterConfirmedWrite — more than one write', () => {
-  it('two writes in doubt: no single total proves them, and the later bound wins', () => {
-    const later = BOUND + 5_000;
-    const u = addOutstanding(oneInDoubt(), { expectedTotal: 12, settlesAt: later, now: T0 + 25_000 });
-    expect(u).toEqual({ expectedTotal: null, settlesAt: later, mayStillLand: true });
-    // 11 (the first alone) and 12 (both) prove nothing: one may land later.
-    expect(afterRead(u, { total: 11, startedAt: T0 + 26_000 })).toBe(u);
-    expect(afterRead(u, { total: 12, startedAt: T0 + 26_000 })).toBe(u);
-    expect(afterRead(u, { total: 12, startedAt: later })).toBeNull();
+  it('a write in flight is ended only by its own answer, never by a read', () => {
+    const w = startWrite(NONE, A, { expectedTotal: 11 });
+    expect(readWrites(w, { total: 11, startedAt: T0 + 1 })).toBe(w);
+    expect(readWrites(w, { total: 10, startedAt: T0 + 10 * UNCONFIRMED_SETTLE_MS })).toBe(w);
   });
 
-  it('a confirmed write on top of one in doubt drops the shortcut but keeps the bound', () => {
-    const u = afterConfirmedWrite(oneInDoubt());
-    expect(u).toEqual({ expectedTotal: null, settlesAt: BOUND, mayStillLand: true });
-    expect(afterRead(u, { total: 11, startedAt: T0 + 30_000 })).toBe(u);
-  });
-
-  it('a confirmed write with nothing in doubt leaves nothing', () => {
-    expect(afterConfirmedWrite(null)).toBeNull();
+  it('no writes, nothing to end', () => {
+    expect(readWrites(NONE, { total: 10, startedAt: T0 })).toBe(NONE);
   });
 });
 
-describe('afterBound', () => {
-  it('flips the wording once the bound has passed, and not before', () => {
-    const u = oneInDoubt();
-    expect(afterBound(u, BOUND - 1)).toBe(u);
-    expect(afterBound(u, BOUND)).toEqual({ ...u, mayStillLand: false });
+describe('two overlapping writes — each ends only by its own answer, proof or expiry', () => {
+  it('a read showing the first write while a second is IN FLIGHT does not clear the first', () => {
+    // 11 is A landing — or B (+1, sent on the same shown 10) landing with A
+    // still running. Until B answers, no single total identifies A.
+    const w = startWrite(aInDoubt(), B, { expectedTotal: 11 });
+    const after = readWrites(w, { total: 11, startedAt: T0 + 30_000 });
+    expect(after.get(A)).toMatchObject({ phase: 'unconfirmed' });
+    expect(summarize(after)).toMatchObject({ settlesAt: BOUND, mayStillLand: true });
+  });
+
+  it('a write sent while another is outstanding never gets a proof of its own', () => {
+    const w = startWrite(aInDoubt(), B, { expectedTotal: 12 });
+    expect(w.get(B)).toMatchObject({ phase: 'sending', expectedTotal: null });
+    // ...and the first write sent keeps its own.
+    expect(startWrite(NONE, A, { expectedTotal: 11 }).get(A)?.expectedTotal).toBe(11);
+  });
+
+  it('the second REFUSED (nothing written): the first can be proved again', () => {
+    const w = answerWrite(startWrite(aInDoubt(), B, { expectedTotal: 11 }), B, { kind: 'refused' });
+    expect(w.get(A)?.expectedTotal).toBe(11);
+    expect(readWrites(w, { total: 11, startedAt: T0 + 31_000 }).size).toBe(0);
+  });
+
+  it('the second CONFIRMED: the first loses its proof and ends only at its own bound', () => {
+    const w = answerWrite(startWrite(aInDoubt(), B, { expectedTotal: 11 }), B, {
+      kind: 'confirmed',
+    });
+    expect([...w.keys()]).toEqual([A]);
+    expect(w.get(A)?.expectedTotal).toBeNull();
+    expect(readWrites(w, { total: 11, startedAt: T0 + 31_000 })).toBe(w);
+    expect(readWrites(w, { total: 12, startedAt: BOUND }).size).toBe(0);
+  });
+
+  it('the second UNCONFIRMED too: the first expires at its bound and the second stays until its own', () => {
+    const bLater = BOUND + 30_000;
+    const w = answerWrite(startWrite(aInDoubt(), B, { expectedTotal: 11 }), B, {
+      kind: 'unconfirmed',
+      settlesAt: bLater,
+      now: T0 + 50_000,
+    });
+    // Neither 11 (one landed) nor 12 (both) proves either write.
+    expect(readWrites(w, { total: 11, startedAt: T0 + 51_000 })).toBe(w);
+    expect(readWrites(w, { total: 12, startedAt: T0 + 51_000 })).toBe(w);
+    // A read at A's bound ends A only: the label stays for B.
+    const afterA = readWrites(w, { total: 12, startedAt: BOUND });
+    expect([...afterA.keys()]).toEqual([B]);
+    expect(summarize(afterA)).toEqual({
+      expectedTotal: null,
+      settlesAt: bLater,
+      mayStillLand: true,
+    });
+    // B was sent with A outstanding, so even alone it cannot be proved by a total.
+    expect(readWrites(afterA, { total: 12, startedAt: BOUND + 1 })).toBe(afterA);
+    expect(readWrites(afterA, { total: 12, startedAt: bLater }).size).toBe(0);
+  });
+
+  it('a confirmed write with nothing else outstanding leaves nothing', () => {
+    const w = answerWrite(startWrite(NONE, A, { expectedTotal: 11 }), A, { kind: 'confirmed' });
+    expect(w.size).toBe(0);
+    expect(summarize(w)).toBeNull();
+  });
+});
+
+describe('summarize — what the screens label', () => {
+  it('a write in flight alone is not labelled (every tap is briefly in flight)', () => {
+    expect(summarize(startWrite(NONE, A, { expectedTotal: 11 }))).toBeNull();
+  });
+
+  it('one write in doubt: its bound and its proof', () => {
+    expect(summarize(aInDoubt())).toEqual({
+      expectedTotal: 11,
+      settlesAt: BOUND,
+      mayStillLand: true,
+    });
+  });
+
+  it('a commit without a total is labelled from its answer, and can no longer land', () => {
+    const w = answerWrite(startWrite(NONE, A, { expectedTotal: 11 }), A, {
+      kind: 'committedWithoutTotal',
+      answeredAt: T0 + 400,
+    });
+    expect(summarize(w)).toEqual({ expectedTotal: null, settlesAt: T0 + 400, mayStillLand: false });
+  });
+});
+
+describe('boundWrites', () => {
+  it('flips the wording of a write once its bound has passed, and not before', () => {
+    const w = aInDoubt();
+    expect(boundWrites(w, BOUND - 1)).toBe(w);
+    expect(boundWrites(w, BOUND).get(A)).toMatchObject({ mayStillLand: false });
   });
 });
 
@@ -98,8 +183,13 @@ describe('the store', () => {
     vi.useRealTimers();
   });
 
+  /** Sends a write of `delta` on `shown` and loses its answer now, handed off at `sentAt`. */
+  function lose(itemId: string, shown: number, delta: number, sentAt = Date.now()) {
+    unconfirmedStock.beginWrite(itemId, { shownTotal: shown, delta }).unconfirmed(sentAt);
+  }
+
   it('keeps the label through an immediate re-read of the old total, then settles on the read after the bound', () => {
-    unconfirmedStock.markUnconfirmed('item-1', { shownTotal: 10, delta: 1, sentAt: T0 });
+    lose('item-1', 10, 1, T0);
     const cb = vi.fn();
     const off = unconfirmedStock.onBoundPassed('item-1', cb);
 
@@ -121,7 +211,7 @@ describe('the store', () => {
   });
 
   it('a read showing the write clears it early, and its timer never fires', () => {
-    unconfirmedStock.markUnconfirmed('item-1', { shownTotal: 10, delta: -2, sentAt: T0 });
+    lose('item-1', 10, -2, T0);
     const cb = vi.fn();
     unconfirmedStock.onBoundPassed('item-1', cb);
 
@@ -133,14 +223,16 @@ describe('the store', () => {
   });
 
   it('is keyed by item: a read of another item changes nothing', () => {
-    unconfirmedStock.markUnconfirmed('item-1', { shownTotal: 10, delta: 1, sentAt: T0 });
+    lose('item-1', 10, 1, T0);
     unconfirmedStock.recordRead('item-2', 11, BOUND + 1);
     expect(unconfirmedStock.get('item-1')).not.toBeNull();
   });
 
   it('a commit without a total settles on the next read sent after the answer, not one sent before', () => {
     const answeredAt = T0 + 400;
-    unconfirmedStock.markCommittedWithoutTotal('item-1', answeredAt);
+    unconfirmedStock
+      .beginWrite('item-1', { shownTotal: 10, delta: 1 })
+      .committedWithoutTotal(answeredAt);
     expect(unconfirmedStock.get('item-1')).toMatchObject({ mayStillLand: false });
 
     unconfirmedStock.recordRead('item-1', 10, answeredAt - 1);
@@ -150,7 +242,7 @@ describe('the store', () => {
   });
 
   it('beginRead judges a read on when it was SENT, not when it returned', () => {
-    unconfirmedStock.markUnconfirmed('item-1', { shownTotal: 10, delta: 1, sentAt: T0 });
+    lose('item-1', 10, 1, T0);
     vi.setSystemTime(BOUND - 1_000);
     const report = unconfirmedStock.beginRead('item-1');
     // The read returns after the bound, still carrying the old total: it was
@@ -164,11 +256,73 @@ describe('the store', () => {
   });
 
   it('an unsubscribed screen is not called at the bound', () => {
-    unconfirmedStock.markUnconfirmed('item-1', { shownTotal: 10, delta: 1, sentAt: T0 });
+    lose('item-1', 10, 1, T0);
     const cb = vi.fn();
     const off = unconfirmedStock.onBoundPassed('item-1', cb);
     off();
     vi.advanceTimersByTime(UNCONFIRMED_SETTLE_MS + 1_000);
     expect(cb).not.toHaveBeenCalled();
+  });
+
+  it('a write in flight is not labelled, but blocks the proof of one in doubt until it answers', () => {
+    const solo = unconfirmedStock.beginWrite('item-2', { shownTotal: 3, delta: 1 });
+    expect(unconfirmedStock.get('item-2')).toBeNull();
+    solo.refused();
+    expect(unconfirmedStock.writes('item-2').size).toBe(0);
+
+    lose('item-1', 10, 1, T0);
+    vi.setSystemTime(T0 + 30_000);
+    const second = unconfirmedStock.beginWrite('item-1', { shownTotal: 10, delta: 1 });
+    expect(unconfirmedStock.writes('item-1').size).toBe(2);
+
+    // A pull-to-refresh lands while the second is in flight, showing 11.
+    unconfirmedStock.recordRead('item-1', 11, Date.now());
+    expect(unconfirmedStock.get('item-1')).toMatchObject({ settlesAt: BOUND, mayStillLand: true });
+
+    // The second is confirmed: the first still cannot be proved by a total.
+    second.confirmed();
+    unconfirmedStock.recordRead('item-1', 11, Date.now());
+    expect(unconfirmedStock.get('item-1')).toMatchObject({ settlesAt: BOUND });
+  });
+
+  it('two writes in doubt: one re-read at EACH bound, and the label ends only after the later one', () => {
+    const bLater = T0 + 30_000 + UNCONFIRMED_SETTLE_MS;
+    lose('item-1', 10, 1, T0);
+    vi.setSystemTime(T0 + 30_000);
+    lose('item-1', 10, 1, T0 + 30_000);
+    const cb = vi.fn();
+    unconfirmedStock.onBoundPassed('item-1', cb);
+
+    vi.advanceTimersByTime(BOUND - Date.now() + 1_000);
+    expect(cb).toHaveBeenCalledTimes(1);
+    // A can no longer land, B still can.
+    expect(unconfirmedStock.get('item-1')).toMatchObject({ settlesAt: bLater, mayStillLand: true });
+    unconfirmedStock.recordRead('item-1', 12, Date.now());
+    expect(unconfirmedStock.writes('item-1').size).toBe(1);
+    expect(unconfirmedStock.get('item-1')).not.toBeNull();
+
+    vi.advanceTimersByTime(bLater - Date.now() + 1_000);
+    expect(cb).toHaveBeenCalledTimes(2);
+    unconfirmedStock.recordRead('item-1', 12, Date.now());
+    expect(unconfirmedStock.get('item-1')).toBeNull();
+  });
+
+  it('a write answers once: a second report is ignored', () => {
+    const w = unconfirmedStock.beginWrite('item-1', { shownTotal: 10, delta: 1 });
+    w.unconfirmed(T0);
+    w.confirmed();
+    expect(unconfirmedStock.get('item-1')).toMatchObject({ expectedTotal: 11 });
+  });
+
+  it('the label a screen holds keeps its reference while a write only goes out', () => {
+    lose('item-1', 10, 1, T0);
+    const before = unconfirmedStock.get('item-1');
+    unconfirmedStock.beginWrite('item-1', { shownTotal: 10, delta: 1 });
+    // The proof went (two writes), so the summary did change...
+    expect(unconfirmedStock.get('item-1')).not.toBe(before);
+    const during = unconfirmedStock.get('item-1');
+    // ...but a read that changes nothing leaves the same object for React.
+    unconfirmedStock.recordRead('item-1', 99, Date.now());
+    expect(unconfirmedStock.get('item-1')).toBe(during);
   });
 });
