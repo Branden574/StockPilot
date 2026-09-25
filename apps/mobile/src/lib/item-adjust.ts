@@ -1,13 +1,16 @@
 import { adjustItemStock, type AdjustStockBody, type AdjustStockResult } from './stock-api';
+import { UNCONFIRMED_SETTLE_MS, unconfirmedStock } from './unconfirmed-stock';
 
 /**
- * ITEM SCREEN MANUAL ADJUST — the four quick buttons (-5, -1, +1, +5) and the
- * "Adjust with reason" sheet on app/item/[id].tsx.
+ * MANUAL ADJUST FROM THE PHONE — the item screen's four quick buttons (-5, -1,
+ * +1, +5) and "Adjust with reason" sheet (app/item/[id].tsx), and the scan
+ * tab's quick adjust (-1, +1, +5, +25; app/(drawer)/(tabs)/scan.tsx). One
+ * sender, so a timeout means the same thing on both screens.
  *
  * ═══ WHY THIS GOES THROUGH THE SERVER ═══
  *
- * Until 2026-09-22 the screen called the adjust-stock RPC straight from the
- * phone's Supabase client (the literal call shape is not written here: the
+ * Until 2026-09-22 the item screen called the adjust-stock RPC straight from
+ * the phone's Supabase client (the literal call shape is not written here: the
  * guard in no-direct-adjust-rpc.test.ts greps every shipped source file for
  * it). That skipped everything POST /api/v1/items/<id>/adjust adds:
  *
@@ -25,7 +28,10 @@ import { adjustItemStock, type AdjustStockBody, type AdjustStockResult } from '.
  *     invalidation, so each left a manager's Items list showing the old
  *     on-hand total for up to the 60 s cache window.
  *
- * The scan tab made the same move on 2026-09-05; this is its sibling.
+ * The scan tab made the same move on 2026-09-05 with its own inline POST; since
+ * 2026-09-22 it sends through submitItemAdjust too, so its timeouts are
+ * reported as unconfirmed instead of "Could not adjust" (which read as "nothing
+ * happened, tap again" on a write that may have landed).
  *
  * ═══ WHY IT IS NOT QUEUED OFFLINE ═══
  *
@@ -34,14 +40,15 @@ import { adjustItemStock, type AdjustStockBody, type AdjustStockResult } from '.
  * no idempotency key, so when a request's response is lost after the server
  * committed (a dropped connection, or api()'s 20 s timeout), a queued replay
  * would move the stock a second time. Every other manual stock write on the
- * phone (scan quick-adjust, transfer, remove-from-rack) is online-only for the
- * same reason, and the outbox's `adjust_stock` kind has never been wired. So a
+ * phone (transfer, remove-from-rack) is online-only for the same reason, and the outbox's `adjust_stock` kind has never been wired. So a
  * failure is SAID, never dropped and never silently retried.
  */
 
 /** The reason stored on the movement when the operator typed none. The
  *  history has always used this label for adjustments made on this screen. */
 export const ITEM_ADJUST_DEFAULT_REASON = 'Mobile detail';
+/** The scan tab's label in the item history, unchanged since 2026-09-05. */
+export const SCAN_ADJUST_REASON = 'Mobile scan';
 
 export interface AdjustAlert {
   title: string;
@@ -58,30 +65,48 @@ export type ItemAdjustOutcome =
   /** The server evaluated the request and said no. Nothing was written. */
   | { kind: 'refused'; alert: AdjustAlert }
   /**
-   * The request may or may not have been written: the connection failed,
-   * timed out, or the server answered 5xx. The displayed total can no longer
-   * be trusted as current until it is read again from the server.
+   * The request may or may not have been written, and may still be running:
+   * the connection failed, timed out, or the server answered 5xx. The item is
+   * now in unconfirmed-stock.ts, which keeps its total labelled until a read
+   * shows the write or the write can no longer land.
    */
   | { kind: 'unconfirmed'; alert: AdjustAlert };
 
-export function buildItemAdjustBody(delta: number, reason?: string): AdjustStockBody {
+export function buildItemAdjustBody(
+  delta: number,
+  reason?: string,
+  defaultReason: string = ITEM_ADJUST_DEFAULT_REASON,
+): AdjustStockBody {
   const trimmed = (reason ?? '').trim();
   return {
     quantityChange: delta,
     // Explicit, as the RPC call it replaces was: a -1 is a REMOVAL in the item
     // history, and Activity and the exports filter on the movement kind.
     movementType: delta > 0 ? 'add' : 'remove',
-    reason: trimmed.length > 0 ? trimmed : ITEM_ADJUST_DEFAULT_REASON,
+    reason: trimmed.length > 0 ? trimmed : defaultReason,
   };
 }
+
+const SETTLE_SECONDS = Math.round(UNCONFIRMED_SETTLE_MS / 1000);
 
 const UNCONFIRMED: AdjustAlert = {
   title: 'Adjustment not confirmed',
   message:
-    'The app could not confirm this adjustment, so it may or may not have been saved. ' +
-    'It was not queued to retry. Pull down to refresh and check the on-hand quantity ' +
-    'before adjusting again, so the change is not applied twice.',
+    'The app could not confirm this adjustment, so it may or may not have been saved, ' +
+    'and it may still be saving. It was not queued to retry. The on-hand quantity stays ' +
+    `marked "Not confirmed" until the app sees the change, or for up to ${SETTLE_SECONDS} ` +
+    'seconds, after which it checks again. Check it before adjusting again, so the change ' +
+    'is not applied twice.',
 };
+
+/** Every 4xx means nothing was written; the operator must be told so. */
+const NOTHING_CHANGED = 'Nothing was changed.';
+
+function withNothingChanged(message: string): string {
+  const m = message.trim();
+  if (m.includes(NOTHING_CHANGED)) return m;
+  return `${/[.!?]$/.test(m) ? m : `${m}.`} ${NOTHING_CHANGED}`;
+}
 
 /**
  * Refusal or uncertainty, decided on the numeric HTTP status only (the same
@@ -133,27 +158,54 @@ export function classifyAdjustFailure(err: unknown): Exclude<ItemAdjustOutcome, 
     };
   }
   // api() has already reduced the body to the server's friendly message (the
-  // permission, archived, insufficient-stock and validation sentences) and
-  // never echoes an HTML error page.
+  // permission, warehouse, archived, insufficient-stock and validation
+  // sentences) and never echoes an HTML error page.
   const message = err instanceof Error && err.message ? err.message : null;
+  if (status === 403) {
+    // Not allowed: a missing stock:adjust, or an item in a warehouse this
+    // member cannot write to. The warehouse refusal reached the phone as a 500
+    // until 2026-09-22, which this file had to call "may or may not have been
+    // saved"; it now arrives as the 403 it is.
+    return {
+      kind: 'refused',
+      alert: {
+        title: 'Not allowed to adjust',
+        message: withNothingChanged(message ?? 'You do not have access to adjust this item.'),
+      },
+    };
+  }
   return {
     kind: 'refused',
     alert: {
       title: 'Could not adjust',
-      message: message ?? 'The server refused this adjustment. Nothing was changed.',
+      message: withNothingChanged(message ?? 'The server refused this adjustment.'),
     },
   };
 }
 
+export interface SubmitItemAdjustOptions {
+  /** The sheet's typed reason; blank falls back to `defaultReason`. */
+  reason?: string;
+  /** What the history calls an adjustment from this screen. */
+  defaultReason?: string;
+  /**
+   * The on-hand total on screen when the operator tapped. With the delta it
+   * is the total that proves an unconfirmed write landed (unconfirmed-stock.ts).
+   */
+  shownTotal: number;
+}
+
 /**
- * Send one manual adjustment. NEVER REJECTS: every outcome comes back as a
- * value, so the screen's bare onPress handlers cannot leak an unobserved
- * rejection and every failure reaches the operator.
+ * Send one manual adjustment and record what the answer means for the item's
+ * on-hand total in unconfirmed-stock.ts, so every screen showing the item
+ * labels it the same way. NEVER REJECTS: every outcome comes back as a value,
+ * so the screens' bare onPress handlers cannot leak an unobserved rejection
+ * and every failure reaches the operator.
  */
 export async function submitItemAdjust(
   itemId: string,
   delta: number,
-  reason?: string,
+  opts: SubmitItemAdjustOptions,
   post: (itemId: string, body: AdjustStockBody) => Promise<AdjustStockResult> = adjustItemStock,
 ): Promise<ItemAdjustOutcome> {
   // The sheet already refuses these; this keeps a zero or NaN from ever
@@ -164,15 +216,24 @@ export async function submitItemAdjust(
       alert: { title: 'Could not adjust', message: 'Enter a non-zero quantity.' },
     };
   }
+  // Taken BEFORE the request leaves: the server can commit any time after
+  // this, so the unconfirmed bound is counted from here, not from the error.
+  const sentAt = Date.now();
   let res: AdjustStockResult;
   try {
-    res = await post(itemId, buildItemAdjustBody(delta, reason));
+    res = await post(itemId, buildItemAdjustBody(delta, opts.reason, opts.defaultReason));
   } catch (e) {
-    return classifyAdjustFailure(e);
+    const outcome = classifyAdjustFailure(e);
+    if (outcome.kind === 'unconfirmed') {
+      unconfirmedStock.markUnconfirmed(itemId, { shownTotal: opts.shownTotal, delta, sentAt });
+    }
+    return outcome;
   }
   const q = res?.quantityOnHand;
-  return {
-    kind: 'saved',
-    quantityOnHand: typeof q === 'number' && Number.isFinite(q) ? q : null,
-  };
+  if (typeof q === 'number' && Number.isFinite(q)) {
+    unconfirmedStock.markConfirmed(itemId);
+    return { kind: 'saved', quantityOnHand: q };
+  }
+  unconfirmedStock.markCommittedWithoutTotal(itemId, Date.now());
+  return { kind: 'saved', quantityOnHand: null };
 }

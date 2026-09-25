@@ -25,9 +25,13 @@ function adjustBody(): string {
 }
 
 describe('item screen — manual adjust goes through the server route', () => {
-  it('adjust() sends through submitItemAdjust (POST /api/v1/items/<id>/adjust)', () => {
-    expect(screen).toMatch(/import \{ submitItemAdjust \} from '@\/lib\/item-adjust';/);
-    expect(adjustBody()).toMatch(/await submitItemAdjust\(itemId, delta, reason\)/);
+  it('adjust() sends through submitItemAdjust (POST /api/v1/items/<id>/adjust) with the total on screen', () => {
+    expect(screen).toMatch(/import \{ submitItemAdjust, type ItemAdjustOutcome \} from '@\/lib\/item-adjust';/);
+    // shownTotal is what lets the unconfirmed-stock store recognise a read
+    // that shows this write.
+    expect(adjustBody()).toMatch(
+      /await submitItemAdjust\(itemId, delta, \{\s*reason,\s*shownTotal: item\.quantity_on_hand,\s*\}\)/,
+    );
   });
 
   it('the four quick buttons send -5, -1, +1 and +5', () => {
@@ -45,8 +49,28 @@ describe('item screen — manual adjust goes through the server route', () => {
 
   it('the "Adjust with reason" sheet sends its delta AND its reason', () => {
     expect(screen).toMatch(
-      /onConfirm=\{async \(delta, reason\) => \{\s*await adjust\(delta, reason\);/,
+      /onConfirm=\{async \(delta, reason\) => \{\s*const kind = await adjust\(delta, reason\);/,
     );
+  });
+
+  // Review finding: a refused request closed the sheet and threw away the
+  // typed change and reason. Only a refusal keeps it open: after an
+  // unconfirmed write, a sheet still holding the change is one tap from
+  // applying it twice.
+  it('keeps the sheet open, with its input, when the request is refused', () => {
+    const confirm = screen.slice(
+      screen.indexOf('onConfirm={async (delta, reason) => {'),
+      screen.indexOf('<MoveStockModal'),
+    );
+    expect(confirm).toMatch(/if \(kind !== 'refused'\) setAdjustOpen\(false\);/);
+    // Exactly one close, and it is the conditional one.
+    expect(confirm.match(/setAdjustOpen\(false\)/g)?.length).toBe(1);
+    // adjust() hands the kind back on every path, so a refusal is told apart.
+    expect(adjustBody()).toMatch(/Promise<ItemAdjustOutcome\['kind'\] \| null>/);
+    expect(adjustBody().match(/return outcome\.kind;/g)?.length).toBe(3);
+    // The sheet's draft survives because its content is keyed on `visible`
+    // (reset-by-remount), which a refusal no longer flips.
+    expect(screen).toMatch(/<AdjustModalContent\s*key=\{String\(visible\)\}/);
   });
 
   it('shows the total from the server answer, never the old total plus the delta', () => {
@@ -62,19 +86,37 @@ describe('item screen — manual adjust goes through the server route', () => {
       /outcome\.kind === 'refused'[\s\S]{0,200}Alert\.alert\(outcome\.alert\.title, outcome\.alert\.message\)/,
     );
     expect(body).toMatch(
-      /outcome\.kind === 'unconfirmed'[\s\S]{0,120}setQuantityUnconfirmed\(true\)[\s\S]{0,80}Alert\.alert/,
+      /outcome\.kind === 'unconfirmed'[\s\S]{0,200}Alert\.alert\(outcome\.alert\.title, outcome\.alert\.message\);\s*refreshAfterAdjust\(\);/,
     );
   });
 
-  it('labels an unconfirmed total on screen until a server read replaces it', () => {
-    expect(screen).toMatch(/\{quantityUnconfirmed \? \(/);
-    expect(screen).toMatch(/Not confirmed · pull down to refresh/);
+  it('labels an unconfirmed total from the app-wide store, card and sheet', () => {
+    expect(screen).toMatch(/const unconfirmed = useUnconfirmedStock\(id\);/);
+    expect(screen).toMatch(/\{unconfirmed \? \(/);
+    expect(screen).toMatch(/\{unconfirmedOnHandLabel\(unconfirmed\)\}/);
+    expect(screen).toMatch(/'Not confirmed · may still be saving'/);
+    expect(screen).toMatch(/'Not confirmed · pull down to refresh'/);
     // ...and in the adjust sheet, whose NEW TOTAL preview is built on it.
-    expect(screen).toMatch(/quantityUnconfirmed=\{quantityUnconfirmed\}/);
-    expect(screen).toMatch(/\{quantityUnconfirmed \? ' · not confirmed' : ''\}/);
-    // Cleared only by a server number: load() right before it paints, or the
-    // total a saved write returned (asserted in the adjust() pins above).
-    expect(screen).toMatch(/setQuantityUnconfirmed\(false\);\s*setItem\(\{/);
+    expect(screen).toMatch(/unconfirmed=\{unconfirmed\}/);
+    expect(screen).toMatch(/\{unconfirmed \? ' · not confirmed' : ''\}/);
+  });
+
+  // Review finding: the automatic re-read after an unconfirmed outcome cleared
+  // the label on ANY read, so a read that beat a still-running write painted
+  // the pre-write total as current. load() now only REPORTS its read, with the
+  // time it was sent; the store decides (unconfirmed-stock.test.ts).
+  it('load() never clears the doubt by itself: it reports the read and when it was sent', () => {
+    expect(screen).not.toMatch(/setQuantityUnconfirmed/);
+    expect(screen).toMatch(
+      /const reportRead = unconfirmedStock\.beginRead\(id\);\s*const \{ data, error \} = await supabase\s*\.from\('inventory_items'\)/,
+    );
+    expect(screen).toMatch(/reportRead\(Number\(r\.quantity_on_hand\) \|\| 0\);\s*setItem\(\{/);
+  });
+
+  it('re-reads once when the bound passes, so the label settles without a pull', () => {
+    expect(screen).toMatch(
+      /return unconfirmedStock\.onBoundPassed\(id, \(\) => \{\s*load\(\)\.catch/,
+    );
   });
 
   it('load() lets only the newest read paint, so an older read cannot repaint a stale total', () => {
@@ -94,10 +136,19 @@ describe('item screen — manual adjust goes through the server route', () => {
     );
   });
 
-  it('hides the adjust controls where the route would refuse them (same gate as the scan tab)', () => {
+  // Review finding: two stock:adjust gates on one screen that disagreed (the
+  // quick adjust on showWriteCta, "Remove from rack" on manager-or-role).
+  it('derives every stock:adjust control on the screen from ONE gate', () => {
     expect(screen).toMatch(
-      /const canQuickAdjust = showWriteCta\(permissions, 'stock:adjust'\) && item\.status !== 'archived';/,
+      /const canAdjustStock = showWriteCtaForRole\(role, permissions, 'stock:adjust'\);/,
     );
+    expect(screen).toMatch(/const canQuickAdjust = canAdjustStock && item\.status !== 'archived';/);
     expect(screen).toMatch(/\{canQuickAdjust \? \(\s*<>\s*<View style=\{styles\.quickAdjust\}>/);
+    expect(screen).toMatch(
+      /\{canAdjustStock && item\.status !== 'archived' && item\.quantity_on_hand > 0 \? \(/,
+    );
+    // No second derivation of the same permission anywhere in the code.
+    const code = screen.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(code.match(/'stock:adjust'/g)?.length).toBe(1);
   });
 });

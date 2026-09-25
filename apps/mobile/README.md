@@ -96,7 +96,9 @@ After signing in on a real device and granting the notifications permission, hit
 
 The mobile app imports `@stockpilot/core` for shared types and constants. Database queries hit Supabase directly via the JS SDK using the same RLS policies as the web app — every mobile-side query is automatically scoped to the user's org.
 
-Stock adjustments call the same `adjust_stock` RPC the web's stock-adjust dialog uses, so the ledger stays consistent. Notifications insert + fan out via `createNotification()` so a row in `notifications` always coincides with a push to that user's registered devices.
+Manual stock adjustments (the item screen's quick adjust and "Adjust with reason", the scan tab's quick adjust) never call the `adjust_stock` RPC from the phone. They POST to `/api/v1/items/<id>/adjust` through `submitItemAdjust` (`src/lib/item-adjust.ts`), which runs the same `InventoryService.adjustStock` as the web's adjust dialog: the `stock:adjust` permission and MFA gate, the item's warehouse write scope, the archived-item refusal, the audit row, and the web Items cache invalidation all apply. They are online-only: the route takes no idempotency key, so a replayed request could move stock twice. A 4xx is shown as a refusal (nothing was written). A timeout, network error or 5xx is shown as unconfirmed, and the on-hand stays labelled "Not confirmed" until a read shows the change or the write can no longer land (`src/lib/unconfirmed-stock.ts`).
+
+Notifications insert + fan out via `createNotification()` so a row in `notifications` always coincides with a push to that user's registered devices.
 
 ## Build for the stores
 

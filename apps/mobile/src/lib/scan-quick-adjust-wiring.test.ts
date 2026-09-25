@@ -28,14 +28,66 @@ const scan = readFileSync(
   'utf8',
 );
 
+/** The body of the scan tab's `async function adjust(...)`. */
+function adjustBody(): string {
+  const start = scan.indexOf('async function adjust(delta: number)');
+  const end = scan.indexOf('const unconfirmed = useUnconfirmedStock', start);
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  return scan.slice(start, end);
+}
+
 describe('scan tab — quick adjust goes through the API, not the RPC', () => {
   it('never calls the adjust_stock RPC directly', () => {
     expect(scan).not.toMatch(/rpc\(\s*'adjust_stock'/);
   });
 
-  it('POSTs to the permission-enforcing /api/v1/items/<id>/adjust route', () => {
-    expect(scan).toMatch(/\/api\/v1\/items\/\$\{item\.id\}\/adjust/);
-    expect(scan).toMatch(/method:\s*'POST'/);
+  it("sends through the item screen's sender (POST /api/v1/items/<id>/adjust)", () => {
+    // submitItemAdjust -> adjustItemStock -> the permission-enforcing route;
+    // its payload and status handling are unit-tested in item-adjust.test.ts.
+    expect(scan).toMatch(/import \{ SCAN_ADJUST_REASON, submitItemAdjust \} from '@\/lib\/item-adjust';/);
+    expect(adjustBody()).toMatch(
+      /await submitItemAdjust\(itemId, delta, \{\s*defaultReason: SCAN_ADJUST_REASON,\s*shownTotal: item\.quantity_on_hand,\s*\}\)/,
+    );
+  });
+
+  // Review finding: every error, a timeout or 5xx included, was reported as
+  // "Could not adjust", which reads as "nothing happened, tap again" on a
+  // write that may have committed.
+  it('reports a timeout or 5xx as unconfirmed, never as "Could not adjust"', () => {
+    const body = adjustBody();
+    expect(body).not.toMatch(/Could not adjust/);
+    expect(body).not.toMatch(/catch \(/);
+    expect(body).toMatch(
+      /outcome\.kind === 'refused'[\s\S]{0,120}Alert\.alert\(outcome\.alert\.title, outcome\.alert\.message\)/,
+    );
+    expect(body).toMatch(
+      /outcome\.kind === 'unconfirmed'[\s\S]{0,120}Alert\.alert\(outcome\.alert\.title, outcome\.alert\.message\);\s*void rereadShownItem\(itemId\);/,
+    );
+  });
+
+  it('paints only the total the server returned, never the old total plus the delta', () => {
+    const body = adjustBody();
+    expect(body).not.toMatch(/quantity_on_hand\s*\+\s*delta/);
+    expect(body).toMatch(/quantity_on_hand: q \}/);
+  });
+
+  it('labels an unconfirmed on-hand and settles it only through the store', () => {
+    expect(scan).toMatch(/const unconfirmed = useUnconfirmedStock\(item\?\.id\);/);
+    expect(scan).toMatch(/\{unconfirmedScanLabel\(unconfirmed\)\}/);
+    // Every read of the card's item reports its total and when it was sent.
+    expect(scan).toMatch(
+      /const reportRead = unconfirmedStock\.beginRead\(id\);\s*const \{ data: row \} = await supabase/,
+    );
+    expect(scan).toMatch(/if \(!row\) return null;[\s\S]{0,500}reportRead\(Number\(/);
+    // ...and it re-reads once when the bound passes.
+    expect(scan).toMatch(/unconfirmedStock\.onBoundPassed\(shownItemId, \(\) => onBoundPassed\(shownItemId\)\)/);
+  });
+
+  it('a re-read cannot repaint over a newer answer or onto another item', () => {
+    expect(adjustBody()).toMatch(/rereadSeq\.current\+\+;/);
+    expect(scan).toMatch(/if \(seq !== rereadSeq\.current \|\| !found\) return;/);
+    expect(scan).toMatch(/setItem\(\(prev\) => \(prev && prev\.id === itemId \? found : prev\)\);/);
   });
 
   it('hides the quick-adjust buttons from a member without stock:adjust', () => {

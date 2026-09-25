@@ -63,7 +63,7 @@ import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { api } from '@/lib/api';
-import { showWriteCta } from '@/lib/cta-gating';
+import { showWriteCta, showWriteCtaForRole } from '@/lib/cta-gating';
 import { canMintPlacementDestination } from '@/lib/move-stock-form';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { isOfflineState } from '@/lib/exceptions-api';
@@ -71,7 +71,12 @@ import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
 import { replacePrimaryPhoto } from '@/lib/item-photo-replace';
-import { submitItemAdjust } from '@/lib/item-adjust';
+import { submitItemAdjust, type ItemAdjustOutcome } from '@/lib/item-adjust';
+import {
+  unconfirmedStock,
+  useUnconfirmedStock,
+  type UnconfirmedStock,
+} from '@/lib/unconfirmed-stock';
 import {
   MOVEMENT_SHADOWED_AUDIT_EVENTS,
   auditCapFor,
@@ -483,11 +488,16 @@ export default function ItemDetail() {
   const [activityError, setActivityError] = React.useState<string | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
-  // True from the moment an adjustment's outcome is unknown (the request may
-  // or may not have been written) until a server read replaces the ON HAND
-  // number. While true the number is labelled, so a total the server may
-  // already have changed is never presented as current.
-  const [quantityUnconfirmed, setQuantityUnconfirmed] = React.useState(false);
+  // The doubt an adjustment leaves over the ON HAND number when its answer
+  // never came back (the write may have landed, or may still be running).
+  // App-wide and keyed by item (src/lib/unconfirmed-stock.ts), so it survives
+  // leaving this screen and covers a write sent from the scan tab. While set,
+  // the number is labelled, so a total the server may be about to change is
+  // never presented as current. Only a read that SHOWS the write, or one sent
+  // after the write can no longer land, clears it: an immediate re-read can
+  // beat a slow write to the database, and used to clear the label with the
+  // pre-write total on screen.
+  const unconfirmed = useUnconfirmedStock(id);
   // Web parity: /dashboard/inventory/[id]?tab=movements|activity deep-links
   // straight to a tab — mobile honors the same param (notification links,
   // in-app pushes, and tests can land directly on a tab). Unknown values
@@ -513,11 +523,12 @@ export default function ItemDetail() {
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
   const canTransfer =
     isManager || (role !== null && can({ role: role as Role, permissions }, 'stock:transfer'));
-  // Remove-from-rack (write-off) gate — mirrors the web item detail's
-  // 'stock:adjust' requirement. Cosmetic only; /api/v1/items/[id]/remove-stock
-  // re-asserts stock:adjust inside InventoryService.removeStockFromLocation.
-  const canAdjustStock =
-    isManager || (role !== null && can({ role: role as Role, permissions }, 'stock:adjust'));
+  // THE 'stock:adjust' gate for this screen: the quick adjust, "Adjust with
+  // reason" and "Remove from rack" all derive from it (each adds its own
+  // item-state condition below). It used to be two rules that disagreed; see
+  // showWriteCtaForRole. Cosmetic only: /api/v1/items/[id]/adjust and
+  // /remove-stock both re-assert stock:adjust in InventoryService.adjustStock.
+  const canAdjustStock = showWriteCtaForRole(role, permissions, 'stock:adjust');
   // Gates the move sheet's inline "+ New rack" (non-book) and, for a book, its
   // DEFAULT path: placing into the crate the label names, which for a
   // label-only crate means minting the row. The server does that under
@@ -598,6 +609,9 @@ export default function ItemDetail() {
     // a load that runs before it is known makes the call, and a manager's
     // answer is simply empty.
     const elsewhereRead = readItemElsewhere(supabase, id, role);
+    // Marks when this read was SENT: a write still in flight can commit after
+    // this moment however late the answer arrives, so the doubt is judged on it.
+    const reportRead = unconfirmedStock.beginRead(id);
     const { data, error } = await supabase
       .from('inventory_items')
       .select(
@@ -734,8 +748,9 @@ export default function ItemDetail() {
     if (seq !== loadSeq.current) return;
 
     paintedItemId.current = r.id as string;
-    // A fresh server read is, by definition, the confirmed total.
-    setQuantityUnconfirmed(false);
+    // NOT "a fresh read is the confirmed total": a read can beat a write that
+    // is still running. The store decides whether this read settles the doubt.
+    reportRead(Number(r.quantity_on_hand) || 0);
     setItem({
       id: r.id as string,
       organization_id: r.organization_id as string,
@@ -1144,6 +1159,16 @@ export default function ItemDetail() {
     void load();
   }, [load]);
 
+  // When an unconfirmed adjustment's bound passes, read once more: that read is
+  // sent after nothing can still land, so it settles the label either way. The
+  // only read the doubt adds, and only an unconfirmed outcome creates one.
+  React.useEffect(() => {
+    if (!id) return;
+    return unconfirmedStock.onBoundPassed(id, () => {
+      load().catch((e: unknown) => console.warn('[item] re-read after unconfirmed bound failed', e));
+    });
+  }, [id, load]);
+
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- tab-change fetch: the sync sets inside the loaders are their loading/error flags (also used by pull-to-refresh); every data set is post-await
     if (tab === 'movements') void loadMovements();
@@ -1176,37 +1201,51 @@ export default function ItemDetail() {
    * same item, and it is how a failed write used to look like a saved one.
    *
    * Never rejects (submitItemAdjust returns every failure as a value), so the
-   * bare onPress callers below cannot leak an unobserved rejection.
+   * bare onPress callers below cannot leak an unobserved rejection. Returns
+   * the outcome's kind so the sheet can stay open on a refusal.
+   *
+   * submitItemAdjust records what each outcome means for the ON HAND number in
+   * src/lib/unconfirmed-stock.ts (unconfirmed, committed without a total, or
+   * confirmed); this function only paints and re-reads.
+   *
+   * RELOAD COST PER SAVED TAP, unchanged by the unconfirmed handling: the POST,
+   * then one load() (the item row; then warehouse, charter, serial count and
+   * rack holdings in parallel; then the primary image row, whose signed URL is
+   * cached) and the open history tab's first page. The holdings are why it
+   * re-reads at all: a manual add lands on a rack or Unplaced, a removal draws
+   * one down.
    */
-  async function adjust(delta: number, reason?: string): Promise<void> {
-    if (!item) return;
+  async function adjust(delta: number, reason?: string): Promise<ItemAdjustOutcome['kind'] | null> {
+    if (!item) return null;
     const itemId = item.id;
     setBusy(true);
-    const outcome = await submitItemAdjust(itemId, delta, reason);
+    const outcome = await submitItemAdjust(itemId, delta, {
+      reason,
+      shownTotal: item.quantity_on_hand,
+    });
     setBusy(false);
 
     if (outcome.kind === 'refused') {
       // Nothing was written, so the total on screen is still the last one the
       // server gave us.
       Alert.alert(outcome.alert.title, outcome.alert.message);
-      return;
+      return outcome.kind;
     }
     if (outcome.kind === 'unconfirmed') {
-      setQuantityUnconfirmed(true);
+      // The number stays labelled (the store now holds the doubt); this read
+      // clears it only if it already shows the write.
       Alert.alert(outcome.alert.title, outcome.alert.message);
       refreshAfterAdjust();
-      return;
+      return outcome.kind;
     }
     const q = outcome.quantityOnHand;
-    if (q === null) {
-      // Written, but the answer carried no total: the one on screen is now
-      // known to be old. Say so until the re-read below replaces it.
-      setQuantityUnconfirmed(true);
-    } else {
+    if (q !== null) {
       setItem((prev) => (prev && prev.id === itemId ? { ...prev, quantity_on_hand: q } : prev));
-      setQuantityUnconfirmed(false);
     }
+    // q === null: written, but the answer carried no total. The store marks
+    // the number as old until the re-read below replaces it.
     refreshAfterAdjust();
+    return outcome.kind;
   }
 
   /**
@@ -1369,14 +1408,14 @@ export default function ItemDetail() {
   }
 
   const lowStock = item.reorder_point > 0 && item.quantity_on_hand <= item.reorder_point;
-  // The manual-adjust controls' gate — the SAME rule the scan tab's quick
-  // adjust uses. Cosmetic only: the /adjust route asserts 'stock:adjust'
-  // server-side and the service refuses an archived item ("Unarchive it
-  // first"). Before the screen went through that route the direct RPC call
-  // honoured neither, so these buttons showed for everyone; now a member
-  // without the permission, or an archived item, would get a button that can
-  // only ever fail. Unknown permissions (not loaded yet) still show them.
-  const canQuickAdjust = showWriteCta(permissions, 'stock:adjust') && item.status !== 'archived';
+  // The manual-adjust controls: this screen's one stock:adjust gate, and not
+  // archived (the service refuses an archived item, "Unarchive it first").
+  // Before the screen went through the /adjust route the direct RPC call
+  // honoured neither, so these buttons showed for everyone; now they would
+  // only ever fail. Once the permission set has loaded this is the scan tab's
+  // rule exactly (showWriteCta); before that, the role decides here, since
+  // this screen knows it.
+  const canQuickAdjust = canAdjustStock && item.status !== 'archived';
   const status: 'ok' | 'warn' | 'crit' =
     item.quantity_on_hand <= 0 ? 'crit' : lowStock ? 'warn' : 'ok';
   const inventoryValue = item.unit_cost * item.quantity_on_hand;
@@ -1614,9 +1653,9 @@ export default function ItemDetail() {
                   {status === 'crit' ? <Pill status="crit">OUT</Pill> : null}
                 </View>
               </View>
-              {quantityUnconfirmed ? (
+              {unconfirmed ? (
                 <Mono size={11.5} tracking={0.04} color={ACCENT.warn} style={{ marginTop: 6 }}>
-                  Not confirmed · pull down to refresh
+                  {unconfirmedOnHandLabel(unconfirmed)}
                 </Mono>
               ) : null}
               <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 6 }}>
@@ -1935,12 +1974,17 @@ export default function ItemDetail() {
       <AdjustModal
         visible={adjustOpen}
         item={item}
-        quantityUnconfirmed={quantityUnconfirmed}
+        unconfirmed={unconfirmed}
         busy={busy}
         onClose={() => setAdjustOpen(false)}
         onConfirm={async (delta, reason) => {
-          await adjust(delta, reason);
-          setAdjustOpen(false);
+          const kind = await adjust(delta, reason);
+          // A REFUSAL keeps the sheet open with the typed change and reason, so
+          // the operator can fix what the server objected to instead of typing
+          // both again. Saved and unconfirmed close it: after an unconfirmed
+          // write, a sheet still holding the same change is one tap from
+          // applying it twice.
+          if (kind !== 'refused') setAdjustOpen(false);
         }}
       />
 
@@ -2603,17 +2647,30 @@ function AuditCard({ audit }: { audit: AuditCardModel }) {
   );
 }
 
+/**
+ * The ON HAND label while an adjustment is unconfirmed. Two wordings because
+ * they call for different things: while the write can still land, a refresh
+ * may not settle it and the operator should wait; once it cannot, the next
+ * read settles it (this screen re-reads by itself at that moment, and a pull
+ * is the fallback when that read fails).
+ */
+function unconfirmedOnHandLabel(u: UnconfirmedStock): string {
+  return u.mayStillLand
+    ? 'Not confirmed · may still be saving'
+    : 'Not confirmed · pull down to refresh';
+}
+
 function AdjustModal({
   visible,
   item,
-  quantityUnconfirmed,
+  unconfirmed,
   busy,
   onClose,
   onConfirm,
 }: {
   visible: boolean;
   item: Item;
-  quantityUnconfirmed: boolean;
+  unconfirmed: UnconfirmedStock | null;
   busy: boolean;
   onClose: () => void;
   onConfirm: (delta: number, reason: string) => Promise<void>;
@@ -2632,7 +2689,7 @@ function AdjustModal({
       <AdjustModalContent
         key={String(visible)}
         item={item}
-        quantityUnconfirmed={quantityUnconfirmed}
+        unconfirmed={unconfirmed}
         busy={busy}
         onClose={onClose}
         onConfirm={onConfirm}
@@ -2643,13 +2700,13 @@ function AdjustModal({
 
 function AdjustModalContent({
   item,
-  quantityUnconfirmed,
+  unconfirmed,
   busy,
   onClose,
   onConfirm,
 }: {
   item: Item;
-  quantityUnconfirmed: boolean;
+  unconfirmed: UnconfirmedStock | null;
   busy: boolean;
   onClose: () => void;
   onConfirm: (delta: number, reason: string) => Promise<void>;
@@ -2712,7 +2769,7 @@ function AdjustModalContent({
                   adjustment's outcome is unknown the sheet says so too — the
                   moment someone re-enters a change is the moment a stale base
                   turns into a double count. */}
-              {quantityUnconfirmed ? ' · not confirmed' : ''}
+              {unconfirmed ? ' · not confirmed' : ''}
             </Mono>
 
             <View style={{ marginTop: 20, gap: 14 }}>
