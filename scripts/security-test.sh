@@ -179,6 +179,19 @@ PGTAP_TESTS=(
   # baseline_at is not client-writable; the guard's read is a SECURITY DEFINER
   # probe that answers only inside a ledger transaction.
   supabase/tests/0369_count_correctness.test.sql
+  # Exception occurrences (F1-1, 0370): signed-in users hold SELECT only on
+  # occurrences, events and sync state, filtered by the one visibility rule
+  # (_exc_occurrence_visible: item read scope plus the holdings rule), so
+  # warehouse, charter, category and org scoping carry over; the EX counters
+  # are closed to the API roles. Only exceptions_sync opens or resolves, and it
+  # is service_role only (asserted from the catalog), drops cross-org ids, never
+  # resolves a failed, truncated or held rule, and applies evaluations in order.
+  # exception_occurrence_act answers "not found" for a row the caller cannot
+  # see, needs stock:adjust and write access to the row's warehouse (manager
+  # when it has none), refuses a resolved row, and never resolves.
+  # item_stock_levels.positive_since is stamped by a trigger that ignores
+  # supplied values and leaves the S1 ledger guard in force.
+  supabase/tests/0370_exception_occurrences.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
