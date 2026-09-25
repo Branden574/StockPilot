@@ -3,13 +3,16 @@ import { notFound, redirect } from 'next/navigation';
 
 import { RentalActionsPanel } from '@/components/rentals/rental-actions-panel';
 import { RentalDetailHeader } from '@/components/rentals/rental-detail-header';
+import { RentalEmailsCard } from '@/components/rentals/rental-emails-card';
 import { ReportProblemButton } from '@/components/maintenance/report-problem-button';
 import { requireOrgContext } from '@/lib/auth/session';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { reportError } from '@/lib/error-reporter';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { InventoryService } from '@/server/services/inventory';
 import { RentalsService } from '@/server/services/rentals';
 import { WarehousesService } from '@/server/services/warehouses';
-import { can } from '@stockpilot/core';
+import { can, resolveOrgTimezone } from '@stockpilot/core';
 import { formatNumber } from '@/lib/utils';
 
 export default async function RentalDetailPage({
@@ -32,8 +35,24 @@ export default async function RentalDetailPage({
     WarehousesService.forCurrentUser(),
   ]);
 
-  const rental = await rentalsSvc.get(id);
+  // The rental, whether the daily sweep sends overdue reminders for this
+  // organization (its explicit Rentals row, read the way the sweep reads it;
+  // null when unreadable), and the organization's zone for the times. The
+  // zone falls back to the documented default rather than failing the page
+  // (getOrgRowForRequest throws on a read error), like the PO imports list.
+  const [rental, remindersOn, timeZone] = await Promise.all([
+    rentalsSvc.get(id),
+    rentalsSvc.overdueRemindersOn(),
+    getOrgRowForRequest(ctx.organizationId)
+      .then((org) => resolveOrgTimezone(org?.timezone))
+      .catch((e: unknown) => {
+        void reportError(e, { tag: 'rentals.detail.org_timezone_failed', level: 'warning' });
+        return resolveOrgTimezone(null);
+      }),
+  ]);
   if (!rental) notFound();
+  // One moment for the whole page, so the emails card and the header agree.
+  const nowMs = Date.now();
 
   // Resolve item names for each line
   const itemIds = rental.lines.map((l) => l.item_id);
@@ -78,6 +97,16 @@ export default async function RentalDetailPage({
         <RentalDetailHeader
           rental={rental}
           warehouseName={warehouse?.name ?? rental.warehouse_id}
+          timeZone={timeZone}
+          nowMs={nowMs}
+        />
+
+        {/* Which emails the borrower gets, and the overdue reminder's real state */}
+        <RentalEmailsCard
+          rental={rental}
+          remindersOn={remindersOn}
+          nowMs={nowMs}
+          timeZone={timeZone}
         />
 
         {/* Actions panel — only shown when rental is out and user has permission */}

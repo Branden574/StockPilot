@@ -28,6 +28,11 @@ interface RentalsListTableProps {
   rentals: RentalWithLines[];
   viewerRole: string;
   itemNames?: Map<string, string>;
+  /**
+   * The overdue reminder's mark per OVERDUE rental id ("Reminder sent Sep 26",
+   * "No email on file"), decided on the server (rentals/page.tsx).
+   */
+  reminderMarks?: Record<string, string>;
 }
 
 type StatusDisplay = 'out' | 'returned' | 'cancelled' | 'overdue';
@@ -207,6 +212,7 @@ export function RentalsListTable({
   rentals,
   viewerRole,
   itemNames,
+  reminderMarks,
 }: RentalsListTableProps) {
   const [returnTarget, setReturnTarget] = React.useState<RentalWithLines | null>(null);
   const [cancelTarget, setCancelTarget] = React.useState<RentalWithLines | null>(null);
@@ -291,7 +297,17 @@ export function RentalsListTable({
                   {/* Expected return */}
                   <td className="px-4 py-3">
                     {rental.status === 'out' ? (
-                      <DueLabel expectedReturnAt={rental.expected_return_at} />
+                      <>
+                        <DueLabel expectedReturnAt={rental.expected_return_at} />
+                        {reminderMarks?.[rental.id] ? (
+                          <span
+                            data-testid="reminder-mark"
+                            className="block text-[11px] text-muted-foreground"
+                          >
+                            {reminderMarks[rental.id]}
+                          </span>
+                        ) : null}
+                      </>
                     ) : rental.returned_at ? (
                       <span className="text-muted-foreground text-xs">
                         {formatRelative(rental.returned_at)}

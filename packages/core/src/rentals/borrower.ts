@@ -25,6 +25,10 @@
  *
  * Web and phone say this in the same words, so the copy lives here. If the
  * emails above change, change this sentence with them.
+ *
+ * What a rental's detail and list pages say about these emails afterwards
+ * (sent, when, or why not) lives in ./emails.ts, which shares its overdue rule
+ * with the sweep itself.
  */
 export const RENTAL_BORROWER_EMAIL_HELP =
   'If you add an email, they get the checkout receipt, the return confirmation, and, while Rentals is switched on in Settings > Modules, a reminder if the rental is overdue.';

@@ -1,12 +1,22 @@
 import { cn, formatRelative } from '@/lib/utils';
 import type { RentalRow } from '@/server/services/rentals';
 
+import {
+  formatOrgDateTime,
+  isRentalOverdue,
+  RENTAL_BORROWER_NOT_IN_STOCKPILOT,
+  RENTAL_BORROWER_TEAM_MEMBER,
+  RENTAL_NO_EMAIL_NOTE,
+  RENTAL_NON_MEMBER_EMAIL_NOTE,
+  rentalEmailOnFile,
+} from '@stockpilot/core';
+
 type StatusDisplay = 'out' | 'returned' | 'cancelled' | 'overdue';
 
-function deriveStatus(rental: RentalRow): StatusDisplay {
+function deriveStatus(rental: RentalRow, nowMs: number): StatusDisplay {
   if (rental.status === 'returned') return 'returned';
   if (rental.status === 'cancelled') return 'cancelled';
-  if (new Date(rental.expected_return_at) < new Date()) return 'overdue';
+  if (isRentalOverdue(rental, nowMs)) return 'overdue';
   return 'out';
 }
 
@@ -38,26 +48,57 @@ function StatusPill({ status }: { status: StatusDisplay }) {
 interface RentalDetailHeaderProps {
   rental: RentalRow;
   warehouseName: string;
+  /**
+   * The organization's zone. The expected return is printed with its time in
+   * it: the overdue reminder's timing (the emails card) depends on that time,
+   * and the server's own zone (UTC on Vercel) can name a different day.
+   */
+  timeZone: string;
+  /** The page's render moment, shared with the emails card ("overdue" agrees). */
+  nowMs: number;
 }
 
-export function RentalDetailHeader({ rental, warehouseName }: RentalDetailHeaderProps) {
-  const status = deriveStatus(rental);
+export function RentalDetailHeader({
+  rental,
+  warehouseName,
+  timeZone,
+  nowMs,
+}: RentalDetailHeaderProps) {
+  const status = deriveStatus(rental, nowMs);
+  const isMember = Boolean(rental.borrower_user_id);
+  // The address the rental emails go to (the same check the sender makes).
+  const email = rentalEmailOnFile(rental.borrower_email);
 
   return (
     <div className="rounded-xl border bg-card p-6 space-y-4">
       {/* Top row: borrower + status */}
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold">{rental.borrower_name}</h2>
-            {rental.borrower_user_id && (
-              <span className="inline-flex items-center rounded-full bg-primary/10 text-primary px-2 py-0.5 text-[11px] font-medium">
-                member
-              </span>
-            )}
+        <div className="min-w-0">
+          <p className="text-muted-foreground text-xs font-medium uppercase tracking-wide">Borrower</p>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold break-words">{rental.borrower_name}</h2>
+            <span
+              data-testid="borrower-kind"
+              className={cn(
+                'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium',
+                isMember ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
+              )}
+            >
+              {isMember ? RENTAL_BORROWER_TEAM_MEMBER : RENTAL_BORROWER_NOT_IN_STOCKPILOT}
+            </span>
           </div>
-          {rental.borrower_email && (
-            <p className="text-sm text-muted-foreground mt-0.5">{rental.borrower_email}</p>
+          {email ? (
+            <>
+              <p className="text-sm text-muted-foreground mt-0.5 break-all">
+                <span className="sr-only">Email on file: </span>
+                {email}
+              </p>
+              {!isMember ? (
+                <p className="text-xs text-muted-foreground mt-0.5">{RENTAL_NON_MEMBER_EMAIL_NOTE}</p>
+              ) : null}
+            </>
+          ) : (
+            <p className="text-sm text-amber-700 dark:text-amber-400 mt-0.5">{RENTAL_NO_EMAIL_NOTE}</p>
           )}
         </div>
         <StatusPill status={status} />
@@ -89,11 +130,11 @@ export function RentalDetailHeader({ rental, warehouseName }: RentalDetailHeader
               status === 'overdue' ? 'text-red-600 dark:text-red-400 font-medium' : '',
             )}
           >
-            {new Date(rental.expected_return_at).toLocaleDateString('en-US', {
-              month: 'short',
-              day: 'numeric',
-              year: 'numeric',
-            })}
+            {formatOrgDateTime(
+              rental.expected_return_at,
+              { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' },
+              timeZone,
+            )}
           </dd>
         </div>
 

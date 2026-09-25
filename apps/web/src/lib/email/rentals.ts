@@ -9,6 +9,8 @@ import { sendEmail } from './resend';
 import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
 
+import { rentalEmailOnFile } from '@stockpilot/core';
+
 import type {
   RentalBaseParams,
   RentalEmailItem,
@@ -116,7 +118,9 @@ async function loadRentalContext(rentalId: string): Promise<RentalContext | null
 
   const row = rental as RentalRow;
 
-  const email = (row.borrower_email ?? '').trim();
+  // The rental pages say "no email on file: no receipt or reminders" with
+  // this same check (@stockpilot/core rentals/emails.ts).
+  const email = rentalEmailOnFile(row.borrower_email);
   if (!email) {
     // Normal: many rentals have no borrower email. Nothing to send.
     return null;

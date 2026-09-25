@@ -11,7 +11,7 @@ import {
 } from '@/server/loaders/orders-new-catalog';
 import { InventoryService } from '@/server/services/inventory';
 import { fetchAllRowsByIds, reportDegradedRead } from '@/server/services/lib/fetch-by-ids';
-import { TeamService } from '@/server/services/team';
+import { RentalsService } from '@/server/services/rentals';
 import { WarehousesService } from '@/server/services/warehouses';
 import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
 import { can, resolvePlacement } from '@stockpilot/core';
@@ -66,9 +66,9 @@ export default async function NewRentalPage({
 
   const params = await searchParams;
 
-  const [warehousesSvc, teamSvc] = await Promise.all([
+  const [warehousesSvc, rentalsSvc] = await Promise.all([
     WarehousesService.forCurrentUser(),
-    TeamService.forCurrentUser(),
+    RentalsService.forCurrentUser(),
   ]);
 
   const warehouses = (await warehousesSvc.listNames()).map((w) => ({
@@ -121,7 +121,7 @@ export default async function NewRentalPage({
   const [
     { data: rentalItemsData, error: rentalItemsError },
     mediaByItemId,
-    teamMembers,
+    members,
   ] = await Promise.all([
     supabase
       .from('inventory_items')
@@ -143,7 +143,10 @@ export default async function NewRentalPage({
       );
       return {} as Record<string, CatalogItemMedia>;
     }),
-    teamSvc.listMembers(),
+    // The borrower picker's team members: the same query the phone's picker
+    // reads through GET /api/v1/rentals/borrowers (accepted members only, the
+    // ones create_rental accepts).
+    rentalsSvc.listBorrowerMembers(),
   ]);
   // An ignored error here was an empty catalog: "no rental items" for a
   // warehouse that has them. The error boundary offers a retry instead.
@@ -271,15 +274,6 @@ export default async function NewRentalPage({
   });
 
   const aisles = buildAisles(items);
-
-  // Members for the borrower picker (read above, with the items).
-  const members = teamMembers
-    .filter((m) => m.user !== null)
-    .map((m) => ({
-      userId: m.user_id,
-      displayName: m.user?.full_name ?? m.user?.email ?? 'Unknown',
-      email: m.user?.email ?? null,
-    }));
 
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">

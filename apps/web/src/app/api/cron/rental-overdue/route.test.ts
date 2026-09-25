@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+
 import { callArgs, inFilters, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
+
+import { RENTAL_OVERDUE_SWEEP } from '@stockpilot/core';
 
 /**
  * Overdue-rental reminder cron (S6-A). Security invariant, listed in
@@ -44,13 +49,21 @@ import { reportError } from '@/lib/error-reporter';
 
 import { GET } from './route';
 
-type Rental = { id: string; organization_id: string; expected_return_at: string };
+type Rental = {
+  id: string;
+  organization_id: string;
+  status: string;
+  expected_return_at: string;
+  overdue_reminder_sent_at: string | null;
+};
 
 function rental(id: string, organizationId: string, daysLate = 2): Rental {
   return {
     id,
     organization_id: organizationId,
+    status: 'out',
     expected_return_at: new Date(Date.now() - daysLate * 24 * 60 * 60 * 1000).toISOString(),
+    overdue_reminder_sent_at: null,
   };
 }
 
@@ -92,7 +105,15 @@ function arrange(opts: {
       const rows = orgFilter
         ? opts.rentals.filter((r) => (orgFilter[1] as string[]).includes(r.organization_id))
         : opts.rentals;
-      return { data: rows.map(({ id, expected_return_at }) => ({ id, expected_return_at })), error: null };
+      return {
+        data: rows.map(({ id, status, expected_return_at, overdue_reminder_sent_at }) => ({
+          id,
+          status,
+          expected_return_at,
+          overdue_reminder_sent_at,
+        })),
+        error: null,
+      };
     },
     'rentals.update': (call: MockCall) => {
       const id = claimedId(call) ?? '?';
@@ -194,6 +215,7 @@ describe('GET /api/cron/rental-overdue', () => {
     const readMethods = stub.chainsAll.get('rentals.select')?.[0] ?? [];
     const readArgs = stub.chainArgsAll.get('rentals.select')?.[0] ?? [];
     const read: MockCall = { table: 'rentals', op: 'select', methods: readMethods, args: readArgs };
+    expect(callArgs(read, 'select')).toEqual(['id, status, expected_return_at, overdue_reminder_sent_at']);
     expect(callArgs(read, 'eq')).toEqual(['status', 'out']);
     expect(callArgs(read, 'is')).toEqual(['overdue_reminder_sent_at', null]);
     expect(callArgs(read, 'lt')?.[0]).toBe('expected_return_at');
@@ -282,5 +304,51 @@ describe('GET /api/cron/rental-overdue', () => {
       expect(ids.length).toBeLessThanOrEqual(100);
     }
     expect(sendMock.mock.calls.map(([id]) => id)).toEqual(['r-late-batch2', 'r-batch1']);
+  });
+
+  // The pages decide "sent" and "will be sent" with isOverdueReminderCandidate
+  // (@stockpilot/core rentals/emails.ts). The run applies the same function to
+  // every row its query returned, so a row the query lets through that the
+  // shared rule refuses is never claimed or emailed. Mutation caught: dropping
+  // the filter, which would email the rows below.
+  it('claims only rows the shared rule accepts, whatever the query returned', async () => {
+    const future = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    const { claims } = arrange({
+      rentals: [
+        { ...rental('r-returned', 'org-on'), status: 'returned' },
+        { ...rental('r-reminded', 'org-on'), overdue_reminder_sent_at: new Date().toISOString() },
+        { ...rental('r-not-due', 'org-on'), expected_return_at: future },
+        rental('r-ok', 'org-on'),
+      ],
+      enabledOrgIds: ['org-on'],
+    });
+    const res = await GET(authed());
+    expect(await res.json()).toEqual({ ok: true, considered: 1, sent: 1, skipped: 0, failed: 0 });
+    expect(claims).toEqual(['r-ok']);
+    expect(sendMock.mock.calls.map(([id]) => id)).toEqual(['r-ok']);
+  });
+
+  it('reads the module and status the pages describe (RENTAL_OVERDUE_SWEEP)', async () => {
+    const { stub } = arrange({ rentals: [rental('r-1', 'org-on')], enabledOrgIds: ['org-on'] });
+    await GET(authed());
+    const [modulesChain] = stub.chainArgsAll.get('organization_modules.select') ?? [];
+    expect(modulesChain).toEqual(expect.arrayContaining([['module_id', RENTAL_OVERDUE_SWEEP.moduleId]]));
+    const claim = stub.chainArgsAll.get('rentals.update')?.[0] ?? [];
+    expect(claim).toEqual(expect.arrayContaining([['status', RENTAL_OVERDUE_SWEEP.status]]));
+  });
+});
+
+// The pages print when this run will send a reminder ("Sep 27, around 8:00 AM")
+// from RENTAL_OVERDUE_SWEEP.utcHour. The run's real schedule is vercel.json.
+// Mutation caught: moving the cron without moving the constant, which would
+// make every "will be sent" line on the rental pages name the wrong time.
+describe('the rental-overdue schedule the pages describe', () => {
+  it('vercel.json runs the sweep daily at RENTAL_OVERDUE_SWEEP.utcHour UTC', () => {
+    const vercel = JSON.parse(
+      readFileSync(path.resolve(__dirname, '../../../../../vercel.json'), 'utf8'),
+    ) as { crons?: Array<{ path: string; schedule: string }> };
+    const entries = (vercel.crons ?? []).filter((c) => c.path === '/api/cron/rental-overdue');
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.schedule).toBe(`0 ${RENTAL_OVERDUE_SWEEP.utcHour} * * *`);
   });
 });

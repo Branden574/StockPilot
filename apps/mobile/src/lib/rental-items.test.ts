@@ -223,7 +223,11 @@ describe('Rentals screen wiring', () => {
   });
 
   it('a failed checkouts read says so instead of "No rentals yet.", on every load', () => {
-    expect(screen).toContain('const { data, error } = await supabase\n      .from(\'rentals\')');
+    // The rentals read's own error is bound (it now shares a Promise.all with
+    // the reminder context, which never fails the list).
+    expect(screen).toContain(
+      'const [{ data, error }, context] = await Promise.all([\n      supabase\n        .from(\'rentals\')',
+    );
     expect(screen).toContain('setCheckoutsFailed(Boolean(error));');
     expect(screen).toContain("emptyTitle={checkoutsFailed ? 'Could not load rentals.' : 'No rentals yet.'}");
     expect(screen).toMatch(/checkoutsFailed\s*\? 'RENTALS · CHECKOUTS'/);

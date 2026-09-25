@@ -171,7 +171,8 @@ vi.mock('@/server/services/bundles', () => ({
 const rentalsList = vi.fn(async () => ({ rentals: [] }));
 vi.mock('@/server/services/rentals', () => ({
   RentalsService: {
-    forCurrentUser: vi.fn(async () => ({ list: rentalsList })),
+    // overdueRemindersOn: the list's overdue reminder marks (2026-09-25).
+    forCurrentUser: vi.fn(async () => ({ list: rentalsList, overdueRemindersOn: vi.fn(async () => true) })),
   },
 }));
 const inventoryByIds = vi.fn(async () => []);
