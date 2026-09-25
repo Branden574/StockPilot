@@ -251,3 +251,35 @@ describe('rentals/new.tsx — refusals are shown, not swallowed (SP-012)', () =>
     expect(jsx).not.toMatch(/stays available to rent elsewhere/i);
   });
 });
+
+describe('rentals/new.tsx — a borrower who is not in StockPilot (2026-09-25)', () => {
+  // L4L asked how to rent to "someone else from a site" with no StockPilot
+  // access. The phone always took a typed name and an optional email; it now
+  // says, in the web picker's words (shared from @stockpilot/core), that no
+  // account is needed and which emails go to that address.
+  it('keeps the name field and the optional email field', () => {
+    const jsx = code().slice(code().indexOf('return ('));
+    expect(jsx).toContain('label="FULL NAME"');
+    expect(jsx).toContain('label="EMAIL (OPTIONAL)"');
+    expect(jsx).toMatch(/keyboardType="email-address"/);
+  });
+
+  it('shows the shared helper text under the email, not a local copy', () => {
+    expect(source).toMatch(/import \{[^}]*RENTAL_BORROWER_EMAIL_HELP[^}]*\} from '@stockpilot\/core'/);
+    const jsx = code().slice(code().indexOf('label="EMAIL (OPTIONAL)"'));
+    const help = jsx.indexOf('{RENTAL_BORROWER_EMAIL_HELP}');
+    expect(help).toBeGreaterThan(-1);
+    expect(help).toBeLessThan(jsx.indexOf('label="DAYS FROM TODAY"'));
+    expect(jsx).toContain('They do not need a StockPilot account.');
+  });
+
+  it('sends the typed email, or null when it is blank', () => {
+    expect(submitBody()).toMatch(/borrowerEmail:\s*borrowerEmail\.trim\(\)\s*\|\|\s*null/);
+  });
+
+  it('does not promise a confirmation email when none will be sent', () => {
+    const jsx = source.slice(source.indexOf('return ('));
+    expect(jsx).not.toMatch(/The borrower is emailed a confirmation\.\s/);
+    expect(jsx).toMatch(/emailed a confirmation when you add their email/);
+  });
+});
