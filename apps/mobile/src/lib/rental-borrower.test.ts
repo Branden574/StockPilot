@@ -4,9 +4,12 @@ import { createRentalSchema } from '@stockpilot/core';
 
 import {
   BORROWER_SEARCH_OFFLINE_NOTE,
+  BORROWER_SUGGESTION_A11Y_HINT,
   BORROWER_TYPE_ANYONE_NOTE,
   EMPTY_BORROWER,
+  borrowerEmailErrorShown,
   borrowerEmailInvalid,
+  borrowerSuggestionA11yLabel,
   borrowerRequestFields,
   borrowerSearchFailure,
   keepPickedMember,
@@ -167,5 +170,46 @@ describe('borrowerSearchFailure: typing always still works', () => {
       status: 'failed',
       message: `You do not have access to that. ${BORROWER_TYPE_ANYONE_NOTE}`,
     });
+  });
+});
+
+describe('borrowerEmailErrorShown: the web rule, after the field is left', () => {
+  // Mutation caught: the error on every render (the old screen), which showed
+  // "Enter a full email address..." from the first letter typed.
+  it('a half-typed address shows nothing until the field is left', () => {
+    const typing = typeEmail(typeName(EMPTY_BORROWER, 'Sam'), 's');
+    expect(borrowerEmailInvalid(typing)).toBe(true);
+    expect(borrowerEmailErrorShown(typing, false)).toBe(false);
+    expect(borrowerEmailErrorShown(typing, true)).toBe(true);
+  });
+
+  it('never for a good address, a blank one or a picked member, touched or not', () => {
+    const good = typeEmail(typeName(EMPTY_BORROWER, 'Sam'), 'sam@site4.org');
+    for (const touched of [false, true]) {
+      expect(borrowerEmailErrorShown(good, touched)).toBe(false);
+      expect(borrowerEmailErrorShown(EMPTY_BORROWER, touched)).toBe(false);
+      expect(borrowerEmailErrorShown(pickMember(ANA), touched)).toBe(false);
+    }
+  });
+});
+
+describe('borrowerSuggestionA11yLabel: what VoiceOver reads for a suggestion', () => {
+  // Mutation caught: "Check out to <name>, team member" (the old label). It
+  // replaced the email shown in the row, so two members with one name read
+  // the same, and it sounded as if the tap checked the rental out.
+  it('names the member and carries their email, so two of one name can be told apart', () => {
+    const alexA: RentalBorrowerMember = { userId: 'u-a', displayName: 'Alex Kim', email: 'alex.kim@school.org' };
+    const alexB: RentalBorrowerMember = { userId: 'u-b', displayName: 'Alex Kim', email: 'akim@site4.org' };
+    expect(borrowerSuggestionA11yLabel(alexA)).toBe('Alex Kim, team member, alex.kim@school.org');
+    expect(borrowerSuggestionA11yLabel(alexA)).not.toBe(borrowerSuggestionA11yLabel(alexB));
+  });
+
+  it('a member with no account email: the name alone', () => {
+    expect(borrowerSuggestionA11yLabel(BO)).toBe('Bo Diaz, team member');
+  });
+
+  it('never says the tap checks out; the hint says it picks the borrower', () => {
+    expect(borrowerSuggestionA11yLabel(ANA)).not.toMatch(/check/i);
+    expect(BORROWER_SUGGESTION_A11Y_HINT).toBe('Makes them the borrower');
   });
 });

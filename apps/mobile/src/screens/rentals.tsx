@@ -23,6 +23,7 @@ import {
 import {
   RENTAL_LIST_REMINDER_COLUMNS,
   loadRentalReminderContext,
+  rentalDayLabel,
   rentalListReminderMark,
   rentalStatusPill,
   type RentalReminderContext,
@@ -290,6 +291,7 @@ export default function RentalsScreen() {
         <RentalCard
           rental={r}
           now={now}
+          timeZone={reminderContext.timeZone}
           reminderMark={rentalListReminderMark(r, reminderContext, now)}
           onPress={() => router.push(`/rentals/${r.id}`)}
         />
@@ -302,16 +304,20 @@ export default function RentalsScreen() {
  * One checkout. A tap opens the rental on the phone (app/rentals/[id].tsx);
  * it used to open the web page in a browser. An overdue row carries its
  * reminder mark ("Reminder sent Sep 26", "No email on file", ...), decided by
- * the daily sweep's own rule (lib/rental-view.ts, @stockpilot/core).
+ * the daily sweep's own rule (lib/rental-view.ts, @stockpilot/core). Its dates
+ * are in the organization's zone, like that mark and the detail screen
+ * (rentalDayLabel); they used to be in the device's.
  */
 function RentalCard({
   rental,
   now,
+  timeZone,
   reminderMark,
   onPress,
 }: {
   rental: RentalRow;
   now: number;
+  timeZone: string | null;
   reminderMark: string | null;
   onPress: () => void;
 }) {
@@ -338,9 +344,9 @@ function RentalCard({
               {rental.borrower_name}
             </Body>
             <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
-              out {new Date(rental.checked_out_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+              out {rentalDayLabel(rental.checked_out_at, timeZone)}
               {' · due '}
-              {new Date(rental.expected_return_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+              {rentalDayLabel(rental.expected_return_at, timeZone)}
             </Mono>
             {reminderMark ? (
               <Body size={12} muted style={{ marginTop: 4 }}>

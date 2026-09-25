@@ -9,7 +9,10 @@ import { makeSupabaseStub } from '@/test/supabase-mock';
  *   - the registry sender (rentals@) and subjects on the wire,
  *   - NO List-Unsubscribe headers (essential footer per the rental
  *     classification decision — nothing to unsubscribe from),
- *   - best-effort semantics (DB/send failures never throw).
+ *   - best-effort semantics (DB/send failures never throw),
+ *   - the overdue sender's outcome: 'sent' only when Resend accepted it. The
+ *     daily sweep keeps its "reminded" stamp (printed as "Sent <time>" on the
+ *     rental pages) only for 'sent', so a refused send must not read as one.
  */
 
 vi.mock('@/lib/env', () => ({
@@ -24,7 +27,9 @@ interface SendEmailArgs {
   from?: string;
   headers?: Record<string, string>;
 }
-const sendEmailMock = vi.fn(async (_args: SendEmailArgs) => ({ ok: true }));
+const sendEmailMock = vi.fn(
+  async (_args: SendEmailArgs): Promise<{ ok: boolean; error?: string }> => ({ ok: true }),
+);
 vi.mock('./resend', () => ({
   sendEmail: (args: SendEmailArgs) => sendEmailMock(args),
 }));
@@ -128,11 +133,11 @@ describe('rental email dispatch', () => {
     expect(args.html).not.toContain('View rental');
   });
 
-  it('never throws — a load failure logs and returns', async () => {
+  it('never throws — a load failure logs and answers failed', async () => {
     adminHolder.client = makeSupabaseStub({
       'rentals.select': { data: null, error: { message: 'boom' } },
     }).client;
-    await expect(sendRentalOverdueEmail(RENTAL_ROW.id)).resolves.toBeUndefined();
+    await expect(sendRentalOverdueEmail(RENTAL_ROW.id)).resolves.toBe('failed');
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
@@ -140,5 +145,41 @@ describe('rental email dispatch', () => {
     adminHolder.client = stubFor().client;
     sendEmailMock.mockRejectedValueOnce(new Error('resend down'));
     await expect(sendRentalCheckoutEmail(RENTAL_ROW.id)).resolves.toBeUndefined();
+  });
+});
+
+describe('the overdue sender says how the send ended', () => {
+  it("'sent' when Resend accepted it", async () => {
+    adminHolder.client = stubFor().client;
+    await expect(sendRentalOverdueEmail(RENTAL_ROW.id)).resolves.toBe('sent');
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+  });
+
+  // Mutation caught: ignoring sendEmail's answer (the old code). sendEmail
+  // reports a Resend 4xx/5xx or a network failure as { ok: false } and never
+  // throws, so without this the sweep counted a refused reminder as sent and
+  // the pages printed "Sent <time>" for it.
+  it("'failed' when Resend refused it or could not be reached (sendEmail answers ok:false)", async () => {
+    adminHolder.client = stubFor().client;
+    sendEmailMock.mockResolvedValueOnce({ ok: false, error: '422 invalid to' });
+    await expect(sendRentalOverdueEmail(RENTAL_ROW.id)).resolves.toBe('failed');
+  });
+
+  it("'failed' when the send throws", async () => {
+    adminHolder.client = stubFor().client;
+    sendEmailMock.mockRejectedValueOnce(new Error('resend down'));
+    await expect(sendRentalOverdueEmail(RENTAL_ROW.id)).resolves.toBe('failed');
+  });
+
+  it("'no_email' with no email on file, and nothing is sent", async () => {
+    adminHolder.client = stubFor({ borrower_email: '  ' }).client;
+    await expect(sendRentalOverdueEmail(RENTAL_ROW.id)).resolves.toBe('no_email');
+    expect(sendEmailMock).not.toHaveBeenCalled();
+  });
+
+  it("'not_found' when the rental is gone", async () => {
+    adminHolder.client = makeSupabaseStub({ 'rentals.select': { data: [], error: null } }).client;
+    await expect(sendRentalOverdueEmail(RENTAL_ROW.id)).resolves.toBe('not_found');
+    expect(sendEmailMock).not.toHaveBeenCalled();
   });
 });

@@ -13,9 +13,11 @@ import {
   loadRentalDetail,
   loadRentalReminderContext,
   rentalBorrowerView,
+  rentalDayLabel,
   rentalListReminderMark,
   rentalStatusPill,
   rentalTimeLabel,
+  rentalWebActionLabel,
   type RentalViewClient,
 } from './rental-view';
 
@@ -223,10 +225,10 @@ describe('rentalStatusPill', () => {
 });
 
 describe('rentalBorrowerView', () => {
-  it('someone not in StockPilot with an email: the email and the no-link note', () => {
+  it('a borrower not linked to an account, with an email: the email and the no-link note', () => {
     expect(rentalBorrowerView({ borrower_name: 'Pat', borrower_user_id: null, borrower_email: 'pat@site4.org' })).toEqual({
       name: 'Pat',
-      kind: 'Not in StockPilot',
+      kind: 'Not linked to a StockPilot account',
       isMember: false,
       email: 'pat@site4.org',
       note: RENTAL_NON_MEMBER_EMAIL_NOTE,
@@ -259,5 +261,58 @@ describe('rentalTimeLabel', () => {
   it('an em dash for nothing or garbage', () => {
     expect(rentalTimeLabel(null, null)).toBe('—');
     expect(rentalTimeLabel('garbage', null)).toBe('—');
+  });
+});
+
+describe('rentalDayLabel: the list card dates, in the organization zone', () => {
+  // The organization on UTC (the column default) and the phone in California:
+  // the card must name the day the detail screen names.
+  it('the organization zone when known', () => {
+    expect(rentalDayLabel('2026-09-26T00:00:00.000Z', 'UTC')).toBe('Sep 26');
+    expect(rentalDayLabel('2026-09-26T00:00:00.000Z', 'America/Los_Angeles')).toBe('Sep 25');
+  });
+
+  it('agrees with the detail label on the day', () => {
+    for (const zone of ['UTC', 'America/Los_Angeles', 'Pacific/Auckland']) {
+      const day = rentalDayLabel('2026-09-26T00:00:00.000Z', zone);
+      expect(rentalTimeLabel('2026-09-26T00:00:00.000Z', zone).startsWith(`${day},`)).toBe(true);
+    }
+  });
+
+  it('an em dash for nothing or garbage', () => {
+    expect(rentalDayLabel(null, 'UTC')).toBe('—');
+    expect(rentalDayLabel('garbage', null)).toBe('—');
+  });
+});
+
+describe('rentalWebActionLabel: the detail button to the web actions', () => {
+  // The web page shows Mark returned only with rentals:create, and Cancel only
+  // with rentals:manage too. Mutation caught: the button for every viewer of
+  // an out rental (the old screen).
+  const set = (...p: string[]) => new Set(p) as Set<never>;
+
+  it('none for a viewer the web page gives no action to', () => {
+    expect(rentalWebActionLabel('out', set('rentals:read'))).toBeNull();
+    expect(rentalWebActionLabel('out', set())).toBeNull();
+  });
+
+  it('Mark returned only, without rentals:manage', () => {
+    expect(rentalWebActionLabel('out', set('rentals:read', 'rentals:create'))).toBe('Mark returned on the web');
+  });
+
+  it('and cancel with rentals:manage', () => {
+    expect(rentalWebActionLabel('out', set('rentals:create', 'rentals:manage'))).toBe(
+      'Mark returned or cancel on the web',
+    );
+  });
+
+  it('nothing for a rental that is no longer out', () => {
+    for (const status of ['returned', 'cancelled']) {
+      expect(rentalWebActionLabel(status, set('rentals:create', 'rentals:manage'))).toBeNull();
+    }
+  });
+
+  it('while the permissions load, shown like every other write button (the web and server decide)', () => {
+    expect(rentalWebActionLabel('out', undefined)).toBe('Mark returned or cancel on the web');
   });
 });

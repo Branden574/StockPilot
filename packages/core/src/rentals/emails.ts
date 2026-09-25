@@ -37,8 +37,12 @@ import { formatOrgDate, formatOrgDateTime } from '../time/org-timezone';
  * logged anywhere, so the pages describe their RULE and never claim a send.
  * `overdue_reminder_sent_at` is stamped by the sweep just before its send (it
  * claims the row first so two runs cannot both email), for every overdue
- * rental it picks up, including ones with no email, whose send then skips. So
- * "sent" is read only together with an email on file: a stamped rental with no
+ * rental it picks up, including ones with no email, whose send then skips. A
+ * send that did not go out (Resend refused it or could not be reached) gives
+ * the stamp back, and the next run tries again, so a stamp with an email on
+ * file means the reminder was handed to the email service. The one exception
+ * is a run that dies between the claim and the send (see the cron's header).
+ * "Sent" is read only together with an email on file: a stamped rental with no
  * email was never emailed. (The app has no way to add an email to a rental
  * after checkout, so an address on file now is the address the sweep saw.)
  */
@@ -185,7 +189,17 @@ export function overdueReminderState(
 // ─── Copy (web and phone say the same words) ──────────────────────────────
 
 export const RENTAL_BORROWER_TEAM_MEMBER = 'Team member';
-export const RENTAL_BORROWER_NOT_IN_STOCKPILOT = 'Not in StockPilot';
+
+/**
+ * A rental whose borrower_user_id is null. That column says only that the
+ * rental is not tied to an account, not that the person has none: every phone
+ * checkout before 2026-09-25 was a typed name (the phone had no member
+ * search), and the web picker has always let a typed name through, so many of
+ * these borrowers are co-workers. "Not in StockPilot" would be false about
+ * them. The New rental forms still offer "Someone not in StockPilot": there
+ * the operator is the one saying it.
+ */
+export const RENTAL_BORROWER_NOT_LINKED = 'Not linked to a StockPilot account';
 
 /** In place of the email when there is none. */
 export const RENTAL_NO_EMAIL_NOTE =

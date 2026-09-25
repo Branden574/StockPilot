@@ -150,6 +150,34 @@ export function borrowerEmailInvalid(draft: BorrowerDraft): boolean {
   return draft.userId === null && email.length > 0 && !isBorrowerEmailFormat(email);
 }
 
+/**
+ * Whether the email field shows its format error: only once the operator has
+ * left the field (`touched`, set on blur and cleared by a pick or Change),
+ * the web picker's rule. It used to show from the first letter typed, flagging
+ * a mistake nobody had made yet. Check out stays disabled on
+ * borrowerEmailInvalid alone, so a bad address still cannot be sent.
+ */
+export function borrowerEmailErrorShown(draft: BorrowerDraft, touched: boolean): boolean {
+  return touched && borrowerEmailInvalid(draft);
+}
+
+/**
+ * What VoiceOver reads for a member suggestion. An explicit label replaces the
+ * text inside the button, so the email goes in it: two members with the same
+ * name ("Alex Kim", or "Unknown" for a profile with no name) are told apart
+ * only by their email, which the screen already shows under the name. The
+ * label names the person; BORROWER_SUGGESTION_A11Y_HINT says what a tap does.
+ * It used to read "Check out to <name>, team member", with no email, and
+ * sounded as if the tap submitted the checkout.
+ */
+export function borrowerSuggestionA11yLabel(member: RentalBorrowerMember): string {
+  const email = member.email?.trim();
+  return `${member.displayName}, team member${email ? `, ${email}` : ''}`;
+}
+
+/** A tap on a suggestion picks the borrower; it does not check anything out. */
+export const BORROWER_SUGGESTION_A11Y_HINT = 'Makes them the borrower';
+
 /** The borrower fields of the POST /api/v1/rentals body. */
 export function borrowerRequestFields(draft: BorrowerDraft): {
   borrowerUserId: string | null;

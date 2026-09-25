@@ -4,7 +4,7 @@ import type { RentalRow } from '@/server/services/rentals';
 import {
   formatOrgDateTime,
   isRentalOverdue,
-  RENTAL_BORROWER_NOT_IN_STOCKPILOT,
+  RENTAL_BORROWER_NOT_LINKED,
   RENTAL_BORROWER_TEAM_MEMBER,
   RENTAL_NO_EMAIL_NOTE,
   RENTAL_NON_MEMBER_EMAIL_NOTE,
@@ -84,7 +84,7 @@ export function RentalDetailHeader({
                 isMember ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
               )}
             >
-              {isMember ? RENTAL_BORROWER_TEAM_MEMBER : RENTAL_BORROWER_NOT_IN_STOCKPILOT}
+              {isMember ? RENTAL_BORROWER_TEAM_MEMBER : RENTAL_BORROWER_NOT_LINKED}
             </span>
           </div>
           {email ? (
