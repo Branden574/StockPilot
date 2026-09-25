@@ -13,6 +13,10 @@ vi.mock('@/lib/supabase/server', () => ({
 }));
 vi.mock('@/lib/auth/session', () => ({ requireOrgContext: vi.fn() }));
 
+import { AuthSessionMissingError } from '@supabase/supabase-js';
+
+import { SessionEndedError } from '@/lib/auth/session-ended';
+
 import { getMfaFactorsForRequest } from './request-cache';
 
 describe('getMfaFactorsForRequest', () => {
@@ -21,6 +25,18 @@ describe('getMfaFactorsForRequest', () => {
   it('returns the factors when GoTrue answers', async () => {
     listFactors.mockResolvedValueOnce({ data: { all: [{ status: 'verified' }] }, error: null });
     await expect(getMfaFactorsForRequest()).resolves.toEqual([{ status: 'verified' }]);
+  });
+
+  it('a session that NO LONGER EXISTS is a SessionEndedError, not an unreadable list', async () => {
+    listFactors.mockResolvedValueOnce({ data: null, error: new AuthSessionMissingError() });
+    await expect(getMfaFactorsForRequest()).rejects.toBeInstanceOf(SessionEndedError);
+  });
+
+  it('any OTHER failure is still an unreadable list (not mistaken for an ended session)', async () => {
+    listFactors.mockResolvedValueOnce({ data: null, error: { name: 'AuthApiError', message: 'boom', status: 500 } });
+    const err = await getMfaFactorsForRequest().catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(SessionEndedError);
+    expect((err as Error).message).toMatch(/getMfaFactorsForRequest/);
   });
 
   it('THROWS when the list cannot be read — never "no factors"', async () => {

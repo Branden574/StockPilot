@@ -108,6 +108,7 @@ vi.mock('@/lib/supabase/server', () => ({
 }));
 
 import { requireOrgContext } from '@/lib/auth/session';
+import { SessionEndedError } from '@/lib/auth/session-ended';
 
 import DashboardLayout from './layout';
 
@@ -170,6 +171,21 @@ describe('DashboardLayout — the factor read overlaps the context read', () => 
     expect((thrown as Error | null)?.message).toBe(
       'getMfaFactorsForRequest: AuthRetryableFetchError',
     );
+  });
+
+  it('an ENDED session is sent to the cookie-clearing route, not the error screen, with nothing unhandled', async () => {
+    state.factors = () => Promise.reject(new SessionEndedError());
+    let thrown: unknown = null;
+    const unhandled = await unhandledDuring(async () => {
+      const render = DashboardLayout({ children: null });
+      await new Promise((r) => setTimeout(r, 10));
+      state.releaseContext!();
+      await render.catch((e) => {
+        thrown = e;
+      });
+    });
+    expect(unhandled).toEqual([]);
+    expect((thrown as Error | null)?.message).toBe('REDIRECT:/auth/session-ended');
   });
 
   it('a context that REDIRECTS leaves the abandoned factor read observed, not unhandled', async () => {
