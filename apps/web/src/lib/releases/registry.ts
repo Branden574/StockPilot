@@ -28,6 +28,32 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'order-page-card-sizes-2026-09-25',
+    revision: 1,
+    status: 'published',
+    title: 'Item cards on the New order page are the same size in every category',
+    summary:
+      'On the New order page, a category with only one, two or three items stretched its cards across the row, so one item could show a photo filling most of the screen. Every card is now the same size, whatever its category holds.',
+    publishedAt: '2026-09-25T20:45:00Z',
+    entries: [
+      {
+        id: 'order-page-card-sizes',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'No more oversized item photos on the New order page',
+        whatChanged:
+          'Item cards on the New order page are now the same width in every category, so a category with one, two or three items shows normal-size cards and photos.',
+        whyItMatters:
+          'Each category filled its row with the cards it had. A category with one item showed a single card as wide as the page, with a photo filling most of the screen, and two items each took half the row.',
+        howItAffectsYou:
+          'Nothing else changes. On a phone the cards are one per row, as before.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders/new', label: 'Open New order' },
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
     id: 'order-page-every-item-2026-09-25',
     revision: 1,
     status: 'published',

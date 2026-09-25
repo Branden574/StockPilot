@@ -982,9 +982,15 @@
 }
 
 /* ---- Product grid --------------------------------------------- */
+/* auto-FILL, never auto-fit: every category is its own .sf-grid, and auto-fit
+   collapses the empty columns, so a category with 1, 2 or 3 items stretched
+   its cards across the whole row (a lone card was about 1100px wide with an
+   825px photo, owner report 2026-09-25). auto-fill keeps the empty columns,
+   so every card is the same width whatever its category holds. Guarded by
+   storefront-grid.guard.test.ts. */
 .sp-storefront .sf-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 14px;
 }
 
