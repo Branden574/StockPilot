@@ -2,7 +2,7 @@ import { inventoryDefaultLifecycle, rentalItemsPredicate } from '@stockpilot/cor
 import { useRouter } from 'expo-router';
 import { Boxes, PackageOpen, Plus } from 'lucide-react-native';
 import * as React from 'react';
-import { Linking, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 
 import { Card } from '@/components/ui/card';
 import { Chip } from '@/components/ui/chip';
@@ -20,6 +20,14 @@ import {
   type RentalItemRow,
   type RentalItemSource,
 } from '@/lib/rental-items';
+import {
+  RENTAL_LIST_REMINDER_COLUMNS,
+  loadRentalReminderContext,
+  rentalDayLabel,
+  rentalListReminderMark,
+  rentalStatusPill,
+  type RentalReminderContext,
+} from '@/lib/rental-view';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
@@ -30,7 +38,9 @@ interface RentalRow {
   id: string;
   status: string;
   borrower_name: string;
+  borrower_user_id: string | null;
   borrower_email: string | null;
+  overdue_reminder_sent_at: string | null;
   checked_out_at: string;
   expected_return_at: string;
   returned_at: string | null;
@@ -75,6 +85,12 @@ export default function RentalsScreen() {
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [now, setNow] = React.useState(() => Date.now());
+  // The overdue sweep's switch and the organization's zone, for the reminder
+  // mark on overdue rows (lib/rental-view.ts). Unknown until the first load.
+  const [reminderContext, setReminderContext] = React.useState<RentalReminderContext>({
+    remindersOn: null,
+    timeZone: null,
+  });
   const [view, setView] = React.useState<RentalsView>('checkouts');
   const [items, setItems] = React.useState<RentalItemsState | null>(null);
 
@@ -84,16 +100,22 @@ export default function RentalsScreen() {
     // rule): overdue badges refresh exactly when the list does - on mount and
     // pull-to-refresh - instead of whenever an unrelated re-render happens.
     setNow(Date.now());
-    const { data, error } = await supabase
-      .from('rentals')
-      .select(
-        `id, status, borrower_name, borrower_email,
-         checked_out_at, expected_return_at, returned_at, notes,
-         warehouse:warehouses!warehouse_id (name)`,
-      )
-      .eq('organization_id', orgId)
-      .order('checked_out_at', { ascending: false })
-      .limit(100);
+    // The reminder context rides along; it never fails the list (an
+    // unreadable switch leaves only the marks that do not depend on it).
+    const [{ data, error }, context] = await Promise.all([
+      supabase
+        .from('rentals')
+        .select(
+          `id, status, borrower_name, borrower_email, ${RENTAL_LIST_REMINDER_COLUMNS},
+           checked_out_at, expected_return_at, returned_at, notes,
+           warehouse:warehouses!warehouse_id (name)`,
+        )
+        .eq('organization_id', orgId)
+        .order('checked_out_at', { ascending: false })
+        .limit(100),
+      loadRentalReminderContext(supabase, orgId),
+    ]);
+    setReminderContext(context);
     // A refused read used to render "No rentals yet.", a claim about the
     // org's checkouts made from an error.
     if (error) console.warn('rentals list', error);
@@ -106,7 +128,9 @@ export default function RentalsScreen() {
           id: r.id as string,
           status: r.status as string,
           borrower_name: r.borrower_name as string,
+          borrower_user_id: (r.borrower_user_id as string | null) ?? null,
           borrower_email: (r.borrower_email as string | null) ?? null,
+          overdue_reminder_sent_at: (r.overdue_reminder_sent_at as string | null) ?? null,
           checked_out_at: r.checked_out_at as string,
           expected_return_at: r.expected_return_at as string,
           returned_at: (r.returned_at as string | null) ?? null,
@@ -263,32 +287,51 @@ export default function RentalsScreen() {
       onRefresh={refresh}
       trailing={canCreate ? <IconChip icon={Plus} onPress={() => router.push('/rentals/new')} /> : undefined}
       keyExtractor={(r) => r.id}
-      renderItem={(r) => <RentalCard rental={r} now={now} />}
+      renderItem={(r) => (
+        <RentalCard
+          rental={r}
+          now={now}
+          timeZone={reminderContext.timeZone}
+          reminderMark={rentalListReminderMark(r, reminderContext, now)}
+          onPress={() => router.push(`/rentals/${r.id}`)}
+        />
+      )}
     />
   );
 }
 
-function RentalCard({ rental, now }: { rental: RentalRow; now: number }) {
+/**
+ * One checkout. A tap opens the rental on the phone (app/rentals/[id].tsx);
+ * it used to open the web page in a browser. An overdue row carries its
+ * reminder mark ("Reminder sent Sep 26", "No email on file", ...), decided by
+ * the daily sweep's own rule (lib/rental-view.ts, @stockpilot/core). Its dates
+ * are in the organization's zone, like that mark and the detail screen
+ * (rentalDayLabel); they used to be in the device's.
+ */
+function RentalCard({
+  rental,
+  now,
+  timeZone,
+  reminderMark,
+  onPress,
+}: {
+  rental: RentalRow;
+  now: number;
+  timeZone: string | null;
+  reminderMark: string | null;
+  onPress: () => void;
+}) {
   const { c } = useTheme();
-  const isOverdue =
-    rental.status === 'out' && new Date(rental.expected_return_at).getTime() < now;
-  const pill =
-    rental.status === 'returned' ? (
-      <Pill status="ok">RETURNED</Pill>
-    ) : rental.status === 'cancelled' ? (
-      <Pill status="crit">CANCELLED</Pill>
-    ) : isOverdue ? (
-      <Pill status="crit">OVERDUE</Pill>
-    ) : (
-      <Pill status="warn">OUT</Pill>
-    );
-
-  function openOnWeb() {
-    Linking.openURL(`https://stockpilotusa.com/dashboard/rentals/${rental.id}`).catch(() => undefined);
-  }
+  const status = rentalStatusPill(rental, now);
+  const pill = <Pill status={status.status}>{status.label}</Pill>;
 
   return (
-    <Pressable onPress={openOnWeb} style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}>
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityHint="Opens the rental"
+      style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+    >
       <Card padding={14}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
           <View style={{ flex: 1, minWidth: 0 }}>
@@ -301,10 +344,15 @@ function RentalCard({ rental, now }: { rental: RentalRow; now: number }) {
               {rental.borrower_name}
             </Body>
             <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
-              out {new Date(rental.checked_out_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+              out {rentalDayLabel(rental.checked_out_at, timeZone)}
               {' · due '}
-              {new Date(rental.expected_return_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+              {rentalDayLabel(rental.expected_return_at, timeZone)}
             </Mono>
+            {reminderMark ? (
+              <Body size={12} muted style={{ marginTop: 4 }}>
+                {reminderMark}
+              </Body>
+            ) : null}
           </View>
           {pill}
         </View>

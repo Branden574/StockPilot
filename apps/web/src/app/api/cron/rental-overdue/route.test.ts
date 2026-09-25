@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+
 import { callArgs, inFilters, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
+
+import { RENTAL_OVERDUE_SWEEP } from '@stockpilot/core';
 
 /**
  * Overdue-rental reminder cron (S6-A). Security invariant, listed in
@@ -15,6 +20,9 @@ import { callArgs, inFilters, makeSupabaseStub, type MockCall } from '@/test/sup
  *     returns the row only to the run that won it; the email goes out only for
  *     a claimed row. It used to send and then stamp, so overlapping runs could
  *     email the same borrower twice.
+ *   - A SEND THAT DID NOT GO OUT GIVES THE CLAIM BACK: the stamp is what the
+ *     rental pages print as "Sent <time>", so a refused or failed send clears
+ *     it (guarded on the exact value written) for the next run to retry.
  *
  * This repo's supabase mock does not filter rows, so the rentals read answers
  * through a function that applies the `.in('organization_id', …)` filter the
@@ -33,8 +41,10 @@ vi.mock('@/lib/supabase/admin', () => ({
 }));
 
 let callOrder: string[] = [];
-const sendMock = vi.fn(async (rentalId: string) => {
+type Outcome = 'sent' | 'no_email' | 'not_found' | 'failed';
+const sendMock = vi.fn(async (rentalId: string): Promise<Outcome> => {
   callOrder.push(`send:${rentalId}`);
+  return 'sent';
 });
 vi.mock('@/lib/email/rentals', () => ({
   sendRentalOverdueEmail: (rentalId: string) => sendMock(rentalId),
@@ -44,13 +54,21 @@ import { reportError } from '@/lib/error-reporter';
 
 import { GET } from './route';
 
-type Rental = { id: string; organization_id: string; expected_return_at: string };
+type Rental = {
+  id: string;
+  organization_id: string;
+  status: string;
+  expected_return_at: string;
+  overdue_reminder_sent_at: string | null;
+};
 
 function rental(id: string, organizationId: string, daysLate = 2): Rental {
   return {
     id,
     organization_id: organizationId,
+    status: 'out',
     expected_return_at: new Date(Date.now() - daysLate * 24 * 60 * 60 * 1000).toISOString(),
+    overdue_reminder_sent_at: null,
   };
 }
 
@@ -74,10 +92,16 @@ function arrange(opts: {
   /** Ids another run already claimed: the guarded update matches no row. */
   alreadyClaimed?: string[];
   claimError?: { message: string };
+  /** The guarded release of a claim fails. */
+  releaseError?: { message: string };
   /** Seeded so a route that reads the comp would let this org through. */
   compedOrgIds?: string[];
 }) {
   const claims: string[] = [];
+  /** Each release: the rental, and the stamp value its guard names. */
+  const releases: Array<{ id: string; guard: unknown }> = [];
+  /** Each claim's stamp value, by rental. */
+  const stamps = new Map<string, unknown>();
   const stub = makeSupabaseStub({
     'organization_modules.select': opts.modulesError
       ? { data: null, error: opts.modulesError }
@@ -92,11 +116,27 @@ function arrange(opts: {
       const rows = orgFilter
         ? opts.rentals.filter((r) => (orgFilter[1] as string[]).includes(r.organization_id))
         : opts.rentals;
-      return { data: rows.map(({ id, expected_return_at }) => ({ id, expected_return_at })), error: null };
+      return {
+        data: rows.map(({ id, status, expected_return_at, overdue_reminder_sent_at }) => ({
+          id,
+          status,
+          expected_return_at,
+          overdue_reminder_sent_at,
+        })),
+        error: null,
+      };
     },
     'rentals.update': (call: MockCall) => {
       const id = claimedId(call) ?? '?';
+      const payload = callArgs(call, 'update')?.[0] as { overdue_reminder_sent_at: unknown };
+      if (payload.overdue_reminder_sent_at === null) {
+        callOrder.push(`release:${id}`);
+        const guard = eqArgs(call).find(([col]) => col === 'overdue_reminder_sent_at')?.[1];
+        releases.push({ id, guard });
+        return { data: null, error: opts.releaseError ?? null };
+      }
       callOrder.push(`claim:${id}`);
+      stamps.set(id, payload.overdue_reminder_sent_at);
       if (opts.claimError) return { data: null, error: opts.claimError };
       if (opts.alreadyClaimed?.includes(id)) return { data: null, error: null };
       claims.push(id);
@@ -104,7 +144,14 @@ function arrange(opts: {
     },
   });
   adminHolder.client = stub.client;
-  return { stub, claims };
+  return { stub, claims, releases, stamps };
+}
+
+/** Every `.eq(col, value)` of a call, in order. */
+function eqArgs(call: MockCall): Array<[string, unknown]> {
+  return call.methods.flatMap((m, i) =>
+    m === 'eq' ? [call.args[i] as [string, unknown]] : [],
+  );
 }
 
 beforeEach(() => {
@@ -194,6 +241,7 @@ describe('GET /api/cron/rental-overdue', () => {
     const readMethods = stub.chainsAll.get('rentals.select')?.[0] ?? [];
     const readArgs = stub.chainArgsAll.get('rentals.select')?.[0] ?? [];
     const read: MockCall = { table: 'rentals', op: 'select', methods: readMethods, args: readArgs };
+    expect(callArgs(read, 'select')).toEqual(['id, status, expected_return_at, overdue_reminder_sent_at']);
     expect(callArgs(read, 'eq')).toEqual(['status', 'out']);
     expect(callArgs(read, 'is')).toEqual(['overdue_reminder_sent_at', null]);
     expect(callArgs(read, 'lt')?.[0]).toBe('expected_return_at');
@@ -282,5 +330,117 @@ describe('GET /api/cron/rental-overdue', () => {
       expect(ids.length).toBeLessThanOrEqual(100);
     }
     expect(sendMock.mock.calls.map(([id]) => id)).toEqual(['r-late-batch2', 'r-batch1']);
+  });
+
+  // The pages decide "sent" and "will be sent" with isOverdueReminderCandidate
+  // (@stockpilot/core rentals/emails.ts). The run applies the same function to
+  // every row its query returned, so a row the query lets through that the
+  // shared rule refuses is never claimed or emailed. Mutation caught: dropping
+  // the filter, which would email the rows below.
+  it('claims only rows the shared rule accepts, whatever the query returned', async () => {
+    const future = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    const { claims } = arrange({
+      rentals: [
+        { ...rental('r-returned', 'org-on'), status: 'returned' },
+        { ...rental('r-reminded', 'org-on'), overdue_reminder_sent_at: new Date().toISOString() },
+        { ...rental('r-not-due', 'org-on'), expected_return_at: future },
+        rental('r-ok', 'org-on'),
+      ],
+      enabledOrgIds: ['org-on'],
+    });
+    const res = await GET(authed());
+    expect(await res.json()).toEqual({ ok: true, considered: 1, sent: 1, skipped: 0, failed: 0 });
+    expect(claims).toEqual(['r-ok']);
+    expect(sendMock.mock.calls.map(([id]) => id)).toEqual(['r-ok']);
+  });
+
+  // The rental pages print the stamp as "Overdue reminder: Sent <time>".
+  // Mutation caught: ignoring the send's result (the old code), which kept the
+  // stamp on a reminder Resend refused, so the pages claimed a send that never
+  // happened and no run ever tried again.
+  it('a send that did not go out gives the claim back, guarded on the stamp it wrote', async () => {
+    const { claims, releases, stamps } = arrange({
+      rentals: [rental('r-bounced', 'org-on', 3), rental('r-ok', 'org-on', 1)],
+      enabledOrgIds: ['org-on'],
+    });
+    sendMock.mockImplementationOnce(async (rentalId: string) => {
+      callOrder.push(`send:${rentalId}`);
+      return 'failed';
+    });
+    const res = await GET(authed());
+    expect(await res.json()).toEqual({ ok: true, considered: 2, sent: 1, skipped: 0, failed: 1 });
+    expect(claims).toEqual(['r-bounced', 'r-ok']);
+    expect(callOrder).toEqual(['claim:r-bounced', 'send:r-bounced', 'release:r-bounced', 'claim:r-ok', 'send:r-ok']);
+    // Released only where this run's own claim still stands.
+    expect(releases).toEqual([{ id: 'r-bounced', guard: stamps.get('r-bounced') }]);
+    expect(typeof stamps.get('r-bounced')).toBe('string');
+    expect(vi.mocked(reportError)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reportError).mock.calls[0]?.[1]).toMatchObject({
+      extra: { step: 'send', rentalId: 'r-bounced' },
+    });
+  });
+
+  it('a send that throws (it should not) is treated as not sent and released', async () => {
+    const { releases } = arrange({ rentals: [rental('r-1', 'org-on')], enabledOrgIds: ['org-on'] });
+    const boom = new Error('boom');
+    sendMock.mockRejectedValueOnce(boom);
+    const res = await GET(authed());
+    expect(await res.json()).toEqual({ ok: true, considered: 1, sent: 0, skipped: 0, failed: 1 });
+    expect(releases.map((r) => r.id)).toEqual(['r-1']);
+    // Reported once, with the error it threw.
+    expect(vi.mocked(reportError)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reportError).mock.calls[0]?.[0]).toBe(boom);
+  });
+
+  // No email on file: nothing to send now or later. The pages say "Not sent:
+  // no email on file" whatever the stamp says, and the stamp keeps the rental
+  // from being re-read every day.
+  it('no email on file keeps the stamp and is counted as skipped, not sent', async () => {
+    const { claims, releases } = arrange({ rentals: [rental('r-1', 'org-on')], enabledOrgIds: ['org-on'] });
+    sendMock.mockResolvedValueOnce('no_email');
+    const res = await GET(authed());
+    expect(await res.json()).toEqual({ ok: true, considered: 1, sent: 0, skipped: 1, failed: 0 });
+    expect(claims).toEqual(['r-1']);
+    expect(releases).toEqual([]);
+    expect(vi.mocked(reportError)).not.toHaveBeenCalled();
+  });
+
+  it('a release that fails is reported as such', async () => {
+    arrange({
+      rentals: [rental('r-1', 'org-on')],
+      enabledOrgIds: ['org-on'],
+      releaseError: { message: 'connection reset' },
+    });
+    sendMock.mockResolvedValueOnce('failed');
+    const res = await GET(authed());
+    expect(await res.json()).toMatchObject({ sent: 0, failed: 1 });
+    expect(vi.mocked(reportError)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reportError).mock.calls[0]?.[1]).toMatchObject({
+      extra: { step: 'release', rentalId: 'r-1' },
+    });
+  });
+
+  it('reads the module and status the pages describe (RENTAL_OVERDUE_SWEEP)', async () => {
+    const { stub } = arrange({ rentals: [rental('r-1', 'org-on')], enabledOrgIds: ['org-on'] });
+    await GET(authed());
+    const [modulesChain] = stub.chainArgsAll.get('organization_modules.select') ?? [];
+    expect(modulesChain).toEqual(expect.arrayContaining([['module_id', RENTAL_OVERDUE_SWEEP.moduleId]]));
+    const claim = stub.chainArgsAll.get('rentals.update')?.[0] ?? [];
+    expect(claim).toEqual(expect.arrayContaining([['status', RENTAL_OVERDUE_SWEEP.status]]));
+  });
+});
+
+// The pages print when this run will send a reminder ("Sep 27, around 8:00 AM")
+// from RENTAL_OVERDUE_SWEEP.utcHour. The run's real schedule is vercel.json.
+// Mutation caught: moving the cron without moving the constant, which would
+// make every "will be sent" line on the rental pages name the wrong time.
+describe('the rental-overdue schedule the pages describe', () => {
+  it('vercel.json runs the sweep daily at RENTAL_OVERDUE_SWEEP.utcHour UTC', () => {
+    const vercel = JSON.parse(
+      readFileSync(path.resolve(__dirname, '../../../../../vercel.json'), 'utf8'),
+    ) as { crons?: Array<{ path: string; schedule: string }> };
+    const entries = (vercel.crons ?? []).filter((c) => c.path === '/api/cron/rental-overdue');
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.schedule).toBe(`0 ${RENTAL_OVERDUE_SWEEP.utcHour} * * *`);
   });
 });

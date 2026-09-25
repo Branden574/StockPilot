@@ -20,6 +20,7 @@ const PURE_MODULES = [
   'order-stock-check.ts',
   'rental-items.ts',
   'org-members.ts',
+  'paginate.ts',
 ];
 
 const FORBIDDEN = [

@@ -24,10 +24,25 @@ vi.mock('@/server/actions/rentals', () => ({
   createRentalAction: (input: unknown) => createRentalAction(input),
 }));
 
-vi.mock('@/lib/use-catalog-thumbnails', () => ({ useCatalogThumbnails: () => ({}) }));
+const thumbs = vi.hoisted(() => ({
+  urls: [] as Array<string | null>,
+  answer: {} as Record<string, string>,
+}));
+vi.mock('@/lib/use-catalog-thumbnails', () => ({
+  useCatalogThumbnails: (url: string | null) => {
+    thumbs.urls.push(url);
+    return url ? thumbs.answer : {};
+  },
+}));
+const gridItems = vi.hoisted(() => ({ current: [] as Array<{ id: string; imageUrl: string | null }> }));
 vi.mock('@/components/orders/v2/aisle-bar', () => ({ AisleBar: () => null }));
 vi.mock('@/components/orders/v2/toolbar', () => ({ Toolbar: () => null }));
-vi.mock('@/components/orders/v2/catalog-grid', () => ({ CatalogGrid: () => null }));
+vi.mock('@/components/orders/v2/catalog-grid', () => ({
+  CatalogGrid: ({ items }: { items: Array<{ id: string; imageUrl: string | null }> }) => {
+    gridItems.current = items;
+    return null;
+  },
+}));
 
 vi.mock('@/components/rentals/borrower-picker', () => ({
   BorrowerPicker: ({
@@ -116,7 +131,7 @@ function savedCart(key: string, lines: Array<{ itemId: string; quantity: number 
   );
 }
 
-function renderForm() {
+function renderForm(items: CatalogItem[] = [TENT]) {
   return render(
     <RentalCreateForm
       warehouses={[
@@ -124,7 +139,7 @@ function renderForm() {
         { id: 'wh-2', name: 'Annex' },
       ]}
       warehouseId="wh-1"
-      items={[TENT]}
+      items={items}
       aisles={[]}
       members={[]}
       viewerRole="admin"
@@ -193,5 +208,84 @@ describe('RentalCreateForm — the cart checks out only what it shows', () => {
 
     expect(push).toHaveBeenCalledWith('/dashboard/rentals/new?warehouseId=wh-2');
     expect((checkOut() as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+// ═══ RENTAL PHOTOS: WITH THE PAGE, CORRECTED BY A RENTALS-ONLY READ ═══
+//
+// L4L, 2026-09-25: rental photos appeared about five seconds after the page.
+// The form asked for photos of EVERY item in the warehouse (includeRentals=1).
+// The page now ships photos in its HTML from the warehouse photo map, which is
+// up to 4 hours old; the form reads the rental items' photos fresh and changes
+// a card only when that answer names a different image.
+describe('RentalCreateForm — photos', () => {
+  const SIGNED = 'https://proj.supabase.co/storage/v1/object/sign/item-images/org-1';
+  const CANOPY: CatalogItem = {
+    ...TENT,
+    id: 'canopy',
+    name: 'Canopy',
+    imageUrl: `${SIGNED}/canopy/a.webp?token=page`,
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    thumbs.urls = [];
+    thumbs.answer = {};
+    gridItems.current = [];
+  });
+
+  const imageById = () => new Map(gridItems.current.map((i) => [i.id, i.imageUrl]));
+
+  it('asks for rental items only', () => {
+    renderForm([CANOPY, TENT]);
+    expect(thumbs.urls.at(-1)).toBe('/api/orders/catalog-thumbnails?warehouseId=wh-1&rentalsOnly=1');
+    expect(thumbs.urls.some((u) => u?.includes('includeRentals'))).toBe(false);
+  });
+
+  it('asks even when every card already has a photo (the map can be hours old)', () => {
+    renderForm([CANOPY]);
+    expect(thumbs.urls.at(-1)).toBe('/api/orders/catalog-thumbnails?warehouseId=wh-1&rentalsOnly=1');
+  });
+
+  it('makes no photo request when there are no rental items', () => {
+    renderForm([]);
+    expect(thumbs.urls.length).toBeGreaterThan(0);
+    expect(thumbs.urls.every((u) => u === null)).toBe(true);
+  });
+
+  it('fills a missing photo; the same image under a new signature is left alone', () => {
+    thumbs.answer = {
+      canopy: `${SIGNED}/canopy/a.webp?token=fresh`,
+      tent: `${SIGNED}/tent/t.webp?token=fresh`,
+    };
+    renderForm([CANOPY, TENT]);
+    expect(imageById().get('canopy')).toBe(`${SIGNED}/canopy/a.webp?token=page`);
+    expect(imageById().get('tent')).toBe(`${SIGNED}/tent/t.webp?token=fresh`);
+  });
+
+  it('a photo replaced since the map was built: the card shows the new one', () => {
+    thumbs.answer = { canopy: `${SIGNED}/canopy/b.webp?token=fresh` };
+    renderForm([CANOPY]);
+    expect(imageById().get('canopy')).toBe(`${SIGNED}/canopy/b.webp?token=fresh`);
+  });
+
+  it('a book that showed its cover and now has an uploaded photo: the photo', () => {
+    const BOOK: CatalogItem = {
+      ...TENT,
+      id: 'book',
+      imageUrl: 'https://books.google.com/books/content?id=AAA&printsec=frontcover&img=1',
+    };
+    thumbs.answer = { book: `${SIGNED}/book/p.webp?token=fresh` };
+    renderForm([BOOK]);
+    expect(imageById().get('book')).toBe(`${SIGNED}/book/p.webp?token=fresh`);
+  });
+
+  it('keeps a cover that has not changed, and keeps the page photo when the answer has none', () => {
+    const cover = 'https://books.google.com/books/content?id=AAA&printsec=frontcover&img=1';
+    const BOOK: CatalogItem = { ...TENT, id: 'book', imageUrl: cover };
+    thumbs.answer = { book: cover };
+    renderForm([BOOK, CANOPY]);
+    expect(imageById().get('book')).toBe(cover);
+    expect(imageById().get('canopy')).toBe(`${SIGNED}/canopy/a.webp?token=page`);
   });
 });

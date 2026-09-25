@@ -1,7 +1,13 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { rentalItemsPredicate } from '@stockpilot/core';
+
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
+import { CATALOG_ROW_CEILING } from '@/server/loaders/orders-new-catalog';
+import { ServiceError, type ServiceContext } from '@/server/services/context';
 import { ItemImagesService } from '@/server/services/item-images';
+import { fetchAllRows } from '@/server/services/lib/paginate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -21,6 +27,21 @@ export const dynamic = 'force-dynamic';
  * Once warm (per-URL unstable_cache hits the 25-day TTL on later
  * visits) this is sub-100ms. First call after a deploy is still
  * ~2-3s — but it no longer blocks first paint.
+ *
+ * WHICH ITEMS (one shape per caller):
+ *   • default: orderable items (active, non-bundle, NOT rentals), the
+ *     orders picker's set. Unchanged, request for request.
+ *   • `rentalsOnly=1`: ONLY rental items, exactly the rows the New rental
+ *     page lists (/dashboard/rentals/new: active, is_rental, not deleted,
+ *     by name then id, every row up to CATALOG_ROW_CEILING, read in
+ *     1000-row pages). The rentals form sends this.
+ *   • `includeRentals=1`, LEGACY: what the rentals form sent before
+ *     rentalsOnly. It only DROPPED the is_rental=false filter, so it read
+ *     every orderable item in the warehouse (up to 500) and signed a photo
+ *     for each one, to decorate a page that shows a handful of rentals:
+ *     the ~5 s wait for rental photos on L4L (2026-09-25). Still answered,
+ *     unchanged, so a tab running the previous bundle keeps its photos
+ *     until it reloads. Nothing sends it any more.
  */
 export async function GET(req: NextRequest) {
   const ctx = await withApiContext(req);
@@ -37,8 +58,59 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // The rentals checkout catalog reuses this endpoint but needs RENTAL items
-  // (the orders picker excludes them). includeRentals=1 drops the is_rental filter.
+  if (url.searchParams.get('rentalsOnly') === '1') {
+    // The New rental page's own item query, repeated filter for filter
+    // (pattern #10: a client refetch repeats every filter the server render
+    // applied), so this signs photos for the items on that page and no
+    // others. Bundles are NOT excluded here because that page does not
+    // exclude them either.
+    //
+    // Every row, paged past PostgREST's 1000-row max_rows, to the same ceiling
+    // as the page: a 500-row limit here left photos off whatever sorted after
+    // row 500 (the Orders catalog lost 65 DC4 items to its own 500-row limit,
+    // 2026-09-25).
+    let rentalRows: Array<{ id: string }>;
+    try {
+      rentalRows = await fetchAllRows<{ id: string }>(
+        (from, to) =>
+          ctx.supabase
+            .from('inventory_items')
+            .select('id')
+            .eq('organization_id', ctx.organizationId)
+            .eq('warehouse_id', warehouseId)
+            .eq('status', 'active')
+            .eq('is_rental', rentalItemsPredicate.isRental)
+            .is('deleted_at', null)
+            .order('name', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to),
+        { cap: CATALOG_ROW_CEILING },
+      );
+    } catch (e) {
+      // A failed read is not "no photos": answer an error so the page's hook
+      // retries (lib/use-catalog-thumbnails.ts), instead of keeping an empty
+      // map for the session. Never the error's own text (S13): the detail
+      // goes to the reporter.
+      void reportError(
+        e instanceof ServiceError ? new Error(e.internalDetail ?? e.message) : e,
+        {
+          tag: 'orders.catalog-thumbnails.rentals',
+          organizationId: ctx.organizationId,
+          extra: { warehouseId },
+        },
+      );
+      return NextResponse.json(
+        { error: 'internal_error', message: 'Could not load rental item photos.' },
+        { status: 500 },
+      );
+    }
+    return signedUrlsFor(
+      ctx,
+      rentalRows.map((i) => i.id),
+    );
+  }
+
+  // LEGACY (see the header): includeRentals=1 drops the is_rental filter.
   const includeRentals = url.searchParams.get('includeRentals') === '1';
 
   // Item IDs to resolve thumbnails for — same filter the picker uses
@@ -58,6 +130,11 @@ export async function GET(req: NextRequest) {
   const { data: items } = await itemsQuery;
 
   const itemIds = ((items ?? []) as Array<{ id: string }>).map((i) => i.id);
+  return signedUrlsFor(ctx, itemIds);
+}
+
+/** `{ urls: { itemId: signedMasterUrl } }` for `itemIds`. */
+async function signedUrlsFor(ctx: ServiceContext, itemIds: string[]): Promise<NextResponse> {
   if (itemIds.length === 0) {
     return NextResponse.json({ urls: {} }, { status: 200 });
   }
