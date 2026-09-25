@@ -250,7 +250,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'A brief connection problem was shown as a fact, such as a missing order, an empty history or no assigned warehouses, which could make an order look deleted or send people to an admin to fix access that was fine.',
         howItAffectsYou:
-          'If you see one of these messages, nothing was changed. Reload the page, choose Try again, or pull down in the mobile app. If StockPilot cannot check your two-factor status for a moment, it asks you to reload or try again. A browser you sign out from Active sessions on another device is signed out straight away.',
+          'If you see one of these messages, nothing was changed. Reload the page, choose Try again, or pull down in the mobile app. If StockPilot cannot check your two-factor status for a moment, it asks you to reload or try again.',
         whatToDo:
           'No action needed. If the same message keeps appearing, tell us through Support and feedback.',
         link: { href: '/dashboard/support', label: 'Open Support & feedback' },
