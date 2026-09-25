@@ -54,6 +54,25 @@ describe('fetchAllRows (mobile)', () => {
     ]);
   });
 
+  it('a last page one row short of full (1,999 rows) is the last page: no extra request', async () => {
+    const { build, asked } = server(1999);
+    expect(await fetchAllRows(build)).toHaveLength(1999);
+    expect(asked).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ]);
+  });
+
+  it('a ceiling one past a page (1001) asks for a one-row last window and stops there', async () => {
+    const { build, asked } = server(5000);
+    const rows = await fetchAllRows(build, { cap: 1001 });
+    expect(rows).toHaveLength(1001);
+    expect(asked).toEqual([
+      [0, 999],
+      [1000, 1000],
+    ]);
+  });
+
   it('stops at the ceiling: the last window is cut to it and nothing past it is asked for', async () => {
     const { build, asked } = server(5000);
     const rows = await fetchAllRows(build, { cap: 1500 });
