@@ -28,6 +28,47 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'bundles-sku-and-component-search-2026-09-25',
+    revision: 1,
+    status: 'published',
+    title: 'Bundles: generate a SKU, and a better component search',
+    summary:
+      'When you create or edit a bundle in the web app, an Auto button next to SKU fills in a SKU for you, and a SKU another bundle already uses now says so. The Components search lists the closest matches first, lets you pick with the keyboard or a scanner, and says when a search fails.',
+    publishedAt: '2026-09-25T17:30:00Z',
+    entries: [
+      {
+        id: 'bundle-auto-sku',
+        category: 'new',
+        area: 'Bundles',
+        title: 'Generate a bundle SKU with Auto',
+        whatChanged:
+          'On the New bundle page, and when you edit a bundle, an Auto button next to SKU fills in a SKU such as KIT-7CHLH-5ICJYWB, generated the same way as item SKUs. The SKU is still optional.',
+        whyItMatters:
+          'There was no way to get a bundle SKU without making one up, and a SKU another bundle already used failed with a general error.',
+        howItAffectsYou:
+          'Choose Auto for a new SKU, or type your own. If another bundle already uses the SKU you type, saving tells you so and suggests Auto, instead of showing "An internal error occurred".',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/bundles/new', label: 'New bundle' },
+        audience: { anyPermission: ['bundles:manage'], modules: ['bundles'] },
+      },
+      {
+        id: 'bundle-component-search',
+        category: 'improved',
+        area: 'Bundles',
+        title: 'The Components search finds the right item first',
+        whatChanged:
+          'The Components search on the bundle page now searches items only, in one request, and shows up to 20 matches with the total count. An exact SKU or barcode comes first, then names and SKUs that start with what you typed. Use the arrow keys and Enter to add an item, or scan a barcode. Items already in the bundle are marked Added.',
+        whyItMatters:
+          'The search also looked through purchase orders, suppliers and warehouses, returned at most five items in no particular order, and could offer archived items, deleted items and kits. A search that failed looked the same as one with no matches.',
+        howItAffectsYou:
+          'Rental equipment, kits and archived items are not offered as components. If nothing matches, the list says so; if the search cannot reach the server, it says that and offers Try again. Pressing Enter in the search box no longer submits the bundle.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/bundles/new', label: 'New bundle' },
+        audience: { anyPermission: ['bundles:manage'], modules: ['bundles'] },
+      },
+    ],
+  },
+  {
     // F1-1 (#260, 0370) and the holdings staff scope (#261, 0371) are LIVE:
     // web deployed 2026-09-25, phone half in OTA bbc7e0c8 the same day. #251
     // (crate labels) is live on web since 2026-09-24. PUBLISHED on the

@@ -159,6 +159,21 @@ export interface DistributeInput {
  * Refusals assemble_bundle() / distribute_bundle() raise since 0365, as the
  * sentences the web modal and the phone show verbatim.
  */
+/**
+ * A bundle SKU is unique per organization (bundles_org_sku_unique, 0040). The
+ * insert/update used to pass the 23505 through as internal_error, so a typed
+ * duplicate showed "An internal error occurred". Say what is wrong instead.
+ */
+export const BUNDLE_SKU_TAKEN =
+  'A bundle with that SKU already exists. Choose another SKU, or use Auto to generate one.';
+
+function bundleWriteError(error: { code?: string; message: string }): ServiceError {
+  if (error.code === '23505' && /bundles_org_sku_unique/.test(error.message)) {
+    return new ServiceError('conflict', BUNDLE_SKU_TAKEN);
+  }
+  return new ServiceError('internal_error', error.message);
+}
+
 export const BUNDLE_COMPONENT_NOT_IN_WAREHOUSE =
   "A component of this kit isn't stocked at this warehouse. Assemble the kit where its components are.";
 export const BUNDLE_PHANTOM_DELETED =
@@ -492,7 +507,7 @@ export class BundlesService {
       })
       .select('id')
       .single();
-    if (error) throw new ServiceError('internal_error', error.message);
+    if (error) throw bundleWriteError(error);
 
     const componentsPayload = input.components.map((c) => ({
       bundle_id: bundle.id as string,
@@ -551,7 +566,7 @@ export class BundlesService {
         .update(updatePayload)
         .eq('organization_id', this.ctx.organizationId)
         .eq('id', id);
-      if (error) throw new ServiceError('internal_error', error.message);
+      if (error) throw bundleWriteError(error);
     }
 
     if (patch.components) {

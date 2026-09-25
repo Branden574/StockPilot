@@ -64,6 +64,20 @@ export interface WarehouseAccess {
 }
 
 /**
+ * Whether the ROLE alone gives every warehouse: getWarehouseAccess's first
+ * branch. For these roles `hasAllAccess` is true whether its warehouses read
+ * succeeds or fails, and `readableIds` only lists the warehouses, so a caller
+ * that needs `hasAllAccess` and not the id list (an item search, which filters
+ * by warehouse only when access is NOT all) can skip that read and keep a
+ * round trip off its critical path. One function, used by getWarehouseAccess
+ * itself, so the shortcut cannot drift from the rule. Throws on an unknown
+ * role exactly as getWarehouseAccess does.
+ */
+export function roleSeesEveryWarehouse(role: Role): boolean {
+  return isManagerOrAbove(role);
+}
+
+/**
  * What a failed read resolves to. supabase-js RESOLVES a failed query as
  * `{ data: null, error }` rather than throwing, and this helper used to read
  * that as `data ?? []`: indistinguishable from a real "no rows". An access
@@ -85,7 +99,7 @@ function accessWhenUnreadable(role: Role): WarehouseAccess {
   return {
     readableIds: [],
     writableIds: [],
-    hasAllAccess: isManagerOrAbove(role),
+    hasAllAccess: roleSeesEveryWarehouse(role),
     primaryWarehouseId: null,
     unreadable: true,
   };
@@ -119,7 +133,7 @@ export const getWarehouseAccess = cache(async (ctx?: WarehouseCtxLike): Promise<
   const onRequestCookieClient =
     !callerClient || (ctx?.cookieClient !== undefined && ctx.cookieClient === callerClient);
 
-  if (isManagerOrAbove(c.role as Role)) {
+  if (roleSeesEveryWarehouse(c.role as Role)) {
     // Rank 8 (query hygiene): shares the dashboard layout's request-cached
     // `warehouses` fetch instead of issuing a second, narrower (`id` only)
     // copy of the same query in the same render — but ONLY when we're on the

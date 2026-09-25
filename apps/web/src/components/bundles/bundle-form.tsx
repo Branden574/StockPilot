@@ -1,26 +1,24 @@
 'use client';
 
-import { Loader2, Search, Trash2 } from 'lucide-react';
+import { Loader2, Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import {
+  BundleComponentPicker,
+  type ComponentSearchItem,
+} from '@/components/bundles/bundle-component-picker';
 import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { generateSku } from '@/lib/utils';
 import {
   createBundleAction,
   updateBundleAction,
 } from '@/server/actions/bundles';
-
-interface ItemSearchResult {
-  id: string;
-  name: string;
-  sku: string;
-  quantity: number;
-}
 
 interface ComponentRow {
   itemId: string;
@@ -50,40 +48,14 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
   const [components, setComponents] = React.useState<ComponentRow[]>(
     initial?.components ?? [],
   );
-  const [search, setSearch] = React.useState('');
-  const [searchResults, setSearchResults] = React.useState<ItemSearchResult[]>([]);
-  const [searching, setSearching] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const isEdit = Boolean(initial);
+  const addedIds = React.useMemo(
+    () => new Set(components.map((c) => c.itemId)),
+    [components],
+  );
 
-  React.useEffect(() => {
-    if (search.trim().length < 2) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
-      setSearchResults([]);
-      return;
-    }
-    const ctrl = new AbortController();
-    setSearching(true);
-    const t = setTimeout(async () => {
-      try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(search)}`, {
-          signal: ctrl.signal,
-        });
-        const data = await res.json();
-        setSearchResults((data.items as ItemSearchResult[]) ?? []);
-      } catch {
-        // Aborted or network failure — ignore.
-      } finally {
-        setSearching(false);
-      }
-    }, 200);
-    return () => {
-      ctrl.abort();
-      clearTimeout(t);
-    };
-  }, [search]);
-
-  function addComponent(item: ItemSearchResult) {
+  function addComponent(item: ComponentSearchItem) {
     setComponents((cur) => {
       if (cur.some((c) => c.itemId === item.id)) {
         toast.info(`"${item.name}" is already a component.`);
@@ -100,8 +72,6 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
         },
       ];
     });
-    setSearch('');
-    setSearchResults([]);
   }
 
   function updateComponent(itemId: string, patch: Partial<ComponentRow>) {
@@ -188,13 +158,28 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
             SKU
             <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
           </Label>
-          <Input
-            id="bundle-sku"
-            value={sku}
-            onChange={(e) => setSku(e.target.value)}
-            placeholder="KIT-READ-3"
-            maxLength={64}
-          />
+          <div className="flex gap-2">
+            <Input
+              id="bundle-sku"
+              value={sku}
+              onChange={(e) => setSku(e.target.value)}
+              placeholder="KIT-READ-3"
+              maxLength={64}
+            />
+            {/* Same generator and button word as the item form's SKU; the KIT
+                prefix matches the placeholder. Unique per organization is
+                still enforced by bundles_org_sku_unique on save. */}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9"
+              title="Generate a SKU"
+              onClick={() => setSku(generateSku('KIT'))}
+            >
+              Auto
+            </Button>
+          </div>
         </div>
         <div className="space-y-1.5">
           <Label className="block">Pre-assembly</Label>
@@ -238,46 +223,12 @@ export function BundleForm({ initial }: { initial?: InitialBundle }) {
           </p>
         </div>
 
-        <div className="relative">
-          <Search className="text-muted-foreground pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search items by name, SKU, or barcode…"
-            className="pl-8"
-          />
-          {searchResults.length > 0 && (
-            <div className="border-border bg-popover absolute z-10 mt-1 max-h-64 w-full overflow-y-auto rounded-md border shadow-lg">
-              {searchResults.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => addComponent(item)}
-                  className="hover:bg-muted flex w-full items-center justify-between gap-3 border-b border-border/60 px-3 py-2 text-left text-sm last:border-b-0"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-medium">{item.name}</div>
-                    <div className="text-muted-foreground font-mono text-[11px]">
-                      {item.sku}
-                    </div>
-                  </div>
-                  <div className="text-muted-foreground tabular-nums text-xs">
-                    {item.quantity} on hand
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-          {searching && search.trim().length >= 2 && searchResults.length === 0 && (
-            <p className="text-muted-foreground absolute left-0 top-full mt-1 text-xs">
-              Searching…
-            </p>
-          )}
-        </div>
+        <BundleComponentPicker addedIds={addedIds} onAdd={addComponent} />
 
         {components.length === 0 ? (
           <p className="text-muted-foreground rounded-md border border-dashed border-border p-4 text-center text-xs">
-            No components yet. Search for items above and click to add.
+            No components yet. Search for items above, then click one or press
+            Enter to add it.
           </p>
         ) : (
           <div className="bg-card overflow-hidden rounded-lg border">

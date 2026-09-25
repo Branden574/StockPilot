@@ -1,14 +1,19 @@
 // apps/web/src/app/api/items/search/route.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { withApiContextMock, inventoryListMock, lineLabelsMock, primaryImagesMock } = vi.hoisted(
-  () => ({
-    withApiContextMock: vi.fn(),
-    inventoryListMock: vi.fn(),
-    lineLabelsMock: vi.fn(),
-    primaryImagesMock: vi.fn(),
-  }),
-);
+const {
+  withApiContextMock,
+  inventoryListMock,
+  lineLabelsMock,
+  primaryImagesMock,
+  searchForPickerMock,
+} = vi.hoisted(() => ({
+  withApiContextMock: vi.fn(),
+  inventoryListMock: vi.fn(),
+  lineLabelsMock: vi.fn(),
+  primaryImagesMock: vi.fn(),
+  searchForPickerMock: vi.fn(),
+}));
 
 vi.mock('@/lib/auth/api-context', () => ({
   withApiContext: withApiContextMock,
@@ -18,6 +23,7 @@ vi.mock('@/server/services/inventory', () => ({
     constructor() {}
     list = inventoryListMock;
     lineLabelsByIds = lineLabelsMock;
+    searchForPicker = searchForPickerMock;
   },
 }));
 vi.mock('@/server/services/item-images', () => ({
@@ -564,5 +570,119 @@ describe('?ids= is UUID-validated before it reaches the filter builder', () => {
     expect(await res.json()).toEqual({ items: [], total: 0 });
     expect(inventoryListMock).not.toHaveBeenCalled();
     expect(lineLabelsMock).not.toHaveBeenCalled();
+  });
+});
+
+// ── ?rank=relevance (the bundle component picker) ─────────────────────────
+// Opt-in. The "forwards filters to InventoryService.list" test at the top
+// asserts the WHOLE list() filter object for a request without it, so it is
+// also the proof that the default contract is unchanged; the tests below add
+// that no other value of the flag changes it either.
+
+describe('GET /api/items/search — ?rank=relevance (best match first)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    withApiContextMock.mockResolvedValue({
+      supabase: {} as never,
+      organizationId: 'org-1',
+      userId: 'u-1',
+      email: 'a@b.c',
+      role: 'manager',
+    });
+    primaryImagesMock.mockResolvedValue(new Map());
+    searchForPickerMock.mockResolvedValue({ items: [], total: 0 });
+  });
+
+  const COMPONENT_QS =
+    'q=pen&rank=relevance&type=all&status=active&bundles=exclude&expected=any&isbn=1&limit=20';
+
+  it('forwards the picker filters to searchForPicker and never calls list() or the image batch', async () => {
+    await GET(makeReq(COMPONENT_QS));
+    expect(searchForPickerMock).toHaveBeenCalledWith({
+      q: 'pen',
+      itemType: 'all',
+      itemTypes: undefined,
+      excludeBundles: true,
+      status: 'active',
+      expected: 'any',
+      warehouseId: undefined,
+      limit: 20,
+    });
+    expect(inventoryListMock).not.toHaveBeenCalled();
+    expect(primaryImagesMock).not.toHaveBeenCalled();
+  });
+
+  it('answers with the ranked rows and the full match count, unchanged', async () => {
+    const ranked = {
+      items: [
+        {
+          id: 'i1',
+          sku: 'PEN',
+          name: 'Zebra marker',
+          barcode: null,
+          item_type: 'product',
+          quantity_on_hand: 4,
+          awaiting_first_receipt: false,
+          warehouse_name: 'DC4',
+          match: 'exact',
+        },
+      ],
+      total: 57,
+    };
+    searchForPickerMock.mockResolvedValueOnce(ranked);
+    const res = await GET(makeReq(COMPONENT_QS));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(ranked);
+  });
+
+  it('expands a typed ISBN and passes a warehouse narrowing through', async () => {
+    await GET(makeReq('q=9780142407332&rank=relevance&isbn=1&wh=w-9'));
+    expect(searchForPickerMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isbnVariants: ['9780142407332', '014240733X'],
+        warehouseId: 'w-9',
+      }),
+    );
+  });
+
+  it('defaults to 20 rows and clamps the limit to 200', async () => {
+    await GET(makeReq('q=pen&rank=relevance'));
+    expect(searchForPickerMock).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 20 }));
+    await GET(makeReq('q=pen&rank=relevance&limit=5000'));
+    expect(searchForPickerMock).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 200 }));
+  });
+
+  it('keeps the 2-character floor', async () => {
+    const res = await GET(makeReq('q=p&rank=relevance'));
+    expect(await res.json()).toEqual({ items: [], total: 0 });
+    expect(searchForPickerMock).not.toHaveBeenCalled();
+  });
+
+  it('id resolution still wins over it', async () => {
+    lineLabelsMock.mockResolvedValueOnce([]);
+    await GET(makeReq('ids=11111111-1111-4111-8111-111111111111&rank=relevance&q=pen'));
+    expect(lineLabelsMock).toHaveBeenCalled();
+    expect(searchForPickerMock).not.toHaveBeenCalled();
+  });
+
+  it('browse mode with no search is the ordinary list, not a ranked search', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    await GET(makeReq('browse=1&rank=relevance'));
+    expect(searchForPickerMock).not.toHaveBeenCalled();
+    expect(inventoryListMock).toHaveBeenCalled();
+  });
+
+  it('any other value of the flag is the default path, exactly as before', async () => {
+    inventoryListMock.mockResolvedValueOnce({ items: [], total: 0 });
+    await GET(makeReq('q=pen&rank=name&slim=1'));
+    expect(searchForPickerMock).not.toHaveBeenCalled();
+    expect(inventoryListMock).toHaveBeenCalledWith(
+      expect.objectContaining({ q: 'pen', limit: 50, offset: 0 }),
+    );
+  });
+
+  it('a failed search is a server error, not an empty result', async () => {
+    searchForPickerMock.mockRejectedValueOnce(new Error('boom'));
+    await expect(GET(makeReq(COMPONENT_QS))).rejects.toThrow('boom');
   });
 });

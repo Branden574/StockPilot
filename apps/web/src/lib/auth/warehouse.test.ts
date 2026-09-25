@@ -46,7 +46,7 @@ vi.mock('@/lib/supabase/server', () => ({
 import { readWarehousesForRequest } from '@/lib/dashboard/request-cache';
 import { createClient } from '@/lib/supabase/server';
 
-import { getWarehouseAccess } from './warehouse';
+import { getWarehouseAccess, roleSeesEveryWarehouse } from './warehouse';
 
 type Role = 'owner' | 'admin' | 'manager' | 'staff' | 'viewer';
 
@@ -145,4 +145,28 @@ describe('getWarehouseAccess — no context (the requireOrgContext fallback)', (
     expect(readWarehousesForRequest).toHaveBeenCalledTimes(1);
     expect(access.readableIds).toEqual(['wh-a', 'wh-b']);
   });
+});
+
+describe('roleSeesEveryWarehouse: the rule an item search uses to skip the read', () => {
+  it.each<[Role, boolean]>([
+    ['owner', true],
+    ['admin', true],
+    ['manager', true],
+    ['staff', false],
+    ['viewer', false],
+  ])('%s: %s', (role, expected) => {
+    expect(roleSeesEveryWarehouse(role)).toBe(expected);
+  });
+
+  it.each<Role>(['owner', 'admin', 'manager'])(
+    '%s: getWarehouseAccess answers all access even when its read FAILS, so skipping the read loses nothing',
+    async (role) => {
+      const failing = makeSupabaseStub({
+        'warehouses.select': { data: null, error: { message: 'timeout' } },
+      });
+      const access = await getWarehouseAccess(ctx(role, failing.client));
+      expect(access.unreadable).toBe(true);
+      expect(access.hasAllAccess).toBe(roleSeesEveryWarehouse(role));
+    },
+  );
 });

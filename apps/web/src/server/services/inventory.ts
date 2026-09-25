@@ -6,7 +6,10 @@ import {
   forcedWarehouseId,
   getWarehouseAccess,
   ForbiddenError,
+  roleSeesEveryWarehouse,
 } from '@/lib/auth/warehouse';
+import { isIsbnSearch } from '@/lib/books/isbn-variants';
+import { rankItemMatches, type ItemMatchTier } from '@/lib/inventory/rank-item-matches';
 import type { PlaceDest } from '@/lib/locations/destination-option';
 import { isRackShelfLocation, isSystemLocation } from '@/lib/locations/groups';
 import { reportError } from '@/lib/error-reporter';
@@ -945,6 +948,85 @@ export interface ItemLineLabelRow {
   is_bundle: boolean;
 }
 
+/** searchForPicker: the most rows each of its reads returns (the matches, the
+ *  name/SKU prefix read, the word read) for one search. */
+export const PICKER_RANK_WINDOW = 200;
+/** searchForPicker: rows returned when the caller names no limit. */
+export const PICKER_DEFAULT_LIMIT = 20;
+/** searchForPicker: the most words of one search matched separately. */
+const PICKER_MAX_WORDS = 6;
+/** searchForPicker: the most rows the exact SKU/barcode lookup reads. */
+const PICKER_EXACT_LIMIT = 10;
+
+/** What a picker row renders, plus what ranking reads (model_number) and what
+ *  the viewer-grant filter reads (category_id). The warehouse name is a join
+ *  in the same request, not another round trip. */
+const ITEM_PICKER_COLUMNS =
+  'id, sku, name, barcode, model_number, item_type, quantity_on_hand, awaiting_first_receipt, category_id, warehouse:warehouses!warehouse_id (name)';
+
+/** Filters searchForPicker honours. Each means what it means in list(). */
+export interface ItemPickerSearchFilters {
+  q: string;
+  itemType?: ItemListFilters['itemType'];
+  itemTypes?: ItemListFilters['itemTypes'];
+  excludeBundles?: boolean;
+  status?: ItemListFilters['status'];
+  expected?: ItemListFilters['expected'];
+  isbnVariants?: string[];
+  warehouseId?: string | null;
+  /** Rows returned, 1 to PICKER_RANK_WINDOW. Default PICKER_DEFAULT_LIMIT. */
+  limit?: number;
+}
+
+/** One row of searchForPicker, best match first. */
+export interface ItemPickerRow {
+  id: string;
+  sku: string;
+  name: string;
+  barcode: string | null;
+  item_type: 'product' | 'book' | 'asset' | 'consumable';
+  quantity_on_hand: number;
+  /** Created from a purchase order and never received (0277). */
+  awaiting_first_receipt: boolean;
+  /** The warehouse this item row belongs to (null for an org-level item), so
+   *  two rows of one SKU in different warehouses can be told apart. */
+  warehouse_name: string | null;
+  /** Why it ranked where it did (see rankItemMatches). */
+  match: ItemMatchTier;
+}
+
+/**
+ * The codes an exact SKU/barcode lookup asks for: the search as typed, upper
+ * and lower case (SKUs are usually stored in one case and typed in the
+ * other), plus `extra` (the other ISBN form of a typed ISBN, which is only
+ * ever a barcode). Double quotes and backslashes are dropped because each
+ * value is quoted inside the filter string.
+ */
+function exactCodeCandidates(term: string, extra: readonly string[] = []): string[] {
+  const values = [term, term.toUpperCase(), term.toLowerCase(), ...extra]
+    .map((v) => v.replace(/["\\]/g, '').trim())
+    .filter((v) => v.length > 0);
+  return [...new Set(values)];
+}
+
+/**
+ * The search as the body of a LIKE pattern for searchForPicker's prefix and
+ * word reads: whitespace collapsed, and every character the filter string
+ * cannot carry unquoted or LIKE would read as its own syntax (, ( ) % * " \)
+ * turned into `_`, which matches any one character. So "Pen (blue)" still
+ * reads the item named exactly that, and a leading double quote cannot open a
+ * quoted filter value. A wildcard only widens the read; the ranker compares
+ * the literal text, and the reads also carry every word's clause, so they
+ * never return a row the matches would not.
+ */
+function pickerLikeBody(search: string): string {
+  return search
+    .trim()
+    .slice(0, 120)
+    .replace(/\s+/g, ' ')
+    .replace(/[,()%*"\\]/g, '_');
+}
+
 /** One row of listByIdsForExport: list()'s item row without the placement
  *  columns list() derives from holdings. */
 export interface InventoryExportItemRow {
@@ -1787,6 +1869,230 @@ export class InventoryService {
       }>;
     });
     return keepGranted(rows, grants);
+  }
+
+  /**
+   * SEARCH-AS-YOU-TYPE FOR A PICKER, BEST MATCH FIRST. Backs
+   * `/api/items/search?rank=relevance` (the bundle component picker).
+   *
+   * list() is a list page: it sorts by a column, counts the value of every
+   * match, and reads every row's holdings for its placement columns, which a
+   * picker throws away. Here, one level of requests after the access check:
+   *
+   *   - the matches, name order, at most PICKER_RANK_WINDOW, with the exact
+   *     count (so the picker can say "20 of 143");
+   *   - beside it, for a one-word search, an exact SKU/barcode lookup of at
+   *     most PICKER_EXACT_LIMIT rows, so the item whose code was typed or
+   *     scanned is found even when more than PICKER_RANK_WINDOW rows match;
+   *   - and two reads of the next tiers, name order, at most
+   *     PICKER_RANK_WINDOW each: a name or SKU that starts with the search,
+   *     and a word in the name that does. The matches window is the first
+   *     rows in NAME order, so for a broad search ("pen", "math") the items
+   *     that start with it sort past it, behind "Appendix..." and "Everyday
+   *     Mathematics"; these reads bring them anyway. Both carry every word's
+   *     clause, so each is a subset of the matches and `total` still counts
+   *     every row returned.
+   *
+   * Then rankItemMatches puts them in relevance order and the first `limit`
+   * go back. No holdings, no value sum, no images. A manager or above skips
+   * the warehouse read too (roleSeesEveryWarehouse): their access is decided
+   * by role.
+   *
+   * Matching: each word of the search must match name, SKU, barcode or model
+   * number (list()'s one-phrase clause per word, ANDed), so "red pen" finds
+   * "Pen, red". A one-word search is exactly list()'s clause.
+   *
+   * Scoping mirrors list() line for line (the established pattern in this
+   * file, like countExpected): organization, not deleted, the caller's
+   * warehouses (or the optional warehouseId for all-access), a viewer's
+   * category grants, status (default active), awaiting_first_receipt
+   * (default excluded; 'any' = no predicate), item_type (undefined =
+   * product, 'all' = none, itemTypes wins), kits when excludeBundles, and
+   * never a rental. Every request carries the same scope, so no extra read
+   * can widen what the caller sees.
+   *
+   * ISBN forms (`isbnVariants`, from the route's isbn=1) count only when the
+   * search IS an ISBN (isIsbnSearch), and only as barcodes.
+   */
+  async searchForPicker(
+    filters: ItemPickerSearchFilters,
+  ): Promise<{ items: ItemPickerRow[]; total: number }> {
+    const none = { items: [] as ItemPickerRow[], total: 0 };
+    const limit = Math.min(
+      PICKER_RANK_WINDOW,
+      Math.max(1, Math.floor(filters.limit ?? PICKER_DEFAULT_LIMIT) || PICKER_DEFAULT_LIMIT),
+    );
+    // buildItemSearchClause's sanitizing, applied once up front so the words
+    // and the exact codes are cut from the same text.
+    const term = filters.q
+      .trim()
+      .slice(0, 120)
+      .replace(/[,()%*]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (term.length < 2) return none;
+    const words = [...new Set(term.split(' '))].slice(0, PICKER_MAX_WORDS);
+    const oneWord = words.length === 1;
+    // An ISBN is one word, and its other form only means something when the
+    // search is an ISBN. isbnVariants() keeps the digits of whatever it is
+    // given, so without isIsbnSearch the SKU "ABC1234567890" would bring in
+    // the unrelated item whose barcode is "1234567890" and rank it exact.
+    const isbnVariants = oneWord && isIsbnSearch(term) ? (filters.isbnVariants ?? []) : [];
+
+    const viewerGrantsRead = this.viewerCategoryGrants();
+    const access = roleSeesEveryWarehouse(this.ctx.role)
+      ? null
+      : await getWarehouseAccess(this.ctx);
+    if (access?.unreadable) {
+      // A failed assignments or membership read is not "no warehouses".
+      // Answering it with an empty list made the picker say "No items match"
+      // when the search had failed; this way it shows its error and Try
+      // again. Access stays denied either way: nothing is read.
+      throw new ServiceError('internal_error', 'Warehouse access could not be read');
+    }
+    if (access && !access.hasAllAccess && access.readableIds.length === 0) return none;
+
+    let grantsInUrl: string[] | null = null;
+    let grantsAfterRead: Set<string> | null = null;
+    if (this.ctx.role === 'viewer') {
+      try {
+        const granted = await viewerGrantsRead;
+        if (granted !== null) {
+          if (granted.size === 0) return none;
+          if (grantsFitInUrl(granted)) grantsInUrl = [...granted];
+          else grantsAfterRead = granted;
+        }
+      } catch {
+        // Defense in depth, as in list(): RLS still enforces the grants.
+      }
+    }
+
+    const scoped = (withCount: boolean) => {
+      let query = this.ctx.supabase
+        .from('inventory_items')
+        .select(ITEM_PICKER_COLUMNS, withCount ? { count: 'exact' } : undefined)
+        .eq('organization_id', this.ctx.organizationId)
+        .is('deleted_at', null);
+      if (access && !access.hasAllAccess) {
+        // in-list-bound: the caller's readable warehouses (an org's handful of sites)
+        query = query.in('warehouse_id', access.readableIds);
+      } else if (filters.warehouseId) {
+        query = query.eq('warehouse_id', filters.warehouseId);
+      }
+      if (grantsInUrl) {
+        // in-list-bound: grantsFitInUrl keeps this under GRANTS_IN_URL_MAX_CHARS
+        query = query.in('category_id', grantsInUrl);
+      }
+      if (!filters.status || filters.status === 'active') {
+        query = query.eq('status', 'active');
+      } else if (filters.status !== 'all') {
+        query = query.eq('status', filters.status);
+      }
+      if (filters.expected !== 'any') {
+        query = query.eq('awaiting_first_receipt', filters.expected === true);
+      }
+      if (filters.itemTypes && filters.itemTypes.length > 0) {
+        // in-list-bound: item types are a fixed enum of four values
+        query = query.in('item_type', filters.itemTypes);
+      } else if (filters.itemType === undefined) {
+        query = query.eq('item_type', 'product');
+      } else if (filters.itemType !== 'all') {
+        query = query.eq('item_type', filters.itemType);
+      }
+      if (filters.excludeBundles) {
+        query = query.or('is_bundle.is.null,is_bundle.eq.false');
+      }
+      return query.eq('is_rental', false);
+    };
+
+    // The scope plus every word's clause: what "matches the search" means.
+    const matching = (withCount: boolean) => {
+      let query = scoped(withCount);
+      for (const word of words) {
+        const clause = buildItemSearchClause(word, isbnVariants);
+        if (clause) query = query.or(clause);
+      }
+      return query;
+    };
+
+    const matchesRead = matching(true)
+      .order('name', { ascending: true })
+      .order('id', { ascending: true })
+      .range(0, PICKER_RANK_WINDOW - 1);
+
+    const skuCodes = oneWord ? exactCodeCandidates(term) : [];
+    const barcodeCodes = oneWord ? exactCodeCandidates(term, isbnVariants) : [];
+    const quoted = (codes: string[]) => codes.map((v) => `"${v}"`).join(',');
+    const exactRead =
+      skuCodes.length > 0
+        ? scoped(false)
+            // in-list-bound: the search in up to three cases (plus, for a
+            // barcode, the two forms of a typed ISBN)
+            .or(`sku.in.(${quoted(skuCodes)}),barcode.in.(${quoted(barcodeCodes)})`)
+            .limit(PICKER_EXACT_LIMIT)
+        : Promise.resolve({ data: [], error: null });
+
+    const like = pickerLikeBody(filters.q);
+    const prefixRead = matching(false)
+      .or(`name.ilike.${like}%,sku.ilike.${like}%`)
+      .order('name', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(PICKER_RANK_WINDOW);
+    const wordRead = matching(false)
+      .ilike('name', `% ${like}%`)
+      .order('name', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(PICKER_RANK_WINDOW);
+
+    const [matchesRes, exactRes, prefixRes, wordRes] = await Promise.all([
+      matchesRead,
+      exactRead,
+      prefixRead,
+      wordRead,
+    ]);
+    for (const res of [matchesRes, exactRes, prefixRes, wordRes]) {
+      if (res.error) throw new ServiceError('internal_error', res.error.message);
+    }
+
+    type PickerDbRow = {
+      id: string;
+      sku: string;
+      name: string;
+      barcode: string | null;
+      model_number: string | null;
+      item_type: ItemPickerRow['item_type'];
+      quantity_on_hand: number | string | null;
+      awaiting_first_receipt: boolean | null;
+      category_id: string | null;
+      warehouse: { name: string | null } | Array<{ name: string | null }> | null;
+    };
+    const byId = new Map<string, PickerDbRow>();
+    for (const res of [exactRes, prefixRes, wordRes, matchesRes]) {
+      for (const row of (res.data ?? []) as unknown as PickerDbRow[]) byId.set(row.id, row);
+    }
+    const rows = keepGranted([...byId.values()], grantsAfterRead);
+    // Ranked against the search as typed (not the sanitized words), so
+    // "Pen (blue)" still ranks the item named exactly that as a prefix match.
+    const ranked = rankItemMatches(rows, filters.q.trim().slice(0, 120), isbnVariants);
+    return {
+      items: ranked.slice(0, limit).map((r) => {
+        const wh = Array.isArray(r.warehouse) ? r.warehouse[0] : r.warehouse;
+        return {
+          id: r.id,
+          sku: r.sku,
+          name: r.name,
+          barcode: r.barcode ?? null,
+          item_type: r.item_type,
+          quantity_on_hand: Number(r.quantity_on_hand) || 0,
+          awaiting_first_receipt: r.awaiting_first_receipt === true,
+          warehouse_name: wh?.name ?? null,
+          match: r.match,
+        };
+      }),
+      // Every row of every read also matches the words, so the count covers
+      // them.
+      total: Math.max(matchesRes.count ?? 0, rows.length),
+    };
   }
 
   /**
