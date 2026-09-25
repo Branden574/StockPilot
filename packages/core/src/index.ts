@@ -57,6 +57,7 @@ export * from './orders/delivery-request';
 export * from './orders/delivery-request-input';
 export * from './orders/requester-identity';
 export * from './orders/order-returns-view';
+export * from './rentals/borrower';
 export * from './time/org-timezone';
 export * from './b2b/pricing-mode';
 export * from './auth/account-status';

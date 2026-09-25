@@ -13,11 +13,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * (batched, paged, throws); category names batch too and degrade with a report.
  */
 
-const { adminRef, reserved, formProps, reportError } = vi.hoisted(() => ({
+const { adminRef, reserved, formProps, reportError, thumbMap } = vi.hoisted(() => ({
   adminRef: { current: null as unknown },
   reserved: vi.fn(),
   formProps: vi.fn(),
   reportError: vi.fn(async () => {}),
+  thumbMap: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
@@ -53,6 +54,9 @@ vi.mock('@/server/services/inventory', () => ({
   InventoryService: {
     forCurrentUser: vi.fn(async () => ({ reservedQuantityByItemIds: reserved })),
   },
+}));
+vi.mock('@/server/loaders/orders-new-catalog', () => ({
+  loadCatalogThumbMapCached: thumbMap,
 }));
 vi.mock('@/components/rentals/rental-create-form', () => ({
   RentalCreateForm: (props: Record<string, unknown>) => {
@@ -95,11 +99,20 @@ function stubWith(categories: (call: MockCall) => { data: unknown; error: unknow
 async function renderPage() {
   render(await NewRentalPage({ searchParams: Promise.resolve({}) }));
   return formProps.mock.calls.at(-1)?.[0] as {
-    items: Array<{ id: string; reservedQuantity: number; categoryName: string | null }>;
+    items: Array<{
+      id: string;
+      reservedQuantity: number;
+      categoryName: string | null;
+      imageUrl: string | null;
+      lqip: string | null;
+    }>;
   };
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  thumbMap.mockResolvedValue({});
+});
 
 describe('New rental: 300 rental items', () => {
   it('takes reservations from the batched service read, for every item, and counts one in the last batch', async () => {
@@ -154,5 +167,74 @@ describe('New rental: 300 rental items', () => {
     await expect(NewRentalPage({ searchParams: Promise.resolve({}) })).rejects.toThrow(
       /rental items read failed/,
     );
+  });
+});
+
+describe('New rental: photos arrive with the page', () => {
+  // L4L, 2026-09-25: "rental photos take about 5 seconds to pop up". The page
+  // shipped every card with imageUrl null and waited on a browser request that
+  // signed a photo for every item in the warehouse. The cards now carry their
+  // photo from the cached warehouse thumbnail map (the Orders storefront's).
+  const photoItems = [
+    { ...items[0]!, id: uuid(1, 'a'), custom_fields: {} },
+    { ...items[0]!, id: uuid(2, 'a'), custom_fields: { thumbnail_url: 'https://covers.example/2.jpg' } },
+    { ...items[0]!, id: uuid(3, 'a'), custom_fields: {} },
+    { ...items[0]!, id: uuid(4, 'a'), custom_fields: null },
+  ];
+
+  function stubPhotoItems() {
+    adminRef.current = makeSupabaseStub({
+      'inventory_items.select': { data: photoItems, error: null },
+      'categories.select': { data: [], error: null },
+    }).client;
+    reserved.mockResolvedValue(new Map());
+  }
+
+  it('reads the map for the page warehouse and puts each photo, cover and blur on its card', async () => {
+    stubPhotoItems();
+    thumbMap.mockResolvedValue({
+      [uuid(1, 'a')]: { url: 'https://signed.example/1.webp', lqip: 'data:image/webp;base64,AAA' },
+      // A photo whose URL failed to sign keeps its blur.
+      [uuid(3, 'a')]: { url: null, lqip: 'data:image/webp;base64,CCC' },
+      // Another warehouse item that is not a rental: never on a card.
+      [uuid(99, 'f')]: { url: 'https://signed.example/99.webp', lqip: null },
+    });
+
+    const props = await renderPage();
+
+    expect(thumbMap).toHaveBeenCalledWith('org-1', 'wh-1');
+    const byId = new Map(props.items.map((i) => [i.id, i]));
+    // Photo: the URL, and no blur (the storefront's payload rule).
+    expect(byId.get(uuid(1, 'a'))).toMatchObject({
+      imageUrl: 'https://signed.example/1.webp',
+      lqip: null,
+    });
+    // No uploaded photo, a book cover on the item: the cover.
+    expect(byId.get(uuid(2, 'a'))).toMatchObject({
+      imageUrl: 'https://covers.example/2.jpg',
+      lqip: null,
+    });
+    expect(byId.get(uuid(3, 'a'))).toMatchObject({
+      imageUrl: null,
+      lqip: 'data:image/webp;base64,CCC',
+    });
+    expect(byId.get(uuid(4, 'a'))).toMatchObject({ imageUrl: null, lqip: null });
+    expect(props.items).toHaveLength(4);
+  });
+
+  it('a failed map still renders the catalog (the form fills photos in later)', async () => {
+    stubPhotoItems();
+    thumbMap.mockRejectedValue(new Error('thumb batch sign failed: 503'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const props = await renderPage();
+
+    expect(props.items).toHaveLength(4);
+    expect(props.items.find((i) => i.id === uuid(1, 'a'))?.imageUrl).toBeNull();
+    expect(props.items.find((i) => i.id === uuid(2, 'a'))?.imageUrl).toBe(
+      'https://covers.example/2.jpg',
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('thumb map unavailable'));
+    warn.mockRestore();
   });
 });

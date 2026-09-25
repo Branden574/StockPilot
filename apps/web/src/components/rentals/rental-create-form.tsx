@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { isBorrowerEmailFormat } from '@stockpilot/core';
+
 import { AisleBar } from '@/components/orders/v2/aisle-bar';
 import {
   CartProvider,
@@ -75,16 +77,27 @@ function RentalCreateFormInner({
   const [availabilityFilter, setAvailabilityFilter] = React.useState<AvailabilityFilter>('any');
   const [sortKey, setSortKey] = React.useState<SortKey>('name');
 
-  // Deferred thumbnail URLs (same pattern as orders v2) — the hook retries
-  // with backoff so one blip doesn't blank the whole session.
+  // Photos come with the page (the server reads the cached warehouse photo
+  // map). This deferred request only FILLS rental items that arrived without
+  // one: a photo added since the map was built, or a map that failed. It asks
+  // for RENTAL items only (rentalsOnly=1). It used to ask for every item in
+  // the warehouse (includeRentals=1, up to 500, one signed URL each), which
+  // kept rental photos about five seconds behind the page. No request at all
+  // when every card already has a photo. The hook retries with backoff so one
+  // blip doesn't blank the whole session.
+  const needsThumbFill = rawItems.some((it) => !it.imageUrl);
   const thumbUrls = useCatalogThumbnails(
-    `/api/orders/catalog-thumbnails?warehouseId=${encodeURIComponent(warehouseId)}&includeRentals=1`,
+    needsThumbFill
+      ? `/api/orders/catalog-thumbnails?warehouseId=${encodeURIComponent(warehouseId)}&rentalsOnly=1`
+      : null,
   );
 
   const items = React.useMemo<CatalogItem[]>(() => {
     if (Object.keys(thumbUrls).length === 0) return rawItems;
+    // Fill only: a photo the page already shows is never swapped for a
+    // different signed URL of the same image (a second download, a flicker).
     return rawItems.map((it) =>
-      thumbUrls[it.id] ? { ...it, imageUrl: thumbUrls[it.id]! } : it,
+      !it.imageUrl && thumbUrls[it.id] ? { ...it, imageUrl: thumbUrls[it.id]! } : it,
     );
   }, [rawItems, thumbUrls]);
 
@@ -201,7 +214,7 @@ function RentalCreateFormInner({
       return;
     }
     const borrowerEmail = borrower.borrowerEmail?.trim() ?? '';
-    if (borrowerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(borrowerEmail)) {
+    if (borrowerEmail && !isBorrowerEmailFormat(borrowerEmail)) {
       toast.error('Enter a valid borrower email, or leave it blank.');
       return;
     }
@@ -293,6 +306,7 @@ function RentalCreateFormInner({
           <div className="space-y-1.5">
             <Label htmlFor="rental-borrower">Borrower</Label>
             <BorrowerPicker
+              inputId="rental-borrower"
               members={members}
               value={borrower}
               onChange={setBorrower}

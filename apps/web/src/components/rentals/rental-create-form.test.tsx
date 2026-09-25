@@ -24,10 +24,25 @@ vi.mock('@/server/actions/rentals', () => ({
   createRentalAction: (input: unknown) => createRentalAction(input),
 }));
 
-vi.mock('@/lib/use-catalog-thumbnails', () => ({ useCatalogThumbnails: () => ({}) }));
+const thumbs = vi.hoisted(() => ({
+  urls: [] as Array<string | null>,
+  answer: {} as Record<string, string>,
+}));
+vi.mock('@/lib/use-catalog-thumbnails', () => ({
+  useCatalogThumbnails: (url: string | null) => {
+    thumbs.urls.push(url);
+    return url ? thumbs.answer : {};
+  },
+}));
+const gridItems = vi.hoisted(() => ({ current: [] as Array<{ id: string; imageUrl: string | null }> }));
 vi.mock('@/components/orders/v2/aisle-bar', () => ({ AisleBar: () => null }));
 vi.mock('@/components/orders/v2/toolbar', () => ({ Toolbar: () => null }));
-vi.mock('@/components/orders/v2/catalog-grid', () => ({ CatalogGrid: () => null }));
+vi.mock('@/components/orders/v2/catalog-grid', () => ({
+  CatalogGrid: ({ items }: { items: Array<{ id: string; imageUrl: string | null }> }) => {
+    gridItems.current = items;
+    return null;
+  },
+}));
 
 vi.mock('@/components/rentals/borrower-picker', () => ({
   BorrowerPicker: ({
@@ -116,7 +131,7 @@ function savedCart(key: string, lines: Array<{ itemId: string; quantity: number 
   );
 }
 
-function renderForm() {
+function renderForm(items: CatalogItem[] = [TENT]) {
   return render(
     <RentalCreateForm
       warehouses={[
@@ -124,7 +139,7 @@ function renderForm() {
         { id: 'wh-2', name: 'Annex' },
       ]}
       warehouseId="wh-1"
-      items={[TENT]}
+      items={items}
       aisles={[]}
       members={[]}
       viewerRole="admin"
@@ -193,5 +208,42 @@ describe('RentalCreateForm — the cart checks out only what it shows', () => {
 
     expect(push).toHaveBeenCalledWith('/dashboard/rentals/new?warehouseId=wh-2');
     expect((checkOut() as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+// ═══ RENTAL PHOTOS: WITH THE PAGE, AND ONLY RENTALS ASKED FOR AFTER ═══
+//
+// L4L, 2026-09-25: rental photos appeared about five seconds after the page.
+// The form asked for photos of EVERY item in the warehouse (includeRentals=1).
+// The page now ships photos in its HTML; the form asks, for rental items only,
+// just when a card arrived without one, and never replaces a photo it has.
+describe('RentalCreateForm — photos', () => {
+  const CANOPY: CatalogItem = { ...TENT, id: 'canopy', name: 'Canopy', imageUrl: 'https://ssr/canopy.webp' };
+
+  beforeEach(() => {
+    localStorage.clear();
+    thumbs.urls = [];
+    thumbs.answer = {};
+    gridItems.current = [];
+  });
+
+  it('asks for rental items only, and only when a card has no photo yet', () => {
+    renderForm([CANOPY, TENT]);
+    expect(thumbs.urls.at(-1)).toBe('/api/orders/catalog-thumbnails?warehouseId=wh-1&rentalsOnly=1');
+    expect(thumbs.urls.some((u) => u?.includes('includeRentals'))).toBe(false);
+  });
+
+  it('makes no photo request when every card already has its photo', () => {
+    renderForm([CANOPY]);
+    expect(thumbs.urls.length).toBeGreaterThan(0);
+    expect(thumbs.urls.every((u) => u === null)).toBe(true);
+  });
+
+  it('fills a missing photo and never replaces one the page sent', () => {
+    thumbs.answer = { canopy: 'https://deferred/canopy.webp', tent: 'https://deferred/tent.webp' };
+    renderForm([CANOPY, TENT]);
+    const byId = new Map(gridItems.current.map((i) => [i.id, i.imageUrl]));
+    expect(byId.get('canopy')).toBe('https://ssr/canopy.webp');
+    expect(byId.get('tent')).toBe('https://deferred/tent.webp');
   });
 });

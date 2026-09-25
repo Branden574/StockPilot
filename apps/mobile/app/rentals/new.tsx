@@ -23,7 +23,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { stockAvailability } from '@stockpilot/core';
+import { RENTAL_BORROWER_EMAIL_HELP, stockAvailability } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -534,6 +534,11 @@ export default function NewRental() {
               keyboardType="email-address"
               autoCapitalize="none"
             />
+            {/* The web picker's words (shared from core): anyone can borrow,
+                and the email is where the rental emails go. */}
+            <Body size={12} muted>
+              They do not need a StockPilot account. {RENTAL_BORROWER_EMAIL_HELP}
+            </Body>
           </FormSection>
 
           <FormSection icon={Calendar} label="EXPECTED RETURN">
@@ -586,8 +591,8 @@ export default function NewRental() {
           */}
           <Body size={12.5} muted style={{ marginTop: 8 }}>
             Checking out reserves these units, so they stop showing as available to rent
-            elsewhere. The borrower is emailed a confirmation. Mark the rental returned to release
-            the stock.
+            elsewhere. The borrower is emailed a confirmation when you add their email. Mark the
+            rental returned to release the stock.
           </Body>
 
           {!canCreate ? (
