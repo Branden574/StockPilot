@@ -166,6 +166,9 @@ describe('nav order is frozen to the original static nav', () => {
       // where the web sidebar already puts it: sortOrder 5, immediately after
       // Items. Everything else is byte-for-byte the legacy order.
       '/inventory', '/staging',
+      // Exceptions gained a native twin (F1-1). Deliberate addition, placed
+      // where the web sidebar already puts it: sortOrder 7, after Staging.
+      '/exceptions',
       '/books', '/categories', '/tags', '/movements', '/rentals', '/bundles',
       '/orders', '/cycle-counts', '/procedures', '/receive', '/purchase-orders', '/recurring-pos', '/po-imports',
       '/locations', '/suppliers', '/reports',

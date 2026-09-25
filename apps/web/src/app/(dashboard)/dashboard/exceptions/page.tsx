@@ -1,26 +1,39 @@
-import { AlertTriangle, CheckCircle2, ChevronRight, Clock } from 'lucide-react';
+import { CheckCircle2, ChevronRight } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { Badge } from '@/components/ui/badge';
+import { CheckNowButton } from '@/components/exceptions/check-now-button';
+import {
+  CheckedAt,
+  ExceptionsUnavailable,
+  exceptionTime,
+  FirstCheckPending,
+  RecurrenceChip,
+  SeverityChip,
+  StateChip,
+  stateOf,
+  UncheckedRulesBanner,
+  uncheckedRuleLabels,
+} from '@/components/exceptions/occurrence-display';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
-import { ServiceError, withContext } from '@/server/services/context';
+import { ServiceError, withContext, type ServiceContext } from '@/server/services/context';
 import {
   ExceptionOccurrencesService,
   type ExceptionOccurrence,
+  type ExceptionSyncState,
   type OccurrenceListResult,
+  type OccurrenceListStatus,
 } from '@/server/services/exception-occurrences';
 
 import {
-  countExceptions,
   describeOccurrence,
-  EXCEPTION_FIRST_CHECK_PENDING_COPY,
+  EXCEPTION_ALL_CLEAR_TITLE,
+  EXCEPTION_NONE_RESOLVED_COPY,
+  EXCEPTION_RESOLVED_WINDOW_DAYS,
   EXCEPTION_RULES,
-  groupExceptions,
-  occurrenceKey,
-  recurrenceBadge,
-  type WarehouseException,
+  groupOccurrences,
+  resolveOrgTimezone,
 } from '@stockpilot/core';
 
 export const metadata = { title: 'Exceptions · StockPilot' };
@@ -34,242 +47,286 @@ export const metadata = { title: 'Exceptions · StockPilot' };
  * a queue to manage. What there was: conditions that were simply wrong, which
  * nothing surfaced. This page surfaces them.
  *
- * Since F1-1 (migration 0370) the page reads STORED occurrences: the system
- * evaluates the rules org-wide every 15 minutes and after each posted or
- * cancelled count, and this page renders what it found, with "Checked at".
- * The page never evaluates or syncs, so it costs one read. Before an org's
- * first check it says so, and never shows the all-clear state.
+ * ═══ CONDITIONS ARE DERIVED, THE LIFECYCLE IS STORED (F1-1, migration 0370) ═══
  *
- * INTERIM RENDERING: stage 3 of F1-1 replaces this body with the Open and
- * Resolved tabs, state chips and the occurrence detail. What is here keeps
- * the rules that stage must also keep: a failed read renders "unavailable",
- * never an empty list, and an unchecked org never reads as all clear.
+ * The rules are still evaluated from live data, never stored as settings. What
+ * is stored is each occurrence's lifecycle: the system evaluates every rule
+ * org-wide every 15 minutes (the cron) and after each posted or cancelled
+ * count, raises an occurrence (EX-000042) the first time it finds a condition,
+ * and resolves it by itself once a complete check no longer finds it. NO
+ * PERSON RESOLVES AN OCCURRENCE: people can acknowledge one and add notes.
+ *
+ * This page renders the stored state with "Checked at". It never evaluates or
+ * syncs (owner decision F1 Q9: freshness must not slow a page down), so it
+ * costs one list read plus the org's sync state. A manager's "Check now"
+ * schedules a check after the response and returns at once.
+ *
+ * What it must never get wrong:
+ *   - a failed read renders "unavailable", never an empty list (pattern #1);
+ *   - before the org's first check it says so, and never shows all clear;
+ *   - a rule the last check could not vouch for (failed or truncated) is
+ *     named, and the all-clear state is withheld while any is out.
  */
-export default async function ExceptionsPage() {
-  let svc: ExceptionOccurrencesService;
+type SearchParams = { tab?: string | string[] };
+
+function firstParam(v: string | string[] | undefined): string | undefined {
+  return Array.isArray(v) ? v[0] : v;
+}
+
+async function orgTimeZone(organizationId: string): Promise<string> {
   try {
-    svc = await ExceptionOccurrencesService.forCurrentUser();
+    return await getCachedOrgTimezone(organizationId);
+  } catch {
+    // Formatting only: the default zone.
+    return resolveOrgTimezone(null);
+  }
+}
+
+export default async function ExceptionsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<SearchParams>;
+}) {
+  let ctx: ServiceContext;
+  try {
+    ctx = await withContext();
   } catch (e) {
     if (e instanceof ServiceError && (e.code === 'forbidden' || e.code === 'not_found')) notFound();
     throw e;
   }
+  const sp = (await searchParams) ?? {};
+  const tab: OccurrenceListStatus = firstParam(sp.tab) === 'resolved' ? 'resolved' : 'open';
 
   let result: OccurrenceListResult | null = null;
   try {
-    result = await svc.list({ status: 'open' });
+    result = await new ExceptionOccurrencesService(ctx).list({ status: tab });
   } catch (e) {
     if (e instanceof ServiceError && e.code === 'forbidden') notFound();
     // Any other failure renders "unavailable" below. An empty list here
     // would read as "nothing wrong", which is the one thing it must not say.
     result = null;
   }
+  const timeZone = await orgTimeZone(ctx.organizationId);
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:py-8">
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Exceptions</h1>
-        <p className="text-muted-foreground mt-1 text-sm">
-          Conditions that are wrong and that nothing else tells you about. The system checks
-          every 15 minutes and after each posted count; fix the cause and the row resolves on the
-          next check.
-        </p>
+      <header className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Exceptions</h1>
+          <p className="text-muted-foreground mt-1 max-w-2xl text-sm">
+            Conditions that are wrong and that nothing else tells you about. Each one keeps its
+            number while it lasts; fix the cause and the system resolves it on the next check.
+          </p>
+        </div>
+        {result?.canCheckNow ? <CheckNowButton /> : null}
       </header>
+
+      <nav aria-label="Exception lists" className="mb-4 flex flex-wrap gap-1">
+        <TabLink href="/dashboard/exceptions" active={tab === 'open'}>
+          Open
+          {tab === 'open' && result && result.syncState ? ` (${result.occurrences.length})` : ''}
+        </TabLink>
+        <TabLink href="/dashboard/exceptions?tab=resolved" active={tab === 'resolved'}>
+          Resolved, last {EXCEPTION_RESOLVED_WINDOW_DAYS} days
+        </TabLink>
+      </nav>
+
       {result === null ? (
-        <Unavailable />
+        <ExceptionsUnavailable />
+      ) : result.syncState === null ? (
+        // Not checked yet. Whatever rows exist, nothing here may read as all
+        // clear.
+        <FirstCheckPending />
+      ) : tab === 'open' ? (
+        <OpenList result={result} syncState={result.syncState} timeZone={timeZone} />
       ) : (
-        <OpenList
-          result={result}
-          checkedAt={result.syncState ? await checkedAtLabel(result.syncState.lastSyncedAt) : null}
-        />
+        <ResolvedList result={result} syncState={result.syncState} timeZone={timeZone} />
       )}
     </div>
   );
 }
 
-function Unavailable() {
+function TabLink({ href, active, children }: { href: string; active: boolean; children: React.ReactNode }) {
   return (
-    <div
-      role="alert"
-      className="border-warning/40 bg-warning/5 flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
+    <Link
+      href={href}
+      prefetch={false}
+      aria-current={active ? 'page' : undefined}
+      className={
+        active
+          ? 'bg-foreground text-background rounded-md px-2.5 py-1.5 text-xs font-medium'
+          : 'text-muted-foreground hover:text-foreground hover:bg-muted rounded-md px-2.5 py-1.5 text-xs font-medium'
+      }
     >
-      <AlertTriangle className="text-warning mt-0.5 size-4 shrink-0" aria-hidden />
-      <p>Exceptions are unavailable right now. Reload the page to try again.</p>
-    </div>
+      {children}
+    </Link>
   );
-}
-
-async function checkedAtLabel(iso: string): Promise<string> {
-  let timeZone = 'America/Los_Angeles';
-  try {
-    const ctx = await withContext();
-    timeZone = await getCachedOrgTimezone(ctx.organizationId);
-  } catch {
-    // Formatting only: fall back to the default zone.
-  }
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(new Date(iso));
-}
-
-function toRow(o: ExceptionOccurrence): WarehouseException & { occurrence: ExceptionOccurrence } {
-  const d = describeOccurrence(o.rule, o.facts, {
-    itemName: o.item?.name ?? null,
-    conditionSince: o.conditionSince,
-  });
-  return {
-    rule: o.rule,
-    key: occurrenceKey(o),
-    title: d.title,
-    detail: d.detail,
-    href: `/dashboard/inventory/${o.itemId}`,
-    units: d.units ?? undefined,
-    occurrence: o,
-  };
 }
 
 function OpenList({
   result,
-  checkedAt,
+  syncState,
+  timeZone,
 }: {
   result: OccurrenceListResult;
-  checkedAt: string | null;
+  syncState: ExceptionSyncState;
+  timeZone: string;
 }) {
-  const state = result.syncState;
-  if (state === null) {
-    // Not checked yet. Whatever rows exist, the empty state must not read as
-    // all clear.
-    return (
-      <div
-        role="status"
-        className="bg-muted/40 flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
-      >
-        <Clock className="text-muted-foreground mt-0.5 size-4 shrink-0" aria-hidden />
-        <p>{EXCEPTION_FIRST_CHECK_PENDING_COPY}</p>
-      </div>
-    );
-  }
-
-  const rows = result.occurrences.map(toRow);
-  const byKey = new Map(rows.map((r) => [r.key, r.occurrence]));
-  const groups = groupExceptions(rows);
-  const { total, critical } = countExceptions(rows);
-  // Rules the last check could not vouch for. Their silence is UNKNOWN, not
-  // clean, so the page names them and never shows "Nothing needs attention"
-  // while any is out.
-  const uncheckedLabels = [...new Set([...state.failedRules, ...state.truncatedRules])].map(
-    (rule) => EXCEPTION_RULES[rule].label,
-  );
+  const groups = groupOccurrences(result.occurrences);
+  const unchecked = uncheckedRuleLabels(syncState);
 
   return (
-    <>
-      <p className="text-muted-foreground mb-4 text-xs">Checked at {checkedAt}</p>
-
-      {uncheckedLabels.length > 0 && (
-        <div
-          role="alert"
-          className="border-warning/40 bg-warning/5 mb-5 flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
-        >
-          <AlertTriangle className="text-warning mt-0.5 size-4 shrink-0" aria-hidden />
-          <p>
-            {uncheckedLabels.length === 1 ? 'One check' : `${uncheckedLabels.length} checks`} could
-            not complete on the last run: {uncheckedLabels.join(', ')}. What{' '}
-            {uncheckedLabels.length === 1 ? 'it' : 'they'} would show is unknown, not clean.
-          </p>
-        </div>
-      )}
-
+    <div className="space-y-4">
+      <CheckedAt syncState={syncState} timeZone={timeZone} />
+      <UncheckedRulesBanner labels={unchecked} />
       {result.truncated && (
-        <p className="text-warning mb-4 text-xs">
-          Showing the first {rows.length} open exceptions. There are more.
+        <p className="text-warning text-xs">
+          Showing the first {result.occurrences.length} open exceptions. There are more.
         </p>
       )}
 
-      {total === 0 && uncheckedLabels.length > 0 ? null : total === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
-            <CheckCircle2 className="text-success size-7" aria-hidden />
-            <p className="text-base font-medium">Nothing needs attention</p>
-            <p className="text-muted-foreground max-w-md text-sm">
-              No archived locations holding stock, nothing over-promised, nothing stranded in
-              Staging or Unplaced, and every rack label agrees with where the stock actually is.
-            </p>
-          </CardContent>
-        </Card>
+      {groups.length === 0 ? (
+        // With a rule unchecked, silence is unknown: no all-clear.
+        unchecked.length > 0 ? null : (
+          <Card>
+            <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
+              <CheckCircle2 className="text-success size-7" aria-hidden />
+              <p className="text-base font-medium">{EXCEPTION_ALL_CLEAR_TITLE}</p>
+              <p className="text-muted-foreground max-w-md text-sm">
+                No archived locations holding stock, nothing over-promised, nothing stranded in
+                Staging or Unplaced, and every rack label agrees with where the stock actually is.
+              </p>
+            </CardContent>
+          </Card>
+        )
       ) : (
-        <>
-          <div className="mb-5 flex flex-wrap items-center gap-2">
-            <Badge variant={critical > 0 ? 'destructive' : 'secondary'} className="gap-1">
-              {critical > 0 && <AlertTriangle className="size-3" aria-hidden />}
-              {total} open
-            </Badge>
-            {critical > 0 && (
-              <span className="text-muted-foreground text-xs">{critical} need attention now</span>
-            )}
-          </div>
-
-          <div className="space-y-4">
-            {groups.map((g) => (
-              <Card key={g.meta.rule}>
-                <CardHeader className="pb-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <CardTitle className="text-base">{g.meta.label}</CardTitle>
-                    <Badge
-                      variant={g.meta.severity === 'critical' ? 'destructive' : 'secondary'}
-                      className="gap-1"
-                    >
-                      {g.meta.severity === 'critical' && (
-                        <AlertTriangle className="size-3" aria-hidden />
-                      )}
-                      {g.meta.severity === 'critical' ? 'Critical' : 'Warning'}
-                    </Badge>
-                    <span className="text-muted-foreground text-xs tabular-nums">
-                      {g.items.length}
-                    </span>
-                  </div>
-                  <p className="text-muted-foreground mt-1 text-sm">{g.meta.action}</p>
-                </CardHeader>
-                <CardContent className="pt-0">
-                  <ul className="divide-border divide-y">
-                    {g.items.map((e) => (
-                      <OccurrenceRow key={e.key} e={e} o={byKey.get(e.key)!} />
-                    ))}
-                  </ul>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </>
+        groups.map((g) => (
+          <Card key={g.meta.rule}>
+            <CardHeader className="pb-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <CardTitle className="text-base">{g.meta.label}</CardTitle>
+                <SeverityChip rule={g.meta.rule} />
+                <span className="text-muted-foreground text-xs tabular-nums">{g.rows.length}</span>
+              </div>
+              <p className="text-muted-foreground mt-1 text-sm">{g.meta.action}</p>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <ul className="divide-border divide-y">
+                {g.rows.map((r) => (
+                  <OccurrenceRow
+                    key={r.occurrence.id}
+                    o={r.occurrence}
+                    title={r.description.title}
+                    detail={r.description.detail}
+                    syncState={syncState}
+                    timeZone={timeZone}
+                  />
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+        ))
       )}
-    </>
+    </div>
   );
 }
 
-function OccurrenceRow({ e, o }: { e: WarehouseException; o: ExceptionOccurrence }) {
-  const recurred = recurrenceBadge(o.recurrenceIndex);
+function ResolvedList({
+  result,
+  syncState,
+  timeZone,
+}: {
+  result: OccurrenceListResult;
+  syncState: ExceptionSyncState;
+  timeZone: string;
+}) {
+  return (
+    <div className="space-y-4">
+      <CheckedAt syncState={syncState} timeZone={timeZone} />
+      {result.truncated && (
+        <p className="text-warning text-xs">
+          Showing the {result.occurrences.length} most recently resolved. There are more.
+        </p>
+      )}
+      {result.occurrences.length === 0 ? (
+        <Card>
+          <CardContent className="py-10 text-center">
+            <p className="text-muted-foreground text-sm">{EXCEPTION_NONE_RESOLVED_COPY}</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardContent className="pt-2">
+            <ul className="divide-border divide-y">
+              {result.occurrences.map((o) => {
+                const d = describeOccurrence(o.rule, o.facts, {
+                  itemName: o.item?.name ?? null,
+                  conditionSince: o.conditionSince,
+                  asOf: o.resolvedAt ?? new Date(),
+                });
+                return (
+                  <OccurrenceRow
+                    key={o.id}
+                    o={o}
+                    title={d.title}
+                    detail={d.detail}
+                    syncState={syncState}
+                    timeZone={timeZone}
+                    showRule
+                  />
+                );
+              })}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function OccurrenceRow({
+  o,
+  title,
+  detail,
+  syncState,
+  timeZone,
+  showRule = false,
+}: {
+  o: ExceptionOccurrence;
+  title: string;
+  detail: string;
+  syncState: ExceptionSyncState;
+  timeZone: string;
+  showRule?: boolean;
+}) {
+  const when = o.resolvedAt
+    ? `Resolved ${exceptionTime(o.resolvedAt, timeZone)}`
+    : o.presentWhenTrackingBegan
+      ? 'Already present when tracking began'
+      : `First seen ${exceptionTime(o.firstSeenAt, timeZone)}`;
   return (
     <li>
       <Link
-        href={e.href ?? `/dashboard/inventory/${o.itemId}`}
+        href={`/dashboard/exceptions/${o.id}`}
         className="hover:bg-muted/50 focus-visible:ring-ring block rounded-sm px-1 focus-visible:ring-2 focus-visible:outline-none"
       >
         <div className="flex items-center justify-between gap-3 py-2.5">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium">
+          <div className="min-w-0 space-y-1">
+            <p className="text-sm font-medium break-words">
               {o.reference && (
                 <span className="text-muted-foreground mr-2 font-mono text-xs">{o.reference}</span>
               )}
-              {e.title}
+              {title}
             </p>
-            <p className="text-muted-foreground truncate text-xs">
-              {e.detail}
-              {o.presentWhenTrackingBegan && ' · Already present when tracking began'}
-              {o.acknowledgedAt && ' · Acknowledged'}
-              {recurred && ` · ${recurred}`}
+            <p className="text-muted-foreground text-xs break-words">
+              {showRule ? `${EXCEPTION_RULES[o.rule].label} · ` : ''}
+              {detail}
             </p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <StateChip state={stateOf(o, syncState)} />
+              <RecurrenceChip recurrenceIndex={o.recurrenceIndex} />
+              <span className="text-muted-foreground text-xs">{when}</span>
+            </div>
           </div>
           <ChevronRight className="text-muted-foreground size-4 shrink-0" aria-hidden />
         </div>

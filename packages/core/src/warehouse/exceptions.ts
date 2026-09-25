@@ -1,3 +1,4 @@
+import { formatCycleCountNumber } from '../cycle-counts/cycle-count-number';
 import { formatStockQuantity } from '../inventory/stock-writeoff';
 
 /**
@@ -599,3 +600,184 @@ export const EXCEPTION_SYNC_INTERVAL_MINUTES = 15;
  * its all-clear state until a check has run.
  */
 export const EXCEPTION_FIRST_CHECK_PENDING_COPY = `The first check has not run yet. It runs within ${EXCEPTION_SYNC_INTERVAL_MINUTES} minutes.`;
+
+/** The Resolved list covers this many days (web tab and the phone). */
+export const EXCEPTION_RESOLVED_WINDOW_DAYS = 30;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SHARED DISPLAY COPY (F1-1 stage 3: the web pages and the phone screens)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Every word the web Exceptions pages and the phone's Exceptions screens both
+// show about an occurrence's state, its timeline and why an action is not
+// offered lives here, so the two never word the same row differently. None of
+// it says a person resolved anything, and none of it points at a person as a
+// cause.
+
+/** How each action kind reads as a link or button. */
+export const EXCEPTION_ACTION_LABELS: Record<ExceptionActionKind, string> = {
+  open_item: 'Open item',
+  put_away: 'Go to Staging',
+  edit_label: 'Edit label',
+};
+
+/** A failed read. Each surface adds its own "try again" instruction. A failed
+ *  read is never shown as an empty list. */
+export const EXCEPTION_LIST_UNAVAILABLE_COPY = 'Exceptions are unavailable right now.';
+
+/** Shown on the Open list when every check completed and nothing is open. */
+export const EXCEPTION_ALL_CLEAR_TITLE = 'Nothing needs attention';
+
+/** Shown on the Resolved list when nothing resolved inside the window. */
+export const EXCEPTION_NONE_RESOLVED_COPY = `Nothing was resolved in the last ${EXCEPTION_RESOLVED_WINDOW_DAYS} days.`;
+
+/** What acknowledging does, and what it does not do. */
+export const EXCEPTION_ACKNOWLEDGE_HELP =
+  'Acknowledging tells others this is being looked at. It does not resolve the exception: that happens by itself once a check no longer finds the condition.';
+
+/** Why Acknowledge and Add note are not offered to this reader. */
+export const EXCEPTION_ACT_NOT_PERMITTED_COPY =
+  'You can view this exception. Acknowledging it or adding a note needs permission to adjust stock in its warehouse.';
+
+/** Why Acknowledge and Add note are disabled on a resolved occurrence. */
+export const EXCEPTION_ACT_RESOLVED_COPY =
+  'This exception is resolved, so it can no longer be acknowledged or given notes.';
+
+/** Why Acknowledge and Add note are disabled while the phone is offline. */
+export const EXCEPTION_ACT_OFFLINE_COPY =
+  'You are offline. Acknowledging and adding notes need a connection.';
+
+/**
+ * Why the acknowledge and note actions are unavailable, or null when they are
+ * available. `canAct` is the server's hint for this reader (the database
+ * re-checks it on every action). Order matters: a resolved row and a reader
+ * without permission are told so even while offline, because reconnecting
+ * would not change their answer.
+ */
+export function exceptionActDisabledReason(input: {
+  resolved: boolean;
+  canAct: boolean;
+  online: boolean;
+}): string | null {
+  if (input.resolved) return EXCEPTION_ACT_RESOLVED_COPY;
+  if (!input.canAct) return EXCEPTION_ACT_NOT_PERMITTED_COPY;
+  if (!input.online) return EXCEPTION_ACT_OFFLINE_COPY;
+  return null;
+}
+
+/** The chip for a displayed state (see occurrenceState). */
+export function occurrenceStateLabel(state: OccurrenceState): string {
+  switch (state.kind) {
+    case 'resolved':
+      return `Resolved: ${OCCURRENCE_RESOLVED_REASON_COPY[state.reason]}`;
+    case 'rechecking':
+      return 'Re-checking';
+    case 'recount_in_progress': {
+      const ref = formatCycleCountNumber(state.countNumber);
+      return ref ? `Recount in progress (${ref})` : 'Recount in progress';
+    }
+    case 'acknowledged':
+      return 'Acknowledged';
+    case 'open':
+      return 'Open';
+  }
+}
+
+/** Every kind a timeline event can have (exception_occurrence_events.kind). */
+export type OccurrenceEventKind =
+  | 'raised'
+  | 'acknowledged'
+  | 'note'
+  | 'recount_linked'
+  | 'recount_closed'
+  | 'resolved'
+  | 'evidence_added'
+  | 'evidence_removed'
+  | 'escalated';
+
+/**
+ * The headline of one timeline event. `actorLabel` is the person's name as
+ * the reader sees it, or null for the system (raised, recount closed,
+ * resolved). `resolvedReason` is the occurrence's own reason, used by the
+ * `resolved` event: an occurrence resolves at most once.
+ */
+export function describeOccurrenceEvent(event: {
+  kind: OccurrenceEventKind;
+  actorLabel: string | null;
+  cycleCountNumber?: number | null;
+  resolvedReason?: OccurrenceResolvedReason | null;
+}): string {
+  const who = event.actorLabel?.trim() || null;
+  const by = who ? ` by ${who}` : '';
+  const cc = formatCycleCountNumber(event.cycleCountNumber ?? null);
+  switch (event.kind) {
+    case 'raised':
+      return 'Raised by the system check';
+    case 'acknowledged':
+      return `Acknowledged${by}`;
+    case 'note':
+      return who ? `Note from ${who}` : 'Note';
+    case 'recount_linked':
+      return `${cc ? `Recount ${cc}` : 'A recount'} linked${by}`;
+    case 'recount_closed':
+      return `${cc ? `Recount ${cc}` : 'The linked recount'} closed`;
+    case 'resolved':
+      return `Resolved by the system check: ${OCCURRENCE_RESOLVED_REASON_COPY[event.resolvedReason ?? 'cleared']}`;
+    case 'evidence_added':
+      return `Photo added${by}`;
+    case 'evidence_removed':
+      return `Photo removed${by}`;
+    case 'escalated':
+      return `Escalated to a maintenance request${by}`;
+  }
+}
+
+/** The fields groupOccurrences needs from a stored occurrence. */
+export interface GroupableOccurrence {
+  id: string;
+  rule: ExceptionRule;
+  facts: unknown;
+  conditionSince: string | null;
+  resolvedAt: string | null;
+  item: { name: string } | null;
+}
+
+/**
+ * The Open list for display: grouped by rule, critical groups first, and
+ * inside a group by units at stake, then age (sortExceptions). Each row
+ * carries its sentence from describeOccurrence, so the web page and the phone
+ * word and order the list identically. `asOf` is "now" for open rows.
+ */
+export function groupOccurrences<T extends GroupableOccurrence>(
+  list: readonly T[],
+  asOf: string | Date = new Date(),
+): Array<{
+  meta: ExceptionRuleMeta;
+  rows: Array<{ occurrence: T; description: OccurrenceDescription }>;
+}> {
+  const byId = new Map<string, { occurrence: T; description: OccurrenceDescription }>();
+  const flat: WarehouseException[] = [];
+  for (const o of list) {
+    const description = describeOccurrence(o.rule, o.facts, {
+      itemName: o.item?.name ?? null,
+      conditionSince: o.conditionSince,
+      asOf: o.resolvedAt ?? asOf,
+    });
+    byId.set(o.id, { occurrence: o, description });
+    flat.push({
+      rule: o.rule,
+      // The occurrence id, not occurrenceKey: two resolved occurrences of one
+      // identity can sit in the same list.
+      key: o.id,
+      title: description.title,
+      detail: description.detail,
+      href: null,
+      units: description.units ?? undefined,
+      ageDays: conditionAgeDays(o.conditionSince, o.resolvedAt ?? asOf) ?? undefined,
+    });
+  }
+  return groupExceptions(flat).map((g) => ({
+    meta: g.meta,
+    rows: g.items.map((e) => byId.get(e.key)!),
+  }));
+}

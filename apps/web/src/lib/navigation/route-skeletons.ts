@@ -36,12 +36,19 @@ function within(pathname: string, base: string): boolean {
 const PAGE_SECTIONS = [
   '/dashboard/audit',
   '/dashboard/customers',
-  '/dashboard/exceptions',
   '/dashboard/help',
   '/dashboard/support',
   '/dashboard/admin',
   '/dashboard/reports',
 ];
+
+/**
+ * Pages matched EXACTLY (not their sub-routes) that rely on the late skeleton:
+ * the Exceptions list has no loading.tsx of its own, while its occurrence
+ * pages (/dashboard/exceptions/<id>) have one (exceptions/[id]/loading.tsx),
+ * so a section-wide match would stack a second skeleton on theirs.
+ */
+const PAGE_EXACT = ['/dashboard/exceptions'];
 
 /**
  * The sections whose async layout sits above their own loading.tsx. Only a
@@ -78,6 +85,7 @@ export function routeSkeletonFor(pathname: string): RouteSkeletonKind | null {
   if (within(pathname, '/dashboard/orders')) return 'table-8';
   // Async layout above purchase-orders/loading.tsx (TablePageSkeleton rows=6).
   if (within(pathname, '/dashboard/purchase-orders')) return 'table-6';
+  if (PAGE_EXACT.includes(pathname)) return 'page';
   if (PAGE_SECTIONS.some((base) => within(pathname, base))) return 'page';
   return null;
 }

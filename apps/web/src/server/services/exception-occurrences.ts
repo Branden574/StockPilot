@@ -2,12 +2,14 @@ import 'server-only';
 
 import {
   can,
+  EXCEPTION_RESOLVED_WINDOW_DAYS,
   EXCEPTION_RULE_IDS,
   formatOccurrenceNumber,
   isExceptionRule,
   isManagerOrAbove,
   presentWhenTrackingBegan,
   type ExceptionRule,
+  type OccurrenceEventKind,
   type OccurrenceRecountRef,
   type OccurrenceResolvedReason,
 } from '@stockpilot/core';
@@ -55,8 +57,8 @@ export const EXCEPTION_SYNC_THROTTLE_MS = 60_000;
  *  tens to hundreds in practice. */
 const OPEN_LIST_CAP = 5_000;
 const RESOLVED_LIST_CAP = 1_000;
-/** The Resolved tab shows the last 30 days. */
-const RESOLVED_WINDOW_DAYS = 30;
+/** The Resolved tab shows the last 30 days (core, so the copy agrees). */
+const RESOLVED_WINDOW_DAYS = EXCEPTION_RESOLVED_WINDOW_DAYS;
 /** Earlier occurrences of the same identity shown on the detail. */
 const HISTORY_LIMIT = 50;
 /** Timeline events read for one occurrence (a backstop far above real use). */
@@ -142,16 +144,8 @@ export interface OccurrenceListResult {
   canCheckNow: boolean;
 }
 
-export type OccurrenceEventKind =
-  | 'raised'
-  | 'acknowledged'
-  | 'note'
-  | 'recount_linked'
-  | 'recount_closed'
-  | 'resolved'
-  | 'evidence_added'
-  | 'evidence_removed'
-  | 'escalated';
+/** The event kinds, from core (describeOccurrenceEvent words each one). */
+export type { OccurrenceEventKind };
 
 export interface OccurrenceEvent {
   id: string;

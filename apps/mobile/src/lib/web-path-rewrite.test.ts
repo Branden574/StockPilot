@@ -113,3 +113,33 @@ describe('SP-031 notification doors with native twins', () => {
     );
   });
 });
+
+// Exceptions (F1-1) has native twins for the list and one occurrence. No push
+// links there yet, but What's New CTAs, shared links and pasted URLs do, and
+// every one of them must land on the screen, not fall through the /dashboard/*
+// catch-all to home.
+
+describe('exceptions deep links', () => {
+  const ID = '33333333-3333-4333-8333-333333333333';
+
+  it('an occurrence: /dashboard/exceptions/<uuid> -> /exceptions/<uuid>', () => {
+    expect(rewriteWebPath(`/dashboard/exceptions/${ID}`)).toBe(`/exceptions/${ID}`);
+  });
+
+  it('the list, with or without the tab query: -> /exceptions', () => {
+    expect(rewriteWebPath('/dashboard/exceptions')).toBe('/exceptions');
+    expect(rewriteWebPath('/dashboard/exceptions?tab=resolved')).toBe('/exceptions');
+  });
+
+  // Mutation caught: the rows placed below the catch-all (every link opens
+  // home) or the bare-list row placed above the detail row with a looser
+  // pattern (an occurrence link opens the list).
+  it('ORDERING: both rows sit above the catch-all, and the detail is never read as the list', () => {
+    expect(rewriteWebPath(`/dashboard/exceptions/${ID}`)).not.toBe('/');
+    expect(rewriteWebPath('/dashboard/exceptions')).not.toBe('/');
+    expect(rewriteWebPath(`/dashboard/exceptions/${ID}`)).not.toBe('/exceptions');
+    // A malformed id is not an occurrence: it falls through to home, never
+    // into a screen that would ask the server for it.
+    expect(rewriteWebPath('/dashboard/exceptions/not-an-id')).toBe('/');
+  });
+});

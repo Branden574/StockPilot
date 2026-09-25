@@ -2,6 +2,20 @@ import { describe, expect, it } from 'vitest';
 
 import {
   atLeastDaysCopy,
+  describeOccurrenceEvent,
+  EXCEPTION_ACKNOWLEDGE_HELP,
+  EXCEPTION_ACT_NOT_PERMITTED_COPY,
+  EXCEPTION_ACT_OFFLINE_COPY,
+  EXCEPTION_ACT_RESOLVED_COPY,
+  EXCEPTION_ACTION_LABELS,
+  EXCEPTION_ALL_CLEAR_TITLE,
+  EXCEPTION_LIST_UNAVAILABLE_COPY,
+  EXCEPTION_NONE_RESOLVED_COPY,
+  EXCEPTION_RESOLVED_WINDOW_DAYS,
+  exceptionActDisabledReason,
+  groupOccurrences,
+  occurrenceStateLabel,
+  type OccurrenceEventKind,
   conditionAgeDays,
   countExceptions,
   describeOccurrence,
@@ -418,5 +432,159 @@ describe('EXCEPTION_FIRST_CHECK_PENDING_COPY', () => {
   it('says the first check has not run, and never reads as all clear', () => {
     expect(EXCEPTION_FIRST_CHECK_PENDING_COPY).toMatch(/within 15 minutes/);
     expect(EXCEPTION_FIRST_CHECK_PENDING_COPY).not.toMatch(/nothing needs attention|all clear/i);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Shared display copy (F1-1 stage 3)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('exceptionActDisabledReason', () => {
+  it('is null only when the row is open, the reader may act and the phone is online', () => {
+    expect(exceptionActDisabledReason({ resolved: false, canAct: true, online: true })).toBeNull();
+  });
+
+  // Mutation caught: dropping the online check leaves Acknowledge live offline.
+  it('offline disables the actions with the reason', () => {
+    expect(exceptionActDisabledReason({ resolved: false, canAct: true, online: false })).toBe(
+      EXCEPTION_ACT_OFFLINE_COPY,
+    );
+  });
+
+  it('a reader without permission is told so, online or not', () => {
+    for (const online of [true, false]) {
+      expect(exceptionActDisabledReason({ resolved: false, canAct: false, online })).toBe(
+        EXCEPTION_ACT_NOT_PERMITTED_COPY,
+      );
+    }
+  });
+
+  it('a resolved row is told it is resolved first', () => {
+    expect(exceptionActDisabledReason({ resolved: true, canAct: true, online: false })).toBe(
+      EXCEPTION_ACT_RESOLVED_COPY,
+    );
+  });
+});
+
+describe('occurrenceStateLabel', () => {
+  it('words every state, and a resolved one by its reason, never as a person resolving it', () => {
+    expect(occurrenceStateLabel({ kind: 'open' })).toBe('Open');
+    expect(occurrenceStateLabel({ kind: 'acknowledged', at: 'x', by: 'u' })).toBe('Acknowledged');
+    expect(
+      occurrenceStateLabel({ kind: 'recount_in_progress', cycleCountId: 'c', countNumber: 12 }),
+    ).toBe('Recount in progress (CC-000012)');
+    expect(
+      occurrenceStateLabel({ kind: 'recount_in_progress', cycleCountId: 'c', countNumber: null }),
+    ).toBe('Recount in progress');
+    expect(occurrenceStateLabel({ kind: 'rechecking', cycleCountId: 'c', countNumber: 12 })).toBe(
+      'Re-checking',
+    );
+    expect(occurrenceStateLabel({ kind: 'resolved', reason: 'cleared', at: 'x' })).toBe(
+      'Resolved: Cleared',
+    );
+    expect(occurrenceStateLabel({ kind: 'resolved', reason: 'subject_gone', at: 'x' })).toBe(
+      'Resolved: Item archived or deleted',
+    );
+  });
+});
+
+describe('describeOccurrenceEvent', () => {
+  const KINDS: OccurrenceEventKind[] = [
+    'raised',
+    'acknowledged',
+    'note',
+    'recount_linked',
+    'recount_closed',
+    'resolved',
+    'evidence_added',
+    'evidence_removed',
+    'escalated',
+  ];
+
+  it('words every kind', () => {
+    for (const kind of KINDS) {
+      expect(describeOccurrenceEvent({ kind, actorLabel: 'Dana Lee' }).trim().length).toBeGreaterThan(3);
+    }
+  });
+
+  it('the system raises and resolves; a person acknowledges and adds notes', () => {
+    expect(describeOccurrenceEvent({ kind: 'raised', actorLabel: null })).toBe('Raised by the system check');
+    expect(
+      describeOccurrenceEvent({ kind: 'resolved', actorLabel: null, resolvedReason: 'reclassified' }),
+    ).toBe('Resolved by the system check: Now reported under another rule');
+    expect(describeOccurrenceEvent({ kind: 'acknowledged', actorLabel: 'Dana Lee' })).toBe(
+      'Acknowledged by Dana Lee',
+    );
+    expect(describeOccurrenceEvent({ kind: 'note', actorLabel: 'Former member' })).toBe(
+      'Note from Former member',
+    );
+    expect(
+      describeOccurrenceEvent({ kind: 'recount_closed', actorLabel: null, cycleCountNumber: 7 }),
+    ).toBe('Recount CC-000007 closed');
+  });
+});
+
+describe('groupOccurrences', () => {
+  const occ = (o: Partial<Parameters<typeof groupOccurrences>[0][number]> & { id: string; rule: ExceptionRule }) => ({
+    facts: {},
+    conditionSince: null,
+    resolvedAt: null,
+    item: null,
+    ...o,
+  });
+
+  it('puts critical rules first, then orders by units at stake, and words each row once', () => {
+    const groups = groupOccurrences(
+      [
+        occ({ id: 'a', rule: 'stale_staging', facts: { itemName: 'Atlas', units: 2 }, conditionSince: '2026-09-01T00:00:00Z' }),
+        occ({ id: 'b', rule: 'stale_staging', facts: { itemName: 'Globe', units: 40 }, conditionSince: '2026-09-20T00:00:00Z' }),
+        occ({ id: 'c', rule: 'over_reserved', facts: { itemName: 'Map', promised: 5, onHand: 3 } }),
+      ],
+      '2026-09-24T00:00:00Z',
+    );
+    expect(groups.map((g) => g.meta.rule)).toEqual(['over_reserved', 'stale_staging']);
+    expect(groups[1]!.rows.map((r) => r.occurrence.id)).toEqual(['b', 'a']);
+    expect(groups[1]!.rows[1]!.description.detail).toBe('in Staging for at least 23 days');
+  });
+
+  it('keeps two occurrences of one identity apart (resolved recurrences)', () => {
+    const groups = groupOccurrences([
+      occ({ id: 'r1', rule: 'label_mismatch', resolvedAt: '2026-09-20T00:00:00Z' }),
+      occ({ id: 'r2', rule: 'label_mismatch', resolvedAt: '2026-09-22T00:00:00Z' }),
+    ]);
+    expect(groups[0]!.rows.map((r) => r.occurrence.id).sort()).toEqual(['r1', 'r2']);
+  });
+
+  it('prefers the live item name over the stored one', () => {
+    const [g] = groupOccurrences([
+      occ({ id: 'x', rule: 'over_reserved', facts: { itemName: 'Old name' }, item: { name: 'New name' } }),
+    ]);
+    expect(g!.rows[0]!.description.title).toBe('New name');
+  });
+});
+
+describe('shared list copy', () => {
+  it('the unavailable and empty wording never reads as all clear by accident', () => {
+    expect(EXCEPTION_LIST_UNAVAILABLE_COPY).not.toMatch(/nothing|clear|no exceptions/i);
+    expect(EXCEPTION_ALL_CLEAR_TITLE).toBe('Nothing needs attention');
+    expect(EXCEPTION_NONE_RESOLVED_COPY).toContain(`${EXCEPTION_RESOLVED_WINDOW_DAYS} days`);
+  });
+
+  it('acknowledging is described as not resolving anything', () => {
+    expect(EXCEPTION_ACKNOWLEDGE_HELP).toMatch(/does not resolve/);
+  });
+
+  it('no shared copy names or implies a person as a cause', () => {
+    for (const text of [
+      EXCEPTION_ACKNOWLEDGE_HELP,
+      EXCEPTION_ACT_NOT_PERMITTED_COPY,
+      EXCEPTION_ACT_RESOLVED_COPY,
+      EXCEPTION_ACT_OFFLINE_COPY,
+      EXCEPTION_LIST_UNAVAILABLE_COPY,
+      EXCEPTION_NONE_RESOLVED_COPY,
+      ...Object.values(EXCEPTION_ACTION_LABELS),
+    ]) {
+      expect(text).not.toMatch(/employee|staff|theft|stole|someone|worker|picker/i);
+    }
   });
 });
