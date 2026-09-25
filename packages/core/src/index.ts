@@ -44,6 +44,8 @@ export * from './sports/variant-keys';
 export * from './orders/order-number';
 export * from './cycle-counts/cycle-count-number';
 export * from './cycle-counts/cycle-count-list';
+export * from './cycle-counts/capture-label';
+export * from './cycle-counts/start-summary';
 export * from './pagination/list-page';
 export * from './orders/pick-shortfall';
 export * from './orders/cart-totals';

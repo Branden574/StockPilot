@@ -78,6 +78,16 @@ describe('CountItemPicker', () => {
     expect(url.searchParams.get('q')).toBeNull();
   });
 
+  // 0369 (D8): kit phantoms are never counted, so the picker must not offer
+  // one (the start would drop it and report it as skipped). Mutation: drop
+  // bundles=exclude, and the endpoint lists kits (excludeBundles defaults off).
+  it('never offers a kit phantom (bundles=exclude on every page)', async () => {
+    fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'a', name: 'Alpha Charger' })]));
+    render(<CountItemPicker warehouses={WAREHOUSES} />);
+    await screen.findByText('Alpha Charger');
+    expect(lastUrl().searchParams.get('bundles')).toBe('exclude');
+  });
+
   it('Books tab refetches with type=book', async () => {
     const user = userEvent.setup();
     fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'b1', name: 'Algebra I', item_type: 'book' })]));

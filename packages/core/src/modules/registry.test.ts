@@ -120,7 +120,7 @@ describe('MODULE_REGISTRY', () => {
       '/','/inventory','/tags','/movements','/categories','/locations','/reports',
       '/notifications','/team','/settings','/admin','/admin/charters','/admin/warehouses',
       '/admin/bins','/admin/users','/admin/vendor-mappings','/admin/uom-conversions',
-      '/admin/reconciliation','/admin/audit','/scan','/books','/rentals','/bundles',
+      '/admin/audit','/scan','/books','/rentals','/bundles',
       '/orders','/cycle-counts','/procedures','/purchase-orders','/receive','/po-imports',
       '/suppliers','/ai','/schedule',
     ]) expect(drawerHrefs).toContain(href);
@@ -132,6 +132,17 @@ describe('MODULE_REGISTRY', () => {
   // screen behind it, which is a tap that resolves nowhere for every
   // sports-enabled phone user. This list mirrors apps/mobile/app — adding a
   // drawer placement means adding the screen (or not adding the placement).
+  // The dead mobile Reconciliation screen was deleted (S5-C, D9); a drawer
+  // entry left behind opens expo-router's "Unmatched Route" for every admin.
+  // (apps/mobile's admin-reconciliation-removed.wiring.test.ts checks every
+  // drawer href against the real app/ tree too.)
+  it('the mobile drawer has no Reconciliation entry (the web page stays)', () => {
+    const placements = Object.values(MODULE_REGISTRY).flatMap((m) => m.placements);
+    expect(placements.filter((p) => p.surface === 'mobile_drawer').map((p) => p.href))
+      .not.toContain('/admin/reconciliation');
+    expect(placements.filter((p) => p.surface === 'web_sidebar').map((p) => p.href))
+      .toContain('/dashboard/admin/reconciliation');
+  });
   it('every mobile drawer href resolves to a real Expo route', () => {
     const EXPO_ROUTES = new Set([
       '/', '/inventory', '/staging', '/books', '/categories', '/tags', '/movements',
@@ -140,7 +151,7 @@ describe('MODULE_REGISTRY', () => {
       '/suppliers', '/reports', '/ai', '/schedule', '/notifications', '/team',
       '/settings', '/support', '/scan', '/zendesk', '/size-count/new',
       '/admin', '/admin/charters', '/admin/warehouses', '/admin/bins', '/admin/users',
-      '/admin/vendor-mappings', '/admin/uom-conversions', '/admin/reconciliation',
+      '/admin/vendor-mappings', '/admin/uom-conversions',
       '/admin/audit', '/maintenance',
     ]);
     for (const def of Object.values(MODULE_REGISTRY)) {

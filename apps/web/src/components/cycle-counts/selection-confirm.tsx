@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { cycleCountStartedMessage } from '@stockpilot/core';
+
 import { CountItemPicker } from '@/components/cycle-counts/count-item-picker';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -75,14 +77,14 @@ export function SelectionConfirm({
       toast.error(r.error.message);
       return;
     }
+    // Skipped picks are archived or removed items, or (0369, D8) rental
+    // equipment and kits, which counts never include. One sentence, shared
+    // with the phone.
+    const summary = cycleCountStartedMessage(r.data.lineCount, r.data.skipped);
     if (r.data.skipped > 0) {
-      toast.message(
-        `Started with ${r.data.lineCount} item${r.data.lineCount === 1 ? '' : 's'}; ${r.data.skipped} were archived or removed.`,
-      );
+      toast.message(summary);
     } else {
-      toast.success(
-        `Cycle count started · ${r.data.lineCount} item${r.data.lineCount === 1 ? '' : 's'}.`,
-      );
+      toast.success(summary);
     }
     useCountSelection.getState().clear();
     router.push(`/dashboard/cycle-counts/${r.data.id}`);

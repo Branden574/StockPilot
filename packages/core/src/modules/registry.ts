@@ -265,7 +265,11 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
       { surface: 'mobile_drawer', section: 'admin', label: 'Admin overview', href: '/admin', iconName: 'Network', defaultSortOrder: 0, requiresAdmin: true },
       { surface: 'mobile_drawer', section: 'admin', label: 'Vendor mappings', href: '/admin/vendor-mappings', iconName: 'Layers', defaultSortOrder: 50, requiresAdmin: true },
       { surface: 'mobile_drawer', section: 'admin', label: 'UoM conversions', href: '/admin/uom-conversions', iconName: 'ArrowLeftRight', defaultSortOrder: 60, requiresAdmin: true },
-      { surface: 'mobile_drawer', section: 'admin', label: 'Reconciliation', href: '/admin/reconciliation', iconName: 'BarChart3', defaultSortOrder: 70, requiresAdmin: true },
+      // No mobile Reconciliation entry (S5-C, owner default D9): the phone's
+      // screen of that name read a status and a column that never existed and
+      // always showed "No posted counts yet", so it was removed. Posted counts
+      // live in Cycle counts (filter Completed); the web page of the same name
+      // is the PO ordered/received reconciliation and stays.
       // Mobile keeps its existing /admin/audit screen (screens carry no page
       // gates by design — nav filtering + audit_logs RLS enforce access).
       { surface: 'mobile_drawer', section: 'admin', label: 'Audit log', href: '/admin/audit', iconName: 'FileLock', defaultSortOrder: 80, requires: 'activity_logs:read' },

@@ -54,6 +54,10 @@ export interface CachedCycleCountLine {
   counted: number | null;
   updatedAt: string | null;
   localDirty: boolean;
+  /** When the server's count of this line was physically taken, for a count
+   *  synced from an offline phone (server 0369); null for an online record
+   *  and on rows cached before this column existed. */
+  offlineCapturedAt: string | null;
 }
 
 export interface CycleCountSnapshot {
@@ -96,6 +100,8 @@ export async function cacheCycleCount(
     expected: number;
     counted: number | null;
     updatedAt: string | null;
+    /** offlineCaptureAt() of the server row (@stockpilot/core). */
+    offlineCapturedAt?: string | null;
   }>,
 ): Promise<void> {
   const db = await getDb();
@@ -130,7 +136,9 @@ export async function cacheCycleCount(
         [line.id],
       );
       if (existing && existing.local_dirty === 1) {
-        // Refresh metadata + expected, but leave counted alone.
+        // Refresh metadata + expected, but leave counted alone. The server's
+        // capture time is left alone too: it belongs to the server's count,
+        // which the pending local edit is about to replace.
         await db.runAsync(
           `update cycle_count_lines
              set item_name = ?, item_sku = ?, item_barcode = ?,
@@ -152,8 +160,9 @@ export async function cacheCycleCount(
       await db.runAsync(
         `insert or replace into cycle_count_lines
            (id, count_id, item_id, item_name, item_sku, item_barcode,
-            item_variant_label, expected, counted, updated_at, local_dirty)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+            item_variant_label, expected, counted, updated_at, local_dirty,
+            offline_captured_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
         [
           line.id,
           header.id,
@@ -165,6 +174,7 @@ export async function cacheCycleCount(
           line.expected,
           line.counted,
           line.updatedAt,
+          line.offlineCapturedAt ?? null,
         ],
       );
     }
@@ -212,9 +222,11 @@ export async function getCycleCount(
     counted: number | null;
     updated_at: string | null;
     local_dirty: number;
+    offline_captured_at: string | null;
   }>(
     `select id, count_id, item_id, item_name, item_sku, item_barcode,
-            item_variant_label, expected, counted, updated_at, local_dirty
+            item_variant_label, expected, counted, updated_at, local_dirty,
+            offline_captured_at
        from cycle_count_lines where count_id = ?`,
     [id],
   );
@@ -245,6 +257,7 @@ export async function getCycleCount(
       counted: r.counted,
       updatedAt: r.updated_at,
       localDirty: r.local_dirty === 1,
+      offlineCapturedAt: r.offline_captured_at ?? null,
     })),
   };
 }
@@ -332,6 +345,11 @@ export async function updateLocalLine(
           cycleCountId: line.count_id,
           lineId: line.id,
           countedQuantity: counted,
+          // When the count was taken (server 0369): a count synced later is
+          // measured against the book at THIS moment, not at arrival, so a
+          // pick in between is not a phantom variance. Device clock; the
+          // server corrects its skew (cycle-count-record-body.ts).
+          capturedAt: new Date(now).toISOString(),
         }),
         now,
         scope.orgId,
@@ -391,6 +409,9 @@ export interface OutboxRow {
   organizationId: string | null;
   /** The account that queued it; NULL on a legacy row (outbox-scope.ts). */
   userId: string | null;
+  /** Enqueue time (ms since epoch, device clock). A record_count row queued
+   *  before capturedAt was stamped into its payload falls back to this. */
+  createdAt?: number | null;
 }
 
 /** A queued outbox row, and whether its retry backoff has elapsed. */
@@ -424,9 +445,10 @@ export async function outboxQueued(now: number = Date.now()): Promise<QueuedOutb
     status: string;
     organization_id: string | null;
     user_id: string | null;
+    created_at: number | null;
   }>(
     `select id, kind, idempotency_key, payload_json, attempts,
-            last_attempt_at, status, organization_id, user_id
+            last_attempt_at, status, organization_id, user_id, created_at
        from pending_actions
       where status in ('pending','failed')
       order by created_at asc`,
@@ -441,6 +463,7 @@ export async function outboxQueued(now: number = Date.now()): Promise<QueuedOutb
     status: r.status,
     organizationId: r.organization_id ?? null,
     userId: r.user_id ?? null,
+    createdAt: r.created_at ?? null,
     due: isDue(r.attempts, r.last_attempt_at, r.status, now),
   }));
 }

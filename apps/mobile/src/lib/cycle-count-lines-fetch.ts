@@ -35,8 +35,12 @@ export const MAX_CYCLE_COUNT_LINE_PAGES = 50;
  * The columns the detail screen maps. `variant_size` / `jersey_number` come
  * from 0298 (sports) and feed the shared `variantLabel` builder, so the phone,
  * the web row and the printed count sheet all name a variant identically.
+ * `captured_at` (0369) is when a count synced from an offline phone was
+ * actually taken; the screen shows "Counted offline <time>" like the web
+ * review (owner default D7). This build ships after 0369 (release order:
+ * migration, web, then the OTA).
  */
-export const CYCLE_COUNT_LINES_SELECT = `id, expected_quantity, counted_quantity, counted_at, updated_at,
+export const CYCLE_COUNT_LINES_SELECT = `id, expected_quantity, counted_quantity, counted_at, updated_at, captured_at,
            item:inventory_items!item_id (id, name, sku, barcode, variant_size, jersey_number)`;
 
 /** Minimal shape of a PostgREST query awaited to `{ data, error }`. */

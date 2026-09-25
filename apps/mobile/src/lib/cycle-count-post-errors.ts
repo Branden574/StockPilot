@@ -3,14 +3,23 @@
  * service's mapPostCycleCountError in
  * apps/web/src/server/services/cycle-counts.ts).
  *
- * The mobile screen posts through supabase.rpc('post_cycle_count') directly,
- * so the raw PostgREST message ("cycle_count_stale_line") would otherwise
- * reach the alert verbatim. Codes are stable across migrations (0079 v2,
- * 0339 v4); the strings are kept identical to the web ones so a person sees
- * the same sentence on both surfaces.
+ * The phone posts through POST /api/v1/cycle-counts/[id]/post (SP-055), which
+ * runs the web service, so the message that arrives is normally the web's
+ * sentence already and passes through unchanged. This table is the FALLBACK
+ * for a raw code that still arrives. Codes are stable across migrations (0079
+ * v2, 0339 v4, 0342/0343, 0369); the strings are kept identical to the web
+ * ones so a person sees the same sentence on both surfaces.
  */
 
 export const POST_CYCLE_COUNT_ERROR_COPY: readonly (readonly [code: string, copy: string])[] = [
+  // 0369, FIRST: the raise carries the item's SKU after the code, and a SKU is
+  // free text (one containing "forbidden" must not match that code below).
+  // Another count posted a correction for the item after this line was
+  // counted; posting it would apply that correction twice.
+  [
+    'cycle_count_line_superseded',
+    'Another count posted a correction for an item after this count recorded it, so posting would apply that correction twice. Clear and recount that line, then post again.',
+  ],
   ['cycle_count_not_found', 'Cycle count not found.'],
   [
     'cycle_count_not_open',

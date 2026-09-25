@@ -65,6 +65,10 @@ export interface CycleCountLineRow {
   notes: string | null;
   counted_by: string | null;
   counted_at: string | null;
+  /** When the counter counted, for a count queued offline and synced later
+   *  (0369): the line was measured against the book at this moment. Null for
+   *  an online record. Filled on the detail page only (review, D7). */
+  captured_at?: string | null;
 }
 
 export interface CycleCountLineWithItem extends CycleCountLineRow {
@@ -229,6 +233,22 @@ function toListItem(r: CycleCountPageRpcRow): CycleCountListItem {
   };
 }
 
+/** The refusal a post gets when another count already posted a correction for
+ *  one of its items after that line was counted (0369). The mobile fallback
+ *  table (cycle-count-post-errors.ts) carries the same sentence. */
+export const CYCLE_COUNT_LINE_SUPERSEDED_COPY =
+  'Another count posted a correction for an item after this count recorded it, so posting would apply that correction twice. Clear and recount that line, then post again.';
+
+/** The same refusal for several lines at once (the post names every
+ *  superseded line in one refusal, 0369). */
+function supersededManyCopy(n: number): string {
+  return `Another count posted corrections for ${n} items after this count recorded them, so posting would apply those corrections twice. Clear and recount those lines, then post again.`;
+}
+
+/** The raise names up to 20 SKUs, then "(+n more)"; SKUs are free text, so the
+ *  list is cut, never echoed whole. */
+const SUPERSEDED_LIST_MAX_CHARS = 600;
+
 /**
  * Maps stable PG raise-exception codes from post_cycle_count (v2 0079,
  * v4 0339) into user-friendly errors. Codes are kept stable across
@@ -237,19 +257,49 @@ function toListItem(r: CycleCountPageRpcRow): CycleCountListItem {
  *
  * v4 (0339) adds two fail-closed refusals. Both mean "one line's stock
  * moved in a way the count cannot attribute": the humane fix is a
- * clear + recount of that line, never a silent double-count. Mobile
- * posts through the RPC directly and mirrors these strings in
- * app/cycle-count/[id].tsx.
+ * clear + recount of that line, never a silent double-count.
  *
  * 0342/0343 add two more: cycle_count_location_out_of_org (42501) and
  * cycle_count_location_out_of_scope (22023), raised when a line's
  * trigger-derived counted_location_id lands outside the org / the count's
- * warehouse scope. The mobile twin lives in
- * apps/mobile/src/lib/cycle-count-post-errors.ts and mirrors this map; it does
- * NOT yet carry these two codes, so a mobile post still alerts the raw
- * Postgres string for them (owed follow-up — keep the two files in step).
+ * warehouse scope.
+ *
+ * 0369 adds cycle_count_line_superseded (P0001, `…: <sku>`): overlapping
+ * counts, where another count already posted a correction for the item after
+ * this line was counted.
+ *
+ * The phone posts through /api/v1/cycle-counts/[id]/post, which runs this
+ * service, so it shows these sentences; its fallback table
+ * (apps/mobile/src/lib/cycle-count-post-errors.ts) mirrors them for a raw
+ * code that still arrives. Keep the two in step.
  */
-export function mapPostCycleCountError(message: string): ServiceError {
+export function mapPostCycleCountError(message: string, detail?: string | null): ServiceError {
+  // 0369 (checked FIRST): the raise carries the items' SKUs after the code,
+  // and a SKU is free text ("FORBIDDEN-1" would otherwise match `forbidden`
+  // below). Another count posted a correction for an item after this count's
+  // line was measured; posting it would apply the same correction twice. The
+  // post names every superseded line in one refusal, and DETAIL carries how
+  // many (`superseded_lines=<n>`; SKUs may contain commas, so the count is
+  // never inferred from the list).
+  const superseded = /cycle_count_line_superseded(?::\s*([\s\S]+))?/.exec(message);
+  if (superseded) {
+    const total = Number(/superseded_lines=(\d+)/.exec(detail ?? '')?.[1] ?? '1');
+    if (Number.isFinite(total) && total > 1) {
+      const items = superseded[1]?.trim().slice(0, SUPERSEDED_LIST_MAX_CHARS);
+      return new ServiceError(
+        'validation_error',
+        items ? `${supersededManyCopy(total)} Items: ${items}.` : supersededManyCopy(total),
+        { reason: 'cycle_count_line_superseded', count: total, ...(items ? { items } : {}) },
+      );
+    }
+    // One line: a SKU is short; a runaway string is cut, never echoed whole.
+    const sku = superseded[1]?.trim().slice(0, 120);
+    return new ServiceError(
+      'validation_error',
+      sku ? `${CYCLE_COUNT_LINE_SUPERSEDED_COPY} Item: ${sku}.` : CYCLE_COUNT_LINE_SUPERSEDED_COPY,
+      { reason: 'cycle_count_line_superseded', ...(sku ? { sku } : {}) },
+    );
+  }
   if (message.includes('cycle_count_not_found')) {
     return new ServiceError('not_found', 'Cycle count not found.');
   }
@@ -304,6 +354,11 @@ export function mapPostCycleCountError(message: string): ServiceError {
   return new ServiceError('internal_error', message);
 }
 
+/** A selection with nothing countable left: archived, deleted, or (0369, D8)
+ *  rental equipment and kit phantoms, which counts never include. */
+const NO_COUNTABLE_PICKS_COPY =
+  'None of the selected items can be counted. Archived items, rental equipment and kits are left out of counts. Refresh and try again.';
+
 /**
  * Maps the stable raise from start_cycle_count (migration 0226) back to the
  * exact user-facing errors the old TypeScript start() produced. The RPC
@@ -321,10 +376,7 @@ function mapStartCycleCountError(
     if (scope === 'selection') {
       // A group scope has already been expanded to its variants by here, so it
       // reaches the RPC as a selection and shares this message.
-      return new ServiceError(
-        'validation_error',
-        'None of the selected items are still active. Refresh and try again.',
-      );
+      return new ServiceError('validation_error', NO_COUNTABLE_PICKS_COPY);
     }
     const where = warehouseId ? 'this warehouse' : 'your organization';
     return new ServiceError(
@@ -998,10 +1050,37 @@ export class CycleCountsService {
       string,
       { group_id: string | null; variant_size: string | null; jersey_number: string | null }
     >();
+    // When each line on this page was captured (0369, D7: an offline count is
+    // accepted however old, and the review shows when it was taken). Same
+    // page-scoped shape as the variant read and run beside it. Fail-SOFT: a
+    // refused read (or a database without 0369) shows no capture time, never a
+    // broken count page.
+    const pageLineIds = rows.map((r) => r.id as string).filter(Boolean);
+    const ctx = this.ctx;
+    const capturedRead =
+      pageLineIds.length > 0
+        ? fetchAllRowsByIds<{ id: string; captured_at: string | null }>(
+            pageLineIds,
+            (batch) => (from, to) =>
+              ctx.supabase
+                .from('cycle_count_lines')
+                .select('id, captured_at')
+                .eq('cycle_count_id', id)
+                .in('id', batch)
+                .order('id')
+                .range(from, to),
+          ).catch((e: unknown) => {
+            void reportError(e, {
+              tag: 'cycle_counts.detail.captured_at_read',
+              level: 'warning',
+              extra: { cycleCountId: id },
+            });
+            return [] as Array<{ id: string; captured_at: string | null }>;
+          })
+        : Promise.resolve([] as Array<{ id: string; captured_at: string | null }>);
     if (pageItemIds.length > 0) {
       // Batched: 200 uuids in one `.in()` already sits at the local
       // gateway's ~8 KB limit (~215 uuids) once the rest of the URL is added.
-      const ctx = this.ctx;
       const vRows = await fetchAllRowsByIds<Record<string, unknown>>(
         pageItemIds,
         (batch) => (from, to) =>
@@ -1022,6 +1101,9 @@ export class CycleCountsService {
       }
     }
 
+    const capturedByLine = new Map<string, string | null>();
+    for (const c of await capturedRead) capturedByLine.set(c.id, c.captured_at ?? null);
+
     const lines: CycleCountLineWithItem[] = rows.map((r) => {
       const variant = variantByItem.get(r.item_id as string);
       return {
@@ -1035,6 +1117,7 @@ export class CycleCountsService {
         notes: (r.notes as string | null) ?? null,
         counted_by: (r.counted_by as string | null) ?? null,
         counted_at: (r.counted_at as string | null) ?? null,
+        captured_at: capturedByLine.get(r.id as string) ?? null,
         item: {
           id: r.item_id as string,
           name: (r.item_name as string) ?? '',
@@ -1095,7 +1178,13 @@ export class CycleCountsService {
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', this.ctx.organizationId)
       .is('deleted_at', null)
-      .eq('status', 'active');
+      .eq('status', 'active')
+      // The snapshot's own predicate (start_cycle_count, 0369): rental
+      // equipment and kit phantoms are never lines, so counting them here
+      // would raise the "new items added mid-count" warning for good in any
+      // warehouse that holds one.
+      .eq('is_rental', false)
+      .eq('is_bundle', false);
     if (h.warehouse_id) q = q.eq('warehouse_id', h.warehouse_id);
     const { count, error } = await q;
     if (error) throw new ServiceError('internal_error', error.message);
@@ -1126,7 +1215,8 @@ export class CycleCountsService {
    *     as it does for a hand-picked selection.
    *
    * Returns `skipped` = how many requested ids were dropped because they
-   * were archived / deleted / not in the org by the time we snapshotted.
+   * were archived / deleted / not in the org by the time we snapshotted, or
+   * are rental equipment or kit phantoms, which are never counted (0369).
    */
   async start(input: {
     scope?: 'warehouse' | 'selection' | 'group';
@@ -1198,6 +1288,9 @@ export class CycleCountsService {
             .in('group_id', batch)
             .is('deleted_at', null)
             .eq('status', 'active')
+            // Same countable predicate start_cycle_count applies (0369, D8).
+            .eq('is_rental', false)
+            .eq('is_bundle', false)
             .order('id', { ascending: true })
             .range(from, to),
       );
@@ -1205,7 +1298,9 @@ export class CycleCountsService {
       if (groupItemIds.length === 0) {
         throw new ServiceError(
           'validation_error',
-          'Those product groups have no active variants to count.',
+          // Rental equipment and kits are never counted (0369, D8), so a
+          // group of only those has nothing to count either.
+          'Those product groups have no variants that can be counted. Archived items, rental equipment and kits are left out of counts.',
         );
       }
       // Hand-picked items may be counted alongside a group in the same pass.
@@ -1261,15 +1356,17 @@ export class CycleCountsService {
             .eq('organization_id', ctx.organizationId)
             .is('deleted_at', null)
             .eq('status', 'active')
+            // Rental equipment and kit phantoms are never counted (0369, D8):
+            // dropped here they are reported as `skipped`, and a selection of
+            // only such items is refused before anything is created.
+            .eq('is_rental', false)
+            .eq('is_bundle', false)
             .in('id', batch)
             .order('id', { ascending: true })
             .range(from, to),
       );
       if (items.length === 0) {
-        throw new ServiceError(
-          'validation_error',
-          'None of the selected items are still active. Refresh and try again.',
-        );
+        throw new ServiceError('validation_error', NO_COUNTABLE_PICKS_COPY);
       }
       // Write-access gate: every distinct warehouse represented must be
       // writable by the caller. Items with no warehouse require full
@@ -1503,9 +1600,26 @@ export class CycleCountsService {
    *  every reader shows (counted - expected) is measured against what the
    *  shelf should have held when it was counted. Every writer — this
    *  method behind the web action and the /record API (mobile manual,
-   *  barcode, AI scan, offline replay) — inherits it. counted_at is
-   *  stamped server-side, so an offline-queued count is "counted" at sync
-   *  time (stated limit; see 0339 header). */
+   *  barcode, AI scan, offline replay) — inherits it.
+   *
+   *  OFFLINE CAPTURE TIME (0369). `capturedAt` is when the counter counted,
+   *  already skew-corrected onto the server clock by the record route. When
+   *  given, the trigger measures the line against the book AT THAT MOMENT
+   *  (on-hand now minus the ledger movements since), so a pick between the
+   *  physical count and the sync is not a phantom variance. captured_at is
+   *  ALWAYS written: NULL when none is given (the web action, old phone
+   *  bundles), which makes the record an online record (measured at
+   *  arrival) even over a line an earlier offline record left a capture time
+   *  on. The trigger can then keep an unchanged capture time for what it is,
+   *  a retry of the same record, instead of guessing from value equality
+   *  that none was sent. (Requires 0369 before this code: the migration
+   *  ships first.) counted_at stays the server's write time.
+   *
+   *  A record can wait behind an in-flight post of the same item (the
+   *  trigger's FOR SHARE read). Past lock_timeout / statement_timeout
+   *  (55P03 / 57014) it is a RETRYABLE internal error, never a conflict or a
+   *  validation error: the phone's drain treats a 4xx as final and would
+   *  discard the count. */
   async recordCount(input: {
     cycleCountId: string;
     lineId: string;
@@ -1513,6 +1627,9 @@ export class CycleCountsService {
     reason?: string | null;
     notes?: string | null;
     aiScanId?: string | null;
+    /** ISO time the count was taken (offline replay only). Omitted = an
+     *  online record: captured_at is written NULL. */
+    capturedAt?: string;
   }): Promise<void> {
     assertModuleEnabled(this.ctx, 'cycle_counts');
     assertPermission(this.ctx, 'stock:adjust');
@@ -1536,6 +1653,7 @@ export class CycleCountsService {
     if (input.aiScanId !== undefined) {
       update.ai_scan_id = input.aiScanId;
     }
+    update.captured_at = input.capturedAt ?? null;
     const { data, error } = await this.ctx.supabase
       .from('cycle_count_lines')
       .update(update)
@@ -1543,7 +1661,16 @@ export class CycleCountsService {
       .eq('id', input.lineId)
       .select('id')
       .maybeSingle();
-    if (error) throw new ServiceError('internal_error', error.message);
+    if (error) {
+      if (error.code === '55P03' || error.code === '57014') {
+        throw new ServiceError(
+          'internal_error',
+          `cycle_count_record_busy (${error.code}): ${error.message}`,
+          { retryable: true },
+        );
+      }
+      throw new ServiceError('internal_error', error.message);
+    }
     if (!data) {
       // Row either doesn't exist OR RLS / parent-status blocked the
       // write. We can't tell the difference from the API, so map both
@@ -1728,7 +1855,9 @@ export class CycleCountsService {
 
   /** Clears a previously-recorded count for a line so the user can recount.
    *  The DB trigger (0339) restores expected_quantity to expected_at_start,
-   *  so the line reads as it did at session start until recounted. */
+   *  so the line reads as it did at session start until recounted, and (0369)
+   *  forgets the line's capture time and baseline, so the recount is measured
+   *  on its own. */
   async clearCount(input: { cycleCountId: string; lineId: string }): Promise<void> {
     assertModuleEnabled(this.ctx, 'cycle_counts');
     assertPermission(this.ctx, 'stock:adjust');
@@ -1826,8 +1955,9 @@ export class CycleCountsService {
       // post_cycle_count emits: cycle_count_not_found, cycle_count_not_open,
       // forbidden, item_out_of_scope (v2 0079), cycle_count_stale_line,
       // cycle_count_negative_result (v4 0339), cycle_count_location_out_of_org
-      // and cycle_count_location_out_of_scope (0342/0343).
-      throw mapPostCycleCountError(error.message);
+      // and cycle_count_location_out_of_scope (0342/0343), and
+      // cycle_count_line_superseded (0369, with DETAIL superseded_lines=<n>).
+      throw mapPostCycleCountError(error.message, error.details);
     }
     // The RPC has committed the variance adjustments. The Items/Books views
     // must drop their cached quantities here, not in a caller: the phone posts

@@ -81,3 +81,23 @@ describe('cycle-count/[id].tsx — post error wiring (0339)', () => {
     expect(screen).toContain('Expected is the system quantity when the line was counted');
   });
 });
+
+describe('postCycleCountErrorMessage — superseded line (0369)', () => {
+  it('maps the raw raise (with its SKU) to the same sentence the web shows', () => {
+    expect(postCycleCountErrorMessage('cycle_count_line_superseded: SKU-1')).toBe(
+      'Another count posted a correction for an item after this count recorded it, so posting would apply that correction twice. Clear and recount that line, then post again.',
+    );
+  });
+
+  it('is checked before the other codes (a SKU is free text)', () => {
+    expect(postCycleCountErrorMessage('cycle_count_line_superseded: FORBIDDEN-9')).toContain(
+      'Clear and recount that line',
+    );
+  });
+
+  it('the server sentence that normally arrives passes through unchanged', () => {
+    const web =
+      'Another count posted a correction for an item after this count recorded it, so posting would apply that correction twice. Clear and recount that line, then post again. Item: SKU-1.';
+    expect(postCycleCountErrorMessage(web)).toBe(web);
+  });
+});

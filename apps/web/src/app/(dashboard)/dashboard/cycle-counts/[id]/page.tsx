@@ -222,6 +222,7 @@ export default async function CycleCountDetailPage({
         members={members}
         assigneeName={assigneeName}
         itemsInScopeCount={itemsInScopeCount}
+        timeZone={tz}
       />
     </div>
   );

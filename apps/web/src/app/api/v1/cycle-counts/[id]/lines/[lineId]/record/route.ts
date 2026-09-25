@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { resolveCapturedAt } from '@/lib/cycle-counts/capture-time';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { ServiceError } from '@/server/services/context';
@@ -18,6 +19,13 @@ const bodySchema = z.object({
   // cycle_count_ai_scans row. NULL/omitted for manual + barcode
   // entries (unchanged existing behavior).
   aiScanId: z.string().uuid().nullable().optional(),
+  // Offline capture time (0369). Read LENIENTLY by resolveCapturedAt: a value
+  // that cannot be read is dropped (the record is then an online record, as
+  // today), never refused. The phone's drain treats a 400 as final and would
+  // discard the operator's count over a bad timestamp. Old bundles send
+  // neither key.
+  capturedAt: z.unknown().optional(),
+  clientSentAt: z.unknown().optional(),
 });
 
 /**
@@ -29,6 +37,12 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; lineId: string }> },
 ) {
+  // The server clock at ARRIVAL, read before anything else (0369). An offline
+  // capture is placed at arrivedAt - (clientSentAt - capturedAt), so every
+  // millisecond spent before this read (auth, the rate limit, the body) would
+  // land the capture that much later than the real count, where a pick of the
+  // item reads as before the count.
+  const arrivedAt = Date.now();
   const ctx = await withApiContext(req);
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
@@ -68,6 +82,15 @@ export async function POST(
     );
   }
 
+  // The device's two clock readings, skew-corrected onto the server clock
+  // (only the elapsed time between them is trusted), against the clock at
+  // arrival. The database clamps the result to [count started, now].
+  const capturedAt = resolveCapturedAt({
+    capturedAt: parsed.data.capturedAt,
+    clientSentAt: parsed.data.clientSentAt,
+    serverNow: arrivedAt,
+  });
+
   try {
     const svc = new CycleCountsService(ctx);
     await svc.recordCount({
@@ -76,11 +99,24 @@ export async function POST(
       countedQuantity: parsed.data.countedQuantity,
       reason: parsed.data.reason ?? null,
       notes: parsed.data.notes ?? null,
-      aiScanId: parsed.data.aiScanId ?? null,
+      // Passed through UNCHANGED: omitted stays undefined, so a manual or
+      // offline recount keeps the line's AI-scan link (recordCount writes
+      // ai_scan_id only when it is given). `?? null` used to wipe it.
+      aiScanId: parsed.data.aiScanId,
+      ...(capturedAt ? { capturedAt } : {}),
     });
     return NextResponse.json({ ok: true });
   } catch (e) {
     if (e instanceof ServiceError) {
+      // A record that waited too long behind an in-flight post of the same
+      // item (0369 FOR SHARE, lock_timeout 8 s) is RETRYABLE: 503, never a
+      // 4xx, which the phone's drain would treat as a final refusal.
+      if (e.code === 'internal_error' && e.details?.retryable === true) {
+        return NextResponse.json(
+          { error: e.code, message: e.message },
+          { status: 503, headers: { 'Retry-After': '5' } },
+        );
+      }
       const status =
         e.code === 'forbidden'
           ? 403

@@ -134,3 +134,9 @@ describe('fetchAllCycleCountLines', () => {
     await expect(fetchAllCycleCountLines(client, 'cc-1')).rejects.toThrow('network down');
   });
 });
+
+describe('CYCLE_COUNT_LINES_SELECT (0369)', () => {
+  it('reads captured_at, so the screen can say when an offline count was taken', () => {
+    expect(CYCLE_COUNT_LINES_SELECT).toMatch(/\bcaptured_at\b/);
+  });
+});

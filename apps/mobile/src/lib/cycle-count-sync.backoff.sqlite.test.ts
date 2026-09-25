@@ -31,8 +31,15 @@ vi.mock('expo-network', () => ({
 vi.mock('./account-disabled-state', () => ({ getAccountDisabled: () => false }));
 const sent = vi.hoisted(() => ({ bodies: [] as Record<string, unknown>[] }));
 vi.mock('./api', () => ({
-  api: vi.fn(async (_path: string, opts: { body: Record<string, unknown> }) => {
-    sent.bodies.push(opts.body);
+  // The engine hands api() a body FACTORY (clientSentAt is stamped as the
+  // request leaves); the real api() builds it just before the send.
+  api: vi.fn(async (_path: string, opts: { body: unknown }) => {
+    sent.bodies.push(
+      (typeof opts.body === 'function' ? (opts.body as () => unknown)() : opts.body) as Record<
+        string,
+        unknown
+      >,
+    );
   }),
 }));
 vi.mock('./supabase', () => ({

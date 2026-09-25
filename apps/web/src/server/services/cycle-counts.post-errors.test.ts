@@ -109,3 +109,84 @@ describe('mapPostCycleCountError — counted-location raises (0342 + 0343)', () 
     );
   });
 });
+
+/**
+ * 0369: overlapping counts. post_cycle_count raises
+ * `cycle_count_line_superseded: <sku>` (P0001) when another count already
+ * posted a correction for the item after this line was counted; posting it
+ * would apply the same correction twice. The SKU is free text, so the mapping
+ * runs FIRST (a SKU like "FORBIDDEN-1" must not be read as the `forbidden`
+ * code). Removing the mapping turns every one of these into internal_error.
+ */
+describe('mapPostCycleCountError — superseded line (0369)', () => {
+  it('maps the raise to validation_error with the recount copy and the SKU', () => {
+    const e = mapPostCycleCountError('cycle_count_line_superseded: SKU-0369-AB');
+    expect(e.code).toBe('validation_error');
+    expect(e.message).toBe(
+      'Another count posted a correction for an item after this count recorded it, so posting would apply that correction twice. Clear and recount that line, then post again. Item: SKU-0369-AB.',
+    );
+    expect(e.details).toEqual({ reason: 'cycle_count_line_superseded', sku: 'SKU-0369-AB' });
+  });
+
+  it('keeps the copy when the SKU is missing', () => {
+    const e = mapPostCycleCountError('cycle_count_line_superseded');
+    expect(e.code).toBe('validation_error');
+    expect(e.message).toContain('Clear and recount that line');
+    expect(e.details).toEqual({ reason: 'cycle_count_line_superseded' });
+  });
+
+  it('a SKU that contains another code still maps to superseded (checked first)', () => {
+    for (const sku of ['FORBIDDEN-1', 'cycle_count_not_open', 'item_out_of_scope-2']) {
+      const e = mapPostCycleCountError(`cycle_count_line_superseded: ${sku}`);
+      expect(e.details).toMatchObject({ reason: 'cycle_count_line_superseded', sku });
+      expect(e.code).toBe('validation_error');
+    }
+  });
+
+  it('never echoes a runaway SKU whole', () => {
+    const e = mapPostCycleCountError(`cycle_count_line_superseded: ${'X'.repeat(500)}`);
+    expect((e.details as { sku: string }).sku).toHaveLength(120);
+  });
+});
+
+/**
+ * 0369: the post names EVERY superseded line in one refusal (the first 20
+ * SKUs, then "(+n more)"), with the total in DETAIL (`superseded_lines=<n>`).
+ * A SKU may contain a comma, so the count comes from DETAIL, never from the
+ * list. Before this a manager found each overlap one post attempt at a time.
+ */
+describe('mapPostCycleCountError — several superseded lines (0369)', () => {
+  it('names every line and says how many', () => {
+    const e = mapPostCycleCountError(
+      'cycle_count_line_superseded: SKU-1, SKU-2, SKU-3',
+      'superseded_lines=3',
+    );
+    expect(e.code).toBe('validation_error');
+    expect(e.message).toBe(
+      'Another count posted corrections for 3 items after this count recorded them, so posting would apply those corrections twice. Clear and recount those lines, then post again. Items: SKU-1, SKU-2, SKU-3.',
+    );
+    expect(e.details).toEqual({
+      reason: 'cycle_count_line_superseded',
+      count: 3,
+      items: 'SKU-1, SKU-2, SKU-3',
+    });
+  });
+
+  it('carries the "(+n more)" tail and cuts a runaway list', () => {
+    const e = mapPostCycleCountError(
+      `cycle_count_line_superseded: ${'S'.repeat(700)} (+5 more)`,
+      'superseded_lines=25',
+    );
+    expect(e.message).toContain('corrections for 25 items');
+    expect((e.details as { items: string }).items).toHaveLength(600);
+  });
+
+  it('one line keeps the single-line copy, with or without DETAIL', () => {
+    for (const detail of ['superseded_lines=1', null, undefined, '']) {
+      const e = mapPostCycleCountError('cycle_count_line_superseded: A, B-KIT', detail);
+      // "A, B-KIT" is ONE SKU with a comma in it: the count is DETAIL's.
+      expect(e.message).toContain('Clear and recount that line');
+      expect(e.details).toEqual({ reason: 'cycle_count_line_superseded', sku: 'A, B-KIT' });
+    }
+  });
+});

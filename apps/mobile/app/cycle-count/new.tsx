@@ -13,6 +13,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { cycleCountStartedMessage } from '@stockpilot/core';
+
 import { Card, Hair } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
@@ -66,6 +68,12 @@ export default function NewCycleCount() {
       });
       countSelection.clear();
       router.replace({ pathname: '/cycle-count/[id]', params: { id: res.id } });
+      // Picks the start left out (archived or removed since they were ticked,
+      // or rental equipment and kits, which are never counted): said, not
+      // silently dropped. Same sentence as the web.
+      if (res.skipped > 0) {
+        Alert.alert('Count started', cycleCountStartedMessage(res.lineCount, res.skipped));
+      }
     } catch (e) {
       setBusy(false);
       Alert.alert(
@@ -197,6 +205,10 @@ function ItemPicker({ selectedCount }: { selectedCount: number }) {
         // soft-deleted rows are never countable.
         .eq('awaiting_first_receipt', plan.awaitingFirstReceipt)
         .is('deleted_at', null)
+        // Countable only (server 0369, D8): rental equipment and kit
+        // phantoms are never counted, so they are never offered.
+        .eq('is_rental', plan.isRental)
+        .eq('is_bundle', plan.isBundle)
         .order('name', { ascending: true })
         .range(plan.range.from, plan.range.to);
       if (plan.lifecycle) req = req.eq('status', plan.lifecycle);

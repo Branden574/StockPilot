@@ -6,7 +6,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { variantLabel } from '@stockpilot/core';
+import { offlineCaptureLabel, variantLabel } from '@stockpilot/core';
 
 import { HelpTip } from '@/components/onboarding/help-tip';
 import { Badge } from '@/components/ui/badge';
@@ -98,6 +98,9 @@ interface Props {
       items were added after start() — surfaced as a warning so the counter
       can decide to cancel + restart. */
   itemsInScopeCount?: number;
+  /** The organization's IANA timezone, for the offline capture time a line
+      shows in review (0369). */
+  timeZone?: string;
 }
 
 export function CycleCountDetail({
@@ -114,6 +117,7 @@ export function CycleCountDetail({
   members = [],
   assigneeName = null,
   itemsInScopeCount,
+  timeZone,
 }: Props) {
   const router = useRouter();
   const pathname = usePathname();
@@ -424,6 +428,7 @@ export function CycleCountDetail({
                 error={lineError?.id === l.id ? lineError.message : null}
                 onSave={(value) => saveCount(l, value)}
                 onClear={() => clearLine(l)}
+                timeZone={timeZone}
               />
             ))}
           </TableBody>
@@ -552,6 +557,7 @@ function CountRow({
   error = null,
   onSave,
   onClear,
+  timeZone,
 }: {
   line: CycleCountLineWithItem;
   disabled: boolean;
@@ -567,6 +573,8 @@ function CountRow({
       result makes the row put the server's value back in the box. */
   onSave: (value: string) => Promise<boolean>;
   onClear: () => Promise<boolean>;
+  /** Organization timezone for the offline capture label. */
+  timeZone?: string;
 }) {
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [draft, setDraft] = React.useState<string>(
@@ -604,6 +612,10 @@ function CountRow({
     jerseyNumber: line.item?.jersey_number ?? null,
     size: line.item?.variant_size ?? null,
   });
+  // A count queued offline and synced later was measured against the book at
+  // the moment it was taken (0369). Whoever reviews and posts sees when.
+  const capturedText =
+    line.counted_quantity != null ? offlineCaptureLabel(line, timeZone) : null;
 
   return (
     <TableRow>
@@ -620,6 +632,9 @@ function CountRow({
           <div className="text-muted-foreground truncate font-mono text-[10.5px]">
             {line.item.barcode}
           </div>
+        )}
+        {capturedText && (
+          <div className="text-muted-foreground truncate text-xs">{capturedText}</div>
         )}
       </TableCell>
       <TableCell className="text-muted-foreground font-mono text-xs">
