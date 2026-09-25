@@ -661,10 +661,13 @@ async function sendOne(
       return;
     }
     case 'adjust_stock': {
-      // Reuses the existing adjust_stock RPC via a thin server route;
-      // in the meantime the mobile scan tab still hits supabase.rpc()
-      // directly when online, so this branch only fires for offline-
-      // queued adjusts.
+      // NOTHING ENQUEUES THIS KIND, on purpose. Every manual adjustment on the
+      // phone (scan tab, item screen) is an online-only POST to
+      // /api/v1/items/<id>/adjust, which takes no idempotency key: replaying a
+      // request whose response was lost after the server committed would move
+      // the stock twice. Wiring this needs server-side dedupe first, the way
+      // distribute_bundle has it (0347). Until then a failed adjustment is
+      // reported on screen (item-adjust.ts), never queued.
       throw new Error('adjust_stock queueing not yet wired — adjust online for now');
     }
     case 'size_count_event': {
