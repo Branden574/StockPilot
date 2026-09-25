@@ -173,11 +173,20 @@ describe('the local record survives', () => {
    * and a prune, or "preserved for the user and support" is just a comment.
    */
   it('is actually rendered somewhere the operator can reach', () => {
-    expect(settingsScreen).toMatch(/import \{ (countHeld, )?countRejected \} from '@\/lib\/queue'/);
-    // The held work queued by another account is surfaced by the same screen.
-    expect(settingsScreen).toContain(
-      'unsentWorkDetail({ rejected: rejectedCount, held: heldCount })',
+    expect(settingsScreen).toMatch(
+      /import \{ (countHeld, )?countRejected(, countUnconfirmedAdjust)? \} from '@\/lib\/queue'/,
     );
+    // The held work queued by another account is surfaced by the same screen,
+    // and a stock adjustment that may have been applied is not "never sent".
+    expect(settingsScreen).toMatch(
+      /unsentWorkDetail\(\{\s*rejected: rejectedCount,\s*held: heldCount,\s*unconfirmed: unconfirmedCount,\s*\}\)/,
+    );
+    expect(settingsScreen).toContain('await countUnconfirmedAdjust()');
+    // Unsent work lists those adjustments apart, under "Not confirmed".
+    expect(rejectedScreen).toContain('(rows ?? []).filter(isUnconfirmedAdjustRow)');
+    expect(rejectedScreen).toContain('`NOT CONFIRMED · ${unconfirmedRows.length}`');
+    expect(rejectedScreen).toContain('`NEVER SENT · ${neverSentRows.length}`');
+    expect(rejectedScreen).not.toContain('those changes were never applied');
     expect(rejectedScreen).toContain('listHeld(REJECTED_KEEP_MAX)');
     expect(rejectedScreen).toContain('discardHeldAction(row.id)');
     expect(settingsScreen).toContain("router.push('/settings/rejected-work' as never)");

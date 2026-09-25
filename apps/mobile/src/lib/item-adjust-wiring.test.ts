@@ -30,7 +30,7 @@ describe('item screen — manual adjust goes through the server route', () => {
     // shownTotal is what lets the unconfirmed-stock store recognise a read
     // that shows this write.
     expect(adjustBody()).toMatch(
-      /await submitItemAdjust\(itemId, delta, \{\s*reason,\s*shownTotal: item\.quantity_on_hand,\s*\}\)/,
+      /await submitItemAdjust\(itemId, delta, \{\s*reason,\s*shownTotal: item\.quantity_on_hand,\s*offline: \{/,
     );
   });
 
@@ -67,10 +67,49 @@ describe('item screen — manual adjust goes through the server route', () => {
     expect(confirm.match(/setAdjustOpen\(false\)/g)?.length).toBe(1);
     // adjust() hands the kind back on every path, so a refusal is told apart.
     expect(adjustBody()).toMatch(/Promise<ItemAdjustOutcome\['kind'\] \| null>/);
-    expect(adjustBody().match(/return outcome\.kind;/g)?.length).toBe(3);
+    expect(adjustBody().match(/return outcome\.kind;/g)?.length).toBe(4);
     // The sheet's draft survives because its content is keyed on `visible`
     // (reset-by-remount), which a refusal no longer flips.
     expect(screen).toMatch(/<AdjustModalContent\s*key=\{String\(visible\)\}/);
+  });
+
+  // OFFLINE (adjust-outbox.ts): with no connection at the tap the adjustment
+  // is saved in the S4 outbox, stamped with its workspace and account by
+  // queue.ts enqueue(), and sent later through the same route, at most once.
+  it('queues an adjustment made with no connection, as outbox kind adjust_stock', () => {
+    expect(screen).toMatch(/import \{ enqueue, pendingAdjustFor \} from '@\/lib\/queue';/);
+    expect(screen).toMatch(/import \{ isOnline, syncNow \} from '@\/lib\/sync';/);
+    const body = adjustBody();
+    expect(body).toMatch(
+      /offline: \{\s*isOnline,[\s\S]{0,120}enqueue: \(payload\) => enqueue\(ADJUST_STOCK_KIND, payload\),\s*itemLabel:/,
+    );
+    // A queued change is said, the note re-read and the badge refreshed; the
+    // total on screen is not touched (nothing was sent).
+    const queued = body.slice(body.indexOf("if (outcome.kind === 'queued')"));
+    expect(queued).toMatch(
+      /^if \(outcome\.kind === 'queued'\) \{[\s\S]{0,200}Alert\.alert\(outcome\.alert\.title, outcome\.alert\.message\);\s*void refreshQueuedAdjust\(\);[\s\S]{0,120}void cycleCountSync\.refreshPendingCount\(\);\s*return outcome\.kind;/,
+    );
+    expect(queued.slice(0, queued.indexOf('return outcome.kind;'))).not.toMatch(/setItem|refreshAfterAdjust/);
+  });
+
+  it('says beside ON HAND and in the sheet what is queued and not in the number yet', () => {
+    expect(screen).toMatch(/\{queuedAdjust\.count > 0 \? \(/);
+    expect(screen).toMatch(/\{queuedOnHandLabel\(queuedAdjust\)\}/);
+    expect(screen).toMatch(/`Queued offline · \$\{what\} · sends when online`/);
+    expect(screen).toMatch(/`\$\{q\.count\} changes, net \$\{formatQueuedNet\(q\.net\)\}`/);
+    expect(screen).toMatch(/queuedNet=\{queuedAdjust\.count > 0 \? queuedAdjust\.net : null\}/);
+    expect(screen).toMatch(/queued offline` : ''\}/);
+  });
+
+  it('re-reads the item when a queued change leaves the outbox, and sends queued changes once online', () => {
+    expect(screen).toMatch(/const drained = next\.count < queuedCountSeen\.current;/);
+    expect(screen).toMatch(/if \(drained\) load\(\)/);
+    expect(screen).toMatch(
+      /\}, \[syncStatus\.pendingCount, syncStatus\.status, refreshQueuedAdjust\]\);/,
+    );
+    expect(screen).toMatch(
+      /next\.count === 0 \|\| syncStatus\.status === 'offline'\) return;\s*await syncNow\(\);/,
+    );
   });
 
   it('shows the total from the server answer, never the old total plus the delta', () => {

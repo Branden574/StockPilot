@@ -568,7 +568,10 @@ export default function Scan() {
       shownTotal: item.quantity_on_hand,
     });
     setBusy(false);
-    if (outcome.kind === 'refused') {
+    // 'queued' cannot happen here: this tab passes no `offline`, so a tap with
+    // no connection is attempted and reported like any other failure. It is
+    // handled with the refusal only so the type stays exhaustive.
+    if (outcome.kind === 'refused' || outcome.kind === 'queued') {
       Alert.alert(outcome.alert.title, outcome.alert.message);
       return;
     }

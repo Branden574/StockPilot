@@ -373,3 +373,138 @@ describe('buildItemAdjustBody', () => {
     ]);
   });
 });
+
+describe('submitItemAdjust — offline (the item screen): queued only when nothing was sent', () => {
+  const NOW = Date.UTC(2026, 8, 25, 17, 2, 3);
+
+  function offlineQueue(online: boolean | (() => Promise<boolean>)) {
+    const enqueue = vi.fn(async (_payload: Record<string, unknown>) => ({ id: 1 }));
+    return {
+      enqueue,
+      offline: {
+        isOnline: typeof online === 'function' ? online : async () => online,
+        enqueue,
+        itemLabel: 'Polo S (POLO-S)',
+        now: () => NOW,
+      },
+    };
+  }
+
+  it('with no connection it sends NOTHING and saves the row in the outbox', async () => {
+    const q = offlineQueue(false);
+
+    const outcome = await submitItemAdjust('item-1', -1, { ...SHOWN, offline: q.offline });
+
+    expect(outcome.kind).toBe('queued');
+    expect(apiMock.api).not.toHaveBeenCalled();
+    expect(q.enqueue).toHaveBeenCalledTimes(1);
+    expect(q.enqueue).toHaveBeenCalledWith({
+      itemId: 'item-1',
+      quantityChange: -1,
+      movementType: 'remove',
+      reason: ITEM_ADJUST_DEFAULT_REASON,
+      notes: 'Queued offline on the phone at 2026-09-25T17:02:03.000Z (phone clock).',
+      itemLabel: 'Polo S (POLO-S)',
+    });
+  });
+
+  it('keeps the sheet reason on the queued row', async () => {
+    const q = offlineQueue(false);
+
+    await submitItemAdjust('item-1', 4, { ...SHOWN, reason: ' Found on shelf ', offline: q.offline });
+
+    expect(q.enqueue.mock.calls[0]?.[0]).toMatchObject({
+      quantityChange: 4,
+      movementType: 'add',
+      reason: 'Found on shelf',
+    });
+  });
+
+  it('a queued change puts nothing in doubt: nothing is in flight', async () => {
+    const q = offlineQueue(false);
+
+    await submitItemAdjust('item-1', 1, { ...SHOWN, offline: q.offline });
+
+    expect(unconfirmedStock.writes('item-1').size).toBe(0);
+    expect(unconfirmedStock.get('item-1')).toBeNull();
+  });
+
+  it('says it was saved offline and that the total changes only once it is sent', async () => {
+    const q = offlineQueue(false);
+
+    const outcome = await submitItemAdjust('item-1', -5, { ...SHOWN, offline: q.offline });
+
+    expect(outcome).toMatchObject({ kind: 'queued', alert: { title: 'Saved offline' } });
+    const message = (outcome as { alert: { message: string } }).alert.message;
+    expect(message).toContain('−5');
+    expect(message).toMatch(/sent when it is back online/);
+    expect(message).toMatch(/Unsent work/);
+  });
+
+  it('with a connection it POSTs as before and queues nothing', async () => {
+    const q = offlineQueue(true);
+    apiMock.api.mockResolvedValueOnce({ ok: true, quantityOnHand: 6 });
+
+    const outcome = await submitItemAdjust('item-1', 1, { ...SHOWN, offline: q.offline });
+
+    expect(outcome).toEqual({ kind: 'saved', quantityOnHand: 6 });
+    expect(q.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('a request that was SENT and failed is never queued: it may have landed', async () => {
+    const q = offlineQueue(true);
+    apiMock.api.mockRejectedValueOnce(new Error('Network request failed'));
+
+    const outcome = await submitItemAdjust('item-1', 1, { ...SHOWN, offline: q.offline });
+
+    expect(outcome.kind).toBe('unconfirmed');
+    expect(q.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('a connection check that throws means "try online" (the rule sync.ts isOnline keeps)', async () => {
+    const q = offlineQueue(async () => {
+      throw new Error('expo-network unavailable');
+    });
+    apiMock.api.mockResolvedValueOnce({ ok: true, quantityOnHand: 6 });
+
+    await submitItemAdjust('item-1', 1, { ...SHOWN, offline: q.offline });
+
+    expect(apiMock.api).toHaveBeenCalledTimes(1);
+    expect(q.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('when the outbox refuses (no account to own the row) it says nothing was saved or changed', async () => {
+    const q = offlineQueue(false);
+    q.enqueue.mockRejectedValueOnce(
+      new Error('No signed-in account to queue this change for. Sign in and try again.'),
+    );
+
+    const outcome = await submitItemAdjust('item-1', 1, { ...SHOWN, offline: q.offline });
+
+    expect(outcome).toMatchObject({ kind: 'refused', alert: { title: 'Could not save offline' } });
+    const message = (outcome as { alert: { message: string } }).alert.message;
+    expect(message).toMatch(/No signed-in account/);
+    expect(message).toMatch(/Nothing was changed\.$/);
+    expect(apiMock.api).not.toHaveBeenCalled();
+  });
+
+  it('a zero is refused before the connection is even checked', async () => {
+    const isOnline = vi.fn(async () => false);
+    const q = offlineQueue(isOnline);
+
+    const outcome = await submitItemAdjust('item-1', 0, { ...SHOWN, offline: q.offline });
+
+    expect(outcome.kind).toBe('refused');
+    expect(isOnline).not.toHaveBeenCalled();
+    expect(q.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('without `offline` (the scan tab) a tap is always attempted, never queued', async () => {
+    apiMock.api.mockRejectedValueOnce(new Error('Network request failed'));
+
+    const outcome = await submitItemAdjust('item-1', 1, SHOWN);
+
+    expect(outcome.kind).toBe('unconfirmed');
+    expect(apiMock.api).toHaveBeenCalledTimes(1);
+  });
+});

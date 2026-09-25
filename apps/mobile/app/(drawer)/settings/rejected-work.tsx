@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Card, Hair } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { isUnconfirmedAdjustRow } from '@/lib/adjust-outbox';
 import { discardHeldAction } from '@/lib/cycle-count-cache';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { clearRejected, listHeld, listRejected, type PendingActionRow } from '@/lib/queue';
@@ -42,6 +43,13 @@ import { useTheme } from '@/lib/use-theme';
  * It is listed as "Queued by another account" (kind and age only, never the
  * payload) with Discard, the one way to remove it when its owner is not
  * coming back. The rejected record, by contrast, is this account's own.
+ *
+ * THIRD KIND: stock adjustments NOT CONFIRMED (adjust-outbox.ts). An
+ * adjustment queued offline is sent at most once, because its route cannot
+ * recognise a replay; when that one send got no answer, the row is parked
+ * here although it MAY have been applied. Those rows are listed apart, under
+ * "Not confirmed", and this screen never says they were not applied: each
+ * row's message names the item and the change to check.
  */
 export default function RejectedWorkScreen() {
   const { c } = useTheme();
@@ -86,7 +94,7 @@ export default function RejectedWorkScreen() {
   function confirmClear() {
     Alert.alert(
       'Clear this list?',
-      'This removes the record of the changes that were never sent. It does not send them — those changes were never applied. Make sure anything still needed has been re-entered first.',
+      'This removes the record of these changes. It does not send them. Make sure anything still needed has been re-entered first, and that each stock adjustment marked "Not confirmed" was checked on its item.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -135,6 +143,9 @@ export default function RejectedWorkScreen() {
   }
 
   const nothing = rows !== null && held !== null && rows.length === 0 && held.length === 0;
+  // The adjustments that MAY have been applied, listed apart from the rest.
+  const unconfirmedRows = (rows ?? []).filter(isUnconfirmedAdjustRow);
+  const neverSentRows = (rows ?? []).filter((r) => !isUnconfirmedAdjustRow(r));
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
@@ -161,8 +172,9 @@ export default function RejectedWorkScreen() {
         showsVerticalScrollIndicator={false}
       >
         <Body muted size={14} style={{ marginTop: 6 }}>
-          Changes saved on this device that were not sent to the server. They were not applied to
-          your inventory. If they still matter, enter them again.
+          Changes saved on this device that the server did not accept. They were not applied to
+          your inventory. If they still matter, enter them again. A stock adjustment listed as not
+          confirmed is different: it may have been applied, so check the item first.
         </Body>
 
         {held !== null && held.length > 0 ? (
@@ -222,34 +234,70 @@ export default function RejectedWorkScreen() {
           </Card>
         ) : rows.length === 0 ? null : (
           <View style={{ marginTop: 18 }}>
-            <View style={{ paddingHorizontal: 4, paddingBottom: 10 }}>
-              <Eyebrow>{`NEVER SENT · ${rows.length}`}</Eyebrow>
-            </View>
-            <Card padding={0}>
-              {rows.map((row, idx) => (
-                <View key={row.id}>
-                  {idx > 0 ? <Hair /> : null}
-                  <View style={styles.row}>
-                    <View style={styles.rowHead}>
-                      <Body size={15.5} style={{ fontFamily: FONT.display, flexShrink: 1 }}>
-                        {pendingActionLabel(row.kind)}
-                      </Body>
-                      <Mono size={11} color={c.ink4}>
-                        {rejectedWhen(row.lastAttemptAt ?? row.createdAt, now)}
-                      </Mono>
-                    </View>
-                    {row.lastError ? (
-                      <Body size={13.5} color={ACCENT.crit} style={{ marginTop: 4 }}>
-                        {row.lastError}
-                      </Body>
-                    ) : null}
-                    <Mono size={10} tracking={0.1} color={c.ink4} style={{ marginTop: 6 }}>
-                      {row.idempotencyKey.slice(0, 8).toUpperCase()}
-                    </Mono>
-                  </View>
+            {unconfirmedRows.length > 0 ? (
+              <View style={{ marginBottom: 18 }}>
+                <View style={{ paddingHorizontal: 4, paddingBottom: 10 }}>
+                  <Eyebrow>{`NOT CONFIRMED · ${unconfirmedRows.length}`}</Eyebrow>
                 </View>
-              ))}
-            </Card>
+                <Card padding={0}>
+                  {unconfirmedRows.map((row, idx) => (
+                    <View key={row.id}>
+                      {idx > 0 ? <Hair /> : null}
+                      <View style={styles.row}>
+                        <View style={styles.rowHead}>
+                          <Body size={15.5} style={{ fontFamily: FONT.display, flexShrink: 1 }}>
+                            {pendingActionLabel(row.kind)}
+                          </Body>
+                          <Mono size={11} color={c.ink4}>
+                            {rejectedWhen(row.lastAttemptAt ?? row.createdAt, now)}
+                          </Mono>
+                        </View>
+                        {/* Warn, not crit: this may have worked. The message
+                            names the item and the change to check. */}
+                        <Body size={13.5} color={ACCENT.warn} style={{ marginTop: 4 }}>
+                          {row.lastError}
+                        </Body>
+                        <Mono size={10} tracking={0.1} color={c.ink4} style={{ marginTop: 6 }}>
+                          {row.idempotencyKey.slice(0, 8).toUpperCase()}
+                        </Mono>
+                      </View>
+                    </View>
+                  ))}
+                </Card>
+              </View>
+            ) : null}
+            {neverSentRows.length > 0 ? (
+              <>
+                <View style={{ paddingHorizontal: 4, paddingBottom: 10 }}>
+                  <Eyebrow>{`NEVER SENT · ${neverSentRows.length}`}</Eyebrow>
+                </View>
+                <Card padding={0}>
+                  {neverSentRows.map((row, idx) => (
+                    <View key={row.id}>
+                      {idx > 0 ? <Hair /> : null}
+                      <View style={styles.row}>
+                        <View style={styles.rowHead}>
+                          <Body size={15.5} style={{ fontFamily: FONT.display, flexShrink: 1 }}>
+                            {pendingActionLabel(row.kind)}
+                          </Body>
+                          <Mono size={11} color={c.ink4}>
+                            {rejectedWhen(row.lastAttemptAt ?? row.createdAt, now)}
+                          </Mono>
+                        </View>
+                        {row.lastError ? (
+                          <Body size={13.5} color={ACCENT.crit} style={{ marginTop: 4 }}>
+                            {row.lastError}
+                          </Body>
+                        ) : null}
+                        <Mono size={10} tracking={0.1} color={c.ink4} style={{ marginTop: 6 }}>
+                          {row.idempotencyKey.slice(0, 8).toUpperCase()}
+                        </Mono>
+                      </View>
+                    </View>
+                  ))}
+                </Card>
+              </>
+            ) : null}
 
             <Pressable
               onPress={confirmClear}
@@ -264,9 +312,10 @@ export default function RejectedWorkScreen() {
         )}
 
         <Mono size={10} tracking={0.1} color={c.ink4} style={{ marginTop: 18 }}>
-          {/* Retention applies to the never-sent record only: work held for
-              another account is never removed except by Discard. */}
-          {`NEVER-SENT RECORDS ARE KEPT FOR ${REJECTED_RETENTION_DAYS} DAYS, THEN REMOVED AUTOMATICALLY`}
+          {/* Retention applies to this account's record only (never sent and
+              not confirmed): work held for another account is never removed
+              except by Discard. */}
+          {`THESE RECORDS ARE KEPT FOR ${REJECTED_RETENTION_DAYS} DAYS, THEN REMOVED AUTOMATICALLY`}
         </Mono>
       </ScrollView>
     </View>

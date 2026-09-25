@@ -112,4 +112,15 @@ describe('unsentWorkDetail (Settings > Unsent work)', () => {
       '3 never sent · 2 from another account',
     );
   });
+
+  it('never calls a not-confirmed stock adjustment "never sent": it may have been applied', () => {
+    expect(unsentWorkDetail({ rejected: 3, held: 0, unconfirmed: 1 })).toBe(
+      '2 never sent · 1 not confirmed',
+    );
+    expect(unsentWorkDetail({ rejected: 1, held: 2, unconfirmed: 1 })).toBe(
+      '1 not confirmed · 2 from another account',
+    );
+    // A count read a moment apart can disagree; it is clamped, never negative.
+    expect(unsentWorkDetail({ rejected: 1, held: 0, unconfirmed: 4 })).toBe('1 not confirmed');
+  });
 });

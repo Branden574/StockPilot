@@ -312,6 +312,171 @@ describe('drainQueue — every row is sent under its own org, and only as its ow
   });
 });
 
+describe('drainQueue — adjust_stock: the same route as an online tap, AT MOST ONCE', () => {
+  // What the item screen queued for a -1 made with no connection
+  // (adjust-outbox.ts queuedAdjustPayload).
+  const ADJUST: Row = {
+    id: 9,
+    kind: 'adjust_stock',
+    idempotencyKey: 'k9',
+    organizationId: 'org-a',
+    userId: 'u1',
+    payload: {
+      itemId: 'item-1',
+      quantityChange: -1,
+      movementType: 'remove',
+      reason: 'Mobile detail',
+      notes: 'Queued offline on the phone at 2026-09-25T17:02:03.000Z (phone clock).',
+      itemLabel: 'Polo S (POLO-S)',
+    },
+  };
+
+  /** api() as far as the hand-off, then the given outcome. */
+  function sendThen(outcome: () => unknown, handOff = true) {
+    apiMock.api.mockImplementation(async (path: string, opts?: { onSend?: () => void }) => {
+      calls.log.push(`api:${path}`);
+      if (handOff) opts?.onSend?.();
+      return outcome();
+    });
+  }
+
+  function lastErrorOf(id: number): string {
+    const call = queueMock.markRejected.mock.calls.find((c) => c[0] === id);
+    return String(call?.[1] ?? '');
+  }
+
+  it('POSTs the stored body to /api/v1/items/<id>/adjust under the row’s own org and account, then acks', async () => {
+    live.orgId = 'org-b';
+    sendThen(() => ({ ok: true, quantityOnHand: 3 }));
+    pending([ADJUST]);
+
+    expect(await drainQueue()).toEqual({ ok: 1, failed: 0, rejected: 0 });
+    expect(calls.log).toEqual(['markSending:9', 'api:/api/v1/items/item-1/adjust', 'markOk:9']);
+    expect(apiMock.api).toHaveBeenCalledWith('/api/v1/items/item-1/adjust', {
+      method: 'POST',
+      // Exactly the route's body: no item id, no label, and no idempotency
+      // key (the route has none; nothing pretends otherwise).
+      body: {
+        quantityChange: -1,
+        movementType: 'remove',
+        reason: 'Mobile detail',
+        notes: 'Queued offline on the phone at 2026-09-25T17:02:03.000Z (phone clock).',
+      },
+      orgId: 'org-a',
+      asUserId: 'u1',
+      onSend: expect.any(Function),
+    });
+  });
+
+  it.each([400, 403, 409, 422])(
+    'a %i refusal is TERMINAL: rejected with the item named, never retried',
+    async (status) => {
+      sendThen(() => {
+        throw httpError(status, 'Missing permission: stock:adjust');
+      });
+      pending([ADJUST]);
+
+      expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 1 });
+      expect(queueMock.markFailed).not.toHaveBeenCalled();
+      expect(lastErrorOf(9)).toBe(
+        '\u22121 to Polo S (POLO-S): Missing permission: stock:adjust. Nothing was changed.',
+      );
+    },
+  );
+
+  it('a 401 on a live account retries; on a disabled account it is rejected', async () => {
+    sendThen(() => {
+      throw httpError(401, 'unauthenticated');
+    });
+    pending([ADJUST]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+
+    disabledMock.getAccountDisabled.mockReturnValue(true);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 1 });
+  });
+
+  it('a 429 retries: the rate limit answers before the route writes', async () => {
+    sendThen(() => {
+      throw httpError(429, 'Too many requests');
+    });
+    pending([ADJUST]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+    expect(queueMock.markRejected).not.toHaveBeenCalled();
+  });
+
+  it('a 5xx after the hand-off is NOT retried: parked as not confirmed, so it can never apply twice', async () => {
+    sendThen(() => {
+      throw httpError(500, 'internal_error');
+    });
+    pending([ADJUST]);
+
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 1 });
+    expect(calls.log).toEqual([
+      'markSending:9',
+      'api:/api/v1/items/item-1/adjust',
+      'markRejected:9',
+    ]);
+    expect(queueMock.markFailed).not.toHaveBeenCalled();
+    expect(lastErrorOf(9)).toMatch(/^Not confirmed: \u22121 to Polo S \(POLO-S\) was sent/);
+  });
+
+  it('a network error AFTER the hand-off is parked as not confirmed', async () => {
+    sendThen(() => {
+      throw new Error('Network request failed');
+    });
+    pending([ADJUST]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 1 });
+    expect(lastErrorOf(9)).toMatch(/may or may not have been saved/);
+  });
+
+  it('a failure BEFORE the hand-off retries: nothing left the phone', async () => {
+    sendThen(() => {
+      throw new Error('Network request failed');
+    }, false);
+    pending([ADJUST]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+    expect(queueMock.markRejected).not.toHaveBeenCalled();
+  });
+
+  it('the stored item id is only ever one path segment', async () => {
+    sendThen(() => ({ ok: true }));
+    pending([{ ...ADJUST, payload: { ...ADJUST.payload, itemId: '../../bundles/b1/distribute' } }]);
+    await drainQueue();
+    expect(apiMock.api.mock.calls[0]?.[0]).toBe(
+      '/api/v1/items/..%2F..%2Fbundles%2Fb1%2Fdistribute/adjust',
+    );
+  });
+
+  it('a malformed row is rejected without a request', async () => {
+    pending([{ ...ADJUST, payload: { quantityChange: -1 } }]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 1 });
+    expect(apiMock.api).not.toHaveBeenCalled();
+  });
+
+  it("another account's queued adjustment is held, and a session change at send time puts it back", async () => {
+    live.userId = 'u2';
+    pending([ADJUST]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 0 });
+    expect(calls.log).toEqual([]);
+
+    live.userId = 'u1';
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw new OutboxSessionChangedError();
+    });
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 0 });
+    expect(calls.log).toEqual(['markSending:9', 'api:/api/v1/items/item-1/adjust', 'markHeld:9']);
+  });
+
+  it('the other kinds keep their retry rule: a 5xx on a receipt is still retried', async () => {
+    sendThen(() => {
+      throw httpError(500);
+    });
+    pending([RECEIPT]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+  });
+});
+
 describe('sendOne carries no second copy of the record_count send (SP-099)', () => {
   /**
    * Source pin, because the branch it guards is UNREACHABLE by construction —

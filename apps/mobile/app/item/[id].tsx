@@ -71,7 +71,11 @@ import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
 import { replacePrimaryPhoto } from '@/lib/item-photo-replace';
+import { ADJUST_STOCK_KIND, formatQueuedNet } from '@/lib/adjust-outbox';
+import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
 import { submitItemAdjust, type ItemAdjustOutcome } from '@/lib/item-adjust';
+import { enqueue, pendingAdjustFor } from '@/lib/queue';
+import { isOnline, syncNow } from '@/lib/sync';
 import {
   unconfirmedStock,
   useUnconfirmedStock,
@@ -498,6 +502,10 @@ export default function ItemDetail() {
   // beat a slow write to the database, and used to clear the label with the
   // pre-write total on screen.
   const unconfirmed = useUnconfirmedStock(id);
+  // Adjustments made on this screen with NO connection, saved in the outbox and
+  // not sent yet (adjust-outbox.ts). ON HAND cannot include them until the
+  // drain sends them, so the card says so beside the number.
+  const [queuedAdjust, setQueuedAdjust] = React.useState({ count: 0, net: 0 });
   // Web parity: /dashboard/inventory/[id]?tab=movements|activity deep-links
   // straight to a tab — mobile honors the same param (notification links,
   // in-app pushes, and tests can land directly on a tab). Unknown values
@@ -790,6 +798,26 @@ export default function ItemDetail() {
       elsewhere,
     });
   }, [id, router, role]);
+
+  // The outbox count this screen last saw for the item, so a DROP (a queued
+  // adjustment was sent, or parked as refused or not confirmed) re-reads the
+  // item: the number on screen does not include that change yet.
+  const queuedCountSeen = React.useRef(0);
+  const refreshQueuedAdjust = React.useCallback(async () => {
+    if (!id) return null;
+    let next: { count: number; net: number };
+    try {
+      next = await pendingAdjustFor(id);
+    } catch (e) {
+      console.warn('[item] could not read queued adjustments', e);
+      return null;
+    }
+    const drained = next.count < queuedCountSeen.current;
+    queuedCountSeen.current = next.count;
+    setQueuedAdjust(next);
+    if (drained) load().catch((e: unknown) => console.warn('[item] re-read after drain failed', e));
+    return next;
+  }, [id, load]);
 
   /**
    * Fetches ONE page of `stock_movements` (SerialsCard "Load more" pattern:
@@ -1169,6 +1197,29 @@ export default function ItemDetail() {
     });
   }, [id, load]);
 
+  // QUEUED OFFLINE ADJUSTMENTS. Re-read this item's outbox rows whenever the
+  // sync badge's state changes (a row queued, sent or parked; the phone going
+  // on or offline). While some are queued and the phone reports a connection,
+  // send them now instead of at the next 60 s tick, so reconnecting shows the
+  // new total within seconds; refreshQueuedAdjust re-reads the item once they
+  // leave the outbox. syncNow is single-flight, and this runs only while this
+  // item has queued rows.
+  const syncStatus = useSyncStatus();
+  React.useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const next = await refreshQueuedAdjust();
+      if (cancelled || !next || next.count === 0 || syncStatus.status === 'offline') return;
+      await syncNow();
+      if (cancelled) return;
+      await refreshQueuedAdjust();
+      void cycleCountSync.refreshPendingCount();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [syncStatus.pendingCount, syncStatus.status, refreshQueuedAdjust]);
+
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- tab-change fetch: the sync sets inside the loaders are their loading/error flags (also used by pull-to-refresh); every data set is post-await
     if (tab === 'movements') void loadMovements();
@@ -1179,6 +1230,13 @@ export default function ItemDetail() {
   async function onRefresh() {
     setRefreshing(true);
     try {
+      // Adjustments queued offline for this item: try to send them first, so
+      // the read below can include them (a no-op while still offline).
+      if (queuedAdjust.count > 0) {
+        await syncNow();
+        await refreshQueuedAdjust();
+        void cycleCountSync.refreshPendingCount();
+      }
       await load();
       if (tab === 'movements') await loadMovements();
       if (tab === 'activity') await loadActivity();
@@ -1193,7 +1251,10 @@ export default function ItemDetail() {
    * Goes through POST /api/v1/items/<id>/adjust (src/lib/item-adjust.ts has
    * the full why: permission + MFA gate, warehouse scope, audit, webhook, the
    * no-Staging rule for a manual add, and the web Items cache invalidation the
-   * direct RPC call skipped). It is not queued offline — see that file.
+   * direct RPC call skipped). With NO connection at the tap it is not sent:
+   * it is saved in the outbox and the drain sends it later, at most once,
+   * through the same route (src/lib/adjust-outbox.ts). A request that was
+   * sent and failed is never queued (it may have landed).
    *
    * NO OPTIMISTIC STOCK. Nothing moves on screen until the server answers,
    * and what moves is the total the server returned, never the old total plus
@@ -1222,9 +1283,23 @@ export default function ItemDetail() {
     const outcome = await submitItemAdjust(itemId, delta, {
       reason,
       shownTotal: item.quantity_on_hand,
+      offline: {
+        isOnline,
+        // Stamped with this workspace and account (queue.ts, S4).
+        enqueue: (payload) => enqueue(ADJUST_STOCK_KIND, payload),
+        itemLabel: `${item.name} (${item.sku})`,
+      },
     });
     setBusy(false);
 
+    if (outcome.kind === 'queued') {
+      // Nothing was sent, so nothing changes on screen but the queued note.
+      Alert.alert(outcome.alert.title, outcome.alert.message);
+      void refreshQueuedAdjust();
+      // The header badge counts outbox rows; show this one now.
+      void cycleCountSync.refreshPendingCount();
+      return outcome.kind;
+    }
     if (outcome.kind === 'refused') {
       // Nothing was written, so the total on screen is still the last one the
       // server gave us.
@@ -1672,6 +1747,11 @@ export default function ItemDetail() {
                   {unconfirmedOnHandLabel(unconfirmed)}
                 </Mono>
               ) : null}
+              {queuedAdjust.count > 0 ? (
+                <Mono size={11.5} tracking={0.04} color={ACCENT.warn} style={{ marginTop: 6 }}>
+                  {queuedOnHandLabel(queuedAdjust)}
+                </Mono>
+              ) : null}
               <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 6 }}>
                 Reorder at {item.reorder_point} · suggested reorder {item.reorder_quantity}
               </Mono>
@@ -1989,6 +2069,7 @@ export default function ItemDetail() {
         visible={adjustOpen}
         item={item}
         unconfirmed={unconfirmed}
+        queuedNet={queuedAdjust.count > 0 ? queuedAdjust.net : null}
         busy={busy}
         onClose={() => setAdjustOpen(false)}
         onConfirm={async (delta, reason) => {
@@ -2662,6 +2743,17 @@ function AuditCard({ audit }: { audit: AuditCardModel }) {
 }
 
 /**
+ * The ON HAND note while adjustments made offline wait in the outbox. The
+ * number above does not include them: the server has not seen them yet.
+ */
+function queuedOnHandLabel(q: { count: number; net: number }): string {
+  // Two or more can net to 0 ("+1" then "-1"); say how many, or "0" reads as nothing queued.
+  const what =
+    q.count > 1 ? `${q.count} changes, net ${formatQueuedNet(q.net)}` : formatQueuedNet(q.net);
+  return `Queued offline · ${what} · sends when online`;
+}
+
+/**
  * The ON HAND label while an adjustment is unconfirmed. Two wordings because
  * they call for different things: while the write can still land, a refresh
  * may not settle it and the operator should wait; once it cannot, the next
@@ -2678,6 +2770,7 @@ function AdjustModal({
   visible,
   item,
   unconfirmed,
+  queuedNet,
   busy,
   onClose,
   onConfirm,
@@ -2685,6 +2778,8 @@ function AdjustModal({
   visible: boolean;
   item: Item;
   unconfirmed: UnconfirmedStock | null;
+  /** Net change queued offline for this item and not sent yet; null = none. */
+  queuedNet: number | null;
   busy: boolean;
   onClose: () => void;
   onConfirm: (delta: number, reason: string) => Promise<void>;
@@ -2704,6 +2799,7 @@ function AdjustModal({
         key={String(visible)}
         item={item}
         unconfirmed={unconfirmed}
+        queuedNet={queuedNet}
         busy={busy}
         onClose={onClose}
         onConfirm={onConfirm}
@@ -2715,12 +2811,14 @@ function AdjustModal({
 function AdjustModalContent({
   item,
   unconfirmed,
+  queuedNet,
   busy,
   onClose,
   onConfirm,
 }: {
   item: Item;
   unconfirmed: UnconfirmedStock | null;
+  queuedNet: number | null;
   busy: boolean;
   onClose: () => void;
   onConfirm: (delta: number, reason: string) => Promise<void>;
@@ -2784,6 +2882,9 @@ function AdjustModalContent({
                   moment someone re-enters a change is the moment a stale base
                   turns into a double count. */}
               {unconfirmed ? ' · not confirmed' : ''}
+              {/* Same reason for changes still waiting in the outbox: the base
+                  below does not include them. */}
+              {queuedNet !== null ? ` · ${formatQueuedNet(queuedNet)} queued offline` : ''}
             </Mono>
 
             <View style={{ marginTop: 20, gap: 14 }}>

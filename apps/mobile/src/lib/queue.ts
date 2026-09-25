@@ -1,3 +1,8 @@
+import {
+  countUnconfirmedAdjustSql,
+  pendingAdjustForItemSql,
+  UNCONFIRMED_ADJUST_PREFIX,
+} from './adjust-outbox';
 import { getDb, queuedWrite } from './db';
 import { HELD_FOR_OTHER_SQL, OWNED_BY_USER_SQL } from './outbox-scope';
 import { REJECTED_KEEP_MAX, rejectedPruneCutoff } from './rejected-work';
@@ -11,6 +16,10 @@ import { liveOutboxScope, outboxWriteScope } from './session-scope';
  *
  * Idempotency keys are UUIDs generated locally so the server can
  * dedupe replays from a network-flaky client.
+ *
+ * EXCEPT `adjust_stock`: its route (POST /api/v1/items/<id>/adjust) takes no
+ * key and cannot recognise a replay, so its rows are sent AT MOST ONCE and a
+ * send with no provable outcome is parked, not retried (adjust-outbox.ts).
  */
 
 export type PendingActionKind =
@@ -408,6 +417,39 @@ export async function countHeld(): Promise<number> {
         and ${HELD_FOR_OTHER_SQL}`,
     [userId],
   );
+  return row?.n ?? 0;
+}
+
+/**
+ * The live account's stock adjustments for ONE item that are queued and not
+ * sent yet (adjust-outbox.ts): how many, and their net change. The item screen
+ * says so under ON HAND, since the number there cannot include them until the
+ * drain has sent them. Legacy rows count as the live account's, as in every
+ * other outbox counter.
+ */
+export async function pendingAdjustFor(itemId: string): Promise<{ count: number; net: number }> {
+  const db = await getDb();
+  const { userId } = await liveOutboxScope();
+  const row = await db.getFirstAsync<{ n: number; net: number | null }>(
+    pendingAdjustForItemSql(OWNED_BY_USER_SQL),
+    [itemId, userId],
+  );
+  return { count: row?.n ?? 0, net: Number(row?.net ?? 0) || 0 };
+}
+
+/**
+ * How many of the live account's rejected rows are stock adjustments that MAY
+ * have been applied (adjust-outbox.ts, "Not confirmed"). Counted apart so the
+ * Settings row does not call them "never sent".
+ */
+export async function countUnconfirmedAdjust(): Promise<number> {
+  const db = await getDb();
+  const { userId } = await liveOutboxScope();
+  const row = await db.getFirstAsync<{ n: number }>(countUnconfirmedAdjustSql(OWNED_BY_USER_SQL), [
+    UNCONFIRMED_ADJUST_PREFIX,
+    UNCONFIRMED_ADJUST_PREFIX,
+    userId,
+  ]);
   return row?.n ?? 0;
 }
 

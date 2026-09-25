@@ -1,3 +1,4 @@
+import { queuedAdjustPayload } from './adjust-outbox';
 import {
   adjustItemStock,
   type AdjustSendHooks,
@@ -38,15 +39,22 @@ import { UNCONFIRMED_SETTLE_MS, unconfirmedStock } from './unconfirmed-stock';
  * reported as unconfirmed instead of "Could not adjust" (which read as "nothing
  * happened, tap again" on a write that may have landed).
  *
- * ═══ WHY IT IS NOT QUEUED OFFLINE ═══
+ * ═══ OFFLINE: QUEUED ONLY WHEN IT NEVER LEFT THE PHONE ═══
  *
- * The outbox only carries writes the server can DEDUPE: distribute_bundle
- * replays with the key its direct attempt used (0347). The adjust route takes
- * no idempotency key, so when a request's response is lost after the server
+ * The item screen passes `offline` (SubmitItemAdjustOptions). When the phone
+ * reports NO connection at the tap, the adjustment is not attempted: it is
+ * saved in the outbox and sent later by the drain, at most once, through this
+ * same route (adjust-outbox.ts has the rules). That is safe precisely because
+ * nothing was sent.
+ *
+ * A request that WAS sent and then failed is never queued. The adjust route
+ * takes no idempotency key, so when a response is lost after the server
  * committed (a dropped connection, or api()'s 20 s timeout), a queued replay
- * would move the stock a second time. Every other manual stock write on the
- * phone (transfer, remove-from-rack) is online-only for the same reason, and the outbox's `adjust_stock` kind has never been wired. So a
- * failure is SAID, never dropped and never silently retried.
+ * would move the stock a second time. So an online failure is SAID —
+ * refused, or unconfirmed with the number labelled — never silently retried.
+ * The scan tab passes no `offline` and stays online-only, like the other
+ * manual stock writes on the phone (transfer, remove-from-rack): it cannot
+ * show an item without reading it from the server first.
  */
 
 /** The reason stored on the movement when the operator typed none. The
@@ -75,7 +83,13 @@ export type ItemAdjustOutcome =
    * now in unconfirmed-stock.ts, which keeps its total labelled until a read
    * shows the write or the write can no longer land.
    */
-  | { kind: 'unconfirmed'; alert: AdjustAlert };
+  | { kind: 'unconfirmed'; alert: AdjustAlert }
+  /**
+   * No connection, so nothing was sent: the adjustment is in the outbox and
+   * the drain sends it when the phone is back online (adjust-outbox.ts). The
+   * on-hand total does not change until then.
+   */
+  | { kind: 'queued'; alert: AdjustAlert };
 
 export function buildItemAdjustBody(
   delta: number,
@@ -125,7 +139,9 @@ function withNothingChanged(message: string): string {
  * api()'s timeout) or a 5xx (a gateway timeout can arrive after the commit) —
  * is unconfirmed.
  */
-export function classifyAdjustFailure(err: unknown): Exclude<ItemAdjustOutcome, { kind: 'saved' }> {
+export function classifyAdjustFailure(
+  err: unknown,
+): Exclude<ItemAdjustOutcome, { kind: 'saved' } | { kind: 'queued' }> {
   const e = err as { status?: unknown; details?: unknown } | null | undefined;
   const status = typeof e?.status === 'number' ? e.status : null;
   if (status === null || status < 400 || status >= 500) {
@@ -198,6 +214,82 @@ export interface SubmitItemAdjustOptions {
    * is the total that proves an unconfirmed write landed (unconfirmed-stock.ts).
    */
   shownTotal: number;
+  /**
+   * Queue the adjustment when the phone has no connection (the item screen).
+   * Omitted = online only (the scan tab).
+   */
+  offline?: OfflineAdjustQueue;
+}
+
+/** How a screen that allows it saves an adjustment made with no connection. */
+export interface OfflineAdjustQueue {
+  /** Whether the phone has a connection now (sync.ts isOnline). */
+  isOnline: () => Promise<boolean>;
+  /** Saves the row (queue.ts enqueue('adjust_stock', payload)), which stamps
+   *  it with this workspace and account and throws when neither is known. */
+  enqueue: (payload: Record<string, unknown>) => Promise<unknown>;
+  /** The item's name and SKU, kept on the row so Unsent work can name it. */
+  itemLabel?: string | null;
+  /** The clock, for the note the movement carries. Date.now in the app. */
+  now?: () => number;
+}
+
+function signedDelta(delta: number): string {
+  return delta > 0 ? `+${delta}` : `\u2212${Math.abs(delta)}`;
+}
+
+/**
+ * Save the adjustment in the outbox. Never rejects. The screen shows the
+ * alert; the total is NOT changed (nothing was written yet).
+ */
+async function queueOffline(
+  itemId: string,
+  delta: number,
+  opts: SubmitItemAdjustOptions,
+  offline: OfflineAdjustQueue,
+): Promise<ItemAdjustOutcome> {
+  const body = buildItemAdjustBody(delta, opts.reason, opts.defaultReason);
+  try {
+    await offline.enqueue(
+      queuedAdjustPayload({
+        itemId,
+        body,
+        itemLabel: offline.itemLabel ?? null,
+        queuedAt: (offline.now ?? Date.now)(),
+      }),
+    );
+  } catch (e) {
+    // queue.ts refuses when no account can be named as the row's owner
+    // (OutboxOwnerUnknownError), or the local database failed. Nothing was
+    // saved and nothing was sent.
+    const message = e instanceof Error && e.message ? e.message : 'This phone could not save it.';
+    return {
+      kind: 'refused',
+      alert: {
+        title: 'Could not save offline',
+        message: `There is no connection, and this adjustment could not be saved on the phone: ${withNothingChanged(message)}`,
+      },
+    };
+  }
+  return {
+    kind: 'queued',
+    alert: {
+      title: 'Saved offline',
+      message:
+        `There is no connection, so this ${signedDelta(delta)} is saved on this phone and is ` +
+        'sent when it is back online. The on-hand quantity changes after that. If the server ' +
+        'refuses it, it is listed in Settings > Unsent work.',
+    },
+  };
+}
+
+/** sync.ts isOnline() never throws; an injected one might. Unknown = try online. */
+async function reportsOffline(offline: OfflineAdjustQueue): Promise<boolean> {
+  try {
+    return !(await offline.isOnline());
+  } catch {
+    return false;
+  }
 }
 
 /** How a manual adjustment is sent. adjustItemStock in the app; a stub in tests. */
@@ -227,6 +319,12 @@ export async function submitItemAdjust(
       kind: 'refused',
       alert: { title: 'Could not adjust', message: 'Enter a non-zero quantity.' },
     };
+  }
+  // No connection: nothing is sent, so queueing cannot double anything.
+  // Decided BEFORE any write is registered below: a queued change is not in
+  // flight and must not label the number as unconfirmed.
+  if (opts.offline && (await reportsOffline(opts.offline))) {
+    return queueOffline(itemId, delta, opts, opts.offline);
   }
   // Registered before the request leaves: while it is in flight, a read that
   // shows another write's "base + delta" may be THIS write landing instead.

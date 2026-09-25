@@ -1,6 +1,13 @@
 import * as Network from 'expo-network';
 
 import { getAccountDisabled } from './account-disabled-state';
+import {
+  ADJUST_STOCK_KIND,
+  adjustDrainVerdict,
+  parseQueuedAdjust,
+  refusedQueuedAdjustMessage,
+  unconfirmedQueuedAdjustMessage,
+} from './adjust-outbox';
 import { api } from './api';
 import {
   CYCLE_COUNT_HEADER_UPSERT_SQL,
@@ -35,11 +42,12 @@ import { WAREHOUSE_SCOPE_META_KEY, refreshWarehouseScope } from './warehouse-sco
  *
  *   Push: drain pending_actions in age order, hit each kind's matching
  *         endpoint with the idempotency_key from the row. On 2xx, delete
- *         the row. On 4xx (client error — bad payload), mark failed; the
- *         user can retry from a queue UI. On 5xx / network failure, leave
- *         pending so the next tick retries. On a 401 raised while the
- *         account is known disabled, mark REJECTED — terminal, never
- *         re-read, so the write cannot land when the account is re-enabled.
+ *         the row. A definitive refusal (drain-failure.ts: 400/403/409/422,
+ *         a 404 with our code, a 401 on a disabled account) is REJECTED —
+ *         terminal, parked in Unsent work. Anything else is failed and
+ *         retried next tick. `adjust_stock` rows follow their own at-most-once
+ *         rules instead (adjust-outbox.ts): their route cannot recognise a
+ *         replay, so a send that may have landed is parked, never re-sent.
  */
 
 interface SnapshotResponse {
@@ -583,11 +591,20 @@ export async function drainQueue(): Promise<{
 
     // Stamps a legacy row with this account, so it is never sent as another.
     await markSending(action.id, { orgId: decision.orgId, userId: decision.userId });
+    // Whether api() handed this row's request to fetch. Before that moment
+    // nothing can have reached the server; an adjust_stock row's failure is
+    // judged on it (adjust-outbox.ts), since its route cannot dedupe a replay.
+    let handedOff = false;
     try {
-      await sendOne(action.kind, action.idempotencyKey, action.payload, {
-        orgId: decision.orgId,
-        asUserId: decision.userId,
-      });
+      await sendOne(
+        action.kind,
+        action.idempotencyKey,
+        action.payload,
+        { orgId: decision.orgId, asUserId: decision.userId },
+        () => {
+          handedOff = true;
+        },
+      );
       await markOk(action.id);
       ok += 1;
     } catch (e) {
@@ -598,6 +615,28 @@ export async function drainQueue(): Promise<{
         continue;
       }
       const msg = e instanceof Error ? e.message : String(e);
+      // AT MOST ONCE. Retried only when provably not written; parked, never
+      // re-sent, when it may have been; each parked row names the item and
+      // the change, so the operator knows what to check.
+      if (action.kind === ADJUST_STOCK_KIND) {
+        const verdict = adjustDrainVerdict(e, {
+          accountDisabled: getAccountDisabled(),
+          handedOff,
+        });
+        if (verdict === 'failed') {
+          await markFailed(action.id, msg);
+          failed += 1;
+        } else {
+          await markRejected(
+            action.id,
+            verdict === 'unconfirmed'
+              ? unconfirmedQueuedAdjustMessage(action.payload)
+              : refusedQueuedAdjustMessage(action.payload, msg),
+          );
+          rejected += 1;
+        }
+        continue;
+      }
       // 4xx (bad payload, validation) and 5xx / network errors both stay in
       // 'failed' and are re-read next tick. The ONE terminal case is a 401 on a
       // known-disabled account: that write must never replay after re-enable.
@@ -625,6 +664,8 @@ async function sendOne(
   idempotencyKey: string,
   payload: Record<string, unknown>,
   scope: OutboxSendScope,
+  /** Called by api() as the request is handed to fetch (adjust_stock only). */
+  onSend: () => void,
 ): Promise<void> {
   switch (kind) {
     case 'receive_po_line': {
@@ -661,14 +702,23 @@ async function sendOne(
       return;
     }
     case 'adjust_stock': {
-      // NOTHING ENQUEUES THIS KIND, on purpose. Every manual adjustment on the
-      // phone (scan tab, item screen) is an online-only POST to
-      // /api/v1/items/<id>/adjust, which takes no idempotency key: replaying a
-      // request whose response was lost after the server committed would move
-      // the stock twice. Wiring this needs server-side dedupe first, the way
-      // distribute_bundle has it (0347). Until then a failed adjustment is
-      // reported on screen (item-adjust.ts), never queued.
-      throw new Error('adjust_stock queueing not yet wired — adjust online for now');
+      // Queued by the item screen ONLY when the phone had no connection at the
+      // tap (item-adjust.ts), so the first send is this one. The same route and
+      // body as an online tap: permission and MFA gate, warehouse scope, audit
+      // row, rack/Unplaced for an add, draw mode 'any' for a removal. No
+      // idempotency key is sent: the route has none, which is why drainQueue
+      // judges this kind's failures by adjust-outbox.ts (at most once).
+      // parseQueuedAdjust throws before the hand-off on a malformed row.
+      const { itemId, body } = parseQueuedAdjust(payload);
+      // Encoded: the id comes from the device's own SQLite, and a path segment
+      // is all it may ever be.
+      await api(`/api/v1/items/${encodeURIComponent(itemId)}/adjust`, {
+        method: 'POST',
+        body,
+        ...scope,
+        onSend,
+      });
+      return;
     }
     case 'size_count_event': {
       // RETIRED 2026-08-24 with the mobile size-count screens. Kept as a

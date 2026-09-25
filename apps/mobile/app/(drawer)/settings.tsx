@@ -50,7 +50,7 @@ import { deleteOrgData } from '@/lib/db';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { clearOfflineCache } from '@/lib/offline-cache';
-import { countHeld, countRejected } from '@/lib/queue';
+import { countHeld, countRejected, countUnconfirmedAdjust } from '@/lib/queue';
 import { unsentWorkDetail } from '@/lib/rejected-work';
 import { isOnline, syncNow } from '@/lib/sync';
 import { refreshEffectivePermissions } from '@/lib/use-effective-permissions';
@@ -105,6 +105,9 @@ export default function Settings() {
   const [pending, setPending] = React.useState(false);
   const [rejectedCount, setRejectedCount] = React.useState(0);
   const [heldCount, setHeldCount] = React.useState(0);
+  // Of rejectedCount: stock adjustments whose answer never came back, which
+  // may have been applied (adjust-outbox.ts). Not called "never sent".
+  const [unconfirmedCount, setUnconfirmedCount] = React.useState(0);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -138,6 +141,12 @@ export default function Settings() {
           if (!cancelled) setHeldCount(n);
         } catch (e) {
           console.warn('[settings] held count failed', e);
+        }
+        try {
+          const n = await countUnconfirmedAdjust();
+          if (!cancelled) setUnconfirmedCount(n);
+        } catch (e) {
+          console.warn('[settings] unconfirmed count failed', e);
         }
       })();
       return () => {
@@ -421,7 +430,11 @@ export default function Settings() {
           <SettingRow
             icon={FileWarning}
             title="Unsent work"
-            detail={unsentWorkDetail({ rejected: rejectedCount, held: heldCount })}
+            detail={unsentWorkDetail({
+              rejected: rejectedCount,
+              held: heldCount,
+              unconfirmed: unconfirmedCount,
+            })}
             chevron
             onPress={() => router.push('/settings/rejected-work' as never)}
           />

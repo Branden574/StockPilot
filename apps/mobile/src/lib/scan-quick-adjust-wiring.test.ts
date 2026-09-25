@@ -51,6 +51,13 @@ describe('scan tab — quick adjust goes through the API, not the RPC', () => {
     );
   });
 
+  // The scan tab stays online-only: it passes no `offline`, so no tap here is
+  // ever put in the outbox (item-adjust.ts; the item screen queues).
+  it('never queues: it passes no offline option', () => {
+    expect(adjustBody()).not.toMatch(/offline:/);
+    expect(scan).not.toMatch(/enqueue\(/);
+  });
+
   // Review finding: every error, a timeout or 5xx included, was reported as
   // "Could not adjust", which reads as "nothing happened, tap again" on a
   // write that may have committed.
