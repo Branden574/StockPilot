@@ -46,6 +46,17 @@ vi.mock('@/server/services/lib/inventory-list-cache', async (importOriginal) => 
   invalidateInventoryListAfterWrite: vi.fn(),
 }));
 
+// Same reason, same shape: posting or cancelling a count schedules an
+// Exception Center sync after the response (scheduleExceptionSync → defer).
+// Outside a request scope defer runs the task at once, so every cycle-count
+// service test would start a real background sync against a service-role
+// client. The scheduler is a no-op vi.fn here; tests that assert on it import
+// this mock, and exception-sync-schedule.test.ts tests the real one through
+// vi.importActual.
+vi.mock('@/server/services/lib/exception-sync-schedule', () => ({
+  scheduleExceptionSync: vi.fn(),
+}));
+
 // Most React tests use happy-dom via the environmentMatchGlobs in vitest.config.
 // Only land DOM-flavoured polyfills when a window exists.
 if (typeof window !== 'undefined') {

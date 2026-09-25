@@ -76,6 +76,10 @@
     {
       "path": "/api/cron/maintenance-draft-reminders",
       "schedule": "0 16 * * *"
+    },
+    {
+      "path": "/api/cron/exception-occurrences",
+      "schedule": "*/15 * * * *"
     }
   ],
   "functions": {

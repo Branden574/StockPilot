@@ -1,10 +1,25 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  atLeastDaysCopy,
+  conditionAgeDays,
   countExceptions,
+  describeOccurrence,
+  EXCEPTION_FIRST_CHECK_PENDING_COPY,
+  EXCEPTION_RULE_IDS,
   EXCEPTION_RULES,
+  formatOccurrenceNumber,
   groupExceptions,
+  HOLDING_RULES,
+  isExceptionRule,
+  isHoldingRule,
+  occurrenceKey,
+  occurrenceState,
+  presentWhenTrackingBegan,
+  recurrenceBadge,
   sortExceptions,
+  type ExceptionRule,
+  type OccurrenceStateInput,
   type WarehouseException,
 } from './exceptions';
 
@@ -111,5 +126,297 @@ describe('EXCEPTION_RULES', () => {
 
   it('is keyed consistently with its own rule field', () => {
     for (const [key, meta] of Object.entries(EXCEPTION_RULES)) expect(meta.rule).toBe(key);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Stored occurrences (F1-1)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Wording that names or implies a person as the cause. Explanations describe
+ *  process and record-keeping only. */
+const PEOPLE_WORDING = /employee|staff|theft|stole|someone|worker|picker|person|user/i;
+
+describe('EXCEPTION_RULES occurrence metadata', () => {
+  it('every rule offers at least two neutral explanations and says what clears it', () => {
+    for (const rule of EXCEPTION_RULE_IDS) {
+      const meta = EXCEPTION_RULES[rule];
+      expect(meta.explanations.length).toBeGreaterThanOrEqual(2);
+      for (const e of meta.explanations) expect(e.trim().length).toBeGreaterThan(20);
+      expect(meta.clearedBy.startsWith('Clears when')).toBe(true);
+      expect(meta.actions.length).toBeGreaterThan(0);
+      expect(meta.actions).toContain('open_item');
+    }
+  });
+
+  // Mutation caught: an explanation such as "a staff member moved it without
+  // scanning" — the screen must never point at people.
+  it('no explanation or clear condition names or implies a person', () => {
+    for (const rule of EXCEPTION_RULE_IDS) {
+      const meta = EXCEPTION_RULES[rule];
+      for (const text of [...meta.explanations, meta.clearedBy]) {
+        expect(text).not.toMatch(PEOPLE_WORDING);
+      }
+    }
+  });
+
+  it('only item-level rules are recountable; holding rules never are', () => {
+    // A count records the item total, and a negative difference comes off the
+    // counted rack first, so recounting a Staging holding can correct the
+    // wrong place.
+    for (const rule of HOLDING_RULES) expect(EXCEPTION_RULES[rule].recountable).toBe(false);
+    expect(EXCEPTION_RULES.over_reserved.recountable).toBe(true);
+    expect(EXCEPTION_RULES.label_mismatch.recountable).toBe(false);
+  });
+
+  it('Staging and Unplaced offer put-away; a label mismatch offers a label edit', () => {
+    expect(EXCEPTION_RULES.stale_staging.actions[0]).toBe('put_away');
+    expect(EXCEPTION_RULES.long_unplaced.actions[0]).toBe('put_away');
+    expect(EXCEPTION_RULES.label_mismatch.actions[0]).toBe('edit_label');
+  });
+
+  it('EXCEPTION_RULE_IDS lists every rule exactly once', () => {
+    expect([...EXCEPTION_RULE_IDS].sort()).toEqual(Object.keys(EXCEPTION_RULES).sort());
+  });
+});
+
+describe('isExceptionRule / isHoldingRule', () => {
+  it('accepts this build\'s rules and refuses anything else, including a newer build\'s rule', () => {
+    for (const r of EXCEPTION_RULE_IDS) expect(isExceptionRule(r)).toBe(true);
+    expect(isExceptionRule('count_variance')).toBe(false);
+    expect(isExceptionRule('')).toBe(false);
+    expect(isExceptionRule(null)).toBe(false);
+    expect(isExceptionRule(42)).toBe(false);
+  });
+
+  it('the three holding rules are exactly the ones the database requires a location for', () => {
+    expect([...HOLDING_RULES].sort()).toEqual(['long_unplaced', 'orphaned_stock', 'stale_staging']);
+    expect(isHoldingRule('over_reserved')).toBe(false);
+    expect(isHoldingRule('label_mismatch')).toBe(false);
+  });
+});
+
+describe('occurrenceKey', () => {
+  it('gives each rule its own prefix, so one holding never collides across rules', () => {
+    expect(occurrenceKey({ rule: 'stale_staging', itemId: 'i', locationId: 'l' })).toBe('stale_staging:i:l');
+    expect(occurrenceKey({ rule: 'orphaned_stock', itemId: 'i', locationId: 'l' })).toBe('orphaned_stock:i:l');
+    expect(occurrenceKey({ rule: 'long_unplaced', itemId: 'i', locationId: 'l' })).toBe('long_unplaced:i:l');
+    expect(occurrenceKey({ rule: 'label_mismatch', itemId: 'i', locationId: null })).toBe('label:i');
+    expect(occurrenceKey({ rule: 'over_reserved', itemId: 'i', locationId: null })).toBe('over:i');
+    const keys = new Set(
+      (['stale_staging', 'orphaned_stock', 'long_unplaced'] as ExceptionRule[]).map((rule) =>
+        occurrenceKey({ rule, itemId: 'i', locationId: 'l' }),
+      ),
+    );
+    expect(keys.size).toBe(3);
+  });
+});
+
+describe('formatOccurrenceNumber', () => {
+  it('pads to six digits and never truncates', () => {
+    expect(formatOccurrenceNumber(42)).toBe('EX-000042');
+    expect(formatOccurrenceNumber('7')).toBe('EX-000007');
+    expect(formatOccurrenceNumber(1234567)).toBe('EX-1234567');
+  });
+
+  it('refuses anything that is not a positive whole number', () => {
+    for (const bad of [0, -1, 1.5, NaN, null, undefined, 'x', '']) {
+      expect(formatOccurrenceNumber(bad as never)).toBeNull();
+    }
+  });
+});
+
+describe('conditionAgeDays / atLeastDaysCopy', () => {
+  it('counts whole days, never negative, null when the start is unknown', () => {
+    expect(conditionAgeDays('2026-09-01T00:00:00Z', '2026-09-10T12:00:00Z')).toBe(9);
+    expect(conditionAgeDays('2026-09-10T00:00:00Z', '2026-09-01T00:00:00Z')).toBe(0);
+    expect(conditionAgeDays(null, '2026-09-10T00:00:00Z')).toBeNull();
+    expect(conditionAgeDays('not a date', '2026-09-10T00:00:00Z')).toBeNull();
+  });
+
+  it('always says "at least"', () => {
+    expect(atLeastDaysCopy(9)).toBe('for at least 9 days');
+    expect(atLeastDaysCopy(1)).toBe('for at least 1 day');
+  });
+});
+
+describe('describeOccurrence', () => {
+  const AS_OF = '2026-09-24T12:00:00Z';
+
+  it('orphaned stock names the archived location and the units', () => {
+    const d = describeOccurrence('orphaned_stock', {
+      itemName: 'Atlas',
+      sku: 'A1',
+      units: 12,
+      locationName: 'Rack 9-Z',
+      locationKind: 'rack',
+    });
+    expect(d).toEqual({ title: '12 × Atlas', detail: 'in Rack 9-Z, which is archived', units: 12 });
+  });
+
+  it('Staging reads "for at least N days" from the condition start', () => {
+    const d = describeOccurrence(
+      'stale_staging',
+      { itemName: 'Atlas', sku: null, units: 4, locationName: 'Staging', locationKind: 'staging' },
+      { conditionSince: '2026-09-15T12:00:00Z', asOf: AS_OF },
+    );
+    expect(d.detail).toBe('in Staging for at least 9 days');
+    expect(d.title).toBe('4 × Atlas');
+    expect(d.units).toBe(4);
+  });
+
+  it('Unplaced reads "unplaced for at least N days"', () => {
+    const d = describeOccurrence(
+      'long_unplaced',
+      { itemName: 'Atlas', sku: null, units: 1.5, locationName: 'Unplaced', locationKind: 'unplaced' },
+      { conditionSince: '2026-08-01T12:00:00Z', asOf: AS_OF },
+    );
+    expect(d.detail).toBe('unplaced for at least 54 days');
+    expect(d.title).toBe('1.5 × Atlas');
+  });
+
+  it('a resolved row ages to its resolution, not to now', () => {
+    const d = describeOccurrence(
+      'stale_staging',
+      { itemName: 'Atlas', units: 4 },
+      { conditionSince: '2026-09-01T00:00:00Z', asOf: '2026-09-11T00:00:00Z' },
+    );
+    expect(d.detail).toBe('in Staging for at least 10 days');
+  });
+
+  it('over-reserved states promised against on hand, and the shortfall as units', () => {
+    const d = describeOccurrence('over_reserved', { itemName: 'Atlas', sku: 'A1', promised: 14, onHand: 10 });
+    expect(d).toEqual({ title: 'Atlas', detail: '14 promised, 10 on hand', units: 4 });
+  });
+
+  it('a label mismatch names the label and where the stock is', () => {
+    const d = describeOccurrence('label_mismatch', {
+      itemName: 'Atlas',
+      sku: 'A1',
+      label: '40-C',
+      stockOn: ['39-C', '41-A'],
+    });
+    expect(d).toEqual({ title: 'Atlas', detail: 'labelled 40-C, stock is on 39-C, 41-A', units: null });
+  });
+
+  it('the live item name wins over the stored one', () => {
+    const d = describeOccurrence('over_reserved', { itemName: 'Old name', promised: 2, onHand: 1 }, {
+      itemName: 'New name',
+    });
+    expect(d.title).toBe('New name');
+  });
+
+  it('renders a sentence for every rule even from empty or malformed facts', () => {
+    for (const rule of EXCEPTION_RULE_IDS) {
+      for (const facts of [{}, null, 'x', [1, 2], { units: 'many', stockOn: 'nope' }]) {
+        const d = describeOccurrence(rule, facts);
+        expect(d.title.length).toBeGreaterThan(0);
+        expect(d.detail.length).toBeGreaterThan(0);
+        expect(d.detail).not.toMatch(/undefined|NaN|null/);
+        expect(d.title).not.toMatch(/undefined|NaN|null/);
+      }
+    }
+  });
+});
+
+describe('occurrenceState — precedence', () => {
+  const base: OccurrenceStateInput = {
+    resolvedAt: null,
+    resolvedReason: null,
+    acknowledgedAt: null,
+    acknowledgedBy: null,
+    recount: null,
+  };
+  const recount = (status: string, completedAt: string | null = null) => ({
+    cycleCountId: 'cc-1',
+    countNumber: 31,
+    status,
+    completedAt,
+  });
+
+  it('open by default', () => {
+    expect(occurrenceState(base, null)).toEqual({ kind: 'open' });
+  });
+
+  it('acknowledged carries who and when', () => {
+    expect(
+      occurrenceState({ ...base, acknowledgedAt: '2026-09-20T10:00:00Z', acknowledgedBy: 'u1' }, null),
+    ).toEqual({ kind: 'acknowledged', at: '2026-09-20T10:00:00Z', by: 'u1' });
+  });
+
+  it('a recount in progress outranks acknowledged', () => {
+    const s = occurrenceState(
+      { ...base, acknowledgedAt: '2026-09-20T10:00:00Z', recount: recount('in_progress') },
+      '2026-09-24T00:00:00Z',
+    );
+    expect(s).toEqual({ kind: 'recount_in_progress', cycleCountId: 'cc-1', countNumber: 31 });
+  });
+
+  it('a completed recount the store has not re-evaluated since reads Re-checking', () => {
+    const s = occurrenceState(
+      { ...base, acknowledgedAt: '2026-09-20T10:00:00Z', recount: recount('completed', '2026-09-24T10:00:00Z') },
+      '2026-09-24T09:59:00Z',
+    );
+    expect(s).toEqual({ kind: 'rechecking', cycleCountId: 'cc-1', countNumber: 31 });
+    // Before any sync at all it is also re-checking, never "open".
+    expect(occurrenceState({ ...base, recount: recount('completed', '2026-09-24T10:00:00Z') }, null).kind).toBe(
+      'rechecking',
+    );
+  });
+
+  it('once an evaluation after the completed recount applied, Re-checking ends', () => {
+    const s = occurrenceState(
+      { ...base, acknowledgedAt: '2026-09-20T10:00:00Z', recount: recount('completed', '2026-09-24T10:00:00Z') },
+      '2026-09-24T10:00:01Z',
+    );
+    expect(s.kind).toBe('acknowledged');
+  });
+
+  it('a cancelled recount does not change the state', () => {
+    expect(occurrenceState({ ...base, recount: recount('canceled') }, null)).toEqual({ kind: 'open' });
+  });
+
+  it('resolved outranks everything', () => {
+    const s = occurrenceState(
+      {
+        resolvedAt: '2026-09-24T11:00:00Z',
+        resolvedReason: 'reclassified',
+        acknowledgedAt: '2026-09-20T10:00:00Z',
+        acknowledgedBy: 'u1',
+        recount: recount('in_progress'),
+      },
+      null,
+    );
+    expect(s).toEqual({ kind: 'resolved', reason: 'reclassified', at: '2026-09-24T11:00:00Z' });
+  });
+});
+
+describe('recurrenceBadge', () => {
+  it('is empty for a first occurrence and ordinal after that', () => {
+    expect(recurrenceBadge(0)).toBeNull();
+    expect(recurrenceBadge(1)).toBe('Recurred (2nd time)');
+    expect(recurrenceBadge(2)).toBe('Recurred (3rd time)');
+    expect(recurrenceBadge(3)).toBe('Recurred (4th time)');
+    expect(recurrenceBadge(10)).toBe('Recurred (11th time)');
+    expect(recurrenceBadge(11)).toBe('Recurred (12th time)');
+    expect(recurrenceBadge(12)).toBe('Recurred (13th time)');
+    expect(recurrenceBadge(20)).toBe('Recurred (21st time)');
+    expect(recurrenceBadge(21)).toBe('Recurred (22nd time)');
+    expect(recurrenceBadge(-1)).toBeNull();
+  });
+});
+
+describe('presentWhenTrackingBegan', () => {
+  it('is true only when first seen by the very first sync', () => {
+    expect(presentWhenTrackingBegan('2026-10-02T15:00:00.000Z', '2026-10-02T15:00:00Z')).toBe(true);
+    expect(presentWhenTrackingBegan('2026-10-02T15:15:00Z', '2026-10-02T15:00:00Z')).toBe(false);
+    expect(presentWhenTrackingBegan('2026-10-02T15:00:00Z', null)).toBe(false);
+  });
+});
+
+describe('EXCEPTION_FIRST_CHECK_PENDING_COPY', () => {
+  it('says the first check has not run, and never reads as all clear', () => {
+    expect(EXCEPTION_FIRST_CHECK_PENDING_COPY).toMatch(/within 15 minutes/);
+    expect(EXCEPTION_FIRST_CHECK_PENDING_COPY).not.toMatch(/nothing needs attention|all clear/i);
   });
 });

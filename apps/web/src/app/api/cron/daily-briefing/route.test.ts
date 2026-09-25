@@ -28,9 +28,14 @@ import { makeSupabaseStub } from '@/test/supabase-mock';
  *     in the other five, so daily briefings run as a disabled admin while
  *     auto-reorder does not. Nothing in the tree would notice.
  *
- * The real fix is one shared module imported by all 25 call sites; that
- * sweep spans routes this change does not own, so the guard below stands in
- * the meantime and keeps the divergence loud rather than silent.
+ * The shared module now exists: server/services/lib/system-context.ts
+ * exports both helpers, and new code imports them from there (the exception
+ * occurrences cron was the first). Moving the existing routes onto it spans
+ * routes that change did not own, so the guard below still compares every
+ * route copy, now WITH the shared module, and keeps the divergence loud
+ * rather than silent. The shared buildSystemContext differs from the route
+ * copies only in branding its result (SystemServiceContext), which the
+ * signature below normalises away and nothing else.
  */
 
 const envHolder = {
@@ -247,16 +252,34 @@ function extractFunction(source: string, name: string): string | null {
  * exactly the parts a "tightening" would change.
  */
 function behaviouralSignature(body: string): string {
-  return body
-    .replace(/\.select\((['"`])[^'"`]*\1\)/g, '.select(<projection>)')
-    .replace(/as\s*\{[^}]*\}/g, 'as <row>')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return (
+    body
+      .replace(/\.select\((['"`])[^'"`]*\1\)/g, '.select(<projection>)')
+      .replace(/as\s*\{[^}]*\}/g, 'as <row>')
+      .replace(/\s+/g, ' ')
+      .trim()
+      // The shared module's ONLY difference (see the header): its result is
+      // branded. The return type names the branded type and the returned
+      // literal passes through brandSystemContext(); both are types and
+      // identity, not the actor predicate, so they normalise to the route
+      // copies' spelling. Anything else that differs still splits the group.
+      .replace(/Promise<SystemServiceContext \| null>/g, 'Promise<ServiceContext | null>')
+      .replace(/return brandSystemContext\((\{.*\})\);/, 'return $1;')
+  );
 }
 
-function copiesOf(name: string): Array<{ file: string; signature: string }> {
+/** The shared module every new call site imports (see the header). Compared
+ *  with the route copies, never counted among them. */
+const SHARED_MODULE = join(API_ROOT, '..', '..', 'server', 'services', 'lib', 'system-context.ts');
+const SHARED_MODULE_LABEL = relative(API_ROOT, SHARED_MODULE);
+
+function copiesOf(
+  name: string,
+  opts: { includeShared?: boolean } = {},
+): Array<{ file: string; signature: string }> {
   const found: Array<{ file: string; signature: string }> = [];
-  for (const file of routeFiles()) {
+  const files = opts.includeShared ? [...routeFiles(), SHARED_MODULE] : routeFiles();
+  for (const file of files) {
     const body = extractFunction(readFileSync(file, 'utf8'), name);
     if (body) found.push({ file: relative(API_ROOT, file), signature: behaviouralSignature(body) });
   }
@@ -265,7 +288,10 @@ function copiesOf(name: string): Array<{ file: string; signature: string }> {
 
 describe('duplicated cron helpers must not diverge', () => {
   it('every private buildSystemContext picks the system actor the same way', () => {
-    const copies = copiesOf('buildSystemContext');
+    const copies = copiesOf('buildSystemContext', { includeShared: true });
+    // The shared module is compared too; a guard that silently stopped
+    // finding it would let it drift from every route copy.
+    expect(copies.map((c) => c.file)).toContain(SHARED_MODULE_LABEL);
     // Guard the guard: if the extraction lands and every copy disappears,
     // this must fail loudly rather than pass vacuously.
     expect(copies.length).toBeGreaterThan(0);
@@ -280,7 +306,8 @@ describe('duplicated cron helpers must not diverge', () => {
   });
 
   it('every private secretsEqual compares the cron secret the same way', () => {
-    const copies = copiesOf('secretsEqual');
+    const copies = copiesOf('secretsEqual', { includeShared: true });
+    expect(copies.map((c) => c.file)).toContain(SHARED_MODULE_LABEL);
     expect(copies.length).toBeGreaterThan(0);
 
     const bySignature = new Map<string, string[]>();
@@ -293,8 +320,24 @@ describe('duplicated cron helpers must not diverge', () => {
   it('no NEW copy of either helper appears (the count only ever ratchets down)', () => {
     // Pinned at the counts measured when this guard was written. Migrating a
     // route to a shared import LOWERS these — update them downward freely.
-    // An INCREASE means a 26th copy was pasted in; extract instead.
+    // An INCREASE means a 26th copy was pasted in; import the shared module
+    // (server/services/lib/system-context.ts) instead. These count ROUTE
+    // copies only; the shared module is never one of them.
     expect(copiesOf('buildSystemContext').length).toBeLessThanOrEqual(6);
     expect(copiesOf('secretsEqual').length).toBeLessThanOrEqual(19);
+    expect(copiesOf('buildSystemContext').map((c) => c.file)).not.toContain(SHARED_MODULE_LABEL);
+  });
+
+  it('the shared module brands exactly what the route copies build, and nothing more', () => {
+    // Negative pin on the normalisation above: it must erase ONLY the brand.
+    // A shared body that also changed the actor predicate (here: dropping the
+    // impersonation filter) must still split from the route copies.
+    const shared = extractFunction(readFileSync(SHARED_MODULE, 'utf8'), 'buildSystemContext');
+    expect(shared).not.toBeNull();
+    const tampered = shared!.replace(".is('impersonation_expires_at', null)", '');
+    expect(tampered).not.toBe(shared);
+    const routeSignature = copiesOf('buildSystemContext')[0]!.signature;
+    expect(behaviouralSignature(shared!)).toBe(routeSignature);
+    expect(behaviouralSignature(tampered)).not.toBe(routeSignature);
   });
 });
