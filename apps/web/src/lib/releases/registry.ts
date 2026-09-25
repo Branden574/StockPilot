@@ -28,15 +28,21 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
-    // DRAFT until F1-1 rollout step 6 (after the Demo Co walk): set
-    // publishedAt to the real announcement time and status to 'published'.
+    // F1-1 (#260, 0370) and the holdings staff scope (#261, 0371) are LIVE:
+    // web deployed 2026-09-25, phone half in OTA bbc7e0c8 the same day. #251
+    // (crate labels) is live on web since 2026-09-24. PUBLISHED on the
+    // owner's go of 2026-09-25: the production deployment that contains this
+    // commit announces it. It sits ABOVE fixes-and-improvements-2026-09-25 on
+    // purpose: it holds the newest changes, and the notice offers only the
+    // top unread release, so its publishedAt must never be earlier than that
+    // release's.
     id: 'exception-tracking-2026-09',
     revision: 1,
-    status: 'draft',
+    status: 'published',
     title: 'Exceptions now keep a history, and are in the mobile app',
     summary:
-      'Each problem on the Exceptions page now has its own number, the date it was first found, a timeline with acknowledgements and notes, and the date it cleared. The system checks every 15 minutes and after each posted or cancelled count, and resolves an exception by itself once the problem is gone. Exceptions are also in the mobile app.',
-    publishedAt: '2026-09-25T17:00:00Z',
+      'Each problem on the Exceptions page now has its own number, a timeline with acknowledgements and notes, and the date it cleared. The system checks every 15 minutes and after each posted or cancelled count, and resolves an exception by itself once the problem is gone. Exceptions are also in the mobile app. Staff and viewers now see stock locations only in the warehouses they are assigned to, with stock elsewhere shown as one figure.',
+    publishedAt: '2026-09-25T15:00:00Z',
     entries: [
       {
         id: 'exception-occurrences',
@@ -63,10 +69,253 @@ export const RELEASES: Release[] = [
           'The mobile app has an Exceptions screen in the menu, with the same Open and Resolved lists, the same wording and the same detail as the web app. You can acknowledge an exception and add notes from your phone.',
         whyItMatters: 'Most of these problems are fixed at the rack, not at a desk.',
         howItAffectsYou:
-          'Acknowledging and adding notes need a connection. While offline, the screen shows the list as it was when it last loaded, with that time, and the buttons are turned off with the reason.',
-        whatToDo: 'Open Exceptions from the menu in the mobile app.',
+          'Acknowledging and adding notes need a connection, and while offline those buttons are turned off with the reason. Offline, the screen shows the list as it was when it last loaded since you opened the app, with that time. If it has not loaded since then, it says it needs a connection.',
+        whatToDo:
+          'Open Exceptions from the menu in the mobile app. If it is not in the menu yet, close the app completely and open it again to load the latest update.',
         link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
         audience: { anyPermission: ['items:read'] },
+      },
+      {
+        id: 'stock-in-other-warehouses',
+        category: 'improved',
+        area: 'Inventory',
+        title: 'Staff and viewers see stock in their own warehouses, and the rest as one figure',
+        whatChanged:
+          'Staff and viewers now see rack, Staging and Unplaced holdings only in the warehouses they are assigned to. Where an item also has stock elsewhere, the item page, the Items, Books and Rentals item lists, the Transfer dialog, and the item, scan, Move stock and Remove from rack screens in the mobile app show it as one figure, such as 12 in other warehouses. Staff can transfer stock, or adjust it at a location, only in their own warehouses.',
+        whyItMatters:
+          'Before this, a viewer’s figures counted stock held in other warehouses, including stock waiting in Staging or Unplaced there, as placed on a rack, so the racks listed for an item did not add up to its placed figure. Staff and viewers now see their own warehouses in detail and the rest as one total, so the figures add up.',
+        howItAffectsYou:
+          'On hand is still the total for the whole organization. Transfer and Move stock offer only locations in your own warehouses, plus locations that belong to no warehouse, and stock going to or coming from another warehouse has to be moved by a manager. If the figure for other warehouses cannot be loaded, the screen says so instead of showing a partial total. Managers, admins and owners see and move stock in every warehouse, as before.',
+        whatToDo:
+          'No action needed. If you need to see or move stock in another warehouse, ask a manager, or ask an admin to change your warehouse access on the Team page.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        id: 'label-check-crates-on-rack',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Stock in a crate on its labelled rack is no longer flagged as a label problem',
+        whatChanged:
+          'The Exceptions page no longer lists a “Label will not lead to the stock” problem when the label names a rack and the stock is in a crate on that rack, for example a label of 43-B · Gray #5 with the stock in Gray #5 on rack 43-B. It also accepts a rack written with spaces, such as 22 - B for 22-B.',
+        whyItMatters:
+          'Those labels were correct, so the page listed items that needed no attention, which made the real label problems harder to find.',
+        howItAffectsYou:
+          'Items are still listed when their stock is on a different rack from the label, or in a crate on a different rack. The Exceptions screen in the mobile app shows the same result.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
+        audience: { anyPermission: ['items:read'] },
+      },
+    ],
+  },
+  {
+    // Everything user-visible merged from 2026-09-18 (after the
+    // inventory-and-orders-2026-09 publish) to 2026-09-24, all live on web and,
+    // for phone changes, in the OTAs published with them. F1-1 and #261 are in
+    // exception-tracking-2026-09 above, and so is #248's staff transfer rule
+    // (folded into stock-in-other-warehouses). Covers #208 #217 #218 #224
+    // #225 #228 #229 #233 #235 #236 #238 #239 #241 #242 #244 #245 #246 #248
+    // #249 #252 #253 #254 #255 #256 #257 #259. PUBLISHED with
+    // exception-tracking-2026-09, on the same go; its publishedAt must never
+    // be later than that release's.
+    id: 'fixes-and-improvements-2026-09-25',
+    revision: 1,
+    status: 'published',
+    title: 'Fixes to cycle counts, new items, offline work, orders and purchase orders',
+    summary:
+      'Changes since September 18. Cycle counts apply each correction once, measure offline counts at the time they were taken, and have references such as CC-000042. Stock added without a rack waits in Unplaced. The mobile app no longer loses work saved offline. Order approval checks the combined quantity of repeated items, reorder drafts skip items already on order, and the rental cart is kept apart from the Orders basket. What you see depends on your role and the features your organization uses.',
+    publishedAt: '2026-09-25T15:00:00Z',
+    entries: [
+      {
+        id: 'count-corrections-applied-once',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title: 'Cycle counts no longer apply a correction twice or report false differences',
+        whatChanged:
+          'Posting a count is now refused when another count has posted a correction for one of its items since your count recorded it, and the message names the items to clear and recount. A count entered in the mobile app while offline is now compared with the stock held when you counted, not when the phone reconnected. New counts, and the item pickers for them, leave out rental equipment and kits.',
+        whyItMatters:
+          'Before this, two counts that found the same difference both applied it: with 20 in the system and 22 on the shelf, the system ended at 24. Anything picked, received or moved between an offline count and its sync showed as a difference and was written into stock on posting. A rental unit out on loan could be counted as missing.',
+        howItAffectsYou:
+          'Overlapping counts are still allowed, and a line where the count matched the system never causes a refusal. A line that reaches StockPilot two minutes or more after it was counted shows Counted offline with the time of the count. If a selection included rental equipment or kits, the message after starting says how many items were left out. Counts that were already open keep their lines.',
+        whatToDo:
+          'No action needed. If a post is refused, clear the items the message names, count them again, then post.',
+        link: { href: '/dashboard/cycle-counts', label: 'Open Cycle counts' },
+        audience: {
+          anyPermission: ['cycle_counts:read', 'stock:adjust'],
+          modules: ['cycle_counts'],
+        },
+      },
+      {
+        id: 'new-item-stock-waits-in-unplaced',
+        category: 'fixed',
+        area: 'Inventory',
+        title:
+          'Stock added without a rack waits in Unplaced, and the phone asks before creating a rack',
+        whatChanged:
+          'When you add an item with a starting quantity but no rack, on the web or in the mobile app, its stock now goes to Unplaced in that warehouse to wait for put-away, and the primary location you chose is kept as a label. On the Items list, stock held at a site rather than on a rack reads No rack instead of the site name. In the mobile app, if the rack you type for a new item does not exist, Save asks before creating it and suggests the closest existing racks.',
+        whyItMatters:
+          'Stock added without a rack was recorded at the site itself, so it counted as put away, never appeared in Staging, and the Rack column showed the site name as if it were a rack. On the phone, a mistyped rack number created a new rack without asking and put all of the item’s stock on it.',
+        howItAffectsYou:
+          'Typing an existing rack still puts the stock straight on it, and imports and receiving against a purchase order work as before. On the phone you can go back and fix the rack, choose a suggested rack, or create the new one. The New Item form in the web app does not ask about new racks yet. Duplicating an item that is not a book now puts the copy’s stock on the rack you enter. Items added before this change can still show No rack.',
+        whatToDo:
+          'Check Staging for items added without a rack and put them away. If an item shows No rack on Items, select it and use Set rack.',
+        link: { href: '/dashboard/inventory/staging', label: 'Open Staging' },
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        id: 'large-item-lists-in-batches',
+        category: 'fixed',
+        area: 'Web and mobile apps',
+        title: 'Reserved stock, exports and large counts work when a list covers hundreds of items',
+        whatChanged:
+          'Screens that work with many items at once no longer put every item into a single request, on the web and in the mobile app. This covers the new order page, exports and PDF reports, the Exceptions page, cycle counts, Set rack and Print labels for large selections, and the mobile app’s offline download.',
+        whyItMatters:
+          'When a request covered about 400 items or more, it was too long and was refused. The new order page then showed stock already reserved for other orders as available, and exports, reports, large counts and bulk actions could fail or come back incomplete.',
+        howItAffectsYou:
+          'Available quantities on the new order page leave out units reserved for other orders, however large the catalog. A read that fails is no longer treated as having found nothing.',
+        whatToDo: 'No action needed. If an export or report failed for you before, try it again.',
+      },
+      {
+        id: 'phone-offline-work-kept',
+        category: 'fixed',
+        area: 'Mobile app',
+        title:
+          'The mobile app keeps work saved offline and asks before signing out with unsent changes',
+        whatChanged:
+          'Changes the mobile app saves while offline, such as counts, stock adjustments and PO receipts, are now kept through app updates and sent under the workspace and account they were saved in, even if you switch workspace first. A count typed just before you tap Back is saved. Signing out with unsent changes now tries to send them, then lets you stay signed in, sign out and keep them on the phone, or sign out and discard them. Settings, Offline cache, Clear now clears the copy and downloads a fresh one.',
+        whyItMatters:
+          'A change could be lost without a message, or sent to the wrong workspace and refused there. Signing out deleted changes still waiting to be sent, and on a shared phone the next person could send the previous person’s counts under their own name. Clear said Cleared without removing anything.',
+        howItAffectsYou:
+          'Changes you keep at sign-out are sent the next time you sign in on that phone, and never under another account. Settings, Unsent work lists changes left by another account, with a Discard button for work whose owner is not coming back. Clearing the offline cache needs a connection and never removes unsent changes.',
+        whatToDo:
+          'No action needed. On a shared phone, let your changes sync before you sign out when you can.',
+      },
+      {
+        id: 'items-list-current-stock',
+        category: 'fixed',
+        area: 'Inventory',
+        title:
+          'Items and Books refresh after more kinds of stock change, and explain an empty filtered view',
+        whatChanged:
+          'The Items and Books lists in the web app now refresh after stock changes they used to miss: counts posted from the phone, reopened picking, changes made with the AI assistant, and approved or cancelled PO imports. When Items is filtered to one warehouse and shows nothing, but your search matches items in your other warehouses, it now says how many match elsewhere and offers Search all warehouses.',
+        whyItMatters:
+          'Those changes left the lists showing earlier quantities for a while, which could send someone to a rack for stock that had already moved. The web app remembers its warehouse filter in each browser, so an item could appear on the phone and seem to be missing on the web with nothing on screen to explain why.',
+        howItAffectsYou:
+          'The filter works as before, and the message counts only items you are allowed to see. On the scan screen in the mobile app, an adjustment that was saved no longer reports Could not adjust.',
+        whatToDo:
+          'No action needed. If Items looks empty, read the message and choose Search all warehouses when you need to.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        id: 'order-approval-stock-checks',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Order approval and picking check stock more carefully',
+        whatChanged:
+          'When the same item is on more than one line of an order, approval now checks the combined quantity against stock, and a newly submitted order combines those lines into one. An order with no items can no longer be approved. Submitting an order now saves the order and its items together. Complete picking, on the web and in the mobile app, no longer takes units held for a rental that is out.',
+        whyItMatters:
+          'Two lines for the same item could each pass the stock check and together hold more than was on hand. A submit that failed partway could leave an empty order behind that managers were notified about and could approve. Picking could count units out with a borrower as available.',
+        howItAffectsYou:
+          'Approval is refused when the combined quantity is more than is available, as it is for a single line. Approving an order with no items asks you to add at least one first. If part of an order page cannot be loaded, the page shows an error instead of the order with its reservations missing.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
+      },
+      {
+        id: 'purchase-order-drafts-and-search',
+        category: 'fixed',
+        area: 'Purchase orders',
+        title:
+          'Reorder drafts skip items already on order, PO saves are all or nothing, and search finds POs again',
+        whatChanged:
+          'Draft PO from suggestions, on Reorder Planning and the Reorder forecast report, now leaves out items already on an open purchase order, and so do reorder drafts made by the AI assistant. Creating or editing a draft purchase order saves the supplier, totals and every line in one step, or nothing at all. The search box at the top of the web app, also opened with Command-K or Control-K, finds purchase orders by number again.',
+        whyItMatters:
+          'Each reorder run drafted every item below its reorder point again, including items already on order, so the same item could be ordered twice. A save that failed partway could leave an empty draft, or one whose total did not match its lines. Since May, search had returned no purchase orders.',
+        howItAffectsYou:
+          'Reorder Planning says how many items it skipped because they are already on order. Create draft POs on the Items list still drafts exactly the items you check, and says how many were already on an open PO. A line for a deleted item or for a kit’s pre-assembled stock is refused with the item named, and existing ones are labelled so you can remove them.',
+        whatToDo:
+          'No action needed. If a draft or a recurring template shows a line marked Deleted or Pre-assembled kit, remove that line.',
+        link: { href: '/dashboard/purchase-orders', label: 'Open purchase orders' },
+        audience: { anyPermission: ['purchase_orders:manage'], modules: ['purchase_orders'] },
+      },
+      {
+        id: 'clear-messages-when-a-read-fails',
+        category: 'fixed',
+        area: 'Web and mobile apps',
+        title:
+          'A screen that cannot load something now says so, and an ended session goes to sign-in',
+        whatChanged:
+          'When a read fails for a moment, screens now say so instead of showing a wrong answer. An order that could not be loaded shows an error with Try again, not a page saying it does not exist. An item’s Movements or Activity tab says it could not load the history instead of showing none. In the mobile app, the Items, Books, Rentals and Team lists say when they could not load, instead of looking empty, and ask you to pull down to try again. If your session in a browser has ended, the next page opens sign-in with a message instead of an error page.',
+        whyItMatters:
+          'A brief connection problem was shown as a fact, such as a missing order, an empty history or no assigned warehouses, which could make an order look deleted or send people to an admin to fix access that was fine.',
+        howItAffectsYou:
+          'If you see one of these messages, nothing was changed. Reload the page, choose Try again, or pull down in the mobile app. If StockPilot cannot check your two-factor status for a moment, it asks you to reload or try again.',
+        whatToDo:
+          'No action needed. If the same message keeps appearing, tell us through Support and feedback.',
+        link: { href: '/dashboard/support', label: 'Open Support & feedback' },
+      },
+      {
+        id: 'rentals-list-and-cart',
+        category: 'fixed',
+        area: 'Rentals',
+        title:
+          'Every rental item is listed, and the rental cart is kept apart from the Orders basket',
+        whatChanged:
+          'Rentals, Items in the web app now lists every rental item, and the Rentals screen in the mobile app has an Items view with each item’s units on hand, out and available. The New rental page keeps its own cart, separate from the Orders basket, and choosing another warehouse there loads that warehouse’s rental items. Orders your team creates in the web app, and items added to an order on the web or in the mobile app, now refuse rental items. Mark returned and Cancel rental finish without an error when someone else closed the rental a moment before.',
+        whyItMatters:
+          'The web page looked for rentals only among the first 50 items, so some rental items were missing. Items left in the Orders basket were carried into the rental cart without being shown, which could make checkout fail, and finishing a rental emptied the Orders basket. Changing the warehouse left the first warehouse’s items on screen.',
+        howItAffectsYou:
+          'Renting no longer changes your Orders basket. If an item saved in a rental cart can no longer be rented there, the cart shows it with a remove button. When someone else is checking out or approving the same items at that moment, checkout says so and asks you to try again, instead of showing an error. Rental items are no longer on the Items tab in the mobile app; find them under Rentals.',
+        whatToDo: 'No action needed. Open Rentals and choose Items to see your rental equipment.',
+        link: { href: '/dashboard/rentals', label: 'Open Rentals' },
+        audience: { anyPermission: ['rentals:read', 'rentals:create'], modules: ['rentals'] },
+      },
+      {
+        id: 'cycle-count-references',
+        category: 'improved',
+        area: 'Cycle counts',
+        title: 'Cycle counts have reference numbers and a searchable history',
+        whatChanged:
+          'Every cycle count now has a permanent reference such as CC-000042, including counts started before this change. The Cycle counts page in the web app and the Cycle counts screen in the mobile app have a search box that finds a count by its number, warehouse or notes, a filter for In progress, Completed and Canceled, and 25 counts per page. In the mobile app, Admin has a Count history link to the same list in place of Reconciliation.',
+        whyItMatters:
+          'The web list stopped at 200 counts and the mobile list at 50, so older counts could not be opened, and there was no short way to refer to one count. The mobile Reconciliation screen always said there were no posted counts.',
+        howItAffectsYou:
+          'The reference appears on the count’s page, on the count PDF, in the notification you get when a count is assigned to you, and in the activity feed. Search accepts CC-000042, CC-42 or 42. While offline, the mobile app searches only the counts already downloaded to the phone and says so.',
+        whatToDo: 'No action needed. Quote the CC number when you talk about a count.',
+        link: { href: '/dashboard/cycle-counts', label: 'Open Cycle counts' },
+        audience: {
+          anyPermission: ['cycle_counts:read', 'stock:adjust'],
+          modules: ['cycle_counts'],
+        },
+      },
+      {
+        id: 'po-imports-upload-date-and-uploader',
+        category: 'improved',
+        area: 'Purchase orders',
+        title: 'PO imports show the upload date and who uploaded each file',
+        whatChanged:
+          'The PO imports list in the web app now shows the date each file was uploaded, such as Sep 9, 2026, instead of a relative time such as 2 weeks ago, with the time when you hover over it. Each import also shows who uploaded it, on the list and on its own page, in the web app and in the mobile app.',
+        whyItMatters:
+          'A relative time is hard to match against a delivery or an invoice date, and StockPilot did not show who had uploaded a file.',
+        howItAffectsYou:
+          'In the web app, dates follow your organization’s time zone. The uploader is shown by name, or by email when no name is set, and someone who has left your organization is shown as Former member. In the mobile app, an imports list that fails to load now says so and asks you to pull down to try again, instead of saying No imports yet.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/purchase-orders/imports', label: 'Open PO imports' },
+        audience: { anyPermission: ['purchase_orders:manage'], modules: ['po_imports'] },
+      },
+      {
+        id: 'page-changes-without-placeholder',
+        category: 'improved',
+        area: 'Web app',
+        title: 'Moving between pages no longer flashes a loading placeholder',
+        whatChanged:
+          'When you move to Overview, Items, Books, Orders, an item or an order in the web app, the page you are leaving stays in view under the progress bar until the new one is ready. A loading placeholder appears only if the new page takes longer than 400 milliseconds. On an item page, the tab you click is highlighted at once. On the new order page, the Frequently ordered row now arrives with the rest of the page instead of being fetched after it.',
+        whyItMatters:
+          'Pages that were ready quickly still flashed a placeholder first, and item tabs gave no sign that a click had registered, so people clicked again. Measured over 20 loads in a test organization, the median time for the first row of photos on the new order page to appear fell from 1.49 seconds to 0.69 seconds.',
+        howItAffectsYou:
+          'Back and Forward show the progress bar too, and with your device set to reduce motion, the bar no longer stays on screen after a page loads. StockPilot also does less background work: measured in a demonstration organization, opening the dashboard and then Items now leads to 73 to 76 database requests instead of about 200.',
+        whatToDo: 'No action needed.',
       },
     ],
   },
