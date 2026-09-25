@@ -79,7 +79,7 @@ describe('PlacementsBreakdown', () => {
   // 0371: a staff member or viewer sees holdings only in their own warehouses.
   // Placed stock elsewhere is ONE entry: a count and how many places, never a
   // per-location quantity, and never a remove target.
-  it('adds one "in other warehouses" entry after the visible racks', () => {
+  it('adds one "placed in other warehouses" entry after the visible racks', () => {
     render(
       <PlacementsBreakdown
         placements={[{ locationId: 'a', name: '22-B', kind: 'rack', quantity: 12 }]}
@@ -90,7 +90,7 @@ describe('PlacementsBreakdown', () => {
       />,
     );
     expect(screen.getByTestId('placements-elsewhere')).toHaveTextContent(
-      '7 in other warehouses (1 location)',
+      '7 placed in other warehouses (1 location)',
     );
     // Only the visible rack can be written off from here.
     expect(screen.getAllByRole('button', { name: /Remove stock from/i })).toHaveLength(1);
@@ -103,7 +103,7 @@ describe('PlacementsBreakdown', () => {
         elsewhere={{ quantity: 7, locationCount: 2 }}
       />,
     );
-    expect(screen.getByText('7 in other warehouses (2 locations)')).toBeInTheDocument();
+    expect(screen.getByText('7 placed in other warehouses (2 locations)')).toBeInTheDocument();
   });
 
   it('renders nothing extra when nothing is elsewhere (managers, or a 0 count)', () => {

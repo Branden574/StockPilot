@@ -2,7 +2,7 @@
 
 import { PackageMinus } from 'lucide-react';
 
-import { formatElsewhereNote } from '@stockpilot/core';
+import { formatElsewherePlacedNote } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
 import { RemoveFromRackDialog } from '@/components/inventory/remove-from-rack-dialog';
@@ -104,7 +104,7 @@ export function PlacementsBreakdown({
             </span>
           )}
           <span className="text-muted-foreground text-sm tabular-nums">
-            {formatElsewhereNote(elsewhereShown.quantity, elsewhereShown.locationCount)}
+            {formatElsewherePlacedNote(elsewhereShown.quantity, elsewhereShown.locationCount)}
           </span>
         </span>
       )}

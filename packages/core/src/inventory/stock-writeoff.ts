@@ -117,6 +117,19 @@ export function formatElsewhereNote(quantity: number, locationCount = 0): string
 }
 
 /**
+ * The placed-stock line of an item's placement breakdown, e.g.
+ * "7 placed in other warehouses (1 location)". It sits next to the on-hand
+ * sum, where "12 in other warehouses" counts ALL of the stock elsewhere
+ * (placed, Staging and Unplaced), so the placed figure says "placed" to keep
+ * the two numbers from reading as the same thing.
+ */
+export function formatElsewherePlacedNote(quantity: number, locationCount = 0): string {
+  const base = `${formatStockQuantity(quantity)} placed in other warehouses`;
+  if (locationCount <= 0) return base;
+  return `${base} (${locationCount} location${locationCount === 1 ? '' : 's'})`;
+}
+
+/**
  * The empty or partial state of a move/remove source list when part of the
  * item's stock is in warehouses the caller cannot move from. `noneHere` is
  * true when the caller holds none of the item's stock at all.

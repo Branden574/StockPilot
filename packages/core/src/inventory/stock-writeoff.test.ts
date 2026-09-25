@@ -6,6 +6,7 @@ import {
   formatArchiveStockBlockMessage,
   formatBulkArchiveStockBlockMessage,
   formatElsewhereNote,
+  formatElsewherePlacedNote,
   formatElsewhereSourcesNote,
   formatHoldingLabel,
   formatLocationArchiveStockBlockMessage,
@@ -87,6 +88,9 @@ describe('stock in other warehouses (0371)', () => {
     expect(formatElsewhereNote(7, 1)).toBe('7 in other warehouses (1 location)');
     expect(formatElsewhereNote(7, 2)).toBe('7 in other warehouses (2 locations)');
     expect(formatElsewhereNote(12.5)).toBe('12.5 in other warehouses');
+    expect(formatElsewherePlacedNote(7)).toBe('7 placed in other warehouses');
+    expect(formatElsewherePlacedNote(7, 1)).toBe('7 placed in other warehouses (1 location)');
+    expect(formatElsewherePlacedNote(7, 2)).toBe('7 placed in other warehouses (2 locations)');
   });
 
   it('formatElsewhereSourcesNote: whether any of the stock is the caller\'s', () => {

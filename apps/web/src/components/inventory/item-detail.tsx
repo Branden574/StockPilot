@@ -709,7 +709,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                     // can't be adjusted, so hide it there too.
                     canRemoveStock={canAdjustStock && item.status !== 'archived'}
                     // Placed stock in warehouses the caller cannot see (0371),
-                    // as one count: "7 in other warehouses (1 location)".
+                    // as one count: "7 placed in other warehouses (1 location)".
                     elsewhere={
                       hiddenHoldings && hiddenHoldings.placed > 0
                         ? {
