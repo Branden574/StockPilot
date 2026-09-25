@@ -123,11 +123,12 @@ describe('listExceptions', () => {
   });
 
   it('leaves out a rule this build cannot word, keeps the rest, and COUNTS what it left out', async () => {
-    // A phone on an older bundle once F1-2 writes count_variance rows: if
-    // those are the only open rows, an uncounted drop reads as all clear.
+    // A phone on an older bundle once a newer server writes rows of a rule it
+    // does not know (as count_variance was before F1-2): if those are the only
+    // open rows, an uncounted drop reads as all clear.
     // Mutation caught: dropping unknown rows without counting them.
     apiMock.api.mockResolvedValueOnce(
-      listBody({ occurrences: [occurrence(), occurrence({ id: 'x', rule: 'count_variance' })] }),
+      listBody({ occurrences: [occurrence(), occurrence({ id: 'x', rule: 'a_future_rule' })] }),
     );
     const list = await listExceptions('open');
     expect(list.occurrences.map((o) => o.id)).toEqual([ID]);
@@ -136,7 +137,7 @@ describe('listExceptions', () => {
 
   it('adds the rows the server itself could not word (a web rollback)', async () => {
     apiMock.api.mockResolvedValueOnce(
-      listBody({ occurrences: [occurrence({ id: 'x', rule: 'count_variance' })], unrecognized: 2 }),
+      listBody({ occurrences: [occurrence({ id: 'x', rule: 'a_future_rule' })], unrecognized: 2 }),
     );
     const list = await listExceptions('open');
     expect(list.occurrences).toEqual([]);
@@ -149,15 +150,15 @@ describe('listExceptions', () => {
         occurrences: [],
         syncState: {
           ...SYNC,
-          failedRules: ['count_variance', 'stale_staging'],
-          truncatedRules: ['count_variance'],
+          failedRules: ['a_future_rule', 'stale_staging'],
+          truncatedRules: ['a_future_rule'],
           unrecognizedUncheckedRules: 1,
         },
       }),
     );
     const list = await listExceptions('open');
     expect(list.syncState?.failedRules).toEqual(['stale_staging']);
-    // One the server counted, plus count_variance (sent, unknown here), once.
+    // One the server counted, plus a_future_rule (sent, unknown here), once.
     expect(list.syncState?.unrecognizedUncheckedRules).toBe(2);
   });
 

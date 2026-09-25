@@ -114,6 +114,7 @@ export function servedLikePostgrest(
       const [col, value] = (call.args[i] ?? []) as [string, unknown];
       switch (method) {
         case 'select':
+        case 'rpc':
           break;
         case 'eq':
           out = out.filter((r) => r[col] === value);
@@ -317,6 +318,60 @@ export function makeSupabaseStub(results: ResultMap = {}): SupabaseStub {
     return new Proxy(stub, handler);
   }
 
+  /**
+   * An rpc() result is chainable like supabase-js's (a set-returning function
+   * can be paged: `.rpc(fn, args).order('id').range(0, 999)`) and resolves
+   * when awaited. The MockCall a result function receives has 'rpc' first,
+   * with the call's args object at `args[0][0]` as before, then each chained
+   * method and its arguments, so `servedLikePostgrest` can page an rpc too.
+   *
+   * A plain `await rpc(fn, args)` is answered at CALL time, as it always was:
+   * tests that fire several calls concurrently read "the call being answered"
+   * from `rpcCalls` at that moment. Only a call that is then chained is
+   * answered again when awaited, with the whole chain (so a result function
+   * runs twice for a chained call; keep such functions free of counters).
+   */
+  function makeRpcChain(name: string, rpcArgs: unknown): unknown {
+    const methods: string[] = ['rpc'];
+    const args: unknown[][] = [[rpcArgs]];
+    const call = (): MockCall => ({ table: name, op: 'rpc', methods: [...methods], args: [...args] });
+    let eager: { value: QueryResult } | { error: unknown };
+    try {
+      eager = { value: pickResult(results, `rpc:${name}`, `rpc:${name}`, call()) };
+    } catch (e) {
+      eager = { error: e };
+    }
+    let chained = false;
+    const target: Record<string, unknown> = {};
+    const handler: ProxyHandler<Record<string, unknown>> = {
+      get(_t, prop: string) {
+        if (prop === 'then') {
+          return (resolve: (v: QueryResult) => void, reject?: (e: unknown) => void) => {
+            try {
+              if (chained) {
+                resolve(pickResult(results, `rpc:${name}`, `rpc:${name}`, call()));
+              } else if ('value' in eager) {
+                resolve(eager.value);
+              } else {
+                throw eager.error;
+              }
+            } catch (e) {
+              if (reject) reject(e);
+              else throw e;
+            }
+          };
+        }
+        return (...callArgs: unknown[]) => {
+          chained = true;
+          methods.push(prop);
+          args.push(callArgs);
+          return new Proxy(target, handler);
+        };
+      },
+    };
+    return new Proxy(target, handler);
+  }
+
   const client = {
     from: vi.fn((table: string) => {
       fromCalls.push(table);
@@ -324,14 +379,7 @@ export function makeSupabaseStub(results: ResultMap = {}): SupabaseStub {
     }),
     rpc: vi.fn((name: string, args: unknown) => {
       rpcCalls.push({ name, args });
-      return Promise.resolve(
-        pickResult(results, `rpc:${name}`, `rpc:${name}`, {
-          table: name,
-          op: 'rpc',
-          methods: [],
-          args: [[args]],
-        }),
-      );
+      return makeRpcChain(name, args);
     }),
     auth: {
       getUser: vi.fn(async () => ({

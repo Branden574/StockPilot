@@ -55,6 +55,12 @@ const MOBILE_SRC = path.resolve(WEB_SRC, '../../mobile/src');
  */
 const KNOWN_UNREACHABLE: ReadonlyArray<{ name: string; file: string; reason: string }> = [
   {
+    name: 'startRecountAction',
+    file: 'exceptions.ts',
+    reason:
+      'F1-2 is built in stages: this action lands with the service and route (stage 2); the recount dialog that calls it lands in stage 3, which must delete this entry (the guard fails once the action has a caller).',
+  },
+  {
     name: 'createProcedureCategoryAction',
     file: 'procedures.ts',
     reason: 'SP-120 orphan; procedures.ts is outside this change — delete or wire it.',

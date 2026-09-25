@@ -6,7 +6,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * reasons pass through, and raw database text never does.
  */
 
-const { act, requestCheck } = vi.hoisted(() => ({ act: vi.fn(), requestCheck: vi.fn() }));
+const { act, requestCheck, recountStart } = vi.hoisted(() => ({
+  act: vi.fn(),
+  requestCheck: vi.fn(),
+  recountStart: vi.fn(),
+}));
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
@@ -14,6 +18,11 @@ vi.mock('@/server/services/exception-occurrences', () => ({
   ExceptionOccurrencesService: class {
     act = act;
     requestCheck = requestCheck;
+  },
+}));
+vi.mock('@/server/services/exception-recount', () => ({
+  ExceptionRecountService: class {
+    start = recountStart;
   },
 }));
 vi.mock('@/server/services/context', async (importOriginal) => ({
@@ -25,7 +34,7 @@ import { revalidatePath } from 'next/cache';
 
 import { ServiceError } from '@/server/services/context';
 
-import { actOnExceptionAction, requestExceptionCheckAction } from './exceptions';
+import { actOnExceptionAction, requestExceptionCheckAction, startRecountAction } from './exceptions';
 
 const ID = '11111111-1111-4111-8111-111111111111';
 
@@ -81,5 +90,44 @@ describe('requestExceptionCheckAction', () => {
     await expect(requestExceptionCheckAction()).resolves.toEqual({
       error: { message: 'Only a manager can run a check now.', reason: null },
     });
+  });
+});
+
+describe('startRecountAction', () => {
+  it('passes the selection and key through, and revalidates Exceptions and counts', async () => {
+    recountStart.mockResolvedValue({ cycleCountId: 'cc-1', created: true });
+    await expect(
+      startRecountAction({ occurrenceIds: [ID], itemIds: null, assignedTo: null, idempotencyKey: 'tap-1' }),
+    ).resolves.toEqual({ ok: true, result: { cycleCountId: 'cc-1', created: true } });
+    expect(recountStart).toHaveBeenCalledWith({
+      occurrenceIds: [ID],
+      itemIds: null,
+      assignedTo: null,
+      idempotencyKey: 'tap-1',
+    });
+    expect(revalidatePath).toHaveBeenCalledWith('/dashboard/exceptions');
+    expect(revalidatePath).toHaveBeenCalledWith('/dashboard/cycle-counts');
+  });
+
+  it('says when a refusal is safe to retry with the same key', async () => {
+    recountStart.mockRejectedValue(
+      new ServiceError('conflict', 'Try again in a moment.', { reason: 'recount_busy', retryable: true }),
+    );
+    await expect(startRecountAction({ occurrenceIds: [ID] })).resolves.toEqual({
+      error: { message: 'Try again in a moment.', reason: 'recount_busy', retryable: true },
+    });
+    recountStart.mockRejectedValue(
+      new ServiceError('conflict', 'Already used.', { reason: 'idempotency_conflict' }),
+    );
+    await expect(startRecountAction({ occurrenceIds: [ID] })).resolves.toEqual({
+      error: { message: 'Already used.', reason: 'idempotency_conflict' },
+    });
+  });
+
+  it('never forwards raw database text', async () => {
+    recountStart.mockRejectedValue(new ServiceError('internal_error', 'relation secret_table'));
+    const res = await startRecountAction({ occurrenceIds: [ID] });
+    expect(JSON.stringify(res)).not.toMatch(/secret_table/);
+    expect(res).toEqual({ error: { message: 'Something went wrong. Please try again.', reason: null } });
   });
 });

@@ -70,7 +70,7 @@ describe('exceptions list screen', () => {
   });
 
   it('never shows the all-clear while a check is unknown or an open row cannot be shown', () => {
-    // Rows of a newer rule (count_variance, before this bundle's OTA) are
+    // Rows of a newer rule (as count_variance was before F1-2's OTA) are
     // counted by parseExceptionList; the empty state must not call them all
     // clear. Mutation caught: gating the all-clear on syncState and the
     // unchecked rules only.

@@ -51,7 +51,15 @@ export type ExceptionRule =
    * picker exactly as well as one reading the wrong number — which is to say,
    * not at all — so both belong under one heading.
    */
-  | 'label_mismatch';
+  | 'label_mismatch'
+  /**
+   * The item's latest posted count found a different quantity than the book
+   * (F1-2). Posting already changed the book to the counted number, so the
+   * open question is whether that number is right: a recount answers it. The
+   * row opens for counts completed in the last COUNT_VARIANCE_OPEN_WINDOW_DAYS
+   * and clears only when a later completed count matches the book exactly.
+   */
+  | 'count_variance';
 
 /**
  * What a reader can do about a row, as a kind the web page and the phone each
@@ -170,7 +178,31 @@ export const EXCEPTION_RULES: Record<ExceptionRule, ExceptionRuleMeta> = {
     actions: ['edit_label', 'open_item'],
     recountable: false,
   },
+  count_variance: {
+    rule: 'count_variance',
+    severity: 'warning',
+    label: 'Count did not match the book',
+    action:
+      'A posted count found a different quantity than the book, and posting changed the book to the counted number. Recount to confirm that number before relying on it.',
+    explanations: [
+      'Stock moved without the movement being recorded, such as a pick, transfer, return or receipt.',
+      'Some of the units are stored in a place the count did not cover.',
+      'The count was off, for example units hidden behind others or a similar item counted in its place.',
+      'An earlier adjustment or import left the book wrong, and this count corrected it.',
+    ],
+    clearedBy:
+      'Clears when a later completed count of this item matches the book exactly. A recount that finds another difference keeps it open with the new numbers.',
+    actions: ['open_item'],
+    recountable: true,
+  },
 };
+
+/**
+ * A count_variance row OPENS only for a count completed within this many days.
+ * An older difference is HELD: an open row stays open (it never ages out), but
+ * nothing new opens for a count that old (owner decision, F1 Q2).
+ */
+export const COUNT_VARIANCE_OPEN_WINDOW_DAYS = 30;
 
 /** One detected instance. Built by the service; rendered as-is. */
 export interface WarehouseException {
@@ -259,11 +291,13 @@ export const EXCEPTION_RULE_IDS: readonly ExceptionRule[] = [
   'stale_staging',
   'long_unplaced',
   'label_mismatch',
+  'count_variance',
 ];
 
 /** A value read from the database is one of this build's rules. A rule a newer
- *  build stored (count_variance from F1-2) is not, and a caller must not index
- *  EXCEPTION_RULES with it. */
+ *  build stored is not, and a caller must not index EXCEPTION_RULES with it.
+ *  (count_variance, F1-2, is known from this build on; an older phone bundle
+ *  still treats it as unknown and counts it instead of rendering it.) */
 export function isExceptionRule(value: unknown): value is ExceptionRule {
   return typeof value === 'string' && (EXCEPTION_RULE_IDS as readonly string[]).includes(value);
 }
@@ -303,6 +337,8 @@ export function occurrenceKey(id: OccurrenceIdentity): string {
       return `label:${id.itemId}`;
     case 'over_reserved':
       return `over:${id.itemId}`;
+    case 'count_variance':
+      return `variance:${id.itemId}`;
     default:
       return `${id.rule}:${id.itemId}:${id.locationId ?? 'none'}`;
   }
@@ -361,10 +397,43 @@ export const EXCEPTION_FACTS_LABEL_MAX = 100;
 /** Most rack names a label-mismatch row lists. */
 export const EXCEPTION_FACTS_LIST_MAX = 10;
 
+/**
+ * Facts for count_variance: the item's latest posted count line (the
+ * evaluator reads it from _latest_count_lines, 0372). Numbers and names only.
+ */
+export interface CountVarianceOccurrenceFacts {
+  itemName: string;
+  sku: string | null;
+  /** The count that found the difference (link target; may be unreadable). */
+  cycleCountId: string;
+  /** Its number, for "CC-000042"; null before 0358 numbered it. */
+  countNumber: number | null;
+  /** The moment the counted quantity was true for: the line's baseline
+   *  (capture time of an offline count, else when the record read the
+   *  book), falling back to when it was recorded. */
+  observedAt: string | null;
+  /** When the count was posted. */
+  completedAt: string | null;
+  /** The book at count time (the line's expected quantity). */
+  expected: number;
+  counted: number;
+  /** counted - expected: exactly what the post applied. Never 0 here. */
+  variance: number;
+  /** The shelf location the count was attributed to (the item's only shelf
+   *  location when it was counted), or null: not recorded. */
+  countedLocationName: string | null;
+  /** Recorded with AI shelf-scan assistance. */
+  aiAssisted: boolean;
+  /** When the phone took the count, for a count recorded offline and synced
+   *  later (core offlineCaptureAt); null for an online record. */
+  capturedOfflineAt: string | null;
+}
+
 export type OccurrenceFacts =
   | HoldingOccurrenceFacts
   | OverReservedOccurrenceFacts
-  | LabelMismatchOccurrenceFacts;
+  | LabelMismatchOccurrenceFacts
+  | CountVarianceOccurrenceFacts;
 
 export interface OccurrenceDescription {
   /** The subject, in the warehouse's own words. */
@@ -487,7 +556,39 @@ export function describeOccurrence(
             : 'the label does not name where the stock is';
       return { title: itemName, detail, units: null };
     }
+    case 'count_variance': {
+      const expected = num(f.expected);
+      const counted = num(f.counted);
+      const stored = num(f.variance);
+      const variance =
+        stored !== null && stored !== 0
+          ? stored
+          : expected !== null && counted !== null
+            ? roundQuantity(counted - expected)
+            : null;
+      const cc = formatCycleCountNumber(num(f.countNumber));
+      const ref = cc ? ` (${cc})` : '';
+      const detail =
+        variance === null || expected === null || counted === null
+          ? `a count did not match the book${ref}`
+          : `found ${signedQuantity(variance)}: counted ${formatStockQuantity(counted)}, book ${formatStockQuantity(expected)}${ref}`;
+      return { title: itemName, detail, units: variance === null ? null : Math.abs(variance) };
+    }
   }
+}
+
+/** A quantity rounded to the columns' 4 decimal places, so a difference of two
+ *  numeric(14,4) values reads exactly (10.1 - 10 is 0.1, not 0.0999…). */
+export function roundQuantity(value: number): number {
+  return Math.round(value * 10_000) / 10_000;
+}
+
+/** "+2", "-1.5", "0": a difference with its sign. */
+export function signedQuantity(value: number): string {
+  const n = roundQuantity(value);
+  if (n > 0) return `+${formatStockQuantity(n)}`;
+  if (n < 0) return `-${formatStockQuantity(-n)}`;
+  return '0';
 }
 
 // ── Displayed state ─────────────────────────────────────────────────────────
@@ -648,14 +749,14 @@ export const EXCEPTION_ALL_CLEAR_TITLE = 'Nothing needs attention';
 /** The line under EXCEPTION_ALL_CLEAR_TITLE: what "nothing" covers. One copy
  *  for the web page and the phone; a new rule updates it here. */
 export const EXCEPTION_ALL_CLEAR_BODY =
-  'No archived locations holding stock, nothing over-promised, nothing stranded in Staging or Unplaced, and every rack label agrees with where the stock is.';
+  'No archived locations holding stock, nothing over-promised, nothing stranded in Staging or Unplaced, every rack label agrees with where the stock is, and every recent count matched the book.';
 
 /**
  * Open exceptions this build cannot word: rows of a rule a newer build added
- * (count_variance, F1-2), which the list leaves out rather than render with
- * the wrong words. They are still open, so a surface that has any must never
- * show the all-clear state; it shows this line instead. Null when there are
- * none.
+ * (count_variance, for a bundle from before F1-2), which the list leaves out
+ * rather than render with the wrong words. They are still open, so a surface
+ * that has any must never show the all-clear state; it shows this line
+ * instead. Null when there are none.
  */
 export function exceptionUnrecognizedCopy(count: number): string | null {
   if (!Number.isFinite(count) || count <= 0) return null;

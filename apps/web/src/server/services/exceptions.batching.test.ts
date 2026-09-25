@@ -82,7 +82,7 @@ describe('evaluateForSync with many reserved items', () => {
       'long_unplaced',
       'label_mismatch',
     ]);
-    expect(res.completeRules).toEqual(['over_reserved']);
+    expect(res.completeRules).toEqual(['over_reserved', 'count_variance']);
     expect(res.present.filter((p) => p.rule === 'over_reserved')).toHaveLength(3);
     const tags = reportError.mock.calls.map(
       (c) => (c as unknown as [Error, { tag: string }])[1].tag,

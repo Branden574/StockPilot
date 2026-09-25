@@ -20,17 +20,21 @@ export const dynamic = 'force-dynamic';
  * yet", never as all clear). The cron, a posted or cancelled count and
  * "Check now" are what refresh the store.
  *
- * `status` defaults to open; anything but `resolved` reads as open. A failed
- * read is a 500, never an empty list.
+ * `status` defaults to open; anything but `resolved` reads as open.
+ * `itemId=<uuid>` narrows the list to one item's occurrences (the item
+ * screen's open issues, and the exceptions "Count this item" passes to the
+ * recount so they are linked to it); a malformed one is a 400. A failed read
+ * is a 500, never an empty list.
  */
 export async function GET(req: NextRequest) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
-  const status =
-    new URL(req.url).searchParams.get('status') === 'resolved' ? 'resolved' : 'open';
+  const search = new URL(req.url).searchParams;
+  const status = search.get('status') === 'resolved' ? 'resolved' : 'open';
+  const itemId = search.get('itemId');
   try {
-    const result = await new ExceptionOccurrencesService(ctx).list({ status });
+    const result = await new ExceptionOccurrencesService(ctx).list({ status, itemId });
     return NextResponse.json(
       { organizationId: ctx.organizationId, ...result },
       { headers: { 'Cache-Control': 'private, no-store' } },

@@ -7,6 +7,8 @@ import { uuidSchema } from '@stockpilot/core';
 import { reportError } from '@/lib/error-reporter';
 import { ServiceError, withContext } from '@/server/services/context';
 import { ExceptionOccurrencesService } from '@/server/services/exception-occurrences';
+import { ExceptionRecountService } from '@/server/services/exception-recount';
+import type { ExceptionRecountResult } from '@/server/services/exception-recount';
 
 /**
  * Server actions for the Exception Center (F1-1). Thin wrappers over
@@ -19,6 +21,10 @@ import { ExceptionOccurrencesService } from '@/server/services/exception-occurre
  *   - requestExceptionCheckAction: a manager's "Check now". It SCHEDULES a
  *     sync to run after the response and returns at once (owner decision F1
  *     Q9: nothing a person does waits for a sync).
+ *   - startRecountAction: a manager's targeted recount (F1-2), the same
+ *     ExceptionRecountService.start the phone reaches through
+ *     POST /api/v1/exceptions/recount. The dialog mints `idempotencyKey` once
+ *     and resends it on a retry, so a double tap starts one count.
  *
  * Only plain result objects cross this boundary. No type is re-exported from
  * here (recurring pattern #25: `export type { X }` in a 'use server' module
@@ -26,7 +32,9 @@ import { ExceptionOccurrencesService } from '@/server/services/exception-occurre
  * from the service.
  */
 
-type Failure = { error: { message: string; reason: string | null } };
+/** `retryable`: nothing was saved and sending the same request again (with
+ *  the same idempotency key) is safe. */
+type Failure = { error: { message: string; reason: string | null; retryable?: boolean } };
 
 function fail(e: unknown, tag: string): Failure {
   if (!(e instanceof ServiceError) || e.code === 'internal_error') {
@@ -45,7 +53,9 @@ function fail(e: unknown, tag: string): Failure {
     if (e.code === 'internal_error') {
       return { error: { message: 'Something went wrong. Please try again.', reason: null } };
     }
-    return { error: { message: e.message, reason } };
+    const retryable =
+      details && typeof details === 'object' && (details as { retryable?: unknown }).retryable === true;
+    return { error: { message: e.message, reason, ...(retryable ? { retryable: true } : {}) } };
   }
   return { error: { message: 'Something went wrong. Please try again.', reason: null } };
 }
@@ -81,5 +91,27 @@ export async function requestExceptionCheckAction(): Promise<
     return { ok: true, ...res };
   } catch (e) {
     return fail(e, 'actions.exceptions.check_now');
+  }
+}
+
+export async function startRecountAction(input: {
+  occurrenceIds?: string[] | null;
+  itemIds?: string[] | null;
+  assignedTo?: string | null;
+  idempotencyKey?: string | null;
+}): Promise<{ ok: true; result: ExceptionRecountResult } | Failure> {
+  try {
+    const ctx = await withContext();
+    const result = await new ExceptionRecountService(ctx).start({
+      occurrenceIds: Array.isArray(input?.occurrenceIds) ? input.occurrenceIds : null,
+      itemIds: Array.isArray(input?.itemIds) ? input.itemIds : null,
+      assignedTo: typeof input?.assignedTo === 'string' ? input.assignedTo : null,
+      idempotencyKey: typeof input?.idempotencyKey === 'string' ? input.idempotencyKey : null,
+    });
+    revalidatePath('/dashboard/exceptions');
+    revalidatePath('/dashboard/cycle-counts');
+    return { ok: true, result };
+  } catch (e) {
+    return fail(e, 'actions.exceptions.recount');
   }
 }
