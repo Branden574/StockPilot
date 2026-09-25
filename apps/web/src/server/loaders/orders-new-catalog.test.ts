@@ -23,6 +23,7 @@ vi.mock('@/lib/supabase/server', () => ({
 }));
 
 import {
+  CATALOG_ROW_CEILING,
   FULL_CATALOG_SCOPE_KEY,
   loadCatalogBundle,
   loadCatalogItems,
@@ -477,6 +478,23 @@ describe('loadCatalogItems — every orderable item in the warehouse', () => {
       [1000, 1999],
       [2000, 2999],
     ]);
+  });
+
+  it('at the 10,000-row safety ceiling it stops reading and reports it, never silently', async () => {
+    const rows: Array<Row & { name: string }> = [];
+    for (let i = 0; i < CATALOG_ROW_CEILING + 50; i += 1) {
+      rows.push({ ...item(`i-${String(i).padStart(5, '0')}`, WH, null, CAT_X), name: `n-${String(i).padStart(5, '0')}` });
+    }
+    const admin = makeFilteringAdmin(rows);
+    createAdminClientMock.mockReturnValue(admin.client);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const items = await loadCatalogItems(viewer('owner'), WH);
+
+    expect(items).toHaveLength(CATALOG_ROW_CEILING);
+    expect(admin.itemQueries).toHaveLength(CATALOG_ROW_CEILING / 1000);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('10000-row ceiling'));
+    errorSpy.mockRestore();
   });
 
   it('a failed second page rejects the catalog (never a partial one cached as whole)', async () => {

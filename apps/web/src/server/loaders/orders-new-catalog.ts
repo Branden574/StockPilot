@@ -546,7 +546,9 @@ export const loadCatalogItemsCached = unstable_cache(
   ): Promise<CatalogItem[]> => {
     return loadCatalogItemsUncached(organizationId, warehouseId, accessKey);
   },
-  ['orders-new-v2-catalog-v2'],
+  // v3 (2026-09-25): the catalog is every orderable row, no longer the first
+  // 500 by name. Bumped so no cached 500-row list outlives the deploy.
+  ['orders-new-v2-catalog-v3'],
   { revalidate: 60, tags: ['orders-new-v2-catalog'] },
 );
 
