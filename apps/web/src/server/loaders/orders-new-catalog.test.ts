@@ -1152,10 +1152,12 @@ describe('thumb map: bounded to what the pages show, signed in chunks, never sil
     }
   });
 
-  it('another warehouse, another org, archived, discontinued and soft-deleted items get no entry and no signature, on any page', async () => {
+  it('another warehouse, another org and soft-deleted items get no entry and no signature, on any page; archived items keep theirs', async () => {
     // 4,000 items with ids interleaved, so the excluded ones sit on both sides
     // of every page boundary. Rentals and bundles are photographed stock the
-    // pages show: they stay.
+    // pages show: they stay. Archived (and discontinued) items stay too: one
+    // unarchived or auto-restored by arriving stock is back in the catalog
+    // within 60 s, and its photo must already be in this 4 h map.
     const rows: Array<Record<string, unknown>> = [];
     const kept: string[] = [];
     const excluded: string[] = [];
@@ -1170,7 +1172,7 @@ describe('thumb map: bounded to what the pages show, signed in chunks, never sil
       else if (kind === 5) rows.push(imageRow(itemId, { rental: true }));
       else if (kind === 6) rows.push(imageRow(itemId, { bundle: true }));
       else rows.push(imageRow(itemId));
-      (kind <= 4 ? excluded : kept).push(itemId);
+      (kind <= 1 || kind === 4 ? excluded : kept).push(itemId);
     }
     const { signCalls, pages } = thumbMapClient(rows);
 
@@ -1180,14 +1182,13 @@ describe('thumb map: bounded to what the pages show, signed in chunks, never sil
     const signed = new Set(signCalls.flat());
     expect(excluded.filter((id) => signed.has(`${ORG}/items/${id}/primary.webp`))).toEqual([]);
     expect(signed.size).toBe(kept.length);
-    // 1,500 kept rows: two pages, each with every filter.
-    expect(pages()).toHaveLength(2);
+    // 2,500 kept rows: three pages, each with every filter.
+    expect(pages()).toHaveLength(3);
     for (const page of pages()) {
       const filters = page.filter(([m]) => m === 'eq' || m === 'is').map(([m, a]) => [m, ...a]);
       expect(filters).toEqual([
         ['eq', 'organization_id', ORG],
         ['eq', 'item.warehouse_id', WH],
-        ['eq', 'item.status', 'active'],
         ['is', 'item.deleted_at', null],
       ]);
       expect(page.find(([m]) => m === 'select')?.[1][0]).toContain('item:inventory_items!inner(');

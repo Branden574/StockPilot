@@ -126,8 +126,9 @@ const SIGN_FAILURE_THROW_RATIO = 0.1;
 const SIGN_PATHS_PER_CALL = 1000;
 /**
  * Serialized-size warning for the map. Next 16 does not cache an
- * unstable_cache entry over 2 MB (incremental-cache/index.js: it
- * console.warns and skips the write), so past that every visit re-pages the
+ * unstable_cache entry over 2 MB (incremental-cache/index.js: in production it
+ * console.warns and skips the write; `next dev` throws E1003 instead), so past
+ * that every visit re-pages the
  * image rows and re-signs every photo. Next measures the entry with the value
  * JSON-encoded twice (every quote escaped, ~8 more bytes per item than
  * JSON.stringify(media)); 1.5 MB warns well before the cliff. Each entry is
@@ -155,13 +156,15 @@ export const loadCatalogThumbMapCached = unstable_cache(
     // hid 65 items). id breaks ties so every page reads the same global order
     // and "first row per item" below means the same row it always did.
     //
-    // ACTIVE, NOT DELETED items only. With only org + warehouse on the join,
-    // every archived and soft-deleted item that ever had a photo got a map
-    // entry and a signed URL, growing the map without bound. Every reader
-    // shows active, non-deleted items only (the storefront catalog, Frequently
-    // ordered through it, and the New rental page's rental items once it reads
-    // this map), so no page loses a photo. is_rental and is_bundle are NOT
-    // filtered, on purpose: rental photos come from this map too.
+    // NOT-DELETED items only. With only org + warehouse on the join, every
+    // soft-deleted item that ever had a photo kept a map entry and a signed
+    // URL. ARCHIVED items keep theirs, on purpose: an archived item is back in
+    // the catalog within 60 s when it is unarchived or auto-restored by
+    // arriving stock (0266), and this map is cached for 4 h, so dropping them
+    // would show a restored item with no photo for hours. A soft-deleted item
+    // brought back (RecoveryService.restore, rare) waits for the next rebuild,
+    // up to 4 h, the same as a new item. is_rental and is_bundle are NOT
+    // filtered either: rental photos come from this map too.
     // With `!inner`, a filter on the embed filters the image rows themselves
     // (PostgREST "top-level filtering"), and each page's builder applies it.
     //
@@ -188,7 +191,6 @@ export const loadCatalogThumbMapCached = unstable_cache(
             )
             .eq('organization_id', organizationId)
             .eq('item.warehouse_id', warehouseId)
-            .eq('item.status', 'active')
             .is('item.deleted_at', null)
             .order('is_primary', { ascending: false })
             .order('sort_order', { ascending: true })
