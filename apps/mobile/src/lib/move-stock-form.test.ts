@@ -21,6 +21,7 @@ import {
   placementRefusalAlert,
   initialMoveQuantity,
   initialMoveQuantityForSource,
+  isWritableDestination,
   moveDestinationChoices,
   moveDestinationScope,
   newLocationFields,
@@ -313,6 +314,76 @@ describe('moveDestinationChoices — put-away stays inside one warehouse', () =>
     expect(
       moveDestinationChoices(dests, { excludeLocationId: 'rack-b' }).map((d) => d.id),
     ).not.toContain('rack-b');
+  });
+});
+
+// ── Owner decision Q4 (0371): destinations a scoped member can write ─────────
+
+describe('isWritableDestination / moveDestinationChoices — Q4 destinations', () => {
+  // The walk fixture: QA staff is assigned QA Main DC only.
+  const MAIN = 'wh-main';
+  const ANNEX = 'wh-annex';
+  const dests: MoveDestination[] = [
+    { id: 'rack-qa1', name: 'Rack QA-1', kind: 'rack', warehouseId: MAIN },
+    { id: 'rack-qa2', name: 'Rack QA-2', kind: 'rack', warehouseId: ANNEX },
+    { id: 'unplaced-main', name: 'Unplaced', kind: 'unplaced', warehouseId: MAIN },
+    { id: 'unplaced-annex', name: 'Unplaced', kind: 'unplaced', warehouseId: ANNEX },
+    { id: 'shelf-none', name: 'Org Shelf', kind: 'rack', warehouseId: null },
+  ];
+  const ids = (list: MoveDestination[]) => list.map((d) => d.id);
+
+  it('the same answers as the web isWritableDestination (apps/web/src/lib/placements.ts)', () => {
+    // [writable, destination warehouse, expected] — the web table, row for row.
+    const table: [readonly string[] | null | undefined, string | null, boolean][] = [
+      [null, MAIN, true],
+      [undefined, ANNEX, true],
+      [[MAIN], MAIN, true],
+      [[MAIN], ANNEX, false],
+      [[MAIN], null, true],
+      [[], MAIN, false],
+      [[], null, true],
+      [[MAIN, ANNEX], ANNEX, true],
+    ];
+    for (const [writable, wh, expected] of table) {
+      expect(isWritableDestination({ warehouseId: wh }, writable)).toBe(expected);
+    }
+  });
+
+  it('staff on Main are offered Main and no-warehouse locations, never the Annex', () => {
+    expect(ids(moveDestinationChoices(dests, { writableWarehouseIds: [MAIN] }))).toEqual([
+      'rack-qa1',
+      'unplaced-main',
+      'shelf-none',
+    ]);
+  });
+
+  it('managers (null) and callers that pass nothing are unrestricted, as before', () => {
+    expect(ids(moveDestinationChoices(dests, { writableWarehouseIds: null }))).toEqual(ids(dests));
+    expect(ids(moveDestinationChoices(dests))).toEqual(ids(dests));
+  });
+
+  it('a failed access read ([]) leaves only locations with no warehouse', () => {
+    expect(ids(moveDestinationChoices(dests, { writableWarehouseIds: [] }))).toEqual(['shelf-none']);
+  });
+
+  it('composes with the source exclusion and the put-away scope', () => {
+    expect(
+      ids(
+        moveDestinationChoices(dests, {
+          excludeLocationId: 'rack-qa1',
+          scope: { kind: 'all' },
+          writableWarehouseIds: [MAIN],
+        }),
+      ),
+    ).toEqual(['unplaced-main', 'shelf-none']);
+    expect(
+      ids(
+        moveDestinationChoices(dests, {
+          scope: { kind: 'warehouse', warehouseId: ANNEX },
+          writableWarehouseIds: [MAIN],
+        }),
+      ),
+    ).toEqual([]);
   });
 });
 

@@ -899,6 +899,23 @@ it must not.
   is classified in `holdings-readers.guard.test.ts` (folds the hidden totals,
   complete by scope, label only, or service client), so a new reader that adds
   holdings up or decides from them cannot land without folding them in.
+- **The phone's side (0371)**: `apps/mobile/src/lib/holdings-elsewhere.ts` is
+  the phone's one caller of `item_holdings_elsewhere`, through the member's
+  own client, with the same rules (skipped by ROLE for managers and above;
+  batches of at most 500 ids in the POST body, started alongside the screen's
+  own reads; never throws; a failure is `'unavailable'`, never "nothing
+  elsewhere", and is not cached). The item screen and the scan sheet add an
+  ELSEWHERE row ("+N in other warehouses") or the "Could not load stock in
+  other warehouses" note, and never let holdings they know are incomplete
+  refute the item's rack label. Move stock and Remove from rack name stock in
+  other warehouses in their empty and partial states, say "Could not load this
+  item's stock" when their own holdings read fails, and Move stock offers a
+  scoped member only destinations in their assigned warehouses plus locations
+  with no warehouse (Q4; read from `user_warehouse_assignments`, the rows the
+  server's write check reads; a failed read narrows and says so). The phone
+  writes still go through `/api/v1/items/[id]/transfer` and `remove-stock`,
+  which enforce all of it. `holdings-elsewhere-wiring.test.ts` pins that no
+  other phone file names the RPC.
 - **Pinned at (inverted)**: `0322`'s test asserts the **warehouse-scoped**
   `qual` verbatim;
   [`0331_ar2_warehouse_scope.test.sql`](../../supabase/tests/0331_ar2_warehouse_scope.test.sql)

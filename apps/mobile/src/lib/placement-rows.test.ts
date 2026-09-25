@@ -22,10 +22,20 @@
  * which is why this file exists and why the logic was moved out of the screen
  * (screens cannot be loaded under vitest — they import native modules).
  */
-import type { RackHoldingLike } from '@stockpilot/core';
+import {
+  ELSEWHERE_UNAVAILABLE_NOTE,
+  type ItemElsewhere,
+  type RackHoldingLike,
+} from '@stockpilot/core';
 import { describe, expect, it } from 'vitest';
 
-import { buildPlacementRows, type PlacementRowsInput } from './placement-rows';
+import {
+  buildPlacementRows,
+  elsewhereRow,
+  elsewhereUnavailableNote,
+  holdingsKnownInFull,
+  type PlacementRowsInput,
+} from './placement-rows';
 
 const rack = (name: string, quantity = 4): RackHoldingLike => ({ name, quantity, kind: 'rack' });
 const crate = (name: string, quantity = 5): RackHoldingLike => ({ name, quantity, kind: 'crate' });
@@ -220,5 +230,164 @@ describe('malformed data fails toward showing, never toward hiding', () => {
   it('a whole label parked in the number field still decomposes', () => {
     expect(valueOf({ rackNumber: '38-A', holdings: [rack('38-A')] }, 'RACK')).toBe('38-A');
     expect(labelsOf({ rackNumber: '38-A', holdings: [rack('5-C')] })).toEqual([]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 0371 — STOCK IN WAREHOUSES THE MEMBER CANNOT SEE
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Since 0371 a staff member or viewer reads holdings only in their own
+// warehouses. The card's `holdings` are then a partial view: it says where the
+// rest is (an ELSEWHERE row), says so when that could not be read (a note,
+// never a number), and never calls a rack label false on holdings it knows are
+// incomplete.
+
+/** The walk fixture's QA-CHROME, as QA staff (QA Main DC) sees it. */
+const CHROME_ELSEWHERE: ItemElsewhere = {
+  status: 'some',
+  staged: 5,
+  unplaced: 0,
+  placed: 7,
+  placedLocationIds: ['0a000000-0000-0000-0000-0000000000b2'],
+};
+const STAGED_ONLY: ItemElsewhere = {
+  status: 'some',
+  staged: 5,
+  unplaced: 0,
+  placed: 0,
+  placedLocationIds: [],
+};
+const UNAVAILABLE: ItemElsewhere = { status: 'unavailable' };
+const NONE: ItemElsewhere = { status: 'none' };
+
+describe('0371 — the ELSEWHERE row', () => {
+  it('counts every hidden unit, in the shared web words', () => {
+    // 5 in Annex Staging + 7 on Annex Rack QA-2 = 12, whatever the bucket.
+    expect(elsewhereRow(CHROME_ELSEWHERE)).toEqual({
+      label: 'ELSEWHERE',
+      value: '+12 in other warehouses',
+    });
+    expect(elsewhereRow(STAGED_ONLY)?.value).toBe('+5 in other warehouses');
+  });
+
+  it('keeps a fractional quantity as the column holds it', () => {
+    expect(
+      elsewhereRow({ status: 'some', staged: 0, unplaced: 0.5, placed: 2, placedLocationIds: [] })
+        ?.value,
+    ).toBe('+2.5 in other warehouses');
+  });
+
+  it('is absent for nothing elsewhere, a manager (none), and a zero total', () => {
+    expect(elsewhereRow(NONE)).toBeNull();
+    expect(elsewhereRow(null)).toBeNull();
+    expect(elsewhereRow(undefined)).toBeNull();
+    expect(
+      elsewhereRow({ status: 'some', staged: 0, unplaced: 0, placed: 0, placedLocationIds: [] }),
+    ).toBeNull();
+  });
+
+  it('is NEVER a row for a failed read — a failed read has no number to show', () => {
+    expect(elsewhereRow(UNAVAILABLE)).toBeNull();
+    expect(elsewhereUnavailableNote(UNAVAILABLE)).toBe(ELSEWHERE_UNAVAILABLE_NOTE);
+    expect(ELSEWHERE_UNAVAILABLE_NOTE).toBe(
+      'Could not load stock in other warehouses, so it may not be shown here.',
+    );
+  });
+
+  it('the unavailable note is for a failed read only', () => {
+    expect(elsewhereUnavailableNote(NONE)).toBeNull();
+    expect(elsewhereUnavailableNote(CHROME_ELSEWHERE)).toBeNull();
+    expect(elsewhereUnavailableNote(null)).toBeNull();
+  });
+
+  it('sits beside the holdings row, before the remembered RACK', () => {
+    // QA staff on QA-CHROME: nothing placed in their warehouse, so the only
+    // stock the card can name is elsewhere.
+    expect(
+      rowsFor({ warehouseName: 'QA Main DC', charterName: 'Generic', elsewhere: CHROME_ELSEWHERE }),
+    ).toEqual([
+      { label: 'WAREHOUSE', value: 'QA Main DC' },
+      { label: 'CHARTER', value: 'Generic' },
+      { label: 'ELSEWHERE', value: '+12 in other warehouses' },
+    ]);
+    expect(
+      labelsOf({
+        rackNumber: '5',
+        rackRow: 'A',
+        holdings: [rack('5-A'), rack('2-C')],
+        elsewhere: CHROME_ELSEWHERE,
+      }),
+    ).toEqual(['SPLIT STOCK', 'ELSEWHERE', 'RACK']);
+  });
+
+  it('a card with ONLY stock elsewhere still renders (it is not "knows nothing")', () => {
+    expect(rowsFor({ elsewhere: CHROME_ELSEWHERE })).toHaveLength(1);
+    expect(rowsFor({ elsewhere: UNAVAILABLE })).toEqual([]);
+  });
+
+  it('a manager card (none, or no field at all) is exactly what it was', () => {
+    const over = { rackNumber: '38', rackRow: 'A', holdings: [rack('5-C')] };
+    expect(rowsFor({ ...over, elsewhere: NONE })).toEqual(rowsFor(over));
+    expect(labelsOf(over)).toEqual([]);
+  });
+});
+
+describe('0371 — incomplete holdings refute nothing', () => {
+  it('holdingsKnownInFull: only a successful read with no hidden PLACED stock', () => {
+    expect(holdingsKnownInFull(undefined)).toBe(true);
+    expect(holdingsKnownInFull(null)).toBe(true);
+    expect(holdingsKnownInFull(NONE)).toBe(true);
+    // Hidden Staging/Unplaced stock says nothing about any rack.
+    expect(holdingsKnownInFull(STAGED_ONLY)).toBe(true);
+    expect(holdingsKnownInFull(CHROME_ELSEWHERE)).toBe(false);
+    expect(holdingsKnownInFull(UNAVAILABLE)).toBe(false);
+  });
+
+  it('a rack label the VISIBLE holdings miss stands when placed stock is hidden', () => {
+    // The label names the Annex rack QA-2, where 7 units really are. The member
+    // sees only a Main rack, which on its own would refute the label.
+    const over = {
+      rackNumber: 'QA',
+      rackRow: '2',
+      holdings: [rack('QA-1')],
+    };
+    expect(labelsOf(over)).toEqual([]);
+    expect(labelsOf({ ...over, elsewhere: CHROME_ELSEWHERE })).toEqual(['ELSEWHERE', 'RACK']);
+    expect(valueOf({ ...over, elsewhere: CHROME_ELSEWHERE }, 'RACK')).toBe('QA · 2');
+  });
+
+  it('...and when the read failed, since the holdings may be missing a part', () => {
+    expect(
+      labelsOf({
+        rackNumber: 'QA',
+        rackRow: '2',
+        holdings: [rack('QA-1')],
+        elsewhere: UNAVAILABLE,
+      }),
+    ).toEqual(['RACK']);
+  });
+
+  it('hidden Staging stock alone does not rescue a refuted label', () => {
+    expect(
+      labelsOf({
+        rackNumber: 'QA',
+        rackRow: '2',
+        holdings: [rack('QA-1')],
+        elsewhere: STAGED_ONLY,
+      }),
+    ).toEqual(['ELSEWHERE']);
+  });
+
+  it('the 0335 crate rule still fires when the holdings ARE complete', () => {
+    expect(
+      labelsOf({
+        itemType: 'book',
+        rackNumber: '40',
+        rackRow: 'B',
+        holdings: [crate('Gray #BIN')],
+        elsewhere: NONE,
+      }),
+    ).toEqual(['IN CRATE']);
   });
 });
