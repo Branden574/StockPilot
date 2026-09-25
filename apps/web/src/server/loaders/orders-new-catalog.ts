@@ -122,20 +122,49 @@ export const loadCatalogThumbMapCached = unstable_cache(
     const supabase = createAdminClient();
     // Mirror the catalog loader's item scoping with an inner join on
     // inventory_items so only this warehouse's images get signed.
-    const { data, error: rowsError } = await supabase
-      .from('item_images')
-      .select(
-        'item_id, lqip, thumb_path, storage_path, is_primary, sort_order, item:inventory_items!inner(warehouse_id)',
-      )
-      .eq('organization_id', organizationId)
-      .eq('item.warehouse_id', warehouseId)
-      .order('is_primary', { ascending: false })
-      .order('sort_order', { ascending: true });
-    // THROW, never an empty map: a failed read cached as {} would blank every
-    // photo for 4h. loadCatalogBundle catches, so this request goes
-    // photo-less and the next one retries.
-    if (rowsError) {
-      throw new Error(`thumb map image rows read failed: ${rowsError.message}`);
+    //
+    // EVERY image row, paged past PostgREST's 1000-row max_rows. The single
+    // read here was silently cut at 1000 rows, so once a warehouse held more
+    // image rows than that, photos went missing for whatever sorted last (DC4
+    // held 613 on 2026-09-25, the day the item catalog's own 500-row limit
+    // hid 65 items). id breaks ties so every page reads the same global order
+    // and "first row per item" below means the same row it always did.
+    type ImageRow = {
+      item_id: string;
+      lqip: string | null;
+      thumb_path: string | null;
+      storage_path: string | null;
+    };
+    let data: ImageRow[];
+    try {
+      data = await fetchAllRows<ImageRow>(
+        (from, to) =>
+          supabase
+            .from('item_images')
+            .select(
+              'item_id, lqip, thumb_path, storage_path, is_primary, sort_order, item:inventory_items!inner(warehouse_id)',
+            )
+            .eq('organization_id', organizationId)
+            .eq('item.warehouse_id', warehouseId)
+            .order('is_primary', { ascending: false })
+            .order('sort_order', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to) as unknown as PromiseLike<{
+            data: ImageRow[] | null;
+            error: { message: string } | null;
+          }>,
+      );
+    } catch (err) {
+      // THROW, never an empty map: a failed read cached as {} would blank
+      // every photo for 4h. loadCatalogBundle catches, so this request goes
+      // photo-less and the next one retries. Any failed page fails the read.
+      const cause =
+        err instanceof ServiceError
+          ? (err.internalDetail ?? err.message)
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      throw new Error(`thumb map image rows read failed: ${cause}`);
     }
 
     // First row per item wins (is_primary DESC + sort_order ASC).
@@ -143,12 +172,7 @@ export const loadCatalogThumbMapCached = unstable_cache(
       string,
       { lqip: string | null; thumbPath: string | null; storagePath: string | null }
     >();
-    for (const row of (data ?? []) as Array<{
-      item_id: string;
-      lqip: string | null;
-      thumb_path: string | null;
-      storage_path: string | null;
-    }>) {
+    for (const row of data) {
       if (!rowByItem.has(row.item_id)) {
         rowByItem.set(row.item_id, {
           lqip: row.lqip ?? null,

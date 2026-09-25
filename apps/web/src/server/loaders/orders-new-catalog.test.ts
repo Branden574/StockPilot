@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeSupabaseStub } from '@/test/supabase-mock';
+import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 const { createAdminClientMock, createClientMock } = vi.hoisted(() => ({
   createAdminClientMock: vi.fn(),
@@ -929,6 +929,72 @@ describe('storefront loaders throw on a failed read instead of caching it', () =
     const stub = makeSupabaseStub({ 'item_images.select': FAILED });
     createAdminClientMock.mockReturnValue(stub.client);
     await expect(loadCatalogThumbMapCached(ORG, WH)).rejects.toThrow(/image rows read failed/);
+    expect(stub.client.storage.from).not.toHaveBeenCalled();
+  });
+
+  it('thumb map: reads every image row past the 1000-row response cap, and the primary photo still wins', async () => {
+    // 1,500 items with two images each: a non-primary at sort_order 0 and the
+    // primary at sort_order 1. 3,000 rows is three full pages; one read used
+    // to stop at the first 1000 rows (all primaries), so 500 items had none.
+    const rows: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < 1500; i += 1) {
+      const itemId = `item-${String(i).padStart(4, '0')}`;
+      for (const [n, primary] of [
+        [0, false],
+        [1, true],
+      ] as const) {
+        rows.push({
+          id: `img-${String(i).padStart(4, '0')}-${n}`,
+          organization_id: ORG,
+          'item.warehouse_id': WH,
+          item_id: itemId,
+          lqip: null,
+          thumb_path: null,
+          storage_path: `${ORG}/${itemId}/${primary ? 'primary' : 'other'}.webp`,
+          is_primary: primary,
+          sort_order: n,
+        });
+      }
+    }
+    const stub = makeSupabaseStub({ 'item_images.select': servedLikePostgrest(rows) });
+    const createSignedUrls = vi.fn(async (paths: string[]) => ({
+      data: paths.map((path) => ({ path, signedUrl: `https://signed/${path}`, error: null })),
+      error: null,
+    }));
+    (stub.client.storage as unknown as { from: unknown }).from = vi.fn(() => ({ createSignedUrls }));
+    createAdminClientMock.mockReturnValue(stub.client);
+
+    const media = await loadCatalogThumbMapCached(ORG, WH);
+
+    expect(Object.keys(media)).toHaveLength(1500);
+    expect(Object.values(media).every((m) => /\/primary\.webp$/.test(m.url ?? ''))).toBe(true);
+    expect(stub.chainArgsAll.get('item_images.select')?.map((args) => args.at(-1))).toEqual([
+      [0, 999],
+      [1000, 1999],
+      [2000, 2999],
+      [3000, 3999],
+    ]);
+  });
+
+  it('thumb map: a failed second page rejects (never a map missing the rest, cached for 4 h)', async () => {
+    let page = 0;
+    const firstPage = Array.from({ length: 1000 }, (_, i) => ({
+      item_id: `item-${i}`,
+      lqip: null,
+      thumb_path: null,
+      storage_path: `p/${i}.webp`,
+    }));
+    const stub = makeSupabaseStub({
+      'item_images.select': (() => {
+        page += 1;
+        return page === 1 ? { data: firstPage, error: null } : FAILED;
+      }) as never,
+    });
+    createAdminClientMock.mockReturnValue(stub.client);
+
+    await expect(loadCatalogThumbMapCached(ORG, WH)).rejects.toThrow(
+      /image rows read failed: .*fetch failed/,
+    );
     expect(stub.client.storage.from).not.toHaveBeenCalled();
   });
 
