@@ -221,6 +221,71 @@ describe('BorrowerPicker', () => {
     expect(list()).toBeNull();
   });
 
+  it('the list is not a Tab stop (Tab goes from the name box to the email)', () => {
+    // Chrome makes an overflowing scroll box with no focusable children a Tab
+    // stop. With a long member list, Tab from the name box landed on the
+    // list, inside the picker, so the list stayed open over the email field.
+    // jsdom has no such scroll boxes, so the attribute is what is pinned.
+    renderPicker();
+    fireEvent.focus(nameBox());
+    expect(list()!.getAttribute('tabindex')).toBe('-1');
+  });
+
+  it('clicking the box reopens the list after a pick, and after Escape', () => {
+    // A pick keeps focus in the name box (the list's mousedown is cancelled),
+    // so a second click on the box fires no focus event. It used to leave the
+    // list shut, with no visible way to switch to another member.
+    const { last } = renderPicker();
+    act(() => nameBox().focus());
+    fireEvent.click(screen.getByRole('option', { name: /Jane Doe/ }));
+    expect(last()?.borrowerUserId).toBe('u-jane');
+    expect(list()).toBeNull();
+    expect(document.activeElement).toBe(nameBox());
+
+    fireEvent.click(nameBox());
+    expect(list()).not.toBeNull();
+    expect(nameBox().getAttribute('aria-expanded')).toBe('true');
+    expect(options()).toHaveLength(3);
+
+    fireEvent.keyDown(nameBox(), { key: 'Escape' });
+    expect(list()).toBeNull();
+    fireEvent.click(nameBox());
+    expect(list()).not.toBeNull();
+  });
+
+  it('only the chosen borrower is announced as selected, not the highlighted option', () => {
+    renderPicker({ borrowerUserId: 'u-jane', borrowerName: 'Jane Doe', borrowerEmail: 'jane@l4l.org' });
+    fireEvent.focus(nameBox());
+    // Highlight "Someone not in StockPilot": highlighted, not selected.
+    fireEvent.keyDown(nameBox(), { key: 'ArrowDown' });
+    expect(nameBox().getAttribute('aria-activedescendant')).toBe(options()[0]!.id);
+    const selected = () =>
+      options()
+        .filter((o) => o.getAttribute('aria-selected') === 'true')
+        .map((o) => o.textContent);
+    expect(options()[0]!.getAttribute('aria-selected')).toBe('false');
+    expect(selected()).toEqual(['Jane Doejane@l4l.org']);
+
+    // The picked member, highlighted, shows it (a ring over the picked fill).
+    fireEvent.keyDown(nameBox(), { key: 'ArrowDown' });
+    const jane = screen.getByRole('option', { name: /Jane Doe/ });
+    expect(nameBox().getAttribute('aria-activedescendant')).toBe(jane.id);
+    expect(jane.className).toMatch(/\bring-2\b/);
+    fireEvent.keyDown(nameBox(), { key: 'ArrowDown' });
+    expect(jane.className).not.toMatch(/\bring-2\b/);
+  });
+
+  it('a typed name is the chosen borrower: "Someone else" is the selected option', () => {
+    renderPicker();
+    fireEvent.focus(nameBox());
+    expect(options()[0]!.getAttribute('aria-selected')).toBe('false');
+    fireEvent.change(nameBox(), { target: { value: 'Pat' } });
+    expect(options()[0]!.getAttribute('aria-selected')).toBe('true');
+    expect(
+      options().filter((o) => o.getAttribute('aria-selected') === 'true'),
+    ).toHaveLength(1);
+  });
+
   it('choosing from the list keeps focus in the name box (mousedown does not blur it)', () => {
     renderPicker();
     fireEvent.focus(nameBox());
