@@ -204,6 +204,21 @@ PGTAP_TESTS=(
   # rows for managers) and location_stock_census (manager or locations:manage)
   # disclose nothing across orgs.
   supabase/tests/0371_holdings_staff_scope.test.sql
+  # Targeted recount (F1-2, 0372): start_targeted_recount is SECURITY INVOKER
+  # (the count is created under the caller's own RLS) with the service's
+  # floors in its body: manager, cycle_counts:assign and stock:adjust (staff,
+  # even one granted cycle_counts:assign, viewers and managers missing either
+  # permission get 42501); another org's occurrence or item reads as not found
+  # (P0002); at most 200 items; a replayed idempotency key returns the first
+  # count and a reused key with another request is refused; per-item advisory
+  # locks make two concurrent starts one count
+  # (scripts/db-concurrency/0372_recount_overlap.sh). _exc_link_recount is
+  # SECURITY DEFINER with its gates in the body (INV-25): visibility first, so
+  # an invisible occurrence is P0002 and never a 42501 that confirms it
+  # exists; manager with cycle_counts:assign; same-org, in-progress count that
+  # holds the item. Neither RPC resolves. _latest_count_lines reads every
+  # count of an org past RLS, so EXECUTE is service_role only (catalog).
+  supabase/tests/0372_exception_recount.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
