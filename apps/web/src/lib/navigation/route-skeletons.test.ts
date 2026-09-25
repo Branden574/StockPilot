@@ -34,6 +34,9 @@ describe('routeSkeletonFor (C1)', () => {
     ['/dashboard/audit', 'page'],
     ['/dashboard/customers', 'page'],
     ['/dashboard/exceptions', 'page'],
+    // The occurrence page has its own loading.tsx: no late skeleton.
+    ['/dashboard/exceptions/abc', null],
+    ['/dashboard/exceptionsx', null],
     ['/dashboard/support', 'page'],
     ['/dashboard/suppliers', null],
     ['/dashboard/movements', null],

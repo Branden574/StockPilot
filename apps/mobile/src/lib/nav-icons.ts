@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   ArrowLeftRight,
   BarChart3,
   Bell,
@@ -72,6 +73,9 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   Layers,
   // Staging (put-away worklist) — same icon name the web sidebar placement uses.
   LayoutList,
+  // Exceptions (F1-1): same icon name the web sidebar placement uses. Without
+  // this entry the drawer silently falls back to Box.
+  AlertTriangle,
   FileLock,
   Wrench,
   // Zendesk uses a custom react-native-svg mark (not in lucide); cast to

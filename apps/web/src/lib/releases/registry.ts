@@ -21,12 +21,55 @@ import type { Release } from '@stockpilot/core';
  * bounce them. Pages open to every member are the listed exception in the test.
  *
  * Validated by registry.test.ts against @stockpilot/core's releaseRegistrySchema,
- * so bad content fails the build. The six releases below the first one are the
- * legacy announcements, frozen to the character by
+ * so bad content fails the build. The six oldest releases are the legacy
+ * announcements, frozen to the character by
  * legacy-announcements.fixture.ts: their id, title, summary and link must not
  * change. docs/releases/PUBLISHING.md is the workflow.
  */
 export const RELEASES: Release[] = [
+  {
+    // DRAFT until F1-1 rollout step 6 (after the Demo Co walk): set
+    // publishedAt to the real announcement time and status to 'published'.
+    id: 'exception-tracking-2026-09',
+    revision: 1,
+    status: 'draft',
+    title: 'Exceptions now keep a history, and are in the mobile app',
+    summary:
+      'Each problem on the Exceptions page now has its own number, the date it was first found, a timeline with acknowledgements and notes, and the date it cleared. The system checks every 15 minutes and after each posted or cancelled count, and resolves an exception by itself once the problem is gone. Exceptions are also in the mobile app.',
+    publishedAt: '2026-09-25T17:00:00Z',
+    entries: [
+      {
+        id: 'exception-occurrences',
+        category: 'improved',
+        area: 'Inventory',
+        title: 'Numbered exceptions with a history',
+        whatChanged:
+          'Each exception now has a number such as EX-000042 and a page of its own showing possible causes, what clears it, a timeline and any earlier times the same problem was found. An Open tab lists what is still wrong and a Resolved tab lists what cleared in the last 30 days. A problem that comes back opens under a new number, marked as recurred and linked to the earlier one.',
+        whyItMatters:
+          'Before this the page showed only what was wrong at the moment it loaded, so there was no record of when a problem was found, whether it had been looked at, or whether it keeps coming back.',
+        howItAffectsYou:
+          'The page shows the result of the latest check and the time it ran. Checks run every 15 minutes and after each posted or cancelled count, and managers can ask for one sooner with Check now. Problems that already existed when tracking began are marked that way. An exception cannot be marked resolved by hand: it resolves once a check no longer finds the problem.',
+        whatToDo:
+          'Open Exceptions and work through the Open tab. If you can adjust stock in the warehouse, acknowledge an exception you are looking into and add notes as you go.',
+        link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        id: 'exceptions-on-mobile',
+        category: 'new',
+        area: 'Inventory',
+        title: 'Exceptions in the mobile app',
+        whatChanged:
+          'The mobile app has an Exceptions screen in the menu, with the same Open and Resolved lists, the same wording and the same detail as the web app. You can acknowledge an exception and add notes from your phone.',
+        whyItMatters: 'Most of these problems are fixed at the rack, not at a desk.',
+        howItAffectsYou:
+          'Acknowledging and adding notes need a connection. While offline, the screen shows the list as it was when it last loaded, with that time, and the buttons are turned off with the reason.',
+        whatToDo: 'Open Exceptions from the menu in the mobile app.',
+        link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
+        audience: { anyPermission: ['items:read'] },
+      },
+    ],
+  },
   {
     id: 'inventory-and-orders-2026-09',
     revision: 1,

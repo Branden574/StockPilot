@@ -72,6 +72,13 @@ const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
   { re: new RegExp(`/dashboard/maintenance/${UUID}`), to: (m) => `/maintenance/${m[1]}` },
   { re: /\/dashboard\/maintenance\/new$/, to: () => '/maintenance/new' },
   { re: /\/dashboard\/maintenance(\?.*)?$/, to: () => '/maintenance' },
+  // Exceptions (F1-1) has native twins: the list and one occurrence. F1 sends
+  // no push to either, but a What's New CTA, a shared link or a pasted URL
+  // must still land on the screen instead of home. Detail before the bare
+  // list so an occurrence id is never read as the list; both above the
+  // catch-all. Query (the ?tab= filter) is dropped -> the Open list.
+  { re: new RegExp(`/dashboard/exceptions/${UUID}`), to: (m) => `/exceptions/${m[1]}` },
+  { re: /\/dashboard\/exceptions(\?.*)?$/, to: () => '/exceptions' },
   { re: /^\/dashboard(\/.*)?$/, to: () => '/' },
 ];
 

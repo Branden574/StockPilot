@@ -88,6 +88,7 @@ describe('routes that rely on the late skeleton', () => {
       'bundles/loading.tsx',
       'categories/loading.tsx',
       'cycle-counts/loading.tsx',
+      'exceptions/[id]/loading.tsx',
       'insights/loading.tsx',
       'locations/loading.tsx',
       'maintenance/loading.tsx',

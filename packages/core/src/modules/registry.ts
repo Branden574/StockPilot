@@ -127,6 +127,11 @@ export const MODULE_REGISTRY: Record<ModuleId, ModuleDefinition> = {
       // same 'items:read' gate, so the phone's drawer mirrors the sidebar.
       // Put-away is done on foot; it used to be desk-only.
       { surface: 'mobile_drawer', section: 'inventory', label: 'Staging', href: '/staging', iconName: 'LayoutList', defaultSortOrder: 5, requires: 'items:read' },
+      // Native twin of the web Exceptions page (F1-1): same section, sort order,
+      // icon and 'items:read' gate as its web_sidebar placement above, so the
+      // phone's drawer mirrors the sidebar. Acknowledging and adding notes are
+      // gated inside the screen (stock:adjust + warehouse write), not here.
+      { surface: 'mobile_drawer', section: 'inventory', label: 'Exceptions', href: '/exceptions', iconName: 'AlertTriangle', defaultSortOrder: 7, requires: 'items:read' },
       { surface: 'mobile_drawer', section: 'inventory', label: 'Tags', href: '/tags', iconName: 'Tags', defaultSortOrder: 40, requires: 'items:update' },
     ],
   },

@@ -143,9 +143,20 @@ describe('MODULE_REGISTRY', () => {
     expect(placements.filter((p) => p.surface === 'web_sidebar').map((p) => p.href))
       .toContain('/dashboard/admin/reconciliation');
   });
+  it('Exceptions has a mobile drawer twin that mirrors its web sidebar entry (F1-1)', () => {
+    const placements = MODULE_REGISTRY.inventory.placements;
+    const web = placements.find((p) => p.surface === 'web_sidebar' && p.href === '/dashboard/exceptions');
+    const mob = placements.find((p) => p.surface === 'mobile_drawer' && p.href === '/exceptions');
+    expect(mob).toBeDefined();
+    for (const key of ['section', 'label', 'iconName', 'defaultSortOrder', 'requires'] as const) {
+      expect(mob?.[key], key).toBe(web?.[key]);
+    }
+    expect(mob?.requires).toBe('items:read');
+    expect(mob?.iconName).toBe('AlertTriangle');
+  });
   it('every mobile drawer href resolves to a real Expo route', () => {
     const EXPO_ROUTES = new Set([
-      '/', '/inventory', '/staging', '/books', '/categories', '/tags', '/movements',
+      '/', '/inventory', '/staging', '/exceptions', '/books', '/categories', '/tags', '/movements',
       '/rentals', '/bundles', '/orders', '/customers', '/cycle-counts', '/procedures',
       '/receive', '/purchase-orders', '/recurring-pos', '/po-imports', '/locations',
       '/suppliers', '/reports', '/ai', '/schedule', '/notifications', '/team',

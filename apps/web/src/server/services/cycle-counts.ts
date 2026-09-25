@@ -17,6 +17,7 @@ import { reportError } from '@/lib/error-reporter';
 
 import { audit } from './audit';
 import { dispatchEvent } from './integration-events';
+import { scheduleExceptionSync } from './lib/exception-sync-schedule';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { fetchAllRows } from './lib/paginate';
@@ -1920,6 +1921,11 @@ export class CycleCountsService {
         'This cycle count is no longer open. Reload to see the latest status.',
       );
     }
+    // The count is closed. An Exception Center occurrence linked to it as its
+    // recount (F1-2) is re-checked by the next sync; schedule that sync to
+    // run AFTER the response, only now that the cancel has landed. Nothing
+    // here waits for it (owner decision F1 Q9).
+    scheduleExceptionSync(this.ctx.organizationId, 'cycle_count.cancel');
     await audit(
       {
         event: 'cycle_count.canceled',
@@ -1965,6 +1971,13 @@ export class CycleCountsService {
     // count posted on the floor left the web Items list showing pre-count
     // quantities to every manager for up to the 60s TTL.
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'cycle_count.post');
+    // The post corrected stock, so Exception Center conditions may have
+    // cleared (or appeared). Schedule a forced sync to run AFTER the
+    // response, only now that the RPC committed; the web action and the
+    // phone's /api/v1 route both come through here. The caller never waits
+    // for it (owner decision F1 Q9), and a sync failure is reported by the
+    // sync, never raised here.
+    scheduleExceptionSync(this.ctx.organizationId, 'cycle_count.post');
     await audit(
       {
         event: 'cycle_count.posted',
