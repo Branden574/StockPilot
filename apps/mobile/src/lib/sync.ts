@@ -1,6 +1,16 @@
 import * as Network from 'expo-network';
 
 import { getAccountDisabled } from './account-disabled-state';
+import {
+  ADJUST_STOCK_KIND,
+  adjustDrainVerdict,
+  adjustSendGate,
+  parseQueuedAdjust,
+  queuedAdjustRefusalReason,
+  refusedQueuedAdjustMessage,
+  unconfirmedQueuedAdjustMessage,
+  wasAnswered,
+} from './adjust-outbox';
 import { api } from './api';
 import {
   CYCLE_COUNT_HEADER_UPSERT_SQL,
@@ -25,6 +35,7 @@ import {
 import { OutboxSessionChangedError, outboxSendDecision } from './outbox-scope';
 import { listPending, markFailed, markHeld, markOk, markRejected, markSending } from './queue';
 import { liveOutboxScope } from './session-scope';
+import { unconfirmedStock } from './unconfirmed-stock';
 import { WAREHOUSE_SCOPE_META_KEY, refreshWarehouseScope } from './warehouse-scope';
 
 /**
@@ -35,11 +46,12 @@ import { WAREHOUSE_SCOPE_META_KEY, refreshWarehouseScope } from './warehouse-sco
  *
  *   Push: drain pending_actions in age order, hit each kind's matching
  *         endpoint with the idempotency_key from the row. On 2xx, delete
- *         the row. On 4xx (client error — bad payload), mark failed; the
- *         user can retry from a queue UI. On 5xx / network failure, leave
- *         pending so the next tick retries. On a 401 raised while the
- *         account is known disabled, mark REJECTED — terminal, never
- *         re-read, so the write cannot land when the account is re-enabled.
+ *         the row. A definitive refusal (drain-failure.ts: 400/403/409/422,
+ *         a 404 with our code, a 401 on a disabled account) is REJECTED —
+ *         terminal, parked in Unsent work. Anything else is failed and
+ *         retried next tick. `adjust_stock` rows follow their own at-most-once
+ *         rules instead (adjust-outbox.ts): their route cannot recognise a
+ *         replay, so a send that may have landed is parked, never re-sent.
  */
 
 interface SnapshotResponse {
@@ -265,7 +277,16 @@ export async function pullSnapshot(
     // Answered for the account recorded as the cache's owner below, or not at
     // all: a session that changed since the check refuses before sending.
     snap = await api<SnapshotResponse>(path, liveUserId ? { asUserId: liveUserId } : {});
+    // This pull is the drain's probe of the link (adjust-outbox.ts
+    // adjustSendGate): queued stock adjustments, which cannot be retried, are
+    // handed off only after the server has just answered this phone.
+    adjustSendGate.serverAnswered();
   } catch (e) {
+    // Any HTTP status is an answer: the round trip worked. No status is a
+    // network error or a timeout, and the drain that follows sends no queued
+    // adjustment into it.
+    if (wasAnswered(e)) adjustSendGate.serverAnswered();
+    else adjustSendGate.noAnswer();
     console.warn('[sync] snapshot pull failed', e);
     return null;
   }
@@ -581,13 +602,39 @@ export async function drainQueue(): Promise<{
     const decision = outboxSendDecision(action, await liveOutboxScope());
     if (!decision.send) continue;
 
+    // A stock adjustment cannot be retried once it has left the phone
+    // (adjust-outbox.ts), so it is handed off only while the link is known to
+    // work: the server answered this phone since its last lost answer (the
+    // gate; the pull that opens each pass is the probe), and the phone still
+    // reports a connection NOW, re-read per row as the cycle-count drain does.
+    // Otherwise the row is left exactly as it is, never handed off, and the
+    // next pass sends it. Without this, one dropped connection parked every
+    // adjustment behind it as "Not confirmed" although none reached the server.
+    if (action.kind === ADJUST_STOCK_KIND) {
+      if (!adjustSendGate.canSend()) continue;
+      if (!(await isOnline())) {
+        adjustSendGate.noAnswer();
+        continue;
+      }
+    }
+
     // Stamps a legacy row with this account, so it is never sent as another.
     await markSending(action.id, { orgId: decision.orgId, userId: decision.userId });
+    // When api() handed this row's request to fetch (null: not yet). Before
+    // that moment nothing can have reached the server; an adjust_stock row's
+    // failure is judged on it (adjust-outbox.ts), since its route cannot dedupe
+    // a replay, and its "may still land" window starts there.
+    let handedOffAt: number | null = null;
     try {
-      await sendOne(action.kind, action.idempotencyKey, action.payload, {
-        orgId: decision.orgId,
-        asUserId: decision.userId,
-      });
+      await sendOne(
+        action.kind,
+        action.idempotencyKey,
+        action.payload,
+        { orgId: decision.orgId, asUserId: decision.userId },
+        () => {
+          handedOffAt = Date.now();
+        },
+      );
       await markOk(action.id);
       ok += 1;
     } catch (e) {
@@ -598,6 +645,39 @@ export async function drainQueue(): Promise<{
         continue;
       }
       const msg = e instanceof Error ? e.message : String(e);
+      // AT MOST ONCE. Retried only when provably not written; parked, never
+      // re-sent, when it may have been; each parked row names the item and
+      // the change, so the operator knows what to check.
+      if (action.kind === ADJUST_STOCK_KIND) {
+        const verdict = adjustDrainVerdict(e, {
+          accountDisabled: getAccountDisabled(),
+          handedOff: handedOffAt !== null,
+        });
+        if (verdict === 'failed') {
+          await markFailed(action.id, msg);
+          failed += 1;
+        } else if (verdict === 'unconfirmed') {
+          // The link just lost an answer: no further adjustment is handed off
+          // until the server answers this phone again (the next pass's pull).
+          adjustSendGate.noAnswer();
+          // The write may still be committing (the server keeps going after
+          // api() stops waiting), so the item's ON HAND is labelled "Not
+          // confirmed" until it can no longer land. Recorded BEFORE the row
+          // leaves the outbox: the item screen re-reads the item the moment it
+          // does, and that read must not stand as the confirmed total.
+          const itemId = typeof action.payload.itemId === 'string' ? action.payload.itemId : '';
+          if (itemId) unconfirmedStock.recordUnconfirmed(itemId, handedOffAt ?? Date.now());
+          await markRejected(action.id, unconfirmedQueuedAdjustMessage(action.payload));
+          rejected += 1;
+        } else {
+          await markRejected(
+            action.id,
+            refusedQueuedAdjustMessage(action.payload, queuedAdjustRefusalReason(e, msg)),
+          );
+          rejected += 1;
+        }
+        continue;
+      }
       // 4xx (bad payload, validation) and 5xx / network errors both stay in
       // 'failed' and are re-read next tick. The ONE terminal case is a 401 on a
       // known-disabled account: that write must never replay after re-enable.
@@ -625,6 +705,8 @@ async function sendOne(
   idempotencyKey: string,
   payload: Record<string, unknown>,
   scope: OutboxSendScope,
+  /** Called by api() as the request is handed to fetch (adjust_stock only). */
+  onSend: () => void,
 ): Promise<void> {
   switch (kind) {
     case 'receive_po_line': {
@@ -661,11 +743,23 @@ async function sendOne(
       return;
     }
     case 'adjust_stock': {
-      // Reuses the existing adjust_stock RPC via a thin server route;
-      // in the meantime the mobile scan tab still hits supabase.rpc()
-      // directly when online, so this branch only fires for offline-
-      // queued adjusts.
-      throw new Error('adjust_stock queueing not yet wired — adjust online for now');
+      // Queued by the item screen ONLY when the phone had no connection at the
+      // tap (item-adjust.ts), so the first send is this one. The same route and
+      // body as an online tap: permission and MFA gate, warehouse scope, audit
+      // row, rack/Unplaced for an add, draw mode 'any' for a removal. No
+      // idempotency key is sent: the route has none, which is why drainQueue
+      // judges this kind's failures by adjust-outbox.ts (at most once).
+      // parseQueuedAdjust throws before the hand-off on a malformed row.
+      const { itemId, body } = parseQueuedAdjust(payload);
+      // Encoded: the id comes from the device's own SQLite, and a path segment
+      // is all it may ever be.
+      await api(`/api/v1/items/${encodeURIComponent(itemId)}/adjust`, {
+        method: 'POST',
+        body,
+        ...scope,
+        onSend,
+      });
+      return;
     }
     case 'size_count_event': {
       // RETIRED 2026-08-24 with the mobile size-count screens. Kept as a

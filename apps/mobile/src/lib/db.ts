@@ -1,5 +1,10 @@
 import * as SQLite from 'expo-sqlite';
 
+import {
+  orphanedQueuedAdjustMessage,
+  ORPHANED_ADJUST_SELECT_SQL,
+  PARK_ORPHANED_ADJUST_SQL,
+} from './adjust-outbox';
 import { OWNED_BY_USER_SQL } from './outbox-scope';
 
 /**
@@ -132,13 +137,39 @@ export async function initDb(): Promise<void> {
   // — so the offline write is silently lost and the unsynced badge sticks. Any
   // 'sending' row present at startup is definitionally orphaned (no drain is in
   // flight yet), so reset it to 'pending' to be re-drained.
+  //
+  // EXCEPT a stock adjustment (adjust-outbox.ts): its route cannot recognise a
+  // replay, and a row left 'sending' may have reached the server before the
+  // app died. It is parked as "Not confirmed" instead, naming the item and the
+  // change, and never re-sent. Same transaction, before the general reset.
   try {
-    await queuedWrite((db) =>
-      db.runAsync("update pending_actions set status = 'pending' where status = 'sending'"),
-    );
+    await queuedWrite(async (db) => {
+      await parkOrphanedAdjustments(db);
+      await db.runAsync("update pending_actions set status = 'pending' where status = 'sending'");
+    });
   } catch {
     /* best-effort reclaim — never block app startup */
   }
+}
+
+/** Exported for adjust-outbox.sqlite.test.ts. Runs inside the caller's transaction. */
+export async function parkOrphanedAdjustments(
+  db: Pick<SQLite.SQLiteDatabase, 'getAllAsync' | 'runAsync'>,
+  now: number = Date.now(),
+): Promise<number> {
+  const orphans = await db.getAllAsync<{ id: number; payload_json: string }>(
+    ORPHANED_ADJUST_SELECT_SQL,
+  );
+  for (const o of orphans) {
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = JSON.parse(o.payload_json) as Record<string, unknown>;
+    } catch {
+      /* an unreadable payload is still parked, with the generic wording */
+    }
+    await db.runAsync(PARK_ORPHANED_ADJUST_SQL, [orphanedQueuedAdjustMessage(payload), now, o.id]);
+  }
+  return orphans.length;
 }
 
 /** The statements ensureSchema needs; expo-sqlite's database satisfies it. */

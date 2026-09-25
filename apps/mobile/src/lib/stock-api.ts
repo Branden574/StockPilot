@@ -232,6 +232,72 @@ export async function removeStockFromLocation(
 }
 
 /**
+ * The body of POST /api/v1/items/<id>/adjust — the route's own zod schema,
+ * field for field. There is deliberately no `locationId`: the service resolves
+ * the rack/Unplaced for a manual add (so a phone +1 never lands in Staging) and
+ * draws a manual removal in mode 'any'. A location-scoped draw-down is
+ * removeStockFromLocation; a move is transferStock.
+ */
+export interface AdjustStockBody {
+  /** Signed, non-zero; the route refuses 0 and anything past +/-1,000,000. */
+  quantityChange: number;
+  /** Only the three manual kinds. Omitted = derived from the sign server-side. */
+  movementType?: 'add' | 'remove' | 'adjust';
+  /** Trimmed and capped at 500 characters by the route. */
+  reason?: string;
+  notes?: string;
+}
+
+export interface AdjustStockResult {
+  ok?: boolean;
+  /**
+   * The item's on-hand total AFTER this write, read from the row the atomic
+   * adjust_stock RPC returns. This is the number to show: local arithmetic
+   * (old total + delta) is wrong the moment anyone else adjusts the same item.
+   */
+  quantityOnHand?: number;
+}
+
+export interface AdjustSendHooks {
+  /**
+   * Called as the request is handed to fetch (api()'s onSend). The sender
+   * times its "may still land" window from here, not from the tap.
+   */
+  onSend?: () => void;
+}
+
+/**
+ * Manually adjust an item's on-hand total — native parity for the web
+ * item page's adjust dialog. POSTs to /api/v1/items/<id>/adjust, which routes
+ * through InventoryService.adjustStock: the 'stock:adjust' PERMISSION and the
+ * MFA gate (the raw RPC checks only the staff-role floor), the item's
+ * warehouse write scope, the archived-item refusal, the audit row, the
+ * stock.low webhook, and the invalidation of the web's cached Items view.
+ * Every one of those refusals is a 4xx (the warehouse one was a 500 until
+ * 2026-09-22), so a 5xx always means "may have been written".
+ *
+ * Screens do not call this directly: submitItemAdjust (item-adjust.ts) wraps
+ * it for both the item screen and the scan tab, and records what each outcome
+ * means for the on-hand total shown (unconfirmed-stock.ts).
+ *
+ * Rethrown as-is on a non-2xx, like transferStock: the caller needs the
+ * ApiError's numeric `status` to tell a refusal (nothing was written) from a
+ * transport failure (it may have been), and its `details` to recognise the
+ * MFA step-up refusal. Flattening to a plain Error would lose both.
+ */
+export async function adjustItemStock(
+  itemId: string,
+  body: AdjustStockBody,
+  hooks: AdjustSendHooks = {},
+): Promise<AdjustStockResult> {
+  return ((await api(`/api/v1/items/${itemId}/adjust`, {
+    method: 'POST',
+    body,
+    onSend: hooks.onSend,
+  })) ?? {}) as AdjustStockResult;
+}
+
+/**
  * The message to show a person. `api()` already reduces a non-2xx to the
  * server's friendly `message` (and never echoes a raw HTML error page), so this
  * is just the Error → string step.

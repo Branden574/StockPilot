@@ -44,6 +44,7 @@ import { useEnabledModules } from '@/lib/enabled-modules';
 import { readItemElsewhere } from '@/lib/holdings-elsewhere';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
+import { SCAN_ADJUST_REASON, submitItemAdjust } from '@/lib/item-adjust';
 import {
   elsewhereRow,
   elsewhereUnavailableNote,
@@ -51,6 +52,11 @@ import {
 } from '@/lib/placement-rows';
 import { resolveScanMatches, sanitizeScanCode } from '@/lib/scan-resolve';
 import { supabase } from '@/lib/supabase';
+import {
+  unconfirmedStock,
+  useUnconfirmedStock,
+  type UnconfirmedStock,
+} from '@/lib/unconfirmed-stock';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
@@ -194,6 +200,23 @@ export default function Scan() {
   // SKU under different charters/racks) — the picker sheet renders while
   // this is non-null, and is cleared once the user picks one or cancels.
   const [placementChoices, setPlacementChoices] = React.useState<ScanCandidate[] | null>(null);
+  /**
+   * ONLY THE NEWEST READ MAY PAINT THE CARD. Bumped by every write (adjust)
+   * and every fresh scan; a re-read paints only if nothing bumped it since it
+   * started (rereadShownItem).
+   */
+  const rereadSeq = React.useRef(0);
+  /**
+   * Show a freshly scanned (or just created) item. Every such paint goes
+   * through here, because it is NEWER than any re-read still in flight: scan
+   * an item, adjust it with no answer, tap "Scan next" and scan it again, and
+   * the re-read from the first card could otherwise land after the new scan
+   * and repaint its older on-hand total over it.
+   */
+  function showScannedItem(found: FoundItem) {
+    rereadSeq.current++;
+    setItem(found);
+  }
 
 
   /** Loads an item's rich detail (with image + location name) by id. */
@@ -203,6 +226,9 @@ export default function Scan() {
     // so it starts NOW, alongside the item read, never chained after the
     // holdings read below. It never rejects; a failure resolves 'unavailable'.
     const elsewhereRead = readItemElsewhere(supabase, id, role);
+    // Marks when this read was SENT, which is what unconfirmed-stock.ts
+    // judges it on.
+    const reportRead = unconfirmedStock.beginRead(id);
     const { data: row } = await supabase
       .from('inventory_items')
       .select(
@@ -215,6 +241,11 @@ export default function Scan() {
       .is('deleted_at', null)
       .maybeSingle();
     if (!row) return null;
+    // Every read of the total reports to the unconfirmed-stock store, whichever
+    // path asked for it (a scan, a placement pick, the re-read after an
+    // adjustment): a read that shows an unconfirmed write, or was sent after it
+    // could no longer land, clears that item's "Not confirmed".
+    reportRead(Number((row as { quantity_on_hand?: unknown }).quantity_on_hand) || 0);
 
     // Primary image (or first image) — the path lives in item_images,
     // we sign a URL for the storage object.
@@ -342,7 +373,7 @@ export default function Scan() {
     setBusy(true);
     const found = await loadItemById(candidate.id);
     setBusy(false);
-    if (found) setItem(found);
+    if (found) showScannedItem(found);
     else reset();
   }
 
@@ -449,7 +480,7 @@ export default function Scan() {
       setBusy(false);
       return;
     }
-    setItem(found);
+    showScannedItem(found);
     setBusy(false);
   }
 
@@ -460,6 +491,20 @@ export default function Scan() {
     setPlacementChoices(null);
     setLastCode(null);
     setScanning(true);
+  }
+
+  /**
+   * Re-read the card's item after an adjustment whose total is in doubt. Only
+   * the newest read may paint, and only onto the same item: the operator may
+   * have scanned something else, or tapped again, while it was in flight.
+   */
+  async function rereadShownItem(itemId: string) {
+    const seq = ++rereadSeq.current;
+    const found = await loadItemById(itemId);
+    // A failed read (null) keeps the card; loadItemById has already reported
+    // any total it did read to the unconfirmed-stock store.
+    if (seq !== rereadSeq.current || !found) return;
+    setItem((prev) => (prev && prev.id === itemId ? found : prev));
   }
 
   /**
@@ -490,39 +535,74 @@ export default function Scan() {
    *     after a return (L4L, 2026-08-17) — and the phone showed that raw string.
    *   • it refuses ARCHIVED items, writes the audit row and fires stock.low.
    *
-   * The route returns the AUTHORITATIVE new quantity from the atomic RPC, so we
-   * take that over local arithmetic (which drifts when two people adjust the
-   * same item) and only fall back to the optimistic sum if it is absent.
+   * The route returns the AUTHORITATIVE new quantity from the atomic RPC, and
+   * that is the only number painted: never local arithmetic, which drifts when
+   * two people adjust the same item and made a write whose answer carried no
+   * total look confirmed.
+   *
+   * ═══ A TIMEOUT IS NOT A FAILURE ═══
+   *
+   * This used to be its own inline POST that reported every error as "Could
+   * not adjust" — including a timeout or a 5xx, where the write may well have
+   * committed. "Could not" reads as "nothing happened, tap again", and the
+   * second tap moves the stock twice. It now sends through submitItemAdjust,
+   * the item screen's sender: a 4xx is a refusal (nothing was written), and a
+   * network failure, timeout or 5xx is UNCONFIRMED — said so, never retried,
+   * and the on-hand is labelled until a read shows the write or the write can
+   * no longer land (src/lib/unconfirmed-stock.ts).
+   *
+   * Reload cost per SAVED tap is still zero reads: the answer carries the
+   * total. Only an unconfirmed outcome (or a saved one without a total) re-reads
+   * the card: once right away, and once more when the bound passes if the
+   * label is still up.
    */
   async function adjust(delta: number) {
     if (!item) return;
+    const itemId = item.id;
+    // Any re-read already in flight started before this write: its total must
+    // not repaint over this write's answer.
+    rereadSeq.current++;
     setBusy(true);
-    try {
-      const res = (await api(`/api/v1/items/${item.id}/adjust`, {
-        method: 'POST',
-        body: {
-          quantityChange: delta,
-          movementType: delta > 0 ? 'add' : 'remove',
-          reason: 'Mobile scan',
-        },
-      })) as { quantityOnHand?: number } | null;
-      // State updated only AFTER the write lands — an optimistic update next to
-      // a failed write hides the failure completely (recurring pattern #22).
-      setItem({
-        ...item,
-        quantity_on_hand:
-          typeof res?.quantityOnHand === 'number'
-            ? res.quantityOnHand
-            : item.quantity_on_hand + delta,
-      });
-    } catch (e) {
-      // `api()` has already reduced a non-2xx to the server's friendly message
-      // (and never echoes a raw HTML error page), so this is safe to show.
-      Alert.alert('Could not adjust', e instanceof Error ? e.message : 'Network error');
-    } finally {
-      setBusy(false);
+    const outcome = await submitItemAdjust(itemId, delta, {
+      defaultReason: SCAN_ADJUST_REASON,
+      shownTotal: item.quantity_on_hand,
+    });
+    setBusy(false);
+    // 'queued' cannot happen here: this tab passes no `offline`, so a tap with
+    // no connection is attempted and reported like any other failure. It is
+    // handled with the refusal only so the type stays exhaustive.
+    if (outcome.kind === 'refused' || outcome.kind === 'queued') {
+      Alert.alert(outcome.alert.title, outcome.alert.message);
+      return;
     }
+    if (outcome.kind === 'unconfirmed') {
+      Alert.alert(outcome.alert.title, outcome.alert.message);
+      void rereadShownItem(itemId);
+      return;
+    }
+    const q = outcome.quantityOnHand;
+    if (q === null) {
+      // Written, but no total came back: the store labels the number as old
+      // until this read replaces it.
+      void rereadShownItem(itemId);
+      return;
+    }
+    // State updated only AFTER the write lands — an optimistic update next to
+    // a failed write hides the failure completely (recurring pattern #22).
+    setItem((prev) => (prev && prev.id === itemId ? { ...prev, quantity_on_hand: q } : prev));
   }
+
+  // The shown item's doubt, and one re-read when its bound passes (that read
+  // is sent after nothing can still land, so it settles the label).
+  const unconfirmed = useUnconfirmedStock(item?.id);
+  const shownItemId = item?.id ?? null;
+  const onBoundPassed = React.useEffectEvent((itemId: string) => {
+    void rereadShownItem(itemId);
+  });
+  React.useEffect(() => {
+    if (!shownItemId) return;
+    return unconfirmedStock.onBoundPassed(shownItemId, () => onBoundPassed(shownItemId));
+  }, [shownItemId]);
 
   /**
    * Cover-ID flow. Opens the camera, captures a cover photo, uploads it
@@ -693,6 +773,7 @@ export default function Scan() {
    */
   async function capturePhoto() {
     if (!item || !orgId) return;
+    const itemId = item.id;
     const perm = await ImagePicker.requestCameraPermissionsAsync();
     if (!perm.granted) {
       Alert.alert('Camera access needed', 'Allow camera to take photos.');
@@ -710,7 +791,7 @@ export default function Scan() {
       // Resize on-device so the bucket only stores list-friendly sizes
       // (~400 KB JPEGs instead of multi-megapixel phone photos).
       const resized = await resizeForUpload(asset.uri);
-      const path = `${orgId}/items/${item.id}/${cryptoRandom()}.${resized.ext}`;
+      const path = `${orgId}/items/${itemId}/${cryptoRandom()}.${resized.ext}`;
 
       // ArrayBuffer upload — `fetch(uri).blob()` uploads a 0-byte object
       // in React Native/Expo, which is why captured photos never showed
@@ -725,13 +806,13 @@ export default function Scan() {
         .from('item_images')
         .select('id')
         .eq('organization_id', orgId)
-        .eq('item_id', item.id)
+        .eq('item_id', itemId)
         .limit(1);
       const isFirst = !existing || existing.length === 0;
 
       const { error: insErr } = await supabase.from('item_images').insert({
         organization_id: orgId,
-        item_id: item.id,
+        item_id: itemId,
         storage_path: path,
         is_primary: isFirst,
       });
@@ -739,7 +820,11 @@ export default function Scan() {
 
       const signedUrl = await signItemImage(path);
       if (signedUrl) {
-        setItem({ ...item, image_url: signedUrl });
+        // ONLY the photo, merged into the card as it is NOW and only if it
+        // still shows this item. A spread of the copy taken when the upload
+        // started repainted any on-hand total a re-read painted meanwhile
+        // (the bound re-read of an unconfirmed adjustment runs on a timer).
+        setItem((prev) => (prev && prev.id === itemId ? { ...prev, image_url: signedUrl } : prev));
       }
     } catch (e) {
       Alert.alert('Upload failed', e instanceof Error ? e.message : 'Unknown error');
@@ -967,6 +1052,9 @@ export default function Scan() {
                 >
                   {item.quantity_on_hand}
                 </Text>
+                {unconfirmed ? (
+                  <Text style={styles.unconfirmedNote}>{unconfirmedScanLabel(unconfirmed)}</Text>
+                ) : null}
               </View>
               <View style={styles.stat}>
                 <Text style={styles.statLabel}>Reorder at</Text>
@@ -1043,10 +1131,10 @@ export default function Scan() {
 
             {canQuickAdjust && (
               <View style={styles.actions}>
-                <ActionBtn label="−1" onPress={() => adjust(-1)} disabled={busy} />
-                <ActionBtn label="+1" onPress={() => adjust(1)} disabled={busy} primary />
-                <ActionBtn label="+5" onPress={() => adjust(5)} disabled={busy} primary />
-                <ActionBtn label="+25" onPress={() => adjust(25)} disabled={busy} />
+                <ActionBtn label="−1" onPress={() => void adjust(-1)} disabled={busy} />
+                <ActionBtn label="+1" onPress={() => void adjust(1)} disabled={busy} primary />
+                <ActionBtn label="+5" onPress={() => void adjust(5)} disabled={busy} primary />
+                <ActionBtn label="+25" onPress={() => void adjust(25)} disabled={busy} />
               </View>
             )}
 
@@ -1106,7 +1194,7 @@ export default function Scan() {
                 setAddBook(null);
                 void (async () => {
                   const found = await loadItemById(id);
-                  if (found) setItem(found);
+                  if (found) showScannedItem(found);
                   else reset();
                 })();
               }}
@@ -1126,7 +1214,7 @@ export default function Scan() {
                 setAddItem(null);
                 void (async () => {
                   const found = await loadItemById(id);
-                  if (found) setItem(found);
+                  if (found) showScannedItem(found);
                   else reset();
                 })();
               }}
@@ -1268,6 +1356,15 @@ function CenterMessage({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * The on-hand note while an adjustment is unconfirmed. This card has no pull
+ * to refresh; it re-reads by itself when the bound passes, and scanning the
+ * item again is the fallback when that read fails.
+ */
+function unconfirmedScanLabel(u: UnconfirmedStock): string {
+  return u.mayStillLand ? 'Not confirmed · may still be saving' : 'Not confirmed · scan again to check';
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   overlay: {
@@ -1357,6 +1454,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   statValue: { color: theme.text, fontSize: 22, fontWeight: '700', marginTop: 2 },
+  unconfirmedNote: { color: theme.warning, fontSize: 11, fontWeight: '600', marginTop: 2 },
   statValueMuted: { color: theme.text, fontSize: 14, fontWeight: '600', marginTop: 2 },
   locationBox: {
     marginTop: space.md,

@@ -173,11 +173,20 @@ describe('the local record survives', () => {
    * and a prune, or "preserved for the user and support" is just a comment.
    */
   it('is actually rendered somewhere the operator can reach', () => {
-    expect(settingsScreen).toMatch(/import \{ (countHeld, )?countRejected \} from '@\/lib\/queue'/);
-    // The held work queued by another account is surfaced by the same screen.
-    expect(settingsScreen).toContain(
-      'unsentWorkDetail({ rejected: rejectedCount, held: heldCount })',
+    expect(settingsScreen).toMatch(
+      /import \{ (countHeld, )?countRejected(, countUnconfirmedAdjust)? \} from '@\/lib\/queue'/,
     );
+    // The held work queued by another account is surfaced by the same screen,
+    // and a stock adjustment that may have been applied is not "never sent".
+    expect(settingsScreen).toMatch(
+      /unsentWorkDetail\(\{\s*rejected: rejectedCount,\s*held: heldCount,\s*unconfirmed: unconfirmedCount,\s*\}\)/,
+    );
+    expect(settingsScreen).toContain('await countUnconfirmedAdjust()');
+    // Unsent work lists those adjustments apart, under "Not confirmed".
+    expect(rejectedScreen).toContain('(rows ?? []).filter(isUnconfirmedAdjustRow)');
+    expect(rejectedScreen).toContain('`NOT CONFIRMED · ${unconfirmedRows.length}`');
+    expect(rejectedScreen).toContain('`NEVER SENT · ${neverSentRows.length}`');
+    expect(rejectedScreen).not.toContain('those changes were never applied');
     expect(rejectedScreen).toContain('listHeld(REJECTED_KEEP_MAX)');
     expect(rejectedScreen).toContain('discardHeldAction(row.id)');
     expect(settingsScreen).toContain("router.push('/settings/rejected-work' as never)");
@@ -193,13 +202,19 @@ describe('the local record survives', () => {
   });
 
   it('stops the badge claiming "All synced" over work that was never sent', () => {
-    expect(badge).toContain('rejectedCount');
-    const allSyncedAt = badge.indexOf("label = 'All synced'");
-    const rejectedAt = badge.indexOf('rejectedCount > 0');
-    expect(rejectedAt).toBeGreaterThan(-1);
-    expect(rejectedAt).toBeLessThan(allSyncedAt);
-    expect(cycleSync).toMatch(/import \{ countRejected(, markHeld)? \} from '\.\/queue'/);
+    // The wording is executed in sync-badge.test.ts (rejected before "All
+    // synced"; not-confirmed adjustments apart). This pins that the pill uses
+    // it, fed the engine's counts, and that the engine reads both.
+    expect(flat(badge)).toContain(
+      'syncBadgeState({ status, pendingCount, rejectedCount, unconfirmedCount, })',
+    );
+    expect(badge).not.toMatch(/not sent`/);
+    expect(cycleSync).toMatch(
+      /import \{ countRejected, countUnconfirmedAdjust, markHeld \} from '\.\/queue'/,
+    );
     expect(cycleSync).toContain('rejectedCount: number;');
+    expect(cycleSync).toContain('unconfirmedCount: number;');
+    expect(cycleSync).toContain('unconfirmedCount: this.unconfirmedCount,');
   });
 
   it('ages the record out instead of accumulating for the life of the install', () => {

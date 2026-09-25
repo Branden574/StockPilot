@@ -758,8 +758,10 @@ const OUTSIDE_ALLOWLIST: Record<string, string> = {
  * silently. Self-checking like the allowlist.
  */
 const OUTSIDE_KNOWN_GAPS: Record<string, string> = {
-  'mobile/app/item/[id].tsx#ItemDetail':
-    'the phone item screen (quick +/-1/5 buttons and the Adjust sheet) calls the raw adjust_stock RPC straight to Postgres: no Next request exists to expire the web cache, so web lists show the pre-adjust quantity for up to LIST_TTL_SEC (60 s). Remediation: route it through POST /api/v1/items/[id]/adjust (InventoryService.adjustStock), which invalidates and also enforces stock:adjust server-side (the RPC checks only the staff role)',
+  // Empty since 2026-09-25: the phone item screen's quick +/-1/5 buttons and
+  // Adjust sheet (mobile/app/item/[id].tsx) were the one entry. They now POST
+  // /api/v1/items/[id]/adjust (InventoryService.adjustStock, which
+  // invalidates), online and from the outbox.
 };
 
 /** Outside members that store a stock-table builder in a variable but only
@@ -1117,10 +1119,23 @@ describe('stock writes outside services, and invalidations Next would drop', () 
     for (const k of [
       'web/src/server/actions/item-visibility.ts#setItemPublicVisibilityAction',
       'web/src/lib/ai/embeddings.ts#embedItemsBatch',
-      'mobile/app/item/[id].tsx#ItemDetail',
     ]) {
       expect(keys, k).toContain(k);
     }
+    // The phone has no direct stock writer left: the item screen's quick
+    // adjust was the last (it POSTs /api/v1/items/[id]/adjust since
+    // 2026-09-25). So prove the scan still REACHES the phone's screens, and
+    // that the same scanner flags the shape that screen used to have.
+    expect(files).toContain('mobile/app/item/[id].tsx');
+    expect(members.some((m) => m.key.startsWith('mobile/app/item/[id].tsx#'))).toBe(true);
+    const probe = scanSource(
+      'mobile/app/probe.tsx',
+      "export function Probe() { void supabase.rpc('adjust_stock', { p_item_id: 'x' }); }",
+      isStockRpc,
+    );
+    expect(probe.members.find((m) => m.key === 'mobile/app/probe.tsx#Probe')?.writes).toContain(
+      'rpc:adjust_stock',
+    );
     expect(callables.byClass.get('OrderRequestsService')).toContain('cancel');
     expect(callables.byClass.get('InventoryService')).toContain('update');
   });

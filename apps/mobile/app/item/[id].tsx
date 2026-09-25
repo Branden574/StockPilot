@@ -63,7 +63,7 @@ import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { api } from '@/lib/api';
-import { showWriteCta } from '@/lib/cta-gating';
+import { showWriteCta, showWriteCtaForRole } from '@/lib/cta-gating';
 import { canMintPlacementDestination } from '@/lib/move-stock-form';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { isOfflineState } from '@/lib/exceptions-api';
@@ -71,6 +71,16 @@ import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
 import { replacePrimaryPhoto } from '@/lib/item-photo-replace';
+import { ADJUST_STOCK_KIND, describeQueuedChanges } from '@/lib/adjust-outbox';
+import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
+import { submitItemAdjust, type ItemAdjustOutcome } from '@/lib/item-adjust';
+import { enqueue, pendingAdjustFor } from '@/lib/queue';
+import { isOnline, syncNow } from '@/lib/sync';
+import {
+  unconfirmedStock,
+  useUnconfirmedStock,
+  type UnconfirmedStock,
+} from '@/lib/unconfirmed-stock';
 import {
   MOVEMENT_SHADOWED_AUDIT_EVENTS,
   auditCapFor,
@@ -482,6 +492,20 @@ export default function ItemDetail() {
   const [activityError, setActivityError] = React.useState<string | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  // The doubt an adjustment leaves over the ON HAND number when its answer
+  // never came back (the write may have landed, or may still be running).
+  // App-wide and keyed by item (src/lib/unconfirmed-stock.ts), so it survives
+  // leaving this screen and covers a write sent from the scan tab. While set,
+  // the number is labelled, so a total the server may be about to change is
+  // never presented as current. Only a read that SHOWS the write, or one sent
+  // after the write can no longer land, clears it: an immediate re-read can
+  // beat a slow write to the database, and used to clear the label with the
+  // pre-write total on screen.
+  const unconfirmed = useUnconfirmedStock(id);
+  // Adjustments made on this screen with NO connection, saved in the outbox and
+  // not sent yet (adjust-outbox.ts). ON HAND cannot include them until the
+  // drain sends them, so the card says so beside the number.
+  const [queuedAdjust, setQueuedAdjust] = React.useState({ count: 0, net: 0 });
   // Web parity: /dashboard/inventory/[id]?tab=movements|activity deep-links
   // straight to a tab — mobile honors the same param (notification links,
   // in-app pushes, and tests can land directly on a tab). Unknown values
@@ -507,11 +531,12 @@ export default function ItemDetail() {
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
   const canTransfer =
     isManager || (role !== null && can({ role: role as Role, permissions }, 'stock:transfer'));
-  // Remove-from-rack (write-off) gate — mirrors the web item detail's
-  // 'stock:adjust' requirement. Cosmetic only; /api/v1/items/[id]/remove-stock
-  // re-asserts stock:adjust inside InventoryService.removeStockFromLocation.
-  const canAdjustStock =
-    isManager || (role !== null && can({ role: role as Role, permissions }, 'stock:adjust'));
+  // THE 'stock:adjust' gate for this screen: the quick adjust, "Adjust with
+  // reason" and "Remove from rack" all derive from it (each adds its own
+  // item-state condition below). It used to be two rules that disagreed; see
+  // showWriteCtaForRole. Cosmetic only: /api/v1/items/[id]/adjust and
+  // /remove-stock both re-assert stock:adjust in InventoryService.adjustStock.
+  const canAdjustStock = showWriteCtaForRole(role, permissions, 'stock:adjust');
   // Gates the move sheet's inline "+ New rack" (non-book) and, for a book, its
   // DEFAULT path: placing into the crate the label names, which for a
   // label-only crate means minting the row. The server does that under
@@ -564,8 +589,22 @@ export default function ItemDetail() {
     setActivityMovements((prev) => applyNoteToMovements(prev, movementId, note));
   }, []);
 
+  // ═══ ONLY THE NEWEST READ MAY PAINT THE ITEM ═══
+  //
+  // load() now runs after every adjustment (it is the one reader of the rack
+  // holdings the adjustment just changed), so reads overlap: tap +1, tap +1
+  // again, and the first read can land AFTER the second write's answer. Without
+  // this counter that older read repaints the on-hand total the second tap
+  // already replaced — stale stock shown as current. Every load() takes a
+  // number; a read that is no longer the newest when it resolves is dropped.
+  const loadSeq = React.useRef(0);
+  // The item id this screen has already painted. A failed REFRESH keeps what
+  // is on screen; only a failed FIRST read has nothing to keep.
+  const paintedItemId = React.useRef<string | null>(null);
+
   const load = React.useCallback(async () => {
     if (!id) return;
+    const seq = ++loadSeq.current;
     // STOCK IN WAREHOUSES THIS MEMBER CANNOT SEE (0371). It needs only the id,
     // so it starts NOW, alongside the item read and well before the holdings
     // read it completes: never a request chained after another. It never
@@ -578,7 +617,10 @@ export default function ItemDetail() {
     // a load that runs before it is known makes the call, and a manager's
     // answer is simply empty.
     const elsewhereRead = readItemElsewhere(supabase, id, role);
-    const { data } = await supabase
+    // Marks when this read was SENT: a write still in flight can commit after
+    // this moment however late the answer arrives, so the doubt is judged on it.
+    const reportRead = unconfirmedStock.beginRead(id);
+    const { data, error } = await supabase
       .from('inventory_items')
       .select(
         `id, organization_id, name, sku, barcode, description, quantity_on_hand,
@@ -592,6 +634,18 @@ export default function ItemDetail() {
       )
       .eq('id', id)
       .maybeSingle();
+    if (seq !== loadSeq.current) return;
+    if (error) {
+      // A failed READ is not a missing item. This used to fall into the
+      // not-found branch below, so a refresh on a dropped connection — the
+      // exact moment the adjust path re-reads after an unconfirmed write —
+      // told the operator the item no longer existed and navigated away.
+      if (paintedItemId.current === id) return;
+      Alert.alert('Could not load this item', 'Check your connection and try again.', [
+        { text: 'OK', onPress: () => router.back() },
+      ]);
+      return;
+    }
     if (!data) {
       Alert.alert('Not found', 'This item no longer exists.', [
         { text: 'OK', onPress: () => router.back() },
@@ -670,6 +724,7 @@ export default function ItemDetail() {
         .gt('quantity', 0),
       elsewhereRead,
     ]);
+    if (seq !== loadSeq.current) return;
     const rackHoldings: RackHoldingLike[] = ((holdingResp?.data ?? []) as unknown as {
       quantity: number;
       locations: { name: string; kind: string } | { name: string; kind: string }[] | null;
@@ -698,7 +753,12 @@ export default function ItemDetail() {
     if (imgRow?.storage_path) {
       imageUrl = await signItemImage(imgRow.storage_path as string);
     }
+    if (seq !== loadSeq.current) return;
 
+    paintedItemId.current = r.id as string;
+    // NOT "a fresh read is the confirmed total": a read can beat a write that
+    // is still running. The store decides whether this read settles the doubt.
+    reportRead(Number(r.quantity_on_hand) || 0);
     setItem({
       id: r.id as string,
       organization_id: r.organization_id as string,
@@ -738,6 +798,26 @@ export default function ItemDetail() {
       elsewhere,
     });
   }, [id, router, role]);
+
+  // The outbox count this screen last saw for the item, so a DROP (a queued
+  // adjustment was sent, or parked as refused or not confirmed) re-reads the
+  // item: the number on screen does not include that change yet.
+  const queuedCountSeen = React.useRef(0);
+  const refreshQueuedAdjust = React.useCallback(async () => {
+    if (!id) return null;
+    let next: { count: number; net: number };
+    try {
+      next = await pendingAdjustFor(id);
+    } catch (e) {
+      console.warn('[item] could not read queued adjustments', e);
+      return null;
+    }
+    const drained = next.count < queuedCountSeen.current;
+    queuedCountSeen.current = next.count;
+    setQueuedAdjust(next);
+    if (drained) load().catch((e: unknown) => console.warn('[item] re-read after drain failed', e));
+    return next;
+  }, [id, load]);
 
   /**
    * Fetches ONE page of `stock_movements` (SerialsCard "Load more" pattern:
@@ -1100,9 +1180,45 @@ export default function ItemDetail() {
   const movementsRemaining = Math.max(0, movementsTotal - movements.length);
 
   React.useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
+    // Fetch-on-mount: every set inside load() is post-await. The
+    // set-state-in-effect suppression that sat here became unused once load()
+    // gained its sequence guard (the rule no longer traces a set through the
+    // early returns), and an unused directive is itself a lint warning.
     void load();
   }, [load]);
+
+  // When an unconfirmed adjustment's bound passes, read once more: that read is
+  // sent after nothing can still land, so it settles the label either way. The
+  // only read the doubt adds, and only an unconfirmed outcome creates one.
+  React.useEffect(() => {
+    if (!id) return;
+    return unconfirmedStock.onBoundPassed(id, () => {
+      load().catch((e: unknown) => console.warn('[item] re-read after unconfirmed bound failed', e));
+    });
+  }, [id, load]);
+
+  // QUEUED OFFLINE ADJUSTMENTS. Re-read this item's outbox rows whenever the
+  // sync badge's state changes (a row queued, sent or parked; the phone going
+  // on or offline). While some are queued and the phone reports a connection,
+  // send them now instead of at the next 60 s tick, so reconnecting shows the
+  // new total within seconds; refreshQueuedAdjust re-reads the item once they
+  // leave the outbox. syncNow is single-flight, and this runs only while this
+  // item has queued rows.
+  const syncStatus = useSyncStatus();
+  React.useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const next = await refreshQueuedAdjust();
+      if (cancelled || !next || next.count === 0 || syncStatus.status === 'offline') return;
+      await syncNow();
+      if (cancelled) return;
+      await refreshQueuedAdjust();
+      void cycleCountSync.refreshPendingCount();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [syncStatus.pendingCount, syncStatus.status, refreshQueuedAdjust]);
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- tab-change fetch: the sync sets inside the loaders are their loading/error flags (also used by pull-to-refresh); every data set is post-await
@@ -1114,6 +1230,13 @@ export default function ItemDetail() {
   async function onRefresh() {
     setRefreshing(true);
     try {
+      // Adjustments queued offline for this item: try to send them first, so
+      // the read below can include them (a no-op while still offline).
+      if (queuedAdjust.count > 0) {
+        await syncNow();
+        await refreshQueuedAdjust();
+        void cycleCountSync.refreshPendingCount();
+      }
       await load();
       if (tab === 'movements') await loadMovements();
       if (tab === 'activity') await loadActivity();
@@ -1122,23 +1245,94 @@ export default function ItemDetail() {
     }
   }
 
-  async function adjust(delta: number, reason = 'Mobile detail') {
-    if (!item) return;
+  /**
+   * Manual adjust: the -5/-1/+1/+5 buttons and the "Adjust with reason" sheet.
+   *
+   * Goes through POST /api/v1/items/<id>/adjust (src/lib/item-adjust.ts has
+   * the full why: permission + MFA gate, warehouse scope, audit, webhook, the
+   * no-Staging rule for a manual add, and the web Items cache invalidation the
+   * direct RPC call skipped). With NO connection at the tap it is not sent:
+   * it is saved in the outbox and the drain sends it later, at most once,
+   * through the same route (src/lib/adjust-outbox.ts). A request that was
+   * sent and failed is never queued (it may have landed).
+   *
+   * NO OPTIMISTIC STOCK. Nothing moves on screen until the server answers,
+   * and what moves is the total the server returned, never the old total plus
+   * the delta: that arithmetic is wrong the moment anyone else adjusts the
+   * same item, and it is how a failed write used to look like a saved one.
+   *
+   * Never rejects (submitItemAdjust returns every failure as a value), so the
+   * bare onPress callers below cannot leak an unobserved rejection. Returns
+   * the outcome's kind so the sheet can stay open on a refusal.
+   *
+   * submitItemAdjust records what each outcome means for the ON HAND number in
+   * src/lib/unconfirmed-stock.ts (unconfirmed, committed without a total, or
+   * confirmed); this function only paints and re-reads.
+   *
+   * RELOAD COST PER SAVED TAP, unchanged by the unconfirmed handling: the POST,
+   * then one load() (the item row; then warehouse, charter, serial count and
+   * rack holdings in parallel; then the primary image row, whose signed URL is
+   * cached) and the open history tab's first page. The holdings are why it
+   * re-reads at all: a manual add lands on a rack or Unplaced, a removal draws
+   * one down.
+   */
+  async function adjust(delta: number, reason?: string): Promise<ItemAdjustOutcome['kind'] | null> {
+    if (!item) return null;
+    const itemId = item.id;
     setBusy(true);
-    const { error } = await supabase.rpc('adjust_stock', {
-      p_item_id: item.id,
-      p_quantity_change: delta,
-      p_movement_type: delta > 0 ? 'add' : 'remove',
-      p_location_id: null,
-      p_reason: reason,
-      p_notes: null,
+    const outcome = await submitItemAdjust(itemId, delta, {
+      reason,
+      shownTotal: item.quantity_on_hand,
+      offline: {
+        isOnline,
+        // Stamped with this workspace and account (queue.ts, S4).
+        enqueue: (payload) => enqueue(ADJUST_STOCK_KIND, payload),
+        itemLabel: `${item.name} (${item.sku})`,
+      },
     });
     setBusy(false);
-    if (error) {
-      Alert.alert('Could not adjust', error.message);
-      return;
+
+    if (outcome.kind === 'queued') {
+      // Nothing was sent, so nothing changes on screen but the queued note.
+      Alert.alert(outcome.alert.title, outcome.alert.message);
+      void refreshQueuedAdjust();
+      // The header badge counts outbox rows; show this one now.
+      void cycleCountSync.refreshPendingCount();
+      return outcome.kind;
     }
-    setItem({ ...item, quantity_on_hand: item.quantity_on_hand + delta });
+    if (outcome.kind === 'refused') {
+      // Nothing was written, so the total on screen is still the last one the
+      // server gave us.
+      Alert.alert(outcome.alert.title, outcome.alert.message);
+      return outcome.kind;
+    }
+    if (outcome.kind === 'unconfirmed') {
+      // The number stays labelled (the store now holds the doubt); this read
+      // clears it only if it already shows the write.
+      Alert.alert(outcome.alert.title, outcome.alert.message);
+      refreshAfterAdjust();
+      return outcome.kind;
+    }
+    const q = outcome.quantityOnHand;
+    if (q !== null) {
+      setItem((prev) => (prev && prev.id === itemId ? { ...prev, quantity_on_hand: q } : prev));
+    }
+    // q === null: written, but the answer carried no total. The store marks
+    // the number as old until the re-read below replaces it.
+    refreshAfterAdjust();
+    return outcome.kind;
+  }
+
+  /**
+   * After any adjustment that was (or may have been) written: re-read the item
+   * — the adjustment also re-sliced the rack holdings shown under ON HAND
+   * (a manual add now lands on the item's rack or Unplaced, a removal draws a
+   * rack down) — and the open history tab. Same refresh the move and
+   * remove-from-rack sheets do. load() is sequence-guarded, so a read that
+   * started before this write can no longer repaint over its answer.
+   */
+  function refreshAfterAdjust() {
+    load().catch((e: unknown) => console.warn('[item] refresh after adjust failed', e));
     if (tab === 'movements') void loadMovements();
     if (tab === 'activity') void loadActivity();
   }
@@ -1151,12 +1345,18 @@ export default function ItemDetail() {
   // raw client mutation would silently skip all three.
   async function restoreItem() {
     if (!item || restoring) return;
+    const itemId = item.id;
     setRestoring(true);
     try {
-      await api(`/api/v1/items/${item.id}/restore`, { method: 'POST' });
+      await api(`/api/v1/items/${itemId}/restore`, { method: 'POST' });
       // Optimistic flip — clears both the Archived and Auto-archived
-      // badges immediately rather than waiting on a refetch.
-      setItem({ ...item, status: 'active', auto_archived: false });
+      // badges immediately rather than waiting on a refetch. Merged into the
+      // CURRENT item, not the copy this call started with: a read that
+      // landed while the request was out (the bound re-read, a pull) carries
+      // a newer on-hand total, which a spread of the old copy would repaint.
+      setItem((prev) =>
+        prev && prev.id === itemId ? { ...prev, status: 'active', auto_archived: false } : prev,
+      );
     } catch (e) {
       Alert.alert('Could not restore', e instanceof Error ? e.message : 'Please try again.');
     } finally {
@@ -1228,12 +1428,13 @@ export default function ItemDetail() {
 
   async function uploadAndReplace(uri: string, ext: string) {
     if (!item || !orgId) return;
+    const itemId = item.id;
     setPhotoBusy(true);
     try {
       // Resize on-device so the bucket only stores list-friendly sizes
       // (~400 KB JPEGs instead of multi-megapixel phone photos).
       const resized = await resizeForUpload(uri);
-      const path = `${orgId}/items/${item.id}/${Math.random().toString(36).slice(2, 14)}.${resized.ext}`;
+      const path = `${orgId}/items/${itemId}/${Math.random().toString(36).slice(2, 14)}.${resized.ext}`;
       // ArrayBuffer upload — `fetch(uri).blob()` uploads a 0-byte object
       // to Supabase Storage in RN/Expo, so use arrayBuffer().
       const arrayBuffer = await (await fetch(resized.uri)).arrayBuffer();
@@ -1256,7 +1457,7 @@ export default function ItemDetail() {
       const outcome = await replacePrimaryPhoto({
         supabase,
         orgId,
-        itemId: item.id,
+        itemId,
         newPath: path,
       });
       if (!outcome.ok) {
@@ -1267,7 +1468,14 @@ export default function ItemDetail() {
       // reported as a failed save.
       for (const w of outcome.warnings) console.warn('[item photo]', w);
       const signedUrl = await signItemImage(path);
-      setItem({ ...item, imageUrl: signedUrl });
+      // ONLY the photo changes, merged into the item as it is NOW. This used
+      // to spread the copy of the item taken when the upload started, and an
+      // upload takes seconds on a warehouse link: an adjustment saved in the
+      // meantime (the quick buttons stay live during a photo replace) was
+      // painted back to the on-hand total from before it, with no label.
+      // Merging keeps the quick buttons usable while a slow upload runs,
+      // rather than disabling them on photoBusy.
+      setItem((prev) => (prev && prev.id === itemId ? { ...prev, imageUrl: signedUrl } : prev));
     } catch (e) {
       Alert.alert('Photo error', e instanceof Error ? e.message : 'Upload failed.');
     } finally {
@@ -1289,6 +1497,14 @@ export default function ItemDetail() {
   }
 
   const lowStock = item.reorder_point > 0 && item.quantity_on_hand <= item.reorder_point;
+  // The manual-adjust controls: this screen's one stock:adjust gate, and not
+  // archived (the service refuses an archived item, "Unarchive it first").
+  // Before the screen went through the /adjust route the direct RPC call
+  // honoured neither, so these buttons showed for everyone; now they would
+  // only ever fail. Once the permission set has loaded this is the scan tab's
+  // rule exactly (showWriteCta); before that, the role decides here, since
+  // this screen knows it.
+  const canQuickAdjust = canAdjustStock && item.status !== 'archived';
   const status: 'ok' | 'warn' | 'crit' =
     item.quantity_on_hand <= 0 ? 'crit' : lowStock ? 'warn' : 'ok';
   const inventoryValue = item.unit_cost * item.quantity_on_hand;
@@ -1526,26 +1742,40 @@ export default function ItemDetail() {
                   {status === 'crit' ? <Pill status="crit">OUT</Pill> : null}
                 </View>
               </View>
+              {unconfirmed ? (
+                <Mono size={11.5} tracking={0.04} color={ACCENT.warn} style={{ marginTop: 6 }}>
+                  {unconfirmedOnHandLabel(unconfirmed)}
+                </Mono>
+              ) : null}
+              {queuedAdjust.count > 0 ? (
+                <Mono size={11.5} tracking={0.04} color={ACCENT.warn} style={{ marginTop: 6 }}>
+                  {queuedOnHandLabel(queuedAdjust)}
+                </Mono>
+              ) : null}
               <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 6 }}>
                 Reorder at {item.reorder_point} · suggested reorder {item.reorder_quantity}
               </Mono>
 
-              <View style={styles.quickAdjust}>
-                <QuickBtn label="−5" onPress={() => adjust(-5)} disabled={busy} />
-                <QuickBtn label="−1" onPress={() => adjust(-1)} disabled={busy} />
-                <QuickBtn label="+1" onPress={() => adjust(1)} disabled={busy} primary />
-                <QuickBtn label="+5" onPress={() => adjust(5)} disabled={busy} primary />
-              </View>
+              {canQuickAdjust ? (
+                <>
+                  <View style={styles.quickAdjust}>
+                    <QuickBtn label="−5" onPress={() => void adjust(-5)} disabled={busy} />
+                    <QuickBtn label="−1" onPress={() => void adjust(-1)} disabled={busy} />
+                    <QuickBtn label="+1" onPress={() => void adjust(1)} disabled={busy} primary />
+                    <QuickBtn label="+5" onPress={() => void adjust(5)} disabled={busy} primary />
+                  </View>
 
-              <Button
-                block
-                variant="outline"
-                onPress={() => setAdjustOpen(true)}
-                leading={<ArrowLeftRight size={16} color={c.ink} strokeWidth={1.5} />}
-                style={{ marginTop: 12 }}
-              >
-                Adjust with reason
-              </Button>
+                  <Button
+                    block
+                    variant="outline"
+                    onPress={() => setAdjustOpen(true)}
+                    leading={<ArrowLeftRight size={16} color={c.ink} strokeWidth={1.5} />}
+                    style={{ marginTop: 12 }}
+                  >
+                    Adjust with reason
+                  </Button>
+                </>
+              ) : null}
               {canTransfer ? (
                 <Button
                   block
@@ -1838,11 +2068,18 @@ export default function ItemDetail() {
       <AdjustModal
         visible={adjustOpen}
         item={item}
+        unconfirmed={unconfirmed}
+        queued={queuedAdjust.count > 0 ? queuedAdjust : null}
         busy={busy}
         onClose={() => setAdjustOpen(false)}
         onConfirm={async (delta, reason) => {
-          await adjust(delta, reason);
-          setAdjustOpen(false);
+          const kind = await adjust(delta, reason);
+          // A REFUSAL keeps the sheet open with the typed change and reason, so
+          // the operator can fix what the server objected to instead of typing
+          // both again. Saved and unconfirmed close it: after an unconfirmed
+          // write, a sheet still holding the same change is one tap from
+          // applying it twice.
+          if (kind !== 'refused') setAdjustOpen(false);
         }}
       />
 
@@ -2295,16 +2532,25 @@ function MovementNoteModalContent({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
       >
-        <Pressable
-          onPress={onClose}
-          style={{
-            flex: 1,
-            justifyContent: 'flex-end',
-            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
-          }}
+        {/* Backdrop is a SIBLING behind the card, never its parent: a
+            Pressable ancestor turns the sheet into one VoiceOver element.
+            See the note in AdjustModalContent below. */}
+        <View
+          style={{ flex: 1, justifyContent: 'flex-end' }}
+          accessibilityViewIsModal
+          onAccessibilityEscape={onClose}
         >
           <Pressable
-            onPress={() => undefined}
+            onPress={onClose}
+            onAccessibilityTap={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+            ]}
+          />
+          <View
             style={[
               {
                 backgroundColor: c.card,
@@ -2377,8 +2623,8 @@ function MovementNoteModalContent({
                 </Button>
               </View>
             </View>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </KeyboardAvoidingView>
   );
 }
@@ -2505,15 +2751,43 @@ function AuditCard({ audit }: { audit: AuditCardModel }) {
   );
 }
 
+/**
+ * The ON HAND note while adjustments made offline wait in the outbox. The
+ * number above does not include them: the server has not seen them yet.
+ */
+function queuedOnHandLabel(q: { count: number; net: number }): string {
+  // Two or more can net to 0 ("+1" then "-1"); describeQueuedChanges says how
+  // many, or "0" reads as nothing queued. The Adjust sheet uses the same words.
+  return `Queued offline · ${describeQueuedChanges(q)} · sends when online`;
+}
+
+/**
+ * The ON HAND label while an adjustment is unconfirmed. Two wordings because
+ * they call for different things: while the write can still land, a refresh
+ * may not settle it and the operator should wait; once it cannot, the next
+ * read settles it (this screen re-reads by itself at that moment, and a pull
+ * is the fallback when that read fails).
+ */
+function unconfirmedOnHandLabel(u: UnconfirmedStock): string {
+  return u.mayStillLand
+    ? 'Not confirmed · may still be saving'
+    : 'Not confirmed · pull down to refresh';
+}
+
 function AdjustModal({
   visible,
   item,
+  unconfirmed,
+  queued,
   busy,
   onClose,
   onConfirm,
 }: {
   visible: boolean;
   item: Item;
+  unconfirmed: UnconfirmedStock | null;
+  /** Changes queued offline for this item and not sent yet; null = none. */
+  queued: { count: number; net: number } | null;
   busy: boolean;
   onClose: () => void;
   onConfirm: (delta: number, reason: string) => Promise<void>;
@@ -2532,6 +2806,8 @@ function AdjustModal({
       <AdjustModalContent
         key={String(visible)}
         item={item}
+        unconfirmed={unconfirmed}
+        queued={queued}
         busy={busy}
         onClose={onClose}
         onConfirm={onConfirm}
@@ -2542,11 +2818,15 @@ function AdjustModal({
 
 function AdjustModalContent({
   item,
+  unconfirmed,
+  queued,
   busy,
   onClose,
   onConfirm,
 }: {
   item: Item;
+  unconfirmed: UnconfirmedStock | null;
+  queued: { count: number; net: number } | null;
   busy: boolean;
   onClose: () => void;
   onConfirm: (delta: number, reason: string) => Promise<void>;
@@ -2564,18 +2844,50 @@ function AdjustModalContent({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
       >
-        <Pressable
-          onPress={onClose}
-          style={[
-            {
-              flex: 1,
-              justifyContent: 'flex-end',
-              backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
-            },
-          ]}
+        {/*
+         * THE BACKDROP IS A SIBLING BEHIND THE SHEET, NEVER ITS PARENT.
+         *
+         * This card used to be a `Pressable onPress={() => undefined}` inside a
+         * scrim Pressable, only to stop taps inside it from closing the sheet.
+         * A Pressable is an accessibility element by default, and iOS collapses
+         * everything inside one into a single element: VoiceOver read the whole
+         * sheet as one label (title, on-hand line, both field placeholders,
+         * NEW TOTAL, Cancel, Confirm) and could not reach the CHANGE field or
+         * the Confirm button on their own (simulator walk, 2026-09-25). The same
+         * wrapper also claims the touch responder, which blocks scrolling —
+         * see add-order-items-sheet.tsx.
+         *
+         * Now the scrim is an absolute-fill sibling painted first (so the card
+         * covers it and a tap on the card never reaches it) and is itself a
+         * labelled "Close" button, and the card is a plain View, which is not
+         * an accessibility element. accessibilityViewIsModal (iOS) keeps
+         * VoiceOver inside the open sheet. The sheet guard test
+         * (src/lib/sheet-backdrop-guard.test.ts) fails if the old shape
+         * comes back anywhere in the app.
+         *
+         * The scrim also sets onAccessibilityTap. Without it, a VoiceOver
+         * double-tap on "Close" is a synthetic touch at the CENTRE of the
+         * scrim's frame; with the keyboard up this card covers that point
+         * (it lands on the CHANGE field), so "Close" did not close. With it,
+         * iOS calls the handler directly. onAccessibilityEscape on the
+         * container makes the two-finger scrub close the sheet too.
+         */}
+        <View
+          style={{ flex: 1, justifyContent: 'flex-end' }}
+          accessibilityViewIsModal
+          onAccessibilityEscape={onClose}
         >
           <Pressable
-            onPress={() => undefined}
+            onPress={onClose}
+            onAccessibilityTap={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+            ]}
+          />
+          <View
             style={[
               {
                 backgroundColor: c.card,
@@ -2605,6 +2917,15 @@ function AdjustModalContent({
             </Display>
             <Mono size={11.5} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
               on hand {item.quantity_on_hand} {item.unit_of_measure}
+              {/* The NEW TOTAL below is built on this number, so when the last
+                  adjustment's outcome is unknown the sheet says so too — the
+                  moment someone re-enters a change is the moment a stale base
+                  turns into a double count. */}
+              {unconfirmed ? ' · not confirmed' : ''}
+              {/* Same reason for changes still waiting in the outbox: the base
+                  below does not include them. Worded as the card's note, so
+                  two changes that net to 0 never read as nothing queued. */}
+              {queued !== null ? ` · ${describeQueuedChanges(queued)} queued offline` : ''}
             </Mono>
 
             <View style={{ marginTop: 20, gap: 14 }}>
@@ -2616,6 +2937,7 @@ function AdjustModalContent({
                   value={delta}
                   onChangeText={setDelta}
                   placeholder="e.g. -3 or 12"
+                  accessibilityLabel="Change, plus adds, minus removes"
                   placeholderTextColor={c.ink5}
                   keyboardType="numbers-and-punctuation"
                   autoFocus
@@ -2644,7 +2966,11 @@ function AdjustModalContent({
                   value={reason}
                   onChangeText={setReason}
                   placeholder="Cycle count variance, damage, etc."
+                  accessibilityLabel="Reason, optional"
                   placeholderTextColor={c.ink5}
+                  // The /adjust route refuses a reason over 500 characters;
+                  // stop the typing there instead of failing the whole save.
+                  maxLength={500}
                   // minHeight for the same reason as the CHANGE box above.
                   style={{
                     fontFamily: FONT.displayRegular,
@@ -2698,8 +3024,8 @@ function AdjustModalContent({
                 </Button>
               </View>
             </View>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </KeyboardAvoidingView>
   );
 }
@@ -3089,16 +3415,25 @@ function SerialStatusSheet({
       onRequestClose={onClose}
       statusBarTranslucent
     >
-      <Pressable
-        onPress={onClose}
-        style={{
-          flex: 1,
-          justifyContent: 'flex-end',
-          backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
-        }}
+      {/* Backdrop is a SIBLING behind the card, never its parent: a
+          Pressable ancestor turns the sheet into one VoiceOver element.
+          See the note in AdjustModalContent above. */}
+      <View
+        style={{ flex: 1, justifyContent: 'flex-end' }}
+        accessibilityViewIsModal
+        onAccessibilityEscape={onClose}
       >
         <Pressable
-          onPress={() => undefined}
+          onPress={onClose}
+          onAccessibilityTap={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+          ]}
+        />
+        <View
           style={[
             {
               backgroundColor: c.card,
@@ -3174,8 +3509,8 @@ function SerialStatusSheet({
           <Button block variant="ghost" onPress={onClose} style={{ marginTop: 12 }}>
             Cancel
           </Button>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -3334,16 +3669,25 @@ function AddSerialsModalContent({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
       >
-        <Pressable
-          onPress={onClose}
-          style={{
-            flex: 1,
-            justifyContent: 'flex-end',
-            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
-          }}
+        {/* Backdrop is a SIBLING behind the card, never its parent: a
+            Pressable ancestor turns the sheet into one VoiceOver element.
+            See the note in AdjustModalContent above. */}
+        <View
+          style={{ flex: 1, justifyContent: 'flex-end' }}
+          accessibilityViewIsModal
+          onAccessibilityEscape={onClose}
         >
           <Pressable
-            onPress={() => undefined}
+            onPress={onClose}
+            onAccessibilityTap={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+            ]}
+          />
+          <View
             style={[
               {
                 backgroundColor: c.card,
@@ -3477,8 +3821,8 @@ function AddSerialsModalContent({
                 </Button>
               </View>
             </View>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </KeyboardAvoidingView>
   );
 }

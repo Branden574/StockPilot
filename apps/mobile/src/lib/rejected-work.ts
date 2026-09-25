@@ -80,16 +80,28 @@ export function rejectedWhen(at: number, now: number): string {
 }
 
 /**
- * The Settings > Unsent work row's detail, from the two things that screen
- * lists: this account's rejected record and the changes HELD for another
- * account on this device (queued by someone else, waiting for them to sign
- * in here again; outbox-scope.ts). Held work is not this person's to act on,
- * but it is on the device and only this screen can discard it, so the row
- * must not say "None" over it.
+ * The Settings > Unsent work row's detail, from the things that screen lists:
+ * this account's rejected record and the changes HELD for another account on
+ * this device (queued by someone else, waiting for them to sign in here again;
+ * outbox-scope.ts). Held work is not this person's to act on, but it is on the
+ * device and only this screen can discard it, so the row must not say "None"
+ * over it.
+ *
+ * `unconfirmed` (default 0) is the part of `rejected` that is a stock
+ * adjustment sent from the outbox whose answer never came back
+ * (adjust-outbox.ts). It MAY have been applied, so it is not called "never
+ * sent".
  */
-export function unsentWorkDetail(counts: { rejected: number; held: number }): string {
+export function unsentWorkDetail(counts: {
+  rejected: number;
+  held: number;
+  unconfirmed?: number;
+}): string {
+  const unconfirmed = Math.min(Math.max(counts.unconfirmed ?? 0, 0), counts.rejected);
+  const neverSent = counts.rejected - unconfirmed;
   const parts: string[] = [];
-  if (counts.rejected > 0) parts.push(`${counts.rejected} never sent`);
+  if (neverSent > 0) parts.push(`${neverSent} never sent`);
+  if (unconfirmed > 0) parts.push(`${unconfirmed} not confirmed`);
   if (counts.held > 0) parts.push(`${counts.held} from another account`);
   return parts.length > 0 ? parts.join(' · ') : 'None';
 }

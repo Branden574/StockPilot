@@ -34,13 +34,27 @@ export const maxDuration = 30;
  * (InventoryService.adjustStock, reached from the item page / adjust dialog).
  *
  * Why this route exists at all: the phone called the `adjust_stock` RPC
- * DIRECTLY with a null location — the scan tab until 2026-09-05, when this
- * route was added for it, and the item screen's -5/-1/+1/+5 buttons and
- * "Adjust with reason" sheet until 2026-09-22. That is the exact hole the
- * sibling remove-stock route's header warns about — "Mobile MUST go through the
+ * DIRECTLY with a null location. That is the exact hole the sibling
+ * remove-stock route's header warns about — "Mobile MUST go through the
  * service, or a member without stock:adjust could remove stock by calling the
- * RPC directly" — and it was live on the quick-adjust buttons. Four things went
- * wrong on that path, all fixed by routing here:
+ * RPC directly" — and it was live on the quick-adjust buttons.
+ *
+ * WHO LANDS HERE, AND SINCE WHEN (corrected 2026-09-25):
+ *   • the scan tab's quick adjust, since 2026-09-05, when this route was added
+ *     for it;
+ *   • the item screen's -5/-1/+1/+5 buttons and "Adjust with reason" sheet,
+ *     since the mobile update that carries the 2026-09-25 port. Moving them
+ *     here was first written on 2026-09-22, but that work was never merged,
+ *     and until 2026-09-25 this header said they had moved when main still
+ *     called the RPC. A tap made with no connection is queued on the phone
+ *     and replayed here from its outbox with the same body, AT MOST ONCE
+ *     (apps/mobile/src/lib/adjust-outbox.ts): this route takes no idempotency
+ *     key, so the phone never re-sends an attempt whose answer was lost.
+ *   • NOT phones still running an older bundle: they keep calling the RPC
+ *     until they take that update, and the RPC still admits any staff+ member
+ *     (0327). Nothing in the database closes that path.
+ *
+ * Four things went wrong on the direct path, all fixed by routing here:
  *
  *   1. PERMISSION. The RPC checks only `has_org_role(org, 'staff')` (0327) and
  *      the stock_movements write policy is ADDITIVE (`has_org_role(...,'staff')
@@ -54,7 +68,14 @@ export const maxDuration = 30;
  *   3. DRAW MODE. Omitting p_mode leaves the default 'placed' path, which
  *      raises `insufficient_placed_stock` for an item whose only unit sits in
  *      Staging — the L4L 2026-08-17 incident. adjustStock passes mode 'any' for
- *      manual null-location removals.
+ *      manual null-location removals. The phone gets no mode of its own: its
+ *      -1/-5 is a manual removal, drawn exactly as the web adjust dialog's
+ *      (the shelf first, in the 'placed' order, then Staging only for what the
+ *      shelf does not cover). So a -1 on an item whose remaining units are
+ *      only in Staging now succeeds from the phone, where the direct RPC
+ *      refused it. A shortfall across ALL holdings (drift) is still refused.
+ *      Which warehouse's holdings a null-location draw may reach is unchanged
+ *      here (apply_level_delta; the draw-provenance follow-up).
  *   4. The RPC writes no audit row and fires no `stock.low` webhook; the
  *      service does both.
  *
@@ -139,11 +160,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // The stock movement has COMMITTED by this line. An invalidation that
     // threw used to fall into the catch below and answer 500, telling the
     // phone its adjustment failed when it had not: the operator taps again
-    // and the stock moves twice. Since 2026-09-22 the iPhone item screen's
-    // +/-1, +/-5 and "Adjust with reason" all land here (they called the RPC
-    // directly before), so this is the write path for every manual phone
-    // adjustment. A missed invalidation costs at most the 60 s list-cache
-    // window; a false failure costs a double count. Report it, never fail.
+    // and the stock moves twice (and the phone's outbox, which never re-sends
+    // an answer it lost, would park a write that landed as "not confirmed").
+    // Every manual phone adjustment on a current bundle lands here: the scan
+    // tab, and the item screen's +/-1, +/-5 and "Adjust with reason", online
+    // or replayed from the outbox (see the header for since when). A missed
+    // invalidation costs at most the 60 s list-cache window; a false failure
+    // costs a double count. Report it, never fail.
     try {
       revalidateInventoryList(ctx.organizationId);
     } catch (err) {

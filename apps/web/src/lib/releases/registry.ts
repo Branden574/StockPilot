@@ -28,6 +28,45 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'phone-stock-adjustments-2026-09',
+    revision: 1,
+    status: 'published',
+    title: 'Adjusting stock in the mobile app now matches the web, including offline',
+    summary:
+      'The +1, -1, +5, -5 and Adjust with reason buttons on an item in the mobile app now go through the same checks as the web app and appear in the audit log. A change made with no connection is saved on the phone and sent once you are back online. Sheets and dialogs in the mobile app also work properly with VoiceOver.',
+    publishedAt: '2026-09-25T20:00:00Z',
+    entries: [
+      {
+        id: 'phone-adjust-through-server',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'Stock adjustments on the phone use the same rules as the web',
+        whatChanged:
+          'The +1, -1, +5, -5 and Adjust with reason buttons on an item in the mobile app now go through the same checks as the web app, including permission to adjust stock, and each change is recorded in the audit log. A -1 on an item whose remaining units are only in Staging now works. A +1 goes onto the item\'s rack, or to Unplaced when it has none, instead of Staging.',
+        whyItMatters:
+          'These buttons used to change stock directly, skipping the permission check and leaving no audit record, and a -1 refused stock that was only in Staging.',
+        howItAffectsYou:
+          'If a change is refused, the phone says why and that nothing was changed. With no connection, the change is saved on the phone, shown as queued on the item, and sent once when you are back online; on hand updates after it is sent. Anything the server refuses is listed in Settings, Unsent work, with the reason.',
+        whatToDo:
+          'Update the app when it offers the new version. If Settings shows Unsent work, read the reason and enter the change again if it is still needed.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['stock:adjust'] },
+      },
+      {
+        id: 'phone-sheets-voiceover',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'Sheets and dialogs work with VoiceOver',
+        whatChanged:
+          'In the mobile app, the Adjust stock, note and serial sheets on an item, the Deny and Reopen picking dialogs and the signature view on an order, and the Face ID sign-in offer now let VoiceOver reach each field and button on its own, with a Close button to dismiss them.',
+        whyItMatters:
+          'VoiceOver read each of these as one block of text, so its fields and buttons could not be used with a screen reader.',
+        howItAffectsYou: 'Nothing changes for people who do not use VoiceOver. Tapping outside a sheet still closes it.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
     id: 'count-differences-and-recounts-2026-09',
     revision: 1,
     status: 'published',

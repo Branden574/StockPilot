@@ -21,7 +21,7 @@ import {
   outboxSendDecision,
   REPLACED_BY_LATER_COUNT,
 } from './outbox-scope';
-import { countRejected, markHeld } from './queue';
+import { countRejected, countUnconfirmedAdjust, markHeld } from './queue';
 import { liveOutboxScope } from './session-scope';
 
 /**
@@ -60,6 +60,12 @@ export interface SyncSnapshot {
    * truth without the drains ever seeing these rows.
    */
   rejectedCount: number;
+  /**
+   * Of `rejectedCount`: stock adjustments sent from the outbox whose answer
+   * never came back (adjust-outbox.ts). They MAY have been applied, so the
+   * badge calls them "not confirmed", never "not sent" (sync-badge.ts).
+   */
+  unconfirmedCount: number;
   lastError: string | null;
   lastSyncAt: number | null;
 }
@@ -70,6 +76,7 @@ class CycleCountSyncEngine {
   private status: SyncStatus = 'idle';
   private pendingCount = 0;
   private rejectedCount = 0;
+  private unconfirmedCount = 0;
   private lastError: string | null = null;
   private lastSyncAt: number | null = null;
   private listeners = new Set<Listener>();
@@ -130,6 +137,7 @@ class CycleCountSyncEngine {
       status: this.status,
       pendingCount: this.pendingCount,
       rejectedCount: this.rejectedCount,
+      unconfirmedCount: this.unconfirmedCount,
       lastError: this.lastError,
       lastSyncAt: this.lastSyncAt,
     };
@@ -143,6 +151,7 @@ class CycleCountSyncEngine {
   async refreshPendingCount(): Promise<void> {
     this.pendingCount = await totalPendingCount();
     this.rejectedCount = await this.safeRejectedCount();
+    this.unconfirmedCount = await this.safeUnconfirmedCount();
     this.emit();
   }
 
@@ -157,6 +166,16 @@ class CycleCountSyncEngine {
     } catch (e) {
       console.warn('[cycle-count-sync] rejected count failed', e);
       return this.rejectedCount;
+    }
+  }
+
+  /** Same rule as safeRejectedCount: display-only, never breaks a drain. */
+  private async safeUnconfirmedCount(): Promise<number> {
+    try {
+      return await countUnconfirmedAdjust();
+    } catch (e) {
+      console.warn('[cycle-count-sync] unconfirmed count failed', e);
+      return this.unconfirmedCount;
     }
   }
 
@@ -192,6 +211,7 @@ class CycleCountSyncEngine {
     const online = await this.isOnline();
     this.pendingCount = await totalPendingCount();
     this.rejectedCount = await this.safeRejectedCount();
+    this.unconfirmedCount = await this.safeUnconfirmedCount();
     if (!online) {
       this.status = 'offline';
       this.emit();
@@ -314,6 +334,7 @@ class CycleCountSyncEngine {
 
       this.pendingCount = await totalPendingCount();
       this.rejectedCount = await this.safeRejectedCount();
+      this.unconfirmedCount = await this.safeUnconfirmedCount();
       if (this.status !== 'offline') {
         // 'failing' means "still retrying". A rejected row will never be
         // retried, so the engine is genuinely idle afterwards.

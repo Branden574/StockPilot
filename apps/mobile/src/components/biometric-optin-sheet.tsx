@@ -72,15 +72,30 @@ export function BiometricOptInSheet({
       onRequestClose={onDismiss}
       statusBarTranslucent
     >
-      <Pressable
-        style={[
-          styles.scrim,
-          { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
-        ]}
-        onPress={onDismiss}
-      >
+      {/*
+       * Backdrop is a SIBLING behind the sheet, never its parent. The card used
+       * to be a `Pressable onPress={() => undefined}` inside the scrim
+       * Pressable; a Pressable is an accessibility element by default and iOS
+       * collapses everything inside it, so VoiceOver read the sheet as one label
+       * and could not reach "Enable Face ID" or "Not now" on their own. See
+       * add-order-items-sheet.tsx and src/lib/sheet-backdrop-guard.test.ts.
+       * accessibilityViewIsModal (iOS) keeps VoiceOver inside the open sheet.
+       * onAccessibilityTap makes a VoiceOver double-tap on the scrim call
+       * onDismiss directly; without it iOS taps the scrim's centre, which this
+       * card covers. onAccessibilityEscape: the two-finger scrub dismisses.
+       */}
+      <View style={styles.container} accessibilityViewIsModal onAccessibilityEscape={onDismiss}>
         <Pressable
-          onPress={() => undefined}
+          onPress={onDismiss}
+          onAccessibilityTap={onDismiss}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+          ]}
+        />
+        <View
           style={[
             styles.sheet,
             {
@@ -134,14 +149,14 @@ export function BiometricOptInSheet({
               Not now
             </Button>
           </View>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  scrim: {
+  container: {
     flex: 1,
     justifyContent: 'flex-end',
   },

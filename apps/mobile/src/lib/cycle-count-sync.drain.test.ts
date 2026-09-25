@@ -54,6 +54,7 @@ vi.mock('./cycle-count-cache', () => cacheMock);
 
 const queueMock = vi.hoisted(() => ({
   countRejected: vi.fn(async () => 0),
+  countUnconfirmedAdjust: vi.fn(async () => 0),
   markHeld: vi.fn(),
 }));
 vi.mock('./queue', () => queueMock);
@@ -306,5 +307,17 @@ describe('the record body says when the count was taken (server 0369)', () => {
     const body = sentBody();
     expect(body?.capturedAt).toBe('2026-09-24T09:15:00.000Z');
     expect(typeof body?.clientSentAt).toBe('string');
+  });
+});
+
+describe('the snapshot the header badge reads', () => {
+  it('carries the not-confirmed adjustments apart from the rest of the rejected record', async () => {
+    cacheMock.rows = [];
+    queueMock.countRejected.mockResolvedValueOnce(3);
+    queueMock.countUnconfirmedAdjust.mockResolvedValueOnce(1);
+
+    await cycleCountSync.refreshPendingCount();
+
+    expect(cycleCountSync.snapshot()).toMatchObject({ rejectedCount: 3, unconfirmedCount: 1 });
   });
 });
