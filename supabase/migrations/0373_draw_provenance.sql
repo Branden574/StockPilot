@@ -39,7 +39,10 @@
 --      share as its numeric(14,4) holding moved and skips a share that
 --      rounds to zero, so a quantity with more than four decimals (which
 --      adjust_stock and the API accept) records the truth and never trips
---      the table's CHECK (review, 2026-09-25).
+--      the table's CHECK (review, 2026-09-25). The drawer's scope is worked
+--      out once per call: service or manager for the whole call, else one
+--      caller_can_write_location per distinct (organization, warehouse) of
+--      the holdings touched, never one per row (perf review, 2026-09-25).
 --   4. public.apply_level_delta keeps its signature, default, SECURITY
 --      DEFINER, search_path, ACL and comment. It keeps its own gate verbatim
 --      and then calls the engine with a NULL movement id, so it moves
@@ -152,7 +155,9 @@ set lock_timeout = '5s';
 -- 0) Preflight: refuse (55000) unless every body this file restates is the
 --    exact text it was built from.
 -- ═══════════════════════════════════════════════════════════════════════════
--- md5(prosrc) at the pre-0373 head (local, PG 17.6.1.166, 2026-09-25):
+-- md5(prosrc) at the pre-0373 head (local, PG 17.6.1.166, 2026-09-25;
+-- re-derived at 0372 after the rebase onto F1-2: unchanged, 0372 restates
+-- none of these bodies):
 --   public.apply_level_delta             4be0f94c4390e7cd9c15a73e629133bf (0359)
 --   ledger.adjust_stock                  5ac1ac45313bb352e2ff5c015aa18cd3 (0371)
 --   ledger.distribute_bundle             489959c7ad7fdc9cc153c6326e503dc5 (0365+0367)
@@ -309,6 +314,21 @@ comment on column public.stock_movement_holdings.actor_scope is
 -- current max, so a second engine call for the same movement appends instead
 -- of colliding. Raises nothing by design; the table's CHECK and FK
 -- constraints fail loudly on a bug.
+--
+-- The drawer's scope is worked out once per call, not once per row (perf
+-- review, 2026-09-25: per row, a staff 50-line pick paid 150
+-- caller_can_write_location calls). Service and manager are one answer for
+-- the whole call, decided before the insert exactly as before. Below manager
+-- the answer depends on the holding: caller_can_write_location reads its
+-- location only for organization_id and warehouse_id (and auth.uid(), fixed
+-- for the call), so it is asked once per distinct (organization, warehouse)
+-- among the call's locations, on any one location of that pair, inside the
+-- insert's own statement (same snapshot as the per-row call it replaces).
+-- A missing location and a NULL id share the (NULL, NULL) pair, and both
+-- answer false. pgTAP 0373 S1-S9 pin caller_can_write_location's text (a
+-- change to what it reads fails there instead of silently skewing the
+-- scope), prove the values equal the per-row formula for six personas, and
+-- count the calls.
 create function ledger._record_holdings(
   p_movement_id uuid,
   p_org         uuid,
@@ -325,13 +345,17 @@ security invoker
 set search_path = public
 as $function$
 declare
-  v_uid uuid := auth.uid();
-  v_mgr boolean;
+  v_uid   uuid := auth.uid();
+  v_scope text;  -- the whole call's scope: service or manager; NULL below manager
 begin
   if p_movement_id is null or coalesce(cardinality(p_locs), 0) = 0 then
     return;
   end if;
-  v_mgr := v_uid is not null and public.has_org_role(p_org, 'manager');
+  if v_uid is null then
+    v_scope := 'service';
+  elsif public.has_org_role(p_org, 'manager') then
+    v_scope := 'manager';
+  end if;
 
   -- Each share is recorded as its holding actually moved. The engine's shares
   -- carry the caller's full precision (adjust_stock takes an unconstrained
@@ -343,19 +367,31 @@ begin
   -- zero moved nothing and records no row (only the last share of a draw can
   -- be fractional), so the CHECK (quantity <> 0) cannot fail and the rows
   -- equal the holdings difference exactly. seq numbers the kept rows.
+  --
+  -- s is read only below manager (COALESCE stops at a non-NULL v_scope, and a
+  -- CTE that is never read is never run), and MATERIALIZED so each pair's
+  -- caller_can_write_location runs once however many rows read it. It covers
+  -- every location passed, kept or not: an extra pair only costs a call.
   insert into public.stock_movement_holdings (
     movement_id, seq, organization_id, item_id, location_id, quantity, step, mode,
     location_kind, location_warehouse_id, item_warehouse_id, actor_scope)
+  with s as materialized (
+    select g.organization_id, g.warehouse_id,
+           case when public.caller_can_write_location(any_value(x.loc)) then 'in_scope'
+                else 'out_of_scope' end as scope
+      from unnest(p_locs) as x(loc)
+      left join public.locations g on g.id = x.loc
+     group by g.organization_id, g.warehouse_id
+  )
   select p_movement_id,
          coalesce((select max(h.seq) from public.stock_movement_holdings h
                     where h.movement_id = p_movement_id), 0)
            + (row_number() over (order by u.ord))::int,
          p_org, p_item_id, u.loc, u.qty, u.step, p_mode,
          l.kind, l.warehouse_id, p_item_wh,
-         case when v_uid is null then 'service'
-              when v_mgr then 'manager'
-              when public.caller_can_write_location(u.loc) then 'in_scope'
-              else 'out_of_scope' end
+         coalesce(v_scope, (select s.scope from s
+                             where s.organization_id is not distinct from l.organization_id
+                               and s.warehouse_id is not distinct from l.warehouse_id))
     from (select x.loc, x.step, x.ord, floor(x.qty * 10000 + 0.5) / 10000 as qty
             from unnest(p_locs, p_qtys, p_steps) with ordinality as x(loc, qty, step, ord)) u
     left join public.locations l on l.id = u.loc
@@ -368,7 +404,7 @@ revoke all on function ledger._record_holdings(uuid, uuid, uuid, uuid, uuid[], n
   from public, anon, authenticated, service_role;
 
 comment on function ledger._record_holdings(uuid, uuid, uuid, uuid, uuid[], numeric[], text[], text) is
-  '0373: the only writer of public.stock_movement_holdings. Called only by ledger.apply_level_delta_for (SECURITY DEFINER), so it runs as that function''s owner; no API role holds EXECUTE. A NULL movement id or an empty array records nothing. Each share is recorded as its numeric(14,4) holding moved (rounded half up to four decimals); a share that rounds to zero records no row. seq continues from the movement''s current max over the kept rows. actor_scope: service / manager / in_scope / out_of_scope (caller_can_write_location).';
+  '0373: the only writer of public.stock_movement_holdings. Called only by ledger.apply_level_delta_for (SECURITY DEFINER), so it runs as that function''s owner; no API role holds EXECUTE. A NULL movement id or an empty array records nothing. Each share is recorded as its numeric(14,4) holding moved (rounded half up to four decimals); a share that rounds to zero records no row. seq continues from the movement''s current max over the kept rows. actor_scope: service / manager / in_scope / out_of_scope (caller_can_write_location), worked out once per call: service or manager for the whole call, else caller_can_write_location once per distinct (organization, warehouse) of the call''s locations, in the insert''s own statement.';
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
