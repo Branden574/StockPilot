@@ -47,10 +47,13 @@
 --   S. SCOPE ONCE PER CALL (perf review, 2026-09-25): service and manager
 --      are one answer per call; below manager caller_can_write_location runs
 --      once per distinct (organization, warehouse) of the call's locations.
---      Its text is pinned (it must read the location only for those two
---      columns); six personas over eight locations and six pairs give
---      literal values equal to the old per-row formula, with the call
---      counts; a real six-holding staff draw asks three times, not six.
+--      Its text and volatility are pinned (it must read the location only
+--      for those two columns, and run in the INSERT's snapshot); six personas
+--      over eight locations and six pairs give literal values equal to the
+--      old per-row formula, with the call counts; a real six-holding staff
+--      draw asks three times, not six. A one-location call (every increment,
+--      most adjusts) asks once, of that location, and never runs the pair CTE
+--      (S10-S15, review 2026-09-25: counted by the locations reads).
 --
 -- The push-time lock order (the migration's lock prelude) needs two sessions:
 -- scripts/db-concurrency/0373_push_lock_order.sh.
@@ -122,8 +125,9 @@
 --        -> post; P3, P5, D4, D5, D9, D16, D19, D21, D32 ...
 --   M22  recorder executable by authenticated
 --        -> A13
---   M26  recorder: in_scope and out_of_scope swapped
---        -> C8, D4, D5, D9, D16, D19, E6, S5, S6, S7, S8
+--   M26  recorder: in_scope and out_of_scope swapped (in the pair CTE; the
+--        one-location path is M44)
+--        -> C8, D4, D5, D9, D16, S5, S6, S7, S8
 --   M28  table added to the realtime publication
 --        -> A9
 --   M29  recorder: insert the unrounded share (the text before the review fix)
@@ -136,7 +140,8 @@
 --        EQUIVALENT (only the last share of a draw can be fractional, so a
 --        dropped row is always last); survives by construction.
 --   Scope once per call (perf review, 2026-09-25; re-run with M17, M18,
---   M22, M26, M29-M31 on the new recorder, all killed as listed above):
+--   M22, M26, M29-M31 on the new recorder, all killed as listed above; the
+--   whole set re-run on the one-location path, 2026-09-25, lists below):
 --   M33  recorder: scope asked per row again (values identical, the old cost)
 --        -> S5, S6, S7, S9
 --   M34  recorder: pair key drops the warehouse (organization only)
@@ -146,26 +151,40 @@
 --   M36  recorder: one answer for the whole call below manager (first pair wins)
 --        -> C8, D5, D9, S5, S6, S7, S8, S9
 --   M37  recorder: manager check dropped (managers go through caller_can_write_location)
---        -> C7, D21, D25, D28, D32, S3, S4
+--        -> C7, D21, D25, D28, D32, S3, S4, S10, S13
 --   M38  recorder: COALESCE operands swapped (the pair's answer beats service/manager)
---        -> C1, C2, C3, C4, C5, C7, D21, D25, D28, D32, E6, S2, S3, S4
+--        -> C1, C2, C3, C4, C5, C7, D21, D25, D28, D32, E6, S2, S3, S4, S10, S13
 --   M39  recorder: the pair CTE not MATERIALIZED (inlined into the per-row subplan)
 --        -> S5, S6, S7, S9
 --   M40  recorder: pair lookup with = instead of IS NOT DISTINCT FROM (a NULL
 --        warehouse never matches; actor_scope NULL fails the NOT NULL)
 --        -> C8, D1, D2, D4, D5, D6, D9, D13, E1, E2, E3, E9, F8, F9, F10 ...
 --   M41  recorder: service decided by has_org_role instead of the NULL subject
---        -> C1, C2, C3, C4, C5, E6, S2
+--        -> C1, C2, C3, C4, C5, E6, S2, S10
+--   One-location path (review, 2026-09-25):
+--   M42  recorder: the one-location path removed (every call through the pair
+--        CTE; values and call counts identical, only the CTE's cost)
+--        -> S13
+--   M43  recorder: the one-location path taken for every call (per-row again)
+--        -> S5, S6, S7, S9
+--   M44  recorder: the one-location path swaps in_scope and out_of_scope
+--        -> D9, D16, D19, E6, S11, S12, S14
+--   M45  recorder: the one-location path asks has_org_role(staff) instead of
+--        the location
+--        -> S11, S12, S13, S14, S15
 --   M23  the migration's drift preflight disabled: not reachable from pgTAP
 --        (the migration is applied before tests run); killed by the live
 --        drift check (drift planted in each of the five restated bodies:
 --        55000 with the preflight, silently overwritten without it).
+--   M46  the preflight's caller_can_write_location pin removed: likewise
+--        killed by the live drift check (a planted body drift and a VOLATILE
+--        caller_can_write_location: 55000 with the pin, applied without it).
 --
 -- Namespace: 03730000. Wrapped in begin/rollback; nothing leaks.
 
 begin;
 
-select plan(148);
+select plan(154);
 
 \set orgS    '\'03730000-0000-0000-0000-000000000001\''
 \set orgF    '\'03730000-0000-0000-0000-000000000002\''
@@ -1445,9 +1464,9 @@ select is(
 -- the calls on a real six-holding staff draw.
 -- ══════════════════════════════════════════════════════════════════════════
 select is(
-  (select md5(p.prosrc) from pg_proc p where p.oid = 'public.caller_can_write_location(uuid)'::regprocedure),
-  '188634bf8552a0064bfbf1ebfecf814f',
-  'S1: caller_can_write_location is the text the recorder''s per-(organization, warehouse) evaluation was proven against: it reads the location only for organization_id and warehouse_id. If this fails, re-prove ledger._record_holdings before updating the pin');
+  (select md5(p.prosrc) || '|' || p.provolatile::text from pg_proc p where p.oid = 'public.caller_can_write_location(uuid)'::regprocedure),
+  '188634bf8552a0064bfbf1ebfecf814f|s',
+  'S1: caller_can_write_location is the text and volatility the recorder''s per-(organization, warehouse) evaluation was proven against: it reads the location only for organization_id and warehouse_id, and STABLE runs it in the INSERT''s snapshot. The migration''s preflight refuses the same drift at push time. If this fails, re-prove ledger._record_holdings before updating both pins');
 
 -- An org-level location of the FOREIGN org: (orgF, NULL) must never share an
 -- answer with the home org's Site (orgS, NULL).
@@ -1542,6 +1561,97 @@ select set_config('stockpilot.ledger', '', true);
 set local "request.jwt.claim.sub" to '';
 select is(pg_temp.ccwl_calls() - (select before from s_calls), 3::bigint,
   'S9: that draw asked caller_can_write_location three times (WA, the Site''s org level, WB), not six');
+
+-- ONE-LOCATION CALLS (review, 2026-09-25). Every increment and most adjusts
+-- pass one location; the recorder asks caller_can_write_location of it
+-- directly, inside the insert, and never runs the pair CTE (which cost 7 us
+-- more than the per-row call there). Each of the eight locations above as
+-- its own call, per persona: <tag:scope, in call order>#per_row=<every row
+-- equals the old per-row formula>#calls=<total caller_can_write_location calls>.
+create function pg_temp.one_probe(p_sub text) returns text language sql as $f$
+  select string_agg(split_part(y.r, '#', 1), ',' order by y.o)
+         || '#per_row=' || bool_and(split_part(y.r, '#', 2) = 'per_row=true')::text
+         || '#calls=' || sum(split_part(split_part(y.r, '#', 3), '=', 2)::int)
+    from (select x.o, pg_temp.scope_probe(p_sub, array[x.loc]) as r
+            from unnest((select locs from s_locs)) with ordinality as x(loc, o)) y;
+$f$;
+
+select is(pg_temp.one_probe('') || ' | ' || pg_temp.one_probe(:u_adm) || ' | ' || pg_temp.one_probe(:u_mgr),
+  'A1:service,UA:service,SA:service,S:service,B1:service,F1:service,FS:service,null:service#per_row=true#calls=0'
+  || ' | A1:manager,UA:manager,SA:manager,S:manager,B1:manager,F1:manager,FS:manager,null:manager#per_row=true#calls=0'
+  || ' | A1:manager,UA:manager,SA:manager,S:manager,B1:manager,F1:manager,FS:manager,null:manager#per_row=true#calls=0',
+  'S10: one-location calls as service, an admin and a manager: one answer each, no caller_can_write_location call');
+select is(pg_temp.one_probe(:u_stf),
+  'A1:in_scope,UA:in_scope,SA:in_scope,S:in_scope,B1:out_of_scope,F1:out_of_scope,FS:out_of_scope,null:out_of_scope#per_row=true#calls=8',
+  'S11: one-location calls as WA staff: the per-row answer for each location, one call per call');
+select is(pg_temp.one_probe(:u_vwr) || ' | ' || pg_temp.one_probe(:u_out),
+  'A1:out_of_scope,UA:out_of_scope,SA:out_of_scope,S:in_scope,B1:out_of_scope,F1:out_of_scope,FS:out_of_scope,null:out_of_scope#per_row=true#calls=8'
+  || ' | A1:out_of_scope,UA:out_of_scope,SA:out_of_scope,S:out_of_scope,B1:out_of_scope,F1:in_scope,FS:in_scope,null:out_of_scope#per_row=true#calls=8',
+  'S12: one-location calls as the WB viewer and the foreign manager: the per-row answer for each location, one call per call');
+
+-- The pair CTE does not run on a one-location call: a staff call reads
+-- public.locations exactly one caller_can_write_location's worth more than a
+-- manager's (which never asks), where the CTE's join would add another read.
+-- Seven calls each, across the plan cache's custom-to-generic switch. Reports
+-- <location>:extra=<distinct staff-minus-manager reads>,direct=<distinct reads
+-- of one direct caller_can_write_location call>.
+create function pg_temp.loc_reads() returns bigint language sql stable as $f$
+  select coalesce(t.seq_scan, 0) + coalesce(t.idx_scan, 0)
+    from pg_stat_xact_user_tables t where t.relid = 'public.locations'::regclass;
+$f$;
+create function pg_temp.reads_probe(p_sub text, p_loc uuid, p_direct boolean) returns bigint
+language plpgsql as $f$
+declare
+  v bigint;
+begin
+  begin
+    perform set_config('request.jwt.claim.sub', p_sub, true);
+    v := pg_temp.loc_reads();
+    if p_direct then
+      perform public.caller_can_write_location(p_loc);
+    else
+      perform ledger._record_holdings(gen_random_uuid(), '03730000-0000-0000-0000-000000000001', '03730000-0000-0000-0000-0000000000c1',
+        '03730000-0000-0000-0000-0000000000b1', array[p_loc], array[-1::numeric], array['placed'], 'placed');
+    end if;
+    v := pg_temp.loc_reads() - v;
+    raise exception using errcode = 'ZX377', message = v::text;
+  exception
+    when sqlstate 'ZX377' then return sqlerrm::bigint;
+  end;
+end $f$;
+select is(
+  (select string_agg(z.tag || ':extra=' || z.extra || ',direct=' || z.direct, ' ' order by z.tag)
+     from (select v.tag,
+                  string_agg(distinct (pg_temp.reads_probe(:u_stf, v.loc, false) - pg_temp.reads_probe(:u_mgr, v.loc, false))::text, ';') as extra,
+                  string_agg(distinct pg_temp.reads_probe(:u_stf, v.loc, true)::text, ';') as direct
+             from (values (:locA1::uuid, 'A1'), (:locB1::uuid, 'B1')) v(loc, tag), generate_series(1, 7) g
+            group by v.tag) z),
+  'A1:extra=1,direct=1 B1:extra=1,direct=1',
+  'S13: a one-location staff call never runs the pair CTE: it reads locations one caller_can_write_location more than a manager''s call, in and out of scope, custom and generic plans');
+
+-- Real engine calls as WA staff: a +1 (always one location, WA Staging) and a
+-- one-holding draw from the WB rack.
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type)
+values ('03730000-0000-0000-0000-0000000000cc', :orgS, :whA, 'PV-0373-O', 'One Holding Item 0373', 2, 'active', 'none');
+delete from public.item_stock_levels where item_id = '03730000-0000-0000-0000-0000000000cc';
+insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
+values (:orgS, '03730000-0000-0000-0000-0000000000cc', :locB1, 2);
+update s_calls set before = pg_temp.ccwl_calls();
+set local "request.jwt.claim.sub" to :u_stf;
+select set_config('stockpilot.ledger', pg_current_xact_id()::text, true);
+select is(
+  split_part(pg_temp.run(format($$select ledger.apply_level_delta_for(%L, '03730000-0000-0000-0000-0000000000cc', 1, 'placed')$$, '03730000-0000-0000-0000-00000000f0a1'),
+                         '03730000-0000-0000-0000-0000000000cc', '03730000-0000-0000-0000-00000000f0a1'), '#', 2)
+  || ' | ' ||
+  split_part(pg_temp.run(format($$select ledger.apply_level_delta_for(%L, '03730000-0000-0000-0000-0000000000cc', -1, 'placed')$$, '03730000-0000-0000-0000-00000000f0a2'),
+                         '03730000-0000-0000-0000-0000000000cc', '03730000-0000-0000-0000-00000000f0a2'), '#', 2),
+  '1:SA:1:increment:in_scope | 1:B1:-1:placed:out_of_scope',
+  'S14: a WA staff +1 lands in WA Staging (in scope) and a one-holding -1 takes from the WB rack (out of scope)');
+select set_config('stockpilot.ledger', '', true);
+set local "request.jwt.claim.sub" to '';
+select is(pg_temp.ccwl_calls() - (select before from s_calls), 2::bigint,
+  'S15: those two engine calls asked caller_can_write_location once each');
 
 select * from finish();
 rollback;

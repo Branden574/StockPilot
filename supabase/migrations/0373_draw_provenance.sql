@@ -42,7 +42,8 @@
 --      the table's CHECK (review, 2026-09-25). The drawer's scope is worked
 --      out once per call: service or manager for the whole call, else one
 --      caller_can_write_location per distinct (organization, warehouse) of
---      the holdings touched, never one per row (perf review, 2026-09-25).
+--      the holdings touched, never one per row (perf review, 2026-09-25); a
+--      one-location call asks it once, of that location, with no pair CTE.
 --   4. public.apply_level_delta keeps its signature, default, SECURITY
 --      DEFINER, search_path, ACL and comment. It keeps its own gate verbatim
 --      and then calls the engine with a NULL movement id, so it moves
@@ -127,9 +128,11 @@
 -- insufficient_placed_stock. The recorder raises nothing by design; its
 -- CHECK and FK constraints fail loudly (23514 / 23503) only on a bug. This
 -- file raises 55000 at push time if a body it restates has drifted from the
--- text it was built from, if 0373 is already applied, if authenticated
--- cannot INSERT stock_movements.id, or if a post-check fails, and fails
--- with 55P03 when it cannot take its two table locks (PROD PUSH NOTE).
+-- text it was built from, if caller_can_write_location has drifted from the
+-- text (or volatility) the recorder was proven against, if 0373 is already
+-- applied, if authenticated cannot INSERT stock_movements.id, or if a
+-- post-check fails, and fails with 55P03 when it cannot take its two table
+-- locks (PROD PUSH NOTE).
 -- Never 40001/40P01 (0367).
 --
 -- ── PROD PUSH NOTE ──────────────────────────────────────────────────────────
@@ -163,10 +166,19 @@ set lock_timeout = '5s';
 --   ledger.distribute_bundle             489959c7ad7fdc9cc153c6326e503dc5 (0365+0367)
 --   ledger.assemble_bundle               8e9893d5666762e238bd354cc85bdbd1 (0365)
 --   ledger.process_return_disposition    d16d045bafacef106377a2767c972704 (0197/0359)
+-- and one body this file does NOT restate but relies on:
+--   public.caller_can_write_location     188634bf8552a0064bfbf1ebfecf814f (0365), STABLE
+-- ledger._record_holdings (section 3) asks it once per distinct (organization,
+-- warehouse) of a call's locations. That equals the per-row answer only while
+-- it reads the location for organization_id and warehouse_id alone and stays
+-- STABLE (so it runs in the INSERT's own snapshot). A drifted body or
+-- volatility is refused here, before anything is created; pgTAP 0373 S1 pins
+-- both locally (review, 2026-09-25).
 do $pre$
 declare
   r record;
   v_have text;
+  v_vol  text;
 begin
   if to_regclass('public.stock_movement_holdings') is not null
      or to_regclass('public.stock_movements_id_org_item_key') is not null
@@ -193,6 +205,15 @@ begin
         using errcode = '55000';
     end if;
   end loop;
+
+  select md5(p.prosrc), p.provolatile::text into v_have, v_vol
+    from pg_proc p
+   where p.oid = to_regprocedure('public.caller_can_write_location(uuid)');
+  if v_have is distinct from '188634bf8552a0064bfbf1ebfecf814f' or v_vol is distinct from 's' then
+    raise exception '0373: public.caller_can_write_location(uuid) drifted from the text ledger._record_holdings was proven against (md5 %, volatility %; want 188634bf8552a0064bfbf1ebfecf814f, s)',
+      coalesce(v_have, '<missing>'), coalesce(v_vol, '<missing>')
+      using errcode = '55000';
+  end if;
 
   -- The INVOKER callers insert an explicit id into stock_movements as the
   -- user. That needs INSERT on the id column (today the default table-level
@@ -324,11 +345,13 @@ comment on column public.stock_movement_holdings.actor_scope is
 -- for the call), so it is asked once per distinct (organization, warehouse)
 -- among the call's locations, on any one location of that pair, inside the
 -- insert's own statement (same snapshot as the per-row call it replaces).
--- A missing location and a NULL id share the (NULL, NULL) pair, and both
--- answer false. pgTAP 0373 S1-S9 pin caller_can_write_location's text (a
--- change to what it reads fails there instead of silently skewing the
--- scope), prove the values equal the per-row formula for six personas, and
--- count the calls.
+-- A one-location call asks it of that location directly, also inside the
+-- insert. A missing location and a NULL id share the (NULL, NULL) pair, and
+-- both answer false. The section 0 preflight and pgTAP 0373 S1 pin
+-- caller_can_write_location's text and volatility (a change to what it reads
+-- is refused instead of silently skewing the scope); S2-S15 prove the values
+-- equal the per-row formula for six personas and count the calls, and S13
+-- that a one-location call never runs the pair CTE.
 create function ledger._record_holdings(
   p_movement_id uuid,
   p_org         uuid,
@@ -368,10 +391,15 @@ begin
   -- be fractional), so the CHECK (quantity <> 0) cannot fail and the rows
   -- equal the holdings difference exactly. seq numbers the kept rows.
   --
-  -- s is read only below manager (COALESCE stops at a non-NULL v_scope, and a
-  -- CTE that is never read is never run), and MATERIALIZED so each pair's
-  -- caller_can_write_location runs once however many rows read it. It covers
-  -- every location passed, kept or not: an extra pair only costs a call.
+  -- Below manager (COALESCE stops at a non-NULL v_scope), a call with ONE
+  -- location (every increment, and most adjusts) asks caller_can_write_location
+  -- of it directly: at most one row, so that is the per-row formula itself,
+  -- one call, and the pair CTE never runs (the CTE cost 7 us more than the
+  -- per-row call on a one-holding staff draw; review, 2026-09-25). A call with
+  -- several locations reads s, MATERIALIZED so each pair's
+  -- caller_can_write_location runs once however many rows read it. s covers
+  -- every location passed, kept or not: an extra pair only costs a call. A
+  -- CTE that is never read is never run.
   insert into public.stock_movement_holdings (
     movement_id, seq, organization_id, item_id, location_id, quantity, step, mode,
     location_kind, location_warehouse_id, item_warehouse_id, actor_scope)
@@ -389,9 +417,13 @@ begin
            + (row_number() over (order by u.ord))::int,
          p_org, p_item_id, u.loc, u.qty, u.step, p_mode,
          l.kind, l.warehouse_id, p_item_wh,
-         coalesce(v_scope, (select s.scope from s
-                             where s.organization_id is not distinct from l.organization_id
-                               and s.warehouse_id is not distinct from l.warehouse_id))
+         coalesce(v_scope,
+                  case when cardinality(p_locs) = 1
+                       then case when public.caller_can_write_location(u.loc) then 'in_scope'
+                                 else 'out_of_scope' end
+                       else (select s.scope from s
+                              where s.organization_id is not distinct from l.organization_id
+                                and s.warehouse_id is not distinct from l.warehouse_id) end)
     from (select x.loc, x.step, x.ord, floor(x.qty * 10000 + 0.5) / 10000 as qty
             from unnest(p_locs, p_qtys, p_steps) with ordinality as x(loc, qty, step, ord)) u
     left join public.locations l on l.id = u.loc
@@ -404,7 +436,7 @@ revoke all on function ledger._record_holdings(uuid, uuid, uuid, uuid, uuid[], n
   from public, anon, authenticated, service_role;
 
 comment on function ledger._record_holdings(uuid, uuid, uuid, uuid, uuid[], numeric[], text[], text) is
-  '0373: the only writer of public.stock_movement_holdings. Called only by ledger.apply_level_delta_for (SECURITY DEFINER), so it runs as that function''s owner; no API role holds EXECUTE. A NULL movement id or an empty array records nothing. Each share is recorded as its numeric(14,4) holding moved (rounded half up to four decimals); a share that rounds to zero records no row. seq continues from the movement''s current max over the kept rows. actor_scope: service / manager / in_scope / out_of_scope (caller_can_write_location), worked out once per call: service or manager for the whole call, else caller_can_write_location once per distinct (organization, warehouse) of the call''s locations, in the insert''s own statement.';
+  '0373: the only writer of public.stock_movement_holdings. Called only by ledger.apply_level_delta_for (SECURITY DEFINER), so it runs as that function''s owner; no API role holds EXECUTE. A NULL movement id or an empty array records nothing. Each share is recorded as its numeric(14,4) holding moved (rounded half up to four decimals); a share that rounds to zero records no row. seq continues from the movement''s current max over the kept rows. actor_scope: service / manager / in_scope / out_of_scope (caller_can_write_location), worked out once per call: service or manager for the whole call, else caller_can_write_location once per distinct (organization, warehouse) of the call''s locations (once, of that location, for a one-location call), in the insert''s own statement.';
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
