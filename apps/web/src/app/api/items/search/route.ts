@@ -52,7 +52,8 @@ const VALID_SORTS = new Set<ItemListSort>([
  *
  * Also the shared search behind the cycle-count picker (`?browse=1`), the
  * order add-items picker (repeated `?type=`) and the PO line-item picker
- * (`?slim=1&isbn=1&expected=any`, plus `?ids=` for label resolution). Every
+ * (`?slim=1&isbn=1&expected=any`, plus `?ids=` for label resolution), and the
+ * bundle component picker (`?rank=relevance`, best match first). Every
  * flag added for one of those is opt-in: with none of them present the
  * request behaves exactly as it always has.
  */
@@ -198,6 +199,35 @@ export async function GET(req: Request): Promise<Response> {
       is_bundle: r.is_bundle === true,
     }));
     return NextResponse.json({ items, total: items.length });
+  }
+
+  // Relevance mode (`?rank=relevance`), for a search-as-you-type picker that
+  // wants the item the person meant at the top: an exact SKU or barcode
+  // first, then name/SKU prefix, a word in the name, anything containing the
+  // search, and rows that only have every word somewhere; name order within
+  // each. InventoryService.searchForPicker reads the matches and ranks them in
+  // one level of requests, with no holdings, value sum or images.
+  //
+  // It honours q, type, bundles, status, expected, isbn, wh and limit (default
+  // 20, at most 200), and nothing else: no paging (`offset`), no sort, no
+  // chip filters. Rows are the picker shape: id, sku, name, barcode,
+  // item_type, quantity_on_hand, awaiting_first_receipt, warehouse_name and
+  // match. `total` counts every match, so a picker can say how many it is not
+  // showing. Opt-in: without the flag nothing below changes.
+  if (params.get('rank') === 'relevance' && raw.length >= 2) {
+    const rankLimit = Math.min(200, Math.max(1, Number(params.get('limit')) || 20));
+    const ranked = await inventorySvc.searchForPicker({
+      q: raw,
+      itemType,
+      itemTypes,
+      excludeBundles,
+      status: expected === true ? 'all' : status,
+      expected,
+      ...(isbnMatches.length > 0 ? { isbnVariants: isbnMatches } : {}),
+      warehouseId,
+      limit: rankLimit,
+    });
+    return NextResponse.json({ items: ranked.items, total: ranked.total });
   }
 
   const result = await inventorySvc.list({

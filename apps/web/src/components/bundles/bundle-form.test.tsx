@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
@@ -8,6 +8,9 @@ vi.mock('@/server/actions/bundles', () => ({
   updateBundleAction: vi.fn(),
 }));
 
+import { createBundleAction } from '@/server/actions/bundles';
+
+import { COMPONENT_SEARCH_DEBOUNCE_MS } from './bundle-component-picker';
 import { BundleForm } from './bundle-form';
 
 const KIT_SKU = /^KIT-[0-9A-Z]{5}-[0-9A-Z]{7}$/;
@@ -47,5 +50,61 @@ describe('BundleForm SKU: Auto', () => {
       />,
     );
     expect(screen.getByRole('button', { name: 'Auto' })).toBeInTheDocument();
+  });
+});
+
+describe('BundleForm components: the search picker', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('Enter adds the best match as a component row, which then shows as Added, and the form is not submitted', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        items: [
+          {
+            id: 'i-pencil',
+            sku: 'PEN-2',
+            name: 'Pencil No. 2',
+            barcode: null,
+            item_type: 'product',
+            quantity_on_hand: 40,
+            awaiting_first_receipt: false,
+            warehouse_name: 'DC4',
+          },
+        ],
+        total: 1,
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const settle = async () => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(COMPONENT_SEARCH_DEBOUNCE_MS);
+      });
+      await act(async () => {
+        for (let i = 0; i < 10; i += 1) await Promise.resolve();
+      });
+    };
+
+    render(<BundleForm />);
+    const search = screen.getByRole('combobox');
+    search.focus();
+    fireEvent.change(search, { target: { value: 'pencil' } });
+    await settle();
+    fireEvent.keyDown(search, { key: 'Enter' });
+
+    const table = screen.getByRole('table');
+    expect(within(table).getByText('Pencil No. 2')).toBeInTheDocument();
+    expect(within(table).getByText('PEN-2')).toBeInTheDocument();
+    expect(createBundleAction).not.toHaveBeenCalled();
+
+    fireEvent.change(search, { target: { value: 'pencil' } });
+    await settle();
+    expect(screen.getByRole('option')).toHaveTextContent('Added');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
