@@ -2532,16 +2532,20 @@ function MovementNoteModalContent({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
       >
-        <Pressable
-          onPress={onClose}
-          style={{
-            flex: 1,
-            justifyContent: 'flex-end',
-            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
-          }}
-        >
+        {/* Backdrop is a SIBLING behind the card, never its parent: a
+            Pressable ancestor turns the sheet into one VoiceOver element.
+            See the note in AdjustModalContent below. */}
+        <View style={{ flex: 1, justifyContent: 'flex-end' }} accessibilityViewIsModal>
           <Pressable
-            onPress={() => undefined}
+            onPress={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+            ]}
+          />
+          <View
             style={[
               {
                 backgroundColor: c.card,
@@ -2614,8 +2618,8 @@ function MovementNoteModalContent({
                 </Button>
               </View>
             </View>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </KeyboardAvoidingView>
   );
 }
@@ -2835,18 +2839,38 @@ function AdjustModalContent({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
       >
-        <Pressable
-          onPress={onClose}
-          style={[
-            {
-              flex: 1,
-              justifyContent: 'flex-end',
-              backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
-            },
-          ]}
-        >
+        {/*
+         * THE BACKDROP IS A SIBLING BEHIND THE SHEET, NEVER ITS PARENT.
+         *
+         * This card used to be a `Pressable onPress={() => undefined}` inside a
+         * scrim Pressable, only to stop taps inside it from closing the sheet.
+         * A Pressable is an accessibility element by default, and iOS collapses
+         * everything inside one into a single element: VoiceOver read the whole
+         * sheet as one label (title, on-hand line, both field placeholders,
+         * NEW TOTAL, Cancel, Confirm) and could not reach the CHANGE field or
+         * the Confirm button on their own (simulator walk, 2026-09-25). The same
+         * wrapper also claims the touch responder, which blocks scrolling —
+         * see add-order-items-sheet.tsx.
+         *
+         * Now the scrim is an absolute-fill sibling painted first (so the card
+         * covers it and a tap on the card never reaches it) and is itself a
+         * labelled "Close" button, and the card is a plain View, which is not
+         * an accessibility element. accessibilityViewIsModal (iOS) keeps
+         * VoiceOver inside the open sheet. The sheet guard test
+         * (src/lib/sheet-backdrop-guard.test.ts) fails if the old shape
+         * comes back anywhere in the app.
+         */}
+        <View style={{ flex: 1, justifyContent: 'flex-end' }} accessibilityViewIsModal>
           <Pressable
-            onPress={() => undefined}
+            onPress={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+            ]}
+          />
+          <View
             style={[
               {
                 backgroundColor: c.card,
@@ -2981,8 +3005,8 @@ function AdjustModalContent({
                 </Button>
               </View>
             </View>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </KeyboardAvoidingView>
   );
 }
@@ -3372,16 +3396,20 @@ function SerialStatusSheet({
       onRequestClose={onClose}
       statusBarTranslucent
     >
-      <Pressable
-        onPress={onClose}
-        style={{
-          flex: 1,
-          justifyContent: 'flex-end',
-          backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
-        }}
-      >
+      {/* Backdrop is a SIBLING behind the card, never its parent: a
+          Pressable ancestor turns the sheet into one VoiceOver element.
+          See the note in AdjustModalContent above. */}
+      <View style={{ flex: 1, justifyContent: 'flex-end' }} accessibilityViewIsModal>
         <Pressable
-          onPress={() => undefined}
+          onPress={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+          style={[
+            StyleSheet.absoluteFill,
+            { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+          ]}
+        />
+        <View
           style={[
             {
               backgroundColor: c.card,
@@ -3457,8 +3485,8 @@ function SerialStatusSheet({
           <Button block variant="ghost" onPress={onClose} style={{ marginTop: 12 }}>
             Cancel
           </Button>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -3617,16 +3645,20 @@ function AddSerialsModalContent({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={{ flex: 1 }}
       >
-        <Pressable
-          onPress={onClose}
-          style={{
-            flex: 1,
-            justifyContent: 'flex-end',
-            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
-          }}
-        >
+        {/* Backdrop is a SIBLING behind the card, never its parent: a
+            Pressable ancestor turns the sheet into one VoiceOver element.
+            See the note in AdjustModalContent above. */}
+        <View style={{ flex: 1, justifyContent: 'flex-end' }} accessibilityViewIsModal>
           <Pressable
-            onPress={() => undefined}
+            onPress={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+            ]}
+          />
+          <View
             style={[
               {
                 backgroundColor: c.card,
@@ -3760,8 +3792,8 @@ function AddSerialsModalContent({
                 </Button>
               </View>
             </View>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </KeyboardAvoidingView>
   );
 }

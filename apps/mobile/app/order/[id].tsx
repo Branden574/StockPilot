@@ -2419,41 +2419,66 @@ export default function OrderDetail() {
       )}
 
       <Modal visible={sigOpen} transparent animationType="fade" onRequestClose={() => setSigOpen(false)}>
-        <Pressable
-          onPress={() => setSigOpen(false)}
-          style={{
-            flex: 1,
-            justifyContent: 'center',
-            padding: 24,
-            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
-          }}
-        >
-          <Pressable onPress={() => undefined} style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Customer signature</Body>
-              <Pressable onPress={() => setSigOpen(false)} hitSlop={8}>
-                <X size={18} color={c.ink4} />
-              </Pressable>
+        {/*
+         * THE BACKDROP IS A SIBLING BEHIND THE DIALOG, NEVER ITS PARENT — the
+         * same shape for this dialog and the Deny / Reopen dialogs below.
+         *
+         * Each card used to be a `Pressable onPress={() => undefined}` inside a
+         * scrim Pressable, only to stop taps inside it from closing the dialog.
+         * A Pressable is an accessibility element by default and iOS collapses
+         * everything inside one into a single element, so VoiceOver read the
+         * whole dialog as one label and could not reach the reason field or the
+         * Cancel / Deny / Reopen buttons on their own; it also claims the touch
+         * responder (see add-order-items-sheet.tsx).
+         *
+         * The scrim must dim the FULL screen, so it cannot sit inside the padded
+         * layer (Yoga insets an absolute child by its parent's padding — see
+         * notifications.tsx). The padding lives on a `pointerEvents="box-none"`
+         * layer above it: taps beside the card fall through to the scrim and
+         * close, while the card, a plain View, keeps its own touches.
+         * accessibilityViewIsModal (iOS) keeps VoiceOver inside the dialog.
+         */}
+        <View style={{ flex: 1 }} accessibilityViewIsModal>
+          <Pressable
+            onPress={() => setSigOpen(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+            ]}
+          />
+          <View
+            style={{ flex: 1, justifyContent: 'center', padding: 24 }}
+            pointerEvents="box-none"
+          >
+            <View style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Customer signature</Body>
+                <Pressable onPress={() => setSigOpen(false)} hitSlop={8}>
+                  <X size={18} color={c.ink4} />
+                </Pressable>
+              </View>
+              {sigLoading ? (
+                <View style={{ height: 180, alignItems: 'center', justifyContent: 'center' }}>
+                  <ActivityIndicator color={c.ink4} />
+                </View>
+              ) : sigUrl ? (
+                <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 8 }}>
+                  <Image
+                    source={{ uri: sigUrl }}
+                    style={{ width: '100%', height: 180 }}
+                    resizeMode="contain"
+                  />
+                </View>
+              ) : null}
+              <Mono size={11} color={c.ink4}>
+                {order?.signedByName ?? 'Signed'}
+                {order?.signedAt ? ` · ${new Date(order.signedAt).toLocaleString()}` : ''}
+              </Mono>
             </View>
-            {sigLoading ? (
-              <View style={{ height: 180, alignItems: 'center', justifyContent: 'center' }}>
-                <ActivityIndicator color={c.ink4} />
-              </View>
-            ) : sigUrl ? (
-              <View style={{ backgroundColor: '#fff', borderRadius: 8, padding: 8 }}>
-                <Image
-                  source={{ uri: sigUrl }}
-                  style={{ width: '100%', height: 180 }}
-                  resizeMode="contain"
-                />
-              </View>
-            ) : null}
-            <Mono size={11} color={c.ink4}>
-              {order?.signedByName ?? 'Signed'}
-              {order?.signedAt ? ` · ${new Date(order.signedAt).toLocaleString()}` : ''}
-            </Mono>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </Modal>
 
       <Modal
@@ -2506,56 +2531,64 @@ export default function OrderDetail() {
 
       {/* Deny-reason capture (the requester sees this reason). */}
       <Modal visible={denyOpen} transparent animationType="fade" onRequestClose={dismissDenyModal}>
-        <Pressable
-          onPress={dismissDenyModal}
-          style={{
-            flex: 1,
-            justifyContent: 'center',
-            padding: 24,
-            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
-          }}
-        >
-          <Pressable onPress={() => undefined} style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
-            <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Deny this request?</Body>
-            <Mono size={11} color={c.ink4}>The requester is notified with the reason you provide.</Mono>
-            <TextInput
-              value={denyReason}
-              onChangeText={setDenyReason}
-              placeholder="Reason"
-              placeholderTextColor={c.ink4}
-              multiline
-              style={{
-                minHeight: 72,
-                borderWidth: 1,
-                borderColor: c.hair,
-                borderRadius: 10,
-                padding: 10,
-                color: c.ink,
-                fontFamily: FONT.mono,
-                fontSize: 13,
-                textAlignVertical: 'top',
-              }}
-            />
-            <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end' }}>
-              <Pressable
-                onPress={dismissDenyModal}
-                style={[styles.addBtn, { backgroundColor: 'transparent', borderWidth: 1, borderColor: c.hair, paddingHorizontal: 18 }]}
-              >
-                <Mono size={13} color={c.ink}>Cancel</Mono>
-              </Pressable>
-              <Pressable
-                onPress={() => void submitDeny()}
-                disabled={acting !== null}
-                style={[
-                  styles.addBtn,
-                  { backgroundColor: '#b42318', paddingHorizontal: 18, opacity: acting !== null ? 0.5 : 1 },
-                ]}
-              >
-                <Mono size={13} color="#fff">Deny</Mono>
-              </Pressable>
+        {/* Backdrop is a SIBLING behind the dialog, never its parent — see
+            the Customer signature dialog above. */}
+        <View style={{ flex: 1 }} accessibilityViewIsModal>
+          <Pressable
+            onPress={dismissDenyModal}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+            ]}
+          />
+          <View
+            style={{ flex: 1, justifyContent: 'center', padding: 24 }}
+            pointerEvents="box-none"
+          >
+            <View style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
+              <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Deny this request?</Body>
+              <Mono size={11} color={c.ink4}>The requester is notified with the reason you provide.</Mono>
+              <TextInput
+                value={denyReason}
+                onChangeText={setDenyReason}
+                placeholder="Reason"
+                placeholderTextColor={c.ink4}
+                multiline
+                style={{
+                  minHeight: 72,
+                  borderWidth: 1,
+                  borderColor: c.hair,
+                  borderRadius: 10,
+                  padding: 10,
+                  color: c.ink,
+                  fontFamily: FONT.mono,
+                  fontSize: 13,
+                  textAlignVertical: 'top',
+                }}
+              />
+              <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end' }}>
+                <Pressable
+                  onPress={dismissDenyModal}
+                  style={[styles.addBtn, { backgroundColor: 'transparent', borderWidth: 1, borderColor: c.hair, paddingHorizontal: 18 }]}
+                >
+                  <Mono size={13} color={c.ink}>Cancel</Mono>
+                </Pressable>
+                <Pressable
+                  onPress={() => void submitDeny()}
+                  disabled={acting !== null}
+                  style={[
+                    styles.addBtn,
+                    { backgroundColor: '#b42318', paddingHorizontal: 18, opacity: acting !== null ? 0.5 : 1 },
+                  ]}
+                >
+                  <Mono size={13} color="#fff">Deny</Mono>
+                </Pressable>
+              </View>
             </View>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </Modal>
 
       {/* Reopen-picking reason capture — manager override that sends a
@@ -2569,69 +2602,77 @@ export default function OrderDetail() {
         animationType="fade"
         onRequestClose={dismissReopenModal}
       >
-        <Pressable
-          onPress={dismissReopenModal}
-          style={{
-            flex: 1,
-            justifyContent: 'center',
-            padding: 24,
-            backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
-          }}
-        >
-          <Pressable onPress={() => undefined} style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
-            <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Reopen picking?</Body>
-            <Mono size={11} color={c.ink4} style={{ lineHeight: 16 }}>
-              Sends this order back to picking so the count can be corrected. The picked
-              quantities and the assigned picker are kept, but the stock that was picked returns
-              to Unplaced — not necessarily its original rack — and will need to be put away
-              again before it can ship.
-              {order?.status === 'packing_slip_generated'
-                ? ' The already-generated packing slip will be voided; a new one must be printed after picking finishes.'
-                : ''}{' '}
-              A signed order can&apos;t be reopened. This is recorded in the audit log.
-            </Mono>
-            <TextInput
-              value={reopenReason}
-              onChangeText={setReopenReason}
-              placeholder="Why is this being reopened? (e.g. miscount on line 3)"
-              placeholderTextColor={c.ink4}
-              multiline
-              style={{
-                minHeight: 72,
-                borderWidth: 1,
-                borderColor: c.hair,
-                borderRadius: 10,
-                padding: 10,
-                color: c.ink,
-                fontFamily: FONT.mono,
-                fontSize: 13,
-                textAlignVertical: 'top',
-              }}
-            />
-            <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end' }}>
-              <Pressable
-                onPress={dismissReopenModal}
-                style={[styles.addBtn, { backgroundColor: 'transparent', borderWidth: 1, borderColor: c.hair, paddingHorizontal: 18 }]}
-              >
-                <Mono size={13} color={c.ink}>Cancel</Mono>
-              </Pressable>
-              <Pressable
-                onPress={() => void reopenPicking()}
-                disabled={!reopenReason.trim() || acting !== null}
-                style={[
-                  styles.addBtn,
-                  {
-                    backgroundColor: '#b42318',
-                    paddingHorizontal: 18,
-                    opacity: reopenReason.trim() && acting === null ? 1 : 0.5,
-                  },
-                ]}
-              >
-                <Mono size={13} color="#fff">Reopen picking</Mono>
-              </Pressable>
+        {/* Backdrop is a SIBLING behind the dialog, never its parent — see
+            the Customer signature dialog above. */}
+        <View style={{ flex: 1 }} accessibilityViewIsModal>
+          <Pressable
+            onPress={dismissReopenModal}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+            ]}
+          />
+          <View
+            style={{ flex: 1, justifyContent: 'center', padding: 24 }}
+            pointerEvents="box-none"
+          >
+            <View style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
+              <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>Reopen picking?</Body>
+              <Mono size={11} color={c.ink4} style={{ lineHeight: 16 }}>
+                Sends this order back to picking so the count can be corrected. The picked
+                quantities and the assigned picker are kept, but the stock that was picked returns
+                to Unplaced — not necessarily its original rack — and will need to be put away
+                again before it can ship.
+                {order?.status === 'packing_slip_generated'
+                  ? ' The already-generated packing slip will be voided; a new one must be printed after picking finishes.'
+                  : ''}{' '}
+                A signed order can&apos;t be reopened. This is recorded in the audit log.
+              </Mono>
+              <TextInput
+                value={reopenReason}
+                onChangeText={setReopenReason}
+                placeholder="Why is this being reopened? (e.g. miscount on line 3)"
+                placeholderTextColor={c.ink4}
+                multiline
+                style={{
+                  minHeight: 72,
+                  borderWidth: 1,
+                  borderColor: c.hair,
+                  borderRadius: 10,
+                  padding: 10,
+                  color: c.ink,
+                  fontFamily: FONT.mono,
+                  fontSize: 13,
+                  textAlignVertical: 'top',
+                }}
+              />
+              <View style={{ flexDirection: 'row', gap: 10, justifyContent: 'flex-end' }}>
+                <Pressable
+                  onPress={dismissReopenModal}
+                  style={[styles.addBtn, { backgroundColor: 'transparent', borderWidth: 1, borderColor: c.hair, paddingHorizontal: 18 }]}
+                >
+                  <Mono size={13} color={c.ink}>Cancel</Mono>
+                </Pressable>
+                <Pressable
+                  onPress={() => void reopenPicking()}
+                  disabled={!reopenReason.trim() || acting !== null}
+                  style={[
+                    styles.addBtn,
+                    {
+                      backgroundColor: '#b42318',
+                      paddingHorizontal: 18,
+                      opacity: reopenReason.trim() && acting === null ? 1 : 0.5,
+                    },
+                  ]}
+                >
+                  <Mono size={13} color="#fff">Reopen picking</Mono>
+                </Pressable>
+              </View>
             </View>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </Modal>
 
       {/* Create-return sheet (staff parity with web's CreateReturnDialog):
