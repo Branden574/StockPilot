@@ -64,6 +64,14 @@ export function buildWarehouseScope(
   };
 }
 
+/**
+ * Appended to the scoped line on pages with placement columns (0371): staff
+ * and viewers read stock locations in their own warehouses only, and stock
+ * elsewhere is counted rather than named.
+ */
+export const SCOPED_PLACEMENT_NOTE =
+  "Rack columns show your warehouses' racks; stock elsewhere shows as \"in other warehouses\".";
+
 /** Shown when a scoped user's warehouse access could not be read. */
 export const WAREHOUSE_ACCESS_UNREADABLE_MESSAGE =
   "We couldn't load your warehouse access. Refresh the page to try again.";

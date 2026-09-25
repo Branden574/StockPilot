@@ -4,6 +4,10 @@ import {
   bookCrateAcknowledgementsMatch,
   bookRackAcknowledgementsMatch,
   describeNewRackPlacement,
+  ELSEWHERE_UNAVAILABLE_NOTE,
+  formatElsewhereSourcesNote,
+  holdingsElsewhereTotal,
+  type ItemElsewhere,
   parseBookCrateChangeDetail,
   parseBookRackChangeDetail,
   toBookCrateAcknowledgement,
@@ -61,7 +65,7 @@ import {
   type DestinationFields,
 } from '@/lib/locations/placement-destination';
 import { transferStockAction } from '@/server/actions/inventory';
-import { transferableHoldings } from '@/lib/placements';
+import { isWritableDestination, transferableHoldings } from '@/lib/placements';
 
 /** NON-BOOKS only: sentinel Select value for the inline "create a new location"
  *  branch — mirrors PlaceFromStagingDialog's NEW_RACK_SENTINEL. */
@@ -134,6 +138,20 @@ interface StockTransferDialogProps {
    *  or `locations:manage`; the server re-asserts through the placement path's
    *  SECURITY DEFINER resolve-or-create, migration 0340, owner decision D1). */
   canMintDestination?: boolean;
+  /**
+   * The item's stock in warehouses the viewer cannot see (0371). `holdings`
+   * lists only the viewer's own warehouses, so without this the empty state
+   * said "This item's stock is in Staging/Unplaced" for stock that is in fact
+   * on another warehouse's rack. Absent: treated as nothing elsewhere.
+   */
+  elsewhere?: ItemElsewhere;
+  /**
+   * Warehouses the viewer can write (owner decision Q4, 0371): destinations
+   * are narrowed to these plus locations with no warehouse, because any other
+   * destination can only end in the server's refusal (0365). Null or absent:
+   * unrestricted (managers and above, and all-warehouse members).
+   */
+  writableWarehouseIds?: readonly string[] | null;
   trigger?: React.ReactNode;
 }
 
@@ -146,6 +164,8 @@ export function StockTransferDialog({
   itemType,
   bookStorage,
   canMintDestination = false,
+  elsewhere,
+  writableWarehouseIds = null,
   trigger,
 }: StockTransferDialogProps) {
   const [open, setOpen] = React.useState(false);
@@ -253,15 +273,21 @@ export function StockTransferDialog({
   // (transferStockAction) and reports `crateSyncUnplaced` so a book left in no
   // placement is never silent about its now-possibly-stale label.
   const destinationLocations = React.useMemo(() => {
+    // Scoped members: only destinations they can write (Q4, 0371). The source
+    // list needs no such filter, because a member only sees holdings in
+    // warehouses they can act on.
     const eligible = locations.filter(
-      (l) => l.id !== fromLocation && l.kind !== 'staging',
+      (l) =>
+        l.id !== fromLocation &&
+        l.kind !== 'staging' &&
+        isWritableDestination(l, writableWarehouseIds),
     );
     // Sorted, not merely included: an operator hunting for "get this off the
     // rack" should not have to scroll a 48-rack list to find the one option
     // that does it without destroying anything.
     const unplaced = eligible.filter((l) => l.kind === 'unplaced');
     return [...unplaced, ...eligible.filter((l) => l.kind !== 'unplaced')];
-  }, [locations, fromLocation]);
+  }, [locations, fromLocation, writableWarehouseIds]);
 
   const fromLoc = locations.find((l) => l.id === fromLocation);
   const toLoc = locations.find((l) => l.id === toLocation);
@@ -269,6 +295,15 @@ export function StockTransferDialog({
     !isNew && !!fromLoc && !!toLoc && fromLoc.warehouse_id !== toLoc.warehouse_id;
 
   const hasNoSources = sourceHoldings.length === 0;
+  // STOCK THE VIEWER CANNOT MOVE (0371): what the item holds in warehouses
+  // they cannot see. The empty state names it instead of blaming Staging, and
+  // a non-empty source list says the rest is elsewhere.
+  const elsewhereTotal =
+    elsewhere?.status === 'some' ? holdingsElsewhereTotal(elsewhere) : 0;
+  const elsewhereUnavailable = elsewhere?.status === 'unavailable';
+  const awaitingHere = holdings.some(
+    (h) => h.quantity > 0 && (h.kind === 'staging' || h.kind === 'unplaced'),
+  );
 
   /** The picked existing row as the put-away dialogs see one — its own columns. */
   const selectedOption: DestinationOption | null =
@@ -605,8 +640,19 @@ export function StockTransferDialog({
 
         {hasNoSources ? (
           <p className="text-muted-foreground text-sm">
-            This item&apos;s stock is in Staging/Unplaced — placement is handled in the
-            staging workflow.
+            {elsewhereTotal > 0 && !awaitingHere ? (
+              formatElsewhereSourcesNote(elsewhereTotal, { noneHere: true })
+            ) : elsewhereUnavailable && !awaitingHere ? (
+              ELSEWHERE_UNAVAILABLE_NOTE
+            ) : (
+              <>
+                This item&apos;s stock is in Staging/Unplaced — placement is handled in the
+                staging workflow.
+                {elsewhereTotal > 0 &&
+                  ` ${formatElsewhereSourcesNote(elsewhereTotal, { noneHere: false })}`}
+                {elsewhereUnavailable && ` ${ELSEWHERE_UNAVAILABLE_NOTE}`}
+              </>
+            )}
           </p>
         ) : (
           <div className="space-y-3">
@@ -636,6 +682,16 @@ export function StockTransferDialog({
                   ))}
                 </SelectContent>
               </Select>
+              {elsewhereTotal > 0 && (
+                <p className="text-muted-foreground text-[11px]">
+                  {formatElsewhereSourcesNote(elsewhereTotal, { noneHere: false })}
+                </p>
+              )}
+              {elsewhereUnavailable && (
+                <p role="status" className="text-muted-foreground text-[11px]">
+                  {ELSEWHERE_UNAVAILABLE_NOTE}
+                </p>
+              )}
             </div>
 
             <div className="space-y-1.5">

@@ -11,7 +11,8 @@ import { InventoryTable, type InstantAdoptedPayload } from '@/components/invento
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { Button } from '@/components/ui/button';
-import { can, isManagerOrAbove, type Role } from '@stockpilot/core';
+import { can, ELSEWHERE_UNAVAILABLE_NOTE, isManagerOrAbove, type Role } from '@stockpilot/core';
+import { ELSEWHERE_PLACEMENT_KIND, ELSEWHERE_PLACEMENT_LABEL } from '@/lib/placements';
 import { deriveInstantView, instantStateFromPageParams } from '@/lib/inventory/instant-mode';
 import {
   ALL_WAREHOUSES_KEY,
@@ -205,7 +206,7 @@ export default async function InventoryPage({
           {/* Warehouse-scoped users (staff/viewer): name the scope so an
               empty-looking list reads as "you're narrowed", not "broken".
               Renders null for all-access roles. */}
-          <ScopedWarehouseNotice />
+          <ScopedWarehouseNotice placementNote />
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {/* Inventory pages use ?status=active|archived|discontinued|all
@@ -270,6 +271,11 @@ type SectionData = {
   /** ACTIVE items awaiting first receipt (mig 0277) — the "Expected"
    *  chip's count badge (server mode; instant mode derives locally). */
   expectedCount: number;
+  /** Live (staff/viewer) path only: the stock-in-other-warehouses read failed
+   *  (0371), so the placement figures cover the viewer's own warehouses only
+   *  and the page says so. Absent on the cached manager path, which sees every
+   *  holding. */
+  elsewhereUnavailable?: boolean;
 };
 
 /**
@@ -791,6 +797,7 @@ async function inventoryTableSection({
       trends,
       placementMap,
       expectedCount: expectedCountLive,
+      elsewhereUnavailable: inventory.elsewhereUnavailable,
     };
   }
 
@@ -806,9 +813,27 @@ async function inventoryTableSection({
   // a single row at their own on-hand. Single-location items stay one row.
   const placementRows = itemsWithImages.flatMap((item) => {
     const ps = placementMap.get(item.id) ?? [];
+    // STOCK IN OTHER WAREHOUSES (0371). A staff member or viewer reads holdings
+    // only in their own warehouses, so `ps` lists those; the rest of the item's
+    // stock is one more line, counted and never named, so the lines still add
+    // up to the item's on hand. 0 (and absent) on the manager path.
+    const elsewhere = (item as { elsewhere_quantity?: number }).elsewhere_quantity ?? 0;
+    const elsewhereRow =
+      elsewhere > 0
+        ? [
+            {
+              ...item,
+              rowKey: `${item.id}:${ELSEWHERE_PLACEMENT_KIND}`,
+              line_quantity: elsewhere,
+              placement_label: ELSEWHERE_PLACEMENT_LABEL as string | null,
+              placement_kind: ELSEWHERE_PLACEMENT_KIND as string | undefined,
+            },
+          ]
+        : [];
     // Both branches return the SAME row shape (same keys + property types) so
     // the result is a single uniform array, not a union.
     if (ps.length === 0) {
+      if (elsewhereRow.length > 0) return elsewhereRow;
       return [
         {
           ...item,
@@ -819,13 +844,16 @@ async function inventoryTableSection({
         },
       ];
     }
-    return ps.map((p) => ({
-      ...item,
-      rowKey: `${item.id}:${p.locationId}`,
-      line_quantity: p.quantity,
-      placement_label: p.label as string | null,
-      placement_kind: p.kind as string | undefined,
-    }));
+    return [
+      ...ps.map((p) => ({
+        ...item,
+        rowKey: `${item.id}:${p.locationId}`,
+        line_quantity: p.quantity,
+        placement_label: p.label as string | null,
+        placement_kind: p.kind as string | undefined,
+      })),
+      ...elsewhereRow,
+    ];
   });
 
   const lookups = {
@@ -879,7 +907,7 @@ async function inventoryTableSection({
   // instant branch that fell through (over-cap org or loader failure).
   const productGroupUnits = await (countingUnitsPromise ?? loadCountingUnitsForOrg());
 
-  return (
+  const table = (
     <InventoryTable
       items={placementRows}
       total={data.total}
@@ -905,6 +933,17 @@ async function inventoryTableSection({
       expectedCount={data.expectedCount}
       productGroupUnits={productGroupUnits}
     />
+  );
+  // Never the partial figures presented as complete: when the stock in other
+  // warehouses could not be read, the page says so above the table (0371).
+  if (!data.elsewhereUnavailable) return table;
+  return (
+    <>
+      <p role="status" className="text-muted-foreground mb-2 text-xs">
+        {ELSEWHERE_UNAVAILABLE_NOTE}
+      </p>
+      {table}
+    </>
   );
 }
 

@@ -114,13 +114,15 @@ describe('InventoryService.bulkUpdate — archive stock guard past the 1000-row 
     const ids = Array.from({ length: 3 }, (_, i) => `itm-${i}`);
     const stub = makeSupabaseStub({
       'inventory_items.select': {
-        data: ids.map((id) => ({ id, warehouse_id: 'wh-1' })),
+        // quantity_on_hand 0: only the HOLDINGS can block here, so the block
+        // proves the page-2 row was read.
+        data: ids.map((id) => ({ id, warehouse_id: 'wh-1', quantity_on_hand: 0 })),
         error: null,
       },
       'item_stock_levels.select': pagedHoldings([
         {
           id: 'lvl-1001',
-          item_id: 'itm-1001',
+          item_id: 'itm-2',
           location_id: 'l',
           quantity: 7,
           locations: { id: 'l', name: '100-A', kind: 'rack' },
@@ -129,11 +131,13 @@ describe('InventoryService.bulkUpdate — archive stock guard past the 1000-row 
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
+    // Page 1 is 1000 holdings of OTHER items (a real `.in()` never returns
+    // those; the guard only ever judges the items it was asked about). The
+    // selected item's stock is on page 2. Un-paginated, the guard never saw
+    // it and archived the item while it held 7 units.
     await expect(svc.bulkUpdate({ ids, op: { kind: 'archive' } })).rejects.toMatchObject({
       code: 'validation_error',
-      // 1000 (page 1) + 1 (page 2). Un-paginated it says 1000 and, worse,
-      // lets the page-2 item through when it is the ONLY one holding stock.
-      message: expect.stringContaining('1001 selected items'),
+      message: expect.stringContaining('7 units still on hand (7 in 100-A)'),
     });
   });
 

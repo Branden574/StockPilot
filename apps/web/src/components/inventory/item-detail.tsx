@@ -61,7 +61,17 @@ import { formatGrade, getCrateColor, readBookStorage } from '@/lib/book-storage'
 import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 
-import { can, holdingsContradictRack, isLikelyIsbn, type CustomFieldDefinition } from '@stockpilot/core';
+import {
+  can,
+  holdingsContradictRack,
+  isLikelyIsbn,
+  isManagerOrAbove,
+  type CustomFieldDefinition,
+  type ItemElsewhere,
+  type Role,
+} from '@stockpilot/core';
+import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { placementSummary } from '@/lib/placements';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { ITEM_DETAIL_TOUR } from '@/lib/onboarding/tours';
@@ -139,7 +149,26 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // throws, the page is notFound() (or the error) and those results are
   // dropped unread. The dependent reads further down (category, supplier,
   // profile, signed photo URLs, market price) only start after it returns.
-  const itemRead = inventorySvc.get(id, { withUpdater: true });
+  // `withElsewhere` (0371): the item's stock in warehouses the caller cannot
+  // see, asked alongside the row (managers and above make no call). The page's
+  // "placed + awaiting put-away = on hand" line, the placement breakdown and
+  // the transfer dialog's empty state all need it, or a staff member's page
+  // presents part of the stock as all of it.
+  const itemRead = inventorySvc.get(id, { withUpdater: true, withElsewhere: true });
+  // TRANSFER DESTINATIONS for a scoped member (owner decision Q4, 0371): only
+  // warehouses they can write, plus locations with no warehouse. Offering any
+  // other destination can only end in the server's 403 (0365). Null =
+  // unrestricted. Manager+ never read it; for a staff member it is the same
+  // request-cached access read get() makes for this context, so it costs no
+  // extra call. A failed read narrows to no warehouse at all (fail closed; the
+  // server still decides).
+  const canTransferStockEarly = can(ctx, 'stock:transfer');
+  const destinationScopeRead: Promise<string[] | null> =
+    canTransferStockEarly && !isManagerOrAbove(ctx.role as Role)
+      ? getWarehouseAccess(ctx)
+          .then((access) => (access.hasAllAccess ? null : access.writableIds))
+          .catch(() => [] as string[])
+      : Promise.resolve(null);
   const serialsSvc = new SerialsService(ctx);
   // OVERVIEW-ONLY READS STAY ON OVERVIEW. A Movements or Activity click is a
   // query-only navigation, and Next re-renders this whole page for it (the page
@@ -216,6 +245,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   for (const read of [
     locationsRead,
     holdingsRead,
+    destinationScopeRead,
     activityRead,
     imageRowsRead,
     costHistoryRead,
@@ -293,6 +323,7 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
     reservedByItem,
     serialWarehouses,
     marketPriceObs,
+    writableWarehouseIds,
   ] = await Promise.all([
     categoryIdForFetch
       ? ctx.supabase
@@ -345,7 +376,20 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
           .then((s) => s.getLatestObservation(item.id as string))
           .catch(() => null)
       : Promise.resolve(null),
+    destinationScopeRead,
   ]);
+
+  // ── Stock in warehouses the caller cannot see (0371) ────────────────
+  // 'none' for managers and above. See InventoryService.get's withElsewhere.
+  const elsewhere: ItemElsewhere =
+    (item as { elsewhere?: ItemElsewhere }).elsewhere ?? { status: 'none' };
+  const hiddenHoldings = elsewhere.status === 'some' ? elsewhere : null;
+  const placementLine = placementSummary({
+    onHand: Number(item.quantity_on_hand ?? 0),
+    stagedAll: Number((item as { staged_quantity?: number }).staged_quantity ?? 0),
+    unplacedAll: Number((item as { unplaced_quantity?: number }).unplaced_quantity ?? 0),
+    elsewhere,
+  });
 
   // Resolve the org's defined custom fields against this item's stored
   // custom_fields. Only fields with a stored, non-empty value are shown so the
@@ -597,6 +641,8 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                     warehouse_id: (l.warehouse_id as string | null) ?? null,
                   }))}
                   holdings={holdings}
+                  elsewhere={elsewhere}
+                  writableWarehouseIds={writableWarehouseIds}
                   itemType={(item.item_type as string | null) ?? null}
                   // CONTEXT ONLY — the dialog never predicts or acknowledges a
                   // crate change from this snapshot; it confirms from the
@@ -662,34 +708,65 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                     // on the same permission adjustStock asserts; archived items
                     // can't be adjusted, so hide it there too.
                     canRemoveStock={canAdjustStock && item.status !== 'archived'}
+                    // Placed stock in warehouses the caller cannot see (0371),
+                    // as one count: "7 in other warehouses (1 location)".
+                    elsewhere={
+                      hiddenHoldings && hiddenHoldings.placed > 0
+                        ? {
+                            quantity: hiddenHoldings.placed,
+                            locationCount: hiddenHoldings.placedLocationIds.length,
+                          }
+                        : null
+                    }
                   />
                   {(() => {
-                    // Staged + Unplaced = on-hand that hasn't been put away
-                    // yet (derivePlacement fields assigned by svc.get above).
-                    const awaitingPutAway =
-                      Number((item as { staged_quantity?: number }).staged_quantity ?? 0) +
-                      Number((item as { unplaced_quantity?: number }).unplaced_quantity ?? 0);
-                    if (awaitingPutAway <= 0) return null;
-                    // The "On hand" number above INCLUDES this awaiting-put-away
-                    // stock, but the placed-rack breakdown does NOT — so without
-                    // this line the racks (e.g. 250 + 250 = 500) don't add up to
-                    // On hand (600). Spell the split out so active vs. staged is
-                    // never silently combined (owner report 2026-07-09): placed +
-                    // awaiting put-away = on hand.
-                    const onHand = Number(item.quantity_on_hand as number) || 0;
-                    const placed = Math.max(0, onHand - awaitingPutAway);
+                    // The "On hand" number above INCLUDES awaiting-put-away
+                    // stock (Staging + Unplaced), but the placed-rack breakdown
+                    // does NOT — so without this line the racks (e.g. 250 + 250
+                    // = 500) don't add up to On hand (600). Spell the split out
+                    // so active vs. staged is never silently combined (owner
+                    // report 2026-07-09): placed + awaiting put-away = on hand.
+                    //
+                    // 0371: for a staff member or viewer, part of the stock can
+                    // sit in warehouses they cannot see. That part is its own
+                    // term ("+ 12 in other warehouses"), so the sum still holds;
+                    // and when it could not be read, the page says so instead
+                    // of printing a sum that may be missing a part.
+                    if (placementLine.kind === 'none') return null;
+                    if (placementLine.kind === 'unavailable') {
+                      return (
+                        <p role="status" className="text-muted-foreground w-full text-xs">
+                          {placementLine.note}
+                        </p>
+                      );
+                    }
                     return (
                       <p className="text-muted-foreground w-full text-xs">
                         <span className="text-foreground font-medium tabular-nums">
-                          {formatNumber(placed)}
+                          {formatNumber(placementLine.placed)}
                         </span>{' '}
-                        placed{' + '}
-                        <span className="text-warning font-medium tabular-nums">
-                          {formatNumber(awaitingPutAway)}
-                        </span>{' '}
-                        awaiting put-away{' = '}
+                        placed
+                        {placementLine.awaiting > 0 && (
+                          <>
+                            {' + '}
+                            <span className="text-warning font-medium tabular-nums">
+                              {formatNumber(placementLine.awaiting)}
+                            </span>{' '}
+                            awaiting put-away
+                          </>
+                        )}
+                        {placementLine.elsewhere > 0 && (
+                          <>
+                            {' + '}
+                            <span className="text-foreground font-medium tabular-nums">
+                              {formatNumber(placementLine.elsewhere)}
+                            </span>{' '}
+                            in other warehouses
+                          </>
+                        )}
+                        {' = '}
                         <span className="text-foreground font-medium tabular-nums">
-                          {formatNumber(onHand)}
+                          {formatNumber(placementLine.onHand)}
                         </span>{' '}
                         on hand
                       </p>
@@ -803,12 +880,35 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
                   // summary is a human's note about which box, refuted by
                   // nothing here — the split is described in full by the
                   // breakdown directly above.
-                  const rackContradicted = holdingsContradictRack(
-                    storage.rackLabel,
-                    holdings
-                      .filter((h) => h.kind === 'rack' || h.kind === 'crate')
-                      .map((h) => ({ name: h.name, quantity: h.quantity, kind: h.kind })),
+                  //
+                  // 0371: the holdings here are the caller's own warehouses'.
+                  // A rack in ANOTHER warehouse can hold the labelled stock, so
+                  // hidden placed locations count as evidence FOR the label
+                  // (named from the org-wide location list; their quantities
+                  // are unknown, and the rule reads names only). When the
+                  // hidden stock could not be read, or a hidden location
+                  // cannot be named, the holdings are not known in full and
+                  // the label is never called false.
+                  const hiddenPlacedIds = hiddenHoldings?.placedLocationIds ?? [];
+                  const hiddenPlaced = hiddenPlacedIds.map((locId) =>
+                    locations.find((l) => (l.id as string) === locId),
                   );
+                  const holdingsKnownInFull =
+                    elsewhere.status !== 'unavailable' && hiddenPlaced.every((l) => !!l);
+                  const rackContradicted =
+                    holdingsKnownInFull &&
+                    holdingsContradictRack(storage.rackLabel, [
+                      ...holdings
+                        .filter((h) => h.kind === 'rack' || h.kind === 'crate')
+                        .map((h) => ({ name: h.name, quantity: h.quantity, kind: h.kind })),
+                      ...hiddenPlaced
+                        .filter((l) => l!.kind === 'rack' || l!.kind === 'crate')
+                        .map((l) => ({
+                          name: l!.name as string,
+                          quantity: 0,
+                          kind: l!.kind as string,
+                        })),
+                    ]);
                   const showRack = !!storage.rackLabel && !rackContradicted;
                   const hasAny = isBook || storage.grade || showRack || storage.crateNumber || isbn;
                   if (!hasAny) return null;

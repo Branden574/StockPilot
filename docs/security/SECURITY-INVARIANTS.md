@@ -883,6 +883,22 @@ it must not.
   −1, a manual removal in 'any' mode, `complete_picking`) goes through the
   frozen `apply_level_delta`, which draws the item's stock from any warehouse;
   the movement row records no from-location.
+- **The web app's side (0371)**: `InventoryService.hiddenHoldingsFor` is the
+  one caller of `item_holdings_elsewhere` (batches of at most 500 ids, in the
+  POST body, started alongside the caller's own holdings read; skipped by
+  ROLE for managers and above). It never throws: a failed read is
+  `{ ok: false }`, never "nothing elsewhere". Guards FAIL CLOSED on it (the
+  single and bulk item archive guards, the book crate prediction and
+  reconciliation, bulk Set rack); displays say "Could not load stock in other
+  warehouses" instead of printing a sum that may be missing a part (item page,
+  Items and Books lists, transfer dialog). The location archive guard decides
+  from `location_stock_census` and uses its own read only to name items. The
+  transfer dialog offers scoped members only destinations they can write
+  (owner decision Q4; `transfer_stock` still enforces it). Every
+  `item_stock_levels` reader under `apps/web/src/server` and `apps/web/src/app`
+  is classified in `holdings-readers.guard.test.ts` (folds the hidden totals,
+  complete by scope, label only, or service client), so a new reader that adds
+  holdings up or decides from them cannot land without folding them in.
 - **Pinned at (inverted)**: `0322`'s test asserts the **warehouse-scoped**
   `qual` verbatim;
   [`0331_ar2_warehouse_scope.test.sql`](../../supabase/tests/0331_ar2_warehouse_scope.test.sql)

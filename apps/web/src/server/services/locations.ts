@@ -592,19 +592,66 @@ export class LocationsService {
    * un-archivable.
    */
   private async assertEmptyOrThrow(id: string): Promise<void> {
-    const { data, error } = await this.ctx.supabase
-      .from('item_stock_levels')
-      .select('quantity, inventory_items!inner(id, name)')
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('location_id', id)
-      .gt('quantity', 0);
-    if (error) {
-      throw new ServiceError(
+    // ═══ THE TOTAL IS THE ORG'S, NOT THE CALLER'S (0371) ═══
+    //
+    // The answer to "is this location empty" must not depend on what the
+    // caller can read. A read through the caller's client is narrowed twice:
+    // by warehouse (since 0371 a staff member reads holdings only in their own
+    // warehouses, and locations:manage lets them archive a location anywhere)
+    // and by item (the inventory_items!inner embed drops holdings of items the
+    // caller cannot read, which already left a manager blind to them). Either
+    // way the guard saw nothing and let the location archive with stock on it.
+    //
+    // So the DECISION comes from location_stock_census: a gated SECURITY
+    // DEFINER count and total of the positive holdings at this location across
+    // the whole org (manager, or locations:manage, in the location's org). The
+    // caller's own read only NAMES the items it can see; whatever the census
+    // counts beyond them is "units of items you can't see". Both asked
+    // together.
+    //
+    // FAIL-CLOSED: a census or holdings read error refuses the archive with
+    // the same message as before; the census's 42501 (the caller lacks the
+    // gate) is the permission refusal it is.
+    const [censusRes, holdersRes] = await Promise.all([
+      Promise.resolve(this.ctx.supabase.rpc('location_stock_census', { p_location_id: id })),
+      Promise.resolve(
+        this.ctx.supabase
+          .from('item_stock_levels')
+          .select('quantity, inventory_items!inner(id, name)')
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('location_id', id)
+          .gt('quantity', 0),
+      ),
+    ]);
+    const cannotVerify = () =>
+      new ServiceError(
         'internal_error',
         'Could not verify this location is empty before archiving. Please try again.',
       );
+    if (censusRes.error) {
+      if ((censusRes.error as { code?: string }).code === '42501') {
+        throw new ServiceError('forbidden', 'Missing permission: locations:manage');
+      }
+      console.error('[locations.archive] location_stock_census failed', {
+        code: (censusRes.error as { code?: string }).code ?? null,
+        error: censusRes.error.message,
+      });
+      throw cannotVerify();
     }
-    const rows = (data ?? []) as unknown as Array<{
+    if (holdersRes.error) throw cannotVerify();
+    // Exactly one row when authorized (a TABLE-returning function answers as
+    // an array). Anything else is not an answer, and "no answer" is not "empty".
+    const censusRow = (Array.isArray(censusRes.data) ? censusRes.data[0] : censusRes.data) as
+      | { holding_rows?: unknown; total_quantity?: unknown }
+      | null
+      | undefined;
+    const censusTotal = Number(censusRow?.total_quantity);
+    const censusRows = Number(censusRow?.holding_rows);
+    if (!censusRow || !Number.isFinite(censusTotal) || !Number.isFinite(censusRows)) {
+      console.error('[locations.archive] location_stock_census returned no usable row');
+      throw cannotVerify();
+    }
+    const rows = (holdersRes.data ?? []) as unknown as Array<{
       quantity: number;
       inventory_items: { name: string } | null;
     }>;
@@ -612,16 +659,20 @@ export class LocationsService {
     // real filter, but "a zero row is not stock" is the INVARIANT this guard
     // rests on, and leaving it expressible only as a PostgREST argument means a
     // refactor that drops or loosens that argument turns every used rack
-    // permanently un-archivable with nothing failing to say so.
+    // permanently un-archivable with nothing failing to say so. (The census
+    // counts positive holdings only, for the same reason.)
     const holders = rows
       .filter((r) => Number(r.quantity) > 0)
       .map((r) => ({
         name: r.inventory_items?.name ?? 'an item',
         quantity: Number(r.quantity),
       }));
-    if (holders.length === 0) return;
-
-    const total = holders.reduce((sum, h) => sum + h.quantity, 0);
+    const visibleTotal = holders.reduce((sum, h) => sum + h.quantity, 0);
+    // The census is the whole answer; the named holders are a part of it. The
+    // max only guards a holding added between the two reads.
+    const total = Math.max(censusTotal, visibleTotal);
+    if (total <= 0) return;
+    const hiddenUnits = Math.max(0, total - visibleTotal);
     const { data: loc } = await this.ctx.supabase
       .from('locations')
       .select('name')
@@ -635,8 +686,13 @@ export class LocationsService {
     // unreachable with every test still green. The flag is the contract.
     throw new ServiceError(
       'validation_error',
-      formatLocationArchiveStockBlockMessage(name, total, holders),
-      { locationHoldsStock: true, units: total, items: holders.length },
+      formatLocationArchiveStockBlockMessage(name, total, holders, hiddenUnits),
+      {
+        locationHoldsStock: true,
+        units: total,
+        // Every holding at the location, named or not.
+        items: Math.max(censusRows, holders.length),
+      },
     );
   }
 

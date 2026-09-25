@@ -28,6 +28,7 @@ import type { ItemHistoryMovement, ItemHistoryPage } from '@stockpilot/core';
 import type { RemoveStockFromLocationInput } from '@stockpilot/core';
 import type { CountingUnit } from '@stockpilot/core';
 import type { RackHoldingLike } from '@stockpilot/core';
+import type { HoldingsElsewhere, ItemElsewhere } from '@stockpilot/core';
 import type {
   BookCrateAcknowledgedChange,
   BookCrateChangeItem,
@@ -52,9 +53,14 @@ import {
   isBookRackChangeAcknowledged,
   isAtLeast,
   isCrateDestination,
+  chunkHoldingsElsewhereIds,
   formatArchiveStockBlockMessage,
   formatBulkArchiveStockBlockMessage,
   formatHoldingLabel,
+  holdingsElsewhereTotal,
+  isManagerOrAbove,
+  itemElsewhereFrom,
+  parseHoldingsElsewhereRows,
   formatRackLabel,
   formatRackPosition,
   formatStockQuantity,
@@ -589,6 +595,48 @@ export function derivePlacement(
 }
 
 /**
+ * A placed location as the book crate split rule reads it: its kind (to drop
+ * the system buckets) and its own crate and rack columns (the summary the
+ * reconciliation writes when a book resolves to exactly this location).
+ */
+type CrateRuleLocation = {
+  id: string;
+  kind: string | null;
+  type: string | null;
+  crate_color: string | null;
+  crate_number: string | null;
+  rack_number: string | null;
+  rack_row: string | null;
+};
+
+/**
+ * The answer of `InventoryService.hiddenHoldingsFor`: what each item holds in
+ * warehouses the caller cannot see (item_holdings_elsewhere, 0371), or
+ * `ok: false` when that could not be read. A failed read is NEVER an empty
+ * map: guards refuse on it and displays say they could not load it.
+ */
+export type HiddenHoldingsRead =
+  | { ok: true; byItem: ReadonlyMap<string, HoldingsElsewhere> }
+  | { ok: false };
+
+/**
+ * Whether the caller's own holdings read is already complete: managers and
+ * above pass 0331's manager disjunct and see every holding, so there is
+ * nothing hidden to ask about. Decided by ROLE, not by getWarehouseAccess's
+ * hasAllAccess: that flag is also true for a staff member with the 0280
+ * all-warehouses setting, whose holdings visibility is decided by their
+ * assignment ROWS, and asking the database is the only way to be sure those
+ * rows cover everything. An unknown role asks too.
+ */
+function seesEveryHolding(ctx: ServiceContext): boolean {
+  try {
+    return isManagerOrAbove(ctx.role);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * A put-away destination. Defined in `@/lib/locations/destination-option`
  * beside its client-facing twin (both describe the same `locations` row, fed
  * by the same column list) and re-exported here because this service's
@@ -1053,7 +1101,7 @@ export class InventoryService {
     // an optional warehouseId filter; otherwise see everything.
     if (!access.hasAllAccess) {
       if (access.readableIds.length === 0) {
-        return { items: [], total: 0, valueOnHand: 0 };
+        return { items: [], total: 0, valueOnHand: 0, elsewhereUnavailable: false };
       }
       // in-list-bound: the caller's readable warehouses (an org's handful of sites)
       query = query.in('warehouse_id', access.readableIds);
@@ -1079,7 +1127,7 @@ export class InventoryService {
         const accessibleCats = await viewerGrantsRead;
         if (accessibleCats !== null) {
           if (accessibleCats.size === 0) {
-            return { items: [], total: 0, valueOnHand: 0 };
+            return { items: [], total: 0, valueOnHand: 0, elsewhereUnavailable: false };
           }
           if (grantsFitInUrl(accessibleCats)) {
             // in-list-bound: grantsFitInUrl keeps this under GRANTS_IN_URL_MAX_CHARS
@@ -1391,6 +1439,18 @@ export class InventoryService {
     // location_id so two same-named racks in different warehouses stay two
     // holdings, matching rackHoldingsCount rather than placed_racks.
     const placedHoldingsByItem = new Map<string, Map<string, RackHoldingLike>>();
+    // STOCK IN OTHER WAREHOUSES (0371). A member below manager reads holdings
+    // only in their own warehouses, so the loop below sees part of each item's
+    // stock. Started here, ALONGSIDE the holdings read (it needs only the ids),
+    // and folded in after it: staged/unplaced include the hidden buckets (so
+    // `placed_quantity` is not overstated), `rackHoldingsCount` counts the
+    // hidden placed locations (so the bulk Set-rack split warning agrees with
+    // the server, which counts them too), and `elsewhere_quantity` carries the
+    // hidden total for the "N in other warehouses" suffix. Managers and above
+    // make no call. A failed read leaves the visible figures and says so
+    // (`elsewhereUnavailable`), never "nothing elsewhere".
+    const elsewhereRead: Promise<HiddenHoldingsRead> =
+      ids.length > 0 ? this.hiddenHoldingsFor(ids) : Promise.resolve({ ok: true, byItem: new Map() });
     if (ids.length > 0) {
       // CHUNKED + PAGED (see holdingsForItemIds). `ids` is the whole page and
       // `limit` clamps at 1000, so a 1000-item export page with more than one
@@ -1451,21 +1511,26 @@ export class InventoryService {
         }
       }
     }
+    const elsewhere = await elsewhereRead;
+    const hiddenByItem = elsewhere.ok ? elsewhere.byItem : new Map<string, HoldingsElsewhere>();
     const rowsWithPlacement = (rows ?? []).map((r) => {
       const id = (r as { id: string }).id;
+      const hidden = hiddenByItem.get(id);
       return {
         ...(r as object),
         ...derivePlacement(
           Number((r as { quantity_on_hand: number }).quantity_on_hand),
-          stagedByItem.get(id) ?? 0,
-          unplacedByItem.get(id) ?? 0,
+          (stagedByItem.get(id) ?? 0) + (hidden?.staged ?? 0),
+          (unplacedByItem.get(id) ?? 0) + (hidden?.unplaced ?? 0),
         ),
         // Sorted for stable display ("1-A, 2-C" not "2-C, 1-A").
         placed_racks: (placedRacksByItem.get(id) ?? []).sort((a, b) => a.localeCompare(b)),
-        rackHoldingsCount: rackHoldingsByItem.get(id)?.size ?? 0,
+        rackHoldingsCount:
+          (rackHoldingsByItem.get(id)?.size ?? 0) + (hidden?.placedLocationIds.length ?? 0),
         placed_holdings: [...(placedHoldingsByItem.get(id)?.values() ?? [])].sort((a, b) =>
           a.name.localeCompare(b.name),
         ),
+        elsewhere_quantity: holdingsElsewhereTotal(hidden),
       };
     });
 
@@ -1532,8 +1597,18 @@ export class InventoryService {
          *  consumer can apply the crate rule, and `placed_racks` (names only,
          *  name-deduped) cannot supply it. */
         placed_holdings: RackHoldingLike[];
+        /** Units this item holds in warehouses the caller cannot see
+         *  (item_holdings_elsewhere, 0371). 0 for managers and above, and for
+         *  an item with nothing out of view. Already folded into the staged/
+         *  unplaced/placed figures and rackHoldingsCount above; carried so the
+         *  RACK column can say "+N in other warehouses". */
+        elsewhere_quantity: number;
       }>,
       total: totalCount,
+      /** True when the stock-in-other-warehouses read failed: the placement
+       *  figures above then cover the caller's own warehouses only, and the
+       *  page must say so rather than present them as complete. */
+      elsewhereUnavailable: !elsewhere.ok,
       /** Sum of (unit_cost × quantity_on_hand) over the FULL filtered
        *  rowset (across all pages), not just the current page. Backs
        *  the "$N on hand" footer on the inventory + books list pages
@@ -2141,7 +2216,7 @@ export class InventoryService {
    * comes back null. The hint names the column because inventory_items has
    * three foreign keys to user_profiles (created_by, updated_by, deleted_by).
    */
-  async get(id: string, opts: { withUpdater?: boolean } = {}) {
+  async get(id: string, opts: { withUpdater?: boolean; withElsewhere?: boolean } = {}) {
     // THREE reads, started together. They used to run one after another (the
     // item row, then the caller's warehouse access, then the Staging/Unplaced
     // holdings), and production logs of the item page (2026-09-22) showed what
@@ -2187,6 +2262,15 @@ export class InventoryService {
         .eq('item_id', id)
         .in('locations.kind', ['staging', 'unplaced']),
     );
+    // `withElsewhere` (the item page): what the item holds in warehouses the
+    // caller cannot see, asked in the SAME level as the holdings above (0371).
+    // Without it a staff member's page read "12 placed + 20 awaiting put-away
+    // = 32 on hand" for an item that has 7 placed in another warehouse and 25
+    // awaiting put-away. Managers and above skip the call (hiddenHoldingsFor).
+    // It never rejects, and the RPC only answers for items the caller can
+    // read, so starting it before the row is cleared discloses nothing; its
+    // answer is dropped with the rest when the row is not found.
+    const elsewhereRead = opts.withElsewhere ? this.hiddenHoldingsFor([id]) : null;
     // Both are abandoned, unawaited, when the row is missing, unreadable or
     // forbidden: mark their rejections observed so one can never surface as
     // an unhandled rejection (which takes the whole function down).
@@ -2223,12 +2307,26 @@ export class InventoryService {
       if (r.locations?.kind === 'unplaced') unplaced += Number(r.quantity);
       else staged += Number(r.quantity);
     }
+    // FOLDED BEFORE derivePlacement, so `placed_quantity` counts only placed
+    // stock (visible or not) instead of every hidden unit. `elsewhere` carries
+    // the hidden totals themselves, so the page can say "N in other
+    // warehouses" and split its own line; 'unavailable' when they could not
+    // be read, and then the page must not print its sum as complete.
+    let elsewhere: ItemElsewhere | null = null;
+    if (elsewhereRead) {
+      const read = await elsewhereRead;
+      elsewhere = itemElsewhereFrom(read.ok ? read.byItem : null, id);
+      if (elsewhere.status === 'some') {
+        staged += elsewhere.staged;
+        unplaced += elsewhere.unplaced;
+      }
+    }
     const placement = derivePlacement(
       Number((data as { quantity_on_hand: number }).quantity_on_hand),
       staged,
       unplaced,
     );
-    return Object.assign(data, placement);
+    return Object.assign(data, placement, elsewhere ? { elsewhere } : {});
   }
 
   /**
@@ -2271,6 +2369,59 @@ export class InventoryService {
         quantity: Number(row.quantity),
       };
     });
+  }
+
+  /**
+   * What each item holds in warehouses the CALLER CANNOT SEE — the other half
+   * of every holdings read made through the caller's own client.
+   *
+   * Since 0371 a member below manager reads `item_stock_levels` only in their
+   * assigned warehouses (plus locations with no warehouse), while the item's
+   * `quantity_on_hand` stays the org-wide total. Every screen that adds up the
+   * visible holdings, and every guard that decides from them, must fold this
+   * in or it presents a partial view as complete. The gated SECURITY DEFINER
+   * RPC `item_holdings_elsewhere` returns only totals (Staging, Unplaced,
+   * placed, and the placed location ids), for items the caller can read.
+   *
+   *   • Managers and above: no call at all, an empty answer (they see every
+   *     holding already). See seesEveryHolding for why the rule is the role.
+   *   • Batches of at most 500 ids (the RPC's bound), all in parallel. The
+   *     ids go in the POST body of the RPC, never in a URL (pattern #29).
+   *   • Start it ALONGSIDE the caller's own holdings read, never after it: it
+   *     needs only the item ids, and a serial chain is what stalls pages.
+   *   • NEVER THROWS. A failed batch, a malformed answer or a missing function
+   *     (the web deployed before the migration: PGRST202) resolves
+   *     `{ ok: false }` for the whole call, logged. Guards then refuse (fail
+   *     closed); displays say they could not load it. Never `[]`.
+   */
+  async hiddenHoldingsFor(itemIds: readonly string[]): Promise<HiddenHoldingsRead> {
+    if (seesEveryHolding(this.ctx)) return { ok: true, byItem: new Map() };
+    const batches = chunkHoldingsElsewhereIds(itemIds);
+    if (batches.length === 0) return { ok: true, byItem: new Map() };
+    try {
+      const answers = await Promise.all(
+        batches.map(async (batch) => {
+          const { data, error } = await this.ctx.supabase.rpc('item_holdings_elsewhere', {
+            p_item_ids: batch,
+          });
+          if (error) {
+            throw new Error(
+              `item_holdings_elsewhere failed (${(error as { code?: string }).code ?? 'no code'}): ${error.message}`,
+            );
+          }
+          return parseHoldingsElsewhereRows(data);
+        }),
+      );
+      const byItem = new Map<string, HoldingsElsewhere>();
+      for (const answer of answers) for (const [id, h] of answer) byItem.set(id, h);
+      return { ok: true, byItem };
+    } catch (e) {
+      console.error(
+        '[inventory] stock in other warehouses could not be read; guards refuse and displays say so',
+        { error: rawErrorText(e), items: itemIds.length },
+      );
+      return { ok: false };
+    }
   }
 
   /**
@@ -4465,7 +4616,11 @@ export class InventoryService {
             after.row,
             rackName,
           );
-          if (outcome.failedItemIds.length > 0) placementFailed = { rackName };
+          // Stock in another warehouse (0371) did not move either, so the
+          // label is ahead of it just the same.
+          if (outcome.failedItemIds.length > 0 || outcome.elsewhereItemIds.length > 0) {
+            placementFailed = { rackName };
+          }
         } catch (e) {
           // FAIL-SOFT, LOUD. The edit itself already succeeded and must not be
           // undone by a placement hiccup — but the caller is told, because the
@@ -4586,8 +4741,24 @@ export class InventoryService {
    * exists on the row but isn't (yet) split into item_stock_levels still blocks.
    */
   private async assertArchivableOrThrow(id: string, item: unknown): Promise<void> {
-    const holdings = await this.holdingsForGuard(id);
-    const placedTotal = holdings.reduce((sum, h) => sum + h.quantity, 0);
+    // The caller's own holdings read and the stock in warehouses they cannot
+    // see (0371), together. The block itself was already right for a staff
+    // member (quantity_on_hand counts every warehouse), but the message listed
+    // only the visible holdings, so its parts did not add up to its total.
+    // FAIL-CLOSED on either read, like holdingsForGuard: a guard that cannot
+    // see all of the stock does not let the archive through.
+    const [holdings, elsewhere] = await Promise.all([
+      this.holdingsForGuard(id),
+      this.hiddenHoldingsFor([id]),
+    ]);
+    if (!elsewhere.ok) {
+      throw new ServiceError(
+        'internal_error',
+        'Could not verify this item has no stock before archiving. Please try again.',
+      );
+    }
+    const hidden = holdingsElsewhereTotal(elsewhere.byItem.get(id));
+    const placedTotal = holdings.reduce((sum, h) => sum + h.quantity, 0) + hidden;
     const onHand = Number((item as { quantity_on_hand?: number }).quantity_on_hand ?? 0);
     const total = Math.max(onHand, placedTotal);
     if (total > 0) {
@@ -4596,6 +4767,7 @@ export class InventoryService {
         formatArchiveStockBlockMessage(
           total,
           holdings.map((h) => ({ label: h.label, quantity: h.quantity })),
+          hidden,
         ),
       );
     }
@@ -4677,13 +4849,31 @@ export class InventoryService {
     );
   }
 
-  private async assertBulkArchivableOrThrow(ids: string[]): Promise<void> {
+  /**
+   * `onHandById` is each target item's quantity_on_hand, read through the
+   * caller's own client with the rows bulkUpdate already loads (see there).
+   */
+  private async assertBulkArchivableOrThrow(
+    ids: string[],
+    onHandById: ReadonlyMap<string, number>,
+  ): Promise<void> {
     if (ids.length === 0) return;
     // CHUNKED + PAGED (see holdingsForItemIds). This read used to be one
     // un-ranged `.in()` over up to 500 ids, and an item can hold several rows
     // (staging + unplaced + rack + crate). Past the 1000-row cap the overflow
     // items simply vanished from `byItem`, `byItem.size === 0` read as "clean",
     // and they archived while still holding stock — with no error anywhere.
+    //
+    // ═══ AND THE STOCK THE CALLER CANNOT SEE (0371) ═══
+    // A staff member reads holdings only in their own warehouses. An item in
+    // their warehouse whose stock sits entirely in ANOTHER warehouse returned
+    // no visible rows, and this guard (which decided from holdings alone)
+    // archived it silently: the exact orphan it exists to stop. So, per item,
+    // the stock is the greater of quantity_on_hand and visible + hidden
+    // holdings (item_holdings_elsewhere, asked in parallel) — the single-item
+    // guard's max(on hand, holdings) rule — and a refusal names the hidden
+    // units. Either read failing blocks the batch.
+    const elsewhereRead = this.hiddenHoldingsFor(ids);
     let data: unknown[];
     try {
       data = await this.holdingsForItemIds<unknown>(
@@ -4693,6 +4883,13 @@ export class InventoryService {
     } catch {
       // FAIL-CLOSED, unchanged: a read error blocks the batch rather than risk
       // orphaning stock.
+      throw new ServiceError(
+        'internal_error',
+        'Could not verify these items have no stock before archiving. Please try again.',
+      );
+    }
+    const elsewhere = await elsewhereRead;
+    if (!elsewhere.ok) {
       throw new ServiceError(
         'internal_error',
         'Could not verify these items have no stock before archiving. Please try again.',
@@ -4711,16 +4908,31 @@ export class InventoryService {
       });
       byItem.set(row.item_id, arr);
     }
-    if (byItem.size === 0) return;
+    const holding: Array<{
+      holdings: Array<{ label: string; quantity: number }>;
+      hidden: number;
+      total: number;
+    }> = [];
+    for (const id of new Set(ids)) {
+      const holdings = byItem.get(id) ?? [];
+      const hidden = holdingsElsewhereTotal(elsewhere.byItem.get(id));
+      const visible = holdings.reduce((sum, h) => sum + h.quantity, 0);
+      const onHand = Number(onHandById.get(id) ?? 0) || 0;
+      const total = Math.max(onHand, visible + hidden);
+      if (total > 0) holding.push({ holdings, hidden, total });
+    }
+    if (holding.length === 0) return;
 
     // Single-item batch → the detailed, location-naming message (bulk-of-one
     // must read exactly like the item-detail archive dialog).
-    if (byItem.size === 1) {
-      const [holdings] = [...byItem.values()];
-      const total = holdings!.reduce((sum, h) => sum + h.quantity, 0);
-      throw new ServiceError('validation_error', formatArchiveStockBlockMessage(total, holdings!));
+    if (holding.length === 1) {
+      const [only] = holding;
+      throw new ServiceError(
+        'validation_error',
+        formatArchiveStockBlockMessage(only!.total, only!.holdings, only!.hidden),
+      );
     }
-    throw new ServiceError('validation_error', formatBulkArchiveStockBlockMessage(byItem.size));
+    throw new ServiceError('validation_error', formatBulkArchiveStockBlockMessage(holding.length));
   }
 
   /**
@@ -4840,6 +5052,14 @@ export class InventoryService {
      */
     placeFailed?: number;
     /**
+     * Set rack only: items with stock in warehouses the caller cannot see
+     * (0371). That stock was not moved, because this caller cannot move stock
+     * out of those warehouses; the rack label was still set, so it is ahead of
+     * that stock. Never counted in `placeFailed`: nothing was refused, the
+     * move was never the caller's to make. Managers never get it.
+     */
+    placeElsewhere?: number;
+    /**
      * Set rack only: BOOKS whose crate summary was cleared because their stock
      * now sits on the rack and nowhere else. Reported so the toast can say it —
      * a crate label silently surviving a physical move is what sent pickers to
@@ -4886,12 +5106,18 @@ export class InventoryService {
     // CHUNKED: one `.in()` of all 500 ids never even reached the server (see
     // chunkedItemRead) — this read is what produces `allowedIds`, so a
     // truncated or failed answer silently narrows every guard below it.
-    const rows = await this.chunkedItemRead<{ id: string; warehouse_id: string | null }>(
+    // `quantity_on_hand` rides along for the archive stock guard below (0371:
+    // holdings alone no longer show a staff member every warehouse's stock).
+    const rows = await this.chunkedItemRead<{
+      id: string;
+      warehouse_id: string | null;
+      quantity_on_hand?: number | string | null;
+    }>(
       input.ids,
       (batch) => (from, to) =>
         this.ctx.supabase
           .from('inventory_items')
-          .select('id, warehouse_id')
+          .select('id, warehouse_id, quantity_on_hand')
           .eq('organization_id', this.ctx.organizationId)
           // in-list-bound: one fetchAllRowsByIds batch, handed in by chunkedItemRead
           .in('id', batch)
@@ -4926,7 +5152,10 @@ export class InventoryService {
       input.op.kind === 'archive' ||
       (input.op.kind === 'set_status' && input.op.status === 'archived');
     if (isBulkArchive && !input.acknowledgeStock) {
-      await this.assertBulkArchivableOrThrow(allowedIds);
+      await this.assertBulkArchivableOrThrow(
+        allowedIds,
+        new Map((rows ?? []).map((r) => [r.id, Number(r.quantity_on_hand ?? 0) || 0])),
+      );
     }
 
     // Rack ops merge into custom_fields server-side via a SECURITY
@@ -5020,6 +5249,7 @@ export class InventoryService {
       // label set, so failures are logged and `placed` just stays 0.
       let placed = 0;
       let placeFailed = 0;
+      let placeElsewhere = 0;
       let crateCleared = 0;
       let crateUnchanged = 0;
       let crateChanged = 0;
@@ -5052,10 +5282,11 @@ export class InventoryService {
           // placed. Erring toward a warning is the only safe direction — the
           // silent version of this is the bug being fixed.
           console.error('[bulkUpdate set_rack] bulk placement failed', e);
-          return { placed: 0, failedItemIds: [...allowedIds] };
+          return { placed: 0, failedItemIds: [...allowedIds], elsewhereItemIds: [] as string[] };
         });
         placed = placement.placed;
         placeFailed = placement.failedItemIds.length;
+        placeElsewhere = placement.elsewhereItemIds.length;
         // ═══ THE CRATE SUMMARY MUST FOLLOW THE STOCK — DEFECT 3(4) ═══
         // inventory_set_rack above writes the RACK keys only (migration 0068).
         // This branch then PHYSICALLY RELOCATES every selected item's stock onto
@@ -5199,6 +5430,7 @@ export class InventoryService {
         skipped: skipped + (allowedIds.length - ok),
         placed,
         ...(placeFailed > 0 ? { placeFailed } : {}),
+        ...(placeElsewhere > 0 ? { placeElsewhere } : {}),
         ...(crateCleared > 0 ? { crateCleared } : {}),
         ...(crateUnchanged > 0 ? { crateUnchanged } : {}),
         ...(crateChanged > 0 ? { crateChanged } : {}),
@@ -6437,39 +6669,39 @@ export class InventoryService {
     const known = itemIds.filter((id) => moves.has(id));
     if (known.length === 0) return out;
 
-    // Batched and paged (holdingsForItemIds). A failed read returns an empty
-    // prediction, which the caller reads as "assume it writes" (fail closed).
-    let data: Array<{
-      item_id: string;
-      location_id: string;
-      quantity: number;
-      locations: { kind: string | null; type: string | null } | null;
-    }>;
+    // THE SAME INPUT the reconciliation decides from (readPlacedHoldingsForCrateRule),
+    // so the prompt and the write can never disagree about whether a book is
+    // split. A failed read returns an empty prediction, which the caller reads
+    // as "assume it writes" (fail closed).
+    let placed: Awaited<ReturnType<InventoryService['readPlacedHoldingsForCrateRule']>>;
     try {
-      data = await this.holdingsForItemIds(
-        known,
-        'item_id, location_id, quantity, locations!inner(id, kind, type)',
-      );
+      placed = await this.readPlacedHoldingsForCrateRule(known);
     } catch {
       return out;
     }
 
-    const placedByItem = new Map<string, Array<{ locationId: string; quantity: number }>>();
-    for (const row of data) {
-      const loc = row.locations;
-      if (!loc) continue;
-      if (isSystemLocation({ type: loc.type, kind: loc.kind })) continue;
-      const list = placedByItem.get(row.item_id) ?? [];
-      list.push({ locationId: row.location_id, quantity: row.quantity });
-      placedByItem.set(row.item_id, list);
-    }
-
     for (const itemId of known) {
+      // A holding in another warehouse whose location could not be read: the
+      // split rule cannot be decided, so no prediction (fail closed).
+      if (placed.unresolvedItemIds.has(itemId)) continue;
       const move = moves.get(itemId)!;
+      const holdings = [...(placed.byItem.get(itemId)?.entries() ?? [])];
+      // A hidden holding's quantity is unknown (the caller only learns that it
+      // is positive). It can never be this move's SOURCE (a source the caller
+      // can move from is one they can see), but if it ever were, the drain
+      // arithmetic below could not be done: no prediction, fail closed.
+      if (holdings.some(([locationId, h]) => h.quantity === null && locationId === move.fromLocationId)) {
+        continue;
+      }
       out.set(
         itemId,
         bookCratePlacementWillSync({
-          placedHoldings: placedByItem.get(itemId) ?? [],
+          // A hidden holding survives this move whatever its size: any
+          // positive quantity says "still placed elsewhere afterwards".
+          placedHoldings: holdings.map(([locationId, h]) => ({
+            locationId,
+            quantity: h.quantity ?? Number.POSITIVE_INFINITY,
+          })),
           destinationLocationId: toLocationId,
           fromLocationId: move.fromLocationId,
           quantity: move.quantity,
@@ -6477,6 +6709,126 @@ export class InventoryService {
       );
     }
     return out;
+  }
+
+  /**
+   * THE ONE INPUT to the book crate split rule, shared by the prediction
+   * (readBookCrateSyncPrediction) and the reconciliation
+   * (syncBookCratePlacementInner): per item, every PLACED holding (Staging and
+   * Unplaced never count) keyed by location, with the location's own crate and
+   * rack columns.
+   *
+   * ═══ COMPLETE ACROSS WAREHOUSES (0371) ═══
+   *
+   * A staff member reads holdings only in their own warehouses. The split rule
+   * decides from ALL of a book's placed holdings: a book split across a Main
+   * crate and an Annex crate must stay "split" (summary left alone, reported),
+   * and draining the Main crate while copies remain in the Annex crate must
+   * re-sync the summary to the Annex crate. Built from the visible holdings
+   * alone, the first case was rewritten to the Main crate and the second
+   * reported as unplaced. So the visible rows are joined by the placed
+   * location ids item_holdings_elsewhere reports, with those locations' columns
+   * read through the caller's own client (locations are readable org-wide).
+   * Their quantity is unknown to the caller and carried as null.
+   *
+   * THROWS when either the holdings or the stock-in-other-warehouses read
+   * fails; each caller already fails closed on a throw. An item whose hidden
+   * location row could not be read is listed in `unresolvedItemIds`: its split
+   * cannot be decided, and each caller treats it as it treats a failed read.
+   */
+  private async readPlacedHoldingsForCrateRule(itemIds: string[]): Promise<{
+    byItem: Map<string, Map<string, { location: CrateRuleLocation; quantity: number | null }>>;
+    unresolvedItemIds: Set<string>;
+  }> {
+    const byItem = new Map<
+      string,
+      Map<string, { location: CrateRuleLocation; quantity: number | null }>
+    >();
+    const unresolvedItemIds = new Set<string>();
+    if (itemIds.length === 0) return { byItem, unresolvedItemIds };
+
+    // No `.in('locations.kind', …)` filter (pattern #23: it drops NULL-kind
+    // Site rows, which are exactly "this book is also somewhere else"); the
+    // system buckets are classified out in JS. Batched and paged
+    // (holdingsForItemIds). The hidden read runs alongside it.
+    const elsewhereRead = this.hiddenHoldingsFor(itemIds);
+    const rows = await this.holdingsForItemIds<{
+      item_id: string;
+      location_id: string;
+      quantity: number;
+      locations: CrateRuleLocation | null;
+    }>(
+      itemIds,
+      'item_id, location_id, quantity, locations!inner(id, kind, type, crate_color, crate_number, rack_number, rack_row)',
+    );
+    const elsewhere = await elsewhereRead;
+    if (!elsewhere.ok) {
+      throw new ServiceError(
+        'internal_error',
+        'Could not read stock in other warehouses for the crate summary.',
+      );
+    }
+
+    for (const row of rows) {
+      const loc = row.locations;
+      if (!loc) continue;
+      if (isSystemLocation({ type: loc.type, kind: loc.kind })) continue;
+      const perItem = byItem.get(row.item_id) ?? new Map();
+      const prior = perItem.get(row.location_id);
+      perItem.set(row.location_id, {
+        location: loc,
+        quantity: (prior?.quantity ?? 0) + Number(row.quantity),
+      });
+      byItem.set(row.item_id, perItem);
+    }
+
+    // The placed locations the caller cannot see, per item, that the visible
+    // read did not already cover (the two sets are disjoint by construction;
+    // the check only keeps a visible quantity from being overwritten by null).
+    const hiddenIdsByItem = new Map<string, string[]>();
+    const hiddenLocationIds = new Set<string>();
+    for (const itemId of itemIds) {
+      const ids = (elsewhere.byItem.get(itemId)?.placedLocationIds ?? []).filter(
+        (locationId) => !byItem.get(itemId)?.has(locationId),
+      );
+      if (ids.length === 0) continue;
+      hiddenIdsByItem.set(itemId, ids);
+      for (const locationId of ids) hiddenLocationIds.add(locationId);
+    }
+    if (hiddenLocationIds.size === 0) return { byItem, unresolvedItemIds };
+
+    // Throws on a read error (fetchAllRowsByIds), which fails the caller
+    // closed. Soft-deleted locations are NOT filtered: a holding at one is
+    // still a holding, exactly as the visible embed above treats it.
+    const locationRows = await fetchAllRowsByIds<CrateRuleLocation>(
+      [...hiddenLocationIds],
+      (batch) => (from, to) =>
+        this.ctx.supabase
+          .from('locations')
+          .select('id, kind, type, crate_color, crate_number, rack_number, rack_row')
+          .eq('organization_id', this.ctx.organizationId)
+          // in-list-bound: one fetchAllRowsByIds batch
+          .in('id', batch)
+          .order('id')
+          .range(from, to) as unknown as PromiseLike<{
+          data: CrateRuleLocation[] | null;
+          error: { message: string } | null;
+        }>,
+    );
+    const locationById = new Map(locationRows.map((l) => [l.id, l]));
+    for (const [itemId, ids] of hiddenIdsByItem) {
+      const perItem = byItem.get(itemId) ?? new Map();
+      for (const locationId of ids) {
+        const location = locationById.get(locationId);
+        if (!location) {
+          unresolvedItemIds.add(itemId);
+          continue;
+        }
+        perItem.set(locationId, { location, quantity: null });
+      }
+      byItem.set(itemId, perItem);
+    }
+    return { byItem, unresolvedItemIds };
   }
 
   /**
@@ -6735,16 +7087,22 @@ export class InventoryService {
     // holdings each, used to run into the 1000-row cap, and dropping one of a
     // split book's holdings makes it look unsplit. A failed read writes
     // nothing and reports every book as failed.
-    let data: unknown[] | null = null;
+    //
+    // COMPLETE ACROSS WAREHOUSES (0371): the shared input builder joins the
+    // placed locations item_holdings_elsewhere reports, so a staff member's
+    // sync decides "split / single / unplaced" from every warehouse's holdings,
+    // exactly as a manager's does. Staging/Unplaced never count toward the
+    // split decision (stock WAITING to be put away is not a place the book
+    // "is in"); the builder drops them. A failed read writes nothing and
+    // reports every book as failed; a book whose hidden location could not be
+    // read is reported as failed too.
+    let placedAll: Awaited<ReturnType<InventoryService['readPlacedHoldingsForCrateRule']>> | null;
     try {
-      data = await this.holdingsForItemIds<unknown>(
-        bookIds,
-        'item_id, location_id, quantity, locations!inner(id, kind, type, crate_color, crate_number, rack_number, rack_row)',
-      );
+      placedAll = await this.readPlacedHoldingsForCrateRule(bookIds);
     } catch {
-      data = null;
+      placedAll = null;
     }
-    if (data === null)
+    if (placedAll === null)
       return {
         syncedItemIds: [],
         failedItemIds: bookIds,
@@ -6755,35 +7113,19 @@ export class InventoryService {
         cratePreservedItemIds: [],
       };
 
-    type HoldingRow = {
-      item_id: string;
-      location_id: string;
-      locations: {
-        id: string;
-        kind: string | null;
-        type: string | null;
-        crate_color: string | null;
-        crate_number: string | null;
-        // The location's OWN rack position. A rack row carries its number/row
-        // here; a CRATE row carries the position it sits on (the columns have
-        // been on `locations` since 0188, for both kinds); a Site carries
-        // neither. One read, both halves of the summary — see the derivation
-        // below for why they cannot come from two places.
-        rack_number: string | null;
-        rack_row: string | null;
-      };
-    };
-    const placedByItem = new Map<string, Map<string, HoldingRow['locations']>>();
-    for (const row of (data ?? []) as unknown as HoldingRow[]) {
-      const loc = row.locations;
-      if (!loc) continue;
-      // Staging/Unplaced are stock WAITING to be put away, not a location the
-      // book "is in" — they never count toward the split decision.
-      if (isSystemLocation({ type: loc.type, kind: loc.kind })) continue;
-      const perItem = placedByItem.get(row.item_id) ?? new Map<string, HoldingRow['locations']>();
-      perItem.set(row.location_id, loc);
-      placedByItem.set(row.item_id, perItem);
+    // The location's OWN rack position rides on each entry: a rack row carries
+    // its number/row, a CRATE row carries the position it sits on (the columns
+    // have been on `locations` since 0188, for both kinds); a Site carries
+    // neither. One read, both halves of the summary — see the derivation below
+    // for why they cannot come from two places.
+    const placedByItem = new Map<string, Map<string, CrateRuleLocation>>();
+    for (const [itemId, perItem] of placedAll.byItem) {
+      placedByItem.set(
+        itemId,
+        new Map([...perItem].map(([locationId, h]) => [locationId, h.location])),
+      );
     }
+    const unresolvedItemIds = bookIds.filter((id) => placedAll!.unresolvedItemIds.has(id));
 
     // Group by the SUMMARY the sync would write, so N books landing in one
     // place cost ONE RPC call instead of N.
@@ -6802,6 +7144,9 @@ export class InventoryService {
     const rackPreservedItemIds: string[] = [];
     const cratePreservedItemIds: string[] = [];
     for (const itemId of bookIds) {
+      // Its split could not be decided (see readPlacedHoldingsForCrateRule):
+      // written nothing, reported failed below.
+      if (placedAll.unresolvedItemIds.has(itemId)) continue;
       const placed = placedByItem.get(itemId);
       // ═══ NO PLACED HOLDING — LEFT ALONE, BUT NEVER SILENTLY ═══
       // Everything this book still has is in a staging/unplaced bucket, or it
@@ -7043,7 +7388,7 @@ export class InventoryService {
       batches.set(key, batch);
     }
 
-    const failedItemIds: string[] = [];
+    const failedItemIds: string[] = [...unresolvedItemIds];
     const syncedItemIds: string[] = [];
     // One audit row per written book, collected and written in batches after
     // the loop (auditMany) instead of one request per book: bulk Set rack
@@ -7220,8 +7565,28 @@ export class InventoryService {
     num: string | null,
     row: string | null,
     name: string,
-  ): Promise<{ placed: number; failedItemIds: string[] }> {
-    if (itemIds.length === 0 || !num) return { placed: 0, failedItemIds: [] };
+  ): Promise<{ placed: number; failedItemIds: string[]; elsewhereItemIds: string[] }> {
+    if (itemIds.length === 0 || !num) return { placed: 0, failedItemIds: [], elsewhereItemIds: [] };
+
+    // ═══ STOCK IN WAREHOUSES THE CALLER CANNOT SEE (0371) ═══
+    // A staff member reads holdings only in their own warehouses, so the
+    // holdings read below sees part of each item. Two decisions need the rest:
+    //   • THE SPLIT RULE. An item with one rack holding here and one in another
+    //     warehouse IS split, and a split item is never moved (label only).
+    //     Seen from the visible rows alone it looked single, so its stock was
+    //     moved and its rack label rewritten while copies sat on the other
+    //     warehouse's rack. Every hidden PLACED location counts toward the
+    //     split, whatever its kind: the caller cannot tell a rack from a site
+    //     there, and "split, label only" is the conservative answer (the list's
+    //     rackHoldingsCount counts them the same way, so the dialog's split
+    //     warning agrees).
+    //   • WHAT DID NOT MOVE. Hidden stock (any bucket) is in a warehouse this
+    //     caller cannot move from; the server would refuse it (0365). It is
+    //     never attempted, and the item is reported in `elsewhereItemIds` so
+    //     the operator hears that part of its stock stayed where it is.
+    // Asked in parallel with the reads below. A failed read claims nothing,
+    // like a failed holdings read: every item is reported failed to place.
+    const elsewhereRead = this.hiddenHoldingsFor(itemIds);
 
     // CHUNKED (see chunkedItemRead): an item missing from this map resolves no
     // destination warehouse and is reported as failed to place, so a truncated
@@ -7278,8 +7643,18 @@ export class InventoryService {
       console.error('[set_rack place] holdings read failed — no item can be claimed as placed', {
         error: e instanceof ServiceError ? (e.internalDetail ?? e.message) : String(e),
       });
-      return { placed: 0, failedItemIds: [...itemIds] };
+      return { placed: 0, failedItemIds: [...itemIds], elsewhereItemIds: [] };
     }
+    const elsewhere = await elsewhereRead;
+    if (!elsewhere.ok) {
+      console.error(
+        '[set_rack place] stock in other warehouses unreadable — no item can be claimed as placed',
+      );
+      return { placed: 0, failedItemIds: [...itemIds], elsewhereItemIds: [] };
+    }
+    const elsewhereItemIds = itemIds.filter(
+      (id) => holdingsElsewhereTotal(elsewhere.byItem.get(id)) > 0,
+    );
 
     const isAlreadyPlaced = (h: (typeof allHoldings)[number]) =>
       h.locations != null && isRackShelfLocation(h.locations);
@@ -7302,7 +7677,10 @@ export class InventoryService {
       warehouseId: string | null;
     }> = [];
     for (const [itemId, hs] of rackHoldingsByItem) {
-      if (hs.length !== 1) continue; // split placement — NEVER move, label-only
+      // Split placement — NEVER move, label-only. Hidden placed locations
+      // count (see the note at the top).
+      const hiddenPlaced = elsewhere.byItem.get(itemId)?.placedLocationIds.length ?? 0;
+      if (hs.length + hiddenPlaced !== 1) continue;
       const h = hs[0]!;
       singleRackMoves.push({
         item_id: itemId,
@@ -7313,7 +7691,7 @@ export class InventoryService {
     }
 
     if (levels.length === 0 && singleRackMoves.length === 0)
-      return { placed: 0, failedItemIds: [] };
+      return { placed: 0, failedItemIds: [], elsewhereItemIds };
 
     // Resolve (find or create) the destination rack ONCE per warehouse —
     // shared by both the not-yet-placed auto-place and the single-holding
@@ -7425,7 +7803,7 @@ export class InventoryService {
       if (transferAudits.length > 0) await auditMany(transferAudits, this.ctx);
     }
 
-    return { placed: placedCount, failedItemIds: [...failedItemIds] };
+    return { placed: placedCount, failedItemIds: [...failedItemIds], elsewhereItemIds };
   }
 
   /** Find an existing rack/crate location named `name` in the warehouse, or

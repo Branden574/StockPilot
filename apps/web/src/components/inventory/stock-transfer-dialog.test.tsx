@@ -693,3 +693,126 @@ describe('StockTransferDialog — Staging is not a destination, Unplaced is', ()
     );
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STOCK IN WAREHOUSES THE VIEWER CANNOT SEE (0371)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// A staff member reads holdings only in their own warehouses, so `holdings`
+// here lists those. The empty state used to blame Staging for stock that is in
+// fact on another warehouse's rack; and the destination list offered every
+// warehouse in the org, where only their own (and locations with no warehouse)
+// can succeed (owner decision Q4; the server's 0365 check is unchanged).
+describe('StockTransferDialog — stock in other warehouses, and where it may go', () => {
+  const MAIN_RACK = { id: 'loc-main', name: 'Rack M-1', kind: 'rack', warehouse_id: 'wh-main' };
+  const MAIN_UNPLACED = { id: 'loc-main-unp', name: 'Unplaced', kind: 'unplaced', warehouse_id: 'wh-main' };
+  const ANNEX_RACK = { id: 'loc-annex', name: 'Rack A-9', kind: 'rack', warehouse_id: 'wh-annex' };
+  const SITE = { id: 'loc-site', name: 'District Site', kind: null, warehouse_id: null };
+  const LOCATIONS = [MAIN_RACK, MAIN_UNPLACED, ANNEX_RACK, SITE];
+  const chrome = {
+    status: 'some' as const,
+    staged: 5,
+    unplaced: 0,
+    placed: 7,
+    placedLocationIds: ['loc-annex'],
+  };
+
+  function renderScoped(opts: {
+    holdings: unknown[];
+    elsewhere?: unknown;
+    writableWarehouseIds?: string[] | null;
+  }) {
+    return render(
+      <StockTransferDialog
+        itemId="item-1"
+        itemName="QA Chrome"
+        currentQuantity={32}
+        currentLocationId={null}
+        locations={LOCATIONS as never}
+        holdings={opts.holdings as never}
+        elsewhere={opts.elsewhere as never}
+        writableWarehouseIds={opts.writableWarehouseIds ?? null}
+        itemType="asset"
+      />,
+    );
+  }
+
+  it('names stock in other warehouses instead of blaming Staging', async () => {
+    const user = userEvent.setup();
+    renderScoped({
+      holdings: [{ locationId: 'loc-main-unp', name: 'Unplaced', kind: 'unplaced', warehouseId: 'wh-main', quantity: 20 }],
+      elsewhere: chrome,
+    });
+    await user.click(screen.getByRole('button', { name: /transfer/i }));
+    expect(
+      screen.getByText(
+        /This item's stock is in Staging\/Unplaced — placement is handled in the staging workflow\. The rest of this item's stock \(12\) is in warehouses you don't manage\./,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('says ALL of it is elsewhere when the viewer holds none of it', async () => {
+    const user = userEvent.setup();
+    renderScoped({ holdings: [], elsewhere: chrome });
+    await user.click(screen.getByRole('button', { name: /transfer/i }));
+    expect(
+      screen.getByText("This item's stock (12) is in warehouses you don't manage."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Staging\/Unplaced/)).not.toBeInTheDocument();
+  });
+
+  it('says it could not load the rest when that read failed', async () => {
+    const user = userEvent.setup();
+    renderScoped({ holdings: [], elsewhere: { status: 'unavailable' } });
+    await user.click(screen.getByRole('button', { name: /transfer/i }));
+    expect(screen.getByText(/Could not load stock in other warehouses/)).toBeInTheDocument();
+  });
+
+  it("keeps today's copy when nothing is elsewhere", async () => {
+    const user = userEvent.setup();
+    renderScoped({ holdings: [], elsewhere: { status: 'none' } });
+    await user.click(screen.getByRole('button', { name: /transfer/i }));
+    expect(
+      screen.getByText(/This item's stock is in Staging\/Unplaced — placement is handled in the staging workflow\.$/),
+    ).toBeInTheDocument();
+  });
+
+  it('with sources, still says the rest is elsewhere under the source list', async () => {
+    const user = userEvent.setup();
+    renderScoped({
+      holdings: [{ locationId: 'loc-main', name: 'Rack M-1', kind: 'rack', warehouseId: 'wh-main', quantity: 3 }],
+      elsewhere: chrome,
+    });
+    await user.click(screen.getByRole('button', { name: /transfer/i }));
+    expect(
+      screen.getByText("The rest of this item's stock (12) is in warehouses you don't manage."),
+    ).toBeInTheDocument();
+  });
+
+  it('Q4: a scoped member is offered only their warehouses and locations with no warehouse', async () => {
+    const user = userEvent.setup();
+    renderScoped({
+      holdings: [{ locationId: 'loc-main', name: 'Rack M-1', kind: 'rack', warehouseId: 'wh-main', quantity: 3 }],
+      elsewhere: { status: 'none' },
+      writableWarehouseIds: ['wh-main'],
+    });
+    await user.click(screen.getByRole('button', { name: /transfer/i }));
+    await user.click(screen.getAllByRole('combobox')[1]!);
+    await screen.findByRole('option', { name: /District Site/ });
+    const names = screen.getAllByRole('option').map((o) => o.textContent);
+    expect(names).toEqual(['Unplaced — off the rack, stock kept', 'District Site']);
+    expect(screen.queryByRole('option', { name: /Rack A-9/ })).not.toBeInTheDocument();
+  });
+
+  it('Q4: unrestricted (managers) still sees every warehouse', async () => {
+    const user = userEvent.setup();
+    renderScoped({
+      holdings: [{ locationId: 'loc-main', name: 'Rack M-1', kind: 'rack', warehouseId: 'wh-main', quantity: 3 }],
+      elsewhere: { status: 'none' },
+      writableWarehouseIds: null,
+    });
+    await user.click(screen.getByRole('button', { name: /transfer/i }));
+    await user.click(screen.getAllByRole('combobox')[1]!);
+    expect(await screen.findByRole('option', { name: /Rack A-9/ })).toBeInTheDocument();
+  });
+});

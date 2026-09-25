@@ -349,8 +349,9 @@ describe('ItemDetail: reads start by what they need, not one after another', () 
     for (const read of [...OVERVIEW_ONLY_READS, ...ROW_KEYED_READS]) {
       expect(started).not.toContain(read);
     }
-    // The footer's editor came with the row: no read of its own.
-    expect(getCalls).toEqual([[ITEM_ID, { withUpdater: true }]]);
+    // The footer's editor came with the row: no read of its own. So does the
+    // stock in other warehouses (0371): one get(), asked with the row.
+    expect(getCalls).toEqual([[ITEM_ID, { withUpdater: true, withElsewhere: true }]]);
     expect(started).not.toContain('table:user_profiles');
     expect(screen.getByText(/Last updated by Dana Editor/)).toBeTruthy();
     // One module answer source, and it is not a round trip.

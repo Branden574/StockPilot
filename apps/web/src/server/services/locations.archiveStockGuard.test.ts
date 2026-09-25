@@ -37,14 +37,30 @@ function makeService(opts: {
   row?: { id: string; kind: string | null } | null;
   holdings?: Array<{ quantity: number; inventory_items: { id: string; name: string } }>;
   holdingsError?: { message: string } | null;
+  /**
+   * location_stock_census (0371): the org-wide count and total. Defaults to
+   * exactly the positive `holdings`, i.e. a caller who can read every item at
+   * the location.
+   */
+  census?: { data: unknown; error: { message: string; code?: string } | null };
 }): { svc: LocationsService; stub: SupabaseStub } {
   const row = 'row' in opts ? opts.row : { id: LOC, kind: 'rack' };
+  const positive = (opts.holdings ?? []).filter((h) => h.quantity > 0);
   const stub = makeSupabaseStub({
     'locations.select': { data: row, error: null },
     'locations.update': { data: row ? { id: row.id } : null, error: null },
     'item_stock_levels.select': {
       data: opts.holdings ?? [],
       error: opts.holdingsError ?? null,
+    },
+    'rpc:location_stock_census': opts.census ?? {
+      data: [
+        {
+          holding_rows: positive.length,
+          total_quantity: positive.reduce((sum, h) => sum + h.quantity, 0),
+        },
+      ],
+      error: null,
     },
   });
   const ctx = {
@@ -131,6 +147,102 @@ describe('LocationsService.archive — the stock guard', () => {
     expect(err).toBeInstanceOf(ServiceError);
     expect((err as ServiceError).code).toBe('internal_error');
     expect(stub.chains.get('locations.update')).toBeUndefined();
+  });
+
+  // ═══ THE TOTAL IS THE ORG'S (0371) ═══
+  // The caller's own read is narrowed by warehouse (a staff member with
+  // locations:manage) and by item (the inventory_items!inner embed). Probe
+  // C6 of the 0371 design: that read saw 0 rows where the location held 2
+  // holdings / 15 units, and the location archived. The census decides now.
+
+  it('refuses on the census even when the caller can read NONE of the stock', async () => {
+    const { svc, stub } = makeService({
+      holdings: [],
+      census: { data: [{ holding_rows: 2, total_quantity: 15 }], error: null },
+    });
+    const err = await archiveError(svc);
+    expect(err).toBeInstanceOf(ServiceError);
+    expect((err as ServiceError).code).toBe('validation_error');
+    expect((err as ServiceError).message).toBe(
+      "Cannot archive: This location still holds 15 units of items you can't see. " +
+        'Move or write off that stock first — archiving anyway leaves it still counted in on hand but attached to a hidden location.',
+    );
+    expect((err as ServiceError).details).toMatchObject({
+      locationHoldsStock: true,
+      units: 15,
+      items: 2,
+    });
+    expect(stub.chains.get('locations.update')).toBeUndefined();
+  });
+
+  it('names what the caller can read and counts the rest', async () => {
+    const { svc } = makeService({
+      holdings: [{ quantity: 7, inventory_items: { id: 'i1', name: 'QA Chrome' } }],
+      census: { data: [{ holding_rows: 2, total_quantity: 15 }], error: null },
+    });
+    const err = await archiveError(svc);
+    expect((err as ServiceError).message).toContain(
+      "still holds 15 units (7 of QA Chrome, and 8 units of items you can't see)",
+    );
+    expect((err as ServiceError).details).toMatchObject({ units: 15, items: 2 });
+  });
+
+  it('asks the census and the naming read TOGETHER, not one after the other', async () => {
+    let release!: (v: unknown) => void;
+    const held = new Promise((r) => {
+      release = r;
+    });
+    const { svc, stub } = makeService({ holdings: [] });
+    const realRpc = stub.client.rpc;
+    stub.client.rpc = vi.fn(async (name: string, args: unknown) => {
+      await held;
+      return realRpc(name, args);
+    });
+    const pending = svc.archive(LOC);
+    await new Promise((r) => setTimeout(r, 0));
+    // The census has not answered, yet the naming read has already been made.
+    expect(stub.fromCalls).toContain('item_stock_levels');
+    release(undefined);
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  it("maps the census's 42501 to forbidden and archives nothing", async () => {
+    const { svc, stub } = makeService({
+      census: { data: null, error: { message: 'forbidden', code: '42501' } },
+    });
+    const err = await archiveError(svc);
+    expect(err).toBeInstanceOf(ServiceError);
+    expect((err as ServiceError).code).toBe('forbidden');
+    expect(stub.chains.get('locations.update')).toBeUndefined();
+  });
+
+  it('FAILS CLOSED when the census is missing (web deployed before the migration)', async () => {
+    const { svc, stub } = makeService({
+      census: {
+        data: null,
+        error: { message: 'Could not find the function', code: 'PGRST202' },
+      },
+    });
+    const err = await archiveError(svc);
+    expect(err).toBeInstanceOf(ServiceError);
+    expect((err as ServiceError).code).toBe('internal_error');
+    expect((err as ServiceError).internalDetail).toContain('Could not verify this location is empty');
+    expect(stub.chains.get('locations.update')).toBeUndefined();
+  });
+
+  it('FAILS CLOSED when the census answers with no row: no answer is not "empty"', async () => {
+    const { svc, stub } = makeService({ census: { data: [], error: null } });
+    const err = await archiveError(svc);
+    expect((err as ServiceError).code).toBe('internal_error');
+    expect(stub.chains.get('locations.update')).toBeUndefined();
+  });
+
+  it('asks the census about THIS location', async () => {
+    const { svc, stub } = makeService({ holdings: [] });
+    await svc.archive(LOC);
+    expect(stub.rpcCalls).toEqual([
+      { name: 'location_stock_census', args: { p_location_id: LOC } },
+    ]);
   });
 
   it('still refuses Staging/Unplaced before it ever looks at stock', async () => {
