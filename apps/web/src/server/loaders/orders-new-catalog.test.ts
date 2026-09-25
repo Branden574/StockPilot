@@ -947,6 +947,8 @@ describe('storefront loaders throw on a failed read instead of caching it', () =
           id: `img-${String(i).padStart(4, '0')}-${n}`,
           organization_id: ORG,
           'item.warehouse_id': WH,
+          'item.status': 'active',
+          'item.deleted_at': null,
           item_id: itemId,
           lqip: null,
           thumb_path: null,
@@ -1035,5 +1037,297 @@ describe('storefront loaders throw on a failed read instead of caching it', () =
     await expect(loadChartersForWarehouse(WH)).resolves.toEqual([
       { id: CHARTER_A, name: 'Alpha', code: 'A', address: null },
     ]);
+  });
+});
+
+/* ---- the thumb map stays bounded ---- */
+
+// Since every image row is read (7f4bdc2d), the map had no bound of its own:
+// one entry, with a ~550-char signed URL and its blur, for every photographed
+// item of the warehouse including archived and soft-deleted ones; every path
+// in ONE createSignedUrls body (storage-api's schema refuses more than 1000
+// paths per call, and its 1 MiB body limit ~8,450; either threw the whole
+// map); and past Next's 2 MB entry limit the map is never cached, silently.
+describe('thumb map: bounded to what the pages show, signed in chunks, never silently too big', () => {
+  const OTHER_ORG = '00000000-0000-4000-8000-0000000000ff';
+  const pad = (i: number) => String(i).padStart(4, '0');
+
+  function imageRow(
+    itemId: string,
+    over: {
+      id?: string;
+      primary?: boolean;
+      sortOrder?: number;
+      org?: string;
+      warehouse?: string;
+      status?: string;
+      deletedAt?: string | null;
+      rental?: boolean;
+      bundle?: boolean;
+      lqip?: string | null;
+      path?: string | null;
+    } = {},
+  ): Record<string, unknown> {
+    const primary = over.primary ?? true;
+    return {
+      id: over.id ?? `img-${itemId}-${primary ? 'p' : 'o'}`,
+      organization_id: over.org ?? ORG,
+      // The embed's columns, flattened as the mock filters them.
+      'item.warehouse_id': over.warehouse ?? WH,
+      'item.status': over.status ?? 'active',
+      'item.deleted_at': over.deletedAt ?? null,
+      'item.is_rental': over.rental ?? false,
+      'item.is_bundle': over.bundle ?? false,
+      item_id: itemId,
+      lqip: over.lqip ?? null,
+      thumb_path: null,
+      storage_path:
+        over.path === undefined
+          ? `${ORG}/items/${itemId}/${primary ? 'primary' : 'other'}.webp`
+          : over.path,
+      is_primary: primary,
+      sort_order: over.sortOrder ?? 0,
+    };
+  }
+
+  type SignAnswer = {
+    data: Array<{ path: string; signedUrl: string | null; error: string | null }> | null;
+    error: { message: string } | null;
+  };
+  const signAll = (paths: string[], url = (p: string) => `https://signed/${p}`): SignAnswer => ({
+    data: paths.map((path) => ({ path, signedUrl: url(path), error: null })),
+    error: null,
+  });
+
+  /** An admin client serving `rows` like PostgREST, with a recording signer. */
+  function thumbMapClient(
+    rows: ReadonlyArray<Record<string, unknown>> | (() => ReadonlyArray<Record<string, unknown>>),
+    sign: (paths: string[], call: number) => SignAnswer = (paths) => signAll(paths),
+  ) {
+    const stub = makeSupabaseStub({ 'item_images.select': servedLikePostgrest(rows) });
+    const signCalls: string[][] = [];
+    const createSignedUrls = vi.fn(async (paths: string[]) => {
+      signCalls.push(paths);
+      // storage-api's body schema: `paths` maxItems MAX_OBJECTS_PER_REQUEST
+      // (1000). Past it the whole call is a 400, before any path is signed.
+      if (paths.length > 1000) {
+        return { data: null, error: { message: 'body/paths must NOT have more than 1000 items' } };
+      }
+      return sign(paths, signCalls.length - 1);
+    });
+    (stub.client.storage as unknown as { from: unknown }).from = vi.fn(() => ({ createSignedUrls }));
+    createAdminClientMock.mockReturnValue(stub.client);
+    /** Each page's chain as [method, args] pairs. */
+    const pages = () => {
+      const chains = stub.chainsAll.get('item_images.select') ?? [];
+      const args = stub.chainArgsAll.get('item_images.select') ?? [];
+      return chains.map((methods, p) => methods.map((m, k) => [m, args[p]?.[k] ?? []] as const));
+    };
+    return { stub, signCalls, pages };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('every page reads in one total order: is_primary desc, sort_order asc, then id', async () => {
+    // 2,500 items, one photo each, all tied on (is_primary, sort_order). A
+    // database may return tied rows in any order per statement, so the mock
+    // flips the tie order on every request: only the id tiebreak keeps the
+    // three pages from overlapping and skipping rows.
+    const rows = Array.from({ length: 2500 }, (_, i) => imageRow(`item-${pad(i)}`));
+    let reads = 0;
+    const { pages } = thumbMapClient(() => (reads++ % 2 === 0 ? rows : [...rows].reverse()));
+
+    const media = await loadCatalogThumbMapCached(ORG, WH);
+
+    expect(Object.keys(media)).toHaveLength(2500);
+    expect(pages()).toHaveLength(3);
+    for (const page of pages()) {
+      expect(page.filter(([m]) => m === 'order').map(([, a]) => a)).toEqual([
+        ['is_primary', { ascending: false }],
+        ['sort_order', { ascending: true }],
+        ['id', { ascending: true }],
+      ]);
+    }
+  });
+
+  it('another warehouse, another org, archived, discontinued and soft-deleted items get no entry and no signature, on any page', async () => {
+    // 4,000 items with ids interleaved, so the excluded ones sit on both sides
+    // of every page boundary. Rentals and bundles are photographed stock the
+    // pages show: they stay.
+    const rows: Array<Record<string, unknown>> = [];
+    const kept: string[] = [];
+    const excluded: string[] = [];
+    for (let i = 0; i < 4000; i += 1) {
+      const itemId = `item-${pad(i)}`;
+      const kind = i % 8;
+      if (kind === 0) rows.push(imageRow(itemId, { warehouse: WH2 }));
+      else if (kind === 1) rows.push(imageRow(itemId, { org: OTHER_ORG }));
+      else if (kind === 2) rows.push(imageRow(itemId, { status: 'archived' }));
+      else if (kind === 3) rows.push(imageRow(itemId, { status: 'discontinued' }));
+      else if (kind === 4) rows.push(imageRow(itemId, { deletedAt: '2026-09-01T00:00:00Z' }));
+      else if (kind === 5) rows.push(imageRow(itemId, { rental: true }));
+      else if (kind === 6) rows.push(imageRow(itemId, { bundle: true }));
+      else rows.push(imageRow(itemId));
+      (kind <= 4 ? excluded : kept).push(itemId);
+    }
+    const { signCalls, pages } = thumbMapClient(rows);
+
+    const media = await loadCatalogThumbMapCached(ORG, WH);
+
+    expect(Object.keys(media).sort()).toEqual(kept);
+    const signed = new Set(signCalls.flat());
+    expect(excluded.filter((id) => signed.has(`${ORG}/items/${id}/primary.webp`))).toEqual([]);
+    expect(signed.size).toBe(kept.length);
+    // 1,500 kept rows: two pages, each with every filter.
+    expect(pages()).toHaveLength(2);
+    for (const page of pages()) {
+      const filters = page.filter(([m]) => m === 'eq' || m === 'is').map(([m, a]) => [m, ...a]);
+      expect(filters).toEqual([
+        ['eq', 'organization_id', ORG],
+        ['eq', 'item.warehouse_id', WH],
+        ['eq', 'item.status', 'active'],
+        ['is', 'item.deleted_at', null],
+      ]);
+      expect(page.find(([m]) => m === 'select')?.[1][0]).toContain('item:inventory_items!inner(');
+    }
+  });
+
+  it('2,500 photographed items: three createSignedUrls calls of at most 1000 paths, every item on its primary photo', async () => {
+    // Two photos per item (the primary sorts second by sort_order): 5,000 rows.
+    const rows: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < 2500; i += 1) {
+      rows.push(imageRow(`item-${pad(i)}`, { primary: false, sortOrder: 0 }));
+      rows.push(imageRow(`item-${pad(i)}`, { primary: true, sortOrder: 1 }));
+    }
+    const { signCalls } = thumbMapClient(rows);
+
+    const media = await loadCatalogThumbMapCached(ORG, WH);
+
+    expect(signCalls.map((paths) => paths.length)).toEqual([1000, 1000, 500]);
+    expect(new Set(signCalls.flat()).size).toBe(2500);
+    expect(Object.keys(media)).toHaveLength(2500);
+    for (let i = 0; i < 2500; i += 1) {
+      const itemId = `item-${pad(i)}`;
+      expect(media[itemId]).toEqual({
+        url: `https://signed/${ORG}/items/${itemId}/primary.webp`,
+        lqip: null,
+      });
+    }
+  });
+
+  it('keeps an lqip only where there is no URL', async () => {
+    const BLUR = 'data:image/webp;base64,UklGRh4AAABXRUJQVlA4';
+    const rows = [
+      imageRow('signed', { lqip: BLUR }),
+      imageRow('no-path', { lqip: BLUR, path: null }),
+      imageRow('sign-failed', { lqip: BLUR }),
+      imageRow('no-path-no-blur', { path: null }),
+      // Enough good signatures to stay under the fail-closed ratio (1 in 21).
+      ...Array.from({ length: 19 }, (_, i) => imageRow(`ok-${i}`, { lqip: BLUR })),
+    ];
+    thumbMapClient(rows, (paths) => ({
+      data: paths.map((path) =>
+        path.includes('/sign-failed/')
+          ? { path, signedUrl: null, error: 'Object not found' }
+          : { path, signedUrl: `https://signed/${path}`, error: null },
+      ),
+      error: null,
+    }));
+
+    const media = await loadCatalogThumbMapCached(ORG, WH);
+
+    expect(media.signed).toEqual({ url: `https://signed/${ORG}/items/signed/primary.webp`, lqip: null });
+    expect(media['no-path']).toEqual({ url: null, lqip: BLUR });
+    expect(media['sign-failed']).toEqual({ url: null, lqip: BLUR });
+    expect(media['no-path-no-blur']).toBeUndefined();
+    for (let i = 0; i < 19; i += 1) expect(media[`ok-${i}`]?.lqip).toBeNull();
+  });
+
+  it('warns with the warehouse, entry count and size past 1.5 MB serialized, and not below', async () => {
+    // Next skips caching an entry over 2 MB with only its own warning; this
+    // one comes first. Long tokens stand in for real ~550-char signed URLs.
+    const LIMIT = 1.5 * 1024 * 1024;
+    const rows = Array.from({ length: 1000 }, (_, i) => imageRow(`item-${pad(i)}`));
+    const run = async (tokenChars: number) => {
+      vi.clearAllMocks();
+      thumbMapClient(rows, (paths) =>
+        signAll(paths, (p) => `https://signed/${p}?token=${'t'.repeat(tokenChars)}`),
+      );
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const media = await loadCatalogThumbMapCached(ORG, WH);
+      const thumbWarnings = warn.mock.calls
+        .map((c) => String(c[0]))
+        .filter((m) => m.includes('thumb map'));
+      warn.mockRestore();
+      return { size: JSON.stringify(media).length, entries: Object.keys(media).length, thumbWarnings };
+    };
+
+    const above = await run(1500);
+    expect(above.size).toBeGreaterThan(LIMIT);
+    expect(above.entries).toBe(1000);
+    expect(above.thumbWarnings).toHaveLength(1);
+    expect(above.thumbWarnings[0]).toContain(WH);
+    expect(above.thumbWarnings[0]).toContain('1000 entries');
+    expect(above.thumbWarnings[0]).toContain(`${above.size} chars`);
+
+    const below = await run(1400);
+    expect(below.size).toBeLessThan(LIMIT);
+    expect(below.size).toBeGreaterThan(LIMIT * 0.95);
+    expect(below.entries).toBe(1000);
+    expect(below.thumbWarnings).toEqual([]);
+  });
+
+  it('a failed chunk rejects the map and signs nothing after it', async () => {
+    const rows = Array.from({ length: 2500 }, (_, i) => imageRow(`item-${pad(i)}`));
+    const { signCalls } = thumbMapClient(rows, (paths, call) =>
+      call === 1 ? { data: null, error: { message: 'Payload Too Large' } } : signAll(paths),
+    );
+
+    await expect(loadCatalogThumbMapCached(ORG, WH)).rejects.toThrow(
+      /thumb batch sign failed \(paths 1001-2000 of 2500\): Payload Too Large/,
+    );
+    expect(signCalls.map((paths) => paths.length)).toEqual([1000, 1000]);
+  });
+
+  it('a mostly-failed signing across chunks rejects (fail-closed ratio over every chunk)', async () => {
+    // The first chunk signs; the next two come back with per-path errors.
+    const rows = Array.from({ length: 2500 }, (_, i) => imageRow(`item-${pad(i)}`));
+    thumbMapClient(rows, (paths, call) =>
+      call === 0
+        ? signAll(paths)
+        : {
+            data: paths.map((path) => ({ path, signedUrl: null, error: 'Object not found' })),
+            error: null,
+          },
+    );
+
+    await expect(loadCatalogThumbMapCached(ORG, WH)).rejects.toThrow(
+      /sign failure ratio too high \(1500\/2500\)/,
+    );
+  });
+
+  it('the fail-closed ratio is the whole map\'s, not one chunk\'s', async () => {
+    // 60 failures, all in the last chunk of 500: 12% of that call, 2.4% of the
+    // map. Isolated failures degrade those items only.
+    const rows = Array.from({ length: 2500 }, (_, i) => imageRow(`item-${pad(i)}`));
+    const failing = new Set(
+      Array.from({ length: 60 }, (_, i) => `${ORG}/items/item-${pad(2440 + i)}/primary.webp`),
+    );
+    const { signCalls } = thumbMapClient(rows, (paths) => ({
+      data: paths.map((path) =>
+        failing.has(path)
+          ? { path, signedUrl: null, error: 'Object not found' }
+          : { path, signedUrl: `https://signed/${path}`, error: null },
+      ),
+      error: null,
+    }));
+
+    const media = await loadCatalogThumbMapCached(ORG, WH);
+
+    expect(signCalls.map((paths) => paths.length)).toEqual([1000, 1000, 500]);
+    expect(Object.keys(media)).toHaveLength(2440);
+    expect(media['item-2440']).toBeUndefined();
   });
 });
