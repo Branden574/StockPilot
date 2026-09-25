@@ -202,13 +202,19 @@ describe('the local record survives', () => {
   });
 
   it('stops the badge claiming "All synced" over work that was never sent', () => {
-    expect(badge).toContain('rejectedCount');
-    const allSyncedAt = badge.indexOf("label = 'All synced'");
-    const rejectedAt = badge.indexOf('rejectedCount > 0');
-    expect(rejectedAt).toBeGreaterThan(-1);
-    expect(rejectedAt).toBeLessThan(allSyncedAt);
-    expect(cycleSync).toMatch(/import \{ countRejected(, markHeld)? \} from '\.\/queue'/);
+    // The wording is executed in sync-badge.test.ts (rejected before "All
+    // synced"; not-confirmed adjustments apart). This pins that the pill uses
+    // it, fed the engine's counts, and that the engine reads both.
+    expect(flat(badge)).toContain(
+      'syncBadgeState({ status, pendingCount, rejectedCount, unconfirmedCount, })',
+    );
+    expect(badge).not.toMatch(/not sent`/);
+    expect(cycleSync).toMatch(
+      /import \{ countRejected, countUnconfirmedAdjust, markHeld \} from '\.\/queue'/,
+    );
     expect(cycleSync).toContain('rejectedCount: number;');
+    expect(cycleSync).toContain('unconfirmedCount: number;');
+    expect(cycleSync).toContain('unconfirmedCount: this.unconfirmedCount,');
   });
 
   it('ages the record out instead of accumulating for the life of the install', () => {

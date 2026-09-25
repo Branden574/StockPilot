@@ -95,10 +95,16 @@ describe('item screen — manual adjust goes through the server route', () => {
   it('says beside ON HAND and in the sheet what is queued and not in the number yet', () => {
     expect(screen).toMatch(/\{queuedAdjust\.count > 0 \? \(/);
     expect(screen).toMatch(/\{queuedOnHandLabel\(queuedAdjust\)\}/);
-    expect(screen).toMatch(/`Queued offline · \$\{what\} · sends when online`/);
-    expect(screen).toMatch(/`\$\{q\.count\} changes, net \$\{formatQueuedNet\(q\.net\)\}`/);
-    expect(screen).toMatch(/queuedNet=\{queuedAdjust\.count > 0 \? queuedAdjust\.net : null\}/);
-    expect(screen).toMatch(/queued offline` : ''\}/);
+    expect(screen).toMatch(
+      /`Queued offline · \$\{describeQueuedChanges\(q\)\} · sends when online`/,
+    );
+    // The sheet gets the count as well as the net and uses the same words:
+    // "+1" then "-1" queued read "0 queued offline" there, as if nothing were.
+    expect(screen).toMatch(/queued=\{queuedAdjust\.count > 0 \? queuedAdjust : null\}/);
+    expect(screen).toMatch(
+      /\{queued !== null \? ` · \$\{describeQueuedChanges\(queued\)\} queued offline` : ''\}/,
+    );
+    expect(screen).not.toMatch(/formatQueuedNet\(queuedNet\)/);
   });
 
   it('re-reads the item when a queued change leaves the outbox, and sends queued changes once online', () => {

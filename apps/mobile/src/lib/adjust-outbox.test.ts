@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   adjustDrainVerdict,
+  createAdjustSendGate,
   describeQueuedAdjust,
+  describeQueuedChanges,
+  discardedInFlightAdjustMessage,
   formatQueuedNet,
   isUnconfirmedAdjustRow,
   offlineAdjustNote,
@@ -10,10 +13,13 @@ import {
   parseQueuedAdjust,
   QueuedAdjustInvalidError,
   queuedAdjustPayload,
+  queuedAdjustRefusalReason,
   refusedQueuedAdjustMessage,
   UNCONFIRMED_ADJUST_PREFIX,
   unconfirmedQueuedAdjustMessage,
+  wasAnswered,
 } from './adjust-outbox';
+import { UNCONFIRMED_SETTLE_MS } from './unconfirmed-stock';
 
 /** Shaped like api()'s ApiError: the verdict reads `status` and `code` only. */
 function httpError(status: number, code?: string, message = 'boom') {
@@ -181,5 +187,77 @@ describe('what the operator is told', () => {
     expect(formatQueuedNet(3)).toBe('+3');
     expect(formatQueuedNet(-2)).toBe('−2');
     expect(formatQueuedNet(0)).toBe('0');
+  });
+});
+
+describe('the words for queued changes (the ON HAND note and the Adjust sheet)', () => {
+  it('one change is its signed amount', () => {
+    expect(describeQueuedChanges({ count: 1, net: 1 })).toBe('+1');
+    expect(describeQueuedChanges({ count: 1, net: -5 })).toBe('−5');
+  });
+
+  it('two or more say how many, so changes that net to 0 never read as nothing queued', () => {
+    expect(describeQueuedChanges({ count: 2, net: 0 })).toBe('2 changes, net 0');
+    expect(describeQueuedChanges({ count: 3, net: 4 })).toBe('3 changes, net +4');
+  });
+});
+
+describe('a parked "Not confirmed" record', () => {
+  it('says to wait out the window in which a saved change can still appear', () => {
+    const secs = `${UNCONFIRMED_SETTLE_MS / 1000} seconds`;
+    expect(unconfirmedQueuedAdjustMessage(PAYLOAD)).toContain(`within ${secs} of being sent`);
+    expect(orphanedQueuedAdjustMessage(PAYLOAD)).toContain(`within ${secs} of being sent`);
+  });
+
+  it('one discarded at sign-out while on the wire is a not-confirmed record, never "nothing changed"', () => {
+    const m = discardedInFlightAdjustMessage(PAYLOAD);
+    expect(m.startsWith(UNCONFIRMED_ADJUST_PREFIX)).toBe(true);
+    expect(m).toContain('−1 to Polo S (POLO-S)');
+    expect(m).toMatch(/discarded at sign-out/);
+    expect(m).toMatch(/may or may not have been saved/);
+    expect(m).not.toMatch(/Nothing was changed/);
+    expect(isUnconfirmedAdjustRow({ kind: 'adjust_stock', lastError: m })).toBe(true);
+  });
+});
+
+describe('queuedAdjustRefusalReason', () => {
+  it("never records the route's bare 401 code word", () => {
+    expect(queuedAdjustRefusalReason(httpError(401, 'unauthenticated'), 'unauthenticated')).toBe(
+      'This account was disabled when it was sent',
+    );
+    expect(
+      refusedQueuedAdjustMessage(
+        PAYLOAD,
+        queuedAdjustRefusalReason(httpError(401, 'unauthenticated'), 'unauthenticated'),
+      ),
+    ).toBe('−1 to Polo S (POLO-S): This account was disabled when it was sent. Nothing was changed.');
+  });
+
+  it("keeps every other refusal's server sentence", () => {
+    expect(queuedAdjustRefusalReason(httpError(403), 'Missing permission: stock:adjust')).toBe(
+      'Missing permission: stock:adjust',
+    );
+  });
+});
+
+describe('the send gate', () => {
+  it('is closed at app start, opens on any answer, and closes on a lost one', () => {
+    const gate = createAdjustSendGate();
+    expect(gate.canSend()).toBe(false);
+    gate.serverAnswered();
+    expect(gate.canSend()).toBe(true);
+    gate.noAnswer();
+    expect(gate.canSend()).toBe(false);
+    gate.serverAnswered();
+    gate.resetForTests();
+    expect(gate.canSend()).toBe(false);
+  });
+
+  it('an HTTP status is an answer; a network error or a timeout is not', () => {
+    expect(wasAnswered(httpError(500))).toBe(true);
+    expect(wasAnswered(httpError(401))).toBe(true);
+    expect(wasAnswered(new TypeError('Network request failed'))).toBe(false);
+    expect(wasAnswered(new Error('Request timed out.'))).toBe(false);
+    expect(wasAnswered(null)).toBe(false);
   });
 });

@@ -71,7 +71,7 @@ import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
 import { replacePrimaryPhoto } from '@/lib/item-photo-replace';
-import { ADJUST_STOCK_KIND, formatQueuedNet } from '@/lib/adjust-outbox';
+import { ADJUST_STOCK_KIND, describeQueuedChanges } from '@/lib/adjust-outbox';
 import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
 import { submitItemAdjust, type ItemAdjustOutcome } from '@/lib/item-adjust';
 import { enqueue, pendingAdjustFor } from '@/lib/queue';
@@ -2069,7 +2069,7 @@ export default function ItemDetail() {
         visible={adjustOpen}
         item={item}
         unconfirmed={unconfirmed}
-        queuedNet={queuedAdjust.count > 0 ? queuedAdjust.net : null}
+        queued={queuedAdjust.count > 0 ? queuedAdjust : null}
         busy={busy}
         onClose={() => setAdjustOpen(false)}
         onConfirm={async (delta, reason) => {
@@ -2747,10 +2747,9 @@ function AuditCard({ audit }: { audit: AuditCardModel }) {
  * number above does not include them: the server has not seen them yet.
  */
 function queuedOnHandLabel(q: { count: number; net: number }): string {
-  // Two or more can net to 0 ("+1" then "-1"); say how many, or "0" reads as nothing queued.
-  const what =
-    q.count > 1 ? `${q.count} changes, net ${formatQueuedNet(q.net)}` : formatQueuedNet(q.net);
-  return `Queued offline · ${what} · sends when online`;
+  // Two or more can net to 0 ("+1" then "-1"); describeQueuedChanges says how
+  // many, or "0" reads as nothing queued. The Adjust sheet uses the same words.
+  return `Queued offline · ${describeQueuedChanges(q)} · sends when online`;
 }
 
 /**
@@ -2770,7 +2769,7 @@ function AdjustModal({
   visible,
   item,
   unconfirmed,
-  queuedNet,
+  queued,
   busy,
   onClose,
   onConfirm,
@@ -2778,8 +2777,8 @@ function AdjustModal({
   visible: boolean;
   item: Item;
   unconfirmed: UnconfirmedStock | null;
-  /** Net change queued offline for this item and not sent yet; null = none. */
-  queuedNet: number | null;
+  /** Changes queued offline for this item and not sent yet; null = none. */
+  queued: { count: number; net: number } | null;
   busy: boolean;
   onClose: () => void;
   onConfirm: (delta: number, reason: string) => Promise<void>;
@@ -2799,7 +2798,7 @@ function AdjustModal({
         key={String(visible)}
         item={item}
         unconfirmed={unconfirmed}
-        queuedNet={queuedNet}
+        queued={queued}
         busy={busy}
         onClose={onClose}
         onConfirm={onConfirm}
@@ -2811,14 +2810,14 @@ function AdjustModal({
 function AdjustModalContent({
   item,
   unconfirmed,
-  queuedNet,
+  queued,
   busy,
   onClose,
   onConfirm,
 }: {
   item: Item;
   unconfirmed: UnconfirmedStock | null;
-  queuedNet: number | null;
+  queued: { count: number; net: number } | null;
   busy: boolean;
   onClose: () => void;
   onConfirm: (delta: number, reason: string) => Promise<void>;
@@ -2883,8 +2882,9 @@ function AdjustModalContent({
                   turns into a double count. */}
               {unconfirmed ? ' · not confirmed' : ''}
               {/* Same reason for changes still waiting in the outbox: the base
-                  below does not include them. */}
-              {queuedNet !== null ? ` · ${formatQueuedNet(queuedNet)} queued offline` : ''}
+                  below does not include them. Worded as the card's note, so
+                  two changes that net to 0 never read as nothing queued. */}
+              {queued !== null ? ` · ${describeQueuedChanges(queued)} queued offline` : ''}
             </Mono>
 
             <View style={{ marginTop: 20, gap: 14 }}>

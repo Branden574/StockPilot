@@ -4,9 +4,12 @@ import { getAccountDisabled } from './account-disabled-state';
 import {
   ADJUST_STOCK_KIND,
   adjustDrainVerdict,
+  adjustSendGate,
   parseQueuedAdjust,
+  queuedAdjustRefusalReason,
   refusedQueuedAdjustMessage,
   unconfirmedQueuedAdjustMessage,
+  wasAnswered,
 } from './adjust-outbox';
 import { api } from './api';
 import {
@@ -32,6 +35,7 @@ import {
 import { OutboxSessionChangedError, outboxSendDecision } from './outbox-scope';
 import { listPending, markFailed, markHeld, markOk, markRejected, markSending } from './queue';
 import { liveOutboxScope } from './session-scope';
+import { unconfirmedStock } from './unconfirmed-stock';
 import { WAREHOUSE_SCOPE_META_KEY, refreshWarehouseScope } from './warehouse-scope';
 
 /**
@@ -273,7 +277,16 @@ export async function pullSnapshot(
     // Answered for the account recorded as the cache's owner below, or not at
     // all: a session that changed since the check refuses before sending.
     snap = await api<SnapshotResponse>(path, liveUserId ? { asUserId: liveUserId } : {});
+    // This pull is the drain's probe of the link (adjust-outbox.ts
+    // adjustSendGate): queued stock adjustments, which cannot be retried, are
+    // handed off only after the server has just answered this phone.
+    adjustSendGate.serverAnswered();
   } catch (e) {
+    // Any HTTP status is an answer: the round trip worked. No status is a
+    // network error or a timeout, and the drain that follows sends no queued
+    // adjustment into it.
+    if (wasAnswered(e)) adjustSendGate.serverAnswered();
+    else adjustSendGate.noAnswer();
     console.warn('[sync] snapshot pull failed', e);
     return null;
   }
@@ -589,12 +602,29 @@ export async function drainQueue(): Promise<{
     const decision = outboxSendDecision(action, await liveOutboxScope());
     if (!decision.send) continue;
 
+    // A stock adjustment cannot be retried once it has left the phone
+    // (adjust-outbox.ts), so it is handed off only while the link is known to
+    // work: the server answered this phone since its last lost answer (the
+    // gate; the pull that opens each pass is the probe), and the phone still
+    // reports a connection NOW, re-read per row as the cycle-count drain does.
+    // Otherwise the row is left exactly as it is, never handed off, and the
+    // next pass sends it. Without this, one dropped connection parked every
+    // adjustment behind it as "Not confirmed" although none reached the server.
+    if (action.kind === ADJUST_STOCK_KIND) {
+      if (!adjustSendGate.canSend()) continue;
+      if (!(await isOnline())) {
+        adjustSendGate.noAnswer();
+        continue;
+      }
+    }
+
     // Stamps a legacy row with this account, so it is never sent as another.
     await markSending(action.id, { orgId: decision.orgId, userId: decision.userId });
-    // Whether api() handed this row's request to fetch. Before that moment
-    // nothing can have reached the server; an adjust_stock row's failure is
-    // judged on it (adjust-outbox.ts), since its route cannot dedupe a replay.
-    let handedOff = false;
+    // When api() handed this row's request to fetch (null: not yet). Before
+    // that moment nothing can have reached the server; an adjust_stock row's
+    // failure is judged on it (adjust-outbox.ts), since its route cannot dedupe
+    // a replay, and its "may still land" window starts there.
+    let handedOffAt: number | null = null;
     try {
       await sendOne(
         action.kind,
@@ -602,7 +632,7 @@ export async function drainQueue(): Promise<{
         action.payload,
         { orgId: decision.orgId, asUserId: decision.userId },
         () => {
-          handedOff = true;
+          handedOffAt = Date.now();
         },
       );
       await markOk(action.id);
@@ -621,17 +651,28 @@ export async function drainQueue(): Promise<{
       if (action.kind === ADJUST_STOCK_KIND) {
         const verdict = adjustDrainVerdict(e, {
           accountDisabled: getAccountDisabled(),
-          handedOff,
+          handedOff: handedOffAt !== null,
         });
         if (verdict === 'failed') {
           await markFailed(action.id, msg);
           failed += 1;
+        } else if (verdict === 'unconfirmed') {
+          // The link just lost an answer: no further adjustment is handed off
+          // until the server answers this phone again (the next pass's pull).
+          adjustSendGate.noAnswer();
+          // The write may still be committing (the server keeps going after
+          // api() stops waiting), so the item's ON HAND is labelled "Not
+          // confirmed" until it can no longer land. Recorded BEFORE the row
+          // leaves the outbox: the item screen re-reads the item the moment it
+          // does, and that read must not stand as the confirmed total.
+          const itemId = typeof action.payload.itemId === 'string' ? action.payload.itemId : '';
+          if (itemId) unconfirmedStock.recordUnconfirmed(itemId, handedOffAt ?? Date.now());
+          await markRejected(action.id, unconfirmedQueuedAdjustMessage(action.payload));
+          rejected += 1;
         } else {
           await markRejected(
             action.id,
-            verdict === 'unconfirmed'
-              ? unconfirmedQueuedAdjustMessage(action.payload)
-              : refusedQueuedAdjustMessage(action.payload, msg),
+            refusedQueuedAdjustMessage(action.payload, queuedAdjustRefusalReason(e, msg)),
           );
           rejected += 1;
         }

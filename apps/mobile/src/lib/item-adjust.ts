@@ -15,10 +15,13 @@ import { UNCONFIRMED_SETTLE_MS, unconfirmedStock } from './unconfirmed-stock';
  *
  * ═══ WHY THIS GOES THROUGH THE SERVER ═══
  *
- * Until 2026-09-22 the item screen called the adjust-stock RPC straight from
- * the phone's Supabase client (the literal call shape is not written here: the
- * guard in no-direct-adjust-rpc.test.ts greps every shipped source file for
- * it). That skipped everything POST /api/v1/items/<id>/adjust adds:
+ * Until the mobile update that carries the 2026-09-25 port of this file, the
+ * item screen called the adjust-stock RPC straight from the phone's Supabase
+ * client (the literal call shape is not written here: the guard in
+ * no-direct-adjust-rpc.test.ts greps every shipped source file for it). The
+ * move was first written on 2026-09-22 on a branch that was never merged, so
+ * main kept the direct call until the port. That skipped everything
+ * POST /api/v1/items/<id>/adjust adds:
  *
  *   • the 'stock:adjust' PERMISSION and the MFA gate — the RPC checks only the
  *     staff-role floor (0327), so a staffer whose stock:adjust was revoked
@@ -34,10 +37,11 @@ import { UNCONFIRMED_SETTLE_MS, unconfirmedStock } from './unconfirmed-stock';
  *     invalidation, so each left a manager's Items list showing the old
  *     on-hand total for up to the 60 s cache window.
  *
- * The scan tab made the same move on 2026-09-05 with its own inline POST; since
- * 2026-09-22 it sends through submitItemAdjust too, so its timeouts are
- * reported as unconfirmed instead of "Could not adjust" (which read as "nothing
- * happened, tap again" on a write that may have landed).
+ * The scan tab made the same move on 2026-09-05 with its own inline POST, and
+ * kept it until the same 2026-09-25 port: from that update it sends through
+ * submitItemAdjust too, so its timeouts are reported as unconfirmed instead of
+ * "Could not adjust" (which read as "nothing happened, tap again" on a write
+ * that may have landed).
  *
  * ═══ OFFLINE: QUEUED ONLY WHEN IT NEVER LEFT THE PHONE ═══
  *

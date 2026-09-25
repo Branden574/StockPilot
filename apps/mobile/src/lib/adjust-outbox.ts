@@ -1,4 +1,5 @@
 import { classifyDrainFailure } from './drain-failure';
+import { UNCONFIRMED_SETTLE_MS } from './unconfirmed-stock';
 
 import type { AdjustStockBody } from './stock-api';
 
@@ -47,8 +48,20 @@ import type { AdjustStockBody } from './stock-api';
  * double count. Server-side dedupe (a key the RPC records with the movement)
  * would let this kind retry like the others; it needs a migration.
  *
- * PURE on purpose: sync.ts, db.ts and queue.ts need expo-sqlite, and the
- * decisions worth pinning live here so vitest can execute them.
+ * ═══ ONE LOST ANSWER, NOT SIX ═══
+ *
+ * A lost answer is usually a lost CONNECTION, and every row sent after it on
+ * the same dead link fails the same way after its own hand-off, so each one
+ * would be parked "Not confirmed" although none reached the server. So a
+ * queued adjustment is only handed off while the server has just answered
+ * this phone (adjustSendGate below): the snapshot pull that opens every sync
+ * pass is the probe, and a lost answer closes the gate until the next pull
+ * gets an answer. The drain also re-reads the phone's network state before
+ * each adjustment (sync.ts).
+ *
+ * FREE OF NATIVE MODULES on purpose: sync.ts, db.ts and queue.ts need
+ * expo-sqlite, and the decisions worth pinning live here so vitest can execute
+ * them. Pure functions, except the one send gate at the bottom (module state).
  */
 
 export const ADJUST_STOCK_KIND = 'adjust_stock';
@@ -168,9 +181,18 @@ export function describeQueuedAdjust(payload: Record<string, unknown>): string {
  */
 export const UNCONFIRMED_ADJUST_PREFIX = 'Not confirmed: ';
 
+const SETTLE_SECONDS = Math.round(UNCONFIRMED_SETTLE_MS / 1000);
+
+/**
+ * The server keeps running after the phone stops waiting (the route's 30 s
+ * maxDuration plus the database's own bound; unconfirmed-stock.ts), so a
+ * check made the moment the row is parked can miss a write that is still
+ * committing, and re-entering it then counts the stock twice.
+ */
 const CHECK_BEFORE_REENTERING =
-  'It was not sent again, so it cannot be applied twice. Check the item’s on-hand ' +
-  'quantity and history, and adjust again only if the change is missing.';
+  'It was not sent again, so it cannot be applied twice. If it was saved, it shows within ' +
+  `${SETTLE_SECONDS} seconds of being sent. After that, check the item’s on-hand quantity ` +
+  'and history, and adjust again only if the change is missing.';
 
 /** last_error for a send whose answer never came back. */
 export function unconfirmedQueuedAdjustMessage(payload: Record<string, unknown>): string {
@@ -186,6 +208,33 @@ export function orphanedQueuedAdjustMessage(payload: Record<string, unknown>): s
     `${UNCONFIRMED_ADJUST_PREFIX}${describeQueuedAdjust(payload)} was being sent when the app ` +
     `closed, so it may or may not have been saved. ${CHECK_BEFORE_REENTERING}`
   );
+}
+
+/**
+ * last_error for a row that was being sent when the person chose "Sign out
+ * and discard" (queue.ts discardUnsyncedFor). A request already handed to
+ * fetch cannot be called back: the server may still commit it. Deleting the
+ * row there left no record of a write that may land, so it is parked instead.
+ */
+export function discardedInFlightAdjustMessage(payload: Record<string, unknown>): string {
+  return (
+    `${UNCONFIRMED_ADJUST_PREFIX}${describeQueuedAdjust(payload)} was already being sent when ` +
+    `unsent changes were discarded at sign-out, so it may or may not have been saved. ` +
+    CHECK_BEFORE_REENTERING
+  );
+}
+
+/**
+ * The refusal reason to record, from the error the drain caught. api() falls
+ * back to the body's `error` CODE when there is no `message`, and the route
+ * answers a 401 with a bare { error: 'unauthenticated' }; a 401 is only a
+ * refusal for this kind on an account the phone knows is disabled
+ * (adjustDrainVerdict), so it is said in words, as item-adjust.ts does online.
+ */
+export function queuedAdjustRefusalReason(err: unknown, message: string): string {
+  const e = err as { status?: unknown } | null | undefined;
+  if (e?.status === 401) return 'This account was disabled when it was sent';
+  return message;
 }
 
 /** last_error for a refusal: which change, and the server's sentence. */
@@ -224,6 +273,18 @@ export const PARK_ORPHANED_ADJUST_SQL = `
    where id = ? and status = 'sending'`;
 
 /**
+ * "Sign out and discard": the account's adjustments in flight right now
+ * (queue.ts discardUnsyncedFor parks them with PARK_ORPHANED_ADJUST_SQL
+ * instead of deleting them). Params: (user id). `owned` as below.
+ */
+export function inFlightAdjustForUserSql(owned: string): string {
+  return `
+  select id, payload_json from pending_actions
+   where status = 'sending' and kind = 'adjust_stock'
+     and ${owned}`;
+}
+
+/**
  * The live account's unsent adjustments for ONE item (legacy rows included,
  * as every outbox counter does). Params: (itemId, live user id or null).
  * `owned` is outbox-scope.ts OWNED_BY_USER_SQL, passed in to keep this module
@@ -254,4 +315,66 @@ export function countUnconfirmedAdjustSql(owned: string): string {
 export function formatQueuedNet(net: number): string {
   if (!Number.isFinite(net) || net === 0) return '0';
   return net > 0 ? `+${net}` : `−${Math.abs(net)}`;
+}
+
+/**
+ * What is queued for one item, for the ON HAND note and the Adjust sheet:
+ * "+1" for one change, "2 changes, net 0" for more. Two or more can net to 0
+ * ("+1" then "-1"), and a bare "0" reads as nothing queued.
+ */
+export function describeQueuedChanges(q: { count: number; net: number }): string {
+  return q.count > 1 ? `${q.count} changes, net ${formatQueuedNet(q.net)}` : formatQueuedNet(q.net);
+}
+
+/*
+ * ── THE SEND GATE ──────────────────────────────────────────────────────────
+ */
+
+/**
+ * Whether a queued adjustment may be handed off now. See "ONE LOST ANSWER,
+ * NOT SIX" in the header.
+ *
+ * Open only while the LAST thing the phone learned about the link is that the
+ * server answered it: the snapshot pull at the start of each sync pass
+ * reports every answer (any HTTP status; the round trip worked) and every
+ * failure with no answer (sync.ts pullSnapshot). A lost adjustment answer
+ * closes it for the rest of that pass and for every later pass whose pull
+ * gets no answer. Closed at app start, until the first pull answers.
+ *
+ * Only this kind waits on it: every other kind carries an idempotency key and
+ * is retried safely.
+ */
+export interface AdjustSendGate {
+  /** The server answered a request (any HTTP status). */
+  serverAnswered(): void;
+  /** A request got no answer: a network error or a timeout. */
+  noAnswer(): void;
+  canSend(): boolean;
+  /** Tests only: back to the app-start state (closed). */
+  resetForTests(): void;
+}
+
+export function createAdjustSendGate(): AdjustSendGate {
+  let answered = false;
+  return {
+    serverAnswered: () => {
+      answered = true;
+    },
+    noAnswer: () => {
+      answered = false;
+    },
+    canSend: () => answered,
+    resetForTests: () => {
+      answered = false;
+    },
+  };
+}
+
+/** The app's one gate: module state, as long as the JS runtime lives. */
+export const adjustSendGate = createAdjustSendGate();
+
+/** Whether a caught error carries an HTTP answer (api()'s ApiError status). */
+export function wasAnswered(err: unknown): boolean {
+  const e = err as { status?: unknown } | null | undefined;
+  return typeof e?.status === 'number';
 }

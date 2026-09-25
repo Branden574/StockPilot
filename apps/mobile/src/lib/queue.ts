@@ -1,5 +1,8 @@
 import {
   countUnconfirmedAdjustSql,
+  discardedInFlightAdjustMessage,
+  inFlightAdjustForUserSql,
+  PARK_ORPHANED_ADJUST_SQL,
   pendingAdjustForItemSql,
   UNCONFIRMED_ADJUST_PREFIX,
 } from './adjust-outbox';
@@ -179,6 +182,15 @@ export async function markOk(id: number): Promise<void> {
   await queuedWrite((db) => db.runAsync(`delete from pending_actions where id = ?`, [id]));
 }
 
+/**
+ * The send failed and may be retried: back to 'failed', which the drain reads
+ * again. ONLY a row still 'sending'. The drain marks a row sending before its
+ * request and this after it, and in between the row can be taken out of the
+ * queue for good: parked by "Sign out and discard" (a stock adjustment already
+ * on the wire, discardUnsyncedFor) or rejected by an account eviction
+ * (rejectAllPending). Re-arming it here would send, later, work the person
+ * discarded or that a disabled account queued.
+ */
 export async function markFailed(id: number, error: string): Promise<void> {
   await queuedWrite((db) =>
     db.runAsync(
@@ -186,7 +198,7 @@ export async function markFailed(id: number, error: string): Promise<void> {
         set status = 'failed',
             last_error = ?,
             last_attempt_at = ?
-      where id = ?`,
+      where id = ? and status = 'sending'`,
       [error.slice(0, 1000), Date.now(), id],
     ),
   );
@@ -512,17 +524,40 @@ export async function adoptLegacyRows(owner: {
  * attempt, or deleted their account (its work can never be sent). Removes this
  * account's unsynced rows (and legacy ones), never another account's held work
  * and never a rejected record.
+ *
+ * EXCEPT a stock adjustment already on the wire ('sending'): the sign-out
+ * waits for the drain for only 15 s (sign-out-flow.ts) and api() for 20 s, so
+ * the prompt can come up while one is in flight, and the server can still
+ * commit it after the row is gone. Its route cannot recognise a replay and it
+ * is never re-sent (adjust-outbox.ts), so it is PARKED "Not confirmed", as a
+ * row the app died on is at start: the drain's own answer then replaces the
+ * record (markRejected), deletes it on success (markOk), or leaves it parked
+ * (markFailed and markHeld touch only a row still 'sending').
+ *
+ * @returns how many rows were deleted.
  */
 export async function discardUnsyncedFor(userId: string): Promise<number> {
-  const result = await queuedWrite((db) =>
-    db.runAsync(
+  return queuedWrite(async (db) => {
+    const inFlight = await db.getAllAsync<{ id: number; payload_json: string }>(
+      inFlightAdjustForUserSql(OWNED_BY_USER_SQL),
+      [userId],
+    );
+    const now = Date.now();
+    for (const row of inFlight) {
+      await db.runAsync(PARK_ORPHANED_ADJUST_SQL, [
+        discardedInFlightAdjustMessage(safeParse(row.payload_json)),
+        now,
+        row.id,
+      ]);
+    }
+    const result = await db.runAsync(
       `delete from pending_actions
       where status in ('pending','failed','sending')
         and ${OWNED_BY_USER_SQL}`,
       [userId],
-    ),
-  );
-  return result.changes;
+    );
+    return result.changes;
+  });
 }
 
 function rowFromDb(r: PendingActionDbRow): PendingActionRow {

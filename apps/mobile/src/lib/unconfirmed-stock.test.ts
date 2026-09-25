@@ -314,6 +314,37 @@ describe('the store', () => {
     expect(unconfirmedStock.get('item-1')).toMatchObject({ expectedTotal: 11 });
   });
 
+  it('recordUnconfirmed (a queued adjustment the drain sent): labelled from its send, never proved by a total, re-read at the bound', () => {
+    const cb = vi.fn();
+    unconfirmedStock.onBoundPassed('item-1', cb);
+    unconfirmedStock.recordUnconfirmed('item-1', T0);
+    expect(unconfirmedStock.get('item-1')).toEqual({
+      expectedTotal: null,
+      settlesAt: BOUND,
+      mayStillLand: true,
+    });
+
+    // Whatever total a read sent before the bound shows, it cannot tell
+    // whether the write landed or is still running.
+    for (const total of [10, 11, 15]) unconfirmedStock.recordRead('item-1', total, BOUND - 1);
+    expect(unconfirmedStock.get('item-1')).not.toBeNull();
+
+    vi.advanceTimersByTime(UNCONFIRMED_SETTLE_MS + 1_000);
+    expect(cb).toHaveBeenCalledTimes(1);
+    unconfirmedStock.recordRead('item-1', 11, Date.now());
+    expect(unconfirmedStock.get('item-1')).toBeNull();
+  });
+
+  it('recordUnconfirmed takes the proof away from a write of the same item already in doubt', () => {
+    lose('item-1', 10, 1, T0);
+    unconfirmedStock.recordUnconfirmed('item-1', T0 + 5_000);
+    // 11 was "the first write landed"; with a second write that may have
+    // moved the stock, it proves nothing.
+    unconfirmedStock.recordRead('item-1', 11, T0 + 6_000);
+    expect(unconfirmedStock.writes('item-1').size).toBe(2);
+    expect(unconfirmedStock.get('item-1')).toMatchObject({ expectedTotal: null });
+  });
+
   it('the label a screen holds keeps its reference while a write only goes out', () => {
     lose('item-1', 10, 1, T0);
     const before = unconfirmedStock.get('item-1');

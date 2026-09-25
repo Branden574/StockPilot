@@ -25,12 +25,13 @@ import * as React from 'react';
  *
  * ═══ ONE ENTRY PER WRITE, NOT ONE PER ITEM ═══
  *
- * Until 2026-09-22 the item held a single doubt, and a second adjustment sent
- * while the first was unconfirmed only switched off rule 1 when its ANSWER
- * arrived. While it was in flight, a read showing "first write's base + delta"
- * cleared the first write's label, although that total may have been the
- * SECOND write landing (base + its delta) with the first still running. The
- * first then landed on top, and the total on screen was stale with no label.
+ * An earlier draft of this store (2026-09-22, never merged) held a single doubt
+ * per item, and a second adjustment sent while the first was unconfirmed only
+ * switched off rule 1 when its ANSWER arrived. While it was in flight, a read
+ * showing "first write's base + delta" cleared the first write's label,
+ * although that total may have been the SECOND write landing (base + its
+ * delta) with the first still running. The first then landed on top, and the
+ * total on screen was stale with no label.
  *
  * Each write is now its own entry, created when it is SENT (phase 'sending')
  * and ended only by its own answer, its own confirmation or its own expiry:
@@ -126,11 +127,15 @@ export interface UnconfirmedStock {
 
 // ─── Pure transitions (unit-tested; the store below only sequences them) ───
 
-/** A write was sent. `expectedTotal` is the total on screen plus its delta. */
+/**
+ * A write was sent. `expectedTotal` is the total on screen plus its delta, or
+ * null when the sender saw no total (a queued adjustment the outbox drain
+ * sends: no read can prove it, so only its bound ends it).
+ */
 export function startWrite(
   writes: ItemWrites,
   id: number,
-  sent: { expectedTotal: number },
+  sent: { expectedTotal: number | null },
 ): ItemWrites {
   const next = new Map(writes);
   next.set(id, {
@@ -371,6 +376,26 @@ export const unconfirmedStock = {
       unconfirmed: (sentAt) =>
         answer({ kind: 'unconfirmed', settlesAt: sentAt + UNCONFIRMED_SETTLE_MS, now: Date.now() }),
     };
+  },
+  /**
+   * An adjustment the OUTBOX DRAIN sent got no answer (sync.ts; the row is
+   * parked "Not confirmed", adjust-outbox.ts). The drain saw no total, so no
+   * read can prove the write: the item stays labelled until a read sent after
+   * `sentAt` + UNCONFIRMED_SETTLE_MS. Without this, the item screen re-read
+   * the item the moment the row left the outbox and showed a total the write
+   * could still change, with no label, next to the instruction to check it.
+   */
+  recordUnconfirmed(itemId: string, sentAt: number): void {
+    const id = nextWriteId++;
+    const started = startWrite(writesOf(itemId), id, { expectedTotal: null });
+    put(
+      itemId,
+      answerWrite(started, id, {
+        kind: 'unconfirmed',
+        settlesAt: sentAt + UNCONFIRMED_SETTLE_MS,
+        now: Date.now(),
+      }),
+    );
   },
   /** Every server read of the item's total reports here. */
   recordRead(itemId: string, total: number, startedAt: number): void {

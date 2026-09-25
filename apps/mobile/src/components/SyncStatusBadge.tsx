@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 
 import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
+import { syncBadgeState, type SyncBadgeTone } from '@/lib/sync-badge';
 import { TYPE_CEILING, capTo, radius, space, theme } from '@/lib/theme';
 
 /**
@@ -15,48 +16,35 @@ import { TYPE_CEILING, capTo, radius, space, theme } from '@/lib/theme';
  * drain attempt — useful when the user wants to push their last edit
  * before walking away from a counter.
  *
- * State → UI:
- *   syncing                  spinner + "Syncing…"           (blue)
- *   offline                  gray dot + "Offline — N queued" (gray)
- *   failing                  red dot  + "Sync issue — retrying" (red)
- *   idle, nothing queued     green dot + "All synced"        (green)
- *   idle, pendingCount > 0   amber dot + "N pending"         (amber)
- *   idle, rejectedCount > 0  red dot  + "N not sent"         (red)
+ * What it says is decided in src/lib/sync-badge.ts (the full table is
+ * there). Two cases this pill got wrong before:
  *
- * The last row is the one that was missing. A terminal REJECTION (work queued
- * while the account was disabled) leaves `pendingCount` at zero — correctly, no
- * drain will ever read those rows again — and the badge answered "All synced"
- * over the top of writes that never landed. That is the silent-loss outcome the
- * rejection design existed to prevent, moved one layer out. Settings → Unsent
- * work lists what they were.
+ *   • A terminal REJECTION leaves `pendingCount` at zero, and the badge
+ *     answered "All synced" over the top of writes that never landed. It now
+ *     says how many were not sent; Settings → Unsent work lists them.
+ *   • A stock adjustment sent from the outbox whose answer never came back is
+ *     parked as rejected too, but it MAY have been applied. The badge called
+ *     it "not sent", which reads as "enter it again". It now says "not
+ *     confirmed".
  */
+const TONE_COLOR: Record<SyncBadgeTone, string> = {
+  primary: theme.primary,
+  muted: theme.textMuted,
+  destructive: theme.destructive,
+  success: theme.success,
+  warning: theme.warning,
+};
+
 export function SyncStatusBadge() {
-  const { status, pendingCount, rejectedCount } = useSyncStatus();
-
-  let label: string;
-  let dotColor = theme.success;
-  let kind: 'dot' | 'spinner' = 'dot';
-
-  if (status === 'syncing') {
-    label = 'Syncing…';
-    dotColor = theme.primary;
-    kind = 'spinner';
-  } else if (status === 'offline') {
-    label = pendingCount > 0 ? `Offline · ${pendingCount} queued` : 'Offline';
-    dotColor = theme.textMuted;
-  } else if (status === 'failing') {
-    label = 'Sync issue · retrying';
-    dotColor = theme.destructive;
-  } else if (pendingCount === 0 && rejectedCount > 0) {
-    label = `${rejectedCount} not sent`;
-    dotColor = theme.destructive;
-  } else if (pendingCount === 0) {
-    label = 'All synced';
-    dotColor = theme.success;
-  } else {
-    label = `${pendingCount} pending`;
-    dotColor = theme.warning;
-  }
+  const { status, pendingCount, rejectedCount, unconfirmedCount } = useSyncStatus();
+  const { label, tone, spinner } = syncBadgeState({
+    status,
+    pendingCount,
+    rejectedCount,
+    unconfirmedCount,
+  });
+  const dotColor = TONE_COLOR[tone];
+  const kind: 'dot' | 'spinner' = spinner ? 'spinner' : 'dot';
 
   return (
     <Pressable

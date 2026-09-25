@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { nodeExpoDb } from './__fixtures__/expo-sqlite-node';
 import {
   queuedAdjustPayload,
+  refusedQueuedAdjustMessage,
   UNCONFIRMED_ADJUST_PREFIX,
   unconfirmedQueuedAdjustMessage,
 } from './adjust-outbox';
@@ -189,5 +190,68 @@ describe('countUnconfirmedAdjust (the Settings row)', () => {
 
     expect(await queue.countUnconfirmedAdjust()).toBe(1);
     expect(await queue.countRejected()).toBe(3);
+  });
+});
+
+describe('"Sign out and discard" while an adjustment is on the wire', () => {
+  function seedAll() {
+    seed({ id: 1, kind: 'adjust_stock', payload: adjustPayload('item-1', -5), status: 'sending' });
+    seed({ id: 2, kind: 'adjust_stock', payload: adjustPayload('item-2', 1) }); // pending
+    seed({ id: 3, kind: 'adjust_stock', payload: adjustPayload('item-3', 2), status: 'failed' });
+    seed({ id: 4, kind: 'receive_po_line', payload: { poId: 'po1' }, status: 'sending' });
+    seed({ id: 5, kind: 'adjust_stock', payload: adjustPayload('item-5', 1), status: 'sending', user: 'u2' });
+  }
+
+  it('parks the in-flight adjustment "Not confirmed" and deletes the rest of this account\'s unsent rows', async () => {
+    seedAll();
+    // 2, 3 and the receipt 4: deleted. 1 is parked, 5 is another account's.
+    expect(await queue.discardUnsyncedFor('u1')).toBe(3);
+
+    const after = rows();
+    expect(after.map((r) => [r.id, r.status])).toEqual([
+      [1, 'rejected'],
+      [5, 'sending'],
+    ]);
+    expect(after[0]!.last_error).toMatch(
+      new RegExp(`^${UNCONFIRMED_ADJUST_PREFIX}\u22125 to Item item-1 was already being sent when unsent changes were discarded`),
+    );
+    // Listed in Unsent work as not confirmed, and never sent again.
+    expect(await queue.countUnconfirmedAdjust()).toBe(1);
+    expect((await queue.listPending()).map((r) => r.id)).toEqual([]);
+  });
+
+  it("the drain's own answer then settles the record: a refusal replaces it, a success removes it", async () => {
+    seedAll();
+    await queue.discardUnsyncedFor('u1');
+    await queue.markRejected(1, refusedQueuedAdjustMessage(adjustPayload('item-1', -5), 'Forbidden'));
+    expect(rows()[0]).toMatchObject({ id: 1, status: 'rejected', last_error: '\u22125 to Item item-1: Forbidden. Nothing was changed.' });
+
+    await queue.markOk(1);
+    expect(rows().map((r) => r.id)).toEqual([5]);
+  });
+
+  it('an answer that would retry it (markFailed, markHeld) leaves the parked record alone: discarded work is never re-armed', async () => {
+    seedAll();
+    await queue.discardUnsyncedFor('u1');
+    await queue.markFailed(1, 'Network request failed');
+    await queue.markHeld(1);
+    expect(rows()[0]).toMatchObject({ id: 1, status: 'rejected' });
+    expect(rows()[0]!.last_error!.startsWith(UNCONFIRMED_ADJUST_PREFIX)).toBe(true);
+    expect((await queue.listPending()).map((r) => r.id)).toEqual([]);
+  });
+});
+
+describe('markFailed moves only a row still being sent', () => {
+  it("re-arms a 'sending' row and never a rejected one", async () => {
+    seed({ id: 1, kind: 'receive_po_line', payload: { poId: 'po1' }, status: 'sending' });
+    seed({ id: 2, kind: 'receive_po_line', payload: { poId: 'po2' }, status: 'rejected', lastError: 'Account disabled: this queued change was never sent.' });
+
+    await queue.markFailed(1, 'boom');
+    await queue.markFailed(2, 'boom');
+
+    expect(rows().map((r) => [r.id, r.status, r.last_error])).toEqual([
+      [1, 'failed', 'boom'],
+      [2, 'rejected', 'Account disabled: this queued change was never sent.'],
+    ]);
   });
 });
