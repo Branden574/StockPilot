@@ -3,7 +3,7 @@ import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ORDER_DRAFT_PREFIX } from '../v2/cart-context';
-import type { CatalogItem } from '../v2/types';
+import type { CartState, CatalogItem, StorefrontCharter } from '../v2/types';
 
 // ═══ A WAREHOUSE SWITCH GIVES THAT WAREHOUSE ITS OWN CART ═══
 //
@@ -75,6 +75,8 @@ vi.mock('./storefront-overlays', () => ({
     ) : null,
 }));
 
+import { toast } from 'sonner';
+
 import { OrdersStorefront, type StorefrontCatalogData } from './orders-storefront';
 
 const MAIN = 'wh-main';
@@ -107,6 +109,16 @@ const CATALOGS: Record<string, CatalogItem[]> = {
   [ANNEX]: [item('cable', 'HDMI Cable', ANNEX)],
 };
 
+function site(id: string, name: string): StorefrontCharter {
+  return { id, name, code: null, address: null };
+}
+
+/** The delivery sites each warehouse services (warehouse_charters). */
+const SITES: Record<string, StorefrontCharter[]> = {
+  [MAIN]: [site('site-main', 'Main Campus')],
+  [ANNEX]: [site('site-annex', 'Annex Campus')],
+};
+
 /** An already-settled promise, so React.use reads it without suspending. */
 function settled<T>(value: T): Promise<T> {
   const p = Promise.resolve(value) as Promise<T> & { status: string; value: T };
@@ -125,7 +137,7 @@ function page(warehouseId: string) {
       warehouseId={warehouseId}
       catalogPromise={settled<StorefrontCatalogData>({ items: CATALOGS[warehouseId]!, aisles: [] })}
       frequentlyOrderedPromise={settled([])}
-      chartersForWarehouse={[]}
+      chartersForWarehouse={SITES[warehouseId]!}
       viewerRole="manager"
       viewerName="QA Manager"
       viewerEmail="manager@example.test"
@@ -165,6 +177,26 @@ async function pastSaveDebounce() {
   });
 }
 
+const fulfillment = (mode: 'Pickup' | 'Delivery') =>
+  within(screen.getByRole('radiogroup', { name: 'Fulfillment type' })).getByRole('button', {
+    name: new RegExp(mode, 'i'),
+  });
+
+/** Open the Deliver to control in the setup bar and choose a site. */
+function chooseSite(name: string) {
+  fireEvent.click(screen.getByText('Deliver to'));
+  fireEvent.click(within(screen.getByRole('dialog')).getByText(name));
+}
+
+/** The site the setup bar's Deliver to control shows. */
+const deliverTo = () =>
+  screen.getByText('Deliver to').parentElement!.querySelector('.vl')!.textContent!.trim();
+
+function submitAndConfirm() {
+  fireEvent.click(screen.getByRole('button', { name: /submit order request/i }));
+  fireEvent.click(screen.getByRole('button', { name: /confirm & submit/i }));
+}
+
 const savedDraft = (warehouseId: string) => {
   const raw = localStorage.getItem(`${ORDER_DRAFT_PREFIX}${warehouseId}`);
   return raw ? (JSON.parse(raw) as { warehouseId: string; lines: unknown[] }) : null;
@@ -174,6 +206,7 @@ describe('OrdersStorefront — switching warehouse', () => {
   beforeEach(() => {
     localStorage.clear();
     push.mockReset();
+    vi.mocked(toast.error).mockReset();
     createOrderRequestAction.mockReset();
     createOrderRequestAction.mockResolvedValue({
       ok: true,
@@ -255,5 +288,64 @@ describe('OrdersStorefront — switching warehouse', () => {
     await switchWarehouse(view, 'Main DC', MAIN);
     expect(cartLines()).toEqual(['Chromebook']);
     expect(screen.getByTestId('qty').textContent).toBe('2');
+  });
+
+  it("keeps each warehouse's setup answers with its own cart and restores them on the way back", async () => {
+    const view = await openPage(MAIN);
+    fireEvent.click(screen.getByText('Add Chromebook'));
+    fireEvent.click(fulfillment('Delivery'));
+    chooseSite('Main Campus');
+    await waitFor(() =>
+      expect(savedDraft(MAIN)).toMatchObject({
+        fulfillmentType: 'delivery',
+        charterId: 'site-main',
+      }),
+    );
+
+    await switchWarehouse(view, 'Annex', ANNEX);
+    expect(fulfillment('Pickup').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryAllByText('Main Campus')).toEqual([]);
+
+    await switchWarehouse(view, 'Main DC', MAIN);
+    expect(fulfillment('Delivery').getAttribute('aria-pressed')).toBe('true');
+    expect(deliverTo()).toBe('Main Campus');
+  });
+
+  // ═══ A SAVED DRAFT CAN CARRY ANOTHER WAREHOUSE'S DELIVERY SITE ═══
+  //
+  // While the bug was live the cart kept the first warehouse, but the Deliver
+  // to list was the second warehouse's. Choosing a site there saved that
+  // site under the FIRST warehouse's draft. Restored now, the setup bar finds
+  // no such site and shows "Choose a site...", yet Submit still sent the stale
+  // id and the server refused it with "That site is not serviced by the chosen
+  // warehouse." A site this warehouse does not service is no site at all.
+  it('treats a restored delivery site that this warehouse does not service as no site', async () => {
+    const stale: CartState = {
+      warehouseId: MAIN,
+      charterId: 'site-annex',
+      fulfillmentType: 'delivery',
+      onBehalfOf: null,
+      notes: '',
+      neededBy: '',
+      lines: [{ itemId: 'chromebook', quantity: 1 }],
+    };
+    localStorage.setItem(`${ORDER_DRAFT_PREFIX}${MAIN}`, JSON.stringify(stale));
+
+    await openPage(MAIN);
+    expect(cartLines()).toEqual(['Chromebook']);
+    expect(deliverTo()).toBe('Choose a site…');
+
+    submitAndConfirm();
+    expect(toast.error).toHaveBeenCalledWith('Select a delivery site in the setup bar above.');
+    expect(createOrderRequestAction).not.toHaveBeenCalled();
+
+    chooseSite('Main Campus');
+    submitAndConfirm();
+    await waitFor(() => expect(createOrderRequestAction).toHaveBeenCalledTimes(1));
+    expect(createOrderRequestAction.mock.calls[0]![0]).toMatchObject({
+      warehouseId: MAIN,
+      fulfillmentType: 'delivery',
+      deliveryCharterId: 'site-main',
+    });
   });
 });

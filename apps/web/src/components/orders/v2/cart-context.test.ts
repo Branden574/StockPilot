@@ -43,13 +43,6 @@ describe('cartReducer', () => {
     expect(cleared.warehouseId).toBe('wh-1');
   });
 
-  it('set-warehouse changes the id and clears lines', () => {
-    let s = cartReducer(seed, { type: 'add', itemId: 'i-1' });
-    s = cartReducer(s, { type: 'set-warehouse', warehouseId: 'wh-2' });
-    expect(s.warehouseId).toBe('wh-2');
-    expect(s.lines).toEqual([]);
-  });
-
   it('set-setup patches only specified keys', () => {
     const s = cartReducer(seed, {
       type: 'set-setup',

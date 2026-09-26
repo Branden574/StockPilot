@@ -811,7 +811,12 @@ function StorefrontCatalog({
       toast.error('Add at least one item to your cart before submitting.');
       return;
     }
-    if (state.fulfillmentType === 'delivery' && !state.charterId) {
+    // `charter`, not `state.charterId`: a site this warehouse does not service
+    // is no site. A draft saved while the cart could outlive a warehouse change
+    // (fixed 2026-09-26) can carry the other warehouse's site; the setup bar
+    // already shows "Choose a site…" for it, and sending the id only drew
+    // "That site is not serviced by the chosen warehouse." from the server.
+    if (state.fulfillmentType === 'delivery' && !charter) {
       toast.error('Select a delivery site in the setup bar above.');
       return;
     }
@@ -831,8 +836,7 @@ function StorefrontCatalog({
         neededBy: state.neededBy ? new Date(state.neededBy).toISOString() : null,
         fulfillmentType: state.fulfillmentType,
         requesterPhone: null,
-        deliveryCharterId:
-          state.fulfillmentType === 'delivery' ? (state.charterId ?? null) : null,
+        deliveryCharterId: state.fulfillmentType === 'delivery' ? (charter?.id ?? null) : null,
         pickupLocationNotes: null,
         onBehalfOf: state.onBehalfOf
           ? {
