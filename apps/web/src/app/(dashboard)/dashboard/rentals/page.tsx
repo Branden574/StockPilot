@@ -160,6 +160,7 @@ export default async function RentalsPage({
         viewerRole={ctx.role}
         itemNames={itemNames}
         reminderMarks={reminderMarks}
+        timeZone={timeZone}
       />
     </div>
   );

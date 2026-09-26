@@ -21,15 +21,21 @@ import {
   type RentalItemSource,
 } from '@/lib/rental-items';
 import {
+  RENTAL_LIST_NO_WORKSPACE_TITLE,
   RENTAL_LIST_REMINDER_COLUMNS,
   loadRentalReminderContext,
   rentalDayLabel,
   rentalListReminderMark,
+  rentalListStaleCopy,
+  rentalReadErrorMessage,
   rentalStatusPill,
+  settleRentalCheckouts,
+  type RentalCheckoutsView,
   type RentalReminderContext,
 } from '@/lib/rental-view';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
+import { retryWorkspace } from '@/lib/use-workspace';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -78,31 +84,31 @@ export default function RentalsScreen() {
   // the server enforces). Loading fallback shows, matching other screens.
   const perms = useEffectivePermissions();
   const canCreate = showWriteCta(perms, 'rentals:create');
-  const { orgId } = useOrg();
-  const [rows, setRows] = React.useState<RentalRow[]>([]);
-  // The checkouts read FAILED: not "No rentals yet.". Set by every load.
-  const [checkoutsFailed, setCheckoutsFailed] = React.useState(false);
-  const [loading, setLoading] = React.useState(true);
+  const { orgId, loading: workspaceLoading } = useOrg();
+  // The checkouts, the reminder context read with them and the clock they were
+  // read at, TAGGED with the organization they were read for (see `shown`).
+  // A failed first read is "Could not load rentals.", never "No rentals yet."
+  // (settleRentalCheckouts).
+  const [checkouts, setCheckouts] = React.useState<RentalCheckoutsView<RentalRow> | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
-  const [now, setNow] = React.useState(() => Date.now());
-  // The overdue sweep's switch and the organization's zone, for the reminder
-  // mark on overdue rows (lib/rental-view.ts). Unknown until the first load.
-  const [reminderContext, setReminderContext] = React.useState<RentalReminderContext>({
-    remindersOn: null,
-    timeZone: null,
-  });
   const [view, setView] = React.useState<RentalsView>('checkouts');
   const [items, setItems] = React.useState<RentalItemsState | null>(null);
+  // Only the latest read lands. The list reloads on focus, on pull and on a
+  // switch of organization, and a slower, older read (another organization's
+  // after a switch) used to land last and show its checkouts under the new
+  // organization (review 2026-09-26), like the detail screen's seqRef.
+  const loadSeqRef = React.useRef(0);
 
   const load = React.useCallback(async () => {
     if (!orgId) return;
+    const seq = ++loadSeqRef.current;
     // Snapshot the clock with the data, not during render (compiler purity
-    // rule): overdue badges refresh exactly when the list does - on mount and
+    // rule): overdue badges refresh exactly when the list does - on focus and
     // pull-to-refresh - instead of whenever an unrelated re-render happens.
-    setNow(Date.now());
+    const readAt = Date.now();
     // The reminder context rides along; it never fails the list (an
     // unreadable switch leaves only the marks that do not depend on it).
-    const [{ data, error }, context] = await Promise.all([
+    const [{ data, error, status }, context] = await Promise.all([
       supabase
         .from('rentals')
         .select(
@@ -115,31 +121,36 @@ export default function RentalsScreen() {
         .limit(100),
       loadRentalReminderContext(supabase, orgId),
     ]);
-    setReminderContext(context);
+    if (seq !== loadSeqRef.current) return;
     // A refused read used to render "No rentals yet.", a claim about the
-    // org's checkouts made from an error.
-    if (error) console.warn('rentals list', error);
-    setCheckoutsFailed(Boolean(error));
-    setRows(
-      (data ?? []).map((row) => {
-        const r = row as Record<string, unknown>;
-        const wh = r.warehouse as { name: string | null } | { name: string | null }[] | null;
-        return {
-          id: r.id as string,
-          status: r.status as string,
-          borrower_name: r.borrower_name as string,
-          borrower_user_id: (r.borrower_user_id as string | null) ?? null,
-          borrower_email: (r.borrower_email as string | null) ?? null,
-          overdue_reminder_sent_at: (r.overdue_reminder_sent_at as string | null) ?? null,
-          checked_out_at: r.checked_out_at as string,
-          expected_return_at: r.expected_return_at as string,
-          returned_at: (r.returned_at as string | null) ?? null,
-          notes: (r.notes as string | null) ?? null,
-          warehouse: Array.isArray(wh) ? wh[0] ?? null : wh,
-        };
-      }),
-    );
-    setLoading(false);
+    // org's checkouts made from an error. A failed RELOAD keeps the rows this
+    // organization already shows, with a banner (settleRentalCheckouts):
+    // offline, coming back from a rental used to replace them with "Could not
+    // load rentals.".
+    if (error) {
+      console.warn('rentals list', error);
+      const reason = rentalReadErrorMessage(error, status);
+      setCheckouts((prev) => settleRentalCheckouts(prev, orgId, { ok: false, reason, context, readAt }));
+      return;
+    }
+    const rows: RentalRow[] = (data ?? []).map((row) => {
+      const r = row as Record<string, unknown>;
+      const wh = r.warehouse as { name: string | null } | { name: string | null }[] | null;
+      return {
+        id: r.id as string,
+        status: r.status as string,
+        borrower_name: r.borrower_name as string,
+        borrower_user_id: (r.borrower_user_id as string | null) ?? null,
+        borrower_email: (r.borrower_email as string | null) ?? null,
+        overdue_reminder_sent_at: (r.overdue_reminder_sent_at as string | null) ?? null,
+        checked_out_at: r.checked_out_at as string,
+        expected_return_at: r.expected_return_at as string,
+        returned_at: (r.returned_at as string | null) ?? null,
+        notes: (r.notes as string | null) ?? null,
+        warehouse: Array.isArray(wh) ? wh[0] ?? null : wh,
+      };
+    });
+    setCheckouts((prev) => settleRentalCheckouts(prev, orgId, { ok: true, rows, context, readAt }));
   }, [orgId]);
 
   // The rental inventory. Same rule as web's Rentals -> Items: the shared
@@ -213,6 +224,11 @@ export default function RentalsScreen() {
 
   // Rows fetched for another organization are not this one's rental items.
   const current = items && items.orgId === orgId ? items : null;
+  // Nor its checkouts: until this organization's read lands, the list loads.
+  const shown = checkouts && checkouts.orgId === orgId ? checkouts : null;
+  // No workspace could be loaded (offline at launch): say so, and let a pull
+  // load it again, never a spinner with nothing to do (review 2026-09-26).
+  const noWorkspace = !orgId && !workspaceLoading;
 
   // First open of the Items view fetches it; after that pull-to-refresh does.
   React.useEffect(() => {
@@ -223,8 +239,11 @@ export default function RentalsScreen() {
 
   async function refresh() {
     setRefreshing(true);
-    await (view === 'items' ? loadItems() : load());
-    setRefreshing(false);
+    try {
+      await (noWorkspace ? retryWorkspace() : view === 'items' ? loadItems() : load());
+    } finally {
+      setRefreshing(false);
+    }
   }
 
   const viewSwitch = (
@@ -241,15 +260,21 @@ export default function RentalsScreen() {
         title="Rental"
         italic="items."
         header={viewSwitch}
-        emptyTitle={current?.failed ? 'Could not load rental items.' : 'No rental items yet.'}
+        emptyTitle={
+          noWorkspace
+            ? RENTAL_LIST_NO_WORKSPACE_TITLE
+            : current?.failed
+              ? 'Could not load rental items.'
+              : 'No rental items yet.'
+        }
         emptyBody={
-          current?.failed
+          noWorkspace || current?.failed
             ? 'Check your connection and pull down to try again.'
             : 'Rental items are the canopies, supplies and equipment staff check out. Add them on the web under Rentals.'
         }
         emptyIcon={Boxes}
         data={current?.rows ?? []}
-        loading={current === null}
+        loading={current === null && !noWorkspace}
         refreshing={refreshing}
         onRefresh={refresh}
         keyExtractor={(r) => r.id}
@@ -264,6 +289,10 @@ export default function RentalsScreen() {
     );
   }
 
+  const rows = shown?.rows ?? [];
+  const checkoutsFailed = shown?.failed ?? false;
+  const now = shown?.readAt ?? 0;
+  const reminderContext: RentalReminderContext = shown?.context ?? { remindersOn: null, timeZone: null };
   const out = rows.filter((r) => r.status === 'out').length;
   const overdue = rows.filter(
     (r) => r.status === 'out' && new Date(r.expected_return_at) < new Date(),
@@ -272,22 +301,37 @@ export default function RentalsScreen() {
   return (
     <DataListScreen
       eyebrow={
-        checkoutsFailed
+        checkoutsFailed || !shown
           ? 'RENTALS · CHECKOUTS'
           : `RENTALS · ${out} OUT${overdue > 0 ? ` · ${overdue} OVERDUE` : ''}`
       }
       title="Rental"
       italic="checkouts."
-      header={viewSwitch}
-      emptyTitle={checkoutsFailed ? 'Could not load rentals.' : 'No rentals yet.'}
+      header={
+        shown?.staleReason ? (
+          <View style={{ gap: 12 }}>
+            {viewSwitch}
+            <Card padding={12}>
+              <Body size={13.5} accessibilityRole="alert">
+                {rentalListStaleCopy(shown.staleReason)}
+              </Body>
+            </Card>
+          </View>
+        ) : (
+          viewSwitch
+        )
+      }
+      emptyTitle={
+        noWorkspace ? RENTAL_LIST_NO_WORKSPACE_TITLE : checkoutsFailed ? 'Could not load rentals.' : 'No rentals yet.'
+      }
       emptyBody={
-        checkoutsFailed
+        noWorkspace || checkoutsFailed
           ? 'Check your connection and pull down to try again.'
           : 'Check out reusable assets (canopies, supplies, equipment) on the web. Track returns and overdue items here.'
       }
       emptyIcon={PackageOpen}
       data={rows}
-      loading={loading}
+      loading={shown === null && !noWorkspace}
       refreshing={refreshing}
       onRefresh={refresh}
       trailing={

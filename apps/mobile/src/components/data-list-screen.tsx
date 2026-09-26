@@ -88,8 +88,11 @@ export function DataListScreen<T>({
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <IconChip icon={ArrowLeft} onPress={goBack} />
-            <IconChip icon={Menu} onPress={openDrawer} />
+            {/* Icon-only: without a label VoiceOver read each as an unnamed
+                element (re-walk 2026-09-26, on every list screen that uses
+                this header). A label also makes IconChip a button. */}
+            <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" />
+            <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Menu" />
           </View>
           {trailing}
         </View>

@@ -105,6 +105,15 @@ describe('the words VoiceOver reads', () => {
     expect(attrText(chip!.el, 'accessibilityState', chip!.sf)).toBe('{ selected: active }');
   });
 
+  // Re-walk 2026-09-26: the shared list header's back arrow and menu chips
+  // (DataListScreen, on the Rentals list and about two dozen other screens)
+  // were unnamed elements. Mutation caught: the two chips without a label.
+  it("the shared list header's back and menu chips say Back and Menu", () => {
+    const chips = elementsOf('src/components/data-list-screen.tsx', (el, sf) => tagOf(el, sf) === 'IconChip');
+    expect(chips.map((c) => attrText(c.el, 'accessibilityLabel', c.sf))).toEqual(['Back', 'Menu']);
+    expect(chips.map((c) => attrText(c.el, 'icon', c.sf))).toEqual(['ArrowLeft', 'Menu']);
+  });
+
   it('IconChip announces a labelled chip as a button', () => {
     const sf = parseTsx(readSource(path.join(MOBILE_ROOT, 'src/components/ui/row.tsx')), 'row.tsx');
     const fn = sf.statements.find(

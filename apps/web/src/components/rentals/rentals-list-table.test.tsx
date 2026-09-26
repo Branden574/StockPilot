@@ -15,6 +15,7 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 import { RentalsListTable } from './rentals-list-table';
 
 const DAY = 24 * 60 * 60 * 1000;
+const PT = 'America/Los_Angeles';
 
 function rental(id: string, over: Record<string, unknown> = {}) {
   return {
@@ -49,6 +50,7 @@ describe('RentalsListTable reminder marks', () => {
       <RentalsListTable
         rentals={[rental('a'), rental('b')]}
         viewerRole="staff"
+        timeZone={PT}
         reminderMarks={{ a: 'Reminder sent Sep 20' }}
       />,
     );
@@ -58,7 +60,7 @@ describe('RentalsListTable reminder marks', () => {
   });
 
   it('renders as before when no marks are given', () => {
-    render(<RentalsListTable rentals={[rental('a')]} viewerRole="staff" />);
+    render(<RentalsListTable rentals={[rental('a')]} viewerRole="staff" timeZone={PT} />);
     expect(screen.queryByTestId('reminder-mark')).toBeNull();
   });
 });
@@ -88,6 +90,7 @@ describe('RentalsListTable due label agrees with the pill', () => {
           rental('just', { expected_return_at: new Date(Date.now() - 10 * 60_000).toISOString() }),
         ]}
         viewerRole="staff"
+        timeZone={PT}
         reminderMarks={{ five: 'Reminder goes out Sep 26' }}
       />,
     );
@@ -106,28 +109,92 @@ describe('RentalsListTable due label agrees with the pill', () => {
           rental(`h${h}`, { expected_return_at: new Date(Date.now() - h * HOUR).toISOString() }),
         )}
         viewerRole="staff"
+        timeZone={PT}
       />,
     );
     for (const h of offsets) {
       expect(returnCell(`h${h}`).textContent).toMatch(/^Overdue by /);
       expect(statusCell(`h${h}`).textContent).toBe('Overdue');
     }
-    expect(returnCell('h36').textContent).toBe('Overdue by 2 days');
+    // Whole days, floored like the hours: 36 hours late is 1 day, not 2.
+    // Mutation caught: Math.round, which said 2.
+    expect(returnCell('h36').textContent).toBe('Overdue by 1 day');
+    expect(returnCell('h60').textContent).toBe('Overdue by 2 days');
   });
 
   it('not yet due: as before', () => {
-    render(
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // Fri Sep 25 2026, 10:00 AM PDT.
+      vi.setSystemTime(Date.parse('2026-09-25T17:00:00.000Z'));
+      render(
+        <RentalsListTable
+          rentals={[
+            rental('soon', { expected_return_at: new Date(Date.now() + 2 * HOUR).toISOString() }),
+            rental('later', { expected_return_at: new Date(Date.now() + 3 * 24 * HOUR).toISOString() }),
+          ]}
+          viewerRole="staff"
+          timeZone={PT}
+        />,
+      );
+      expect(returnCell('soon').textContent).toBe('Due today');
+      expect(statusCell('soon').textContent).toBe('Out');
+      expect(returnCell('later').textContent).toBe('Due in 3 days');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// Review 2026-09-26: "Due today" meant "due within about 12 hours" (the hours
+// rounded to days), not the day the detail page prints the expected return
+// on. Mutation caught: Math.round(diffMs / DAY_MS), which says "Due today" at
+// 9 PM for a rental due at 8 AM tomorrow, and "Due in 1 day" at 8 AM for one
+// due at 11 PM that day.
+describe("RentalsListTable due label counts calendar days in the organization's zone", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function labelAt(nowIso: string, dueIso: string, timeZone: string): string {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse(nowIso));
+    const { unmount } = render(
       <RentalsListTable
-        rentals={[
-          rental('soon', { expected_return_at: new Date(Date.now() + 2 * HOUR).toISOString() }),
-          rental('later', { expected_return_at: new Date(Date.now() + 3 * 24 * HOUR).toISOString() }),
-        ]}
+        rentals={[rental('cal', { expected_return_at: dueIso })]}
         viewerRole="staff"
+        timeZone={timeZone}
       />,
     );
-    expect(returnCell('soon').textContent).toBe('Due today');
-    expect(statusCell('soon').textContent).toBe('Out');
-    expect(returnCell('later').textContent).toBe('Due in 3 days');
+    const text = returnCell('cal').textContent ?? '';
+    unmount();
+    return text;
+  }
+
+  it('9 PM, due 8 AM tomorrow: due in 1 day, not today', () => {
+    // Thu Sep 24 9:00 PM PDT; due Fri Sep 25 8:00 AM PDT (11 hours ahead).
+    expect(labelAt('2026-09-25T04:00:00.000Z', '2026-09-25T15:00:00.000Z', PT)).toBe('Due in 1 day');
+  });
+
+  it('8 AM, due 11 PM the same day: due today', () => {
+    // Fri Sep 25 8:00 AM PDT; due Fri Sep 25 11:00 PM PDT (15 hours ahead).
+    expect(labelAt('2026-09-25T15:00:00.000Z', '2026-09-26T06:00:00.000Z', PT)).toBe('Due today');
+  });
+
+  it("the day is the organization's, not the server's or the browser's", () => {
+    // The same two instants are one calendar day apart in Los Angeles and the
+    // same day in UTC.
+    expect(labelAt('2026-09-25T04:00:00.000Z', '2026-09-25T15:00:00.000Z', 'UTC')).toBe('Due today');
+    // Due just after midnight PDT tomorrow, 1 hour ahead: tomorrow.
+    expect(labelAt('2026-09-25T06:30:00.000Z', '2026-09-25T07:30:00.000Z', PT)).toBe('Due in 1 day');
+  });
+
+  it('counts calendar days across a clock change', () => {
+    // Sat Mar 7 2026 noon PST to Mon Mar 9 noon PDT: 47 hours (the clocks go
+    // forward on Mar 8), two days.
+    expect(labelAt('2026-03-07T20:00:00.000Z', '2026-03-09T19:00:00.000Z', PT)).toBe('Due in 2 days');
+    // Sat Oct 31 noon PDT to Mon Nov 2 noon PST: 49 hours, two days.
+    expect(labelAt('2026-10-31T19:00:00.000Z', '2026-11-02T20:00:00.000Z', PT)).toBe('Due in 2 days');
   });
 });
 
@@ -157,7 +224,7 @@ describe('RentalsListTable hydrates across a clock tick', () => {
         returned_at: new Date(t0 - 210_000).toISOString(),
       }),
     ];
-    const ui = <RentalsListTable rentals={rows} viewerRole="staff" />;
+    const ui = <RentalsListTable rentals={rows} viewerRole="staff" timeZone={PT} />;
     const html = renderToString(ui);
     expect(html).toContain('3 minutes ago');
 
@@ -189,6 +256,7 @@ describe('RentalsListTable borrower tag', () => {
       <RentalsListTable
         rentals={[rental('m', { borrower_user_id: 'user-1' }), rental('n')]}
         viewerRole="staff"
+        timeZone={PT}
       />,
     );
     const tags = screen.getAllByTestId('borrower-kind');

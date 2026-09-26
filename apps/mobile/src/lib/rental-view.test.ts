@@ -15,7 +15,11 @@ import {
   RENTAL_LIST_REMINDER_COLUMNS,
   loadRentalDetail,
   rentalCheckoutFailure,
+  rentalExpectedReturn,
+  rentalListStaleCopy,
   rentalReadErrorMessage,
+  settleRentalCheckouts,
+  type RentalCheckoutsView,
   rentalReadFailureMessage,
   loadRentalReminderContext,
   rentalBorrowerView,
@@ -248,33 +252,158 @@ describe('rentalCheckoutFailure: the Check out alert', () => {
   // Simulator walk 2026-09-25: the alert body was "fetch failed:
   // UnexpectedException: Could not connect to the server. (at
   // ExpoModulesCore/Promise.swift:56)".
-  it('no answer: not confirmed, look before checking out again (never the network text)', () => {
+  it('sent, no answer: not confirmed, look before checking out again (never the network text)', () => {
     const native = new Error(
       'fetch failed: UnexpectedException: Could not connect to the server. (at ExpoModulesCore/Promise.swift:56)',
     );
-    expect(rentalCheckoutFailure(native)).toEqual({
+    expect(rentalCheckoutFailure(native, true)).toEqual({
       title: 'Checkout not confirmed',
       message: RENTAL_CHECKOUT_UNCONFIRMED,
     });
     // api()'s own timeout carries no status either: the POST may have landed.
-    expect(rentalCheckoutFailure(new Error('Request timed out. Check your connection and try again.')).title).toBe(
-      'Checkout not confirmed',
+    expect(
+      rentalCheckoutFailure(new Error('Request timed out. Check your connection and try again.'), true).title,
+    ).toBe('Checkout not confirmed');
+    expect(rentalCheckoutFailure(new TypeError('Network request failed'), true).message).not.toMatch(
+      /fetch|Network request/,
     );
-    expect(rentalCheckoutFailure(new TypeError('Network request failed')).message).not.toMatch(/fetch|Network request/);
     expect(RENTAL_CHECKOUT_UNCONFIRMED).toMatch(/Rentals list before you check out again/);
   });
 
-  it("an answer: the service's own sentence, as before", () => {
+  // Review 2026-09-26: a gateway error after the checkout committed said
+  // "The server had a problem. Try again in a moment." (api()'s words for a
+  // 5xx with no JSON body), and the route's own 500 says "Please try again".
+  // A second tap lends the same units twice. Mutation caught: the old rule,
+  // which gave every answer with a status the server's sentence.
+  it('sent, a 5xx: not confirmed, and never "try again"', () => {
+    for (const status of [500, 502, 503, 504]) {
+      const gateway = Object.assign(new Error('The server had a problem. Try again in a moment.'), { status });
+      const failure = rentalCheckoutFailure(gateway, true);
+      expect(failure).toEqual({ title: 'Checkout not confirmed', message: RENTAL_CHECKOUT_UNCONFIRMED });
+      expect(failure.message).not.toMatch(/try again/i);
+    }
+  });
+
+  // Review 2026-09-26: 999999999 days made an Invalid Date, whose toISOString
+  // threw while the request was built, and the alert said the rental "may or
+  // may not have been checked out" although nothing was sent. Mutation caught:
+  // the old rule, which read every failure without a status as unconfirmed.
+  it('never sent: could not check out, with the reason, and never "may or may not"', () => {
+    const failure = rentalCheckoutFailure(new RangeError('Invalid time value'), false);
+    expect(failure).toEqual({
+      title: 'Could not check out',
+      message: 'Invalid time value. Nothing was sent, so nothing was checked out.',
+    });
+    expect(failure.message).not.toMatch(/may or may not/);
+    expect(rentalCheckoutFailure('storage unavailable', false)).toEqual({
+      title: 'Could not check out',
+      message: 'The app could not send it. Nothing was sent, so nothing was checked out.',
+    });
+  });
+
+  it("sent and refused (a 4xx): the service's own sentence, as before", () => {
     const refused = Object.assign(new Error('Projector B: only 2 available to rent.'), { status: 400 });
-    expect(rentalCheckoutFailure(refused)).toEqual({
+    expect(rentalCheckoutFailure(refused, true)).toEqual({
       title: 'Could not check out',
       message: 'Projector B: only 2 available to rent.',
     });
-    const blank = Object.assign(new Error(''), { status: 500 });
-    expect(rentalCheckoutFailure(blank)).toEqual({
+    const busy = Object.assign(new Error(''), { status: 409 });
+    expect(rentalCheckoutFailure(busy, true)).toEqual({
       title: 'Could not check out',
       message: 'Could not check this rental out.',
     });
+  });
+});
+
+describe('rentalExpectedReturn: DAYS FROM TODAY', () => {
+  const now = new Date('2026-09-26T17:00:00.000Z');
+
+  it('that many days from now', () => {
+    const d = rentalExpectedReturn('7', now);
+    expect(d).not.toBeNull();
+    const expected = new Date(now.getTime());
+    expected.setDate(expected.getDate() + 7);
+    expect(d!.getTime()).toBe(expected.getTime());
+  });
+
+  it('nothing for blank, zero, negative or not a number', () => {
+    for (const text of ['', '0', '-3', 'abc']) expect(rentalExpectedReturn(text, now)).toBeNull();
+  });
+
+  // Mutation caught: the screen's old memo, which returned the Invalid Date,
+  // so Check out stayed enabled and the request could not be built.
+  it('nothing for a count of days with no real date', () => {
+    expect(rentalExpectedReturn('999999999', now)).toBeNull();
+    const far = rentalExpectedReturn('36500', now);
+    expect(far && Number.isFinite(far.getTime())).toBe(true);
+    expect(() => far!.toISOString()).not.toThrow();
+  });
+});
+
+describe('settleRentalCheckouts: what the list shows after a read', () => {
+  const ctxA = { remindersOn: true, timeZone: 'America/Los_Angeles' };
+  const ctxUnknown = { remindersOn: null, timeZone: null };
+  const shownA: RentalCheckoutsView<string> = {
+    orgId: 'org-a',
+    rows: ['r1', 'r2'],
+    context: ctxA,
+    readAt: 1_000,
+    failed: false,
+    staleReason: null,
+  };
+
+  it('a read that worked replaces everything, and clears a banner', () => {
+    const next = settleRentalCheckouts({ ...shownA, staleReason: 'x' }, 'org-a', {
+      ok: true,
+      rows: ['r3'],
+      context: ctxA,
+      readAt: 2_000,
+    });
+    expect(next).toEqual({ orgId: 'org-a', rows: ['r3'], context: ctxA, readAt: 2_000, failed: false, staleReason: null });
+  });
+
+  // Review 2026-09-26: offline, going back from a rental re-read the list and
+  // replaced the rows being read with "Could not load rentals.".
+  it('a failed reload keeps the rows, their context and their clock, with the reason', () => {
+    const next = settleRentalCheckouts(shownA, 'org-a', {
+      ok: false,
+      reason: RENTAL_CONNECTION_FAILURE,
+      context: ctxUnknown,
+      readAt: 2_000,
+    });
+    expect(next).toEqual({ ...shownA, staleReason: RENTAL_CONNECTION_FAILURE });
+  });
+
+  it("never keeps another organization's rows: a failure there is the failure", () => {
+    const next = settleRentalCheckouts(shownA, 'org-b', {
+      ok: false,
+      reason: RENTAL_CONNECTION_FAILURE,
+      context: ctxUnknown,
+      readAt: 2_000,
+    });
+    expect(next).toEqual({ orgId: 'org-b', rows: [], context: ctxUnknown, readAt: 2_000, failed: true, staleReason: null });
+  });
+
+  it('with nothing shown yet (or only a failure), a failure is the failure', () => {
+    const first = settleRentalCheckouts<string>(null, 'org-a', {
+      ok: false,
+      reason: 'x',
+      context: ctxUnknown,
+      readAt: 1,
+    });
+    expect(first.failed).toBe(true);
+    expect(first.rows).toEqual([]);
+    expect(settleRentalCheckouts(first, 'org-a', { ok: false, reason: 'y', context: ctxUnknown, readAt: 2 })).toMatchObject({
+      failed: true,
+      staleReason: null,
+      readAt: 2,
+    });
+  });
+
+  it('the banner says the rows are the last ones loaded, and why', () => {
+    expect(rentalListStaleCopy(RENTAL_CONNECTION_FAILURE)).toBe(
+      'Could not refresh. Showing the rentals as last loaded. Could not reach the server. Check your connection and try again.',
+    );
   });
 });
 
@@ -365,15 +494,34 @@ describe('rentalTimeLabel', () => {
   });
 
   // Simulator walk 2026-09-25: EXPECTED RETURN read "Oct 2, 2026 at 9:51 PM"
-  // on the phone and "Oct 2, 2026, 9:51 PM" on the web. Hermes joins a date
-  // and a time with " at "; this stands in for it (core emails.test.ts has
-  // the same stand-in).
+  // on the phone and "Oct 2, 2026, 9:51 PM" on the web. This stands in for
+  // Hermes on iOS as it really behaves (core emails.test.ts has the same
+  // stand-in, pinned there to the parts hermes-engine 250829098.0.16
+  // returned): a date and a time are joined with " at ", a narrow no-break
+  // space goes before PM, and formatToParts types only the date fields of a
+  // date-and-time pattern; the hour, minute and PM come back as "literal".
+  // The first stand-in kept them typed, and its test passed while the phone
+  // still printed "at" (re-walk 2026-09-26).
   describe('on an engine that writes "at" (Hermes on iOS)', () => {
     const REAL_DTF = Intl.DateTimeFormat;
     afterEach(() => {
       Object.defineProperty(Intl, 'DateTimeFormat', { value: REAL_DTF, configurable: true, writable: true });
       vi.restoreAllMocks();
     });
+
+    function hermesParts(parts: Intl.DateTimeFormatPart[]): Intl.DateTimeFormatPart[] {
+      const pieces = (value: string): Intl.DateTimeFormatPart[] =>
+        (value.match(/[A-Za-z0-9]+|[^A-Za-z0-9]/g) ?? []).map((v) => ({ type: 'literal', value: v }));
+      const spaced = parts.map((p, i) =>
+        p.type === 'literal' && parts[i + 1]?.type === 'dayPeriod' ? { ...p, value: '\u202f' } : p,
+      );
+      const split = (ps: Intl.DateTimeFormatPart[]) => ps.flatMap((p) => (p.type === 'literal' ? pieces(p.value) : [p]));
+      const hourAt = spaced.findIndex((p) => p.type === 'hour');
+      const hasDate = spaced.some((p) => p.type === 'month' || p.type === 'day' || p.type === 'year');
+      if (hourAt < 0 || !hasDate) return split(spaced);
+      const time = spaced.slice(hourAt).map((p) => p.value).join('');
+      return [...split(spaced.slice(0, hourAt - 1)), ...pieces(` at ${time}`)];
+    }
 
     function useHermesLikeIntl() {
       class HermesLike {
@@ -382,13 +530,7 @@ describe('rentalTimeLabel', () => {
           this.real = new REAL_DTF(locales, options);
         }
         formatToParts(date?: Date | number): Intl.DateTimeFormatPart[] {
-          const parts = this.real.formatToParts(date);
-          return parts.map((p, i) => {
-            const next = parts[i + 1]?.type;
-            if (p.type === 'literal' && next === 'hour') return { ...p, value: ' at ' };
-            if (p.type === 'literal' && next === 'dayPeriod') return { ...p, value: '\u202f' };
-            return p;
-          });
+          return hermesParts(this.real.formatToParts(date));
         }
         format(date?: Date | number): string {
           return this.formatToParts(date).map((p) => p.value).join('');
@@ -421,6 +563,17 @@ describe('rentalTimeLabel', () => {
           minute: '2-digit',
         }),
       ).toBe('Oct 2, 2026 at 9:51\u202fPM');
+      // The engine types no hour or minute in a date-and-time pattern.
+      const types = new Intl.DateTimeFormat('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      })
+        .formatToParts(new Date(due))
+        .map((p) => p.type);
+      expect(types).not.toContain('hour');
+      expect(types).not.toContain('minute');
       expect(rentalTimeLabel(due, 'America/Los_Angeles')).toBe('Oct 2, 2026, 9:51 PM');
       expect(rentalTimeLabel(due, null)).toBe(device);
       expect(device).not.toMatch(/ at |\u202f/);

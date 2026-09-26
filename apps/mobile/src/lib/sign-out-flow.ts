@@ -26,8 +26,10 @@
  *   4. stamp this account's legacy rows as its own, so the next account never
  *      adopts them (outbox-scope.ts);
  *   5. sign out globally; on an error, locally; then read the session back;
- *   6. only once it is gone: discard (if chosen) and clear the cache. The
- *      outbox is never cleared by a sign-out.
+ *   6. only once it is gone: discard (if chosen), clear the cache, and forget
+ *      the account's saved workspace (the active organization and the
+ *      per-organization warehouse, account-eviction.ts
+ *      accountScopedStorageKeys). The outbox is never cleared by a sign-out.
  *
  * Pure: every effect is injected, so the order can be executed in vitest (the
  * React Native auth context cannot load there).
@@ -64,6 +66,15 @@ export interface SignOutFlowDeps extends EndSessionDeps {
   discardUnsynced(): Promise<void>;
   /** Clear the org-scoped cache. Never touches the outbox. */
   wipeCache(): Promise<void>;
+  /**
+   * Remove this account's saved workspace keys from AsyncStorage (the active
+   * organization and the per-organization warehouse). They outlived an
+   * ordinary sign-out: the next account's /api/v1 calls named the previous
+   * account's organization (api.ts orgHeader) and its queued rows were
+   * stamped with it (session-scope.ts) until its own workspace load
+   * succeeded, and a failed first load never replaced it (review 2026-09-26).
+   */
+  clearAccountStorage(): Promise<void>;
 }
 
 /** How long the sign-out waits for the drains before asking anyway. */
@@ -161,6 +172,13 @@ export async function runSignOutFlow(
     await deps.wipeCache();
   } catch (e) {
     warn('[auth] wipe-on-signout failed', e);
+  }
+  // Only once the session is gone, like the wipe: a sign-out that failed
+  // keeps the person in their workspace.
+  try {
+    await deps.clearAccountStorage();
+  } catch (e) {
+    warn('[auth] could not forget the saved workspace', e);
   }
   return 'signed-out';
 }

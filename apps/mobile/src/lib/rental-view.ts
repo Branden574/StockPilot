@@ -95,29 +95,70 @@ export function rentalReadFailureMessage(err: unknown): string {
   return 'The request failed.';
 }
 
-/** Said when Check out got no answer (see rentalCheckoutFailure). */
+/** Said when a Check out that was sent was not confirmed (see rentalCheckoutFailure). */
 export const RENTAL_CHECKOUT_UNCONFIRMED =
-  'The app did not hear back from the server, so this rental may or may not have been checked out. ' +
+  'The app could not confirm this checkout with the server, so this rental may or may not have been checked out. ' +
   'Check your connection, then look for it on the Rentals list before you check out again.';
 
+/** Ends a sentence that has no end mark. */
+function sentence(text: string): string {
+  const t = text.trim();
+  return /[.!?]$/.test(t) ? t : `${t}.`;
+}
+
 /**
- * The alert for a Check out that failed. With an answer (api() throws an
- * ApiError carrying the HTTP status): the service's own sentence, as before,
- * written for an operator. With no answer (offline, a dropped connection, or
- * api()'s timeout): the request may have reached the server before the answer
- * was lost, and a second Check out would lend the same units twice, so it
- * says to look first, the way the phone's order edits do
- * (add-order-items.ts, the indeterminate case). Keyed on the status, never on
- * the message text.
+ * The alert for a Check out that failed. `sent` is whether api() handed the
+ * request to fetch (its onSend hook, as item-adjust.ts uses it).
+ *
+ *   - Never sent (the body could not be built, the session or the saved
+ *     workspace could not be read): nothing reached the server, so it could
+ *     not check out, and the reason is given. It used to say "may or may not
+ *     have been checked out" here too.
+ *   - Sent, with no answer (offline, a dropped connection, api()'s timeout)
+ *     or a 5xx: the checkout may have committed before the answer was lost.
+ *     A gateway 502, 503 or 504 can arrive after the commit, and so can the
+ *     route's 500: create_rental commits in one call, and an answer from the
+ *     database lost after that commit reaches the route as an internal error
+ *     (services/rentals.ts rentalRpcError). A second Check out would lend the
+ *     same units twice (there is no idempotency key yet, S6-B), so it never
+ *     says "try again": it says to look first, the way the phone's order
+ *     edits and stock adjustments do (add-order-items.ts, item-adjust.ts).
+ *   - Sent and refused (a 4xx): nothing was written; the service's own
+ *     sentence, written for an operator.
+ * Keyed on the status, never on the message text.
  */
-export function rentalCheckoutFailure(e: unknown): { title: string; message: string } {
+export function rentalCheckoutFailure(e: unknown, sent: boolean): { title: string; message: string } {
+  if (!sent) {
+    const reason = e instanceof Error && e.message.trim() ? e.message : 'The app could not send it.';
+    return {
+      title: 'Could not check out',
+      message: `${sentence(reason)} Nothing was sent, so nothing was checked out.`,
+    };
+  }
   const status =
     e && typeof e === 'object' && typeof (e as { status?: unknown }).status === 'number'
       ? (e as { status: number }).status
       : null;
-  if (status === null) return { title: 'Checkout not confirmed', message: RENTAL_CHECKOUT_UNCONFIRMED };
+  if (status === null || status >= 500) {
+    return { title: 'Checkout not confirmed', message: RENTAL_CHECKOUT_UNCONFIRMED };
+  }
   const message = e instanceof Error && e.message.trim() ? e.message : 'Could not check this rental out.';
   return { title: 'Could not check out', message };
+}
+
+/**
+ * When a rental typed as DAYS FROM TODAY is due: that many days after `now`,
+ * or null when there is nothing to send. Null for anything that is not a
+ * whole number of days above zero, and for a number of days so large the
+ * date does not exist (999999999 days is an Invalid Date, whose
+ * toISOString() throws before the request is even built).
+ */
+export function rentalExpectedReturn(daysText: string, now: Date): Date | null {
+  const days = parseInt(daysText, 10);
+  if (Number.isNaN(days) || days <= 0) return null;
+  const d = new Date(now.getTime());
+  d.setDate(d.getDate() + days);
+  return Number.isFinite(d.getTime()) ? d : null;
 }
 
 /** The switch and the zone every rental screen needs. */
@@ -163,6 +204,61 @@ export async function loadRentalReminderContext(
 
 /** The columns the list's reminder mark needs, added to its select. */
 export const RENTAL_LIST_REMINDER_COLUMNS = 'borrower_user_id, overdue_reminder_sent_at';
+
+/** The checkouts the list shows, and the organization they were read for. */
+export interface RentalCheckoutsView<Row> {
+  /** The organization the rows belong to. After a switch they are not the one on screen. */
+  orgId: string;
+  rows: Row[];
+  /** The reminder switch and zone read with the rows. */
+  context: RentalReminderContext;
+  /** When the rows were read: "overdue" and the marks use this clock. */
+  readAt: number;
+  /** No list could be read for this organization ("Could not load rentals."). */
+  failed: boolean;
+  /** A reload failed and the rows from before it are still shown: why, for the banner. */
+  staleReason: string | null;
+}
+
+/** One read of the list: the rows, or why there are none. */
+export type RentalCheckoutsRead<Row> =
+  | { ok: true; rows: Row[]; context: RentalReminderContext; readAt: number }
+  | { ok: false; reason: string; context: RentalReminderContext; readAt: number };
+
+/**
+ * What the list shows after a read. A read that failed keeps the rows the
+ * same organization already shows, with the reason for a banner: the list
+ * reloads on focus, and offline, coming back from a rental replaced the list
+ * being read with "Could not load rentals." and no rows (review 2026-09-26).
+ * With nothing shown for this organization yet, a failure is the failure.
+ */
+export function settleRentalCheckouts<Row>(
+  prev: RentalCheckoutsView<Row> | null,
+  orgId: string,
+  read: RentalCheckoutsRead<Row>,
+): RentalCheckoutsView<Row> {
+  if (read.ok) {
+    return { orgId, rows: read.rows, context: read.context, readAt: read.readAt, failed: false, staleReason: null };
+  }
+  if (prev && prev.orgId === orgId && !prev.failed) return { ...prev, staleReason: read.reason };
+  return { orgId, rows: [], context: read.context, readAt: read.readAt, failed: true, staleReason: null };
+}
+
+/** The banner over rows kept through a failed reload. */
+export function rentalListStaleCopy(reason: string): string {
+  return `Could not refresh. Showing the rentals as last loaded. ${reason}`;
+}
+
+/**
+ * Said when no workspace could be loaded (a launch offline, or a failed first
+ * read after signing in), beside a Try again that loads it again
+ * (use-workspace.ts retryWorkspace).
+ */
+export const RENTAL_WORKSPACE_UNAVAILABLE =
+  'Could not load your workspace. Check your connection and try again.';
+
+/** The rentals list's title for the same case; a pull loads it again. */
+export const RENTAL_LIST_NO_WORKSPACE_TITLE = 'Could not load your workspace.';
 
 /**
  * The small mark an OVERDUE row carries ("Reminder sent Sep 26", "No email on

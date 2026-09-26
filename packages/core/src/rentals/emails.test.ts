@@ -393,21 +393,43 @@ describe('the borrower label says only what the rental records', () => {
 // ─── The same words on the web and the phone ────────────────────────────
 
 /**
- * An Intl that writes dates the way Hermes on iOS does, from this runtime's
- * own: the date and the time joined with " at " (the simulator showed "Sent
- * Sep 23 at 3:00 PM." where the web says "Sent Sep 23, 3:00 PM."), and a
- * narrow no-break space before AM or PM, as newer locale data writes it. The
- * parts themselves (month, day, hour, ...) are this runtime's, unchanged.
+ * An Intl that behaves the way Hermes on iOS does, built from this runtime's
+ * own parts. Measured 2026-09-26 by running the app's own Hermes
+ * (hermes-engine 250829098.0.16, the macOS slice of hermesvm: the same Apple
+ * Intl code as iOS) through JSI; the arrays in the first test below are what
+ * it returned.
+ *   - A date alone, or a time alone: every part typed, a narrow no-break
+ *     space (U+202F) before AM or PM.
+ *   - A date AND a time: joined with " at " ("Sep 23 at 3:00 PM"), and
+ *     formatToParts types only the date fields. From the quoted "at" on,
+ *     every piece ("3", ":", "00", "PM") comes back as type "literal".
+ *   - Literals come back one piece per run of letters or digits, or per
+ *     other character (", " is "," then " ").
+ * The first fix's stand-in kept hour, minute and dayPeriod typed, so its tests
+ * passed while the phone still printed the engine's words (re-walk
+ * 2026-09-26).
  */
 const REAL_DTF = Intl.DateTimeFormat;
 
+const NNBSP = '\u202f';
+
+function literalPieces(value: string): Intl.DateTimeFormatPart[] {
+  return (value.match(/[A-Za-z0-9]+|[^A-Za-z0-9]/g) ?? []).map((v) => ({ type: 'literal', value: v }));
+}
+
 function hermesParts(parts: Intl.DateTimeFormatPart[]): Intl.DateTimeFormatPart[] {
-  return parts.map((p, i) => {
-    const next = parts[i + 1];
-    if (p.type === 'literal' && next?.type === 'hour') return { ...p, value: ' at ' };
-    if (p.type === 'literal' && next?.type === 'dayPeriod') return { ...p, value: '\u202f' };
-    return p;
-  });
+  const spaced = parts.map((p, i) =>
+    p.type === 'literal' && parts[i + 1]?.type === 'dayPeriod' ? { ...p, value: NNBSP } : p,
+  );
+  const hourAt = spaced.findIndex((p) => p.type === 'hour');
+  const hasDate = spaced.some((p) => p.type === 'month' || p.type === 'day' || p.type === 'year');
+  const split = (ps: Intl.DateTimeFormatPart[]) =>
+    ps.flatMap((p) => (p.type === 'literal' ? literalPieces(p.value) : [p]));
+  if (hourAt < 0 || !hasDate) return split(spaced);
+  // The date fields, then " at " and the time, all of it untyped. The part
+  // before the hour is the engine's own date-to-time separator, replaced.
+  const time = spaced.slice(hourAt).map((p) => p.value).join('');
+  return [...split(spaced.slice(0, hourAt - 1)), ...literalPieces(` at ${time}`)];
 }
 
 class HermesLikeDateTimeFormat {
@@ -419,7 +441,11 @@ class HermesLikeDateTimeFormat {
     return hermesParts(this.real.formatToParts(date));
   }
   format(date?: Date | number): string {
-    return this.formatToParts(date).map((p) => p.value).join('');
+    // Not through this.formatToParts: an engine without formatToParts (below)
+    // still formats.
+    return hermesParts(this.real.formatToParts(date))
+      .map((p) => p.value)
+      .join('');
   }
   resolvedOptions(): Intl.ResolvedDateTimeFormatOptions {
     return this.real.resolvedOptions();
@@ -443,6 +469,41 @@ describe('rental times read the same on the web and the phone (simulator walk 20
 
   // Wed Sep 23 2026, 3:00 PM PDT.
   const SENT = '2026-09-23T22:00:04.000Z';
+
+  // What hermes-engine 250829098.0.16 returned for these formatters (the JSI
+  // run, 2026-09-26), piece for piece. The stand-in must be the engine, or
+  // these tests pass while the phone does not.
+  it('the stand-in returns the parts Hermes returned', () => {
+    useHermesLikeIntl();
+    const partsOf = (options: Intl.DateTimeFormatOptions) =>
+      new Intl.DateTimeFormat('en-US', options)
+        .formatToParts(new Date('2026-09-23T22:00:00.000Z'))
+        .map((p) => [p.type, p.value]);
+    expect(partsOf({ month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: PT })).toEqual([
+      ['month', 'Sep'], ['literal', ' '], ['day', '23'], ['literal', ' '], ['literal', 'at'], ['literal', ' '],
+      ['literal', '3'], ['literal', ':'], ['literal', '00'], ['literal', NNBSP], ['literal', 'PM'],
+    ]);
+    expect(
+      partsOf({
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        timeZone: 'America/New_York',
+      }),
+    ).toEqual([
+      ['month', 'Sep'], ['literal', ' '], ['day', '23'], ['literal', ','], ['literal', ' '], ['year', '2026'],
+      ['literal', ' '], ['literal', 'at'], ['literal', ' '],
+      ['literal', '6'], ['literal', ':'], ['literal', '00'], ['literal', NNBSP], ['literal', 'PM'],
+    ]);
+    expect(partsOf({ hour: 'numeric', minute: '2-digit', timeZone: PT })).toEqual([
+      ['hour', '3'], ['literal', ':'], ['minute', '00'], ['literal', NNBSP], ['dayPeriod', 'PM'],
+    ]);
+    expect(partsOf({ month: 'short', day: 'numeric', year: 'numeric', timeZone: PT })).toEqual([
+      ['month', 'Sep'], ['literal', ' '], ['day', '23'], ['literal', ','], ['literal', ' '], ['year', '2026'],
+    ]);
+  });
 
   it('the stand-in engine writes what the phone showed', () => {
     useHermesLikeIntl();
@@ -501,16 +562,55 @@ describe('rental times read the same on the web and the phone (simulator walk 20
     );
   });
 
-  it("an engine without formatToParts still gets the engine's own words, never nothing", () => {
+  // A date alone and a time alone are spelled the same on every engine, so an
+  // engine without formatToParts still gets the web's words from each
+  // formatter's own string. Mutation caught: the first fix, which fell back to
+  // the engine's date-and-time string ("Oct 2, 2026 at 9:51 PM").
+  it("an engine without formatToParts still gets the web's words", () => {
     class NoParts extends HermesLikeDateTimeFormat {
       override formatToParts(): Intl.DateTimeFormatPart[] {
         throw new TypeError('formatToParts is not supported');
       }
     }
     useHermesLikeIntl(NoParts);
-    expect(formatRentalDateTime('2026-10-03T04:51:00.000Z', PT, { withYear: true })).toBe(
-      'Oct 2, 2026 at 9:51\u202fPM',
+    expect(formatRentalDateTime('2026-10-03T04:51:00.000Z', PT, { withYear: true })).toBe('Oct 2, 2026, 9:51 PM');
+    expect(overdueReminderText({ kind: 'sent', sentAt: SENT }, PT)).toBe('Sent Sep 23, 3:00 PM.');
+  });
+
+  it("with no Intl formatter at all, the engine's own words with plain spaces, never nothing", () => {
+    useHermesLikeIntl(
+      class {
+        constructor() {
+          throw new RangeError('Intl.DateTimeFormat is not supported');
+        }
+      },
     );
-    expect(overdueReminderText({ kind: 'sent', sentAt: SENT }, PT)).toBe('Sent Sep 23 at 3:00\u202fPM.');
+    const printed = formatRentalDateTime('2026-10-03T04:51:00.000Z', PT, { withYear: true });
+    expect(printed).toBe('Oct 2, 2026 at 9:51 PM');
+    expect(printed).not.toMatch(/[\u202f\u00a0]/);
+    expect(overdueReminderText({ kind: 'sent', sentAt: SENT }, PT)).toBe('Sent Sep 23 at 3:00 PM.');
+  });
+
+  // Every caller gets the same words from the same function: the web detail
+  // header, the phone's labels (rental-view.ts rentalTimeLabel) and the
+  // reminder lines on both. No engine's separator survives in any of them.
+  it('no label on either engine carries " at " or a no-break space', () => {
+    const due = '2026-10-03T04:51:00.000Z';
+    const labels = () => [
+      formatRentalDateTime(due, PT, { withYear: true }),
+      formatRentalDateTime(due, null, { withYear: true }),
+      formatRentalDateTime(due, 'UTC'),
+      overdueReminderText({ kind: 'sent', sentAt: SENT }, PT),
+      overdueReminderText({ kind: 'sent', sentAt: SENT }),
+      overdueReminderText({ kind: 'scheduled', at: new Date(due) }, PT),
+      overdueReminderText({ kind: 'due', at: new Date(due) }),
+      overdueReminderListMark({ kind: 'sent', sentAt: SENT }, PT) ?? '',
+      overdueReminderListMark({ kind: 'scheduled', at: new Date(due) }, PT) ?? '',
+    ];
+    const web = labels();
+    useHermesLikeIntl();
+    const phone = labels();
+    expect(phone).toEqual(web);
+    for (const label of phone) expect(label).not.toMatch(/ at |[\u202f\u00a0]/);
   });
 });

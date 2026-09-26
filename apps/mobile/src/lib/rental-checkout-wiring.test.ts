@@ -198,7 +198,8 @@ describe('rentals/new.tsx — a failed read blocks the picker, never reads as av
     // warehouses section would say "No active warehouses to check out from"
     // for a read that failed.
     const src = code();
-    expect(src).toContain('{warehousesError !== null ? (');
+    // Second in the chain since 2026-09-26 (after "no workspace").
+    expect(src).toContain(') : warehousesError !== null ? (');
     for (const flag of ['warehousesError', 'itemsError', 'stockError']) {
       expect(src, `${flag} tested for truthiness`).not.toMatch(
         new RegExp(`(?:[!(&|?]\\s*|\\{)${flag}\\s*(?:\\?|&&|\\|\\||\\))`),
@@ -206,7 +207,7 @@ describe('rentals/new.tsx — a failed read blocks the picker, never reads as av
     }
     expect(src).not.toMatch(/set(?:Warehouses|Items|Stock)Error\(error\.message\)/);
     // The failure is decided before the empty-list sentence can be reached.
-    expect(src.indexOf('{warehousesError !== null ? (')).toBeLessThan(
+    expect(src.indexOf(') : warehousesError !== null ? (')).toBeLessThan(
       src.indexOf('No active warehouses to check out from.'),
     );
   });
@@ -230,6 +231,29 @@ describe('rentals/new.tsx — a failed read blocks the picker, never reads as av
     expect(jsx).toContain('onRetry={() => setItemsNonce((n) => n + 1)}');
     // The retry button is disabled while its reload runs.
     expect(source).toMatch(/onPress=\{onRetry\}\s*disabled=\{retrying\}/);
+  });
+});
+
+describe('rentals/new.tsx — no workspace (review 2026-09-26)', () => {
+  // Offline at launch there is no workspace: every read returns early, and
+  // the WAREHOUSE and ITEMS sections spun with nothing to tap. Mutation
+  // caught: the old screen, whose WAREHOUSE section went straight to its
+  // spinner.
+  it('says so in the WAREHOUSE section with a Try again that loads the workspace again', () => {
+    const src = code();
+    expect(src).toContain('const { orgId, loading: workspaceLoading } = useOrg();');
+    expect(src).toContain('const noWorkspace = !orgId && !workspaceLoading;');
+    expect(src).toMatch(
+      /async function reloadWorkspace\(\) \{\s*setRetryingWorkspace\(true\);\s*try \{\s*await retryWorkspace\(\);\s*\} finally \{\s*setRetryingWorkspace\(false\);\s*\}\s*\}/,
+    );
+    const jsx = src.slice(src.indexOf('<FormSection icon={Warehouse} label="WAREHOUSE">'));
+    expect(jsx).toMatch(
+      /^<FormSection icon=\{Warehouse\} label="WAREHOUSE">\s*\{noWorkspace \? \(\s*<ReadFailure\s*message=\{RENTAL_WORKSPACE_UNAVAILABLE\}\s*detail=\{null\}\s*retrying=\{retryingWorkspace\}\s*onRetry=\{\(\) => void reloadWorkspace\(\)\}/,
+    );
+  });
+
+  it('the ITEMS section points at the WAREHOUSE section instead of spinning', () => {
+    expect(code()).toContain('{!warehouseId && (!warehousesLoading || noWorkspace) ? (');
   });
 });
 
@@ -262,7 +286,30 @@ describe('rentals/new.tsx — refusals are shown, not swallowed (SP-012)', () =>
     // rentalCheckoutFailure (rental-view.test.ts pins its rules).
     const body = submitBody();
     expect(code()).toContain("from '@/lib/rental-view';");
-    expect(body).toMatch(/const failure = rentalCheckoutFailure\(e\);\s*Alert\.alert\(failure\.title, failure\.message\);/);
+    expect(body).toMatch(/const failure = rentalCheckoutFailure\(e, sent\);\s*Alert\.alert\(failure\.title, failure\.message\);/);
+  });
+
+  // Review 2026-09-26: a Check out whose request never left said it "may or
+  // may not have been checked out". Whether it left is api()'s onSend hook
+  // (as item-adjust.ts uses it), set before the POST and read in the catch.
+  // Mutation caught: rentalCheckoutFailure(e), which could not tell.
+  it('tells the alert whether the request was handed to fetch (api() onSend)', () => {
+    const body = submitBody();
+    const flag = body.indexOf('let sent = false;');
+    expect(flag).toBeGreaterThan(-1);
+    expect(flag).toBeLessThan(body.indexOf("'/api/v1/rentals'"));
+    expect(body).toMatch(/onSend: \(\) => \{\s*sent = true;\s*\},/);
+    expect(code()).not.toMatch(/sent = true;[\s\S]*sent = true;/);
+  });
+
+  // Mutation caught: the old memo, which returned the Invalid Date that
+  // 999999999 days makes, so Check out stayed enabled and toISOString() threw
+  // while the request was built.
+  it('the expected return is the shared helper, so a date that does not exist disables Check out', () => {
+    expect(code()).toContain('const expectedReturn = React.useMemo(() => rentalExpectedReturn(returnDays, new Date()), [returnDays]);');
+    const canSubmit = source.slice(source.indexOf('const canSubmit ='));
+    expect(canSubmit.slice(0, canSubmit.indexOf(';'))).toMatch(/Boolean\(expectedReturn\)/);
+    expect(code()).not.toMatch(/parseInt\(returnDays/);
   });
 
   // Simulator walk 2026-09-25: offline, the alert read "fetch failed:

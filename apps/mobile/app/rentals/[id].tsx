@@ -33,6 +33,7 @@ import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
+  RENTAL_WORKSPACE_UNAVAILABLE,
   loadRentalDetail,
   rentalBorrowerView,
   rentalStatusPill,
@@ -45,6 +46,7 @@ import { ACCENT, FONT } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useTheme } from '@/lib/use-theme';
+import { retryWorkspace } from '@/lib/use-workspace';
 
 const TONE_ICON: Record<RentalEmailTone, typeof Mail> = {
   recorded: CheckCircle2,
@@ -73,13 +75,14 @@ const TONE_ICON: Record<RentalEmailTone, typeof Mail> = {
 export default function RentalDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { orgId } = useOrg();
+  const { orgId, loading: workspaceLoading } = useOrg();
   const { c } = useTheme();
   const enabledModules = useEnabledModules();
   const enabled = enabledModules.has('rentals');
   const perms = useEffectivePermissions();
   const [load, setLoad] = React.useState<RentalDetailLoad | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [retryingWorkspace, setRetryingWorkspace] = React.useState(false);
   // The moment the data describes, taken with it (not during render), so
   // "overdue" and the reminder's state agree until the next refresh.
   const [nowMs, setNowMs] = React.useState(() => Date.now());
@@ -119,11 +122,33 @@ export default function RentalDetailScreen() {
     }
   }
 
+  // No workspace could be loaded (a launch offline, or a failed first read
+  // after signing in): the read above never starts, and this screen spun with
+  // nothing to tap until some other screen mounted online (review
+  // 2026-09-26). Try again loads the workspace again; so do the app returning
+  // to the foreground and the connection coming back (use-sync.ts).
+  async function reloadWorkspace() {
+    setRetryingWorkspace(true);
+    try {
+      await retryWorkspace();
+    } finally {
+      setRetryingWorkspace(false);
+    }
+  }
+
   if (!enabled) {
     return (
       <Gate onBack={goBack}>
         Rentals are not switched on for this workspace. Ask an admin to turn them on in Settings
         {' > '}Modules.
+      </Gate>
+    );
+  }
+
+  if (!orgId && !workspaceLoading) {
+    return (
+      <Gate onBack={goBack} onRetry={() => void reloadWorkspace()} retrying={retryingWorkspace}>
+        {RENTAL_WORKSPACE_UNAVAILABLE}
       </Gate>
     );
   }

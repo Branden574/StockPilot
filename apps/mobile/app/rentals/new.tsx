@@ -69,11 +69,14 @@ import {
   type RentalPickerItem,
 } from '@/lib/rental-items';
 import {
+  RENTAL_WORKSPACE_UNAVAILABLE,
   rentalCheckoutFailure,
+  rentalExpectedReturn,
   rentalReadErrorMessage,
   rentalReadFailureMessage,
 } from '@/lib/rental-view';
 import { useOrg } from '@/lib/use-org';
+import { retryWorkspace } from '@/lib/use-workspace';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, RADIUS } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -118,7 +121,7 @@ interface WarehouseRow {
 export default function NewRental() {
   const router = useRouter();
   const { user } = useAuth();
-  const { orgId } = useOrg();
+  const { orgId, loading: workspaceLoading } = useOrg();
   const { c } = useTheme();
   // The rentals list already hides its '+' for members without rentals:create
   // (src/screens/rentals.tsx), but this route is reachable directly. The real
@@ -168,6 +171,21 @@ export default function NewRental() {
   const [returnDays, setReturnDays] = React.useState('7');
   const [notes, setNotes] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  // No workspace could be loaded (a launch offline, or a failed first read
+  // after signing in): every read below waits on one, and the WAREHOUSE and
+  // ITEMS sections spun with nothing to tap (review 2026-09-26). Try again
+  // loads it again (use-workspace.ts retryWorkspace), as do the app returning
+  // to the foreground and the connection coming back (use-sync.ts).
+  const noWorkspace = !orgId && !workspaceLoading;
+  const [retryingWorkspace, setRetryingWorkspace] = React.useState(false);
+  async function reloadWorkspace() {
+    setRetryingWorkspace(true);
+    try {
+      await retryWorkspace();
+    } finally {
+      setRetryingWorkspace(false);
+    }
+  }
 
   React.useEffect(() => {
     if (!orgId) return;
@@ -333,13 +351,9 @@ export default function NewRental() {
     [cart],
   );
 
-  const expectedReturn = React.useMemo(() => {
-    const days = parseInt(returnDays, 10);
-    if (Number.isNaN(days) || days <= 0) return null;
-    const d = new Date();
-    d.setDate(d.getDate() + days);
-    return d;
-  }, [returnDays]);
+  // Null for a count of days with no real date (rentalExpectedReturn): Check
+  // out is then disabled, rather than failing while building the request.
+  const expectedReturn = React.useMemo(() => rentalExpectedReturn(returnDays, new Date()), [returnDays]);
 
   function addOne(item: RentalPickerItem) {
     const max = availableFor(item);
@@ -405,6 +419,9 @@ export default function NewRental() {
       return;
     }
     setBusy(true);
+    // Whether api() handed the request to fetch (its onSend hook). Before
+    // that, nothing can have reached the server.
+    let sent = false;
     try {
       await api<{ id: string }>('/api/v1/rentals', {
         method: 'POST',
@@ -417,17 +434,22 @@ export default function NewRental() {
           notes: notes.trim() || null,
           lines,
         },
+        onSend: () => {
+          sent = true;
+        },
       });
       router.back();
     } catch (e) {
-      // With an answer, ApiError.message is the service's own sentence
+      // Refused (a 4xx): ApiError.message is the service's own sentence
       // ("Projector B: only 2 available to rent…"), already written for an
       // operator: shown as-is, which is the whole point of letting the
-      // checkout be refusable. With no answer (offline, a dropped connection,
-      // the timeout) the POST may have landed, so the alert says to look on
-      // the Rentals list before checking out again, never the network layer's
-      // own text (rentalCheckoutFailure, lib/rental-view.ts).
-      const failure = rentalCheckoutFailure(e);
+      // checkout be refusable. Sent with no answer (offline, a dropped
+      // connection, the timeout) or a 5xx: the POST may have landed, so the
+      // alert says to look on the Rentals list before checking out again and
+      // never "try again". Never sent: it could not check out, and says why.
+      // Never the network layer's own text (rentalCheckoutFailure,
+      // lib/rental-view.ts).
+      const failure = rentalCheckoutFailure(e, sent);
       Alert.alert(failure.title, failure.message);
     } finally {
       setBusy(false);
@@ -457,7 +479,14 @@ export default function NewRental() {
           keyboardShouldPersistTaps="handled"
         >
           <FormSection icon={Warehouse} label="WAREHOUSE">
-            {warehousesError !== null ? (
+            {noWorkspace ? (
+              <ReadFailure
+                message={RENTAL_WORKSPACE_UNAVAILABLE}
+                detail={null}
+                retrying={retryingWorkspace}
+                onRetry={() => void reloadWorkspace()}
+              />
+            ) : warehousesError !== null ? (
               <ReadFailure
                 message="Could not load warehouses."
                 detail={warehousesError}
@@ -523,7 +552,7 @@ export default function NewRental() {
               />
             </View>
 
-            {!warehouseId && !warehousesLoading ? (
+            {!warehouseId && (!warehousesLoading || noWorkspace) ? (
               // No warehouse to pick from (the read failed, or the org has
               // none): said in the WAREHOUSE section above, never a spinner
               // that cannot stop.

@@ -238,14 +238,40 @@ const DAY_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
 };
 const TIME_OPTIONS: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' };
 
-/** The pieces a rental date and time are written from. */
-interface ClockParts {
-  month: string;
-  day: string;
-  year: string;
-  hour: string;
-  minute: string;
-  dayPeriod: string;
+/** The zone option for a rental formatter: the organization's, or the device's when absent. */
+function zoneOption(timeZone: string | null | undefined): Intl.DateTimeFormatOptions {
+  // resolveOrgTimezone: a zone this runtime cannot format degrades to the
+  // documented default instead of throwing out of a render.
+  return timeZone ? { timeZone: resolveOrgTimezone(timeZone) } : {};
+}
+
+/** A narrow no-break space or a no-break space, written as a plain space. */
+function plainSpaces(s: string): string {
+  return s.replace(/[\u202f\u00a0]/g, ' ');
+}
+
+/** The typed parts of one formatter (never its literals), or null when this runtime cannot give them. */
+function typedParts(d: Date, options: Intl.DateTimeFormatOptions): Partial<Record<string, string>> | null {
+  try {
+    const out: Partial<Record<string, string>> = {};
+    for (const p of new Intl.DateTimeFormat('en-US', options).formatToParts(d)) {
+      // Older Intl implementations name the AM/PM part "dayperiod".
+      const type = (p.type as string) === 'dayperiod' ? 'dayPeriod' : p.type;
+      if (type !== 'literal') out[type] = plainSpaces(p.value).trim();
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/** One formatter's own string, spaces made plain, or null when it throws. */
+function formattedWith(d: Date, options: Intl.DateTimeFormatOptions): string | null {
+  try {
+    return plainSpaces(new Intl.DateTimeFormat('en-US', options).format(d)).trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -253,55 +279,57 @@ interface ClockParts {
  *
  * `toLocaleString` joins a date and a time with its own engine's pattern. On
  * the web (V8) that is "Sep 23, 3:00 PM"; on the phone (Hermes on iOS) it is
- * "Sep 23 at 3:00 PM", and newer locale data also puts a narrow no-break
- * space before PM. The rental screens say the web and the phone use the same
- * words, and they did not (simulator walk, 2026-09-25: "Sent Sep 23 at
- * 3:00 PM." on the phone beside "Sent Sep 23, 3:00 PM." on the web). So the
- * words are assembled here from Intl's parts (month, day, year, hour, minute
- * and AM or PM, which every engine agrees on) with this file's own
- * separators, never the engine's.
+ * "Sep 23 at 3:00 PM", with a narrow no-break space (U+202F) before PM. The
+ * rental screens say the web and the phone use the same words, and they did
+ * not (simulator walk, 2026-09-25: "Sent Sep 23 at 3:00 PM." on the phone
+ * beside "Sent Sep 23, 3:00 PM." on the web). So the words are assembled here
+ * with this file's own separators, never the engine's.
  *
- * Null when this runtime cannot give the parts; the caller then falls back to
- * the engine's own string rather than printing nothing. A phone set to 24-hour
- * time has no AM or PM part, and gets "15:00".
+ * THE DATE AND THE TIME COME FROM TWO FORMATTERS, never one. The first fix
+ * read month, day, hour and minute from ONE date-and-time formatter's
+ * formatToParts, and the phone kept the engine's words anyway (re-walk
+ * 2026-09-26). Hermes' formatToParts (iOS, hermes-engine 250829098.0.16) types
+ * a combined pattern ("MMM d 'at' h:mm a") only up to the quoted "at": month,
+ * day and year come back typed, and "3", ":", "00" and "PM" all come back as
+ * type "literal". With no hour or minute the parts were refused and every
+ * label fell back to the engine's string. The same engine types a date-only
+ * pattern and a time-only pattern correctly, so the date is read from one and
+ * the time from the other, in the same zone.
+ *
+ * A runtime that cannot give the parts at all still gets these words, from
+ * each formatter's own string (a date alone and a time alone are spelled the
+ * same on both engines). U+202F and U+00A0 are always written as a plain
+ * space. A phone set to 24-hour time has no AM or PM part, and gets "15:00".
+ *
+ * dayText: "Sep 23", or with `withYear` "Sep 23, 2026". Null only when Intl
+ * cannot format at all.
  */
-function clockParts(
-  d: Date,
-  timeZone: string | null | undefined,
-  withYear: boolean,
-): ClockParts | null {
-  try {
-    const parts = new Intl.DateTimeFormat('en-US', {
-      ...DAY_TIME_OPTIONS,
-      ...(withYear ? { year: 'numeric' } : {}),
-      // resolveOrgTimezone: a zone this runtime cannot format degrades to the
-      // documented default instead of throwing out of a render.
-      ...(timeZone ? { timeZone: resolveOrgTimezone(timeZone) } : {}),
-    }).formatToParts(d);
-    const out: ClockParts = { month: '', day: '', year: '', hour: '', minute: '', dayPeriod: '' };
-    for (const p of parts) {
-      // Older Intl implementations name the AM/PM part "dayperiod".
-      const type = (p.type as string) === 'dayperiod' ? 'dayPeriod' : p.type;
-      if (type in out) out[type as keyof ClockParts] = p.value;
-    }
-    if (!out.month || !out.day || !out.hour || !out.minute || (withYear && !out.year)) return null;
-    return out;
-  } catch {
-    return null;
+function dayText(d: Date, timeZone: string | null | undefined, withYear: boolean): string | null {
+  const options: Intl.DateTimeFormatOptions = {
+    ...DAY_OPTIONS,
+    ...(withYear ? { year: 'numeric' } : {}),
+    ...zoneOption(timeZone),
+  };
+  const p = typedParts(d, options);
+  if (p?.month && p.day && (!withYear || p.year)) {
+    return withYear ? `${p.month} ${p.day}, ${p.year}` : `${p.month} ${p.day}`;
   }
+  return formattedWith(d, options);
 }
 
-function dayOf(p: ClockParts, withYear: boolean): string {
-  return withYear ? `${p.month} ${p.day}, ${p.year}` : `${p.month} ${p.day}`;
-}
-
-function timeOf(p: ClockParts): string {
-  return p.dayPeriod ? `${p.hour}:${p.minute} ${p.dayPeriod}` : `${p.hour}:${p.minute}`;
+/** "3:00 PM" (or "15:00"). Null only when Intl cannot format at all. */
+function clockText(d: Date, timeZone: string | null | undefined): string | null {
+  const options: Intl.DateTimeFormatOptions = { ...TIME_OPTIONS, ...zoneOption(timeZone) };
+  const p = typedParts(d, options);
+  if (p?.hour && p.minute) {
+    return p.dayPeriod ? `${p.hour}:${p.minute} ${p.dayPeriod}` : `${p.hour}:${p.minute}`;
+  }
+  return formattedWith(d, options);
 }
 
 /**
  * "Sep 23, 3:00 PM", or with `withYear` "Oct 2, 2026, 9:51 PM": the same
- * words on the web and the phone (see clockParts). In the organization's zone
+ * words on the web and the phone (see dayText). In the organization's zone
  * when the caller has it (the web pages; the phone once it has read it), else
  * in the device's zone. An em dash for a missing or unreadable value.
  */
@@ -314,19 +342,23 @@ export function formatRentalDateTime(
   const d = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(d.getTime())) return '—';
   const withYear = opts.withYear === true;
-  const p = clockParts(d, timeZone, withYear);
-  if (p) return `${dayOf(p, withYear)}, ${timeOf(p)}`;
+  const day = dayText(d, timeZone, withYear);
+  const time = clockText(d, timeZone);
+  if (day && time) return `${day}, ${time}`;
+  // No Intl at all: the engine's own string, rather than nothing.
   const engineOpts: Intl.DateTimeFormatOptions = withYear
     ? { ...DAY_TIME_OPTIONS, year: 'numeric' }
     : DAY_TIME_OPTIONS;
-  return timeZone ? formatOrgDateTime(d, engineOpts, timeZone) : d.toLocaleString('en-US', engineOpts);
+  return plainSpaces(
+    timeZone ? formatOrgDateTime(d, engineOpts, timeZone) : d.toLocaleString('en-US', engineOpts),
+  );
 }
 
 /**
  * A date ("Sep 23"), a date and time ("Sep 23, 3:00 PM") or a time
- * ("8:00 AM"), assembled from the parts (see clockParts). Formats in the
- * organization's zone when the caller has it, else in the device's zone (the
- * same fallback the Exceptions screens use).
+ * ("8:00 AM"), written the same way on every engine (see dayText).
+ * Formats in the organization's zone when the caller has it, else in the
+ * device's zone (the same fallback the Exceptions screens use).
  */
 function fmt(
   input: Date | string,
@@ -335,19 +367,23 @@ function fmt(
 ): string {
   const d = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(d.getTime())) return '—';
-  const p = clockParts(d, timeZone, false);
-  if (p) {
-    if (kind === 'date') return dayOf(p, false);
-    if (kind === 'time') return timeOf(p);
-    return `${dayOf(p, false)}, ${timeOf(p)}`;
+  const day = kind === 'time' ? '' : dayText(d, timeZone, false);
+  const time = kind === 'date' ? '' : clockText(d, timeZone);
+  if (day !== null && time !== null) {
+    if (kind === 'date') return day;
+    if (kind === 'time') return time;
+    return `${day}, ${time}`;
   }
+  // No Intl at all: the engine's own string, rather than nothing.
   const opts = kind === 'date' ? DAY_OPTIONS : kind === 'time' ? TIME_OPTIONS : DAY_TIME_OPTIONS;
   if (timeZone) {
-    return kind === 'date' ? formatOrgDate(d, opts, timeZone) : formatOrgDateTime(d, opts, timeZone);
+    return plainSpaces(
+      kind === 'date' ? formatOrgDate(d, opts, timeZone) : formatOrgDateTime(d, opts, timeZone),
+    );
   }
-  return kind === 'date'
-    ? d.toLocaleDateString('en-US', opts)
-    : d.toLocaleString('en-US', opts);
+  return plainSpaces(
+    kind === 'date' ? d.toLocaleDateString('en-US', opts) : d.toLocaleString('en-US', opts),
+  );
 }
 
 /** "Sep 27, around 8:00 AM": when a run starts. */

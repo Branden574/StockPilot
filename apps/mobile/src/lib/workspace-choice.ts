@@ -4,13 +4,18 @@
  *
  * THE DEFECT THIS CLOSES (found 2026-09-23 on the simulator). Every /api/v1
  * call names its workspace with X-Organization-Id, read from AsyncStorage
- * (`workspace.activeOrgId`, api.ts orgHeader). Sign-out deletes that key, and
- * hydrate() then picked `orgs[0]` for the SCREEN without saving it. With no
- * header the server answers for the user's default organization instead, so a
- * member of two organizations saw one workspace in every direct read (Home,
- * Items) while the snapshot pull, starting a count, posting a count and the
- * cycle-count history all ran against the other. The history screen, which
- * refuses an answer for a workspace other than the one shown, just spun.
+ * (`workspace.activeOrgId`, api.ts orgHeader). With that key absent (a fresh
+ * install, an eviction, and since 2026-09-26 an ordinary sign-out, which
+ * removes it once the session has ended: sign-out-flow.ts), hydrate() picked
+ * `orgs[0]` for the SCREEN without saving it. With no header the server
+ * answers for the user's default organization instead, so a member of two
+ * organizations saw one workspace in every direct read (Home, Items) while the
+ * snapshot pull, starting a count, posting a count and the cycle-count history
+ * all ran against the other. The history screen, which refuses an answer for a
+ * workspace other than the one shown, just spun.
+ *
+ * (The biometric fallback sign-out, signOutToFallback, keeps the key: it is
+ * the same person signing in again with a password.)
  *
  * THE RULE, in the server's own order (api-context.ts pickActiveMembership):
  *   1. the stored workspace, while the user is still a member of it;

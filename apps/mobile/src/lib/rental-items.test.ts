@@ -373,12 +373,16 @@ describe('Rentals screen wiring', () => {
 
   it('a failed checkouts read says so instead of "No rentals yet.", on every load', () => {
     // The rentals read's own error is bound (it now shares a Promise.all with
-    // the reminder context, which never fails the list).
+    // the reminder context, which never fails the list), with its status for
+    // the reason. Every load settles through settleRentalCheckouts: a failure
+    // with nothing shown is `failed` (rental-view.test.ts pins the rule; a
+    // failed RELOAD keeps the rows shown, with a banner).
     expect(screen).toContain(
-      'const [{ data, error }, context] = await Promise.all([\n      supabase\n        .from(\'rentals\')',
+      'const [{ data, error, status }, context] = await Promise.all([\n      supabase\n        .from(\'rentals\')',
     );
-    expect(screen).toContain('setCheckoutsFailed(Boolean(error));');
-    expect(screen).toContain("emptyTitle={checkoutsFailed ? 'Could not load rentals.' : 'No rentals yet.'}");
-    expect(screen).toMatch(/checkoutsFailed\s*\? 'RENTALS · CHECKOUTS'/);
+    expect(screen).toMatch(/if \(error\) \{[\s\S]*?settleRentalCheckouts\(prev, orgId, \{ ok: false, reason, context, readAt \}\)/);
+    expect(screen).toContain('const checkoutsFailed = shown?.failed ?? false;');
+    expect(screen).toMatch(/checkoutsFailed \? 'Could not load rentals\.' : 'No rentals yet\.'/);
+    expect(screen).toMatch(/checkoutsFailed \|\| !shown\s*\? 'RENTALS · CHECKOUTS'/);
   });
 });

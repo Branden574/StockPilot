@@ -68,6 +68,26 @@ describe('app/rentals/[id].tsx', () => {
     expect(src).toContain('`Could not load this rental. ${load.message}`');
   });
 
+  // Review 2026-09-26: offline at launch (or a failed first read after
+  // signing in) there is no workspace, loadRental returns early, and the
+  // screen showed a spinner with nothing to tap. Mutation caught: the old
+  // screen, which went straight to the spinner.
+  it('with no workspace, says so with a Try again that loads the workspace again', () => {
+    const src = code(DETAIL);
+    expect(src).toContain('const { orgId, loading: workspaceLoading } = useOrg();');
+    expect(src).toContain("import { retryWorkspace } from '@/lib/use-workspace';");
+    expect(src).toMatch(
+      /async function reloadWorkspace\(\) \{\s*setRetryingWorkspace\(true\);\s*try \{\s*await retryWorkspace\(\);\s*\} finally \{\s*setRetryingWorkspace\(false\);\s*\}\s*\}/,
+    );
+    const gate = src.indexOf('if (!orgId && !workspaceLoading) {');
+    expect(gate).toBeGreaterThan(-1);
+    // Decided before the spinner that waits for a load.
+    expect(gate).toBeLessThan(src.indexOf('if (load === null) {'));
+    const branch = src.slice(gate, src.indexOf('if (load === null) {'));
+    expect(branch).toContain('onRetry={() => void reloadWorkspace()} retrying={retryingWorkspace}');
+    expect(branch).toContain('{RENTAL_WORKSPACE_UNAVAILABLE}');
+  });
+
   it('is gated on the Rentals module like the other detail screens', () => {
     expect(code(DETAIL)).toMatch(/const enabled = enabledModules\.has\('rentals'\);/);
   });
@@ -110,6 +130,50 @@ describe('src/screens/rentals.tsx: the list', () => {
       /useFocusEffect\(\s*React\.useCallback\(\(\) => \{\s*void load\(\);\s*\}, \[load\]\),\s*\);/,
     );
     expect(src).not.toMatch(/React\.useEffect\(\(\) => \{\s*void load\(\);\s*\}, \[load\]\);/);
+  });
+
+  // Review 2026-09-26: load() set its rows with no check of which read they
+  // came from. After a switch of organization, the old organization's slower
+  // read could land last and show its checkouts under the new one; and every
+  // focus adds another read. Mutation caught: the old load(), with neither a
+  // sequence check nor rows tagged with their organization.
+  it('only the latest read lands, and rows show only for the organization they were read for', () => {
+    const src = code(LIST);
+    expect(src).toContain('const loadSeqRef = React.useRef(0);');
+    expect(src).toMatch(/if \(!orgId\) return;\s*const seq = \+\+loadSeqRef\.current;/);
+    const load = src.slice(src.indexOf('const load = React.useCallback('), src.indexOf('const loadItems = React.useCallback('));
+    const landed = load.indexOf('if (seq !== loadSeqRef.current) return;');
+    expect(landed).toBeGreaterThan(load.indexOf('await Promise.all('));
+    // Every state write in the load comes after that check.
+    expect(landed).toBeLessThan(load.indexOf('setCheckouts('));
+    expect(load).not.toMatch(/setRows\(|setReminderContext\(|setCheckoutsFailed\(/);
+    expect(src).toContain('const shown = checkouts && checkouts.orgId === orgId ? checkouts : null;');
+    expect(src).toContain('const rows = shown?.rows ?? [];');
+    expect(src).toContain('loading={shown === null && !noWorkspace}');
+  });
+
+  // Review 2026-09-26: offline, going back from a rental replaced the list
+  // being read with "Could not load rentals." and no rows. Mutation caught:
+  // setRows(data ?? []) on an error.
+  it('a failed reload keeps the rows already shown, with a banner that says so', () => {
+    const src = code(LIST);
+    expect(src).toMatch(
+      /setCheckouts\(\(prev\) => settleRentalCheckouts\(prev, orgId, \{ ok: false, reason, context, readAt \}\)\);/,
+    );
+    expect(src).toMatch(
+      /setCheckouts\(\(prev\) => settleRentalCheckouts\(prev, orgId, \{ ok: true, rows, context, readAt \}\)\);/,
+    );
+    expect(src).toContain('const reason = rentalReadErrorMessage(error, status);');
+    expect(src).toContain('{rentalListStaleCopy(shown.staleReason)}');
+    expect(src).toMatch(/shown\?\.staleReason \? \(/);
+  });
+
+  it('with no workspace, both views say so and a pull loads the workspace again', () => {
+    const src = code(LIST);
+    expect(src).toContain('const noWorkspace = !orgId && !workspaceLoading;');
+    expect(src).toMatch(/await \(noWorkspace \? retryWorkspace\(\) : view === 'items' \? loadItems\(\) : load\(\)\);/);
+    expect(src).toContain('loading={current === null && !noWorkspace}');
+    expect(src.match(/noWorkspace\s*\?\s*RENTAL_LIST_NO_WORKSPACE_TITLE/g)).toHaveLength(2);
   });
 
   it('a card opens the rental on the phone, not the web', () => {

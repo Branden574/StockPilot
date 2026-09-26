@@ -1,3 +1,4 @@
+import { useNetworkState } from 'expo-network';
 import { Check, ChevronDown } from 'lucide-react-native';
 import * as React from 'react';
 import {
@@ -9,6 +10,7 @@ import {
 } from 'react-native';
 
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { isOfflineState } from '@/lib/exceptions-api';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import {
@@ -65,6 +67,11 @@ export function WorkspaceHeaderChip({ onPress }: { onPress: () => void }) {
   );
 }
 
+/** Under ORGANIZATIONS while offline, when the rows cannot be tapped. */
+export const WORKSPACE_SWITCH_OFFLINE_COPY =
+  "Switching organization needs a connection. It replaces this phone's offline copy of your items, " +
+  'purchase orders and counts, and the new one cannot load until you are back online.';
+
 export function WorkspaceSwitcherSheet({
   visible,
   onDismiss,
@@ -74,6 +81,13 @@ export function WorkspaceSwitcherSheet({
 }) {
   const { c } = useTheme();
   const { orgs, activeOrgId, warehouses, activeWarehouseId } = useWorkspace();
+  // A switch of organization clears this phone's offline copy of the old one
+  // (items, purchase orders, counts) and pulls the new one in full. Offline
+  // the pull cannot start, so a tap, even by mistake, left no offline copy of
+  // either until the phone was back online (review 2026-09-26). Organizations
+  // are not switchable while offline; warehouses are (nothing is cleared).
+  // The live network state, the rule sync.ts isOnline() applies.
+  const offline = isOfflineState(useNetworkState());
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onDismiss}>
       <Pressable style={styles.backdrop} onPress={onDismiss} />
@@ -90,19 +104,29 @@ export function WorkspaceSwitcherSheet({
 
           <View style={{ marginTop: 18 }}>
             <Eyebrow>ORGANIZATIONS</Eyebrow>
+            {offline && orgs.length > 1 ? (
+              <Body size={12.5} muted style={{ marginTop: 8 }}>
+                {WORKSPACE_SWITCH_OFFLINE_COPY}
+              </Body>
+            ) : null}
             <View style={{ marginTop: 8, gap: 8 }}>
               {orgs.map((o) => {
                 const selected = activeOrgId === o.id;
                 return (
                   <Pressable
                     key={o.id}
-                    onPress={() => void setActiveOrg(o.id)}
+                    onPress={() => {
+                      if (!offline) void setActiveOrg(o.id);
+                    }}
+                    disabled={offline}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected, disabled: offline }}
                     style={({ pressed }) => [
                       styles.row,
                       {
                         borderColor: selected ? c.ink : c.hair,
                         backgroundColor: selected ? c.card : 'transparent',
-                        opacity: pressed ? 0.8 : 1,
+                        opacity: offline && !selected ? 0.5 : pressed ? 0.8 : 1,
                       },
                     ]}
                   >

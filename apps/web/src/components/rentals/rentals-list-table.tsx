@@ -20,7 +20,12 @@ import { cn, formatRelative } from '@/lib/utils';
 import { cancelRentalAction, markRentalReturnedAction } from '@/server/actions/rentals';
 import type { RentalLineRow, RentalRow } from '@/server/services/rentals';
 
-import { hasPermission, isRentalOverdue, RENTAL_BORROWER_TEAM_MEMBER } from '@stockpilot/core';
+import {
+  hasPermission,
+  isRentalOverdue,
+  RENTAL_BORROWER_TEAM_MEMBER,
+  startOfOrgDay,
+} from '@stockpilot/core';
 
 type RentalWithLines = RentalRow & { lines: RentalLineRow[] };
 
@@ -33,6 +38,12 @@ interface RentalsListTableProps {
    * "No email on file"), decided on the server (rentals/page.tsx).
    */
   reminderMarks?: Record<string, string>;
+  /**
+   * The organization's zone (resolveOrgTimezone), resolved on the server
+   * (rentals/page.tsx). "Due today" is a calendar day in it: the day the
+   * detail page prints the expected return in.
+   */
+  timeZone: string;
 }
 
 type StatusDisplay = 'out' | 'returned' | 'cancelled' | 'overdue';
@@ -91,26 +102,52 @@ function plural(n: number, unit: string): string {
  * the pill decides it (the expected return has passed), so an Overdue row
  * never reads "Due today": it rounded the days to 0, and a rental 5 hours
  * late read "Due today" next to its Overdue pill and its reminder mark (web
- * walk 2026-09-25). Under a day late it says the hours.
+ * walk 2026-09-25). Under a day late it says the hours; past that, the whole
+ * days (floored like the hours: 36 hours late is 1 day, not 2).
+ *
+ * Not yet due, it counts CALENDAR days in the organization's zone, the zone
+ * the detail page prints the expected return in. It used to round the hours
+ * to days, so "Due today" meant "within about 12 hours": at 9 PM a rental due
+ * at 8 AM tomorrow read "Due today" while its detail page said tomorrow, and
+ * at 8 AM one due at 11 PM that day read "Due in 1 day".
  */
-function dueLabel(expectedReturnAt: string, nowMs: number): { text: string; tone: 'late' | 'today' | 'later' } {
-  const diffMs = Date.parse(expectedReturnAt) - nowMs;
+function dueLabel(
+  expectedReturnAt: string,
+  nowMs: number,
+  timeZone: string,
+): { text: string; tone: 'late' | 'today' | 'later' } {
+  const dueMs = Date.parse(expectedReturnAt);
+  if (!Number.isFinite(dueMs)) return { text: '—', tone: 'later' };
+  const diffMs = dueMs - nowMs;
   if (diffMs < 0) {
     const lateMs = -diffMs;
-    if (lateMs >= DAY_MS) return { text: `Overdue by ${plural(Math.round(lateMs / DAY_MS), 'day')}`, tone: 'late' };
+    if (lateMs >= DAY_MS) return { text: `Overdue by ${plural(Math.floor(lateMs / DAY_MS), 'day')}`, tone: 'late' };
     const hours = Math.floor(lateMs / HOUR_MS);
     return {
       text: hours < 1 ? 'Overdue by less than an hour' : `Overdue by ${plural(hours, 'hour')}`,
       tone: 'late',
     };
   }
-  const days = Math.round(diffMs / DAY_MS);
-  if (days === 0) return { text: 'Due today', tone: 'today' };
+  // Midnight to midnight in the zone. Rounded, because a day that a clock
+  // change shortens or lengthens is 23 or 25 hours long.
+  const days = Math.round(
+    (startOfOrgDay(new Date(dueMs), timeZone).getTime() - startOfOrgDay(new Date(nowMs), timeZone).getTime()) /
+      DAY_MS,
+  );
+  if (days <= 0) return { text: 'Due today', tone: 'today' };
   return { text: `Due in ${plural(days, 'day')}`, tone: 'later' };
 }
 
-function DueLabel({ expectedReturnAt, nowMs }: { expectedReturnAt: string; nowMs: number }) {
-  const { text, tone } = dueLabel(expectedReturnAt, nowMs);
+function DueLabel({
+  expectedReturnAt,
+  nowMs,
+  timeZone,
+}: {
+  expectedReturnAt: string;
+  nowMs: number;
+  timeZone: string;
+}) {
+  const { text, tone } = dueLabel(expectedReturnAt, nowMs, timeZone);
   return (
     <span
       className={cn(
@@ -247,6 +284,7 @@ export function RentalsListTable({
   viewerRole,
   itemNames,
   reminderMarks,
+  timeZone,
 }: RentalsListTableProps) {
   const [returnTarget, setReturnTarget] = React.useState<RentalWithLines | null>(null);
   const [cancelTarget, setCancelTarget] = React.useState<RentalWithLines | null>(null);
@@ -339,7 +377,7 @@ export function RentalsListTable({
                   <td className="px-4 py-3">
                     {rental.status === 'out' ? (
                       <>
-                        <DueLabel expectedReturnAt={rental.expected_return_at} nowMs={nowMs} />
+                        <DueLabel expectedReturnAt={rental.expected_return_at} nowMs={nowMs} timeZone={timeZone} />
                         {reminderMarks?.[rental.id] ? (
                           <span
                             data-testid="reminder-mark"
