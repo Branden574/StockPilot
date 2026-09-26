@@ -28,6 +28,33 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'order-page-warehouse-switch-2026-09-26',
+    revision: 1,
+    status: 'published',
+    title: 'Orders go through after you change warehouse on the New order page',
+    summary:
+      'On the New order page, changing the warehouse and then submitting was refused with "Every line must be at the chosen warehouse", because the cart stayed with the warehouse the page first opened with. Each warehouse now has its own cart, and Submit places the order at the warehouse shown.',
+    publishedAt: '2026-09-26T23:00:00Z',
+    entries: [
+      {
+        id: 'order-page-warehouse-switch',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Changing warehouse on the New order page no longer blocks Submit',
+        whatChanged:
+          'Changing the warehouse on the New order page now changes the cart with it. Items you add are saved with the warehouse shown, and Submit places the order at that warehouse.',
+        whyItMatters:
+          'The cart kept the warehouse the page first opened with. After a change, Submit was refused with "Every line must be at the chosen warehouse", and the items were saved under the first warehouse, so they could appear in that warehouse\'s cart later.',
+        howItAffectsYou:
+          'Each warehouse keeps its own cart. When you change warehouse, the cart shows what you left in that warehouse, or is empty, and changing back shows the other cart as you left it.',
+        whatToDo:
+          'If an order was refused after you changed warehouse, open New order, choose the warehouse and submit it again. If a cart shows a line with a long code instead of an item name, remove that line before you submit.',
+        link: { href: '/dashboard/orders/new', label: 'Open New order' },
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
     id: 'rentals-borrowers-and-emails-2026-09',
     revision: 1,
     status: 'published',

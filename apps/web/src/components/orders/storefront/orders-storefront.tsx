@@ -129,8 +129,18 @@ export function OrdersStorefront(props: OrdersStorefrontProps) {
     fulfillmentType: 'pickup',
   });
 
+  // ═══ ONE CART PER WAREHOUSE, KEYED ═══
+  //
+  // The warehouse control is a router.push to ?warehouseId=<new>, and Next keys
+  // the page without its search params, so this component is NOT remounted: it
+  // gets the new warehouse as a prop. The cart's reducer only reads `initial`
+  // on mount, so it kept the first warehouse. The draft saved under the old
+  // warehouse's key, Submit sent the old warehouse, and the server refused
+  // every line with "Every line must be at the chosen warehouse" (local walk,
+  // 2026-09-26). Keying the provider by warehouse mounts a fresh cart that
+  // restores that warehouse's own draft, as the New rental page does.
   return (
-    <CartProvider initial={initial}>
+    <CartProvider key={props.warehouseId} initial={initial}>
       <StorefrontShell {...props} />
     </CartProvider>
   );
@@ -840,8 +850,9 @@ function StorefrontCatalog({
 
       // Clear the persisted draft right away so a reload doesn't
       // resurrect the just-submitted cart. In-memory lines stay until
-      // "Done" so the success screen can still show them.
-      clearCartDraft(warehouseId);
+      // "Done" so the success screen can still show them. The key is the
+      // cart's own warehouse, the one its save effect writes under.
+      clearCartDraft(state.warehouseId);
       setSubmitted({
         id: res.data.id,
         orderNumber: res.data.orderNumber,
@@ -861,7 +872,7 @@ function StorefrontCatalog({
     // clearCartDraft still runs, and now it holds: the debounced writer
     // recognises a pristine cart and removes the key rather than re-persisting
     // the state this dispatch just cleaned.
-    clearCartDraft(warehouseId);
+    clearCartDraft(state.warehouseId);
     dispatch({ type: 'reset' });
     setReviewStage(null);
     setSubmitted(null);

@@ -186,6 +186,10 @@ const CartContext = React.createContext<CartContextValue | null>(null);
  * debounce-saves on every change. localStorage key is scoped per
  * warehouseId so swapping warehouses doesn't trample the other
  * warehouse's draft, and per page by `draftPrefix` (see above).
+ *
+ * `initial` is read once, on mount. A page that changes warehouse without
+ * remounting (a router.push that only changes ?warehouseId) must key this
+ * provider by the warehouse, or the cart keeps the first one.
  */
 export function CartProvider({
   initial,
