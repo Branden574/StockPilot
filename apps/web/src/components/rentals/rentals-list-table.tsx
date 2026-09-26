@@ -20,7 +20,12 @@ import { cn, formatRelative } from '@/lib/utils';
 import { cancelRentalAction, markRentalReturnedAction } from '@/server/actions/rentals';
 import type { RentalLineRow, RentalRow } from '@/server/services/rentals';
 
-import { hasPermission } from '@stockpilot/core';
+import {
+  hasPermission,
+  isRentalOverdue,
+  RENTAL_BORROWER_TEAM_MEMBER,
+  startOfOrgDay,
+} from '@stockpilot/core';
 
 type RentalWithLines = RentalRow & { lines: RentalLineRow[] };
 
@@ -28,16 +33,39 @@ interface RentalsListTableProps {
   rentals: RentalWithLines[];
   viewerRole: string;
   itemNames?: Map<string, string>;
+  /**
+   * The overdue reminder's mark per OVERDUE rental id ("Reminder sent Sep 26",
+   * "No email on file"), decided on the server (rentals/page.tsx).
+   */
+  reminderMarks?: Record<string, string>;
+  /**
+   * The organization's zone (resolveOrgTimezone), resolved on the server
+   * (rentals/page.tsx). "Due today" is a calendar day in it: the day the
+   * detail page prints the expected return in.
+   */
+  timeZone: string;
 }
 
 type StatusDisplay = 'out' | 'returned' | 'cancelled' | 'overdue';
 
-function deriveStatus(rental: RentalRow): StatusDisplay {
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+/** The pill: core's overdue rule, the one the detail page's pill uses. */
+function deriveStatus(rental: RentalRow, nowMs: number): StatusDisplay {
   if (rental.status === 'returned') return 'returned';
   if (rental.status === 'cancelled') return 'cancelled';
-  if (new Date(rental.expected_return_at) < new Date()) return 'overdue';
+  if (isRentalOverdue(rental, nowMs)) return 'overdue';
   return 'out';
 }
+
+// The pill, the due label and the "Checked out" and "Returned" times are
+// worked out from the clock while rendering, on the server and again in the
+// browser, and a minute (or the due moment) can pass between the two. React
+// then reported a hydration mismatch ("4 minutes ago" against "3 minutes
+// ago", web walk 2026-09-25). Each of those elements carries
+// suppressHydrationWarning, as the other client tables with relative times do
+// (inventory-table.tsx, team-manager.tsx): the drift is expected.
 
 function StatusPill({ status }: { status: StatusDisplay }) {
   const styles: Record<StatusDisplay, string> = {
@@ -58,31 +86,79 @@ function StatusPill({ status }: { status: StatusDisplay }) {
         'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold leading-none',
         styles[status],
       )}
+      suppressHydrationWarning
     >
       {labels[status]}
     </span>
   );
 }
 
-function DueLabel({ expectedReturnAt }: { expectedReturnAt: string }) {
-  const expected = new Date(expectedReturnAt);
-  const now = new Date();
-  const diffMs = expected.getTime() - now.getTime();
-  const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+function plural(n: number, unit: string): string {
+  return `${n} ${unit}${n === 1 ? '' : 's'}`;
+}
 
-  if (diffDays === 0) {
-    return <span className="text-amber-600 dark:text-amber-400 text-xs font-medium">Due today</span>;
+/**
+ * When an out rental is due, beside its pill. Past due is decided exactly as
+ * the pill decides it (the expected return has passed), so an Overdue row
+ * never reads "Due today": it rounded the days to 0, and a rental 5 hours
+ * late read "Due today" next to its Overdue pill and its reminder mark (web
+ * walk 2026-09-25). Under a day late it says the hours; past that, the whole
+ * days (floored like the hours: 36 hours late is 1 day, not 2).
+ *
+ * Not yet due, it counts CALENDAR days in the organization's zone, the zone
+ * the detail page prints the expected return in. It used to round the hours
+ * to days, so "Due today" meant "within about 12 hours": at 9 PM a rental due
+ * at 8 AM tomorrow read "Due today" while its detail page said tomorrow, and
+ * at 8 AM one due at 11 PM that day read "Due in 1 day".
+ */
+function dueLabel(
+  expectedReturnAt: string,
+  nowMs: number,
+  timeZone: string,
+): { text: string; tone: 'late' | 'today' | 'later' } {
+  const dueMs = Date.parse(expectedReturnAt);
+  if (!Number.isFinite(dueMs)) return { text: '—', tone: 'later' };
+  const diffMs = dueMs - nowMs;
+  if (diffMs < 0) {
+    const lateMs = -diffMs;
+    if (lateMs >= DAY_MS) return { text: `Overdue by ${plural(Math.floor(lateMs / DAY_MS), 'day')}`, tone: 'late' };
+    const hours = Math.floor(lateMs / HOUR_MS);
+    return {
+      text: hours < 1 ? 'Overdue by less than an hour' : `Overdue by ${plural(hours, 'hour')}`,
+      tone: 'late',
+    };
   }
-  if (diffDays < 0) {
-    return (
-      <span className="text-red-600 dark:text-red-400 text-xs font-medium">
-        Overdue by {Math.abs(diffDays)} day{Math.abs(diffDays) !== 1 ? 's' : ''}
-      </span>
-    );
-  }
+  // Midnight to midnight in the zone. Rounded, because a day that a clock
+  // change shortens or lengthens is 23 or 25 hours long.
+  const days = Math.round(
+    (startOfOrgDay(new Date(dueMs), timeZone).getTime() - startOfOrgDay(new Date(nowMs), timeZone).getTime()) /
+      DAY_MS,
+  );
+  if (days <= 0) return { text: 'Due today', tone: 'today' };
+  return { text: `Due in ${plural(days, 'day')}`, tone: 'later' };
+}
+
+function DueLabel({
+  expectedReturnAt,
+  nowMs,
+  timeZone,
+}: {
+  expectedReturnAt: string;
+  nowMs: number;
+  timeZone: string;
+}) {
+  const { text, tone } = dueLabel(expectedReturnAt, nowMs, timeZone);
   return (
-    <span className="text-muted-foreground text-xs">
-      Due in {diffDays} day{diffDays !== 1 ? 's' : ''}
+    <span
+      className={cn(
+        'text-xs',
+        tone === 'late' && 'text-red-600 dark:text-red-400 font-medium',
+        tone === 'today' && 'text-amber-600 dark:text-amber-400 font-medium',
+        tone === 'later' && 'text-muted-foreground',
+      )}
+      suppressHydrationWarning
+    >
+      {text}
     </span>
   );
 }
@@ -207,12 +283,16 @@ export function RentalsListTable({
   rentals,
   viewerRole,
   itemNames,
+  reminderMarks,
+  timeZone,
 }: RentalsListTableProps) {
   const [returnTarget, setReturnTarget] = React.useState<RentalWithLines | null>(null);
   const [cancelTarget, setCancelTarget] = React.useState<RentalWithLines | null>(null);
 
   const canCreate = hasPermission(viewerRole as never, 'rentals:create');
   const canManage = hasPermission(viewerRole as never, 'rentals:manage');
+  // One moment for every row, so a row's pill and its due label agree.
+  const nowMs = Date.now();
 
   if (rentals.length === 0) {
     return (
@@ -256,7 +336,7 @@ export function RentalsListTable({
           </thead>
           <tbody className="divide-y">
             {rentals.map((rental) => {
-              const status = deriveStatus(rental);
+              const status = deriveStatus(rental, nowMs);
               const firstLine = rental.lines[0];
               const firstName = firstLine
                 ? (itemNames?.get(firstLine.item_id) ?? `Item ×${firstLine.quantity}`)
@@ -271,8 +351,13 @@ export function RentalsListTable({
                   {/* Borrower */}
                   <td className="px-4 py-3">
                     <p className="font-medium leading-tight">{rental.borrower_name}</p>
+                    {/* The detail page's words (core). Only a team member is
+                        tagged: most rows are borrowers not linked to an
+                        account, and the detail says so for them. */}
                     {rental.borrower_user_id && (
-                      <span className="text-[10px] text-muted-foreground">(member)</span>
+                      <span data-testid="borrower-kind" className="block text-[11px] text-muted-foreground">
+                        {RENTAL_BORROWER_TEAM_MEMBER}
+                      </span>
                     )}
                   </td>
 
@@ -284,16 +369,26 @@ export function RentalsListTable({
                   </td>
 
                   {/* Checkout date */}
-                  <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">
+                  <td className="px-4 py-3 hidden md:table-cell text-muted-foreground" suppressHydrationWarning>
                     {formatRelative(rental.checked_out_at)}
                   </td>
 
                   {/* Expected return */}
                   <td className="px-4 py-3">
                     {rental.status === 'out' ? (
-                      <DueLabel expectedReturnAt={rental.expected_return_at} />
+                      <>
+                        <DueLabel expectedReturnAt={rental.expected_return_at} nowMs={nowMs} timeZone={timeZone} />
+                        {reminderMarks?.[rental.id] ? (
+                          <span
+                            data-testid="reminder-mark"
+                            className="block text-[11px] text-muted-foreground"
+                          >
+                            {reminderMarks[rental.id]}
+                          </span>
+                        ) : null}
+                      </>
                     ) : rental.returned_at ? (
-                      <span className="text-muted-foreground text-xs">
+                      <span className="text-muted-foreground text-xs" suppressHydrationWarning>
                         {formatRelative(rental.returned_at)}
                       </span>
                     ) : (

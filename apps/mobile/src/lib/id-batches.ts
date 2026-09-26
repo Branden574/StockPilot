@@ -295,13 +295,18 @@ export type IdBatchOutcome<T> = { ok: true; value: T } | { ok: false; message: s
 /**
  * Settle a throwing batched read into an outcome a screen can branch on
  * without a try/catch. A failure is an outcome of its own, never an empty
- * value.
+ * value. `describe` words the failure for a screen that says it its own way
+ * (the rental screens word a read with no answer as a connection problem,
+ * rental-view.ts rentalReadFailureMessage); by default, the error's text.
  */
-export async function settleIdBatchRead<T>(p: Promise<T>): Promise<IdBatchOutcome<T>> {
+export async function settleIdBatchRead<T>(
+  p: Promise<T>,
+  describe: (err: unknown) => string = errorText,
+): Promise<IdBatchOutcome<T>> {
   try {
     return { ok: true, value: await p };
   } catch (err) {
-    return { ok: false, message: errorText(err) };
+    return { ok: false, message: describe(err) };
   }
 }
 

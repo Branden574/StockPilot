@@ -99,18 +99,27 @@ export function IconChip({
   shape = 'square',
   onPress,
   badge,
+  accessibilityLabel,
 }: {
   icon: LucideIcon;
   shape?: 'square' | 'circle';
   onPress?: () => void;
   /** Optional unread count. Renders a red pill top-right when > 0. */
   badge?: number;
+  /**
+   * What VoiceOver says for this icon-only button ("New rental", "Back").
+   * Without one the chip has no words to read (the icon is not text); with
+   * one it is also announced as a button.
+   */
+  accessibilityLabel?: string;
 }) {
   const { c } = useTheme();
   const showBadge = typeof badge === 'number' && badge > 0;
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole={accessibilityLabel ? 'button' : undefined}
+      accessibilityLabel={accessibilityLabel}
       style={({ pressed }) => [
         styles.chip,
         {

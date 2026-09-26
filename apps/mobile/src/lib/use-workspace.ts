@@ -70,7 +70,12 @@ function publish(next: Partial<WorkspaceState>) {
   for (const fn of listeners) fn(cached);
 }
 
-async function loadOrgs(userId: string) {
+/**
+ * The user's accepted memberships, or null when the read FAILED (offline, a
+ * dropped connection, a 5xx). A failed read is not "a member of nothing":
+ * hydrate() keeps the workspace already on screen instead (see there).
+ */
+async function loadOrgs(userId: string): Promise<OrgOption[] | null> {
   const { data, error } = await supabase
     .from('organization_members')
     .select('role, organization_id, organizations:organization_id (name)')
@@ -78,7 +83,7 @@ async function loadOrgs(userId: string) {
     .not('accepted_at', 'is', null);
   if (error) {
     console.warn('[workspace] loadOrgs failed:', error.message);
-    return [] as OrgOption[];
+    return null;
   }
   const rows = (data ?? []) as Array<Record<string, unknown>>;
   return rows
@@ -94,7 +99,12 @@ async function loadOrgs(userId: string) {
     .filter((o) => !!o.id);
 }
 
-async function loadWarehouses(orgId: string) {
+/**
+ * The organization's warehouses, or null when the read FAILED. A failed read
+ * is not "no warehouses": hydrate() keeps the ones already on screen (see
+ * there), as it keeps the workspace through a failed membership read.
+ */
+async function loadWarehouses(orgId: string): Promise<WarehouseOption[] | null> {
   const { data, error } = await supabase
     .from('warehouses')
     .select('id, name, status')
@@ -102,25 +112,26 @@ async function loadWarehouses(orgId: string) {
     .order('name', { ascending: true });
   if (error) {
     console.warn('[workspace] loadWarehouses failed:', error.message);
-    return [] as WarehouseOption[];
+    return null;
   }
   return ((data ?? []) as Array<{ id: string; name: string; status?: string | null }>)
     .filter((w) => (w.status ?? 'active') !== 'archived')
     .map((w) => ({ id: w.id, name: w.name }));
 }
 
-/** How long a switch waits for the warehouse list. React Native's fetch has
- *  no timeout of its own, and a switch waits for this read inside the switch
- *  queue: a stalled request must not hold every later switch. */
+/** How long a workspace load or a switch waits for the warehouse list. React
+ *  Native's fetch has no timeout of its own: a switch waits for this read
+ *  inside the switch queue, and a load holds `loading` until it answers, so a
+ *  stalled request must not hold every later switch or a spinner. */
 const WAREHOUSE_READ_TIMEOUT_MS = 15_000;
 
-/** loadWarehouses, answered with [] (as its error path does) when it fails or
- *  takes longer than WAREHOUSE_READ_TIMEOUT_MS. */
-function loadWarehousesBounded(orgId: string): Promise<WarehouseOption[]> {
+/** loadWarehouses, answered with null (as its error path does) when it fails
+ *  or takes longer than WAREHOUSE_READ_TIMEOUT_MS. */
+function loadWarehousesBounded(orgId: string): Promise<WarehouseOption[] | null> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       console.warn('[workspace] loadWarehouses timed out');
-      resolve([]);
+      resolve(null);
     }, WAREHOUSE_READ_TIMEOUT_MS);
     loadWarehouses(orgId).then(
       (rows) => {
@@ -129,7 +140,7 @@ function loadWarehousesBounded(orgId: string): Promise<WarehouseOption[]> {
       },
       () => {
         clearTimeout(timer);
-        resolve([]);
+        resolve(null);
       },
     );
   });
@@ -153,6 +164,14 @@ async function loadProfileDefaultOrg(userId: string): Promise<string | null> {
 /** Switches that have started (see hydrate). */
 let switchesStarted = 0;
 
+/**
+ * The account epoch the workspace on screen was chosen in (by a hydrate or a
+ * switch), or null while none is shown. hydrate() keeps that workspace
+ * through a failed membership read only when it belongs to the account still
+ * signed in.
+ */
+let shownEpoch: number | null = null;
+
 // A different account (or none) ends the account epoch the moment auth says
 // so, before any screen reacts: a workspace load or switch still running for
 // the previous account then saves and shows nothing. A token refresh keeps the
@@ -164,10 +183,22 @@ supabase.auth.onAuthStateChange((_event, session) => {
   epochUserId = id;
 });
 
-async function hydrate(userId: string) {
+/** Workspace loads running now (see retryWorkspace). */
+let loadsRunning = 0;
+
+async function hydrate(userId: string): Promise<void> {
+  loadsRunning += 1;
+  try {
+    await loadWorkspace(userId);
+  } finally {
+    loadsRunning -= 1;
+  }
+}
+
+async function loadWorkspace(userId: string) {
   const epochAtStart = accountEpoch();
   const switchesAtStart = switchesStarted;
-  const [orgs, persisted, profileDefault] = await Promise.all([
+  const [memberships, persisted, profileDefault] = await Promise.all([
     loadOrgs(userId),
     AsyncStorage.getItem(ACTIVE_ORG_STORAGE_KEY),
     loadProfileDefaultOrg(userId),
@@ -179,6 +210,22 @@ async function hydrate(userId: string) {
   // The account changed while these reads were out (sign-out, another user,
   // eviction): this load belongs to an account that is gone.
   if (accountEpoch() !== epochAtStart) return;
+  // THE MEMBERSHIP READ FAILED (offline, a dropped connection). Every screen
+  // that mounts runs this load, and a failed read used to count as "a member
+  // of nothing": the workspace became null for the WHOLE APP, and every screen
+  // reading with it stopped asking. On the phone's rental screens that was a
+  // Try again that did nothing, or stayed disabled, after the connection came
+  // back, until some other screen mounted online (simulator walk 2026-09-25).
+  // So the workspace this account already has on screen stays, with its
+  // warehouses: nothing new is chosen, saved or wiped, and every read made
+  // with it is still answered by the server under the user's own access. With
+  // no workspace yet for this account (a cold start offline), there is
+  // nothing to keep and none is shown, as before.
+  if (memberships === null && cached.activeOrgId !== null && shownEpoch === epochAtStart) {
+    publish({ loading: false });
+    return;
+  }
+  const orgs = memberships ?? [];
   // A switch made while these reads were out has already saved, wiped and
   // published its workspace. Deciding from the value read above would put the
   // screen back on the old workspace while every request and the cache use the
@@ -210,10 +257,22 @@ async function hydrate(userId: string) {
   let warehouses: WarehouseOption[] = [];
   let activeWarehouseId: string | null = null;
   if (activeOrgId) {
-    warehouses = await loadWarehouses(activeOrgId);
-    const persistedWh = await AsyncStorage.getItem(WAREHOUSE_STORAGE_KEY(activeOrgId));
-    activeWarehouseId =
-      persistedWh && warehouses.some((w) => w.id === persistedWh) ? persistedWh : null;
+    // Bounded like a switch's read: a hung request must not hold `loading`.
+    const read = await loadWarehousesBounded(activeOrgId);
+    if (read === null && activeOrgId === cached.activeOrgId && shownEpoch === epochAtStart) {
+      // THE WAREHOUSE READ FAILED for the workspace already on screen. It
+      // used to count as "no warehouses": the saved warehouse was not in the
+      // empty list, so the active warehouse became null for the whole app and
+      // every list quietly widened to all warehouses. The same rule as a
+      // failed membership read above: what this account already shows stays.
+      warehouses = cached.warehouses;
+      activeWarehouseId = cached.activeWarehouseId;
+    } else {
+      warehouses = read ?? [];
+      const persistedWh = await AsyncStorage.getItem(WAREHOUSE_STORAGE_KEY(activeOrgId));
+      activeWarehouseId =
+        persistedWh && warehouses.some((w) => w.id === persistedWh) ? persistedWh : null;
+    }
   }
   if (accountEpoch() !== epochAtStart) return;
   if (switchesStarted !== switchesAtStart) {
@@ -225,6 +284,7 @@ async function hydrate(userId: string) {
   }
   const activeOrg = orgs.find((o) => o.id === activeOrgId) ?? null;
   const activeWarehouse = warehouses.find((w) => w.id === activeWarehouseId) ?? null;
+  shownEpoch = activeOrgId ? epochAtStart : null;
   publish({
     loading: false,
     orgs,
@@ -238,6 +298,46 @@ async function hydrate(userId: string) {
   if (activeOrgId && choice.resetCache) {
     void syncNow(true).then(() => refreshEnabledModules());
   }
+}
+
+/** The retry running now (see retryWorkspace). */
+let retrying: Promise<void> | null = null;
+
+/**
+ * Load the workspace again when none is shown for the account signed in.
+ *
+ * A launch offline, or a failed first membership read after signing in,
+ * leaves no workspace (hydrate keeps one only when this account already has
+ * one on screen), and hydrate otherwise runs only when a screen mounts or the
+ * session changes. A rental opened from a notification then spun with
+ * nothing to tap after the connection came back (review 2026-09-26). The
+ * rental screens' Try again calls this, and useSync calls it when the app
+ * returns to the foreground, when the connection comes back and on each sync
+ * tick.
+ *
+ * Nothing happens while a workspace is shown (a switch or a load chose it),
+ * while a load is already running, or with nobody signed in. It is an
+ * ordinary hydrate, so the account epoch and switch rules above apply to it
+ * unchanged.
+ */
+export function retryWorkspace(): Promise<void> {
+  if (retrying) return retrying;
+  const userId = epochUserId;
+  // A load already running (a screen that just mounted) answers the same way.
+  if (!userId || cached.activeOrgId !== null || loadsRunning > 0) return Promise.resolve();
+  publish({ loading: true });
+  const run = hydrate(userId)
+    .catch((err: unknown) => {
+      // A storage read that threw: the screen offers Try again again, never a
+      // spinner that waits on a load that has ended.
+      console.warn('[workspace] retrying the workspace load failed', err);
+      if (cached.activeOrgId === null) publish({ loading: false });
+    })
+    .finally(() => {
+      retrying = null;
+    });
+  retrying = run;
+  return run;
 }
 
 /** Workspace switches in the order they were asked for (see setActiveOrg). */
@@ -277,6 +377,7 @@ async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
   }
   if (epoch !== accountEpoch()) return; // signed out mid-switch: show nothing
   const orgRow = cached.orgs.find((o) => o.id === orgId) ?? null;
+  shownEpoch = epoch;
   publish({
     activeOrgId: orgId,
     activeOrgName: orgRow?.name ?? null,
@@ -285,7 +386,9 @@ async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
     activeWarehouseId: null,
     activeWarehouseName: null,
   });
-  const warehouses = await loadWarehousesBounded(orgId);
+  // A failed read leaves this new workspace with no warehouse list yet: there
+  // is nothing of its own on screen to keep.
+  const warehouses = (await loadWarehousesBounded(orgId)) ?? [];
   const persistedWh = await AsyncStorage.getItem(WAREHOUSE_STORAGE_KEY(orgId));
   const activeWarehouseId =
     persistedWh && warehouses.some((w) => w.id === persistedWh) ? persistedWh : null;
@@ -344,6 +447,7 @@ export function useWorkspace(): WorkspaceState {
 
   React.useEffect(() => {
     if (!user) {
+      shownEpoch = null;
       publish({
         loading: false,
         orgs: [],

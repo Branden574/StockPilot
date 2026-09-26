@@ -143,3 +143,26 @@ describe('exceptions deep links', () => {
     expect(rewriteWebPath('/dashboard/exceptions/not-an-id')).toBe('/');
   });
 });
+
+// Rentals (2026-09-25): the phone has a rental detail now, reached by links
+// inside the app, push taps and stockpilot:// links. (The https links in
+// rental emails open Safari: there are no universal links yet, see
+// web-path-rewrite.ts.)
+describe('rentals deep links', () => {
+  const ID = '44444444-4444-4444-8444-444444444444';
+
+  it('a rental: /dashboard/rentals/<uuid> -> /rentals/<uuid>', () => {
+    expect(rewriteWebPath(`/dashboard/rentals/${ID}`)).toBe(`/rentals/${ID}`);
+  });
+
+  it('the list (any status filter) and New rental', () => {
+    expect(rewriteWebPath('/dashboard/rentals')).toBe('/rentals');
+    expect(rewriteWebPath('/dashboard/rentals?status=overdue')).toBe('/rentals');
+    expect(rewriteWebPath('/dashboard/rentals/new')).toBe('/rentals/new');
+  });
+
+  it('rental item pages and malformed ids are not rentals: home', () => {
+    expect(rewriteWebPath(`/dashboard/rentals/items/${ID}`)).toBe('/');
+    expect(rewriteWebPath('/dashboard/rentals/not-an-id')).toBe('/');
+  });
+});

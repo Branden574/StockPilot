@@ -106,4 +106,76 @@ describe('CartProvider — drafts are per page', () => {
     clearCartDraft(WH);
     expect(localStorage.getItem(`${ORDER_DRAFT_PREFIX}${WH}`)).toBeNull();
   });
+
+  // Web walk 2026-09-25: a checkout that came back inside the 250 ms save
+  // debounce cleared the draft, then the save still waiting wrote it back.
+  describe('a cleared draft stays cleared', () => {
+    async function settle() {
+      await act(async () => {
+        vi.advanceTimersByTime(300);
+      });
+    }
+
+    it('the New rental cart: a save still waiting never writes the cleared draft back', async () => {
+      renderCart(RENTAL_DRAFT_PREFIX);
+      await settle();
+      act(() => {
+        screen.getByRole('button', { name: 'add tent' }).click();
+      });
+      clearCartDraft(WH, RENTAL_DRAFT_PREFIX); // the checkout came back at once
+      await settle();
+      expect(localStorage.getItem(`${RENTAL_DRAFT_PREFIX}${WH}`)).toBeNull();
+    });
+
+    it('the Orders cart (placing an order): the same', async () => {
+      renderCart();
+      await settle();
+      act(() => {
+        screen.getByRole('button', { name: 'add tent' }).click();
+      });
+      clearCartDraft(WH);
+      await settle();
+      expect(localStorage.getItem(`${ORDER_DRAFT_PREFIX}${WH}`)).toBeNull();
+    });
+
+    it('a change made after the clear is saved as usual', async () => {
+      renderCart(RENTAL_DRAFT_PREFIX);
+      await settle();
+      act(() => {
+        screen.getByRole('button', { name: 'add tent' }).click();
+      });
+      clearCartDraft(WH, RENTAL_DRAFT_PREFIX);
+      act(() => {
+        screen.getByRole('button', { name: 'add tent' }).click();
+      });
+      await settle();
+      const saved = JSON.parse(localStorage.getItem(`${RENTAL_DRAFT_PREFIX}${WH}`) ?? '{}');
+      expect(saved.lines).toEqual([{ itemId: 'tent', quantity: 2 }]);
+    });
+
+    it("clearing one page's draft leaves the other page's waiting save alone", async () => {
+      render(
+        <>
+          <CartProvider
+            initial={initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' })}
+            draftPrefix={RENTAL_DRAFT_PREFIX}
+          >
+            <Lines />
+          </CartProvider>
+          <CartProvider initial={initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' })}>
+            <Lines />
+          </CartProvider>
+        </>,
+      );
+      await settle();
+      act(() => {
+        for (const b of screen.getAllByRole('button', { name: 'add tent' })) b.click();
+      });
+      clearCartDraft(WH, RENTAL_DRAFT_PREFIX);
+      await settle();
+      expect(localStorage.getItem(`${RENTAL_DRAFT_PREFIX}${WH}`)).toBeNull();
+      const orders = JSON.parse(localStorage.getItem(`${ORDER_DRAFT_PREFIX}${WH}`) ?? '{}');
+      expect(orders.lines).toEqual([{ itemId: 'tent', quantity: 1 }]);
+    });
+  });
 });

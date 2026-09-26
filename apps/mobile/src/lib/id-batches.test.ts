@@ -362,4 +362,13 @@ describe('settleIdBatchRead', () => {
       await settleIdBatchRead(Promise.reject(new IdBatchReadError('URI too long', 414))),
     ).toEqual({ ok: false, message: 'URI too long' });
   });
+
+  it('words the failure with `describe` when a screen passes one', async () => {
+    const offline = new IdBatchReadError('TypeError: Network request failed', 0);
+    expect(
+      await settleIdBatchRead(Promise.reject(offline), (err) =>
+        err instanceof IdBatchReadError && err.status === 0 ? 'No connection.' : 'Other.',
+      ),
+    ).toEqual({ ok: false, message: 'No connection.' });
+  });
 });

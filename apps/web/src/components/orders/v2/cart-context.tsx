@@ -18,6 +18,17 @@ export const ORDER_DRAFT_PREFIX = 'order-draft:';
 export const RENTAL_DRAFT_PREFIX = 'rental-draft:';
 const SAVE_DEBOUNCE_MS = 250;
 
+// ═══ A CLEARED DRAFT STAYS CLEARED ═══
+//
+// Every cart change schedules a save SAVE_DEBOUNCE_MS later. A checkout that
+// comes back inside that window (Add, then Check out at once) cleared the
+// draft and then the save still waiting wrote the checked-out lines back, so
+// the next New rental visit for that warehouse opened with them (web walk,
+// 2026-09-25, `rental-draft:<warehouseId>`). The Orders page has the same
+// window between placing an order and Done. The waiting save of each draft key
+// is kept here, and clearCartDraft cancels it along with removing the key.
+const pendingSaves = new Map<string, ReturnType<typeof setTimeout>>();
+
 /**
  * Returns a clean cart state seeded for a given warehouse +
  * fulfillment type. Used as both the reducer's initial value and
@@ -211,7 +222,9 @@ export function CartProvider({
   }, []);
 
   React.useEffect(() => {
+    const key = `${draftPrefix}${state.warehouseId}`;
     const t = setTimeout(() => {
+      if (pendingSaves.get(key) === t) pendingSaves.delete(key);
       try {
         // ═══ THE SAVE THAT UNDID THE CLEAR ═══
         //
@@ -226,14 +239,17 @@ export function CartProvider({
         // draft. Removing rather than skipping matters: skipping would leave a
         // stale draft on disk when a shopper empties their basket, which is the
         // resurrection bug pointed the other way.
-        const key = `${draftPrefix}${state.warehouseId}`;
         if (isPristineCart(state)) localStorage.removeItem(key);
         else localStorage.setItem(key, JSON.stringify(state));
       } catch {
         /* quota exceeded — silent fail; draft is best-effort. */
       }
     }, SAVE_DEBOUNCE_MS);
-    return () => clearTimeout(t);
+    pendingSaves.set(key, t);
+    return () => {
+      clearTimeout(t);
+      if (pendingSaves.get(key) === t) pendingSaves.delete(key);
+    };
   }, [state, draftPrefix]);
 
   return (
@@ -255,11 +271,19 @@ export function useCart() {
  * Call after a successful submit so the next visit to /orders/new
  * starts from a blank cart instead of resurrecting the just-placed
  * order. Safe to call even if no draft exists. Pass the same `draftPrefix`
- * the page's CartProvider uses.
+ * the page's CartProvider uses. It also cancels that draft's save still
+ * waiting on the debounce (see pendingSaves above); a change made to the cart
+ * afterwards is saved as usual.
  */
 export function clearCartDraft(warehouseId: string, draftPrefix: string = ORDER_DRAFT_PREFIX) {
+  const key = `${draftPrefix}${warehouseId}`;
+  const pending = pendingSaves.get(key);
+  if (pending !== undefined) {
+    clearTimeout(pending);
+    pendingSaves.delete(key);
+  }
   try {
-    localStorage.removeItem(`${draftPrefix}${warehouseId}`);
+    localStorage.removeItem(key);
   } catch {
     /* noop */
   }

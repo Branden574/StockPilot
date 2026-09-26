@@ -7,6 +7,7 @@ import {
   Plus,
   Search,
   User,
+  UserCheck,
   Warehouse,
 } from 'lucide-react-native';
 import * as React from 'react';
@@ -20,23 +21,62 @@ import {
   StyleSheet,
   TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { stockAvailability } from '@stockpilot/core';
+import {
+  RENTAL_BORROWER_EMAIL_HELP,
+  RENTAL_BORROWER_TEAM_MEMBER,
+  RENTAL_NO_EMAIL_NOTE,
+  stockAvailability,
+} from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
-import { api, ApiError } from '@/lib/api';
+import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { showWriteCta } from '@/lib/cta-gating';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
-import { readErrorMessage, settleIdBatchRead } from '@/lib/id-batches';
+import { settleIdBatchRead } from '@/lib/id-batches';
 import { readOpenReservations, sumReservedByItem } from '@/lib/id-reads';
-import { rentalPickerStatus } from '@/lib/rental-items';
+import {
+  BORROWER_EMAIL_FORMAT_ERROR,
+  BORROWER_SUGGESTION_A11Y_HINT,
+  EMPTY_BORROWER,
+  borrowerEmailErrorShown,
+  borrowerEmailInvalid,
+  borrowerRequestFields,
+  borrowerSearchFailure,
+  borrowerSuggestionA11yLabel,
+  keepPickedMember,
+  listRentalBorrowers,
+  matchBorrowers,
+  pickMember,
+  someoneElse,
+  typeEmail,
+  typeName,
+  type BorrowerDraft,
+  type BorrowerSearch,
+  type RentalBorrowerMember,
+} from '@/lib/rental-borrower';
+import {
+  readRentalPickerItems,
+  rentalPickerStatus,
+  type RentalPickerItem,
+} from '@/lib/rental-items';
+import {
+  RENTAL_WORKSPACE_UNAVAILABLE,
+  rentalCheckoutFailure,
+  rentalExpectedReturn,
+  rentalReadErrorMessage,
+  rentalReadFailureMessage,
+} from '@/lib/rental-view';
 import { useOrg } from '@/lib/use-org';
+import { retryWorkspace } from '@/lib/use-workspace';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT, RADIUS } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -44,13 +84,6 @@ import { useTheme } from '@/lib/use-theme';
 interface WarehouseRow {
   id: string;
   name: string;
-}
-
-interface RentalItemRow {
-  id: string;
-  name: string | null;
-  sku: string | null;
-  quantity_on_hand: number | null;
 }
 
 /**
@@ -88,7 +121,7 @@ interface RentalItemRow {
 export default function NewRental() {
   const router = useRouter();
   const { user } = useAuth();
-  const { orgId } = useOrg();
+  const { orgId, loading: workspaceLoading } = useOrg();
   const { c } = useTheme();
   // The rentals list already hides its '+' for members without rentals:create
   // (src/screens/rentals.tsx), but this route is reachable directly. The real
@@ -108,7 +141,7 @@ export default function NewRental() {
   const [warehousesLoading, setWarehousesLoading] = React.useState(true);
   const [warehousesError, setWarehousesError] = React.useState<string | null>(null);
   const [warehousesNonce, setWarehousesNonce] = React.useState(0);
-  const [items, setItems] = React.useState<RentalItemRow[]>([]);
+  const [items, setItems] = React.useState<RentalPickerItem[]>([]);
   const [reservedByItem, setReservedByItem] = React.useState<Record<string, number>>({});
   const [itemsLoading, setItemsLoading] = React.useState(false);
   // Why the items or their open reservations did not load. Either one BLOCKS
@@ -121,11 +154,38 @@ export default function NewRental() {
   const [search, setSearch] = React.useState('');
   /** itemId → quantity. The cart; each entry becomes one `lines[]` element. */
   const [cart, setCart] = React.useState<Record<string, number>>({});
-  const [borrowerName, setBorrowerName] = React.useState('');
-  const [borrowerEmail, setBorrowerEmail] = React.useState('');
+  // The borrower: a picked team member, or anyone else by typed name and
+  // email (lib/rental-borrower.ts holds the rules, the web picker's).
+  const [borrower, setBorrower] = React.useState<BorrowerDraft>(EMPTY_BORROWER);
+  // The email's format error shows only after the field is left, as on the
+  // web (borrowerEmailErrorShown). A pick or Change starts it over.
+  const [emailTouched, setEmailTouched] = React.useState(false);
+  // At the accessibility text sizes the picked member's name and the Change
+  // chip no longer fit one row: the chip moves under the name, which keeps
+  // the full width (the Dynamic Type policy: stack, never break mid-word).
+  const stackPickedBorrower = shouldStackRow(useWindowDimensions().fontScale);
+  // The team members to search. A failed load never blocks the form: a typed
+  // name and email still check out (see borrowerSearchFailure).
+  const [borrowerSearch, setBorrowerSearch] = React.useState<BorrowerSearch>({ status: 'loading' });
+  const [borrowerNonce, setBorrowerNonce] = React.useState(0);
   const [returnDays, setReturnDays] = React.useState('7');
   const [notes, setNotes] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  // No workspace could be loaded (a launch offline, or a failed first read
+  // after signing in): every read below waits on one, and the WAREHOUSE and
+  // ITEMS sections spun with nothing to tap (review 2026-09-26). Try again
+  // loads it again (use-workspace.ts retryWorkspace), as do the app returning
+  // to the foreground and the connection coming back (use-sync.ts).
+  const noWorkspace = !orgId && !workspaceLoading;
+  const [retryingWorkspace, setRetryingWorkspace] = React.useState(false);
+  async function reloadWorkspace() {
+    setRetryingWorkspace(true);
+    try {
+      await retryWorkspace();
+    } finally {
+      setRetryingWorkspace(false);
+    }
+  }
 
   React.useEffect(() => {
     if (!orgId) return;
@@ -146,8 +206,10 @@ export default function NewRental() {
         setWarehouseId(null);
         setCart({});
         // Never empty: a gateway 502 or 504 with an empty body gives an empty
-        // error.message, which would leave the failure with no reason.
-        setWarehousesError(readErrorMessage(error, status));
+        // error.message, which would leave the failure with no reason. No
+        // answer at all (offline) is said as a connection problem, never the
+        // network layer's own text (rentalReadErrorMessage).
+        setWarehousesError(rentalReadErrorMessage(error, status));
         setWarehousesLoading(false);
         return;
       }
@@ -163,6 +225,30 @@ export default function NewRental() {
       cancelled = true;
     };
   }, [orgId, warehousesNonce]);
+
+  // Team members for the borrower search (GET /api/v1/rentals/borrowers, the
+  // web picker's query). Only for someone who may check out: the route answers
+  // 403 otherwise, and the screen already says they cannot. Reloaded for a new
+  // organization and by Try again.
+  React.useEffect(() => {
+    if (!orgId || !canCreate) return;
+    let cancelled = false;
+    void (async () => {
+      setBorrowerSearch({ status: 'loading' });
+      try {
+        const members = await listRentalBorrowers();
+        if (cancelled) return;
+        setBorrowerSearch({ status: 'ready', members });
+        // A member picked before a switch of organization is not this one's.
+        setBorrower((d) => keepPickedMember(d, members));
+      } catch (e) {
+        if (!cancelled) setBorrowerSearch(borrowerSearchFailure(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [orgId, canCreate, borrowerNonce]);
 
   // Rental items for the selected warehouse, plus the OPEN reservations against
   // them. Availability, not on-hand, is what the server enforces (SP-052), so
@@ -184,39 +270,43 @@ export default function NewRental() {
       // whose item is not in the rental warehouse, so keeping it would
       // guarantee a refusal the operator cannot see the cause of.
       setCart({});
-      const { data, error, status } = await supabase
-        .from('inventory_items')
-        .select('id, name, sku, quantity_on_hand')
-        .eq('organization_id', orgId)
-        .eq('warehouse_id', warehouseId)
-        .eq('status', 'active')
-        .eq('is_rental', true)
-        .is('deleted_at', null)
-        .order('name', { ascending: true })
-        .limit(500);
+      // Every rental item, in 1000-row pages, to the web's ceiling: the web New
+      // rental page's read, filter for filter (lib/rental-items.ts). It was
+      // one request with `.limit(500)` by name, and the search below runs over
+      // the rows held here, so an item past row 500 could not be found.
+      // rentalReadFailureMessage: a page with no answer (offline) is a
+      // connection problem, never "fetch failed: UnexpectedException ...".
+      const read = await settleIdBatchRead(
+        readRentalPickerItems(supabase, orgId, warehouseId),
+        rentalReadFailureMessage,
+      );
       if (cancelled) return;
-      if (error) {
+      if (!read.ok) {
         // Not "No rental items in this warehouse": that sentence sends the
-        // operator to the web to mark items rentable that already are.
-        console.warn('rental items', error);
+        // operator to the web to mark items rentable that already are. A page
+        // that fails after the first one lands here too, never a short list.
+        // The message is never empty: an empty 502 body says its status.
+        console.warn('rental items', read.message);
         setItems([]);
         setReservedByItem({});
-        setItemsError(readErrorMessage(error, status));
+        setItemsError(read.message);
         setItemsLoading(false);
         return;
       }
-      const rows = (data ?? []) as RentalItemRow[];
+      const rows = read.value;
       setItems(rows);
 
-      // Open reservations for up to 500 items, batched (one `.in()` URL with
-      // 500 uuids fails). A failure is NOT "nothing reserved": it blocks the
-      // picker, since every figure would otherwise show on hand as available.
+      // Open reservations for every item read (up to RENTAL_PICKER_ROW_CEILING,
+      // 10,000), batched: one `.in()` URL fails past a few hundred uuids. A
+      // failure is NOT "nothing reserved": it blocks the picker, since every
+      // figure would otherwise show on hand as available.
       const reservations = await settleIdBatchRead(
         readOpenReservations(
           supabase,
           orgId,
           rows.map((r) => r.id),
         ),
+        rentalReadFailureMessage,
       );
       if (cancelled) return;
       if (reservations.ok) {
@@ -235,7 +325,7 @@ export default function NewRental() {
   }, [orgId, warehouseId, itemsNonce]);
 
   const availableFor = React.useCallback(
-    (item: RentalItemRow) =>
+    (item: RentalPickerItem) =>
       stockAvailability({
         onHand: item.quantity_on_hand ?? 0,
         reserved: reservedByItem[item.id] ?? 0,
@@ -261,15 +351,11 @@ export default function NewRental() {
     [cart],
   );
 
-  const expectedReturn = React.useMemo(() => {
-    const days = parseInt(returnDays, 10);
-    if (Number.isNaN(days) || days <= 0) return null;
-    const d = new Date();
-    d.setDate(d.getDate() + days);
-    return d;
-  }, [returnDays]);
+  // Null for a count of days with no real date (rentalExpectedReturn): Check
+  // out is then disabled, rather than failing while building the request.
+  const expectedReturn = React.useMemo(() => rentalExpectedReturn(returnDays, new Date()), [returnDays]);
 
-  function addOne(item: RentalItemRow) {
+  function addOne(item: RentalPickerItem) {
     const max = availableFor(item);
     setCart((prev) => {
       const next = (prev[item.id] ?? 0) + 1;
@@ -280,7 +366,7 @@ export default function NewRental() {
     });
   }
 
-  function removeOne(item: RentalItemRow) {
+  function removeOne(item: RentalPickerItem) {
     setCart((prev) => {
       const next = (prev[item.id] ?? 0) - 1;
       const copy = { ...prev };
@@ -299,7 +385,8 @@ export default function NewRental() {
     Boolean(orgId) &&
     Boolean(warehouseId) &&
     lines.length > 0 &&
-    borrowerName.trim().length > 0 &&
+    borrower.name.trim().length > 0 &&
+    !borrowerEmailInvalid(borrower) &&
     Boolean(expectedReturn) &&
     !busy &&
     !picker.blocked &&
@@ -327,32 +414,43 @@ export default function NewRental() {
       Alert.alert('Expected return required', 'Enter the number of days until return.');
       return;
     }
+    if (borrowerEmailInvalid(borrower)) {
+      Alert.alert('Check the email', BORROWER_EMAIL_FORMAT_ERROR);
+      return;
+    }
     setBusy(true);
+    // Whether api() handed the request to fetch (its onSend hook). Before
+    // that, nothing can have reached the server.
+    let sent = false;
     try {
       await api<{ id: string }>('/api/v1/rentals', {
         method: 'POST',
         body: {
           warehouseId,
-          borrowerName: borrowerName.trim(),
-          borrowerEmail: borrowerEmail.trim() || null,
+          // borrowerUserId only for a picked team member; a typed name is
+          // someone not in StockPilot (lib/rental-borrower.ts).
+          ...borrowerRequestFields(borrower),
           expectedReturnAt: expectedReturn.toISOString(),
           notes: notes.trim() || null,
           lines,
         },
+        onSend: () => {
+          sent = true;
+        },
       });
       router.back();
     } catch (e) {
-      // ApiError.message is the service's own sentence ("Projector B: only 2
-      // available to rent…"), already written for an operator — show it as-is
-      // rather than a generic failure, which is the whole point of letting the
-      // checkout be refusable.
-      const message =
-        e instanceof ApiError
-          ? e.message
-          : e instanceof Error
-            ? e.message
-            : 'Could not check this rental out.';
-      Alert.alert('Could not check out', message);
+      // Refused (a 4xx): ApiError.message is the service's own sentence
+      // ("Projector B: only 2 available to rent…"), already written for an
+      // operator: shown as-is, which is the whole point of letting the
+      // checkout be refusable. Sent with no answer (offline, a dropped
+      // connection, the timeout) or a 5xx: the POST may have landed, so the
+      // alert says to look on the Rentals list before checking out again and
+      // never "try again". Never sent: it could not check out, and says why.
+      // Never the network layer's own text (rentalCheckoutFailure,
+      // lib/rental-view.ts).
+      const failure = rentalCheckoutFailure(e, sent);
+      Alert.alert(failure.title, failure.message);
     } finally {
       setBusy(false);
     }
@@ -362,7 +460,7 @@ export default function NewRental() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={ChevronLeft} onPress={() => router.back()} />
+          <IconChip icon={ChevronLeft} onPress={() => router.back()} accessibilityLabel="Back" />
         </View>
         <View style={styles.head}>
           <Eyebrow>RENTALS · NEW CHECKOUT</Eyebrow>
@@ -381,7 +479,14 @@ export default function NewRental() {
           keyboardShouldPersistTaps="handled"
         >
           <FormSection icon={Warehouse} label="WAREHOUSE">
-            {warehousesError !== null ? (
+            {noWorkspace ? (
+              <ReadFailure
+                message={RENTAL_WORKSPACE_UNAVAILABLE}
+                detail={null}
+                retrying={retryingWorkspace}
+                onRetry={() => void reloadWorkspace()}
+              />
+            ) : warehousesError !== null ? (
               <ReadFailure
                 message="Could not load warehouses."
                 detail={warehousesError}
@@ -402,6 +507,9 @@ export default function NewRental() {
                     <Pressable
                       key={w.id}
                       onPress={() => setWarehouseId(w.id)}
+                      accessibilityRole="button"
+                      accessibilityLabel={w.name}
+                      accessibilityState={{ selected: active }}
                       style={({ pressed }) => [
                         styles.chip,
                         {
@@ -444,7 +552,7 @@ export default function NewRental() {
               />
             </View>
 
-            {!warehouseId && !warehousesLoading ? (
+            {!warehouseId && (!warehousesLoading || noWorkspace) ? (
               // No warehouse to pick from (the read failed, or the org has
               // none): said in the WAREHOUSE section above, never a spinner
               // that cannot stop.
@@ -478,20 +586,26 @@ export default function NewRental() {
                 {visibleItems.map((it) => {
                   const avail = availableFor(it);
                   const qty = cart[it.id] ?? 0;
+                  const itemName = it.name ?? 'Untitled item';
                   return (
                     <View key={it.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                       <View style={{ flex: 1 }}>
                         <Body size={14} style={{ fontFamily: FONT.display }}>
-                          {it.name ?? 'Untitled item'}
+                          {itemName}
                         </Body>
                         <Mono size={10} tracking={0.1} upper color={c.ink4} style={{ marginTop: 2 }}>
                           {it.sku ? `${it.sku} · ` : ''}
                           {avail} AVAILABLE
                         </Mono>
                       </View>
+                      {/* The steppers are icons: without a label VoiceOver read
+                          them as unnamed elements (simulator walk 2026-09-25). */}
                       <Pressable
                         onPress={() => removeOne(it)}
                         disabled={qty === 0}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Remove one ${itemName}`}
+                        accessibilityState={{ disabled: qty === 0 }}
                         hitSlop={8}
                         style={[styles.step, { borderColor: c.hair, opacity: qty === 0 ? 0.35 : 1 }]}
                       >
@@ -503,6 +617,9 @@ export default function NewRental() {
                       <Pressable
                         onPress={() => addOne(it)}
                         disabled={qty >= avail}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Add one ${itemName}`}
+                        accessibilityState={{ disabled: qty >= avail }}
                         hitSlop={8}
                         style={[
                           styles.step,
@@ -519,21 +636,89 @@ export default function NewRental() {
           </FormSection>
 
           <FormSection icon={User} label="BORROWER">
-            <Field
-              label="FULL NAME"
-              value={borrowerName}
-              onChangeText={setBorrowerName}
-              placeholder="Who is checking this out?"
-              autoCapitalize="words"
-            />
-            <Field
-              label="EMAIL (OPTIONAL)"
-              value={borrowerEmail}
-              onChangeText={setBorrowerEmail}
-              placeholder="borrower@company.com"
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
+            {borrower.userId !== null ? (
+              // A picked team member: their name and the account email the
+              // rental emails will go to. Change starts a fresh borrower.
+              <View style={{ gap: 8 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <UserCheck size={16} color={c.ink} strokeWidth={1.5} />
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Body size={15} style={{ fontFamily: FONT.display }}>
+                      {borrower.name}
+                    </Body>
+                    <Body size={12} muted>
+                      {RENTAL_BORROWER_TEAM_MEMBER}
+                    </Body>
+                  </View>
+                  {stackPickedBorrower ? null : (
+                    <ChangeBorrowerChip
+                      onPress={() => {
+                        setBorrower(someoneElse(borrower));
+                        setEmailTouched(false);
+                      }}
+                    />
+                  )}
+                </View>
+                {stackPickedBorrower ? (
+                  <ChangeBorrowerChip
+                    stacked
+                    onPress={() => {
+                      setBorrower(someoneElse(borrower));
+                      setEmailTouched(false);
+                    }}
+                  />
+                ) : null}
+                <Body size={12} muted>
+                  {borrower.email.trim()
+                    ? `Rental emails go to ${borrower.email.trim()}.`
+                    : RENTAL_NO_EMAIL_NOTE}
+                </Body>
+              </View>
+            ) : (
+              <>
+                <Field
+                  label="FULL NAME"
+                  value={borrower.name}
+                  onChangeText={(text) => setBorrower((d) => typeName(d, text))}
+                  placeholder="Search team members, or type anyone’s name"
+                  autoCapitalize="words"
+                  autoCorrect={false}
+                />
+                {/* Only for someone who may check out (the list is not loaded
+                    otherwise, and the screen says why below). */}
+                {canCreate ? (
+                  <BorrowerSuggestions
+                    search={borrowerSearch}
+                    draft={borrower}
+                    onPick={(member) => {
+                      setBorrower(pickMember(member));
+                      setEmailTouched(false);
+                    }}
+                    onRetry={() => setBorrowerNonce((n) => n + 1)}
+                  />
+                ) : null}
+                <Field
+                  label="EMAIL (OPTIONAL)"
+                  value={borrower.email}
+                  onChangeText={(text) => setBorrower((d) => typeEmail(d, text))}
+                  onBlur={() => setEmailTouched(true)}
+                  placeholder="borrower@company.com"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                {borrowerEmailErrorShown(borrower, emailTouched) ? (
+                  <Body size={12} color={ACCENT.warn}>
+                    {BORROWER_EMAIL_FORMAT_ERROR}
+                  </Body>
+                ) : null}
+                {/* The web picker's words (shared from core): anyone can borrow,
+                    and the email is where the rental emails go. */}
+                <Body size={12} muted>
+                  They do not need a StockPilot account. {RENTAL_BORROWER_EMAIL_HELP}
+                </Body>
+              </>
+            )}
           </FormSection>
 
           <FormSection icon={Calendar} label="EXPECTED RETURN">
@@ -583,11 +768,16 @@ export default function NewRental() {
             old copy disclosed that nothing was reserved — true of the direct
             insert, false of this path, and leaving it would teach operators to
             distrust a checkout that does hold the stock.
+            Nothing about emails here: the BORROWER section already says where
+            they go (the shared help text, or "Rental emails go to ..." for a
+            picked member). This line used to say "emailed a confirmation when
+            you add their email", which named the checkout receipt after the
+            return confirmation and was wrong for a picked member, whose
+            account email is used without anyone adding it.
           */}
           <Body size={12.5} muted style={{ marginTop: 8 }}>
             Checking out reserves these units, so they stop showing as available to rent
-            elsewhere. The borrower is emailed a confirmation. Mark the rental returned to release
-            the stock.
+            elsewhere. Mark the rental returned to release the stock.
           </Body>
 
           {!canCreate ? (
@@ -605,6 +795,127 @@ export default function NewRental() {
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
+  );
+}
+
+/**
+ * Team members matching the typed name, under the name field. A tap picks the
+ * member; anything else typed stays a borrower not in StockPilot. When the
+ * list could not load, the reason and a retry, and typing still works.
+ */
+function BorrowerSuggestions({
+  search,
+  draft,
+  onPick,
+  onRetry,
+}: {
+  search: BorrowerSearch;
+  draft: BorrowerDraft;
+  onPick: (member: RentalBorrowerMember) => void;
+  onRetry: () => void;
+}) {
+  const { c } = useTheme();
+  if (search.status === 'failed') {
+    return (
+      <View style={{ gap: 8 }}>
+        <Body size={12} muted>
+          {search.message}
+        </Body>
+        <Pressable
+          onPress={onRetry}
+          accessibilityRole="button"
+          accessibilityLabel="Try loading team members again"
+          style={({ pressed }) => [
+            styles.chip,
+            { alignSelf: 'flex-start', borderColor: c.hair, backgroundColor: c.card, opacity: pressed ? 0.85 : 1 },
+          ]}
+        >
+          <Body size={13} color={c.ink2} style={{ fontFamily: FONT.display }}>
+            Try again
+          </Body>
+        </Pressable>
+      </View>
+    );
+  }
+  if (!draft.name.trim()) return null;
+  if (search.status === 'loading') {
+    return (
+      <Body size={12} muted>
+        Looking up team members…
+      </Body>
+    );
+  }
+  const { shown, more } = matchBorrowers(search.members, draft);
+  if (shown.length === 0) {
+    return (
+      <Body size={12} muted>
+        No team member matches. They will be checked out as someone not in StockPilot.
+      </Body>
+    );
+  }
+  return (
+    <View style={{ gap: 6 }}>
+      {shown.map((member) => (
+        <Pressable
+          key={member.userId}
+          onPress={() => onPick(member)}
+          accessibilityRole="button"
+          accessibilityLabel={borrowerSuggestionA11yLabel(member)}
+          accessibilityHint={BORROWER_SUGGESTION_A11Y_HINT}
+          style={({ pressed }) => [
+            styles.suggestion,
+            { borderColor: c.hair, backgroundColor: pressed ? c.paper2 : c.card },
+          ]}
+        >
+          <UserCheck size={14} color={c.ink3} strokeWidth={1.5} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Body size={14} style={{ fontFamily: FONT.display }}>
+              {member.displayName}
+            </Body>
+            {member.email ? (
+              <Body size={12} muted>
+                {member.email}
+              </Body>
+            ) : null}
+          </View>
+        </Pressable>
+      ))}
+      <Body size={12} muted>
+        {more > 0
+          ? `${more} more ${more === 1 ? 'match' : 'matches'}. Keep typing to narrow the list. `
+          : ''}
+        Not on the list? Keep the name as typed: they are someone not in StockPilot.
+      </Body>
+    </View>
+  );
+}
+
+/**
+ * Change, next to a picked member. `stacked` (large text) puts it on its own
+ * line under the name, sized to its label rather than stretched.
+ */
+function ChangeBorrowerChip({ onPress, stacked = false }: { onPress: () => void; stacked?: boolean }) {
+  const { c } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel="Change borrower"
+      hitSlop={8}
+      style={({ pressed }) => [
+        styles.chip,
+        {
+          borderColor: c.hair,
+          backgroundColor: c.card,
+          opacity: pressed ? 0.85 : 1,
+          alignSelf: stacked ? 'flex-start' : 'auto',
+        },
+      ]}
+    >
+      <Body size={13} color={c.ink2} style={{ fontFamily: FONT.display }}>
+        Change
+      </Body>
+    </Pressable>
   );
 }
 
@@ -727,6 +1038,16 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 999,
     borderWidth: 1,
+  },
+  suggestion: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderRadius: RADIUS.tile,
   },
   step: {
     width: 32,

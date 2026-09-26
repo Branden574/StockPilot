@@ -9,6 +9,8 @@ import { sendEmail } from './resend';
 import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
 
+import { rentalEmailOnFile } from '@stockpilot/core';
+
 import type {
   RentalBaseParams,
   RentalEmailItem,
@@ -25,10 +27,13 @@ import type {
  * gone — rentals now compose from the same shared component layer as
  * every other email family.
  *
- * Each exported function is `Promise<void>` and NEVER throws or rejects:
- * the whole body is wrapped in try/catch so an email failure can't break
- * rental checkout/return or a cron sweep. Failures log a `console.warn`
- * and return.
+ * No exported function ever throws or rejects: the whole body is wrapped in
+ * try/catch so an email failure can't break rental checkout/return or a cron
+ * sweep. Failures log a `console.warn` and return. The checkout and return
+ * senders return nothing; the overdue sender returns how the send ended
+ * (RentalEmailOutcome), because the daily sweep must not leave a rental
+ * marked reminded when no reminder went out (the rental pages print that
+ * mark as "Sent <time>").
  *
  * These run server-side from the rental service / cron with the
  * service-role client (the `rentals` + org tables carry RLS), so we use
@@ -64,6 +69,21 @@ interface RentalContext {
   row: RentalRow;
 }
 
+/**
+ * How one send ended.
+ *   sent       the email service accepted it (or, with no RESEND_API_KEY, the
+ *              dry run logged it)
+ *   no_email   the rental has no email on file: there was nothing to send
+ *   not_found  the rental is gone
+ *   failed     nothing was confirmed sent: the rental read failed, or the
+ *              email service refused the message or could not be reached
+ */
+export type RentalEmailOutcome = 'sent' | 'no_email' | 'not_found' | 'failed';
+
+type LoadedRental =
+  | { ok: true; ctx: RentalContext }
+  | { ok: false; outcome: Exclude<RentalEmailOutcome, 'sent'> };
+
 // ─── Date labels ─────────────────────────────────────────────────────
 
 // Org-local display timezone. Matches the schedule-reminders cron's
@@ -94,7 +114,7 @@ function fmtDateTime(iso: string | null): string | null {
 
 // ─── Data fetching ───────────────────────────────────────────────────
 
-async function loadRentalContext(rentalId: string): Promise<RentalContext | null> {
+async function loadRentalContext(rentalId: string): Promise<LoadedRental> {
   const admin = createAdminClient();
 
   const { data: rental, error: rentalErr } = await admin
@@ -107,19 +127,21 @@ async function loadRentalContext(rentalId: string): Promise<RentalContext | null
 
   if (rentalErr) {
     console.warn('[rental-email] failed to load rental', rentalId, rentalErr.message);
-    return null;
+    return { ok: false, outcome: 'failed' };
   }
   if (!rental) {
     console.warn('[rental-email] rental not found', rentalId);
-    return null;
+    return { ok: false, outcome: 'not_found' };
   }
 
   const row = rental as RentalRow;
 
-  const email = (row.borrower_email ?? '').trim();
+  // The rental pages say "no email on file: no receipt or reminders" with
+  // this same check (@stockpilot/core rentals/emails.ts).
+  const email = rentalEmailOnFile(row.borrower_email);
   if (!email) {
     // Normal: many rentals have no borrower email. Nothing to send.
-    return null;
+    return { ok: false, outcome: 'no_email' };
   }
 
   // Lines joined to inventory_items for display name + SKU (asset tag).
@@ -198,7 +220,7 @@ async function loadRentalContext(rentalId: string): Promise<RentalContext | null
     },
   };
 
-  return { base, row };
+  return { ok: true, ctx: { base, row } };
 }
 
 // ─── Render-by-kind ──────────────────────────────────────────────────
@@ -235,19 +257,28 @@ function renderByKind(kind: RentalEmailKind, ctx: RentalContext): RenderedRental
 async function sendRentalEmail(
   rentalId: string,
   kind: RentalEmailKind,
-): Promise<void> {
+): Promise<RentalEmailOutcome> {
   try {
-    const ctx = await loadRentalContext(rentalId);
-    if (!ctx) return;
+    const loaded = await loadRentalContext(rentalId);
+    if (!loaded.ok) return loaded.outcome;
 
-    const rendered = renderByKind(kind, ctx);
-    await sendEmail({
-      to: ctx.base.borrowerEmail,
+    const rendered = renderByKind(kind, loaded.ctx);
+    const result = await sendEmail({
+      to: loaded.ctx.base.borrowerEmail,
       subject: rendered.subject,
       html: rendered.html,
       text: rendered.text,
       from: rendered.from,
     });
+    // sendEmail answers { ok: false } (it does not throw) when Resend refuses
+    // the message or cannot be reached. That is not a send. resend.ts has
+    // already logged Resend's reply, which can quote the address, so only the
+    // rental is named here.
+    if (!result.ok) {
+      console.warn(`[rental-email] ${kind} email was not accepted for rental ${rentalId}`);
+      return 'failed';
+    }
+    return 'sent';
   } catch (err) {
     // Best-effort: an email failure must never break rental
     // checkout/return or a cron sweep.
@@ -255,6 +286,7 @@ async function sendRentalEmail(
       `[rental-email] ${kind} email failed for rental ${rentalId}:`,
       err instanceof Error ? err.message : err,
     );
+    return 'failed';
   }
 }
 
@@ -270,7 +302,12 @@ export async function sendRentalReturnedEmail(rentalId: string): Promise<void> {
   await sendRentalEmail(rentalId, 'returned');
 }
 
-/** Reminder that a rental is past its expected return date. Best-effort; never throws. */
-export async function sendRentalOverdueEmail(rentalId: string): Promise<void> {
-  await sendRentalEmail(rentalId, 'overdue');
+/**
+ * Reminder that a rental is past its expected return date. Best-effort; never
+ * throws. Returns how the send ended: the daily sweep keeps its "reminded"
+ * stamp only for 'sent' (and for 'no_email', where there is nothing to retry),
+ * and hands a 'failed' rental back to the next run.
+ */
+export async function sendRentalOverdueEmail(rentalId: string): Promise<RentalEmailOutcome> {
+  return sendRentalEmail(rentalId, 'overdue');
 }

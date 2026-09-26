@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session, User } from '@supabase/supabase-js';
 import * as React from 'react';
 import { Alert, AppState, type AppStateStatus } from 'react-native';
@@ -9,6 +10,7 @@ import {
   setAccountGateState,
 } from './account-disabled-state';
 import {
+  accountScopedStorageKeys,
   clearSessionEnded,
   isInvoluntarySessionEnd,
   markSessionEnded,
@@ -470,6 +472,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           },
           // The cache only: the outbox stays, held for this account.
           wipeCache: wipeForSignOut,
+          // The saved workspace belongs to this account, not the device: the
+          // same keys an eviction removes (use-account-gate.ts).
+          clearAccountStorage: async () => {
+            const keys = accountScopedStorageKeys(await AsyncStorage.getAllKeys());
+            if (keys.length > 0) await AsyncStorage.multiRemove(keys);
+          },
           warn: (message, err) => console.warn(message, err),
         },
         { discardWithoutAsking: opts?.afterAccountDeleted === true },

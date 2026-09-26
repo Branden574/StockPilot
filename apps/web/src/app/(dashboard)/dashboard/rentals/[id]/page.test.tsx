@@ -21,6 +21,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const rentalGet = vi.fn();
+const overdueRemindersOn = vi.fn(async (): Promise<boolean | null> => true);
+const orgRow = vi.fn(async (): Promise<{ timezone: string | null } | null> => ({ timezone: 'America/New_York' }));
+const emailsCardProps = vi.fn();
+const headerProps = vi.fn();
 const inventoryByIds = vi.fn(async () => []);
 const warehousesListNames = vi.fn(async () => []);
 const checkModuleAccessMock = vi.fn();
@@ -47,8 +51,21 @@ vi.mock('@/components/rentals/rental-actions-panel', () => ({
   RentalActionsPanel: () => null,
 }));
 vi.mock('@/components/rentals/rental-detail-header', () => ({
-  RentalDetailHeader: () => null,
+  RentalDetailHeader: (props: Record<string, unknown>) => {
+    headerProps(props);
+    return null;
+  },
 }));
+vi.mock('@/components/rentals/rental-emails-card', () => ({
+  RentalEmailsCard: (props: Record<string, unknown>) => {
+    emailsCardProps(props);
+    return null;
+  },
+}));
+vi.mock('@/lib/dashboard/request-cache', () => ({
+  getOrgRowForRequest: () => orgRow(),
+}));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 
 // The ONE component under test in this file — a recording spy, never the
 // real implementation (that component's own render/visibility logic is
@@ -84,7 +101,9 @@ vi.mock('@/server/services/inventory', () => ({
   InventoryService: { forCurrentUser: vi.fn(async () => ({ byIds: inventoryByIds })) },
 }));
 vi.mock('@/server/services/rentals', () => ({
-  RentalsService: { forCurrentUser: vi.fn(async () => ({ get: rentalGet })) },
+  RentalsService: {
+    forCurrentUser: vi.fn(async () => ({ get: rentalGet, overdueRemindersOn })),
+  },
 }));
 vi.mock('@/server/services/warehouses', () => ({
   WarehousesService: { forCurrentUser: vi.fn(async () => ({ listNames: warehousesListNames })) },
@@ -124,6 +143,8 @@ beforeEach(() => {
   inventoryByIds.mockResolvedValue([]);
   setPermissions(true);
   checkModuleAccessMock.mockResolvedValue({ enabled: true, canManage: false });
+  overdueRemindersOn.mockResolvedValue(true);
+  orgRow.mockResolvedValue({ timezone: 'America/New_York' });
 });
 
 describe('rentals/[id] host — ReportProblemButton gating (I1, fix wave 2)', () => {
@@ -171,5 +192,46 @@ describe('rentals/[id] host — ReportProblemButton gating (I1, fix wave 2)', ()
     checkModuleAccessMock.mockResolvedValue({ enabled: true, canManage: false });
     await renderPage();
     expect(checkModuleAccessMock).toHaveBeenCalledWith('maintenance_requests');
+  });
+});
+
+describe('rentals/[id] host: the borrower emails card (2026-09-25)', () => {
+  // The card decides the overdue reminder's state from what the page hands it.
+  // These pin that the page hands it the sweep's own switch (the explicit
+  // Rentals row, RentalsService.overdueRemindersOn), the organization's zone,
+  // and one render moment, and that the header prints in the same zone.
+  it('passes the rental, the reminders switch, the organization zone and the render moment', async () => {
+    overdueRemindersOn.mockResolvedValue(false);
+    const before = Date.now();
+    await renderPage();
+    const after = Date.now();
+    expect(overdueRemindersOn).toHaveBeenCalledTimes(1);
+    const props = emailsCardProps.mock.calls.at(-1)?.[0] as {
+      rental: unknown;
+      remindersOn: boolean | null;
+      nowMs: number;
+      timeZone: string;
+    };
+    expect(props.rental).toEqual(rentalFixture());
+    expect(props.remindersOn).toBe(false);
+    expect(props.timeZone).toBe('America/New_York');
+    expect(props.nowMs).toBeGreaterThanOrEqual(before);
+    expect(props.nowMs).toBeLessThanOrEqual(after);
+    expect(headerProps.mock.calls.at(-1)?.[0]).toMatchObject({
+      timeZone: 'America/New_York',
+      nowMs: props.nowMs,
+    });
+  });
+
+  it('an unreadable switch reaches the card as null ("could not check"), not as on or off', async () => {
+    overdueRemindersOn.mockResolvedValue(null);
+    await renderPage();
+    expect(emailsCardProps.mock.calls.at(-1)?.[0]).toMatchObject({ remindersOn: null });
+  });
+
+  it('an unreadable organization row falls back to the documented default zone, not a failed page', async () => {
+    orgRow.mockRejectedValue(new Error('org read failed'));
+    await renderPage();
+    expect(emailsCardProps.mock.calls.at(-1)?.[0]).toMatchObject({ timeZone: 'America/Los_Angeles' });
   });
 });

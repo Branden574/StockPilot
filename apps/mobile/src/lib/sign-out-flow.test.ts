@@ -74,6 +74,9 @@ function harness(overrides: Partial<Harness['state']> = {}): Harness {
     wipeCache: vi.fn(async () => {
       log.push('wipe');
     }),
+    // Not in `log`, so the sequences below read as before; its own tests
+    // check when it runs.
+    clearAccountStorage: vi.fn(async () => {}),
   };
   return { deps, log, state };
 }
@@ -257,6 +260,48 @@ describe('unsyncedPrompt', () => {
   });
 });
 
+// Review 2026-09-26: an ordinary sign-out left the account's saved workspace
+// (workspace.activeOrgId) in AsyncStorage. The next account's requests named
+// that organization, and its queued rows were stamped with it, until its own
+// workspace load succeeded. Only the eviction removed the keys. Mutation
+// caught: the flow without the step.
+describe('a sign-out forgets the saved workspace, once the session is gone', () => {
+  const orderOf = (fn: unknown) => (fn as { mock: { invocationCallOrder: number[] } }).mock.invocationCallOrder;
+
+  it('signed out: the saved workspace is forgotten, after the cache is cleared', async () => {
+    const h = harness();
+    expect(await runSignOutFlow(h.deps)).toBe('signed-out');
+    expect(h.deps.clearAccountStorage).toHaveBeenCalledTimes(1);
+    expect(orderOf(h.deps.clearAccountStorage)[0]).toBeGreaterThan(orderOf(h.deps.signOut).at(-1)!);
+    expect(orderOf(h.deps.clearAccountStorage)[0]).toBeGreaterThan(orderOf(h.deps.wipeCache)[0]!);
+  });
+
+  it('still signed in, or chose to stay: the workspace stays', async () => {
+    const failed = harness({ globalError: new Error('offline'), localError: new Error('offline') });
+    expect(await runSignOutFlow(failed.deps)).toBe('still-signed-in');
+    expect(failed.deps.clearAccountStorage).not.toHaveBeenCalled();
+
+    const stayed = harness({ unsynced: 2, afterDrain: 2, choice: 'stay' });
+    expect(await runSignOutFlow(stayed.deps)).toBe('stayed');
+    expect(stayed.deps.clearAccountStorage).not.toHaveBeenCalled();
+  });
+
+  it('after an in-app account deletion too', async () => {
+    const h = harness();
+    expect(await runSignOutFlow(h.deps, { discardWithoutAsking: true })).toBe('signed-out');
+    expect(h.deps.clearAccountStorage).toHaveBeenCalledTimes(1);
+  });
+
+  it('a storage failure is reported, and the sign-out still completes', async () => {
+    const h = harness();
+    const warn = vi.fn();
+    h.deps.warn = warn;
+    (h.deps.clearAccountStorage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('disk full'));
+    expect(await runSignOutFlow(h.deps)).toBe('signed-out');
+    expect(warn).toHaveBeenCalledWith('[auth] could not forget the saved workspace', expect.any(Error));
+  });
+});
+
 describe('auth-context wiring', () => {
   const src = readFileSync(path.resolve(__dirname, './auth-context.tsx'), 'utf8');
   const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
@@ -267,6 +312,10 @@ describe('auth-context wiring', () => {
     const body = fn('signOut');
     expect(body).toContain('runSignOutFlow(');
     expect(body).toContain('wipeCache: wipeForSignOut');
+    // The keys an eviction removes (account-eviction.ts accountScopedStorageKeys).
+    expect(body).toMatch(
+      /clearAccountStorage: async \(\) => \{\s*const keys = accountScopedStorageKeys\(await AsyncStorage\.getAllKeys\(\)\);\s*if \(keys\.length > 0\) await AsyncStorage\.multiRemove\(keys\);\s*\},/,
+    );
     expect(body).toContain('countUnsynced: () => totalPendingCount()');
     expect(body).toContain('await cycleCountSync.forceSync()');
     expect(body).not.toMatch(/await supabase\.auth\.signOut\(/);

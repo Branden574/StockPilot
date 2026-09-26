@@ -1,7 +1,10 @@
+import * as Network from 'expo-network';
 import * as React from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
 
+import { isOfflineState } from './exceptions-api';
 import { syncNow } from './sync';
+import { retryWorkspace } from './use-workspace';
 
 import type { User } from '@supabase/supabase-js';
 
@@ -15,6 +18,12 @@ const FOREGROUND_INTERVAL_MS = 60_000;
  *
  * No-op when not signed in. Errors are swallowed inside syncNow so a
  * sync failure never crashes the app shell.
+ *
+ * The same moments, and the connection coming back, also load the workspace
+ * again when none is shown (retryWorkspace, a no-op while one is): a launch
+ * offline left the rental screens, and every screen reading with the
+ * workspace, waiting until some other screen mounted online (review
+ * 2026-09-26).
  */
 export function useSync(user: User | null): void {
   React.useEffect(() => {
@@ -26,7 +35,9 @@ export function useSync(user: User | null): void {
     const start = () => {
       if (interval) return;
       interval = setInterval(() => {
-        if (!cancelled) void syncNow();
+        if (cancelled) return;
+        void syncNow();
+        void retryWorkspace();
       }, FOREGROUND_INTERVAL_MS);
     };
     const stop = () => {
@@ -42,17 +53,23 @@ export function useSync(user: User | null): void {
     const onAppStateChange = (state: AppStateStatus) => {
       if (state === 'active') {
         void syncNow();
+        void retryWorkspace();
         start();
       } else {
         stop();
       }
     };
     const sub = AppState.addEventListener('change', onAppStateChange);
+    // Back online: the same rule sync.ts isOnline() applies (isOfflineState).
+    const netSub = Network.addNetworkStateListener((state) => {
+      if (!cancelled && !isOfflineState(state)) void retryWorkspace();
+    });
 
     return () => {
       cancelled = true;
       stop();
       sub.remove();
+      netSub.remove();
     };
   }, [user]);
 }

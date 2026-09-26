@@ -103,9 +103,27 @@ describe('rentals/new.tsx — goes through the service, not the table (SP-012)',
 describe('rentals/new.tsx — item selection (SP-012)', () => {
   it('picks real rental items rather than free-text notes', () => {
     // createRentalSchema requires lines.min(1); a notes-only screen cannot
-    // satisfy it, and a rental with no lines is the original defect.
-    expect(source).toMatch(/is_rental/);
-    expect(source).toMatch(/inventory_items/);
+    // satisfy it, and a rental with no lines is the original defect. The read
+    // lives in lib/rental-items.ts (its test pins the table and every filter).
+    expect(code()).toMatch(/readRentalPickerItems\(supabase, orgId, warehouseId\)/);
+    const lib = readFileSync(path.resolve(__dirname, 'rental-items.ts'), 'utf8');
+    expect(lib).toMatch(/idReadSelect\(client, 'inventory_items'/);
+    expect(lib).toMatch(/\.eq\('is_rental', rentalItemsPredicate\.isRental\)/);
+  });
+
+  // 2026-09-25: the read was ONE request with `.limit(500)` by name, and the
+  // search runs over the rows the screen holds, so a rental item past row 500
+  // could not be found on the phone while the web New rental page listed it.
+  it('reads every rental item through the paged reader, never one limited request', () => {
+    const body = itemsEffect();
+    expect(body).toMatch(
+      /const read = await settleIdBatchRead\(\s*readRentalPickerItems\(supabase, orgId, warehouseId\),\s*rentalReadFailureMessage,\s*\);/,
+    );
+    const src = code();
+    expect(src).not.toMatch(/\.limit\(/);
+    expect(src).not.toMatch(/from\(\s*'inventory_items'\s*\)/);
+    // The search filters what was read, not a server query of its own.
+    expect(src).toMatch(/const visibleItems = React\.useMemo\(\(\) => \{[\s\S]*?return items\.filter\(/);
   });
 
   it('reads open reservations so availability shown matches what the server enforces', () => {
@@ -149,11 +167,12 @@ describe('rentals/new.tsx — a failed read blocks the picker, never reads as av
 
   it('a failed items read sets its own error instead of "No rental items in this warehouse"', () => {
     const body = itemsEffect();
-    expect(body).toContain('const { data, error, status } = await supabase');
-    // readErrorMessage: never empty. A 502 or 504 with an empty body gives an
-    // empty error.message, which left the failure with no reason under it.
+    // Any failed page (the first or a later one) rejects readRentalPickerItems,
+    // and the settled failure lands here with its reason, which is never
+    // empty: a 502 or 504 with an empty body says its status
+    // (readErrorMessage, in fetchAllRows).
     expect(body).toMatch(
-      /if \(error\) \{[\s\S]*?setItemsError\(readErrorMessage\(error, status\)\);[\s\S]*?return;/,
+      /if \(!read\.ok\) \{[\s\S]*?setItems\(\[\]\);[\s\S]*?setItemsError\(read\.message\);[\s\S]*?return;\s*\}\s*const rows = read\.value;/,
     );
   });
 
@@ -169,7 +188,7 @@ describe('rentals/new.tsx — a failed read blocks the picker, never reads as av
     const firstAwait = body.indexOf('await ');
     expect(body.slice(0, firstAwait)).toContain('setWarehousesError(null);');
     expect(body).toContain('const { data, error, status } = await supabase');
-    expect(body).toMatch(/if \(error\) \{[\s\S]*?setWarehousesError\(readErrorMessage\(error, status\)\);/);
+    expect(body).toMatch(/if \(error\) \{[\s\S]*?setWarehousesError\(rentalReadErrorMessage\(error, status\)\);/);
     expect(source).toContain('onRetry={() => setWarehousesNonce((n) => n + 1)}');
     expect(source).toContain('No active warehouses to check out from. Add one on the web first.');
   });
@@ -179,7 +198,8 @@ describe('rentals/new.tsx — a failed read blocks the picker, never reads as av
     // warehouses section would say "No active warehouses to check out from"
     // for a read that failed.
     const src = code();
-    expect(src).toContain('{warehousesError !== null ? (');
+    // Second in the chain since 2026-09-26 (after "no workspace").
+    expect(src).toContain(') : warehousesError !== null ? (');
     for (const flag of ['warehousesError', 'itemsError', 'stockError']) {
       expect(src, `${flag} tested for truthiness`).not.toMatch(
         new RegExp(`(?:[!(&|?]\\s*|\\{)${flag}\\s*(?:\\?|&&|\\|\\||\\))`),
@@ -187,7 +207,7 @@ describe('rentals/new.tsx — a failed read blocks the picker, never reads as av
     }
     expect(src).not.toMatch(/set(?:Warehouses|Items|Stock)Error\(error\.message\)/);
     // The failure is decided before the empty-list sentence can be reached.
-    expect(src.indexOf('{warehousesError !== null ? (')).toBeLessThan(
+    expect(src.indexOf(') : warehousesError !== null ? (')).toBeLessThan(
       src.indexOf('No active warehouses to check out from.'),
     );
   });
@@ -211,6 +231,29 @@ describe('rentals/new.tsx — a failed read blocks the picker, never reads as av
     expect(jsx).toContain('onRetry={() => setItemsNonce((n) => n + 1)}');
     // The retry button is disabled while its reload runs.
     expect(source).toMatch(/onPress=\{onRetry\}\s*disabled=\{retrying\}/);
+  });
+});
+
+describe('rentals/new.tsx — no workspace (review 2026-09-26)', () => {
+  // Offline at launch there is no workspace: every read returns early, and
+  // the WAREHOUSE and ITEMS sections spun with nothing to tap. Mutation
+  // caught: the old screen, whose WAREHOUSE section went straight to its
+  // spinner.
+  it('says so in the WAREHOUSE section with a Try again that loads the workspace again', () => {
+    const src = code();
+    expect(src).toContain('const { orgId, loading: workspaceLoading } = useOrg();');
+    expect(src).toContain('const noWorkspace = !orgId && !workspaceLoading;');
+    expect(src).toMatch(
+      /async function reloadWorkspace\(\) \{\s*setRetryingWorkspace\(true\);\s*try \{\s*await retryWorkspace\(\);\s*\} finally \{\s*setRetryingWorkspace\(false\);\s*\}\s*\}/,
+    );
+    const jsx = src.slice(src.indexOf('<FormSection icon={Warehouse} label="WAREHOUSE">'));
+    expect(jsx).toMatch(
+      /^<FormSection icon=\{Warehouse\} label="WAREHOUSE">\s*\{noWorkspace \? \(\s*<ReadFailure\s*message=\{RENTAL_WORKSPACE_UNAVAILABLE\}\s*detail=\{null\}\s*retrying=\{retryingWorkspace\}\s*onRetry=\{\(\) => void reloadWorkspace\(\)\}/,
+    );
+  });
+
+  it('the ITEMS section points at the WAREHOUSE section instead of spinning', () => {
+    expect(code()).toContain('{!warehouseId && (!warehousesLoading || noWorkspace) ? (');
   });
 });
 
@@ -239,15 +282,175 @@ describe('rentals/new.tsx — refusals are shown, not swallowed (SP-012)', () =>
   it('surfaces the server message on failure', () => {
     // The route can now legitimately REFUSE (over-lend, non-rental item, wrong
     // warehouse) where the direct insert always succeeded. ApiError.message is
-    // the service's own operator-readable sentence — show it verbatim.
+    // the service's own operator-readable sentence — shown verbatim by
+    // rentalCheckoutFailure (rental-view.test.ts pins its rules).
     const body = submitBody();
-    expect(body).toMatch(/ApiError/);
-    expect(body).toMatch(/Alert\.alert/);
+    expect(code()).toContain("from '@/lib/rental-view';");
+    expect(body).toMatch(/const failure = rentalCheckoutFailure\(e, sent\);\s*Alert\.alert\(failure\.title, failure\.message\);/);
+  });
+
+  // Review 2026-09-26: a Check out whose request never left said it "may or
+  // may not have been checked out". Whether it left is api()'s onSend hook
+  // (as item-adjust.ts uses it), set before the POST and read in the catch.
+  // Mutation caught: rentalCheckoutFailure(e), which could not tell.
+  it('tells the alert whether the request was handed to fetch (api() onSend)', () => {
+    const body = submitBody();
+    const flag = body.indexOf('let sent = false;');
+    expect(flag).toBeGreaterThan(-1);
+    expect(flag).toBeLessThan(body.indexOf("'/api/v1/rentals'"));
+    expect(body).toMatch(/onSend: \(\) => \{\s*sent = true;\s*\},/);
+    expect(code()).not.toMatch(/sent = true;[\s\S]*sent = true;/);
+  });
+
+  // Mutation caught: the old memo, which returned the Invalid Date that
+  // 999999999 days makes, so Check out stayed enabled and toISOString() threw
+  // while the request was built.
+  it('the expected return is the shared helper, so a date that does not exist disables Check out', () => {
+    expect(code()).toContain('const expectedReturn = React.useMemo(() => rentalExpectedReturn(returnDays, new Date()), [returnDays]);');
+    const canSubmit = source.slice(source.indexOf('const canSubmit ='));
+    expect(canSubmit.slice(0, canSubmit.indexOf(';'))).toMatch(/Boolean\(expectedReturn\)/);
+    expect(code()).not.toMatch(/parseInt\(returnDays/);
+  });
+
+  // Simulator walk 2026-09-25: offline, the alert read "fetch failed:
+  // UnexpectedException: Could not connect to the server. (at
+  // ExpoModulesCore/Promise.swift:56)", and a failed read showed the same
+  // text under "Could not load warehouses.". Mutation caught: the old catch,
+  // which showed any Error's message.
+  it('never shows the network layer\'s text: every failure is worded by the rental helpers', () => {
+    const src = code();
+    expect(submitBody()).not.toMatch(/Alert\.alert\([^)]*\be\.message/);
+    expect(src).not.toMatch(/readErrorMessage\(/);
+    expect(src).toMatch(/readOpenReservations\([\s\S]*?\),\s*rentalReadFailureMessage,\s*\);/);
   });
 
   it('no longer tells the operator that stock is not reserved — it now is', () => {
     const jsx = source.slice(source.indexOf('return ('));
     expect(jsx).not.toMatch(/does not reserve stock/i);
     expect(jsx).not.toMatch(/stays available to rent elsewhere/i);
+  });
+});
+
+describe('rentals/new.tsx — a borrower who is not in StockPilot (2026-09-25)', () => {
+  // L4L asked how to rent to "someone else from a site" with no StockPilot
+  // access. The phone always took a typed name and an optional email; it now
+  // says, in the web picker's words (shared from @stockpilot/core), that no
+  // account is needed and which emails go to that address.
+  it('keeps the name field and the optional email field', () => {
+    const jsx = code().slice(code().indexOf('return ('));
+    expect(jsx).toContain('label="FULL NAME"');
+    expect(jsx).toContain('label="EMAIL (OPTIONAL)"');
+    expect(jsx).toMatch(/keyboardType="email-address"/);
+  });
+
+  it('shows the shared helper text under the email, not a local copy', () => {
+    expect(source).toMatch(/import \{[^}]*RENTAL_BORROWER_EMAIL_HELP[^}]*\} from '@stockpilot\/core'/);
+    const jsx = code().slice(code().indexOf('label="EMAIL (OPTIONAL)"'));
+    const help = jsx.indexOf('{RENTAL_BORROWER_EMAIL_HELP}');
+    expect(help).toBeGreaterThan(-1);
+    expect(help).toBeLessThan(jsx.indexOf('label="DAYS FROM TODAY"'));
+    expect(jsx).toContain('They do not need a StockPilot account.');
+  });
+
+  it('sends the borrower through the shared request builder (typed email, or null when blank)', () => {
+    // borrowerRequestFields trims the email to null and sends borrowerUserId
+    // only for a picked member (rental-borrower.test.ts pins its rules).
+    expect(submitBody()).toMatch(/\.\.\.borrowerRequestFields\(borrower\)/);
+    expect(submitBody()).not.toMatch(/borrowerEmail:\s*borrowerEmail/);
+  });
+
+  // The footer used to say "emailed a confirmation when you add their email":
+  // it named the checkout receipt after the return confirmation (the detail
+  // pages list both, by those names), and was wrong for a picked member, whose
+  // account email is used without anyone adding it. The BORROWER section says
+  // where the emails go; the footer says nothing about them.
+  it('the footer says nothing about emails, and never calls the receipt a confirmation', () => {
+    const src = code();
+    const jsx = src.slice(src.indexOf('return ('));
+    expect(jsx).not.toMatch(/emailed a confirmation/i);
+    const footer = jsx.slice(jsx.indexOf('Checking out reserves these units'));
+    expect(footer.slice(0, footer.indexOf('</Body>'))).not.toMatch(/email/i);
+  });
+});
+
+describe('rentals/new.tsx: team member search (2026-09-25, the web BorrowerPicker twin)', () => {
+  // The phone had no member search: every phone rental was a typed name, so a
+  // team member got no borrower_user_id and no account email. The rules live
+  // in lib/rental-borrower.ts (tested there); these pin that the screen uses
+  // them and reads members only through the Bearer route.
+  it('loads members from GET /api/v1/rentals/borrowers, only for someone who may check out', () => {
+    const src = code();
+    expect(src).toMatch(/const members = await listRentalBorrowers\(\);/);
+    expect(src).toMatch(/if \(!orgId \|\| !canCreate\) return;/);
+    expect(src).toContain('}, [orgId, canCreate, borrowerNonce]);');
+    // Never a direct read of the member tables from the phone.
+    expect(src).not.toMatch(/from\(\s*'organization_members'\s*\)/);
+    expect(src).not.toMatch(/from\(\s*'user_profiles'\s*\)/);
+  });
+
+  it('a failed member load never blocks the form: the reason, a retry, and typing still works', () => {
+    const src = code();
+    expect(src).toMatch(/setBorrowerSearch\(borrowerSearchFailure\(e\)\)/);
+    expect(src).toContain('onRetry={() => setBorrowerNonce((n) => n + 1)}');
+    const canSubmit = src.slice(src.indexOf('const canSubmit ='));
+    expect(canSubmit.slice(0, canSubmit.indexOf(';'))).not.toMatch(/borrowerSearch/);
+  });
+
+  it('pick, type over and Change go through the shared rules', () => {
+    const src = code();
+    expect(src).toMatch(/onPick=\{\(member\) => \{\s*setBorrower\(pickMember\(member\)\);/);
+    expect(src).toMatch(/onChangeText=\{\(text\) => setBorrower\(\(d\) => typeName\(d, text\)\)\}/);
+    expect(src).toMatch(/onChangeText=\{\(text\) => setBorrower\(\(d\) => typeEmail\(d, text\)\)\}/);
+    expect(src).toMatch(/onPress=\{\(\) => \{\s*setBorrower\(someoneElse\(borrower\)\);/);
+    expect(src).toMatch(/setBorrower\(\(d\) => keepPickedMember\(d, members\)\)/);
+  });
+
+  // Mutation caught: the error on every render (the old screen), which flagged
+  // "Enter a full email address..." from the first letter typed. The web picker
+  // shows it only after the field is left.
+  it('the email format error waits until the field is left, and a pick or Change starts it over', () => {
+    const src = code();
+    expect(src).toContain('onBlur={() => setEmailTouched(true)}');
+    expect(src).toContain('{borrowerEmailErrorShown(borrower, emailTouched) ? (');
+    expect(src).not.toMatch(/\{borrowerEmailInvalid\(borrower\) \? \(/);
+    expect(src).toMatch(/setBorrower\(pickMember\(member\)\);\s*setEmailTouched\(false\);/);
+    expect(src.match(/setBorrower\(someoneElse\(borrower\)\);\s*setEmailTouched\(false\);/g)).toHaveLength(2);
+  });
+
+  // Mutation caught: "Check out to <name>, team member" (the old label), which
+  // replaced the email shown in the row for VoiceOver, so two members with
+  // one name read the same, and sounded as if the tap checked out.
+  it('a suggestion reads its email to VoiceOver and says the tap picks the borrower', () => {
+    const src = code();
+    expect(src).toContain('accessibilityLabel={borrowerSuggestionA11yLabel(member)}');
+    expect(src).toContain('accessibilityHint={BORROWER_SUGGESTION_A11Y_HINT}');
+    expect(src).not.toMatch(/Check out to \$\{member/);
+  });
+
+  // The Dynamic Type policy: a name beside a control stacks at the
+  // accessibility sizes (mid-word breaks are a width problem). Mutation
+  // caught: the old fixed row, which left a long name ~100pt at AX5.
+  it('the picked member row stacks its Change chip under the name at large text sizes', () => {
+    const src = code();
+    expect(src).toContain("import { shouldStackRow } from '@/lib/dynamic-type-layout';");
+    expect(src).toContain('const stackPickedBorrower = shouldStackRow(useWindowDimensions().fontScale);');
+    expect(src).toMatch(/\{stackPickedBorrower \? null : \(\s*<ChangeBorrowerChip/);
+    expect(src).toMatch(/\{stackPickedBorrower \? \(\s*<ChangeBorrowerChip\s+stacked/);
+    expect(src).toContain("alignSelf: stacked ? 'flex-start' : 'auto',");
+  });
+
+  it('a picked member shows where the emails go, or the no-email note; a typed bad email blocks Check out', () => {
+    const src = code();
+    expect(src).toContain('`Rental emails go to ${borrower.email.trim()}.`');
+    expect(src).toContain('RENTAL_NO_EMAIL_NOTE');
+    const canSubmit = src.slice(src.indexOf('const canSubmit ='));
+    expect(canSubmit.slice(0, canSubmit.indexOf(';'))).toMatch(/!borrowerEmailInvalid\(borrower\)/);
+    const body = submitBody();
+    expect(body.indexOf('if (borrowerEmailInvalid(borrower))')).toBeGreaterThan(-1);
+    expect(body.indexOf('if (borrowerEmailInvalid(borrower))')).toBeLessThan(body.indexOf("'/api/v1/rentals'"));
+  });
+
+  it('never describes a reminder before the return date', () => {
+    expect(source).not.toMatch(/due soon|before (it is|the rental is) due|upcoming reminder|day before/i);
   });
 });
