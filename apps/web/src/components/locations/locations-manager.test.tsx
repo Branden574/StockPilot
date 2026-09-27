@@ -8,6 +8,14 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
+vi.mock('next/link', async () => {
+  const React = await import('react');
+  return {
+    default: ({ href, children }: { href: string; children: React.ReactNode }) =>
+      React.createElement('a', { href }, children),
+  };
+});
+
 vi.mock('@/server/actions/locations', () => ({
   archiveLocationAction: vi.fn(),
   createLocationAction: vi.fn(),
@@ -59,7 +67,7 @@ describe('LocationsManager warehouse column + system-row lock', () => {
     await user.click(screen.getByRole('button', { name: /system/i }));
 
     expect(screen.getByText('Warehouse')).toBeInTheDocument();
-    expect(screen.getByText('DC4', { selector: 'td' })).toBeInTheDocument();
+    expect(screen.getByText('DC4', { selector: 'td' })).toBeInTheDocument(); // Warehouse column
     expect(screen.getByText('ETC Lancaster')).toBeInTheDocument();
 
     expect(screen.getAllByText('Auto-managed')).toHaveLength(2);
@@ -69,10 +77,27 @@ describe('LocationsManager warehouse column + system-row lock', () => {
 
   it('keeps Edit/Archive on normal rows (Sites tab)', () => {
     render(<LocationsManager initial={ROWS} canManage />);
-    const siteRow = screen.getByText('DC4', { selector: 'td' }).closest('tr')!;
+    const siteRow = screen.getByRole('link', { name: 'DC4' }).closest('tr')!;
     expect(within(siteRow as HTMLElement).getByRole('button', { name: 'Edit' })).toBeInTheDocument();
     expect(
       within(siteRow as HTMLElement).getByRole('button', { name: /archive dc4/i }),
     ).toBeInTheDocument();
+  });
+});
+
+describe('LocationsManager rows open the location page (F1-3)', () => {
+  it('each row name links to /dashboard/locations/<id>, on every tab', async () => {
+    const user = userEvent.setup();
+    render(<LocationsManager initial={ROWS} canManage={false} />);
+    expect(screen.getByRole('link', { name: 'DC4' })).toHaveAttribute('href', '/dashboard/locations/site-1');
+    await user.click(screen.getByRole('button', { name: /system/i }));
+    expect(
+      screen.getAllByRole('link', { name: 'Staging' }).map((a) => a.getAttribute('href')),
+    ).toEqual(['/dashboard/locations/sys-1', '/dashboard/locations/sys-2']);
+  });
+
+  it('archived rows link too (the page shows them as archived)', () => {
+    render(<LocationsManager initial={[ROWS[0]!]} view="archived" canManage />);
+    expect(screen.getByRole('link', { name: 'DC4' })).toHaveAttribute('href', '/dashboard/locations/site-1');
   });
 });

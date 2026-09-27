@@ -509,6 +509,13 @@ describe('location totals cover every row', () => {
     expect(locationVerificationTotalsCopy(locationVerificationTotals([], HERE))).toBe(
       '0 items, 0 units here.',
     );
+    // A rack page, named as one explicitly: the same words.
+    expect(
+      locationVerificationTotalsCopy(
+        locationVerificationTotals(rows, HERE, { items: 1, quantity: 6 }),
+        { locationKind: 'rack' },
+      ),
+    ).toMatch(/^5 items, 11\.5 units here\. 1 counted while this was its only shelf location, /);
     expect(
       locationVerificationTotalsCopy(
         locationVerificationTotals([{ quantity: 1, summary: neverCounted() }], HERE),
@@ -590,4 +597,36 @@ describe('parseItemVerificationSummary (the phone reads the API)', () => {
       VERIFICATION_MOVEMENTS_UNKNOWN_COPY,
     );
   });
+});
+
+describe('location totals on Staging and Unplaced pages (not shelves)', () => {
+  const countedHere = (): ItemVerificationSummary =>
+    summary({
+      lastCount: count({
+        countedLocationId: HERE,
+        countedLocation: { name: 'Staging', kind: 'staging', archived: false },
+      }),
+    });
+  it.each(['staging', 'unplaced'])(
+    '%s: "counted while all of it was here", never a shelf',
+    (kind) => {
+      const one = locationVerificationTotalsCopy(
+        locationVerificationTotals([{ quantity: 2, summary: countedHere() }], HERE),
+        { locationKind: kind },
+      );
+      expect(one).toBe('1 item, 2 units here. 1 counted while all of it was here.');
+      const many = locationVerificationTotalsCopy(
+        locationVerificationTotals(
+          [
+            { quantity: 2, summary: countedHere() },
+            { quantity: 3, summary: countedHere() },
+          ],
+          HERE,
+        ),
+        { locationKind: kind },
+      );
+      expect(many).toBe('2 items, 5 units here. 2 counted while all their stock was here.');
+      expect(`${one}\n${many}`).not.toMatch(/shelf/);
+    },
+  );
 });

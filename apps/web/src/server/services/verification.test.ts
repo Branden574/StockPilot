@@ -721,4 +721,51 @@ describe('VerificationService.location', () => {
       'Nothing here can be counted.',
     );
   });
+
+  it('recountItemIds: every countable row on EVERY page (not just the one shown), never a hidden, unsummarised or uncountable item', async () => {
+    // 61 listed rows (one of 62 is hidden): page 2 shows 11 of them, but a
+    // recount covers the whole location.
+    const held = holdings(62, { hidden: [61] });
+    const rows = new Map(held.map((h) => [h.item_id, row(h.item_id)]));
+    rows.set(itemId(3), row(itemId(3), { item_is_rental: true, item_countable: false }));
+    rows.set(itemId(4), row(itemId(4), { item_is_bundle: true, item_countable: false }));
+    rows.delete(itemId(62)); // its summary did not come back
+    const r = await new VerificationService(
+      ctx(locationStub({ held, summaryRows: rows })),
+    ).location(LOC, { page: 2 });
+    expect(r.rows).toHaveLength(11);
+    const expected = Array.from({ length: 60 }, (_, i) => itemId(i + 1)).filter(
+      (id) => id !== itemId(3) && id !== itemId(4),
+    );
+    expect([...r.recountItemIds].sort()).toEqual(expected.sort());
+    expect(r.recountItemIds).toHaveLength(r.totals!.countable);
+  });
+
+  it('recountItemIds is empty when the reader may not recount, above the recount cap, or when nothing is listed', async () => {
+    const staff = await new VerificationService(ctx(locationStub(), { role: 'staff' })).location(
+      LOC,
+    );
+    expect(staff.recountItemIds).toEqual([]);
+    const off = new Set<ModuleId>(DEFAULT_MODULE_IDS.filter((m) => m !== 'cycle_counts'));
+    const noModule = await new VerificationService(
+      ctx(locationStub(), { enabledModules: off }),
+    ).location(LOC);
+    expect(noModule.recountItemIds).toEqual([]);
+    const big = await new VerificationService(ctx(locationStub({ held: holdings(201) }))).location(
+      LOC,
+    );
+    expect([big.totals!.countable, big.recountProblem !== null, big.recountItemIds]).toEqual([
+      201,
+      true,
+      [],
+    ]);
+    const atCap = await new VerificationService(
+      ctx(locationStub({ held: holdings(200) })),
+    ).location(LOC);
+    expect([atCap.recountProblem, atCap.recountItemIds.length]).toEqual([null, 200]);
+    const outOfScope = await new VerificationService(
+      ctx(locationStub({ visible: { data: false, error: null } })),
+    ).location(LOC);
+    expect(outOfScope.recountItemIds).toEqual([]);
+  });
 });

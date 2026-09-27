@@ -25,6 +25,12 @@ describe('breadcrumb derivation from the (overridden) nav', () => {
     expect(crumbsForPathname('/dashboard/nope-not-a-route').map((c) => c.label)).toEqual(['—']);
   });
 
+  it('a location page (F1-3) sits under Locations, which links back to the list', () => {
+    const crumbs = crumbsForPathname('/dashboard/locations/0a000000-0000-0000-0000-0000000000b1');
+    expect(crumbs.map((c) => c.label)).toEqual(['Inventory', 'Locations', 'Detail']);
+    expect(crumbs[1]!.href).toBe('/dashboard/locations');
+  });
+
   it('renames the nav-item segment by href; the static sub-page tail stays', () => {
     const crumbs = applyNavLabelsToCrumbs(
       crumbsForPathname('/dashboard/inventory/abc-123/edit'),

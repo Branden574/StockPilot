@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
-import { can, uuidSchema, type RecountUnavailableReason } from '@stockpilot/core';
+import { can, RECOUNT_MAX_ITEMS, uuidSchema, type RecountUnavailableReason } from '@stockpilot/core';
 
 import { reportError } from '@/lib/error-reporter';
 import { fetchCountAssignees } from '@/server/lib/count-assignees';
@@ -32,6 +32,8 @@ import type { ExceptionRecountResult } from '@/server/services/exception-recount
  *   - listItemRecountTargetsAction: the item page's "Count this item" asks
  *     which of the item's open exceptions a recount can settle, so the count
  *     is linked to them (the database links only the exceptions it is named).
+ *   - listItemsRecountTargetsAction: the same for several items, for the
+ *     location page's "Recount items here" (F1-3).
  *
  * Only plain result objects cross this boundary. No type is re-exported from
  * here (recurring pattern #25: `export type { X }` in a 'use server' module
@@ -165,5 +167,51 @@ export async function listItemRecountTargetsAction(
     };
   } catch (e) {
     return fail(e, 'actions.exceptions.item_recount_targets');
+  }
+}
+
+/**
+ * Which open exceptions a recount of these items can settle, for the location
+ * page's "Recount items here" (F1-3), so the count is linked to them the way
+ * "Count this item" links an item's own. At most RECOUNT_MAX_ITEMS ids (a
+ * recount's own cap). The open list is the Exception Center's own read
+ * (ExceptionOccurrencesService.list, under the reader's RLS, with its
+ * per-row canRecount), filtered to these items. `truncated`: the open list
+ * stopped at its cap, so some exceptions may be left unlinked (the after-post
+ * check still sees them).
+ */
+export async function listItemsRecountTargetsAction(itemIds: string[]): Promise<
+  | {
+      ok: true;
+      canRecount: boolean;
+      recountUnavailableReason: RecountUnavailableReason | null;
+      occurrenceIds: string[];
+      truncated: boolean;
+    }
+  | Failure
+> {
+  try {
+    if (
+      !Array.isArray(itemIds) ||
+      itemIds.length === 0 ||
+      itemIds.length > RECOUNT_MAX_ITEMS ||
+      !itemIds.every((id) => uuidSchema.safeParse(id).success)
+    ) {
+      throw new ServiceError('validation_error', 'Those item ids are not valid.');
+    }
+    const wanted = new Set(itemIds.map((id) => id.toLowerCase()));
+    const ctx = await withContext();
+    const res = await new ExceptionOccurrencesService(ctx).list({ status: 'open' });
+    return {
+      ok: true,
+      canRecount: res.canRecount,
+      recountUnavailableReason: res.recountUnavailableReason,
+      occurrenceIds: res.occurrences
+        .filter((o) => o.canRecount && wanted.has(o.itemId.toLowerCase()))
+        .map((o) => o.id),
+      truncated: res.truncated,
+    };
+  } catch (e) {
+    return fail(e, 'actions.exceptions.items_recount_targets');
   }
 }

@@ -3,7 +3,13 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { Suspense } from 'react';
+
 import { ItemActivityPanel } from '@/components/inventory/item-activity-panel';
+import {
+  ItemVerificationCard,
+  ItemVerificationCardSkeleton,
+} from '@/components/inventory/item-verification-card';
 import { PlacementsBreakdown } from '@/components/inventory/placements-breakdown';
 import { StockAvailabilityLine } from '@/components/inventory/stock-availability-line';
 import { BarcodeDisplay } from '@/components/inventory/barcode-display';
@@ -438,6 +444,12 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
   // return target the page was opened with.
   const activityRetryHref = `?${new URLSearchParams({
     tab: activeTab,
+    ...(returnParam ? { return: returnParam } : {}),
+  }).toString()}`;
+  // The verification card's "N recorded stock movements since" opens the
+  // Movements tab of this same page, keeping the validated return target.
+  const movementsTabHref = `?${new URLSearchParams({
+    tab: 'movements',
     ...(returnParam ? { return: returnParam } : {}),
   }).toString()}`;
 
@@ -989,26 +1001,38 @@ export async function ItemDetail({ id, backHref, backLabel, editHref, tab, retur
               </CardContent>
             </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Reorder</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                <Stat
-                  label="Reorder at"
-                  value={`${formatNumber(item.reorder_point as number)} ${item.unit_of_measure as string}`}
-                />
-                <Stat
-                  label="Reorder qty"
-                  value={`${formatNumber(item.reorder_quantity as number)} ${item.unit_of_measure as string}`}
-                />
-                <Stat label="Retail price" value={formatCurrency(item.retail_price as number)} />
-                <Stat
-                  label="Status"
-                  value={(item.status as string).replace(/^./, (s) => s.toUpperCase())}
-                />
-              </CardContent>
-            </Card>
+            <div className="space-y-4 sm:space-y-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Reorder</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm">
+                  <Stat
+                    label="Reorder at"
+                    value={`${formatNumber(item.reorder_point as number)} ${item.unit_of_measure as string}`}
+                  />
+                  <Stat
+                    label="Reorder qty"
+                    value={`${formatNumber(item.reorder_quantity as number)} ${item.unit_of_measure as string}`}
+                  />
+                  <Stat label="Retail price" value={formatCurrency(item.retail_price as number)} />
+                  <Stat
+                    label="Status"
+                    value={(item.status as string).replace(/^./, (s) => s.toUpperCase())}
+                  />
+                </CardContent>
+              </Card>
+
+              {/* Last physical count (F1-3). OFF THE CRITICAL PATH: the card
+                  reads item_verification_summaries itself, under its own
+                  Suspense boundary, so nothing above waits for it and a slow
+                  or failed read never holds or fails the item page (it says
+                  "Couldn't load verification" in its own place). Overview
+                  only, like the other panels only Overview shows. */}
+              <Suspense fallback={<ItemVerificationCardSkeleton />}>
+                <ItemVerificationCard itemId={id} movementsHref={movementsTabHref} />
+              </Suspense>
+            </div>
 
             {/* Per-org custom fields — only the org's DEFINED item fields that
                 this item has a value for. Reserved/hardcoded keys are rendered

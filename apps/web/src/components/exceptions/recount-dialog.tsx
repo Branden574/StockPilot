@@ -54,6 +54,9 @@ export interface RecountDialogProps {
   /** The caller is still working out what to send (Count this item reads the
    *  item's open exceptions first): Start is disabled meanwhile. */
   preparing?: boolean;
+  /** What is being worked out while `preparing` (defaults to the item's open
+   *  exceptions; the location page reads several items'). */
+  preparingLabel?: string;
   /** A sentence about the selection (e.g. the exceptions could not be read,
    *  so the count will not be linked to them). */
   note?: string | null;
@@ -102,6 +105,7 @@ function RecountDialogBody({
   occurrenceIds,
   itemIds = [],
   preparing = false,
+  preparingLabel = 'Checking this item’s open exceptions...',
   note = null,
   blocked = null,
   timeZone,
@@ -225,7 +229,7 @@ function RecountDialogBody({
         {preparing ? (
           <p className="text-muted-foreground flex items-center gap-2" role="status">
             <Loader2 className="size-4 animate-spin" aria-hidden />
-            Checking this item’s open exceptions...
+            {preparingLabel}
           </p>
         ) : null}
         {note ? <p className="text-muted-foreground">{note}</p> : null}

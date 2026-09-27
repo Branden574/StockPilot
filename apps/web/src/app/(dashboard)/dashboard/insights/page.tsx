@@ -11,7 +11,7 @@ import { gatherInsights, summarizeInsights, type InsightSeverity } from '@/serve
 
 import { can } from '@stockpilot/core';
 
-export const metadata: Metadata = { title: 'Briefing — StockPilot' };
+export const metadata: Metadata = { title: 'Briefing' };
 export const dynamic = 'force-dynamic';
 
 const SEVERITY_BADGE: Record<InsightSeverity, 'destructive' | 'warning' | 'outline'> = {

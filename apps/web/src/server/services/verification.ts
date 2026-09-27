@@ -139,6 +139,14 @@ export interface LocationVerification {
   /** Why "Recount items here" cannot be pressed for this location's items
    *  (none countable, or more than the recount cap), or null. */
   recountProblem: string | null;
+  /**
+   * The items "Recount items here" counts: every listed row (across ALL
+   * pages, not just this one) whose item can be counted. Filled only when the
+   * reader may start a recount and there is no recountProblem, so it never
+   * holds more than RECOUNT_MAX_ITEMS ids; otherwise empty. The recount
+   * service and start_targeted_recount re-check every id.
+   */
+  recountItemIds: string[];
   timeZone: string;
 }
 
@@ -493,6 +501,7 @@ export class VerificationService {
         totals: null,
         truncated: false,
         recountProblem: null,
+        recountItemIds: [],
       };
     }
 
@@ -555,6 +564,7 @@ export class VerificationService {
       issuesByItem.set(row.item_id, list);
     }
 
+    const recountProblem = locationRecountProblem(totals.countable);
     return {
       ...base,
       holdingsVisible: true,
@@ -564,7 +574,12 @@ export class VerificationService {
       totalRows,
       totals,
       truncated: holdings.length >= LOCATION_HOLDINGS_CAP,
-      recountProblem: locationRecountProblem(totals.countable),
+      recountProblem,
+      // Every page's countable rows, the same rows totals.countable counted.
+      recountItemIds:
+        block === null && recountProblem === null
+          ? all.filter((r) => r.summary?.item.countable === true).map((r) => r.itemId)
+          : [],
     };
   }
 

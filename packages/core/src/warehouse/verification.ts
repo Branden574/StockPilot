@@ -533,13 +533,25 @@ function units(q: number): string {
 }
 
 /** "12 items, 340 units here. 5 counted while this was their only shelf
- *  location, 4 item totals counted, 3 not counted." */
-export function locationVerificationTotalsCopy(t: LocationVerificationTotals): string {
+ *  location, 4 item totals counted, 3 not counted."
+ *
+ *  `locationKind`: the page's location kind. Staging and Unplaced are not
+ *  shelves (the same rule as locationRowVerificationCopy), so a count
+ *  recorded there reads "counted while all of it was here" / "while all their
+ *  stock was here". */
+export function locationVerificationTotalsCopy(
+  t: LocationVerificationTotals,
+  opts: { locationKind?: string | null } = {},
+): string {
   const head = `${plural(t.items, 'item', 'items')}, ${units(t.quantity)} here.`;
   const parts: string[] = [];
   if (t.countedHere > 0) {
+    const one = t.countedHere === 1;
+    const bucket = opts.locationKind === 'unplaced' || opts.locationKind === 'staging';
     parts.push(
-      `${t.countedHere} counted while this was ${t.countedHere === 1 ? 'its' : 'their'} only shelf location`,
+      bucket
+        ? `${t.countedHere} counted while all ${one ? 'of it was' : 'their stock was'} here`
+        : `${t.countedHere} counted while this was ${one ? 'its' : 'their'} only shelf location`,
     );
   }
   if (t.countedItemTotal > 0)

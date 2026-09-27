@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import { Suspense } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -241,9 +242,25 @@ vi.mock('@/server/services/warehouses', () => ({
   },
 }));
 
+/**
+ * The verification card's read (F1-3). `started` records it, so a test can
+ * tell whether the PAGE made it (it must not) or the card did (once React
+ * renders the card, inside its own Suspense boundary).
+ */
+const verificationItem = vi.hoisted(() => vi.fn());
+vi.mock('@/server/services/verification', () => ({
+  VerificationService: class VerificationService {
+    item(...args: unknown[]) {
+      started.push('verification');
+      return verificationItem(...args);
+    }
+  },
+}));
+
 import { ServiceError } from '@/server/services/context';
 
 import { ItemDetail } from './item-detail';
+import { ItemVerificationCard, ItemVerificationCardSkeleton } from './item-verification-card';
 
 const ITEM_ID = '11111111-1111-1111-1111-111111111111';
 
@@ -321,6 +338,7 @@ beforeEach(() => {
   for (const k of Object.keys(tableAnswers)) delete tableAnswers[k];
   tableAnswers.categories = { id: 'cat-1', name: 'HVAC', color: null, public_visibility: 'public' };
   tableAnswers.suppliers = { id: 'sup-1', name: 'Acme Supply' };
+  verificationItem.mockImplementation(async () => VERIFICATION);
 });
 
 afterEach(() => {
@@ -575,5 +593,158 @@ describe('ItemDetail: a failed activity feed is a could-not-load state on its ta
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByText('HVAC')).toBeTruthy();
     expect(reportError).not.toHaveBeenCalled();
+  });
+});
+
+
+// ── The verification card is OFF the critical path (F1-3) ──────────────────
+
+const VERIFICATION = {
+  itemId: ITEM_ID,
+  summary: {
+    itemId: ITEM_ID,
+    item: {
+      status: 'active',
+      isRental: false,
+      isBundle: false,
+      deleted: false,
+      countable: true,
+      quantityOnHand: 10,
+    },
+    lastCount: {
+      cycleCountId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      countNumber: 31,
+      completedAt: '2026-09-12T16:00:00Z',
+      countedAt: '2026-09-12T15:02:00Z',
+      capturedAt: null,
+      baselineAt: '2026-09-12T15:02:00Z',
+      expectedQuantity: 10,
+      expectedAtStart: 10,
+      countedQuantity: 10,
+      countedLocationId: null,
+      countedLocation: null,
+      aiAssisted: false,
+      countedBy: null,
+      postedBy: null,
+    },
+    movementsSince: 0,
+    outsideLedgerSince: 0,
+    openCount: null,
+  },
+  openIssues: [],
+  openIssuesTruncated: false,
+  checkedAt: null,
+  canCount: false,
+  countUnavailableReason: 'not_permitted',
+  timeZone: 'America/Chicago',
+};
+
+type Node = unknown;
+type El = { type: unknown; props: Record<string, unknown> & { children?: Node } };
+const isEl = (n: Node): n is El =>
+  typeof n === 'object' && n !== null && 'type' in n && 'props' in n;
+
+/** Every element in a server component's returned tree (without rendering
+ *  it), each with its ancestors, nearest last. */
+function elements(node: Node, ancestors: El[] = [], out: Array<{ el: El; ancestors: El[] }> = []) {
+  if (Array.isArray(node)) {
+    for (const child of node) elements(child, ancestors, out);
+  } else if (isEl(node)) {
+    out.push({ el: node, ancestors });
+    elements(node.props.children, [...ancestors, node], out);
+  }
+  return out;
+}
+
+describe('ItemDetail: the verification card is off the critical path (F1-3)', () => {
+  it('the page returns while item_verification_summaries has not answered, and never makes that read itself', async () => {
+    const never = new Promise<never>(() => {});
+    verificationItem.mockImplementation(() => never);
+    const tree = await Promise.race([
+      ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back' }),
+      new Promise<'waited'>((r) => setTimeout(() => r('waited'), 1_000)),
+    ]);
+    expect(tree).not.toBe('waited');
+    expect(started).not.toContain('verification');
+  });
+
+  it('the card sits inside its own Suspense boundary, with the card skeleton as the fallback', async () => {
+    const tree = await ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back' });
+    const all = elements(tree);
+    const cards = all.filter((e) => e.el.type === ItemVerificationCard);
+    expect(cards).toHaveLength(1);
+    const card = cards[0]!;
+    expect(card.el.props.itemId).toBe(ITEM_ID);
+    // The Movements tab of this same page.
+    expect(card.el.props.movementsHref).toBe('?tab=movements');
+    // Its nearest boundary is a Suspense of its own, holding nothing else.
+    const boundary = [...card.ancestors].reverse().find((a) => a.type === Suspense);
+    expect(boundary).toBeDefined();
+    expect(isEl(boundary!.props.fallback)).toBe(true);
+    expect((boundary!.props.fallback as El).type).toBe(ItemVerificationCardSkeleton);
+    expect(boundary!.props.children).toBe(card.el);
+  });
+
+  it('rendered: the page shows in full while the card is still loading, with the skeleton in its place', async () => {
+    verificationItem.mockImplementation(() => new Promise<never>(() => {}));
+    render(await ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back' }));
+    expect(screen.getByText(/Last updated by Dana Editor/)).toBeTruthy();
+    expect(screen.getByText('HVAC')).toBeTruthy();
+    expect(screen.getByTestId('item-verification-card-loading')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a failed verification read cannot fail the page; the card itself says "Couldn\'t load verification"', async () => {
+    verificationItem.mockImplementation(async () => {
+      throw new ServiceError('internal_error', 'rpc exploded');
+    });
+    const tree = await ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back' });
+    // The page resolved without the read; the card element it placed makes
+    // the read when React renders it, and answers with the unavailable state.
+    const card = elements(tree).find((e) => e.el.type === ItemVerificationCard)!;
+    render(await ItemVerificationCard(card.el.props as unknown as Parameters<typeof ItemVerificationCard>[0]));
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain("Couldn't load verification");
+    expect(screen.queryByText('No physical count on record.')).toBeNull();
+    expect(reportError).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'internal_error' }),
+      expect.objectContaining({ tag: 'inventory.item_verification' }),
+    );
+    await flush();
+    expect(unhandled).toEqual([]);
+  });
+
+  it('the card element the page placed renders the summary when the read answers', async () => {
+    const tree = await ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back' });
+    const card = elements(tree).find((e) => e.el.type === ItemVerificationCard)!;
+    render(await ItemVerificationCard(card.el.props as unknown as Parameters<typeof ItemVerificationCard>[0]));
+    expect(screen.getByTestId('verification-headline')).toHaveTextContent(
+      'Last physical count: Sep 12, 2026 · CC-000031',
+    );
+    expect(verificationItem).toHaveBeenCalledWith(ITEM_ID);
+  });
+
+  it('a Movements or Activity render has no card and makes no verification read', async () => {
+    for (const tab of ['movements', 'activity']) {
+      started.length = 0;
+      const tree = await ItemDetail({ id: ITEM_ID, backHref: '/dashboard/inventory', backLabel: 'Back', tab });
+      expect(elements(tree).some((e) => e.el.type === ItemVerificationCard)).toBe(false);
+      render(tree);
+      await flush();
+      expect(started).not.toContain('verification');
+    }
+  });
+
+  it('the movements link keeps the validated return target', async () => {
+    const tree = await ItemDetail({
+      id: ITEM_ID,
+      backHref: '/dashboard/inventory?q=hvac',
+      backLabel: 'Back',
+      returnParam: '/dashboard/inventory?q=hvac',
+    });
+    const card = elements(tree).find((e) => e.el.type === ItemVerificationCard)!;
+    const qs = new URLSearchParams(String(card.el.props.movementsHref).slice(1));
+    expect(qs.get('tab')).toBe('movements');
+    expect(qs.get('return')).toBe('/dashboard/inventory?q=hvac');
   });
 });

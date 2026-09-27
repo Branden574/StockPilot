@@ -43,6 +43,7 @@ import {
   actOnExceptionAction,
   listCountAssigneesAction,
   listItemRecountTargetsAction,
+  listItemsRecountTargetsAction,
   requestExceptionCheckAction,
   startRecountAction,
 } from './exceptions';
@@ -207,6 +208,65 @@ describe('listItemRecountTargetsAction (Count this item)', () => {
   it('a failed read is a failure, never "no exceptions"', async () => {
     list.mockRejectedValue(new ServiceError('internal_error', 'boom'));
     await expect(listItemRecountTargetsAction(ITEM)).resolves.toEqual({
+      error: { message: 'Something went wrong. Please try again.', reason: null },
+    });
+  });
+});
+
+describe('listItemsRecountTargetsAction (Recount items here, F1-3)', () => {
+  const A = '22222222-2222-4222-8222-222222222222';
+  const B = '33333333-3333-4333-8333-333333333333';
+  const OTHER = '44444444-4444-4444-8444-444444444444';
+
+  it("returns the open exceptions a recount can settle, for THESE items only", async () => {
+    list.mockResolvedValue({
+      canRecount: true,
+      recountUnavailableReason: null,
+      truncated: false,
+      occurrences: [
+        { id: 'o1', itemId: A, canRecount: true },
+        { id: 'o2', itemId: A, canRecount: false },
+        { id: 'o3', itemId: OTHER, canRecount: true },
+        { id: 'o4', itemId: B.toUpperCase(), canRecount: true },
+      ],
+    });
+    await expect(listItemsRecountTargetsAction([A, B])).resolves.toEqual({
+      ok: true,
+      canRecount: true,
+      recountUnavailableReason: null,
+      occurrenceIds: ['o1', 'o4'],
+      truncated: false,
+    });
+    expect(list).toHaveBeenCalledWith({ status: 'open' });
+  });
+
+  it('says when the open list stopped at its cap (some may be left unlinked), and passes a refusal reason through', async () => {
+    list.mockResolvedValue({
+      canRecount: false,
+      recountUnavailableReason: 'module_disabled',
+      truncated: true,
+      occurrences: [],
+    });
+    await expect(listItemsRecountTargetsAction([A])).resolves.toMatchObject({
+      canRecount: false,
+      recountUnavailableReason: 'module_disabled',
+      truncated: true,
+    });
+  });
+
+  it.each([
+    ['no ids', []],
+    ['a malformed id', [A, 'nope']],
+    ['more than a recount can hold', Array.from({ length: 201 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`)],
+  ])('refuses %s without reading', async (_what, ids) => {
+    const res = await listItemsRecountTargetsAction(ids as string[]);
+    expect(res).toEqual({ error: { message: 'Those item ids are not valid.', reason: null } });
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it('a failed read is a failure, never "no exceptions"', async () => {
+    list.mockRejectedValue(new ServiceError('internal_error', 'boom'));
+    await expect(listItemsRecountTargetsAction([A])).resolves.toEqual({
       error: { message: 'Something went wrong. Please try again.', reason: null },
     });
   });

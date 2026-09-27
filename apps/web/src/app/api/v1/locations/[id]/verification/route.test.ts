@@ -186,6 +186,8 @@ describe('GET /api/v1/locations/[id]/verification', () => {
         totalRows: 3,
         canRecount: true,
         recountProblem: null,
+        // The phone's "Recount items here" sends these (every countable row).
+        recountItemIds: [itemId(1), itemId(2), itemId(3)],
       });
       // The phone words each row with core, through the parser.
       expect(
