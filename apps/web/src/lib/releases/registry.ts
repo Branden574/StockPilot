@@ -48,7 +48,7 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           "Each warehouse keeps its own cart. Requesting for, Pickup or Delivery, the delivery site, Needed by and the notes belong to that cart, along with the items. When you change warehouse you see that warehouse's cart, or a new one that starts on Pickup with Requesting for set to Myself. Changing back brings back the first cart and its answers.",
         whatToDo:
-          'If you placed an order after changing warehouse, open it from Orders and check the Warehouse it shows. If it is wrong, use Cancel request while it is pending approval, or ask a manager, then order again. To redo a refused order, open New order, choose the warehouse and submit again. Remove any line showing a long code instead of an item name, and choose the delivery site again if asked.',
+          'If you ordered after changing warehouse, open the order and check its Warehouse. If it is wrong, cancel it while pending approval, or ask a manager, then order again. To redo a refused order, choose the warehouse you meant, add the items again and submit. If a cart opens with items you already ordered, remove them. Remove lines showing a long code, and choose the delivery site again if asked.',
         link: { href: '/dashboard/orders/new', label: 'Open New order' },
         audience: { anyPermission: ['orders:request'], modules: ['orders'] },
       },
