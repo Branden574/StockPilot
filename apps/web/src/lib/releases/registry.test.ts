@@ -197,7 +197,12 @@ describe('F1-3 (last physical count and location pages) is published', () => {
   it('is published after the web deploy, the phone update and the Demo Co walk, so readers are told', () => {
     expect(release().status).toBe('published');
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(F1_3);
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(F1_3);
+    // An old phone build lists at most three unread releases, newest first;
+    // F1-3 comes into that list once the four newer releases are read.
+    const newer = Object.fromEntries(
+      RELEASES.slice(0, RELEASES.findIndex((r) => r.id === F1_3)).map((r) => [r.id, true]),
+    );
+    expect(legacyAnnouncementsFor(RELEASES, everyone, newer).map((a) => a.id)).toContain(F1_3);
     expect(registryFingerprint(RELEASES)).toContain(F1_3);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(F1_3);
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-28T00:00:00Z'));
@@ -219,9 +224,9 @@ describe('F1-3 (last physical count and location pages) is published', () => {
  * read as the product. The wording is now "stock on record" (core
  * on-record-wording.guard.test.ts). The releases that describe those screens
  * were edited in place, without a new revision (a wording fix, not a
- * re-announcement), and the fix has a release of its own, held as a DRAFT
- * until the phone release (pnpm release:ota) brings the phone the new words.
- * The follow-up that publishes it flips this pin to 'published'.
+ * re-announcement), and the fix has a release of its own, held as a draft
+ * until the phone release (pnpm release:ota) brought the phone the new words,
+ * and published after it.
  */
 describe('stock on record wording', () => {
   const FIX = 'stock-on-record-wording-2026-09-27';
@@ -240,14 +245,15 @@ describe('stock on record wording', () => {
     /,\s*book\s+\d/i,
   ];
 
-  it('is at the top, a draft, so no reader, no API and no old phone build is told before the phone update', () => {
-    expect(RELEASES[0]!.id).toBe(FIX);
-    expect(release().status).toBe('draft');
+  it('is published after the web deploy and the verified phone update, so readers are told', () => {
+    expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
-    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(FIX);
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(FIX);
-    expect(registryFingerprint(RELEASES)).not.toContain(FIX);
-    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(FIX);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(FIX);
+    // Second from the top, so an old phone build lists it among its three.
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(FIX);
+    expect(registryFingerprint(RELEASES)).toContain(FIX);
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(FIX);
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-28T00:00:00Z'));
   });
 
   it('is a fix to Inventory, for everyone who can read items', () => {
@@ -305,19 +311,26 @@ describe('stock on record wording', () => {
 /**
  * Kits on the New order page (owner decisions 2026-09-27): anyone who can place
  * orders sees kits, with no Bundles permission, but only where the Bundles
- * module is on. The note is addressed the same way, and waits as a draft for
- * the web deploy and the Demo Co walk.
+ * module is on. The note is addressed the same way, and was held as a draft
+ * until the web deploy and the Demo Co walk.
  */
 describe('the kits release', () => {
   const release = () => RELEASES.find((r) => r.id === 'order-page-kits-2026-09-27')!;
 
-  it('is the newest release after the later-dated stock on record draft', () => {
-    // The registry is newest first; the stock on record draft is dated the
-    // next day, so it sits above.
-    expect(RELEASES.slice(0, 2).map((r) => r.id)).toEqual([
-      'stock-on-record-wording-2026-09-27',
+  it('is the newest release, so it is the one the notice offers, and the three it shipped with follow', () => {
+    // The notice offers only the top unread release a reader can see, and an
+    // old phone build lists at most three. Kits lead, then the stock on record
+    // fix every counter sees; where Bundles is off, the fix is the top.
+    expect(RELEASES.slice(0, 4).map((r) => r.id)).toEqual([
       'order-page-kits-2026-09-27',
+      'stock-on-record-wording-2026-09-27',
+      'order-page-add-full-kit-removed-2026-09-27',
+      'bundle-distribute-managers-2026-09-27',
     ]);
+    for (const r of RELEASES.slice(0, 4)) {
+      expect(r.status, r.id).toBe('published');
+      expect(registryFingerprint(RELEASES), r.id).toContain(r.id);
+    }
   });
 
   it('is addressed to people who can place orders, where Orders and Bundles are on', () => {

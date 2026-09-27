@@ -28,42 +28,10 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
-    id: 'stock-on-record-wording-2026-09-27',
-    revision: 1,
-    // DRAFT until the phone release (pnpm release:ota): the phone words counts
-    // and exceptions with its own copy of core, so until the update reaches it
-    // the phone still says "book". A draft never leaves the server
-    // (visibleReleases, registryFingerprint), so merging this does not announce
-    // wording the phone does not show yet. A small follow-up sets it to
-    // 'published' (and updates the pin in registry.test.ts).
-    status: 'draft',
-    title: 'Counts and exceptions say stock on record instead of book',
-    summary:
-      'On the web and in the mobile app, cycle count results, the Physical count card on an item and count exceptions now say stock on record, not book, for the quantity StockPilot has recorded. For example, Book corrected from 50 to 0 (-50) now reads Stock on record corrected from 50 to 0 (-50). The Books section is unchanged.',
-    publishedAt: '2026-09-28T17:00:00Z',
-    entries: [
-      {
-        id: 'stock-on-record-wording',
-        category: 'fixed',
-        area: 'Inventory',
-        title: 'Counts and exceptions say stock on record instead of book',
-        whatChanged:
-          'Cycle count results, the Physical count card on an item page, location pages and count exceptions now say stock on record where they said book. Book corrected from 50 to 0 (-50) reads Stock on record corrected from 50 to 0 (-50), Matched the book (10) reads Matched the stock on record (10), Book now: 0 reads On record now: 0, and the exception Count did not match the book is now Count did not match the stock on record. This applies on the web and in the mobile app.',
-        whyItMatters:
-          'Book was accounting shorthand for the quantity on record. In an organization that stocks books it read as the product, so a count result on an electronics item, such as a Chromebook, looked as if the item were a book.',
-        howItAffectsYou:
-          'Only the words change. The numbers, how counts are posted, and when exceptions open and clear are the same. The Books section, book racks and crates, and ISBN lookups are unchanged. In the web app, the warning shown before archiving items that still hold stock now says archiving keeps the stock on record.',
-        whatToDo: 'No action needed.',
-        link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
-        audience: { anyPermission: ['items:read'] },
-      },
-    ],
-  },
-  {
     id: 'order-page-kits-2026-09-27',
     revision: 1,
-    // A draft until the web deploy and the Demo Co walk; the New order page is
-    // web only, so there is no phone update to wait for. Addressed only where
+    // Held as a draft (#275) until the web deploy and the Demo Co walk; the New
+    // order page is web only. Addressed only where
     // Bundles is on: that is where kits exist. The removal of Add full kit is
     // its own release below, because the button was on every organization's
     // New order page, Bundles or not (review F7).
@@ -72,11 +40,11 @@ export const RELEASES: Release[] = [
     // (Orders OR Bundles), which told organizations without Bundles about
     // kits. The release names Orders and each entry names Bundles, and a
     // reader must pass both.
-    status: 'draft',
+    status: 'published',
     title: 'Order a whole kit from the New order page in one step',
     summary:
       'When your organization uses Bundles, the New order page shows kits: bundles whose items you can all order at the chosen warehouse. Add kit puts every item of the kit into your cart as its own line, and the order is approved and picked like any other.',
-    publishedAt: '2026-09-27T20:00:00Z',
+    publishedAt: '2026-09-27T23:24:00Z',
     audience: { modules: ['orders'] },
     entries: [
       {
@@ -112,17 +80,46 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'stock-on-record-wording-2026-09-27',
+    revision: 1,
+    // Held as a draft (#274) until the phone release, because the phone words
+    // counts and exceptions with its own copy of core. Published after the web
+    // deploy and the verified phone update.
+    status: 'published',
+    title: 'Counts and exceptions say stock on record instead of book',
+    summary:
+      'On the web and in the mobile app, cycle count results, the Physical count card on an item and count exceptions now say stock on record, not book, for the quantity StockPilot has recorded. For example, Book corrected from 50 to 0 (-50) now reads Stock on record corrected from 50 to 0 (-50). The Books section is unchanged.',
+    publishedAt: '2026-09-27T23:23:00Z',
+    entries: [
+      {
+        id: 'stock-on-record-wording',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Counts and exceptions say stock on record instead of book',
+        whatChanged:
+          'Cycle count results, the Physical count card on an item page, location pages and count exceptions now say stock on record where they said book. Book corrected from 50 to 0 (-50) reads Stock on record corrected from 50 to 0 (-50), Matched the book (10) reads Matched the stock on record (10), Book now: 0 reads On record now: 0, and the exception Count did not match the book is now Count did not match the stock on record. This applies on the web and in the mobile app.',
+        whyItMatters:
+          'Book was accounting shorthand for the quantity on record. In an organization that stocks books it read as the product, so a count result on an electronics item, such as a Chromebook, looked as if the item were a book.',
+        howItAffectsYou:
+          'Only the words change. The numbers, how counts are posted, and when exceptions open and clear are the same. The Books section, book racks and crates, and ISBN lookups are unchanged. In the web app, the warning shown before archiving items that still hold stock now says archiving keeps the stock on record.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
+        audience: { anyPermission: ['items:read'] },
+      },
+    ],
+  },
+  {
     id: 'order-page-add-full-kit-removed-2026-09-27',
     revision: 1,
-    // Goes out with the kits release (a draft until the same web deploy), to
+    // Goes out with the kits release, after the same web deploy, to
     // everyone who can place orders, with or without Bundles: the button was
     // on the New order page of any organization with a category named like
     // "New Hire". Its words hold where Bundles is off (review F7).
-    status: 'draft',
+    status: 'published',
     title: 'Add full kit is gone from the New order page',
     summary:
       'The Add full kit button on a category of the New order page is gone. It added one of every in-stock item in that category, whatever a kit actually held. Add the items you need one by one; where your organization uses Bundles, the New order page can also offer kits, which add exactly a bundle\'s items.',
-    publishedAt: '2026-09-27T20:00:00Z',
+    publishedAt: '2026-09-27T23:22:00Z',
     entries: [
       {
         id: 'order-page-add-full-kit-removed',
@@ -144,13 +141,13 @@ export const RELEASES: Release[] = [
   {
     id: 'bundle-distribute-managers-2026-09-27',
     revision: 1,
-    // A draft until the web deploy and the phone update (the mobile bundle
-    // screen changes too), then published.
-    status: 'draft',
+    // Held as a draft until the web deploy and the phone update (the mobile
+    // bundle screen changes too).
+    status: 'published',
     title: 'Distribute on a bundle is shown only to managers and above',
     summary:
       'On the web and in the mobile app, Distribute on a bundle now appears only for managers, admins and owners who can distribute bundles. Staff were shown it, but StockPilot refuses a distribution from anyone below manager, so their attempt ended in Permission denied.',
-    publishedAt: '2026-09-27T20:00:00Z',
+    publishedAt: '2026-09-27T23:21:00Z',
     entries: [
       {
         id: 'bundle-distribute-managers',
