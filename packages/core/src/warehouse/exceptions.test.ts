@@ -42,6 +42,7 @@ import {
   type ExceptionRule,
   type OccurrenceStateInput,
   type WarehouseException,
+  exceptionCheckedAtCopy,
 } from './exceptions';
 
 const ex = (o: Partial<WarehouseException> & Pick<WarehouseException, 'rule' | 'key'>): WarehouseException => ({
@@ -729,5 +730,13 @@ describe('copy that keeps the all-clear honest', () => {
     ]) {
       expect(text).not.toMatch(/employee|staff|theft|stole|someone|worker|picker/i);
     }
+  });
+});
+
+describe('exceptionCheckedAtCopy', () => {
+  it('states the check time and the cadence, one sentence for every surface', () => {
+    expect(exceptionCheckedAtCopy('Sep 27, 4:32 PM')).toBe(
+      'Checked at Sep 27, 4:32 PM. The system checks every 15 minutes and after each posted or cancelled count.',
+    );
   });
 });

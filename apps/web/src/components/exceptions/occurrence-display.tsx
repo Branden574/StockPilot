@@ -6,7 +6,7 @@ import {
   EXCEPTION_FIRST_CHECK_PENDING_COPY,
   EXCEPTION_LIST_UNAVAILABLE_COPY,
   EXCEPTION_RULES,
-  EXCEPTION_SYNC_INTERVAL_MINUTES,
+  exceptionCheckedAtCopy,
   exceptionUncheckedRulesCopy,
   exceptionUnrecognizedCopy,
   formatOrgDateTime,
@@ -144,8 +144,7 @@ export function UnrecognizedNotice({ count }: { count: number }) {
 export function CheckedAt({ syncState, timeZone }: { syncState: ExceptionSyncState; timeZone: string }) {
   return (
     <p className="text-muted-foreground text-xs">
-      Checked at {exceptionTime(syncState.lastSyncedAt, timeZone)}. The system checks every{' '}
-      {EXCEPTION_SYNC_INTERVAL_MINUTES} minutes and after each posted or cancelled count.
+      {exceptionCheckedAtCopy(exceptionTime(syncState.lastSyncedAt, timeZone))}
     </p>
   );
 }

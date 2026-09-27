@@ -1,6 +1,7 @@
 import { ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { Suspense } from 'react';
 
 import { OccurrenceActions } from '@/components/exceptions/occurrence-actions';
 import { RecountButton } from '@/components/exceptions/recount-selection';
@@ -14,6 +15,10 @@ import {
   StateChip,
   stateOf,
 } from '@/components/exceptions/occurrence-display';
+import {
+  ItemVerificationCard,
+  ItemVerificationCardSkeleton,
+} from '@/components/inventory/item-verification-card';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
@@ -40,7 +45,7 @@ import {
   type ExceptionActionKind,
 } from '@stockpilot/core';
 
-export const metadata = { title: 'Exception · StockPilot' };
+export const metadata = { title: 'Exception' };
 
 /**
  * ONE EXCEPTION OCCURRENCE (F1-1).
@@ -60,6 +65,11 @@ export const metadata = { title: 'Exception · StockPilot' };
  * cycle_counts module, cycle_counts:assign and stock:adjust). Its linked
  * recount and what it has come to so far are shown, and a closed recount's
  * timeline entry says what it found (core describeTimelineEvent).
+ *
+ * The item's last physical count (F1-3) is the shared verification card,
+ * streamed under its own Suspense boundary so this page never waits for it,
+ * and shown only when the reader can see the item. The location of a holding
+ * rule links to that location's page.
  *
  * Reads only, never syncs. Not found and not visible are the same answer
  * (404), so existence is not leaked; any other failed read renders
@@ -165,7 +175,13 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
               <>
                 <dt className="text-muted-foreground">Location</dt>
                 <dd>
-                  {o.location.name}
+                  {o.locationId ? (
+                    <Link href={`/dashboard/locations/${o.locationId}`} className="font-medium hover:underline">
+                      {o.location.name}
+                    </Link>
+                  ) : (
+                    o.location.name
+                  )}
                   {o.location.archived ? <span className="text-muted-foreground"> (archived)</span> : null}
                 </dd>
               </>
@@ -202,6 +218,17 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
           </dl>
         </CardContent>
       </Card>
+
+      {o.item ? (
+        // The item's last physical count, off this page's critical path.
+        <Suspense fallback={<ItemVerificationCardSkeleton />}>
+          <ItemVerificationCard
+            itemId={o.itemId}
+            movementsHref={`/dashboard/inventory/${o.itemId}?tab=movements`}
+            excludeIssueId={o.id}
+          />
+        </Suspense>
+      ) : null}
 
       <div className="flex flex-wrap gap-2">
         {meta.actions.map((kind) => (

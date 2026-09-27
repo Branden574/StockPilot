@@ -110,6 +110,13 @@ const READERS: Record<string, Entry> = {
     why: 'Only NAMES the items the caller can read; the decision is location_stock_census, org-wide.',
     foldedBy: ['assertEmptyOrThrow'],
   },
+  // ── VerificationService (F1-3, 0374) ─────────────────────────────────
+  'server/services/verification.ts::location': {
+    classification: 'folds-hidden',
+    count: 1,
+    why: 'The location page lists every holding at ONE location and totals them. item_stock_levels RLS is location-based, so for a location inside the reader\'s scope the read is complete (holdings of items the reader cannot open still come back, with a null item, and are counted as hidden); location_holdings_visible (0374, the policy\'s location clause, pgTAP-equal to it) says when the scope does not cover the location, and the page then lists nothing and says so instead of showing an empty location.',
+    foldedBy: ['location'],
+  },
   // ── Others ─────────────────────────────────────────────────────────────
   'server/services/rack-holdings.ts::fetchRackHoldingsByItem': {
     classification: 'label-only',
@@ -147,6 +154,7 @@ const READERS: Record<string, Entry> = {
 const FOLD_TOKENS: Record<string, RegExp> = {
   'server/services/inventory.ts': /\bthis\.hiddenHoldingsFor\(/,
   'server/services/locations.ts': /\.rpc\(\s*'location_stock_census'/,
+  'server/services/verification.ts': /\.rpc\(\s*'location_holdings_visible'/,
 };
 
 function walk(dir: string, out: string[] = []): string[] {

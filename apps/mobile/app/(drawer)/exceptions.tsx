@@ -13,7 +13,7 @@ import {
   EXCEPTION_NONE_RESOLVED_COPY,
   EXCEPTION_RESOLVED_WINDOW_DAYS,
   EXCEPTION_RULES,
-  EXCEPTION_SYNC_INTERVAL_MINUTES,
+  exceptionCheckedAtCopy,
   describeOccurrence,
   exceptionCheckNowCopy,
   exceptionUncheckedRulesCopy,
@@ -346,7 +346,7 @@ export default function ExceptionsScreen() {
                 </Card>
               ) : (
                 <Body size={12.5} muted>
-                  {`Checked at ${exceptionTimeLabel(list!.syncState.lastSyncedAt, timeZone)}. The system checks every ${EXCEPTION_SYNC_INTERVAL_MINUTES} minutes and after each posted or cancelled count.`}
+                  {exceptionCheckedAtCopy(exceptionTimeLabel(list!.syncState.lastSyncedAt, timeZone))}
                 </Body>
               )}
               {unchecked ? (

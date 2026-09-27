@@ -724,6 +724,16 @@ export const EXCEPTION_SYNC_INTERVAL_MINUTES = 15;
  */
 export const EXCEPTION_FIRST_CHECK_PENDING_COPY = `The first check has not run yet. It runs within ${EXCEPTION_SYNC_INTERVAL_MINUTES} minutes.`;
 
+/**
+ * "Checked at <time>." plus the cadence, in one place for every surface (web
+ * Exceptions page and detail, phone list and detail). `time` is the already
+ * formatted check time (formatOrgDateTime spells it the same on every engine).
+ * The phone detail used to stop after the time.
+ */
+export function exceptionCheckedAtCopy(time: string): string {
+  return `Checked at ${time}. The system checks every ${EXCEPTION_SYNC_INTERVAL_MINUTES} minutes and after each posted or cancelled count.`;
+}
+
 /** The Resolved list covers this many days (web tab and the phone). */
 export const EXCEPTION_RESOLVED_WINDOW_DAYS = 30;
 

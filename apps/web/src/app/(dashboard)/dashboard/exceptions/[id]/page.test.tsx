@@ -51,6 +51,28 @@ vi.mock('@/server/services/context', async (importOriginal) => ({
 vi.mock('@/lib/dashboard/cached-org', () => ({
   getCachedOrgTimezone: vi.fn(async () => 'America/Los_Angeles'),
 }));
+// The item's verification card (F1-3) is its own unit
+// (item-verification-card.test.tsx). Here: which props the page hands it, and
+// that it sits in a Suspense boundary of its own: while `card.suspend` is on
+// it never resolves, and only a boundary around it lets the rest of the page
+// render.
+const card = vi.hoisted(() => ({ suspend: false, never: new Promise<never>(() => {}) }));
+vi.mock('@/components/inventory/item-verification-card', async () => {
+  const React = await import('react');
+  return {
+    ItemVerificationCard: (props: { itemId: string; movementsHref: string; excludeIssueId?: string | null }) => {
+      if (card.suspend) throw card.never;
+      return React.createElement('div', {
+        'data-testid': 'verification-card',
+        'data-item': props.itemId,
+        'data-movements': props.movementsHref,
+        'data-exclude': props.excludeIssueId ?? '',
+      });
+    },
+    ItemVerificationCardSkeleton: () =>
+      React.createElement('div', { 'data-testid': 'verification-card-loading' }),
+  };
+});
 
 import { ServiceError } from '@/server/services/context';
 
@@ -117,7 +139,10 @@ async function renderPage(id = ID) {
   return render(await ExceptionDetailPage({ params: Promise.resolve({ id }) }));
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  card.suspend = false;
+});
 
 describe('Exception detail page', () => {
   it('a failed read says unavailable, never an empty page', async () => {
@@ -286,5 +311,44 @@ describe('Exception detail page', () => {
     await renderPage();
     expect(screen.getByText('Recount CC-000002 linked by Dana Lee')).toBeInTheDocument();
     expect(screen.getByText('Recount CC-000002 closed: Matched the book (21)')).toBeInTheDocument();
+  });
+
+  it("shows the item's last physical count card, leaving this exception out of its chips", async () => {
+    get.mockResolvedValue(detail());
+    await renderPage();
+    const c = screen.getByTestId('verification-card');
+    expect(c).toHaveAttribute('data-item', 'item-1');
+    expect(c).toHaveAttribute('data-movements', '/dashboard/inventory/item-1?tab=movements');
+    expect(c).toHaveAttribute('data-exclude', ID);
+  });
+
+  it('the card is off the page\'s critical path: while it has not answered, the rest of the page renders around its skeleton', async () => {
+    card.suspend = true;
+    get.mockResolvedValue(detail());
+    await renderPage();
+    expect(screen.getByTestId('verification-card-loading')).toBeInTheDocument();
+    expect(screen.getByText('What can cause this')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Acknowledge' })).toBeInTheDocument();
+  });
+
+  it('no card when the reader cannot see the item', async () => {
+    get.mockResolvedValue(detail({ item: null }));
+    await renderPage();
+    expect(screen.queryByTestId('verification-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('verification-card-loading')).not.toBeInTheDocument();
+  });
+
+  it("a holding rule's location links to the location page", async () => {
+    get.mockResolvedValue(
+      detail({
+        rule: 'stale_staging',
+        locationId: 'loc-1',
+        location: { name: 'Staging', kind: 'staging', archived: false },
+        facts: { itemName: 'Atlas', units: 4, locationName: 'Staging' },
+        conditionSince: '2026-09-20T15:00:00Z',
+      }),
+    );
+    await renderPage();
+    expect(screen.getByRole('link', { name: 'Staging' })).toHaveAttribute('href', '/dashboard/locations/loc-1');
   });
 });

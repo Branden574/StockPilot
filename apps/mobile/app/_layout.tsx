@@ -240,6 +240,7 @@ function RootGate() {
         <Stack.Screen name="maintenance/new" options={{ presentation: 'card' }} />
         <Stack.Screen name="maintenance/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="exceptions/[id]" options={{ presentation: 'card' }} />
+        <Stack.Screen name="location/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="schedule/new" options={{ presentation: 'card' }} />
         <Stack.Screen name="ai/chat" options={{ presentation: 'card' }} />
         <Stack.Screen name="zendesk/web" options={{ presentation: 'card' }} />

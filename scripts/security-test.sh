@@ -240,6 +240,17 @@ PGTAP_TESTS=(
   # (differential oracle). security_invariants INV-37..41 keep the engine's
   # callers and the cache's writers honest.
   supabase/tests/0373_draw_provenance.test.sql
+  # Verification summaries (F1-3, 0374): item_verification_summaries reads
+  # counts and movements past RLS, so it is SECURITY DEFINER with its gates in
+  # the body (signed in, member of the org, caller_can_read_item, item in the
+  # org): another warehouse's item, another org's item, a non-member and a
+  # signed-out caller get no row, and a member of two orgs gets no row for
+  # the other org's item. It returns counts only, never movement rows; a
+  # member who cannot see the item's movements still gets the true count.
+  # At most 500 ids. location_holdings_visible (SECURITY INVOKER) equals
+  # item_stock_levels RLS for every persona and location, so a location page
+  # never shows hidden holdings as an empty location.
+  supabase/tests/0374_verification_summaries.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql

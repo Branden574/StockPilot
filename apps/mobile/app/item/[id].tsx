@@ -53,6 +53,7 @@ import {
 } from '@stockpilot/core';
 
 import { ExceptionRecountSheet } from '@/components/exception-recount-sheet';
+import { ItemVerificationCard, useItemVerification } from '@/components/item-verification-card';
 import { MoveStockModal } from '@/components/move-stock-modal';
 import { PhotoViewer } from '@/components/photo-viewer';
 import { RemoveFromRackModal } from '@/components/remove-from-rack-modal';
@@ -67,6 +68,7 @@ import { showWriteCta, showWriteCtaForRole } from '@/lib/cta-gating';
 import { canMintPlacementDestination } from '@/lib/move-stock-form';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { isOfflineState } from '@/lib/exceptions-api';
+import { canOpenCountScreen } from '@/lib/verification-api';
 import { useOrg } from '@/lib/use-org';
 import { signItemImage } from '@/lib/image-cache';
 import { resizeForUpload } from '@/lib/image-resize';
@@ -580,6 +582,17 @@ export default function ItemDetail() {
   });
   const offline = isOfflineState(useNetworkState());
   const [countOpen, setCountOpen] = React.useState(false);
+  // "LAST PHYSICAL COUNT" (F1-3): its own read, OFF this screen's critical
+  // path. It starts alongside the item read (under the active workspace until
+  // the item's own organization is known; the same workspace for every item
+  // opened from it, so no second read), never holds the screen, and its
+  // failure is the card's alone. Read again after anything that changes what
+  // it says: a pull, an adjustment, a move or removal, a started count.
+  const [verificationNonce, setVerificationNonce] = React.useState(0);
+  const refreshVerification = React.useCallback(() => setVerificationNonce((n) => n + 1), []);
+  const verification = useItemVerification(id, item?.organization_id ?? orgId, verificationNonce);
+  // Counts are linked only for a reader who can open them (the web's rule).
+  const canOpenCounts = canOpenCountScreen(role, permissions);
 
   // Optimistic reflect of a saved note edit across BOTH movement lists (the
   // Movements tab and the Activity tab keep independent arrays, and the same
@@ -1237,6 +1250,7 @@ export default function ItemDetail() {
         await refreshQueuedAdjust();
         void cycleCountSync.refreshPendingCount();
       }
+      refreshVerification();
       await load();
       if (tab === 'movements') await loadMovements();
       if (tab === 'activity') await loadActivity();
@@ -1333,6 +1347,7 @@ export default function ItemDetail() {
    */
   function refreshAfterAdjust() {
     load().catch((e: unknown) => console.warn('[item] refresh after adjust failed', e));
+    refreshVerification();
     if (tab === 'movements') void loadMovements();
     if (tab === 'activity') void loadActivity();
   }
@@ -1853,6 +1868,17 @@ export default function ItemDetail() {
               </Body>
             </Card>
 
+            {/* Last physical count (F1-3). "Count this item" stays in the
+                stock card above, so the card is not given onCount. */}
+            <ItemVerificationCard
+              view={verification.view}
+              onRetry={verification.reload}
+              canOpenCounts={canOpenCounts}
+              onOpenCount={(cycleCountId) => router.push(`/cycle-count/${cycleCountId}` as Href)}
+              onOpenMovements={() => setTab('movements')}
+              onOpenIssue={(occurrenceId) => router.push(`/exceptions/${occurrenceId}` as Href)}
+            />
+
             {/* Meta card */}
             <Card padding={0}>
               <MetaRow label="UNIT COST" value={`$${item.unit_cost.toFixed(2)}`} />
@@ -2093,6 +2119,7 @@ export default function ItemDetail() {
         onClose={() => setMoveOpen(false)}
         onMoved={() => {
           void load();
+          refreshVerification();
           if (tab === 'movements') void loadMovements();
           if (tab === 'activity') void loadActivity();
         }}
@@ -2105,7 +2132,11 @@ export default function ItemDetail() {
         orgId={orgId ?? null}
         online={!offline}
         onClose={() => setCountOpen(false)}
-        onDone={() => setCountOpen(false)}
+        onDone={() => {
+          setCountOpen(false);
+          // The card now says which open count holds the item.
+          refreshVerification();
+        }}
         onOpenCount={(cycleCountId) => {
           setCountOpen(false);
           router.push(`/cycle-count/${cycleCountId}` as Href);
@@ -2120,6 +2151,7 @@ export default function ItemDetail() {
         onClose={() => setRemoveOpen(false)}
         onRemoved={() => {
           void load();
+          refreshVerification();
           if (tab === 'movements') void loadMovements();
           if (tab === 'activity') void loadActivity();
         }}

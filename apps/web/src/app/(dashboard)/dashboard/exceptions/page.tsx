@@ -40,7 +40,7 @@ import {
   resolveOrgTimezone,
 } from '@stockpilot/core';
 
-export const metadata = { title: 'Exceptions · StockPilot' };
+export const metadata = { title: 'Exceptions' };
 
 /**
  * THE EXCEPTION CENTER.
@@ -337,36 +337,51 @@ function OccurrenceRow({
   return (
     <li className="flex items-start gap-2">
       {selectable ? <RecountCheckbox occurrenceId={o.id} label={o.reference ?? title} /> : null}
-      <Link
-        href={`/dashboard/exceptions/${o.id}`}
-        className="hover:bg-muted/50 focus-visible:ring-ring block min-w-0 flex-1 rounded-sm px-1 focus-visible:ring-2 focus-visible:outline-none"
-      >
-        <div className="flex items-center justify-between gap-3 py-2.5">
-          <div className="min-w-0 space-y-1">
-            <p className="text-sm font-medium break-words">
-              {o.reference && (
-                <span className="text-muted-foreground mr-2 font-mono text-xs">{o.reference}</span>
-              )}
-              {title}
-            </p>
-            <p className="text-muted-foreground text-xs break-words">
-              {showRule ? `${EXCEPTION_RULES[o.rule].label} · ` : ''}
-              {detail}
-            </p>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <StateChip state={state} />
-              <RecurrenceChip recurrenceIndex={o.recurrenceIndex} />
-              {recountNote ? (
-                <span className="text-muted-foreground text-xs" data-testid="recount-note">
-                  {recountNote}
-                </span>
-              ) : null}
-              <span className="text-muted-foreground text-xs">{when}</span>
+      <div className="min-w-0 flex-1">
+        <Link
+          href={`/dashboard/exceptions/${o.id}`}
+          className="hover:bg-muted/50 focus-visible:ring-ring block min-w-0 rounded-sm px-1 focus-visible:ring-2 focus-visible:outline-none"
+        >
+          <div className="flex items-center justify-between gap-3 py-2.5">
+            <div className="min-w-0 space-y-1">
+              <p className="text-sm font-medium break-words">
+                {o.reference && (
+                  <span className="text-muted-foreground mr-2 font-mono text-xs">{o.reference}</span>
+                )}
+                {title}
+              </p>
+              <p className="text-muted-foreground text-xs break-words">
+                {showRule ? `${EXCEPTION_RULES[o.rule].label} · ` : ''}
+                {detail}
+              </p>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <StateChip state={state} />
+                <RecurrenceChip recurrenceIndex={o.recurrenceIndex} />
+                {recountNote ? (
+                  <span className="text-muted-foreground text-xs" data-testid="recount-note">
+                    {recountNote}
+                  </span>
+                ) : null}
+                <span className="text-muted-foreground text-xs">{when}</span>
+              </div>
             </div>
+            <ChevronRight className="text-muted-foreground size-4 shrink-0" aria-hidden />
           </div>
-          <ChevronRight className="text-muted-foreground size-4 shrink-0" aria-hidden />
-        </div>
-      </Link>
+        </Link>
+        {/* A holding rule's location opens its own page (F1-3): what is held
+            there and when each item was last counted. A sibling of the row's
+            link, never inside it (no nested links). */}
+        {o.locationId && o.location ? (
+          <p className="-mt-1.5 px-1 pb-2 text-xs" data-testid="occurrence-location-link">
+            <Link
+              href={`/dashboard/locations/${o.locationId}`}
+              className="text-muted-foreground hover:text-foreground underline-offset-4 hover:underline"
+            >
+              Location: {o.location.name}
+            </Link>
+          </p>
+        ) : null}
+      </div>
     </li>
   );
 }

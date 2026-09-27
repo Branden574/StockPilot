@@ -151,6 +151,15 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
   ],
   [/^\/dashboard\/purchase-orders$/, [SECTION_INVENTORY, POS_LIST]],
 
+  // One location's page (F1-3).
+  [
+    /^\/dashboard\/locations\/[^/]+$/,
+    [
+      SECTION_INVENTORY,
+      { label: 'Locations', href: '/dashboard/locations' },
+      { label: 'Detail', href: null },
+    ],
+  ],
   [
     /^\/dashboard\/locations$/,
     [SECTION_INVENTORY, { label: 'Locations', href: '/dashboard/locations' }],

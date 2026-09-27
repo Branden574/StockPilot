@@ -96,7 +96,7 @@ describe('exceptions list screen', () => {
   });
 
   it('shows "Checked at" and never runs a check on view; Check now is offered only when the server allows it', () => {
-    expect(code).toContain('Checked at ${exceptionTimeLabel(list!.syncState.lastSyncedAt, timeZone)}');
+    expect(code).toContain('exceptionCheckedAtCopy(exceptionTimeLabel(list!.syncState.lastSyncedAt, timeZone))');
     expect(code).toContain('{list?.canCheckNow ? (');
     expect(code).toContain('disabled={checking || offline}');
   });
@@ -225,5 +225,13 @@ describe('exceptions is registered in the app navigation', () => {
     expect(item?.label).toBe('Exceptions');
     expect(item?.iconName).toBe('AlertTriangle');
     expect(navIcons).toMatch(/^\s+AlertTriangle,$/m);
+  });
+});
+
+describe('the Checked at line reads the same on web and phone', () => {
+  it('the list and the detail both use core exceptionCheckedAtCopy (the detail used to drop the cadence)', () => {
+    expect(codeOnly(listScreen)).toMatch(/exceptionCheckedAtCopy\(\s*exceptionTimeLabel\(/);
+    expect(codeOnly(detailScreen)).toMatch(/exceptionCheckedAtCopy\(\s*exceptionTimeLabel\(/);
+    expect(codeOnly(detailScreen)).not.toMatch(/`Checked at \$\{/);
   });
 });

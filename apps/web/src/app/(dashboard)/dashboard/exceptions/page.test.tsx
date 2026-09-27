@@ -237,6 +237,33 @@ describe('Exceptions list page', () => {
     expect(screen.getByText(/in Staging for at least 9 days/)).toBeInTheDocument();
   });
 
+  it('a holding-rule row links to its location page, beside (never inside) the row link; an item-level row has none', async () => {
+    list.mockResolvedValue(
+      listResult({
+        occurrences: [
+          occurrence({
+            id: '33333333-3333-4333-8333-333333333333',
+            reference: 'EX-000043',
+            rule: 'stale_staging',
+            locationId: 'loc-1',
+            location: { name: 'Staging', kind: 'staging', archived: false },
+            facts: { itemName: 'Atlas', units: 4, locationName: 'Staging' },
+            conditionSince: new Date(Date.now() - 9 * 86_400_000).toISOString(),
+          }),
+          occurrence(),
+        ],
+      }),
+    );
+    await renderPage();
+    const links = screen.getAllByTestId('occurrence-location-link');
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveTextContent('Location: Staging');
+    const a = links[0]!.querySelector('a')!;
+    expect(a.getAttribute('href')).toBe('/dashboard/locations/loc-1');
+    // Not nested in the row's own link (an <a> inside an <a> is invalid HTML).
+    expect(a.parentElement!.closest('a')).toBeNull();
+  });
+
   it('reads the open list once and never syncs', async () => {
     list.mockResolvedValue(listResult());
     await renderPage();

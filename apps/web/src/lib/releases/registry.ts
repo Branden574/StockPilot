@@ -28,6 +28,53 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'last-physical-count-and-location-pages-2026-09-27',
+    revision: 1,
+    // DRAFT until the phone release (pnpm release:ota) and the Demo Co walk:
+    // a draft never leaves the server (visibleReleases, registryFingerprint),
+    // so merging this does not announce screens the phone does not have yet.
+    // A small follow-up sets it to 'published' (and updates the pin in
+    // registry.test.ts).
+    status: 'draft',
+    title: 'Item pages show the last physical count, and each location has a page',
+    summary:
+      'On the web and in the mobile app, an item now shows when it was last physically counted, what that count found, and how many recorded stock movements came after it, and an exception shows the same for its item. Each location in Locations now opens a page listing what is held there and when each item was last counted, with the open exceptions recorded there. When Cycle Counts is on, managers who can assign counts and adjust stock can recount the items at a location from its page.',
+    publishedAt: '2026-09-27T20:00:00Z',
+    entries: [
+      {
+        id: 'item-last-physical-count',
+        category: 'new',
+        area: 'Inventory',
+        title: 'Last physical count on the item page',
+        whatChanged:
+          "The Overview tab of an item page has a Physical count card. It gives the date and number of the latest posted cycle count of the item, whether it matched the book or corrected it (for example Book corrected from 8 to 10 (+2)), who counted and who posted it, and whether one location was the item's only place outside Staging at the time (a rack or crate reads as its only shelf location) or the item total was counted. Below that: recorded stock movements since the count, the book quantity now, any open count holding the item, and its open exceptions.",
+        whyItMatters:
+          'Nothing on the item said when its stock was last counted or what had happened to it since, so finding out meant searching Cycle counts and reading the Movements tab.',
+        howItAffectsYou:
+          'The card describes what the count recorded at that moment; it does not say the shelf matches the book now. An item that was never counted reads No physical count on record, and rental equipment and kits say they are not cycle counted. Rows written outside the stock ledger since the count are counted separately. If the card cannot load, it says so, and the rest of the page is unaffected. An exception page shows the same card for its item.',
+        whatToDo:
+          'No action needed. Open an item to see its last physical count, and select the movements line to see the movements since.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        id: 'location-pages',
+        category: 'new',
+        area: 'Inventory',
+        title: 'A page for each location',
+        whatChanged:
+          "Select a location's name on the Locations page, or the location of an exception, to open its page. It shows the location's kind and warehouse, the open exceptions recorded there, and each item held there with its units there and its last count: counted while this was its only shelf location (at Unplaced or a site, its only place outside Staging), the item total counted, or not counted. A line at the top totals every item held there, and the list shows 50 items per page.",
+        whyItMatters:
+          'Checking what a rack holds, and when it was last counted, meant opening each item on it one at a time.',
+        howItAffectsYou:
+          'Staff and viewers see stock and open exceptions at locations in their own warehouses; for a location in another warehouse the page says they are not listed. Items you cannot open are counted in the totals but not listed. When Cycle Counts is on, managers who can assign counts and adjust stock see Recount items here, which starts one cycle count of every item there that can be counted, up to 200 items. Like every count, it records each item total, wherever the item is stored.',
+        whatToDo: "Open Locations and select a location's name.",
+        link: { href: '/dashboard/locations', label: 'Open Locations' },
+        audience: { anyPermission: ['items:read'] },
+      },
+    ],
+  },
+  {
     id: 'order-page-warehouse-switch-2026-09-26',
     revision: 1,
     status: 'published',

@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
+import { restoreIntl, useHermesLikeIntl } from './__fixtures__/hermes-like-intl';
 import {
   ORG_TIMEZONE_DEFAULT,
   formatOrgDateTime,
@@ -187,5 +188,177 @@ describe('startOfOrgDay where midnight does not exist', () => {
         if (got !== truth) expect({ z, day: today, got }).toEqual({ z, day: today, got: truth });
       }
     }
+  });
+});
+
+/**
+ * ONE SPELLING OF AN ORG TIME, ON EVERY ENGINE.
+ *
+ * formatOrgDateTime was `toLocaleString`, which joins a date and a time with
+ * its own engine's pattern: "Sep 27, 4:32 PM" on the web (V8), "Sep 27 at
+ * 4:32 PM" with a narrow no-break space before PM on the phone (Hermes on
+ * iOS). The simulator walk of 2026-09-27 found the verification card's
+ * "Checked at" line reading two ways (web occurrence-display.tsx exceptionTime
+ * and phone exceptions-api.ts exceptionTimeLabel both call this with the same
+ * options). The stand-in is the Hermes the rentals fix measured
+ * (__fixtures__/hermes-like-intl.ts).
+ */
+describe('formatOrgDateTime: the same words on the web and the phone', () => {
+  afterEach(() => {
+    restoreIntl();
+  });
+
+  // Sun Sep 27 2026, 4:32:05 PM PDT.
+  const AT = '2026-09-27T23:32:05.000Z';
+  const PT = 'America/Los_Angeles';
+
+  it('"Checked at": the web words on a Hermes-like engine (simulator walk 2026-09-27)', () => {
+    const opts = { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' } as const;
+    expect(formatOrgDateTime(AT, opts, PT)).toBe('Sep 27, 4:32 PM');
+    useHermesLikeIntl();
+    // The stand-in is the engine that printed the phone's words.
+    expect(new Date(AT).toLocaleString('en-US', { ...opts, timeZone: PT })).toBe(
+      'Sep 27 at 4:32\u202fPM',
+    );
+    expect(formatOrgDateTime(AT, opts, PT)).toBe('Sep 27, 4:32 PM');
+  });
+
+  // Every option shape a caller passes today. The web's words must not change,
+  // and the phone must print exactly them.
+  const CALLERS: Array<[string, Intl.DateTimeFormatOptions, string]> = [
+    [
+      'exception times (web exceptionTime, phone exceptionTimeLabel, capture copy)',
+      { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' },
+      'Sep 27, 4:32 PM',
+    ],
+    [
+      'cycle counts, PO imports, order needed-by, delivery request, phone count list',
+      { dateStyle: 'medium', timeStyle: 'short' },
+      'Sep 27, 2026, 4:32 PM',
+    ],
+    [
+      'maintenance request submitted email',
+      { dateStyle: 'long', timeStyle: 'short' },
+      'September 27, 2026 at 4:32 PM',
+    ],
+    [
+      'maintenance resolved email',
+      {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        timeZoneName: 'short',
+      },
+      'Sep 27, 2026, 4:32 PM PDT',
+    ],
+    [
+      'rental times with the year (the no-parts fallback)',
+      { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' },
+      'Sep 27, 2026, 4:32 PM',
+    ],
+    [
+      'verification count date',
+      { month: 'short', day: 'numeric', year: 'numeric' },
+      'Sep 27, 2026',
+    ],
+    ['verification capture time', { hour: 'numeric', minute: '2-digit' }, '4:32 PM'],
+    ['open since', { month: 'short', day: 'numeric' }, 'Sep 27'],
+    ['a date style alone', { dateStyle: 'medium' }, 'Sep 27, 2026'],
+    ['no options (the engine default)', {}, '9/27/2026, 4:32:05 PM'],
+  ];
+
+  it.each(CALLERS)(
+    '%s: the web words are unchanged, and the phone prints them',
+    (_, opts, words) => {
+      const web = formatOrgDateTime(AT, opts, PT);
+      expect(web).toBe(words);
+      // What this engine (the web's) printed before: toLocaleString itself.
+      expect(web).toBe(new Date(AT).toLocaleString('en-US', { timeZone: PT, ...opts }));
+      useHermesLikeIntl();
+      const phone = formatOrgDateTime(AT, opts, PT);
+      expect(phone).toBe(words);
+      expect(phone).not.toMatch(/[\u202f\u00a0]/);
+    },
+  );
+
+  // The web's words must not move for any shape a future caller might pass:
+  // on this engine the new formatter reads exactly as toLocaleString did.
+  // Exhaustive and deterministic (over 1,500 option shapes, two zones, two
+  // instants): about 1.2 s locally, over 5 s on CI runners, hence its own limit.
+  it('on this engine, every date-and-time shape reads as toLocaleString did', () => {
+    const plain = (s: string) => s.replace(/[\u202f\u00a0]/g, ' ');
+    const instants = [new Date(AT), new Date('2026-01-03T08:05:00.000Z')];
+    const shapes: Intl.DateTimeFormatOptions[] = [];
+    for (const weekday of [undefined, 'short', 'long'] as const)
+      for (const year of [undefined, 'numeric'] as const)
+        for (const month of [undefined, 'numeric', 'short', 'long'] as const)
+          for (const day of [undefined, 'numeric'] as const)
+            for (const hour of [undefined, 'numeric', '2-digit'] as const)
+              for (const minute of [undefined, '2-digit'] as const)
+                for (const second of [undefined, '2-digit'] as const)
+                  for (const timeZoneName of [undefined, 'short'] as const)
+                    for (const hour12 of [undefined, false] as const) {
+                      const o: Intl.DateTimeFormatOptions = {};
+                      if (weekday) o.weekday = weekday;
+                      if (year) o.year = year;
+                      if (month) o.month = month;
+                      if (day) o.day = day;
+                      if (hour) o.hour = hour;
+                      if (minute) o.minute = minute;
+                      if (second) o.second = second;
+                      if (timeZoneName) o.timeZoneName = timeZoneName;
+                      if (hour12 !== undefined) o.hour12 = hour12;
+                      shapes.push(o);
+                    }
+    for (const dateStyle of [undefined, 'full', 'long', 'medium', 'short'] as const)
+      for (const timeStyle of [undefined, 'full', 'long', 'medium', 'short'] as const) {
+        if (dateStyle || timeStyle) shapes.push({ dateStyle, timeStyle });
+      }
+    const mismatches: string[] = [];
+    for (const o of shapes) {
+      for (const d of instants) {
+        for (const tz of [PT, 'Asia/Tokyo']) {
+          const want = plain(d.toLocaleString('en-US', { timeZone: tz, ...o }));
+          const got = formatOrgDateTime(d, o, tz);
+          if (got !== want) mismatches.push(`${JSON.stringify(o)} ${tz}: ${got} != ${want}`);
+        }
+      }
+    }
+    expect(shapes.length).toBeGreaterThan(1000);
+    expect(mismatches).toEqual([]);
+  }, 60_000);
+
+  it('a long month joins with " at " on both engines, as the web always has', () => {
+    const opts = { month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' } as const;
+    expect(formatOrgDateTime(AT, opts, PT)).toBe('September 27 at 4:32 PM');
+    useHermesLikeIntl();
+    expect(formatOrgDateTime(AT, opts, PT)).toBe('September 27 at 4:32 PM');
+  });
+
+  it("with no Intl formatter at all, the engine's own words with plain spaces, never nothing", () => {
+    useHermesLikeIntl(
+      class {
+        constructor() {
+          throw new RangeError('Intl.DateTimeFormat is not supported');
+        }
+      },
+    );
+    const printed = formatOrgDateTime(
+      AT,
+      { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' },
+      PT,
+    );
+    expect(printed).toBe('Sep 27 at 4:32 PM');
+    expect(printed).not.toMatch(/[\u202f\u00a0]/);
+  });
+
+  it('a bad value is still an em dash, and a bad zone still degrades', () => {
+    expect(formatOrgDateTime('garbage', { dateStyle: 'medium', timeStyle: 'short' }, PT)).toBe('—');
+    useHermesLikeIntl();
+    expect(
+      formatOrgDateTime(AT, { dateStyle: 'medium', timeStyle: 'short' }, 'America/Fresno'),
+    ).toBe('Sep 27, 2026, 4:32 PM');
   });
 });

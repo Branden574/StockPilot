@@ -1,4 +1,9 @@
-import { formatOrgDate, formatOrgDateTime, resolveOrgTimezone } from '../time/org-timezone';
+import {
+  formatOrgDate,
+  formatOrgDateTime,
+  plainSpaces,
+  resolveOrgTimezone,
+} from '../time/org-timezone';
 
 /**
  * THE RENTAL EMAILS, AS THE SCREENS DESCRIBE THEM.
@@ -243,11 +248,6 @@ function zoneOption(timeZone: string | null | undefined): Intl.DateTimeFormatOpt
   // resolveOrgTimezone: a zone this runtime cannot format degrades to the
   // documented default instead of throwing out of a render.
   return timeZone ? { timeZone: resolveOrgTimezone(timeZone) } : {};
-}
-
-/** A narrow no-break space or a no-break space, written as a plain space. */
-function plainSpaces(s: string): string {
-  return s.replace(/[\u202f\u00a0]/g, ' ');
 }
 
 /** The typed parts of one formatter (never its literals), or null when this runtime cannot give them. */

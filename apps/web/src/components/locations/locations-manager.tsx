@@ -1,6 +1,7 @@
 'use client';
 
 import { Building2, History, Loader2, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import Link from 'next/link';
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
@@ -254,7 +255,16 @@ export function LocationsManager({
                 <TableBody>
                   {rows.map((row) => (
                     <TableRow key={row.id}>
-                      <TableCell className="font-medium">{row.name}</TableCell>
+                      <TableCell className="font-medium">
+                        {/* The location's own page (F1-3): what is held here
+                            and when each item was last counted. */}
+                        <Link
+                          href={`/dashboard/locations/${row.id}`}
+                          className="hover:underline underline-offset-4"
+                        >
+                          {row.name}
+                        </Link>
+                      </TableCell>
                       <TableCell className="text-xs uppercase tracking-wider text-muted-foreground">
                         {row.type ?? '—'}
                       </TableCell>

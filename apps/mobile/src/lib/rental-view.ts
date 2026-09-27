@@ -17,6 +17,7 @@ import {
   type RentalEmailFacts,
 } from '@stockpilot/core';
 
+import { CONNECTION_FAILURE_COPY } from './connection-copy';
 import { showWriteCta } from './cta-gating';
 import { IdBatchReadError, readErrorMessage } from './id-batches';
 
@@ -61,14 +62,14 @@ function selectFrom(client: RentalViewClient, table: string, columns: string): M
 // ─── When the server did not answer ──────────────────────────────────────
 
 /**
- * What the rental screens say when a read got no answer at all: offline, a
- * dropped connection. Worded as the phone's other screens word it
- * (exceptions-api.ts, for a request with no HTTP status). The network layer's
- * own text is never shown: the simulator walk (2026-09-25) found "Could not
- * load this rental. Error: fetch failed: UnexpectedException: Could not
- * connect to the server. (at ExpoModulesCore/Promise.swift:56)".
+ * What the rental screens say when a read got no answer at all (offline, a
+ * dropped connection): the phone's one sentence for it (connection-copy.ts),
+ * also said by the recount sheet and the verification screens. The network
+ * layer's own text is never shown: the simulator walk (2026-09-25) found
+ * "Could not load this rental. Error: fetch failed: UnexpectedException:
+ * Could not connect to the server. (at ExpoModulesCore/Promise.swift:56)".
  */
-export const RENTAL_CONNECTION_FAILURE = 'Could not reach the server. Check your connection and try again.';
+export const RENTAL_CONNECTION_FAILURE = CONNECTION_FAILURE_COPY;
 
 /**
  * The reason a Supabase read failed, as the rental screens say it. Decided on
