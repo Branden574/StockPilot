@@ -48,6 +48,11 @@ import { useTheme } from '@/lib/use-theme';
  * a recount can settle and names them, so the count is linked to them; if
  * that read fails the item can still be counted, and the sheet says the count
  * will not be linked.
+ *
+ * For "Recount items here" (`itemIds`, F1-3, the location screen), it counts
+ * the items it is given, at most RECOUNT_MAX_ITEMS (the server refuses more),
+ * and says how many. Nothing is linked up front; the system checks the
+ * exceptions again after the count is posted.
  */
 export function ExceptionRecountSheet(props: {
   visible: boolean;
@@ -56,6 +61,8 @@ export function ExceptionRecountSheet(props: {
   occurrenceIds?: readonly string[];
   /** "Count this item": this item, plus its recountable open exceptions. */
   itemId?: string | null;
+  /** "Recount items here": these items (the location screen gathers them). */
+  itemIds?: readonly string[];
   orgId: string | null;
   online: boolean;
   timeZone?: string | null;
@@ -93,6 +100,7 @@ function SheetContent({
   title,
   occurrenceIds: givenOccurrenceIds = [],
   itemId = null,
+  itemIds: givenItemIds = [],
   orgId,
   online,
   timeZone,
@@ -103,6 +111,7 @@ function SheetContent({
   title: string;
   occurrenceIds?: readonly string[];
   itemId?: string | null;
+  itemIds?: readonly string[];
   orgId: string | null;
   online: boolean;
   timeZone?: string | null;
@@ -167,7 +176,9 @@ function SheetContent({
 
   const occurrenceIds =
     targets.kind === 'ready' ? targets.occurrenceIds : targets.kind === 'none' ? [...givenOccurrenceIds] : [];
-  const itemIds = itemId ? [itemId] : [];
+  const itemIds = itemId ? [itemId] : [...givenItemIds];
+  // "Recount items here": a list of items and no exceptions.
+  const itemList = !itemId && givenItemIds.length > 0 && givenOccurrenceIds.length === 0;
   const blocked =
     targets.kind === 'ready' && !targets.canRecount ? recountUnavailableCopy(targets.unavailableReason) : null;
   // Offline first among the reasons that can change: reconnecting enables it.
@@ -204,7 +215,9 @@ function SheetContent({
       ? 'This item’s open exceptions could not be read, so the count will not be linked to them. The system still checks them after the count is posted.'
       : targets.kind === 'ready' && targets.occurrenceIds.length > 0
         ? `The count will be linked to this item’s ${targets.occurrenceIds.length === 1 ? 'open exception' : `${targets.occurrenceIds.length} open exceptions`}.`
-        : null;
+        : itemList
+          ? `The recount will include ${itemIds.length === 1 ? '1 item' : `${itemIds.length} items`}.`
+          : null;
 
   return (
     <View style={{ flex: 1, justifyContent: 'flex-end' }}>
@@ -287,8 +300,9 @@ function SheetContent({
             <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 12 }} style={{ maxHeight: 440 }}>
               <Body size={14}>{RECOUNT_COUNTS_TOTAL_COPY}</Body>
               <Body size={13.5} muted>
-                A recount is an ordinary count. It changes no stock until a manager posts it, and the system then
-                checks these exceptions again.
+                {itemList
+                  ? 'A recount is an ordinary count. It changes no stock until a manager posts it, and the system then checks these items’ exceptions again.'
+                  : 'A recount is an ordinary count. It changes no stock until a manager posts it, and the system then checks these exceptions again.'}
               </Body>
               {preparing ? (
                 <Body size={13.5} muted accessibilityRole="text">

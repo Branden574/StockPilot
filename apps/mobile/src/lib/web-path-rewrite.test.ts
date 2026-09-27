@@ -166,3 +166,41 @@ describe('rentals deep links', () => {
     expect(rewriteWebPath('/dashboard/rentals/not-an-id')).toBe('/');
   });
 });
+
+// Locations (F1-3): one location has a native twin (app/location/[id].tsx,
+// SINGULAR), and the list is the drawer's Locations screen (/locations,
+// plural). A What's New CTA, a shared link or a pasted URL for either must
+// land on the screen instead of home.
+describe('locations deep links', () => {
+  const ID = '55555555-5555-4555-8555-555555555555';
+
+  it('a location: /dashboard/locations/<uuid> -> /location/<uuid>', () => {
+    expect(rewriteWebPath(`/dashboard/locations/${ID}`)).toBe(`/location/${ID}`);
+  });
+
+  it("the web page's ?page= is dropped", () => {
+    expect(rewriteWebPath(`/dashboard/locations/${ID}?page=3`)).toBe(`/location/${ID}`);
+  });
+
+  it('the list, with or without a query: -> /locations', () => {
+    expect(rewriteWebPath('/dashboard/locations')).toBe('/locations');
+    expect(rewriteWebPath('/dashboard/locations?tab=racks')).toBe('/locations');
+  });
+
+  // Mutation caught: the rows below the catch-all (both open home), the
+  // detail mapped to the plural list route, or the list row matching first.
+  it('ORDERING: both rows sit above the catch-all, and a location is never read as the list', () => {
+    expect(rewriteWebPath(`/dashboard/locations/${ID}`)).not.toBe('/');
+    expect(rewriteWebPath(`/dashboard/locations/${ID}`)).not.toBe('/locations');
+    expect(rewriteWebPath(`/dashboard/locations/${ID}`)).not.toBe(`/locations/${ID}`);
+    expect(rewriteWebPath('/dashboard/locations')).not.toBe('/');
+  });
+
+  it('a malformed id is not a location: home', () => {
+    expect(rewriteWebPath('/dashboard/locations/not-an-id')).toBe('/');
+  });
+
+  it('the stockpilot:// form of the link resolves the same way', () => {
+    expect(rewriteWebPath(`stockpilot:///dashboard/locations/${ID}`)).toBe(`/location/${ID}`);
+  });
+});

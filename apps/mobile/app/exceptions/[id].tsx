@@ -6,6 +6,7 @@ import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, V
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
+  COUNT_THIS_ITEM_LABEL,
   EXCEPTION_ACTION_LABELS,
   EXCEPTION_FIRST_CHECK_PENDING_COPY,
   EXCEPTION_RULES,
@@ -26,6 +27,7 @@ import {
 
 import { ExceptionNoteSheet } from '@/components/exception-note-sheet';
 import { ExceptionRecountSheet } from '@/components/exception-recount-sheet';
+import { ItemVerificationCard, useItemVerification } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
@@ -44,8 +46,11 @@ import {
   type ExceptionSheetMode,
   type MobileExceptionDetail,
 } from '@/lib/exceptions-api';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
+import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
+import { canOpenCountScreen } from '@/lib/verification-api';
 
 /**
  * One exception (F1-1): the native twin of /dashboard/exceptions/[id]. Reads
@@ -66,6 +71,10 @@ import { useTheme } from '@/lib/use-theme';
  * for a reader the server says can start one (canRecount). It needs a
  * connection: offline the button is disabled with the reason. A closed
  * recount's timeline entry says what it found (core describeTimelineEvent).
+ *
+ * LAST PHYSICAL COUNT (F1-3): the item's card (components/item-verification-card.tsx),
+ * with its own read, so a failure there never hides the exception. The
+ * location, when the exception has one, opens the location screen.
  */
 
 type Loaded =
@@ -86,6 +95,11 @@ export default function ExceptionDetailScreen() {
   const [refreshing, setRefreshing] = React.useState(false);
   const [sheet, setSheet] = React.useState<ExceptionSheetMode | null>(null);
   const [recountOpen, setRecountOpen] = React.useState(false);
+  // "Count this item" from the verification card (rules a Recount cannot
+  // settle; those have the Recount button instead).
+  const [countOpen, setCountOpen] = React.useState(false);
+  // Bumped whenever this screen re-reads, so the card re-reads with it.
+  const [verificationNonce, setVerificationNonce] = React.useState(0);
   const seqRef = React.useRef(0);
 
   const load = React.useCallback(async () => {
@@ -165,6 +179,7 @@ export default function ExceptionDetailScreen() {
 
   async function refresh() {
     setRefreshing(true);
+    setVerificationNonce((n) => n + 1);
     await load();
     setRefreshing(false);
   }
@@ -206,7 +221,9 @@ export default function ExceptionDetailScreen() {
           onRefresh={() => void refresh()}
           onOpenSheet={setSheet}
           onRecount={() => setRecountOpen(true)}
+          onCount={() => setCountOpen(true)}
           onNavigate={(href) => router.push(href as Href)}
+          verificationRefreshKey={verificationNonce}
         />
       )}
 
@@ -241,10 +258,32 @@ export default function ExceptionDetailScreen() {
           onDone={() => {
             setRecountOpen(false);
             // Re-read, so the state chip and the timeline show the recount.
+            setVerificationNonce((n) => n + 1);
             void load();
           }}
           onOpenCount={(cycleCountId) => {
             setRecountOpen(false);
+            router.push(`/cycle-count/${cycleCountId}` as Href);
+          }}
+        />
+      ) : null}
+
+      {state.kind === 'ready' ? (
+        <ExceptionRecountSheet
+          visible={countOpen}
+          title={COUNT_THIS_ITEM_LABEL}
+          itemId={state.detail.occurrence.itemId}
+          orgId={orgId ?? null}
+          online={!offline}
+          timeZone={state.detail.timeZone}
+          onClose={() => setCountOpen(false)}
+          onDone={() => {
+            setCountOpen(false);
+            setVerificationNonce((n) => n + 1);
+            void load();
+          }}
+          onOpenCount={(cycleCountId) => {
+            setCountOpen(false);
             router.push(`/cycle-count/${cycleCountId}` as Href);
           }}
         />
@@ -267,7 +306,9 @@ function Detail({
   onRefresh,
   onOpenSheet,
   onRecount,
+  onCount,
   onNavigate,
+  verificationRefreshKey,
 }: {
   detail: MobileExceptionDetail;
   banner: string | null;
@@ -276,10 +317,23 @@ function Detail({
   onRefresh: () => void;
   onOpenSheet: (mode: ExceptionSheetMode) => void;
   onRecount: () => void;
+  onCount: () => void;
   onNavigate: (href: string) => void;
+  verificationRefreshKey: number;
 }) {
   const { c } = useTheme();
   const o = detail.occurrence;
+  // The item's last physical count (F1-3), read for the workspace this
+  // exception belongs to. Not read for an item this reader cannot see (the
+  // ITEM fact says so; the card would only repeat it).
+  const verification = useItemVerification(
+    o.item ? o.itemId : null,
+    detail.organizationId,
+    verificationRefreshKey,
+  );
+  // Counts are linked only for a reader who can open them (the web's rule).
+  const { role } = useRole();
+  const canOpenCounts = canOpenCountScreen(role, useEffectivePermissions());
   const meta = EXCEPTION_RULES[o.rule];
   const d = describeOccurrence(o.rule, o.facts, {
     itemName: o.item?.name ?? null,
@@ -353,7 +407,14 @@ function Detail({
 
       <Card padding={14}>
         <Fact label="ITEM" value={o.item ? `${o.item.name}${o.item.sku ? ` (${o.item.sku})` : ''}` : 'Not visible to you'} />
-        {o.location ? (
+        {o.location && o.locationId ? (
+          <Fact
+            label="LOCATION"
+            value={`${o.location.name}${o.location.archived ? ' (archived)' : ''}`}
+            onPress={() => onNavigate(`/location/${o.locationId}`)}
+            hint="Opens the location"
+          />
+        ) : o.location ? (
           <Fact label="LOCATION" value={`${o.location.name}${o.location.archived ? ' (archived)' : ''}`} />
         ) : null}
         <Fact
@@ -451,6 +512,21 @@ function Detail({
         </Section>
       ) : null}
 
+      {o.item ? (
+        <ItemVerificationCard
+          view={verification.view}
+          onRetry={verification.reload}
+          canOpenCounts={canOpenCounts}
+          onOpenCount={(cycleCountId) => onNavigate(`/cycle-count/${cycleCountId}`)}
+          onOpenMovements={() => onNavigate(`/item/${o.itemId}?tab=movements`)}
+          onOpenIssue={(occurrenceId) => onNavigate(`/exceptions/${occurrenceId}`)}
+          // A rule a Recount can settle has the Recount button above; offering
+          // "Count this item" too would be two buttons for one count.
+          onCount={showRecount ? undefined : onCount}
+          excludeIssueId={o.id}
+        />
+      ) : null}
+
       <Section title="WHAT CAN CAUSE THIS">
         {meta.explanations.map((e) => (
           <Body key={e} size={14}>
@@ -530,7 +606,33 @@ function Detail({
   );
 }
 
-function Fact({ label, value }: { label: string; value: string }) {
+function Fact({
+  label,
+  value,
+  onPress,
+  hint,
+}: {
+  label: string;
+  value: string;
+  /** Makes the fact a link (the location opens the location screen). */
+  onPress?: () => void;
+  hint?: string;
+}) {
+  if (onPress) {
+    return (
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="link"
+        accessibilityHint={hint}
+        style={({ pressed }) => ({ gap: 2, paddingVertical: 6, opacity: pressed ? 0.7 : 1 })}
+      >
+        <Eyebrow prefix="">{label}</Eyebrow>
+        <Body size={14.5} style={{ textDecorationLine: 'underline' }}>
+          {value}
+        </Body>
+      </Pressable>
+    );
+  }
   return (
     <View style={{ gap: 2, paddingVertical: 6 }}>
       <Eyebrow prefix="">{label}</Eyebrow>

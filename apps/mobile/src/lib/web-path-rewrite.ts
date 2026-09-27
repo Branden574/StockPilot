@@ -94,6 +94,16 @@ const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
   { re: new RegExp(`/dashboard/rentals/${UUID}`), to: (m) => `/rentals/${m[1]}` },
   { re: /\/dashboard\/rentals\/new$/, to: () => '/rentals/new' },
   { re: /\/dashboard\/rentals(\?.*)?$/, to: () => '/rentals' },
+  // Locations (F1-3): one location has a native twin (app/location/[id].tsx,
+  // "last physical count" for every item held there), and the list is the
+  // drawer's Locations screen. A What's New CTA, a shared link or a pasted
+  // URL must land on the screen instead of home. Detail before the bare list
+  // so a location id is never read as the list; the native detail route is
+  // SINGULAR (/location/<id>), the list plural. Query (the web page's ?page=
+  // or tab) is dropped. No push links here yet, so no cold-start shim under
+  // app/dashboard/ (see the cycle-count note above).
+  { re: new RegExp(`/dashboard/locations/${UUID}`), to: (m) => `/location/${m[1]}` },
+  { re: /\/dashboard\/locations(\?.*)?$/, to: () => '/locations' },
   { re: /^\/dashboard(\/.*)?$/, to: () => '/' },
 ];
 
