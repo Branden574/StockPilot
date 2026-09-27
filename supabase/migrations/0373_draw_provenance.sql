@@ -88,10 +88,10 @@
 -- statement over the base tables that restates has_org_role(org, 'manager')
 -- or caller_can_write_location (is_org_member + user_can_access_warehouse
 -- 'write') for that drawer. The section 0 preflight pins the four restated
--- predicates (text and volatility) and the (organization_id, user_id)
--- uniqueness of organization_members; pgTAP 0373 S2-S4 prove the restatement
--- equals the live predicates for twelve signed-in personas and service over
--- nine locations.
+-- predicates (text, volatility, security mode, search_path and owner) and
+-- the (organization_id, user_id) uniqueness of organization_members; pgTAP
+-- 0373 S2-S4 prove the restatement equals the live predicates for twelve
+-- signed-in personas and service over nine locations.
 --
 -- Statement-level AFTER triggers clear the cache whenever the transaction
 -- itself changes an input: organization_members and user_warehouse_assignments
@@ -151,11 +151,12 @@
 -- trigger raises 42501 ledger_only for a draw inserted outside a ledger
 -- transaction and 42501 draw_immutable for any UPDATE that changes a draw;
 -- neither is reachable from a ledger RPC. This file raises 55000 at push
--- time if a body it restates or mirrors has drifted from the text it was
--- built from, if 0373 is already applied, if stock_movements carries a
--- trigger other than the 0369 stamp, if authenticated lacks table-level
--- INSERT or SELECT on stock_movements, or if a post-check fails; and 55P03
--- when it cannot take its locks (PROD PUSH NOTE). Never 40001/40P01 (0367).
+-- time if a function it restates or mirrors has drifted from the text or
+-- header (volatility, security mode, search_path, owner) it was built from,
+-- if 0373 is already applied, if stock_movements carries a trigger other
+-- than the 0369 stamp, if authenticated lacks table-level INSERT or SELECT
+-- on stock_movements, or if a post-check fails; and 55P03 when it cannot
+-- take its locks (PROD PUSH NOTE). Never 40001/40P01 (0367).
 --
 -- ── PROD PUSH NOTE ──────────────────────────────────────────────────────────
 -- ADD COLUMN needs ACCESS EXCLUSIVE on stock_movements (metadata only: the
@@ -176,8 +177,8 @@ set lock_timeout = '5s';
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- 0) Preflight: refuse (55000) unless every body this file restates or
---    mirrors is the exact text it was built from.
+-- 0) Preflight: refuse (55000) unless every function this file restates or
+--    mirrors is the exact text AND header it was built from.
 -- ═══════════════════════════════════════════════════════════════════════════
 -- md5(prosrc) at the pre-0373 head (local, PG 17.6.1.166; unchanged at 0372):
 --   public.apply_level_delta             4be0f94c4390e7cd9c15a73e629133bf (0359)
@@ -193,11 +194,30 @@ set lock_timeout = '5s';
 --   public.user_can_access_warehouse     76b4170f3d393e8a1f293ca3d4895955
 -- A drifted predicate means the restatement may no longer equal it: re-prove
 -- ledger._seal (pgTAP 0373 S2-S4) before updating a pin.
+--
+-- The header is pinned with the text, for all ten: volatility, SECURITY
+-- DEFINER or INVOKER, proconfig (the SET search_path) and the owner. The six
+-- restated functions are written below with CREATE OR REPLACE and a restated
+-- header, which REPLACES the security mode, volatility and SET clause (it
+-- keeps the owner and ACL), so a header changed on production without a body
+-- change would otherwise be overwritten silently. For the four predicates the
+-- header is part of what _seal restates: a predicate that became INVOKER, or
+-- read another search_path, could answer differently from the restatement.
+-- Pre-0373 values (local, 0372):
+--   apply_level_delta, process_return_disposition   VOLATILE, DEFINER
+--   adjust_stock, distribute_bundle, assemble_bundle,
+--   tg_stock_movements_via_ledger                   VOLATILE, INVOKER
+--   the four predicates                             STABLE,   DEFINER
+--   proconfig {search_path=public} for all but process_return_disposition
+--   ({"search_path=public, extensions"}); owner postgres for all ten.
 do $pre$
 declare
   r record;
   v_have text;
   v_vol  text;
+  v_sec  boolean;
+  v_cfg  text;
+  v_own  text;
 begin
   if to_regtype('public.stock_draw') is not null
      or to_regtype('public.stock_draw_holding') is not null
@@ -212,24 +232,30 @@ begin
 
   for r in
     select * from (values
-      ('public.apply_level_delta(uuid,numeric,text)',                            '4be0f94c4390e7cd9c15a73e629133bf', null),
-      ('ledger.adjust_stock(uuid,numeric,text,uuid,text,text,text)',             '5ac1ac45313bb352e2ff5c015aa18cd3', null),
-      ('ledger.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)',     '489959c7ad7fdc9cc153c6326e503dc5', null),
-      ('ledger.assemble_bundle(uuid,numeric,uuid,text)',                         '8e9893d5666762e238bd354cc85bdbd1', null),
-      ('ledger.process_return_disposition(uuid)',                                'd16d045bafacef106377a2767c972704', null),
-      ('public.tg_stock_movements_via_ledger()',                                 '31fb4a57e3748a412211947559111cff', null),
-      ('public.has_org_role(uuid,text)',                                         '10422b29a6e15acd003d4f11ed28e90c', 's'),
-      ('public.caller_can_write_location(uuid)',                                 '188634bf8552a0064bfbf1ebfecf814f', 's'),
-      ('public.is_org_member(uuid)',                                             '76492a6556e9f6a7c33d942aa9726f9f', 's'),
-      ('public.user_can_access_warehouse(uuid,uuid,text)',                       '76b4170f3d393e8a1f293ca3d4895955', 's')
-    ) v(fn, want, vol)
+      ('public.apply_level_delta(uuid,numeric,text)',                        '4be0f94c4390e7cd9c15a73e629133bf', 'v', true,  '{search_path=public}'),
+      ('ledger.adjust_stock(uuid,numeric,text,uuid,text,text,text)',         '5ac1ac45313bb352e2ff5c015aa18cd3', 'v', false, '{search_path=public}'),
+      ('ledger.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)', '489959c7ad7fdc9cc153c6326e503dc5', 'v', false, '{search_path=public}'),
+      ('ledger.assemble_bundle(uuid,numeric,uuid,text)',                     '8e9893d5666762e238bd354cc85bdbd1', 'v', false, '{search_path=public}'),
+      ('ledger.process_return_disposition(uuid)',                            'd16d045bafacef106377a2767c972704', 'v', true,  '{"search_path=public, extensions"}'),
+      ('public.tg_stock_movements_via_ledger()',                             '31fb4a57e3748a412211947559111cff', 'v', false, '{search_path=public}'),
+      ('public.has_org_role(uuid,text)',                                     '10422b29a6e15acd003d4f11ed28e90c', 's', true,  '{search_path=public}'),
+      ('public.caller_can_write_location(uuid)',                             '188634bf8552a0064bfbf1ebfecf814f', 's', true,  '{search_path=public}'),
+      ('public.is_org_member(uuid)',                                         '76492a6556e9f6a7c33d942aa9726f9f', 's', true,  '{search_path=public}'),
+      ('public.user_can_access_warehouse(uuid,uuid,text)',                   '76b4170f3d393e8a1f293ca3d4895955', 's', true,  '{search_path=public}')
+    ) v(fn, want, vol, secdef, cfg)
   loop
-    select md5(p.prosrc), p.provolatile::text into v_have, v_vol
+    select md5(p.prosrc), p.provolatile::text, p.prosecdef, p.proconfig::text, pg_catalog.pg_get_userbyid(p.proowner)
+      into v_have, v_vol, v_sec, v_cfg, v_own
       from pg_proc p
      where p.oid = to_regprocedure(r.fn);
-    if v_have is distinct from r.want or (r.vol is not null and v_vol is distinct from r.vol) then
-      raise exception '0373: % drifted from the text this migration restates or mirrors (md5 %, volatility %; want %, %)',
-        r.fn, coalesce(v_have, '<missing>'), coalesce(v_vol, '<missing>'), r.want, coalesce(r.vol, 'any')
+    if v_have is distinct from r.want
+       or v_vol is distinct from r.vol
+       or v_sec is distinct from r.secdef
+       or v_cfg is distinct from r.cfg
+       or v_own is distinct from 'postgres' then
+      raise exception '0373: % drifted from the text or header this migration restates or mirrors (md5 %, volatility %, security definer %, config %, owner %; want %, %, %, %, postgres)',
+        r.fn, coalesce(v_have, '<missing>'), coalesce(v_vol, '<missing>'), coalesce(v_sec::text, '<missing>'),
+        coalesce(v_cfg, '<none>'), coalesce(v_own, '<missing>'), r.want, r.vol, r.secdef, r.cfg
         using errcode = '55000';
     end if;
   end loop;

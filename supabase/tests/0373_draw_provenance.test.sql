@@ -1614,7 +1614,8 @@ select is(
 -- it equals them; S5-S6 count; S7-S13 prove when an answer is dropped.
 -- ══════════════════════════════════════════════════════════════════════════
 select is(
-  (select string_agg(p.proname || ':' || md5(p.prosrc) || ':' || p.provolatile::text, ',' order by p.proname)
+  (select string_agg(p.proname || ':' || md5(p.prosrc) || ':' || p.provolatile::text || ':' || p.prosecdef::text
+                     || ':' || p.proconfig::text || ':' || pg_get_userbyid(p.proowner), ',' order by p.proname)
      from pg_proc p where p.oid in ('public.has_org_role(uuid,text)'::regprocedure,
                                     'public.caller_can_write_location(uuid)'::regprocedure,
                                     'public.is_org_member(uuid)'::regprocedure,
@@ -1624,8 +1625,8 @@ select is(
                        and (select array_agg(a.attname::text order by a.attname) from unnest(c.conkey) k(attnum)
                               join pg_attribute a on a.attrelid = c.conrelid and a.attnum = k.attnum)
                            = array['organization_id', 'user_id'])::text,
-  'caller_can_write_location:188634bf8552a0064bfbf1ebfecf814f:s,has_org_role:10422b29a6e15acd003d4f11ed28e90c:s,is_org_member:76492a6556e9f6a7c33d942aa9726f9f:s,user_can_access_warehouse:76b4170f3d393e8a1f293ca3d4895955:s|true',
-  'S1: the four predicates ledger._seal restates are the text and volatility it was proven against, and organization_members is unique on (organization_id, user_id) (has_org_role''s limit 1 row is the only row). The preflight refuses the same drift at push time. If this fails, re-prove _seal (S2-S4) before updating both pins');
+  'caller_can_write_location:188634bf8552a0064bfbf1ebfecf814f:s:true:{search_path=public}:postgres,has_org_role:10422b29a6e15acd003d4f11ed28e90c:s:true:{search_path=public}:postgres,is_org_member:76492a6556e9f6a7c33d942aa9726f9f:s:true:{search_path=public}:postgres,user_can_access_warehouse:76b4170f3d393e8a1f293ca3d4895955:s:true:{search_path=public}:postgres|true',
+  'S1: the four predicates ledger._seal restates are the text, volatility, SECURITY DEFINER, search_path and owner it was proven against, and organization_members is unique on (organization_id, user_id) (has_org_role''s limit 1 row is the only row). The preflight refuses the same drift at push time. If this fails, re-prove _seal (S2-S4) before updating both pins');
 
 -- Nine locations: WA rack, WA Unplaced, WA Staging, the home Site, the WB
 -- rack, the foreign rack, a foreign org-level location, a home location in
