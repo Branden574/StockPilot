@@ -3,9 +3,19 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { PERMISSIONS, releaseRegistrySchema, type Release } from '@stockpilot/core';
+import {
+  MODULE_REGISTRY,
+  PERMISSIONS,
+  releaseRegistrySchema,
+  type ModuleId,
+  type Release,
+  type ReleaseViewer,
+} from '@stockpilot/core';
+
+import { ANNOUNCEMENTS } from '@/lib/onboarding/announcements';
 
 import { LEGACY_ANNOUNCEMENTS } from './legacy-announcements.fixture';
+import { legacyAnnouncementsFor, registryFingerprint, visibleReleases } from './logic';
 import { RELEASES } from './registry';
 
 /**
@@ -165,5 +175,40 @@ describe('the six legacy announcements survive the move, to the character', () =
       LEGACY_ANNOUNCEMENTS.some((a) => a.id === id),
     );
     expect(order).toEqual(LEGACY_ANNOUNCEMENTS.map((a) => a.id));
+  });
+});
+
+/**
+ * F1-3's release is held as a DRAFT until its phone release (pnpm release:ota)
+ * and the Demo Co walk (review 2026-09-27, M4): published in the feature
+ * commit, it would have been announced to phone users on merge, before the
+ * phone had the location screen. The follow-up that publishes it flips this
+ * pin to 'published'.
+ */
+describe('F1-3 (last physical count and location pages) is held as a draft', () => {
+  const F1_3 = 'last-physical-count-and-location-pages-2026-09-27';
+  const release = () => RELEASES.find((r) => r.id === F1_3)!;
+  /** A reader every audience includes. */
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+
+  it('is a draft, so no reader, no API and no old phone build is told about it yet', () => {
+    expect(release().status).toBe('draft');
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(F1_3);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(F1_3);
+    expect(registryFingerprint(RELEASES)).not.toContain(F1_3);
+    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(F1_3);
+  });
+
+  it('its summary (all an old phone build shows) is true on both platforms, and says who may recount', () => {
+    const summary = release().summary;
+    expect(summary).toMatch(/^On the web and in the mobile app, /);
+    expect(summary).toContain(
+      'When Cycle Counts is on, managers who can assign counts and adjust stock can recount the items at a location from its page.',
+    );
+    expect(summary).not.toMatch(/Locations page|item page/);
   });
 });

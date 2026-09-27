@@ -5,7 +5,10 @@ import {
   formatCycleCountNumber,
   VERIFICATION_UNAVAILABLE_COPY,
   verificationIssueChipCopy,
+  verificationRefusalCopy,
+  verificationRefusalOf,
   verificationSummaryCopy,
+  type VerificationRefusal,
 } from '@stockpilot/core';
 
 import { exceptionTime } from '@/components/exceptions/occurrence-display';
@@ -33,9 +36,12 @@ import { VerificationService, type ItemVerification } from '@/server/services/ve
  * item_verification_summaries: the card makes its own read and streams in
  * when it answers (item-detail.parallel-reads.test.tsx pins it).
  *
- * A FAILED READ SAYS SO. Any failure other than "not permitted" or "not
- * found" is reported and renders "Couldn't load verification" (role="alert"),
- * never "No physical count on record.": an error must not read as a fact.
+ * A FAILED READ SAYS SO. Any failure other than a refusal is reported and
+ * renders "Couldn't load verification" (role="alert"), never "No physical
+ * count on record.": an error must not read as a fact. A REFUSAL (not found,
+ * not permitted, the MFA step-up, a bad id) is not reported and says why,
+ * under the same headline, in the phone card's words (core
+ * verificationRefusalCopy), so the two platforms show the same card.
  */
 
 export interface ItemVerificationCardProps {
@@ -52,6 +58,7 @@ export async function ItemVerificationCard({
   excludeIssueId = null,
 }: ItemVerificationCardProps) {
   let data: ItemVerification | null;
+  let refusal: VerificationRefusal | null = null;
   let canOpenCounts = false;
   let organizationId: string | undefined;
   try {
@@ -61,20 +68,16 @@ export async function ItemVerificationCard({
     data = await new VerificationService(ctx).item(itemId);
   } catch (e) {
     if (isNextControlFlowError(e)) throw e;
-    // Not this reader's to see (the host page answers not found for the item
-    // itself): nothing to show, not an error.
-    if (
-      e instanceof ServiceError &&
-      (e.code === 'forbidden' || e.code === 'not_found' || e.code === 'validation_error')
-    ) {
-      return null;
-    }
-    void reportError(e, { tag: 'inventory.item_verification', organizationId });
     data = null;
+    // A refusal is an answer (said, not reported); anything else is a read
+    // that failed.
+    refusal = e instanceof ServiceError ? verificationRefusalOf(e.code, e.details?.reason) : null;
+    if (!refusal) void reportError(e, { tag: 'inventory.item_verification', organizationId });
   }
   return (
     <ItemVerificationCardView
       data={data}
+      refusal={refusal}
       canOpenCounts={canOpenCounts}
       movementsHref={movementsHref}
       excludeIssueId={excludeIssueId}
@@ -109,14 +112,17 @@ export function ItemVerificationCardSkeleton() {
   );
 }
 
-/** The card from an answer (null: the read failed). Exported for tests. */
+/** The card from an answer (null: the read failed, or was refused when
+ *  `refusal` says why). Exported for tests. */
 export function ItemVerificationCardView({
   data,
+  refusal = null,
   canOpenCounts,
   movementsHref,
   excludeIssueId = null,
 }: {
   data: ItemVerification | null;
+  refusal?: VerificationRefusal | null;
   canOpenCounts: boolean;
   movementsHref: string;
   excludeIssueId?: string | null;
@@ -129,7 +135,14 @@ export function ItemVerificationCardView({
           className="border-warning/40 bg-warning/5 flex items-start gap-2 rounded-md border px-3 py-2"
         >
           <AlertTriangle className="text-warning mt-0.5 size-4 shrink-0" aria-hidden />
-          <p>{VERIFICATION_UNAVAILABLE_COPY}. Reload the page to try again.</p>
+          {refusal ? (
+            <div className="space-y-1">
+              <p className="font-medium">{VERIFICATION_UNAVAILABLE_COPY}</p>
+              <p data-testid="verification-refusal">{verificationRefusalCopy(refusal, 'item')}</p>
+            </div>
+          ) : (
+            <p>{VERIFICATION_UNAVAILABLE_COPY}. Reload the page to try again.</p>
+          )}
         </div>
       </CardShell>
     );

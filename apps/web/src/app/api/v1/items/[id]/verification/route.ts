@@ -1,7 +1,10 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { verificationErrorResponse } from '@/lib/verification/error-response';
+import {
+  verificationErrorResponse,
+  verificationUnauthenticatedResponse,
+} from '@/lib/verification/error-response';
 import { VerificationService } from '@/server/services/verification';
 
 export const runtime = 'nodejs';
@@ -23,7 +26,7 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const ctx = await withApiContext(req);
-  if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  if (!ctx) return verificationUnauthenticatedResponse();
 
   const { id } = await params;
   try {

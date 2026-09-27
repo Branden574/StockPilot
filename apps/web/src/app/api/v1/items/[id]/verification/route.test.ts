@@ -131,10 +131,16 @@ beforeEach(() => {
 });
 
 describe('GET /api/v1/items/[id]/verification', () => {
-  it('401 without a session, and reads nothing', async () => {
+  // L5 (review 2026-09-27): the 401 had no `message` and no Cache-Control.
+  it('401 without a session, in the one error shape, not cached, and reads nothing', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(null);
     const res = await GET(bearer(URL_), params(ITEM));
     expect(res.status).toBe(401);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(await res.json()).toEqual({
+      error: 'unauthenticated',
+      message: 'Your session has ended. Sign in again.',
+    });
   });
 
   it('serves a Bearer caller and a cookie caller alike, handing the request to withApiContext', async () => {

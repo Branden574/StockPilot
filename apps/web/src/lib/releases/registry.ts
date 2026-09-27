@@ -30,10 +30,15 @@ export const RELEASES: Release[] = [
   {
     id: 'last-physical-count-and-location-pages-2026-09-27',
     revision: 1,
-    status: 'published',
+    // DRAFT until the phone release (pnpm release:ota) and the Demo Co walk:
+    // a draft never leaves the server (visibleReleases, registryFingerprint),
+    // so merging this does not announce screens the phone does not have yet.
+    // A small follow-up sets it to 'published' (and updates the pin in
+    // registry.test.ts).
+    status: 'draft',
     title: 'Item pages show the last physical count, and each location has a page',
     summary:
-      'An item page now shows when the item was last physically counted, what that count found, and how many recorded stock movements came after it. An exception page shows the same for its item. Each location on the Locations page now opens a page listing what is held there and when each item was last counted, with the open exceptions recorded there. Managers can recount the items at a location from that page.',
+      'On the web and in the mobile app, an item now shows when it was last physically counted, what that count found, and how many recorded stock movements came after it, and an exception shows the same for its item. Each location in Locations now opens a page listing what is held there and when each item was last counted, with the open exceptions recorded there. When Cycle Counts is on, managers who can assign counts and adjust stock can recount the items at a location from its page.',
     publishedAt: '2026-09-27T20:00:00Z',
     entries: [
       {
@@ -42,7 +47,7 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: 'Last physical count on the item page',
         whatChanged:
-          "The Overview tab of an item page has a Physical count card. It gives the date and number of the latest posted cycle count of the item, whether it matched the book or corrected it (for example Book corrected from 8 to 10 (+2)), who counted and who posted it, and whether one rack was the item's only shelf location at the time or the item total was counted. Below that: recorded stock movements since the count, the book quantity now, any open count holding the item, and its open exceptions.",
+          "The Overview tab of an item page has a Physical count card. It gives the date and number of the latest posted cycle count of the item, whether it matched the book or corrected it (for example Book corrected from 8 to 10 (+2)), who counted and who posted it, and whether one location was the item's only place outside Staging at the time (a rack or crate reads as its only shelf location) or the item total was counted. Below that: recorded stock movements since the count, the book quantity now, any open count holding the item, and its open exceptions.",
         whyItMatters:
           'Nothing on the item said when its stock was last counted or what had happened to it since, so finding out meant searching Cycle counts and reading the Movements tab.',
         howItAffectsYou:
@@ -58,11 +63,11 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: 'A page for each location',
         whatChanged:
-          "Select a location's name on the Locations page, or the location of an exception, to open its page. It shows the location's kind and warehouse, the open exceptions recorded there, and each item held there with its units there and its last count: counted while this was its only shelf location, the item total counted, or not counted. A line at the top totals every item held there, and the list shows 50 items per page.",
+          "Select a location's name on the Locations page, or the location of an exception, to open its page. It shows the location's kind and warehouse, the open exceptions recorded there, and each item held there with its units there and its last count: counted while this was its only shelf location (at Unplaced or a site, its only place outside Staging), the item total counted, or not counted. A line at the top totals every item held there, and the list shows 50 items per page.",
         whyItMatters:
           'Checking what a rack holds, and when it was last counted, meant opening each item on it one at a time.',
         howItAffectsYou:
-          'Staff and viewers see stock at locations in their own warehouses; for a location in another warehouse the page says its stock is not listed. Items you cannot open are counted in the totals but not listed. When Cycle Counts is on, managers who can assign counts and adjust stock see Recount items here, which starts one cycle count of every item there that can be counted, up to 200 items. Like every count, it records each item total, wherever the item is stored.',
+          'Staff and viewers see stock and open exceptions at locations in their own warehouses; for a location in another warehouse the page says they are not listed. Items you cannot open are counted in the totals but not listed. When Cycle Counts is on, managers who can assign counts and adjust stock see Recount items here, which starts one cycle count of every item there that can be counted, up to 200 items. Like every count, it records each item total, wherever the item is stored.',
         whatToDo: "Open Locations and select a location's name.",
         link: { href: '/dashboard/locations', label: 'Open Locations' },
         audience: { anyPermission: ['items:read'] },

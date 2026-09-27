@@ -12,8 +12,10 @@
 --        * its latest physical count, from _latest_count_lines (0372), the one
 --          source of "last physical count" the count_variance rule also reads:
 --          the count, who counted and who posted, when it was observed, the
---          book and the counted quantity, the counted location (and its kind
---          and archived state, for the label) and whether AI helped;
+--          book and the counted quantity, the counted location (and its kind,
+--          type and archived state, for the label: a rack or crate is a
+--          "shelf location", a Site or Unplaced "its only place outside
+--          Staging", core isRackShelfLocation) and whether AI helped;
 --        * movements_since: stock ledger rows (via_ledger, 0369) for the item
 --          written after the moment the count is true for
 --          (coalesce(baseline_at, counted_at)), EXCLUDING the count's own
@@ -115,6 +117,7 @@ returns table (
   counted_location_id       uuid,
   counted_location_name     text,
   counted_location_kind     text,
+  counted_location_type     text,
   counted_location_archived boolean,
   ai_assisted               boolean,
   movements_since           integer,
@@ -182,6 +185,7 @@ begin
          lc.counted_location_id,
          lc.counted_location_name,
          loc.kind,
+         loc.type,
          case when lc.counted_location_id is null or loc.id is null then null
               else loc.deleted_at is not null end,
          lc.ai_assisted,
@@ -236,7 +240,7 @@ comment on function public.item_verification_summaries(uuid, uuid[]) is
   'F1-3 (0374): per requested item the caller can read in p_org (is_org_member, '
   'caller_can_read_item, same org), the item''s countability facts and on-hand, '
   'its latest physical count (_latest_count_lines: count, people, moments, book '
-  'and counted quantity, counted location with kind and archived state, AI '
+  'and counted quantity, counted location with kind, type and archived state, AI '
   'assisted), movements_since (via_ledger rows after coalesce(baseline_at, '
   'counted_at), excluding the count''s own cycle_count movement), '
   'outside_ledger_since (via_ledger = false rows in the same window) and the '

@@ -1,11 +1,16 @@
 import {
   EXCEPTION_FIRST_CHECK_PENDING_COPY,
+  LOCATION_HOLDINGS_TRUNCATED_COPY,
+  LOCATION_NO_OPEN_ISSUES_COPY,
+  VERIFICATION_SESSION_ENDED_COPY,
   can,
   formatStockQuantity,
   isRecountUnavailableReason,
   locationRecountProblem,
+  locationRecountProblemOf,
   parseItemVerificationSummary,
   recountDisabledReason,
+  verificationRefusalCopy,
   type ItemVerificationSummary,
   type LocationRowVerificationCopy,
   type LocationVerificationTotals,
@@ -13,6 +18,7 @@ import {
   type RecountUnavailableReason,
   type Role,
   type VerificationIssue,
+  type VerificationSubject,
 } from '@stockpilot/core';
 
 import { api } from './api';
@@ -140,7 +146,7 @@ export class VerificationResponseError extends Error {
       problem === 'workspace'
         ? 'The server answered for a different workspace.'
         : problem === 'invalid_id'
-          ? 'This link is not valid.'
+          ? verificationRefusalCopy('invalid_id', 'item')
           : 'The server sent an unexpected answer.',
     );
     this.name = 'VerificationResponseError';
@@ -396,18 +402,18 @@ export interface VerificationErrorView {
   keepShown: boolean;
 }
 
-export type VerificationSubject = 'item' | 'location';
-
-const NOT_AVAILABLE: Record<VerificationSubject, string> = {
-  item: 'This item is not available to you, or it no longer exists.',
-  location: 'This location is not available to you, or it no longer exists.',
-};
+/** 'item' | 'location' (core's: the web card and page word refusals with
+ *  the same core verificationRefusalCopy). */
+export type { VerificationSubject };
 
 /**
  * Why a verification read failed, in words. Keyed on the HTTP status and the
  * route's app-authored code and `details.reason`, never on message text. The
  * route answers every unexpected failure as a 500 "Couldn't load
- * verification", so the headline already says that; this adds the cause.
+ * verification", so the headline already says that; this adds the cause. A
+ * refusal (404, 403, 400, 401) reads in core's words, the same the web card
+ * and location page show (verificationRefusalCopy,
+ * VERIFICATION_SESSION_ENDED_COPY).
  */
 export function describeVerificationError(
   e: unknown,
@@ -423,7 +429,11 @@ export function describeVerificationError(
       };
     }
     if (e.problem === 'invalid_id')
-      return { detail: 'This link is not valid.', retry: false, keepShown: false };
+      return {
+        detail: verificationRefusalCopy('invalid_id', subject),
+        retry: false,
+        keepShown: false,
+      };
     return {
       detail:
         'The server sent an answer this version of the app cannot read. Try again, or update the app.',
@@ -439,7 +449,7 @@ export function describeVerificationError(
     // The route's own 404 carries { error: 'not_found' }. A 404 without it
     // never reached the route: a server that does not have it yet.
     return code === 'not_found'
-      ? { detail: NOT_AVAILABLE[subject], retry: false, keepShown: false }
+      ? { detail: verificationRefusalCopy('not_found', subject), retry: false, keepShown: false }
       : {
           detail: 'The server does not offer this yet. Try again later.',
           retry: true,
@@ -450,25 +460,34 @@ export function describeVerificationError(
     // The phone has no in-place step-up; a session reaches AAL2 at sign-in
     // (the same instruction as item-adjust.ts and change-email.tsx).
     return {
-      detail:
-        'Your account uses an authenticator app, and this session did not sign in with it. Sign out and sign back in with your code to see this.',
+      detail: verificationRefusalCopy('aal2_required', subject),
       retry: false,
       keepShown: false,
     };
   }
   if (status === 403 && reason === 'mfa_required') {
     return {
-      detail:
-        'Your organization requires two-factor authentication. Set it up on the web, then sign in again.',
+      detail: verificationRefusalCopy('mfa_required', subject),
       retry: false,
       keepShown: false,
     };
   }
-  if (status === 403)
-    return { detail: 'You do not have permission to see this.', retry: false, keepShown: false };
+  if (status === 403) {
+    return {
+      detail: verificationRefusalCopy('forbidden', subject),
+      retry: false,
+      keepShown: false,
+    };
+  }
   if (status === 401)
-    return { detail: 'Your session has ended. Sign in again.', retry: true, keepShown: false };
-  if (status === 400) return { detail: 'This link is not valid.', retry: false, keepShown: false };
+    return { detail: VERIFICATION_SESSION_ENDED_COPY, retry: true, keepShown: false };
+  if (status === 400) {
+    return {
+      detail: verificationRefusalCopy('invalid_id', subject),
+      retry: false,
+      keepShown: false,
+    };
+  }
   if (status === 429) {
     return {
       detail: 'Too many requests. Wait a moment and try again.',
@@ -590,13 +609,12 @@ export function verificationCheckedAtCopy(
 
 export const VERIFICATION_ISSUES_TRUNCATED_COPY = 'More open exceptions exist than are shown here.';
 
-/** The server's holdings cap (LOCATION_HOLDINGS_CAP), for the words only. */
-const LOCATION_HOLDINGS_CAP = 20_000;
+/** The holdings read stopped at the server's cap (core's words, the web's). */
+export { LOCATION_HOLDINGS_TRUNCATED_COPY };
 
-export const LOCATION_HOLDINGS_TRUNCATED_COPY = `Only the first ${LOCATION_HOLDINGS_CAP.toLocaleString('en-US')} holdings here were read, so these totals are partial.`;
-
-/** "Open issues here" with none, after a check has run (the web's words). */
-export const LOCATION_NO_OPEN_ISSUES_COPY = 'No open exceptions are recorded at this location.';
+/** "Open issues here" with none, after a check has run, when nothing here is
+ *  hidden from the reader (core locationOpenIssuesEmptyCopy picks the words). */
+export { LOCATION_NO_OPEN_ISSUES_COPY };
 
 export const LOCATION_WORKSPACE_UNAVAILABLE =
   'Your workspace could not be loaded, so this location cannot be shown. Check your connection and try again.';
@@ -673,7 +691,8 @@ export function locationRowAccessibilityLabel(
  * disabled. Only for a reader the server says may start one (a manager who can
  * start counts; plan section 5), and only where stock is listed. Disabled, with
  * the reason, when nothing here can be counted or too many items can (the
- * server's recountProblem), when the totals are partial, or offline (core
+ * server's recountProblem), when the totals are partial (core
+ * locationRecountProblemOf, the web page's rule too), or offline (core
  * recountDisabledReason, fed the LIVE network state).
  */
 export function locationRecountState(
@@ -685,10 +704,7 @@ export function locationRecountState(
 ): { show: boolean; disabledReason: string | null } {
   if (!v.holdingsVisible || !v.canRecount || !v.totals)
     return { show: false, disabledReason: null };
-  const problem =
-    v.recountProblem ??
-    (v.truncated ? LOCATION_HOLDINGS_TRUNCATED_COPY : null) ??
-    locationRecountProblem(v.totals.countable);
+  const problem = locationRecountProblemOf(v);
   return {
     show: true,
     disabledReason: problem ?? recountDisabledReason({ canRecount: true, online }),

@@ -14,10 +14,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
-  EXCEPTION_FIRST_CHECK_PENDING_COPY,
   LOCATION_HOLDINGS_OUT_OF_SCOPE_COPY,
   LOCATION_RECOUNT_LABEL,
   VERIFICATION_UNAVAILABLE_COPY,
+  locationOpenIssuesEmptyCopy,
   locationRowVerificationCopy,
   locationVerificationTotalsCopy,
   verificationIssueChipCopy,
@@ -39,7 +39,6 @@ import { useTheme } from '@/lib/use-theme';
 import { retryWorkspace } from '@/lib/use-workspace';
 import {
   LOCATION_HOLDINGS_TRUNCATED_COPY,
-  LOCATION_NO_OPEN_ISSUES_COPY,
   LOCATION_WORKSPACE_UNAVAILABLE,
   VERIFICATION_ISSUES_TRUNCATED_COPY,
   describeVerificationError,
@@ -76,8 +75,11 @@ import {
  *
  * A failed read says "Couldn't load verification" with why and Try again;
  * never an empty location. When the reader's warehouses do not cover this
- * location, the stock is not listed and the screen says why (never "nothing
- * here"). Offline, the page already on screen stays with its time.
+ * location, the stock and the open exceptions are not listed and the screen
+ * says why (never "nothing here", never "none recorded"); with items here the
+ * reader cannot open, no chips is "none you can see" (core
+ * locationOpenIssuesEmptyCopy, the web page's words). Offline, the page
+ * already on screen stays with its time.
  */
 
 type Gather =
@@ -290,6 +292,12 @@ function LocationBody({
   const loc = data.location;
   const recount = locationRecountState(data, !offline);
   const rangeStart = (data.page - 1) * data.pageSize + 1;
+  // Read under the reader's RLS: "none" only when nothing here is hidden.
+  const noIssues = locationOpenIssuesEmptyCopy({
+    holdingsVisible: data.holdingsVisible,
+    hiddenItems: data.totals?.hiddenItems ?? 0,
+    checkedAt: data.checkedAt,
+  });
 
   return (
     <ScrollView
@@ -326,7 +334,8 @@ function LocationBody({
       </View>
 
       {/* Open issues here: the chips; none only after a check has run (before
-          the first one, that it has not run: never an all-clear). */}
+          the first one, that it has not run: never an all-clear), and only
+          when nothing here is hidden from the reader. */}
       <View style={{ gap: 8 }}>
         <Eyebrow>OPEN ISSUES HERE</Eyebrow>
         {data.openIssues.length > 0 ? (
@@ -341,9 +350,7 @@ function LocationBody({
           </View>
         ) : (
           <Body size={14} muted>
-            {data.checkedAt === null
-              ? EXCEPTION_FIRST_CHECK_PENDING_COPY
-              : LOCATION_NO_OPEN_ISSUES_COPY}
+            {noIssues.text}
           </Body>
         )}
         {data.openIssuesTruncated ? (
@@ -370,7 +377,10 @@ function LocationBody({
           <Card padding={16}>
             <Eyebrow>STOCK HERE</Eyebrow>
             <Body size={14.5} style={{ marginTop: 8 }}>
-              {locationVerificationTotalsCopy(data.totals, { locationKind: loc.kind })}
+              {locationVerificationTotalsCopy(data.totals, {
+                locationKind: loc.kind,
+                locationType: loc.type,
+              })}
             </Body>
             {data.truncated ? (
               <Body size={13} color={ACCENT.warn} style={{ marginTop: 6 }}>
@@ -408,6 +418,7 @@ function LocationBody({
                 row={row}
                 locationId={loc.id}
                 locationKind={loc.kind}
+                locationType={loc.type}
                 timeZone={data.timeZone}
                 onPress={() => onNavigate(`/item/${row.itemId}`)}
               />
@@ -437,12 +448,14 @@ function LocationRow({
   row,
   locationId,
   locationKind,
+  locationType,
   timeZone,
   onPress,
 }: {
   row: MobileLocationVerificationRow;
   locationId: string;
   locationKind: string | null;
+  locationType: string | null;
   timeZone: string | null;
   onPress: () => void;
 }) {
@@ -450,7 +463,11 @@ function LocationRow({
   // Past the AX threshold the name and the units stack (both are content, so
   // neither is capped; side by side the units squeezed the name to a sliver).
   const stacked = shouldStackRow(useWindowDimensions().fontScale);
-  const copy = locationRowVerificationCopy(row.summary, locationId, { timeZone, locationKind });
+  const copy = locationRowVerificationCopy(row.summary, locationId, {
+    timeZone,
+    locationKind,
+    locationType,
+  });
   const chips = row.issues.map((i) => verificationIssueChipCopy(i));
   const unavailable = row.summary === null;
   return (

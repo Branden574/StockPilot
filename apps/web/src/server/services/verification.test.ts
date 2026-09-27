@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DEFAULT_MODULE_IDS, verificationSummaryCopy, type ModuleId } from '@stockpilot/core';
+import {
+  DEFAULT_MODULE_IDS,
+  LOCATION_HOLDINGS_TRUNCATED_COPY,
+  verificationSummaryCopy,
+  type ModuleId,
+} from '@stockpilot/core';
 
 import {
   makeServiceContext,
@@ -50,6 +55,10 @@ const ITEM = '11111111-1111-4111-8111-111111111111';
 const LOC = '22222222-2222-4222-8222-222222222222';
 const OTHER_LOC = '33333333-3333-4333-8333-333333333333';
 const CC = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+/** Ids with hex LETTERS, so upper-casing them changes them (the ids above
+ *  are all digits). */
+const HEX_ITEM = 'abcdef01-2345-4678-89ab-cdef01234567';
+const HEX_LOC = 'fedcba98-7654-4321-8fed-cba987654321';
 const OPEN_CC = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 
 /** A deterministic uuid for the n-th item. */
@@ -155,6 +164,7 @@ describe('mapSummaryRow', () => {
         counted_location_id: LOC,
         counted_location_name: 'A-12',
         counted_location_kind: 'rack',
+        counted_location_type: 'shelf',
         counted_location_archived: false,
         movements_since: 3,
         outside_ledger_since: 1,
@@ -184,7 +194,7 @@ describe('mapSummaryRow', () => {
         expectedAtStart: 10,
         countedQuantity: 10,
         countedLocationId: LOC,
-        countedLocation: { name: 'A-12', kind: 'rack', archived: false },
+        countedLocation: { name: 'A-12', kind: 'rack', type: 'shelf', archived: false },
         aiAssisted: true,
         countedBy: { id: 'u-count', label: null },
         postedBy: { id: 'u-post', label: null },
@@ -193,6 +203,38 @@ describe('mapSummaryRow', () => {
       outsideLedgerSince: 1,
       openCount: { cycleCountId: OPEN_CC, countNumber: 45 },
     });
+  });
+});
+
+describe('mapSummaryRow: the counted location type (0374)', () => {
+  // L2: the words need the type to tell a Site from a shelf.
+  it("carries the counted location's type; a database that sends none reads null", () => {
+    const site = mapSummaryRow(
+      row(ITEM, {
+        counted_location_id: LOC,
+        counted_location_name: 'Job site',
+        counted_location_kind: null,
+        counted_location_type: 'jobsite',
+        counted_location_archived: false,
+      }),
+    );
+    expect(site.lastCount?.countedLocation).toEqual({
+      name: 'Job site',
+      kind: null,
+      type: 'jobsite',
+      archived: false,
+    });
+    expect(verificationSummaryCopy(site).scope).toBe(
+      'Counted while Job site was its only place outside Staging',
+    );
+    const older = row(ITEM, {
+      counted_location_id: LOC,
+      counted_location_name: 'A-12',
+      counted_location_kind: 'rack',
+      counted_location_archived: false,
+    });
+    delete older.counted_location_type;
+    expect(mapSummaryRow(older).lastCount?.countedLocation?.type).toBeNull();
   });
 });
 
@@ -388,6 +430,39 @@ describe('VerificationService.item', () => {
       code: 'validation_error',
     });
     expect(stub.rpcCalls).toHaveLength(0);
+  });
+
+  // L1 (review 2026-09-27): the id check accepts upper case (a typed or pasted
+  // link); the database answers in lower case, so the summary was not found
+  // and the card read "not available" for a real, readable item.
+  it('an upper-case id is the same item: read and answered in lower case', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:item_verification_summaries': summariesRpc(new Map([[HEX_ITEM, row(HEX_ITEM)]])),
+      'exception_occurrences.select': servedLikePostgrest([
+        {
+          id: 'o-1',
+          organization_id: ORG,
+          occurrence_number: 42,
+          rule: 'count_variance',
+          item_id: HEX_ITEM,
+          location_id: null,
+          resolved_at: null,
+        },
+      ]),
+      'exception_sync_state.select.maybeSingle': {
+        data: { last_synced_at: '2026-09-24T18:00:02Z' },
+        error: null,
+      },
+      'organizations.select.maybeSingle': { data: { timezone: 'America/Chicago' }, error: null },
+      'user_profiles.select': { data: [], error: null },
+    });
+    const upper = HEX_ITEM.toUpperCase();
+    expect(upper).not.toBe(HEX_ITEM);
+    const r = await new VerificationService(ctx(stub)).item(upper);
+    expect(r.itemId).toBe(HEX_ITEM);
+    expect(r.summary.itemId).toBe(HEX_ITEM);
+    expect(r.openIssues.map((i) => i.reference)).toEqual(['EX-000042']);
+    expect((stub.rpcCalls[0]!.args as { p_item_ids: string[] }).p_item_ids).toEqual([HEX_ITEM]);
   });
 
   it.each([
@@ -644,6 +719,76 @@ describe('VerificationService.location', () => {
     expect(r.rows[1]!.issues).toEqual([]);
   });
 
+  // L1: an upper-case location id reads as the same location, so a count
+  // recorded here is "counted here", not "item total counted ... while A-12".
+  it('an upper-case location id is the same location: rows counted here, chips here', async () => {
+    const stub = locationStub({
+      location: {
+        data: {
+          id: HEX_LOC,
+          name: 'A-12',
+          kind: 'rack',
+          type: 'shelf',
+          warehouse_id: 'wh-a',
+          deleted_at: null,
+          warehouse: { name: 'Main' },
+        },
+        error: null,
+      },
+      held: holdings(1).map((h) => ({ ...h, location_id: HEX_LOC })),
+      summaryRows: new Map([[itemId(1), row(itemId(1), { counted_location_id: HEX_LOC })]]),
+      issues: [
+        {
+          id: 'o-1',
+          occurrence_number: 1,
+          rule: 'stale_staging',
+          item_id: itemId(1),
+          location_id: HEX_LOC,
+        },
+      ],
+    });
+    const upper = HEX_LOC.toUpperCase();
+    expect(upper).not.toBe(HEX_LOC);
+    const r = await new VerificationService(ctx(stub)).location(upper);
+    expect(r.rows).toHaveLength(1);
+    expect(r.totals).toMatchObject({ countedHere: 1, countedItemTotal: 0 });
+    expect(r.openIssues.map((i) => i.reference)).toEqual(['EX-000001']);
+    expect(r.rows[0]!.issues.map((i) => i.reference)).toEqual(['EX-000001']);
+    expect(stub.rpcCalls.find((c) => c.name === 'location_holdings_visible')?.args).toEqual({
+      p_location_id: HEX_LOC,
+    });
+  });
+
+  // L3 (review 2026-09-27): the page's chips depend only on the sorted
+  // holdings, so they are read while the summaries are, not after.
+  it("reads the page's chips while the summaries are still being read (not in series)", async () => {
+    const stub = locationStub({ held: holdings(3) });
+    const realRpc = stub.client.rpc.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    stub.client.rpc.mockImplementation(((name: string, args: unknown) => {
+      const answer = realRpc(name, args);
+      return name === 'item_verification_summaries' ? gate.then(() => answer) : answer;
+    }) as typeof realRpc);
+    const pending = new VerificationService(ctx(stub)).location(LOC);
+    const pageChipReads = () =>
+      (stub.chainArgsAll.get('exception_occurrences.select') ?? []).filter((args) =>
+        args.some((a) => a[0] === 'item_id'),
+      );
+    try {
+      await vi.waitFor(() => {
+        expect(stub.rpcCalls.some((c) => c.name === 'item_verification_summaries')).toBe(true);
+        expect(pageChipReads()).toHaveLength(1);
+      });
+    } finally {
+      release();
+    }
+    const r = await pending;
+    expect(r.rows).toHaveLength(3);
+  });
+
   it('not_found for a location outside the org or unknown; a malformed id is a validation error', async () => {
     const stub = locationStub({ location: { data: null, error: null } });
     await expect(new VerificationService(ctx(stub)).location(LOC)).rejects.toMatchObject({
@@ -693,11 +838,25 @@ describe('VerificationService.location', () => {
     });
   });
 
-  it(`reaching the ${LOCATION_HOLDINGS_CAP}-holding cap is disclosed`, async () => {
-    const stub = locationStub({ held: holdings(LOCATION_HOLDINGS_CAP + 5) });
+  // L5 (review 2026-09-27): the web now refuses "Recount items here" on a
+  // partial read, as the phone did (the server says why; both show it).
+  it(`reaching the ${LOCATION_HOLDINGS_CAP}-holding cap is disclosed, and no recount is offered on the partial read`, async () => {
+    const held = holdings(LOCATION_HOLDINGS_CAP + 5);
+    // Only 100 of the items read can be counted: within the recount cap, so
+    // only the partial read stands in the way.
+    const rows = new Map(
+      held.map((h, i) => [
+        h.item_id,
+        i < 100 ? row(h.item_id) : row(h.item_id, { item_is_rental: true, item_countable: false }),
+      ]),
+    );
+    const stub = locationStub({ held, summaryRows: rows });
     const r = await new VerificationService(ctx(stub)).location(LOC);
     expect(r.truncated).toBe(true);
     expect(r.totalRows).toBe(LOCATION_HOLDINGS_CAP);
+    expect(r.totals!.countable).toBe(100);
+    expect(r.recountProblem).toBe(LOCATION_HOLDINGS_TRUNCATED_COPY);
+    expect(r.recountItemIds).toEqual([]);
   }, 30_000);
 
   it('canRecount for a manager with Cycle Counts on, and the recount problem only speaks to the item count', async () => {

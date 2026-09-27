@@ -1,7 +1,11 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { verificationErrorResponse } from '@/lib/verification/error-response';
+import {
+  verificationErrorResponse,
+  verificationUnauthenticatedResponse,
+} from '@/lib/verification/error-response';
+import { assertPermission, ServiceError } from '@/server/services/context';
 import { VerificationService } from '@/server/services/verification';
 
 export const runtime = 'nodejs';
@@ -15,10 +19,12 @@ export const dynamic = 'force-dynamic';
  * page), and whether the reader may start "Recount items here".
  *
  * Cookie or Bearer (withApiContext), the same gates as the web page:
- * items:read (403 without it, or at a required MFA step-up); 404 when the
- * location does not exist in the reader's organization; 400 for a malformed
- * id or page. When the reader's warehouses do not cover the location,
- * `holdingsVisible` is false and no rows are listed (never an empty
+ * items:read (403 without it, or at a required MFA step-up), checked before
+ * anything about the request is judged; 404 when the location does not exist
+ * in the reader's organization; 400 for a malformed id or page. Every refusal
+ * has the one error shape and is never cached (verificationErrorResponse; a
+ * 401 carries a message too). When the reader's warehouses do not cover the
+ * location, `holdingsVisible` is false and no rows are listed (never an empty
  * location). Any other failure is a 500 whose message is "Couldn't load
  * verification". Read-only.
  *
@@ -27,22 +33,14 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const ctx = await withApiContext(req);
-  if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  if (!ctx) return verificationUnauthenticatedResponse();
 
   const { id } = await params;
-  const raw = new URL(req.url).searchParams.get('page');
-  let page = 1;
-  if (raw !== null) {
-    if (!/^[1-9]\d{0,5}$/.test(raw)) {
-      return NextResponse.json(
-        { error: 'validation_error', message: 'The page must be a whole number from 1.' },
-        { status: 400 },
-      );
-    }
-    page = Number(raw);
-  }
-
   try {
+    // The service's own gate, FIRST: a caller without items:read, or short of
+    // the MFA step-up, is refused before the page is judged.
+    assertPermission(ctx, 'items:read');
+    const page = pageParam(new URL(req.url).searchParams.get('page'));
     const result = await new VerificationService(ctx).location(id, { page });
     return NextResponse.json(
       { organizationId: ctx.organizationId, ...result },
@@ -51,4 +49,16 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   } catch (e) {
     return verificationErrorResponse(e, 'api.v1.locations.verification', ctx);
   }
+}
+
+/** `?page=`: 1-based, 1 when absent. Anything else is a validation error
+ *  (400, in the routes' one error shape). */
+function pageParam(raw: string | null): number {
+  if (raw === null) return 1;
+  if (!/^[1-9]\d{0,5}$/.test(raw)) {
+    throw new ServiceError('validation_error', 'The page must be a whole number from 1.', {
+      reason: 'invalid_page',
+    });
+  }
+  return Number(raw);
 }

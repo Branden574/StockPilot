@@ -4,9 +4,14 @@ import Link from 'next/link';
 import {
   formatStockQuantity,
   LOCATION_HOLDINGS_OUT_OF_SCOPE_COPY,
+  LOCATION_HOLDINGS_TRUNCATED_COPY,
+  locationOpenIssuesEmptyCopy,
+  locationRecountProblemOf,
   locationRowVerificationCopy,
   locationVerificationTotalsCopy,
   VERIFICATION_UNAVAILABLE_COPY,
+  verificationRefusalCopy,
+  type VerificationRefusal,
 } from '@stockpilot/core';
 
 import { exceptionTime, FirstCheckPending } from '@/components/exceptions/occurrence-display';
@@ -15,12 +20,7 @@ import { LocationRecountButton } from '@/components/locations/location-recount-b
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Pagination } from '@/components/ui/pagination';
-import { formatNumber } from '@/lib/utils';
-import {
-  LOCATION_HOLDINGS_CAP,
-  type LocationVerification,
-  type LocationVerificationRow,
-} from '@/server/services/verification';
+import type { LocationVerification, LocationVerificationRow } from '@/server/services/verification';
 
 /**
  * ONE LOCATION'S PAGE (F1-3): what is held here and when each item was last
@@ -34,7 +34,12 @@ import {
  *     (LOCATION_HOLDINGS_OUT_OF_SCOPE_COPY), never "nothing here";
  *   - a row whose summary could not be read says "Couldn't load
  *     verification", never "Not counted";
- *   - no open exceptions is "none recorded here" only after a check has run;
+ *   - no open exceptions is "none recorded here" only after a check has run,
+ *     and only when nothing here is hidden from the reader (core
+ *     locationOpenIssuesEmptyCopy: out of their warehouses it says so; with
+ *     items they cannot open, "none you can see");
+ *   - a refused read (not found, not permitted, a bad link) says why, in the
+ *     phone's words (core verificationRefusalCopy);
  *   - nothing says "verified" or shows a percentage.
  */
 
@@ -72,15 +77,30 @@ export function LocationBackLink({ archived = false }: { archived?: boolean }) {
   );
 }
 
-/** The whole page could not be read. Never an empty location. */
-export function LocationVerificationUnavailable() {
+/**
+ * The whole page could not be read. Never an empty location. A refusal (the
+ * location is not found or not the reader's, no permission, a bad link) says
+ * why, in the same words as the phone; any other failure says to reload.
+ */
+export function LocationVerificationUnavailable({
+  refusal = null,
+}: {
+  refusal?: VerificationRefusal | null;
+}) {
   return (
     <div
       role="alert"
       className="border-warning/40 bg-warning/5 flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
     >
       <AlertTriangle className="text-warning mt-0.5 size-4 shrink-0" aria-hidden />
-      <p>{VERIFICATION_UNAVAILABLE_COPY}. Reload the page to try again.</p>
+      {refusal ? (
+        <div className="space-y-1">
+          <p className="font-medium">{VERIFICATION_UNAVAILABLE_COPY}</p>
+          <p data-testid="location-refusal">{verificationRefusalCopy(refusal, 'location')}</p>
+        </div>
+      ) : (
+        <p>{VERIFICATION_UNAVAILABLE_COPY}. Reload the page to try again.</p>
+      )}
     </div>
   );
 }
@@ -117,20 +137,25 @@ export function LocationVerificationView({
               <CardTitle className="text-base">Stock here</CardTitle>
               {data.holdingsVisible && data.totals ? (
                 <p className="text-sm" data-testid="location-totals">
-                  {locationVerificationTotalsCopy(data.totals, { locationKind: loc.kind })}
+                  {locationVerificationTotalsCopy(data.totals, {
+                    locationKind: loc.kind,
+                    locationType: loc.type,
+                  })}
                 </p>
               ) : null}
               {data.truncated ? (
                 <p className="text-warning text-xs" data-testid="location-truncated">
-                  Only the first {formatNumber(LOCATION_HOLDINGS_CAP)} holdings here were read, so
-                  these totals are partial.
+                  {LOCATION_HOLDINGS_TRUNCATED_COPY}
                 </p>
               ) : null}
             </div>
             {data.holdingsVisible && data.canRecount ? (
               <LocationRecountButton
                 itemIds={data.recountItemIds}
-                problem={data.recountProblem}
+                // The server's reason, else the same rule on this page: a
+                // partial holdings read is never recounted as "the items
+                // here" (the phone applies the same core rule).
+                problem={locationRecountProblemOf(data)}
                 timeZone={data.timeZone}
               />
             ) : null}
@@ -155,6 +180,7 @@ export function LocationVerificationView({
                     row={row}
                     locationId={loc.id}
                     locationKind={loc.kind}
+                    locationType={loc.type}
                     timeZone={data.timeZone}
                     canOpenCounts={canOpenCounts}
                   />
@@ -178,6 +204,12 @@ export function LocationVerificationView({
 }
 
 function OpenIssuesHere({ data }: { data: LocationVerification }) {
+  // Read under the reader's RLS: "none" only when nothing here is hidden.
+  const empty = locationOpenIssuesEmptyCopy({
+    holdingsVisible: data.holdingsVisible,
+    hiddenItems: data.totals?.hiddenItems ?? 0,
+    checkedAt: data.checkedAt,
+  });
   return (
     <section
       aria-labelledby="open-issues-here"
@@ -189,11 +221,20 @@ function OpenIssuesHere({ data }: { data: LocationVerification }) {
       </h2>
       {data.openIssues.length > 0 ? (
         <VerificationIssueChips issues={data.openIssues} />
-      ) : data.checkedAt === null ? (
+      ) : empty.kind === 'first_check_pending' ? (
         <FirstCheckPending />
+      ) : empty.kind === 'out_of_scope' ? (
+        <p
+          role="status"
+          className="bg-muted/40 flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
+          data-testid="location-issues-out-of-scope"
+        >
+          <Lock className="text-muted-foreground mt-0.5 size-4 shrink-0" aria-hidden />
+          {empty.text}
+        </p>
       ) : (
-        <p className="text-muted-foreground text-sm">
-          No open exceptions are recorded at this location.
+        <p className="text-muted-foreground text-sm" data-testid="location-no-open-issues">
+          {empty.text}
         </p>
       )}
       {data.openIssuesTruncated ? (
@@ -214,16 +255,22 @@ function LocationRow({
   row,
   locationId,
   locationKind,
+  locationType,
   timeZone,
   canOpenCounts,
 }: {
   row: LocationVerificationRow;
   locationId: string;
   locationKind: string | null;
+  locationType: string | null;
   timeZone: string;
   canOpenCounts: boolean;
 }) {
-  const copy = locationRowVerificationCopy(row.summary, locationId, { timeZone, locationKind });
+  const copy = locationRowVerificationCopy(row.summary, locationId, {
+    timeZone,
+    locationKind,
+    locationType,
+  });
   const itemHref = `/dashboard/inventory/${row.itemId}`;
   return (
     <li className="py-3" data-testid="location-row">

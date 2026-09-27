@@ -31,6 +31,12 @@
 --      still gets the true count (mutation: SECURITY INVOKER);
 --    * more than 500 ids is 22023 too_many_items; 500 is fine; duplicates
 --      and nulls in the array give one row per item.
+--    * THE COUNTED LOCATION, recorded by the REAL rebase trigger (0342, v2 in
+--      0369), as the words read it (core verification.ts): the item's only
+--      holding OUTSIDE Staging. 3 in Unplaced plus 5 in Staging records
+--      Unplaced (so "all of it was Unplaced" would be false: review M1);
+--      Staging alone records nothing (Staging is never a counted location);
+--      a Site is recorded with its type (so it is not called a shelf: L2).
 -- L. location_holdings_visible equals what item_stock_levels RLS shows, for
 --    every persona and every location holding stock (mutation: drop the
 --    my_warehouse_ids branch or the no-warehouse branch), and is false for a
@@ -52,7 +58,7 @@
 
 begin;
 
-select plan(41);
+select plan(45);
 
 \set orgA   '\'03740000-0000-0000-0000-00000000000a\''
 \set orgB   '\'03740000-0000-0000-0000-00000000000b\''
@@ -86,6 +92,8 @@ select plan(41);
 \set iArch   '\'03740000-0000-0000-0000-000000000f0b\''
 \set iDel    '\'03740000-0000-0000-0000-000000000f0c\''
 \set iSite   '\'03740000-0000-0000-0000-000000000f0d\''
+\set iUnpl   '\'03740000-0000-0000-0000-000000000f0e\''
+\set iStg    '\'03740000-0000-0000-0000-000000000f0f\''
 -- org B item
 \set itemB   '\'03740000-0000-0000-0000-000000000f20\''
 -- counts
@@ -102,6 +110,7 @@ select plan(41);
 \set ccOther  '\'03740000-0000-0000-0000-00000000020b\''
 \set ccW2     '\'03740000-0000-0000-0000-00000000020c\''
 \set ccB      '\'03740000-0000-0000-0000-00000000020d\''
+\set ccReal   '\'03740000-0000-0000-0000-00000000020e\''
 \set scanAI   '\'03740000-0000-0000-0000-000000000301\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
@@ -151,6 +160,7 @@ insert into public.locations (id, organization_id, warehouse_id, name, type, kin
   (:rOld, :orgA, :whA,  'Z-9',      'shelf', 'rack'),
   (:rB,   :orgB, :whB,  'B-1',      'shelf', 'rack');
 select id as "stA" from public.locations where warehouse_id = :whA and kind = 'staging' and deleted_at is null \gset
+select id as "unA" from public.locations where warehouse_id = :whA and kind = 'unplaced' and deleted_at is null \gset
 
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, is_rental, is_bundle, deleted_at) values
@@ -167,6 +177,8 @@ insert into public.inventory_items
   (:iArch,   :orgA, :whA,  'X0374-ARCH',   'Archived item',   0,  'archived', false, false, null),
   (:iDel,    :orgA, :whA,  'X0374-DEL',    'Deleted item',    0,  'active',   false, false, now()),
   (:iSite,   :orgA, :whA,  'X0374-SITE',   'At the job site', 0,  'active',   false, false, null),
+  (:iUnpl,   :orgA, :whA,  'X0374-UNPL',   'Unplaced+Staging', 8, 'active',   false, false, null),
+  (:iStg,    :orgA, :whA,  'X0374-STG',    'Staging only',    4,  'active',   false, false, null),
   (:itemB,   :orgB, :whB,  'X0374-B',      'Other org item',  1,  'active',   false, false, null);
 
 -- Holdings for L: one per location kind and warehouse (as the owner; the
@@ -175,6 +187,12 @@ insert into public.item_stock_levels (organization_id, item_id, location_id, qua
   (:orgA, :iMatch, :rA,   10),
   (:orgA, :iW2,    :rA2,  2),
   (:orgA, :iSite,  :site, 1),
+  (:orgA, :iUnpl,  :'unA', 3),
+  (:orgA, :iUnpl,  :'stA', 5),
+  (:orgA, :iStg,   :'stA', 4),
+  -- inserting an item with stock on hand seeds it at Unplaced (the no-rack
+  -- seeding); iStg must hold stock in Staging ONLY, so that holding is 0.
+  (:orgA, :iStg,   :'unA', 0),
   (:orgB, :itemB,  :rB,   1)
   on conflict (item_id, location_id) do update set quantity = excluded.quantity;
 
@@ -297,7 +315,7 @@ grant all on s to authenticated;
 -- Guard the fixtures: a silently missing row would let an assertion pass for
 -- the wrong reason.
 do $$ begin
-  if (select count(*) from public.inventory_items where id::text like '03740000-%') <> 14
+  if (select count(*) from public.inventory_items where id::text like '03740000-%') <> 16
      or (select count(*) from public.cycle_count_lines l
           where l.cycle_count_id::text like '03740000-%') <> 15
      or (select count(*) from public.stock_movements m
@@ -306,6 +324,30 @@ do $$ begin
           where m.item_id::text like '03740000-%' and m.via_ledger) <> 10
   then raise exception '0374 test fixtures incomplete'; end if;
 end $$;
+
+-- ── Counted locations through the REAL rebase trigger ─────────────────────
+-- Every line above was planted with the trigger off. These three are recorded
+-- with it ON (as the owner, like the post's own writes), so the counted
+-- location is the one the trigger picks: the item's only holding outside
+-- Staging, Staging left out of the candidates. Then the count is posted
+-- (status completed, as post_cycle_count leaves it; the owner passes the
+-- status guard), so _latest_count_lines reads it as the physical count.
+-- Written with no jwt claims at all (the direct inserts above left the role
+-- claim set, and the count-number trigger refuses an 'authenticated' caller
+-- who is not a manager: no number).
+set local "request.jwt.claim.role" to '';
+set local "request.jwt.claim.sub" to '';
+insert into public.cycle_counts
+  (id, organization_id, warehouse_id, status, scope, started_by, started_at) values
+  (:ccReal, :orgA, :whA, 'in_progress', 'selection', :mgr, now() - interval '30 minutes');
+insert into public.cycle_count_lines
+  (cycle_count_id, item_id, warehouse_id, expected_quantity, counted_quantity, counted_by, counted_at) values
+  (:ccReal, :iUnpl, :whA, 8, 8, :stf, now()),
+  (:ccReal, :iStg,  :whA, 4, 4, :stf, now()),
+  (:ccReal, :iSite, :whA, 0, 1, :stf, now());
+update public.cycle_counts
+   set status = 'completed', completed_at = now(), completed_by = :mgr
+ where id = :ccReal;
 
 -- ═══ G. Structure and grants ══════════════════════════════════════════════
 select ok(
@@ -542,6 +584,44 @@ select is(
   'S26: a null array gives no rows');
 reset role;
 
+-- The counted location as the trigger recorded it, read back through the
+-- summaries (as the manager, who can read all three items).
+set local "request.jwt.claim.sub" to :mgr;
+set local role to 'authenticated';
+insert into s
+select 'real', to_jsonb(v)
+  from public.item_verification_summaries(:orgA, array[:iUnpl, :iStg, :iSite]::uuid[]) v;
+reset role;
+set local "request.jwt.claim.sub" to '';
+
+-- Review M1: the trigger's candidates leave Staging out, so Unplaced is
+-- recorded while Staging ALSO held 5 of the 8 (Z3). Words that say "all of it
+-- was Unplaced" are false for this item. Mutation: add Staging to the
+-- candidates (drop `l.kind is distinct from 'staging'`) -> two candidates,
+-- nothing recorded.
+select is(
+  (select row((r->>'cycle_count_id')::uuid, (r->>'counted_location_id')::uuid,
+              r->>'counted_location_kind', r->>'counted_location_type',
+              (r->>'counted_quantity')::numeric)::text
+     from s where who = 'real' and (r->>'item_id')::uuid = :iUnpl),
+  row(:ccReal::uuid, :'unA'::uuid, 'unplaced', 'other', 8.0000::numeric)::text,
+  'S28: 3 in Unplaced and 5 in Staging: the trigger records Unplaced (the only holding outside Staging), and the summary says so, with its kind');
+
+select is(
+  (select row((r->>'cycle_count_id')::uuid, r->>'counted_location_id', r->>'counted_location_kind')::text
+     from s where who = 'real' and (r->>'item_id')::uuid = :iStg),
+  row(:ccReal::uuid, null::text, null::text)::text,
+  'S29: an item held only in Staging: counted, with no location recorded (Staging is never a counted location)');
+
+-- Review L2: a Site is recorded too, and its type comes back so the words
+-- can tell it is not a shelf (core isRackShelfLocation needs the type).
+select is(
+  (select row((r->>'counted_location_id')::uuid, r->>'counted_location_name',
+              r->>'counted_location_kind', r->>'counted_location_type')::text
+     from s where who = 'real' and (r->>'item_id')::uuid = :iSite),
+  row(:site::uuid, 'Job site', null::text, 'jobsite')::text,
+  'S30: an item held only at a job site (a Site, no kind): the Site is recorded, with its type (jobsite) and no kind');
+
 -- ═══ L. location_holdings_visible ═════════════════════════════════════════
 -- For each persona: which of the four locations holding stock (A-12 in A,
 -- N-3 in the annex, the warehouse-less job site, B-1 in org B) the function
@@ -636,6 +716,15 @@ select is(
       and m.created_at > now() - interval '2 days'),
   1,
   'Z2 (control): one of them has no reference at all (the transfer), so S4 also proves a reference-less row is counted');
+
+select is(
+  (select string_agg(i.sku || ':' || l.kind || '=' || s.quantity::int, ',' order by i.sku, l.kind)
+     from public.item_stock_levels s
+     join public.locations l on l.id = s.location_id
+     join public.inventory_items i on i.id = s.item_id
+    where s.item_id in (:iUnpl, :iStg) and s.quantity > 0),
+  'X0374-STG:staging=4,X0374-UNPL:staging=5,X0374-UNPL:unplaced=3',
+  'Z3 (control): when counted, iUnpl held stock in Staging as well as Unplaced (so S28 is the Unplaced-plus-Staging case) and iStg held stock in Staging only (S29)');
 
 select * from finish();
 rollback;

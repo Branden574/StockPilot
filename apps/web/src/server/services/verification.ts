@@ -2,6 +2,7 @@ import 'server-only';
 
 import {
   formatOccurrenceNumber,
+  LOCATION_HOLDINGS_CAP,
   locationRecountProblem,
   locationVerificationTotals,
   resolveOrgTimezone,
@@ -58,9 +59,10 @@ export const VERIFICATION_BATCH_SIZE = 500;
 const VERIFICATION_BATCH_CONCURRENCY = 2;
 /** Rows a location page shows at a time. */
 export const LOCATION_VERIFICATION_PAGE_SIZE = 50;
-/** Holdings read for one location. Far above any real location; reaching it
- *  is disclosed (`truncated`), never silent. */
-export const LOCATION_HOLDINGS_CAP = 20_000;
+/** Holdings read for one location (core's, so the words and the read agree).
+ *  Far above any real location; reaching it is disclosed (`truncated`, and
+ *  recountProblem), never silent. */
+export { LOCATION_HOLDINGS_CAP };
 /** Open exceptions read for one item or one location (a backstop). */
 const ISSUES_CAP = 1_000;
 
@@ -130,14 +132,16 @@ export interface LocationVerification {
   totalRows: number;
   /** Across EVERY row, not just this page. */
   totals: LocationVerificationTotals | null;
-  /** The holdings read stopped at LOCATION_HOLDINGS_CAP: totals are partial. */
+  /** The holdings read stopped at LOCATION_HOLDINGS_CAP: totals are partial
+   *  (and recountProblem says so: no recount can cover the items not read). */
   truncated: boolean;
   checkedAt: string | null;
   /** The reader may start a recount ("Recount items here"). */
   canRecount: boolean;
   recountUnavailableReason: RecountUnavailableReason | null;
   /** Why "Recount items here" cannot be pressed for this location's items
-   *  (none countable, or more than the recount cap), or null. */
+   *  (a partial holdings read, none countable, or more than the recount cap:
+   *  core locationRecountProblem), or null. */
   recountProblem: string | null;
   /**
    * The items "Recount items here" counts: every listed row (across ALL
@@ -177,6 +181,9 @@ export type SummaryRow = {
   counted_location_id: string | null;
   counted_location_name: string | null;
   counted_location_kind: string | null;
+  /** 0374: a Site's "jobsite", a rack's "shelf" (absent from an older
+   *  database: null). */
+  counted_location_type?: string | null;
   counted_location_archived: boolean | null;
   ai_assisted: boolean | null;
   movements_since: number | string | null;
@@ -219,6 +226,7 @@ export function mapSummaryRow(row: SummaryRow): ItemVerificationSummary {
           ? {
               name: row.counted_location_name,
               kind: row.counted_location_kind,
+              type: row.counted_location_type ?? null,
               archived: row.counted_location_archived === true,
             }
           : null,
@@ -269,6 +277,13 @@ function mapIssue(row: IssueRow): VerificationIssueRef {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A valid id in the database's form. The check accepts upper case (a typed
+ *  or pasted link), and the database answers in lower case: the summaries map
+ *  and the "counted here" match are keyed by what it returns. */
+function canonicalId(id: string): string {
+  return id.toLowerCase();
+}
 
 // ── Service ─────────────────────────────────────────────────────────────────
 
@@ -325,13 +340,14 @@ export class VerificationService {
    * is in another org, or is not readable to this reader (existence is not
    * leaked).
    */
-  async item(itemId: string): Promise<ItemVerification> {
+  async item(rawItemId: string): Promise<ItemVerification> {
     assertPermission(this.ctx, 'items:read');
-    if (!UUID.test(itemId)) {
+    if (!UUID.test(rawItemId)) {
       throw new ServiceError('validation_error', 'That item id is not valid.', {
         reason: 'invalid_item_id',
       });
     }
+    const itemId = canonicalId(rawItemId);
     const orgId = this.ctx.organizationId;
     const [summaries, issues, checkedAt, timeZone] = await Promise.all([
       this.summaries([itemId]),
@@ -381,13 +397,17 @@ export class VerificationService {
    * listed. When the reader's warehouses do not cover the location at all,
    * nothing is listed and `holdingsVisible` is false.
    */
-  async location(locationId: string, opts: { page?: number } = {}): Promise<LocationVerification> {
+  async location(
+    rawLocationId: string,
+    opts: { page?: number } = {},
+  ): Promise<LocationVerification> {
     assertPermission(this.ctx, 'items:read');
-    if (!UUID.test(locationId)) {
+    if (!UUID.test(rawLocationId)) {
       throw new ServiceError('validation_error', 'That location id is not valid.', {
         reason: 'invalid_location_id',
       });
     }
+    const locationId = canonicalId(rawLocationId);
     const orgId = this.ctx.organizationId;
 
     type LocationRow = {
@@ -523,39 +543,42 @@ export class VerificationService {
       return byName !== 0 ? byName : a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0;
     });
 
-    const summaries = await this.summaries(listed.map((r) => r.itemId));
+    // The page is known from the sorted holdings alone, so the page's chips
+    // are read ALONGSIDE the summaries, not after them (one round trip less
+    // on every location page).
+    const totalRows = listed.length;
+    const pageCount = Math.max(1, Math.ceil(totalRows / LOCATION_VERIFICATION_PAGE_SIZE));
+    const requested = Number.isSafeInteger(opts.page) ? (opts.page as number) : 1;
+    const page = Math.min(Math.max(1, requested), pageCount);
+    const pageStart = (page - 1) * LOCATION_VERIFICATION_PAGE_SIZE;
+    const pageEnd = page * LOCATION_VERIFICATION_PAGE_SIZE;
+
+    const [summaries, pageIssues] = await Promise.all([
+      this.summaries(listed.map((r) => r.itemId)),
+      // The page's chips: the item's exceptions here, or about the item itself.
+      fetchAllRowsByIds<IssueRow>(
+        listed.slice(pageStart, pageEnd).map((r) => r.itemId),
+        (batch) => (from, to) =>
+          this.ctx.supabase
+            .from('exception_occurrences')
+            .select(ISSUE_SELECT)
+            .eq('organization_id', orgId)
+            .in('item_id', batch)
+            .is('resolved_at', null)
+            .order('occurrence_number', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to) as unknown as PromiseLike<{
+            data: IssueRow[] | null;
+            error: { message: string } | null;
+          }>,
+      ),
+    ]);
     const all = listed.map((r) => ({ ...r, summary: summaries.get(r.itemId) ?? null }));
     const totals = locationVerificationTotals(all, locationId, {
       items: hiddenItems,
       quantity: hiddenQuantity,
     });
-
-    const totalRows = all.length;
-    const pageCount = Math.max(1, Math.ceil(totalRows / LOCATION_VERIFICATION_PAGE_SIZE));
-    const requested = Number.isSafeInteger(opts.page) ? (opts.page as number) : 1;
-    const page = Math.min(Math.max(1, requested), pageCount);
-    const slice = all.slice(
-      (page - 1) * LOCATION_VERIFICATION_PAGE_SIZE,
-      page * LOCATION_VERIFICATION_PAGE_SIZE,
-    );
-
-    // The page's chips: the item's exceptions here, or about the item itself.
-    const pageIssues = await fetchAllRowsByIds<IssueRow>(
-      slice.map((r) => r.itemId),
-      (batch) => (from, to) =>
-        this.ctx.supabase
-          .from('exception_occurrences')
-          .select(ISSUE_SELECT)
-          .eq('organization_id', orgId)
-          .in('item_id', batch)
-          .is('resolved_at', null)
-          .order('occurrence_number', { ascending: true })
-          .order('id', { ascending: true })
-          .range(from, to) as unknown as PromiseLike<{
-          data: IssueRow[] | null;
-          error: { message: string } | null;
-        }>,
-    );
+    const slice = all.slice(pageStart, pageEnd);
     const issuesByItem = new Map<string, VerificationIssueRef[]>();
     for (const row of pageIssues) {
       if (row.location_id !== null && row.location_id !== locationId) continue;
@@ -564,7 +587,10 @@ export class VerificationService {
       issuesByItem.set(row.item_id, list);
     }
 
-    const recountProblem = locationRecountProblem(totals.countable);
+    const truncated = holdings.length >= LOCATION_HOLDINGS_CAP;
+    // A partial read cannot back a recount of "the items here" (the web and
+    // the phone both disable it with this reason).
+    const recountProblem = locationRecountProblem(totals.countable, { truncated });
     return {
       ...base,
       holdingsVisible: true,
@@ -573,7 +599,7 @@ export class VerificationService {
       pageCount,
       totalRows,
       totals,
-      truncated: holdings.length >= LOCATION_HOLDINGS_CAP,
+      truncated,
       recountProblem,
       // Every page's countable rows, the same rows totals.countable counted.
       recountItemIds:

@@ -958,7 +958,11 @@ it must not.
   `item_stock_levels_select`'s location clause for one location
   (`SECURITY INVOKER`), held equal to the policy for every persona of its
   pgTAP file, so the location page says "not in your warehouses" instead of
-  showing an empty location. The web reader
+  showing an empty location. Its open exceptions are read under the same
+  location clause (`exception_occurrences` RLS, 0370), so there too it says
+  they are not listed, and "none you can see" when items there are hidden
+  from the reader, never "none recorded" (core `locationOpenIssuesEmptyCopy`).
+  The web reader
   (`VerificationService.location`) is classified in
   `holdings-readers.guard.test.ts`. Pinned at
   [`0374_verification_summaries.test.sql`](../../supabase/tests/0374_verification_summaries.test.sql).

@@ -6,7 +6,6 @@ import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, V
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
-  COUNT_THIS_ITEM_LABEL,
   EXCEPTION_ACTION_LABELS,
   EXCEPTION_FIRST_CHECK_PENDING_COPY,
   EXCEPTION_RULES,
@@ -74,7 +73,12 @@ import { canOpenCountScreen } from '@/lib/verification-api';
  *
  * LAST PHYSICAL COUNT (F1-3): the item's card (components/item-verification-card.tsx),
  * with its own read, so a failure there never hides the exception. The
- * location, when the exception has one, opens the location screen.
+ * location, when the exception has one, opens the location screen. The card
+ * offers no "Count this item" here, as on the web: a holding rule is not
+ * settled by counting the item (recounting a Staging or archived-location
+ * holding can correct the wrong place, core EXCEPTION_RULES.recountable), and
+ * a rule a count can settle has the Recount button. "Count this item" stays
+ * on the item screen.
  */
 
 type Loaded =
@@ -95,9 +99,6 @@ export default function ExceptionDetailScreen() {
   const [refreshing, setRefreshing] = React.useState(false);
   const [sheet, setSheet] = React.useState<ExceptionSheetMode | null>(null);
   const [recountOpen, setRecountOpen] = React.useState(false);
-  // "Count this item" from the verification card (rules a Recount cannot
-  // settle; those have the Recount button instead).
-  const [countOpen, setCountOpen] = React.useState(false);
   // Bumped whenever this screen re-reads, so the card re-reads with it.
   const [verificationNonce, setVerificationNonce] = React.useState(0);
   const seqRef = React.useRef(0);
@@ -221,7 +222,6 @@ export default function ExceptionDetailScreen() {
           onRefresh={() => void refresh()}
           onOpenSheet={setSheet}
           onRecount={() => setRecountOpen(true)}
-          onCount={() => setCountOpen(true)}
           onNavigate={(href) => router.push(href as Href)}
           verificationRefreshKey={verificationNonce}
         />
@@ -268,26 +268,6 @@ export default function ExceptionDetailScreen() {
         />
       ) : null}
 
-      {state.kind === 'ready' ? (
-        <ExceptionRecountSheet
-          visible={countOpen}
-          title={COUNT_THIS_ITEM_LABEL}
-          itemId={state.detail.occurrence.itemId}
-          orgId={orgId ?? null}
-          online={!offline}
-          timeZone={state.detail.timeZone}
-          onClose={() => setCountOpen(false)}
-          onDone={() => {
-            setCountOpen(false);
-            setVerificationNonce((n) => n + 1);
-            void load();
-          }}
-          onOpenCount={(cycleCountId) => {
-            setCountOpen(false);
-            router.push(`/cycle-count/${cycleCountId}` as Href);
-          }}
-        />
-      ) : null}
     </View>
   );
 }
@@ -306,7 +286,6 @@ function Detail({
   onRefresh,
   onOpenSheet,
   onRecount,
-  onCount,
   onNavigate,
   verificationRefreshKey,
 }: {
@@ -317,7 +296,6 @@ function Detail({
   onRefresh: () => void;
   onOpenSheet: (mode: ExceptionSheetMode) => void;
   onRecount: () => void;
-  onCount: () => void;
   onNavigate: (href: string) => void;
   verificationRefreshKey: number;
 }) {
@@ -520,9 +498,7 @@ function Detail({
           onOpenCount={(cycleCountId) => onNavigate(`/cycle-count/${cycleCountId}`)}
           onOpenMovements={() => onNavigate(`/item/${o.itemId}?tab=movements`)}
           onOpenIssue={(occurrenceId) => onNavigate(`/exceptions/${occurrenceId}`)}
-          // A rule a Recount can settle has the Recount button above; offering
-          // "Count this item" too would be two buttons for one count.
-          onCount={showRecount ? undefined : onCount}
+          // No "Count this item" here (see the header): the web's rule.
           excludeIssueId={o.id}
         />
       ) : null}

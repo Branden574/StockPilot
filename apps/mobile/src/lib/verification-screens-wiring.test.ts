@@ -114,6 +114,26 @@ describe('the card (components/item-verification-card.tsx)', () => {
     expect(card).toContain('{copy.countAction && onCount ? (');
   });
 
+  // L4 (review 2026-09-27): the issue chips were 36pt and the link lines
+  // bare text (about 38pt with hitSlop), below the 44pt iOS minimum.
+  it('every touchable on the card is at least 44pt tall, and no link line borrows hitSlop', () => {
+    const file = 'src/components/item-verification-card.tsx';
+    const sf = parseTsx(readSource(path.join(MOBILE_ROOT, file)), file);
+    const minTap = /const MIN_TAP = (\d+);/.exec(card);
+    expect(minTap, 'MIN_TAP').not.toBeNull();
+    expect(Number(minTap![1])).toBeGreaterThanOrEqual(44);
+    const pressables = elementsOf(file, (el, s) => TOUCHABLE_TAG.test(tagOf(el, s)));
+    expect(pressables.length).toBeGreaterThanOrEqual(2);
+    for (const p of pressables) {
+      const style = attrText(p.el, 'style', sf) ?? '';
+      const m = /minHeight:\s*(MIN_TAP|\d+)/.exec(style);
+      expect(m, `${where(p)} has no minHeight`).not.toBeNull();
+      const h = m![1] === 'MIN_TAP' ? Number(minTap![1]) : Number(m![1]);
+      expect(h, `${where(p)} minHeight`).toBeGreaterThanOrEqual(44);
+      expect(attrText(p.el, 'hitSlop', sf), `${where(p)} hitSlop`).toBeUndefined();
+    }
+  });
+
   it('links the count, the open count, the movements and each exception', () => {
     expect(card).toContain('onOpenCount(countId)');
     expect(card).toContain('onOpenCount(beingCounted.cycleCountId)');
@@ -165,16 +185,27 @@ describe('exception detail: the card and the location link', () => {
     );
     expect(detail).toContain('{o.item ? (\n        <ItemVerificationCard');
     expect(detail).toContain('excludeIssueId={o.id}');
-    // Recountable rules have the Recount button; the card offers "Count this
-    // item" only for the others.
-    expect(detail).toContain('onCount={showRecount ? undefined : onCount}');
-    expect(detail).toContain('itemId={state.detail.occurrence.itemId}');
   });
 
-  it('re-reads the card with the exception', () => {
-    expect(
-      detail.match(/setVerificationNonce\(\(n\) => n \+ 1\);/g)?.length ?? 0,
-    ).toBeGreaterThanOrEqual(3);
+  // M3 (review 2026-09-27): the card offered "Count this item" on every
+  // exception whose rule a Recount cannot settle (stale_staging,
+  // long_unplaced, orphaned_stock, label_mismatch), which the web and the
+  // plan withhold: recounting a Staging or archived-location holding can
+  // correct the wrong place. It stays on the item screen.
+  it('offers no "Count this item" on the exception detail (the web\'s rule)', () => {
+    const cardJsx = detail.slice(
+      detail.indexOf('<ItemVerificationCard'),
+      detail.indexOf('/>', detail.indexOf('<ItemVerificationCard')),
+    );
+    expect(cardJsx).toContain('excludeIssueId={o.id}');
+    expect(cardJsx).not.toContain('onCount');
+    expect(detail).not.toContain('COUNT_THIS_ITEM_LABEL');
+    expect(detail).not.toMatch(/\bcountOpen\b|\bsetCountOpen\b/);
+  });
+
+  it('re-reads the card with the exception (a pull, and a finished recount)', () => {
+    expect(detail).toMatch(/setRefreshing\(true\);\s+setVerificationNonce\(\(n\) => n \+ 1\);/);
+    expect(detail).toMatch(/setRecountOpen\(false\);[^}]*setVerificationNonce\(\(n\) => n \+ 1\);/);
   });
 
   it('the location opens the location screen', () => {
@@ -217,23 +248,30 @@ describe('location screen (app/location/[id].tsx)', () => {
     expect(location).toContain('{LOCATION_HOLDINGS_OUT_OF_SCOPE_COPY}');
   });
 
-  it('words the rows and the totals through core', () => {
-    expect(location).toContain(
-      'locationRowVerificationCopy(row.summary, locationId, { timeZone, locationKind })',
+  // L2 (review 2026-09-27): the page's kind AND type, so a Site's page is
+  // not called a shelf (core isRackShelfLocation needs both).
+  it("words the rows and the totals through core, with the page's kind and type", () => {
+    expect(location).toMatch(
+      /locationRowVerificationCopy\(row\.summary, locationId, \{\s+timeZone,\s+locationKind,\s+locationType,\s+\}\)/,
     );
-    // The page's kind: Staging and Unplaced are not shelves.
-    expect(location).toContain(
-      'locationVerificationTotalsCopy(data.totals, { locationKind: loc.kind })',
+    expect(location).toMatch(
+      /locationVerificationTotalsCopy\(data\.totals, \{\s+locationKind: loc\.kind,\s+locationType: loc\.type,\s+\}\)/,
     );
+    expect(location).toContain('locationType={loc.type}');
     expect(location).toContain('verificationIssueChipCopy(issue)');
     expect(location).toContain('<Paginator');
     expect(location).toContain('{LOCATION_HOLDINGS_TRUNCATED_COPY}');
   });
 
-  it('open issues here: the chips, or none only after a check has run (never an all-clear before it)', () => {
+  // M2 (review 2026-09-27): the open exceptions are read under the reader's
+  // RLS, so none come back out of their warehouses: that is not "none
+  // recorded". Core picks the words (the web page's too).
+  it("open issues here: the chips, or core's words for none (out of scope, first check pending, none you can see)", () => {
     expect(location).toMatch(
-      /\{data\.checkedAt === null\s+\? EXCEPTION_FIRST_CHECK_PENDING_COPY\s+: LOCATION_NO_OPEN_ISSUES_COPY\}/,
+      /locationOpenIssuesEmptyCopy\(\{\s+holdingsVisible: data\.holdingsVisible,\s+hiddenItems: data\.totals\?\.hiddenItems \?\? 0,\s+checkedAt: data\.checkedAt,\s+\}\)/,
     );
+    expect(location).toContain('{noIssues.text}');
+    expect(location).not.toContain('LOCATION_NO_OPEN_ISSUES_COPY');
     expect(location).toContain('verificationCheckedAtCopy(data.checkedAt, data.timeZone)');
   });
 

@@ -1,10 +1,12 @@
 import { offlineCaptureAt } from '../cycle-counts/capture-label';
 import { formatCycleCountNumber } from '../cycle-counts/cycle-count-number';
+import { isRackShelfLocation } from '../inventory/location-groups';
 import { formatHoldingLabel, formatStockQuantity } from '../inventory/stock-writeoff';
 import { formatOrgDateTime, resolveOrgTimezone } from '../time/org-timezone';
 
 import { recountOutcomeCopy, RECOUNT_MAX_ITEMS } from './exception-recount';
 import {
+  EXCEPTION_FIRST_CHECK_PENDING_COPY,
   EXCEPTION_RULES,
   formatOccurrenceNumber,
   isExceptionRule,
@@ -28,6 +30,16 @@ import {
  * what was recorded and what has happened since, and leave the judgement to
  * the reader. A read that failed says "Couldn't load verification", never
  * "No physical count on record": an error must not read as a fact.
+ *
+ * WHERE A COUNT WAS TAKEN. The rebase trigger (0342, v2 in 0369) records a
+ * counted location only when exactly ONE location outside Staging held the
+ * item, and it leaves Staging out of the candidates: stock waiting in Staging
+ * does not stop a location being recorded. So the words never say "all of
+ * it" was anywhere. A rack, crate, area, shelf or bin reads "was its only
+ * shelf location" (Staging is not a shelf, so that is exact); anything else
+ * (Unplaced, a Site, a job site) reads "was its only place outside Staging".
+ * The split is core's location classifier (isRackShelfLocation, the web's
+ * pickers' rule). Staging itself is never recorded, so it has no words.
  */
 
 // ── The shape both surfaces receive ─────────────────────────────────────────
@@ -70,10 +82,18 @@ export interface VerificationLastCount {
   /** The book when the count started; null for a line from before 0339. */
   expectedAtStart: number | null;
   countedQuantity: number | null;
-  /** The shelf location the count was attributed to: the item's only shelf
-   *  location when it was counted (0342). Null: not recorded. */
+  /** The location the count was attributed to: the item's only holding
+   *  OUTSIDE Staging when it was counted (0342, 0369; Staging may also have
+   *  held some). Null: not recorded. */
   countedLocationId: string | null;
-  countedLocation: { name: string | null; kind: string | null; archived: boolean } | null;
+  /** Its name, kind and type now (type: a Site's "jobsite", a rack's
+   *  "shelf"; null from a server that does not send it). */
+  countedLocation: {
+    name: string | null;
+    kind: string | null;
+    type: string | null;
+    archived: boolean;
+  } | null;
   aiAssisted: boolean;
   countedBy: VerificationPerson | null;
   postedBy: VerificationPerson | null;
@@ -158,6 +178,12 @@ function finite(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+/** Two ids as uuids: a link or a typed URL may carry upper case, and the
+ *  database answers in lower case. */
+function sameId(a: string | null | undefined, b: string | null | undefined): boolean {
+  return typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
+}
+
 /** "Matched the book (10)", "Book corrected from 8 to 10 (+2)", or, for a
  *  line from before 0339 (no book at count time was kept), "Counted 10". */
 export function verificationResultCopy(count: VerificationLastCount): string | null {
@@ -180,22 +206,40 @@ function countedLocationLabel(count: VerificationLastCount): string | null {
   return formatHoldingLabel(count.countedLocation?.kind ?? null, name);
 }
 
-/** The counted location as a clause: "17-B was its only shelf location", or,
- *  for the two system buckets (which are not shelves), "all of it was
- *  Unplaced, on no rack" / "all of it was in Staging". */
-function countedWhereClause(count: VerificationLastCount): string {
-  const kind = count.countedLocation?.kind ?? null;
-  if (kind === 'unplaced') return 'all of it was Unplaced, on no rack';
-  if (kind === 'staging') return 'all of it was in Staging';
-  const label = countedLocationLabel(count);
-  return label
-    ? `${label} was its only shelf location`
-    : 'one shelf location, since removed, was its only shelf location';
+/** Whether a location reads as a "shelf location": a rack, crate, area,
+ *  shelf or bin (core isRackShelfLocation). Unplaced, a Site and anything
+ *  unknown are not. */
+function isShelfLocation(
+  kind: string | null | undefined,
+  type: string | null | undefined,
+): boolean {
+  return isRackShelfLocation({ kind: kind ?? null, type: type ?? null });
 }
 
-/** What the count covered: the item's only shelf location when one was
- *  recorded (0342: the trigger records it only when the item had exactly one
- *  place holding stock), else the item's total with the locations unrecorded. */
+/**
+ * The counted location as a clause, true to what the trigger recorded (the
+ * item's only holding outside Staging; Staging may also have held some):
+ *   - a rack, crate, area, shelf or bin: "17-B was its only shelf location";
+ *   - Unplaced: "Unplaced was its only place outside Staging, on no rack";
+ *   - a Site, a job site, anything else: "Job site was its only place outside
+ *     Staging" (a Site is not a shelf).
+ * Never "all of it": part of the stock may have been in Staging. Staging is
+ * never recorded (the trigger leaves it out of the candidates, and
+ * counted_location_id is not client-writable, 0368; pgTAP 0374 pins both).
+ */
+function countedWhereClause(count: VerificationLastCount): string {
+  const loc = count.countedLocation;
+  if (loc?.kind === 'unplaced') return 'Unplaced was its only place outside Staging, on no rack';
+  const label = countedLocationLabel(count);
+  if (!label) return 'a location, since removed, was its only place outside Staging';
+  return isShelfLocation(loc?.kind, loc?.type)
+    ? `${label} was its only shelf location`
+    : `${label} was its only place outside Staging`;
+}
+
+/** What the count covered: the item's only location outside Staging when one
+ *  was recorded (countedWhereClause), else the item's total with the
+ *  locations unrecorded. */
 export function verificationScopeCopy(count: VerificationLastCount): string {
   if (!count.countedLocationId) return VERIFICATION_ITEM_TOTAL_SCOPE_COPY;
   return `Counted while ${countedWhereClause(count)}`;
@@ -408,9 +452,10 @@ export const LOCATION_HOLDINGS_OUT_OF_SCOPE_COPY =
 
 /** A location page row: what the item's latest count says about THIS place. */
 export interface LocationRowVerificationCopy {
-  /** "Counted Sep 12, 2026, while this was its only shelf location" /
-   *  "Item total counted Sep 12, 2026, location not recorded" / "Not counted" /
-   *  "Couldn't load verification". */
+  /** "Counted Sep 12, 2026, while this was its only shelf location" (a Site
+   *  or Unplaced: "...its only place outside Staging") / "Item total counted
+   *  Sep 12, 2026, location not recorded" / "Not counted" / "Couldn't load
+   *  verification". */
   count: string;
   movementsSince: string | null;
   beingCounted: { text: string; cycleCountId: string } | null;
@@ -422,9 +467,11 @@ export function locationRowVerificationCopy(
   locationId: string,
   opts: {
     timeZone?: string | null;
-    /** The page's location kind: Staging and Unplaced are not shelves, so a
-     *  count recorded there reads "while all of it was here". */
+    /** The page's location kind and type: only a rack, crate, area, shelf or
+     *  bin is a "shelf location"; a count recorded at Unplaced or a Site reads
+     *  "while this was its only place outside Staging". */
     locationKind?: string | null;
+    locationType?: string | null;
   } = {},
 ): LocationRowVerificationCopy {
   if (!summary) {
@@ -450,11 +497,10 @@ export function locationRowVerificationCopy(
   const date = countDate(count, timeZone);
   const when = date ? ` ${date},` : '';
   let text: string;
-  if (count.countedLocationId && count.countedLocationId === locationId) {
-    const bucket = opts.locationKind === 'unplaced' || opts.locationKind === 'staging';
-    text = bucket
-      ? `Counted${when} while all of it was here`
-      : `Counted${when} while this was its only shelf location`;
+  if (count.countedLocationId && sameId(count.countedLocationId, locationId)) {
+    text = isShelfLocation(opts.locationKind, opts.locationType)
+      ? `Counted${when} while this was its only shelf location`
+      : `Counted${when} while this was its only place outside Staging`;
   } else if (count.countedLocationId) {
     text = `Item total counted${when} while ${countedWhereClause(count)}`;
   } else {
@@ -477,7 +523,8 @@ export interface LocationVerificationTotals {
   items: number;
   /** Units here across those rows. */
   quantity: number;
-  /** Latest count recorded this location as the item's only shelf location. */
+  /** Latest count recorded this location as the item's only location
+   *  outside Staging. */
   countedHere: number;
   /** Counted, with the location unrecorded or another one. */
   countedItemTotal: number;
@@ -518,7 +565,7 @@ export function locationVerificationTotals(
     }
     if (s.item.countable) t.countable += 1;
     if (!s.lastCount) t.notCounted += 1;
-    else if (s.lastCount.countedLocationId === locationId) t.countedHere += 1;
+    else if (sameId(s.lastCount.countedLocationId, locationId)) t.countedHere += 1;
     else t.countedItemTotal += 1;
   }
   return t;
@@ -535,23 +582,22 @@ function units(q: number): string {
 /** "12 items, 340 units here. 5 counted while this was their only shelf
  *  location, 4 item totals counted, 3 not counted."
  *
- *  `locationKind`: the page's location kind. Staging and Unplaced are not
- *  shelves (the same rule as locationRowVerificationCopy), so a count
- *  recorded there reads "counted while all of it was here" / "while all their
- *  stock was here". */
+ *  `locationKind` / `locationType`: the page's location. Only a rack, crate,
+ *  area, shelf or bin is a shelf location (the same rule as
+ *  locationRowVerificationCopy); at Unplaced or a Site the count reads
+ *  "counted while this was its (their) only place outside Staging". */
 export function locationVerificationTotalsCopy(
   t: LocationVerificationTotals,
-  opts: { locationKind?: string | null } = {},
+  opts: { locationKind?: string | null; locationType?: string | null } = {},
 ): string {
   const head = `${plural(t.items, 'item', 'items')}, ${units(t.quantity)} here.`;
   const parts: string[] = [];
   if (t.countedHere > 0) {
-    const one = t.countedHere === 1;
-    const bucket = opts.locationKind === 'unplaced' || opts.locationKind === 'staging';
+    const whose = t.countedHere === 1 ? 'its' : 'their';
     parts.push(
-      bucket
-        ? `${t.countedHere} counted while all ${one ? 'of it was' : 'their stock was'} here`
-        : `${t.countedHere} counted while this was ${one ? 'its' : 'their'} only shelf location`,
+      isShelfLocation(opts.locationKind, opts.locationType)
+        ? `${t.countedHere} counted while this was ${whose} only shelf location`
+        : `${t.countedHere} counted while this was ${whose} only place outside Staging`,
     );
   }
   if (t.countedItemTotal > 0)
@@ -566,9 +612,27 @@ export function locationVerificationTotalsCopy(
   return text;
 }
 
+/** Holdings read for one location page. Far above any real location;
+ *  reaching it is disclosed (LOCATION_HOLDINGS_TRUNCATED_COPY), never silent. */
+export const LOCATION_HOLDINGS_CAP = 20_000;
+
+/** "20,000" without depending on the runtime's Intl data. */
+function withThousands(n: number): string {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/** The holdings read stopped at LOCATION_HOLDINGS_CAP: the totals are partial. */
+export const LOCATION_HOLDINGS_TRUNCATED_COPY = `Only the first ${withThousands(LOCATION_HOLDINGS_CAP)} holdings here were read, so these totals are partial.`;
+
 /** Why "Recount items here" cannot be pressed, or null. Permission first
- *  (core recountDisabledReason words that), then the item count. */
-export function locationRecountProblem(countable: number): string | null {
+ *  (core recountDisabledReason words that), then a partial read (`truncated`:
+ *  the items past the cap were never read, so no recount can claim to cover
+ *  the location), then the item count. */
+export function locationRecountProblem(
+  countable: number,
+  opts: { truncated?: boolean } = {},
+): string | null {
+  if (opts.truncated === true) return LOCATION_HOLDINGS_TRUNCATED_COPY;
   if (countable <= 0) return 'Nothing here can be counted.';
   if (countable > RECOUNT_MAX_ITEMS) {
     return `A recount can include at most ${RECOUNT_MAX_ITEMS} items, and ${countable} items here can be counted. Count this location from Cycle Counts instead.`;
@@ -576,7 +640,119 @@ export function locationRecountProblem(countable: number): string | null {
   return null;
 }
 
+/**
+ * Why "Recount items here" cannot be pressed on a location page the server
+ * answered, on the web and the phone alike: the server's recountProblem when
+ * it sent one, else the same rule applied to the page (a partial holdings
+ * read, then the item count). Permission is the caller's (canRecount).
+ */
+export function locationRecountProblemOf(v: {
+  recountProblem: string | null;
+  truncated: boolean;
+  totals: Pick<LocationVerificationTotals, 'countable'> | null;
+}): string | null {
+  return (
+    v.recountProblem ?? locationRecountProblem(v.totals?.countable ?? 0, { truncated: v.truncated })
+  );
+}
+
 export const LOCATION_RECOUNT_LABEL = 'Recount items here';
+
+// ── "Open issues here" with no chips ────────────────────────────────────────
+
+/** None recorded, after a check has run, for a reader who sees everything
+ *  here. */
+export const LOCATION_NO_OPEN_ISSUES_COPY = 'No open exceptions are recorded at this location.';
+
+/** None the reader can see, while items here are hidden from them
+ *  (totals.hiddenItems > 0): exceptions about those items are hidden too. */
+export const LOCATION_NO_VISIBLE_OPEN_ISSUES_COPY =
+  'No open exceptions you can see are recorded here.';
+
+/** The reader's warehouses do not cover the location: exception_occurrences
+ *  RLS hides every exception here (0370 _exc_occurrence_visible, the same
+ *  location clause as location_holdings_visible). Never "none recorded". */
+export const LOCATION_OPEN_ISSUES_OUT_OF_SCOPE_COPY =
+  'This location is in a warehouse you are not assigned to, so its open exceptions are not listed here.';
+
+export type LocationOpenIssuesEmpty =
+  /** The reader cannot see exceptions here at all. */
+  | { kind: 'out_of_scope'; text: string }
+  /** The org's first check has not run: nothing is known yet. */
+  | { kind: 'first_check_pending'; text: string }
+  /** A check has run and nothing the reader can see is open here. */
+  | { kind: 'none'; text: string };
+
+/**
+ * What "Open issues here" says when there are no chips to show, on the web
+ * and the phone alike. The exceptions are read under the reader's RLS, so an
+ * empty list is only "none recorded" when nothing here is hidden from them:
+ *   - out of the reader's warehouses (holdingsVisible false): says so;
+ *   - before the org's first check: that it has not run;
+ *   - items here the reader cannot open (hiddenItems > 0): "none you can see";
+ *   - otherwise: none recorded at this location.
+ */
+export function locationOpenIssuesEmptyCopy(v: {
+  holdingsVisible: boolean;
+  /** totals.hiddenItems (0 when there are no totals). */
+  hiddenItems: number;
+  checkedAt: string | null;
+}): LocationOpenIssuesEmpty {
+  if (!v.holdingsVisible)
+    return { kind: 'out_of_scope', text: LOCATION_OPEN_ISSUES_OUT_OF_SCOPE_COPY };
+  if (v.checkedAt === null) {
+    return { kind: 'first_check_pending', text: EXCEPTION_FIRST_CHECK_PENDING_COPY };
+  }
+  return v.hiddenItems > 0
+    ? { kind: 'none', text: LOCATION_NO_VISIBLE_OPEN_ISSUES_COPY }
+    : { kind: 'none', text: LOCATION_NO_OPEN_ISSUES_COPY };
+}
+
+// ── A refused read (the same words on the web and the phone) ────────────────
+
+export type VerificationSubject = 'item' | 'location';
+
+/** Why the server refused a verification read (never a failed read: that is
+ *  VERIFICATION_UNAVAILABLE_COPY with "try again"). */
+export type VerificationRefusal =
+  'not_found' | 'forbidden' | 'aal2_required' | 'mfa_required' | 'invalid_id';
+
+/** The refusal an app-authored error names (its code and details.reason), or
+ *  null for anything else (a failed read). */
+export function verificationRefusalOf(code: unknown, reason: unknown): VerificationRefusal | null {
+  if (code === 'not_found') return 'not_found';
+  if (code === 'validation_error') return 'invalid_id';
+  if (code === 'forbidden') {
+    if (reason === 'aal2_required') return 'aal2_required';
+    if (reason === 'mfa_required') return 'mfa_required';
+    return 'forbidden';
+  }
+  return null;
+}
+
+/** The sentence under "Couldn't load verification" for a refusal. */
+export function verificationRefusalCopy(
+  refusal: VerificationRefusal,
+  subject: VerificationSubject,
+): string {
+  switch (refusal) {
+    case 'not_found':
+      return subject === 'item'
+        ? 'This item is not available to you, or it no longer exists.'
+        : 'This location is not available to you, or it no longer exists.';
+    case 'forbidden':
+      return 'You do not have permission to see this.';
+    case 'aal2_required':
+      return 'Your account uses an authenticator app, and this session did not sign in with it. Sign out and sign back in with your code to see this.';
+    case 'mfa_required':
+      return 'Your organization requires two-factor authentication. Set it up on the web, then sign in again.';
+    case 'invalid_id':
+      return 'This link is not valid.';
+  }
+}
+
+/** A verification route's 401 `message`, and what the phone says for it. */
+export const VERIFICATION_SESSION_ENDED_COPY = 'Your session has ended. Sign in again.';
 
 // ── Reading a summary sent as JSON (the phone) ──────────────────────────────
 
@@ -641,7 +817,12 @@ export function parseItemVerificationSummary(value: unknown): ItemVerificationSu
       countedQuantity: num(c.countedQuantity),
       countedLocationId: str(c.countedLocationId),
       countedLocation: isObj(loc)
-        ? { name: str(loc.name), kind: str(loc.kind), archived: loc.archived === true }
+        ? {
+            name: str(loc.name),
+            kind: str(loc.kind),
+            type: str(loc.type),
+            archived: loc.archived === true,
+          }
         : null,
       aiAssisted: c.aiAssisted,
       countedBy: person(c.countedBy),

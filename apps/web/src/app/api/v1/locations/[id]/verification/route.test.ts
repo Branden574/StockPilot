@@ -162,9 +162,17 @@ beforeEach(() => {
 });
 
 describe('GET /api/v1/locations/[id]/verification', () => {
-  it('401 without a session', async () => {
+  // L5 (review 2026-09-27): the 401 had no `message` (the documented shape
+  // is { error, message }) and no Cache-Control.
+  it('401 without a session, in the one error shape, not cached', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(null);
-    expect((await GET(bearer(URL_), params(LOC))).status).toBe(401);
+    const res = await GET(bearer(URL_), params(LOC));
+    expect(res.status).toBe(401);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(await res.json()).toEqual({
+      error: 'unauthenticated',
+      message: 'Your session has ended. Sign in again.',
+    });
   });
 
   it('serves Bearer and cookie callers alike: the location, a page of rows, and totals', async () => {
@@ -189,12 +197,16 @@ describe('GET /api/v1/locations/[id]/verification', () => {
         // The phone's "Recount items here" sends these (every countable row).
         recountItemIds: [itemId(1), itemId(2), itemId(3)],
       });
-      // The phone words each row with core, through the parser.
+      // The phone words each row with core, through the parser, with the
+      // page's kind and type (a rack is a shelf location).
+      expect(body.location).toMatchObject({ kind: 'rack', type: 'shelf' });
       expect(
         body.rows.map(
           (r: { summary: unknown }) =>
             locationRowVerificationCopy(parseItemVerificationSummary(r.summary), LOC, {
               timeZone: body.timeZone,
+              locationKind: body.location.kind,
+              locationType: body.location.type,
             }).count,
         ),
       ).toEqual([
@@ -223,16 +235,39 @@ describe('GET /api/v1/locations/[id]/verification', () => {
       countedHere: 601,
       countedItemTotal: 600,
     });
-    expect(locationVerificationTotalsCopy(body.totals)).toBe(
+    expect(
+      locationVerificationTotalsCopy(body.totals, {
+        locationKind: body.location.kind,
+        locationType: body.location.type,
+      }),
+    ).toBe(
       '1201 items, 1201 units here. 601 counted while this was their only shelf location, 600 item totals counted.',
     );
   });
 
-  it.each(['0', 'abc', '-1', '1.5', '9999999'])('400 for page=%s', async (page) => {
-    const stub = ctxWith();
-    const res = await GET(bearer(`${URL_}?page=${page}`), params(LOC));
-    expect(res.status).toBe(400);
-    expect(stub.rpcCalls).toHaveLength(0);
+  // L5: the 400 now comes through verificationErrorResponse (the one shape,
+  // not cached), and only after the permission check.
+  it.each(['0', 'abc', '-1', '1.5', '9999999'])(
+    '400 for page=%s, in the one error shape, not cached',
+    async (page) => {
+      const stub = ctxWith();
+      const res = await GET(bearer(`${URL_}?page=${page}`), params(LOC));
+      expect(res.status).toBe(400);
+      expect(res.headers.get('cache-control')).toBe('private, no-store');
+      expect(await res.json()).toEqual({
+        error: 'validation_error',
+        message: 'The page must be a whole number from 1.',
+        details: { reason: 'invalid_page' },
+      });
+      expect(stub.rpcCalls).toHaveLength(0);
+    },
+  );
+
+  it('a bad page from a caller without items:read is a 403: permission is judged first', async () => {
+    const stub = ctxWith({ role: 'viewer', permissions: ['members:read', 'locations:read'] });
+    const res = await GET(bearer(`${URL_}?page=abc`), params(LOC));
+    expect(res.status).toBe(403);
+    expect(stub.fromCalls).toHaveLength(0);
   });
 
   it("a location the reader's warehouses do not cover: 200, nothing listed, holdingsVisible false (never an empty location)", async () => {

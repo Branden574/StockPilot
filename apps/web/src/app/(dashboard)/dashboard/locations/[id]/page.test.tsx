@@ -7,11 +7,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *   - a failed read says "Couldn't load verification" (role="alert"), never
  *     an empty location and never "Not counted";
  *   - not found, not visible, a malformed id or a reader without items:read
- *     is a 404 (the same answer, so existence is not leaked);
+ *     says "Couldn't load verification" and why, in the phone's words (not
+ *     found and not visible are the same answer, so existence is not leaked);
  *   - a location the reader's warehouses do not cover says so, never
  *     "nothing here";
  *   - the totals line covers EVERY row, not the 50 on the page;
- *   - "No open exceptions" is said only once a check has run;
+ *   - "No open exceptions" is said only once a check has run, and only when
+ *     nothing here is hidden from the reader;
  *   - rows link through to their items; "Recount items here" is offered
  *     only to a reader the server says may start one, disabled with the
  *     reason above the recount cap;
@@ -153,7 +155,7 @@ function data(o: Partial<LocationVerification> = {}): LocationVerification {
           {},
           {
             countedLocationId: LOC,
-            countedLocation: { name: 'A-12', kind: 'rack', archived: false },
+            countedLocation: { name: 'A-12', kind: 'rack', type: 'shelf', archived: false },
           },
         ),
       ),
@@ -208,16 +210,41 @@ beforeEach(() => {
 });
 
 describe('Location page', () => {
-  it('a malformed id is a 404 without a read', async () => {
-    await expect(renderPage('not-an-id')).rejects.toThrow('NEXT_NOT_FOUND');
+  // L5 (review 2026-09-27): the phone says why a location cannot be shown;
+  // the web page now says the same, in core's words, instead of a bare 404.
+  it('a malformed id says the link is not valid, without a read', async () => {
+    await renderPage('not-an-id');
+    expect(screen.getByRole('alert')).toHaveTextContent("Couldn't load verification");
+    expect(screen.getByTestId('location-refusal')).toHaveTextContent('This link is not valid.');
     expect(location).not.toHaveBeenCalled();
   });
 
-  it.each(['not_found', 'forbidden', 'validation_error'] as const)('%s is a 404', async (code) => {
-    location.mockRejectedValue(new ServiceError(code, 'no'));
-    await expect(renderPage()).rejects.toThrow('NEXT_NOT_FOUND');
-    expect(reportError).not.toHaveBeenCalled();
-  });
+  it.each([
+    ['not_found', undefined, 'This location is not available to you, or it no longer exists.'],
+    ['forbidden', undefined, 'You do not have permission to see this.'],
+    ['validation_error', { reason: 'invalid_location_id' }, 'This link is not valid.'],
+    [
+      'forbidden',
+      { reason: 'mfa_required' },
+      'Your organization requires two-factor authentication. Set it up on the web, then sign in again.',
+    ],
+  ] as const)(
+    '%s (%j): says why, as the phone does, not reported',
+    async (code, details, words) => {
+      location.mockRejectedValue(
+        new ServiceError(code, 'no', details as Record<string, unknown> | undefined),
+      );
+      await renderPage();
+      expect(screen.getByRole('alert')).toHaveTextContent("Couldn't load verification");
+      expect(screen.getByTestId('location-refusal')).toHaveTextContent(words);
+      expect(screen.queryByText(/Not counted|0 items|No open exceptions/)).not.toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Locations' })).toHaveAttribute(
+        'href',
+        '/dashboard/locations',
+      );
+      expect(reportError).not.toHaveBeenCalled();
+    },
+  );
 
   it('any other failure says "Couldn\'t load verification", never an empty location, and is reported', async () => {
     location.mockRejectedValue(new ServiceError('internal_error', 'relation exploded'));
@@ -329,6 +356,25 @@ describe('Location page', () => {
     );
   });
 
+  // L5: the phone disabled "Recount items here" on a partial read; the web
+  // did not. Both apply core's rule now (the server's reason, else this).
+  it('"Recount items here" on a partial holdings read is disabled, with the reason', async () => {
+    location.mockResolvedValue(
+      data({
+        truncated: true,
+        canRecount: true,
+        recountUnavailableReason: null,
+        recountProblem: null,
+        recountItemIds: [itemId(1)],
+      }),
+    );
+    await renderPage();
+    expect(screen.getByTestId('location-recount')).toBeDisabled();
+    expect(screen.getByTestId('location-recount-problem')).toHaveTextContent(
+      'Only the first 20,000 holdings here were read, so these totals are partial.',
+    );
+  });
+
   it("outside the reader's warehouses: says so, never an empty location, with no totals and no recount", async () => {
     location.mockResolvedValue(
       data({
@@ -347,6 +393,34 @@ describe('Location page', () => {
     expect(screen.queryByTestId('location-totals')).not.toBeInTheDocument();
     expect(screen.queryByTestId('location-rows')).not.toBeInTheDocument();
     expect(screen.queryByTestId('location-recount')).not.toBeInTheDocument();
+  });
+
+  // M2 (review 2026-09-27): the open exceptions are read under the same RLS,
+  // so out of the reader's warehouses none come back. That is not "none
+  // recorded".
+  it("outside the reader's warehouses, open issues say they are not listed, never that none are recorded", async () => {
+    location.mockResolvedValue(
+      data({ holdingsVisible: false, rows: [], totals: null, totalRows: 0, openIssues: [] }),
+    );
+    await renderPage();
+    const here = screen.getByTestId('location-open-issues');
+    expect(within(here).getByTestId('location-issues-out-of-scope')).toHaveTextContent(
+      'This location is in a warehouse you are not assigned to, so its open exceptions are not listed here.',
+    );
+    expect(here).not.toHaveTextContent('No open exceptions');
+  });
+
+  it('with items here the reader cannot open, no open exceptions is "none you can see"', async () => {
+    location.mockResolvedValue(
+      data({ totals: { ...data().totals!, hiddenItems: 2, hiddenQuantity: 5 } }),
+    );
+    await renderPage();
+    expect(screen.getByTestId('location-no-open-issues')).toHaveTextContent(
+      'No open exceptions you can see are recorded here.',
+    );
+    expect(
+      screen.queryByText('No open exceptions are recorded at this location.'),
+    ).not.toBeInTheDocument();
   });
 
   it('open issues here are chips linking to their pages, with when they were checked', async () => {
@@ -456,10 +530,12 @@ describe('Location page', () => {
     expect(screen.queryByTestId('location-recount')).not.toBeInTheDocument();
   });
 
-  it('a staging location reads "while all of it was here", never calls it a shelf', async () => {
+  // M1: Unplaced is recorded while Staging may also hold some (pgTAP 0374
+  // S28), so never "all of it was here".
+  it('the Unplaced page reads "while this was its only place outside Staging", never "all of it" or a shelf', async () => {
     location.mockResolvedValue(
       data({
-        location: { ...data().location, name: 'Staging', kind: 'staging', type: null },
+        location: { ...data().location, name: 'Unplaced', kind: 'unplaced', type: 'other' },
         rows: [
           rowOf(
             1,
@@ -468,17 +544,66 @@ describe('Location page', () => {
               {},
               {
                 countedLocationId: LOC,
-                countedLocation: { name: 'Staging', kind: 'staging', archived: false },
+                countedLocation: {
+                  name: 'Unplaced',
+                  kind: 'unplaced',
+                  type: 'other',
+                  archived: false,
+                },
               },
             ),
           ),
         ],
+        totals: {
+          ...data().totals!,
+          items: 1,
+          quantity: 4,
+          countedHere: 1,
+          countedItemTotal: 0,
+          notCounted: 0,
+        },
       }),
     );
     await renderPage();
     expect(screen.getByTestId('location-kind')).toHaveTextContent('System location · Main');
     expect(screen.getByTestId('location-row-count')).toHaveTextContent(
-      'Counted Sep 12, 2026, while all of it was here',
+      'Counted Sep 12, 2026, while this was its only place outside Staging',
+    );
+    expect(screen.getByTestId('location-totals')).toHaveTextContent(
+      '1 item, 4 units here. 1 counted while this was its only place outside Staging.',
+    );
+    expect(document.body.textContent).not.toMatch(/shelf location|all of it/);
+  });
+
+  // L2: a Site is not a shelf.
+  it("a job site's page: its only place outside Staging, never a shelf location", async () => {
+    location.mockResolvedValue(
+      data({
+        location: {
+          ...data().location,
+          name: 'Job site',
+          kind: null,
+          type: 'jobsite',
+          warehouseName: null,
+        },
+        rows: [rowOf(1, summary(itemId(1), {}, { countedLocationId: LOC }))],
+        totals: {
+          ...data().totals!,
+          items: 1,
+          quantity: 4,
+          countedHere: 1,
+          countedItemTotal: 0,
+          notCounted: 0,
+        },
+      }),
+    );
+    await renderPage();
+    expect(screen.getByTestId('location-kind')).toHaveTextContent('Job site');
+    expect(screen.getByTestId('location-row-count')).toHaveTextContent(
+      'Counted Sep 12, 2026, while this was its only place outside Staging',
+    );
+    expect(screen.getByTestId('location-totals')).toHaveTextContent(
+      '1 item, 4 units here. 1 counted while this was its only place outside Staging.',
     );
     expect(document.body.textContent).not.toMatch(/shelf location/);
   });
@@ -494,7 +619,7 @@ describe('Location page', () => {
               {},
               {
                 countedLocationId: OTHER_LOC,
-                countedLocation: { name: 'B-3', kind: 'rack', archived: false },
+                countedLocation: { name: 'B-3', kind: 'rack', type: 'shelf', archived: false },
               },
             ),
           ),

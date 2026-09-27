@@ -106,8 +106,10 @@ export function ItemVerificationCard({
   onOpenMovements?: () => void;
   onOpenIssue: (occurrenceId: string) => void;
   /** "Count this item", offered only with this handler, and only when the
-   *  server says this reader may start a count of a countable item. The item
-   *  screen leaves it out: its stock card already has the button. */
+   *  server says this reader may start a count of a countable item. Both
+   *  screens leave it out today: the item screen's stock card already has the
+   *  button, and the exception detail never offers it (the web's rule: a
+   *  holding rule is not settled by counting the item). */
   onCount?: () => void;
   /** The exception this card sits on, left out of its own chips. */
   excludeIssueId?: string | null;
@@ -305,7 +307,13 @@ function Summary({
   );
 }
 
-/** A line of the card that opens something. Content text: no Dynamic Type cap. */
+/** The iOS minimum tap target (Human Interface Guidelines), in points. */
+const MIN_TAP = 44;
+
+/** A line of the card that opens something. Content text: no Dynamic Type cap.
+ *  The target is at least MIN_TAP tall, the text centred in it (a bare text
+ *  line was about 38pt even with hitSlop). No hitSlop: stacked links would
+ *  overlap each other's targets. */
 function LinkLine({
   text,
   hint,
@@ -323,8 +331,12 @@ function LinkLine({
       onPress={onPress}
       accessibilityRole="link"
       accessibilityHint={hint}
-      hitSlop={6}
-      style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1, alignSelf: 'flex-start' })}
+      style={({ pressed }) => ({
+        minHeight: MIN_TAP,
+        justifyContent: 'center',
+        opacity: pressed ? 0.7 : 1,
+        alignSelf: 'flex-start',
+      })}
     >
       <Body
         size={strong ? 15 : 14}
@@ -349,7 +361,7 @@ export function IssueChip({ text, onPress }: { text: string; onPress: () => void
       accessibilityRole="link"
       accessibilityHint="Opens the exception"
       style={({ pressed }) => ({
-        minHeight: 36,
+        minHeight: MIN_TAP,
         paddingHorizontal: 12,
         paddingVertical: 7,
         borderRadius: 8,

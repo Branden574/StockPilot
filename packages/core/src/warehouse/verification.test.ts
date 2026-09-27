@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
+import { EXCEPTION_FIRST_CHECK_PENDING_COPY } from './exceptions';
 import {
+  LOCATION_HOLDINGS_CAP,
   LOCATION_HOLDINGS_OUT_OF_SCOPE_COPY,
+  LOCATION_HOLDINGS_TRUNCATED_COPY,
+  LOCATION_NO_OPEN_ISSUES_COPY,
+  LOCATION_NO_VISIBLE_OPEN_ISSUES_COPY,
+  LOCATION_OPEN_ISSUES_OUT_OF_SCOPE_COPY,
   LOCATION_RECOUNT_LABEL,
+  locationOpenIssuesEmptyCopy,
   locationRecountProblem,
+  locationRecountProblemOf,
   locationRowVerificationCopy,
   locationVerificationTotals,
   locationVerificationTotalsCopy,
@@ -14,9 +22,12 @@ import {
   VERIFICATION_MOVEMENTS_UNKNOWN_COPY,
   VERIFICATION_NEVER_COUNTED_COPY,
   VERIFICATION_NOT_COUNTABLE_COPY,
+  VERIFICATION_SESSION_ENDED_COPY,
   VERIFICATION_UNAVAILABLE_COPY,
   verificationIssueChipCopy,
   verificationNotCountableReason,
+  verificationRefusalCopy,
+  verificationRefusalOf,
   verificationSummaryCopy,
   type ItemVerificationSummary,
   type VerificationLastCount,
@@ -156,37 +167,88 @@ describe('verificationSummaryCopy: every state', () => {
     const at = summary({
       lastCount: count({
         countedLocationId: 'r-1',
-        countedLocation: { name: 'A-12', kind: 'rack', archived: false },
+        countedLocation: { name: 'A-12', kind: 'rack', type: 'shelf', archived: false },
       }),
     });
     expect(verificationSummaryCopy(at, { timeZone: TZ }).scope).toBe(
       'Counted while A-12 was its only shelf location',
     );
+    // The location is gone: its kind is unknown, so it is not called a shelf.
     const gone = summary({ lastCount: count({ countedLocationId: 'r-3', countedLocation: null }) });
     expect(verificationSummaryCopy(gone, { timeZone: TZ }).scope).toBe(
-      'Counted while one shelf location, since removed, was its only shelf location',
+      'Counted while a location, since removed, was its only place outside Staging',
     );
   });
 
-  it('scope: a count recorded at Unplaced or Staging never calls the bucket a shelf', () => {
+  // M1 (review 2026-09-27). The trigger records Unplaced when it is the
+  // item's only holding OUTSIDE Staging (Staging is left out of the
+  // candidates), so 3 in Unplaced plus 5 in Staging records Unplaced (pgTAP
+  // 0374 S28 pins that). "All of it was Unplaced" was false for that item.
+  it('scope: a count recorded at Unplaced says it was the only place outside Staging, never "all of it"', () => {
     const unplaced = summary({
       lastCount: count({
         countedLocationId: 'u',
-        countedLocation: { name: 'Unplaced', kind: 'unplaced', archived: false },
+        countedLocation: { name: 'Unplaced', kind: 'unplaced', type: 'other', archived: false },
       }),
     });
-    expect(verificationSummaryCopy(unplaced, { timeZone: TZ }).scope).toBe(
-      'Counted while all of it was Unplaced, on no rack',
-    );
-    const staging = summary({
+    const scope = verificationSummaryCopy(unplaced, { timeZone: TZ }).scope;
+    expect(scope).toBe('Counted while Unplaced was its only place outside Staging, on no rack');
+    expect(scope).not.toMatch(/all of it/);
+  });
+
+  // L2 (review 2026-09-27). A Site holding the item's only stock outside
+  // Staging is recorded too (the trigger's candidates include NULL-kind
+  // Sites); a Site is not a shelf.
+  it('scope: a Site or job site is its only place outside Staging, never a "shelf location"', () => {
+    const site = summary({
       lastCount: count({
-        countedLocationId: 's',
-        countedLocation: { name: 'Staging WH1', kind: 'staging', archived: false },
+        countedLocationId: 'site',
+        countedLocation: { name: 'Job site', kind: null, type: 'jobsite', archived: false },
       }),
     });
-    expect(verificationSummaryCopy(staging, { timeZone: TZ }).scope).toBe(
-      'Counted while all of it was in Staging',
+    expect(verificationSummaryCopy(site, { timeZone: TZ }).scope).toBe(
+      'Counted while Job site was its only place outside Staging',
     );
+    const warehouse = summary({
+      lastCount: count({
+        countedLocationId: 'wh',
+        countedLocation: { name: 'DC4', kind: null, type: 'warehouse', archived: false },
+      }),
+    });
+    expect(verificationSummaryCopy(warehouse, { timeZone: TZ }).scope).toBe(
+      'Counted while DC4 was its only place outside Staging',
+    );
+    // A server that sends no type: a NULL-kind location is a Site (core
+    // isSiteLocation's catch-all), so never a shelf.
+    const untyped = summary({
+      lastCount: count({
+        countedLocationId: 'x',
+        countedLocation: { name: 'Room 4', kind: null, type: null, archived: false },
+      }),
+    });
+    expect(verificationSummaryCopy(untyped, { timeZone: TZ }).scope).toBe(
+      'Counted while Room 4 was its only place outside Staging',
+    );
+  });
+
+  it('scope: every placement (rack, crate, area, shelf, bin) is a shelf location', () => {
+    for (const loc of [
+      { kind: 'rack', type: 'shelf' },
+      { kind: 'crate', type: 'other' },
+      { kind: 'area', type: 'other' },
+      { kind: null, type: 'shelf' },
+      { kind: null, type: 'bin' },
+    ]) {
+      const s = summary({
+        lastCount: count({
+          countedLocationId: 'p',
+          countedLocation: { name: 'P-1', ...loc, archived: false },
+        }),
+      });
+      expect(verificationSummaryCopy(s, { timeZone: TZ }).scope, JSON.stringify(loc)).toBe(
+        'Counted while P-1 was its only shelf location',
+      );
+    }
   });
 
   it('scope: the item total, with the locations not recorded', () => {
@@ -356,7 +418,7 @@ describe('the words never say "verified" and never show a percentage', () => {
     summary({
       lastCount: count({
         countedLocationId: 'r',
-        countedLocation: { name: 'A-12', kind: 'rack', archived: true },
+        countedLocation: { name: 'A-12', kind: 'rack', type: 'shelf', archived: true },
       }),
     }),
     summary({ lastCount: count({ aiAssisted: true, capturedAt: '2026-09-11T01:00:00Z' }) }),
@@ -401,6 +463,10 @@ describe('the words never say "verified" and never show a percentage', () => {
         ),
       ),
       LOCATION_HOLDINGS_OUT_OF_SCOPE_COPY,
+      LOCATION_OPEN_ISSUES_OUT_OF_SCOPE_COPY,
+      LOCATION_NO_VISIBLE_OPEN_ISSUES_COPY,
+      LOCATION_NO_OPEN_ISSUES_COPY,
+      LOCATION_HOLDINGS_TRUNCATED_COPY,
       locationRecountProblem(0) ?? '',
       locationRecountProblem(500) ?? '',
       LOCATION_RECOUNT_LABEL,
@@ -412,16 +478,49 @@ describe('the words never say "verified" and never show a percentage', () => {
 });
 
 describe('location rows', () => {
-  it('counted while THIS was the only shelf location', () => {
+  it('counted while THIS was the only shelf location (a rack page)', () => {
     const s = summary({
       lastCount: count({
         countedLocationId: HERE,
-        countedLocation: { name: 'A-12', kind: 'rack', archived: false },
+        countedLocation: { name: 'A-12', kind: 'rack', type: 'shelf', archived: false },
       }),
     });
+    expect(
+      locationRowVerificationCopy(s, HERE, {
+        timeZone: TZ,
+        locationKind: 'rack',
+        locationType: 'shelf',
+      }).count,
+    ).toBe('Counted Sep 12, 2026, while this was its only shelf location');
+  });
+  it('a Site page (or a page whose kind is not given): its only place outside Staging, never a shelf', () => {
+    const s = summary({ lastCount: count({ countedLocationId: HERE }) });
+    expect(
+      locationRowVerificationCopy(s, HERE, {
+        timeZone: TZ,
+        locationKind: null,
+        locationType: 'jobsite',
+      }).count,
+    ).toBe('Counted Sep 12, 2026, while this was its only place outside Staging');
     expect(locationRowVerificationCopy(s, HERE, { timeZone: TZ }).count).toBe(
-      'Counted Sep 12, 2026, while this was its only shelf location',
+      'Counted Sep 12, 2026, while this was its only place outside Staging',
     );
+  });
+  // L1 (review 2026-09-27): a link or typed URL may carry an upper-case id;
+  // the database answers in lower case.
+  it('matches the page to the counted location whatever the case of the id', () => {
+    const here = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    const s = summary({ lastCount: count({ countedLocationId: here }) });
+    expect(
+      locationRowVerificationCopy(s, here.toUpperCase(), {
+        timeZone: TZ,
+        locationKind: 'rack',
+        locationType: 'shelf',
+      }).count,
+    ).toBe('Counted Sep 12, 2026, while this was its only shelf location');
+    expect(
+      locationVerificationTotals([{ quantity: 1, summary: s }], here.toUpperCase()).countedHere,
+    ).toBe(1);
   });
   it('the item total, location not recorded', () => {
     expect(locationRowVerificationCopy(summary(), HERE, { timeZone: TZ }).count).toBe(
@@ -432,28 +531,36 @@ describe('location rows', () => {
     const s = summary({
       lastCount: count({
         countedLocationId: 'elsewhere',
-        countedLocation: { name: 'B-3', kind: 'rack', archived: false },
+        countedLocation: { name: 'B-3', kind: 'rack', type: 'shelf', archived: false },
       }),
     });
     expect(locationRowVerificationCopy(s, HERE, { timeZone: TZ }).count).toBe(
       'Item total counted Sep 12, 2026, while B-3 was its only shelf location',
     );
   });
-  it('a location page for Unplaced or Staging: "while all of it was here"; a count at Unplaced seen from a rack page', () => {
+  // M1: never "all of it" (Staging may also have held some).
+  it('the Unplaced page: "while this was its only place outside Staging"; a count at Unplaced seen from a rack page', () => {
     const atUnplaced = summary({
       lastCount: count({
         countedLocationId: HERE,
-        countedLocation: { name: 'Unplaced', kind: 'unplaced', archived: false },
+        countedLocation: { name: 'Unplaced', kind: 'unplaced', type: 'other', archived: false },
       }),
     });
-    expect(
-      locationRowVerificationCopy(atUnplaced, HERE, { timeZone: TZ, locationKind: 'unplaced' })
-        .count,
-    ).toBe('Counted Sep 12, 2026, while all of it was here');
-    expect(
-      locationRowVerificationCopy(atUnplaced, 'rack-page', { timeZone: TZ, locationKind: 'rack' })
-        .count,
-    ).toBe('Item total counted Sep 12, 2026, while all of it was Unplaced, on no rack');
+    const here = locationRowVerificationCopy(atUnplaced, HERE, {
+      timeZone: TZ,
+      locationKind: 'unplaced',
+      locationType: 'other',
+    }).count;
+    expect(here).toBe('Counted Sep 12, 2026, while this was its only place outside Staging');
+    const fromRack = locationRowVerificationCopy(atUnplaced, 'rack-page', {
+      timeZone: TZ,
+      locationKind: 'rack',
+      locationType: 'shelf',
+    }).count;
+    expect(fromRack).toBe(
+      'Item total counted Sep 12, 2026, while Unplaced was its only place outside Staging, on no rack',
+    );
+    expect(`${here}\n${fromRack}`).not.toMatch(/all of it|shelf/);
   });
   it('not counted, and unavailable (never "Not counted" for a failed read)', () => {
     expect(locationRowVerificationCopy(neverCounted(), HERE, { timeZone: TZ }).count).toBe(
@@ -502,6 +609,7 @@ describe('location totals cover every row', () => {
     expect(
       locationVerificationTotalsCopy(
         locationVerificationTotals(rows, HERE, { items: 1, quantity: 6 }),
+        { locationKind: 'rack', locationType: 'shelf' },
       ),
     ).toBe(
       '5 items, 11.5 units here. 1 counted while this was its only shelf location, 2 item totals counted, 1 not counted, 1 could not be loaded. 1 more item here (6 units) is not listed because you cannot open it.',
@@ -509,13 +617,14 @@ describe('location totals cover every row', () => {
     expect(locationVerificationTotalsCopy(locationVerificationTotals([], HERE))).toBe(
       '0 items, 0 units here.',
     );
-    // A rack page, named as one explicitly: the same words.
+    // A page whose kind is not given is not assumed to be a shelf.
     expect(
       locationVerificationTotalsCopy(
         locationVerificationTotals(rows, HERE, { items: 1, quantity: 6 }),
-        { locationKind: 'rack' },
       ),
-    ).toMatch(/^5 items, 11\.5 units here\. 1 counted while this was its only shelf location, /);
+    ).toMatch(
+      /^5 items, 11\.5 units here\. 1 counted while this was its only place outside Staging, /,
+    );
     expect(
       locationVerificationTotalsCopy(
         locationVerificationTotals([{ quantity: 1, summary: neverCounted() }], HERE),
@@ -525,6 +634,35 @@ describe('location totals cover every row', () => {
 });
 
 describe('locationRecountProblem', () => {
+  // L5 (review 2026-09-27): a partial holdings read cannot back a recount of
+  // "the items here", on the web as on the phone.
+  it('a holdings read that reached its cap: the totals are partial, so no recount', () => {
+    expect(LOCATION_HOLDINGS_CAP).toBe(20_000);
+    expect(LOCATION_HOLDINGS_TRUNCATED_COPY).toBe(
+      'Only the first 20,000 holdings here were read, so these totals are partial.',
+    );
+    for (const n of [0, 1, 200, 201]) {
+      expect(locationRecountProblem(n, { truncated: true })).toBe(LOCATION_HOLDINGS_TRUNCATED_COPY);
+    }
+    expect(locationRecountProblem(5, { truncated: false })).toBeNull();
+  });
+  it("locationRecountProblemOf: the server's reason, else a partial read, else the item count", () => {
+    const totals = { countable: 5 };
+    expect(
+      locationRecountProblemOf({ recountProblem: 'Server says no.', truncated: true, totals }),
+    ).toBe('Server says no.');
+    expect(locationRecountProblemOf({ recountProblem: null, truncated: true, totals })).toBe(
+      LOCATION_HOLDINGS_TRUNCATED_COPY,
+    );
+    expect(locationRecountProblemOf({ recountProblem: null, truncated: false, totals })).toBeNull();
+    expect(
+      locationRecountProblemOf({
+        recountProblem: null,
+        truncated: false,
+        totals: { countable: 0 },
+      }),
+    ).toBe('Nothing here can be counted.');
+  });
   it('nothing countable, within the cap, and above it (the 200-item recount cap)', () => {
     expect(locationRecountProblem(0)).toBe('Nothing here can be counted.');
     expect(locationRecountProblem(1)).toBeNull();
@@ -556,13 +694,29 @@ describe('parseItemVerificationSummary (the phone reads the API)', () => {
       openCount: { cycleCountId: 'cc-45', countNumber: 45 },
       lastCount: count({
         countedLocationId: 'r',
-        countedLocation: { name: 'A-12', kind: 'rack', archived: false },
+        countedLocation: { name: 'A-12', kind: 'rack', type: 'shelf', archived: false },
       }),
     });
     expect(parseItemVerificationSummary(JSON.parse(JSON.stringify(s)))).toEqual(s);
     expect(parseItemVerificationSummary(JSON.parse(JSON.stringify(neverCounted())))).toEqual(
       neverCounted(),
     );
+  });
+  it('a server that sends no location type: type null (never a shelf by default)', () => {
+    const s = summary({
+      lastCount: count({
+        countedLocationId: 'r',
+        countedLocation: { name: 'A-12', kind: 'rack', type: 'shelf', archived: false },
+      }),
+    });
+    const raw = JSON.parse(JSON.stringify(s)) as Record<string, any>;
+    delete raw.lastCount.countedLocation.type;
+    expect(parseItemVerificationSummary(raw)!.lastCount!.countedLocation).toEqual({
+      name: 'A-12',
+      kind: 'rack',
+      type: null,
+      archived: false,
+    });
   });
   it('anything it cannot read is null (worded as unavailable), never a never-counted summary', () => {
     for (const bad of [
@@ -599,34 +753,122 @@ describe('parseItemVerificationSummary (the phone reads the API)', () => {
   });
 });
 
-describe('location totals on Staging and Unplaced pages (not shelves)', () => {
+// M1 and L2: the totals on the Unplaced page and on a Site's page. Never "all
+// of it" / "all their stock" (Staging may also have held some), never a shelf.
+describe('location totals on the Unplaced page and a Site page (not shelves)', () => {
   const countedHere = (): ItemVerificationSummary =>
-    summary({
-      lastCount: count({
-        countedLocationId: HERE,
-        countedLocation: { name: 'Staging', kind: 'staging', archived: false },
-      }),
-    });
-  it.each(['staging', 'unplaced'])(
-    '%s: "counted while all of it was here", never a shelf',
-    (kind) => {
-      const one = locationVerificationTotalsCopy(
-        locationVerificationTotals([{ quantity: 2, summary: countedHere() }], HERE),
-        { locationKind: kind },
-      );
-      expect(one).toBe('1 item, 2 units here. 1 counted while all of it was here.');
-      const many = locationVerificationTotalsCopy(
-        locationVerificationTotals(
-          [
-            { quantity: 2, summary: countedHere() },
-            { quantity: 3, summary: countedHere() },
-          ],
-          HERE,
+    summary({ lastCount: count({ countedLocationId: HERE }) });
+  it.each([
+    ['unplaced', 'other'],
+    [null, 'jobsite'],
+    [null, 'warehouse'],
+  ])('kind %s, type %s: "counted while this was its only place outside Staging"', (kind, type) => {
+    const one = locationVerificationTotalsCopy(
+      locationVerificationTotals([{ quantity: 2, summary: countedHere() }], HERE),
+      { locationKind: kind, locationType: type },
+    );
+    expect(one).toBe(
+      '1 item, 2 units here. 1 counted while this was its only place outside Staging.',
+    );
+    const many = locationVerificationTotalsCopy(
+      locationVerificationTotals(
+        [
+          { quantity: 2, summary: countedHere() },
+          { quantity: 3, summary: countedHere() },
+        ],
+        HERE,
+      ),
+      { locationKind: kind, locationType: type },
+    );
+    expect(many).toBe(
+      '2 items, 5 units here. 2 counted while this was their only place outside Staging.',
+    );
+    expect(`${one}\n${many}`).not.toMatch(/shelf|all of it|all their/);
+  });
+  it('a rack, crate or bin page: their only shelf location', () => {
+    for (const [kind, type] of [
+      ['rack', 'shelf'],
+      ['crate', 'other'],
+      [null, 'bin'],
+    ] as const) {
+      expect(
+        locationVerificationTotalsCopy(
+          locationVerificationTotals([{ quantity: 2, summary: countedHere() }], HERE),
+          { locationKind: kind, locationType: type },
         ),
-        { locationKind: kind },
+      ).toBe('1 item, 2 units here. 1 counted while this was its only shelf location.');
+    }
+  });
+});
+
+// M2 (review 2026-09-27): "Open issues here" is read under the reader's RLS,
+// so an empty list is "none recorded" only when nothing here is hidden.
+describe('locationOpenIssuesEmptyCopy', () => {
+  const checkedAt = '2026-09-24T18:00:02Z';
+  it("out of the reader's warehouses: says so, never that none are recorded", () => {
+    for (const at of [checkedAt, null]) {
+      const c = locationOpenIssuesEmptyCopy({
+        holdingsVisible: false,
+        hiddenItems: 0,
+        checkedAt: at,
+      });
+      expect(c).toEqual({ kind: 'out_of_scope', text: LOCATION_OPEN_ISSUES_OUT_OF_SCOPE_COPY });
+      expect(c.text).toBe(
+        'This location is in a warehouse you are not assigned to, so its open exceptions are not listed here.',
       );
-      expect(many).toBe('2 items, 5 units here. 2 counted while all their stock was here.');
-      expect(`${one}\n${many}`).not.toMatch(/shelf/);
-    },
-  );
+      expect(c.text).not.toMatch(/No open exceptions/);
+    }
+  });
+  it('items here the reader cannot open: "none you can see"', () => {
+    expect(
+      locationOpenIssuesEmptyCopy({ holdingsVisible: true, hiddenItems: 2, checkedAt }),
+    ).toEqual({
+      kind: 'none',
+      text: 'No open exceptions you can see are recorded here.',
+    });
+    expect(LOCATION_NO_VISIBLE_OPEN_ISSUES_COPY).toBe(
+      'No open exceptions you can see are recorded here.',
+    );
+  });
+  it('nothing hidden: none recorded at this location; before the first check: that it has not run', () => {
+    expect(
+      locationOpenIssuesEmptyCopy({ holdingsVisible: true, hiddenItems: 0, checkedAt }),
+    ).toEqual({
+      kind: 'none',
+      text: LOCATION_NO_OPEN_ISSUES_COPY,
+    });
+    expect(LOCATION_NO_OPEN_ISSUES_COPY).toBe('No open exceptions are recorded at this location.');
+    expect(
+      locationOpenIssuesEmptyCopy({ holdingsVisible: true, hiddenItems: 3, checkedAt: null }),
+    ).toEqual({ kind: 'first_check_pending', text: EXCEPTION_FIRST_CHECK_PENDING_COPY });
+  });
+});
+
+// L5 (review 2026-09-27): a refused read reads the same on the web card and
+// the phone card.
+describe('verificationRefusalOf / verificationRefusalCopy', () => {
+  it('maps the service codes and reasons; anything else is a failed read (null)', () => {
+    expect(verificationRefusalOf('not_found', undefined)).toBe('not_found');
+    expect(verificationRefusalOf('validation_error', 'invalid_item_id')).toBe('invalid_id');
+    expect(verificationRefusalOf('forbidden', undefined)).toBe('forbidden');
+    expect(verificationRefusalOf('forbidden', 'aal2_required')).toBe('aal2_required');
+    expect(verificationRefusalOf('forbidden', 'mfa_required')).toBe('mfa_required');
+    expect(verificationRefusalOf('internal_error', undefined)).toBeNull();
+    expect(verificationRefusalOf(undefined, undefined)).toBeNull();
+  });
+  it('the words', () => {
+    expect(verificationRefusalCopy('not_found', 'item')).toBe(
+      'This item is not available to you, or it no longer exists.',
+    );
+    expect(verificationRefusalCopy('not_found', 'location')).toBe(
+      'This location is not available to you, or it no longer exists.',
+    );
+    expect(verificationRefusalCopy('forbidden', 'item')).toBe(
+      'You do not have permission to see this.',
+    );
+    expect(verificationRefusalCopy('invalid_id', 'location')).toBe('This link is not valid.');
+    expect(verificationRefusalCopy('aal2_required', 'item')).toMatch(/authenticator app/);
+    expect(verificationRefusalCopy('mfa_required', 'item')).toMatch(/two-factor/);
+    expect(VERIFICATION_SESSION_ENDED_COPY).toBe('Your session has ended. Sign in again.');
+  });
 });

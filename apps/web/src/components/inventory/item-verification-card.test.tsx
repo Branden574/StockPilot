@@ -6,8 +6,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * exception's page. What it must never get wrong:
  *   - a failed read says "Couldn't load verification" (role="alert"), never
  *     "No physical count on record.";
- *   - a reader who may not see the item, or an item that is gone, gets no
- *     card (not an error);
+ *   - a reader who may not see the item, an item that is gone, a missing
+ *     permission or a bad id is a refusal: the card says why in the phone's
+ *     words (core verificationRefusalCopy), and it is not reported;
  *   - every state reads in core's words, never "verified" and never a
  *     percentage;
  *   - the count links only for a reader the count page lets in; movements
@@ -193,7 +194,7 @@ describe('ItemVerificationCardView', () => {
         lastCount: lastCount({
           expectedQuantity: 8,
           countedLocationId: LOC,
-          countedLocation: { name: 'A-12', kind: 'rack', archived: false },
+          countedLocation: { name: 'A-12', kind: 'rack', type: 'shelf', archived: false },
           capturedAt: '2026-09-12T14:30:00Z',
           aiAssisted: true,
         }),
@@ -358,11 +359,29 @@ describe('ItemVerificationCard (the read)', () => {
     expect(headlineLink()?.getAttribute('href')).toBe(`/dashboard/cycle-counts/${CC}`);
   });
 
-  it.each(['forbidden', 'not_found', 'validation_error'] as const)(
-    '%s: no card, not an error',
-    async (code) => {
-      item.mockRejectedValue(new ServiceError(code, 'no'));
-      expect(await ItemVerificationCard(props)).toBeNull();
+  // L5 (review 2026-09-27): the web card rendered nothing on a refusal while
+  // the phone card said why. Both now show the same card, in core's words.
+  it.each([
+    ['not_found', undefined, 'This item is not available to you, or it no longer exists.'],
+    ['forbidden', undefined, 'You do not have permission to see this.'],
+    ['validation_error', { reason: 'invalid_item_id' }, 'This link is not valid.'],
+    [
+      'forbidden',
+      { reason: 'aal2_required' },
+      'Your account uses an authenticator app, and this session did not sign in with it. Sign out and sign back in with your code to see this.',
+    ],
+  ] as const)(
+    '%s (%j): the card says why, as the phone does, and it is not reported',
+    async (code, details, words) => {
+      item.mockRejectedValue(
+        new ServiceError(code, 'no', details as Record<string, unknown> | undefined),
+      );
+      render(await ItemVerificationCard(props));
+      const alert = screen.getByRole('alert');
+      expect(alert).toHaveTextContent("Couldn't load verification");
+      expect(screen.getByTestId('verification-refusal')).toHaveTextContent(words);
+      expect(alert).not.toHaveTextContent('Reload the page');
+      expect(screen.queryByText('No physical count on record.')).toBeNull();
       expect(reportError).not.toHaveBeenCalled();
     },
   );

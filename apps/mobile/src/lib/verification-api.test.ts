@@ -1,11 +1,16 @@
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   EXCEPTION_FIRST_CHECK_PENDING_COPY,
   RECOUNT_OFFLINE_COPY,
   VERIFICATION_NEVER_COUNTED_COPY,
+  VERIFICATION_SESSION_ENDED_COPY,
   VERIFICATION_UNAVAILABLE_COPY,
   locationRowVerificationCopy,
+  verificationRefusalCopy,
   verificationSummaryCopy,
 } from '@stockpilot/core';
 
@@ -66,7 +71,7 @@ function lastCountJson(o: Record<string, unknown> = {}) {
     expectedAtStart: 50,
     countedQuantity: 48,
     countedLocationId: LOC,
-    countedLocation: { name: 'QA-1', kind: 'rack', archived: false },
+    countedLocation: { name: 'QA-1', kind: 'rack', type: 'shelf', archived: false },
     aiAssisted: false,
     countedBy: { id: 'u1', label: 'Ana' },
     postedBy: { id: 'u2', label: 'Ben' },
@@ -514,6 +519,51 @@ describe('describeVerificationError', () => {
         'item',
       ).detail,
     ).toBe('You do not have permission to see this.');
+  });
+
+  // L5 (review 2026-09-27): the web card and location page now word a
+  // refusal too; both take the words from core, so they cannot drift apart.
+  it("a refusal reads in core's words, the ones the web card and location page show", () => {
+    const cases: [unknown, 'item' | 'location', string][] = [
+      [apiError(404, 'x', 'not_found'), 'item', verificationRefusalCopy('not_found', 'item')],
+      [
+        apiError(404, 'x', 'not_found'),
+        'location',
+        verificationRefusalCopy('not_found', 'location'),
+      ],
+      [apiError(403, 'x', 'forbidden'), 'item', verificationRefusalCopy('forbidden', 'item')],
+      [
+        apiError(403, 'x', 'forbidden', { reason: 'aal2_required' }),
+        'item',
+        verificationRefusalCopy('aal2_required', 'item'),
+      ],
+      [
+        apiError(403, 'x', 'forbidden', { reason: 'mfa_required' }),
+        'location',
+        verificationRefusalCopy('mfa_required', 'location'),
+      ],
+      [
+        apiError(400, 'x', 'validation_error'),
+        'location',
+        verificationRefusalCopy('invalid_id', 'location'),
+      ],
+      [apiError(401, 'x', 'unauthenticated'), 'item', VERIFICATION_SESSION_ENDED_COPY],
+    ];
+    for (const [e, subject, words] of cases) {
+      expect(describeVerificationError(e, subject).detail).toBe(words);
+    }
+    // No hand-written copy of those sentences is left in the phone's module.
+    const source = readFileSync(path.resolve(__dirname, 'verification-api.ts'), 'utf8');
+    for (const sentence of [
+      'is not available to you, or it no longer exists',
+      'You do not have permission to see this.',
+      'Your session has ended.',
+      'authenticator app',
+      'requires two-factor authentication',
+      "'This link is not valid.'",
+    ]) {
+      expect(source, sentence).not.toContain(sentence);
+    }
   });
 
   it('keeps the answer on screen only for failures that do not take it away', () => {
