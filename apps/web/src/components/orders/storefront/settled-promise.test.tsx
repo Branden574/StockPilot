@@ -1,4 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
+import * as React from 'react';
+import { createRoot } from 'react-dom/client';
 import { describe, expect, it, vi } from 'vitest';
 
 import { settledOutcome, useSettled, watchSettled } from './settled-promise';
@@ -86,5 +88,99 @@ describe('useSettled', () => {
     expect(result.current).toBeUndefined();
     await act(async () => second.resolve('the other'));
     expect(result.current).toEqual({ ok: true, value: 'the other' });
+  });
+});
+
+/**
+ * Review 2026-09-27: the hook read the outcome in render, and its effect
+ * returned early when the outcome was already recorded, without re-rendering.
+ * When the promise settled after the render but before the effect ran (someone
+ * opens a category just as the kits arrive), the view kept the stale "pending"
+ * answer: no kit cards, and "Checking the kits..." with no items to show.
+ *
+ * act() flushes a commit and its effects in one synchronous pass, so it cannot
+ * open that window; this test uses a plain root, where React runs the passive
+ * effects in a later task and the promise's callbacks run in between. The
+ * sibling settles the promise in its layout effect, i.e. after the reader has
+ * rendered and before the reader's effect.
+ */
+describe('useSettled, when the promise settles between render and effect', () => {
+  it('re-renders with the outcome instead of staying pending', async () => {
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const wasActEnvironment = env.IS_REACT_ACT_ENVIRONMENT;
+    env.IS_REACT_ACT_ENVIRONMENT = false;
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      const d = deferred<string>();
+      // The page watches the kits promise before any view reads it.
+      watchSettled(d.promise);
+      const seen: string[] = [];
+      function Reader({ p }: { p: Promise<string> }) {
+        const outcome = useSettled(p);
+        const text = outcome === undefined ? 'pending' : outcome.ok ? outcome.value : 'failed';
+        seen.push(text);
+        return <span data-testid="reader">{text}</span>;
+      }
+      function SettlesInLayoutEffect({ settle }: { settle: () => void }) {
+        React.useLayoutEffect(settle, [settle]);
+        return null;
+      }
+      const settle = () => d.resolve('kits');
+      root.render(
+        <>
+          <Reader p={d.promise} />
+          <SettlesInLayoutEffect settle={settle} />
+        </>,
+      );
+      await vi.waitFor(() => expect(seen.length).toBeGreaterThan(0));
+      // Let the commit, the promise callbacks and the passive effects all run.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(seen[0]).toBe('pending');
+      expect(settledOutcome(d.promise)).toEqual({ ok: true, value: 'kits' });
+      expect(container.textContent).toBe('kits');
+    } finally {
+      root.unmount();
+      container.remove();
+      env.IS_REACT_ACT_ENVIRONMENT = wasActEnvironment;
+    }
+  });
+
+  it('a rejection in that window re-renders with not ok', async () => {
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const wasActEnvironment = env.IS_REACT_ACT_ENVIRONMENT;
+    env.IS_REACT_ACT_ENVIRONMENT = false;
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      const d = deferred<string>();
+      watchSettled(d.promise);
+      function Reader({ p }: { p: Promise<string> }) {
+        const outcome = useSettled(p);
+        return (
+          <span>{outcome === undefined ? 'pending' : outcome.ok ? outcome.value : 'failed'}</span>
+        );
+      }
+      function SettlesInLayoutEffect({ settle }: { settle: () => void }) {
+        React.useLayoutEffect(settle, [settle]);
+        return null;
+      }
+      const settle = () => d.reject(new Error('stream closed'));
+      root.render(
+        <>
+          <Reader p={d.promise} />
+          <SettlesInLayoutEffect settle={settle} />
+        </>,
+      );
+      await new Promise((r) => setTimeout(r, 50));
+      expect(settledOutcome(d.promise)).toEqual({ ok: false });
+      expect(container.textContent).toBe('failed');
+    } finally {
+      root.unmount();
+      container.remove();
+      env.IS_REACT_ACT_ENVIRONMENT = wasActEnvironment;
+    }
   });
 });

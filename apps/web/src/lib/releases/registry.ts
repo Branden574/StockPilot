@@ -100,11 +100,11 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'The items a kit adds are ordinary order lines',
         whatChanged:
-          'Each item a kit puts in your cart is an ordinary line. You can change or remove any of them, and adding a kit, or one kit more, only ever adds to your cart: it never lowers or removes a line you changed.',
+          "Each item a kit puts in your cart is an ordinary line, and you can change or remove any of them. Adding a kit, or one kit more, never lowers or removes a line you changed; the kit may move its own units onto one rack. One kit less, or a lower count typed in, takes out one kit's worth of each item for every kit taken out, and never units you added by hand.",
         whyItMatters:
           'Approvers and pickers see the same item lines as on any order, so approval and picking work as they always have.',
         howItAffectsYou:
-          'Items a bundle marks optional are not added by the kit. If you lower or remove one of a kit\'s lines, the card counts only the whole kits still in your cart, and adding a kit then adds only what that kit is missing.',
+          "Items a bundle marks optional are not added by the kit. If you lower or remove one of a kit's lines, the card counts only the whole kits still in your cart, and adding a kit then adds only what that kit is missing. Taking a kit out then takes one kit's worth of each item, and anything left over stays in your cart as ordinary lines.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/orders/new', label: 'Open New order' },
         audience: { anyPermission: ['orders:request'], modules: ['bundles'] },

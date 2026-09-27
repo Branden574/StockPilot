@@ -82,6 +82,7 @@ const DC4 = catalog(BACKPACK_18A, BACKPACK_16B, MUG, PAD, PLANNER);
 const empty = (): CartState => initialCartState({ warehouseId: 'wh-dc4', fulfillmentType: 'pickup' });
 const qtyOf = (s: CartState) => new Map(s.lines.map((l) => [l.itemId, l.quantity]));
 const lineQty = (s: CartState, id: string) => s.lines.find((l) => l.itemId === id)?.quantity ?? 0;
+const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 /** Plans the kit count `target` against the cart and applies it, as the page does. */
 function setKits(
@@ -316,12 +317,18 @@ describe('removing a kit takes back only the kit own units', () => {
     expect(s.kits).toEqual({});
   });
 
-  it('a line lowered by hand lowers the kit count, and removing the kit never goes below zero', () => {
+  it('a line lowered by hand lowers the kit count, and taking that one kit out takes one of each, not the rest', () => {
     let s = setKits(empty(), 3);
     s = cartReducer(s, { type: 'set-qty', itemId: MUG.id, quantity: 1 });
     expect(kitsInCart(NEW_HIRE, s.kits[NEW_HIRE.bundleId], qtyOf(s))).toBe(1);
     s = setKits(s, 0);
-    expect(s.lines).toEqual([]);
+    // Was every line emptied: the card showed 1 kit, and one kit less took 3.
+    expect(Object.fromEntries(qtyOf(s))).toEqual({
+      [BACKPACK_18A.id]: 2,
+      [PAD.id]: 2,
+      [PLANNER.id]: 2,
+    });
+    expect(kitsInCart(NEW_HIRE, s.kits[NEW_HIRE.bundleId], qtyOf(s))).toBe(0);
   });
 
   it('the same items added by hand are not a kit', () => {
@@ -330,6 +337,157 @@ describe('removing a kit takes back only the kit own units', () => {
       s = cartReducer(s, { type: 'add', itemId: id });
     }
     expect(kitsInCart(NEW_HIRE, s.kits[NEW_HIRE.bundleId], qtyOf(s))).toBe(0);
+  });
+});
+
+// ═══ ONE KIT LESS TAKES ONE KIT'S WORTH (verify 2026-09-27) ═══
+//
+// Lowering used to give back every unit the kit recorded above the new count.
+// After a hand edit the kit can record more than its count: 3 kits, the mug
+// removed by hand, then Add kit, leaves the card at 1 kit over 3 backpacks,
+// pads and planners. One press of minus then emptied the cart, 10 units at
+// once. Now a step down of n kits takes, per component, n x per kit of the
+// kit's own units, never more, and never a unit added by hand.
+describe('one kit less takes exactly one kit of each item', () => {
+  /** The plan for `target`, and the cart after it. */
+  function lower(s: CartState, target: number, kit: KitOffer = NEW_HIRE, items = DC4) {
+    const plan = planKitChange(kit, target, items, s.kits[kit.bundleId], qtyOf(s));
+    if (!plan.ok) throw new Error('short');
+    return { changes: plan.changes, after: setKits(s, target, kit, items) };
+  }
+  const count = (s: CartState, kit: KitOffer = NEW_HIRE) =>
+    kitsInCart(kit, s.kits[kit.bundleId], qtyOf(s));
+
+  it('3 kits, the mug removed by hand, Add kit, then minus: one of each comes out, not all 10 units', () => {
+    let s = setKits(empty(), 3);
+    s = cartReducer(s, { type: 'remove', itemId: MUG.id });
+    s = setKits(s, 1);
+    expect(count(s)).toBe(1);
+    expect([...qtyOf(s).values()].reduce((a, b) => a + b, 0)).toBe(10);
+
+    const { changes, after } = lower(s, 0);
+    expect([...changes].sort((a, b) => compare(a.itemId, b.itemId))).toEqual(
+      [
+        { itemId: BACKPACK_18A.id, delta: -1 },
+        { itemId: MUG.id, delta: -1 },
+        { itemId: PAD.id, delta: -1 },
+        { itemId: PLANNER.id, delta: -1 },
+      ].sort((a, b) => compare(a.itemId, b.itemId)),
+    );
+    expect(Object.fromEntries(qtyOf(after))).toEqual({
+      [BACKPACK_18A.id]: 2,
+      [PAD.id]: 2,
+      [PLANNER.id]: 2,
+    });
+    expect(count(after)).toBe(0);
+  });
+
+  it('a typed lower count takes (kits removed x per kit) of each item, however much more the kit holds', () => {
+    let s = setKits(empty(), 5);
+    s = cartReducer(s, { type: 'set-qty', itemId: MUG.id, quantity: 2 });
+    expect(count(s)).toBe(2);
+    const { after } = lower(s, 1);
+    expect(Object.fromEntries(qtyOf(after))).toEqual({
+      [BACKPACK_18A.id]: 4,
+      [MUG.id]: 1,
+      [PAD.id]: 4,
+      [PLANNER.id]: 4,
+    });
+    expect(count(after)).toBe(1);
+  });
+
+  it('each minus from the count shown takes one kit, until the card is back to Add kit', () => {
+    let s = setKits(empty(), 4);
+    s = cartReducer(s, { type: 'set-qty', itemId: PAD.id, quantity: 2 });
+    expect(count(s)).toBe(2);
+    s = setKits(s, 1);
+    expect(Object.fromEntries(qtyOf(s))).toEqual({
+      [BACKPACK_18A.id]: 3,
+      [MUG.id]: 3,
+      [PAD.id]: 1,
+      [PLANNER.id]: 3,
+    });
+    s = setKits(s, 0);
+    expect(Object.fromEntries(qtyOf(s))).toEqual({
+      [BACKPACK_18A.id]: 2,
+      [MUG.id]: 2,
+      [PLANNER.id]: 2,
+    });
+    expect(count(s)).toBe(0);
+  });
+
+  it('two units per kit: one kit less takes two of that item', () => {
+    const kit: KitOffer = {
+      ...NEW_HIRE,
+      components: [
+        { anchorItemId: MUG.id, itemIds: [MUG.id], perKit: 2 },
+        { anchorItemId: PAD.id, itemIds: [PAD.id], perKit: 1 },
+      ],
+    };
+    let s = setKits(empty(), 3, kit);
+    expect(Object.fromEntries(qtyOf(s))).toEqual({ [MUG.id]: 6, [PAD.id]: 3 });
+    s = cartReducer(s, { type: 'set-qty', itemId: PAD.id, quantity: 1 });
+    expect(count(s, kit)).toBe(1);
+    const { after } = lower(s, 0, kit);
+    expect(Object.fromEntries(qtyOf(after))).toEqual({ [MUG.id]: 4 });
+  });
+
+  it('units added by hand on a kit line are never taken, however far the count goes down', () => {
+    let s = cartReducer(empty(), { type: 'add', itemId: BACKPACK_18A.id, quantity: 2 });
+    s = setKits(s, 3);
+    s = cartReducer(s, { type: 'remove', itemId: MUG.id });
+    s = setKits(s, 1);
+    // 18-A holds 5: 2 by hand and 3 recorded for the kit.
+    expect(lineQty(s, BACKPACK_18A.id)).toBe(5);
+    s = setKits(s, 0);
+    expect(lineQty(s, BACKPACK_18A.id)).toBe(4);
+    expect(lineQty(s, MUG.id)).toBe(0);
+  });
+
+  it('as the card left it, lowering is unchanged: 150 down to 3 keeps 3 on 18-A and nothing else', () => {
+    const s = setKits(setKits(empty(), 150), 3);
+    expect(Object.fromEntries(qtyOf(s))).toEqual({
+      [BACKPACK_18A.id]: 3,
+      [MUG.id]: 3,
+      [PAD.id]: 3,
+      [PLANNER.id]: 3,
+    });
+  });
+
+  it('after any hand edit, a step down of n kits takes at most n x per kit of each item, only the kit own units', () => {
+    const edits: Array<(s: CartState) => CartState> = [
+      (s) => s,
+      (s) => cartReducer(s, { type: 'remove', itemId: MUG.id }),
+      (s) => cartReducer(s, { type: 'set-qty', itemId: MUG.id, quantity: 1 }),
+      (s) => cartReducer(s, { type: 'set-qty', itemId: PAD.id, quantity: 7 }),
+      (s) => cartReducer(s, { type: 'dec', itemId: PLANNER.id }),
+      (s) => cartReducer(s, { type: 'add', itemId: BACKPACK_18A.id, quantity: 4 }),
+      (s) => cartReducer(s, { type: 'set-qty', itemId: BACKPACK_18A.id, quantity: 1 }),
+    ];
+    for (const edit of edits) {
+      // 6 kits, a hand edit, then Add kit or + back up to 6 where the edit
+      // left fewer: the kit may now record more units than its count.
+      let s = edit(setKits(empty(), 6));
+      if (count(s) < 6) s = setKits(s, Math.max(1, count(s) + 1));
+      const shown = count(s);
+      for (let target = shown - 1; target >= 0; target -= 1) {
+        const before = s;
+        const shares = before.kits[NEW_HIRE.bundleId] ?? {};
+        s = setKits(before, target);
+        expect(count(s)).toBe(target);
+        for (const component of NEW_HIRE.components) {
+          const unitsBefore = component.itemIds.reduce((n, id) => n + lineQty(before, id), 0);
+          const unitsAfter = component.itemIds.reduce((n, id) => n + lineQty(s, id), 0);
+          // One kit less per step: exactly one kit's worth when the kit holds
+          // it, never more.
+          expect(unitsBefore - unitsAfter).toBeLessThanOrEqual(component.perKit);
+          for (const id of component.itemIds) {
+            // Never below what was on the line apart from the kit's record.
+            expect(lineQty(s, id)).toBeGreaterThanOrEqual(lineQty(before, id) - (shares[id] ?? 0));
+          }
+        }
+      }
+    }
   });
 });
 
@@ -642,6 +800,18 @@ describe('shortComponentNames', () => {
       'Chopping Board',
     ]);
     expect(shortComponentNames(['Planner', 'Plant pot'])).toEqual(['Planner', 'Plant pot']);
+  });
+
+  it('drops only a prefix that ends at a separator, never a shared word: two sizes keep their item name', () => {
+    // Local walk 2026-09-27: a kit of both polo sizes read "2 items: (M), (L)"
+    // and, when one ran out, "Out of stock: (L)".
+    expect(
+      shortComponentNames(['L4L - New Hire - Polo (M)', 'L4L - New Hire - Polo (L)']),
+    ).toEqual(['Polo (M)', 'Polo (L)']);
+    expect(shortComponentNames(['Polo Shirt (M)', 'Polo Shirt (L)'])).toEqual([
+      'Polo Shirt (M)',
+      'Polo Shirt (L)',
+    ]);
   });
 
   it('keeps the whole names when one would be left empty, and a single name as it is', () => {

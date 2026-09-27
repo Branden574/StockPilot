@@ -880,8 +880,9 @@ function StorefrontCatalog({
   const handleReviewClose = React.useCallback(() => setReviewStage(null), [setReviewStage]);
 
   // A kit changes the cart in ONE step, or not at all (storefront-kits.ts):
-  // every component tops up to the new count, or gives back the kit's own
-  // units. A component that cannot supply its share changes nothing.
+  // every component tops up to the new count, or gives back one kit's worth
+  // of the kit's own units per kit taken out. A component that cannot supply
+  // its share changes nothing.
   const handleSetKits = React.useCallback(
     (kit: KitOffer, target: number) => {
       const qty = new Map(linesRef.current.map((l) => [l.itemId, l.quantity]));

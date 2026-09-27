@@ -32,11 +32,12 @@
 // "Left" is available (on hand minus open reservations) minus what the cart
 // already holds on that row, from any source.
 //
-// ═══ RAISING THE COUNT ONLY ADDS (walk 2026-09-27) ═══
+// ═══ RAISING THE COUNT NEVER LOWERS A LINE YOU CHANGED (walk 2026-09-27) ═══
 //
-// Add kit, + and a typed count above the current one only ever ADD. A
-// component that already holds its units for the new count is left exactly as
-// it is, even when it holds more: after "3 kits, then the mug line removed by
+// Add kit, + and a typed count above the current one add units, and never
+// lower or remove a line changed by hand; the only units a raise ever moves
+// are the kit's own, onto one rack (below). A component that already holds its
+// units for the new count is left exactly as it is, even when it holds more: after "3 kits, then the mug line removed by
 // hand", Add kit adds one mug and leaves the three backpacks, pads and planners
 // where they are. The first version planned every component to exactly
 // (count x per kit) and so took two of each back off, silently. A line changed
@@ -57,10 +58,17 @@
 // another kit, a raise only tops up, and every line keeps at least what it held.
 // A component's total never falls either way.
 //
-// Lowering the kit count takes the kit's OWN units back off. What the kit keeps
-// is placed by the same rule, within the units it already holds on each row: so
-// 150 kits (134 on 16-B, 16 on 18-A) lowered to 3 keeps 3 on 18-A, the row a
-// fresh 3 would have used, and lowered to 130 keeps one line of 130 on 16-B.
+// Lowering the kit count takes the kit's OWN units back off, ONE KIT'S WORTH
+// PER KIT TAKEN OUT (verify 2026-09-27): from the count the card shows down to
+// the new one, each component gives back (kits taken out × per kit) units,
+// never more. After a hand edit the kit can hold more than its count: 3 kits,
+// the mug removed by hand, then Add kit, reads 1 kit over 3 backpacks, pads and
+// planners, and one minus used to give back every one of them (10 units). It
+// now gives back one of each, and the units above stay in the cart as they
+// are. What the kit keeps is placed by the same rule, within the units it
+// already holds on each row: so 150 kits (134 on 16-B, 16 on 18-A) lowered to
+// 3 keeps 3 on 18-A, the row a fresh 3 would have used, and lowered to 130
+// keeps one line of 130 on 16-B.
 // Units added by hand are never taken: the cart records how many units each kit
 // put on each row (CartState.kits), and a line changed by hand shrinks that
 // record with it (cart-context.tsx). THE LIMIT: the cart cannot tell a unit
@@ -396,10 +404,10 @@ function asTheCardLeftIt(
 /**
  * The cart changes that make the kit count `target`. Above the count in the
  * cart it only adds (raiseComponent): a component already holding its units
- * for the new count is not touched. Below it, each component gives back the
- * kit's own units down to (target × per kit), never a unit added by hand. All
- * or nothing: if any component cannot supply its units, nothing changes and
- * `short` names it.
+ * for the new count is not touched. Below it, each component gives back
+ * (kits taken out × per kit) of the kit's own units, never more and never a
+ * unit added by hand. All or nothing: if any component cannot supply its
+ * units, nothing changes and `short` names it.
  */
 export function planKitChange(
   kit: KitOffer,
@@ -420,10 +428,17 @@ export function planKitChange(
       const adds = raiseComponent(component, want, itemMap, shares, qty, mayMove);
       if (adds === null) return { ok: false, short: component };
       changes.push(...adds);
-    } else if (lowering && want < held) {
+    } else if (lowering) {
+      // One kit less is one kit's worth: (kits taken out x per kit) of the
+      // kit's own units, never more. After a hand edit the kit can hold more
+      // than its count (3 kits, the mug removed, then Add kit: the card reads
+      // 1 over 3 backpacks), and giving back everything above the new count
+      // emptied the cart in one press. Every component holds at least
+      // (current x per kit), so this is always there to give.
+      const excess = Math.min(held, (current - goal) * component.perKit);
       changes.push(
         ...releaseUnits(
-          held - want,
+          excess,
           component.itemIds.map((id) => ({ itemId: id, held: heldOn(id, shares, qty) })),
           component.anchorItemId,
         ),
@@ -489,14 +504,17 @@ export function filterKits(
   });
 }
 
-const PREFIX_BREAK = /[\s\-–—:·/|,]$/;
+/** A prefix ends at a separator mark (then any spaces), never at a bare space. */
+const PREFIX_BREAK = /[\-–—:·/|,]\s*$/;
 
 /**
  * Short names for a kit's item list: the words every name starts with are
  * dropped ("L4L - New Hire - Backpack", "L4L - New Hire - Planner" read
- * "Backpack", "Planner"). Only a prefix ending at a separator is dropped, and
- * only when every name keeps some text; one name, or names with nothing in
- * common, stay whole.
+ * "Backpack", "Planner"). Only a prefix ending at a separator mark is dropped,
+ * so words the names share after it stay ("L4L - New Hire - Polo (M)" and
+ * "... Polo (L)" read "Polo (M)", "Polo (L)", not "(M)", "(L)"), and only when
+ * every name keeps some text; one name, or names with nothing in common, stay
+ * whole.
  */
 export function shortComponentNames(names: readonly string[]): string[] {
   if (names.length < 2) return [...names];

@@ -330,6 +330,19 @@ describe('the kits release', () => {
     }
   });
 
+  it('never says a raise only adds, and says what one kit less takes (verify 2026-09-27)', () => {
+    // The 61st kit moves the kit's own 60 backpacks from 18-A onto 16-B, so a
+    // raise does not only ever add; it never lowers a line the person changed.
+    // One kit less takes one kit's worth, never every unit above the count.
+    const text = readerText(release()).join(' ');
+    expect(text).not.toMatch(/only (ever )?adds/i);
+    const lines = release().entries.find((e) => e.id === 'order-page-kit-lines')!;
+    expect(lines.whatChanged).toContain('never lowers or removes a line you changed');
+    expect(lines.whatChanged).toContain('the kit may move its own units onto one rack');
+    expect(lines.whatChanged).toContain("one kit's worth of each item for every kit taken out");
+    expect(lines.whatChanged).toContain('never units you added by hand');
+  });
+
   it('reaches only readers with Orders AND Bundles on who can place orders', () => {
     const published: Release = { ...release(), status: 'published' };
     const reader = (modules: ModuleId[], permissions: ReleaseViewer['permissions'] = ['orders:request']) =>

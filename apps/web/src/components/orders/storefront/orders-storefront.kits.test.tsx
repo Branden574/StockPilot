@@ -38,8 +38,29 @@ vi.mock('./storefront-cards', () => ({
   FreqCarousel: () => null,
   SfPhoto: () => null,
   CharterTag: () => null,
-  QtyField: ({ qty, itemId }: { qty: number; itemId: string }) => (
-    <span data-testid={`qty-${itemId}`}>{qty}</span>
+  // The count as text, plus, where the field is named (the kit stepper), a
+  // box to type a count into that commits on blur like the real field.
+  QtyField: ({
+    qty,
+    itemId,
+    label,
+    onSetQty,
+  }: {
+    qty: number;
+    itemId: string;
+    label?: string;
+    onSetQty?: (itemId: string, quantity: number) => void;
+  }) => (
+    <>
+      <span data-testid={`qty-${itemId}`}>{qty}</span>
+      {label && onSetQty ? (
+        <input
+          aria-label={label}
+          defaultValue={qty}
+          onBlur={(e) => onSetQty(itemId, Number(e.currentTarget.value))}
+        />
+      ) : null}
+    </>
   ),
 }));
 vi.mock('./storefront-overlays', () => ({
@@ -314,6 +335,45 @@ describe('OrdersStorefront: kits', () => {
     expect(cartQty(MUG.id)).toBe(2);
     expect(cartQty(PAD.id)).toBe(3);
     expect(cartQty(PLANNER.id)).toBe(3);
+  });
+
+  // ═══ Verify 2026-09-27: one press of minus emptied the cart after a hand edit ═══
+  it('3 kits, the mug removed by hand, Add kit, then One kit less: one of each comes out, not all 10 units', async () => {
+    await openPage({ status: 'ok', kits: [NEW_HIRE] });
+    fireEvent.click(kitButton('Add kit'));
+    fireEvent.click(kitButton('One kit more'));
+    fireEvent.click(kitButton('One kit more'));
+    fireEvent.click(cart().getByRole('button', { name: 'Remove L4L - New Hire - Coffee mug from cart' }));
+    fireEvent.click(kitButton('Add kit'));
+    expect(within(kitsRow()).getByTestId(`qty-${NEW_HIRE.bundleId}`).textContent).toBe('1');
+
+    fireEvent.click(kitButton('One kit less'));
+    expect(cartQty(BACKPACK_18A.id)).toBe(2);
+    expect(cartQty(PAD.id)).toBe(2);
+    expect(cartQty(PLANNER.id)).toBe(2);
+    expect(cartQty(MUG.id)).toBe(0);
+    // No whole kit is left, so the card is back to Add kit.
+    expect(kitButton('Add kit')).toBeTruthy();
+  });
+
+  it('a typed lower count after a hand edit takes that many kits, not every unit above it', async () => {
+    await openPage({ status: 'ok', kits: [NEW_HIRE] });
+    fireEvent.click(kitButton('Add kit'));
+    const field = within(kitsRow()).getByRole('textbox', { name: 'Kits of New Hire Bundle in cart' });
+    fireEvent.change(field, { target: { value: '5' } });
+    fireEvent.blur(field);
+    expect(cartQty(MUG.id)).toBe(5);
+    const mug = cartLine('L4L - New Hire - Coffee mug');
+    for (let i = 0; i < 3; i += 1) fireEvent.click(mug.getByRole('button', { name: 'Decrease quantity' }));
+    expect(within(kitsRow()).getByTestId(`qty-${NEW_HIRE.bundleId}`).textContent).toBe('2');
+
+    const again = within(kitsRow()).getByRole('textbox', { name: 'Kits of New Hire Bundle in cart' });
+    fireEvent.change(again, { target: { value: '1' } });
+    fireEvent.blur(again);
+    expect(cartQty(BACKPACK_18A.id)).toBe(4);
+    expect(cartQty(MUG.id)).toBe(1);
+    expect(cartQty(PAD.id)).toBe(4);
+    expect(cartQty(PLANNER.id)).toBe(4);
   });
 
   // ═══ Review F2, reproduced in the walk: Submit waited on the kits read ═══

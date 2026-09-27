@@ -49,7 +49,16 @@ export function useSettled<T>(promise: Promise<T>): Outcome<T> | undefined {
   const [, bump] = React.useReducer((n: number) => n + 1, 0);
   React.useEffect(() => {
     watchSettled(promise);
-    if (outcomes.has(promise)) return;
+    if (outcomes.has(promise)) {
+      // The promise can settle after this render read it and before this
+      // effect runs (a category opened just as the kits arrive): the render
+      // drew "pending", and nothing else would re-render it. Re-render when
+      // the recorded outcome is not the one that was drawn. Once the drawn
+      // one is current, this effect re-runs (outcome is a dependency) and
+      // finds nothing to do.
+      if (outcomes.get(promise) !== outcome) bump();
+      return;
+    }
     let live = true;
     // Registered after watchSettled's own callbacks, so the outcome is recorded
     // by the time this re-render reads it.
@@ -60,6 +69,6 @@ export function useSettled<T>(promise: Promise<T>): Outcome<T> | undefined {
     return () => {
       live = false;
     };
-  }, [promise]);
+  }, [promise, outcome]);
   return outcome;
 }
