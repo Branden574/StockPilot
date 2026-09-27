@@ -63,6 +63,27 @@ describe('cycle-count/[id].tsx: a failed cache write is shown, not swallowed', (
   });
 });
 
+// Simulator walk 2026-09-27: opening a posted count from the verification
+// card showed "Reference unavailable / No single warehouse · 0/0 counted" and
+// a Reassign button for 1 to 2 seconds before the count loaded. The header's
+// words come from cycleCountHeaderView (tested in cycle-count-header.test.ts).
+describe('cycle-count/[id].tsx: no facts and no open-count actions before the count is known', () => {
+  it('the header is worded by cycleCountHeaderView, with a loading line', () => {
+    expect(screen).toContain("from '@/lib/cycle-count-header'");
+    expect(screen).toMatch(/const headerView = cycleCountHeaderView\(header, \{\s+loading,/);
+    expect(screen).toContain("headerView.kind === 'loading'");
+    expect(screen).toContain('{headerView.text}');
+    // The old fallbacks that stated facts about a count not yet read.
+    expect(screen).not.toContain("'No single warehouse'");
+    expect(screen).not.toMatch(/\{countedCount\}\/\{lines\.length\} counted/);
+  });
+
+  it('a count still loading is not open (no Reassign, Release, Scan or edits)', () => {
+    expect(screen).toContain('const isOpen = cycleCountIsOpen(header);');
+    expect(screen).not.toContain("header?.status ?? 'in_progress'");
+  });
+});
+
 describe('cycle-count/[id].tsx: an offline capture is shown in review (0369, D7)', () => {
   // The web review labels a line counted offline with when it was taken; a
   // manager reviewing and posting on the phone must see the same. Mutation:

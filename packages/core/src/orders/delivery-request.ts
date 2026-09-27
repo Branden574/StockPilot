@@ -997,18 +997,16 @@ export interface PreparedDeliveryRequest {
  * the transport and the open plan from one probe answer.
  *
  * ONE ENGINE'S BYTES ARE NOT ANOTHER'S. The body is measured, never estimated,
- * which is what makes this correct on Hermes: `formatOrgDateTime` renders the
- * needed-by line as "Aug 18, 2026 at 9:00 AM" there and "Aug 18, 2026, 9:00 AM"
- * under node and Chromium, and the wider form costs more once percent-encoded.
- * A device can therefore land one row lower than a node-run test predicts on a
- * borderline order, and that is correct behaviour rather than drift — each
- * engine fits what it can actually send. Do not hand-roll the date format to
- * chase byte equality between engines: three renderings already reach
- * production today (the web body is built client-side, and Safari's
- * JavaScriptCore already disagrees with Chrome), so there is no single web
- * byte-string to preserve. Tests must pin the RELATIONSHIP (the measured url
- * fits; the native budget yields at least as many rows as the web one), never
- * an absolute row count that only holds on one engine.
+ * so each engine fits what it can actually send. Until 2026-09-27
+ * `formatOrgDateTime` rendered the needed-by line as "Aug 18, 2026 at 9:00 AM"
+ * on Hermes and "Aug 18, 2026, 9:00 AM" under node and Chromium; it now builds
+ * the words from a date-only and a time-only formatter, so the engines agree
+ * on that line (org-timezone.ts). Other text can still differ by engine, so
+ * the measuring stays: a device may land one row lower than a node-run test
+ * predicts on a borderline order, and that is correct behaviour rather than
+ * drift. Tests must pin the RELATIONSHIP (the measured url fits; the native
+ * budget yields at least as many rows as the web one), never an absolute row
+ * count that only holds on one engine.
  *
  * BINARY SEARCH is sound because body length — and therefore url length — is
  * non-decreasing in `maxRows`: each extra row adds its own text, and the only

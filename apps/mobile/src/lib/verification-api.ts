@@ -22,6 +22,7 @@ import {
 } from '@stockpilot/core';
 
 import { api } from './api';
+import { CONNECTION_FAILURE_COPY, REQUEST_TIMED_OUT_COPY } from './connection-copy';
 import { exceptionTimeLabel } from './exceptions-api';
 
 /**
@@ -502,8 +503,22 @@ export function describeVerificationError(
       keepShown: true,
     };
   }
-  // No status: the request never got an answer (a dropped connection, or
-  // api()'s timeout, whose message is already a sentence).
+  if (status === null) {
+    // No status: the request never got an answer. api()'s own timeout keeps
+    // its sentence; anything else (offline, a dropped connection) is said in
+    // the app's words. The error's own message is never shown here: on iOS it
+    // is the network layer's text ("fetch failed: UnexpectedException: Could
+    // not connect to the server. (at ExpoModulesCore/Promise.swift:56)",
+    // simulator walk 2026-09-27).
+    const timedOut = e instanceof Error && e.message === REQUEST_TIMED_OUT_COPY;
+    return {
+      detail: timedOut ? REQUEST_TIMED_OUT_COPY : CONNECTION_FAILURE_COPY,
+      retry: true,
+      keepShown: true,
+    };
+  }
+  // A status this module does not word: the server's sentence, never a bare
+  // code.
   const message =
     e instanceof Error && e.message && !/^[a-z0-9_]+$/.test(e.message) ? e.message : null;
   return {
@@ -511,6 +526,12 @@ export function describeVerificationError(
     retry: true,
     keepShown: true,
   };
+}
+
+/** The location screen's "Recount items here" when its items could not be
+ *  gathered: why, in the same words as a failed read. */
+export function recountGatherFailureCopy(e: unknown): string {
+  return `The items here could not be gathered. ${describeVerificationError(e, 'location').detail}`;
 }
 
 // ── What a screen shows (loading, the answer, or the failure) ───────────────

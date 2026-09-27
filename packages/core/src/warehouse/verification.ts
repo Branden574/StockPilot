@@ -39,7 +39,10 @@ import {
  * shelf location" (Staging is not a shelf, so that is exact); anything else
  * (Unplaced, a Site, a job site) reads "was its only place outside Staging".
  * The split is core's location classifier (isRackShelfLocation, the web's
- * pickers' rule). Staging itself is never recorded, so it has no words.
+ * pickers' rule). Staging itself is never recorded (pgTAP 0374 S29), but a
+ * line written before 0368 made counted_location_id server-only could name
+ * it, so it keeps words of its own that never contradict themselves: "it had
+ * stock in Staging", never "Staging was its only place outside Staging".
  */
 
 // ── The shape both surfaces receive ─────────────────────────────────────────
@@ -226,9 +229,12 @@ function isShelfLocation(
  * Never "all of it": part of the stock may have been in Staging. Staging is
  * never recorded (the trigger leaves it out of the candidates, and
  * counted_location_id is not client-writable, 0368; pgTAP 0374 pins both).
+ * A line from before 0368 that names Staging anyway says only what it can
+ * mean: "it had stock in Staging".
  */
 function countedWhereClause(count: VerificationLastCount): string {
   const loc = count.countedLocation;
+  if (loc?.kind === 'staging') return 'it had stock in Staging';
   if (loc?.kind === 'unplaced') return 'Unplaced was its only place outside Staging, on no rack';
   const label = countedLocationLabel(count);
   if (!label) return 'a location, since removed, was its only place outside Staging';
@@ -498,9 +504,13 @@ export function locationRowVerificationCopy(
   const when = date ? ` ${date},` : '';
   let text: string;
   if (count.countedLocationId && sameId(count.countedLocationId, locationId)) {
-    text = isShelfLocation(opts.locationKind, opts.locationType)
-      ? `Counted${when} while this was its only shelf location`
-      : `Counted${when} while this was its only place outside Staging`;
+    // The Staging page: never recorded by the trigger (see countedWhereClause).
+    text =
+      opts.locationKind === 'staging'
+        ? `Counted${when} while it had stock here`
+        : isShelfLocation(opts.locationKind, opts.locationType)
+          ? `Counted${when} while this was its only shelf location`
+          : `Counted${when} while this was its only place outside Staging`;
   } else if (count.countedLocationId) {
     text = `Item total counted${when} while ${countedWhereClause(count)}`;
   } else {
@@ -585,7 +595,9 @@ function units(q: number): string {
  *  `locationKind` / `locationType`: the page's location. Only a rack, crate,
  *  area, shelf or bin is a shelf location (the same rule as
  *  locationRowVerificationCopy); at Unplaced or a Site the count reads
- *  "counted while this was its (their) only place outside Staging". */
+ *  "counted while this was its (their) only place outside Staging", and on
+ *  the Staging page (never recorded by the trigger) "while it (they) had
+ *  stock here". */
 export function locationVerificationTotalsCopy(
   t: LocationVerificationTotals,
   opts: { locationKind?: string | null; locationType?: string | null } = {},
@@ -593,11 +605,15 @@ export function locationVerificationTotalsCopy(
   const head = `${plural(t.items, 'item', 'items')}, ${units(t.quantity)} here.`;
   const parts: string[] = [];
   if (t.countedHere > 0) {
-    const whose = t.countedHere === 1 ? 'its' : 'their';
+    const one = t.countedHere === 1;
+    const whose = one ? 'its' : 'their';
     parts.push(
-      isShelfLocation(opts.locationKind, opts.locationType)
-        ? `${t.countedHere} counted while this was ${whose} only shelf location`
-        : `${t.countedHere} counted while this was ${whose} only place outside Staging`,
+      // The Staging page: never recorded by the trigger (see countedWhereClause).
+      opts.locationKind === 'staging'
+        ? `${t.countedHere} counted while ${one ? 'it' : 'they'} had stock here`
+        : isShelfLocation(opts.locationKind, opts.locationType)
+          ? `${t.countedHere} counted while this was ${whose} only shelf location`
+          : `${t.countedHere} counted while this was ${whose} only place outside Staging`,
     );
   }
   if (t.countedItemTotal > 0)

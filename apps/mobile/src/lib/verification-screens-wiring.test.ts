@@ -134,6 +134,36 @@ describe('the card (components/item-verification-card.tsx)', () => {
     }
   });
 
+  // Simulator walk 2026-09-27: the card's and the location screen's "Try
+  // again" were Button size="sm", whose minHeight is 36 (36 pt measured at
+  // the default text size, 41 pt at the largest). The pin above sees only
+  // raw Pressables, so every <Button> on these screens is pinned here: size
+  // md (52), or a minHeight of at least 44 in its style.
+  it('every Button on the card and the location screen is at least 44pt tall', () => {
+    const minTap = Number(/const MIN_TAP = (\d+);/.exec(card)![1]);
+    const button = read('../components/ui/button.tsx');
+    // The heights this pin relies on.
+    expect(button).toContain("const minHeight = size === 'sm' ? 36 : 52;");
+    expect(button).toContain("size = 'md',");
+    for (const file of ['src/components/item-verification-card.tsx', 'app/location/[id].tsx']) {
+      const buttons = elementsOf(file, (el, s) => tagOf(el, s) === 'Button');
+      expect(buttons.length, file).toBeGreaterThan(0);
+      for (const b of buttons) {
+        const size = attrText(b.el, 'size', b.sf);
+        if (size === undefined || size === 'md') continue;
+        const style = attrText(b.el, 'style', b.sf) ?? '';
+        const m = /minHeight:\s*(MIN_TAP|\d+)/.exec(style);
+        expect(m, `${where(b)} is size ${size} with no minHeight`).not.toBeNull();
+        const h = m![1] === 'MIN_TAP' ? minTap : Number(m![1]);
+        expect(h, `${where(b)} minHeight`).toBeGreaterThanOrEqual(44);
+      }
+    }
+    // The location screen's MIN_TAP is the card's.
+    expect(location).toMatch(
+      /import \{ IssueChip, MIN_TAP \} from '@\/components\/item-verification-card';/,
+    );
+  });
+
   it('links the count, the open count, the movements and each exception', () => {
     expect(card).toContain('onOpenCount(countId)');
     expect(card).toContain('onOpenCount(beingCounted.cycleCountId)');
@@ -294,6 +324,15 @@ describe('location screen (app/location/[id].tsx)', () => {
     expect(location).toContain("itemIds={gather.kind === 'ready' ? gather.itemIds : []}");
     expect(location).toContain('online={!offline}');
     expect(location).toContain('title={LOCATION_RECOUNT_LABEL}');
+  });
+
+  // Simulator walk 2026-09-27: a gather that got no answer showed the network
+  // layer's text. The words come from verification-api (tested there).
+  it('a failed gather is worded by recountGatherFailureCopy, never the raw error', () => {
+    expect(location).toContain(
+      "setGather({ kind: 'failed', message: recountGatherFailureCopy(e) });",
+    );
+    expect(location).not.toContain('describeVerificationError(');
   });
 
   it('is a registered stack screen', () => {

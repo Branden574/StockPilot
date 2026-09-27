@@ -160,7 +160,8 @@ export function ItemVerificationCard({
                 variant="outline"
                 disabled={retrying}
                 onPress={() => void retry()}
-                style={{ alignSelf: 'flex-start', marginTop: 6 }}
+                // 44 pt, not the small Button's 36 (simulator walk 2026-09-27).
+                style={{ alignSelf: 'flex-start', marginTop: 6, minHeight: MIN_TAP }}
               >
                 {retrying ? 'Trying again...' : 'Try again'}
               </Button>
@@ -275,7 +276,7 @@ function Summary({
           size="sm"
           variant="outline"
           onPress={onCount}
-          style={{ alignSelf: 'flex-start', marginTop: 6 }}
+          style={{ alignSelf: 'flex-start', marginTop: 6, minHeight: MIN_TAP }}
         >
           {copy.countAction}
         </Button>
@@ -308,7 +309,7 @@ function Summary({
 }
 
 /** The iOS minimum tap target (Human Interface Guidelines), in points. */
-const MIN_TAP = 44;
+export const MIN_TAP = 44;
 
 /** A line of the card that opens something. Content text: no Dynamic Type cap.
  *  The target is at least MIN_TAP tall, the text centred in it (a bare text

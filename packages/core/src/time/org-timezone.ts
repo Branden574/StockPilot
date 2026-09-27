@@ -134,7 +134,93 @@ export function formatOrgTime(
   return d.toLocaleTimeString('en-US', { timeZone: resolveOrgTimezone(tz), ...opts });
 }
 
-/** Combined date + time, locale-aware. */
+/** A narrow no-break space (U+202F) or a no-break space (U+00A0), written as
+ *  a plain space. Hermes on iOS (and newer ICU) puts U+202F before AM/PM. */
+export function plainSpaces(s: string): string {
+  return s.replace(/[\u202f\u00a0]/g, ' ');
+}
+
+// The option keys that describe the date, the time, and neither. `era` and
+// `weekday` are date fields, but a date made of them alone does not split
+// (see splitDateTimeOptions).
+const DATE_FIELDS = ['weekday', 'era', 'year', 'month', 'day'] as const;
+const DAY_FIELDS = ['year', 'month', 'day'] as const;
+const TIME_FIELDS = ['dayPeriod', 'hour', 'minute', 'second', 'fractionalSecondDigits'] as const;
+/** Belong to the time half only: the zone's name is printed after the time. */
+const TIME_ONLY_KEYS = ['timeZoneName', 'hour12', 'hourCycle'] as const;
+
+type OptionsRecord = Record<string, unknown>;
+
+/**
+ * A date-and-time request as a date-only and a time-only request, and the
+ * separator the web (V8, ICU) has always printed between them: " at " after a
+ * long or full date (a `dateStyle` of long or full, or a long month), ", "
+ * otherwise. Null when the request is not one date plus one time (a date
+ * alone, a time alone, or a weekday with a time and no day, which ICU prints
+ * with its own pattern, "Sun 4 PM"): those are formatted whole.
+ *
+ * With no date or time field at all, toLocaleString's own default applies (a
+ * numeric date and time with seconds, "9/27/2026, 4:32:05 PM").
+ */
+function splitDateTimeOptions(
+  opts: Intl.DateTimeFormatOptions,
+): { date: Intl.DateTimeFormatOptions; time: Intl.DateTimeFormatOptions; glue: string } | null {
+  const o = opts as OptionsRecord;
+  const has = (keys: readonly string[]) => keys.some((k) => o[k] !== undefined);
+  const date: OptionsRecord = {};
+  const time: OptionsRecord = {};
+  for (const [k, v] of Object.entries(o)) {
+    if (v === undefined) continue;
+    if ((DATE_FIELDS as readonly string[]).includes(k) || k === 'dateStyle') date[k] = v;
+    else if (
+      (TIME_FIELDS as readonly string[]).includes(k) ||
+      (TIME_ONLY_KEYS as readonly string[]).includes(k) ||
+      k === 'timeStyle'
+    )
+      time[k] = v;
+    else {
+      // timeZone, calendar, numberingSystem, localeMatcher, formatMatcher.
+      date[k] = v;
+      time[k] = v;
+    }
+  }
+  if (o.dateStyle !== undefined || o.timeStyle !== undefined) {
+    if (o.dateStyle === undefined || o.timeStyle === undefined) return null;
+    return {
+      date,
+      time,
+      glue: o.dateStyle === 'long' || o.dateStyle === 'full' ? ' at ' : ', ',
+    };
+  }
+  if (!has(DATE_FIELDS) && !has(TIME_FIELDS)) {
+    // toLocaleString's default: the whole date and the whole time.
+    Object.assign(date, { year: 'numeric', month: 'numeric', day: 'numeric' });
+    Object.assign(time, { hour: 'numeric', minute: 'numeric', second: 'numeric' });
+    return { date, time, glue: ', ' };
+  }
+  if (!has(DAY_FIELDS) || o.era !== undefined || !has(TIME_FIELDS)) return null;
+  return { date, time, glue: o.month === 'long' ? ' at ' : ', ' };
+}
+
+/**
+ * Combined date + time, locale-aware, in the org's zone.
+ *
+ * ONE SPELLING ON EVERY ENGINE. `toLocaleString` joins a date and a time with
+ * its own engine's pattern: "Sep 27, 4:32 PM" on the web (V8), "Sep 27 at
+ * 4:32 PM" with a narrow no-break space before PM on the phone (Hermes on
+ * iOS), so the same exception's "Checked at" read two ways (simulator walk
+ * 2026-09-27). So the date and the time come from TWO formatters, a date-only
+ * and a time-only one in the same zone (each is spelled the same on both
+ * engines), with no-break spaces made plain, joined with the separator the
+ * web has always printed (splitDateTimeOptions). On the web the words do not
+ * change: org-timezone.test.ts checks them against toLocaleString for every
+ * shape. The rentals module reached the same rule for its own times first
+ * (rentals/emails.ts, formatRentalDateTime).
+ *
+ * A request that is not one date plus one time is formatted whole, spaces
+ * made plain. A runtime whose Intl cannot format at all gets its own
+ * toLocaleString, spaces made plain.
+ */
 export function formatOrgDateTime(
   input: Date | string | number,
   opts: Intl.DateTimeFormatOptions = {},
@@ -144,7 +230,18 @@ export function formatOrgDateTime(
   if (Number.isNaN(d.getTime())) return '—';
   // Resolved, not passed through: an unrecognised stored zone degrades to the
   // default instead of throwing out of a render.
-  return d.toLocaleString('en-US', { timeZone: resolveOrgTimezone(tz), ...opts });
+  const options: Intl.DateTimeFormatOptions = { timeZone: resolveOrgTimezone(tz), ...opts };
+  const split = splitDateTimeOptions(options);
+  if (split) {
+    try {
+      const date = new Intl.DateTimeFormat('en-US', split.date).format(d);
+      const time = new Intl.DateTimeFormat('en-US', split.time).format(d);
+      return `${plainSpaces(date).trim()}${split.glue}${plainSpaces(time).trim()}`;
+    } catch {
+      // No usable Intl.DateTimeFormat: the engine's own words, below.
+    }
+  }
+  return plainSpaces(d.toLocaleString('en-US', options));
 }
 
 /**

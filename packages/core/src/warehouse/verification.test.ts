@@ -753,6 +753,78 @@ describe('parseItemVerificationSummary (the phone reads the API)', () => {
   });
 });
 
+// A count recorded at Staging. The trigger never records Staging (it leaves
+// Staging out of the candidates; pgTAP 0374 S29), and counted_location_id is
+// not client-writable since 0368, but a line written before then could name
+// it. Its words must never contradict themselves: "Staging was its only place
+// outside Staging" (verify pass, 2026-09-27). They say only what such a
+// record can mean: the item had stock in Staging when it was counted.
+describe('a count recorded at Staging (defensive: the trigger never records it)', () => {
+  const STAGING = 'loc-staging';
+  const atStaging = (): ItemVerificationSummary =>
+    summary({
+      lastCount: count({
+        countedLocationId: STAGING,
+        countedLocation: { name: 'Staging', kind: 'staging', type: 'other', archived: false },
+      }),
+    });
+
+  it('the item card', () => {
+    const scope = verificationSummaryCopy(atStaging(), { timeZone: TZ }).scope;
+    expect(scope).toBe('Counted while it had stock in Staging');
+  });
+
+  it('a row on another page', () => {
+    expect(
+      locationRowVerificationCopy(atStaging(), HERE, {
+        timeZone: TZ,
+        locationKind: 'rack',
+        locationType: 'shelf',
+      }).count,
+    ).toBe('Item total counted Sep 12, 2026, while it had stock in Staging');
+  });
+
+  it("the Staging page's rows and totals", () => {
+    expect(
+      locationRowVerificationCopy(atStaging(), STAGING, {
+        timeZone: TZ,
+        locationKind: 'staging',
+        locationType: 'other',
+      }).count,
+    ).toBe('Counted Sep 12, 2026, while it had stock here');
+    const one = locationVerificationTotals([{ quantity: 2, summary: atStaging() }], STAGING);
+    expect(
+      locationVerificationTotalsCopy(one, { locationKind: 'staging', locationType: 'other' }),
+    ).toBe('1 item, 2 units here. 1 counted while it had stock here.');
+    const two = locationVerificationTotals(
+      [
+        { quantity: 2, summary: atStaging() },
+        { quantity: 3, summary: atStaging() },
+      ],
+      STAGING,
+    );
+    expect(
+      locationVerificationTotalsCopy(two, { locationKind: 'staging', locationType: 'other' }),
+    ).toBe('2 items, 5 units here. 2 counted while they had stock here.');
+  });
+
+  it('never says Staging was its only place outside Staging, anywhere', () => {
+    const words = [
+      verificationSummaryCopy(atStaging(), { timeZone: TZ }).lines.join('\n'),
+      locationRowVerificationCopy(atStaging(), HERE, { timeZone: TZ }).count,
+      locationRowVerificationCopy(atStaging(), STAGING, {
+        timeZone: TZ,
+        locationKind: 'staging',
+      }).count,
+      locationVerificationTotalsCopy(
+        locationVerificationTotals([{ quantity: 2, summary: atStaging() }], STAGING),
+        { locationKind: 'staging' },
+      ),
+    ].join('\n');
+    expect(words).not.toMatch(/outside Staging|only shelf location|all of it/);
+  });
+});
+
 // M1 and L2: the totals on the Unplaced page and on a Site's page. Never "all
 // of it" / "all their stock" (Staging may also have held some), never a shelf.
 describe('location totals on the Unplaced page and a Site page (not shelves)', () => {

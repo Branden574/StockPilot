@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 
 import { notifyUnauthorized } from './account-eviction';
+import { REQUEST_TIMED_OUT_COPY } from './connection-copy';
 import { OutboxSessionChangedError } from './outbox-scope';
 import { registerInFlight } from './request-cancellation';
 import { supabase } from './supabase';
@@ -251,7 +252,7 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
     // Our timeout aborted (the caller did NOT cancel) → surface a clear,
     // retryable message instead of an opaque AbortError.
     if (ctrl.signal.aborted && !(opts.signal && opts.signal.aborted)) {
-      throw new Error('Request timed out. Check your connection and try again.');
+      throw new Error(REQUEST_TIMED_OUT_COPY);
     }
     throw err;
   } finally {

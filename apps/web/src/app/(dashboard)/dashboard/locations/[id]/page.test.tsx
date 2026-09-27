@@ -608,6 +608,36 @@ describe('Location page', () => {
     expect(document.body.textContent).not.toMatch(/shelf location/);
   });
 
+  // The page passes its location's TYPE as well as its kind (F1-3 review L2).
+  // A bin or shelf with no kind is a shelf location only by its type (core
+  // isRackShelfLocation), so a page that dropped `locationType` would call
+  // it "its only place outside Staging". Mutation caught: removing
+  // `locationType: loc.type` from the totals call or the row's.
+  it('a bin with no kind is a shelf location by its type, in the rows and the totals', async () => {
+    location.mockResolvedValue(
+      data({
+        location: { ...data().location, name: 'Bin 4', kind: null, type: 'bin' },
+        rows: [rowOf(1, summary(itemId(1), {}, { countedLocationId: LOC }))],
+        totals: {
+          ...data().totals!,
+          items: 1,
+          quantity: 4,
+          countedHere: 1,
+          countedItemTotal: 0,
+          notCounted: 0,
+        },
+      }),
+    );
+    await renderPage();
+    expect(screen.getByTestId('location-row-count')).toHaveTextContent(
+      'Counted Sep 12, 2026, while this was its only shelf location',
+    );
+    expect(screen.getByTestId('location-totals')).toHaveTextContent(
+      '1 item, 4 units here. 1 counted while this was its only shelf location.',
+    );
+    expect(document.body.textContent).not.toMatch(/outside Staging/);
+  });
+
   it('counted elsewhere and moved here since: says where the count was taken', async () => {
     location.mockResolvedValue(
       data({

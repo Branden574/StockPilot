@@ -21,6 +21,7 @@ import {
 } from '@stockpilot/core';
 
 import { api } from './api';
+import { CONNECTION_FAILURE_COPY } from './connection-copy';
 
 /**
  * The Exception Center on the phone (F1-1): thin typed wrappers over the
@@ -858,7 +859,7 @@ export function describeRecountError(e: unknown): { message: string; retryable: 
   if (status === null) {
     // Never reached the server, or the answer was lost: resending the same
     // key is safe either way.
-    return { message: 'Could not reach the server. Check your connection and try again.', retryable: true, dropKey: false };
+    return { message: CONNECTION_FAILURE_COPY, retryable: true, dropKey: false };
   }
   return { message: message ?? 'Could not start the recount.', retryable: false, dropKey: false };
 }

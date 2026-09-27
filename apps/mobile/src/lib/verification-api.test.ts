@@ -14,8 +14,10 @@ import {
   verificationSummaryCopy,
 } from '@stockpilot/core';
 
+import { CONNECTION_FAILURE_COPY, REQUEST_TIMED_OUT_COPY } from './connection-copy';
 import * as verification from './verification-api';
 import {
+  recountGatherFailureCopy,
   LOCATION_HOLDINGS_TRUNCATED_COPY,
   RECOUNT_GATHER_CHANGED_COPY,
   canOpenCountScreen,
@@ -597,7 +599,84 @@ describe('describeVerificationError', () => {
 
   it('never shows a bare code as the reason', () => {
     expect(describeVerificationError(new Error('internal_error'), 'item').detail).toBe(
-      'Check your connection and try again.',
+      'Could not reach the server. Check your connection and try again.',
+    );
+  });
+
+  // Simulator walk 2026-09-27: offline, the item card and the location screen
+  // put the network layer's own text under "Couldn't load verification":
+  // "fetch failed: UnexpectedException: Could not connect to the server. (at
+  // ExpoModulesCore/Promise.swift:56)". api() re-throws expo fetch's error
+  // unchanged, so anything with no HTTP status is said in the app's words
+  // (the rental and recount screens' sentence), never the engine's.
+  it('a request that got no answer says the connection sentence, never the network layer text', () => {
+    const expoFetch = new TypeError(
+      'fetch failed: UnexpectedException: Could not connect to the server. (at ExpoModulesCore/Promise.swift:56)',
+    );
+    for (const subject of ['item', 'location'] as const) {
+      for (const e of [
+        expoFetch,
+        new TypeError('Network request failed'),
+        new Error('The Internet connection appears to be offline.'),
+        'boom',
+        null,
+        {},
+      ]) {
+        expect(describeVerificationError(e, subject), String(e)).toEqual({
+          detail: 'Could not reach the server. Check your connection and try again.',
+          retry: true,
+          keepShown: true,
+        });
+      }
+    }
+    // The same sentence the phone's other screens say for it.
+    expect(CONNECTION_FAILURE_COPY).toBe(
+      'Could not reach the server. Check your connection and try again.',
+    );
+  });
+
+  it("api()'s own timeout keeps its sentence (the app's words, not the engine's)", () => {
+    expect(describeVerificationError(new Error(REQUEST_TIMED_OUT_COPY), 'location').detail).toBe(
+      'Request timed out. Check your connection and try again.',
+    );
+  });
+
+  it('the card and the location screen show the connection sentence offline, never the raw text', () => {
+    const KEY = verificationKey(LOC, ORG)!;
+    const expoFetch = new TypeError(
+      'fetch failed: UnexpectedException: Could not connect to the server. (at ExpoModulesCore/Promise.swift:56)',
+    );
+    const stored = verificationFailure<{ timeZone: string }>(
+      null,
+      KEY,
+      expoFetch,
+      'location',
+      (d) => d.timeZone,
+    );
+    const view = verificationView(stored, KEY, false, (d) => d.timeZone);
+    expect(view).toEqual({
+      kind: 'error',
+      error: {
+        detail: 'Could not reach the server. Check your connection and try again.',
+        retry: true,
+        keepShown: true,
+      },
+    });
+  });
+
+  // The location screen's "Recount items here" gather failure (walk
+  // 2026-09-27: the same raw text reached it).
+  it('a recount gather that got no answer says the connection sentence', () => {
+    const expoFetch = new TypeError(
+      'fetch failed: UnexpectedException: Could not connect to the server. (at ExpoModulesCore/Promise.swift:56)',
+    );
+    const words = recountGatherFailureCopy(expoFetch);
+    expect(words).toBe(
+      'The items here could not be gathered. Could not reach the server. Check your connection and try again.',
+    );
+    expect(words).not.toMatch(/fetch failed|Promise\.swift|UnexpectedException/);
+    expect(recountGatherFailureCopy(apiError(500, 'x'))).toBe(
+      'The items here could not be gathered. The server had a problem. Try again in a moment.',
     );
   });
 });

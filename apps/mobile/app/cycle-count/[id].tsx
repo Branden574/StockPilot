@@ -16,9 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   COUNT_LINKED_EXCEPTIONS_UNAVAILABLE_COPY,
   CYCLE_COUNT_REFERENCE_UNAVAILABLE,
-  cycleCountScopeLabel,
   exceptionUnrecognizedCopy,
-  formatCycleCountNumber,
   offlineCaptureAt,
   offlineCaptureLabel,
   variantLabel,
@@ -45,6 +43,7 @@ import {
   type CachedCycleCountHeader,
   type CachedCycleCountLine,
 } from '@/lib/cycle-count-cache';
+import { cycleCountHeaderView, cycleCountIsOpen } from '@/lib/cycle-count-header';
 import { fetchAllCycleCountLines } from '@/lib/cycle-count-lines-fetch';
 import { postCycleCountErrorMessage } from '@/lib/cycle-count-post-errors';
 import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
@@ -553,14 +552,22 @@ export default function CycleCountDetail() {
   }
 
   const countedCount = lines.filter((l) => l.counted !== null).length;
-  // The count's permanent reference, from the cache (filled by the snapshot
-  // pull or the fetch above). Never made up when absent.
-  const reference = formatCycleCountNumber(header?.countNumber);
+  // The header: the count's reference (from the cache, filled by the snapshot
+  // pull or the fetch above; never made up when absent), its place and its
+  // progress, or, before the count is known, that it is loading and nothing
+  // else (cycle-count-header.ts; simulator walk 2026-09-27).
+  const headerView = cycleCountHeaderView(header, {
+    loading,
+    scope,
+    countedCount,
+    lineTotal: lines.length,
+  });
   const offline = syncSnapshot.status === 'offline';
   const hasPending = pendingForThis > 0;
   // Only open (in_progress) counts are editable/postable. Completed or
-  // canceled counts are opened from history read-only.
-  const isOpen = (header?.status ?? 'in_progress') === 'in_progress';
+  // canceled counts are opened from history read-only, and a count still
+  // loading is not open (no Reassign or Release on a count not yet known).
+  const isOpen = cycleCountIsOpen(header);
   // What the footer shows (count-close-gate.ts): Post only on a known yes.
   // Offline with nothing known, it says posting needs a connection and who
   // posts.
@@ -644,7 +651,7 @@ export default function CycleCountDetail() {
         </Pressable>
         <View style={styles.headerRow}>
           <View style={{ flex: 1 }}>
-            {reference ? (
+            {headerView.kind === 'known' && headerView.reference ? (
               <>
                 <Text style={styles.eyebrow}>CYCLE COUNT</Text>
                 {/* Selectable: a long press offers the system Copy, which is the
@@ -653,28 +660,27 @@ export default function CycleCountDetail() {
                 <Text
                   style={[styles.title, styles.reference]}
                   selectable
-                  accessibilityLabel={`Cycle count ${reference}`}
+                  accessibilityLabel={`Cycle count ${headerView.reference}`}
                   accessibilityHint="Long press to copy the reference"
                 >
-                  {reference}
+                  {headerView.reference}
                 </Text>
               </>
             ) : (
               <>
                 <Text style={styles.title}>Cycle count</Text>
-                <Text style={styles.subtitle}>{CYCLE_COUNT_REFERENCE_UNAVAILABLE}</Text>
+                {headerView.kind === 'known' ? (
+                  <Text style={styles.subtitle}>{CYCLE_COUNT_REFERENCE_UNAVAILABLE}</Text>
+                ) : null}
               </>
             )}
-            <Text style={styles.subtitle}>
-              {header && scope
-                ? cycleCountScopeLabel({
-                    warehouseId: header.warehouseId,
-                    warehouseName: header.warehouseName,
-                    scope,
-                  })
-                : (header?.warehouseName ?? (header?.warehouseId ? '—' : 'No single warehouse'))}{' '}
-              · {countedCount}/{lines.length} counted
-            </Text>
+            {headerView.kind === 'known' ? (
+              <Text style={styles.subtitle}>
+                {headerView.place} · {headerView.progress}
+              </Text>
+            ) : headerView.kind === 'loading' ? (
+              <Text style={styles.subtitle}>{headerView.text}</Text>
+            ) : null}
           </View>
           {header && canAdjust && isOpen ? (
             <View style={{ flexDirection: 'row', gap: space.xs }}>

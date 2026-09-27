@@ -1,4 +1,11 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import {
+  HermesLikeDateTimeFormat,
+  NNBSP,
+  restoreIntl,
+  useHermesLikeIntl,
+} from '../time/__fixtures__/hermes-like-intl';
 
 import { RENTAL_BORROWER_EMAIL_HELP } from './borrower';
 import {
@@ -392,79 +399,12 @@ describe('the borrower label says only what the rental records', () => {
 
 // ─── The same words on the web and the phone ────────────────────────────
 
-/**
- * An Intl that behaves the way Hermes on iOS does, built from this runtime's
- * own parts. Measured 2026-09-26 by running the app's own Hermes
- * (hermes-engine 250829098.0.16, the macOS slice of hermesvm: the same Apple
- * Intl code as iOS) through JSI; the arrays in the first test below are what
- * it returned.
- *   - A date alone, or a time alone: every part typed, a narrow no-break
- *     space (U+202F) before AM or PM.
- *   - A date AND a time: joined with " at " ("Sep 23 at 3:00 PM"), and
- *     formatToParts types only the date fields. From the quoted "at" on,
- *     every piece ("3", ":", "00", "PM") comes back as type "literal".
- *   - Literals come back one piece per run of letters or digits, or per
- *     other character (", " is "," then " ").
- * The first fix's stand-in kept hour, minute and dayPeriod typed, so its tests
- * passed while the phone still printed the engine's words (re-walk
- * 2026-09-26).
- */
-const REAL_DTF = Intl.DateTimeFormat;
-
-const NNBSP = '\u202f';
-
-function literalPieces(value: string): Intl.DateTimeFormatPart[] {
-  return (value.match(/[A-Za-z0-9]+|[^A-Za-z0-9]/g) ?? []).map((v) => ({ type: 'literal', value: v }));
-}
-
-function hermesParts(parts: Intl.DateTimeFormatPart[]): Intl.DateTimeFormatPart[] {
-  const spaced = parts.map((p, i) =>
-    p.type === 'literal' && parts[i + 1]?.type === 'dayPeriod' ? { ...p, value: NNBSP } : p,
-  );
-  const hourAt = spaced.findIndex((p) => p.type === 'hour');
-  const hasDate = spaced.some((p) => p.type === 'month' || p.type === 'day' || p.type === 'year');
-  const split = (ps: Intl.DateTimeFormatPart[]) =>
-    ps.flatMap((p) => (p.type === 'literal' ? literalPieces(p.value) : [p]));
-  if (hourAt < 0 || !hasDate) return split(spaced);
-  // The date fields, then " at " and the time, all of it untyped. The part
-  // before the hour is the engine's own date-to-time separator, replaced.
-  const time = spaced.slice(hourAt).map((p) => p.value).join('');
-  return [...split(spaced.slice(0, hourAt - 1)), ...literalPieces(` at ${time}`)];
-}
-
-class HermesLikeDateTimeFormat {
-  private readonly real: Intl.DateTimeFormat;
-  constructor(locales?: string | string[], options?: Intl.DateTimeFormatOptions) {
-    this.real = new REAL_DTF(locales, options);
-  }
-  formatToParts(date?: Date | number): Intl.DateTimeFormatPart[] {
-    return hermesParts(this.real.formatToParts(date));
-  }
-  format(date?: Date | number): string {
-    // Not through this.formatToParts: an engine without formatToParts (below)
-    // still formats.
-    return hermesParts(this.real.formatToParts(date))
-      .map((p) => p.value)
-      .join('');
-  }
-  resolvedOptions(): Intl.ResolvedDateTimeFormatOptions {
-    return this.real.resolvedOptions();
-  }
-}
-
-function useHermesLikeIntl(dtf: unknown = HermesLikeDateTimeFormat) {
-  Object.defineProperty(Intl, 'DateTimeFormat', { value: dtf, configurable: true, writable: true });
-  const hermesFormat = function (this: Date, locales?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions) {
-    return new HermesLikeDateTimeFormat(locales as string | string[] | undefined, options).format(this);
-  };
-  vi.spyOn(Date.prototype, 'toLocaleString').mockImplementation(hermesFormat);
-  vi.spyOn(Date.prototype, 'toLocaleTimeString').mockImplementation(hermesFormat);
-}
+// The Hermes-like Intl (time/__fixtures__/hermes-like-intl.ts) is shared with
+// the org time formatter's tests, so both are held to the same engine.
 
 describe('rental times read the same on the web and the phone (simulator walk 2026-09-25)', () => {
   afterEach(() => {
-    Object.defineProperty(Intl, 'DateTimeFormat', { value: REAL_DTF, configurable: true, writable: true });
-    vi.restoreAllMocks();
+    restoreIntl();
   });
 
   // Wed Sep 23 2026, 3:00 PM PDT.

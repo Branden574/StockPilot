@@ -267,7 +267,6 @@ export default function ExceptionDetailScreen() {
           }}
         />
       ) : null}
-
     </View>
   );
 }

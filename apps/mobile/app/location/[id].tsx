@@ -24,7 +24,7 @@ import {
 } from '@stockpilot/core';
 
 import { ExceptionRecountSheet } from '@/components/exception-recount-sheet';
-import { IssueChip } from '@/components/item-verification-card';
+import { IssueChip, MIN_TAP } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Paginator } from '@/components/ui/paginator';
@@ -41,13 +41,13 @@ import {
   LOCATION_HOLDINGS_TRUNCATED_COPY,
   LOCATION_WORKSPACE_UNAVAILABLE,
   VERIFICATION_ISSUES_TRUNCATED_COPY,
-  describeVerificationError,
   gatherRecountItemIds,
   getLocationVerification,
   locationKindLabel,
   locationRecountState,
   locationRowAccessibilityLabel,
   locationRowQuantityCopy,
+  recountGatherFailureCopy,
   verificationCheckedAtCopy,
   verificationFailure,
   verificationKey,
@@ -163,10 +163,7 @@ export default function LocationScreen() {
         res.ok ? { kind: 'ready', itemIds: res.itemIds } : { kind: 'failed', message: res.message },
       );
     } catch (e) {
-      setGather({
-        kind: 'failed',
-        message: `The items here could not be gathered. ${describeVerificationError(e, 'location').detail}`,
-      });
+      setGather({ kind: 'failed', message: recountGatherFailureCopy(e) });
     }
   }
 
@@ -184,7 +181,7 @@ export default function LocationScreen() {
               variant="outline"
               disabled={retryingWorkspace}
               onPress={() => void reloadWorkspace()}
-              style={{ alignSelf: 'flex-start', marginTop: 12 }}
+              style={{ alignSelf: 'flex-start', marginTop: 12, minHeight: MIN_TAP }}
             >
               Try again
             </Button>
@@ -219,7 +216,7 @@ export default function LocationScreen() {
                 variant="outline"
                 disabled={refreshing}
                 onPress={() => void reload()}
-                style={{ alignSelf: 'flex-start', marginTop: 12 }}
+                style={{ alignSelf: 'flex-start', marginTop: 12, minHeight: MIN_TAP }}
               >
                 Try again
               </Button>
