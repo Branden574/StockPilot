@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { Permission } from '@stockpilot/core';
 
-import { showWriteCta, showWriteCtaForRole } from './cta-gating';
+import { showDistributeCta, showWriteCta, showWriteCtaForRole } from './cta-gating';
 
 describe('showWriteCta', () => {
   it('perms not loaded (undefined) → show, matching current behavior', () => {
@@ -57,5 +57,34 @@ describe('showWriteCtaForRole — one stock:adjust rule for the item screen', ()
         );
       }
     }
+  });
+});
+
+describe('showDistributeCta — Distribute matches the database (0101: manager or above)', () => {
+  const withDistribute = new Set<Permission>(['bundles:read', 'bundles:distribute']);
+
+  it('staff are not offered Distribute, although they hold bundles:distribute', () => {
+    expect(showDistributeCta('staff', withDistribute)).toBe(false);
+    expect(showDistributeCta('staff', undefined)).toBe(false);
+  });
+
+  it('managers and above holding the permission are offered it', () => {
+    for (const role of ['manager', 'admin', 'owner'] as const) {
+      expect(showDistributeCta(role, withDistribute), role).toBe(true);
+      expect(showDistributeCta(role, undefined), role).toBe(true);
+    }
+  });
+
+  it('a manager whose permission was revoked is not offered it', () => {
+    expect(showDistributeCta('manager', new Set<Permission>(['bundles:read']))).toBe(false);
+  });
+
+  it('an unknown role is not offered it: the server would refuse a staff member', () => {
+    expect(showDistributeCta(null, withDistribute)).toBe(false);
+    expect(showDistributeCta(null, undefined)).toBe(false);
+  });
+
+  it('a viewer granted the permission is still not offered it', () => {
+    expect(showDistributeCta('viewer', withDistribute)).toBe(false);
   });
 });

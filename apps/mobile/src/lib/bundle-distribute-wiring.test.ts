@@ -145,3 +145,13 @@ describe('bundles/[id].tsx preview: warehouse-aware (0365)', () => {
     expect(call).toMatch(/warehouseIds: whs\.map\(\(w\) => w\.id\)/);
   });
 });
+
+describe('bundles/[id].tsx — Distribute is offered only where the server accepts it', () => {
+  it('gates the Distribute section with showDistributeCta(role, perms), never the bare permission', () => {
+    expect(screen).toMatch(/const canDistribute = showDistributeCta\(role, perms\);/);
+    expect(screen).not.toMatch(/showWriteCta\(perms, 'bundles:distribute'\)/);
+    expect(screen).toMatch(/const \{ role \} = useRole\(\);/);
+    // The section itself renders only under that gate.
+    expect(screen).toMatch(/\{canDistribute \? \(/);
+  });
+});

@@ -1,4 +1,4 @@
-import { can, type Permission, type Role } from '@stockpilot/core';
+import { can, canDistributeBundles, type Permission, type Role } from '@stockpilot/core';
 
 /**
  * COSMETIC write-CTA gate for mobile screens, driven by the effective
@@ -44,4 +44,21 @@ export function showWriteCtaForRole(
   if (perms !== undefined) return perms.has(permission);
   if (role !== null) return can({ role }, permission);
   return true;
+}
+
+/**
+ * The bundle screen's Distribute section. Unlike the other write CTAs it is
+ * NOT shown while the role is unknown: the server refuses distribution below
+ * manager (0101) although staff hold `bundles:distribute`, so the section
+ * appears only when the role is known to be manager or above AND the permission
+ * holds (the loaded effective set when there is one, else the role's defaults).
+ * The same rule as the web bundle page (core canDistributeBundles), so the
+ * phone never offers a distribution it would queue and see refused.
+ */
+export function showDistributeCta(
+  role: Role | null,
+  perms: ReadonlySet<Permission> | undefined,
+): boolean {
+  if (role === null) return false;
+  return canDistributeBundles(perms === undefined ? { role } : { role, permissions: perms });
 }

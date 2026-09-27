@@ -103,6 +103,34 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'bundle-distribute-managers-2026-09-27',
+    revision: 1,
+    // A draft until the web deploy and the phone update (the mobile bundle
+    // screen changes too), then published.
+    status: 'draft',
+    title: 'Distribute on a bundle is shown only to managers and above',
+    summary:
+      'On the web and in the mobile app, Distribute on a bundle now appears only for managers, admins and owners who can distribute bundles. Staff were shown it, but StockPilot refuses a distribution from anyone below manager, so their attempt ended in Permission denied.',
+    publishedAt: '2026-09-27T20:00:00Z',
+    entries: [
+      {
+        id: 'bundle-distribute-managers',
+        category: 'fixed',
+        area: 'Bundles',
+        title: 'Distribute appears only for people who can distribute',
+        whatChanged:
+          'The Distribute button on a bundle page on the web, and the Distribute section of a bundle in the mobile app, now appear only for managers, admins and owners who hold the permission to distribute bundles.',
+        whyItMatters:
+          'Staff hold that permission by default and were shown Distribute, but StockPilot refuses a distribution from anyone below manager, so a staff member who tried got Permission denied.',
+        howItAffectsYou:
+          'Managers, admins and owners see no change. Staff can still open a bundle and see its items and its distribution history. In the mobile app the section appears once the app knows your role.',
+        whatToDo: 'If you are staff and kits need to be handed out, ask a manager to distribute them.',
+        link: { href: '/dashboard/bundles', label: 'Open Bundles' },
+        audience: { anyPermission: ['bundles:read', 'bundles:distribute'], modules: ['bundles'] },
+      },
+    ],
+  },
+  {
     id: 'last-physical-count-and-location-pages-2026-09-27',
     revision: 1,
     // Published after the web deploy (#272), the phone update (OTA iOS
