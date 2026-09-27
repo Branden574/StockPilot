@@ -179,13 +179,12 @@ describe('the six legacy announcements survive the move, to the character', () =
 });
 
 /**
- * F1-3's release is held as a DRAFT until its phone release (pnpm release:ota)
+ * F1-3's release was held as a DRAFT until its phone release (pnpm release:ota)
  * and the Demo Co walk (review 2026-09-27, M4): published in the feature
  * commit, it would have been announced to phone users on merge, before the
- * phone had the location screen. The follow-up that publishes it flips this
- * pin to 'published'.
+ * phone had the location screen. This follow-up publishes it.
  */
-describe('F1-3 (last physical count and location pages) is held as a draft', () => {
+describe('F1-3 (last physical count and location pages) is published', () => {
   const F1_3 = 'last-physical-count-and-location-pages-2026-09-27';
   const release = () => RELEASES.find((r) => r.id === F1_3)!;
   /** A reader every audience includes. */
@@ -195,12 +194,13 @@ describe('F1-3 (last physical count and location pages) is held as a draft', () 
     enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
   };
 
-  it('is a draft, so no reader, no API and no old phone build is told about it yet', () => {
-    expect(release().status).toBe('draft');
-    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(F1_3);
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(F1_3);
-    expect(registryFingerprint(RELEASES)).not.toContain(F1_3);
-    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(F1_3);
+  it('is published after the web deploy, the phone update and the Demo Co walk, so readers are told', () => {
+    expect(release().status).toBe('published');
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(F1_3);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(F1_3);
+    expect(registryFingerprint(RELEASES)).toContain(F1_3);
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(F1_3);
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-28T00:00:00Z'));
   });
 
   it('its summary (all an old phone build shows) is true on both platforms, and says who may recount', () => {

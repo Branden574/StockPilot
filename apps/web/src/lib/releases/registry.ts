@@ -30,16 +30,13 @@ export const RELEASES: Release[] = [
   {
     id: 'last-physical-count-and-location-pages-2026-09-27',
     revision: 1,
-    // DRAFT until the phone release (pnpm release:ota) and the Demo Co walk:
-    // a draft never leaves the server (visibleReleases, registryFingerprint),
-    // so merging this does not announce screens the phone does not have yet.
-    // A small follow-up sets it to 'published' (and updates the pin in
-    // registry.test.ts).
-    status: 'draft',
+    // Published after the web deploy (#272), the phone update (OTA iOS
+    // 01a0e41c-2dd1-7b0d-9922-98e564179015) and the Demo Co production walk.
+    status: 'published',
     title: 'Item pages show the last physical count, and each location has a page',
     summary:
       'On the web and in the mobile app, an item now shows when it was last physically counted, what that count found, and how many recorded stock movements came after it, and an exception shows the same for its item. Each location in Locations now opens a page listing what is held there and when each item was last counted, with the open exceptions recorded there. When Cycle Counts is on, managers who can assign counts and adjust stock can recount the items at a location from its page.',
-    publishedAt: '2026-09-27T20:00:00Z',
+    publishedAt: '2026-09-27T18:48:00Z',
     entries: [
       {
         id: 'item-last-physical-count',
