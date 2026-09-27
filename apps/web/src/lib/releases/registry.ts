@@ -28,6 +28,33 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'order-page-warehouse-switch-2026-09-26',
+    revision: 1,
+    status: 'published',
+    title: 'The New order page places the order at the warehouse shown after a change',
+    summary:
+      'On the New order page, the cart stayed with the warehouse the page first opened with. After you changed warehouse, Submit was either refused with "Every line must be at the chosen warehouse" or, when every item in the cart came from the first warehouse, placed the order at that first warehouse while the page showed the other one. Each warehouse now has its own cart, and Submit places the order at the warehouse shown.',
+    publishedAt: '2026-09-26T23:00:00Z',
+    entries: [
+      {
+        id: 'order-page-warehouse-switch',
+        category: 'fixed',
+        area: 'Orders',
+        title: "Changing warehouse on the New order page now changes the order's warehouse",
+        whatChanged:
+          'Changing the warehouse on the New order page now changes the cart with it. Items you add are saved with the warehouse shown, and Submit places the order at that warehouse.',
+        whyItMatters:
+          'The cart kept the warehouse the page first opened with, so a change of warehouse did not reach Submit. If the cart held an item from the warehouse shown, Submit was refused with "Every line must be at the chosen warehouse". If every item in the cart came from the first warehouse, Submit placed the order at that first warehouse while the page showed the other one. Items added after a change were also saved under the first warehouse, so they could appear in that warehouse\'s cart later.',
+        howItAffectsYou:
+          "Each warehouse keeps its own cart. Requesting for, Pickup or Delivery, the delivery site, Needed by and the notes belong to that cart, along with the items. When you change warehouse you see that warehouse's cart, or a new one that starts on Pickup with Requesting for set to Myself. Changing back brings back the first cart and its answers.",
+        whatToDo:
+          'If you ordered after changing warehouse, open the order and check its Warehouse. If it is wrong, cancel it while pending approval, or ask a manager, then order again. To redo a refused order, choose the warehouse you meant, add the items again and submit. If a cart opens with items you already ordered, remove them. Remove lines showing a long code, and choose the delivery site again if asked.',
+        link: { href: '/dashboard/orders/new', label: 'Open New order' },
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
     id: 'rentals-borrowers-and-emails-2026-09',
     revision: 1,
     status: 'published',

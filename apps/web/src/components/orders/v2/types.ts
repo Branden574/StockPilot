@@ -77,8 +77,7 @@ export type CartAction =
       patch: Partial<Pick<CartState, 'charterId' | 'fulfillmentType' | 'onBehalfOf'>>;
     }
   | { type: 'set-notes'; value: string }
-  | { type: 'set-needed-by'; value: string }
-  | { type: 'set-warehouse'; warehouseId: string };
+  | { type: 'set-needed-by'; value: string };
 
 /**
  * `charters.address` is a jsonb blob, not a typed column set. Every key is

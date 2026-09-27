@@ -160,8 +160,6 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
       return { ...state, notes: action.value };
     case 'set-needed-by':
       return { ...state, neededBy: action.value };
-    case 'set-warehouse':
-      return { ...state, warehouseId: action.warehouseId, lines: [] };
     default:
       return state;
   }
@@ -186,6 +184,10 @@ const CartContext = React.createContext<CartContextValue | null>(null);
  * debounce-saves on every change. localStorage key is scoped per
  * warehouseId so swapping warehouses doesn't trample the other
  * warehouse's draft, and per page by `draftPrefix` (see above).
+ *
+ * `initial` is read once, on mount. A page that changes warehouse without
+ * remounting (a router.push that only changes ?warehouseId) must key this
+ * provider by the warehouse, or the cart keeps the first one.
  */
 export function CartProvider({
   initial,
@@ -199,9 +201,14 @@ export function CartProvider({
   const [state, dispatch] = React.useReducer(cartReducer, initial);
   const [hydrated, setHydrated] = React.useState(false);
 
-  // Hydration is a one-shot on mount — re-running it on warehouseId
-  // change would clobber the `set-warehouse` action's deliberate cart
-  // clear with the previous warehouse's draft.
+  // Hydration is a one-shot on mount, for the warehouse this provider was
+  // mounted with. That is enough because a cart never changes warehouse while
+  // mounted: the New order and New rental pages key this provider by their
+  // warehouse, and the public order link reloads the page, so a different
+  // warehouse is always a new mount, and this effect runs again and restores
+  // that warehouse's own draft. A provider that outlived a warehouse change
+  // would keep the first warehouse's cart and save under its key (the New
+  // order bug found on 2026-09-26).
   React.useEffect(() => {
     try {
       const raw = localStorage.getItem(`${draftPrefix}${initial.warehouseId}`);
