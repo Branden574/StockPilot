@@ -169,13 +169,13 @@ describe('ItemVerificationCardView', () => {
     expect(headlineLink()?.getAttribute('href')).toBe(`/dashboard/cycle-counts/${CC}`);
     // The reference stays on one line on a narrow screen (no break at "CC-").
     expect(screen.getByText('CC-000031')).toHaveClass('whitespace-nowrap');
-    expect(screen.getByTestId('verification-result')).toHaveTextContent('Matched the book (10)');
+    expect(screen.getByTestId('verification-result')).toHaveTextContent('Matched the stock on record (10)');
     expect(
       screen.getByText('Item total counted. Which locations were checked was not recorded.'),
     ).toBeTruthy();
     expect(screen.getByText('Counted by Dana Lee, posted by Sam Ortiz.')).toBeTruthy();
     expect(hrefOf('2 recorded stock movements since')).toBe(MOVEMENTS);
-    expect(screen.getByText('Book now: 12')).toBeTruthy();
+    expect(screen.getByText('On record now: 12')).toBeTruthy();
     expect(screen.queryByTestId('verification-outside-ledger')).toBeNull();
     expectHonestWords();
   });
@@ -202,7 +202,7 @@ describe('ItemVerificationCardView', () => {
       }),
     );
     expect(screen.getByTestId('verification-result')).toHaveTextContent(
-      'Book corrected from 8 to 10 (+2)',
+      'Stock on record corrected from 8 to 10 (+2)',
     );
     expect(screen.getByText('Counted while A-12 was its only shelf location')).toBeTruthy();
     expect(screen.getByText('Taken 9:30 AM on the device, synced 10:02 AM')).toBeTruthy();
@@ -283,7 +283,7 @@ describe('ItemVerificationCardView', () => {
       '/dashboard/exceptions/o-1',
       '/dashboard/exceptions/o-2',
     ]);
-    expect(chips[0]).toHaveTextContent('EX-000042 · Count did not match the book');
+    expect(chips[0]).toHaveTextContent('EX-000042 · Count did not match the stock on record');
     const issues = screen.getByTestId('verification-issues');
     expect(within(issues).getByText('Open exceptions')).toBeTruthy();
     expect(within(issues).getByText(/^Checked at /)).toBeTruthy();
@@ -337,7 +337,7 @@ describe('ItemVerificationCard (the read)', () => {
     item.mockResolvedValue(verification());
     render(await ItemVerificationCard(props));
     expect(item).toHaveBeenCalledWith(ITEM);
-    expect(screen.getByText('Matched the book (10)')).toBeTruthy();
+    expect(screen.getByText('Matched the stock on record (10)')).toBeTruthy();
   });
 
   it('links the count for a reader with cycle_counts:read, and not for one without it (or stock:adjust)', async () => {

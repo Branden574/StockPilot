@@ -878,7 +878,7 @@ export interface MobileCountLinkedException {
   active: boolean;
   line: MobileCountLinkedLine | null;
   outcome: RecountOutcome;
-  /** "Counted 11, book 10 (+1): adds to Rack 12-A" (core varianceReviewLine,
+  /** "Counted 11, on record 10 (+1): adds to Rack 12-A" (core varianceReviewLine,
    *  worked out by the server from the line it read); null when uncounted. */
   reviewLine: string | null;
 }

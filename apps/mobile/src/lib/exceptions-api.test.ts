@@ -674,7 +674,7 @@ describe('a count\'s linked exceptions', () => {
         line: { id: 'l1', countedQuantity: 21, expectedQuantity: 20, countedLocationId: 'loc-1', countedLocation: { name: '12-A', kind: 'rack', archived: false } },
         outcome: { kind: 'in_progress', counted: 1, total: 1 },
         destination: { kind: 'adds_to_location', location: 'Rack 12-A' },
-        reviewLine: 'Counted 21, book 20 (+1): adds to Rack 12-A',
+        reviewLine: 'Counted 21, on record 20 (+1): adds to Rack 12-A',
       },
       { occurrence: occurrence({ id: 'z', rule: 'a_future_rule' }), active: true, line: null, outcome: { kind: 'unavailable' }, reviewLine: null },
     ],
@@ -689,7 +689,7 @@ describe('a count\'s linked exceptions', () => {
     expect(res.exceptions[0]).toMatchObject({
       active: true,
       line: { id: 'l1', countedQuantity: 21, expectedQuantity: 20, countedLocationId: 'loc-1' },
-      reviewLine: 'Counted 21, book 20 (+1): adds to Rack 12-A',
+      reviewLine: 'Counted 21, on record 20 (+1): adds to Rack 12-A',
     });
     expect(res.unrecognized).toBe(2);
   });
@@ -704,12 +704,12 @@ describe('a count\'s linked exceptions', () => {
   it('shows the server\'s destination only while it describes the line the phone holds', () => {
     const link = {
       line: { id: 'l1', countedQuantity: 21, expectedQuantity: 20, countedLocationId: 'loc-1' },
-      reviewLine: 'Counted 21, book 20 (+1): adds to Rack 12-A',
+      reviewLine: 'Counted 21, on record 20 (+1): adds to Rack 12-A',
       outcome: { kind: 'in_progress', counted: 1, total: 1 } as const,
     };
     const clean = { counted: 21, localDirty: false, drafting: false, countedLocationId: 'loc-1' };
     const open = 'in_progress';
-    expect(linkedLineDestination(link, clean, open)).toEqual({ kind: 'review', text: 'Counted 21, book 20 (+1): adds to Rack 12-A' });
+    expect(linkedLineDestination(link, clean, open)).toEqual({ kind: 'review', text: 'Counted 21, on record 20 (+1): adds to Rack 12-A' });
     const pending = { kind: 'pending', text: 'Where the difference lands shows once this count syncs.' };
     expect(linkedLineDestination(link, { ...clean, localDirty: true }, open)).toEqual(pending);
     expect(linkedLineDestination(link, { ...clean, drafting: true }, open)).toEqual(pending);
@@ -720,14 +720,14 @@ describe('a count\'s linked exceptions', () => {
   });
 
   // Review finding (F1-2): a cancelled or posted recount opened from history
-  // read "Counted 21, book 20 (+1): adds to Rack 12-A", saying stock would
+  // read "Counted 21, on record 20 (+1): adds to Rack 12-A", saying stock would
   // change when nothing more will. Mutation caught: ignore the status.
   it('a closed count says what it came to, never where a difference lands', () => {
     const line = { id: 'l1', countedQuantity: 21, expectedQuantity: 20, countedLocationId: 'loc-1' };
     const phone = { counted: 21, localDirty: false, drafting: false, countedLocationId: 'loc-1' };
     expect(
       linkedLineDestination(
-        { line, reviewLine: 'Counted 21, book 20 (+1): adds to Rack 12-A', outcome: { kind: 'cancelled' } },
+        { line, reviewLine: 'Counted 21, on record 20 (+1): adds to Rack 12-A', outcome: { kind: 'cancelled' } },
         phone,
         'canceled',
       ),
@@ -738,7 +738,7 @@ describe('a count\'s linked exceptions', () => {
         phone,
         'completed',
       ),
-    ).toEqual({ kind: 'review', text: 'Book corrected from 20 to 21 (+1)' });
+    ).toEqual({ kind: 'review', text: 'Stock on record corrected from 20 to 21 (+1)' });
     // Even with a local edit left over, a closed count's result is the answer.
     expect(
       linkedLineDestination(
@@ -746,7 +746,7 @@ describe('a count\'s linked exceptions', () => {
         { ...phone, localDirty: true },
         'completed',
       ),
-    ).toEqual({ kind: 'review', text: 'Matched the book (21)' });
+    ).toEqual({ kind: 'review', text: 'Matched the stock on record (21)' });
   });
 });
 

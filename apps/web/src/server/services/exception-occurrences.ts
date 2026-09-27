@@ -209,8 +209,9 @@ export interface OccurrenceEvent {
   actor: OccurrencePerson | null;
   note: string | null;
   /** The count the event names. On a recount_closed event, `outcome` is what
-   *  that count came to for this item (recountOutcome): "Matched the book",
-   *  "Book corrected from 10 to 11 (+1)", "Cancelled before it was posted". */
+   *  that count came to for this item (recountOutcome): "Matched the stock on
+   *  record", "Stock on record corrected from 10 to 11 (+1)", "Cancelled before
+   *  it was posted". */
   cycleCount: { id: string; countNumber: number | null; outcome?: RecountOutcome } | null;
   maintenanceRequestId: string | null;
   evidenceId: string | null;
@@ -265,7 +266,7 @@ export interface CountLinkedException {
    *  varianceDestination, mirroring post_cycle_count); null when uncounted,
    *  when the count is closed, or when the line cannot re-check the item. */
   destination: VarianceDestination | null;
-  /** "Counted 11, book 10 (+1): adds to Rack 12-A" (core varianceReviewLine),
+  /** "Counted 11, on record 10 (+1): adds to Rack 12-A" (core varianceReviewLine),
    *  or that the line was counted before a later count of the item; null
    *  when uncounted or when the count is closed (read `outcome` then). */
   reviewLine: string | null;
@@ -619,7 +620,7 @@ export class ExceptionOccurrencesService {
     }
     // What each recount came to for this item: the active one, and every
     // closed one the timeline names ("Recount CC-000031 closed: Matched the
-    // book"). One set of reads for both.
+    // stock on record"). One set of reads for both.
     const closedCounts = events
       .filter((e) => e.kind === 'recount_closed' && e.cycle_count_id !== null)
       .map((e) => e.cycle_count_id as string);
@@ -1248,7 +1249,7 @@ export class ExceptionOccurrencesService {
       };
       // The item's line, with whether it re-checks the item (0372's computed
       // field): a line counted before a later count of the item was posted
-      // is "counted before a later count", never "matched the book".
+      // is "counted before a later count", never "matched the stock on record".
       const readLines = (ccId: string, items: ReadonlySet<string>) =>
         fetchAllRowsByIds<OutcomeLine>(
           [...items],

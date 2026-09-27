@@ -143,9 +143,9 @@ describe('recountOutcome', () => {
       [{ kind: 'in_progress', counted: null, total: 3 }, 'In progress'],
       [{ kind: 'cancelled' }, 'Cancelled before it was posted'],
       [{ kind: 'not_counted' }, 'Posted without counting this item'],
-      [{ kind: 'matched', quantity: 10 }, 'Matched the book (10)'],
-      [{ kind: 'corrected', from: 8, to: 10, delta: 2 }, 'Book corrected from 8 to 10 (+2)'],
-      [{ kind: 'corrected', from: 10, to: 7, delta: -3 }, 'Book corrected from 10 to 7 (-3)'],
+      [{ kind: 'matched', quantity: 10 }, 'Matched the stock on record (10)'],
+      [{ kind: 'corrected', from: 8, to: 10, delta: 2 }, 'Stock on record corrected from 8 to 10 (+2)'],
+      [{ kind: 'corrected', from: 10, to: 7, delta: -3 }, 'Stock on record corrected from 10 to 7 (-3)'],
       [{ kind: 'superseded' }, 'Counted before a later count of this item, so it does not re-check it'],
       [{ kind: 'unavailable' }, 'Result not available'],
     ];
@@ -153,9 +153,10 @@ describe('recountOutcome', () => {
   });
 
   // Review finding (F1-2): a recount line counted BEFORE the posted variance
-  // read "Matched the book" while the exception stayed open. Mutation caught:
-  // ignore `rechecks`, and the completed zero line reads "matched".
-  it('a line that does not re-check the item is never "matched the book"', () => {
+  // read "Matched the stock on record" while the exception stayed open.
+  // Mutation caught: ignore `rechecks`, and the completed zero line reads
+  // "matched".
+  it('a line that does not re-check the item is never "matched the stock on record"', () => {
     const stale = { countedQuantity: 20, expectedQuantity: 20, rechecks: false };
     expect(recountOutcome({ status: 'completed' }, stale)).toEqual({ kind: 'superseded' });
     expect(recountOutcome({ status: 'in_progress', countedLines: 1, totalLines: 1 }, stale)).toEqual({
@@ -251,14 +252,14 @@ describe('varianceDestination (mirrors post_cycle_count routing, 0342/0343)', ()
     );
     expect(varianceDestinationCopy({ kind: 'none' })).toBe('no change to stock');
     expect(varianceReviewLine({ countedQuantity: 11, expectedQuantity: 10, countedLocation: rack })).toBe(
-      'Counted 11, book 10 (+1): adds to Rack 12-A',
+      'Counted 11, on record 10 (+1): adds to Rack 12-A',
     );
     expect(varianceReviewLine({ countedQuantity: 10, expectedQuantity: 10, countedLocation: null })).toBe(
-      'Counted 10, book 10: no change to stock',
+      'Counted 10, on record 10: no change to stock',
     );
     expect(varianceReviewLine({ countedQuantity: null, expectedQuantity: 10, countedLocation: null })).toBeNull();
     expect(varianceReviewLine({ countedQuantity: 7, expectedQuantity: 10, countedLocation: rack })).toBe(
-      'Counted 7, book 10 (-3): comes off Rack 12-A first, then Staging, then other shelf locations',
+      'Counted 7, on record 10 (-3): comes off Rack 12-A first, then Staging, then other shelf locations',
     );
   });
 
@@ -267,13 +268,13 @@ describe('varianceDestination (mirrors post_cycle_count routing, 0342/0343)', ()
   it('a line that cannot re-check its item says so instead of a destination', () => {
     expect(
       varianceReviewLine({ countedQuantity: 10, expectedQuantity: 10, countedLocation: null, rechecks: false }),
-    ).toBe('Counted 10, book 10: counted before a later count of this item, so it does not re-check it');
+    ).toBe('Counted 10, on record 10: counted before a later count of this item, so it does not re-check it');
     expect(
       varianceReviewLine({ countedQuantity: 11, expectedQuantity: 10, countedLocation: rack, rechecks: false }),
-    ).toBe('Counted 11, book 10 (+1): counted before a later count of this item, so it does not re-check it');
+    ).toBe('Counted 11, on record 10 (+1): counted before a later count of this item, so it does not re-check it');
     expect(
       varianceReviewLine({ countedQuantity: 11, expectedQuantity: 10, countedLocation: rack, rechecks: true }),
-    ).toBe('Counted 11, book 10 (+1): adds to Rack 12-A');
+    ).toBe('Counted 11, on record 10 (+1): adds to Rack 12-A');
   });
 });
 
@@ -355,7 +356,7 @@ describe('activeRecountCopy / describeTimelineEvent', () => {
         cycleCountNumber: 2,
         recountOutcome: { kind: 'matched', quantity: 21 },
       }),
-    ).toBe('Recount CC-000002 closed: Matched the book (21)');
+    ).toBe('Recount CC-000002 closed: Matched the stock on record (21)');
     expect(
       describeTimelineEvent({
         kind: 'recount_closed',
@@ -363,7 +364,7 @@ describe('activeRecountCopy / describeTimelineEvent', () => {
         cycleCountNumber: 2,
         recountOutcome: { kind: 'corrected', from: 10, to: 11, delta: 1 },
       }),
-    ).toBe('Recount CC-000002 closed: Book corrected from 10 to 11 (+1)');
+    ).toBe('Recount CC-000002 closed: Stock on record corrected from 10 to 11 (+1)');
     // No outcome known: the plain headline, never a made-up result.
     expect(describeTimelineEvent({ kind: 'recount_closed', actorLabel: null, cycleCountNumber: 2 })).toBe(
       'Recount CC-000002 closed',

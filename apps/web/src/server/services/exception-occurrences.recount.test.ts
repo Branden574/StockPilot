@@ -441,11 +441,11 @@ describe('listForCount — a count\'s linked exceptions', () => {
     const [a, b] = (await svc.listForCount(CC)).exceptions;
     expect(a).toMatchObject({
       destination: { kind: 'adds_to_location', location: 'Rack 12-A' },
-      reviewLine: 'Counted 11, book 10 (+1): adds to Rack 12-A',
+      reviewLine: 'Counted 11, on record 10 (+1): adds to Rack 12-A',
     });
     expect(b).toMatchObject({
       destination: { kind: 'off_staging_then_shelves' },
-      reviewLine: 'Counted 4, book 6 (-2): comes off Staging first, then shelf locations',
+      reviewLine: 'Counted 4, on record 6 (-2): comes off Staging first, then shelf locations',
     });
   });
 
@@ -476,7 +476,7 @@ describe('listForCount — a count\'s linked exceptions', () => {
     expect(o).toMatchObject({
       outcome: { kind: 'superseded' },
       destination: null,
-      reviewLine: 'Counted 10, book 10: counted before a later count of this item, so it does not re-check it',
+      reviewLine: 'Counted 10, on record 10: counted before a later count of this item, so it does not re-check it',
     });
     const select = String(open.stub.chainArgsAll.get('cycle_count_lines.select')?.[0]?.[0]?.[0]);
     expect(select).toContain('rechecks:cycle_count_line_rechecks');

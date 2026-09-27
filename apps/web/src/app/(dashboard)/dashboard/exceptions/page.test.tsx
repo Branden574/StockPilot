@@ -408,6 +408,6 @@ describe('Exceptions list page', () => {
     );
     await renderPage();
     expect(screen.getByTestId('occurrence-state')).toHaveTextContent('Re-checking');
-    expect(screen.getByTestId('recount-note')).toHaveTextContent('Matched the book (21)');
+    expect(screen.getByTestId('recount-note')).toHaveTextContent('Matched the stock on record (21)');
   });
 });

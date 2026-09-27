@@ -695,7 +695,7 @@ export function BulkActions({
           </DialogHeader>
           <p className="text-muted-foreground text-sm">
             Archiving hides {count === 1 ? 'this item' : 'these items'} from the active view but keeps
-            the stock on the books — it stays counted in valuation until you remove it. Remove the
+            the stock on record — it stays counted in valuation until you remove it. Remove the
             stock first if you want it off the count.
           </p>
           <DialogFooter>

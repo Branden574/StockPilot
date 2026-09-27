@@ -56,6 +56,7 @@ import { signListThumbnails } from '@/lib/image-cache';
 import { readErrorMessage } from '@/lib/id-batches';
 import { readPrimaryPhotos } from '@/lib/id-reads';
 import { resolveListThumbnails } from '@/lib/list-thumbnails';
+import { itemListGlyph, type ItemListGlyph } from '@/lib/item-list-glyph';
 import {
   buildGroupUnits,
   buildGroupedRows,
@@ -85,6 +86,9 @@ interface Item {
   quantity_on_hand: number;
   reorder_point: number;
   status: string;
+  /** Always 'product' on this tab (ITEMS_VIEW); read so the row glyph is
+   *  decided by the item's own type, never by its category name alone. */
+  item_type: string | null;
   category_id: string | null;
   category_name: string | null;
   primary_location_id: string | null;
@@ -150,7 +154,7 @@ const listHeader = <View style={{ height: 6 }} />;
 // list, and its size-run header still has to say "52 pairs" rather than fall
 // back to a bare count (web's `displayByIds` takes the same stance).
 const ITEM_COLUMNS = `id, name, sku, quantity_on_hand, reorder_point, status, category_id,
-           primary_location_id, charter_id, warehouse_id, updated_at, auto_archived,
+           item_type, primary_location_id, charter_id, warehouse_id, updated_at, auto_archived,
            awaiting_first_receipt, group_id, variant_size,
            category:categories!category_id (name),
            product_group:product_groups!group_id (default_counting_unit)`;
@@ -475,6 +479,7 @@ export default function Inventory() {
           quantity_on_hand: Number(r.quantity_on_hand) || 0,
           reorder_point: Number(r.reorder_point) || 0,
           status: r.status as string,
+          item_type: (r.item_type as string | null) ?? null,
           category_id: (r.category_id as string | null) ?? null,
           category_name: catName,
           primary_location_id: (r.primary_location_id as string | null) ?? null,
@@ -979,13 +984,15 @@ export default function Inventory() {
   );
 }
 
-function glyphFromItem(item: Item): LucideIcon {
-  const cat = (item.category_name ?? '').toLowerCase();
-  if (cat.includes('book')) return BookMarked;
-  if (cat.includes('equipment')) return Layers;
-  if (cat.includes('supply') || cat.includes('supplies')) return Box;
-  return Package;
-}
+/** The icon for each placeholder kind. Which kind a row gets is decided in
+ *  lib/item-list-glyph.ts: the book glyph is for books (item_type 'book', or
+ *  a category named "Books"), not for a "Chromebooks" category. */
+const LIST_GLYPH_ICON: Record<ItemListGlyph, LucideIcon> = {
+  book: BookMarked,
+  equipment: Layers,
+  supplies: Box,
+  generic: Package,
+};
 
 /** Collapsible size-run header row — one per run of same-base sized items
  *  (e.g. "L4L - Pink Shirt", 3 sizes). Tapping toggles the run's member rows. */
@@ -1210,7 +1217,7 @@ const ItemRow = React.memo(function ItemRow({
   // they were never delivered, so "Out of stock" is the exact misreading this
   // feature exists to prevent. Pure + tested in lib/expected-items.ts.
   const pill = stockPillFor(item);
-  const Icon = glyphFromItem(item);
+  const Icon = LIST_GLYPH_ICON[itemListGlyph(item)];
   const pip = PIPS[index % PIPS.length];
   return (
     <View

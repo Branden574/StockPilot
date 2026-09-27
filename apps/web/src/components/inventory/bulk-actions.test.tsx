@@ -239,6 +239,11 @@ describe('BulkActions', () => {
     const override = await screen.findByText(/Archive with stock still on hand\?/i);
     expect(override).toBeInTheDocument();
     expect(screen.getByText(/2 items still hold stock/i)).toBeInTheDocument();
+    // Owner report 2026-09-27: "on the books" reads as the Books section in an
+    // organization that stocks books. The recorded quantity is "on record".
+    const explanation = screen.getByText(/stays counted in valuation/i);
+    expect(explanation).toHaveTextContent('keeps the stock on record');
+    expect(explanation.textContent).not.toMatch(/\bbooks?\b/i);
   });
 
   it('"Archive anyway" re-runs the archive with acknowledgeStock', async () => {

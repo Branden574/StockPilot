@@ -310,7 +310,7 @@ describe('Exception detail page', () => {
     );
     await renderPage();
     expect(screen.getByText('Recount CC-000002 linked by Dana Lee')).toBeInTheDocument();
-    expect(screen.getByText('Recount CC-000002 closed: Matched the book (21)')).toBeInTheDocument();
+    expect(screen.getByText('Recount CC-000002 closed: Matched the stock on record (21)')).toBeInTheDocument();
   });
 
   it("shows the item's last physical count card, leaving this exception out of its chips", async () => {

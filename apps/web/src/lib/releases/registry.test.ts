@@ -212,3 +212,92 @@ describe('F1-3 (last physical count and location pages) is published', () => {
     expect(summary).not.toMatch(/Locations page|item page/);
   });
 });
+
+/**
+ * Owner report 2026-09-27: counts and exceptions called the quantity
+ * StockPilot has on record "the book", which an organization that stocks books
+ * read as the product. The wording is now "stock on record" (core
+ * on-record-wording.guard.test.ts). The releases that describe those screens
+ * were edited in place, without a new revision (a wording fix, not a
+ * re-announcement), and the fix has a release of its own, held as a DRAFT
+ * until the phone release (pnpm release:ota) brings the phone the new words.
+ * The follow-up that publishes it flips this pin to 'published'.
+ */
+describe('stock on record wording', () => {
+  const FIX = 'stock-on-record-wording-2026-09-27';
+  const release = () => RELEASES.find((r) => r.id === FIX)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+  /** The recorded-quantity jargon, as the releases used it. */
+  const JARGON = [
+    /\bthe book\b/i,
+    /\bBook now\b/,
+    /\bbook corrected\b/i,
+    /\bbook (?:qty|quantity|quantities)\b/i,
+    /,\s*book\s+\d/i,
+  ];
+
+  it('is at the top, a draft, so no reader, no API and no old phone build is told before the phone update', () => {
+    expect(RELEASES[0]!.id).toBe(FIX);
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(FIX);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(FIX);
+    expect(registryFingerprint(RELEASES)).not.toContain(FIX);
+    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(FIX);
+  });
+
+  it('is a fix to Inventory, for everyone who can read items', () => {
+    expect(release().entries).toHaveLength(1);
+    const entry = release().entries[0]!;
+    expect(entry.category).toBe('fixed');
+    expect(entry.area).toBe('Inventory');
+    expect(entry.audience).toEqual({ anyPermission: ['items:read'] });
+    expect(release().summary).toMatch(/^On the web and in the mobile app, /);
+    expect(release().summary).toContain(
+      'now say stock on record, not book, for the quantity StockPilot has recorded.',
+    );
+    expect(release().summary).toContain(
+      'Book corrected from 50 to 0 (-50) now reads Stock on record corrected from 50 to 0 (-50)',
+    );
+    expect(entry.whatChanged).toContain('Count did not match the stock on record');
+    expect(entry.howItAffectsYou).toContain('The Books section');
+  });
+
+  it('its summary says "on record" at most once a sentence', () => {
+    // The first draft read "...now call the quantity StockPilot has on record
+    // the stock on record, not the book", which says it twice in one breath.
+    const sentences = release()
+      .summary.split(/(?<=\.)\s+/)
+      .filter(Boolean);
+    expect(sentences.length).toBeGreaterThan(1);
+    for (const sentence of sentences) {
+      expect(sentence.match(/\bon record\b/gi)?.length ?? 0, sentence).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('no other release calls the recorded quantity "the book"', () => {
+    // This release quotes the old words on purpose, to say what changed.
+    const hits = RELEASES.filter((r) => r.id !== FIX).flatMap((r) =>
+      readerText(r).flatMap((text) =>
+        JARGON.filter((re) => re.test(text)).map((re) => `${r.id}: ${re} in "${text.slice(0, 80)}"`),
+      ),
+    );
+    expect(hits).toEqual([]);
+  });
+
+  it('the count and exception releases were reworded in place, not re-announced', () => {
+    for (const id of [
+      'count-differences-and-recounts-2026-09',
+      'last-physical-count-and-location-pages-2026-09-27',
+    ]) {
+      const r = RELEASES.find((x) => x.id === id)!;
+      expect(r.status, id).toBe('published');
+      expect(r.revision, id).toBe(1);
+      expect(readerText(r).join(' '), id).toContain('stock on record');
+    }
+  });
+});

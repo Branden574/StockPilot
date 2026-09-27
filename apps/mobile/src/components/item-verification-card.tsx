@@ -255,7 +255,7 @@ function Summary({
         )
       ) : null}
       {copy.outsideLedger ? <Body size={14}>{copy.outsideLedger}</Body> : null}
-      {copy.bookNow ? <Body size={14}>{copy.bookNow}</Body> : null}
+      {copy.onRecordNow ? <Body size={14}>{copy.onRecordNow}</Body> : null}
 
       {beingCounted && onOpenCount ? (
         <LinkLine
@@ -353,7 +353,7 @@ function LinkLine({
   );
 }
 
-/** "EX-000042 · Count did not match the book": opens the exception. */
+/** "EX-000042 · Count did not match the stock on record": opens the exception. */
 export function IssueChip({ text, onPress }: { text: string; onPress: () => void }) {
   const { c } = useTheme();
   return (

@@ -114,7 +114,7 @@ function linked(o: Record<string, unknown> = {}) {
         },
         outcome: { kind: 'in_progress', counted: 1, total: 1 },
         destination: { kind: 'adds_to_location', location: 'Rack 12-A' },
-        reviewLine: 'Counted 21, book 20 (+1): adds to Rack 12-A',
+        reviewLine: 'Counted 21, on record 20 (+1): adds to Rack 12-A',
       },
     ],
     unrecognized: 0,
@@ -146,7 +146,7 @@ describe('LinkedExceptionsView', () => {
       '/dashboard/exceptions/11111111-1111-4111-8111-111111111111',
     );
     expect(screen.getByTestId('linked-exception-result')).toHaveTextContent(
-      'Counted 21, book 20 (+1): adds to Rack 12-A',
+      'Counted 21, on record 20 (+1): adds to Rack 12-A',
     );
     expect(screen.getByTestId('occurrence-state')).toHaveTextContent('Recount in progress (CC-000002)');
   });
@@ -166,7 +166,7 @@ describe('LinkedExceptionsView', () => {
     const x = (l.exceptions as Array<Record<string, unknown>>)[0]!;
     x.outcome = { kind: 'matched', quantity: 21 };
     render(<LinkedExceptionsView linked={l as never} />);
-    expect(screen.getByTestId('linked-exception-result')).toHaveTextContent('Matched the book (21)');
+    expect(screen.getByTestId('linked-exception-result')).toHaveTextContent('Matched the stock on record (21)');
   });
 
   it('counts linked rows this build cannot word, instead of hiding them', () => {

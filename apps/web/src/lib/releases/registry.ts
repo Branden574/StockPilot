@@ -28,6 +28,38 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'stock-on-record-wording-2026-09-27',
+    revision: 1,
+    // DRAFT until the phone release (pnpm release:ota): the phone words counts
+    // and exceptions with its own copy of core, so until the update reaches it
+    // the phone still says "book". A draft never leaves the server
+    // (visibleReleases, registryFingerprint), so merging this does not announce
+    // wording the phone does not show yet. A small follow-up sets it to
+    // 'published' (and updates the pin in registry.test.ts).
+    status: 'draft',
+    title: 'Counts and exceptions say stock on record instead of book',
+    summary:
+      'On the web and in the mobile app, cycle count results, the Physical count card on an item and count exceptions now say stock on record, not book, for the quantity StockPilot has recorded. For example, Book corrected from 50 to 0 (-50) now reads Stock on record corrected from 50 to 0 (-50). The Books section is unchanged.',
+    publishedAt: '2026-09-28T17:00:00Z',
+    entries: [
+      {
+        id: 'stock-on-record-wording',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Counts and exceptions say stock on record instead of book',
+        whatChanged:
+          'Cycle count results, the Physical count card on an item page, location pages and count exceptions now say stock on record where they said book. Book corrected from 50 to 0 (-50) reads Stock on record corrected from 50 to 0 (-50), Matched the book (10) reads Matched the stock on record (10), Book now: 0 reads On record now: 0, and the exception Count did not match the book is now Count did not match the stock on record. This applies on the web and in the mobile app.',
+        whyItMatters:
+          'Book was accounting shorthand for the quantity on record. In an organization that stocks books it read as the product, so a count result on an electronics item, such as a Chromebook, looked as if the item were a book.',
+        howItAffectsYou:
+          'Only the words change. The numbers, how counts are posted, and when exceptions open and clear are the same. The Books section, book racks and crates, and ISBN lookups are unchanged. In the web app, the warning shown before archiving items that still hold stock now says archiving keeps the stock on record.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
+        audience: { anyPermission: ['items:read'] },
+      },
+    ],
+  },
+  {
     id: 'last-physical-count-and-location-pages-2026-09-27',
     revision: 1,
     // Published after the web deploy (#272), the phone update (OTA iOS
@@ -44,11 +76,11 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: 'Last physical count on the item page',
         whatChanged:
-          "The Overview tab of an item page has a Physical count card. It gives the date and number of the latest posted cycle count of the item, whether it matched the book or corrected it (for example Book corrected from 8 to 10 (+2)), who counted and who posted it, and whether one location was the item's only place outside Staging at the time (a rack or crate reads as its only shelf location) or the item total was counted. Below that: recorded stock movements since the count, the book quantity now, any open count holding the item, and its open exceptions.",
+          "The Overview tab of an item page has a Physical count card. It gives the date and number of the latest posted cycle count of the item, whether it matched the stock on record or corrected it (for example Stock on record corrected from 8 to 10 (+2)), who counted and who posted it, and whether one location was the item's only place outside Staging at the time (a rack or crate reads as its only shelf location) or the item total was counted. Below that: recorded stock movements since the count, the stock on record now, any open count holding the item, and its open exceptions.",
         whyItMatters:
           'Nothing on the item said when its stock was last counted or what had happened to it since, so finding out meant searching Cycle counts and reading the Movements tab.',
         howItAffectsYou:
-          'The card describes what the count recorded at that moment; it does not say the shelf matches the book now. An item that was never counted reads No physical count on record, and rental equipment and kits say they are not cycle counted. Rows written outside the stock ledger since the count are counted separately. If the card cannot load, it says so, and the rest of the page is unaffected. An exception page shows the same card for its item.',
+          'The card describes what the count recorded at that moment; it does not say the shelf matches the stock on record now. An item that was never counted reads No physical count on record, and rental equipment and kits say they are not cycle counted. Rows written outside the stock ledger since the count are counted separately. If the card cannot load, it says so, and the rest of the page is unaffected. An exception page shows the same card for its item.',
         whatToDo:
           'No action needed. Open an item to see its last physical count, and select the movements line to see the movements since.',
         link: { href: '/dashboard/inventory', label: 'Open Items' },
@@ -282,7 +314,7 @@ export const RELEASES: Release[] = [
     status: 'published',
     title: 'Exceptions list count differences, and managers can start a recount',
     summary:
-      'When a posted cycle count finds a different quantity than the book, Exceptions now lists it, with both numbers and the count reference. Managers can recount those items from Exceptions or an item page, on the web and in the mobile app, and the exception clears only when a later count matches the book. Staff no longer see a Post button on counts they cannot post.',
+      'When a posted cycle count finds a different quantity than StockPilot had on record, Exceptions now lists it, with both numbers and the count reference. Managers can recount those items from Exceptions or an item page, on the web and in the mobile app, and the exception clears only when a later count matches the stock on record. Staff no longer see a Post button on counts they cannot post.',
     publishedAt: '2026-09-25T19:00:00Z',
     entries: [
       {
@@ -291,13 +323,13 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: 'Count differences appear on Exceptions',
         whatChanged:
-          'When a posted cycle count finds a different quantity than the book for an item, Exceptions lists it as Count did not match the book, with the counted and book quantities and the count reference, for example found +1: counted 21, book 20 (CC-000042). Only counts completed in the last 30 days open one. Rental equipment and kits are left out.',
+          'When a posted cycle count finds a different quantity than StockPilot had on record for an item, Exceptions lists it as Count did not match the stock on record, with the counted quantity, the stock on record and the count reference, for example found +1: counted 21, on record 20 (CC-000042). Only counts completed in the last 30 days open one. Rental equipment and kits are left out.',
         whyItMatters:
-          'Posting a count changes the book to the counted number, and nothing followed up to confirm that number before people relied on it.',
+          'Posting a count changes the stock on record to the counted number, and nothing followed up to confirm that number before people relied on it.',
         howItAffectsYou:
-          'Differences from counts posted in the last 30 days appear on the next check. An exception clears only when a later completed count of the item matches the book exactly. A recount that finds another difference keeps it open with the new numbers.',
+          'Differences from counts posted in the last 30 days appear on the next check. An exception clears only when a later completed count of the item matches the stock on record exactly. A recount that finds another difference keeps it open with the new numbers.',
         whatToDo:
-          'Open Exceptions and review the Count did not match the book group.',
+          'Open Exceptions and review the Count did not match the stock on record group.',
         link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
         audience: { anyPermission: ['items:read'] },
       },
@@ -311,7 +343,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Confirming a single item used to mean starting a count by hand and remembering which problem it was for.',
         howItAffectsYou:
-          'Pressing Recount twice starts one count, and an item already in an open count is linked to that count instead of getting a second one. Rental equipment and kits cannot be recounted this way. After the count is posted, the system checks the exception again: it resolves when the count matches the book, and stays open with the new numbers when it does not.',
+          'Pressing Recount twice starts one count, and an item already in an open count is linked to that count instead of getting a second one. Rental equipment and kits cannot be recounted this way. After the count is posted, the system checks the exception again: it resolves when the count matches the stock on record, and stays open with the new numbers when it does not.',
         whatToDo:
           'On Exceptions, choose the exceptions to confirm and start a recount, then post the count when it is done.',
         link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },

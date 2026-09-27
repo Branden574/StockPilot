@@ -154,7 +154,7 @@ export type RecountOutcome =
   | { kind: 'corrected'; from: number; to: number; delta: number }
   /**
    * The line was counted before a later count of the item was posted, so it
-   * does not re-check the item: it is never read as "matched the book".
+   * does not re-check the item: it is never read as "matched the stock on record".
    */
   | { kind: 'superseded' }
   /** The count or its line could not be read. Never read as "matched". */
@@ -173,8 +173,8 @@ export const RECOUNT_SUPERSEDED_COPY = 'Counted before a later count of this ite
  *
  * A line that does not re-check the item (`rechecks === false`: counted
  * before a later count of it was posted) is `superseded` while its count is
- * open, and once posted when it applied nothing: "matched the book" would
- * tell the manager the book was confirmed when nobody counted the item after
+ * open, and once posted when it applied nothing: "matched the stock on record"
+ * would tell the manager the book was confirmed when nobody counted the item after
  * the difference was found. A superseded line that still applied a correction
  * (the ledger allows it when the later count changed nothing) reads as the
  * correction, which is what happened to the stock.
@@ -230,9 +230,9 @@ export function recountOutcomeCopy(outcome: RecountOutcome): string {
     case 'not_counted':
       return 'Posted without counting this item';
     case 'matched':
-      return `Matched the book (${formatStockQuantity(outcome.quantity)})`;
+      return `Matched the stock on record (${formatStockQuantity(outcome.quantity)})`;
     case 'corrected':
-      return `Book corrected from ${formatStockQuantity(outcome.from)} to ${formatStockQuantity(outcome.to)} (${signedQuantity(outcome.delta)})`;
+      return `Stock on record corrected from ${formatStockQuantity(outcome.from)} to ${formatStockQuantity(outcome.to)} (${signedQuantity(outcome.delta)})`;
     case 'superseded':
       return RECOUNT_SUPERSEDED_COPY;
     case 'unavailable':
@@ -312,7 +312,7 @@ export function varianceDestinationCopy(destination: VarianceDestination): strin
 /**
  * The review line for a counted line linked to an exception: the counted and
  * book quantities at count time, the difference, and where it lands, e.g.
- * "Counted 11, book 10 (+1): adds to Rack 12-A". Null when not counted.
+ * "Counted 11, on record 10 (+1): adds to Rack 12-A". Null when not counted.
  *
  * A line that cannot re-check its item (`rechecks === false`: counted before
  * a later count of it was posted) says so instead of where its difference
@@ -331,8 +331,8 @@ export function varianceReviewLine(input: {
   const delta = roundQuantity(counted - expected);
   const numbers =
     delta === 0
-      ? `Counted ${formatStockQuantity(counted)}, book ${formatStockQuantity(expected)}`
-      : `Counted ${formatStockQuantity(counted)}, book ${formatStockQuantity(expected)} (${signedQuantity(delta)})`;
+      ? `Counted ${formatStockQuantity(counted)}, on record ${formatStockQuantity(expected)}`
+      : `Counted ${formatStockQuantity(counted)}, on record ${formatStockQuantity(expected)} (${signedQuantity(delta)})`;
   if (input.rechecks === false) {
     return `${numbers}: ${RECOUNT_SUPERSEDED_COPY.charAt(0).toLowerCase()}${RECOUNT_SUPERSEDED_COPY.slice(1)}`;
   }
@@ -393,7 +393,7 @@ export function activeRecountCopy(recount: { countNumber: number | null; outcome
 
 /**
  * One timeline event's headline, with what a closed recount came to:
- * "Recount CC-000031 closed: Matched the book (21)". Every other event reads
+ * "Recount CC-000031 closed: Matched the stock on record (21)". Every other event reads
  * exactly as core describeOccurrenceEvent words it. The web page and the
  * phone both call this, so a closed recount never reads differently on the two.
  */
