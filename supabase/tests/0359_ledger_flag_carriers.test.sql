@@ -234,12 +234,18 @@ select is(
 -- adds ledger.apply_holding_delta, the explicit-location holdings write of
 -- adjust_stock and transfer_stock: SECURITY DEFINER on purpose (the write
 -- must not depend on which holdings the caller can SELECT), gated in its
--- body. The eight moved bodies keep their kind.
+-- body. 0373 adds ledger.apply_level_delta_for, the null-location draw
+-- engine that also returns which holdings each draw touched: SECURITY
+-- DEFINER exactly as public.apply_level_delta was (0331: the draw-down must
+-- not depend on the caller's read scope), with the same gate in its body.
+-- Its helper ledger._seal and the forget trigger function
+-- ledger.tg_forget_draw_scope are SECURITY INVOKER with no API EXECUTE, so
+-- they are not on this list. The eight moved bodies keep their kind.
 select is(
   array(select p.proname::text from pg_proc p
          where p.pronamespace = 'ledger'::regnamespace and p.prosecdef order by 1),
-  array['apply_holding_delta', 'cycle_count_line_superseded', 'process_return_disposition'],
-  '15: only process_return_disposition''s body (and the 0369 superseded probe and the 0371 holdings writer) is SECURITY DEFINER, as before the move');
+  array['apply_holding_delta', 'apply_level_delta_for', 'cycle_count_line_superseded', 'process_return_disposition'],
+  '15: only process_return_disposition''s body (and the 0369 superseded probe, the 0371 holdings writer and the 0373 draw engine) is SECURITY DEFINER, as before the move');
 select ok(
   not has_schema_privilege('anon', 'ledger', 'usage')
   and has_schema_privilege('authenticated', 'ledger', 'usage'),
