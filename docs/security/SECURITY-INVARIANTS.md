@@ -946,6 +946,22 @@ it must not.
   writes still go through `/api/v1/items/[id]/transfer` and `remove-stock`,
   which enforce all of it. `holdings-elsewhere-wiring.test.ts` pins that no
   other phone file names the RPC.
+- **Verification summaries (0374, F1-3)**: `item_verification_summaries(org,
+  item ids)` is `SECURITY DEFINER` because it reads counts
+  (`_latest_count_lines`, service_role only) and `stock_movements` past RLS; a
+  member who can read an item but not its movements (no `activity_logs:read`
+  and the item's warehouse outside `my_warehouse_ids()`) would otherwise get a
+  silently low "movements since". It gates in its body (signed in,
+  `is_org_member(org)`, `caller_can_read_item` per item, the item in the org),
+  returns counts and the count's own facts only, never a movement row, and
+  takes at most 500 ids. `location_holdings_visible(location)` is
+  `item_stock_levels_select`'s location clause for one location
+  (`SECURITY INVOKER`), held equal to the policy for every persona of its
+  pgTAP file, so the location page says "not in your warehouses" instead of
+  showing an empty location. The web reader
+  (`VerificationService.location`) is classified in
+  `holdings-readers.guard.test.ts`. Pinned at
+  [`0374_verification_summaries.test.sql`](../../supabase/tests/0374_verification_summaries.test.sql).
 - **Pinned at (inverted)**: `0322`'s test asserts the **warehouse-scoped**
   `qual` verbatim;
   [`0331_ar2_warehouse_scope.test.sql`](../../supabase/tests/0331_ar2_warehouse_scope.test.sql)
