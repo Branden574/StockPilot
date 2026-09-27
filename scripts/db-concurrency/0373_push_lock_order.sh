@@ -29,11 +29,24 @@
 # sees 40P01, the user write always completes, and the push either completes
 # or fails with 55P03.
 #
-# MUTATION RECORD (live, 2026-09-26, lean 0373; each killed, the file's
-# prelude green three runs in a row):
+# The push also runs the migration's OWN stamp-trigger statement, extracted
+# from the file (CREATE OR REPLACE TRIGGER). On Supabase, supautils makes a
+# DROP TRIGGER run as postgres take ACCESS EXCLUSIVE on every auth, storage
+# and realtime table in supautils.drop_trigger_grants, and wait for them,
+# after the prelude. auth.users' triggers write user_profiles, so:
+#   * s6: a transaction that read auth.users and then writes user_profiles
+#     deadlocks a DROP TRIGGER push (it waits for auth.users while holding
+#     user_profiles);
+#   * s7: any auth reader holds a DROP TRIGGER push for up to lock_timeout
+#     (5 s, then 55P03) while it holds stock_movements. s7 requires the push
+#     to COMPLETE.
+#
+# MUTATION RECORD (live, lean 0373; each killed, the file's prelude green
+# three runs in a row):
 #   no prelude                                              -> s1, s3, s4 (40P01)
 #   stock_movements, then the five WITHOUT nowait           -> s1, s4 (40P01)
 #   the five (nowait) first, then stock_movements           -> s2, s5 (40P01)
+#   the stamp trigger as DROP TRIGGER + CREATE TRIGGER      -> s6 (40P01), s7 (55P03)
 #
 # Runs against the LOCAL stack only (docker container supabase_db_stockpilot).
 # Fixtures live under the 03731111-... namespace and are removed at the start
@@ -41,6 +54,7 @@
 #
 # Usage: bash scripts/db-concurrency/0373_push_lock_order.sh
 #        PRELUDE='<sql>' bash ...   (override the prelude, for mutation runs)
+#        STAMP='<sql>' bash ...     (override the stamp-trigger statement)
 
 set -uo pipefail
 
@@ -69,6 +83,10 @@ fi
 if [ -z "$PRELUDE" ]; then
   echo "note: no lock prelude in $MIGRATION (running the bare statement order)"
 fi
+if [ -z "${STAMP+x}" ]; then
+  STAMP="$(awk '/^(drop|create( or replace)?) trigger trg_zz_stock_movements_via_ledger/{on=1} on{print} on && /execute function public\.tg_stock_movements_via_ledger\(\);/{exit}' "$MIGRATION")"
+fi
+if [ -z "$STAMP" ]; then echo "no stamp-trigger statement found in $MIGRATION"; exit 1; fi
 
 cleanup() {
   if ! "${PSQL[@]}" >/dev/null 2>"$TMP/cleanup.err" <<SQL
@@ -103,6 +121,7 @@ begin;
 set lock_timeout = '5s';
 $PRELUDE
 alter table public.stock_movements add column draw_0373_2s integer;
+$STAMP
 select pg_sleep(1.5);
 create trigger trg_0373_2s_probe after insert or update or delete on public.organization_members
   for each statement execute function ledger.tg_forget_draw_scope();
@@ -123,10 +142,12 @@ ENSURE="select public.ensure_warehouse_placement_locations('$WH');"
 MOVEMENT="insert into public.stock_movements (organization_id, item_id, movement_type, quantity_change, previous_quantity, new_quantity, reason)
   values ('$ORG', '$X', 'adjust', 1, 0, 1, '0373 two-session');"
 MEMBER="update public.organization_members set role = role where organization_id = '$ORG';"
+AUTH_READ="select count(*) from auth.users;"
+PROFILE="update public.user_profiles set id = id where false;"
 
-# run_case <name> <user sql> <user first: yes|no>
+# run_case <name> <user sql> <user first: yes|no> [push must complete: yes]
 run_case() {
-  local name="$1" user_sql="$2" user_first="$3"
+  local name="$1" user_sql="$2" user_first="$3" must_complete="${4:-no}"
   if [ "$user_first" = yes ]; then
     ( "${PSQL[@]}" > "$TMP/$name.user.out" 2>&1 <<<"$user_sql" ) &
     local pid_u=$!
@@ -149,7 +170,9 @@ run_case() {
   if grep -q '^push done$' "$TMP/$name.push.out"; then push=done
   elif grep -q '55P03' "$TMP/$name.push.out" && [ "$(grep -c ERROR "$TMP/$name.push.out")" = 1 ]; then push=55P03
   else push=other; fi
-  if [ "$push" = done ] || [ "$push" = 55P03 ]; then ok "$name: the push completed or failed fast with 55P03 ($push)"
+  if [ "$must_complete" = yes ]; then
+    check "$name: the push completed (it never waits for the auth reader)" "$push" "done"
+  elif [ "$push" = done ] || [ "$push" = 55P03 ]; then ok "$name: the push completed or failed fast with 55P03 ($push)"
   else bad "$name: the push ended some other way"; fi
 }
 
@@ -199,9 +222,29 @@ $MEMBER
 select 'user done';
 rollback;" yes
 
+# 6. An auth reader that then writes user_profiles (the shape of auth.users'
+#    own triggers), in flight: a DROP TRIGGER push would wait for auth.users
+#    while holding user_profiles.
+echo "== 6. auth.users read, then a user_profiles write, the write is in flight"
+run_case s6 "begin;
+$AUTH_READ
+select pg_sleep(1);
+$PROFILE
+select 'user done';
+rollback;" yes
+
+# 7. A long auth reader (longer than the push's lock_timeout): the push must
+#    not wait for it at all.
+echo "== 7. a 6 s reader of auth.users, in flight"
+run_case s7 "begin;
+$AUTH_READ
+select pg_sleep(6);
+select 'user done';
+rollback;" yes yes
+
 if [ "$FAILS" -gt 0 ]; then
   echo "--- session output ---"
-  for f in s1 s2 s3 s4 s5; do
+  for f in s1 s2 s3 s4 s5 s6 s7; do
     echo "[$f user]"; cat "$TMP/$f.user.out" 2>/dev/null
     echo "[$f push]"; cat "$TMP/$f.push.out" 2>/dev/null
   done

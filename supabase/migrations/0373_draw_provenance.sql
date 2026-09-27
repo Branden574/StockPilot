@@ -88,8 +88,9 @@
 -- statement over the base tables that restates has_org_role(org, 'manager')
 -- or caller_can_write_location (is_org_member + user_can_access_warehouse
 -- 'write') for that drawer. The section 0 preflight pins the four restated
--- predicates (text, volatility, security mode, search_path and owner) and
--- the (organization_id, user_id) uniqueness of organization_members; pgTAP
+-- predicates (text, volatility, security mode, search_path, owner, STRICT,
+-- LEAKPROOF and PARALLEL) and the (organization_id, user_id) uniqueness of
+-- organization_members; pgTAP
 -- 0373 S2-S4 prove the restatement equals the live predicates for twelve
 -- signed-in personas and service over nine locations.
 --
@@ -152,7 +153,8 @@
 -- transaction and 42501 draw_immutable for any UPDATE that changes a draw;
 -- neither is reachable from a ledger RPC. This file raises 55000 at push
 -- time if a function it restates or mirrors has drifted from the text or
--- header (volatility, security mode, search_path, owner) it was built from,
+-- header (volatility, security mode, search_path, owner, STRICT, LEAKPROOF,
+-- PARALLEL) it was built from,
 -- if 0373 is already applied, if stock_movements carries a trigger other
 -- than the 0369 stamp, if authenticated lacks table-level INSERT or SELECT
 -- on stock_movements, or if a post-check fails; and 55P03 when it cannot
@@ -169,6 +171,11 @@
 -- way round (scripts/db-concurrency/0373_push_lock_order.sh). The push fails
 -- fast with 55P03 instead; retry is the remedy (the 0370/0371 pattern). Reads
 -- of stock_movements wait for the push while it runs. Push off-peak.
+-- No DROP TRIGGER and no policy DDL anywhere in this file: on Supabase,
+-- supautils makes either one, run as postgres, lock every auth, storage and
+-- realtime table it lists (supautils.drop_trigger_grants / policy_grants) and
+-- wait for them, outside this prelude. The stamp trigger is therefore
+-- replaced with CREATE OR REPLACE TRIGGER, which locks only stock_movements.
 -- ============================================================================
 
 -- PLAIN `set`, not `set local` (0303/0358/0370/0371): the CLI batch is atomic
@@ -196,20 +203,24 @@ set lock_timeout = '5s';
 -- ledger._seal (pgTAP 0373 S2-S4) before updating a pin.
 --
 -- The header is pinned with the text, for all ten: volatility, SECURITY
--- DEFINER or INVOKER, proconfig (the SET search_path) and the owner. The six
+-- DEFINER or INVOKER, proconfig (the SET search_path), the owner, STRICT
+-- (proisstrict), LEAKPROOF (proleakproof) and PARALLEL (proparallel). The six
 -- restated functions are written below with CREATE OR REPLACE and a restated
--- header, which REPLACES the security mode, volatility and SET clause (it
--- keeps the owner and ACL), so a header changed on production without a body
--- change would otherwise be overwritten silently. For the four predicates the
--- header is part of what _seal restates: a predicate that became INVOKER, or
--- read another search_path, could answer differently from the restatement.
+-- header, which REPLACES the security mode, volatility, SET clause, STRICT,
+-- LEAKPROOF and PARALLEL (it keeps the owner and ACL), so a header changed on
+-- production without a body change would otherwise be overwritten silently.
+-- For the four predicates the header is part of what _seal restates: a
+-- predicate that became INVOKER, read another search_path, or turned STRICT
+-- (NULL in, NULL out) could answer differently from the restatement. COST
+-- and ROWS are planner estimates only and are not pinned.
 -- Pre-0373 values (local, 0372):
 --   apply_level_delta, process_return_disposition   VOLATILE, DEFINER
 --   adjust_stock, distribute_bundle, assemble_bundle,
 --   tg_stock_movements_via_ledger                   VOLATILE, INVOKER
 --   the four predicates                             STABLE,   DEFINER
 --   proconfig {search_path=public} for all but process_return_disposition
---   ({"search_path=public, extensions"}); owner postgres for all ten.
+--   ({"search_path=public, extensions"}); owner postgres for all ten; none
+--   STRICT, none LEAKPROOF, all PARALLEL UNSAFE (u).
 do $pre$
 declare
   r record;
@@ -218,6 +229,9 @@ declare
   v_sec  boolean;
   v_cfg  text;
   v_own  text;
+  v_str  boolean;
+  v_leak boolean;
+  v_par  text;
 begin
   if to_regtype('public.stock_draw') is not null
      or to_regtype('public.stock_draw_holding') is not null
@@ -244,18 +258,23 @@ begin
       ('public.user_can_access_warehouse(uuid,uuid,text)',                   '76b4170f3d393e8a1f293ca3d4895955', 's', true,  '{search_path=public}')
     ) v(fn, want, vol, secdef, cfg)
   loop
-    select md5(p.prosrc), p.provolatile::text, p.prosecdef, p.proconfig::text, pg_catalog.pg_get_userbyid(p.proowner)
-      into v_have, v_vol, v_sec, v_cfg, v_own
+    select md5(p.prosrc), p.provolatile::text, p.prosecdef, p.proconfig::text, pg_catalog.pg_get_userbyid(p.proowner),
+           p.proisstrict, p.proleakproof, p.proparallel::text
+      into v_have, v_vol, v_sec, v_cfg, v_own, v_str, v_leak, v_par
       from pg_proc p
      where p.oid = to_regprocedure(r.fn);
     if v_have is distinct from r.want
        or v_vol is distinct from r.vol
        or v_sec is distinct from r.secdef
        or v_cfg is distinct from r.cfg
-       or v_own is distinct from 'postgres' then
-      raise exception '0373: % drifted from the text or header this migration restates or mirrors (md5 %, volatility %, security definer %, config %, owner %; want %, %, %, %, postgres)',
+       or v_own is distinct from 'postgres'
+       or v_str is distinct from false
+       or v_leak is distinct from false
+       or v_par is distinct from 'u' then
+      raise exception '0373: % drifted from the text or header this migration restates or mirrors (md5 %, volatility %, security definer %, config %, owner %, strict %, leakproof %, parallel %; want %, %, %, %, postgres, false, false, u)',
         r.fn, coalesce(v_have, '<missing>'), coalesce(v_vol, '<missing>'), coalesce(v_sec::text, '<missing>'),
-        coalesce(v_cfg, '<none>'), coalesce(v_own, '<missing>'), r.want, r.vol, r.secdef, r.cfg
+        coalesce(v_cfg, '<none>'), coalesce(v_own, '<missing>'), coalesce(v_str::text, '<missing>'),
+        coalesce(v_leak::text, '<missing>'), coalesce(v_par, '<missing>'), r.want, r.vol, r.secdef, r.cfg
         using errcode = '55000';
     end if;
   end loop;
@@ -379,8 +398,15 @@ end;
 $function$;
 
 -- CREATE OR REPLACE keeps the ACL (0369: postgres, service_role) and owner.
-drop trigger trg_zz_stock_movements_via_ledger on public.stock_movements;
-create trigger trg_zz_stock_movements_via_ledger
+-- CREATE OR REPLACE TRIGGER, never DROP TRIGGER + CREATE TRIGGER: under
+-- Supabase's supautils, a DROP TRIGGER run as postgres also takes ACCESS
+-- EXCLUSIVE on every table in supautils.drop_trigger_grants (23 auth, storage
+-- and realtime tables locally, auth.users among them) and WAITS for them
+-- while this file holds its six locks. auth.users' own triggers write
+-- user_profiles, so that wait could deadlock with a signup or an email
+-- change, and every login would queue behind it. CREATE OR REPLACE TRIGGER
+-- takes no such lock (PROD PUSH NOTE; the push lock-order proof, s6-s7).
+create or replace trigger trg_zz_stock_movements_via_ledger
   before insert or update of via_ledger, draw on public.stock_movements
   for each row execute function public.tg_stock_movements_via_ledger();
 

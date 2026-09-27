@@ -1234,11 +1234,12 @@ delete from _sec_inv_forall_on_scoped_allow where why like 'control probe:%';
 -- and keeps every other function from writing draw: by naming it (d), or by
 -- a whole-row write that never names it (d2-d4: an INSERT with no column
 -- list, a stock_movements row populated from a record, or a stock_movements
--- row expanded with .*). The stamp trigger lets any code running inside a
--- ledger transaction write any draw, so a whole-row insert in a ledger body
--- fed from caller jsonb would forge one; these arms keep that shape out of
--- the public and ledger schemas. (Dynamic SQL is out of their reach, as it
--- is for every text census here.)
+-- row expanded with .*), or through MERGE (d5), whose INSERT and UPDATE
+-- actions none of the other arms read. The stamp trigger lets any code
+-- running inside a ledger transaction write any draw, so a whole-row insert
+-- in a ledger body fed from caller jsonb would forge one; these arms keep
+-- that shape out of the public and ledger schemas. (Dynamic SQL is out of
+-- their reach, as it is for every text census here.)
 --
 -- The detectors are temporary views so INV-39 and INV-41 exercise the very
 -- same text. Comments are stripped before matching.
@@ -1366,6 +1367,14 @@ create temporary view _sec_inv_engine_violations as
       or (r.names is not null
           and r.s ~* ('(^|[^a-z0-9_$."])"?(' || r.names || ')"?\s*\)?\s*\.\s*\*'))
   union all
+  -- (d5) no MERGE into stock_movements at all (no exemption: the recorders
+  -- insert with a column list, and MERGE's WHEN NOT MATCHED THEN INSERT /
+  -- WHEN MATCHED THEN UPDATE actions name no table, so arms d and d2 never
+  -- see them)
+  select 'merge into stock_movements: ' || src.fn, src.fn
+    from src
+   where src.s ~* 'merge\s+into\s+("?public"?\s*\.\s*)?"?stock_movements"?(?![a-z0-9_$])'
+  union all
   -- (c) no API role can write the read view, and PUBLIC holds nothing on it
   select 'write privilege on stock_movement_holdings: ' || r.r || ' ' || pv.p, 'public.stock_movement_holdings'
     from unnest(array['anon', 'authenticated', 'service_role']) as r(r),
@@ -1396,13 +1405,13 @@ select is(
 
 -- INV-38. The engine's callers are the listed ones with their listed
 -- arguments; every recorded draw is assigned and written into exactly the
--- next movement row; nothing else writes draw, by name or by a whole-row
+-- next movement row; nothing else writes draw, by name, by a whole-row
 -- write (an INSERT with no column list, a populated or .*-expanded
--- stock_movements row); no API role can write the view.
+-- stock_movements row) or by a MERGE; no API role can write the view.
 select is(
   (select coalesce(string_agg(v.x, ', ' order by v.x collate "C"), '') from _sec_inv_engine_violations v),
   '',
-  'INV-38: every draw-engine caller writes its own draw, for its own drawer, into exactly the movement row it inserts next; nothing else writes draw, by name or by a whole-row write (no column list, populate_record, .*); no API role can write stock_movement_holdings (0373)'
+  'INV-38: every draw-engine caller writes its own draw, for its own drawer, into exactly the movement row it inserts next; nothing else writes draw, by name, by a whole-row write (no column list, populate_record, .*) or by MERGE; no API role can write stock_movement_holdings (0373)'
 );
 
 -- INV-39. VACUITY + MUTATION CONTROL for INV-37 and INV-38: the populations
@@ -1415,9 +1424,10 @@ select is(
 --     (INV-38b1-b3);
 --   * an unlisted function writing draw (INV-38d);
 --   * an INSERT into stock_movements with no column list (INV-38d2), a
---     jsonb_populate_record over the stock_movements rowtype (INV-38d3) and
---     a (row).* over a stock_movements row variable (INV-38d4), each planted
---     alone so each arm is shown to fire by itself;
+--     jsonb_populate_record over the stock_movements rowtype (INV-38d3), a
+--     (row).* over a stock_movements row variable (INV-38d4) and a MERGE
+--     whose INSERT action names draw (INV-38d5), each planted alone so each
+--     arm is shown to fire by itself;
 --   * INSERT granted to authenticated on the view (INV-38c).
 -- Everything planted is removed straight after (and the enclosing rollback
 -- is the second belt).
@@ -1469,6 +1479,16 @@ begin
 end;
 $probe$;
 revoke all on function public._sec_inv_probe_row_star() from public, anon;
+create function ledger._sec_inv_probe_merge(p public.stock_draw) returns void
+  language plpgsql security invoker set search_path = public
+  as $probe$
+begin
+  merge into public.stock_movements m
+  using (select 1) s on false
+  when not matched then insert (draw, organization_id) values (p, null);
+end;
+$probe$;
+revoke all on function ledger._sec_inv_probe_merge(public.stock_draw) from public, anon;
 insert into _sec_inv_ald_caller_allow (fn, why) values
   ('ledger._sec_inv_probe_absent_function', 'control probe: stale entry; deleted below');
 insert into _sec_inv_engine_caller_allow (fn, rec_args, why) values
@@ -1483,15 +1503,16 @@ select is(
      select v.x from _sec_inv_engine_violations v
       where v.fn in ('ledger._sec_inv_probe_engine_unlisted', 'ledger._sec_inv_probe_engine_unpaired',
                      'public._sec_inv_probe_draw_writer', 'ledger._sec_inv_probe_insert_no_list',
-                     'ledger._sec_inv_probe_populate', 'public._sec_inv_probe_row_star')
+                     'ledger._sec_inv_probe_populate', 'public._sec_inv_probe_row_star',
+                     'ledger._sec_inv_probe_merge')
          or v.x like 'write privilege on stock_movement_holdings: authenticated INSERT'
      union all
      select 'populations: ' || (
        (select count(*) from _sec_inv_engine_caller_allow) >= 5
        and (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
              where n.nspname in ('public', 'ledger') and p.prosrc ~* 'apply_level_delta') >= 6)::text) q),
-  'engine call not passing true, v_user: ledger._sec_inv_probe_engine_unpaired | engine draw not assigned to v_prov: ledger._sec_inv_probe_engine_unpaired | insert into stock_movements without a column list: ledger._sec_inv_probe_insert_no_list | populations: true | stale allowlist-H entry: ledger._sec_inv_probe_absent_function | stock_movements row expanded with .*: public._sec_inv_probe_row_star | stock_movements row populated from a record: ledger._sec_inv_probe_populate | unlisted caller of public.apply_level_delta: public._sec_inv_probe_ald_caller | unlisted draw writer: public._sec_inv_probe_draw_writer | unlisted engine caller: ledger._sec_inv_probe_engine_unlisted | unpaired draw: ledger._sec_inv_probe_engine_unpaired after assignment 0 | unpaired draw: ledger._sec_inv_probe_engine_unpaired after assignment 1 | write privilege on stock_movement_holdings: authenticated INSERT',
-  'INV-39 control: the provenance detectors have callers to judge and fire on a planted wrapper caller, a stale entry, an unlisted engine caller, a stale draw, another drawer, a discarded draw, an unlisted draw writer, an INSERT with no column list, a populated stock_movements row, a .*-expanded stock_movements row and a write grant'
+  'engine call not passing true, v_user: ledger._sec_inv_probe_engine_unpaired | engine draw not assigned to v_prov: ledger._sec_inv_probe_engine_unpaired | insert into stock_movements without a column list: ledger._sec_inv_probe_insert_no_list | merge into stock_movements: ledger._sec_inv_probe_merge | populations: true | stale allowlist-H entry: ledger._sec_inv_probe_absent_function | stock_movements row expanded with .*: public._sec_inv_probe_row_star | stock_movements row populated from a record: ledger._sec_inv_probe_populate | unlisted caller of public.apply_level_delta: public._sec_inv_probe_ald_caller | unlisted draw writer: public._sec_inv_probe_draw_writer | unlisted engine caller: ledger._sec_inv_probe_engine_unlisted | unpaired draw: ledger._sec_inv_probe_engine_unpaired after assignment 0 | unpaired draw: ledger._sec_inv_probe_engine_unpaired after assignment 1 | write privilege on stock_movement_holdings: authenticated INSERT',
+  'INV-39 control: the provenance detectors have callers to judge and fire on a planted wrapper caller, a stale entry, an unlisted engine caller, a stale draw, another drawer, a discarded draw, an unlisted draw writer, an INSERT with no column list, a populated stock_movements row, a .*-expanded stock_movements row, a MERGE into stock_movements and a write grant'
 );
 
 revoke insert on table public.stock_movement_holdings from authenticated;
@@ -1502,6 +1523,7 @@ drop function public._sec_inv_probe_draw_writer();
 drop function ledger._sec_inv_probe_insert_no_list();
 drop function ledger._sec_inv_probe_populate(jsonb);
 drop function public._sec_inv_probe_row_star();
+drop function ledger._sec_inv_probe_merge(public.stock_draw);
 delete from _sec_inv_ald_caller_allow where why like 'control probe:%';
 delete from _sec_inv_engine_caller_allow where why like 'control probe:%';
 
