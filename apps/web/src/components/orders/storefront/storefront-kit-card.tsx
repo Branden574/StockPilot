@@ -5,7 +5,7 @@
 // kits are available, where the units go, all or nothing) are in
 // storefront-kits.ts, and this file only draws them.
 
-import { ChevronDown, Layers, Minus, Plus } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, Layers, Minus, Plus } from 'lucide-react';
 import * as React from 'react';
 
 import type { CartKitShares, CatalogItem } from '../v2/types';
@@ -164,14 +164,21 @@ export const KitCard = React.memo(function KitCard({
       </div>
       <div className="sf-card-bd">
         <div className="sf-card-nm">{kit.name}</div>
-        <div className="sf-kit-items">
-          {count} {count === 1 ? 'item' : 'items'}: {itemList}
+        {/* A fixed-height block (storefront.css), so a card is as tall in
+            stock as out of it, and the Kits strip keeps one height. */}
+        <div className="sf-kit-desc">
+          <div className="sf-kit-items">
+            {count} {count === 1 ? 'item' : 'items'}: {itemList}
+          </div>
+          {/* Static text drawn with the card, so no live region: a status role
+              here made every out-of-stock kit an announcement. One line; the
+              whole text is in the title and is read in full. */}
+          {out && (
+            <div className="sf-kit-short" title={kitShortLabel(availability.short, itemMap, nameOf)}>
+              {kitShortLabel(availability.short, itemMap, nameOf)}
+            </div>
+          )}
         </div>
-        {/* Static text drawn with the card, so no live region: a status role
-            here made every out-of-stock kit an announcement. */}
-        {out && (
-          <div className="sf-kit-short">{kitShortLabel(availability.short, itemMap, nameOf)}</div>
-        )}
         <button
           type="button"
           className="sf-kit-more"
@@ -274,48 +281,111 @@ export function KitsUnavailable() {
 const KITS_ROW_SUB = 'Add every item of a kit to your cart in one step';
 
 /**
+ * A control that keyboard focus reaches inside the strip is scrolled fully
+ * into view. The browser only brings a focused element partly into view, so
+ * Tab could land on an Add kit button half outside the strip (local walk,
+ * 390 px). Focus from a pointer is left alone: scrolling between the press
+ * and the release would move the button from under the pointer.
+ */
+export function revealKeyboardFocus(e: React.FocusEvent<HTMLElement>): void {
+  const el = e.target;
+  if (!(el instanceof HTMLElement) || el === e.currentTarget) return;
+  let keyboard = true;
+  try {
+    keyboard = el.matches(':focus-visible');
+  } catch {
+    // An engine without :focus-visible: reveal it anyway.
+  }
+  if (keyboard) el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+/**
+ * Kit cards in one horizontal strip, one per kit, for the Kits row (like
+ * Frequently ordered). The strip is one card high at every width, so the
+ * place reserved for it while the kits stream in is exactly its height.
+ * Every card stays in the page: keyboard focus scrolls a card fully into view
+ * (revealKeyboardFocus), and a screen reader reads them all in order.
+ */
+export function KitStrip({
+  kits,
+  cartKits,
+  trackRef,
+  ...card
+}: Omit<KitCardProps, 'kit' | 'shares'> & {
+  kits: readonly KitOffer[];
+  cartKits: Readonly<Record<string, CartKitShares>>;
+  trackRef?: React.Ref<HTMLDivElement>;
+}) {
+  return (
+    <div className="sf-kits-track" ref={trackRef} onFocus={revealKeyboardFocus}>
+      {kits.map((kit) => (
+        <KitCard key={kit.bundleId} kit={kit} shares={cartKits[kit.bundleId]} {...card} />
+      ))}
+    </div>
+  );
+}
+
+/** One kit card's box, with no words, for the reserved place. */
+function KitCardSkeleton() {
+  return (
+    <div className="sf-card sf-kit-card sf-kit-card-sk">
+      <div className="sf-ph-box">
+        <div className="sf-sk sf-kit-sk-photo" />
+      </div>
+      <div className="sf-card-bd">
+        <div className="sf-card-nm">
+          <span className="sf-sk sf-kit-sk-line" />
+        </div>
+        <div className="sf-kit-desc">
+          <div className="sf-kit-items sf-kit-sk-items">
+            <span className="sf-sk sf-kit-sk-line" />
+            <span className="sf-sk sf-kit-sk-line short" />
+          </div>
+        </div>
+        <span className="sf-kit-more sf-kit-sk-more">
+          Details <ChevronDown size={12} />
+        </span>
+        <div className="sf-card-ctl">
+          <div className="sf-sk sf-kit-sk-ctl" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * The Kits row's place while the kits stream in, when the Bundles module is on
  * (review F9). The row sits above Frequently ordered and the grid, and it
  * always arrives after the catalog (the loader matches the kits against it), so
- * with no reserved space a late row pushed the grid down under the pointer: a
- * layout shift of 0.078 with the bundles read held 5 s (local, 1440 x 1000).
- * This draws the row's own header and one kit card's box with the same classes,
- * so a row of one line of kits replaces it without moving anything. It has no
- * words of its own: when this person has no kits the row closes up.
+ * with no reserved space a late row pushed the grid down under the pointer.
+ * This draws the row's own header and a strip of kit card boxes with the same
+ * classes. The row is one strip, one card high, at every width and for any
+ * number of kits, so it replaces this without moving anything (verify
+ * 2026-09-27: as a wrapping grid, five kits at 390 px wide were 2096 px against
+ * 469 px reserved). It has no words of its own: when this person has no kits
+ * the row closes up.
  */
 export function KitsRowSkeleton() {
   return (
     <section className="sf-kits" aria-busy="true" aria-label="Loading kits">
-      {/* The real header's words, invisible, so it wraps exactly as the real
-          one does on a narrow screen; only the heading shows, as a bar. */}
+      {/* The real header's parts, invisible, so it takes the real one's height;
+          only the heading shows, as a bar. */}
       <div className="sf-sec-head sf-kits-sk-head" aria-hidden>
         <h3 className="sf-sk">
           <Layers size={15} /> Kits
         </h3>
         <span className="ct">1</span>
         <span className="sub">{KITS_ROW_SUB}</span>
-      </div>
-      <div className="sf-grid sf-kit-grid" aria-hidden>
-        <div className="sf-card sf-kit-card sf-kit-card-sk">
-          <div className="sf-ph-box">
-            <div className="sf-sk sf-kit-sk-photo" />
-          </div>
-          <div className="sf-card-bd">
-            <div className="sf-card-nm">
-              <span className="sf-sk sf-kit-sk-line" />
-            </div>
-            <div className="sf-kit-items sf-kit-sk-items">
-              <span className="sf-sk sf-kit-sk-line" />
-              <span className="sf-sk sf-kit-sk-line short" />
-            </div>
-            <span className="sf-kit-more sf-kit-sk-more">
-              Details <ChevronDown size={12} />
-            </span>
-            <div className="sf-card-ctl">
-              <div className="sf-sk sf-kit-sk-ctl" />
-            </div>
-          </div>
+        <span className="spacer" />
+        <div className="sf-arrows">
+          <span className="sf-arrow-sk" />
+          <span className="sf-arrow-sk" />
         </div>
+      </div>
+      <div className="sf-kits-track" aria-hidden>
+        {Array.from({ length: 4 }).map((_, i) => (
+          <KitCardSkeleton key={i} />
+        ))}
       </div>
     </section>
   );
@@ -330,11 +400,16 @@ export function KitsRowSkeleton() {
  */
 export function KitsRow({
   promise,
-  ...grid
-}: { promise: Promise<KitsResult> } & Omit<React.ComponentProps<typeof KitGrid>, 'kits'>) {
+  ...strip
+}: { promise: Promise<KitsResult> } & Omit<React.ComponentProps<typeof KitStrip>, 'kits' | 'trackRef'>) {
   const result = React.use(promise);
+  const trackRef = React.useRef<HTMLDivElement>(null);
   if (result.status === 'error') return <KitsUnavailable />;
   if (result.kits.length === 0) return null;
+  const nudge = (dir: -1 | 1) => {
+    const el = trackRef.current;
+    if (el) el.scrollBy({ left: dir * el.clientWidth * 0.7, behavior: 'smooth' });
+  };
   return (
     <section className="sf-kits" aria-label="Kits">
       <div className="sf-sec-head">
@@ -343,8 +418,17 @@ export function KitsRow({
         </h3>
         <span className="ct">{result.kits.length}</span>
         <span className="sub">{KITS_ROW_SUB}</span>
+        <span className="spacer" />
+        <div className="sf-arrows">
+          <button type="button" onClick={() => nudge(-1)} aria-label="Scroll kits back">
+            <ChevronLeft size={14} />
+          </button>
+          <button type="button" onClick={() => nudge(1)} aria-label="Scroll kits forward">
+            <ChevronRight size={14} />
+          </button>
+        </div>
       </div>
-      <KitGrid kits={result.kits} {...grid} />
+      <KitStrip kits={result.kits} trackRef={trackRef} {...strip} />
     </section>
   );
 }
