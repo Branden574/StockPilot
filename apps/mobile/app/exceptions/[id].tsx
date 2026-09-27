@@ -8,6 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   EXCEPTION_ACTION_LABELS,
   EXCEPTION_FIRST_CHECK_PENDING_COPY,
+  exceptionCheckedAtCopy,
   EXCEPTION_RULES,
   activeRecountCopy,
   describeOccurrence,
@@ -574,7 +575,7 @@ function Detail({
 
       <Body size={12.5} muted>
         {detail.syncState
-          ? `Checked at ${exceptionTimeLabel(detail.syncState.lastSyncedAt, detail.timeZone)}.`
+          ? exceptionCheckedAtCopy(exceptionTimeLabel(detail.syncState.lastSyncedAt, detail.timeZone))
           : EXCEPTION_FIRST_CHECK_PENDING_COPY}
       </Body>
     </ScrollView>
