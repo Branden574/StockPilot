@@ -105,7 +105,7 @@ describe('verificationSummaryCopy: every state', () => {
     expect(manager.lines).toEqual(['No physical count on record.', 'Count this item']);
     // Nothing about "since": there is no count to be since.
     expect(manager.movementsSince).toBeNull();
-    expect(manager.bookNow).toBeNull();
+    expect(manager.onRecordNow).toBeNull();
   });
 
   it('header: the date the count is true for and the count reference, linking to the count', () => {
@@ -137,7 +137,7 @@ describe('verificationSummaryCopy: every state', () => {
 
   it('matched the book', () => {
     expect(verificationSummaryCopy(summary(), { timeZone: TZ }).result).toBe(
-      'Matched the book (10)',
+      'Matched the stock on record (10)',
     );
   });
 
@@ -146,11 +146,11 @@ describe('verificationSummaryCopy: every state', () => {
       lastCount: count({ expectedQuantity: 8, expectedAtStart: 9, countedQuantity: 10 }),
     });
     expect(verificationSummaryCopy(up, { timeZone: TZ }).result).toBe(
-      'Book corrected from 8 to 10 (+2)',
+      'Stock on record corrected from 8 to 10 (+2)',
     );
     const down = summary({ lastCount: count({ expectedQuantity: 10, countedQuantity: 7.5 }) });
     expect(verificationSummaryCopy(down, { timeZone: TZ }).result).toBe(
-      'Book corrected from 10 to 7.5 (-2.5)',
+      'Stock on record corrected from 10 to 7.5 (-2.5)',
     );
   });
 
@@ -322,7 +322,7 @@ describe('verificationSummaryCopy: every state', () => {
     const none = verificationSummaryCopy(summary(), { timeZone: TZ });
     expect(none.movementsSince).toBe('0 recorded stock movements since');
     expect(none.outsideLedger).toBeNull();
-    expect(none.bookNow).toBe('Book now: 12');
+    expect(none.onRecordNow).toBe('On record now: 12');
     const one = verificationSummaryCopy(summary({ movementsSince: 1 }), { timeZone: TZ });
     expect(one.movementsSince).toBe('1 recorded stock movement since');
     const some = verificationSummaryCopy(summary({ movementsSince: 3, outsideLedgerSince: 2 }), {
@@ -394,14 +394,14 @@ describe('verificationSummaryCopy: every state', () => {
     );
     expect(c.lines).toEqual([
       'Last physical count: Sep 12, 2026 · CC-000031',
-      'Matched the book (10)',
+      'Matched the stock on record (10)',
       'Item total counted. Which locations were checked was not recorded.',
       'Counted by Avery, posted by Blake.',
       'Taken 9:00 AM on the device, synced 10:02 AM',
       'Recorded with AI shelf-scan assistance',
       '2 recorded stock movements since',
       '1 recorded outside the stock ledger',
-      'Book now: 12',
+      'On record now: 12',
       'Being counted in CC-000045',
       'Count this item',
     ]);
@@ -676,7 +676,7 @@ describe('locationRecountProblem', () => {
 describe('verificationIssueChipCopy', () => {
   it('reference and rule heading; an unknown rule reads as its reference alone', () => {
     expect(verificationIssueChipCopy({ number: 42, rule: 'count_variance' })).toBe(
-      'EX-000042 · Count did not match the book',
+      'EX-000042 · Count did not match the stock on record',
     );
     expect(verificationIssueChipCopy({ number: 7, rule: 'stale_staging' })).toBe(
       'EX-000007 · Sitting in Staging',

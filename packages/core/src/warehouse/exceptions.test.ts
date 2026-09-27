@@ -203,7 +203,7 @@ describe('EXCEPTION_RULES occurrence metadata', () => {
     expect(meta.severity).toBe('warning');
     expect(meta.action).toMatch(/Recount/);
     // Clears only on an exact later match (owner decision F1 Q2).
-    expect(meta.clearedBy).toMatch(/matches the book exactly/);
+    expect(meta.clearedBy).toMatch(/matches the stock on record exactly/);
     expect(meta.actions).toEqual(['open_item']);
     expect(COUNT_VARIANCE_OPEN_WINDOW_DAYS).toBe(30);
   });
@@ -374,23 +374,23 @@ describe('describeOccurrence', () => {
     };
     expect(describeOccurrence('count_variance', facts)).toEqual({
       title: 'Atlas',
-      detail: 'found +1: counted 11, book 10 (CC-000024)',
+      detail: 'found +1: counted 11, on record 10 (CC-000024)',
       units: 1,
     });
     // Fewer than the book: the sign is kept and the units at stake are the size.
     expect(describeOccurrence('count_variance', { ...facts, counted: 7.5, variance: -2.5 })).toMatchObject({
-      detail: 'found -2.5: counted 7.5, book 10 (CC-000024)',
+      detail: 'found -2.5: counted 7.5, on record 10 (CC-000024)',
       units: 2.5,
     });
     // No number yet: no made-up reference.
     expect(describeOccurrence('count_variance', { ...facts, countNumber: null }).detail).toBe(
-      'found +1: counted 11, book 10',
+      'found +1: counted 11, on record 10',
     );
     // A stored variance that is missing is derived from the two quantities,
     // exactly (10.1 - 10 is 0.1, not 0.0999…).
     expect(
       describeOccurrence('count_variance', { itemName: 'A', expected: 10, counted: 10.1 }).detail,
-    ).toBe('found +0.1: counted 10.1, book 10');
+    ).toBe('found +0.1: counted 10.1, on record 10');
   });
 
   it('the live item name wins over the stored one', () => {
@@ -684,7 +684,7 @@ describe('shared list copy', () => {
 describe('copy that keeps the all-clear honest', () => {
   it('the all-clear body is one shared sentence that covers every rule, counts included', () => {
     expect(EXCEPTION_ALL_CLEAR_BODY).toMatch(/^No archived locations holding stock/);
-    expect(EXCEPTION_ALL_CLEAR_BODY).toMatch(/count matched the book/);
+    expect(EXCEPTION_ALL_CLEAR_BODY).toMatch(/count matched the stock on record/);
   });
 
   it('rows this build cannot word are counted, never silently dropped', () => {

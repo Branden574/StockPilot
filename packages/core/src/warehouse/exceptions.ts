@@ -181,17 +181,17 @@ export const EXCEPTION_RULES: Record<ExceptionRule, ExceptionRuleMeta> = {
   count_variance: {
     rule: 'count_variance',
     severity: 'warning',
-    label: 'Count did not match the book',
+    label: 'Count did not match the stock on record',
     action:
-      'A posted count found a different quantity than the book, and posting changed the book to the counted number. Recount to confirm that number before relying on it.',
+      'A posted count found a different quantity than StockPilot had on record, and posting changed the stock on record to the counted number. Recount to confirm that number before relying on it.',
     explanations: [
       'Stock moved without the movement being recorded, such as a pick, transfer, return or receipt.',
       'Some of the units are stored in a place the count did not cover.',
       'The count was off, for example units hidden behind others or a similar item counted in its place.',
-      'An earlier adjustment or import left the book wrong, and this count corrected it.',
+      'An earlier adjustment or import left the stock on record wrong, and this count corrected it.',
     ],
     clearedBy:
-      'Clears when a later completed count of this item matches the book exactly. A recount that finds another difference keeps it open with the new numbers.',
+      'Clears when a later completed count of this item matches the stock on record exactly. A recount that finds another difference keeps it open with the new numbers.',
     actions: ['open_item'],
     recountable: true,
   },
@@ -570,8 +570,8 @@ export function describeOccurrence(
       const ref = cc ? ` (${cc})` : '';
       const detail =
         variance === null || expected === null || counted === null
-          ? `a count did not match the book${ref}`
-          : `found ${signedQuantity(variance)}: counted ${formatStockQuantity(counted)}, book ${formatStockQuantity(expected)}${ref}`;
+          ? `a count did not match the stock on record${ref}`
+          : `found ${signedQuantity(variance)}: counted ${formatStockQuantity(counted)}, on record ${formatStockQuantity(expected)}${ref}`;
       return { title: itemName, detail, units: variance === null ? null : Math.abs(variance) };
     }
   }
@@ -764,7 +764,7 @@ export const EXCEPTION_ALL_CLEAR_TITLE = 'Nothing needs attention';
 /** The line under EXCEPTION_ALL_CLEAR_TITLE: what "nothing" covers. One copy
  *  for the web page and the phone; a new rule updates it here. */
 export const EXCEPTION_ALL_CLEAR_BODY =
-  'No archived locations holding stock, nothing over-promised, nothing stranded in Staging or Unplaced, every rack label agrees with where the stock is, and every recent count matched the book.';
+  'No archived locations holding stock, nothing over-promised, nothing stranded in Staging or Unplaced, every rack label agrees with where the stock is, and every recent count matched the stock on record.';
 
 /**
  * Open exceptions this build cannot word: rows of a rule a newer build added

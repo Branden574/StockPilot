@@ -740,7 +740,7 @@ describe('evaluateForSync — count_variance (F1-2)', () => {
       aiAssisted: true,
       capturedOfflineAt: null,
     });
-    expect(describeOccurrence('count_variance', p!.facts).detail).toBe('found +1: counted 11, book 10 (CC-000024)');
+    expect(describeOccurrence('count_variance', p!.facts).detail).toBe('found +1: counted 11, on record 10 (CC-000024)');
     expect(e.completeRules).toContain('count_variance');
   });
 

@@ -187,8 +187,9 @@ function sameId(a: string | null | undefined, b: string | null | undefined): boo
   return typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
 }
 
-/** "Matched the book (10)", "Book corrected from 8 to 10 (+2)", or, for a
- *  line from before 0339 (no book at count time was kept), "Counted 10". */
+/** "Matched the stock on record (10)", "Stock on record corrected from 8 to 10
+ *  (+2)", or, for a line from before 0339 (no book at count time was kept),
+ *  "Counted 10". */
 export function verificationResultCopy(count: VerificationLastCount): string | null {
   const counted = finite(count.countedQuantity);
   if (counted === null) return null;
@@ -323,8 +324,8 @@ export interface VerificationSummaryCopy {
   /** Links to the item's Movements tab. */
   movementsSince: string | null;
   outsideLedger: string | null;
-  /** "Book now: 12". */
-  bookNow: string | null;
+  /** "On record now: 12". */
+  onRecordNow: string | null;
   beingCounted: { text: string; cycleCountId: string } | null;
   notCountable: string | null;
   /** "Count this item", for a reader who may start a count of a countable item. */
@@ -343,7 +344,7 @@ function assemble(copy: Omit<VerificationSummaryCopy, 'lines'>): VerificationSum
     copy.aiAssisted,
     copy.movementsSince,
     copy.outsideLedger,
-    copy.bookNow,
+    copy.onRecordNow,
     copy.beingCounted?.text ?? null,
     copy.notCountable,
     copy.countAction,
@@ -372,7 +373,7 @@ export function verificationSummaryCopy(
     aiAssisted: null,
     movementsSince: null,
     outsideLedger: null,
-    bookNow: null,
+    onRecordNow: null,
     beingCounted: null,
     notCountable: null,
     countAction: null,
@@ -422,7 +423,7 @@ export function verificationSummaryCopy(
         ? VERIFICATION_MOVEMENTS_UNKNOWN_COPY
         : verificationMovementsCopy(summary.movementsSince),
     outsideLedger: verificationOutsideLedgerCopy(summary.outsideLedgerSince),
-    bookNow: onHand === null ? null : `Book now: ${formatStockQuantity(onHand)}`,
+    onRecordNow: onHand === null ? null : `On record now: ${formatStockQuantity(onHand)}`,
     beingCounted,
     notCountable,
     countAction,
@@ -439,7 +440,7 @@ export interface VerificationIssue {
   locationId: string | null;
 }
 
-/** "EX-000042 · Count did not match the book". A rule this build does not
+/** "EX-000042 · Count did not match the stock on record". A rule this build does not
  *  know reads as its reference alone. */
 export function verificationIssueChipCopy(
   issue: Pick<VerificationIssue, 'number' | 'rule'>,

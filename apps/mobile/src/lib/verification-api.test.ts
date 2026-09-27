@@ -811,9 +811,9 @@ describe('screen words', () => {
     });
     expect(locationRowQuantityCopy(12)).toBe('12 here');
     expect(
-      locationRowAccessibilityLabel(row, copy, ['EX-000042 · Count did not match the book']),
+      locationRowAccessibilityLabel(row, copy, ['EX-000042 · Count did not match the stock on record']),
     ).toBe(
-      `${row.name}, SKU-1. 12 here. Counted Sep 12, 2026, while this was its only shelf location. 0 recorded stock movements since. EX-000042 · Count did not match the book`,
+      `${row.name}, SKU-1. 12 here. Counted Sep 12, 2026, while this was its only shelf location. 0 recorded stock movements since. EX-000042 · Count did not match the stock on record`,
     );
   });
 

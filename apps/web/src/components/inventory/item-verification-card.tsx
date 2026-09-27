@@ -204,7 +204,7 @@ export function ItemVerificationCardView({
           {copy.outsideLedger}
         </p>
       ) : null}
-      {copy.bookNow ? <p className="tabular-nums">{copy.bookNow}</p> : null}
+      {copy.onRecordNow ? <p className="tabular-nums">{copy.onRecordNow}</p> : null}
       {copy.beingCounted ? (
         <p data-testid="verification-being-counted">
           {canOpenCounts ? (

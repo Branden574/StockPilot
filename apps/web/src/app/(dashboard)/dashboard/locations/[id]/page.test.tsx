@@ -461,7 +461,7 @@ describe('Location page', () => {
     expect(within(here).getByText(/^Checked at /)).toBeInTheDocument();
     const row = screen.getByTestId('location-row');
     expect(
-      within(row).getByRole('link', { name: 'EX-000002 · Count did not match the book' }),
+      within(row).getByRole('link', { name: 'EX-000002 · Count did not match the stock on record' }),
     ).toHaveAttribute('href', '/dashboard/exceptions/o-2');
   });
 

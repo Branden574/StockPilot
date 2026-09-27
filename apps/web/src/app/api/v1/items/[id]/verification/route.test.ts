@@ -175,11 +175,11 @@ describe('GET /api/v1/items/[id]/verification', () => {
       });
       expect(copy.lines).toEqual([
         'Last physical count: Sep 12, 2026 · CC-000031',
-        'Book corrected from 8 to 10 (+2)',
+        'Stock on record corrected from 8 to 10 (+2)',
         'Item total counted. Which locations were checked was not recorded.',
         'Counted and posted by Blake.',
         '1 recorded stock movement since',
-        'Book now: 12',
+        'On record now: 12',
         'Count this item',
       ]);
     }
