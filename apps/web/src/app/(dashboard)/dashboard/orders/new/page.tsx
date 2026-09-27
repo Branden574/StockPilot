@@ -5,8 +5,9 @@ import { OrdersStorefront } from '@/components/orders/storefront/orders-storefro
 import { can, deliveryRecipientsForRouting } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getCachedOrgTimezone, getOrgEmailRouting } from '@/lib/dashboard/cached-org';
-import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
+import { getModulesForRequest, getWarehousesForRequest } from '@/lib/dashboard/request-cache';
 import { loadFrequentlyOrdered } from '@/server/loaders/orders-frequently-ordered';
+import { loadOrderKits } from '@/server/loaders/orders-kits';
 import {
   loadCatalogBundle,
   loadChartersForWarehouse,
@@ -42,10 +43,14 @@ export default async function NewOrderPage({
   //     own call); on soft navs it's one tiny query.
   //   - charters: 5-min unstable_cache, needed by the setup bar.
   //   - viewer identity: ctx fields — no extra query.
+  //   - modules: getModulesForRequest, request-cached and read off the same
+  //     context bundle requireOrgContext resolved (the dashboard layout reads
+  //     it too), so no extra round trip on the normal path. Only decides
+  //     whether the Kits row keeps its place while the kits stream in.
   // Anything only the CATALOG needs (items, media map, and the
   // access-key queries that build the catalog cache key) runs inside
   // catalogPromise, which is never awaited here.
-  const [params, warehouseRows, orgTimezoneRaw, deliveryRouting] = await Promise.all([
+  const [params, warehouseRows, orgTimezoneRaw, deliveryRouting, kitsEnabled] = await Promise.all([
     searchParams,
     getWarehousesForRequest(ctx.organizationId),
     getCachedOrgTimezone(ctx.organizationId),
@@ -54,6 +59,12 @@ export default async function NewOrderPage({
     // which mailboxes. One cheap single-row read, batched with the rest of
     // the shell path.
     getOrgEmailRouting(ctx.organizationId, 'delivery_request'),
+    // A failed module read keeps no place for the row: the kits loader makes
+    // the same read and then says the kits could not be loaded.
+    getModulesForRequest(ctx.organizationId).then(
+      (modules) => modules.has('bundles'),
+      () => false,
+    ),
   ]);
   // Used as-is. getCachedOrgTimezone resolves its own fallback through core's
   // `resolveOrgTimezone` and never returns null or '', so a second
@@ -126,6 +137,10 @@ export default async function NewOrderPage({
   // it never rejects. It was a browser fetch that could only begin after
   // hydration (see the loader's header for the measurement).
   const frequentlyOrderedPromise = loadFrequentlyOrdered(warehouseId, catalogPromise);
+  // The kits (bundles) this person can order here: the same treatment. Started
+  // now, matched against the same catalog, never awaited, never rejects. With
+  // the Bundles module off it reads nothing.
+  const kitsPromise = loadOrderKits(ctx.organizationId, warehouseId, catalogPromise);
   const chartersForWarehouse = await loadChartersForWarehouse(warehouseId);
 
   // The storefront owns its own page head (back link, H1, flow
@@ -139,6 +154,8 @@ export default async function NewOrderPage({
       warehouseId={warehouseId}
       catalogPromise={catalogPromise}
       frequentlyOrderedPromise={frequentlyOrderedPromise}
+      kitsPromise={kitsPromise}
+      kitsEnabled={kitsEnabled}
       chartersForWarehouse={chartersForWarehouse}
       viewerRole={ctx.role}
       viewerName={ctx.fullName}

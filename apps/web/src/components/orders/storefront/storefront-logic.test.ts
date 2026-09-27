@@ -20,7 +20,6 @@ import {
   DRAFT_URL_LIMIT,
   filterCatalog,
   formatSiteAddressLines,
-  fullKitLines,
   glyphFor,
   isBrowsingAll,
   prepareDeliveryRequest as prepareWithRecipients,
@@ -300,25 +299,6 @@ describe('sortCatalog', () => {
     const before = list.slice();
     sortCatalog(list, 'name-desc');
     expect(list).toEqual(before);
-  });
-});
-
-describe('fullKitLines', () => {
-  it('adds one of each in-stock item and skips out-of-stock ones', () => {
-    const inStock = makeItem({ id: 'k1', quantityOnHand: 4 });
-    const low = makeItem({ id: 'k2', quantityOnHand: 2, reorderPoint: 5 });
-    const outHard = makeItem({ id: 'k3', quantityOnHand: 0 });
-    const outReserved = makeItem({ id: 'k4', quantityOnHand: 3, reservedQuantity: 3 });
-
-    const lines = fullKitLines([inStock, low, outHard, outReserved]);
-    expect(lines).toEqual([
-      { itemId: 'k1', quantity: 1 },
-      { itemId: 'k2', quantity: 1 },
-    ]);
-  });
-
-  it('returns an empty list when everything is out', () => {
-    expect(fullKitLines([makeItem({ quantityOnHand: 0 })])).toEqual([]);
   });
 });
 

@@ -122,3 +122,109 @@ describe('cartReducer — reset', () => {
     expect(next.onBehalfOf).toEqual({ name: 'Raymond Allen', email: 'rallen@example.org' });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Kits (New order page). A kit's lines are ordinary lines; CartState.kits only
+// remembers how many units of each line a kit put there, so taking the kit out
+// never takes units added by hand. The allocation itself is pinned in
+// storefront/storefront-kits.test.ts.
+// ---------------------------------------------------------------------------
+describe('cartReducer — kits', () => {
+  const seed = initialCartState({ warehouseId: 'wh-1', fulfillmentType: 'pickup' });
+  const kit = (s: ReturnType<typeof initialCartState>, bundleId: string, changes: Array<[string, number]>) =>
+    cartReducer(s, {
+      type: 'apply-kit',
+      bundleId,
+      changes: changes.map(([itemId, delta]) => ({ itemId, delta })),
+    });
+
+  it('a new cart has no kits', () => {
+    expect(seed.kits).toEqual({});
+  });
+
+  it('apply-kit adds ordinary lines, merges into an existing one, and records the kit units', () => {
+    let s = cartReducer(seed, { type: 'add', itemId: 'mug', quantity: 2 });
+    s = kit(s, 'b1', [
+      ['mug', 3],
+      ['pad', 3],
+    ]);
+    expect(s.lines).toEqual([
+      { itemId: 'mug', quantity: 5 },
+      { itemId: 'pad', quantity: 3 },
+    ]);
+    expect(s.kits).toEqual({ b1: { mug: 3, pad: 3 } });
+  });
+
+  it('a negative change takes units off, drops a line at 0, and forgets a kit with nothing left', () => {
+    let s = kit(seed, 'b1', [['mug', 3]]);
+    s = kit(s, 'b1', [['mug', -3]]);
+    expect(s.lines).toEqual([]);
+    expect(s.kits).toEqual({});
+  });
+
+  it('lowering a line by hand shrinks the kit record to fit; raising it by hand does not grow it', () => {
+    let s = kit(seed, 'b1', [['mug', 3]]);
+    s = cartReducer(s, { type: 'add', itemId: 'mug', quantity: 4 });
+    expect(s.kits).toEqual({ b1: { mug: 3 } });
+    s = cartReducer(s, { type: 'set-qty', itemId: 'mug', quantity: 2 });
+    expect(s.kits).toEqual({ b1: { mug: 2 } });
+    s = cartReducer(s, { type: 'dec', itemId: 'mug' });
+    expect(s.kits).toEqual({ b1: { mug: 1 } });
+    s = cartReducer(s, { type: 'remove', itemId: 'mug' });
+    expect(s.kits).toEqual({});
+  });
+
+  it('a line removed by hand and added again by hand is not the kit again', () => {
+    let s = kit(seed, 'b1', [['mug', 1]]);
+    s = cartReducer(s, { type: 'set-qty', itemId: 'mug', quantity: 0 });
+    s = cartReducer(s, { type: 'add', itemId: 'mug' });
+    expect(s.kits).toEqual({});
+  });
+
+  it('two kits on one line: a line lowered by hand takes from the kit added last', () => {
+    let s = kit(seed, 'first', [['mug', 2]]);
+    s = kit(s, 'second', [['mug', 2]]);
+    s = cartReducer(s, { type: 'set-qty', itemId: 'mug', quantity: 3 });
+    expect(s.kits).toEqual({ first: { mug: 2 }, second: { mug: 1 } });
+  });
+
+  it('clear and reset forget every kit', () => {
+    const s = kit(seed, 'b1', [['mug', 1]]);
+    expect(cartReducer(s, { type: 'clear' }).kits).toEqual({});
+    expect(cartReducer(s, { type: 'reset' }).kits).toEqual({});
+  });
+
+  it('a draft saved before kits existed loads with none', () => {
+    const { kits: _omit, ...old } = seed;
+    const restored = cartReducer(seed, {
+      type: 'hydrate',
+      state: { ...old, lines: [{ itemId: 'mug', quantity: 2 }] } as never,
+    });
+    expect(restored.kits).toEqual({});
+    expect(restored.lines).toEqual([{ itemId: 'mug', quantity: 2 }]);
+  });
+
+  it('a saved kit record is kept only as far as the saved lines hold it, and junk is dropped', () => {
+    const restored = cartReducer(seed, {
+      type: 'hydrate',
+      state: {
+        ...seed,
+        lines: [{ itemId: 'mug', quantity: 2 }],
+        kits: {
+          b1: { mug: 5, gone: 3, frac: 1.5 },
+          b2: 'nonsense',
+          b3: { mug: -1 },
+        },
+      } as never,
+    });
+    expect(restored.kits).toEqual({ b1: { mug: 2 } });
+  });
+
+  it('non-whole or zero changes are ignored', () => {
+    const s = kit(seed, 'b1', [
+      ['mug', 1.5],
+      ['pad', 0],
+    ]);
+    expect(s).toBe(seed);
+  });
+});

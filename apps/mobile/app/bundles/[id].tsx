@@ -18,8 +18,9 @@ import {
   defaultDistributeWarehouseId,
   type DistributionPreview,
 } from '@/lib/bundle-distribute-preview';
-import { showWriteCta } from '@/lib/cta-gating';
+import { showDistributeCta } from '@/lib/cta-gating';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
+import { useRole } from '@/lib/use-role';
 import {
   getBundleComponents,
   getItemById,
@@ -36,11 +37,14 @@ import { radius, space, theme } from '@/lib/theme';
 
 export default function BundleDetail() {
   const router = useRouter();
-  // Distribute is a WRITE — hidden for read-only visitors (bundles:read
-  // grantees). Cosmetic: the API enforces server-side; while permissions are
-  // loading the CTA shows (matches cycle-counts/schedule gating fallback).
+  // Distribute is a WRITE the server accepts from managers and above holding
+  // bundles:distribute (0101). Staff hold the permission by default and were
+  // shown a section whose Distribute the server refused; it now appears only
+  // once the role is known to be manager or above (showDistributeCta, the web
+  // bundle page's rule). Read-only visitors never see it.
   const perms = useEffectivePermissions();
-  const canDistribute = showWriteCta(perms, 'bundles:distribute');
+  const { role } = useRole();
+  const canDistribute = showDistributeCta(role, perms);
   const { id } = useLocalSearchParams<{ id: string }>();
   const [bundle, setBundle] = React.useState<CachedBundle | null>(null);
   const [components, setComponents] = React.useState<CachedBundleComponent[]>([]);

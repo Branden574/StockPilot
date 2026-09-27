@@ -60,6 +60,116 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'order-page-kits-2026-09-27',
+    revision: 1,
+    // A draft until the web deploy and the Demo Co walk; the New order page is
+    // web only, so there is no phone update to wait for. Addressed only where
+    // Bundles is on: that is where kits exist. The removal of Add full kit is
+    // its own release below, because the button was on every organization's
+    // New order page, Bundles or not (review F7).
+    //
+    // Orders AND Bundles: inside one audience the modules are alternatives
+    // (Orders OR Bundles), which told organizations without Bundles about
+    // kits. The release names Orders and each entry names Bundles, and a
+    // reader must pass both.
+    status: 'draft',
+    title: 'Order a whole kit from the New order page in one step',
+    summary:
+      'When your organization uses Bundles, the New order page shows kits: bundles whose items you can all order at the chosen warehouse. Add kit puts every item of the kit into your cart as its own line, and the order is approved and picked like any other.',
+    publishedAt: '2026-09-27T20:00:00Z',
+    audience: { modules: ['orders'] },
+    entries: [
+      {
+        id: 'order-page-kits',
+        category: 'new',
+        area: 'Orders',
+        title: 'Kits on the New order page',
+        whatChanged:
+          'The New order page has a Kits row above Frequently ordered. It lists each active bundle whose items you can all order at the chosen warehouse, with the items it holds and how many kits are available. Add kit puts every item into your cart as its own line, and the minus and plus buttons take out or add one kit at a time. A kit also comes first when you open a category that holds one of its items, and it shows when you search for its name.',
+        whyItMatters: 'Ordering a kit meant finding each of its items and adding them one at a time.',
+        howItAffectsYou:
+          'Kits are counted from the same available stock the item cards show. When an item of a kit is kept on more than one rack under the same SKU, the kit counts every one of those racks you can order from, except stock earmarked for a different site, so your cart can show that item on two lines, one per rack; Details on the card lists the racks. A kit goes into the cart whole or not at all: if one of its items runs out, Add kit is turned off and the card names that item.',
+        whatToDo:
+          'If Add kit is turned off, you can still add the kit\'s other items one by one. Kits come from Bundles, so the kits on offer change when someone who manages bundles edits them.',
+        link: { href: '/dashboard/orders/new', label: 'Open New order' },
+        audience: { anyPermission: ['orders:request'], modules: ['bundles'] },
+      },
+      {
+        id: 'order-page-kit-lines',
+        category: 'new',
+        area: 'Orders',
+        title: 'The items a kit adds are ordinary order lines',
+        whatChanged:
+          "Each item a kit puts in your cart is an ordinary line, and you can change or remove any of them. Adding a kit, or one kit more, never lowers or removes a line you changed; the kit may move its own units onto one rack. One kit less, or a lower count typed in, takes out one kit's worth of each item for every kit taken out, and never units you added by hand.",
+        whyItMatters:
+          'Approvers and pickers see the same item lines as on any order, so approval and picking work as they always have.',
+        howItAffectsYou:
+          "Items a bundle marks optional are not added by the kit. If you lower or remove one of a kit's lines, the card counts only the whole kits still in your cart, and adding a kit then adds only what that kit is missing. Taking a kit out then takes one kit's worth of each item, and anything left over stays in your cart as ordinary lines.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders/new', label: 'Open New order' },
+        audience: { anyPermission: ['orders:request'], modules: ['bundles'] },
+      },
+    ],
+  },
+  {
+    id: 'order-page-add-full-kit-removed-2026-09-27',
+    revision: 1,
+    // Goes out with the kits release (a draft until the same web deploy), to
+    // everyone who can place orders, with or without Bundles: the button was
+    // on the New order page of any organization with a category named like
+    // "New Hire". Its words hold where Bundles is off (review F7).
+    status: 'draft',
+    title: 'Add full kit is gone from the New order page',
+    summary:
+      'The Add full kit button on a category of the New order page is gone. It added one of every in-stock item in that category, whatever a kit actually held. Add the items you need one by one; where your organization uses Bundles, the New order page can also offer kits, which add exactly a bundle\'s items.',
+    publishedAt: '2026-09-27T20:00:00Z',
+    entries: [
+      {
+        id: 'order-page-add-full-kit-removed',
+        category: 'improved',
+        area: 'Orders',
+        title: 'Add full kit is gone',
+        whatChanged:
+          'The Add full kit button on a category header of the New order page is gone. Adding items one at a time, from their cards or by search, works as before.',
+        whyItMatters:
+          'Add full kit added one of every in-stock item in the category, whatever the kit held, so an order could carry every size of an item and items nobody asked for.',
+        howItAffectsYou:
+          'If you used Add full kit, add the items you need one by one. Where your organization uses Bundles, the New order page can also offer kits: each adds exactly the items of one bundle.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders/new', label: 'Open New order' },
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
+    id: 'bundle-distribute-managers-2026-09-27',
+    revision: 1,
+    // A draft until the web deploy and the phone update (the mobile bundle
+    // screen changes too), then published.
+    status: 'draft',
+    title: 'Distribute on a bundle is shown only to managers and above',
+    summary:
+      'On the web and in the mobile app, Distribute on a bundle now appears only for managers, admins and owners who can distribute bundles. Staff were shown it, but StockPilot refuses a distribution from anyone below manager, so their attempt ended in Permission denied.',
+    publishedAt: '2026-09-27T20:00:00Z',
+    entries: [
+      {
+        id: 'bundle-distribute-managers',
+        category: 'fixed',
+        area: 'Bundles',
+        title: 'Distribute appears only for people who can distribute',
+        whatChanged:
+          'The Distribute button on a bundle page on the web, and the Distribute section of a bundle in the mobile app, now appear only for managers, admins and owners who hold the permission to distribute bundles.',
+        whyItMatters:
+          'Staff hold that permission by default and were shown Distribute, but StockPilot refuses a distribution from anyone below manager, so a staff member who tried got Permission denied.',
+        howItAffectsYou:
+          'Managers, admins and owners see no change. Staff can still open a bundle and see its items and its distribution history. In the mobile app the section appears once the app has checked your role with StockPilot, which needs a connection: if the app was opened offline, it appears when you open the bundle again with a connection.',
+        whatToDo: 'If you are staff and kits need to be handed out, ask a manager to distribute them.',
+        link: { href: '/dashboard/bundles', label: 'Open Bundles' },
+        audience: { anyPermission: ['bundles:read', 'bundles:distribute'], modules: ['bundles'] },
+      },
+    ],
+  },
+  {
     id: 'last-physical-count-and-location-pages-2026-09-27',
     revision: 1,
     // Published after the web deploy (#272), the phone update (OTA iOS

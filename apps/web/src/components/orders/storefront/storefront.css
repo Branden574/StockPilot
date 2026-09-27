@@ -1300,22 +1300,271 @@
 .sp-storefront .sf-cat-sec[data-open='false'] .fold {
   transform: rotate(-90deg);
 }
-.sp-storefront .sf-kit-btn {
+/* ---- Kits (bundles on the New order page) -------------------- */
+/* A kit card is an .sf-card: the same grid column, photo box and add control
+   as an item card, so a kit never stretches (see .sf-grid above). */
+.sp-storefront .sf-kits {
+  margin: 4px 0 30px;
+}
+/* The Kits row is ONE horizontal strip at every width, like Frequently ordered
+   (verify 2026-09-27): as a wrapping grid its height grew with the number of
+   kits, so the reserved place could not match it (five kits at 390 px wide:
+   2096 px against 469 px reserved). Every card has a fixed width, and every
+   part of it a fixed height, so the strip is one card high whatever it holds,
+   and KitsRowSkeleton draws the same strip. Guarded by
+   storefront-kits-strip.guard.test.ts. */
+.sp-storefront .sf-kits-track {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 12px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  /* No scroll snapping: with mandatory snapping, Chrome snapped the strip back
+     after Tab moved focus to a card's Add kit button, leaving it half out of
+     view (local walk, 390 px). Keyboard focus is scrolled fully into view
+     instead (revealKeyboardFocus), clear of the faded edges. */
+  scroll-padding-inline: 14px 26px;
+  padding: 2px 2px 6px;
+  scrollbar-width: none;
+  mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 12px,
+    #000 calc(100% - 24px),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    transparent 0,
+    #000 12px,
+    #000 calc(100% - 24px),
+    transparent 100%
+  );
+}
+.sp-storefront .sf-kits-track::-webkit-scrollbar {
+  display: none;
+}
+.sp-storefront .sf-kits-track > .sf-kit-card {
+  flex: 0 0 236px;
+}
+/* One line, whatever the count beside it: a longer count never wraps the
+   header to a second line the reserved place does not have. */
+.sp-storefront .sf-kits .sf-sec-head {
+  align-items: center;
+}
+.sp-storefront .sf-kits .sf-sec-head h3,
+.sp-storefront .sf-kits .sf-sec-head .ct,
+.sp-storefront .sf-kits .sf-sec-head .sf-arrows {
+  flex-shrink: 0;
+}
+.sp-storefront .sf-kits .sf-sec-head .sub {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sp-storefront .sf-kits-sk-head .sf-arrow-sk {
+  display: block;
+  width: 28px;
+  height: 28px;
+}
+/* Two lines of name, always (13.5px x 1.32), not a min-height below it. */
+.sp-storefront .sf-kit-card .sf-card-nm {
+  height: 2.64em;
+  min-height: 0;
+}
+.sp-storefront .sf-kit-grid + .sf-grid,
+.sp-storefront .sf-kit-grid + .sf-rows {
+  margin-top: 14px;
+}
+.sp-storefront .sf-kit-mosaic {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 1px;
+  background: var(--sf-line-2);
+}
+.sp-storefront .sf-kit-mosaic .cell {
+  position: relative;
+  overflow: hidden;
+}
+.sp-storefront .sf-kit-mosaic .cell > .sf-ph {
+  position: absolute;
+  inset: 0;
+  border-bottom: 0;
+}
+.sp-storefront .sf-kit-mosaic .sf-ph .glyph {
+  font-size: 22px;
+}
+.sp-storefront .sf-kit-tag {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 12px;
+  gap: 4px;
+  padding: 2px 8px 2px 6px;
   border-radius: 999px;
+  background: color-mix(in oklab, var(--sf-bg) 74%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border: 1px solid color-mix(in oklab, var(--sf-accent) 45%, var(--sf-line));
-  background: color-mix(in oklab, var(--sf-accent) 10%, transparent);
-  color: var(--sf-ink);
-  font-size: 11.5px;
-  font-weight: 550;
-  transition: all 0.13s;
+  font-family: var(--sf-font-mono);
+  font-size: 10.5px;
+  color: var(--sf-ink-2);
 }
-.sp-storefront .sf-kit-btn:hover {
-  background: color-mix(in oklab, var(--sf-accent) 20%, transparent);
+.sp-storefront .sf-kit-tag svg {
+  color: var(--sf-accent);
+}
+/* The item list and, for a kit that is out, the out-of-stock line share one
+   block of fixed height: two lines of items in stock; one line of items and
+   one line saying what is out otherwise. So a card is as tall either way. */
+.sp-storefront .sf-kit-desc {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  height: 37px;
+  overflow: hidden;
+}
+.sp-storefront .sf-kit-items {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--sf-ink-3);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.sp-storefront .sf-kit-card[data-out='true'] .sf-kit-items {
+  -webkit-line-clamp: 1;
+}
+.sp-storefront .sf-kit-short {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--sf-crit-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sp-storefront .sf-kit-more {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--sf-ink-3);
+}
+.sp-storefront .sf-kit-more:hover {
+  color: var(--sf-ink);
+}
+.sp-storefront .sf-kit-more svg {
+  transition: transform 0.15s;
+}
+.sp-storefront .sf-kit-more[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+.sp-storefront .sf-kit-details {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--sf-ink-3);
+  border-top: 1px solid var(--sf-line-2);
+  padding-top: 7px;
+}
+.sp-storefront .sf-kit-details ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.sp-storefront .sf-kit-details li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 8px;
+}
+.sp-storefront .sf-kit-details .nm {
+  color: var(--sf-ink-2);
+  min-width: 0;
+}
+.sp-storefront .sf-kit-details .av {
+  font-family: var(--sf-font-mono);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+.sp-storefront .sf-kit-details .racks {
+  flex-basis: 100%;
+  font-family: var(--sf-font-mono);
+  font-size: 10.5px;
+  color: var(--sf-ink-4);
+}
+.sp-storefront .sf-kit-details .lim {
+  margin: 7px 0 0;
+  color: var(--sf-ink-2);
+}
+.sp-storefront .sf-kit-details .note {
+  margin: 4px 0 0;
+  color: var(--sf-ink-4);
+}
+/* The Kits row's reserved place while it streams (KitsRowSkeleton): the real
+   row's classes, with its words invisible, so the real row lands on the same
+   box and the grid below does not move. */
+.sp-storefront .sf-kits-sk-head h3 {
+  color: transparent;
+  border-radius: 6px;
+}
+.sp-storefront .sf-kits-sk-head .ct,
+.sp-storefront .sf-kits-sk-head .sub,
+.sp-storefront .sf-kit-sk-more {
+  visibility: hidden;
+}
+.sp-storefront .sf-kit-card-sk:hover {
+  border-color: var(--sf-line);
+  transform: none;
+  box-shadow: none;
+}
+.sp-storefront .sf-kit-sk-photo {
+  position: absolute;
+  inset: 0;
+  border-radius: 0;
+}
+.sp-storefront .sf-kit-sk-line {
+  display: block;
+  height: 12px;
+  width: 80%;
+  border-radius: 6px;
+}
+.sp-storefront .sf-kit-sk-line.short {
+  width: 55%;
+}
+/* Two lines of .sf-kit-items (12px x 1.4), inside the fixed .sf-kit-desc. */
+.sp-storefront .sf-kit-sk-items {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  height: 2.8em;
+}
+.sp-storefront .sf-kit-sk-ctl {
+  height: 33px;
+  border-radius: 9px;
+}
+.sp-storefront .sf-kits-pending {
+  margin: 4px 0 24px;
+  font-size: 12px;
+  color: var(--sf-ink-4);
+}
+.sp-storefront .sf-kits-error {
+  margin: 4px 0 24px;
+  padding: 10px 12px;
+  border: 1px dashed var(--sf-line-strong);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--sf-ink-3);
 }
 
 /* result meta line */

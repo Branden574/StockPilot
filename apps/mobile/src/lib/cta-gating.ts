@@ -1,4 +1,4 @@
-import { can, type Permission, type Role } from '@stockpilot/core';
+import { can, canDistributeBundles, type Permission, type Role } from '@stockpilot/core';
 
 /**
  * COSMETIC write-CTA gate for mobile screens, driven by the effective
@@ -44,4 +44,30 @@ export function showWriteCtaForRole(
   if (perms !== undefined) return perms.has(permission);
   if (role !== null) return can({ role }, permission);
   return true;
+}
+
+/**
+ * The bundle screen's Distribute section. Unlike the other write CTAs it is
+ * NOT shown while the role is unknown: the server refuses distribution below
+ * manager (0101) although staff hold `bundles:distribute`, so the section
+ * appears only when the role is known to be manager or above AND the permission
+ * holds (the loaded effective set when there is one, else the role's defaults).
+ * The same rule as the web bundle page (core canDistributeBundles), so the
+ * phone never offers a distribution it would queue and see refused.
+ *
+ * KNOWN LIMIT, KEPT ON PURPOSE (review F5, 2026-09-27). The role is cached in
+ * memory only (role-cache.ts), so after a cold start with no connection it
+ * stays unknown and a manager does not see Distribute until the role is read:
+ * the next time a screen that reads it (this one included) opens with a
+ * connection. The section is simply absent meanwhile; nothing on the screen
+ * says the person cannot distribute. Showing it on the permission alone would
+ * offer staff a distribution the server refuses, which is what this gate fixed.
+ * The What's New entry for this change says it needs a connection.
+ */
+export function showDistributeCta(
+  role: Role | null,
+  perms: ReadonlySet<Permission> | undefined,
+): boolean {
+  if (role === null) return false;
+  return canDistributeBundles(perms === undefined ? { role } : { role, permissions: perms });
 }

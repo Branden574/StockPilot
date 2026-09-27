@@ -773,8 +773,6 @@ function PublicOrdersV2Inner({
                 }
                 shownCount={GRID_PREVIEW}
                 onViewAll={() => setCategory(g.key)}
-                showKitButton={false}
-                onAddKit={() => undefined}
                 icon={<Package size={15} />}
               >
                 {renderItems(g.items.slice(0, GRID_PREVIEW))}

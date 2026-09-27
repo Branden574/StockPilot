@@ -516,3 +516,48 @@ describe('resolvePortalContext — the mode comes from the org', () => {
     expect(ctx).toBeNull();
   });
 });
+
+/**
+ * A kit's pre-assembled stock (inventory_items.is_bundle) can never be picked
+ * for an order: assembled kits sit in Staging and picking draws placed stock.
+ * The New order page's service refuses it; the portal writes its lines with
+ * the service-role client and the database line guard does not refuse kit
+ * stock yet, so checkout must (review F10, 2026-09-27). An allowlist can name
+ * such an item, so the catalog check does not stop it.
+ */
+describe('portalSubmitOrder — a kit’s pre-assembled stock is refused', () => {
+  const KIT_STOCK = '99999999-9999-4999-8999-999999999999';
+
+  function withKitStock() {
+    const db = makeDb();
+    db.inventory_items!.push(
+      item(KIT_STOCK, { name: 'New Hire Bundle (assembled)', is_bundle: true }),
+    );
+    db.customer_catalog!.push({ customer_id: CUSTOMER, item_id: KIT_STOCK });
+    admin = makeAdmin(db);
+    adminRef.current = admin.client;
+  }
+
+  it('refuses the order by the kit’s name and writes nothing', async () => {
+    withKitStock();
+    await expect(
+      portalSubmitOrder(ctxNoCharge, {
+        lines: [
+          { itemId: ITEM_A, quantity: 1 },
+          { itemId: KIT_STOCK, quantity: 2 },
+        ],
+      }),
+    ).rejects.toThrow(
+      "New Hire Bundle (assembled) is a pre-assembled kit and can't be put on an order. Order the kit's items instead.",
+    );
+    expect(admin.inserts.find((i) => i.table === 'order_requests')).toBeUndefined();
+    expect(admin.inserts.find((i) => i.table === 'order_request_lines')).toBeUndefined();
+  });
+
+  it('an order of ordinary items still goes through', async () => {
+    withKitStock();
+    await expect(
+      portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 1 }] }),
+    ).resolves.toBeTruthy();
+  });
+});

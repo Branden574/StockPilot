@@ -74,6 +74,18 @@ const createSchema = z
       )
       .min(1)
       .max(100),
+    // The kits the New order page used, for the order's audit entry only
+    // (OrderRequestsService.create). Optional: an older page sends none. The
+    // lines alone are the order.
+    kits: z
+      .array(
+        z.object({
+          bundleId: z.string().uuid(),
+          count: z.number().int().positive().max(MAX_TOTAL_QTY),
+        }),
+      )
+      .max(100)
+      .optional(),
   })
   .refine((v) => v.lines.reduce((s, l) => s + l.quantity, 0) <= MAX_TOTAL_QTY, {
     message: `Total quantity across all lines cannot exceed ${MAX_TOTAL_QTY.toLocaleString()}.`,
@@ -116,6 +128,7 @@ export async function createOrderRequestAction(
         quantity: l.quantity,
         notes: l.notes ?? null,
       })),
+      ...(parsed.data.kits && parsed.data.kits.length > 0 ? { kits: parsed.data.kits } : {}),
     });
     revalidatePath('/dashboard/orders');
     revalidateOrdersCatalog();

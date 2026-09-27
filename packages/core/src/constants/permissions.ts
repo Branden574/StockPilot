@@ -1,4 +1,5 @@
 import type { Role } from './roles';
+import { isManagerOrAbove } from './terminology';
 
 export const PERMISSIONS = [
   'organization:update',
@@ -243,6 +244,23 @@ export function can(
   // (cron jobs, OAuth callbacks, tests) omit it and fall back to the static
   // role defaults — exactly their prior behavior, no override awareness needed.
   return ctx.permissions ? ctx.permissions.has(permission) : hasPermission(ctx.role, permission);
+}
+
+/**
+ * Whether to OFFER Distribute on a bundle (web bundle page, phone bundle
+ * screen). The permission alone is not enough: staff hold `bundles:distribute`
+ * by default (commit 90195343), but the database has refused anyone below
+ * manager since 0101 (`has_org_role(org, 'manager')` in distribute_bundle),
+ * which raised the check on the mistaken premise that the permission was
+ * manager-only. A staff member saw Distribute and got "Permission denied".
+ * The control now follows both: the permission (overrides apply) AND manager
+ * or above, so the screen offers exactly what the database accepts.
+ */
+export function canDistributeBundles(ctx: {
+  readonly role: Role;
+  readonly permissions?: ReadonlySet<Permission>;
+}): boolean {
+  return isManagerOrAbove(ctx.role) && can(ctx, 'bundles:distribute');
 }
 
 export function assertPermission(role: Role, permission: Permission): void {

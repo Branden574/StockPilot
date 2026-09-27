@@ -109,7 +109,7 @@ Spacing: page padding `26px 32px 90px`, max-width 1560px centered; shell grid `m
 - Row hover: --bg-sunk@55%. Out-of-stock row at 62% opacity.
 
 ### Category sections (default "All" browsing)
-- Section head: collapse chevron (rotates -90° when closed), icon + name (17px Inter Tight 500), mono count, bottom hairline, "View all N →" link. New Hire section has an **"Add full kit"** pill button (accent@10% fill, accent@45% border, height 28) adding 1 of each in-stock item.
+- Section head: collapse chevron (rotates -90° when closed), icon + name (17px Inter Tight 500), mono count, bottom hairline, "View all N →" link. New Hire section has an **"Add full kit"** pill button (accent@10% fill, accent@45% border, height 28) adding 1 of each in-stock item. (REMOVED 2026-09-27 by owner decision: it added every in-stock item of the category, polo sizes included. Kits now come from Bundles as kit cards; see apps/web/src/components/orders/storefront/storefront-kits.ts. Do not rebuild it from this handoff.)
 - Each section shows one grid row (= column count) of items; "View all" switches to that category pill.
 - When a category/search/filter is active: flat grid with a result line ("All products / 24 items").
 

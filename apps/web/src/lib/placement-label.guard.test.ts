@@ -741,6 +741,13 @@ const RENDERS_PRECOMPUTED = [
   'apps/web/src/components/orders/storefront/storefront-overlays.tsx',
   'apps/web/src/components/orders/v2/item-card.tsx',
   'apps/web/src/components/orders/v2/types.ts',
+  // Kits on the New order page (2026-09-27). The kit card's Details list the
+  // racks of a component kept on several rows, and the kits loader orders those
+  // rows by rack; both use the catalog row's `rackLabel` exactly as the
+  // storefront loader computed it (the BIN_FIRST_EXCEPTION above) and decide
+  // nothing of their own.
+  'apps/web/src/components/orders/storefront/storefront-kit-card.tsx',
+  'apps/web/src/server/loaders/orders-kits.ts',
 ] as const;
 
 /**

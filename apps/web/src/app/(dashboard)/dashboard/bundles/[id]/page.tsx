@@ -15,7 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { can } from '@stockpilot/core';
+import { can, canDistributeBundles } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 import { BundlesService } from '@/server/services/bundles';
@@ -30,13 +30,17 @@ export default async function BundleDetailPage({
   const { id } = await params;
   const ctx = await requireOrgContext();
   const canManage = can(ctx, 'bundles:manage');
-  const canDistribute = can(ctx, 'bundles:distribute');
   // Same visibility gate as the bundles list page — without it, an UNgranted
   // viewer could still open any bundle's recipe + distribution history by
-  // direct URL (bundles RLS is org-member-wide).
-  if (!can(ctx, 'bundles:read') && !canDistribute && !canManage) {
+  // direct URL (bundles RLS is org-member-wide). Holding bundles:distribute
+  // still OPENS the page, as it does the list.
+  if (!can(ctx, 'bundles:read') && !can(ctx, 'bundles:distribute') && !canManage) {
     redirect('/dashboard');
   }
+  // The Distribute BUTTON is offered only where the database will accept it:
+  // bundles:distribute AND manager or above (0101). Staff hold the permission
+  // by default and were shown a button that answered "Permission denied".
+  const canDistribute = canDistributeBundles(ctx);
 
   const svc = await BundlesService.forCurrentUser();
   let detail;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  canDistributeBundles,
   effectivePermissions,
   FULLY_GRANTABLE_PERMISSIONS,
   hasPermission,
@@ -202,5 +203,33 @@ describe('movements:edit_notes defaults', () => {
   it('viewer and staff do NOT have it by default', () => {
     expect(hasPermission('viewer', 'movements:edit_notes')).toBe(false);
     expect(hasPermission('staff', 'movements:edit_notes')).toBe(false);
+  });
+});
+
+describe('canDistributeBundles', () => {
+  // The database refuses distribution below manager (0101), so Distribute is
+  // offered only to managers and above who hold bundles:distribute.
+  it('offers Distribute to owner, admin and manager by default', () => {
+    for (const role of ['owner', 'admin', 'manager'] as const) {
+      expect(canDistributeBundles({ role }), role).toBe(true);
+      expect(canDistributeBundles({ role, permissions: effectivePermissions(role) }), role).toBe(true);
+    }
+  });
+
+  it('never offers it to staff, although staff hold bundles:distribute by default', () => {
+    expect(ROLE_PERMISSIONS.staff).toContain('bundles:distribute');
+    expect(canDistributeBundles({ role: 'staff' })).toBe(false);
+    expect(canDistributeBundles({ role: 'staff', permissions: effectivePermissions('staff') })).toBe(false);
+  });
+
+  it('never offers it to a viewer, even one granted the permission', () => {
+    const granted = effectivePermissions('viewer', [{ permission: 'bundles:distribute', granted: true }]);
+    expect(granted.has('bundles:distribute')).toBe(true);
+    expect(canDistributeBundles({ role: 'viewer', permissions: granted })).toBe(false);
+  });
+
+  it('a manager whose bundles:distribute was revoked is not offered it', () => {
+    const revoked = effectivePermissions('manager', [{ permission: 'bundles:distribute', granted: false }]);
+    expect(canDistributeBundles({ role: 'manager', permissions: revoked })).toBe(false);
   });
 });
