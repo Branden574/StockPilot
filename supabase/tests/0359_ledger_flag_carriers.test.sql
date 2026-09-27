@@ -235,11 +235,12 @@ select is(
 -- adjust_stock and transfer_stock: SECURITY DEFINER on purpose (the write
 -- must not depend on which holdings the caller can SELECT), gated in its
 -- body. 0373 adds ledger.apply_level_delta_for, the null-location draw
--- engine that also records which holdings each draw touched: SECURITY
+-- engine that also returns which holdings each draw touched: SECURITY
 -- DEFINER exactly as public.apply_level_delta was (0331: the draw-down must
 -- not depend on the caller's read scope), with the same gate in its body.
--- Its recorder, ledger._record_holdings, is SECURITY INVOKER with no API
--- EXECUTE, so it is not on this list. The eight moved bodies keep their kind.
+-- Its helper ledger._seal and the forget trigger function
+-- ledger.tg_forget_draw_scope are SECURITY INVOKER with no API EXECUTE, so
+-- they are not on this list. The eight moved bodies keep their kind.
 select is(
   array(select p.proname::text from pg_proc p
          where p.pronamespace = 'ledger'::regnamespace and p.prosecdef order by 1),

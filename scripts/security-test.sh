@@ -227,14 +227,18 @@ PGTAP_TESTS=(
   # item that can no longer be counted resolves as subject_gone.
   supabase/tests/0372_exception_recount_review.test.sql
   # Draw provenance (0373): which holdings a null-location draw touched is
-  # recorded by the one draw engine, ledger.apply_level_delta_for (SECURITY
+  # returned by the one draw engine, ledger.apply_level_delta_for (SECURITY
   # DEFINER, gated in its body: staff+ of the item's org, inside a ledger
-  # RPC), under the movement id its caller inserts. stock_movement_holdings
-  # is read-only to every API role (service_role included); its SELECT
-  # mirrors the parent movement's visibility for every persona; its writer,
-  # ledger._record_holdings, is executable by no API role. Every draw still
-  # moves holdings exactly as the 0359 body did (differential oracle).
-  # security_invariants INV-37/38/39 keep the engine's callers honest.
+  # RPC), and written by its caller into stock_movements.draw of the row it
+  # inserts next. The stamp trigger refuses a draw outside a ledger
+  # transaction (every role) and any later change. The read view
+  # stock_movement_holdings is security_invoker (the movement's visibility
+  # for every persona) and read-only to every API role. The drawer's scope is
+  # cached per transaction by ledger._seal (no API EXECUTE) and cleared by the
+  # transaction's own membership, assignment, profile, warehouse and location
+  # changes. Every draw still moves holdings exactly as the 0359 body did
+  # (differential oracle). security_invariants INV-37..41 keep the engine's
+  # callers and the cache's writers honest.
   supabase/tests/0373_draw_provenance.test.sql
 
   # Storage and attachment exposure.

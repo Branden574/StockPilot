@@ -1,190 +1,197 @@
 -- supabase/tests/0373_draw_provenance.test.sql
 -- Proves migration 0373: every null-location draw and increment reached
 -- through ledger.adjust_stock, distribute_bundle, assemble_bundle and
--- process_return_disposition records exactly which holdings it touched, on
--- exactly its own movement, and every draw still moves holdings byte-for-byte
--- as before.
+-- process_return_disposition carries exactly which holdings it touched on
+-- its OWN stock_movements row (stock_movements.draw), and every draw still
+-- moves holdings byte-for-byte as before.
 --
---   A. STRUCTURE: the table, its keys (composite deferred FK, SET NULL
---      location FK), the unique index it references, RLS with one SELECT
---      policy, no write privilege for any API role, not in realtime; the
---      engine, the recorder and the wrapper.
+--   A. STRUCTURE: the two types, the nullable column (no index, no
+--      constraint, no inbound key), the security_invoker view and its
+--      grants, the stamp trigger's column list, the engine, _seal (INVOKER,
+--      no SET, closed), the five forget triggers, the wrapper, the
+--      stock_movements policies the view inherits, and the first build's
+--      objects gone.
 --   P. TEXT PROOFS: the engine is the 0359 apply_level_delta prosrc plus
---      exactly eight tagged lines of the allowed shapes; each restated caller
---      is its pre-0373 prosrc minus its apply_level_delta lines plus tagged
---      lines of the allowed shapes; kind, config, signature, ACL, owner and
---      comment of the four callers are unchanged.
+--      exactly eleven tagged lines; each restated caller is its pre-0373
+--      prosrc minus its apply_level_delta lines plus tagged lines of the
+--      allowed shapes; kind, config, signature, ACL, owner and comment of the
+--      four callers are unchanged; the three draw-loop queries plan the same
+--      with and without the added SELECT columns (custom and generic).
 --   B. DIFFERENTIAL ORACLE: pg_temp.ald_0359 is the 0359 body verbatim (md5
---      proven). The engine (with a movement id) and the wrapper run on the
---      same fixture in rolled-back subtransactions; holdings and SQLSTATE +
---      message must be identical in every mode and shape. The wrapper
---      records nothing.
---   C. PROVENANCE TRUTH: per successful engine run, the recorded rows summed
---      by location equal the holdings difference (an independent oracle),
---      the total equals the quantity, seq follows the draw order, steps and
---      draw-time snapshots are right, and actor_scope is service / manager /
---      in_scope / out_of_scope.
---   D. PER CALLER, as real personas (every case then checks the deferred FK
---      with SET CONSTRAINTS ... IMMEDIATE, which a rolled-back test would
---      otherwise never run): the phone adjust, the web 'any' removal, a +1,
---      explicit adjust and transfer (no rows), complete_picking with a
---      duplicate line, the cancel restock, reverse_receipt, assemble and
---      distribute (with shortage rows), return restock + scrap (no row
---      crosses legs), and the pinned post_cycle_count gap (no rows).
---   E. FAILURE AND INTEGRITY: insufficient_placed_stock records nothing; an
---      orphan id and another item's movement id both fail the FK (23503);
---      a second engine call for one movement continues seq; a rolled-back
---      subtransaction leaves no rows; zero and NULL record nothing.
---   F. SECURITY: no direct writes; the engine's gate; the wrapper's gate;
---      RLS read parity for every persona (visible rows = rows of visible
---      movements, with literal counts).
---   R. SUB-PRECISION QUANTITIES (review 2026-09-25): a share with more than
---      four decimals (adjust_stock and the API accept any finite value) is
+--      proven). The engine and the wrapper run on the same fixture in
+--      rolled-back subtransactions; holdings and SQLSTATE + message must be
+--      identical in every mode and shape. record = false returns no draw.
+--   C. PROVENANCE TRUTH: per successful engine run, the returned holdings
+--      summed by location equal the holdings difference (an independent
+--      oracle), the total equals the quantity, seq follows the draw order,
+--      steps and draw-time facts are right, and the scope is service /
+--      manager / in_scope / out_of_scope.
+--   R. SUB-PRECISION QUANTITIES: a share with more than four decimals is
 --      recorded as its numeric(14,4) holding moved, and one that rounds to
---      zero records no row: the engine still equals the 0359 oracle exactly,
---      no draw that succeeded before fails (it did, 23514), and rows sum
---      exactly to the holdings difference and to new - previous quantity.
---   S. SCOPE ONCE PER CALL (perf review, 2026-09-25): service and manager
---      are one answer per call; below manager caller_can_write_location runs
---      once per distinct (organization, warehouse) of the call's locations.
---      Its text and volatility are pinned (it must read the location only
---      for those two columns, and run in the INSERT's snapshot); six personas
---      over eight locations and six pairs give literal values equal to the
---      old per-row formula, with the call counts; a real six-holding staff
---      draw asks three times, not six. A one-location call (every increment,
---      most adjusts) asks once, of that location, and never runs the pair CTE
---      (S10-S15, review 2026-09-25: counted by the locations reads).
+--      zero is not recorded; rows sum exactly to the holdings difference.
+--   D. PER CALLER, as real personas: the phone adjust, the web 'any'
+--      removal, a +1, explicit adjust and transfer (no draw), complete_picking
+--      with a duplicate line, the cancel restock, reverse_receipt, assemble
+--      and distribute (with shortage rows), return restock + scrap (no draw
+--      crosses legs), and the pinned post_cycle_count gap (no draw).
+--   E. FAILURE AND INTEGRITY: insufficient_placed_stock records nothing; no
+--      draw sits on a row the ledger did not write; zero and NULL return no
+--      draw; a zero adjust writes no draw; a rolled-back savepoint leaves
+--      nothing.
+--   F. SECURITY: only a ledger transaction inserts a draw (authenticated,
+--      service_role and the owner alike; a forged all-NULL draw too); no role
+--      changes a draw afterwards; the engine's and the wrapper's gates; view
+--      read parity for every persona (visible rows = rows of visible
+--      movements, literal counts), and the same reach straight from the
+--      column; anon reads nothing.
+--   S. THE SCOPE CACHE: the four restated predicates are pinned; the
+--      restatement equals the live has_org_role / caller_can_write_location
+--      for twelve signed-in personas plus service over nine locations (by
+--      pair and by location); each answer is asked once per transaction;
+--      the transaction's own membership, assignment, profile, warehouse and
+--      location changes clear it (per table and event); another drawer or
+--      organization recomputes; a value bound to another transaction,
+--      drawer or organization is ignored; a savepoint rollback discards
+--      answers; the non-recording wrapper never touches the cache.
 --
--- The push-time lock order (the migration's lock prelude) needs two sessions:
--- scripts/db-concurrency/0373_push_lock_order.sh.
+-- The push-time lock order needs two sessions:
+-- scripts/db-concurrency/0373_push_lock_order.sh. That the cache never
+-- outlives its transaction needs COMMIT: the lean commit check
+-- (stockpilot-work/provenance/lean/commit_check_lean.sh).
 --
--- The recorder's closed EXECUTE is asserted from the catalog (A), not by a
--- permission-denied call: images before 17.6.1.155 crash on a
--- permission-denied function call under supautils hint_roles, and CI's image
--- is whatever the CLI pins.
+-- Closed EXECUTE is asserted from the catalog (A), not by a permission-denied
+-- call: images before 17.6.1.155 crash on a permission-denied function call
+-- under supautils hint_roles, and CI's image is whatever the CLI pins.
 --
 -- HOW THE ROLES ARE SIMULATED (house convention): `set local role
 -- authenticated` + request.jwt.claim.sub where RLS matters; the jwt claim
 -- alone (plus the ledger flag raised by hand) for direct engine calls.
 --
--- MUTATION RECORD: MUTATION RECORD (live, 2026-09-25). Each mutant is one edit of the
+-- MUTATION RECORD: (live, 2026-09-26, lean build). Each mutant is one edit of the
 -- migration's own text, applied after reverting 0373 inside a rolled-back
--- transaction; then this file and security_invariants run against it.
--- 'post' = the migration's own post-check already refuses it at push time
--- (55000); the tests listed are the ones that fail with that post-check
--- removed. Every mutant below was killed; the unedited control ran green.
---   M1   engine: drop the append in the placed loop
---        -> P2, C1, C2, C3, C6, C7, C8, D4, D5 ...
---   M2   engine: record the holding's quantity instead of what was taken (placed loop)
---        -> P2, C2, D4, D5, D16, D25, D32
---   M3   engine: drop the staging_first append
---        -> P2, C2, D21, D25, D28, F8, F9, F10, F12 ...
---   M4   engine: drop the 'any' append
---        -> P2, C3, D9, E3, F8, F9, F10, F12
---   M5   engine: drop the increment record
---        -> P2, C4, C5, D9, D19, D25, D28, E3, E5 ...
---   M5b  engine: drop the final (draw) record
---        -> P2, C1, C2, C3, C6, C7, C8, D4, D5 ...
---   M6   engine draw order: Unplaced FIRST instead of last
---        -> post; P1, B1, B2, B9, B10, B17, B18, B19, B20 ...
---   M7   engine: kind <> 'staging' (the 0292 regression: Sites drop out)
---        -> post; P1, B3, B4, B9, B10, B13, B14, B17, B18 ...
---   M8   engine: enter the 'any' Staging tail for 'placed' too
---        -> post; P1, B5, B6, E1, E3, E9, F8, F9, F10 ...
---   M9   engine draw order: add an l.id tie-breaker
---        -> post; P1
---   M24  engine draw order: staging_first takes the SMALLEST Staging first
---        -> post; P1, B7, B8, C2, D28, F14
---   M10  engine SECURITY INVOKER
---        -> A11, D1, D2, D4, D5, D6, D7, D9, D13 ...
---   M11  FK NOT DEFERRABLE
---        -> A4, B1, B3, B7, B9, B13, B17, B19, B21 ...
---   M12  RLS read widening: policy using (true)
---        -> A2, F10, F11, F13, INV-11
---   M12b RLS read widening: org prefilter only (EXISTS on the parent dropped)
---        -> A2, F10, F11
---   M13  grant INSERT on the table to authenticated
---        -> A7, INV-38
---   M14  wrong pairing: the return's restock landing recorded under the scrap (loss) movement
---        -> D28, INV-38
---   M14b wrong pairing: distribute's phantom drain draws BEFORE its id is minted (records under a stale id)
---        -> D25, F8, F9, F10, F12, INV-38
---   M15  adjust_stock inserts its movement WITHOUT the id (id mismatch)
---        -> P4, D3, D4, D5, D8, D9, D12, D15, D16 ...
---   M16  the wrapper passes a non-null id
---        -> post; P6, B2, B4, B8, B10, B14, B18, B20, B22 ...
---   M17  recorder: item warehouse snapshot taken from the location
---        -> C1, C2, C3, C6, D5, F14
---   M18  recorder: seq restarts at 1 for every call
---        -> E5, E6
---   M19  a new function drawing through public.apply_level_delta
---        -> INV-37
---   M20  splice 40001 back into distribute_bundle
---        -> post; P3, 0367#1, 0367#2
---   M21  adjust_stock passes a NULL id to the engine
---        -> post; P3, P5, D4, D5, D9, D16, D19, D21, D32 ...
---   M22  recorder executable by authenticated
---        -> A13
---   M26  recorder: in_scope and out_of_scope swapped (in the pair CTE; the
---        one-location path is M44)
---        -> C8, D4, D5, D9, D16, S5, S6, S7, S8
---   M28  table added to the realtime publication
---        -> A9
---   M29  recorder: insert the unrounded share (the text before the review fix)
---        -> R1, R2, R3, R4, R7, R9, R10, R11, R12, R14, R15
---   M30  recorder: round, but keep shares that round to zero
---        -> R1, R2, R3, R4, R7, R9, R10, R11, R12, R13, R14, R15
---   M31  recorder: round half away from zero (round(qty, 4)), not as the holding moved
---        -> R4, R7, R14, R15
---   M32  recorder: number seq by array position, not over the kept rows:
---        EQUIVALENT (only the last share of a draw can be fractional, so a
---        dropped row is always last); survives by construction.
---   Scope once per call (perf review, 2026-09-25; re-run with M17, M18,
---   M22, M26, M29-M31 on the new recorder, all killed as listed above; the
---   whole set re-run on the one-location path, 2026-09-25, lists below):
---   M33  recorder: scope asked per row again (values identical, the old cost)
---        -> S5, S6, S7, S9
---   M34  recorder: pair key drops the warehouse (organization only)
---        -> C8, D5, D9, S5, S6, S7, S8, S9
---   M35  recorder: pair key drops the organization (warehouse only)
---        -> S5, S6, S7
---   M36  recorder: one answer for the whole call below manager (first pair wins)
---        -> C8, D5, D9, S5, S6, S7, S8, S9
---   M37  recorder: manager check dropped (managers go through caller_can_write_location)
---        -> C7, D21, D25, D28, D32, S3, S4, S10, S13
---   M38  recorder: COALESCE operands swapped (the pair's answer beats service/manager)
---        -> C1, C2, C3, C4, C5, C7, D21, D25, D28, D32, E6, S2, S3, S4, S10, S13
---   M39  recorder: the pair CTE not MATERIALIZED (inlined into the per-row subplan)
---        -> S5, S6, S7, S9
---   M40  recorder: pair lookup with = instead of IS NOT DISTINCT FROM (a NULL
---        warehouse never matches; actor_scope NULL fails the NOT NULL)
---        -> C8, D1, D2, D4, D5, D6, D9, D13, E1, E2, E3, E9, F8, F9, F10 ...
---   M41  recorder: service decided by has_org_role instead of the NULL subject
---        -> C1, C2, C3, C4, C5, E6, S2, S10
---   One-location path (review, 2026-09-25):
---   M42  recorder: the one-location path removed (every call through the pair
---        CTE; values and call counts identical, only the CTE's cost)
---        -> S13
---   M43  recorder: the one-location path taken for every call (per-row again)
---        -> S5, S6, S7, S9
---   M44  recorder: the one-location path swaps in_scope and out_of_scope
---        -> D9, D16, D19, E6, S11, S12, S14
---   M45  recorder: the one-location path asks has_org_role(staff) instead of
---        the location
---        -> S11, S12, S13, S14, S15
---   M23  the migration's drift preflight disabled: not reachable from pgTAP
---        (the migration is applied before tests run); killed by the live
---        drift check (drift planted in each of the five restated bodies:
---        55000 with the preflight, silently overwritten without it).
---   M46  the preflight's caller_can_write_location pin removed: likewise
---        killed by the live drift check (a planted body drift and a VOLATILE
---        caller_can_write_location: 55000 with the pin, applied without it).
+-- transaction; then this file and security_invariants run against it (plus
+-- 0359 and 0367 for K2). 'post' = the migration's own post-check already
+-- refuses it at push time (55000); the tests listed are the ones that fail
+-- with that post-check removed. The unedited control ran green; every mutant
+-- below was killed.
+--  C1     cache key without the transaction id
+--         -> S11
+--  C2     cache key without the drawer
+--         -> D18, D21, D23, D27, F11, S9, S11
+--  C3     cache key without the organization
+--         -> S10, S11
+--  C5     cache never read (every draw asks again)
+--         -> S5, S6, S11
+--  C6     pair answers never cached
+--         -> S5, S6, S12
+--  C7     pair key drops the warehouse
+--         -> C8, D5, D8, S3, S4, S5, S6
+--  C8     pair key drops the organization
+--         -> S3, S4
+--  C9     in_scope and out_of_scope swapped
+--         -> C8, D4, D5, D8, D14, D16, S3, S4, S6 ...
+--  C10    manager answer never given (head always S)
+--         -> C7, D18, D21, D23, D27, F11, S2, S5, S7 ...
+--  C11    mirror: impersonation filter removed from the location org membership
+--         -> S3, S4
+--  C12    mirror: impersonation filter added to the warehouse org role check
+--         -> S3
+--  C13    mirror: disabled_at ignored in the location org membership
+--         -> S4
+--  C14    mirror: disabled_at ignored in the manager answer
+--         -> S4
+--  C15    mirror: role checked in the LOCATION's organization, not the warehouse's
+--         -> S3
+--  C16    mirror: a viewer counts as a writer
+--         -> S4
+--  C17    mirror: staff assignment to ANY warehouse counts
+--         -> C8, D5, D8, S3, S6
+--  C18    mirror: an increment's Staging location read without its warehouse
+--         -> S3, S4
+--  C19    mirror: accepted_at ignored in the manager answer
+--         -> S4
+--  T1     stamp: IS NOT NULL instead of num_nonnulls (the composite trap)
+--         -> F4
+--  T2     stamp: a draw may be inserted by any non-API role outside the ledger
+--         -> F2, F3, F4, F16, F17, F19, F20, R15
+--  T3     stamp: the draw immutable only for API roles
+--         -> F6, F7, F8, F11, F16, F17, F19, F20, R15
+--  T4     stamp: trigger not fired on UPDATE OF draw
+--         -> A10, F6, F7, F8, F11, F16, F17, F19, F20 ...
+--  F-organization_members forget trigger missing on organization_members
+--         -> A15, S7, S8
+--  F-user_warehouse_assignments forget trigger missing on user_warehouse_assignments
+--         -> A15, S7, S8
+--  F-user_profiles forget trigger missing on user_profiles
+--         -> A15, S8
+--  F-warehouses forget trigger missing on warehouses
+--         -> A15, S8
+--  F-locations forget trigger missing on locations
+--         -> A15, S8
+--  F-up-cols forget trigger on user_profiles misses disabled_at
+--         -> A15, S8
+--  F-loc-cols forget trigger on locations misses warehouse_id
+--         -> A15, S8
+--  E1     engine: the placed append dropped
+--         -> P2, C1, C2, C3, C6, C7, C8, R3, R5 ...
+--  E2     engine: the holding's quantity recorded instead of the take (placed)
+--         -> P2, C2, R1, R3, R4, R5, D4, D5, D14 ...
+--  E3     engine: the placed loop's warehouse fact read from the organization column
+--         -> P2, C1, C2, C3, C6, C8, D4, D5, D8 ...
+--  E4     engine: the increment not recorded
+--         -> P2, C4, C5, R6, D8, D16, D21, D23, E3 ...
+--  E5     engine: the final seal dropped
+--         -> P2, C1, C2, C3, C6, C7, C8, R3, R5 ...
+--  E6     engine: round half away from zero (placed), not as the holding moved
+--         -> P2, R4, R14, R15
+--  E7     engine: shares that round to zero kept (placed)
+--         -> P2, R1, R3, R4, R14, R15
+--  E8     engine: the 'any' tail recorded as staging_first
+--         -> P2, C3, R8, D8
+--  E9     engine draw order: Unplaced FIRST instead of last
+--         -> post, P1, B1, B2, B9, B10, B17, B18, B19 ...
+--  E10    engine SECURITY INVOKER
+--         -> A11, D5, D6, D8, D12, E1, E2, E3, E7 ...
+--  K1     the wrapper passes record = true
+--         -> post, P6, INV-38
+--  K2     adjust_stock records auth.uid() instead of v_user
+--         -> post, P3, P5, INV-38
+--  K3     adjust_stock records no drawer (service)
+--         -> post, P3, P5, D4, D5, D8, D14, D16, D18 ...
+--  K4     return: the restock's draw written into the scrap row
+--         -> post, P3, P5, P6, D23, F22, R15, INV-38
+--  K5     distribute: the component row written without its draw
+--         -> post, P4, D21, F16, F17, F18, F20, R15, INV-38
+--  K6     view without security_invoker
+--         -> A5, F18, F19, F21, INV-8
+--  K7     view insertable by authenticated
+--         -> A7, INV-38
+--  K9b    _seal granted to authenticated
+--         -> A13
+--  K10b   the forget function granted to authenticated
+--         -> A16
+--   Survivors, each equivalent by construction:
+--   K8     view: coalesce((m.draw).actor_scope, h.actor_scope): exactly one of
+--          the two is ever set (service/manager on the draw, in/out on the
+--          holding), so the order cannot matter.
+--   K9/K10 _seal / the forget function revoked from public and anon only:
+--          the ledger schema has no default EXECUTE grant for authenticated
+--          (pg_default_acl covers public, storage, graphql* only), so the
+--          revoke is redundant belt; the explicit grants K9b/K10b are killed.
+--   Killed outside pgTAP (they need a COMMIT, two sessions or the push):
+--   C4     _seal writes the cache session-wide (set_config(..., false)):
+--          the lean commit check (2b) fails.
+--   M-md5 / M-vol / M-unique / M-trigger: each preflight check removed lets its
+--          planted drift apply (the lean drift check); the grant check's mutant
+--          is still refused by the post-check (a second defence).
+--   The push lock prelude's three mutants: scripts/db-concurrency/
+--          0373_push_lock_order.sh (40P01 in the scenarios listed there).
 --
 -- Namespace: 03730000. Wrapped in begin/rollback; nothing leaks.
 
 begin;
 
-select plan(154);
+select plan(159);
 
 \set orgS    '\'03730000-0000-0000-0000-000000000001\''
 \set orgF    '\'03730000-0000-0000-0000-000000000002\''
@@ -194,6 +201,14 @@ select plan(154);
 \set u_vwr   '\'03730000-0000-0000-0000-0000000000a4\''
 \set u_aud   '\'03730000-0000-0000-0000-0000000000a5\''
 \set u_out   '\'03730000-0000-0000-0000-0000000000a6\''
+\set u_stn   '\'03730000-0000-0000-0000-0000000000a7\''
+\set u_dis   '\'03730000-0000-0000-0000-0000000000a8\''
+\set u_exp   '\'03730000-0000-0000-0000-0000000000a9\''
+\set u_imp   '\'03730000-0000-0000-0000-0000000000aa\''
+\set u_pnd   '\'03730000-0000-0000-0000-0000000000ab\''
+\set u_two   '\'03730000-0000-0000-0000-0000000000ac\''
+\set u_tx    '\'03730000-0000-0000-0000-0000000000ad\''
+\set u_dsm   '\'03730000-0000-0000-0000-0000000000ae\''
 \set whA     '\'03730000-0000-0000-0000-0000000000b1\''
 \set whB     '\'03730000-0000-0000-0000-0000000000b2\''
 \set whF     '\'03730000-0000-0000-0000-0000000000b3\''
@@ -207,6 +222,7 @@ select plan(154);
 \set itK1    '\'03730000-0000-0000-0000-0000000000c8\''
 \set itK2    '\'03730000-0000-0000-0000-0000000000c9\''
 \set itF     '\'03730000-0000-0000-0000-0000000000ca\''
+\set itQ     '\'03730000-0000-0000-0000-0000000000cd\''
 \set bnd     '\'03730000-0000-0000-0000-0000000000d1\''
 \set ordP    '\'03730000-0000-0000-0000-0000000000d2\''
 \set ordR    '\'03730000-0000-0000-0000-0000000000d3\''
@@ -225,9 +241,8 @@ select plan(154);
 \set locP1   '\'03730000-0000-0000-0000-0000000000e5\''
 \set locP2   '\'03730000-0000-0000-0000-0000000000e6\''
 \set locF    '\'03730000-0000-0000-0000-0000000000e7\''
-\set mvB     '\'03730000-0000-0000-0000-00000000f001\''
-\set mvC     '\'03730000-0000-0000-0000-00000000f002\''
-\set mvE     '\'03730000-0000-0000-0000-00000000f003\''
+\set locFS   '\'03730000-0000-0000-0000-0000000000e8\''
+\set locX1   '\'03730000-0000-0000-0000-0000000000e9\''
 
 -- ── Fixtures (superuser, no jwt subject: RLS bypassed, service path) ─────────
 
@@ -237,7 +252,15 @@ insert into auth.users (id, email, raw_user_meta_data) values
   (:u_stf, 'staff-0373@test.local',    '{}'::jsonb),
   (:u_vwr, 'viewer-0373@test.local',   '{}'::jsonb),
   (:u_aud, 'auditor-0373@test.local',  '{}'::jsonb),
-  (:u_out, 'outsider-0373@test.local', '{}'::jsonb)
+  (:u_out, 'outsider-0373@test.local', '{}'::jsonb),
+  (:u_stn, 'staff-nowh-0373@test.local', '{}'::jsonb),
+  (:u_dis, 'disabled-0373@test.local', '{}'::jsonb),
+  (:u_exp, 'expired-0373@test.local', '{}'::jsonb),
+  (:u_imp, 'impersonating-0373@test.local', '{}'::jsonb),
+  (:u_pnd, 'pending-0373@test.local', '{}'::jsonb),
+  (:u_two, 'two-org-0373@test.local', '{}'::jsonb),
+  (:u_tx,  'two-org-expired-0373@test.local', '{}'::jsonb),
+  (:u_dsm, 'disabled-manager-0373@test.local', '{}'::jsonb)
 on conflict (id) do nothing;
 
 insert into public.organizations (id, name, slug) values
@@ -253,6 +276,23 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgS, :u_aud, 'viewer',  now()),
   (:orgF, :u_out, 'manager', now())
 on conflict do nothing;
+-- Scope-mirror personas (S): staff with no warehouse; WA staff who is
+-- disabled; a manager who is disabled; managers whose impersonation expired / is live / who never
+-- accepted; a manager of the foreign org who is WA staff at home (two-org);
+-- and WA staff at home whose foreign manager membership has expired.
+insert into public.organization_members (organization_id, user_id, role, accepted_at, impersonation_expires_at) values
+  (:orgS, :u_stn, 'staff',   now(), null),
+  (:orgS, :u_dis, 'staff',   now(), null),
+  (:orgS, :u_exp, 'manager', now(), now() - interval '1 hour'),
+  (:orgS, :u_imp, 'manager', now(), now() + interval '1 hour'),
+  (:orgS, :u_pnd, 'manager', null,  null),
+  (:orgF, :u_two, 'manager', now(), null),
+  (:orgS, :u_two, 'staff',   now(), null),
+  (:orgS, :u_tx,  'staff',   now(), null),
+  (:orgF, :u_tx,  'manager', now(), now() - interval '1 hour'),
+  (:orgS, :u_dsm, 'manager', now(), null)
+on conflict do nothing;
+update public.user_profiles set disabled_at = now() where id in (:u_dis, :u_dsm);
 
 -- The 0188 trigger creates Staging + Unplaced per warehouse.
 insert into public.warehouses (id, organization_id, name, code, status) values
@@ -265,7 +305,10 @@ on conflict (id) do nothing;
 -- activity_logs:read (the movement audit surface, 0321) by override.
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id) values
   (:orgS, :u_stf, :whA),
-  (:orgS, :u_vwr, :whB)
+  (:orgS, :u_vwr, :whB),
+  (:orgS, :u_dis, :whA),
+  (:orgS, :u_two, :whA),
+  (:orgS, :u_tx,  :whA)
 on conflict do nothing;
 insert into public.user_permission_overrides (organization_id, user_id, permission, granted)
 values (:orgS, :u_aud, 'activity_logs:read', true);
@@ -390,7 +433,16 @@ create function pg_temp.snap(p_item uuid) returns text language sql stable as $f
     from public.item_stock_levels s where s.item_id = p_item;
 $f$;
 
--- seq:location:quantity:step:actor_scope, in seq order.
+-- A draw's holdings as seq:location:quantity:step:actor_scope, in seq order
+-- (the view's coalesce of the holding's and the draw's scope).
+create function pg_temp.drows(p_d public.stock_draw) returns text language sql stable as $f$
+  select coalesce(string_agg(h.seq || ':' || pg_temp.tag(h.location_id) || ':' || h.quantity::int || ':' || h.step
+                             || ':' || coalesce(h.actor_scope, (p_d).actor_scope, 'NULL'), ',' order by h.seq), '')
+    from unnest((p_d).holdings) with ordinality
+         as h(location_id, quantity, step, location_kind, location_warehouse_id, actor_scope, seq);
+$f$;
+
+-- A movement's rows through the read helper, same format.
 create function pg_temp.rows(p_mv uuid) returns text language sql stable as $f$
   select coalesce(string_agg(h.seq || ':' || pg_temp.tag(h.location_id) || ':' || h.quantity::int
                              || ':' || h.step || ':' || h.actor_scope, ',' order by h.seq), '')
@@ -402,27 +454,45 @@ create function pg_temp.mv(p_item uuid, p_reason text) returns uuid language sql
   select m.id from public.stock_movements m where m.item_id = p_item and m.reason = p_reason;
 $f$;
 
--- Runs one call in a subtransaction that is ALWAYS rolled back, and reports:
---   ok|<holdings after>#<rows of p_mv>#diff=<holdings difference by location>
---     #oracle=<diff equals the recorded rows summed by location>
---     #total=<sum of recorded quantities>#facts=<snapshots match the rows>
---     #n=<rows recorded for the item>
+-- The draw a call returns (the call yields text: a stock_draw, or '' for
+-- void), in a subtransaction that is ALWAYS rolled back. Errors propagate.
+create function pg_temp.draw_of(p_call text) returns public.stock_draw language plpgsql as $f$
+declare
+  v text;
+begin
+  begin
+    execute p_call into v;
+    raise exception using errcode = 'ZX373';
+  exception
+    when sqlstate 'ZX373' then null;
+  end;
+  return nullif(v, '')::public.stock_draw;
+end $f$;
+
+-- Runs one call (yielding text as above) in a subtransaction that is ALWAYS
+-- rolled back, and reports:
+--   ok|<holdings after>#<the returned draw's rows>#diff=<holdings difference by
+--     location>#oracle=<diff equals the draw summed by location>
+--     #total=<sum of recorded quantities>#facts=<draw-time facts match>
+--     #n=<holdings recorded>
 -- or err|<sqlstate>|<message>.
-create function pg_temp.run(p_call text, p_item uuid, p_mv uuid default null) returns text
+create function pg_temp.run(p_call text, p_item uuid) returns text
 language plpgsql as $f$
 declare
   v_before jsonb;
   v_after  jsonb;
+  v_txt    text;
+  v_d      public.stock_draw;
   v_diff   text;
   v_rec    text;
   v_total  numeric;
   v_facts  boolean;
-  v_n      int;
 begin
   select coalesce(jsonb_object_agg(s.location_id::text, s.quantity), '{}'::jsonb) into v_before
     from public.item_stock_levels s where s.item_id = p_item;
   begin
-    execute p_call;
+    execute p_call into v_txt;
+    v_d := nullif(v_txt, '')::public.stock_draw;
     select coalesce(jsonb_object_agg(s.location_id::text, s.quantity), '{}'::jsonb) into v_after
       from public.item_stock_levels s where s.item_id = p_item;
     select coalesce(string_agg(pg_temp.tag(x.k::uuid) || ':' || x.d::int, ','
@@ -434,83 +504,59 @@ begin
     select coalesce(string_agg(pg_temp.tag(y.location_id) || ':' || y.q::int, ','
                                order by pg_temp.tag(y.location_id) collate "C"), '')
       into v_rec
-      from (select h.location_id, sum(h.quantity) as q
-              from public.stock_movement_holdings h
-             where h.movement_id = p_mv
-             group by h.location_id) y;
-    select coalesce(sum(h.quantity), 0) into v_total
-      from public.stock_movement_holdings h where h.movement_id = p_mv;
+      from (select h.location_id, sum(h.quantity) as q from unnest((v_d).holdings) h group by h.location_id) y;
+    select coalesce(sum(h.quantity), 0) into v_total from unnest((v_d).holdings) h;
     select coalesce(bool_and(h.location_kind is not distinct from l.kind
-                             and h.location_warehouse_id is not distinct from l.warehouse_id
-                             and h.item_warehouse_id is not distinct from i.warehouse_id
-                             and h.organization_id = i.organization_id), true)
+                             and h.location_warehouse_id is not distinct from l.warehouse_id), true)
+           and (num_nonnulls(v_d) = 0
+                or (v_d).item_warehouse_id is not distinct from (select i.warehouse_id from public.inventory_items i where i.id = p_item))
       into v_facts
-      from public.stock_movement_holdings h
-      left join public.locations l on l.id = h.location_id
-      join public.inventory_items i on i.id = h.item_id
-     where h.movement_id = p_mv;
-    select count(*)::int into v_n from public.stock_movement_holdings h where h.item_id = p_item;
+      from unnest((v_d).holdings) h
+      left join public.locations l on l.id = h.location_id;
     raise exception using errcode = 'ZX373', message =
-      'ok|' || pg_temp.snap(p_item) || '#' || pg_temp.rows(p_mv) || '#diff=' || v_diff
+      'ok|' || pg_temp.snap(p_item) || '#' || pg_temp.drows(v_d) || '#diff=' || v_diff
       || '#oracle=' || (v_diff = v_rec)::text || '#total=' || v_total::int
-      || '#facts=' || v_facts::text || '#n=' || v_n;
+      || '#facts=' || v_facts::text || '#n=' || coalesce(cardinality((v_d).holdings), 0);
   exception
     when sqlstate 'ZX373' then return sqlerrm;
     when others then return 'err|' || sqlstate || '|' || sqlerrm;
   end;
 end $f$;
 
--- The deferred FK, checked now: SET CONSTRAINTS ... IMMEDIATE runs every
--- pending check; DEFERRED puts the constraint back for the next case.
-create function pg_temp.fk_ok() returns text language plpgsql as $f$
-begin
-  set constraints public.stock_movement_holdings_movement_fk immediate;
-  set constraints public.stock_movement_holdings_movement_fk deferred;
-  return 'fk ok';
-exception when others then
-  return sqlstate || ' ' || sqlerrm;
-end $f$;
-
--- An engine call and an immediate FK check, in a subtransaction that is
--- always rolled back.
-create function pg_temp.fk_probe(p_mv uuid, p_item uuid, p_qty numeric) returns text
-language plpgsql as $f$
-begin
-  begin
-    perform ledger.apply_level_delta_for(p_mv, p_item, p_qty, 'placed');
-    set constraints public.stock_movement_holdings_movement_fk immediate;
-    raise exception using errcode = 'ZX373', message = 'no fk error';
-  exception
-    when sqlstate 'ZX373' then return sqlerrm;
-    when others then return sqlstate;
-  end;
-end $f$;
-
--- Exact (four-decimal) twins of snap/rows/run for the R group: run4 reports
---   ok|<holdings after, exact>#<rows of p_mv, exact>
---     #oracle=<per location, the holdings difference equals the recorded rows EXACTLY>
+-- Exact (four-decimal) twins for the R group: run4 reports
+--   ok|<holdings after, exact>#<the draw's rows, exact>
+--     #oracle=<per location, the holdings difference equals the draw EXACTLY>
 -- or err|<sqlstate>|<message>, in a subtransaction that is always rolled back.
 create function pg_temp.snap4(p_item uuid) returns text language sql stable as $f$
   select coalesce(string_agg(pg_temp.tag(s.location_id) || '=' || s.quantity::text, ','
                              order by pg_temp.tag(s.location_id) collate "C"), '')
     from public.item_stock_levels s where s.item_id = p_item;
 $f$;
+create function pg_temp.drows4(p_d public.stock_draw) returns text language sql stable as $f$
+  select coalesce(string_agg(h.seq || ':' || pg_temp.tag(h.location_id) || ':' || h.quantity::text || ':' || h.step,
+                             ',' order by h.seq), '')
+    from unnest((p_d).holdings) with ordinality
+         as h(location_id, quantity, step, location_kind, location_warehouse_id, actor_scope, seq);
+$f$;
 create function pg_temp.rows4(p_mv uuid) returns text language sql stable as $f$
   select coalesce(string_agg(h.seq || ':' || pg_temp.tag(h.location_id) || ':' || h.quantity::text
                              || ':' || h.step, ',' order by h.seq), '')
     from public.stock_movement_holdings h where h.movement_id = p_mv;
 $f$;
-create function pg_temp.run4(p_call text, p_item uuid, p_mv uuid default null) returns text
+create function pg_temp.run4(p_call text, p_item uuid) returns text
 language plpgsql as $f$
 declare
   v_before jsonb;
   v_after  jsonb;
+  v_txt    text;
+  v_d      public.stock_draw;
   v_oracle boolean;
 begin
   select coalesce(jsonb_object_agg(s.location_id::text, s.quantity), '{}'::jsonb) into v_before
     from public.item_stock_levels s where s.item_id = p_item;
   begin
-    execute p_call;
+    execute p_call into v_txt;
+    v_d := nullif(v_txt, '')::public.stock_draw;
     select coalesce(jsonb_object_agg(s.location_id::text, s.quantity), '{}'::jsonb) into v_after
       from public.item_stock_levels s where s.item_id = p_item;
     select coalesce(bool_and(coalesce(d.d, 0) = coalesce(r.q, 0)), true) into v_oracle
@@ -518,36 +564,29 @@ begin
                    coalesce((v_after ->> k.k)::numeric, 0) - coalesce((v_before ->> k.k)::numeric, 0) as d
               from jsonb_object_keys(v_before || v_after) as k(k)) d
       full join (select h.location_id as loc, sum(h.quantity) as q
-                   from public.stock_movement_holdings h where h.movement_id = p_mv
-                  group by h.location_id) r on r.loc = d.loc;
+                   from unnest((v_d).holdings) h group by h.location_id) r on r.loc = d.loc;
     raise exception using errcode = 'ZX373', message =
-      'ok|' || pg_temp.snap4(p_item) || '#' || pg_temp.rows4(p_mv) || '#oracle=' || v_oracle::text;
+      'ok|' || pg_temp.snap4(p_item) || '#' || pg_temp.drows4(v_d) || '#oracle=' || v_oracle::text;
   exception
     when sqlstate 'ZX373' then return sqlerrm;
     when others then return 'err|' || sqlstate || '|' || sqlerrm;
   end;
 end $f$;
 
--- Report a movement's recorded snapshots from INSIDE pg_temp.run (whose
--- subtransaction is rolled back), as an error message.
+-- A draw's draw-time facts: seq:location:kind:location warehouse:item
+-- warehouse:mode.
 create function pg_temp.whtag(p_wh uuid) returns text language sql immutable as $f$
   select case p_wh when '03730000-0000-0000-0000-0000000000b1'::uuid then 'WA'
                    when '03730000-0000-0000-0000-0000000000b2'::uuid then 'WB'
-                   when null then 'org' else coalesce(p_wh::text, 'org') end;
+                   else coalesce(p_wh::text, 'org') end;
 $f$;
-create function pg_temp.leak(p_mv uuid) returns void language plpgsql as $f$
-declare v text;
-begin
-  select string_agg(h.seq || ':' || pg_temp.tag(h.location_id) || ':' || coalesce(h.location_kind, 'null') || ':'
-                    || pg_temp.whtag(h.location_warehouse_id) || ':' || pg_temp.whtag(h.item_warehouse_id)
-                    || ':' || coalesce(h.mode, 'null'), ',' order by h.seq)
-    into v from public.stock_movement_holdings h where h.movement_id = p_mv;
-  raise exception using errcode = 'ZX374', message = coalesce(v, '<none>');
-end $f$;
-create function pg_temp.leak_fk(p_mv uuid) returns void language plpgsql as $f$
-begin
-  raise exception using errcode = 'ZX375', message = pg_temp.rows(p_mv) || '|' || pg_temp.fk_ok();
-end $f$;
+create function pg_temp.facts(p_d public.stock_draw) returns text language sql stable as $f$
+  select coalesce(string_agg(h.seq || ':' || pg_temp.tag(h.location_id) || ':' || coalesce(h.location_kind, 'null') || ':'
+                             || pg_temp.whtag(h.location_warehouse_id) || ':' || pg_temp.whtag((p_d).item_warehouse_id)
+                             || ':' || coalesce((p_d).mode, 'null'), ',' order by h.seq), '<none>')
+    from unnest((p_d).holdings) with ordinality
+         as h(location_id, quantity, step, location_kind, location_warehouse_id, actor_scope, seq);
+$f$;
 
 -- The 0359 body of public.apply_level_delta, VERBATIM (P8 proves the md5).
 -- Run with no jwt subject, so its gate is skipped: the differential oracle.
@@ -679,44 +718,39 @@ select is(pg_temp.snap(:itX), 'A1=1,A2=1,B1=4,S=2,SA=5,SB=3,UA=2',
 -- A. STRUCTURE
 -- ══════════════════════════════════════════════════════════════════════════
 select is(
-  (select c.relrowsecurity::text || '|' ||
-          (select string_agg(p.policyname || ':' || p.cmd || ':' || p.permissive || ':' || p.roles::text, ',')
-             from pg_policies p where p.schemaname = 'public' and p.tablename = 'stock_movement_holdings')
-     from pg_class c where c.oid = 'public.stock_movement_holdings'::regclass),
-  'true|stock_movement_holdings_select:SELECT:PERMISSIVE:{authenticated}',
-  'A1: RLS is on and the only policy is FOR SELECT TO authenticated');
-select ok(
-  (select qual ~ 'rls_member_org_ids' and qual ~ 'stock_movements m'
-          and qual ~ 'm\.id = stock_movement_holdings\.movement_id'
-     from pg_policies where schemaname = 'public' and tablename = 'stock_movement_holdings'),
-  'A2: the SELECT policy is the org prefilter plus EXISTS on the parent movement (qualified columns)');
+  (select string_agg(t.typname || '(' ||
+            (select string_agg(a.attname || ' ' || format_type(a.atttypid, a.atttypmod), ', ' order by a.attnum)
+               from pg_attribute a where a.attrelid = t.typrelid and a.attnum > 0 and not a.attisdropped) || ')',
+          ' ' order by t.typname)
+     from pg_type t where t.typnamespace = 'public'::regnamespace and t.typname in ('stock_draw', 'stock_draw_holding')),
+  'stock_draw(mode text, item_warehouse_id uuid, actor_scope text, holdings stock_draw_holding[]) stock_draw_holding(location_id uuid, quantity numeric(14,4), step text, location_kind text, location_warehouse_id uuid, actor_scope text)',
+  'A1: the two draw types and their fields (quantity is numeric(14,4), as the holdings)');
 select is(
-  (select string_agg(a.attname, ',' order by k.ord)
-     from pg_constraint c
-     cross join lateral unnest(c.conkey) with ordinality k(attnum, ord)
-     join pg_attribute a on a.attrelid = c.conrelid and a.attnum = k.attnum
-    where c.conname = 'stock_movement_holdings_pkey'),
-  'movement_id,seq',
-  'A3: the primary key is (movement_id, seq); location_id is not in it (no PostgREST many-to-many)');
+  (select format_type(a.atttypid, a.atttypmod) || '|' || a.attnotnull::text || '|' || a.atthasdef::text || '|'
+          || a.atthasmissing::text
+     from pg_attribute a where a.attrelid = 'public.stock_movements'::regclass and a.attname = 'draw' and not a.attisdropped),
+  'stock_draw|false|false|false',
+  'A2: stock_movements.draw is a nullable stock_draw with no default (a metadata-only column: no rewrite, no missing value)');
 select is(
-  (select c.condeferrable::text || c.condeferred::text || '|' || c.confdeltype::text || '|' || c.confrelid::regclass::text || '|'
-          || (select string_agg(a.attname, ',' order by k.ord) from unnest(c.conkey) with ordinality k(attnum, ord)
-                join pg_attribute a on a.attrelid = c.conrelid and a.attnum = k.attnum)
-          || '>' || (select string_agg(a.attname, ',' order by k.ord) from unnest(c.confkey) with ordinality k(attnum, ord)
-                join pg_attribute a on a.attrelid = c.confrelid and a.attnum = k.attnum)
-     from pg_constraint c where c.conname = 'stock_movement_holdings_movement_fk'),
-  'truetrue|c|stock_movements|movement_id,organization_id,item_id>id,organization_id,item_id',
-  'A4: the movement FK is composite (id, org, item), DEFERRABLE INITIALLY DEFERRED, ON DELETE CASCADE');
+  (select string_agg(i.indexrelid::regclass::text, ',' order by i.indexrelid::regclass::text)
+     from pg_index i where i.indrelid = 'public.stock_movements'::regclass),
+  'stock_movements_item_created_idx,stock_movements_org_created_idx,stock_movements_org_type_created_idx,stock_movements_pkey,stock_movements_reference_idx',
+  'A3: stock_movements keeps exactly its pre-0373 indexes (no composite key, no index on draw)');
 select is(
-  (select c.condeferrable::text || '|' || c.confdeltype::text || '|' || c.confrelid::regclass::text
-     from pg_constraint c where c.conname = 'stock_movement_holdings_location_fk'),
-  'false|n|locations',
-  'A5: the location FK is immediate and ON DELETE SET NULL');
+  (select string_agg(c.conname || ':' || c.contype::text || ':' || c.condeferrable::text, ',' order by c.conname)
+     from pg_constraint c where c.conrelid = 'public.stock_movements'::regclass)
+  || '|' || (select count(*) from pg_constraint c where c.confrelid = 'public.stock_movements'::regclass),
+  'stock_movements_from_location_id_fkey:f:false,stock_movements_item_id_fkey:f:false,stock_movements_movement_type_check:c:false,stock_movements_organization_id_fkey:f:false,stock_movements_pkey:p:false,stock_movements_to_location_id_fkey:f:false,stock_movements_user_id_fkey:f:false|0',
+  'A4: stock_movements keeps exactly its pre-0373 constraints, none deferrable, and nothing references it (no deferred work at COMMIT)');
 select is(
-  (select i.indisunique::text || '|' || (i.indpred is null)::text || '|' || pg_get_indexdef(i.indexrelid)
-     from pg_index i where i.indexrelid = 'public.stock_movements_id_org_item_key'::regclass),
-  'true|true|CREATE UNIQUE INDEX stock_movements_id_org_item_key ON public.stock_movements USING btree (id, organization_id, item_id)',
-  'A6: the unique index the FK references is plain and non-partial on (id, organization_id, item_id)');
+  (select c.relkind::text || '|' || c.reloptions::text from pg_class c where c.oid = 'public.stock_movement_holdings'::regclass),
+  'v|{security_invoker=true}',
+  'A5: stock_movement_holdings is a VIEW with security_invoker (the reader''s own RLS on stock_movements applies)');
+select is(
+  (select string_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod), ',' order by a.attnum)
+     from pg_attribute a where a.attrelid = 'public.stock_movement_holdings'::regclass and a.attnum > 0 and not a.attisdropped),
+  'movement_id:uuid,seq:integer,organization_id:uuid,item_id:uuid,location_id:uuid,quantity:numeric(14,4),step:text,mode:text,location_kind:text,location_warehouse_id:uuid,item_warehouse_id:uuid,actor_scope:text,created_at:timestamp with time zone',
+  'A6: the view has the first build''s 13 columns, names and types');
 select is(
   (select coalesce(string_agg(r || ':' || p, ',' order by r, p), '')
      from unnest(array['anon', 'authenticated', 'service_role']) r,
@@ -725,49 +759,50 @@ select is(
        or (p in ('INSERT', 'UPDATE', 'REFERENCES')
            and has_any_column_privilege(r, 'public.stock_movement_holdings', p))),
   '',
-  'A7: no API role (service_role included) holds any write privilege, table- or column-level');
+  'A7: no API role (service_role included) holds any write privilege on the view, table- or column-level');
 select ok(
   has_table_privilege('authenticated', 'public.stock_movement_holdings', 'SELECT')
   and has_table_privilege('service_role', 'public.stock_movement_holdings', 'SELECT')
   and not has_table_privilege('anon', 'public.stock_movement_holdings', 'SELECT')
   and not exists (select 1 from pg_class c, aclexplode(c.relacl) a
                    where c.oid = 'public.stock_movement_holdings'::regclass and a.grantee = 0),
-  'A8: SELECT for authenticated and service_role only; nothing for anon or PUBLIC');
-select ok(
-  not exists (select 1 from pg_publication_tables
-               where pubname = 'supabase_realtime' and schemaname = 'public'
-                 and tablename = 'stock_movement_holdings'),
-  'A9: the table is not in the realtime publication');
+  'A8: view SELECT for authenticated and service_role only; nothing for anon or PUBLIC');
 select is(
-  (select string_agg(pg_get_constraintdef(c.oid), ' ; ' order by pg_get_constraintdef(c.oid) collate "C")
-     from pg_constraint c
-    where c.conrelid = 'public.stock_movement_holdings'::regclass and c.contype = 'c'),
-  'CHECK ((actor_scope = ANY (ARRAY[''service''::text, ''manager''::text, ''in_scope''::text, ''out_of_scope''::text]))) ; CHECK ((quantity <> (0)::numeric)) ; CHECK ((seq > 0)) ; CHECK ((step = ANY (ARRAY[''increment''::text, ''staging_first''::text, ''placed''::text, ''any_staging''::text])))',
-  'A10: the CHECKs: seq > 0, quantity <> 0, the four steps, the four scopes');
+  (select ('draw' = any(t.attnames))::text || '|' || (t.rowfilter is null)::text
+     from pg_publication_tables t
+    where t.pubname = 'supabase_realtime' and t.schemaname = 'public' and t.tablename = 'stock_movements')
+  || '|' || (select count(*) from pg_publication_tables t where t.tablename = 'stock_movement_holdings'),
+  'true|true|0',
+  'A9: stock_movements is published to realtime with no column list or row filter, so its INSERT events carry draw (delivered under the subscriber''s stock_movements RLS); the view is not published');
+select is(
+  (select string_agg(pg_get_triggerdef(t.oid) || '|' || t.tgenabled::text, ' ; ' order by t.tgname)
+     from pg_trigger t where t.tgrelid = 'public.stock_movements'::regclass and not t.tgisinternal),
+  'CREATE TRIGGER trg_zz_stock_movements_via_ledger BEFORE INSERT OR UPDATE OF via_ledger, draw ON public.stock_movements FOR EACH ROW EXECUTE FUNCTION tg_stock_movements_via_ledger()|O',
+  'A10: the 0369 stamp is still the only trigger on stock_movements, enabled, now on UPDATE OF via_ledger, draw');
 select is(
   (select count(*)::int || '|' || bool_and(p.prosecdef)::text || '|' || min(p.proconfig::text) || '|'
           || min(p.pronargdefaults) || '|' || min(p.prorettype::regtype::text) || '|'
-          || min(pg_get_function_identity_arguments(p.oid))
+          || min(pg_get_function_arguments(p.oid))
      from pg_proc p where p.pronamespace = 'ledger'::regnamespace and p.proname = 'apply_level_delta_for'),
-  '1|true|{search_path=public}|0|void|p_movement_id uuid, p_item_id uuid, p_qty numeric, p_mode text',
-  'A11: exactly one engine: SECURITY DEFINER, search_path=public, no defaults, returns void');
+  '1|true|{search_path=public}|0|stock_draw|p_item_id uuid, p_qty numeric, p_mode text, p_record boolean, p_uid uuid, OUT o_draw stock_draw',
+  'A11: exactly one engine: SECURITY DEFINER, search_path=public, no defaults, the draw as its OUT parameter');
 select ok(
-  has_function_privilege('authenticated', 'ledger.apply_level_delta_for(uuid,uuid,numeric,text)', 'execute')
-  and has_function_privilege('service_role', 'ledger.apply_level_delta_for(uuid,uuid,numeric,text)', 'execute')
-  and not has_function_privilege('anon', 'ledger.apply_level_delta_for(uuid,uuid,numeric,text)', 'execute')
+  has_function_privilege('authenticated', 'ledger.apply_level_delta_for(uuid,numeric,text,boolean,uuid)', 'execute')
+  and has_function_privilege('service_role', 'ledger.apply_level_delta_for(uuid,numeric,text,boolean,uuid)', 'execute')
+  and not has_function_privilege('anon', 'ledger.apply_level_delta_for(uuid,numeric,text,boolean,uuid)', 'execute')
   and not exists (select 1 from pg_proc p, aclexplode(p.proacl) a
-                   where p.oid = 'ledger.apply_level_delta_for(uuid,uuid,numeric,text)'::regprocedure and a.grantee = 0),
+                   where p.oid = 'ledger.apply_level_delta_for(uuid,numeric,text,boolean,uuid)'::regprocedure and a.grantee = 0),
   'A12: engine EXECUTE for authenticated (the INVOKER bodies call it as the user) and service_role; none for anon or PUBLIC');
 select ok(
-  (select count(*) = 1 and bool_and(not p.prosecdef) from pg_proc p
-    where p.pronamespace = 'ledger'::regnamespace and p.proname = '_record_holdings')
-  and not has_function_privilege('anon', 'ledger._record_holdings(uuid,uuid,uuid,uuid,uuid[],numeric[],text[],text)', 'execute')
-  and not has_function_privilege('authenticated', 'ledger._record_holdings(uuid,uuid,uuid,uuid,uuid[],numeric[],text[],text)', 'execute')
-  and not has_function_privilege('service_role', 'ledger._record_holdings(uuid,uuid,uuid,uuid,uuid[],numeric[],text[],text)', 'execute')
+  (select count(*) = 1 and bool_and(not p.prosecdef and p.proconfig is null) from pg_proc p
+    where p.pronamespace = 'ledger'::regnamespace and p.proname = '_seal')
+  and not has_function_privilege('anon', 'ledger._seal(uuid,uuid,uuid,text,public.stock_draw_holding[],uuid[])', 'execute')
+  and not has_function_privilege('authenticated', 'ledger._seal(uuid,uuid,uuid,text,public.stock_draw_holding[],uuid[])', 'execute')
+  and not has_function_privilege('service_role', 'ledger._seal(uuid,uuid,uuid,text,public.stock_draw_holding[],uuid[])', 'execute')
   and not exists (select 1 from pg_proc p, aclexplode(p.proacl) a
-                   where p.oid = 'ledger._record_holdings(uuid,uuid,uuid,uuid,uuid[],numeric[],text[],text)'::regprocedure
+                   where p.oid = 'ledger._seal(uuid,uuid,uuid,text,public.stock_draw_holding[],uuid[])'::regprocedure
                      and a.grantee = 0),
-  'A13: the recorder is SECURITY INVOKER and no API role (nor PUBLIC) can execute it');
+  'A13: _seal is SECURITY INVOKER with no SET clause, and no API role (nor PUBLIC) can execute it');
 select is(
   (select count(*)::int || '|' || min(pg_get_function_arguments(p.oid)) || '|' || min(p.prorettype::regtype::text)
           || '|' || bool_and(p.prosecdef)::text || '|' || min(p.proconfig::text) || '|' || min(p.proacl::text)
@@ -776,44 +811,65 @@ select is(
   '1|p_item_id uuid, p_qty numeric, p_mode text DEFAULT ''placed''::text|void|true|{search_path=public}|{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}|627ae82e5211f10ca9e5ede9723cdfe8',
   'A14: public.apply_level_delta keeps one overload, its default, SECURITY DEFINER, search_path, ACL and comment');
 select is(
-  (select pg_get_indexdef(i.indexrelid) from pg_index i
-    where i.indexrelid = 'public.stock_movement_holdings_location_idx'::regclass),
-  'CREATE INDEX stock_movement_holdings_location_idx ON public.stock_movement_holdings USING btree (location_id, created_at DESC) WHERE (location_id IS NOT NULL)',
-  'A15: the per-location index exists (partial, newest first)');
+  (select string_agg(pg_get_triggerdef(t.oid) || '|' || t.tgenabled::text, E'\n' order by c.relname)
+     from pg_trigger t join pg_class c on c.oid = t.tgrelid where t.tgname = 'trg_zz_forget_draw_scope'),
+  'CREATE TRIGGER trg_zz_forget_draw_scope AFTER DELETE OR UPDATE OF id, organization_id, warehouse_id OR TRUNCATE ON public.locations FOR EACH STATEMENT EXECUTE FUNCTION ledger.tg_forget_draw_scope()|O' || E'\n' ||
+  'CREATE TRIGGER trg_zz_forget_draw_scope AFTER INSERT OR DELETE OR UPDATE OR TRUNCATE ON public.organization_members FOR EACH STATEMENT EXECUTE FUNCTION ledger.tg_forget_draw_scope()|O' || E'\n' ||
+  'CREATE TRIGGER trg_zz_forget_draw_scope AFTER INSERT OR DELETE OR UPDATE OF id, disabled_at OR TRUNCATE ON public.user_profiles FOR EACH STATEMENT EXECUTE FUNCTION ledger.tg_forget_draw_scope()|O' || E'\n' ||
+  'CREATE TRIGGER trg_zz_forget_draw_scope AFTER INSERT OR DELETE OR UPDATE OR TRUNCATE ON public.user_warehouse_assignments FOR EACH STATEMENT EXECUTE FUNCTION ledger.tg_forget_draw_scope()|O' || E'\n' ||
+  'CREATE TRIGGER trg_zz_forget_draw_scope AFTER INSERT OR DELETE OR UPDATE OF id, organization_id OR TRUNCATE ON public.warehouses FOR EACH STATEMENT EXECUTE FUNCTION ledger.tg_forget_draw_scope()|O',
+  'A15: the five forget triggers: statement-level AFTER, enabled, on every input of the scope answers (not on locations INSERT)');
+select ok(
+  (select not p.prosecdef and not has_function_privilege('authenticated', p.oid, 'execute')
+          and not has_function_privilege('anon', p.oid, 'execute')
+          and not has_function_privilege('service_role', p.oid, 'execute')
+     from pg_proc p where p.oid = 'ledger.tg_forget_draw_scope()'::regprocedure),
+  'A16: the forget function is SECURITY INVOKER and closed to every API role');
 select is(
-  (select string_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod) || ':' || a.attnotnull::text, ',' order by a.attnum)
-     from pg_attribute a where a.attrelid = 'public.stock_movement_holdings'::regclass and a.attnum > 0 and not a.attisdropped),
-  'movement_id:uuid:true,seq:integer:true,organization_id:uuid:true,item_id:uuid:true,location_id:uuid:false,quantity:numeric(14,4):true,step:text:true,mode:text:false,location_kind:text:false,location_warehouse_id:uuid:false,item_warehouse_id:uuid:false,actor_scope:text:true,created_at:timestamp with time zone:true',
-  'A16: the column list');
+  (select md5(string_agg(p.policyname || ':' || p.cmd || ':' || p.permissive || ':' || p.roles::text || ':'
+                         || coalesce(p.qual, '-') || ':' || coalesce(p.with_check, '-'), E'\n' order by p.policyname))
+     from pg_policies p where p.schemaname = 'public' and p.tablename = 'stock_movements'),
+  '9839edaeacf7cb78033d18b040828a03',
+  'A17: the stock_movements policies (the reach every draw inherits, through the view, PostgREST and Realtime) are exactly the pre-0373 ones');
+select ok(
+  to_regclass('public.stock_movements_id_org_item_key') is null
+  and to_regprocedure('ledger.apply_level_delta_for(uuid,uuid,numeric,text)') is null
+  and not exists (select 1 from pg_proc p where p.pronamespace = 'ledger'::regnamespace and p.proname = '_record_holdings')
+  and not exists (select 1 from pg_class c where c.relname = 'stock_movement_holdings' and c.relkind <> 'v'),
+  'A18: none of the first build''s objects exist (no table, composite index, recorder or id-taking engine)');
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- P. TEXT PROOFS
 -- ══════════════════════════════════════════════════════════════════════════
 select is(
   (select md5(regexp_replace(p.prosrc, '\n[^\n]*-- 0373[^\n]*', '', 'g')) from pg_proc p
-    where p.oid = 'ledger.apply_level_delta_for(uuid,uuid,numeric,text)'::regprocedure),
+    where p.oid = 'ledger.apply_level_delta_for(uuid,numeric,text,boolean,uuid)'::regprocedure),
   '4be0f94c4390e7cd9c15a73e629133bf',
   'P1: the engine minus its tagged lines IS the 0359 apply_level_delta prosrc (md5)');
 select is(
   (select string_agg(btrim(m[1]), E'\n' order by o)
      from pg_proc p, regexp_matches(p.prosrc, '\n([^\n]*)-- 0373[^\n]*', 'g') with ordinality r(m, o)
-    where p.oid = 'ledger.apply_level_delta_for(uuid,uuid,numeric,text)'::regprocedure),
-  $x$v_locs   uuid[]    := '{}';
-v_qtys   numeric[] := '{}';
-v_steps  text[]    := '{}';
-perform ledger._record_holdings(p_movement_id, v_org, p_item_id, v_wh, array[v_loc], array[p_qty], array['increment'], p_mode);
-v_locs := v_locs || v_lvl.location_id; v_qtys := v_qtys || (-v_take); v_steps := v_steps || 'staging_first'::text;
-v_locs := v_locs || v_lvl.location_id; v_qtys := v_qtys || (-v_take); v_steps := v_steps || 'placed'::text;
-v_locs := v_locs || v_lvl.location_id; v_qtys := v_qtys || (-v_take); v_steps := v_steps || 'any_staging'::text;
-perform ledger._record_holdings(p_movement_id, v_org, p_item_id, v_wh, v_locs, v_qtys, v_steps, p_mode);$x$,
-  'P2: the engine has exactly eight tagged lines, in order: three declares, the increment record, one append per draw loop (staging_first, placed, any_staging), the final record');
+    where p.oid = 'ledger.apply_level_delta_for(uuid,numeric,text,boolean,uuid)'::regprocedure),
+  $x$v_h      public.stock_draw_holding[];
+v_o      uuid[];
+v_q      numeric;
+if p_record then v_q := floor(p_qty * 10000 + 0.5) / 10000; if v_q <> 0 then o_draw := ledger._seal(p_uid, v_org, v_wh, p_mode, array[row(v_loc, v_q, 'increment', 'staging', v_wh, null)::public.stock_draw_holding], array[null::uuid]); end if; end if;
+, l.kind, l.warehouse_id, l.organization_id
+v_q := floor(-v_take * 10000 + 0.5) / 10000; if v_q <> 0 then v_h := v_h || row(v_lvl.location_id, v_q, 'staging_first', v_lvl.kind, v_lvl.warehouse_id, null)::public.stock_draw_holding; v_o := v_o || v_lvl.organization_id; end if;
+, l.kind, l.warehouse_id, l.organization_id
+v_q := floor(-v_take * 10000 + 0.5) / 10000; if v_q <> 0 then v_h := v_h || row(v_lvl.location_id, v_q, 'placed', v_lvl.kind, v_lvl.warehouse_id, null)::public.stock_draw_holding; v_o := v_o || v_lvl.organization_id; end if;
+, l.kind, l.warehouse_id, l.organization_id
+v_q := floor(-v_take * 10000 + 0.5) / 10000; if v_q <> 0 then v_h := v_h || row(v_lvl.location_id, v_q, 'any_staging', v_lvl.kind, v_lvl.warehouse_id, null)::public.stock_draw_holding; v_o := v_o || v_lvl.organization_id; end if;
+if p_record and v_h is not null then o_draw := ledger._seal(p_uid, v_org, v_wh, p_mode, v_h, v_o); end if;$x$,
+  'P2: the engine has exactly eleven tagged lines, in order: three declares, the increment record, then per draw loop (staging_first, placed, any_staging) its three SELECT columns and its append, then the final seal');
 select is(
   (select string_agg(x.fn || '=' || (x.stripped = x.want)::text || ':' || x.shapes_ok::text, ',' order by x.fn)
      from (
        select v.fn, v.want,
               md5(regexp_replace(p.prosrc, '\n[^\n]*-- 0373[^\n]*', '', 'g')) as stripped,
-              (select bool_and(btrim(m[1]) ~ '^(v_mv_id\s+uuid( := gen_random_uuid\(\))?;|v_mv_id := gen_random_uuid\(\);|perform ledger\.apply_level_delta_for\(v_mv_id, [^;]+\);|id,|v_mv_id,)$')
-                 from regexp_matches(p.prosrc, '\n([^\n]*)-- 0373[^\n]*', 'g') m) as shapes_ok
+              (select bool_and(btrim(m[1]) ~ '^(v_prov\s+public\.stock_draw;|v_prov := ledger\.apply_level_delta_for\([^;]+, true, v_user\);|draw,|v_prov,)\s+-- 0373$'
+                               or btrim(m[1]) = '-- 0373: drawn before the insert (0197 drew after it), so this row carries its own draw.')
+                 from regexp_matches(p.prosrc, '\n([^\n]*-- 0373[^\n]*)', 'g') m) as shapes_ok
          from (values
            ('adjust_stock',               'ledger.adjust_stock(uuid,numeric,text,uuid,text,text,text)',         '2a3526c05ad8d2dfbd3deba457e7bf42'),
            ('assemble_bundle',            'ledger.assemble_bundle(uuid,numeric,uuid,text)',                     '19f334042018cd4667032da003b6e6ce'),
@@ -831,28 +887,29 @@ select is(
                'ledger.assemble_bundle(uuid,numeric,uuid,text)'::regprocedure,
                'ledger.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)'::regprocedure,
                'ledger.process_return_disposition(uuid)'::regprocedure)) x),
-  'adjust_stock:4,assemble_bundle:9,distribute_bundle:9,process_return_disposition:9',
-  'P4: the tagged-line count per caller (adjust: declare + call + two id lines; the others: declare + 2 x (mint, call, two id lines))');
+  'adjust_stock:4,assemble_bundle:7,distribute_bundle:7,process_return_disposition:9',
+  'P4: the tagged-line count per caller (a declare, then per draw: the call, draw and v_prov in the insert; the return also explains its two moved calls)');
 select is(
   (select string_agg(p.proname || ':' ||
-            (select string_agg(m[1], '/') from regexp_matches(p.prosrc, 'apply_level_delta_for\((v_mv_id, [^,]+, [^,]+(?:, [^)]+)?)\);', 'g') m),
+            (select string_agg(m[1], '/') from regexp_matches(p.prosrc, 'v_prov := ledger\.apply_level_delta_for\(([^;]+)\);', 'g') m),
           ' | ' order by p.proname)
      from pg_proc p where p.oid in (
        'ledger.adjust_stock(uuid,numeric,text,uuid,text,text,text)'::regprocedure,
        'ledger.assemble_bundle(uuid,numeric,uuid,text)'::regprocedure,
        'ledger.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)'::regprocedure,
        'ledger.process_return_disposition(uuid)'::regprocedure)),
-  'adjust_stock:v_mv_id, p_item_id, p_quantity_change, p_mode | assemble_bundle:v_mv_id, v_component.item_id, v_new - v_prev, ''placed''/v_mv_id, v_phantom.id, v_new - v_prev, ''staging'' | distribute_bundle:v_mv_id, v_bundle.phantom_item_id, v_new - v_prev, ''staging_first''/v_mv_id, v_component.item_id, v_new - v_prev, ''placed'' | process_return_disposition:v_mv_id, v_line.item_id, v_line.quantity, ''staging''/v_mv_id, v_line.item_id, -v_line.quantity, ''staging_first''',
-  'P5: every engine call passes v_mv_id and the SAME item, quantity and mode as the apply_level_delta call it replaced');
+  'adjust_stock:p_item_id, p_quantity_change, p_mode, true, v_user | assemble_bundle:v_component.item_id, v_new - v_prev, ''placed'', true, v_user/v_phantom.id, v_new - v_prev, ''staging'', true, v_user | distribute_bundle:v_bundle.phantom_item_id, v_new - v_prev, ''staging_first'', true, v_user/v_component.item_id, v_new - v_prev, ''placed'', true, v_user | process_return_disposition:v_line.item_id, v_line.quantity, ''staging'', true, v_user/v_line.item_id, -v_line.quantity, ''staging_first'', true, v_user',
+  'P5: every engine call passes the SAME item, quantity and mode as the apply_level_delta call it replaced, then record = true and the caller''s own v_user');
 select ok(
-  (select bool_and(p.prosrc !~ 'public\.apply_level_delta\(') from pg_proc p where p.oid in (
+  (select bool_and(p.prosrc !~ 'public\.apply_level_delta\(' and p.prosrc !~ 'perform\s+ledger\.apply_level_delta_for')
+     from pg_proc p where p.oid in (
      'ledger.adjust_stock(uuid,numeric,text,uuid,text,text,text)'::regprocedure,
      'ledger.assemble_bundle(uuid,numeric,uuid,text)'::regprocedure,
      'ledger.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)'::regprocedure,
      'ledger.process_return_disposition(uuid)'::regprocedure))
-  and (select p.prosrc ~ 'perform ledger\.apply_level_delta_for\(null, p_item_id, p_qty, p_mode\);'
+  and (select p.prosrc ~ 'perform ledger\.apply_level_delta_for\(p_item_id, p_qty, p_mode, false, null\);'
          from pg_proc p where p.oid = 'public.apply_level_delta(uuid,numeric,text)'::regprocedure),
-  'P6: no restated caller calls public.apply_level_delta any more; the wrapper passes a NULL movement id');
+  'P6: no restated caller calls public.apply_level_delta or discards a draw; the wrapper passes record = false and no drawer');
 select is(
   (select string_agg(p.proname || ':' || p.prosecdef::text || ':' || p.proconfig::text || ':' || p.proacl::text || ':'
                      || pg_get_userbyid(p.proowner) || ':' || md5(coalesce(obj_description(p.oid, 'pg_proc'), '<none>'))
@@ -873,199 +930,256 @@ select is(
   '4be0f94c4390e7cd9c15a73e629133bf',
   'P8: the differential oracle pg_temp.ald_0359 IS the 0359 body (md5)');
 
+-- P9. PLAN SHAPE. The three added SELECT columns come from the locations row
+-- each draw loop already joins. They must not change a plan (a new plan
+-- could change the order of ties, which 0359 leaves undefined): each loop
+-- query, taken from the installed engine with and without its tagged line,
+-- is prepared and EXPLAINed (COSTS OFF) under a custom and a generic plan
+-- for a real item. Reports loop:mode=same|DIFFERENT and the plan line count.
+create function pg_temp.plan_shapes(p_item uuid) returns text language plpgsql as $f$
+declare
+  v_src  text;
+  q      record;
+  v_mode text;
+  v_with text;
+  v_wo   text;
+  v_p1   text;
+  v_p2   text;
+  r      record;
+  v_out  text := '';
+  i      int := 0;
+begin
+  select p.prosrc into v_src from pg_proc p
+   where p.oid = 'ledger.apply_level_delta_for(uuid,numeric,text,boolean,uuid)'::regprocedure;
+  for q in select m[1] as sql from regexp_matches(v_src, 'for v_lvl in\n(.*?)\n\s*loop\n', 'g') m loop
+    i := i + 1;
+    v_with := replace(q.sql, 'p_item_id', '$1');
+    v_wo := regexp_replace(v_with, '\n[^\n]*-- 0373[^\n]*', '', 'g');
+    if v_with = v_wo then
+      raise exception 'loop % has no tagged line', i;
+    end if;
+    foreach v_mode in array array['force_custom_plan', 'force_generic_plan'] loop
+      perform set_config('plan_cache_mode', v_mode, true);
+      execute 'prepare q0373_with(uuid) as ' || v_with;
+      execute 'prepare q0373_wo(uuid) as ' || v_wo;
+      v_p1 := ''; v_p2 := '';
+      for r in execute format('explain (costs off) execute q0373_with(%L)', p_item) loop
+        v_p1 := v_p1 || r."QUERY PLAN" || E'\n';
+      end loop;
+      for r in execute format('explain (costs off) execute q0373_wo(%L)', p_item) loop
+        v_p2 := v_p2 || r."QUERY PLAN" || E'\n';
+      end loop;
+      deallocate q0373_with;
+      deallocate q0373_wo;
+      v_out := v_out || 'loop' || i || ':' || replace(v_mode, '_plan', '') || '='
+               || case when v_p1 = v_p2 and v_p1 <> '' then 'same' else 'DIFFERENT' end
+               || '(' || (length(v_p1) - length(replace(v_p1, E'\n', ''))) || ' lines) ';
+    end loop;
+  end loop;
+  perform set_config('plan_cache_mode', 'auto', true);
+  return btrim(v_out);
+end $f$;
+select matches(
+  pg_temp.plan_shapes(:itX),
+  '^loop1:force_custom=same\(\d+ lines\) loop1:force_generic=same\(\d+ lines\) loop2:force_custom=same\(\d+ lines\) loop2:force_generic=same\(\d+ lines\) loop3:force_custom=same\(\d+ lines\) loop3:force_generic=same\(\d+ lines\)$',
+  'P9: each of the three draw-loop queries plans identically with and without its added SELECT columns, custom and generic');
+
 -- ══════════════════════════════════════════════════════════════════════════
 -- B. DIFFERENTIAL ORACLE (service path: no jwt subject)
--- Each line: engine-with-id vs oracle (holdings or error), then wrapper vs
--- oracle (everything, which includes "no rows recorded").
+-- Each line: engine vs oracle (holdings or error), then wrapper vs oracle
+-- (everything, which includes "returns no draw").
 -- ══════════════════════════════════════════════════════════════════════════
 set local "request.jwt.claim.sub" to '';
 
-select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, %L, -1, ''placed'')', :mvB, :itX), :itX, :mvB), '#', 1),
-          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -1, ''placed'')', :itX), :itX), '#', 1),
+select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, -1, ''placed'', true, null)::text', :itX), :itX), '#', 1),
+          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -1, ''placed'')::text', :itX), :itX), '#', 1),
   'B1: engine = 0359 oracle: placed -1 (first placed holding only)');
-select is(pg_temp.run(format('select public.apply_level_delta(%L, -1, ''placed'')', :itX), :itX),
-          pg_temp.run(format('select pg_temp.ald_0359(%L, -1, ''placed'')', :itX), :itX),
+select is(pg_temp.run(format('select public.apply_level_delta(%L, -1, ''placed'')::text', :itX), :itX),
+          pg_temp.run(format('select pg_temp.ald_0359(%L, -1, ''placed'')::text', :itX), :itX),
   'B2: wrapper = 0359 oracle, and it records nothing: placed -1 (first placed holding only)');
-select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, %L, -10, ''placed'')', :mvB, :itX), :itX, :mvB), '#', 1),
-          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -10, ''placed'')', :itX), :itX), '#', 1),
+select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, -10, ''placed'', true, null)::text', :itX), :itX), '#', 1),
+          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -10, ''placed'')::text', :itX), :itX), '#', 1),
   'B3: engine = 0359 oracle: placed -10 (every placed holding, Unplaced last, the archived crate included)');
-select is(pg_temp.run(format('select public.apply_level_delta(%L, -10, ''placed'')', :itX), :itX),
-          pg_temp.run(format('select pg_temp.ald_0359(%L, -10, ''placed'')', :itX), :itX),
+select is(pg_temp.run(format('select public.apply_level_delta(%L, -10, ''placed'')::text', :itX), :itX),
+          pg_temp.run(format('select pg_temp.ald_0359(%L, -10, ''placed'')::text', :itX), :itX),
   'B4: wrapper = 0359 oracle, and it records nothing: placed -10 (every placed holding, Unplaced last, the archived crate included)');
-select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, %L, -11, ''placed'')', :mvB, :itX), :itX, :mvB), '#', 1),
-          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -11, ''placed'')', :itX), :itX), '#', 1),
+select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, -11, ''placed'', true, null)::text', :itX), :itX), '#', 1),
+          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -11, ''placed'')::text', :itX), :itX), '#', 1),
   'B5: engine = 0359 oracle: placed -11 (placed never touches Staging: raises)');
-select is(pg_temp.run(format('select public.apply_level_delta(%L, -11, ''placed'')', :itX), :itX),
-          pg_temp.run(format('select pg_temp.ald_0359(%L, -11, ''placed'')', :itX), :itX),
+select is(pg_temp.run(format('select public.apply_level_delta(%L, -11, ''placed'')::text', :itX), :itX),
+          pg_temp.run(format('select pg_temp.ald_0359(%L, -11, ''placed'')::text', :itX), :itX),
   'B6: wrapper = 0359 oracle, and it records nothing: placed -11 (placed never touches Staging: raises)');
-select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, %L, -6, ''staging_first'')', :mvB, :itX), :itX, :mvB), '#', 1),
-          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -6, ''staging_first'')', :itX), :itX), '#', 1),
+select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, -6, ''staging_first'', true, null)::text', :itX), :itX), '#', 1),
+          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -6, ''staging_first'')::text', :itX), :itX), '#', 1),
   'B7: engine = 0359 oracle: staging_first -6 (Staging largest first, across warehouses)');
-select is(pg_temp.run(format('select public.apply_level_delta(%L, -6, ''staging_first'')', :itX), :itX),
-          pg_temp.run(format('select pg_temp.ald_0359(%L, -6, ''staging_first'')', :itX), :itX),
+select is(pg_temp.run(format('select public.apply_level_delta(%L, -6, ''staging_first'')::text', :itX), :itX),
+          pg_temp.run(format('select pg_temp.ald_0359(%L, -6, ''staging_first'')::text', :itX), :itX),
   'B8: wrapper = 0359 oracle, and it records nothing: staging_first -6 (Staging largest first, across warehouses)');
-select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, %L, -12, ''staging_first'')', :mvB, :itX), :itX, :mvB), '#', 1),
-          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -12, ''staging_first'')', :itX), :itX), '#', 1),
+select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, -12, ''staging_first'', true, null)::text', :itX), :itX), '#', 1),
+          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -12, ''staging_first'')::text', :itX), :itX), '#', 1),
   'B9: engine = 0359 oracle: staging_first -12 (all Staging, then placed)');
-select is(pg_temp.run(format('select public.apply_level_delta(%L, -12, ''staging_first'')', :itX), :itX),
-          pg_temp.run(format('select pg_temp.ald_0359(%L, -12, ''staging_first'')', :itX), :itX),
+select is(pg_temp.run(format('select public.apply_level_delta(%L, -12, ''staging_first'')::text', :itX), :itX),
+          pg_temp.run(format('select pg_temp.ald_0359(%L, -12, ''staging_first'')::text', :itX), :itX),
   'B10: wrapper = 0359 oracle, and it records nothing: staging_first -12 (all Staging, then placed)');
-select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, %L, -19, ''staging_first'')', :mvB, :itX), :itX, :mvB), '#', 1),
-          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -19, ''staging_first'')', :itX), :itX), '#', 1),
+select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, -19, ''staging_first'', true, null)::text', :itX), :itX), '#', 1),
+          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -19, ''staging_first'')::text', :itX), :itX), '#', 1),
   'B11: engine = 0359 oracle: staging_first -19 (more than exists: raises)');
-select is(pg_temp.run(format('select public.apply_level_delta(%L, -19, ''staging_first'')', :itX), :itX),
-          pg_temp.run(format('select pg_temp.ald_0359(%L, -19, ''staging_first'')', :itX), :itX),
+select is(pg_temp.run(format('select public.apply_level_delta(%L, -19, ''staging_first'')::text', :itX), :itX),
+          pg_temp.run(format('select pg_temp.ald_0359(%L, -19, ''staging_first'')::text', :itX), :itX),
   'B12: wrapper = 0359 oracle, and it records nothing: staging_first -19 (more than exists: raises)');
-select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, %L, -13, ''any'')', :mvB, :itX), :itX, :mvB), '#', 1),
-          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -13, ''any'')', :itX), :itX), '#', 1),
+select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, -13, ''any'', true, null)::text', :itX), :itX), '#', 1),
+          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -13, ''any'')::text', :itX), :itX), '#', 1),
   'B13: engine = 0359 oracle: any -13 (placed, then Staging)');
-select is(pg_temp.run(format('select public.apply_level_delta(%L, -13, ''any'')', :itX), :itX),
-          pg_temp.run(format('select pg_temp.ald_0359(%L, -13, ''any'')', :itX), :itX),
+select is(pg_temp.run(format('select public.apply_level_delta(%L, -13, ''any'')::text', :itX), :itX),
+          pg_temp.run(format('select pg_temp.ald_0359(%L, -13, ''any'')::text', :itX), :itX),
   'B14: wrapper = 0359 oracle, and it records nothing: any -13 (placed, then Staging)');
-select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, %L, -19, ''any'')', :mvB, :itX), :itX, :mvB), '#', 1),
-          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -19, ''any'')', :itX), :itX), '#', 1),
+select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, -19, ''any'', true, null)::text', :itX), :itX), '#', 1),
+          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -19, ''any'')::text', :itX), :itX), '#', 1),
   'B15: engine = 0359 oracle: any -19 (more than exists: raises)');
-select is(pg_temp.run(format('select public.apply_level_delta(%L, -19, ''any'')', :itX), :itX),
-          pg_temp.run(format('select pg_temp.ald_0359(%L, -19, ''any'')', :itX), :itX),
+select is(pg_temp.run(format('select public.apply_level_delta(%L, -19, ''any'')::text', :itX), :itX),
+          pg_temp.run(format('select pg_temp.ald_0359(%L, -19, ''any'')::text', :itX), :itX),
   'B16: wrapper = 0359 oracle, and it records nothing: any -19 (more than exists: raises)');
-select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, %L, -3, ''staging'')', :mvB, :itX), :itX, :mvB), '#', 1),
-          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -3, ''staging'')', :itX), :itX), '#', 1),
+select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, -3, ''staging'', true, null)::text', :itX), :itX), '#', 1),
+          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -3, ''staging'')::text', :itX), :itX), '#', 1),
   'B17: engine = 0359 oracle: mode staging -3 (draws as placed)');
-select is(pg_temp.run(format('select public.apply_level_delta(%L, -3, ''staging'')', :itX), :itX),
-          pg_temp.run(format('select pg_temp.ald_0359(%L, -3, ''staging'')', :itX), :itX),
+select is(pg_temp.run(format('select public.apply_level_delta(%L, -3, ''staging'')::text', :itX), :itX),
+          pg_temp.run(format('select pg_temp.ald_0359(%L, -3, ''staging'')::text', :itX), :itX),
   'B18: wrapper = 0359 oracle, and it records nothing: mode staging -3 (draws as placed)');
-select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, %L, -4, ''bogus'')', :mvB, :itX), :itX, :mvB), '#', 1),
-          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -4, ''bogus'')', :itX), :itX), '#', 1),
+select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, -4, ''bogus'', true, null)::text', :itX), :itX), '#', 1),
+          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -4, ''bogus'')::text', :itX), :itX), '#', 1),
   'B19: engine = 0359 oracle: mode bogus -4 (draws as placed)');
-select is(pg_temp.run(format('select public.apply_level_delta(%L, -4, ''bogus'')', :itX), :itX),
-          pg_temp.run(format('select pg_temp.ald_0359(%L, -4, ''bogus'')', :itX), :itX),
+select is(pg_temp.run(format('select public.apply_level_delta(%L, -4, ''bogus'')::text', :itX), :itX),
+          pg_temp.run(format('select pg_temp.ald_0359(%L, -4, ''bogus'')::text', :itX), :itX),
   'B20: wrapper = 0359 oracle, and it records nothing: mode bogus -4 (draws as placed)');
-select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, %L, -4, null)', :mvB, :itX), :itX, :mvB), '#', 1),
-          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -4, null)', :itX), :itX), '#', 1),
+select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, -4, null, true, null)::text', :itX), :itX), '#', 1),
+          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -4, null)::text', :itX), :itX), '#', 1),
   'B21: engine = 0359 oracle: mode NULL -4 (draws as placed)');
-select is(pg_temp.run(format('select public.apply_level_delta(%L, -4, null)', :itX), :itX),
-          pg_temp.run(format('select pg_temp.ald_0359(%L, -4, null)', :itX), :itX),
+select is(pg_temp.run(format('select public.apply_level_delta(%L, -4, null)::text', :itX), :itX),
+          pg_temp.run(format('select pg_temp.ald_0359(%L, -4, null)::text', :itX), :itX),
   'B22: wrapper = 0359 oracle, and it records nothing: mode NULL -4 (draws as placed)');
-select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, %L, 3, ''placed'')', :mvB, :itX), :itX, :mvB), '#', 1),
-          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, 3, ''placed'')', :itX), :itX), '#', 1),
+select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, 3, ''placed'', true, null)::text', :itX), :itX), '#', 1),
+          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, 3, ''placed'')::text', :itX), :itX), '#', 1),
   'B23: engine = 0359 oracle: placed +3 (lands in WA Staging)');
-select is(pg_temp.run(format('select public.apply_level_delta(%L, 3, ''placed'')', :itX), :itX),
-          pg_temp.run(format('select pg_temp.ald_0359(%L, 3, ''placed'')', :itX), :itX),
+select is(pg_temp.run(format('select public.apply_level_delta(%L, 3, ''placed'')::text', :itX), :itX),
+          pg_temp.run(format('select pg_temp.ald_0359(%L, 3, ''placed'')::text', :itX), :itX),
   'B24: wrapper = 0359 oracle, and it records nothing: placed +3 (lands in WA Staging)');
-select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, %L, 2, ''any'')', :mvB, :itX), :itX, :mvB), '#', 1),
-          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, 2, ''any'')', :itX), :itX), '#', 1),
+select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, 2, ''any'', true, null)::text', :itX), :itX), '#', 1),
+          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, 2, ''any'')::text', :itX), :itX), '#', 1),
   'B25: engine = 0359 oracle: any +2 (mode ignored for an increment)');
-select is(pg_temp.run(format('select public.apply_level_delta(%L, 2, ''any'')', :itX), :itX),
-          pg_temp.run(format('select pg_temp.ald_0359(%L, 2, ''any'')', :itX), :itX),
+select is(pg_temp.run(format('select public.apply_level_delta(%L, 2, ''any'')::text', :itX), :itX),
+          pg_temp.run(format('select pg_temp.ald_0359(%L, 2, ''any'')::text', :itX), :itX),
   'B26: wrapper = 0359 oracle, and it records nothing: any +2 (mode ignored for an increment)');
-select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, %L, 0, ''placed'')', :mvB, :itX), :itX, :mvB), '#', 1),
-          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, 0, ''placed'')', :itX), :itX), '#', 1),
+select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, 0, ''placed'', true, null)::text', :itX), :itX), '#', 1),
+          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, 0, ''placed'')::text', :itX), :itX), '#', 1),
   'B27: engine = 0359 oracle: zero (no-op)');
-select is(pg_temp.run(format('select public.apply_level_delta(%L, 0, ''placed'')', :itX), :itX),
-          pg_temp.run(format('select pg_temp.ald_0359(%L, 0, ''placed'')', :itX), :itX),
+select is(pg_temp.run(format('select public.apply_level_delta(%L, 0, ''placed'')::text', :itX), :itX),
+          pg_temp.run(format('select pg_temp.ald_0359(%L, 0, ''placed'')::text', :itX), :itX),
   'B28: wrapper = 0359 oracle, and it records nothing: zero (no-op)');
-select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, %L, null, ''placed'')', :mvB, :itX), :itX, :mvB), '#', 1),
-          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, null, ''placed'')', :itX), :itX), '#', 1),
+select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, null, ''placed'', true, null)::text', :itX), :itX), '#', 1),
+          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, null, ''placed'')::text', :itX), :itX), '#', 1),
   'B29: engine = 0359 oracle: NULL quantity (no-op)');
-select is(pg_temp.run(format('select public.apply_level_delta(%L, null, ''placed'')', :itX), :itX),
-          pg_temp.run(format('select pg_temp.ald_0359(%L, null, ''placed'')', :itX), :itX),
+select is(pg_temp.run(format('select public.apply_level_delta(%L, null, ''placed'')::text', :itX), :itX),
+          pg_temp.run(format('select pg_temp.ald_0359(%L, null, ''placed'')::text', :itX), :itX),
   'B30: wrapper = 0359 oracle, and it records nothing: NULL quantity (no-op)');
-select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, %L, 2, ''placed'')', :mvB, :itN), :itN, :mvB), '#', 1),
-          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, 2, ''placed'')', :itN), :itN), '#', 1),
+select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, 2, ''placed'', true, null)::text', :itN), :itN), '#', 1),
+          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, 2, ''placed'')::text', :itN), :itN), '#', 1),
   'B31: engine = 0359 oracle: no-warehouse item +2 (org-level Staging, created on demand)');
-select is(pg_temp.run(format('select public.apply_level_delta(%L, 2, ''placed'')', :itN), :itN),
-          pg_temp.run(format('select pg_temp.ald_0359(%L, 2, ''placed'')', :itN), :itN),
+select is(pg_temp.run(format('select public.apply_level_delta(%L, 2, ''placed'')::text', :itN), :itN),
+          pg_temp.run(format('select pg_temp.ald_0359(%L, 2, ''placed'')::text', :itN), :itN),
   'B32: wrapper = 0359 oracle, and it records nothing: no-warehouse item +2 (org-level Staging, created on demand)');
-select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, %L, -1, ''placed'')', :mvB, :itN), :itN, :mvB), '#', 1),
-          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -1, ''placed'')', :itN), :itN), '#', 1),
+select is(split_part(pg_temp.run(format('select ledger.apply_level_delta_for(%L, -1, ''placed'', true, null)::text', :itN), :itN), '#', 1),
+          split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -1, ''placed'')::text', :itN), :itN), '#', 1),
   'B33: engine = 0359 oracle: no-warehouse item -1 (the org Site)');
-select is(pg_temp.run(format('select public.apply_level_delta(%L, -1, ''placed'')', :itN), :itN),
-          pg_temp.run(format('select pg_temp.ald_0359(%L, -1, ''placed'')', :itN), :itN),
+select is(pg_temp.run(format('select public.apply_level_delta(%L, -1, ''placed'')::text', :itN), :itN),
+          pg_temp.run(format('select pg_temp.ald_0359(%L, -1, ''placed'')::text', :itN), :itN),
   'B34: wrapper = 0359 oracle, and it records nothing: no-warehouse item -1 (the org Site)');
-select is(split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -10, ''placed'')', :itX), :itX), '#', 1),
+select is(split_part(pg_temp.run(format('select pg_temp.ald_0359(%L, -10, ''placed'')::text', :itX), :itX), '#', 1),
   'ok|A1=0,A2=0,B1=0,S=0,SA=5,SB=3,UA=0',
   'B35: the oracle itself: placed -10 empties every placed holding and leaves Staging');
+select is(
+  (select string_agg(coalesce(pg_temp.draw_of(format('select ledger.apply_level_delta_for(%L, %s, %L, false, null)::text', :itX, v.q, v.m))::text, 'none'), ',' order by v.o)
+     from (values (1, -1, 'placed'), (2, -10, 'placed'), (3, -6, 'staging_first'), (4, -13, 'any'), (5, 3, 'placed'), (6, -4, 'bogus')) v(o, q, m)),
+  'none,none,none,none,none,none',
+  'B36: with record = false (the wrapper''s call) the engine returns no draw, in every mode and for an increment');
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- C. PROVENANCE TRUTH
 -- ══════════════════════════════════════════════════════════════════════════
 select is(
-  pg_temp.run(format($$select ledger.apply_level_delta_for(%L, %L, -10, 'placed')$$, :mvC, :itX), :itX, :mvC),
+  pg_temp.run(format($$select ledger.apply_level_delta_for(%L, -10, 'placed', true, null)::text$$, :itX), :itX),
   'ok|A1=0,A2=0,B1=0,S=0,SA=5,SB=3,UA=0#1:A1:-1:placed:service,2:S:-2:placed:service,3:B1:-4:placed:service,4:A2:-1:placed:service,5:UA:-2:placed:service#diff=A1:-1,A2:-1,B1:-4,S:-2,UA:-2#oracle=true#total=-10#facts=true#n=5',
   'C1: placed -10: rows in draw order (location age: A1, Site, WB rack, archived crate; Unplaced last), summing to the holdings difference');
 select is(
-  pg_temp.run(format($$select ledger.apply_level_delta_for(%L, %L, -12, 'staging_first')$$, :mvC, :itX), :itX, :mvC),
+  pg_temp.run(format($$select ledger.apply_level_delta_for(%L, -12, 'staging_first', true, null)::text$$, :itX), :itX),
   'ok|A1=0,A2=1,B1=3,S=0,SA=0,SB=0,UA=2#1:SA:-5:staging_first:service,2:SB:-3:staging_first:service,3:A1:-1:placed:service,4:S:-2:placed:service,5:B1:-1:placed:service#diff=A1:-1,B1:-1,S:-2,SA:-5,SB:-3#oracle=true#total=-12#facts=true#n=5',
   'C2: staging_first -12: Staging largest first (WA 5, then WB 3), then placed');
 select is(
-  pg_temp.run(format($$select ledger.apply_level_delta_for(%L, %L, -13, 'any')$$, :mvC, :itX), :itX, :mvC),
+  pg_temp.run(format($$select ledger.apply_level_delta_for(%L, -13, 'any', true, null)::text$$, :itX), :itX),
   'ok|A1=0,A2=0,B1=0,S=0,SA=2,SB=3,UA=0#1:A1:-1:placed:service,2:S:-2:placed:service,3:B1:-4:placed:service,4:A2:-1:placed:service,5:UA:-2:placed:service,6:SA:-3:any_staging:service#diff=A1:-1,A2:-1,B1:-4,S:-2,SA:-3,UA:-2#oracle=true#total=-13#facts=true#n=6',
   'C3: any -13: every placed holding, then Staging largest first (any_staging)');
 select is(
-  pg_temp.run(format($$select ledger.apply_level_delta_for(%L, %L, 3, 'placed')$$, :mvC, :itX), :itX, :mvC),
+  pg_temp.run(format($$select ledger.apply_level_delta_for(%L, 3, 'placed', true, null)::text$$, :itX), :itX),
   'ok|A1=1,A2=1,B1=4,S=2,SA=8,SB=3,UA=2#1:SA:3:increment:service#diff=SA:3#oracle=true#total=3#facts=true#n=1',
   'C4: +3 lands in the item''s own warehouse Staging: one increment row');
 select is(
-  pg_temp.run(format($$select ledger.apply_level_delta_for(%L, %L, 2, 'any')$$, :mvC, :itN), :itN, :mvC),
+  pg_temp.run(format($$select ledger.apply_level_delta_for(%L, 2, 'any', true, null)::text$$, :itN), :itN),
   'ok|S=2,new-staging-org=2#1:new-staging-org:2:increment:service#diff=new-staging-org:2#oracle=true#total=2#facts=true#n=1',
   'C5: an item with no warehouse lands in the org-level Staging (created on demand, as before)');
--- The draw-time snapshots and the mode, literally, for a draw that crosses
+-- The draw-time facts and the mode, literally, for a draw that crosses
 -- warehouses (B1 is in WB, the item in WA) and a non-standard mode string.
 select is(
-  (select pg_temp.run(format($$select ledger.apply_level_delta_for(%L, %L, -7, 'bogus'); select pg_temp.leak(%L)$$, :mvC, :itX, :mvC), :itX, :mvC)),
-  'err|ZX374|1:A1:rack:WA:WA:bogus,2:S:null:org:WA:bogus,3:B1:rack:WB:WA:bogus',
-  'C6: snapshots are facts at draw time: location kind and warehouse (NULL Site = org), the ITEM''s warehouse (not the location''s), and p_mode exactly as passed');
+  pg_temp.facts(pg_temp.draw_of(format($$select ledger.apply_level_delta_for(%L, -7, 'bogus', true, null)::text$$, :itX))),
+  '1:A1:rack:WA:WA:bogus,2:S:null:org:WA:bogus,3:B1:rack:WB:WA:bogus',
+  'C6: facts at draw time: location kind and warehouse (NULL Site = org), the ITEM''s warehouse (not the location''s), and p_mode exactly as passed');
 set local "request.jwt.claim.sub" to :u_mgr;
 select set_config('stockpilot.ledger', pg_current_xact_id()::text, true);
 select is(
-  split_part(pg_temp.run(format($$select ledger.apply_level_delta_for(%L, %L, -7, 'placed')$$, :mvC, :itX), :itX, :mvC), '#', 2),
+  split_part(pg_temp.run(format($$select ledger.apply_level_delta_for(%L, -7, 'placed', true, %L)::text$$, :itX, :u_mgr), :itX), '#', 2),
   '1:A1:-1:placed:manager,2:S:-2:placed:manager,3:B1:-4:placed:manager',
   'C7: a manager''s draw records actor_scope manager for every holding');
 set local "request.jwt.claim.sub" to :u_stf;
 select is(
-  split_part(pg_temp.run(format($$select ledger.apply_level_delta_for(%L, %L, -7, 'placed')$$, :mvC, :itX), :itX, :mvC), '#', 2),
+  split_part(pg_temp.run(format($$select ledger.apply_level_delta_for(%L, -7, 'placed', true, %L)::text$$, :itX, :u_stf), :itX), '#', 2),
   '1:A1:-1:placed:in_scope,2:S:-2:placed:in_scope,3:B1:-4:placed:out_of_scope',
   'C8: a WA staff draw: WA rack and the org-level Site in_scope, the WB rack out_of_scope');
 select set_config('stockpilot.ledger', '', true);
 set local "request.jwt.claim.sub" to '';
 
 -- ══════════════════════════════════════════════════════════════════════════
--- R. SUB-PRECISION QUANTITIES (review 2026-09-25). adjust_stock takes an
--- unconstrained numeric and the API accepts any finite value, but holdings
--- are numeric(14,4). Before the fix the recorder inserted the unrounded
--- share: a share under 0.00005 became a 0.0000 row and the CHECK failed the
--- whole draw (23514) where 0359 succeeded, and a half-way take recorded
--- 0.0001 against a holding that did not move. Each case: the engine's
--- holdings equal the 0359 oracle's EXACTLY, the rows are literal, and per
--- location the rows equal the holdings difference exactly. Service path.
+-- R. SUB-PRECISION QUANTITIES. adjust_stock takes an unconstrained numeric
+-- and the API accepts any finite value, but holdings are numeric(14,4). Each
+-- share is recorded as its holding moved; one that rounds to zero is not
+-- recorded. Each case: the engine's holdings equal the 0359 oracle's EXACTLY,
+-- the rows are literal, and per location the rows equal the holdings
+-- difference exactly. Service path.
 -- ══════════════════════════════════════════════════════════════════════════
-select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, -0.00001, ''placed'')', :mvB, :itX), :itX, :mvB),
-          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -0.00001, ''placed'')', :itX), :itX), '#', 1) || '##oracle=true',
-  'R1: -0.00001 moves nothing (as 0359) and records no row (was 23514)');
-select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, 0.00004, ''placed'')', :mvB, :itX), :itX, :mvB),
-          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, 0.00004, ''placed'')', :itX), :itX), '#', 1) || '##oracle=true',
-  'R2: +0.00004 lands nothing (as 0359) and records no row (was 23514)');
-select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, -1.00001, ''placed'')', :mvB, :itX), :itX, :mvB),
-          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -1.00001, ''placed'')', :itX), :itX), '#', 1) || '#1:A1:-1.0000:placed#oracle=true',
-  'R3: -1.00001 empties A1; the 0.00001 remainder on the Site moves nothing and records no row (was 23514)');
-select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, -0.00005, ''placed'')', :mvB, :itX), :itX, :mvB),
-          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -0.00005, ''placed'')', :itX), :itX), '#', 1) || '##oracle=true',
-  'R4: -0.00005 (an exact half) leaves A1 at 1.0000, so no row (was a -0.0001 row against an unchanged holding)');
-select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, -0.00006, ''placed'')', :mvB, :itX), :itX, :mvB),
-          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -0.00006, ''placed'')', :itX), :itX), '#', 1) || '#1:A1:-0.0001:placed#oracle=true',
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, -0.00001, ''placed'', true, null)::text', :itX), :itX),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -0.00001, ''placed'')::text', :itX), :itX), '#', 1) || '##oracle=true',
+  'R1: -0.00001 moves nothing (as 0359) and records no row');
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, 0.00004, ''placed'', true, null)::text', :itX), :itX),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, 0.00004, ''placed'')::text', :itX), :itX), '#', 1) || '##oracle=true',
+  'R2: +0.00004 lands nothing (as 0359) and records no row');
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, -1.00001, ''placed'', true, null)::text', :itX), :itX),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -1.00001, ''placed'')::text', :itX), :itX), '#', 1) || '#1:A1:-1.0000:placed#oracle=true',
+  'R3: -1.00001 empties A1; the 0.00001 remainder on the Site moves nothing and records no row');
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, -0.00005, ''placed'', true, null)::text', :itX), :itX),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -0.00005, ''placed'')::text', :itX), :itX), '#', 1) || '##oracle=true',
+  'R4: -0.00005 (an exact half) leaves A1 at 1.0000, so no row');
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, -0.00006, ''placed'', true, null)::text', :itX), :itX),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -0.00006, ''placed'')::text', :itX), :itX), '#', 1) || '#1:A1:-0.0001:placed#oracle=true',
   'R5: -0.00006 takes A1 to 0.9999: one -0.0001 row');
-select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, 0.00005, ''placed'')', :mvB, :itX), :itX, :mvB),
-          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, 0.00005, ''placed'')', :itX), :itX), '#', 1) || '#1:SA:0.0001:increment#oracle=true',
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, 0.00005, ''placed'', true, null)::text', :itX), :itX),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, 0.00005, ''placed'')::text', :itX), :itX), '#', 1) || '#1:SA:0.0001:increment#oracle=true',
   'R6: +0.00005 (an exact half) lands 0.0001 in WA Staging: one 0.0001 row');
-select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, -5.00005, ''staging_first'')', :mvB, :itX), :itX, :mvB),
-          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -5.00005, ''staging_first'')', :itX), :itX), '#', 1) || '#1:SA:-5.0000:staging_first#oracle=true',
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, -5.00005, ''staging_first'', true, null)::text', :itX), :itX),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -5.00005, ''staging_first'')::text', :itX), :itX), '#', 1) || '#1:SA:-5.0000:staging_first#oracle=true',
   'R7: staging_first -5.00005 empties WA Staging; the half on WB Staging moves nothing and records no row');
-select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, -10.00006, ''any'')', :mvB, :itX), :itX, :mvB),
-          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -10.00006, ''any'')', :itX), :itX), '#', 1)
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, -10.00006, ''any'', true, null)::text', :itX), :itX),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -10.00006, ''any'')::text', :itX), :itX), '#', 1)
           || '#1:A1:-1.0000:placed,2:S:-2.0000:placed,3:B1:-4.0000:placed,4:A2:-1.0000:placed,5:UA:-2.0000:placed,6:SA:-0.0001:any_staging#oracle=true',
   'R8: any -10.00006: every placed holding, then 0.0001 off WA Staging (any_staging kept: it moved)');
-select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, %L, -10.00001, ''any'')', :mvB, :itX), :itX, :mvB),
-          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -10.00001, ''any'')', :itX), :itX), '#', 1)
+select is(pg_temp.run4(format('select ledger.apply_level_delta_for(%L, -10.00001, ''any'', true, null)::text', :itX), :itX),
+          split_part(pg_temp.run4(format('select pg_temp.ald_0359(%L, -10.00001, ''any'')::text', :itX), :itX), '#', 1)
           || '#1:A1:-1.0000:placed,2:S:-2.0000:placed,3:B1:-4.0000:placed,4:A2:-1.0000:placed,5:UA:-2.0000:placed#oracle=true',
   'R9: any -10.00001: every placed holding; the 0.00001 Staging remainder moves nothing and records no row');
 
@@ -1081,13 +1195,17 @@ select lives_ok(format($$select public.adjust_stock(%L, -2, 'remove', null, 'D1 
 select lives_ok(format($$select public.adjust_stock(%L, -3, 'remove', null, 'D1 reach', null)$$, :itX),
   'D2: WA staff removes 3 more; the draw reaches the WB rack');
 reset role;
-select is(pg_temp.fk_ok(), 'fk ok', 'D3: the deferred FK holds for both movements (every row names a real movement of the same org and item)');
+select is(
+  (select count(*)::int from public.stock_movements m
+    where m.item_id = :itX and m.reason in ('D1 phone', 'D1 reach') and m.via_ledger and num_nonnulls(m.draw) = 1),
+  2,
+  'D3: both movements are ledger rows carrying their own draw');
 select is(
   (select count(*)::int || '|' || coalesce(m.from_location_id::text, '-') || '>' || coalesce(m.to_location_id::text, '-')
           || '|' || pg_temp.rows(m.id) || '|' || (select string_agg(distinct h.mode, ',') from public.stock_movement_holdings h where h.movement_id = m.id)
      from public.stock_movements m where m.item_id = :itX and m.reason = 'D1 phone' group by m.id),
   '1|->-|1:A1:-1:placed:in_scope,2:S:-1:placed:in_scope|placed',
-  'D4: one movement, from/to still NULL, its rows (A1 then the Site) carry its id and mode placed');
+  'D4: one movement, from/to still NULL, its rows (A1 then the Site) with mode placed');
 select is(
   (select pg_temp.rows(m.id) || '|' ||
           (select string_agg(pg_temp.tag(h.location_id) || ':' || (h.location_warehouse_id is not distinct from :whB)::text
@@ -1105,64 +1223,63 @@ select lives_ok(format($$select public.adjust_stock(%L, -7, 'remove', null, 'D6 
 select lives_ok(format($$select public.adjust_stock(%L, 1, 'adjust', null, 'D7 plus', null)$$, :itX),
   'D7: WA staff adds 1 with no location');
 reset role;
-select is(pg_temp.fk_ok(), 'fk ok', 'D8: the deferred FK holds');
 select is(
   (select pg_temp.rows(pg_temp.mv(:itX, 'D6 web')) || ' | ' || pg_temp.rows(pg_temp.mv(:itX, 'D7 plus'))
           || ' | ' || coalesce((select to_location_id::text from public.stock_movements where id = pg_temp.mv(:itX, 'D7 plus')), 'null')),
   '1:B1:-2:placed:out_of_scope,2:A2:-1:placed:in_scope,3:UA:-2:placed:in_scope,4:SA:-2:any_staging:in_scope | 1:SA:1:increment:in_scope | null',
-  'D9: any: the rest of the placed stock, then Staging (any_staging); +1: one increment row at WA Staging, to_location_id still NULL');
+  'D8: any: the rest of the placed stock, then Staging (any_staging); +1: one increment row at WA Staging, to_location_id still NULL');
 
--- D10: explicit-location adjust and a transfer record nothing.
+-- D9: explicit-location adjust and a transfer record nothing.
 set local "request.jwt.claim.sub" to :u_mgr;
 set local role to 'authenticated';
 select lives_ok(format($$select public.adjust_stock(%L, 2, 'adjust', %L, 'D10 explicit')$$, :itX, :locA1),
-  'D10: a manager adjusts +2 at an explicit location');
+  'D9: a manager adjusts +2 at an explicit location');
 select lives_ok(format($$select public.transfer_stock(%L, %L, %L, 1, 'D10 transfer')$$, :itX, :locA1, :locS),
-  'D11: a manager transfers 1 from A1 to the Site');
+  'D10: a manager transfers 1 from A1 to the Site');
 reset role;
 select is(
   (select string_agg(m.movement_type || ':' || coalesce(bf.tag, '-') || '>' || coalesce(bt.tag, '-') || ':'
-                     || (select count(*) from public.stock_movement_holdings h where h.movement_id = m.id),
+                     || (select count(*) from public.stock_movement_holdings h where h.movement_id = m.id)
+                     || ':' || num_nonnulls(m.draw),
                      ',' order by m.movement_type)
      from public.stock_movements m
      left join lbl bf on bf.id = m.from_location_id
      left join lbl bt on bt.id = m.to_location_id
-    where m.item_id = :itX and (m.reason = 'D10 explicit' or m.notes = 'D10 transfer')) || '|' || pg_temp.fk_ok(),
-  'adjust:->A1:0,transfer:A1>S:0|fk ok',
-  'D12: explicit-location movements keep their from/to and record no provenance rows (the deferred FK holds)');
+    where m.item_id = :itX and (m.reason = 'D10 explicit' or m.notes = 'D10 transfer')),
+  'adjust:->A1:0:0,transfer:A1>S:0:0',
+  'D11: explicit-location movements keep their from/to and carry no draw');
 select is(pg_temp.snap(:itX) || ' qoh=' || (select quantity_on_hand::int from public.inventory_items where id = :itX),
   'A1=1,A2=0,B1=0,S=1,SA=4,SB=3,UA=0 qoh=9',
-  'D13: itX holdings equal on hand after D1-D11');
+  'D12: itX holdings equal on hand after D1-D10');
 
--- D14: complete_picking, two lines of one item; the first spans P1 and P2.
+-- D13: complete_picking, two lines of one item; the first spans P1 and P2.
 set local "request.jwt.claim.sub" to :u_stf;
 set local role to 'authenticated';
-select lives_ok(format($$select public.complete_picking(%L)$$, :ordP), 'D14: WA staff completes the pick');
+select lives_ok(format($$select public.complete_picking(%L)$$, :ordP), 'D13: WA staff completes the pick');
 reset role;
-select is(pg_temp.fk_ok(), 'fk ok', 'D15: the deferred FK holds');
 select is(
   (select count(*)::int || '|' || bool_and(m.reference_type = 'order_request' and m.reference_id = :ordP)::text
           || '|' || bool_and((select sum(h.quantity) from public.stock_movement_holdings h where h.movement_id = m.id) = m.quantity_change)::text
           || '|' || string_agg(pg_temp.rows(m.id), ' / ' order by (select count(*) from public.stock_movement_holdings h where h.movement_id = m.id) desc)
      from public.stock_movements m where m.item_id = :itP and m.movement_type = 'transfer'),
   '2|true|true|1:P1:-1:placed:in_scope,2:P2:-1:placed:in_scope / 1:P2:-2:placed:in_scope',
-  'D16: exactly two movements, both stamped order_request (the exactly-one probe still works); each movement''s rows sum to its batch; the duplicate line keeps its own rows');
+  'D14: exactly two movements, both stamped order_request (the exactly-one probe still works); each movement''s rows sum to its batch; the duplicate line keeps its own rows');
 
--- D17: cancel restocks both lines into Staging.
+-- D15: cancel restocks both lines into Staging.
 set local role to 'authenticated';
-select lives_ok(format($$select public.cancel_order_request(%L, 'D17 cancel')$$, :ordP), 'D17: the requester cancels the picked order');
+select lives_ok(format($$select public.cancel_order_request(%L, 'D17 cancel')$$, :ordP), 'D15: the requester cancels the picked order');
 reset role;
-select is(pg_temp.fk_ok(), 'fk ok', 'D18: the deferred FK holds');
 select is(
   (select string_agg(pg_temp.rows(m.id), ' / ' order by m.id)
      from public.stock_movements m where m.item_id = :itP and m.movement_type = 'return'),
   '1:SA:2:increment:in_scope / 1:SA:2:increment:in_scope',
-  'D19: one increment row per restocked line, at WA Staging');
+  'D16: one increment row per restocked line, at WA Staging');
 
--- D20: reverse_receipt draws staging_first.
+-- D17: reverse_receipt draws staging_first.
 set local "request.jwt.claim.sub" to :u_mgr;
 set local role to 'authenticated';
-do $$
+select lives_ok($$
+do $d$
 declare
   v_receipt public.receipts;
   v_staging uuid;
@@ -1178,65 +1295,63 @@ begin
   perform public.transfer_stock('03730000-0000-0000-0000-0000000000c6'::uuid, v_staging,
                                 '03730000-0000-0000-0000-0000000000e1'::uuid, 1);
   perform public.reverse_receipt(v_receipt.id, 'D20 reverse');
-end $$;
+end $d$;
+$$, 'D17: a manager receives 3 into Staging, moves 1 to A1, and reverses the receipt');
 reset role;
-select is(pg_temp.fk_ok(), 'fk ok', 'D20: the deferred FK holds after receive, transfer and reverse');
 select is(
   (select string_agg(m.movement_type || ':' || m.quantity_change::int || '[' || pg_temp.rows(m.id) || ']', ' ' order by m.movement_type collate "C")
      from public.stock_movements m where m.item_id = :itV),
   'correction:-3[1:SA:-2:staging_first:manager,2:A1:-1:placed:manager] receive_po:3[] transfer:0[]',
-  'D21: the receipt (explicit Staging) and the transfer record nothing; the reversal records Staging first, then A1');
+  'D18: the receipt (explicit Staging) and the transfer record nothing; the reversal records Staging first, then A1');
 
--- D22: assemble then distribute (phantom drain, component draws, shortages).
+-- D19: assemble then distribute (phantom drain, component draws, shortages).
 set local role to 'authenticated';
 select lives_ok(format($$select public.assemble_bundle(%L, 2, %L, 'D22 assemble')$$, :bnd, :whA),
-  'D22: a manager assembles 2 kits');
+  'D19: a manager assembles 2 kits');
 select lives_ok(format($$select public.distribute_bundle(%L, 4, %L, true, null, 'D22 distribute', null)$$, :bnd, :whA),
-  'D23: a manager distributes 4 (2 pre-assembled, 2 built from 1 of each part, shortages allowed)');
+  'D20: a manager distributes 4 (2 pre-assembled, 2 built from 1 of each part, shortages allowed)');
 reset role;
-select is(pg_temp.fk_ok(), 'fk ok', 'D24: the deferred FK holds');
 select is(
   (select string_agg(i.sku || ':' || m.movement_type || ':' || m.quantity_change::int || '[' || pg_temp.rows(m.id) || ']',
                      ' ' order by i.sku collate "C", m.movement_type collate "C", m.quantity_change)
      from public.stock_movements m join public.inventory_items i on i.id = m.item_id
     where m.reference_type = 'bundle' and m.reference_id = :bnd),
   'PV-0373-K1:bundle_assembly:-2[1:A1:-2:placed:manager] PV-0373-K1:bundle_distribution:-1[1:A1:-1:placed:manager] PV-0373-K1:bundle_shortage:0[] PV-0373-K2:bundle_assembly:-2[1:A1:-2:placed:manager] PV-0373-K2:bundle_distribution:-1[1:UA:-1:placed:manager] PV-0373-K2:bundle_shortage:0[] __BUNDLE__03730000:bundle_assembly:2[1:SA:2:increment:manager] __BUNDLE__03730000:bundle_distribution:-2[1:SA:-2:staging_first:manager]',
-  'D25: one row set per movement: component draws (placed), the kit landing in Staging, the pre-assembled drain (staging_first); the zero-quantity shortage rows record nothing');
+  'D21: one row set per movement: component draws (placed), the kit landing in Staging, the pre-assembled drain (staging_first); the zero-quantity shortage rows carry no draw');
 
--- D26: return with scrap: restock lands in WA Staging; the scrap draws the
+-- D22: return with scrap: restock lands in WA Staging; the scrap draws the
 -- LARGEST Staging (WB), exactly as before; nothing crosses legs.
 set local role to 'authenticated';
 select lives_ok(format($$select public.process_return_disposition(%L)$$, :retR),
-  'D26: a manager closes the scrap return');
+  'D22: a manager closes the scrap return');
 reset role;
-select is(pg_temp.fk_ok(), 'fk ok', 'D27: the deferred FK holds');
 select is(
   (select string_agg(m.movement_type || ':' || m.quantity_change::int || '[' || pg_temp.rows(m.id) || ']', ' ' order by m.movement_type collate "C" desc)
      from public.stock_movements m where m.item_id = :itR),
   'return:2[1:SA:2:increment:manager] loss:-2[1:SB:-2:staging_first:manager]',
-  'D28: the return movement has ONLY its +2 Staging landing; the loss movement has ONLY its own -2 (largest Staging first, as today)');
+  'D23: the return movement has ONLY its +2 Staging landing; the loss movement has ONLY its own -2 (largest Staging first, as today)');
 
--- D29: THE PINNED GAP. post_cycle_count's residual draw goes through the
+-- D24: THE PINNED GAP. post_cycle_count's residual draw goes through the
 -- non-recording wrapper. When the count slice lands this flips on purpose.
 set local role to 'authenticated';
 update public.cycle_count_lines set counted_quantity = 2, counted_by = :u_mgr, counted_at = now() where id = :lnC;
-select lives_ok(format($$select public.post_cycle_count(%L)$$, :ccC), 'D29: a manager posts a -2 count with no counted location');
+select lives_ok(format($$select public.post_cycle_count(%L)$$, :ccC), 'D24: a manager posts a -2 count with no counted location');
 reset role;
 select is(
   (select m.quantity_change::int || '|' || coalesce(m.from_location_id::text, '-') || '|'
-          || (select count(*) from public.stock_movement_holdings h where h.movement_id = m.id) || '|' || pg_temp.snap(:itC)
-          || '|' || pg_temp.fk_ok()
+          || (select count(*) from public.stock_movement_holdings h where h.movement_id = m.id) || '|' || num_nonnulls(m.draw)
+          || '|' || pg_temp.snap(:itC)
      from public.stock_movements m where m.item_id = :itC and m.reference_type = 'cycle_count' and m.reference_id = :ccC),
-  '-2|-|0|A1=0,S=2|fk ok',
-  'D30: PINNED GAP (0373 Q4): the count''s residual draw emptied A1 (2 -> 0) but recorded NO provenance');
+  '-2|-|0|0|A1=0,S=2',
+  'D25: PINNED GAP (0373 Q4): the count''s residual draw emptied A1 (2 -> 0) but recorded NO draw');
 
--- D31: a WB item's draw, for the RLS parity below.
+-- D26: a WB item's draw, for the RLS parity below.
 set local role to 'authenticated';
 select lives_ok(format($$select public.adjust_stock(%L, -1, 'remove', null, 'D31 wb', null)$$, :itW),
-  'D31: a manager removes 1 of the WB item');
+  'D26: a manager removes 1 of the WB item');
 reset role;
-select is(pg_temp.rows(pg_temp.mv(:itW, 'D31 wb')) || '|' || pg_temp.fk_ok(), '1:B1:-1:placed:manager|fk ok',
-  'D32: the WB item''s draw is recorded (the deferred FK holds)');
+select is(pg_temp.rows(pg_temp.mv(:itW, 'D31 wb')), '1:B1:-1:placed:manager',
+  'D27: the WB item''s draw is recorded');
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- E. FAILURE AND INTEGRITY
@@ -1248,7 +1363,7 @@ select throws_ok(format($$select public.adjust_stock(%L, -3, 'remove', null, 'E1
 reset role;
 set local "request.jwt.claim.sub" to '';
 select is(
-  pg_temp.run(format($$select pg_temp.ald_0359(%L, -3, 'placed')$$, :itX), :itX),
+  pg_temp.run(format($$select pg_temp.ald_0359(%L, -3, 'placed')::text$$, :itX), :itX),
   'err|P0001|insufficient_placed_stock',
   'E2: the same SQLSTATE and message as the 0359 oracle on the same holdings');
 select is(
@@ -1256,169 +1371,205 @@ select is(
   || (select count(*) from public.stock_movement_holdings where item_id = :itX) || '|' || pg_temp.snap(:itX),
   '0|9|A1=1,A2=0,B1=0,S=1,SA=4,SB=3,UA=0',
   'E3: no movement, no new rows (still the 9 from D1-D7), holdings unchanged');
-select is(pg_temp.fk_probe(:mvE, :itX, -1), '23503', 'E4: an engine call for a movement that never exists fails the FK (23503)');
-select is(pg_temp.fk_probe(pg_temp.mv(:itW, 'D31 wb'), :itX, 1), '23503',
-  'E5: an engine call naming ANOTHER item''s real movement fails the composite FK (23503)');
 select is(
-  (select pg_temp.run(format($$select ledger.apply_level_delta_for(%L, %L, 1, 'placed'); select pg_temp.leak_fk(%L)$$,
-                              pg_temp.mv(:itX, 'D7 plus'), :itX, pg_temp.mv(:itX, 'D7 plus')), :itX)),
-  'err|ZX375|1:SA:1:increment:in_scope,2:SA:1:increment:service|fk ok',
-  'E6: a second engine call for the same movement continues seq (no 23505) and still satisfies the FK');
+  (select count(*)::int from public.stock_movements m where num_nonnulls(m.draw) = 1 and not m.via_ledger),
+  0,
+  'E4: no draw sits on a movement the ledger did not write');
 select is(
-  (select count(*)::int from public.stock_movement_holdings where movement_id = pg_temp.mv(:itX, 'D7 plus')),
-  1,
-  'E7: the rolled-back subtransaction left no row behind');
-select lives_ok(format($$select ledger.apply_level_delta_for(%L, %L, 0, 'placed'); select ledger.apply_level_delta_for(%L, %L, null, 'placed')$$,
-                       :mvE, :itX, :mvE, :itX),
-  'E8: zero and NULL quantities run');
+  coalesce(pg_temp.draw_of(format($$select ledger.apply_level_delta_for(%L, 0, 'placed', true, null)::text$$, :itX))::text, 'none')
+  || '|' || coalesce(pg_temp.draw_of(format($$select ledger.apply_level_delta_for(%L, null, 'placed', true, null)::text$$, :itX))::text, 'none'),
+  'none|none',
+  'E5: zero and NULL quantities return no draw');
+set local "request.jwt.claim.sub" to :u_stf;
+set local role to 'authenticated';
+select lives_ok(format($$select public.adjust_stock(%L, 0, 'adjust', null, 'E6 zero', null)$$, :itX),
+  'E6: a zero adjust with no location runs');
+savepoint e7;
+select 1 from public.adjust_stock(:itX, -1, 'remove', null, 'E7 rolled back', null);
+rollback to savepoint e7;
+reset role;
 select is(
-  (select count(*)::int from public.stock_movement_holdings where movement_id = :mvE) || '|' || pg_temp.fk_ok() || '|' || pg_temp.snap(:itX),
-  '0|fk ok|A1=1,A2=0,B1=0,S=1,SA=4,SB=3,UA=0',
-  'E9: zero and NULL record nothing (and leave nothing pending for the FK) and move nothing');
+  (select num_nonnulls(m.draw) || '|' || (select count(*) from public.stock_movement_holdings h where h.movement_id = m.id)
+     from public.stock_movements m where m.item_id = :itX and m.reason = 'E6 zero')
+  || '|' || (select count(*) from public.stock_movements where item_id = :itX and reason = 'E7 rolled back')
+  || '|' || (select count(*) from public.stock_movement_holdings where item_id = :itX) || '|' || pg_temp.snap(:itX),
+  '0|0|0|9|A1=1,A2=0,B1=0,S=1,SA=4,SB=3,UA=0',
+  'E7: the zero adjust wrote its movement with no draw; a rolled-back savepoint left no movement, no draw and no holdings change');
+set local "request.jwt.claim.sub" to '';
 
 -- ══════════════════════════════════════════════════════════════════════════
 -- F. SECURITY
 -- ══════════════════════════════════════════════════════════════════════════
+-- A realistic forged draw: every field set, so `is not null` would catch it
+-- too. F4 is the one only num_nonnulls catches.
+create temp table forged as
+select row('placed', :whB::uuid, 'manager',
+           array[row(:locB1::uuid, -1, 'placed', 'rack', :whB::uuid, 'in_scope')::public.stock_draw_holding])::public.stock_draw as d;
+grant select on forged to authenticated, service_role, anon;
+
 set local "request.jwt.claim.sub" to :u_mgr;
 set local role to 'authenticated';
 select throws_ok(
-  format($$insert into public.stock_movement_holdings (movement_id, seq, organization_id, item_id, location_id, quantity, step, actor_scope)
-           values (%L, 99, %L, %L, %L, -1, 'placed', 'manager')$$, pg_temp.mv(:itW, 'D31 wb'), :orgS, :itW, :locB1),
-  '42501', null, 'F1: a manager cannot INSERT a provenance row directly');
-select throws_ok($$update public.stock_movement_holdings set quantity = -99$$,
-  '42501', null, 'F2: nor UPDATE one');
-select throws_ok($$delete from public.stock_movement_holdings$$,
-  '42501', null, 'F3: nor DELETE one');
+  format($$insert into public.stock_movements (organization_id, item_id, movement_type, quantity_change, previous_quantity, new_quantity, notes, draw)
+           values (%L, %L, 'adjust', 0, 2, 2, 'F1 forged', (select d from forged))$$, :orgS, :itW),
+  '42501', 'ledger_only', 'F1: a manager''s direct insert (the stock_movements insert policy passes) cannot carry a draw: 42501 ledger_only');
 reset role;
+set local "request.jwt.claim.sub" to '';
+set local role to 'service_role';
+select throws_ok(
+  format($$insert into public.stock_movements (organization_id, item_id, movement_type, quantity_change, previous_quantity, new_quantity, notes, draw)
+           values (%L, %L, 'adjust', 0, 2, 2, 'F2 forged', (select d from forged))$$, :orgS, :itW),
+  '42501', 'ledger_only', 'F2: nor can service_role outside a ledger transaction');
+reset role;
+select throws_ok(
+  format($$insert into public.stock_movements (organization_id, item_id, movement_type, quantity_change, previous_quantity, new_quantity, notes, draw)
+           values (%L, %L, 'adjust', 0, 2, 2, 'F3 forged', (select d from forged))$$, :orgS, :itW),
+  '42501', 'ledger_only', 'F3: nor can the owner (postgres) outside a ledger transaction');
+select throws_ok(
+  format($$insert into public.stock_movements (organization_id, item_id, movement_type, quantity_change, previous_quantity, new_quantity, notes, draw)
+           values (%L, %L, 'adjust', 0, 2, 2, 'F4 forged', row(null, null, null, null)::public.stock_draw)$$, :orgS, :itW),
+  '42501', 'ledger_only', 'F4: a forged draw whose every field is NULL is refused too (num_nonnulls, not IS NOT NULL)');
+savepoint f5;
+select set_config('stockpilot.ledger', pg_current_xact_id()::text, true);
+select lives_ok(
+  format($$insert into public.stock_movements (organization_id, item_id, movement_type, quantity_change, previous_quantity, new_quantity, notes, draw)
+           values (%L, %L, 'adjust', 0, 2, 2, 'F5 in ledger', (select d from forged))$$, :orgS, :itW),
+  'F5: the rule is the ledger flag, not the role: inside a ledger transaction the owner can write a draw (forging needs set_config in the same transaction, 0359''s trust basis)');
+rollback to savepoint f5;
+select throws_ok(
+  format($$update public.stock_movements set draw = null where id = %L$$, pg_temp.mv(:itW, 'D31 wb')),
+  '42501', 'draw_immutable', 'F6: the owner cannot clear a draw');
+select throws_ok(
+  format($$update public.stock_movements set draw = (select d from forged) where id = %L$$, pg_temp.mv(:itW, 'D31 wb')),
+  '42501', 'draw_immutable', 'F7: nor rewrite it');
+set local role to 'service_role';
+select throws_ok(
+  format($$update public.stock_movements set draw = null where id = %L$$, pg_temp.mv(:itW, 'D31 wb')),
+  '42501', 'draw_immutable', 'F8: nor can service_role');
+reset role;
+select lives_ok(
+  format($$update public.stock_movements set notes = 'F9 note', draw = draw where id = %L$$, pg_temp.mv(:itW, 'D31 wb')),
+  'F9: an update that leaves the draw as it is (the note editor''s shape, plus draw = draw) goes through');
+-- <rows an UPDATE of draw touched>|<rows a DELETE touched>, as the caller.
+create function pg_temp.touch(p_id uuid) returns text language plpgsql as $f$
+declare
+  n1 int;
+  n2 int;
+begin
+  update public.stock_movements set draw = null where id = p_id;
+  get diagnostics n1 = row_count;
+  delete from public.stock_movements where id = p_id;
+  get diagnostics n2 = row_count;
+  return n1 || '|' || n2;
+end $f$;
+create temp table f10 as select pg_temp.mv(:itW, 'D31 wb') as id;
+grant select on f10 to authenticated;
+set local "request.jwt.claim.sub" to :u_mgr;
+set local role to 'authenticated';
+select is(
+  pg_temp.touch((select id from f10)),
+  '0|0',
+  'F10: a manager''s UPDATE or DELETE through the API touches no movement (no UPDATE or DELETE policy)');
+reset role;
+select is(pg_temp.rows(pg_temp.mv(:itW, 'D31 wb')) || '|' || (select notes from public.stock_movements where id = pg_temp.mv(:itW, 'D31 wb')),
+  '1:B1:-1:placed:manager|F9 note',
+  'F11: after F6-F10 the WB draw is exactly as recorded');
 set local "request.jwt.claim.sub" to :u_stf;
-select throws_ok(format($$select ledger.apply_level_delta_for(%L, %L, -1, 'placed')$$, :mvE, :itX),
-  '42501', 'ledger_only', 'F4: a direct engine call by staff outside a ledger RPC: 42501 ledger_only');
+select throws_ok(format($$select ledger.apply_level_delta_for(%L, -1, 'placed', true, %L)$$, :itX, :u_stf),
+  '42501', 'ledger_only', 'F12: a direct engine call by staff outside a ledger RPC: 42501 ledger_only');
 set local "request.jwt.claim.sub" to :u_out;
-select throws_ok(format($$select ledger.apply_level_delta_for(%L, %L, -1, 'placed')$$, :mvE, :itX),
-  '42501', 'forbidden', 'F5: a direct engine call by an org outsider: 42501 forbidden');
+select throws_ok(format($$select ledger.apply_level_delta_for(%L, -1, 'placed', true, %L)$$, :itX, :u_out),
+  '42501', 'forbidden', 'F13: a direct engine call by an org outsider: 42501 forbidden');
 set local "request.jwt.claim.sub" to :u_stf;
 select throws_ok(format($$select public.apply_level_delta(%L, 500)$$, :itX),
-  '42501', 'ledger_only', 'F6: a direct call of the wrapper by staff: still 42501 ledger_only (0359 #34)');
+  '42501', 'ledger_only', 'F14: a direct call of the wrapper by staff: still 42501 ledger_only (0359 #34)');
 set local "request.jwt.claim.sub" to :u_out;
 select throws_ok(format($$select public.apply_level_delta(%L, -1)$$, :itX),
-  '42501', 'forbidden', 'F7: a direct call of the wrapper by an outsider: still 42501 forbidden (0331)');
+  '42501', 'forbidden', 'F15: a direct call of the wrapper by an outsider: still 42501 forbidden (0331)');
 set local "request.jwt.claim.sub" to '';
 
--- RLS read parity. For every persona: the rows they can see are exactly the
--- rows whose parent movement they can see, with literal counts. 25 rows
--- exist: 24 on WA items (2 of them naming the WB rack) and 1 on the WB item.
+-- RLS read parity. For every persona: the rows they can see through the view
+-- are exactly the rows of the movements they can see (the draw straight from
+-- the column), with literal counts. 25 rows exist: 24 on WA items (3 of them
+-- naming a WB location) and 1 on the WB item.
 create temp table vis (persona text, kind text, key text);
-grant insert, select on vis to authenticated;
+grant insert, select on vis to authenticated, anon;
+create function pg_temp.collect(p_persona text) returns void language sql as $f$
+  insert into vis select p_persona, 'mv', m.id::text from public.stock_movements m
+   where m.organization_id in ('03730000-0000-0000-0000-000000000001', '03730000-0000-0000-0000-000000000002');
+  insert into vis select p_persona, 'h', h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h
+   where h.organization_id in ('03730000-0000-0000-0000-000000000001', '03730000-0000-0000-0000-000000000002');
+  insert into vis select p_persona, 'col', m.id::text || ':' || g.seq
+    from public.stock_movements m
+    cross join lateral generate_series(1, coalesce(cardinality((m.draw).holdings), 0)) g(seq)
+   where m.organization_id in ('03730000-0000-0000-0000-000000000001', '03730000-0000-0000-0000-000000000002');
+  insert into vis select p_persona, 'wb', h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h
+   where h.location_warehouse_id = '03730000-0000-0000-0000-0000000000b2' and h.item_warehouse_id = '03730000-0000-0000-0000-0000000000b1';
+$f$;
+grant execute on function pg_temp.collect(text) to authenticated, anon;
+-- <rows seen>|<view rows = rows of the visible movements>|<view rows = the
+-- visible movements' draws read straight from the column>
+create function pg_temp.parity(p_persona text) returns text language sql as $f$
+  select (select count(*) from vis where persona = p_persona and kind = 'h')::text || '|' ||
+         (not exists (select v.key from vis v where v.persona = p_persona and v.kind = 'h'
+                      except
+                      select h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h
+                        join vis x on x.persona = p_persona and x.kind = 'mv' and x.key = h.movement_id::text)
+          and not exists (select h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h
+                            join vis x on x.persona = p_persona and x.kind = 'mv' and x.key = h.movement_id::text
+                          except
+                          select v.key from vis v where v.persona = p_persona and v.kind = 'h'))::text || '|' ||
+         (not exists (select key from vis where persona = p_persona and kind = 'h'
+                      except select key from vis where persona = p_persona and kind = 'col')
+          and not exists (select key from vis where persona = p_persona and kind = 'col'
+                          except select key from vis where persona = p_persona and kind = 'h'))::text;
+$f$;
 
 set local "request.jwt.claim.sub" to :u_adm;
 set local role to 'authenticated';
-insert into vis select 'adm', 'mv', m.id::text from public.stock_movements m where m.organization_id in (:orgS, :orgF);
-insert into vis select 'adm', 'h', h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h where h.organization_id in (:orgS, :orgF);
+select pg_temp.collect('adm');
 reset role;
-select is(
-  (select count(*) from vis where persona = 'adm' and kind = 'h')::text || '|' ||
-  (not exists (select v.key from vis v where v.persona = 'adm' and v.kind = 'h'
-               except
-               select h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h
-                 join vis x on x.persona = 'adm' and x.kind = 'mv' and x.key = h.movement_id::text)
-   and not exists (select h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h
-                     join vis x on x.persona = 'adm' and x.kind = 'mv' and x.key = h.movement_id::text
-                   except
-                   select v.key from vis v where v.persona = 'adm' and v.kind = 'h'))::text,
-  '25|true',
-  'F8: parity: an admin sees every row (all 25); visible rows = rows of visible movements');
+select is(pg_temp.parity('adm'), '25|true|true',
+  'F16: parity: an admin sees every row (all 25); view rows = rows of visible movements = their draws');
 set local "request.jwt.claim.sub" to :u_mgr;
 set local role to 'authenticated';
-insert into vis select 'mgr', 'mv', m.id::text from public.stock_movements m where m.organization_id in (:orgS, :orgF);
-insert into vis select 'mgr', 'h', h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h where h.organization_id in (:orgS, :orgF);
+select pg_temp.collect('mgr');
 reset role;
-select is(
-  (select count(*) from vis where persona = 'mgr' and kind = 'h')::text || '|' ||
-  (not exists (select v.key from vis v where v.persona = 'mgr' and v.kind = 'h'
-               except
-               select h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h
-                 join vis x on x.persona = 'mgr' and x.kind = 'mv' and x.key = h.movement_id::text)
-   and not exists (select h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h
-                     join vis x on x.persona = 'mgr' and x.kind = 'mv' and x.key = h.movement_id::text
-                   except
-                   select v.key from vis v where v.persona = 'mgr' and v.kind = 'h'))::text,
-  '25|true',
-  'F9: parity: a manager sees every row (all 25); visible rows = rows of visible movements');
+select is(pg_temp.parity('mgr'), '25|true|true',
+  'F17: parity: a manager sees every row (all 25)');
 set local "request.jwt.claim.sub" to :u_stf;
 set local role to 'authenticated';
-insert into vis select 'stf', 'mv', m.id::text from public.stock_movements m where m.organization_id in (:orgS, :orgF);
-insert into vis select 'stf', 'h', h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h where h.organization_id in (:orgS, :orgF);
-insert into vis select 'stf', 'wb', h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h where h.location_warehouse_id = :whB and h.item_warehouse_id = :whA;
+select pg_temp.collect('stf');
 reset role;
-select is(
-  (select count(*) from vis where persona = 'stf' and kind = 'h')::text || '|' ||
-  (not exists (select v.key from vis v where v.persona = 'stf' and v.kind = 'h'
-               except
-               select h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h
-                 join vis x on x.persona = 'stf' and x.kind = 'mv' and x.key = h.movement_id::text)
-   and not exists (select h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h
-                     join vis x on x.persona = 'stf' and x.kind = 'mv' and x.key = h.movement_id::text
-                   except
-                   select v.key from vis v where v.persona = 'stf' and v.kind = 'h'))::text,
-  '24|true',
-  'F10: parity: WA staff see the 24 rows on WA items, not the row on the WB item; visible rows = rows of visible movements');
+select is(pg_temp.parity('stf'), '24|true|true',
+  'F18: parity: WA staff see the 24 rows on WA items, not the row on the WB item');
 set local "request.jwt.claim.sub" to :u_vwr;
 set local role to 'authenticated';
-insert into vis select 'vwr', 'mv', m.id::text from public.stock_movements m where m.organization_id in (:orgS, :orgF);
-insert into vis select 'vwr', 'h', h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h where h.organization_id in (:orgS, :orgF);
+select pg_temp.collect('vwr');
 reset role;
-select is(
-  (select count(*) from vis where persona = 'vwr' and kind = 'h')::text || '|' ||
-  (not exists (select v.key from vis v where v.persona = 'vwr' and v.kind = 'h'
-               except
-               select h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h
-                 join vis x on x.persona = 'vwr' and x.kind = 'mv' and x.key = h.movement_id::text)
-   and not exists (select h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h
-                     join vis x on x.persona = 'vwr' and x.kind = 'mv' and x.key = h.movement_id::text
-                   except
-                   select v.key from vis v where v.persona = 'vwr' and v.kind = 'h'))::text,
-  '1|true',
-  'F11: parity: the WB viewer sees only the row on the WB item; visible rows = rows of visible movements');
+select is(pg_temp.parity('vwr'), '1|true|true',
+  'F19: parity: the WB viewer sees only the row on the WB item');
 set local "request.jwt.claim.sub" to :u_aud;
 set local role to 'authenticated';
-insert into vis select 'aud', 'mv', m.id::text from public.stock_movements m where m.organization_id in (:orgS, :orgF);
-insert into vis select 'aud', 'h', h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h where h.organization_id in (:orgS, :orgF);
+select pg_temp.collect('aud');
 reset role;
-select is(
-  (select count(*) from vis where persona = 'aud' and kind = 'h')::text || '|' ||
-  (not exists (select v.key from vis v where v.persona = 'aud' and v.kind = 'h'
-               except
-               select h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h
-                 join vis x on x.persona = 'aud' and x.kind = 'mv' and x.key = h.movement_id::text)
-   and not exists (select h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h
-                     join vis x on x.persona = 'aud' and x.kind = 'mv' and x.key = h.movement_id::text
-                   except
-                   select v.key from vis v where v.persona = 'aud' and v.kind = 'h'))::text,
-  '25|true',
-  'F12: parity: a viewer holding activity_logs:read (no warehouse) sees every row; visible rows = rows of visible movements');
+select is(pg_temp.parity('aud'), '25|true|true',
+  'F20: parity: a viewer holding activity_logs:read (no warehouse) sees every row');
 set local "request.jwt.claim.sub" to :u_out;
 set local role to 'authenticated';
-insert into vis select 'out', 'mv', m.id::text from public.stock_movements m where m.organization_id in (:orgS, :orgF);
-insert into vis select 'out', 'h', h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h where h.organization_id in (:orgS, :orgF);
+select pg_temp.collect('out');
 reset role;
-select is(
-  (select count(*) from vis where persona = 'out' and kind = 'h')::text || '|' ||
-  (not exists (select v.key from vis v where v.persona = 'out' and v.kind = 'h'
-               except
-               select h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h
-                 join vis x on x.persona = 'out' and x.kind = 'mv' and x.key = h.movement_id::text)
-   and not exists (select h.movement_id::text || ':' || h.seq from public.stock_movement_holdings h
-                     join vis x on x.persona = 'out' and x.kind = 'mv' and x.key = h.movement_id::text
-                   except
-                   select v.key from vis v where v.persona = 'out' and v.kind = 'h'))::text,
-  '0|true',
-  'F13: parity: an outsider sees nothing; visible rows = rows of visible movements');
+select is(pg_temp.parity('out'), '0|true|true',
+  'F21: parity: an outsider sees nothing');
 select is((select count(*)::int from vis where persona = 'stf' and kind = 'wb'), 3,
-  'F14: WA staff see the three rows on WA items that name a WB location (two draws from the WB rack, the scrap from WB Staging)');
+  'F22: WA staff see the three rows on WA items that name a WB location (two draws from the WB rack, the scrap from WB Staging), exactly as the first build showed them');
+set local "request.jwt.claim.sub" to '';
 
 set local role to 'anon';
 select throws_ok($$select count(*) from public.stock_movement_holdings$$,
-  '42501', null, 'F15: anon cannot read the table at all');
+  '42501', null, 'F23: anon cannot read the view at all');
+select is((select count(*)::int from public.stock_movements where num_nonnulls(draw) = 1), 0,
+  'F24: anon sees no movement, so no draw');
 reset role;
 
 -- ══════════════════════════════════════════════════════════════════════════
@@ -1429,11 +1580,11 @@ reset role;
 set local "request.jwt.claim.sub" to :u_stf;
 set local role to 'authenticated';
 select lives_ok(format($$select public.adjust_stock(%L, -0.00001, 'remove', null, 'R tiny minus', null, 'any')$$, :itX),
-  'R10: WA staff removes 0.00001 in mode any (was 23514 at the recorder''s CHECK)');
+  'R10: WA staff removes 0.00001 in mode any');
 select lives_ok(format($$select public.adjust_stock(%L, 0.00004, 'adjust', null, 'R tiny plus', null)$$, :itX),
-  'R11: WA staff adds 0.00004 with no location (was 23514)');
+  'R11: WA staff adds 0.00004 with no location');
 select lives_ok(format($$select public.adjust_stock(%L, -1.00001, 'remove', null, 'R spill', null)$$, :itX),
-  'R12: WA staff removes 1.00001: A1 empties, the remainder spills onto the Site (was 23514)');
+  'R12: WA staff removes 1.00001: A1 empties, the remainder spills onto the Site');
 select lives_ok(format($$select public.adjust_stock(%L, -0.00005, 'remove', null, 'R half', null, 'any')$$, :itX),
   'R13: WA staff removes an exact half (0.00005)');
 reset role;
@@ -1441,9 +1592,9 @@ select is(
   (select string_agg(m.reason || ':' || m.quantity_change::text || ':' || (m.new_quantity - m.previous_quantity)::text
                      || '[' || pg_temp.rows4(m.id) || ']', ' ' order by m.reason collate "C")
      from public.stock_movements m where m.item_id = :itX and m.reason like 'R %')
-  || ' | ' || pg_temp.snap4(:itX) || ' | ' || pg_temp.fk_ok(),
-  'R half:-0.0001:0.0000[] R spill:-1.0000:-1.0000[1:A1:-1.0000:placed] R tiny minus:0.0000:0.0000[] R tiny plus:0.0000:0.0000[] | A1=0.0000,A2=0.0000,B1=0.0000,S=1.0000,SA=4.0000,SB=3.0000,UA=0.0000 | fk ok',
-  'R14: the four movements exist as before 0373; only the spill records a row (A1 -1); the Site, touched by 0.00001 and 0.00005, never moved; the deferred FK holds');
+  || ' | ' || pg_temp.snap4(:itX),
+  'R half:-0.0001:0.0000[] R spill:-1.0000:-1.0000[1:A1:-1.0000:placed] R tiny minus:0.0000:0.0000[] R tiny plus:0.0000:0.0000[] | A1=0.0000,A2=0.0000,B1=0.0000,S=1.0000,SA=4.0000,SB=3.0000,UA=0.0000',
+  'R14: the four movements exist as before 0373; only the spill records a row (A1 -1); the Site, touched by 0.00001 and 0.00005, never moved');
 select is(
   (select count(*)::int || '|' || bool_and(x.q = x.d)::text
      from (select m.id, m.new_quantity - m.previous_quantity as d,
@@ -1452,206 +1603,330 @@ select is(
             where m.organization_id = :orgS
               and exists (select 1 from public.stock_movement_holdings h where h.movement_id = m.id)) x),
   '19|true',
-  'R15: every movement with provenance rows in this file: the rows sum EXACTLY to its new_quantity - previous_quantity');
+  'R15: every movement with a draw in this file: its rows sum EXACTLY to its new_quantity - previous_quantity');
 
 -- ══════════════════════════════════════════════════════════════════════════
--- S. SCOPE ONCE PER CALL (perf review, 2026-09-25). The recorder decides
--- service / manager once for the whole call and, below manager, asks
--- caller_can_write_location once per distinct (organization, warehouse) of
--- the call's locations instead of once per row. S1 pins the function whose
--- inputs make that safe; S2-S7 prove every persona's values equal the
--- per-row formula (and literal values), with the call counts; S8-S9 count
--- the calls on a real six-holding staff draw.
+-- S. THE SCOPE CACHE. ledger._seal asks the manager answer once per
+-- (transaction, drawer, organization) and, below manager, the location
+-- answer once per (location organization, warehouse) or, for an increment,
+-- per Staging location; a miss restates the live predicates in one
+-- statement. S1 pins what the restatement was proven against; S2-S4 prove
+-- it equals them; S5-S6 count; S7-S13 prove when an answer is dropped.
 -- ══════════════════════════════════════════════════════════════════════════
 select is(
-  (select md5(p.prosrc) || '|' || p.provolatile::text from pg_proc p where p.oid = 'public.caller_can_write_location(uuid)'::regprocedure),
-  '188634bf8552a0064bfbf1ebfecf814f|s',
-  'S1: caller_can_write_location is the text and volatility the recorder''s per-(organization, warehouse) evaluation was proven against: it reads the location only for organization_id and warehouse_id, and STABLE runs it in the INSERT''s snapshot. The migration''s preflight refuses the same drift at push time. If this fails, re-prove ledger._record_holdings before updating both pins');
+  (select string_agg(p.proname || ':' || md5(p.prosrc) || ':' || p.provolatile::text, ',' order by p.proname)
+     from pg_proc p where p.oid in ('public.has_org_role(uuid,text)'::regprocedure,
+                                    'public.caller_can_write_location(uuid)'::regprocedure,
+                                    'public.is_org_member(uuid)'::regprocedure,
+                                    'public.user_can_access_warehouse(uuid,uuid,text)'::regprocedure))
+  || '|' || exists (select 1 from pg_constraint c
+                     where c.conrelid = 'public.organization_members'::regclass and c.contype in ('u', 'p')
+                       and (select array_agg(a.attname::text order by a.attname) from unnest(c.conkey) k(attnum)
+                              join pg_attribute a on a.attrelid = c.conrelid and a.attnum = k.attnum)
+                           = array['organization_id', 'user_id'])::text,
+  'caller_can_write_location:188634bf8552a0064bfbf1ebfecf814f:s,has_org_role:10422b29a6e15acd003d4f11ed28e90c:s,is_org_member:76492a6556e9f6a7c33d942aa9726f9f:s,user_can_access_warehouse:76b4170f3d393e8a1f293ca3d4895955:s|true',
+  'S1: the four predicates ledger._seal restates are the text and volatility it was proven against, and organization_members is unique on (organization_id, user_id) (has_org_role''s limit 1 row is the only row). The preflight refuses the same drift at push time. If this fails, re-prove _seal (S2-S4) before updating both pins');
 
--- An org-level location of the FOREIGN org: (orgF, NULL) must never share an
--- answer with the home org's Site (orgS, NULL).
-insert into public.locations (id, organization_id, warehouse_id, name, type, kind)
-values ('03730000-0000-0000-0000-0000000000e8', :orgF, null, 'FS 0373', 'warehouse', null);
-insert into lbl values ('03730000-0000-0000-0000-0000000000e8', 'FS');
-set local track_functions = 'pl';
-
--- The recorder called directly (as its owner, like the engine) for one
--- persona, in a subtransaction that is always rolled back. Reports
---   <tag:actor_scope per row, in seq order>#per_row=<every row equals the
---   old per-row formula>#calls=<caller_can_write_location calls it made>
-create function pg_temp.ccwl_calls() returns bigint language sql stable as $f$
-  select coalesce(pg_stat_get_xact_function_calls('public.caller_can_write_location(uuid)'::regprocedure), 0);
-$f$;
-create function pg_temp.scope_probe(p_sub text, p_locs uuid[]) returns text
-language plpgsql as $f$
-declare
-  v_mv    uuid := gen_random_uuid();
-  v_calls bigint;
-  v_rows  text;
-  v_same  boolean;
-begin
-  begin
-    perform set_config('request.jwt.claim.sub', p_sub, true);
-    v_calls := pg_temp.ccwl_calls();
-    perform ledger._record_holdings(v_mv, '03730000-0000-0000-0000-000000000001', '03730000-0000-0000-0000-0000000000c1',
-      '03730000-0000-0000-0000-0000000000b1', p_locs, array_fill(-1::numeric, array[cardinality(p_locs)]),
-      array_fill('placed'::text, array[cardinality(p_locs)]), 'placed');
-    v_calls := pg_temp.ccwl_calls() - v_calls;
-    select string_agg(pg_temp.tag(h.location_id) || ':' || h.actor_scope, ',' order by h.seq),
-           bool_and(h.actor_scope = case when auth.uid() is null then 'service'
-                                         when public.has_org_role(h.organization_id, 'manager') then 'manager'
-                                         when public.caller_can_write_location(h.location_id) then 'in_scope'
-                                         else 'out_of_scope' end)
-      into v_rows, v_same
-      from public.stock_movement_holdings h where h.movement_id = v_mv;
-    raise exception using errcode = 'ZX376', message = v_rows || '#per_row=' || v_same::text || '#calls=' || v_calls;
-  exception
-    when sqlstate 'ZX376' then return sqlerrm;
-    when others then return 'err|' || sqlstate || '|' || sqlerrm;
-  end;
-end $f$;
-
--- Eight locations, six (organization, warehouse) pairs: WA x3 (rack, Unplaced,
--- Staging), the home Site, the WB rack, the foreign rack, the foreign
--- org-level location, and a NULL location.
+-- Nine locations: WA rack, WA Unplaced, WA Staging, the home Site, the WB
+-- rack, the foreign rack, a foreign org-level location, a home location in
+-- the FOREIGN warehouse (the location's organization is not the warehouse's:
+-- is_org_member asks the first, user_can_access_warehouse the second), and
+-- no location.
+insert into public.locations (id, organization_id, warehouse_id, name, type, kind) values
+  (:locFS, :orgF, null, 'FS 0373', 'warehouse', null),
+  (:locX1, :orgS, :whF, 'X1 0373', 'other', 'rack');
+insert into lbl values (:locFS, 'FS'), (:locX1, 'X1');
 create temp table s_locs as
 select array[:locA1::uuid,
              (select id from public.locations where warehouse_id = :whA and kind = 'unplaced'),
              (select id from public.locations where warehouse_id = :whA and kind = 'staging'),
-             :locS::uuid, :locB1::uuid, :locF::uuid,
-             '03730000-0000-0000-0000-0000000000e8'::uuid, null::uuid] as locs;
+             :locS::uuid, :locB1::uuid, :locF::uuid, :locFS::uuid, :locX1::uuid, null::uuid] as locs;
 
-select is(pg_temp.scope_probe('', (select locs from s_locs)),
-  'A1:service,UA:service,SA:service,S:service,B1:service,F1:service,FS:service,null:service#per_row=true#calls=0',
-  'S2: service (no jwt subject): one answer for the call, no caller_can_write_location call');
-select is(pg_temp.scope_probe(:u_adm, (select locs from s_locs)),
-  'A1:manager,UA:manager,SA:manager,S:manager,B1:manager,F1:manager,FS:manager,null:manager#per_row=true#calls=0',
-  'S3: an admin (manager or above): one answer for the call, no caller_can_write_location call');
-select is(pg_temp.scope_probe(:u_mgr, (select locs from s_locs)),
-  'A1:manager,UA:manager,SA:manager,S:manager,B1:manager,F1:manager,FS:manager,null:manager#per_row=true#calls=0',
-  'S4: a manager: one answer for the call, no caller_can_write_location call');
-select is(pg_temp.scope_probe(:u_stf, (select locs from s_locs)),
-  'A1:in_scope,UA:in_scope,SA:in_scope,S:in_scope,B1:out_of_scope,F1:out_of_scope,FS:out_of_scope,null:out_of_scope#per_row=true#calls=6',
-  'S5: WA staff: WA and the home Site in scope; WB, the foreign org (rack AND org-level) and NULL out; six calls for eight rows (one per pair)');
-select is(pg_temp.scope_probe(:u_vwr, (select locs from s_locs)),
-  'A1:out_of_scope,UA:out_of_scope,SA:out_of_scope,S:in_scope,B1:out_of_scope,F1:out_of_scope,FS:out_of_scope,null:out_of_scope#per_row=true#calls=6',
-  'S6: the WB viewer (below the write floor): only the home org-level Site in scope, as caller_can_write_location answers per row');
-select is(pg_temp.scope_probe(:u_out, (select locs from s_locs)),
-  'A1:out_of_scope,UA:out_of_scope,SA:out_of_scope,S:out_of_scope,B1:out_of_scope,F1:in_scope,FS:in_scope,null:out_of_scope#per_row=true#calls=6',
-  'S7: the foreign manager (not a manager of the item''s org): only the foreign rack and the foreign org-level location in scope; (orgS, NULL) and (orgF, NULL) answer differently');
+-- _seal called directly (as the engine's owner) for one persona, with the
+-- cache emptied first, keyed by pair (the draw loops' shape) or by location
+-- (the increment's shape). Reports <tag:scope per holding>, then whether
+-- every scope equals the LIVE formula (auth.uid() null -> service,
+-- has_org_role(org, manager) -> manager, caller_can_write_location ->
+-- in/out), then whether both key shapes agree.
+create function pg_temp.mirror_one(p_sub text, p_by_location boolean) returns text language plpgsql as $f$
+declare
+  v_h    public.stock_draw_holding[];
+  v_o    uuid[];
+  v_d    public.stock_draw;
+  v_rows text;
+  v_live boolean;
+begin
+  perform set_config('request.jwt.claim.sub', p_sub, true);
+  perform set_config('stockpilot.draw_scope', '', true);
+  select array_agg(row(x.loc, -1, 'placed', l.kind, l.warehouse_id, null)::public.stock_draw_holding order by x.o),
+         array_agg(case when p_by_location then null else l.organization_id end order by x.o)
+    into v_h, v_o
+    from unnest((select s.locs from s_locs s)) with ordinality as x(loc, o)
+    left join public.locations l on l.id = x.loc;
+  v_d := ledger._seal(nullif(p_sub, '')::uuid, '03730000-0000-0000-0000-000000000001',
+                      '03730000-0000-0000-0000-0000000000b1', 'placed', v_h, v_o);
+  select string_agg(pg_temp.tag(h.location_id) || ':'
+                    || case coalesce(h.actor_scope, (v_d).actor_scope)
+                         when 'service' then 'svc' when 'manager' then 'mgr'
+                         when 'in_scope' then 'in' when 'out_of_scope' then 'out' else '?' end, ',' order by h.seq),
+         bool_and(coalesce(h.actor_scope, (v_d).actor_scope)
+                  = case when auth.uid() is null then 'service'
+                         when public.has_org_role('03730000-0000-0000-0000-000000000001', 'manager') then 'manager'
+                         when public.caller_can_write_location(h.location_id) then 'in_scope'
+                         else 'out_of_scope' end)
+    into v_rows, v_live
+    from unnest((v_d).holdings) with ordinality
+         as h(location_id, quantity, step, location_kind, location_warehouse_id, actor_scope, seq);
+  perform set_config('stockpilot.draw_scope', '', true);
+  perform set_config('request.jwt.claim.sub', '', true);
+  return v_rows || '#live=' || v_live::text;
+end $f$;
+create function pg_temp.mirror(p_name text, p_sub text) returns text language sql as $f$
+  select p_name || '=' || pg_temp.mirror_one(p_sub, false)
+         || '#same_by_location=' || (pg_temp.mirror_one(p_sub, false) = pg_temp.mirror_one(p_sub, true))::text;
+$f$;
 
--- A real staff draw through the engine: six holdings, three pairs.
+select is(
+  pg_temp.mirror('service', '') || E'\n' || pg_temp.mirror('admin', :u_adm) || E'\n'
+  || pg_temp.mirror('manager', :u_mgr) || E'\n' || pg_temp.mirror('impersonating', :u_imp),
+  $s$service=A1:svc,UA:svc,SA:svc,S:svc,B1:svc,F1:svc,FS:svc,X1:svc,null:svc#live=true#same_by_location=true
+admin=A1:mgr,UA:mgr,SA:mgr,S:mgr,B1:mgr,F1:mgr,FS:mgr,X1:mgr,null:mgr#live=true#same_by_location=true
+manager=A1:mgr,UA:mgr,SA:mgr,S:mgr,B1:mgr,F1:mgr,FS:mgr,X1:mgr,null:mgr#live=true#same_by_location=true
+impersonating=A1:mgr,UA:mgr,SA:mgr,S:mgr,B1:mgr,F1:mgr,FS:mgr,X1:mgr,null:mgr#live=true#same_by_location=true$s$,
+  'S2: service, an admin, a manager and a manager inside a live impersonation window: one answer for the whole draw, equal to the live predicates');
+select is(
+  pg_temp.mirror('staff', :u_stf) || E'\n' || pg_temp.mirror('staff_no_wh', :u_stn) || E'\n'
+  || pg_temp.mirror('two_org', :u_two) || E'\n' || pg_temp.mirror('two_org_expired', :u_tx),
+  $s$staff=A1:in,UA:in,SA:in,S:in,B1:out,F1:out,FS:out,X1:out,null:out#live=true#same_by_location=true
+staff_no_wh=A1:out,UA:out,SA:out,S:in,B1:out,F1:out,FS:out,X1:out,null:out#live=true#same_by_location=true
+two_org=A1:in,UA:in,SA:in,S:in,B1:out,F1:in,FS:in,X1:in,null:out#live=true#same_by_location=true
+two_org_expired=A1:in,UA:in,SA:in,S:in,B1:out,F1:out,FS:out,X1:in,null:out#live=true#same_by_location=true$s$,
+  'S3: staff personas equal the live predicates per location: WA staff; staff with no warehouse (only org-level); a foreign manager who is WA staff at home (X1 is in scope through the WAREHOUSE''s organization); and one whose foreign membership expired (user_can_access_warehouse has no impersonation filter, is_org_member does)');
+select is(
+  pg_temp.mirror('viewer', :u_vwr) || E'\n' || pg_temp.mirror('auditor', :u_aud) || E'\n'
+  || pg_temp.mirror('outsider', :u_out) || E'\n' || pg_temp.mirror('disabled', :u_dis) || E'\n'
+  || pg_temp.mirror('disabled_manager', :u_dsm) || E'\n' || pg_temp.mirror('expired', :u_exp) || E'\n' || pg_temp.mirror('pending', :u_pnd),
+  $s$viewer=A1:out,UA:out,SA:out,S:in,B1:out,F1:out,FS:out,X1:out,null:out#live=true#same_by_location=true
+auditor=A1:out,UA:out,SA:out,S:in,B1:out,F1:out,FS:out,X1:out,null:out#live=true#same_by_location=true
+outsider=A1:out,UA:out,SA:out,S:out,B1:out,F1:in,FS:in,X1:out,null:out#live=true#same_by_location=true
+disabled=A1:out,UA:out,SA:out,S:out,B1:out,F1:out,FS:out,X1:out,null:out#live=true#same_by_location=true
+disabled_manager=A1:out,UA:out,SA:out,S:out,B1:out,F1:out,FS:out,X1:out,null:out#live=true#same_by_location=true
+expired=A1:out,UA:out,SA:out,S:out,B1:out,F1:out,FS:out,X1:out,null:out#live=true#same_by_location=true
+pending=A1:out,UA:out,SA:out,S:out,B1:out,F1:out,FS:out,X1:out,null:out#live=true#same_by_location=true$s$,
+  'S4: below the write floor or outside: the WB viewer and the auditor (only the org-level Site), the foreign manager (only foreign locations), a disabled member, a disabled manager, an expired impersonation and a pending invite (nothing): all equal the live predicates');
+
+-- S5. Each answer is asked once per transaction: a second seal of the same
+-- holdings reads organization_members zero times. Reports <the first seal
+-- read it>,<reads by the second>,<pair answers cached>.
+create function pg_temp.member_reads() returns bigint language sql stable as $f$
+  select coalesce(t.seq_scan, 0) + coalesce(t.idx_scan, 0)
+    from pg_stat_xact_user_tables t where t.relid = 'public.organization_members'::regclass;
+$f$;
+create function pg_temp.seal_twice(p_sub uuid) returns text language plpgsql as $f$
+declare
+  v_h  public.stock_draw_holding[];
+  v_o  uuid[];
+  r0   bigint;
+  r1   bigint;
+  r2   bigint;
+  v_c  text;
+begin
+  perform set_config('request.jwt.claim.sub', p_sub::text, true);
+  perform set_config('stockpilot.draw_scope', '', true);
+  select array_agg(row(l.id, -1, 'placed', l.kind, l.warehouse_id, null)::public.stock_draw_holding order by x.o),
+         array_agg(l.organization_id order by x.o)
+    into v_h, v_o
+    from unnest((select (s.locs)[1:5] from s_locs s)) with ordinality as x(loc, o)
+    join public.locations l on l.id = x.loc;
+  r0 := pg_temp.member_reads();
+  perform ledger._seal(p_sub, '03730000-0000-0000-0000-000000000001', '03730000-0000-0000-0000-0000000000b1', 'placed', v_h, v_o);
+  r1 := pg_temp.member_reads();
+  v_c := current_setting('stockpilot.draw_scope', true);
+  perform ledger._seal(p_sub, '03730000-0000-0000-0000-000000000001', '03730000-0000-0000-0000-0000000000b1', 'placed', v_h, v_o);
+  r2 := pg_temp.member_reads();
+  perform set_config('stockpilot.draw_scope', '', true);
+  perform set_config('request.jwt.claim.sub', '', true);
+  return (r1 > r0)::text || ',' || (r2 - r1) || ',' || ((length(v_c) - length(replace(v_c, '|p:', ''))) / 3);
+end $f$;
+select is(pg_temp.seal_twice(:u_stf) || ' | ' || pg_temp.seal_twice(:u_mgr),
+  'true,0,3 | true,0,0',
+  'S5: WA staff over five holdings in three pairs: the first seal asks (three pair answers cached), the second reads nothing; a manager: one answer, then nothing');
+
+-- S6. Real engine draws as WA staff (the ledger flag raised by hand): six
+-- holdings over three pairs, and a +1 keyed by its Staging location. Each in
+-- a subtransaction that is rolled back; reports the rows, then the cache:
+-- pair and location answers held, and the head (M or S).
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type)
-values ('03730000-0000-0000-0000-0000000000cb', :orgS, :whA, 'PV-0373-S', 'Scope Item 0373', 6, 'active', 'none');
-delete from public.item_stock_levels where item_id = '03730000-0000-0000-0000-0000000000cb';
+values ('03730000-0000-0000-0000-0000000000cb', :orgS, :whA, 'PV-0373-S', 'Scope Item 0373', 6, 'active', 'none'),
+       (:itQ, :orgS, :whA, 'PV-0373-Q', 'Cache Item 0373', 20, 'active', 'none');
+delete from public.item_stock_levels where item_id in ('03730000-0000-0000-0000-0000000000cb', :itQ);
 insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
 select :orgS, '03730000-0000-0000-0000-0000000000cb', x.loc, 1
   from unnest(array[:locA1::uuid, :locP1::uuid, :locP2::uuid, :locS::uuid, :locB1::uuid,
                     (select id from public.locations where warehouse_id = :whA and kind = 'unplaced')]) x(loc);
-create temp table s_calls as select pg_temp.ccwl_calls() as before;
-set local "request.jwt.claim.sub" to :u_stf;
-select set_config('stockpilot.ledger', pg_current_xact_id()::text, true);
-select is(
-  split_part(pg_temp.run(format($$select ledger.apply_level_delta_for(%L, '03730000-0000-0000-0000-0000000000cb', -6, 'placed')$$, :mvC),
-                         '03730000-0000-0000-0000-0000000000cb', :mvC), '#', 2),
-  '1:A1:-1:placed:in_scope,2:P1:-1:placed:in_scope,3:P2:-1:placed:in_scope,4:S:-1:placed:in_scope,5:B1:-1:placed:out_of_scope,6:UA:-1:placed:in_scope',
-  'S8: a WA staff engine draw over six holdings (four in WA, the home Site, the WB rack): WA and the Site in scope, the WB rack out, in draw order');
-select set_config('stockpilot.ledger', '', true);
-set local "request.jwt.claim.sub" to '';
-select is(pg_temp.ccwl_calls() - (select before from s_calls), 3::bigint,
-  'S9: that draw asked caller_can_write_location three times (WA, the Site''s org level, WB), not six');
-
--- ONE-LOCATION CALLS (review, 2026-09-25). Every increment and most adjusts
--- pass one location; the recorder asks caller_can_write_location of it
--- directly, inside the insert, and never runs the pair CTE (which cost 7 us
--- more than the per-row call there). Each of the eight locations above as
--- its own call, per persona: <tag:scope, in call order>#per_row=<every row
--- equals the old per-row formula>#calls=<total caller_can_write_location calls>.
-create function pg_temp.one_probe(p_sub text) returns text language sql as $f$
-  select string_agg(split_part(y.r, '#', 1), ',' order by y.o)
-         || '#per_row=' || bool_and(split_part(y.r, '#', 2) = 'per_row=true')::text
-         || '#calls=' || sum(split_part(split_part(y.r, '#', 3), '=', 2)::int)
-    from (select x.o, pg_temp.scope_probe(p_sub, array[x.loc]) as r
-            from unnest((select locs from s_locs)) with ordinality as x(loc, o)) y;
-$f$;
-
-select is(pg_temp.one_probe('') || ' | ' || pg_temp.one_probe(:u_adm) || ' | ' || pg_temp.one_probe(:u_mgr),
-  'A1:service,UA:service,SA:service,S:service,B1:service,F1:service,FS:service,null:service#per_row=true#calls=0'
-  || ' | A1:manager,UA:manager,SA:manager,S:manager,B1:manager,F1:manager,FS:manager,null:manager#per_row=true#calls=0'
-  || ' | A1:manager,UA:manager,SA:manager,S:manager,B1:manager,F1:manager,FS:manager,null:manager#per_row=true#calls=0',
-  'S10: one-location calls as service, an admin and a manager: one answer each, no caller_can_write_location call');
-select is(pg_temp.one_probe(:u_stf),
-  'A1:in_scope,UA:in_scope,SA:in_scope,S:in_scope,B1:out_of_scope,F1:out_of_scope,FS:out_of_scope,null:out_of_scope#per_row=true#calls=8',
-  'S11: one-location calls as WA staff: the per-row answer for each location, one call per call');
-select is(pg_temp.one_probe(:u_vwr) || ' | ' || pg_temp.one_probe(:u_out),
-  'A1:out_of_scope,UA:out_of_scope,SA:out_of_scope,S:in_scope,B1:out_of_scope,F1:out_of_scope,FS:out_of_scope,null:out_of_scope#per_row=true#calls=8'
-  || ' | A1:out_of_scope,UA:out_of_scope,SA:out_of_scope,S:out_of_scope,B1:out_of_scope,F1:in_scope,FS:in_scope,null:out_of_scope#per_row=true#calls=8',
-  'S12: one-location calls as the WB viewer and the foreign manager: the per-row answer for each location, one call per call');
-
--- The pair CTE does not run on a one-location call: a staff call reads
--- public.locations exactly one caller_can_write_location's worth more than a
--- manager's (which never asks), where the CTE's join would add another read.
--- Seven calls each, across the plan cache's custom-to-generic switch. Reports
--- <location>:extra=<distinct staff-minus-manager reads>,direct=<distinct reads
--- of one direct caller_can_write_location call>.
-create function pg_temp.loc_reads() returns bigint language sql stable as $f$
-  select coalesce(t.seq_scan, 0) + coalesce(t.idx_scan, 0)
-    from pg_stat_xact_user_tables t where t.relid = 'public.locations'::regclass;
-$f$;
-create function pg_temp.reads_probe(p_sub text, p_loc uuid, p_direct boolean) returns bigint
-language plpgsql as $f$
+insert into public.item_stock_levels (organization_id, item_id, location_id, quantity) values (:orgS, :itQ, :locA1, 20);
+create function pg_temp.draw_and_cache(p_call text) returns text language plpgsql as $f$
 declare
-  v bigint;
+  v text;
+  c text;
 begin
   begin
-    perform set_config('request.jwt.claim.sub', p_sub, true);
-    v := pg_temp.loc_reads();
-    if p_direct then
-      perform public.caller_can_write_location(p_loc);
-    else
-      perform ledger._record_holdings(gen_random_uuid(), '03730000-0000-0000-0000-000000000001', '03730000-0000-0000-0000-0000000000c1',
-        '03730000-0000-0000-0000-0000000000b1', array[p_loc], array[-1::numeric], array['placed'], 'placed');
-    end if;
-    v := pg_temp.loc_reads() - v;
-    raise exception using errcode = 'ZX377', message = v::text;
+    execute p_call into v;
+    c := current_setting('stockpilot.draw_scope', true);
+    raise exception using errcode = 'ZX373';
   exception
-    when sqlstate 'ZX377' then return sqlerrm::bigint;
+    when sqlstate 'ZX373' then null;
   end;
+  return pg_temp.drows(nullif(v, '')::public.stock_draw)
+         || '#pairs=' || ((length(c) - length(replace(c, '|p:', ''))) / 3)
+         || '#locations=' || ((length(c) - length(replace(c, '|l:', ''))) / 3)
+         || '#head=' || split_part(c, '|', 2);
 end $f$;
-select is(
-  (select string_agg(z.tag || ':extra=' || z.extra || ',direct=' || z.direct, ' ' order by z.tag)
-     from (select v.tag,
-                  string_agg(distinct (pg_temp.reads_probe(:u_stf, v.loc, false) - pg_temp.reads_probe(:u_mgr, v.loc, false))::text, ';') as extra,
-                  string_agg(distinct pg_temp.reads_probe(:u_stf, v.loc, true)::text, ';') as direct
-             from (values (:locA1::uuid, 'A1'), (:locB1::uuid, 'B1')) v(loc, tag), generate_series(1, 7) g
-            group by v.tag) z),
-  'A1:extra=1,direct=1 B1:extra=1,direct=1',
-  'S13: a one-location staff call never runs the pair CTE: it reads locations one caller_can_write_location more than a manager''s call, in and out of scope, custom and generic plans');
-
--- Real engine calls as WA staff: a +1 (always one location, WA Staging) and a
--- one-holding draw from the WB rack.
-insert into public.inventory_items
-  (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type)
-values ('03730000-0000-0000-0000-0000000000cc', :orgS, :whA, 'PV-0373-O', 'One Holding Item 0373', 2, 'active', 'none');
-delete from public.item_stock_levels where item_id = '03730000-0000-0000-0000-0000000000cc';
-insert into public.item_stock_levels (organization_id, item_id, location_id, quantity)
-values (:orgS, '03730000-0000-0000-0000-0000000000cc', :locB1, 2);
-update s_calls set before = pg_temp.ccwl_calls();
 set local "request.jwt.claim.sub" to :u_stf;
 select set_config('stockpilot.ledger', pg_current_xact_id()::text, true);
 select is(
-  split_part(pg_temp.run(format($$select ledger.apply_level_delta_for(%L, '03730000-0000-0000-0000-0000000000cc', 1, 'placed')$$, '03730000-0000-0000-0000-00000000f0a1'),
-                         '03730000-0000-0000-0000-0000000000cc', '03730000-0000-0000-0000-00000000f0a1'), '#', 2)
-  || ' | ' ||
-  split_part(pg_temp.run(format($$select ledger.apply_level_delta_for(%L, '03730000-0000-0000-0000-0000000000cc', -1, 'placed')$$, '03730000-0000-0000-0000-00000000f0a2'),
-                         '03730000-0000-0000-0000-0000000000cc', '03730000-0000-0000-0000-00000000f0a2'), '#', 2),
-  '1:SA:1:increment:in_scope | 1:B1:-1:placed:out_of_scope',
-  'S14: a WA staff +1 lands in WA Staging (in scope) and a one-holding -1 takes from the WB rack (out of scope)');
+  pg_temp.draw_and_cache(format($$select ledger.apply_level_delta_for('03730000-0000-0000-0000-0000000000cb', -6, 'placed', true, %L)::text$$, :u_stf))
+  || ' | ' || pg_temp.draw_and_cache(format($$select ledger.apply_level_delta_for(%L, 1, 'placed', true, %L)::text$$, :itQ, :u_stf)),
+  '1:A1:-1:placed:in_scope,2:P1:-1:placed:in_scope,3:P2:-1:placed:in_scope,4:S:-1:placed:in_scope,5:B1:-1:placed:out_of_scope,6:UA:-1:placed:in_scope#pairs=3#locations=0#head=S'
+  || ' | 1:SA:1:increment:in_scope#pairs=0#locations=1#head=S',
+  'S6: a WA staff draw over six holdings asks three pair answers (WA, the org-level Site, WB), not six; a +1 asks one, keyed by its Staging location');
+
+-- S7. The transaction's own changes take effect at the next draw: -1 draws
+-- of a WA rack by WA staff, around an assignment removed and restored and a
+-- promotion and demotion, all in this one transaction.
+create function pg_temp.scope1(p_item uuid, p_uid uuid) returns text language sql as $f$
+  select coalesce(((x.d).holdings[1]).actor_scope, (x.d).actor_scope)
+    from (select ledger.apply_level_delta_for(p_item, -1, 'placed', true, p_uid) as d) x;
+$f$;
+create temp table s7 (step int, scope text);
+insert into s7 select 1, pg_temp.scope1(:itQ, :u_stf);
+delete from public.user_warehouse_assignments where user_id = :u_stf and warehouse_id = :whA;
+insert into s7 select 2, pg_temp.scope1(:itQ, :u_stf);
+insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id) values (:orgS, :u_stf, :whA);
+insert into s7 select 3, pg_temp.scope1(:itQ, :u_stf);
+update public.organization_members set role = 'manager' where organization_id = :orgS and user_id = :u_stf;
+insert into s7 select 4, pg_temp.scope1(:itQ, :u_stf);
+update public.organization_members set role = 'staff' where organization_id = :orgS and user_id = :u_stf;
+insert into s7 select 5, pg_temp.scope1(:itQ, :u_stf);
+select is((select string_agg(scope, ',' order by step) from s7),
+  'in_scope,out_of_scope,in_scope,manager,in_scope',
+  'S7: within one transaction, removing the assignment makes the next draw out_of_scope, restoring it in_scope, a promotion manager, the demotion in_scope again');
+
+-- S8. Every forget trigger, per event, on a statement that touches no row
+-- (statement triggers fire anyway): cleared, or kept where the column list
+-- excludes it (and on locations INSERT, by design).
+create function pg_temp.forgets(p_stmt text) returns text language plpgsql as $f$
+begin
+  perform set_config('stockpilot.draw_scope', 'planted', true);
+  execute p_stmt;
+  return case when current_setting('stockpilot.draw_scope', true) = 'planted' then 'kept' else 'cleared' end;
+end $f$;
+select is(
+  'om:ins=' || pg_temp.forgets('insert into public.organization_members (organization_id, user_id, role) select organization_id, user_id, role from public.organization_members where false')
+  || ',upd=' || pg_temp.forgets('update public.organization_members set role = role where false')
+  || ',del=' || pg_temp.forgets('delete from public.organization_members where false')
+  || ' uwa:ins=' || pg_temp.forgets('insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id) select organization_id, user_id, warehouse_id from public.user_warehouse_assignments where false')
+  || ',upd=' || pg_temp.forgets('update public.user_warehouse_assignments set warehouse_id = warehouse_id where false')
+  || ',del=' || pg_temp.forgets('delete from public.user_warehouse_assignments where false')
+  || ' up:ins=' || pg_temp.forgets('insert into public.user_profiles (id) select id from public.user_profiles where false')
+  || ',upd_disabled_at=' || pg_temp.forgets('update public.user_profiles set disabled_at = disabled_at where false')
+  || ',upd_id=' || pg_temp.forgets('update public.user_profiles set id = id where false')
+  || ',upd_other=' || pg_temp.forgets('update public.user_profiles set full_name = full_name where false')
+  || ',del=' || pg_temp.forgets('delete from public.user_profiles where false')
+  || ' wh:ins=' || pg_temp.forgets('insert into public.warehouses (organization_id, name, code) select organization_id, name, code from public.warehouses where false')
+  || ',upd_org=' || pg_temp.forgets('update public.warehouses set organization_id = organization_id where false')
+  || ',upd_id=' || pg_temp.forgets('update public.warehouses set id = id where false')
+  || ',upd_other=' || pg_temp.forgets('update public.warehouses set name = name where false')
+  || ',del=' || pg_temp.forgets('delete from public.warehouses where false')
+  || ' loc:ins=' || pg_temp.forgets('insert into public.locations (organization_id, name, type) select organization_id, name, type from public.locations where false')
+  || ',upd_org=' || pg_temp.forgets('update public.locations set organization_id = organization_id where false')
+  || ',upd_wh=' || pg_temp.forgets('update public.locations set warehouse_id = warehouse_id where false')
+  || ',upd_id=' || pg_temp.forgets('update public.locations set id = id where false')
+  || ',upd_other=' || pg_temp.forgets('update public.locations set name = name where false')
+  || ',del=' || pg_temp.forgets('delete from public.locations where false'),
+  'om:ins=cleared,upd=cleared,del=cleared uwa:ins=cleared,upd=cleared,del=cleared up:ins=cleared,upd_disabled_at=cleared,upd_id=cleared,upd_other=kept,del=cleared wh:ins=cleared,upd_org=cleared,upd_id=cleared,upd_other=kept,del=cleared loc:ins=kept,upd_org=cleared,upd_wh=cleared,upd_id=cleared,upd_other=kept,del=cleared',
+  'S8: each forget trigger clears the cache on every event that can change an answer, and only those');
+
+-- S9. Another drawer in the same transaction recomputes (the drawer is in
+-- the key).
+create temp table s9 (step int, scope text);
+insert into s9 select 1, pg_temp.scope1(:itQ, :u_stf);
+set local "request.jwt.claim.sub" to :u_mgr;
+insert into s9 select 2, pg_temp.scope1(:itQ, :u_mgr);
+set local "request.jwt.claim.sub" to :u_stf;
+insert into s9 select 3, pg_temp.scope1(:itQ, :u_stf);
+select is((select string_agg(scope, ',' order by step) from s9), 'in_scope,manager,in_scope',
+  'S9: WA staff, then a manager, then WA staff again in one transaction: each draw has its own drawer''s scope');
+
+-- S10. Another organization recomputes (the organization is in the key): the
+-- two-org persona manages the foreign org and is WA staff at home.
+create temp table s10 (step int, scope text);
+set local "request.jwt.claim.sub" to :u_two;
+insert into s10 select 1, pg_temp.scope1(:itF, :u_two);
+insert into s10 select 2, pg_temp.scope1(:itQ, :u_two);
+select is((select string_agg(scope, ',' order by step) from s10), 'manager,in_scope',
+  'S10: the same drawer draws in the foreign org (manager there), then at home (WA staff): the home draw is in_scope, not the foreign answer');
+
+-- S11. A cached value binds to this transaction, this drawer and this
+-- organization: a planted value for another transaction id, with no
+-- transaction id, for another drawer or for another organization is ignored.
+-- The last one (this transaction, drawer and organization) is trusted: the
+-- trust basis is that only set_config inside the same transaction can plant
+-- it, exactly as for ledger.active() (0359's census, INV-40).
+set local "request.jwt.claim.sub" to :u_stf;
+create temp table s11 (step int, scope text);
+select set_config('stockpilot.draw_scope', '1/' || :u_stf || '/' || :orgS || '|M|', true);
+insert into s11 select 1, pg_temp.scope1(:itQ, :u_stf);
+select set_config('stockpilot.draw_scope', :u_stf || '/' || :orgS || '|M|', true);
+insert into s11 select 2, pg_temp.scope1(:itQ, :u_stf);
+select set_config('stockpilot.draw_scope', pg_current_xact_id()::text || '/' || :u_mgr || '/' || :orgS || '|M|', true);
+insert into s11 select 3, pg_temp.scope1(:itQ, :u_stf);
+select set_config('stockpilot.draw_scope', pg_current_xact_id()::text || '/' || :u_stf || '/' || :orgF || '|M|', true);
+insert into s11 select 4, pg_temp.scope1(:itQ, :u_stf);
+select set_config('stockpilot.draw_scope', pg_current_xact_id()::text || '/' || :u_stf || '/' || :orgS || '|M|', true);
+insert into s11 select 5, pg_temp.scope1(:itQ, :u_stf);
+select is((select string_agg(scope, ',' order by step) from s11),
+  'in_scope,in_scope,in_scope,in_scope,manager',
+  'S11: planted values for another transaction, with no transaction id, for another drawer or another organization are ignored; one bound to this transaction, drawer and organization is read');
+
+-- S12. A rolled-back savepoint discards what it cached; a released one keeps
+-- it. Reports <cached inside>,<after rollback>,<after release>.
+create function pg_temp.sp_probe() returns text language plpgsql as $f$
+declare
+  v_in  text;
+  v_rb  text;
+  v_rel text;
+begin
+  perform set_config('stockpilot.draw_scope', '', true);
+  begin
+    perform pg_temp.scope1('03730000-0000-0000-0000-0000000000cd', '03730000-0000-0000-0000-0000000000a3');
+    v_in := current_setting('stockpilot.draw_scope', true);
+    raise exception using errcode = 'ZX378';
+  exception
+    when sqlstate 'ZX378' then null;
+  end;
+  v_rb := current_setting('stockpilot.draw_scope', true);
+  begin
+    perform pg_temp.scope1('03730000-0000-0000-0000-0000000000cd', '03730000-0000-0000-0000-0000000000a3');
+  exception
+    when sqlstate 'ZX379' then null;
+  end;
+  v_rel := current_setting('stockpilot.draw_scope', true);
+  return (v_in like '%|p:%=I|')::text || ',' || coalesce(nullif(v_rb, ''), 'empty') || ',' || (v_rel like '%|p:%=I|')::text;
+end $f$;
+select is(pg_temp.sp_probe(), 'true,empty,true',
+  'S12: answers cached inside a rolled-back savepoint are discarded with it; a released savepoint keeps them');
+
+-- S13. The non-recording wrapper (post_cycle_count's path) never touches the
+-- cache.
+select set_config('stockpilot.draw_scope', 'planted', true);
+select lives_ok(format($$select public.apply_level_delta(%L, -1)$$, :itQ), 'S13: WA staff draws through the wrapper');
+select is(current_setting('stockpilot.draw_scope', true) || '|' || pg_temp.snap(:itQ), 'planted|A1=4',
+  'S14: the wrapper moved the holding and left the cache alone (record = false never seals)');
 select set_config('stockpilot.ledger', '', true);
+select set_config('stockpilot.draw_scope', '', true);
 set local "request.jwt.claim.sub" to '';
-select is(pg_temp.ccwl_calls() - (select before from s_calls), 2::bigint,
-  'S15: those two engine calls asked caller_can_write_location once each');
 
 select * from finish();
 rollback;
