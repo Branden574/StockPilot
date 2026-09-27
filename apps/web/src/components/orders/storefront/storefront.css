@@ -1427,6 +1427,53 @@
   margin: 4px 0 0;
   color: var(--sf-ink-4);
 }
+/* The Kits row's reserved place while it streams (KitsRowSkeleton): the real
+   row's classes, with its words invisible, so the real row lands on the same
+   box and the grid below does not move. */
+.sp-storefront .sf-kits-sk-head h3 {
+  color: transparent;
+  border-radius: 6px;
+}
+.sp-storefront .sf-kits-sk-head .ct,
+.sp-storefront .sf-kits-sk-head .sub,
+.sp-storefront .sf-kit-sk-more {
+  visibility: hidden;
+}
+.sp-storefront .sf-kit-card-sk:hover {
+  border-color: var(--sf-line);
+  transform: none;
+  box-shadow: none;
+}
+.sp-storefront .sf-kit-sk-photo {
+  position: absolute;
+  inset: 0;
+  border-radius: 0;
+}
+.sp-storefront .sf-kit-sk-line {
+  display: block;
+  height: 12px;
+  width: 80%;
+  border-radius: 6px;
+}
+.sp-storefront .sf-kit-sk-line.short {
+  width: 55%;
+}
+/* Two lines of .sf-kit-items (12px x 1.4), the most its clamp shows. */
+.sp-storefront .sf-kit-sk-items {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  height: 2.8em;
+}
+.sp-storefront .sf-kit-sk-ctl {
+  height: 33px;
+  border-radius: 9px;
+}
+.sp-storefront .sf-kits-pending {
+  margin: 4px 0 24px;
+  font-size: 12px;
+  color: var(--sf-ink-4);
+}
 .sp-storefront .sf-kits-error {
   margin: 4px 0 24px;
   padding: 10px 12px;

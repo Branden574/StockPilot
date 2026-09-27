@@ -321,9 +321,78 @@ describe('the kits release', () => {
   });
 
   it('is addressed to people who can place orders, where Orders and Bundles are on', () => {
+    // Modules inside one audience are alternatives, so Orders sits on the
+    // release and Bundles on each entry: a reader must pass both.
+    expect(release().audience).toEqual({ modules: ['orders'] });
     for (const e of release().entries) {
       expect(e.area).toBe('Orders');
-      expect(e.audience).toEqual({ anyPermission: ['orders:request'], modules: ['orders', 'bundles'] });
+      expect(e.audience).toEqual({ anyPermission: ['orders:request'], modules: ['bundles'] });
     }
+  });
+
+  it('reaches only readers with Orders AND Bundles on who can place orders', () => {
+    const published: Release = { ...release(), status: 'published' };
+    const reader = (modules: ModuleId[], permissions: ReleaseViewer['permissions'] = ['orders:request']) =>
+      visibleReleases([published], { role: 'viewer', permissions, enabledModules: modules }).length;
+    expect(reader(['orders', 'bundles'])).toBe(1);
+    expect(reader(['orders'])).toBe(0);
+    expect(reader(['bundles'])).toBe(0);
+    expect(reader(['orders', 'bundles'], [])).toBe(0);
+  });
+});
+
+/**
+ * The Add full kit button was on the New order page of every organization with
+ * a category named like "New Hire", whatever its modules; kits exist only where
+ * Bundles is on. So the note that the button is gone is its own release,
+ * addressed to everyone who can place orders, and its words must hold for an
+ * organization without Bundles (review F7, 2026-09-27).
+ */
+describe('the Add full kit removal release', () => {
+  const REMOVED = 'order-page-add-full-kit-removed-2026-09-27';
+  const KITS = 'order-page-kits-2026-09-27';
+  const release = () => RELEASES.find((r) => r.id === REMOVED)!;
+  const published = (id: string): Release => ({
+    ...RELEASES.find((r) => r.id === id)!,
+    status: 'published',
+  });
+  const ordersNoBundles: ReleaseViewer = {
+    role: 'viewer',
+    permissions: ['orders:request'],
+    enabledModules: ['orders'],
+  };
+  const ordersWithBundles: ReleaseViewer = { ...ordersNoBundles, enabledModules: ['orders', 'bundles'] };
+
+  it('is addressed to people who can place orders, Bundles or not', () => {
+    for (const e of release().entries) {
+      expect(e.audience).toEqual({ anyPermission: ['orders:request'], modules: ['orders'] });
+    }
+    expect(release().audience).toBeUndefined();
+  });
+
+  it('reaches an organization without Bundles, which is not told about kits', () => {
+    const seen = visibleReleases([published(KITS), published(REMOVED)], ordersNoBundles).map((r) => r.id);
+    expect(seen).toEqual([REMOVED]);
+    const both = visibleReleases([published(KITS), published(REMOVED)], ordersWithBundles).map((r) => r.id);
+    expect(both).toEqual([KITS, REMOVED]);
+  });
+
+  it('says nothing about kits that is untrue where Bundles is off', () => {
+    const text = readerText(release()).join(' ');
+    expect(text).not.toMatch(/kits take its place/i);
+    // Every sentence that mentions kits beyond the button's own name says
+    // where they exist.
+    const sentences = text.split(/(?<=\.)\s+/);
+    for (const sentence of sentences) {
+      const withoutButton = sentence.replace(/Add full kit/g, '');
+      if (/\bkits?\b/i.test(withoutButton) && !/whatever (a|the) kit/i.test(withoutButton)) {
+        expect(sentence, sentence).toMatch(/where your organization uses Bundles/i);
+      }
+    }
+  });
+
+  it('the kits release no longer carries the removal, so no reader gets it twice', () => {
+    const kits = RELEASES.find((r) => r.id === KITS)!;
+    expect(readerText(kits).join(' ')).not.toMatch(/Add full kit/);
   });
 });

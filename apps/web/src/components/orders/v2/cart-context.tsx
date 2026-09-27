@@ -185,12 +185,19 @@ export function cartReducer(state: CartState, action: CartAction): CartState {
       );
       if (valid.length === 0) return state;
       const lines = state.lines.map((l) => ({ ...l }));
-      const shares: CartKitShares = { ...(state.kits?.[action.bundleId] ?? {}) };
+      // The kit's record as far as the lines hold it: where a record says more
+      // than its line now holds, the record is what gives way, never the line.
+      const fitted = fitKitShares(state.kits ?? {}, state.lines)[action.bundleId] ?? {};
+      const shares: CartKitShares = { ...fitted };
       for (const c of valid) {
         const line = lines.find((l) => l.itemId === c.itemId);
-        if (line) line.quantity += c.delta;
-        else if (c.delta > 0) lines.push({ itemId: c.itemId, quantity: c.delta });
-        shares[c.itemId] = (shares[c.itemId] ?? 0) + c.delta;
+        // A kit takes off a line only units it recorded there, so a plan made
+        // against an older cart can never take units added by hand.
+        const delta = c.delta < 0 ? Math.max(c.delta, -(shares[c.itemId] ?? 0)) : c.delta;
+        if (delta === 0) continue;
+        if (line) line.quantity += delta;
+        else if (delta > 0) lines.push({ itemId: c.itemId, quantity: delta });
+        shares[c.itemId] = (shares[c.itemId] ?? 0) + delta;
       }
       const kept = lines.filter((l) => l.quantity > 0);
       return {

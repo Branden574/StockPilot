@@ -135,6 +135,7 @@ export const KitCard = React.memo(function KitCard({
           available={most}
           onSetQty={(_, target) => onSetKits(kit, target)}
           showInCartLabel
+          label={`Kits of ${kit.name} in cart`}
         />
         <button
           type="button"
@@ -166,16 +167,17 @@ export const KitCard = React.memo(function KitCard({
         <div className="sf-kit-items">
           {count} {count === 1 ? 'item' : 'items'}: {itemList}
         </div>
+        {/* Static text drawn with the card, so no live region: a status role
+            here made every out-of-stock kit an announcement. */}
         {out && (
-          <div className="sf-kit-short" role="status">
-            {kitShortLabel(availability.short, itemMap, nameOf)}
-          </div>
+          <div className="sf-kit-short">{kitShortLabel(availability.short, itemMap, nameOf)}</div>
         )}
         <button
           type="button"
           className="sf-kit-more"
           aria-expanded={open}
-          aria-controls={detailsId}
+          // Only while the details exist: an id with no element is a broken reference.
+          aria-controls={open ? detailsId : undefined}
           onClick={() => setOpen((v) => !v)}
         >
           Details <ChevronDown size={12} aria-hidden />
@@ -238,6 +240,27 @@ export function KitGrid({
   );
 }
 
+/**
+ * Around the Kits row: if the kits promise itself rejects in the browser (the
+ * loader never rejects, but a stream that breaks mid-page rejects what it has
+ * not delivered), or the row fails to draw, the row says the kits could not be
+ * loaded instead of taking the order page down with it.
+ */
+export class KitsErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { failed: boolean }
+> {
+  override state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  override render() {
+    return this.state.failed ? <KitsUnavailable /> : this.props.children;
+  }
+}
+
 /** Said in place of the Kits row when the kits could not be read. */
 export function KitsUnavailable() {
   return (
@@ -248,11 +271,62 @@ export function KitsUnavailable() {
   );
 }
 
+const KITS_ROW_SUB = 'Add every item of a kit to your cart in one step';
+
+/**
+ * The Kits row's place while the kits stream in, when the Bundles module is on
+ * (review F9). The row sits above Frequently ordered and the grid, and it
+ * always arrives after the catalog (the loader matches the kits against it), so
+ * with no reserved space a late row pushed the grid down under the pointer: a
+ * layout shift of 0.078 with the bundles read held 5 s (local, 1440 x 1000).
+ * This draws the row's own header and one kit card's box with the same classes,
+ * so a row of one line of kits replaces it without moving anything. It has no
+ * words of its own: when this person has no kits the row closes up.
+ */
+export function KitsRowSkeleton() {
+  return (
+    <section className="sf-kits" aria-busy="true" aria-label="Loading kits">
+      {/* The real header's words, invisible, so it wraps exactly as the real
+          one does on a narrow screen; only the heading shows, as a bar. */}
+      <div className="sf-sec-head sf-kits-sk-head" aria-hidden>
+        <h3 className="sf-sk">
+          <Layers size={15} /> Kits
+        </h3>
+        <span className="ct">1</span>
+        <span className="sub">{KITS_ROW_SUB}</span>
+      </div>
+      <div className="sf-grid sf-kit-grid" aria-hidden>
+        <div className="sf-card sf-kit-card sf-kit-card-sk">
+          <div className="sf-ph-box">
+            <div className="sf-sk sf-kit-sk-photo" />
+          </div>
+          <div className="sf-card-bd">
+            <div className="sf-card-nm">
+              <span className="sf-sk sf-kit-sk-line" />
+            </div>
+            <div className="sf-kit-items sf-kit-sk-items">
+              <span className="sf-sk sf-kit-sk-line" />
+              <span className="sf-sk sf-kit-sk-line short" />
+            </div>
+            <span className="sf-kit-more sf-kit-sk-more">
+              Details <ChevronDown size={12} />
+            </span>
+            <div className="sf-card-ctl">
+              <div className="sf-sk sf-kit-sk-ctl" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 /**
  * The Kits row at the top of the All view, above Frequently ordered. It
  * suspends on the server-started kits promise inside its own boundary (the
- * page gives it a null fallback), so the catalog grid never waits for it, and
- * it draws nothing when there are no kits. A failed read says so.
+ * page gives it KitsRowSkeleton as its fallback when the Bundles module is on),
+ * so the catalog grid never waits for it, and it draws nothing when there are
+ * no kits. A failed read says so.
  */
 export function KitsRow({
   promise,
@@ -268,7 +342,7 @@ export function KitsRow({
           <Layers size={15} /> Kits
         </h3>
         <span className="ct">{result.kits.length}</span>
-        <span className="sub">Add every item of a kit to your cart in one step</span>
+        <span className="sub">{KITS_ROW_SUB}</span>
       </div>
       <KitGrid kits={result.kits} {...grid} />
     </section>

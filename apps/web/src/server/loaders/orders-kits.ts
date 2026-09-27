@@ -26,7 +26,8 @@ import { fetchAllRows } from '@/server/services/lib/paginate';
  * under the visitor's row level security on inventory_items: a row they may not
  * read comes back empty and the kit is not offered. Every row a kit may use is
  * then taken from the visitor's own catalog (the promise the page already
- * started), so the browser receives no item id it was not already given.
+ * started), and the named row's id is sent only when that catalog holds it, so
+ * the browser receives no item id it was not already given.
  *
  * A COMPONENT IS ITS SKU AT THIS WAREHOUSE (owner refinement 2026-09-27). The
  * bundle names one row; the component may use every catalog row with that
@@ -198,7 +199,12 @@ export function resolveKits(
         return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
       });
       components.set(key, {
-        anchorItemId: named.id,
+        // The named row when this person's catalog holds it. When it does not
+        // (archived, or readable but not orderable), its id is NOT sent: the
+        // browser only ever receives ids of rows it was already given (review
+        // F8), and the SKU's first catalog row stands in as the row a tie
+        // prefers.
+        anchorItemId: catalogById.has(named.id) ? named.id : ordered[0]!.id,
         itemIds: ordered.map((r) => r.id),
         perKit,
       });

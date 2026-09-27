@@ -167,11 +167,16 @@ describe('Add kit allocates each component across its racks', () => {
     expect(kitsInCart(NEW_HIRE, s.kits[NEW_HIRE.bundleId], qtyOf(s))).toBe(150);
   });
 
-  it('one kit at a time: 18-A until it has none left, then 16-B takes the 61st', () => {
+  it('one kit at a time: 18-A until it has none left, then the 61st moves the kit onto 16-B, as 61 at once would', () => {
     let s = empty();
-    for (let n = 1; n <= 61; n += 1) s = setKits(s, n);
+    for (let n = 1; n <= 60; n += 1) s = setKits(s, n);
     expect(lineQty(s, BACKPACK_18A.id)).toBe(60);
-    expect(lineQty(s, BACKPACK_16B.id)).toBe(1);
+    // 18-A cannot hold 61 and 16-B can, so the whole count goes to ONE rack
+    // (one line, one rack to pick) instead of 60 on 18-A plus 1 on 16-B.
+    s = setKits(s, 61);
+    expect(lineQty(s, BACKPACK_16B.id)).toBe(61);
+    expect(s.lines.some((l) => l.itemId === BACKPACK_18A.id)).toBe(false);
+    expect(qtyOf(s)).toEqual(qtyOf(setKits(empty(), 61)));
   });
 
   it('194 kits takes every backpack on both racks; the 195th is refused whole', () => {
@@ -255,13 +260,14 @@ describe('Add kit is all or nothing', () => {
 });
 
 describe('removing a kit takes back only the kit own units', () => {
-  it('after the 61st kit went to 16-B, going back to 60 takes it off 16-B (the fewest held first)', () => {
+  it('after the 61st kit moved the kit to 16-B, going back to 60 keeps its one line there', () => {
     let s = empty();
     s = setKits(s, 60);
     s = setKits(s, 61);
     s = setKits(s, 60);
-    expect(lineQty(s, BACKPACK_18A.id)).toBe(60);
-    expect(s.lines.some((l) => l.itemId === BACKPACK_16B.id)).toBe(false);
+    // Lowering only gives units back; it never moves the kit to another rack.
+    expect(lineQty(s, BACKPACK_16B.id)).toBe(60);
+    expect(s.lines.some((l) => l.itemId === BACKPACK_18A.id)).toBe(false);
   });
 
   it('from the 134 + 16 split, one kit less comes off 18-A: 149 still needs both rows, the larger kept whole', () => {
@@ -324,6 +330,243 @@ describe('removing a kit takes back only the kit own units', () => {
       s = cartReducer(s, { type: 'add', itemId: id });
     }
     expect(kitsInCart(NEW_HIRE, s.kits[NEW_HIRE.bundleId], qtyOf(s))).toBe(0);
+  });
+});
+
+// ═══ RAISING A KIT ONLY ADDS (walk 2026-09-27, review F1) ═══
+//
+// The first version planned every component to exactly (count × per kit), so
+// after a line was changed by hand, Add kit or + gave units BACK on the other
+// lines, silently. Both cases below were reproduced in a real browser.
+describe('raising a kit never takes units out of the cart', () => {
+  /** The plan for `target`, and the cart after it. */
+  function raise(s: CartState, target: number) {
+    const plan = planKitChange(NEW_HIRE, target, DC4, s.kits[NEW_HIRE.bundleId], qtyOf(s));
+    if (!plan.ok) throw new Error('short');
+    return { changes: plan.changes, after: setKits(s, target) };
+  }
+
+  it('3 kits, the mug line removed by hand, then Add kit: one mug goes in and nothing comes out', () => {
+    let s = setKits(empty(), 3);
+    s = cartReducer(s, { type: 'remove', itemId: MUG.id });
+    // The card is back to "Add kit": no whole kit is left without the mug.
+    expect(kitsInCart(NEW_HIRE, s.kits[NEW_HIRE.bundleId], qtyOf(s))).toBe(0);
+
+    const { changes, after } = raise(s, 1);
+    expect(changes).toEqual([{ itemId: MUG.id, delta: 1 }]);
+    // Was {backpack 1, mug 1, pad 1, planner 1}: two of each taken back.
+    expect(Object.fromEntries(qtyOf(after))).toEqual({
+      [BACKPACK_18A.id]: 3,
+      [PAD.id]: 3,
+      [PLANNER.id]: 3,
+      [MUG.id]: 1,
+    });
+    expect(kitsInCart(NEW_HIRE, after.kits[NEW_HIRE.bundleId], qtyOf(after))).toBe(1);
+  });
+
+  it('3 kits, the mug set to 1 by hand, then +: one mug goes in, 10 units become 11, not 8', () => {
+    let s = setKits(empty(), 3);
+    s = cartReducer(s, { type: 'set-qty', itemId: MUG.id, quantity: 1 });
+    expect(kitsInCart(NEW_HIRE, s.kits[NEW_HIRE.bundleId], qtyOf(s))).toBe(1);
+
+    const { changes, after } = raise(s, 2);
+    expect(changes).toEqual([{ itemId: MUG.id, delta: 1 }]);
+    expect(Object.fromEntries(qtyOf(after))).toEqual({
+      [BACKPACK_18A.id]: 3,
+      [MUG.id]: 2,
+      [PAD.id]: 3,
+      [PLANNER.id]: 3,
+    });
+    expect(kitsInCart(NEW_HIRE, after.kits[NEW_HIRE.bundleId], qtyOf(after))).toBe(2);
+  });
+
+  it('the mug set to 1 and then back to 3 by hand, then +: the hand-set mugs stay and one more goes in', () => {
+    let s = setKits(empty(), 3);
+    s = cartReducer(s, { type: 'set-qty', itemId: MUG.id, quantity: 1 });
+    s = cartReducer(s, { type: 'set-qty', itemId: MUG.id, quantity: 3 });
+    const { changes, after } = raise(s, 2);
+    expect(changes.every((c) => c.delta > 0)).toBe(true);
+    expect(lineQty(after, MUG.id)).toBe(4);
+    expect(lineQty(after, BACKPACK_18A.id)).toBe(3);
+    expect(lineQty(after, PAD.id)).toBe(3);
+    expect(lineQty(after, PLANNER.id)).toBe(3);
+  });
+
+  it('a typed count above the current one only adds too', () => {
+    let s = setKits(empty(), 3);
+    s = cartReducer(s, { type: 'remove', itemId: MUG.id });
+    const { changes, after } = raise(s, 2);
+    expect(changes).toEqual([{ itemId: MUG.id, delta: 2 }]);
+    expect(lineQty(after, BACKPACK_18A.id)).toBe(3);
+  });
+
+  it('after any hand edit, every raise leaves every line at least where it was', () => {
+    const edits: Array<(s: CartState) => CartState> = [
+      (s) => s,
+      (s) => cartReducer(s, { type: 'remove', itemId: MUG.id }),
+      (s) => cartReducer(s, { type: 'set-qty', itemId: MUG.id, quantity: 1 }),
+      (s) => cartReducer(s, { type: 'set-qty', itemId: PAD.id, quantity: 7 }),
+      (s) => cartReducer(s, { type: 'dec', itemId: PLANNER.id }),
+      (s) => cartReducer(s, { type: 'add', itemId: BACKPACK_16B.id, quantity: 4 }),
+      (s) => cartReducer(s, { type: 'set-qty', itemId: BACKPACK_18A.id, quantity: 1 }),
+    ];
+    for (const edit of edits) {
+      const before = edit(setKits(empty(), 3));
+      const count = kitsInCart(NEW_HIRE, before.kits[NEW_HIRE.bundleId], qtyOf(before));
+      for (const target of [count + 1, count + 2, count + 40]) {
+        const { changes, after } = raise(before, target);
+        // No line holding units added by hand is ever lowered, and here no
+        // line at all: the kit sits on 18-A, which covers each of these counts.
+        expect(changes.filter((c) => c.delta < 0)).toEqual([]);
+        for (const [itemId, quantity] of qtyOf(before)) {
+          expect(lineQty(after, itemId)).toBeGreaterThanOrEqual(quantity);
+        }
+        expect(kitsInCart(NEW_HIRE, after.kits[NEW_HIRE.bundleId], qtyOf(after))).toBe(target);
+      }
+    }
+  });
+});
+
+// ═══ A TYPED JUMP USES ONE RACK WHEN ONE CAN HOLD IT ALL (review F6) ═══
+//
+// The stepper only appears after Add kit has put one backpack on 18-A, so the
+// first version turned every typed count from 61 to 135 into 18-A plus 16-B,
+// although 16-B (134) holds it all.
+describe('a raise is planned over the kit whole count', () => {
+  it('Add kit, then type 100: all 100 backpacks from 16-B, one line', () => {
+    const s = setKits(setKits(empty(), 1), 100);
+    expect(lineQty(s, BACKPACK_16B.id)).toBe(100);
+    expect(s.lines.some((l) => l.itemId === BACKPACK_18A.id)).toBe(false);
+    expect(s.kits[NEW_HIRE.bundleId]![BACKPACK_16B.id]).toBe(100);
+    expect(kitsInCart(NEW_HIRE, s.kits[NEW_HIRE.bundleId], qtyOf(s))).toBe(100);
+  });
+
+  it('3 kits, then type 100: the same single 16-B line a fresh 100 would give', () => {
+    const s = setKits(setKits(empty(), 3), 100);
+    expect(qtyOf(s)).toEqual(qtyOf(setKits(empty(), 100)));
+    expect(lineQty(s, BACKPACK_16B.id)).toBe(100);
+  });
+
+  it('no rack holds 150, so a jump from 3 splits exactly as a fresh 150 does', () => {
+    const s = setKits(setKits(empty(), 3), 150);
+    expect(lineQty(s, BACKPACK_16B.id)).toBe(134);
+    expect(lineQty(s, BACKPACK_18A.id)).toBe(16);
+  });
+
+  it('100 on 16-B raised to 150: 134 + 16, the split a fresh 150 gives, not 100 + 50', () => {
+    // Walk 2026-09-27 (after the first fix): the top-up put the 50 extra on
+    // 18-A, the one rack that could take 50, and kept the jump path-dependent.
+    const s = setKits(setKits(setKits(empty(), 1), 100), 150);
+    expect(lineQty(s, BACKPACK_16B.id)).toBe(134);
+    expect(lineQty(s, BACKPACK_18A.id)).toBe(16);
+    expect(qtyOf(s)).toEqual(qtyOf(setKits(empty(), 150)));
+  });
+
+  it('a raise stays on the rack the kit already uses when that rack can take it', () => {
+    // 100 on 16-B, lowered to 3 (still on 16-B), then one more: the fourth
+    // goes on 16-B too, not onto a second line on 18-A.
+    let s = setKits(setKits(empty(), 100), 3);
+    expect(lineQty(s, BACKPACK_16B.id)).toBe(3);
+    s = setKits(s, 4);
+    expect(lineQty(s, BACKPACK_16B.id)).toBe(4);
+    expect(s.lines.some((l) => l.itemId === BACKPACK_18A.id)).toBe(false);
+  });
+
+  it('the kit never moves off a line that also holds backpacks added by hand', () => {
+    // Two added by hand on 18-A, then Add kit (18-A: 2 by hand + 1 of the kit),
+    // then 100 typed: 18-A keeps its 3, and 16-B takes the other 99.
+    let s = cartReducer(empty(), { type: 'add', itemId: BACKPACK_18A.id, quantity: 2 });
+    s = setKits(s, 1);
+    expect(lineQty(s, BACKPACK_18A.id)).toBe(3);
+    const plan = planKitChange(NEW_HIRE, 100, DC4, s.kits[NEW_HIRE.bundleId], qtyOf(s));
+    expect(plan.ok && plan.changes.every((c) => c.delta > 0)).toBe(true);
+    s = setKits(s, 100);
+    expect(lineQty(s, BACKPACK_18A.id)).toBe(3);
+    expect(lineQty(s, BACKPACK_16B.id)).toBe(99);
+    expect(kitsInCart(NEW_HIRE, s.kits[NEW_HIRE.bundleId], qtyOf(s))).toBe(100);
+  });
+
+  it('a line lowered by hand is never emptied by a typed count: it keeps what the person set', () => {
+    // 3 kits, then the backpack set to 2 by hand (the kit now counts 2), then
+    // 100 typed: 18-A keeps its 2 and 16-B takes the other 98.
+    let s = setKits(empty(), 3);
+    s = cartReducer(s, { type: 'set-qty', itemId: BACKPACK_18A.id, quantity: 2 });
+    expect(kitsInCart(NEW_HIRE, s.kits[NEW_HIRE.bundleId], qtyOf(s))).toBe(2);
+    const plan = planKitChange(NEW_HIRE, 100, DC4, s.kits[NEW_HIRE.bundleId], qtyOf(s));
+    expect(plan.ok && plan.changes.every((c) => c.delta > 0)).toBe(true);
+    s = setKits(s, 100);
+    expect(lineQty(s, BACKPACK_18A.id)).toBe(2);
+    expect(lineQty(s, BACKPACK_16B.id)).toBe(98);
+    expect(kitsInCart(NEW_HIRE, s.kits[NEW_HIRE.bundleId], qtyOf(s))).toBe(100);
+  });
+
+  it('a move takes only this kit own units, and the component total never falls', () => {
+    const before = setKits(empty(), 60);
+    const plan = planKitChange(NEW_HIRE, 61, DC4, before.kits[NEW_HIRE.bundleId], qtyOf(before));
+    if (!plan.ok) throw new Error('short');
+    const backpack = plan.changes.filter(
+      (c) => c.itemId === BACKPACK_18A.id || c.itemId === BACKPACK_16B.id,
+    );
+    expect(backpack).toEqual([
+      { itemId: BACKPACK_18A.id, delta: -60 },
+      { itemId: BACKPACK_16B.id, delta: 61 },
+    ]);
+    expect(backpack.reduce((sum, c) => sum + c.delta, 0)).toBe(1);
+  });
+});
+
+describe('the cart never lets a kit take a unit it did not put there', () => {
+  it('a kit change that asks for more than the kit recorded on a line takes only the kit units', () => {
+    // 2 backpacks by hand, then 3 kits on the same 18-A line: 5, 3 of them the kit's.
+    let s = cartReducer(empty(), { type: 'add', itemId: BACKPACK_18A.id, quantity: 2 });
+    s = setKits(s, 3);
+    expect(lineQty(s, BACKPACK_18A.id)).toBe(5);
+    s = cartReducer(s, {
+      type: 'apply-kit',
+      bundleId: NEW_HIRE.bundleId,
+      changes: [{ itemId: BACKPACK_18A.id, delta: -5 }],
+    });
+    expect(lineQty(s, BACKPACK_18A.id)).toBe(2);
+    expect(s.kits[NEW_HIRE.bundleId]?.[BACKPACK_18A.id]).toBeUndefined();
+  });
+
+  it('a kit with no record on a line cannot take anything off it', () => {
+    const s = cartReducer(
+      cartReducer(empty(), { type: 'add', itemId: MUG.id, quantity: 4 }),
+      { type: 'apply-kit', bundleId: NEW_HIRE.bundleId, changes: [{ itemId: MUG.id, delta: -4 }] },
+    );
+    expect(lineQty(s, MUG.id)).toBe(4);
+  });
+
+  it('a record larger than its line is cut to the line; a raise then tops up from there', () => {
+    // A state whose record says 5 mugs on a 2-mug line (as an old or edited
+    // draft could carry): the kit counts the 2 it can see, and + adds one mug.
+    const s: CartState = {
+      ...empty(),
+      lines: [
+        { itemId: BACKPACK_18A.id, quantity: 3 },
+        { itemId: MUG.id, quantity: 2 },
+        { itemId: PAD.id, quantity: 3 },
+        { itemId: PLANNER.id, quantity: 3 },
+      ],
+      kits: {
+        [NEW_HIRE.bundleId]: {
+          [BACKPACK_18A.id]: 3,
+          [MUG.id]: 5,
+          [PAD.id]: 3,
+          [PLANNER.id]: 3,
+        },
+      },
+    };
+    expect(kitsInCart(NEW_HIRE, s.kits[NEW_HIRE.bundleId], qtyOf(s))).toBe(2);
+    const after = setKits(s, 3);
+    expect(Object.fromEntries(qtyOf(after))).toEqual({
+      [BACKPACK_18A.id]: 3,
+      [MUG.id]: 3,
+      [PAD.id]: 3,
+      [PLANNER.id]: 3,
+    });
+    expect(after.kits[NEW_HIRE.bundleId]![MUG.id]).toBe(3);
   });
 });
 

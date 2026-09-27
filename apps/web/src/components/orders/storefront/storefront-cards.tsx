@@ -75,6 +75,12 @@ interface QtyFieldProps {
   onSetQty: (itemId: string, quantity: number) => void;
   /** Card-size stepper shows the tiny "IN CART" suffix label. */
   showInCartLabel?: boolean;
+  /**
+   * The field's accessible name; "Quantity" when not given. A stepper that does
+   * not count one item's units names what it counts (the kit card: "Kits of
+   * <kit> in cart").
+   */
+  label?: string;
 }
 
 /**
@@ -90,6 +96,7 @@ export function QtyField({
   available,
   onSetQty,
   showInCartLabel,
+  label = 'Quantity',
 }: QtyFieldProps) {
   const [draft, setDraft] = React.useState<string | null>(null);
   const cancelled = React.useRef(false);
@@ -112,7 +119,7 @@ export function QtyField({
         inputMode="numeric"
         pattern="[0-9]*"
         value={draft ?? String(qty)}
-        aria-label="Quantity"
+        aria-label={label}
         onClick={(e) => e.stopPropagation()}
         onFocus={(e) => {
           cancelled.current = false;

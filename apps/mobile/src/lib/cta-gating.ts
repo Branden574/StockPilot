@@ -54,6 +54,15 @@ export function showWriteCtaForRole(
  * holds (the loaded effective set when there is one, else the role's defaults).
  * The same rule as the web bundle page (core canDistributeBundles), so the
  * phone never offers a distribution it would queue and see refused.
+ *
+ * KNOWN LIMIT, KEPT ON PURPOSE (review F5, 2026-09-27). The role is cached in
+ * memory only (role-cache.ts), so after a cold start with no connection it
+ * stays unknown and a manager does not see Distribute until the role is read:
+ * the next time a screen that reads it (this one included) opens with a
+ * connection. The section is simply absent meanwhile; nothing on the screen
+ * says the person cannot distribute. Showing it on the permission alone would
+ * offer staff a distribution the server refuses, which is what this gate fixed.
+ * The What's New entry for this change says it needs a connection.
  */
 export function showDistributeCta(
   role: Role | null,

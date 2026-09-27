@@ -125,9 +125,13 @@ const AISLES = [
   { id: 'cat-tech', name: 'Technology', itemCount: 1 },
 ];
 
+/** A kits read that has not answered, and never will during the test. */
+const pending = (): Promise<KitsResult> => new Promise<KitsResult>(() => {});
+
 async function openPage(
-  kits: KitsResult,
+  kits: KitsResult | Promise<KitsResult>,
   items: CatalogItem[] = [BACKPACK_18A, BACKPACK_16B, MUG, PAD, PLANNER, POLO, CHROMEBOOK],
+  { kitsEnabled = true }: { kitsEnabled?: boolean } = {},
 ) {
   await act(async () => {
     render(
@@ -136,7 +140,8 @@ async function openPage(
         warehouseId={DC4}
         catalogPromise={settled<StorefrontCatalogData>({ items, aisles: AISLES })}
         frequentlyOrderedPromise={settled([])}
-        kitsPromise={settled(kits)}
+        kitsPromise={kits instanceof Promise ? kits : settled(kits)}
+        kitsEnabled={kitsEnabled}
         chartersForWarehouse={[]}
         viewerRole="viewer"
         viewerName="Lillian"
@@ -154,6 +159,12 @@ const cartLines = () =>
     .queryAllByText(/.+/, { selector: '.sf-line .nm' })
     .map((el) => el.textContent);
 const kitsRow = () => screen.getByRole('region', { name: 'Kits' });
+/** A cart line's quantity (0 when the line is not in the cart). */
+const cartQty = (itemId: string) =>
+  Number(cart().queryByTestId(`qty-${itemId}`)?.textContent ?? 0);
+const cartLine = (name: string) => within(cart().getByText(name).closest('.sf-line') as HTMLElement);
+const kitButton = (name: string) =>
+  within(kitsRow()).getByRole('button', { name: `${name}: New Hire Bundle` });
 
 describe('OrdersStorefront: kits', () => {
   beforeEach(() => {
@@ -268,4 +279,121 @@ describe('OrdersStorefront: kits', () => {
     await openPage({ status: 'error' });
     expect(screen.getByText(/Kits could not be loaded/)).toBeTruthy();
   });
+
+  // ═══ Review F1, reproduced in the walk: raising a kit never takes units out ═══
+  it('3 kits, the mug removed from the cart by hand, then Add kit: one mug goes back, nothing comes out', async () => {
+    await openPage({ status: 'ok', kits: [NEW_HIRE] });
+    fireEvent.click(kitButton('Add kit'));
+    fireEvent.click(kitButton('One kit more'));
+    fireEvent.click(kitButton('One kit more'));
+    expect(cartQty(BACKPACK_18A.id)).toBe(3);
+    fireEvent.click(cart().getByRole('button', { name: 'Remove L4L - New Hire - Coffee mug from cart' }));
+    expect(cartQty(MUG.id)).toBe(0);
+
+    fireEvent.click(kitButton('Add kit'));
+    // It was 1 of each: two backpacks, pads and planners taken back, no word.
+    expect(cartQty(BACKPACK_18A.id)).toBe(3);
+    expect(cartQty(PAD.id)).toBe(3);
+    expect(cartQty(PLANNER.id)).toBe(3);
+    expect(cartQty(MUG.id)).toBe(1);
+  });
+
+  it('3 kits, the mug lowered to 1 in the cart, then +: one mug more, and 10 units become 11, not 8', async () => {
+    await openPage({ status: 'ok', kits: [NEW_HIRE] });
+    fireEvent.click(kitButton('Add kit'));
+    fireEvent.click(kitButton('One kit more'));
+    fireEvent.click(kitButton('One kit more'));
+    const mug = cartLine('L4L - New Hire - Coffee mug');
+    fireEvent.click(mug.getByRole('button', { name: 'Decrease quantity' }));
+    fireEvent.click(mug.getByRole('button', { name: 'Decrease quantity' }));
+    expect(cartQty(MUG.id)).toBe(1);
+    expect(within(kitsRow()).getByTestId(`qty-${NEW_HIRE.bundleId}`).textContent).toBe('1');
+
+    fireEvent.click(kitButton('One kit more'));
+    expect(cartQty(BACKPACK_18A.id)).toBe(3);
+    expect(cartQty(MUG.id)).toBe(2);
+    expect(cartQty(PAD.id)).toBe(3);
+    expect(cartQty(PLANNER.id)).toBe(3);
+  });
+
+  // ═══ Review F2, reproduced in the walk: Submit waited on the kits read ═══
+  it('Submit never waits for the kits: with the kits read still pending the order goes at once, with no kit note', async () => {
+    await openPage(pending());
+    fireEvent.click(screen.getByText('Add L4L - New Hire - Coffee mug'));
+    fireEvent.click(screen.getByRole('button', { name: /submit order request/i }));
+    // The review step draws a moment later here: the Kits row is still
+    // suspended, and every render of the page re-suspends it.
+    fireEvent.click(await screen.findByRole('button', { name: /confirm & submit/i }));
+    await waitFor(() => expect(createOrderRequestAction).toHaveBeenCalledTimes(1), { timeout: 1000 });
+    expect(createOrderRequestAction.mock.calls[0]![0]).toMatchObject({
+      lines: [{ itemId: MUG.id, quantity: 1 }],
+      kits: [],
+    });
+  });
+
+  it('a kits promise that REJECTS (a broken stream): the row says so, and Submit still places the order', async () => {
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    // React reports the error the boundary catches; that is expected here.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const broken = Promise.reject(new Error('stream closed'));
+    await openPage(broken);
+    expect(screen.getByText(/Kits could not be loaded/)).toBeTruthy();
+    fireEvent.click(screen.getByText('Add L4L - New Hire - Coffee mug'));
+    fireEvent.click(screen.getByRole('button', { name: /submit order request/i }));
+    fireEvent.click(screen.getByRole('button', { name: /confirm & submit/i }));
+    await waitFor(() => expect(createOrderRequestAction).toHaveBeenCalledTimes(1), { timeout: 1000 });
+    expect(createOrderRequestAction.mock.calls[0]![0]).toMatchObject({ kits: [] });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    consoleError.mockRestore();
+    process.off('unhandledRejection', unhandled);
+    expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  // ═══ Review F4, reproduced in the walk: a failed read read as "Nothing matches" ═══
+  it('a failed kits read, searching a kit by name: says the kits could not be loaded, never "Nothing matches"', async () => {
+    await openPage({ status: 'error' });
+    fireEvent.change(screen.getByLabelText('Search catalog'), { target: { value: 'New Hire Bundle' } });
+    await waitFor(() => expect(screen.getByText(/Kits could not be loaded/)).toBeTruthy());
+    expect(screen.queryByText('Nothing matches')).toBeNull();
+  });
+
+  it('a failed kits read in a category view says so above the items', async () => {
+    await openPage({ status: 'error' });
+    fireEvent.click(screen.getByRole('button', { name: /^New Hire/ }));
+    await waitFor(() => expect(screen.getByText(/Kits could not be loaded/)).toBeTruthy());
+    expect(screen.getAllByTestId('item-card').length).toBeGreaterThan(0);
+    const message = screen.getByText(/Kits could not be loaded/);
+    const firstItem = screen.getAllByTestId('item-card')[0]!;
+    expect(message.compareDocumentPosition(firstItem) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('while the kits read is still out, an empty search says it is checking, not "Nothing matches"', async () => {
+    await openPage(pending());
+    fireEvent.change(screen.getByLabelText('Search catalog'), { target: { value: 'bundle' } });
+    await waitFor(() => expect(screen.getByText('Checking the kits…')).toBeTruthy());
+    expect(screen.queryByText('Nothing matches')).toBeNull();
+  });
+
+  it('once the kits are known and none match either, it is "Nothing matches" as before', async () => {
+    await openPage({ status: 'ok', kits: [NEW_HIRE] });
+    fireEvent.change(screen.getByLabelText('Search catalog'), { target: { value: 'zzz' } });
+    await waitFor(() => expect(screen.getByText('Nothing matches')).toBeTruthy());
+    expect(screen.queryByText(/Kits could not be loaded/)).toBeNull();
+  });
+
+  // ═══ Review F9: the Kits row keeps its place while it streams ═══
+  it('with Bundles on, the Kits row place is held while the kits stream in', async () => {
+    await openPage(pending());
+    expect(screen.getByRole('region', { name: 'Loading kits' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Kits' })).toBeNull();
+  });
+
+  it('with Bundles off, nothing holds a place for a row that will not come', async () => {
+    await openPage(pending(), undefined, { kitsEnabled: false });
+    expect(screen.queryByRole('region', { name: 'Loading kits' })).toBeNull();
+  });
 });
+

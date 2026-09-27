@@ -384,7 +384,7 @@ export async function portalSubmitOrder(
   const itemIds = mergedLines.map((l) => l.itemId);
   const { data: itemRows, error: itemErr } = await admin
     .from('inventory_items')
-    .select('id, warehouse_id, unit_cost')
+    .select('id, name, warehouse_id, unit_cost, is_bundle')
     .eq('organization_id', ctx.organizationId)
     // in-list-bound: a portal order has at most 100 lines (submitSchema)
     .in('id', itemIds);
@@ -394,11 +394,29 @@ export async function portalSubmitOrder(
     void reportError(new Error(itemErr.message), { tag: 'portal.submit.items' });
     throw new Error('Order could not be submitted. Please try again.');
   }
-  const itemMeta = new Map(
-    ((itemRows ?? []) as Array<{ id: string; warehouse_id: string | null; unit_cost: number | null }>).map(
-      (r) => [r.id, r],
-    ),
-  );
+  type ItemMeta = {
+    id: string;
+    name: string | null;
+    warehouse_id: string | null;
+    unit_cost: number | null;
+    is_bundle: boolean | null;
+  };
+  const itemMeta = new Map(((itemRows ?? []) as ItemMeta[]).map((r) => [r.id, r]));
+  // A kit's pre-assembled stock (is_bundle) is built and handed out through
+  // Bundles; picking draws placed stock and assembled kits sit in Staging, so
+  // an order line on one could never be picked. The New order page's service
+  // refuses it (OrderRequestsService.create/addLines); this path inserts its
+  // lines with the service-role client, and the database line guard does not
+  // refuse kit stock yet (next migration), so it refuses here, before the
+  // header is written. An allowlist can name such an item; nothing else stops it.
+  for (const id of itemIds) {
+    const row = itemMeta.get(id);
+    if (row?.is_bundle === true) {
+      throw new Error(
+        `${row.name?.trim() || 'One of the items'} is a pre-assembled kit and can't be put on an order. Order the kit's items instead.`,
+      );
+    }
+  }
   const warehouses = new Set<string>();
   for (const id of itemIds) {
     const wh = itemMeta.get(id)?.warehouse_id;

@@ -54,7 +54,13 @@ import {
   type FreqEntry,
 } from './storefront-cards';
 import { CartFab, CartRail, type CartContextInfo } from './storefront-cart';
-import { KitGrid, KitsRow } from './storefront-kit-card';
+import {
+  KitGrid,
+  KitsErrorBoundary,
+  KitsRow,
+  KitsRowSkeleton,
+  KitsUnavailable,
+} from './storefront-kit-card';
 import {
   componentItem,
   filterKits,
@@ -63,6 +69,7 @@ import {
   type KitOffer,
   type KitsResult,
 } from './storefront-kits';
+import { settledOutcome, useSettled, watchSettled } from './settled-promise';
 import { CatalogSkeleton } from './storefront-skeleton';
 import {
   AVAILABILITY_LABELS,
@@ -111,6 +118,13 @@ export interface OrdersStorefrontProps {
    * rejects (`loadOrderKits`). A failed read arrives as `{ status: 'error' }`.
    */
   kitsPromise: Promise<KitsResult>;
+  /**
+   * Whether the Bundles module is on for this organization, known when the
+   * page renders (request-cached with the layout's own module read). It only
+   * decides whether the Kits row's place is kept while the kits stream in; the
+   * kits themselves always come from `kitsPromise`.
+   */
+  kitsEnabled: boolean;
   chartersForWarehouse: StorefrontCharter[];
   viewerRole: string;
   viewerName: string | null;
@@ -215,6 +229,7 @@ function StorefrontShell({
   catalogPromise,
   frequentlyOrderedPromise,
   kitsPromise,
+  kitsEnabled,
   chartersForWarehouse,
   viewerRole,
   viewerName,
@@ -573,6 +588,7 @@ function StorefrontShell({
             catalogPromise={catalogPromise}
             frequentlyOrderedPromise={frequentlyOrderedPromise}
             kitsPromise={kitsPromise}
+            kitsEnabled={kitsEnabled}
             warehouseId={warehouseId}
             warehouseName={warehouseName}
             chartersForWarehouse={chartersForWarehouse}
@@ -600,6 +616,13 @@ interface FlatResultsProps {
   itemCount: number;
   searching: boolean;
   kits: KitOffer[];
+  /**
+   * What is known about the kits: 'ok' when the read answered (`kits` is the
+   * whole answer for this view), 'pending' while it streams, 'error' when it
+   * failed. Only 'ok' may end in "Nothing matches": a kit read that failed or
+   * has not answered is never shown as "no kits" (walk 2026-09-27, review F4).
+   */
+  kitsState: 'ok' | 'pending' | 'error';
   kitGridProps: KitGridProps;
   /** Shown when neither an item nor a kit matches. */
   empty: React.ReactNode;
@@ -613,10 +636,22 @@ function FlatResults({
   itemCount,
   searching,
   kits,
+  kitsState,
   kitGridProps,
   empty,
   children,
 }: FlatResultsProps) {
+  let rest: React.ReactNode = children;
+  if (itemCount === 0 && kits.length === 0) {
+    rest =
+      kitsState === 'ok' ? (
+        empty
+      ) : kitsState === 'pending' ? (
+        <p className="sf-kits-pending" role="status">
+          Checking the kits…
+        </p>
+      ) : null; // 'error': KitsUnavailable above already says what happened
+  }
   return (
     <>
       <div className="sf-result-line">
@@ -627,28 +662,37 @@ function FlatResults({
           {searching ? ' matching' : ''}
         </span>
       </div>
+      {kitsState === 'error' && <KitsUnavailable />}
       {kits.length > 0 && <KitGrid kits={kits} {...kitGridProps} />}
-      {itemCount === 0 && kits.length === 0 ? empty : children}
+      {rest}
     </>
   );
 }
 
-/** FlatResults with the kits that match the view, read from the streamed kits. */
+/**
+ * FlatResults with the kits that match the view. It does NOT suspend on the
+ * kits: the search box is a deferred value, and a deferred render that
+ * suspends is dropped, so while the kits read was out a search changed nothing
+ * on screen. The items draw at once; the kits join them when they arrive, and
+ * a read that failed (or a stream that broke) says so.
+ */
 function FlatResultsWithKits({
   promise,
   filterInput,
   ...rest
-}: Omit<FlatResultsProps, 'kits'> & {
+}: Omit<FlatResultsProps, 'kits' | 'kitsState'> & {
   promise: Promise<KitsResult>;
   filterInput: Parameters<typeof filterKits>[2];
 }) {
-  const result = React.use(promise);
+  const outcome = useSettled(promise);
+  const kitsState: FlatResultsProps['kitsState'] =
+    outcome === undefined ? 'pending' : outcome.ok ? outcome.value.status : 'error';
+  const offered = outcome?.ok && outcome.value.status === 'ok' ? outcome.value.kits : null;
   const kits = React.useMemo(
-    () =>
-      result.status === 'ok' ? filterKits(result.kits, rest.kitGridProps.itemMap, filterInput) : [],
-    [result, rest.kitGridProps.itemMap, filterInput],
+    () => (offered ? filterKits(offered, rest.kitGridProps.itemMap, filterInput) : []),
+    [offered, rest.kitGridProps.itemMap, filterInput],
   );
-  return <FlatResults kits={kits} {...rest} />;
+  return <FlatResults kits={kits} kitsState={kitsState} {...rest} />;
 }
 
 /* ---- catalog body (suspends on the streamed items payload) ---------------- */
@@ -657,6 +701,7 @@ interface StorefrontCatalogProps {
   catalogPromise: Promise<StorefrontCatalogData>;
   frequentlyOrderedPromise: Promise<FrequentlyOrderedEntry[]>;
   kitsPromise: Promise<KitsResult>;
+  kitsEnabled: boolean;
   warehouseId: string;
   warehouseName: string;
   chartersForWarehouse: StorefrontCharter[];
@@ -676,6 +721,7 @@ function StorefrontCatalog({
   catalogPromise,
   frequentlyOrderedPromise,
   kitsPromise,
+  kitsEnabled,
   warehouseId,
   warehouseName,
   chartersForWarehouse,
@@ -768,10 +814,13 @@ function StorefrontCatalog({
 
   /* --- kits --- */
   // NOT read here. The kits promise is read only by the parts that draw kits
-  // (the Kits row, and a category or search view's kit cards), each inside its
-  // own Suspense boundary. Reading it here with useStreamed re-rendered this
-  // whole component when it settled, which delayed the grid's first useful
-  // frame by about 12 ms in a real browser (local, 2026-09-27).
+  // (the Kits row, and a category or search view's kit cards). Reading it here
+  // with useStreamed re-rendered this whole component when it settled, which
+  // delayed the grid's first useful frame by about 12 ms in a real browser
+  // (local, 2026-09-27). Its outcome is only RECORDED here (no re-render), for
+  // Submit and for a category or search view opened after it settled
+  // (settled-promise.ts).
+  React.useEffect(() => watchSettled(kitsPromise), [kitsPromise]);
 
   /* --- catalog UI state --- */
   const [category, setCategory] = React.useState<CategoryFilter>('all');
@@ -926,10 +975,13 @@ function StorefrontCatalog({
       }
     }
 
+    // The kits, for the audit note only, as far as they have ARRIVED: Submit
+    // never waits for them (settled-promise.ts). Not settled yet, or failed:
+    // an empty list. The note is optional; the lines are the order.
+    const kitsOutcome = settledOutcome(kitsPromise);
+    const offeredKits =
+      kitsOutcome?.ok && kitsOutcome.value.status === 'ok' ? kitsOutcome.value.kits : [];
     startTransition(async () => {
-      // The kits the page offered (already settled: the cards were drawn from
-      // it). The loader never rejects.
-      const offered = await kitsPromise;
       const res = await createOrderRequestAction({
         warehouseId: state.warehouseId,
         notes: state.notes.trim() || null,
@@ -949,7 +1001,7 @@ function StorefrontCatalog({
         lines: lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
         // Which kits the lines came from, for the order's audit entry only;
         // approvers and pickers see the item lines as always.
-        kits: kitsForAudit(offered.status === 'ok' ? offered.kits : [], state.kits, lines),
+        kits: kitsForAudit(offeredKits, state.kits, lines),
       });
 
       if (!res.ok) {
@@ -1241,10 +1293,14 @@ function StorefrontCatalog({
           )}
 
           {/* Kits (unfiltered All view), above Frequently ordered */}
+          {/* Its place is kept while it streams when the Bundles module is
+              on, so a late row never pushes the grid down (review F9). */}
           {browsingAll && (
-            <React.Suspense fallback={null}>
-              <KitsRow promise={kitsPromise} {...kitGridProps} />
-            </React.Suspense>
+            <KitsErrorBoundary>
+              <React.Suspense fallback={kitsEnabled ? <KitsRowSkeleton /> : null}>
+                <KitsRow promise={kitsPromise} {...kitGridProps} />
+              </React.Suspense>
+            </KitsErrorBoundary>
           )}
 
           {/* Frequently ordered (unfiltered All view only) */}
@@ -1299,35 +1355,20 @@ function StorefrontCatalog({
             ))
           ) : (
             // Kits lead a category view and show in search, filtered like the
-            // items. The list draws at once without them, and gains its kit
-            // cards when the kits promise has settled (it has long before
-            // anyone opens a category).
-            <React.Suspense
-              fallback={
-                <FlatResults
-                  title={activeCategoryName}
-                  itemCount={filtered.length}
-                  searching={deferredSearch.trim() !== ''}
-                  kits={[]}
-                  kitGridProps={kitGridProps}
-                  empty={<EmptyResults query={deferredSearch.trim()} onClear={clearAllFilters} />}
-                >
-                  {filtered.length > 0 ? renderItems(filtered) : null}
-                </FlatResults>
-              }
+            // items. The items draw at once; the kit cards join them when the
+            // kits have arrived (long before anyone opens a category, as a
+            // rule), and nothing here waits for them.
+            <FlatResultsWithKits
+              promise={kitsPromise}
+              filterInput={filterInput}
+              title={activeCategoryName}
+              itemCount={filtered.length}
+              searching={deferredSearch.trim() !== ''}
+              kitGridProps={kitGridProps}
+              empty={<EmptyResults query={deferredSearch.trim()} onClear={clearAllFilters} />}
             >
-              <FlatResultsWithKits
-                promise={kitsPromise}
-                filterInput={filterInput}
-                title={activeCategoryName}
-                itemCount={filtered.length}
-                searching={deferredSearch.trim() !== ''}
-                kitGridProps={kitGridProps}
-                empty={<EmptyResults query={deferredSearch.trim()} onClear={clearAllFilters} />}
-              >
-                {filtered.length > 0 ? renderItems(filtered) : null}
-              </FlatResultsWithKits>
-            </React.Suspense>
+              {filtered.length > 0 ? renderItems(filtered) : null}
+            </FlatResultsWithKits>
           )}
         </div>
 

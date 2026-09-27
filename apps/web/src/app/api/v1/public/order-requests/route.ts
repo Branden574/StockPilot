@@ -434,6 +434,12 @@ export async function POST(req: NextRequest) {
   // matches what we'll actually insert.
   const itemIds = [...new Set(dedupedLines.map((l) => l.itemId))];
   const itemMap = new Map<string, { unitCost: number }>();
+  // Lines on a kit's pre-assembled stock, refused below whichever branch
+  // validated the lines.
+  const kitStockNames: string[] = [];
+  const noteKitStock = (row: { name?: string | null; is_bundle?: boolean | null }) => {
+    if (row.is_bundle === true) kitStockNames.push(row.name?.trim() || 'One of the items');
+  };
 
   if (link) {
     const { data: eligibleRows, error: eligErr } = await admin.rpc(
@@ -474,15 +480,21 @@ export async function POST(req: NextRequest) {
     // never returned to the requester).
     const { data: items, error: itemsErr } = await admin
       .from('inventory_items')
-      .select('id, unit_cost')
+      .select('id, name, unit_cost, is_bundle')
       .eq('organization_id', organizationId)
       // in-list-bound: a request's distinct items; lineSchema caps lines at 100
       .in('id', itemIds);
     if (itemsErr) {
       return NextResponse.json({ error: 'internal_error' }, { status: 500 });
     }
-    for (const row of (items ?? []) as Array<{ id: string; unit_cost: number | string | null }>) {
+    for (const row of (items ?? []) as Array<{
+      id: string;
+      name: string | null;
+      unit_cost: number | string | null;
+      is_bundle: boolean | null;
+    }>) {
       itemMap.set(row.id, { unitCost: Number(row.unit_cost) || 0 });
+      noteKitStock(row);
     }
   } else {
     // Legacy fallback (org token without a links row): the pre-0261 checks —
@@ -490,7 +502,7 @@ export async function POST(req: NextRequest) {
     // status='active'.
     const { data: items, error: itemsErr } = await admin
       .from('inventory_items')
-      .select('id, warehouse_id, unit_cost, item_type, status, deleted_at')
+      .select('id, name, warehouse_id, unit_cost, item_type, status, deleted_at, is_bundle')
       .eq('organization_id', organizationId)
       // in-list-bound: a request's distinct items; lineSchema caps lines at 100
       .in('id', itemIds);
@@ -499,13 +511,16 @@ export async function POST(req: NextRequest) {
     }
     type ItemRow = {
       id: string;
+      name: string | null;
       warehouse_id: string | null;
       unit_cost: number | string | null;
       item_type: string;
       status: string;
       deleted_at: string | null;
+      is_bundle: boolean | null;
     };
     for (const row of (items ?? []) as ItemRow[]) {
+      noteKitStock(row);
       if (row.deleted_at) continue;
       if (row.status !== 'active') continue;
       if (row.item_type !== 'book') continue;
@@ -520,6 +535,22 @@ export async function POST(req: NextRequest) {
         );
       }
     }
+  }
+
+  // 5b. A kit's pre-assembled stock (is_bundle) can never be picked for an
+  // order: assembled kits sit in Staging and picking draws placed stock. The
+  // New order page's service refuses it; these lines go in with the
+  // service-role client, and neither the eligibility function nor the
+  // database line guard refuses kit stock yet (next migration), so it is
+  // refused here, before anything is written (review F10, 2026-09-27).
+  if (kitStockNames.length > 0) {
+    return NextResponse.json(
+      {
+        error: 'invalid_line',
+        message: `${kitStockNames[0]} is a pre-assembled kit and can't be put on an order. Please remove it and order the kit's items instead.`,
+      },
+      { status: 400 },
+    );
   }
 
   // C8: normalize the requester email to lowercase on insert so the

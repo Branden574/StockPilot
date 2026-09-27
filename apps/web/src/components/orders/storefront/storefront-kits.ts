@@ -22,15 +22,40 @@
 //
 // ═══ WHERE A KIT'S UNITS GO (the allocation rule) ═══
 //
-// Raising the kit count needs `need` more units of a component. They go:
+// Units of a component go:
 //   1. To ONE row that can take all of them (one line, one rack to pick). When
-//      several can, the row the bundle names wins; otherwise the row with the
-//      most left.
+//      several can, a row the kit already uses wins, then the row the bundle
+//      names, then the row with the most left.
 //   2. Otherwise they are split across rows, the row with the most left first
 //      (the bundle's row first on a tie), so the cart may show two lines for one
 //      component, one per rack.
 // "Left" is available (on hand minus open reservations) minus what the cart
 // already holds on that row, from any source.
+//
+// ═══ RAISING THE COUNT ONLY ADDS (walk 2026-09-27) ═══
+//
+// Add kit, + and a typed count above the current one only ever ADD. A
+// component that already holds its units for the new count is left exactly as
+// it is, even when it holds more: after "3 kits, then the mug line removed by
+// hand", Add kit adds one mug and leaves the three backpacks, pads and planners
+// where they are. The first version planned every component to exactly
+// (count x per kit) and so took two of each back off, silently. A line changed
+// by hand keeps what the person set; where the kit's record of its units is
+// more than a line now holds, it is the RECORD that is cut to the line
+// (cart-context.tsx fitKitShares), never the line.
+//
+// A raise is planned over the kit's WHOLE new count, the way lowering is
+// (below), counting the kit's own units on each rack as its to place: the plan
+// is where a fresh add of that count would put it. "Add kit, then type 100" is
+// 100 from 16-B, not 1 from 18-A plus 99 from 16-B; the 61st kit moves the 60 on
+// 18-A to 16-B with it, the same as a fresh 61; 100 on 16-B raised to 150 is
+// 134 + 16, as a fresh 150. The plan is used when it only adds. When it would
+// move units off a line, it is used only while the kit is exactly as the kit
+// card left it (every item at kit count x per kit, and nothing on its lines but
+// this kit's units), so what moves is only ever the kit's own units. Once a
+// line of the kit has been changed by hand, or holds units added by hand or by
+// another kit, a raise only tops up, and every line keeps at least what it held.
+// A component's total never falls either way.
 //
 // Lowering the kit count takes the kit's OWN units back off. What the kit keeps
 // is placed by the same rule, within the units it already holds on each row: so
@@ -55,7 +80,11 @@ import { availableOf, type CategoryFilter, type ItemStatus } from './storefront-
 
 /** One required component of a kit, resolved for this viewer at this warehouse. */
 export interface KitComponent {
-  /** The row the bundle names (bundle_components.item_id). */
+  /**
+   * The row the bundle names (bundle_components.item_id) when this person's
+   * catalog holds it; otherwise the first of `itemIds`, so the browser is never
+   * sent a row id it was not given. Always one of `itemIds`.
+   */
   anchorItemId: string;
   /**
    * Every row of the viewer's catalog at this warehouse with the anchor's SKU
@@ -206,32 +235,41 @@ export function maxKits(
   return Number.isFinite(kits) ? kits : 0;
 }
 
+const NO_ROWS: ReadonlySet<string> = new Set();
+
 /**
- * Where `need` more units of one component go (see the header). null when the
- * rows cannot supply them all.
+ * Where `need` more units of one component go (see the header). `prefer` names
+ * the rows the kit already uses: among rows that can take all `need`, one of
+ * them wins, so a raise does not open a second line when the kit's own row can
+ * take the units. null when the rows cannot supply them all.
  */
 export function allocateUnits(
   need: number,
   rows: ReadonlyArray<{ itemId: string; left: number }>,
   anchorItemId: string,
+  prefer: ReadonlySet<string> = NO_ROWS,
 ): KitLineChange[] | null {
   if (need <= 0) return [];
   const usable = rows.filter((r) => r.left > 0);
+  const rank = (r: { itemId: string }) => (prefer.has(r.itemId) ? 0 : 1);
+  const isAnchor = (r: { itemId: string }) => Number(r.itemId === anchorItemId);
   const covering = usable.filter((r) => r.left >= need);
   if (covering.length > 0) {
-    const anchor = covering.find((r) => r.itemId === anchorItemId);
-    const pick =
-      anchor ??
-      [...covering].sort((a, b) => b.left - a.left || compareIds(a.itemId, b.itemId))[0]!;
+    const pick = [...covering].sort(
+      (a, b) =>
+        rank(a) - rank(b) ||
+        isAnchor(b) - isAnchor(a) ||
+        b.left - a.left ||
+        compareIds(a.itemId, b.itemId),
+    )[0]!;
     return [{ itemId: pick.itemId, delta: need }];
   }
   const total = usable.reduce((sum, r) => sum + r.left, 0);
   if (total < need) return null;
+  // A split is largest first whatever the kit already uses: it takes two racks
+  // either way, and this keeps a jump the same as a fresh add of that count.
   const ordered = [...usable].sort(
-    (a, b) =>
-      b.left - a.left ||
-      Number(b.itemId === anchorItemId) - Number(a.itemId === anchorItemId) ||
-      compareIds(a.itemId, b.itemId),
+    (a, b) => b.left - a.left || isAnchor(b) - isAnchor(a) || compareIds(a.itemId, b.itemId),
   );
   const out: KitLineChange[] = [];
   let remaining = need;
@@ -278,9 +316,90 @@ function compareIds(a: string, b: string): number {
 }
 
 /**
- * The cart changes that make the kit count `target`: every component tops up
- * to (target × per kit) or gives back its excess. All or nothing: if any
- * component cannot supply its units, nothing changes and `short` names it.
+ * The changes that bring one component up to `want` units of the kit (more than
+ * it holds now). The kit's whole count is planned over the rows the way a
+ * fresh add of that count would be (a row the kit already uses first when one
+ * row can hold it all), counting the kit's own units on each row as its to
+ * place. That plan is used when it only adds, or when `mayMove` (the kit is as
+ * the card left it, so only the kit's own units, on lines holding nothing else,
+ * can move). Otherwise the kit only tops up, and every line keeps at least what
+ * it held. null when the rows cannot supply the units.
+ */
+function raiseComponent(
+  component: KitComponent,
+  want: number,
+  itemMap: ItemLookup,
+  shares: CartKitShares | undefined,
+  qty: QtyLookup,
+  mayMove: boolean,
+): KitLineChange[] | null {
+  const rows = componentRows(component, itemMap).map((row) => ({
+    itemId: row.id,
+    held: heldOn(row.id, shares, qty),
+    free: leftOn(row, qty),
+  }));
+  const heldOf = new Map(rows.map((r) => [r.itemId, r.held]));
+  const held = rows.reduce((sum, r) => sum + r.held, 0);
+  const used = new Set(rows.filter((r) => r.held > 0).map((r) => r.itemId));
+
+  const whole = allocateUnits(
+    want,
+    rows.map((r) => ({ itemId: r.itemId, left: r.free + r.held })),
+    component.anchorItemId,
+    used,
+  );
+  if (whole === null) return null;
+  const planned = new Map(whole.map((c) => [c.itemId, c.delta]));
+  const takes = rows.flatMap((r) => {
+    const keep = planned.get(r.itemId) ?? 0;
+    return keep < r.held ? [{ itemId: r.itemId, delta: keep - r.held }] : [];
+  });
+  if (takes.length === 0 || mayMove) {
+    const adds = whole.flatMap((c) => {
+      const extra = c.delta - (heldOf.get(c.itemId) ?? 0);
+      return extra > 0 ? [{ itemId: c.itemId, delta: extra }] : [];
+    });
+    return [...takes, ...adds];
+  }
+  // Only a top-up: the extra units over what is free, rows the kit uses first.
+  return allocateUnits(
+    want - held,
+    rows.map((r) => ({ itemId: r.itemId, left: r.free })),
+    component.anchorItemId,
+    used,
+  );
+}
+
+/**
+ * Whether the kit is exactly as the kit card left it: every component holds
+ * (count × per kit) of the kit's units, and every line the kit uses holds
+ * nothing but them. Only then may a raise move the kit's units to another rack:
+ * a line changed by hand, or shared with units added by hand or by another kit,
+ * is never lowered.
+ */
+function asTheCardLeftIt(
+  kit: KitOffer,
+  count: number,
+  shares: CartKitShares | undefined,
+  qty: QtyLookup,
+): boolean {
+  return kit.components.every(
+    (component) =>
+      componentHeld(component, shares, qty) === count * component.perKit &&
+      component.itemIds.every((id) => {
+        const held = heldOn(id, shares, qty);
+        return held === 0 || (qty.get(id) ?? 0) === held;
+      }),
+  );
+}
+
+/**
+ * The cart changes that make the kit count `target`. Above the count in the
+ * cart it only adds (raiseComponent): a component already holding its units
+ * for the new count is not touched. Below it, each component gives back the
+ * kit's own units down to (target × per kit), never a unit added by hand. All
+ * or nothing: if any component cannot supply its units, nothing changes and
+ * `short` names it.
  */
 export function planKitChange(
   kit: KitOffer,
@@ -290,19 +409,18 @@ export function planKitChange(
   qty: QtyLookup,
 ): KitPlan {
   const goal = Number.isFinite(target) ? Math.max(0, Math.floor(target)) : 0;
+  const current = kitsInCart(kit, shares, qty);
+  const lowering = goal < current;
+  const mayMove = !lowering && asTheCardLeftIt(kit, current, shares, qty);
   const changes: KitLineChange[] = [];
   for (const component of kit.components) {
     const want = goal * component.perKit;
     const held = componentHeld(component, shares, qty);
-    if (want > held) {
-      const rows = componentRows(component, itemMap).map((row) => ({
-        itemId: row.id,
-        left: leftOn(row, qty),
-      }));
-      const adds = allocateUnits(want - held, rows, component.anchorItemId);
+    if (!lowering && want > held) {
+      const adds = raiseComponent(component, want, itemMap, shares, qty, mayMove);
       if (adds === null) return { ok: false, short: component };
       changes.push(...adds);
-    } else if (want < held) {
+    } else if (lowering && want < held) {
       changes.push(
         ...releaseUnits(
           held - want,

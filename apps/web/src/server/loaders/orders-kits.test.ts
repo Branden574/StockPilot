@@ -190,10 +190,28 @@ describe('resolveKits: which bundles are offered', () => {
     const catalog = DC4_CATALOG.filter((c) => c.id !== 'backpack-18a');
     const kit = resolveKits([NEW_HIRE], catalog, DC4)[0]!;
     expect(kit.components[0]).toEqual({
-      anchorItemId: 'backpack-18a',
+      anchorItemId: 'backpack-16b',
       itemIds: ['backpack-16b'],
       perKit: 1,
     });
+  });
+
+  it('never sends an item id the viewer catalog does not hold (review F8)', async () => {
+    // 18-A archived: the walk found its id in the page's document stream as
+    // the component's anchor, although the viewer was never given that row.
+    const catalog = DC4_CATALOG.filter((c) => c.id !== 'backpack-18a');
+    const stub = client({ data: [NEW_HIRE], error: null });
+    createClientMock.mockResolvedValue(stub.client);
+    const out = await loadOrderKits(ORG, DC4, Promise.resolve({ items: catalog }));
+    expect(out.status).toBe('ok');
+    const given = new Set(catalog.map((c) => c.id));
+    const sent = JSON.stringify(out);
+    expect(sent).not.toContain('backpack-18a');
+    if (out.status !== 'ok') return;
+    for (const component of out.kits.flatMap((k) => k.components)) {
+      expect(given.has(component.anchorItemId)).toBe(true);
+      for (const id of component.itemIds) expect(given.has(id)).toBe(true);
+    }
   });
 
   it('never mixes stock earmarked for a charter into a generic component', () => {

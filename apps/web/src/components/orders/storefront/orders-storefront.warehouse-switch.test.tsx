@@ -138,6 +138,7 @@ function page(warehouseId: string) {
       catalogPromise={settled<StorefrontCatalogData>({ items: CATALOGS[warehouseId]!, aisles: [] })}
       frequentlyOrderedPromise={settled([])}
       kitsPromise={settled({ status: 'ok' as const, kits: [] })}
+      kitsEnabled={false}
       chartersForWarehouse={SITES[warehouseId]!}
       viewerRole="manager"
       viewerName="QA Manager"
