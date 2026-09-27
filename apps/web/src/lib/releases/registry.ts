@@ -39,7 +39,7 @@ export const RELEASES: Release[] = [
     status: 'draft',
     title: 'Counts and exceptions say stock on record instead of book',
     summary:
-      'On the web and in the mobile app, cycle count results, the Physical count card on an item and count exceptions now call the quantity StockPilot has on record the stock on record, not the book. For example, Book corrected from 50 to 0 (-50) now reads Stock on record corrected from 50 to 0 (-50). The Books section is unchanged.',
+      'On the web and in the mobile app, cycle count results, the Physical count card on an item and count exceptions now say stock on record, not book, for the quantity StockPilot has recorded. For example, Book corrected from 50 to 0 (-50) now reads Stock on record corrected from 50 to 0 (-50). The Books section is unchanged.',
     publishedAt: '2026-09-28T17:00:00Z',
     entries: [
       {

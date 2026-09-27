@@ -8,13 +8,21 @@
  * read it as the product and asked why an electronics item showed as a book.
  *
  * The words live here in core, so the web app and the phone read the same.
- * Two checks keep the jargon out:
+ * Three checks keep the jargon out:
  *   1. every count, recount, exception and verification line core composes is
  *      rendered and searched for the word "book";
  *   2. every string and template literal in core's source is searched for the
  *      phrases the jargon used ("the book", "Book now", "Book corrected",
  *      "Matched the book", "counted 11, book 10"...), so new copy cannot bring
- *      it back either.
+ *      it back either;
+ *   3. every string and template literal under warehouse/ and cycle-counts/,
+ *      where the count and exception copy lives and no Books module does, is
+ *      searched for the word "book" or "books" in any phrase, so the jargon
+ *      cannot come back there in words check 2 does not list.
+ *
+ * The app screens have the same phrase check of their own:
+ * apps/web/src/lib/on-record-wording.guard.test.ts and
+ * apps/mobile/src/lib/on-record-wording.guard.test.ts.
  *
  * The real Books feature (item_type 'book', book racks and crates, ISBN, book
  * covers) is untouched: its modules are listed in BOOKS_FEATURE_FILES and are
@@ -67,6 +75,13 @@ const JARGON: ReadonlyArray<{ name: string; re: RegExp; booksMayUse?: true }> = 
   { name: '"book quantity"', re: /\bbook (?:qty|quantity|quantities)\b/i },
   { name: '"counted 11, book 10"', re: /,\s*book\s+(?:\$\{|\d)/i },
 ];
+
+/** "book" or "books" as a word of its own, in any case. */
+const BOOK_WORDS = /\bbooks?\b/i;
+
+/** Where the count and exception copy lives. No Books module is in either,
+ *  so no literal under them may say "book" or "books" in any phrase. */
+const NO_BOOK_WORD_DIRS = ['warehouse/', 'cycle-counts/'] as const;
 
 /** The real Books feature: the only core modules whose copy may say "the book". */
 const BOOKS_FEATURE_FILES = new Set([
@@ -305,6 +320,38 @@ describe("core's copy never brings the jargon back", () => {
           if (books && booksMayUse) continue;
           if (re.test(text)) found.push(`${rel}:${line} ${name}: ${text}`);
         }
+      }
+    }
+    expect(found).toEqual([]);
+  });
+
+  it('no string or template literal in the count and exception modules says "book" at all', () => {
+    // warehouse/ and cycle-counts/ hold the count, recount, exception and
+    // verification copy, and none of the real Books feature: a book there can
+    // only be the recorded-quantity jargon, in whatever new phrase it comes
+    // back as. So these two directories allow nothing, not even "the book".
+    const scoped = files
+      .map((file) => ({ file, rel: path.relative(CORE_SRC, file).split(path.sep).join('/') }))
+      .filter(({ rel }) => NO_BOOK_WORD_DIRS.some((dir) => rel.startsWith(dir)));
+    expect(scoped.map(({ rel }) => rel)).toEqual(
+      expect.arrayContaining([
+        'warehouse/exceptions.ts',
+        'warehouse/exception-recount.ts',
+        'warehouse/verification.ts',
+        'cycle-counts/capture-label.ts',
+      ]),
+    );
+    // No Books module has moved in: if one ever does, it needs its own rule.
+    for (const books of BOOKS_FEATURE_FILES) {
+      expect(
+        NO_BOOK_WORD_DIRS.some((dir) => books.startsWith(dir)),
+        books,
+      ).toBe(false);
+    }
+    const found: string[] = [];
+    for (const { file, rel } of scoped) {
+      for (const { line, text } of literals(file)) {
+        if (BOOK_WORDS.test(text)) found.push(`${rel}:${line} ${text}`);
       }
     }
     expect(found).toEqual([]);

@@ -258,10 +258,25 @@ describe('stock on record wording', () => {
     expect(entry.audience).toEqual({ anyPermission: ['items:read'] });
     expect(release().summary).toMatch(/^On the web and in the mobile app, /);
     expect(release().summary).toContain(
+      'now say stock on record, not book, for the quantity StockPilot has recorded.',
+    );
+    expect(release().summary).toContain(
       'Book corrected from 50 to 0 (-50) now reads Stock on record corrected from 50 to 0 (-50)',
     );
     expect(entry.whatChanged).toContain('Count did not match the stock on record');
     expect(entry.howItAffectsYou).toContain('The Books section');
+  });
+
+  it('its summary says "on record" at most once a sentence', () => {
+    // The first draft read "...now call the quantity StockPilot has on record
+    // the stock on record, not the book", which says it twice in one breath.
+    const sentences = release()
+      .summary.split(/(?<=\.)\s+/)
+      .filter(Boolean);
+    expect(sentences.length).toBeGreaterThan(1);
+    for (const sentence of sentences) {
+      expect(sentence.match(/\bon record\b/gi)?.length ?? 0, sentence).toBeLessThanOrEqual(1);
+    }
   });
 
   it('no other release calls the recorded quantity "the book"', () => {
