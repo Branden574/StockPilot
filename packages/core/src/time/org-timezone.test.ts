@@ -285,6 +285,8 @@ describe('formatOrgDateTime: the same words on the web and the phone', () => {
 
   // The web's words must not move for any shape a future caller might pass:
   // on this engine the new formatter reads exactly as toLocaleString did.
+  // Exhaustive and deterministic (over 1,500 option shapes, two zones, two
+  // instants): about 1.2 s locally, over 5 s on CI runners, hence its own limit.
   it('on this engine, every date-and-time shape reads as toLocaleString did', () => {
     const plain = (s: string) => s.replace(/[\u202f\u00a0]/g, ' ');
     const instants = [new Date(AT), new Date('2026-01-03T08:05:00.000Z')];
@@ -326,7 +328,7 @@ describe('formatOrgDateTime: the same words on the web and the phone', () => {
     }
     expect(shapes.length).toBeGreaterThan(1000);
     expect(mismatches).toEqual([]);
-  });
+  }, 60_000);
 
   it('a long month joins with " at " on both engines, as the web always has', () => {
     const opts = { month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' } as const;
