@@ -54,6 +54,15 @@ import {
   type FreqEntry,
 } from './storefront-cards';
 import { CartFab, CartRail, type CartContextInfo } from './storefront-cart';
+import { KitGrid, KitsRow } from './storefront-kit-card';
+import {
+  componentItem,
+  filterKits,
+  kitsForAudit,
+  planKitChange,
+  type KitOffer,
+  type KitsResult,
+} from './storefront-kits';
 import { CatalogSkeleton } from './storefront-skeleton';
 import {
   AVAILABILITY_LABELS,
@@ -62,7 +71,6 @@ import {
   buildQtyMap,
   cartTotals,
   filterCatalog,
-  fullKitLines,
   isBrowsingAll,
   sortCatalog,
   statusOf,
@@ -80,7 +88,6 @@ import { ORDER_CREATE_TOUR } from '@/lib/onboarding/tours';
 
 const GRID_PREVIEW = 4;
 const LIST_PREVIEW = 6;
-const NEW_HIRE_RE = /new hire/i;
 
 /** Resolved catalog payload streamed in behind the page frame. */
 export interface StorefrontCatalogData {
@@ -99,6 +106,11 @@ export interface OrdersStorefrontProps {
    * first row of photos trailed the catalog by most of a second.
    */
   frequentlyOrderedPromise: Promise<FrequentlyOrderedEntry[]>;
+  /**
+   * The kits (bundles) this person can order here, un-awaited too and never
+   * rejects (`loadOrderKits`). A failed read arrives as `{ status: 'error' }`.
+   */
+  kitsPromise: Promise<KitsResult>;
   chartersForWarehouse: StorefrontCharter[];
   viewerRole: string;
   viewerName: string | null;
@@ -202,6 +214,7 @@ function StorefrontShell({
   warehouseId,
   catalogPromise,
   frequentlyOrderedPromise,
+  kitsPromise,
   chartersForWarehouse,
   viewerRole,
   viewerName,
@@ -559,6 +572,7 @@ function StorefrontShell({
           <StorefrontCatalog
             catalogPromise={catalogPromise}
             frequentlyOrderedPromise={frequentlyOrderedPromise}
+            kitsPromise={kitsPromise}
             warehouseId={warehouseId}
             warehouseName={warehouseName}
             chartersForWarehouse={chartersForWarehouse}
@@ -577,11 +591,72 @@ function StorefrontShell({
   );
 }
 
+/* ---- a category, search or filtered view --------------------------------- */
+
+type KitGridProps = Omit<React.ComponentProps<typeof KitGrid>, 'kits'>;
+
+interface FlatResultsProps {
+  title: string;
+  itemCount: number;
+  searching: boolean;
+  kits: KitOffer[];
+  kitGridProps: KitGridProps;
+  /** Shown when neither an item nor a kit matches. */
+  empty: React.ReactNode;
+  /** The matching items, already rendered (null when none match). */
+  children: React.ReactNode;
+}
+
+/** The result line, the matching kits first, then the matching items. */
+function FlatResults({
+  title,
+  itemCount,
+  searching,
+  kits,
+  kitGridProps,
+  empty,
+  children,
+}: FlatResultsProps) {
+  return (
+    <>
+      <div className="sf-result-line">
+        <span className="n">{title}</span>
+        <span className="m">
+          {itemCount} {itemCount === 1 ? 'item' : 'items'}
+          {kits.length > 0 ? ` · ${kits.length} ${kits.length === 1 ? 'kit' : 'kits'}` : ''}
+          {searching ? ' matching' : ''}
+        </span>
+      </div>
+      {kits.length > 0 && <KitGrid kits={kits} {...kitGridProps} />}
+      {itemCount === 0 && kits.length === 0 ? empty : children}
+    </>
+  );
+}
+
+/** FlatResults with the kits that match the view, read from the streamed kits. */
+function FlatResultsWithKits({
+  promise,
+  filterInput,
+  ...rest
+}: Omit<FlatResultsProps, 'kits'> & {
+  promise: Promise<KitsResult>;
+  filterInput: Parameters<typeof filterKits>[2];
+}) {
+  const result = React.use(promise);
+  const kits = React.useMemo(
+    () =>
+      result.status === 'ok' ? filterKits(result.kits, rest.kitGridProps.itemMap, filterInput) : [],
+    [result, rest.kitGridProps.itemMap, filterInput],
+  );
+  return <FlatResults kits={kits} {...rest} />;
+}
+
 /* ---- catalog body (suspends on the streamed items payload) ---------------- */
 
 interface StorefrontCatalogProps {
   catalogPromise: Promise<StorefrontCatalogData>;
   frequentlyOrderedPromise: Promise<FrequentlyOrderedEntry[]>;
+  kitsPromise: Promise<KitsResult>;
   warehouseId: string;
   warehouseName: string;
   chartersForWarehouse: StorefrontCharter[];
@@ -600,6 +675,7 @@ interface StorefrontCatalogProps {
 function StorefrontCatalog({
   catalogPromise,
   frequentlyOrderedPromise,
+  kitsPromise,
   warehouseId,
   warehouseName,
   chartersForWarehouse,
@@ -690,6 +766,13 @@ function StorefrontCatalog({
     [freqEntries],
   );
 
+  /* --- kits --- */
+  // NOT read here. The kits promise is read only by the parts that draw kits
+  // (the Kits row, and a category or search view's kit cards), each inside its
+  // own Suspense boundary. Reading it here with useStreamed re-rendered this
+  // whole component when it settled, which delayed the grid's first useful
+  // frame by about 12 ms in a real browser (local, 2026-09-27).
+
   /* --- catalog UI state --- */
   const [category, setCategory] = React.useState<CategoryFilter>('all');
   const [searchInput, setSearchInput] = React.useState('');
@@ -713,6 +796,10 @@ function StorefrontCatalog({
   React.useEffect(() => {
     linesRef.current = state.lines;
   }, [state.lines]);
+  const kitSharesRef = React.useRef(state.kits);
+  React.useEffect(() => {
+    kitSharesRef.current = state.kits;
+  }, [state.kits]);
 
   const handleAdd = React.useCallback(
     (itemId: string) => {
@@ -743,15 +830,20 @@ function StorefrontCatalog({
   // tear down and rebind constantly while it is open.
   const handleReviewClose = React.useCallback(() => setReviewStage(null), [setReviewStage]);
 
-  const handleAddKit = React.useCallback(
-    (kitItems: CatalogItem[]) => {
-      for (const line of fullKitLines(kitItems)) {
-        const item = itemMap.get(line.itemId);
-        if (!item) continue;
-        const qty = linesRef.current.find((l) => l.itemId === line.itemId)?.quantity ?? 0;
-        if (qty < availableOf(item)) {
-          dispatch({ type: 'add', itemId: line.itemId, quantity: line.quantity });
-        }
+  // A kit changes the cart in ONE step, or not at all (storefront-kits.ts):
+  // every component tops up to the new count, or gives back the kit's own
+  // units. A component that cannot supply its share changes nothing.
+  const handleSetKits = React.useCallback(
+    (kit: KitOffer, target: number) => {
+      const qty = new Map(linesRef.current.map((l) => [l.itemId, l.quantity]));
+      const plan = planKitChange(kit, target, itemMap, kitSharesRef.current[kit.bundleId], qty);
+      if (!plan.ok) {
+        const name = componentItem(plan.short, itemMap)?.name ?? 'one of its items';
+        toast.error(`Not enough ${name} for that many kits. Nothing was added.`);
+        return;
+      }
+      if (plan.changes.length > 0) {
+        dispatch({ type: 'apply-kit', bundleId: kit.bundleId, changes: plan.changes });
       }
     },
     [itemMap, dispatch],
@@ -791,6 +883,13 @@ function StorefrontCatalog({
   const qtyMap = React.useMemo(() => buildQtyMap(state.lines), [state.lines]);
   const { unitCount } = cartTotals(state.lines);
 
+  const kitGridProps = {
+    itemMap,
+    qtyByItemId: qtyMap,
+    cartKits: state.kits,
+    onSetKits: handleSetKits,
+  };
+
   const charter = chartersForWarehouse.find((c) => c.id === state.charterId) ?? null;
 
   const cartContext: CartContextInfo = {
@@ -828,6 +927,9 @@ function StorefrontCatalog({
     }
 
     startTransition(async () => {
+      // The kits the page offered (already settled: the cards were drawn from
+      // it). The loader never rejects.
+      const offered = await kitsPromise;
       const res = await createOrderRequestAction({
         warehouseId: state.warehouseId,
         notes: state.notes.trim() || null,
@@ -845,6 +947,9 @@ function StorefrontCatalog({
             }
           : null,
         lines: lines.map((l) => ({ itemId: l.itemId, quantity: l.quantity })),
+        // Which kits the lines came from, for the order's audit entry only;
+        // approvers and pickers see the item lines as always.
+        kits: kitsForAudit(offered.status === 'ok' ? offered.kits : [], state.kits, lines),
       });
 
       if (!res.ok) {
@@ -1135,6 +1240,13 @@ function StorefrontCatalog({
             </div>
           )}
 
+          {/* Kits (unfiltered All view), above Frequently ordered */}
+          {browsingAll && (
+            <React.Suspense fallback={null}>
+              <KitsRow promise={kitsPromise} {...kitGridProps} />
+            </React.Suspense>
+          )}
+
           {/* Frequently ordered (unfiltered All view only) */}
           {browsingAll && (
             <React.Suspense
@@ -1180,31 +1292,42 @@ function StorefrontCatalog({
                 }
                 shownCount={previewCount}
                 onViewAll={() => setCategory(g.key)}
-                showKitButton={NEW_HIRE_RE.test(g.name)}
-                onAddKit={() => handleAddKit(g.items)}
                 icon={<Package size={15} />}
               >
                 {renderItems(g.items.slice(0, previewCount))}
               </CategorySection>
             ))
           ) : (
-            <>
-              <div className="sf-result-line">
-                <span className="n">{activeCategoryName}</span>
-                <span className="m">
-                  {filtered.length} {filtered.length === 1 ? 'item' : 'items'}
-                  {deferredSearch.trim() ? ' matching' : ''}
-                </span>
-              </div>
-              {filtered.length === 0 ? (
-                <EmptyResults
-                  query={deferredSearch.trim()}
-                  onClear={clearAllFilters}
-                />
-              ) : (
-                renderItems(filtered)
-              )}
-            </>
+            // Kits lead a category view and show in search, filtered like the
+            // items. The list draws at once without them, and gains its kit
+            // cards when the kits promise has settled (it has long before
+            // anyone opens a category).
+            <React.Suspense
+              fallback={
+                <FlatResults
+                  title={activeCategoryName}
+                  itemCount={filtered.length}
+                  searching={deferredSearch.trim() !== ''}
+                  kits={[]}
+                  kitGridProps={kitGridProps}
+                  empty={<EmptyResults query={deferredSearch.trim()} onClear={clearAllFilters} />}
+                >
+                  {filtered.length > 0 ? renderItems(filtered) : null}
+                </FlatResults>
+              }
+            >
+              <FlatResultsWithKits
+                promise={kitsPromise}
+                filterInput={filterInput}
+                title={activeCategoryName}
+                itemCount={filtered.length}
+                searching={deferredSearch.trim() !== ''}
+                kitGridProps={kitGridProps}
+                empty={<EmptyResults query={deferredSearch.trim()} onClear={clearAllFilters} />}
+              >
+                {filtered.length > 0 ? renderItems(filtered) : null}
+              </FlatResultsWithKits>
+            </React.Suspense>
           )}
         </div>
 

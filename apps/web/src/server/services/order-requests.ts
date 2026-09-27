@@ -309,6 +309,15 @@ export interface CreateOrderRequestInput {
     quantity: number;
     notes?: string | null;
   }>;
+  /**
+   * Which kits (bundles) the New order page used to fill the cart, and how many
+   * of each, as the browser counted them. AUDIT ONLY: written into the
+   * order_request.created entry and nothing else. The lines are what the order
+   * is; approvers, pickers, emails and the pick slip see only them, and the
+   * order timeline never shows this to members (order-timeline.tsx surfaces
+   * known keys only).
+   */
+  kits?: Array<{ bundleId: string; count: number }>;
 }
 
 /**
@@ -352,6 +361,22 @@ function rentalItemNotOrderable(name: string): ServiceError {
   return new ServiceError(
     'validation_error',
     `${name} is a rental item. Check it out from Rentals instead of ordering it.`,
+  );
+}
+
+/**
+ * A kit's pre-assembled stock (inventory_items.is_bundle) is a container built
+ * and handed out through Bundles, not stock an order can pick: picking draws
+ * placed stock and assembled kits sit in Staging. Every order picker already
+ * leaves it out; this is the server's own refusal, so a crafted payload or an
+ * old saved cart cannot put one on an order. The database line guard
+ * (tg_order_request_lines_guard, 0365) does not refuse it yet: that belongs in
+ * the next migration.
+ */
+function kitStockNotOrderable(name: string): ServiceError {
+  return new ServiceError(
+    'validation_error',
+    `${name} is a pre-assembled kit and can't be put on an order. Order the kit's items instead.`,
   );
 }
 
@@ -947,7 +972,8 @@ export class OrderRequestsService {
 
   /**
    * The items an order's lines name, for create() and addLines() to validate
-   * (in-org, in the order's warehouse, received, not a rental item). Batched through
+   * (in-org, in the order's warehouse, received, not a rental item, not a
+   * kit's pre-assembled stock). Batched through
    * fetchAllRowsByIds: an order's lines have no cap, and one `.in()` past
    * ~215 ids fails (414 locally, "fetch failed" in production). Throws on a
    * failed batch, so a line is never rejected as "not found" because its
@@ -961,6 +987,7 @@ export class OrderRequestsService {
       unit_cost: number;
       awaiting_first_receipt: boolean;
       is_rental: boolean;
+      is_bundle: boolean | null;
     }>
   > {
     const ctx = this.ctx;
@@ -969,7 +996,7 @@ export class OrderRequestsService {
       (batch) => (from, to) =>
         ctx.supabase
           .from('inventory_items')
-          .select('id, name, warehouse_id, unit_cost, awaiting_first_receipt, is_rental')
+          .select('id, name, warehouse_id, unit_cost, awaiting_first_receipt, is_rental, is_bundle')
           .eq('organization_id', ctx.organizationId)
           .in('id', batch)
           .order('id')
@@ -1003,6 +1030,7 @@ export class OrderRequestsService {
         warehouse_id: string | null;
         awaiting: boolean;
         rental: boolean;
+        kitStock: boolean;
       }
     >();
     for (const row of items) {
@@ -1011,6 +1039,7 @@ export class OrderRequestsService {
         warehouse_id: row.warehouse_id,
         awaiting: row.awaiting_first_receipt === true,
         rental: row.is_rental === true,
+        kitStock: row.is_bundle === true,
       });
     }
     for (const line of input.lines) {
@@ -1030,6 +1059,7 @@ export class OrderRequestsService {
         );
       }
       if (it.rental) throw rentalItemNotOrderable(it.name);
+      if (it.kitStock) throw kitStockNotOrderable(it.name);
     }
 
     // Defense-in-depth — the FK + CHECK constraint already enforce that
@@ -1135,7 +1165,11 @@ export class OrderRequestsService {
         event: 'order_request.created',
         entityType: 'order_request',
         entityId: row.id,
-        after: { lineCount: pLines.length, warehouseId: input.warehouseId },
+        after: {
+          lineCount: pLines.length,
+          warehouseId: input.warehouseId,
+          ...(input.kits && input.kits.length > 0 ? { kits: input.kits } : {}),
+        },
       },
       this.ctx,
     );
@@ -1279,6 +1313,7 @@ export class OrderRequestsService {
         );
       }
       if (it.is_rental === true) throw rentalItemNotOrderable(it.name);
+      if (it.is_bundle === true) throw kitStockNotOrderable(it.name);
     }
 
     // Existing lines — an item already on the order is topped up, not duplicated.

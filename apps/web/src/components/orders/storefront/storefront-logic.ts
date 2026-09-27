@@ -153,17 +153,6 @@ export function sortCatalog(
 }
 
 /**
- * "Add full kit" for the New Hire section: one of each item in the
- * category that has stock available. Out-of-stock items are skipped
- * entirely rather than queued at 0.
- */
-export function fullKitLines(
-  items: readonly CatalogItem[],
-): Array<{ itemId: string; quantity: number }> {
-  return items.filter((it) => statusOf(it) !== 'out').map((it) => ({ itemId: it.id, quantity: 1 }));
-}
-
-/**
  * Clamp a typed quantity to what a stepper can legally hold:
  * integers between 0 and the item's available stock. Non-finite input
  * clamps to 0 (the cart reducer removes lines at ≤0).

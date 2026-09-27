@@ -301,3 +301,29 @@ describe('stock on record wording', () => {
     }
   });
 });
+
+/**
+ * Kits on the New order page (owner decisions 2026-09-27): anyone who can place
+ * orders sees kits, with no Bundles permission, but only where the Bundles
+ * module is on. The note is addressed the same way, and waits as a draft for
+ * the web deploy and the Demo Co walk.
+ */
+describe('the kits release', () => {
+  const release = () => RELEASES.find((r) => r.id === 'order-page-kits-2026-09-27')!;
+
+  it('is the newest release after the later-dated stock on record draft', () => {
+    // The registry is newest first; the stock on record draft is dated the
+    // next day, so it sits above.
+    expect(RELEASES.slice(0, 2).map((r) => r.id)).toEqual([
+      'stock-on-record-wording-2026-09-27',
+      'order-page-kits-2026-09-27',
+    ]);
+  });
+
+  it('is addressed to people who can place orders, where Orders and Bundles are on', () => {
+    for (const e of release().entries) {
+      expect(e.area).toBe('Orders');
+      expect(e.audience).toEqual({ anyPermission: ['orders:request'], modules: ['orders', 'bundles'] });
+    }
+  });
+});

@@ -60,6 +60,49 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'order-page-kits-2026-09-27',
+    revision: 1,
+    // A draft until the web deploy and the Demo Co walk; the New order page is
+    // web only, so there is no phone update to wait for.
+    status: 'draft',
+    title: 'Order a whole kit from the New order page in one step',
+    summary:
+      'When your organization uses Bundles, the New order page shows kits: bundles whose items you can all order at the chosen warehouse. Add kit puts every item of the kit into your cart as its own line, and the order is approved and picked like any other. The Add full kit button, which added one of every in-stock item of a category, is gone.',
+    publishedAt: '2026-09-27T20:00:00Z',
+    entries: [
+      {
+        id: 'order-page-kits',
+        category: 'new',
+        area: 'Orders',
+        title: 'Kits on the New order page',
+        whatChanged:
+          'The New order page has a Kits row above Frequently ordered. It lists each active bundle whose items you can all order at the chosen warehouse, with the items it holds and how many kits are available. Add kit puts every item into your cart as its own line, and the minus and plus buttons take out or add one kit at a time. A kit also comes first when you open a category that holds one of its items, and it shows when you search for its name.',
+        whyItMatters: 'Ordering a kit meant finding each of its items and adding them one at a time.',
+        howItAffectsYou:
+          'Kits are counted from the same available stock the item cards show. When an item of a kit is kept on more than one rack under the same SKU, the kit counts every one of those racks you can order from, except stock earmarked for a different site, so your cart can show that item on two lines, one per rack; Details on the card lists the racks. A kit goes into the cart whole or not at all: if one of its items runs out, Add kit is turned off and the card names that item.',
+        whatToDo:
+          'If Add kit is turned off, you can still add the kit\'s other items one by one. Kits come from Bundles, so the kits on offer change when someone who manages bundles edits them.',
+        link: { href: '/dashboard/orders/new', label: 'Open New order' },
+        audience: { anyPermission: ['orders:request'], modules: ['orders', 'bundles'] },
+      },
+      {
+        id: 'order-page-add-full-kit-removed',
+        category: 'improved',
+        area: 'Orders',
+        title: 'Kit items are ordinary order lines, and Add full kit is gone',
+        whatChanged:
+          'The Add full kit button on a category header of the New order page is gone; kits take its place. The lines a kit adds are ordinary lines.',
+        whyItMatters:
+          'Add full kit added one of every in-stock item in the category, whatever the kit held.',
+        howItAffectsYou:
+          'You can change or remove any line a kit added, and approvers and pickers see those lines as they see any order. Items a bundle marks optional are not added by the kit.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders/new', label: 'Open New order' },
+        audience: { anyPermission: ['orders:request'], modules: ['orders', 'bundles'] },
+      },
+    ],
+  },
+  {
     id: 'last-physical-count-and-location-pages-2026-09-27',
     revision: 1,
     // Published after the web deploy (#272), the phone update (OTA iOS

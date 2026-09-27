@@ -7,6 +7,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { getCachedOrgTimezone, getOrgEmailRouting } from '@/lib/dashboard/cached-org';
 import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
 import { loadFrequentlyOrdered } from '@/server/loaders/orders-frequently-ordered';
+import { loadOrderKits } from '@/server/loaders/orders-kits';
 import {
   loadCatalogBundle,
   loadChartersForWarehouse,
@@ -126,6 +127,10 @@ export default async function NewOrderPage({
   // it never rejects. It was a browser fetch that could only begin after
   // hydration (see the loader's header for the measurement).
   const frequentlyOrderedPromise = loadFrequentlyOrdered(warehouseId, catalogPromise);
+  // The kits (bundles) this person can order here: the same treatment. Started
+  // now, matched against the same catalog, never awaited, never rejects. With
+  // the Bundles module off it reads nothing.
+  const kitsPromise = loadOrderKits(ctx.organizationId, warehouseId, catalogPromise);
   const chartersForWarehouse = await loadChartersForWarehouse(warehouseId);
 
   // The storefront owns its own page head (back link, H1, flow
@@ -139,6 +144,7 @@ export default async function NewOrderPage({
       warehouseId={warehouseId}
       catalogPromise={catalogPromise}
       frequentlyOrderedPromise={frequentlyOrderedPromise}
+      kitsPromise={kitsPromise}
       chartersForWarehouse={chartersForWarehouse}
       viewerRole={ctx.role}
       viewerName={ctx.fullName}

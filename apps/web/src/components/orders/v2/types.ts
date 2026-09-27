@@ -43,6 +43,13 @@ export interface CartLineState {
   quantity: number;
 }
 
+/**
+ * Units one kit put on each cart line: itemId → units. A kit's lines are
+ * ordinary lines; this only remembers how much of each line came from the kit,
+ * so taking the kit out never takes units added by hand (storefront-kits.ts).
+ */
+export type CartKitShares = Record<string, number>;
+
 export interface CartState {
   warehouseId: string;
   charterId: string | null;
@@ -53,6 +60,12 @@ export interface CartState {
    *  drives the auto-created schedule event at approval (mig 0255). */
   neededBy: string;
   lines: CartLineState[];
+  /**
+   * bundleId → the units that kit put on each line. Never more than a line
+   * holds: every change to a line by hand shrinks it to fit. A draft saved
+   * before kits existed has none and loads with `{}`.
+   */
+  kits: Record<string, CartKitShares>;
 }
 
 export type CartAction =
@@ -64,6 +77,12 @@ export type CartAction =
    *  so the same action handles "type 0 to clear" + "type 5 to set". */
   | { type: 'set-qty'; itemId: string; quantity: number }
   | { type: 'remove'; itemId: string }
+  /**
+   * A kit's planned line changes (storefront-kits.ts planKitChange), applied
+   * as one step: each line moves by `delta` (a line at 0 or less is removed)
+   * and the kit's record of its units moves with it.
+   */
+  | { type: 'apply-kit'; bundleId: string; changes: Array<{ itemId: string; delta: number }> }
   | { type: 'clear' }
   /**
    * Back to a blank order, keeping only the warehouse and the pickup/delivery

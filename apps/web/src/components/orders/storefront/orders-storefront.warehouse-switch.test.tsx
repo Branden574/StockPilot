@@ -137,6 +137,7 @@ function page(warehouseId: string) {
       warehouseId={warehouseId}
       catalogPromise={settled<StorefrontCatalogData>({ items: CATALOGS[warehouseId]!, aisles: [] })}
       frequentlyOrderedPromise={settled([])}
+      kitsPromise={settled({ status: 'ok' as const, kits: [] })}
       chartersForWarehouse={SITES[warehouseId]!}
       viewerRole="manager"
       viewerName="QA Manager"
@@ -328,6 +329,7 @@ describe('OrdersStorefront — switching warehouse', () => {
       notes: '',
       neededBy: '',
       lines: [{ itemId: 'chromebook', quantity: 1 }],
+      kits: {},
     };
     localStorage.setItem(`${ORDER_DRAFT_PREFIX}${MAIN}`, JSON.stringify(stale));
 

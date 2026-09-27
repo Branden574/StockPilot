@@ -368,8 +368,6 @@ interface CategorySectionProps {
   /** Total items in the category — "View all N →" shows when > shown. */
   shownCount: number;
   onViewAll: () => void;
-  showKitButton: boolean;
-  onAddKit: () => void;
   icon: React.ReactNode;
   children: React.ReactNode;
 }
@@ -381,8 +379,6 @@ export function CategorySection({
   onToggle,
   shownCount,
   onViewAll,
-  showKitButton,
-  onAddKit,
   icon,
   children,
 }: CategorySectionProps) {
@@ -403,16 +399,6 @@ export function CategorySection({
         </h3>
         <span className="ct">{itemCount}</span>
         <span className="spacer" />
-        {showKitButton && (
-          <button
-            type="button"
-            className="sf-kit-btn"
-            onClick={onAddKit}
-            title="Add one of each in-stock kit item"
-          >
-            <Plus size={12} /> Add full kit
-          </button>
-        )}
         {itemCount > shownCount && (
           <button type="button" className="see" onClick={onViewAll}>
             View all {itemCount} <ChevronRight size={12} />
