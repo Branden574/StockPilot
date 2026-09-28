@@ -274,6 +274,19 @@ PGTAP_TESTS=(
   # locks are pinned in the catalog. The concurrent cap is
   # scripts/db-concurrency/0375_evidence_cap.sh.
   supabase/tests/0375_exception_evidence.test.sql
+  # Escalate to maintenance (F1-5, 0376): the six escalation columns are
+  # written only by exception_escalation_claim / _finish (SECURITY DEFINER,
+  # search_path and lock_timeout pinned, authenticated only). Both lock the
+  # row after the visibility rule (not found for another org, another
+  # warehouse's holding, a disabled account) and call ONE gate
+  # (_exc_escalation_refusal: the maintenance module and
+  # maintenance_requests:submit; no client role may execute it). A claim
+  # under 2 minutes old refuses every other claim; a link needs the caller's
+  # claim and a request in the same org, for the occurrence's item, made by
+  # the caller within 5 minutes, not cancelled, linked nowhere else; linking
+  # never acknowledges or resolves. The concurrent claim is
+  # scripts/db-concurrency/0376_escalation_claim.sh.
+  supabase/tests/0376_exception_escalation.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
