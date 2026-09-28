@@ -174,11 +174,13 @@ export function SendDeliveryRequestButton(props: SendDeliveryRequestButtonProps)
             yourself.
           </DialogDescription>
         </DialogHeader>
-        {/* sp-storefront scopes the assistant's sf-* classes; flex-wrap puts
+        {/* sp-storefront scopes the assistant's sf-* classes (sf-embedded drops
+            the page's full-height min-height, which stretched this dialog to
+            the window); flex-wrap puts
             its two inline-flex buttons on one row while the sf-note
             paragraphs (flex-basis: 100%) each take their own line, matching
             how the success screen's `.acts` flex row lays them out. */}
-        <div className="sp-storefront flex flex-wrap items-center gap-2">
+        <div className="sp-storefront sf-embedded flex flex-wrap items-center gap-2">
           <DeliveryRequestAction input={input} recipients={recipients} />
         </div>
       </DialogContent>

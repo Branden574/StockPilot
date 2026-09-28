@@ -465,7 +465,7 @@ function DeliveryRequestActionInner({
           // z-50, under the storefront backdrop — that is fine, arguably
           // better: no double-dimming, and DO NOT restructure ui/dialog.tsx
           // to fix it, it serves every dialog in the app.
-          className="sp-storefront max-w-2xl z-[100]"
+          className="sp-storefront sf-embedded max-w-2xl z-[100]"
           // Bug 2 (a11y, focus restore): the Preview button above is a plain
           // <button>, not a <DialogTrigger>, so Radix's own `context.triggerRef`
           // — the target its default onCloseAutoFocus focuses — is never

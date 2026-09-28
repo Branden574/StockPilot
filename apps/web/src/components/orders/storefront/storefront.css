@@ -60,6 +60,16 @@
   min-height: calc(100dvh - var(--sf-topbar-h));
 }
 
+/* A dialog, or a block inside one, that borrows the storefront's tokens and
+   sf-* styles with .sp-storefront is not a page. The page's min-height above
+   (the viewport less the top bar) stretched the order page's "Send delivery
+   request" dialog and the email Preview to the full window height, with the
+   buttons floating mid-way (owner report 2026-09-28). Embedded hosts add
+   .sf-embedded to size to their content. */
+.sp-storefront.sf-embedded {
+  min-height: 0;
+}
+
 /* Dark theme — the design handoff's original token values, verbatim
    (styles.css dark tokens). Applies when next-themes sets .dark on
    <html>. Key set must mirror the light block above exactly. */
