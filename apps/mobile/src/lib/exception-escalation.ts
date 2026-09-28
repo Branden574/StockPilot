@@ -276,6 +276,74 @@ export function escalationTarget(
 /** The request form opened with an exception param that is not an id. */
 export const ESCALATE_BAD_LINK_COPY = 'This exception is not available to you, or it no longer exists.';
 
+/** The request form's launch params, as the route hands them (a repeated key
+ *  arrives as an array). */
+export interface RequestFormParams {
+  itemId?: string | string[];
+  orderRequestId?: string | string[];
+  rentalId?: string | string[];
+  charterId?: string | string[];
+  subject?: string | string[];
+  exceptionOccurrenceId?: string | string[];
+  locationId?: string | string[];
+}
+
+/**
+ * What the request form is FOR, as a key the screen mounts its form under.
+ *
+ * expo-router REUSES the request screen when a link to /maintenance/new
+ * arrives while it is on top (a notification or a web link, rewritten by
+ * web-path-rewrite): the route stays and only its params change. Without a
+ * key the form kept everything it held; the simulator walk (2026-09-27)
+ * found a plain New request form turned into the escalation form with the
+ * plain request's subject still in it (the prefill never writes over typed
+ * text), so Save would have escalated with an unrelated subject.
+ *
+ *   - Escalating: the exception, and nothing else. The server takes the item
+ *     and the location from the exception, so a second link for the SAME
+ *     exception (from the web, with or without the location hint) is the
+ *     same form, and what was typed stays.
+ *   - A plain request: every launch param, because its related records ride
+ *     on Save. What was typed for one launch never rides with another's.
+ *   - A malformed exception param: refused (the screen's gate).
+ */
+export function requestFormKey(params: RequestFormParams): string {
+  const target = escalationTarget(params.exceptionOccurrenceId);
+  if (target.kind === 'escalate') return `escalate:${target.occurrenceId}`;
+  if (target.kind === 'malformed') return 'malformed';
+  return `request:${JSON.stringify([
+    params.itemId ?? null,
+    params.orderRequestId ?? null,
+    params.rentalId ?? null,
+    params.charterId ?? null,
+    params.subject ?? null,
+    params.locationId ?? null,
+  ])}`;
+}
+
+/** The form the screen shows, and whether it replaced one that held unsaved
+ *  input (what the person entered, never the prefill). */
+export interface RequestFormSlot {
+  key: string;
+  replacedUnsaved: boolean;
+}
+
+/**
+ * The slot for the form the route now asks for. The same form keeps its slot.
+ * A new one says it replaced unsaved input only when the form it replaced
+ * held some (`unsavedKey`, the key of the form holding unsaved input, or
+ * null: none, or its request was saved). Nothing entered on the old form is
+ * carried into the new one: a plain draft is never sent as an escalation.
+ */
+export function nextRequestFormSlot(slot: RequestFormSlot, key: string, unsavedKey: string | null): RequestFormSlot {
+  if (slot.key === key) return slot;
+  return { key, replacedUnsaved: unsavedKey !== null && unsavedKey === slot.key };
+}
+
+/** Said on a form that a link opened in place of one holding unsaved input. */
+export const REQUEST_FORM_REPLACED_COPY =
+  'A link opened this form in place of the request you were filling in. What you entered there was not saved and is not part of this request.';
+
 /** The occurrence fields the prefill and the linked-exception card read. */
 export interface EscalationSource extends EscalatableOccurrence {
   id: string;

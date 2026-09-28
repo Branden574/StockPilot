@@ -222,6 +222,64 @@ describe('request form: escalating an exception', () => {
     expect(form).toContain('void retryWorkspace().finally(() => setRetrying(false));');
   });
 
+  // Simulator walk 2026-09-27 (probe w10): a link to the escalation form
+  // arriving over a plain New request form reused the screen and kept the
+  // plain subject. Mutation caught: the key dropped (the form's state
+  // survives a new exception or mode), or the form's state moved back above
+  // the key.
+  it('a link that reuses the screen for another exception or mode mounts a fresh form', () => {
+    const outer = between(form, 'export default function NewMaintenanceRequest()', 'function RequestFormScreen(');
+    expect(outer).toContain('const params = useLocalSearchParams<LaunchParams>();');
+    expect(outer).toContain('const formKey = requestFormKey(params);');
+    expect(outer).toMatch(/<RequestFormScreen\s+key=\{formKey\}\s+params=\{params\}/);
+    // The form's own state lives under the key, never above it.
+    expect(outer).not.toMatch(/useState\(params\.|const prefilled|setEscLoad|setCreatedId/);
+    const inner = between(form, 'function RequestFormScreen(', 'function GateScreen(');
+    expect(inner).toContain("const [subject, setSubject] = React.useState(params.subject ?? '');");
+    expect(inner).toContain('const prefilled = React.useRef(false);');
+    expect(inner).toContain("const [escLoad, setEscLoad] = React.useState<EscalationLoad>({ kind: 'loading' });");
+    expect(inner).toContain('const [createdId, setCreatedId] = React.useState<string | null>(null);');
+  });
+
+  // Never silently discard what was entered: a form holding unsaved input
+  // that a link replaced is said on the new one. The prefill is not input.
+  // Mutation caught: the fields' setters passed raw (the notice never
+  // shows), the prefill marked as input, or a saved request still counted.
+  it('a replaced form holding unsaved input is said on the new form; the prefill is not input', () => {
+    const outer = between(form, 'export default function NewMaintenanceRequest()', 'function RequestFormScreen(');
+    expect(outer).toMatch(/if \(slot\.key !== formKey\) \{\s+setSlot\(nextRequestFormSlot\(slot, formKey, unsavedKey\)\);/);
+    expect(outer).toContain('replacedUnsaved={slot.key === formKey && slot.replacedUnsaved}');
+    expect(outer).toContain('onEntered={() => setUnsavedKey(formKey)}');
+    expect(outer).toContain('onSaved={() => setUnsavedKey(null)}');
+    const step = between(form, '<FormStep', '/>');
+    for (const set of [
+      'setSubject',
+      'setDescription',
+      'setCategory',
+      'setPriority',
+      'setCharterId',
+      'setRequesterPhone',
+      'setBuilding',
+      'setRoomOrArea',
+      'setDepartment',
+      'setAccessInstructions',
+    ]) {
+      expect(step).toContain(`${set}={entered(${set})}`);
+    }
+    expect(form).toContain('setSubject((typed) => typed || prefill.subject);');
+    const save = between(form, 'async function onSave()', 'const [escLoad, setEscLoad]');
+    expect(save).toMatch(/setCreatedId\(id\);\s+onSaved\(\);/);
+    // Said wherever the new form lands: the form, the card alone, a gate.
+    expect(form).toContain('const replacedNotice = replacedUnsaved ? REQUEST_FORM_REPLACED_COPY : null;');
+    expect(step).toContain('notice={replacedNotice}');
+    expect(form).toMatch(/<ReplacedNotice text=\{replacedNotice\} \/>\s+<EscalationSourceCard view=\{escalationView\} \/>/);
+    expect(form).toMatch(/<ReplacedNotice text=\{notice\} \/>\s+\{escalation \? <EscalationSourceCard/);
+    expect(form).toContain('<ReplacedNotice text={notice ?? null} />');
+    expect(form.match(/notice=\{replacedNotice\}/g)?.length).toBeGreaterThanOrEqual(5);
+    const notice = between(form, 'function ReplacedNotice(', 'function GateScreen(');
+    expect(notice).toContain('accessibilityRole="alert"');
+  });
+
   it('the linked-exception card uses core\'s words, and its controls are 44pt', () => {
     const card = between(form, 'function EscalationSourceCard(', 'function PhotosStep(');
     expect(card).toContain('{ESCALATE_TO_MAINTENANCE_HELP}');

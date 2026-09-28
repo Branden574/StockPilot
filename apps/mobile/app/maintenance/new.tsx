@@ -54,9 +54,13 @@ import {
   escalationSourceLines,
   escalationTarget,
   listedCategory,
+  nextRequestFormSlot,
+  REQUEST_FORM_REPLACED_COPY,
+  requestFormKey,
   uuidParam,
   type EscalationFormState,
   type EscalationLoad,
+  type RequestFormSlot,
 } from '@/lib/exception-escalation';
 import {
   describeExceptionsRequestError,
@@ -146,7 +150,64 @@ function localKey(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/**
+ * Launch-point prefill (Task 20's scan/item launch points push with these,
+ * and F1-5's exception and location). NEVER contact identity: the server
+ * ignores any client-supplied requester name/email regardless of what this
+ * screen carries, matching web's own defaults contract (new/page.tsx).
+ */
+type LaunchParams = {
+  itemId?: string;
+  orderRequestId?: string;
+  rentalId?: string;
+  charterId?: string;
+  subject?: string;
+  exceptionOccurrenceId?: string;
+  locationId?: string;
+};
+
 export default function NewMaintenanceRequest() {
+  const params = useLocalSearchParams<LaunchParams>();
+  // A fresh form whenever what it is for changes (requestFormKey):
+  // expo-router REUSES this screen when a link to /maintenance/new arrives
+  // while it is on top, swapping only the params, and the form used to keep
+  // what it held (simulator walk 2026-09-27: a plain request's subject
+  // carried into the escalation form). The same exception keeps its form,
+  // and what was typed in it.
+  const formKey = requestFormKey(params);
+  // The key of the form holding unsaved input (what the person entered, not
+  // the prefill), or null. A form that replaces it says so: never silent.
+  const [unsavedKey, setUnsavedKey] = React.useState<string | null>(null);
+  const [slot, setSlot] = React.useState<RequestFormSlot>({ key: formKey, replacedUnsaved: false });
+  if (slot.key !== formKey) {
+    setSlot(nextRequestFormSlot(slot, formKey, unsavedKey));
+    setUnsavedKey(null);
+  }
+  return (
+    <RequestFormScreen
+      key={formKey}
+      params={params}
+      replacedUnsaved={slot.key === formKey && slot.replacedUnsaved}
+      onEntered={() => setUnsavedKey(formKey)}
+      onSaved={() => setUnsavedKey(null)}
+    />
+  );
+}
+
+function RequestFormScreen({
+  params,
+  replacedUnsaved,
+  onEntered,
+  onSaved,
+}: {
+  params: LaunchParams;
+  /** A link opened this form in place of one holding unsaved input. */
+  replacedUnsaved: boolean;
+  /** The person entered something (the prefill does not count). */
+  onEntered: () => void;
+  /** The request was saved: nothing entered here is unsaved any more. */
+  onSaved: () => void;
+}) {
   const { c } = useTheme();
   const router = useRouter();
   const { user } = useAuth();
@@ -156,19 +217,6 @@ export default function NewMaintenanceRequest() {
   const perms = useEffectivePermissions();
   const canSubmit = showWriteCta(perms, 'maintenance_requests:submit');
 
-  // Launch-point prefill (Task 20's scan/item launch points push with these).
-  // NEVER contact identity — the server ignores any client-supplied
-  // requester name/email regardless of what this screen carries, matching
-  // web's own defaults contract (new/page.tsx).
-  const params = useLocalSearchParams<{
-    itemId?: string;
-    orderRequestId?: string;
-    rentalId?: string;
-    charterId?: string;
-    subject?: string;
-    exceptionOccurrenceId?: string;
-    locationId?: string;
-  }>();
   const relatedItemId = params.itemId || null;
   const relatedOrderRequestId = params.orderRequestId || null;
   const relatedRentalId = params.rentalId || null;
@@ -196,6 +244,16 @@ export default function NewMaintenanceRequest() {
 
   const [sites, setSites] = React.useState<{ id: string; name: string }[]>([]);
   const [categories, setCategories] = React.useState<string[]>([...MAINTENANCE_CATEGORIES]);
+
+  // What the person enters marks this form as holding unsaved input (the
+  // prefill below does not), so a link that replaces it says so.
+  function entered<T>(set: (value: T) => void): (value: T) => void {
+    return (value) => {
+      set(value);
+      onEntered();
+    };
+  }
+  const replacedNotice = replacedUnsaved ? REQUEST_FORM_REPLACED_COPY : null;
 
   // Sites (charters) + org-configured categories + the caller's own default
   // site — the same three reads the web page.tsx server component does
@@ -302,6 +360,7 @@ export default function NewMaintenanceRequest() {
     try {
       const { id } = await createMaintenanceRequest(parsed.data);
       setCreatedId(id);
+      onSaved();
     } catch (e) {
       Alert.alert('Could not save', e instanceof Error ? e.message : 'Unknown error');
     } finally {
@@ -315,6 +374,8 @@ export default function NewMaintenanceRequest() {
   const [escLoad, setEscLoad] = React.useState<EscalationLoad>({ kind: 'loading' });
   const [escReadNonce, setEscReadNonce] = React.useState(0);
   // The prefill fills the fields once, and never over what the person typed.
+  // It is always THIS exception's: a link for another exception, or for a
+  // plain request, mounts a fresh form (requestFormKey, above).
   const prefilled = React.useRef(false);
   React.useEffect(() => {
     if (!escalationId || !orgId || offline) return;
@@ -556,7 +617,7 @@ export default function NewMaintenanceRequest() {
   // ── Gates ────────────────────────────────────────────────────────────
   if (!enabled) {
     return (
-      <GateScreen c={c} onBack={goBack}>
+      <GateScreen c={c} onBack={goBack} notice={replacedNotice}>
         Maintenance requests aren’t enabled for this workspace. Ask an admin to enable it in
         Settings → Modules.
       </GateScreen>
@@ -564,14 +625,14 @@ export default function NewMaintenanceRequest() {
   }
   if (!canSubmit) {
     return (
-      <GateScreen c={c} onBack={goBack}>
+      <GateScreen c={c} onBack={goBack} notice={replacedNotice}>
         You do not have permission to submit maintenance requests.
       </GateScreen>
     );
   }
   if (target.kind === 'malformed') {
     return (
-      <GateScreen c={c} onBack={goBack}>
+      <GateScreen c={c} onBack={goBack} notice={replacedNotice}>
         {ESCALATE_BAD_LINK_COPY}
       </GateScreen>
     );
@@ -581,7 +642,7 @@ export default function NewMaintenanceRequest() {
   // workspace again.
   if (escalationId && !orgId && !workspaceLoading) {
     return (
-      <GateScreen c={c} onBack={goBack} action={<WorkspaceRetry />}>
+      <GateScreen c={c} onBack={goBack} action={<WorkspaceRetry />} notice={replacedNotice}>
         {EXCEPTION_WORKSPACE_UNAVAILABLE}
       </GateScreen>
     );
@@ -631,39 +692,57 @@ export default function NewMaintenanceRequest() {
         // read, or cannot be escalated (with its request to open when it is
         // already escalated). The web shows no form either.
         <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }}>
+          <ReplacedNotice text={replacedNotice} />
           <EscalationSourceCard view={escalationView} />
         </ScrollView>
       ) : (
         <FormStep
           subject={subject}
-          setSubject={setSubject}
+          setSubject={entered(setSubject)}
           description={description}
-          setDescription={setDescription}
+          setDescription={entered(setDescription)}
           category={shownCategory}
-          setCategory={setCategory}
+          setCategory={entered(setCategory)}
           categories={categories}
           priority={priority}
-          setPriority={setPriority}
+          setPriority={entered(setPriority)}
           charterId={charterId}
-          setCharterId={setCharterId}
+          setCharterId={entered(setCharterId)}
           sites={sites}
           requesterPhone={requesterPhone}
-          setRequesterPhone={setRequesterPhone}
+          setRequesterPhone={entered(setRequesterPhone)}
           building={building}
-          setBuilding={setBuilding}
+          setBuilding={entered(setBuilding)}
           roomOrArea={roomOrArea}
-          setRoomOrArea={setRoomOrArea}
+          setRoomOrArea={entered(setRoomOrArea)}
           department={department}
-          setDepartment={setDepartment}
+          setDepartment={entered(setDepartment)}
           accessInstructions={accessInstructions}
-          setAccessInstructions={setAccessInstructions}
+          setAccessInstructions={entered(setAccessInstructions)}
           hasLinkedRecord={hasLinkedRecord}
           saving={saving}
           onSave={escalationId ? () => void onEscalate() : onSave}
           escalation={escalationId ? escalationView : null}
+          notice={replacedNotice}
         />
       )}
     </View>
+  );
+}
+
+/**
+ * Said on the form a link opened in place of one holding unsaved input
+ * (REQUEST_FORM_REPLACED_COPY): what was entered there was not saved and is
+ * not part of this request. Nothing when `text` is null.
+ */
+function ReplacedNotice({ text }: { text: string | null }) {
+  if (!text) return null;
+  return (
+    <Card padding={14} style={{ marginTop: 16 }}>
+      <Body size={14} accessibilityRole="alert">
+        {text}
+      </Body>
+    </Card>
   );
 }
 
@@ -672,12 +751,15 @@ function GateScreen({
   onBack,
   children,
   action,
+  notice,
 }: {
   c: ReturnType<typeof useTheme>['c'];
   onBack: () => void;
   children: React.ReactNode;
   /** A control under the message (Try again). */
   action?: React.ReactNode;
+  /** A link opened this screen in place of a form holding unsaved input. */
+  notice?: string | null;
 }) {
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
@@ -691,6 +773,7 @@ function GateScreen({
           <Body size={14.5}>{children}</Body>
           {action}
         </Card>
+        <ReplacedNotice text={notice ?? null} />
       </View>
     </View>
   );
@@ -751,6 +834,7 @@ function FormStep({
   saving,
   onSave,
   escalation,
+  notice,
 }: {
   subject: string;
   setSubject: (v: string) => void;
@@ -781,6 +865,8 @@ function FormStep({
    *  takes are shown (a field it would drop is never offered), and Save
    *  follows the escalation gate. null for an ordinary request. */
   escalation: EscalationFormView | null;
+  /** A link opened this form in place of one holding unsaved input. */
+  notice: string | null;
 }) {
   const { c } = useTheme();
   const [footerHeight, setFooterHeight] = React.useState<number | null>(null);
@@ -796,6 +882,7 @@ function FormStep({
           }}
           keyboardShouldPersistTaps="handled"
         >
+          <ReplacedNotice text={notice} />
           {escalation ? <EscalationSourceCard view={escalation} /> : null}
           <SectionLabel>WHAT&apos;S THE ISSUE</SectionLabel>
           <Field label="SUBJECT">

@@ -388,8 +388,96 @@ describe('escalationTarget', () => {
   });
 });
 
+// Simulator walk 2026-09-27 (F1-5, probe w10): a link to
+// /maintenance/new?exceptionOccurrenceId=... arriving while a plain New
+// request form was on top REUSED that screen (expo-router keeps the route and
+// swaps its params). It became the escalation form but kept the subject typed
+// for the plain request, because the prefill never writes over typed text, so
+// Save would have escalated with an unrelated subject. The screen now mounts a
+// fresh form whenever this key changes.
+describe('requestFormKey (a fresh form when what the form is for changes)', () => {
+  const PLAIN_ITEM = '66666666-6666-4666-8666-666666666666';
+
+  // Mutation caught: one key for every escalation, or the mode left out (the
+  // plain form's typed subject carried into the escalation form).
+  it('a plain request, each exception and a malformed link are different forms', () => {
+    const plain = escalation.requestFormKey({});
+    const escalateOcc = escalation.requestFormKey({ exceptionOccurrenceId: OCC });
+    const escalateOther = escalation.requestFormKey({ exceptionOccurrenceId: REQ });
+    const malformed = escalation.requestFormKey({ exceptionOccurrenceId: 'abc' });
+    expect(new Set([plain, escalateOcc, escalateOther, malformed]).size).toBe(4);
+  });
+
+  // Never silently discard what someone typed for the SAME exception. The
+  // server takes the item and the location from the exception, so a second
+  // link for it (from the web, with or without the location hint) is the
+  // same form. Mutation caught: the location hint in the escalation key.
+  it('the same exception is the same form, whatever hints the link carries', () => {
+    const fromExceptionScreen = escalation.requestFormKey({ exceptionOccurrenceId: OCC, locationId: LOC });
+    expect(escalation.requestFormKey({ exceptionOccurrenceId: OCC })).toBe(fromExceptionScreen);
+    expect(escalation.requestFormKey({ exceptionOccurrenceId: [OCC] })).toBe(fromExceptionScreen);
+    expect(escalation.requestFormKey({ exceptionOccurrenceId: OCC, subject: 'x', itemId: PLAIN_ITEM })).toBe(
+      fromExceptionScreen,
+    );
+  });
+
+  // A plain request's launch params are what it is for (its related records
+  // ride on Save), so another launch is another form: typed text never rides
+  // with another link's records. The same launch is the same form.
+  it('a plain request is the same form only for the same launch', () => {
+    const forItem = escalation.requestFormKey({ itemId: PLAIN_ITEM, subject: 'Problem with Atlas' });
+    expect(escalation.requestFormKey({ itemId: PLAIN_ITEM, subject: 'Problem with Atlas' })).toBe(forItem);
+    expect(escalation.requestFormKey({ itemId: PLAIN_ITEM })).not.toBe(forItem);
+    expect(escalation.requestFormKey({})).not.toBe(forItem);
+    expect(escalation.requestFormKey({ locationId: LOC })).not.toBe(escalation.requestFormKey({}));
+    expect(escalation.requestFormKey({ charterId: LOC })).not.toBe(escalation.requestFormKey({}));
+    expect(escalation.requestFormKey({ orderRequestId: LOC })).not.toBe(escalation.requestFormKey({ rentalId: LOC }));
+  });
+});
+
+describe('nextRequestFormSlot (a replaced form holding unsaved input is said, never silent)', () => {
+  const A = 'request:[]';
+  const B = `escalate:${OCC}`;
+
+  // Mutation caught: a new slot on every render (the notice lost, or shown
+  // on a form that replaced nothing).
+  it('the same form keeps its slot', () => {
+    const slot = { key: A, replacedUnsaved: false };
+    expect(escalation.nextRequestFormSlot(slot, A, A)).toBe(slot);
+    const said = { key: B, replacedUnsaved: true };
+    expect(escalation.nextRequestFormSlot(said, B, null)).toBe(said);
+  });
+
+  it('a new form says so only when the one it replaced held unsaved input', () => {
+    expect(escalation.nextRequestFormSlot({ key: A, replacedUnsaved: false }, B, A)).toEqual({
+      key: B,
+      replacedUnsaved: true,
+    });
+    // Nothing entered, or it was saved (the photos step): nothing was lost.
+    expect(escalation.nextRequestFormSlot({ key: A, replacedUnsaved: false }, B, null)).toEqual({
+      key: B,
+      replacedUnsaved: false,
+    });
+    // Input entered on some other form is not this one's.
+    expect(escalation.nextRequestFormSlot({ key: A, replacedUnsaved: false }, B, B)).toEqual({
+      key: B,
+      replacedUnsaved: false,
+    });
+    // The notice belongs to the form it was shown on: the next change resets it.
+    expect(escalation.nextRequestFormSlot({ key: B, replacedUnsaved: true }, A, null)).toEqual({
+      key: A,
+      replacedUnsaved: false,
+    });
+  });
+
+  it('the notice says the earlier input was not saved and is not part of this request', () => {
+    expect(escalation.REQUEST_FORM_REPLACED_COPY).toMatch(/not saved/);
+    expect(escalation.REQUEST_FORM_REPLACED_COPY).toMatch(/not part of this request/);
+  });
+});
+
 describe('escalationFormState', () => {
-  const state = (load: Parameters<typeof escalationFormState>[0]['load'], g: Partial<{ online: boolean; saving: boolean; maintenanceEnabled: boolean }> = {}) =>
+  const state =(load: Parameters<typeof escalationFormState>[0]['load'], g: Partial<{ online: boolean; saving: boolean; maintenanceEnabled: boolean }> = {}) =>
     escalationFormState({ load, online: true, saving: false, maintenanceEnabled: true, ...g });
 
   // Mutation caught: showing the form before the exception loaded (a person
