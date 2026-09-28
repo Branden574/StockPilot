@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_MODULE_IDS,
   LOCATION_HOLDINGS_TRUNCATED_COPY,
+  verificationIssueChipCopy,
   verificationSummaryCopy,
   type ModuleId,
 } from '@stockpilot/core';
@@ -389,6 +390,68 @@ describe('VerificationService.item', () => {
     // Every read is pinned to the org.
     const issuesChain = stub.chainArgsAll.get('exception_occurrences.select')![0]!;
     expect(issuesChain).toContainEqual(['organization_id', ORG]);
+  });
+
+  it('F1-5: an escalated open exception carries its request handle (and whether it was cancelled) for the chips', async () => {
+    const stub = itemStub({
+      issues: servedLikePostgrest([
+        {
+          id: 'o-1',
+          organization_id: ORG,
+          occurrence_number: 42,
+          rule: 'count_variance',
+          item_id: ITEM,
+          location_id: null,
+          resolved_at: null,
+          maintenance_request_id: '44444444-4444-4444-8444-444444444444',
+          escalation_number: 14,
+          escalation_request_created_at: '2026-09-27T12:00:00Z',
+          escalation_request_cancelled: false,
+        },
+        {
+          id: 'o-2',
+          organization_id: ORG,
+          occurrence_number: 43,
+          rule: 'stale_staging',
+          item_id: ITEM,
+          location_id: LOC,
+          resolved_at: null,
+          maintenance_request_id: '55555555-5555-4555-8555-555555555555',
+          escalation_number: 9,
+          escalation_request_created_at: '2026-01-02T00:00:00Z',
+          escalation_request_cancelled: true,
+        },
+        {
+          id: 'o-5',
+          organization_id: ORG,
+          occurrence_number: 45,
+          rule: 'label_mismatch',
+          item_id: ITEM,
+          location_id: null,
+          resolved_at: null,
+          maintenance_request_id: null,
+          escalation_number: null,
+          escalation_request_created_at: null,
+          escalation_request_cancelled: null,
+        },
+      ]),
+    });
+    const r = await new VerificationService(ctx(stub)).item(ITEM);
+    expect(r.openIssues.map((i) => i.escalation ?? null)).toEqual([
+      { reference: 'MR-2026-000014', cancelled: false },
+      { reference: 'MR-2026-000009', cancelled: true },
+      null,
+    ]);
+    // The chips word it with core, as every other surface does.
+    expect(r.openIssues.map((i) => verificationIssueChipCopy(i))).toEqual([
+      'EX-000042 · Count did not match the stock on record · Escalated: MR-2026-000014',
+      'EX-000043 · Sitting in Staging · Escalated: MR-2026-000009 (request cancelled)',
+      'EX-000045 · Label will not lead to the stock',
+    ]);
+    const select = String(stub.chainArgsAll.get('exception_occurrences.select')![0]![0]![0]);
+    for (const col of ['escalation_number', 'escalation_request_created_at', 'escalation_request_cancelled']) {
+      expect(select).toContain(col);
+    }
   });
 
   it('a profile the reader cannot see is a former member', async () => {

@@ -410,4 +410,69 @@ describe('Exceptions list page', () => {
     expect(screen.getByTestId('occurrence-state')).toHaveTextContent('Re-checking');
     expect(screen.getByTestId('recount-note')).toHaveTextContent('Matched the stock on record (21)');
   });
+
+  // ── F1-5: escalated to maintenance ────────────────────────────────────────
+
+  // Mutation caught: the chip left off the list (a reader scanning the list
+  // could escalate the same condition twice).
+  it('an escalated row says "Escalated: MR-..." inside its own row link, never as a second link, and stays Open', async () => {
+    list.mockResolvedValue(
+      listResult({
+        occurrences: [
+          occurrence({
+            escalation: {
+              requestId: '44444444-4444-4444-8444-444444444444',
+              requestNumber: 14,
+              reference: 'MR-2026-000014',
+              escalatedAt: '2026-09-24T17:00:00Z',
+              escalatedBy: { id: 'u1', label: 'Dana Lee' },
+              requestCancelled: false,
+              visibleToReader: null,
+              request: null,
+            },
+            canEscalate: false,
+            escalateUnavailableReason: 'already_escalated',
+          }),
+          occurrence({ id: '55555555-5555-4555-8555-555555555555', reference: 'EX-000044', escalation: null }),
+        ],
+      }),
+    );
+    await renderPage();
+    const badges = screen.getAllByTestId('escalation-badge');
+    expect(badges).toHaveLength(1);
+    expect(badges[0]).toHaveTextContent('Escalated: MR-2026-000014');
+    const row = screen.getByRole('link', { name: /EX-000042/ });
+    expect(within(row).getByTestId('escalation-badge')).toBe(badges[0]);
+    expect(badges[0]!.querySelector('a')).toBeNull();
+    // Escalating neither acknowledges nor resolves.
+    expect(within(row).getByTestId('occurrence-state')).toHaveTextContent('Open');
+    expect(document.body.textContent).not.toMatch(/\bsent\b|ticket/i);
+  });
+
+  // The experience review: the list never said the linked request had been
+  // cancelled, so every reader kept seeing a live escalation.
+  it('a row whose linked request was cancelled says so, for every reader', async () => {
+    list.mockResolvedValue(
+      listResult({
+        occurrences: [
+          occurrence({
+            escalation: {
+              requestId: '44444444-4444-4444-8444-444444444444',
+              requestNumber: 14,
+              reference: 'MR-2026-000014',
+              escalatedAt: '2026-09-24T17:00:00Z',
+              escalatedBy: { id: 'u1', label: 'Dana Lee' },
+              requestCancelled: true,
+              visibleToReader: null,
+              request: null,
+            },
+            canEscalate: true,
+            escalateUnavailableReason: null,
+          }),
+        ],
+      }),
+    );
+    await renderPage();
+    expect(screen.getByTestId('escalation-badge')).toHaveTextContent('Escalated: MR-2026-000014 (request cancelled)');
+  });
 });

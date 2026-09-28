@@ -942,3 +942,42 @@ describe('Maintenance Resolved — §GC-4 forbidden-vocabulary sweep on a resolv
     }
   });
 });
+
+/**
+ * F1-5: a request made from an exception names the location it is about
+ * (emailInput().relatedLocation, read from related_location_id). The detail
+ * page and the review screen show it in the email's own words.
+ */
+describe('related location (F1-5)', () => {
+  function withLocation(relatedLocation: { name: string; warehouseName: string | null } | null) {
+    const base = emailInput.getMockImplementation()!;
+    emailInput.mockImplementation(async (id: string, opts: { shareUrl: string | null }) => {
+      const r = await base(id, opts);
+      return { ...r, content: { ...r.content, relatedLocation } };
+    });
+  }
+
+  // Mutation caught: the row left off the Details list.
+  it('the detail page shows the related location with its warehouse', async () => {
+    withLocation({ name: 'Staging', warehouseName: 'DC4 Warehouse' });
+    render(await MaintenanceRequestDetailPage(args()));
+    const row = screen.getByText('Related location').closest('div')!;
+    expect(within(row).getByText('Staging (DC4 Warehouse)')).toBeInTheDocument();
+  });
+
+  it('no related location, no row', async () => {
+    withLocation(null);
+    render(await MaintenanceRequestDetailPage(args()));
+    expect(screen.queryByText('Related location')).toBeNull();
+  });
+
+  it('the review screen (?review=1) names it under the related record as "Related location", as the detail page and the email do', async () => {
+    withLocation({ name: '12-B', warehouseName: null });
+    render(await MaintenanceRequestDetailPage(args({ review: '1' })));
+    // Never a bare "Location:": the email's item block has its own
+    // "Location" (the item's primary location), a different place.
+    expect(screen.getByText('Related location: 12-B')).toBeInTheDocument();
+    expect(screen.queryByText('Location: 12-B')).toBeNull();
+    expect(screen.getByText('Related StockPilot record')).toBeInTheDocument();
+  });
+});

@@ -5,6 +5,7 @@ import {
   formatMaintenanceRequestNumber,
   maintenanceCcNotice,
   prepareMaintenanceEmail,
+  relatedLocationText,
   type MaintenanceEmailContent,
   type OrgEmailRoutingState,
   type PreparedMaintenanceEmail,
@@ -95,6 +96,9 @@ export function MaintenanceReview({
   }
   const requestNumber =
     formatMaintenanceRequestNumber(detail.requestNumber, detail.createdAt) ?? String(detail.requestNumber);
+  // F1-5: the location the request is about (an escalated exception's rack,
+  // Staging or Unplaced), in the email's own words.
+  const relatedLocation = relatedLocationText(emailInput.relatedLocation);
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -143,7 +147,7 @@ export function MaintenanceReview({
             <p className="mt-1 whitespace-pre-wrap text-sm">{detail.description}</p>
           </div>
 
-          {emailInput.relatedItem || emailInput.relatedOrder || emailInput.relatedRental ? (
+          {emailInput.relatedItem || relatedLocation || emailInput.relatedOrder || emailInput.relatedRental ? (
             <div className="mt-4 space-y-2">
               <p className="text-xs font-medium text-muted-foreground">Related StockPilot record</p>
               {emailInput.relatedItem ? (
@@ -159,6 +163,7 @@ export function MaintenanceReview({
                   {emailInput.relatedItem.sku ? ` (${emailInput.relatedItem.sku})` : ''}
                 </p>
               ) : null}
+              {relatedLocation ? <p className="text-sm">Related location: {relatedLocation}</p> : null}
               {emailInput.relatedOrder ? (
                 <p className="text-sm">
                   Order:{' '}

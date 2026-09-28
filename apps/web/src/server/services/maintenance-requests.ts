@@ -29,6 +29,7 @@ import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from './context';
 import { maintenanceShareLinksEnabled, MaintenanceShareLinksService } from './maintenance-share-links';
 import { notifyMaintenanceEvent } from './maintenance-notify';
+import { isDefiniteRefusal } from './lib/postgrest-error';
 
 /**
  * The ONLY audit_logs events the detail page's "StockPilot activity"
@@ -369,7 +370,18 @@ export class MaintenanceRequestsService {
       })
       .select('id, request_number, created_at')
       .single();
-    if (error || !row) throw new ServiceError('internal_error', error?.message ?? 'Could not save the request.');
+    if (error || !row) {
+      // F1-5: an insert that failed without a database answer (no SQLSTATE:
+      // a dropped connection, a gateway timeout) may have committed with its
+      // answer lost. `insertUnconfirmed` tells a caller that must not assume
+      // nothing was saved (ExceptionEscalationService); it is never sent to
+      // a client (internal_error details are dropped at every boundary).
+      throw new ServiceError(
+        'internal_error',
+        error?.message ?? 'Could not save the request.',
+        isDefiniteRefusal(error) ? undefined : { insertUnconfirmed: true },
+      );
+    }
 
     await audit(
       {
@@ -1231,6 +1243,34 @@ export class MaintenanceRequestsService {
       }
     }
 
+    // F1-5: the location the request is about (an escalated exception's rack,
+    // Staging or Unplaced; any request with a related location). Names only.
+    // Its read error is bound: a failed read is reported and the line is left
+    // out (the email builder drops this line first anyway), never guessed.
+    let relatedLocation: MaintenanceEmailInput['relatedLocation'] = null;
+    if (detail.relatedLocationId) {
+      const { data: location, error: locationError } = await this.db
+        .from('locations')
+        .select('id, name, warehouses!warehouse_id(name)')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', detail.relatedLocationId)
+        .maybeSingle();
+      if (locationError) {
+        void reportError(new Error('Related location read failed; the email omits it'), {
+          tag: 'maintenance.email_location_read',
+          level: 'warning',
+          organizationId: this.ctx.organizationId,
+          extra: { requestId: id, detail: locationError.message },
+        });
+      } else if (location) {
+        const warehouse = (location.warehouses as unknown as { name: string } | null) ?? null;
+        relatedLocation = {
+          name: location.name as string,
+          warehouseName: warehouse?.name ?? null,
+        };
+      }
+    }
+
     let relatedRental: MaintenanceEmailInput['relatedRental'] = null;
     if (detail.relatedRentalId) {
       // 0131_rentals.sql: rental line items live in `rental_lines`
@@ -1340,6 +1380,7 @@ export class MaintenanceRequestsService {
       relatedItem,
       relatedOrder,
       relatedRental,
+      relatedLocation,
       photoCount: detail.photoCount,
       shareUrl: opts.shareUrl,
     };

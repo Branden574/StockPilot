@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { can, formatMaintenanceRequestNumber, uuidSchema } from '@stockpilot/core';
+import { can, formatMaintenanceRequestNumber, relatedLocationText, uuidSchema } from '@stockpilot/core';
 
 import { AssignOwnerSelect, type MaintenanceOwnerOption } from '@/components/maintenance/assign-owner-select';
 import { MaintenanceEmailAction } from '@/components/maintenance/maintenance-email-action';
@@ -352,6 +352,10 @@ export default async function MaintenanceRequestDetailPage({
                   </dd>
                 </div>
               ) : null}
+              {/* F1-5: the location the request is about (an escalated
+                  exception's rack, Staging or Unplaced). Names only, read by
+                  emailInput() from the request's related_location_id. */}
+              <DetailRow label="Related location" value={relatedLocationText(emailInput.relatedLocation)} />
               {emailInput.relatedOrder ? (
                 <div className="flex justify-between gap-3">
                   <dt className="text-muted-foreground">Related order</dt>

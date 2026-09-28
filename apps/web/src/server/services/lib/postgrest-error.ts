@@ -46,3 +46,16 @@ export function postgrestErrorText(
   if (parts.length === 0) return 'PostgREST error with an empty message and no status';
   return `${parts.join(', ')} (empty error message)`;
 }
+
+/**
+ * Whether a failed PostgREST call is a DEFINITE answer: the database raised
+ * (a SQLSTATE such as P0001, 42501 or 55P03) or PostgREST refused (a PGRST
+ * code). Either way the call's transaction did not commit. An error with
+ * neither (a dropped connection, a gateway 502 or 504, a timeout) says
+ * nothing about whether the statement ran and committed, and a caller that
+ * must not guess (F1-5's escalation) treats it as unknown.
+ */
+export function isDefiniteRefusal(error: PostgrestLikeError | null | undefined): boolean {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  return /^[0-9A-Z]{5}$/.test(code) || /^PGRST\d{3}$/.test(code);
+}

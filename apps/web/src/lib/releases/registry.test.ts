@@ -457,9 +457,11 @@ describe('F1-4 (photos on exceptions) is published', () => {
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-29T00:00:00Z'));
   });
 
-  it('sits at the top, dated after every other release, so publishing it makes it the newest', () => {
-    expect(RELEASES[0]!.id).toBe(F1_4);
-    for (const r of RELEASES.slice(1)) {
+  it('is the newest published release, just below F1-5\'s draft, dated after every release below it', () => {
+    // F1-5's release (below) is a draft above it, which reaches no reader.
+    expect(RELEASES.findIndex((r) => r.id === F1_4)).toBe(1);
+    expect(RELEASES.filter((r) => r.status === 'published')[0]!.id).toBe(F1_4);
+    for (const r of RELEASES.slice(2)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -500,5 +502,116 @@ describe('F1-4 (photos on exceptions) is published', () => {
     expect(text).toContain('send no notifications');
     // The web sends no capture time: never promise every photo shows one.
     expect(text).toContain('a photo added on the web shows only its upload time');
+  });
+});
+
+/**
+ * F1-5's release (escalate an exception to maintenance) is held as a DRAFT
+ * until its phone release (pnpm release:ota) and the Demo Co walk, as F1-3's
+ * and F1-4's were: published with the web screens, it would tell phone users
+ * about an Escalate their app does not have yet. The follow-up that publishes
+ * it sets 'published' and the real publishedAt, and flips the first pin here.
+ */
+describe('F1-5 (escalate an exception to maintenance) is held as a draft', () => {
+  const F1_5 = 'exception-escalation-2026-09';
+  const release = () => RELEASES.find((r) => r.id === F1_5)!;
+  /** A reader every audience includes. */
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+  const published = (): Release => ({ ...release(), status: 'published' });
+
+  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+    expect(release().status).toBe('draft');
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(F1_5);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).not.toContain(F1_5);
+    // The notice still offers F1-4, the newest published release.
+    expect(list.latestUnread?.id).toBe('exception-photos-2026-09');
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(F1_5);
+    expect(registryFingerprint(RELEASES)).not.toContain(F1_5);
+    // Preparing it changes nothing a client can observe.
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== F1_5)));
+    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(F1_5);
+  });
+
+  it('sits at the top, dated after every other release, so publishing it makes it the newest', () => {
+    expect(RELEASES[0]!.id).toBe(F1_5);
+    for (const r of RELEASES.slice(1)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('is addressed as the screens gate it: the module and items:read, and the escalate entry maintenance_requests:submit', () => {
+    expect(release().audience).toEqual({ anyPermission: ['items:read'], modules: ['maintenance_requests'] });
+    expect(release().entries.map((e) => e.id)).toEqual([
+      'exception-escalate-to-maintenance',
+      'exception-escalated-badge',
+      'maintenance-request-related-location',
+    ]);
+    const [escalate, badge, location] = release().entries;
+    expect(escalate!.audience).toEqual({
+      anyPermission: ['maintenance_requests:submit'],
+      modules: ['maintenance_requests'],
+    });
+    expect(escalate!.link).toEqual({ href: '/dashboard/exceptions', label: 'Open Exceptions' });
+    expect(badge!.audience).toEqual({ anyPermission: ['items:read'], modules: ['maintenance_requests'] });
+    expect(badge!.link).toEqual({ href: '/dashboard/exceptions', label: 'Open Exceptions' });
+    expect(location!.audience).toEqual({
+      anyPermission: ['maintenance_requests:submit', 'maintenance_requests:read_all', 'maintenance_requests:manage'],
+      modules: ['maintenance_requests'],
+    });
+    expect(location!.link).toEqual({ href: '/dashboard/maintenance', label: 'Open Maintenance' });
+  });
+
+  it('once published, it reaches only organizations with Maintenance requests on, and Escalate only people who can submit', () => {
+    const reader = (permissions: ReleaseViewer['permissions'], enabledModules: ModuleId[]) =>
+      visibleReleases([published()], { role: 'viewer', permissions, enabledModules })[0]?.entries.map((e) => e.id) ??
+      [];
+    const submitter = ['items:read', 'maintenance_requests:submit'] as ReleaseViewer['permissions'];
+    expect(reader(submitter, ['maintenance_requests'])).toEqual([
+      'exception-escalate-to-maintenance',
+      'exception-escalated-badge',
+      'maintenance-request-related-location',
+    ]);
+    // The module off: nothing, whatever the permissions.
+    expect(reader(submitter, [])).toEqual([]);
+    // Reads exceptions, cannot submit requests: told about the badge only.
+    expect(reader(['items:read'], ['maintenance_requests'])).toEqual(['exception-escalated-badge']);
+    // Can submit but cannot read exceptions: the Exceptions page would bounce them.
+    expect(reader(['maintenance_requests:submit'], ['maintenance_requests'])).toEqual([]);
+  });
+
+  it("says the owner's decisions plainly: both platforms, nothing emailed on save, one request, online only, no photos copied", () => {
+    const r = release();
+    expect(r.summary).toMatch(/^On the web and in the mobile app, /);
+    expect(r.summary).toContain('Nothing is emailed when you save');
+    expect(r.summary).toContain('opens only if you choose it on the next screen');
+    expect(r.summary).toContain('does not acknowledge or resolve the exception');
+    const text = readerText(r).join(' ');
+    expect(text).toContain('creates one maintenance request linked to the exception');
+    expect(text).toContain('A new one can be made only if that one is cancelled');
+    expect(text).toContain('needs a connection and is not saved to try later');
+    expect(text).toContain('Photos on the exception are not copied');
+    expect(text).toContain('you send it yourself');
+    expect(text).toContain('notifies the same people as one made from the maintenance form');
+    expect(text).toContain('It does not know whether an email went out');
+    // Never a claim StockPilot cannot observe.
+    expect(text).not.toMatch(/\bsent\b|ticket|delivered|submitted/i);
+  });
+
+  it('says the prefill names a place only when the exception is at one (item-level rules have none)', () => {
+    const escalate = release().entries.find((e) => e.id === 'exception-escalate-to-maintenance')!;
+    expect(escalate.whatChanged).toContain('where it is when the exception is at a location');
+    expect(escalate.whatChanged).not.toMatch(/what is wrong, where, and/);
+  });
+
+  it('says every surface shows the escalation, the item and location pages included, and a cancelled request to everyone', () => {
+    const badge = release().entries.find((e) => e.id === 'exception-escalated-badge')!;
+    expect(badge.whatChanged).toContain("on the open exceptions of its item's and location's pages");
+    expect(badge.whatChanged).toContain('If the request is cancelled, everyone who can see the exception sees that');
+    expect(badge.whatChanged).toContain('can be escalated again');
   });
 });

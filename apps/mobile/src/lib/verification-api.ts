@@ -208,6 +208,15 @@ function parseIssue(v: unknown): MobileVerificationIssue {
     rule: v.rule,
     itemId: v.itemId,
     locationId: str(v.locationId),
+    // F1-5: the request it was escalated to (core's chip copy says
+    // "Escalated: MR-..."). Optional: an older server sends none, and a
+    // malformed block is no escalation. "cancelled" only as a real boolean.
+    escalation: isObj(v.escalation)
+      ? {
+          reference: str(v.escalation.reference),
+          cancelled: typeof v.escalation.cancelled === 'boolean' ? v.escalation.cancelled : null,
+        }
+      : null,
   };
 }
 

@@ -5,6 +5,7 @@ import {
   EXCEPTION_RESOLVED_WINDOW_DAYS,
   EXCEPTION_RULE_IDS,
   formatCycleCountNumber,
+  formatMaintenanceRequestNumber,
   formatOccurrenceNumber,
   isExceptionRule,
   isManagerOrAbove,
@@ -14,8 +15,10 @@ import {
   resolveOrgTimezone,
   varianceDestination,
   varianceReviewLine,
+  type EscalateUnavailableReason,
   type ExceptionCheckNotScheduledReason,
   type ExceptionRule,
+  type MaintenanceStatus,
   type OccurrenceEventKind,
   type OccurrenceRecountRef,
   type OccurrenceResolvedReason,
@@ -31,6 +34,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { escalateBlock } from './exception-escalation';
 import { ExceptionsService } from './exceptions';
 import { countStartBlock } from './lib/count-start-preflight';
 import { fetchAllRowsByIds, rawErrorText, reportDegradedRead } from './lib/fetch-by-ids';
@@ -102,7 +106,11 @@ const OUTCOME_CONCURRENCY = 4;
 // PostgREST refuses an embed that more than one relationship could satisfy.
 // Single string literals, so supabase-js can type the rows.
 const OCCURRENCE_SELECT =
-  'id, occurrence_number, rule, item_id, location_id, warehouse_id, facts, condition_since, first_seen_at, last_seen_at, acknowledged_at, acknowledged_by, recount_cycle_count_id, resolved_at, resolved_reason, previous_occurrence_id, recurrence_index, item:inventory_items!exception_occurrences_item_id_fkey(name, sku), location:locations!exception_occurrences_location_id_fkey(name, kind, deleted_at), recount:cycle_counts!exception_occurrences_recount_cycle_count_id_fkey(id, count_number, status, completed_at), acknowledger:user_profiles!exception_occurrences_acknowledged_by_fkey(full_name, email)';
+  'id, occurrence_number, rule, item_id, location_id, warehouse_id, facts, condition_since, first_seen_at, last_seen_at, acknowledged_at, acknowledged_by, recount_cycle_count_id, resolved_at, resolved_reason, previous_occurrence_id, recurrence_index, maintenance_request_id, escalation_number, escalation_request_created_at, escalated_at, escalated_by, escalation_request_cancelled, item:inventory_items!exception_occurrences_item_id_fkey(name, sku), location:locations!exception_occurrences_location_id_fkey(name, kind, deleted_at), recount:cycle_counts!exception_occurrences_recount_cycle_count_id_fkey(id, count_number, status, completed_at), acknowledger:user_profiles!exception_occurrences_acknowledged_by_fkey(full_name, email), escalator:user_profiles!exception_occurrences_escalated_by_fkey(full_name, email)';
+
+/** The linked maintenance requests a detail read looks up, under the
+ *  reader's own RLS (requester, read_all or manage see a request). */
+const ESCALATION_REQUEST_SELECT = 'id, request_number, created_at, status, cancelled_at, outlook_draft_opened_at';
 
 const EVENT_SELECT =
   'id, kind, actor_user_id, cycle_count_id, evidence_id, maintenance_request_id, note, created_at, actor:user_profiles!exception_occurrence_events_actor_user_id_fkey(full_name, email), cycle_count:cycle_counts!exception_occurrence_events_cycle_count_id_fkey(count_number)';
@@ -160,6 +168,46 @@ export interface ExceptionOccurrence {
    *  permissions); null when it is offered or the row is not one a recount
    *  could settle. Worded by core recountUnavailableCopy. */
   recountUnavailableReason: RecountUnavailableReason | null;
+  /** The maintenance request this occurrence was escalated to (F1-5), or null.
+   *  Every reader of the occurrence sees the handle ("Escalated: MR-..."). */
+  escalation: OccurrenceEscalation | null;
+  /** Whether "Escalate to maintenance" is offered to this reader on this row:
+   *  open, the maintenance_requests module on, maintenance_requests:submit,
+   *  and no linked request that is not cancelled. A hint for the UI; the
+   *  service and the database decide. */
+  canEscalate: boolean;
+  /** Why not, when not (worded by core escalateDisabledReason); null when it
+   *  is offered. `module_disabled` usually means hide the button. */
+  escalateUnavailableReason: EscalateUnavailableReason | null;
+}
+
+/**
+ * An occurrence's escalation (F1-5). `requestId`, `requestNumber` and
+ * `reference` are copies on the occurrence itself, so every reader of the
+ * occurrence has them. What the request itself says is only for a reader
+ * who can open it, and only on the detail read.
+ */
+export interface OccurrenceEscalation {
+  /** The linked request; null only if it was deleted. */
+  requestId: string | null;
+  requestNumber: number;
+  /** "MR-2026-000014" (the year comes from the request's created_at). */
+  reference: string | null;
+  escalatedAt: string;
+  escalatedBy: OccurrencePerson | null;
+  /** Whether the linked request was cancelled, for EVERY reader of the
+   *  occurrence (the escalation_request_cancelled computed field, 0376):
+   *  true frees the occurrence for a new escalation, and the badge says so;
+   *  null when not known (an older database, or no link). */
+  requestCancelled: boolean | null;
+  /** Whether THIS reader can open the request (its requester, or a holder of
+   *  maintenance_requests:read_all or :manage). null when not checked (list
+   *  reads) or when the check failed. */
+  visibleToReader: boolean | null;
+  /** What the request records, for a reader who can open it (core
+   *  escalationRequestStateCopy words it); null otherwise. Never "sent":
+   *  draftOpened means a draft opened, nothing more. */
+  request: { status: MaintenanceStatus; draftOpened: boolean; cancelled: boolean } | null;
 }
 
 /** The recount an occurrence points at, with what came of it for its item. */
@@ -218,6 +266,10 @@ export interface OccurrenceEvent {
    *  it was posted". */
   cycleCount: { id: string; countNumber: number | null; outcome?: RecountOutcome } | null;
   maintenanceRequestId: string | null;
+  /** For an escalated event: the request's handle when this reader knows it
+   *  (they can open the request, or it is the occurrence's current link,
+   *  whose number the occurrence carries); null otherwise. */
+  maintenanceRequestReference: string | null;
   evidenceId: string | null;
   /** For an evidence event: the photo's two times (the device's capture time
    *  and the server's upload time) and whether it has since been removed,
@@ -370,6 +422,13 @@ type OccurrenceRow = {
   resolved_reason: OccurrenceResolvedReason | null;
   previous_occurrence_id: string | null;
   recurrence_index: number;
+  maintenance_request_id?: string | null;
+  escalation_number?: number | string | null;
+  escalation_request_created_at?: string | null;
+  escalated_at?: string | null;
+  escalated_by?: string | null;
+  /** The escalation_request_cancelled computed field (0376). */
+  escalation_request_cancelled?: boolean | null;
   item?: { name: string; sku: string | null } | null;
   location?: { name: string; kind: string | null; deleted_at: string | null } | null;
   recount?: {
@@ -379,6 +438,7 @@ type OccurrenceRow = {
     completed_at: string | null;
   } | null;
   acknowledger?: ProfileEmbed;
+  escalator?: ProfileEmbed;
 };
 
 type EventRow = {
@@ -442,11 +502,51 @@ function outcomeFromStatus(status: string): RecountOutcome {
   return recountOutcome({ status }, null);
 }
 
+/** The escalation columns as the occurrence carries them, or null when it was
+ *  never escalated. */
+function mapEscalation(row: OccurrenceRow): OccurrenceEscalation | null {
+  const requestNumber = toNumber(row.escalation_number ?? null);
+  if (requestNumber === null || !row.escalated_at) return null;
+  return {
+    requestId: row.maintenance_request_id ?? null,
+    requestNumber,
+    reference: formatMaintenanceRequestNumber(requestNumber, row.escalation_request_created_at ?? null),
+    escalatedAt: row.escalated_at,
+    escalatedBy: personFor(row.escalated_by ?? null, row.escalator),
+    requestCancelled:
+      typeof row.escalation_request_cancelled === 'boolean' ? row.escalation_request_cancelled : null,
+    visibleToReader: null,
+    request: null,
+  };
+}
+
+/**
+ * Why Escalate is not offered on this row, or null. `escBlock` is the
+ * reader's floors (escalateBlock). A linked request blocks unless it is
+ * known to be cancelled (the claim frees a cancelled one): the computed
+ * field tells every reader, and a reader who can open the request also
+ * sees it on the request. Not known (null) blocks: a second request is
+ * never offered on a guess.
+ */
+function escalateReason(
+  o: Pick<ExceptionOccurrence, 'resolvedAt' | 'escalation'>,
+  escBlock: EscalateUnavailableReason | null,
+): EscalateUnavailableReason | null {
+  if (escBlock !== null) return escBlock;
+  if (o.resolvedAt !== null) return 'resolved';
+  const e = o.escalation;
+  if (e && e.requestId !== null && !(e.requestCancelled === true || e.request?.cancelled === true)) {
+    return 'already_escalated';
+  }
+  return null;
+}
+
 function mapOccurrence(
   row: OccurrenceRow,
   syncState: ExceptionSyncState | null,
   canActOn: ActGate,
   recountBlock: RecountUnavailableReason | null,
+  escBlock: EscalateUnavailableReason | null,
 ): ExceptionOccurrence | null {
   // A rule a newer build stored is not one this build can describe; the
   // caller reports it instead of rendering a broken row.
@@ -497,7 +597,18 @@ function mapOccurrence(
     canRecount: recountBlock === null && row.resolved_at === null && isRecountableRule(row.rule),
     recountUnavailableReason:
       recountBlock !== null && row.resolved_at === null && isRecountableRule(row.rule) ? recountBlock : null,
+    ...escalationFields(row.resolved_at, mapEscalation(row), escBlock),
   };
+}
+
+/** escalation, canEscalate and escalateUnavailableReason, consistently. */
+function escalationFields(
+  resolvedAt: string | null,
+  escalation: OccurrenceEscalation | null,
+  escBlock: EscalateUnavailableReason | null,
+): Pick<ExceptionOccurrence, 'escalation' | 'canEscalate' | 'escalateUnavailableReason'> {
+  const reason = escalateReason({ resolvedAt, escalation }, escBlock);
+  return { escalation, canEscalate: reason === null, escalateUnavailableReason: reason };
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -572,10 +683,11 @@ export class ExceptionOccurrencesService {
     ]);
 
     const recountBlock = countStartBlock(this.ctx);
+    const escBlock = escalateBlock(this.ctx);
     const occurrences: ExceptionOccurrence[] = [];
     let unknown = 0;
     for (const row of rows) {
-      const mapped = mapOccurrence(row, syncState, gate, recountBlock);
+      const mapped = mapOccurrence(row, syncState, gate, recountBlock, escBlock);
       if (mapped) occurrences.push(mapped);
       else unknown += 1;
     }
@@ -633,7 +745,8 @@ export class ExceptionOccurrencesService {
       ),
     ]);
     if (!row) throw new ServiceError('not_found', 'Exception not found.');
-    const occurrence = mapOccurrence(row, syncState, gate, countStartBlock(this.ctx));
+    const escBlock = escalateBlock(this.ctx);
+    const occurrence = mapOccurrence(row, syncState, gate, countStartBlock(this.ctx), escBlock);
     if (!occurrence) {
       this.reportUnknownRules(1);
       throw new ServiceError('not_found', 'Exception not found.');
@@ -684,7 +797,15 @@ export class ExceptionOccurrencesService {
     // exactly the photos its events name, removed ones included. A failed
     // times read leaves each event's times out (never a guessed time).
     const namedEvidence = events.flatMap((e) => (e.evidence_id ? [e.evidence_id] : []));
-    const [evidence, evidenceInfo] = await Promise.all([
+    // The maintenance requests the escalation and the escalated events name,
+    // as far as this reader can open them (F1-5).
+    const namedRequests = [
+      ...new Set([
+        ...(occurrence.escalation?.requestId ? [occurrence.escalation.requestId] : []),
+        ...events.flatMap((e) => (e.kind === 'escalated' && e.maintenance_request_id ? [e.maintenance_request_id] : [])),
+      ]),
+    ];
+    const [evidence, evidenceInfo, requests] = await Promise.all([
       this.evidenceBlock(occurrence, liveEvidence),
       readEvidenceEventInfo(this.ctx, id, namedEvidence).then(
         (info): Map<string, EvidenceEventInfo> | null => info,
@@ -695,7 +816,12 @@ export class ExceptionOccurrencesService {
           return null;
         },
       ),
+      this.readVisibleRequests(namedRequests),
     ]);
+    if (occurrence.escalation) {
+      const escalation = withRequestView(occurrence.escalation, requests);
+      Object.assign(occurrence, escalationFields(occurrence.resolvedAt, escalation, escBlock));
+    }
 
     return {
       occurrence,
@@ -719,6 +845,8 @@ export class ExceptionOccurrencesService {
             }
           : null,
         maintenanceRequestId: e.maintenance_request_id,
+        maintenanceRequestReference:
+          e.kind === 'escalated' ? requestReferenceFor(e.maintenance_request_id, occurrence.escalation, requests) : null,
         evidenceId: e.evidence_id,
         evidence: e.evidence_id && evidenceInfo ? (evidenceInfo.get(e.evidence_id) ?? null) : null,
       })),
@@ -825,7 +953,9 @@ export class ExceptionOccurrencesService {
       this.readSyncState(),
       this.actGate(),
     ]);
-    const mapped = fresh ? mapOccurrence(fresh, syncState, gate, countStartBlock(this.ctx)) : null;
+    const mapped = fresh
+      ? mapOccurrence(fresh, syncState, gate, countStartBlock(this.ctx), escalateBlock(this.ctx))
+      : null;
     if (!mapped) throw new ServiceError('not_found', 'Exception not found.');
     await this.withRecountOutcomes([mapped]);
     return mapped;
@@ -890,10 +1020,11 @@ export class ExceptionOccurrencesService {
     )) as unknown as OccurrenceRow[];
 
     const recountBlock = countStartBlock(this.ctx);
+    const escBlock = escalateBlock(this.ctx);
     const occurrences: ExceptionOccurrence[] = [];
     let unknown = 0;
     for (const row of rows) {
-      const mapped = mapOccurrence(row, syncState, gate, recountBlock);
+      const mapped = mapOccurrence(row, syncState, gate, recountBlock, escBlock);
       if (mapped) occurrences.push(mapped);
       else unknown += 1;
     }
@@ -1175,6 +1306,36 @@ export class ExceptionOccurrencesService {
   }
 
   // ── internals ────────────────────────────────────────────────────────────
+
+  /**
+   * The maintenance requests `ids` names that THIS reader can open, read
+   * through their own client (maintenance_requests_select: the requester, or
+   * read_all / manage). A request missing from the answer is one they cannot
+   * open. The read feeds what the page claims about a request (a draft
+   * opened, or not yet; cancelled), so its error is bound: a failed read is
+   * reported and answers null, and nothing is claimed.
+   */
+  private async readVisibleRequests(ids: readonly string[]): Promise<Map<string, VisibleRequestRow> | null> {
+    if (ids.length === 0) return new Map();
+    const ctx = this.ctx;
+    try {
+      const rows = (await fetchAllRowsByIds<Record<string, unknown>>(
+        ids,
+        (batch) => (from, to) =>
+          ctx.supabase
+            .from('maintenance_requests')
+            .select(ESCALATION_REQUEST_SELECT)
+            .eq('organization_id', ctx.organizationId)
+            .in('id', batch)
+            .order('id', { ascending: true })
+            .range(from, to),
+      )) as unknown as VisibleRequestRow[];
+      return new Map(rows.map((r) => [r.id, r]));
+    } catch (err) {
+      reportDegradedRead('exceptions.escalation_request_read', err, { requests: ids.length });
+      return null;
+    }
+  }
 
   /**
    * The org's time zone, read through the caller's own client (members read
@@ -1467,4 +1628,45 @@ function mapActError(error: { code?: string; message: string; hint?: string | nu
     }
   }
   return new ServiceError('internal_error', postgrestErrorText(error));
+}
+
+/** A linked request as the reader can see it (ESCALATION_REQUEST_SELECT). */
+type VisibleRequestRow = {
+  id: string;
+  request_number: number | string;
+  created_at: string;
+  status: MaintenanceStatus;
+  cancelled_at: string | null;
+  outlook_draft_opened_at: string | null;
+};
+
+/** The escalation with what this reader can see of its request. `requests`
+ *  null (the read failed): nothing is known, so nothing is claimed. */
+function withRequestView(
+  escalation: OccurrenceEscalation,
+  requests: Map<string, VisibleRequestRow> | null,
+): OccurrenceEscalation {
+  if (requests === null || escalation.requestId === null) return escalation;
+  const r = requests.get(escalation.requestId) ?? null;
+  return {
+    ...escalation,
+    visibleToReader: r !== null,
+    request: r
+      ? { status: r.status, draftOpened: r.outlook_draft_opened_at !== null, cancelled: r.cancelled_at !== null }
+      : null,
+  };
+}
+
+/** An escalated event's request handle: from the request itself when the
+ *  reader can open it, else from the occurrence's copy when it is the
+ *  current link; null otherwise (an earlier request the reader cannot open). */
+function requestReferenceFor(
+  requestId: string | null,
+  escalation: OccurrenceEscalation | null,
+  requests: Map<string, VisibleRequestRow> | null,
+): string | null {
+  if (!requestId) return null;
+  const r = requests?.get(requestId);
+  if (r) return formatMaintenanceRequestNumber(toNumber(r.request_number), r.created_at);
+  return escalation?.requestId === requestId ? escalation.reference : null;
 }

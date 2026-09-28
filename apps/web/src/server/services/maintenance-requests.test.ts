@@ -2523,3 +2523,94 @@ describe('listTimelineEvents (fix wave Important 1 — audit-log-driven activity
     await expect(new MaintenanceRequestsService(ctx).listTimelineEvents('r1')).resolves.toEqual([]);
   });
 });
+
+describe('emailInput: the related location (F1-5)', () => {
+  it('looks the location up in THIS org and hands the builder its name and warehouse', async () => {
+    const { stub, ctx } = build({
+      'maintenance_requests.select': { data: { ...BASE_ROW, related_location_id: 'loc-1' }, error: null },
+      'locations.select': { data: { id: 'loc-1', name: 'Staging', warehouses: { name: 'DC4 Fresno' } }, error: null },
+      'organizations.select': { data: { timezone: null }, error: null },
+    });
+    const { content } = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+    expect(content.relatedLocation).toEqual({ name: 'Staging', warehouseName: 'DC4 Fresno' });
+    // The org filter: without it recorded, a foreign location id would name
+    // another tenant's rack in this org's email.
+    expect(stub.chainArgs.get('locations.select')).toContainEqual(['organization_id', ctx.organizationId]);
+    expect(stub.chainArgs.get('locations.select')).toContainEqual(['id', 'loc-1']);
+  });
+
+  it('a location with no warehouse gives a null warehouse name, never a crash or "[object Object]"', async () => {
+    const { ctx } = build({
+      'maintenance_requests.select': { data: { ...BASE_ROW, related_location_id: 'loc-1' }, error: null },
+      'locations.select': { data: { id: 'loc-1', name: 'Unplaced', warehouses: null }, error: null },
+      'organizations.select': { data: { timezone: null }, error: null },
+    });
+    const { content } = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+    expect(content.relatedLocation).toEqual({ name: 'Unplaced', warehouseName: null });
+  });
+
+  it('no related location: no lookup, and the content says none', async () => {
+    const { stub, ctx } = build({
+      'maintenance_requests.select': { data: { ...BASE_ROW }, error: null },
+      'organizations.select': { data: { timezone: null }, error: null },
+    });
+    const { content } = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+    expect(content.relatedLocation).toBeNull();
+    expect(stub.fromCalls).not.toContain('locations');
+  });
+
+  it('a failed location read is reported and the line is left out; the email still builds', async () => {
+    const { ctx } = build({
+      'maintenance_requests.select': { data: { ...BASE_ROW, related_location_id: 'loc-1' }, error: null },
+      'locations.select': { data: null, error: { message: 'boom' } },
+      'organizations.select': { data: { timezone: null }, error: null },
+    });
+    const { content } = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+    expect(content.relatedLocation).toBeNull();
+    expect(reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tag: 'maintenance.email_location_read' }),
+    );
+  });
+
+  it('reads names only: the location read selects no cost, value or quantity column', async () => {
+    const { stub, ctx } = build({
+      'maintenance_requests.select': { data: { ...BASE_ROW, related_location_id: 'loc-1' }, error: null },
+      'locations.select': { data: { id: 'loc-1', name: 'Staging', warehouses: null }, error: null },
+      'organizations.select': { data: { timezone: null }, error: null },
+    });
+    const { content } = await new MaintenanceRequestsService(ctx).emailInput('r1', { shareUrl: null });
+    const selected = String(stub.chainArgs.get('locations.select')?.[0]?.[0] ?? '');
+    expect(selected).toBe('id, name, warehouses!warehouse_id(name)');
+    expect(JSON.stringify(content)).not.toMatch(/cost|price|\bvalue\b|quantity/i);
+  });
+});
+
+describe('create: an insert whose answer never came (F1-5)', () => {
+  it('an insert error with no SQLSTATE is internal_error marked insertUnconfirmed: the row may have committed', async () => {
+    const { ctx } = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'maintenance_requests.insert': { data: null, error: { message: 'TypeError: fetch failed', code: '' } },
+    });
+    const e = await new MaintenanceRequestsService(ctx).create(VALID).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(e).toBeInstanceOf(ServiceError);
+    expect((e as ServiceError).code).toBe('internal_error');
+    expect((e as ServiceError).details).toEqual({ insertUnconfirmed: true });
+  });
+
+  it('an insert the database refused (a SQLSTATE) is internal_error with no such mark: nothing was saved', async () => {
+    const { ctx } = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'maintenance_requests.insert': { data: null, error: { message: 'new row violates row-level security policy', code: '42501' } },
+    });
+    const e = await new MaintenanceRequestsService(ctx).create(VALID).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect((e as ServiceError).code).toBe('internal_error');
+    expect((e as ServiceError).details).toBeUndefined();
+  });
+});

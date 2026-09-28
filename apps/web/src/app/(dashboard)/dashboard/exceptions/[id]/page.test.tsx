@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  ESCALATE_TO_MAINTENANCE_HELP,
   EXCEPTION_ACT_NOT_PERMITTED_COPY,
   EXCEPTION_ACT_RESOLVED_COPY,
   EXCEPTION_EVIDENCE_CAP_COPY,
@@ -26,7 +27,12 @@ import {
  *   - photos (F1-4): everyone who can open it sees them; Add photos only for
  *     a reader who may act on an open exception, under the cap; a failed
  *     photo read is never "No photos yet."; a photo's timeline entries say
- *     who, the two clocks, and the note or the removal's reason.
+ *     who, the two clocks, and the note or the removal's reason;
+ *   - escalation (F1-5): Escalate to maintenance only where the server says
+ *     so, hidden otherwise; an escalated exception shows "Escalated: MR-..."
+ *     to every reader, linked and with what StockPilot records about the
+ *     request only for a reader who can open it; the action then opens that
+ *     request instead of making another; never "sent" or "ticket".
  */
 
 const { get } = vi.hoisted(() => ({ get: vi.fn() }));
@@ -544,5 +550,198 @@ describe('Exception detail page', () => {
     expect(entry).not.toHaveTextContent('Upload time not available.');
     expect(entry).not.toHaveTextContent("device's clock");
     expect(entry).toHaveTextContent(/Sep 24/);
+  });
+
+  // ── F1-5: escalate to maintenance ────────────────────────────────────────
+
+  const REQ = '44444444-4444-4444-8444-444444444444';
+
+  function escalated(o: Record<string, unknown> = {}) {
+    return {
+      requestId: REQ,
+      requestNumber: 14,
+      reference: 'MR-2026-000014',
+      escalatedAt: '2026-09-24T17:00:00Z',
+      escalatedBy: { id: 'u1', label: 'Dana Lee' },
+      requestCancelled: false,
+      visibleToReader: true,
+      request: { status: 'saved', draftOpened: false, cancelled: false },
+      ...o,
+    };
+  }
+
+  it('a reader the server says may escalate gets "Escalate to maintenance", opening the form for this exception', async () => {
+    get.mockResolvedValue(detail({ escalation: null, canEscalate: true, escalateUnavailableReason: null }));
+    await renderPage();
+    expect(screen.getByRole('link', { name: 'Escalate to maintenance' })).toHaveAttribute(
+      'href',
+      `/dashboard/maintenance/new?exceptionOccurrenceId=${ID}`,
+    );
+    expect(screen.getByTestId('escalation-card')).toHaveTextContent(ESCALATE_TO_MAINTENANCE_HELP);
+    expect(screen.queryByTestId('escalation-badge')).not.toBeInTheDocument();
+  });
+
+  // Mutation caught: the action rendered without canEscalate (the module off,
+  // or a reader without maintenance_requests:submit, would be offered a form
+  // that always refuses).
+  it.each(['module_disabled', 'not_permitted', 'resolved'])(
+    'hidden when the server says %s and nothing was escalated',
+    async (reason) => {
+      get.mockResolvedValue(detail({ escalation: null, canEscalate: false, escalateUnavailableReason: reason }));
+      await renderPage();
+      expect(screen.queryByRole('link', { name: 'Escalate to maintenance' })).not.toBeInTheDocument();
+      expect(screen.queryByTestId('escalation-card')).not.toBeInTheDocument();
+    },
+  );
+
+  it('escalated, for a reader who can open the request: the badge links to it, the draft state shows, and the action opens it instead of making another', async () => {
+    get.mockResolvedValue(
+      detail({
+        escalation: escalated({ request: { status: 'draft_opened', draftOpened: true, cancelled: false } }),
+        canEscalate: false,
+        escalateUnavailableReason: 'already_escalated',
+      }),
+    );
+    await renderPage();
+    const badge = screen.getByTestId('escalation-badge');
+    expect(badge).toHaveTextContent('Escalated: MR-2026-000014');
+    expect(badge.querySelector('a')).toHaveAttribute('href', `/dashboard/maintenance/${REQ}`);
+    expect(screen.getByTestId('escalation-request-state')).toHaveTextContent('Email draft opened');
+    expect(screen.getByTestId('escalation-status')).toHaveTextContent('Dana Lee, Sep 24, 10:00 AM');
+    expect(screen.getByRole('link', { name: 'Open MR-2026-000014' })).toHaveAttribute(
+      'href',
+      `/dashboard/maintenance/${REQ}`,
+    );
+    expect(screen.queryByRole('link', { name: 'Escalate to maintenance' })).not.toBeInTheDocument();
+  });
+
+  it('a draft not opened yet says so, and only that', async () => {
+    get.mockResolvedValue(
+      detail({ escalation: escalated(), canEscalate: false, escalateUnavailableReason: 'already_escalated' }),
+    );
+    await renderPage();
+    expect(screen.getByTestId('escalation-request-state')).toHaveTextContent('Email draft not yet opened');
+  });
+
+  // Mutation caught: the link or the draft line shown on visibleToReader
+  // null/false (a reader who cannot open the request would get a 404 link,
+  // and be told about a request they may not see).
+  it('escalated, for a reader who cannot open the request: the handle only, no link, no draft state, and why no new request', async () => {
+    get.mockResolvedValue(
+      detail({
+        escalation: escalated({ visibleToReader: false, request: null }),
+        canEscalate: false,
+        escalateUnavailableReason: 'already_escalated',
+      }),
+    );
+    await renderPage();
+    const badge = screen.getByTestId('escalation-badge');
+    expect(badge).toHaveTextContent('Escalated: MR-2026-000014');
+    expect(badge.querySelector('a')).toBeNull();
+    expect(screen.queryByTestId('escalation-request-state')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Open MR-/ })).not.toBeInTheDocument();
+    expect(screen.getByTestId('escalate-unavailable')).toHaveTextContent(
+      'Already escalated to MR-2026-000014. A new request can be made only if that one is cancelled.',
+    );
+  });
+
+  it('a failed request read (visibleToReader null) links nothing and claims nothing', async () => {
+    get.mockResolvedValue(
+      detail({
+        escalation: escalated({ visibleToReader: null, request: null }),
+        canEscalate: false,
+        escalateUnavailableReason: 'already_escalated',
+      }),
+    );
+    await renderPage();
+    expect(screen.getByTestId('escalation-badge').querySelector('a')).toBeNull();
+    expect(screen.queryByTestId('escalation-request-state')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Open MR-/ })).not.toBeInTheDocument();
+  });
+
+  it('a cancelled request the reader can see: the badge says so (once), and Escalate is offered again', async () => {
+    get.mockResolvedValue(
+      detail({
+        escalation: escalated({
+          requestCancelled: true,
+          request: { status: 'cancelled', draftOpened: false, cancelled: true },
+        }),
+        canEscalate: true,
+        escalateUnavailableReason: null,
+      }),
+    );
+    await renderPage();
+    expect(screen.getByTestId('escalation-badge')).toHaveTextContent('Escalated: MR-2026-000014 (request cancelled)');
+    expect(screen.getByTestId('escalation-status')).toHaveTextContent('Escalated: MR-2026-000014 (request cancelled)');
+    expect(screen.queryByTestId('escalation-request-state')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Escalate to maintenance' })).toBeInTheDocument();
+  });
+
+  // The experience review: once the linked request was cancelled, a staff
+  // member or viewer who did not make it (and cannot open it) was still told
+  // it was live and could not escalate again.
+  it('NOT THE REQUESTER, AFTER A CANCEL: the badge says the request was cancelled, links nowhere, and Escalate is offered again', async () => {
+    get.mockResolvedValue(
+      detail({
+        escalation: escalated({ requestCancelled: true, visibleToReader: false, request: null }),
+        canEscalate: true,
+        escalateUnavailableReason: null,
+      }),
+    );
+    await renderPage();
+    const badge = screen.getByTestId('escalation-badge');
+    expect(badge).toHaveTextContent('Escalated: MR-2026-000014 (request cancelled)');
+    expect(badge.querySelector('a')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Escalate to maintenance' })).toHaveAttribute(
+      'href',
+      `/dashboard/maintenance/new?exceptionOccurrenceId=${ID}`,
+    );
+    expect(screen.queryByTestId('escalate-unavailable')).not.toBeInTheDocument();
+  });
+
+  it('with the module off, the handle still shows but links nowhere (the request page would say not enabled)', async () => {
+    get.mockResolvedValue(
+      detail({ escalation: escalated(), canEscalate: false, escalateUnavailableReason: 'module_disabled' }),
+    );
+    await renderPage();
+    expect(screen.getByTestId('escalation-badge')).toHaveTextContent('Escalated: MR-2026-000014');
+    expect(screen.getByTestId('escalation-badge').querySelector('a')).toBeNull();
+    expect(screen.queryByRole('link', { name: /Open MR-|Escalate to maintenance/ })).not.toBeInTheDocument();
+  });
+
+  it('escalating neither acknowledges nor resolves: the state stays Open and Acknowledge is still offered', async () => {
+    get.mockResolvedValue(
+      detail({ escalation: escalated(), canEscalate: false, escalateUnavailableReason: 'already_escalated' }),
+    );
+    await renderPage();
+    expect(screen.getByTestId('occurrence-state')).toHaveTextContent('Open');
+    expect(screen.getByRole('button', { name: 'Acknowledge' })).toBeInTheDocument();
+  });
+
+  // Mutation caught: the timeline built without maintenanceRequestReference.
+  it('the escalated timeline entry names the request and who escalated it', async () => {
+    get.mockResolvedValue(
+      detail({ escalation: escalated(), canEscalate: false, escalateUnavailableReason: 'already_escalated' }, {
+        timeline: [
+          { id: 'e1', kind: 'raised', at: '2026-09-24T15:00:00Z', actor: null, note: null, cycleCount: null, maintenanceRequestId: null, maintenanceRequestReference: null, evidenceId: null },
+          { id: 'e2', kind: 'escalated', at: '2026-09-24T17:00:00Z', actor: { id: 'u1', label: 'Dana Lee' }, note: null, cycleCount: null, maintenanceRequestId: REQ, maintenanceRequestReference: 'MR-2026-000014', evidenceId: null },
+        ],
+      }),
+    );
+    await renderPage();
+    expect(screen.getByText('Escalated to maintenance request MR-2026-000014 by Dana Lee')).toBeInTheDocument();
+  });
+
+  it('never says "sent" or "ticket" about an escalation', async () => {
+    get.mockResolvedValue(
+      detail({
+        escalation: escalated({ request: { status: 'draft_opened', draftOpened: true, cancelled: false } }),
+        canEscalate: false,
+        escalateUnavailableReason: 'already_escalated',
+      }),
+    );
+    await renderPage();
+    expect(screen.getByTestId('escalation-card').textContent).not.toMatch(/\bsent\b|ticket|notified/i);
+    expect(screen.getByTestId('escalation-badge').textContent).not.toMatch(/\bsent\b|ticket|notified/i);
   });
 });

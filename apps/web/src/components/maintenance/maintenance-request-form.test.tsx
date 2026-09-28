@@ -187,4 +187,132 @@ describe('MaintenanceRequestForm', () => {
       expect(text.toLowerCase()).not.toContain(banned);
     }
   });
+
+  it('a related location from the launch point shows the pre-filled record notice too', () => {
+    renderForm({ relatedLocationId: '55555555-5555-4555-8555-555555555555' });
+    expect(screen.getByText(/related stockpilot record was pre-filled/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * F1-5: the escalation reuses this form with its own `submit` (saving through
+ * escalateExceptionAction) and only the four fields an escalation saves. What
+ * must hold: the plain create action is never called; a refusal is shown in
+ * the form, not only in a toast; a `handled` answer (already escalated: the
+ * person was sent to the request) never calls onSaved and never re-enables a
+ * second save; a failed call says the save is unconfirmed.
+ */
+describe('MaintenanceRequestForm with a submit of its own (escalation)', () => {
+  const ESCALATION_DEFAULTS = {
+    subject: 'Inventory issue: Atlas (A1)',
+    description: 'Stale in Staging: 12 units in Staging for at least 9 days. Location: Staging. Ref EX-000042.',
+    priority: 'normal' as const,
+  };
+
+  function renderEscalation(submit: ReturnType<typeof vi.fn>) {
+    const onSaved = vi.fn();
+    render(
+      <MaintenanceRequestForm
+        defaults={ESCALATION_DEFAULTS}
+        sites={SITES}
+        categories={['Facilities', 'Other']}
+        onSaved={onSaved}
+        submit={submit as never}
+        coreFieldsOnly
+      />,
+    );
+    return { onSaved };
+  }
+
+  // Mutation caught: coreFieldsOnly ignored (a person could type a room or a
+  // phone the escalation then silently drops).
+  it('shows only subject, description, category and priority', () => {
+    renderEscalation(vi.fn());
+    expect(screen.getByLabelText('What is the issue?')).toHaveValue('Inventory issue: Atlas (A1)');
+    expect(screen.getByLabelText('Describe the maintenance issue')).toHaveValue(ESCALATION_DEFAULTS.description);
+    expect(screen.getByLabelText('Category')).toBeInTheDocument();
+    expect(screen.getByLabelText('Priority')).toBeInTheDocument();
+    for (const label of [
+      'Site',
+      'Contact phone (optional)',
+      'Building',
+      'Room or area',
+      'Department',
+      'Additional access instructions',
+    ]) {
+      expect(screen.queryByLabelText(label)).toBeNull();
+    }
+  });
+
+  it('saves through the given submit with the parsed values, never the plain create action, and hands the id to onSaved', async () => {
+    const submit = vi.fn(async (_values: unknown) => ({ id: 'r-esc' }));
+    const { onSaved } = renderEscalation(submit);
+    await userEvent.click(screen.getByRole('button', { name: 'Save request' }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith('r-esc'));
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit.mock.calls[0]![0]).toMatchObject(ESCALATION_DEFAULTS);
+    expect(createAction).not.toHaveBeenCalled();
+    // Moving on: the button stays off, so the next page load cannot be raced.
+    expect(screen.getByRole('button', { name: 'Saving...' })).toBeDisabled();
+  });
+
+  it('the form rules still apply before the submit is called', async () => {
+    const submit = vi.fn();
+    renderEscalation(submit);
+    await userEvent.clear(screen.getByLabelText('What is the issue?'));
+    await userEvent.type(screen.getByLabelText('What is the issue?'), 'AC');
+    await userEvent.click(screen.getByRole('button', { name: 'Save request' }));
+    expect(await screen.findByText(/at least 5 characters/i)).toBeInTheDocument();
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  // Mutation caught: a refusal shown only as a toast (recurring pattern #20).
+  it('a refusal is shown in the form, and the person can try again', async () => {
+    const submit = vi.fn(async () => ({
+      error: { message: 'This exception is being escalated right now. Try again in a minute.' },
+    }));
+    const { onSaved } = renderEscalation(submit);
+    await userEvent.click(screen.getByRole('button', { name: 'Save request' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'This exception is being escalated right now. Try again in a minute.',
+    );
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Save request' })).toBeEnabled();
+  });
+
+  // Mutation caught: `handled` treated as a saved id (onSaved(undefined)) or
+  // as a refusal (the button re-enabled for a second escalation).
+  it('a handled answer (the person was sent to the existing request) calls nothing more and keeps the button off', async () => {
+    const submit = vi.fn(async () => ({ handled: true as const }));
+    const { onSaved } = renderEscalation(submit);
+    await userEvent.click(screen.getByRole('button', { name: 'Save request' }));
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Saving...' })).toBeDisabled();
+  });
+
+  it('a call that throws says the save is unconfirmed, never that nothing was saved', async () => {
+    const submit = vi.fn(async () => {
+      throw new Error('network');
+    });
+    renderEscalation(submit);
+    await userEvent.click(screen.getByRole('button', { name: 'Save request' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'StockPilot did not answer, so the request may or may not have been saved.',
+    );
+  });
+
+  it('two clicks in one frame save once', async () => {
+    let resolve!: (v: { id: string }) => void;
+    const submit = vi.fn(() => new Promise<{ id: string }>((r) => (resolve = r)));
+    const { onSaved } = renderEscalation(submit);
+    const button = screen.getByRole('button', { name: 'Save request' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(submit).toHaveBeenCalled());
+    resolve({ id: 'r-esc' });
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith('r-esc'));
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
 });

@@ -1,11 +1,13 @@
 import { useNetworkState } from 'expo-network';
-import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
+import { type Href, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { ArrowLeft } from 'lucide-react-native';
 import * as React from 'react';
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
+  ESCALATE_TO_MAINTENANCE_HELP,
+  ESCALATE_TO_MAINTENANCE_LABEL,
   EXCEPTION_ACTION_LABELS,
   EXCEPTION_FIRST_CHECK_PENDING_COPY,
   exceptionCheckedAtCopy,
@@ -35,6 +37,9 @@ import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
+import { showWriteCta } from '@/lib/cta-gating';
+import { useEnabledModules } from '@/lib/enabled-modules';
+import { escalateFormRoute, escalationSectionView } from '@/lib/exception-escalation';
 import { evidenceTick, evidenceTimelineLines } from '@/lib/exception-evidence';
 import {
   describeExceptionsRequestError,
@@ -92,6 +97,20 @@ import { canOpenCountScreen } from '@/lib/verification-api';
  * events in the timeline are worded by core describeEvidenceEvent (the
  * photo's two times, each named by its clock).
  *
+ * ESCALATE TO MAINTENANCE (F1-5, Outlook rule 3): the MAINTENANCE section
+ * (lib/exception-escalation.ts escalationSectionView). "Escalated: MR-..."
+ * shows to every reader of an escalated exception and opens the request for
+ * a reader who can open it, with "Email draft opened" or "not yet opened"
+ * (all StockPilot records; never "sent"). "Escalate to maintenance" is
+ * offered on the web's gates: the server's canEscalate AND this phone's
+ * enabled modules and maintenance_requests:submit. It opens the request form
+ * prefilled from this exception (app/maintenance/new.tsx), where Save is the
+ * explicit act; nothing is emailed from here, and the email opens only if
+ * the person taps it on the request. Online only: offline the button is
+ * disabled with the reason and nothing is kept to try later. Escalating
+ * neither acknowledges nor resolves. Coming back from the form or the
+ * request re-reads this screen, so the badge and the draft state are current.
+ *
  * NO WORKSPACE (a launch offline, or a failed first read after signing in):
  * the read never starts, so the screen says so with Try again, which loads
  * the workspace again (retryWorkspace), as the location screen does.
@@ -119,6 +138,12 @@ export default function ExceptionDetailScreen() {
   const { user } = useAuth();
   const userId = user?.id ?? null;
   const offline = isOfflineState(useNetworkState());
+  // Escalate (F1-5): the phone's own view of the web's gates. Cosmetic; the
+  // server's canEscalate and the database decide.
+  const enabledModules = useEnabledModules();
+  const maintenanceEnabled = enabledModules.has('maintenance_requests');
+  const perms = useEffectivePermissions();
+  const canSubmitMaintenance = showWriteCta(perms, 'maintenance_requests:submit');
 
   const [stored, setState] = React.useState<Loaded>({ kind: 'loading' });
   const [refreshing, setRefreshing] = React.useState(false);
@@ -175,6 +200,20 @@ export default function ExceptionDetailScreen() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await (offline returns before any set; that view is derived); the effect synchronizes with the server
     void load();
   }, [load]);
+
+  // Set when this screen sends the person to the escalate form or to the
+  // linked request. The next focus re-reads once, so coming back shows the
+  // new badge, or "Email draft opened" after a draft opened there. A plain
+  // focus (the first one, or load changing while focused) reads nothing
+  // extra: the effect above already did.
+  const rereadOnReturn = React.useRef(false);
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!rereadOnReturn.current) return;
+      rereadOnReturn.current = false;
+      void load();
+    }, [load]),
+  );
 
   // Offline the view is DERIVED, never fetched: the copy on screen (or the
   // one this session remembered) with its time, or a plain "needs a
@@ -280,6 +319,16 @@ export default function ExceptionDetailScreen() {
           onRefresh={() => void refresh()}
           onOpenSheet={setSheet}
           onRecount={() => setRecountOpen(true)}
+          maintenanceEnabled={maintenanceEnabled}
+          canSubmitMaintenance={canSubmitMaintenance}
+          onEscalate={(occurrence) => {
+            rereadOnReturn.current = true;
+            router.push(escalateFormRoute(occurrence) as unknown as Href);
+          }}
+          onOpenRequest={(requestId) => {
+            rereadOnReturn.current = true;
+            router.push(`/maintenance/${requestId}` as Href);
+          }}
           onNavigate={(href) => router.push(href as Href)}
           onPhotosChanged={() => void load()}
           verificationRefreshKey={verificationNonce}
@@ -345,6 +394,10 @@ function Detail({
   onRefresh,
   onOpenSheet,
   onRecount,
+  maintenanceEnabled,
+  canSubmitMaintenance,
+  onEscalate,
+  onOpenRequest,
   onNavigate,
   onPhotosChanged,
   verificationRefreshKey,
@@ -357,6 +410,13 @@ function Detail({
   onRefresh: () => void;
   onOpenSheet: (mode: ExceptionSheetMode) => void;
   onRecount: () => void;
+  /** The maintenance_requests module is on for this workspace (this phone's
+   *  view). */
+  maintenanceEnabled: boolean;
+  /** This reader holds maintenance_requests:submit (this phone's view). */
+  canSubmitMaintenance: boolean;
+  onEscalate: (occurrence: { id: string; locationId: string | null }) => void;
+  onOpenRequest: (requestId: string) => void;
   onNavigate: (href: string) => void;
   onPhotosChanged: () => void;
   verificationRefreshKey: number;
@@ -401,6 +461,14 @@ function Detail({
   // the connection.
   const showRecount = isRecountableRule(o.rule) && !resolved;
   const recountReason = o.canRecount ? recountDisabledReason({ canRecount: true, online: !offline }) : null;
+  // Escalate to maintenance (F1-5): the badge, the draft state, the button or
+  // why not. Fed the live network state: offline the button is disabled.
+  const escalation = escalationSectionView({
+    occurrence: o,
+    maintenanceEnabled,
+    canSubmit: canSubmitMaintenance,
+    online: !offline,
+  });
 
   return (
     <ScrollView
@@ -440,6 +508,11 @@ function Detail({
           {recurred ? (
             <Pill status="default" dot={false}>
               {recurred}
+            </Pill>
+          ) : null}
+          {escalation.badge ? (
+            <Pill status="default" dot={false}>
+              {escalation.badge}
             </Pill>
           ) : null}
         </View>
@@ -563,6 +636,63 @@ function Detail({
         </Section>
       ) : null}
 
+      {escalation.show ? (
+        <Section title="MAINTENANCE">
+          {escalation.badge && escalation.openRequestId ? (
+            <Pressable
+              accessibilityRole="link"
+              accessibilityLabel={escalation.badge}
+              accessibilityHint="Opens the maintenance request"
+              onPress={() => onOpenRequest(escalation.openRequestId!)}
+              style={({ pressed }) => ({ minHeight: MIN_TAP, justifyContent: 'center', opacity: pressed ? 0.7 : 1 })}
+            >
+              <Body size={14.5} color={c.ink} style={{ textDecorationLine: 'underline' }}>
+                {escalation.badge}
+              </Body>
+            </Pressable>
+          ) : escalation.badge ? (
+            <Body size={14.5} color={c.ink}>
+              {escalation.badge}
+            </Body>
+          ) : null}
+          {escalation.escalatedAt ? (
+            <Mono size={11} color={c.ink4}>
+              {`${escalation.escalatedBy ?? 'Former member'}, ${exceptionTimeLabel(escalation.escalatedAt, detail.timeZone)}`}
+            </Mono>
+          ) : null}
+          {escalation.requestState ? (
+            <Body size={13.5} muted>
+              {escalation.requestState}
+            </Body>
+          ) : null}
+          {escalation.offerButton ? (
+            <>
+              <Body size={13.5} muted>
+                {ESCALATE_TO_MAINTENANCE_HELP}
+              </Body>
+              <Button
+                block
+                variant="outline"
+                disabled={escalation.buttonDisabledReason !== null}
+                onPress={() => onEscalate(o)}
+              >
+                {ESCALATE_TO_MAINTENANCE_LABEL}
+              </Button>
+              {escalation.buttonDisabledReason ? (
+                <Body size={13} muted>
+                  {escalation.buttonDisabledReason}
+                </Body>
+              ) : null}
+            </>
+          ) : null}
+          {escalation.note ? (
+            <Body size={13.5} muted>
+              {escalation.note}
+            </Body>
+          ) : null}
+        </Section>
+      ) : null}
+
       {o.item ? (
         <ItemVerificationCard
           view={verification.view}
@@ -616,6 +746,7 @@ function Detail({
                     cycleCountNumber: e.cycleCount?.countNumber ?? null,
                     resolvedReason: o.resolvedReason,
                     recountOutcome: e.cycleCount?.outcome ?? null,
+                    maintenanceRequestReference: e.maintenanceRequestReference,
                   })}
                 </Body>
                 <Mono size={11} color={c.ink4}>

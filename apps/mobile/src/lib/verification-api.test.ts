@@ -10,6 +10,7 @@ import {
   VERIFICATION_SESSION_ENDED_COPY,
   VERIFICATION_UNAVAILABLE_COPY,
   locationRowVerificationCopy,
+  verificationIssueChipCopy,
   verificationRefusalCopy,
   verificationSummaryCopy,
 } from '@stockpilot/core';
@@ -195,6 +196,35 @@ function apiError(status: number, message: string, code?: string, details?: unkn
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('parseItemVerification', () => {
+  // F1-5 (the experience review): the item card's chips left out the
+  // escalation every other surface shows. Mutation caught: the escalation
+  // dropped by the parse (the chip then says nothing about it).
+  it('an escalated issue keeps its request handle and cancelled state, so the chip says "Escalated: MR-..."', () => {
+    const v = parseItemVerification(
+      itemBody({
+        openIssues: [
+          issueJson({ escalation: { reference: 'MR-2026-000014', cancelled: false } }),
+          issueJson({ id: 'occ-2', number: 43, reference: 'EX-000043', escalation: { reference: 'MR-2026-000009', cancelled: true } }),
+          issueJson({ id: 'occ-3', number: 44, reference: 'EX-000044', escalation: { reference: 'MR-2026-000010', cancelled: 'yes' } }),
+          issueJson({ id: 'occ-4', number: 45, reference: 'EX-000045', escalation: 'MR-2026-000011' }),
+        ],
+      }),
+    );
+    expect(v.openIssues.map((i) => i.escalation)).toEqual([
+      { reference: 'MR-2026-000014', cancelled: false },
+      { reference: 'MR-2026-000009', cancelled: true },
+      // Not a real boolean: "cancelled" is not known, never guessed.
+      { reference: 'MR-2026-000010', cancelled: null },
+      null,
+    ]);
+    expect(v.openIssues.map((i) => verificationIssueChipCopy(i))).toEqual([
+      'EX-000042 · Count did not match the stock on record · Escalated: MR-2026-000014',
+      'EX-000043 · Count did not match the stock on record · Escalated: MR-2026-000009 (request cancelled)',
+      'EX-000044 · Count did not match the stock on record · Escalated: MR-2026-000010',
+      'EX-000045 · Count did not match the stock on record',
+    ]);
+  });
+
   it('reads the whole answer, and core words it as the web card does', () => {
     const v = parseItemVerification(itemBody({ openIssues: [issueJson()] }));
     expect(v.organizationId).toBe(ORG);
@@ -207,6 +237,7 @@ describe('parseItemVerification', () => {
         rule: 'count_variance',
         itemId: ITEM,
         locationId: null,
+        escalation: null,
       },
     ]);
     const copy = verificationSummaryCopy(v.summary, { timeZone: v.timeZone, canCount: v.canCount });

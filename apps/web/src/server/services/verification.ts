@@ -1,6 +1,7 @@
 import 'server-only';
 
 import {
+  formatMaintenanceRequestNumber,
   formatOccurrenceNumber,
   LOCATION_HOLDINGS_CAP,
   locationRecountProblem,
@@ -260,12 +261,21 @@ type IssueRow = {
   rule: string;
   item_id: string;
   location_id: string | null;
+  escalation_number?: number | string | null;
+  escalation_request_created_at?: string | null;
+  /** The escalation_request_cancelled computed field (0376). */
+  escalation_request_cancelled?: boolean | null;
 };
 
-const ISSUE_SELECT = 'id, occurrence_number, rule, item_id, location_id';
+// F1-5: the escalation columns and the computed field every reader of the
+// occurrence may read, so the item and location chips say "Escalated:
+// MR-..." as every other surface does.
+const ISSUE_SELECT =
+  'id, occurrence_number, rule, item_id, location_id, escalation_number, escalation_request_created_at, escalation_request_cancelled';
 
 function mapIssue(row: IssueRow): VerificationIssueRef {
   const number = wholeOf(row.occurrence_number);
+  const escalationNumber = wholeOf(row.escalation_number ?? null);
   return {
     id: row.id,
     number,
@@ -273,6 +283,14 @@ function mapIssue(row: IssueRow): VerificationIssueRef {
     rule: row.rule,
     itemId: row.item_id,
     locationId: row.location_id,
+    escalation:
+      escalationNumber !== null && escalationNumber > 0
+        ? {
+            reference: formatMaintenanceRequestNumber(escalationNumber, row.escalation_request_created_at ?? null),
+            cancelled:
+              typeof row.escalation_request_cancelled === 'boolean' ? row.escalation_request_cancelled : null,
+          }
+        : null,
   };
 }
 

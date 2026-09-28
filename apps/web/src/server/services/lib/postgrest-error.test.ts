@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { postgrestErrorText } from './postgrest-error';
+import { isDefiniteRefusal, postgrestErrorText } from './postgrest-error';
 
 describe('postgrestErrorText', () => {
   it('returns a non-empty message unchanged', () => {
@@ -30,5 +30,26 @@ describe('postgrestErrorText', () => {
     expect(postgrestErrorText({ message: '' })).toBe(
       'PostgREST error with an empty message and no status',
     );
+  });
+});
+
+describe('isDefiniteRefusal (F1-5: did the call surely not commit?)', () => {
+  it('a SQLSTATE or a PGRST code is a definite answer: the transaction did not commit', () => {
+    for (const code of ['P0001', '42501', '55P03', '23505', 'P0002', 'PGRST116', 'PGRST000']) {
+      expect(isDefiniteRefusal({ message: 'x', code })).toBe(true);
+    }
+  });
+
+  it('no code (a dropped connection, a gateway 502 or 504) is NOT: the statement may have committed', () => {
+    for (const error of [
+      { message: 'TypeError: fetch failed', code: '' },
+      { message: 'Bad Gateway' },
+      { message: '', code: null },
+      { message: 'x', code: 'ECONNRESET' },
+      null,
+      undefined,
+    ]) {
+      expect(isDefiniteRefusal(error)).toBe(false);
+    }
   });
 });

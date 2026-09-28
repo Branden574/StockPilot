@@ -8,6 +8,7 @@ import { OccurrencePhotos } from '@/components/exceptions/occurrence-photos';
 import { RecountButton } from '@/components/exceptions/recount-selection';
 import {
   CheckedAt,
+  EscalationChip,
   ExceptionsUnavailable,
   exceptionTime,
   FirstCheckPending,
@@ -35,6 +36,12 @@ import {
   describeEvidenceEvent,
   describeOccurrence,
   describeTimelineEvent,
+  ESCALATE_TO_MAINTENANCE_HELP,
+  ESCALATE_TO_MAINTENANCE_LABEL,
+  escalationAlreadyEscalatedCopy,
+  escalationBadgeCopy,
+  escalationOpenRequestLabel,
+  escalationRequestStateCopy,
   EXCEPTION_ACTION_LABELS,
   EXCEPTION_RULES,
   exceptionActDisabledReason,
@@ -81,6 +88,18 @@ export const metadata = { title: 'Exception' };
  * photos". A photo's timeline entries are core's describeEvidenceEvent: who
  * added or removed it, its two times (the device's clock and the server's),
  * and its note or the removal's reason.
+ *
+ * Escalate to maintenance (F1-5) is offered only where the server says so
+ * (canEscalate: the maintenance_requests module, maintenance_requests:submit,
+ * an open exception and no linked request that is not cancelled); it opens
+ * the maintenance request form prefilled from this exception, and saving
+ * there creates one linked request. Nothing is emailed: the request's review
+ * screen opens a draft only when the person taps it. An escalated exception
+ * shows "Escalated: MR-..." to every reader; for a reader who can open the
+ * request it links to it, says whether an email draft was opened (the one
+ * thing StockPilot records about the email), and the action opens that
+ * request instead of making another. Escalating neither acknowledges nor
+ * resolves the exception.
  *
  * Reads only, never syncs. Not found and not visible are the same answer
  * (404), so existence is not leaked; any other failed read renders
@@ -131,6 +150,7 @@ function timelineLine(
       cycleCountNumber: e.cycleCount?.countNumber ?? null,
       resolvedReason,
       recountOutcome: e.cycleCount?.outcome ?? null,
+      maintenanceRequestReference: e.maintenanceRequestReference ?? null,
     }),
     detail: null,
     note: e.note,
@@ -182,6 +202,14 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
   });
   const resolved = o.resolvedAt !== null;
   const disabledReason = exceptionActDisabledReason({ resolved, canAct: o.canAct, online: true });
+  const escalation = o.escalation;
+  // The linked request opens only for a reader the server confirmed can see
+  // it (visibleToReader true: read through their own RLS), and only while
+  // the module is on (the request page says "not enabled" otherwise).
+  const requestHref =
+    escalation?.requestId && escalation.visibleToReader === true && o.escalateUnavailableReason !== 'module_disabled'
+      ? `/dashboard/maintenance/${escalation.requestId}`
+      : null;
 
   return (
     <div className="space-y-6">
@@ -196,6 +224,7 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
         <div className="flex flex-wrap items-center gap-1.5">
           <StateChip state={stateOf(o, detail.syncState)} />
           <RecurrenceChip recurrenceIndex={o.recurrenceIndex} />
+          <EscalationChip escalation={escalation} href={requestHref} />
         </div>
       </header>
 
@@ -324,6 +353,17 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
         </CardContent>
       </Card>
 
+      {escalation || o.canEscalate ? (
+        <EscalationCard
+          occurrenceId={o.id}
+          escalation={escalation}
+          canEscalate={o.canEscalate}
+          alreadyEscalated={o.escalateUnavailableReason === 'already_escalated'}
+          requestHref={requestHref}
+          timeZone={timeZone}
+        />
+      ) : null}
+
       <OccurrencePhotos
         occurrenceId={o.id}
         evidence={detail.evidence}
@@ -425,5 +465,78 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
         </Card>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The exception's maintenance request (F1-5). Rendered when the exception was
+ * escalated, or when this reader may escalate it; hidden otherwise (the
+ * module off, no maintenance_requests:submit, or a resolved exception never
+ * escalated).
+ *
+ *   - Escalated: the handle (the header's badge links it for a reader who
+ *     can open the request), who escalated it and when, and, for that reader
+ *     only, what StockPilot records about the request (an email draft opened
+ *     or not yet; cancelled). Never "sent": nothing here knows whether an
+ *     email went.
+ *   - May escalate: "Escalate to maintenance" opens the request form
+ *     prefilled from this exception. Saving there makes one linked request.
+ *   - Already escalated to a request that is not cancelled: the action opens
+ *     that request for a reader who can open it; everyone else is told a new
+ *     one can be made only if it is cancelled.
+ */
+function EscalationCard({
+  occurrenceId,
+  escalation,
+  canEscalate,
+  alreadyEscalated,
+  requestHref,
+  timeZone,
+}: {
+  occurrenceId: string;
+  escalation: OccurrenceDetail['occurrence']['escalation'];
+  canEscalate: boolean;
+  alreadyEscalated: boolean;
+  requestHref: string | null;
+  timeZone: string;
+}) {
+  const stateLine = escalation ? escalationRequestStateCopy(escalation.request) : null;
+  return (
+    <Card data-testid="escalation-card">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">Maintenance</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {escalation ? (
+          <div className="space-y-0.5" data-testid="escalation-status">
+            <p className="font-medium">{escalationBadgeCopy(escalation.reference, escalation.requestCancelled)}</p>
+            <p className="text-muted-foreground text-xs">
+              {escalation.escalatedBy?.label ?? 'Former member'}, {exceptionTime(escalation.escalatedAt, timeZone)}
+            </p>
+            {stateLine ? <p data-testid="escalation-request-state">{stateLine}</p> : null}
+          </div>
+        ) : null}
+        {canEscalate ? (
+          <div className="space-y-2">
+            <Button asChild size="sm">
+              <Link href={`/dashboard/maintenance/new?exceptionOccurrenceId=${occurrenceId}`}>
+                {ESCALATE_TO_MAINTENANCE_LABEL}
+              </Link>
+            </Button>
+            <p className="text-muted-foreground">{ESCALATE_TO_MAINTENANCE_HELP}</p>
+          </div>
+        ) : alreadyEscalated && escalation ? (
+          requestHref ? (
+            <Button asChild variant="outline" size="sm">
+              <Link href={requestHref}>{escalationOpenRequestLabel(escalation.reference)}</Link>
+            </Button>
+          ) : (
+            <p className="text-muted-foreground" data-testid="escalate-unavailable">
+              {escalationAlreadyEscalatedCopy(escalation.reference)}
+            </p>
+          )
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }

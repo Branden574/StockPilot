@@ -2,15 +2,26 @@
 
 import { revalidatePath } from 'next/cache';
 
-import { can, RECOUNT_MAX_ITEMS, uuidSchema, type RecountUnavailableReason } from '@stockpilot/core';
+import {
+  can,
+  ESCALATE_SERVER_PROBLEM_COPY,
+  ESCALATE_TOO_MANY_COPY,
+  RECOUNT_MAX_ITEMS,
+  uuidSchema,
+  type RecountUnavailableReason,
+} from '@stockpilot/core';
 
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { fetchCountAssignees } from '@/server/lib/count-assignees';
-import { ServiceError, withContext } from '@/server/services/context';
+import { ServiceError, withContext, type ServiceContext } from '@/server/services/context';
+import { ExceptionEscalationService } from '@/server/services/exception-escalation';
 import { ExceptionEvidenceService } from '@/server/services/exception-evidence';
 import { ExceptionOccurrencesService } from '@/server/services/exception-occurrences';
 import { ExceptionRecountService } from '@/server/services/exception-recount';
+import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
 import type { ExceptionRecountResult } from '@/server/services/exception-recount';
+import type { EscalationResult } from '@/server/services/exception-escalation';
 import type {
   EvidenceUploadTicket,
   RecordedEvidence,
@@ -40,6 +51,13 @@ import type {
  *     is linked to them (the database links only the exceptions it is named).
  *   - listItemsRecountTargetsAction: the same for several items, for the
  *     location page's "Recount items here" (F1-3).
+ *   - escalateExceptionAction: "Escalate to maintenance" (F1-5), the same
+ *     ExceptionEscalationService.escalate the phone reaches through
+ *     POST /api/v1/exceptions/[id]/escalate. It saves one maintenance request
+ *     linked to the occurrence; nothing is emailed (the request's review
+ *     screen opens a draft only when the person taps it). An occurrence
+ *     already escalated answers reason already_escalated with the linked
+ *     request's id, which the form opens instead.
  *   - startExceptionEvidenceUploadAction, finalizeExceptionEvidenceAction,
  *     removeExceptionEvidenceAction: photo evidence (F1-4), the same
  *     ExceptionEvidenceService calls the phone reaches through
@@ -297,5 +315,101 @@ export async function removeExceptionEvidenceAction(
     return { ok: true, evidence };
   } catch (e) {
     return fail(e, 'actions.exceptions.evidence_remove');
+  }
+}
+
+/**
+ * Whether this reader can open the maintenance request (its requester, or a
+ * holder of maintenance_requests:read_all or :manage), asked the way its page
+ * asks: MaintenanceRequestsService.get under the reader's own RLS. The answer
+ * decides where the form sends them, so the read's error is bound: anything
+ * but a clean read is "no" (the exception page is always safe to land on),
+ * and a failure that is not simply "not visible" is reported.
+ */
+async function canOpenRequest(ctx: ServiceContext, requestId: string): Promise<boolean> {
+  try {
+    await new MaintenanceRequestsService(ctx).get(requestId);
+    return true;
+  } catch (e) {
+    if (!(e instanceof ServiceError && e.code === 'not_found')) {
+      void reportError(e, { tag: 'actions.exceptions.escalate_duplicate_read', level: 'warning' });
+    }
+    return false;
+  }
+}
+
+/**
+ * "Escalate to maintenance" (F1-5). `values` is the request form's four
+ * fields (subject, description, priority, category); any other key is
+ * ignored, and the item and location come from the occurrence on the server.
+ * Online only, never queued.
+ *
+ * A failure carries `reason` (already_escalated, escalation_in_progress,
+ * occurrence_resolved, escalation_not_claimed, request_not_eligible, busy,
+ * module_disabled; aal2_required from the MFA step-up). For already_escalated
+ * it also carries the linked request's `requestId` and `reference`, and
+ * `requestVisible`: whether this reader can open that request (the form opens
+ * it when they can, and goes back to the exception when they cannot). The
+ * exception's pages are revalidated then too: the page the person came from
+ * still offered Escalate.
+ */
+export async function escalateExceptionAction(
+  id: string,
+  values: unknown,
+): Promise<
+  | ({ ok: true } & EscalationResult)
+  | {
+      error: {
+        message: string;
+        reason: string | null;
+        retryable?: boolean;
+        requestId?: string;
+        reference?: string | null;
+        requestVisible?: boolean;
+      };
+    }
+> {
+  let ctx: ServiceContext | null = null;
+  try {
+    if (!uuidSchema.safeParse(id).success) {
+      throw new ServiceError('validation_error', 'That exception id is not valid.');
+    }
+    ctx = await withContext();
+    // The phone's route limits escalations to 10 a minute per person
+    // (api/v1/exceptions/[id]/escalate); the web's path is limited the same,
+    // under the same key, so neither path is a way around it.
+    const rl = await checkRateLimit(`exceptions-escalate:${ctx.userId}`, 10, 60_000);
+    if (!rl.allowed) {
+      return { error: { message: ESCALATE_TOO_MANY_COPY, reason: 'rate_limited', retryable: true } };
+    }
+    const request = await new ExceptionEscalationService(ctx).escalate(id, values);
+    revalidatePath('/dashboard/exceptions');
+    revalidatePath(`/dashboard/exceptions/${id}`);
+    revalidatePath('/dashboard/maintenance');
+    return { ok: true, ...request };
+  } catch (e) {
+    const failure = fail(e, 'actions.exceptions.escalate');
+    if (!(e instanceof ServiceError) || e.code === 'internal_error') {
+      // A failure that may have left a request saved (or linked): the phone's
+      // words for a 5xx, never a bare "try again" that could save a second.
+      failure.error.message = ESCALATE_SERVER_PROBLEM_COPY;
+    }
+    if (e instanceof ServiceError && e.code === 'module_disabled' && failure.error.reason === null) {
+      failure.error.reason = 'module_disabled';
+    }
+    const details = e instanceof ServiceError && e.code !== 'internal_error' ? e.details : undefined;
+    if (failure.error.reason === 'already_escalated' && typeof details?.requestId === 'string') {
+      revalidatePath('/dashboard/exceptions');
+      revalidatePath(`/dashboard/exceptions/${id}`);
+      return {
+        error: {
+          ...failure.error,
+          requestId: details.requestId,
+          reference: typeof details.reference === 'string' ? details.reference : null,
+          requestVisible: ctx ? await canOpenRequest(ctx, details.requestId) : false,
+        },
+      };
+    }
+    return failure;
   }
 }

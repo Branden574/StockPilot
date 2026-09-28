@@ -65,6 +65,30 @@ describe('maintenance deep links (all three notification doors route through her
     expect(rewriteWebPath('/dashboard/maintenance')).toBe('/maintenance');
     expect(rewriteWebPath('/dashboard/maintenance?scope=all')).toBe('/maintenance');
   });
+
+  // F1-5: the exception's "Escalate to maintenance" link on the web is
+  // /dashboard/maintenance/new?exceptionOccurrenceId=<uuid>. Before, any query
+  // on the new-request path fell through to the catch-all and opened Home.
+  // Mutation caught: the query dropped (a plain, unlinked request form), or
+  // kept unchecked (anything a link carries reaching the form).
+  it('new with the escalate query keeps the exception id and a location id, both uuids only', () => {
+    const occ = '11111111-1111-4111-8111-111111111111';
+    const loc = '55555555-5555-4555-8555-555555555555';
+    expect(rewriteWebPath(`/dashboard/maintenance/new?exceptionOccurrenceId=${occ}`)).toBe(
+      `/maintenance/new?exceptionOccurrenceId=${occ}`,
+    );
+    expect(rewriteWebPath(`/dashboard/maintenance/new?exceptionOccurrenceId=${occ}&locationId=${loc}`)).toBe(
+      `/maintenance/new?exceptionOccurrenceId=${occ}&locationId=${loc}`,
+    );
+    expect(rewriteWebPath(`/dashboard/maintenance/new?locationId=${loc}&subject=hi`)).toBe(
+      `/maintenance/new?locationId=${loc}`,
+    );
+    expect(rewriteWebPath('/dashboard/maintenance/new?exceptionOccurrenceId=../../x')).toBe('/maintenance/new');
+    expect(rewriteWebPath('/dashboard/maintenance/new?itemId=abc')).toBe('/maintenance/new');
+    expect(rewriteWebPath(`/dashboard/maintenance/new?exceptionOccurrenceId=${occ}&exceptionOccurrenceId=${loc}`)).toBe(
+      `/maintenance/new?exceptionOccurrenceId=${occ}`,
+    );
+  });
 });
 
 // SP-031: four notification link shapes that are STILL EMITTED in prod had no

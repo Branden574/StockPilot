@@ -4,9 +4,16 @@ import {
   buildMaintenanceEmailDraft,
   prepareMaintenanceEmail,
   MAINTENANCE_CONDENSED_DISCLOSURE,
+  relatedLocationText,
   type MaintenanceEmailInput,
 } from './email';
-import { OUTLOOK_COMPOSE_BASE, DRAFT_URL_LIMIT } from '../email/outlook-compose';
+import {
+  OUTLOOK_COMPOSE_BASE,
+  DRAFT_URL_LIMIT,
+  composeMailtoUrl,
+  composeOutlookMobileUrl,
+  composeOutlookWebUrl,
+} from '../email/outlook-compose';
 import { L4L_MAINTENANCE_RECIPIENTS } from './constants';
 import { maintenanceEmailRecipients } from './recipients';
 
@@ -1207,5 +1214,218 @@ describe('per-org recipients — the builder composes with what it is HANDED', (
     expect(() => buildMaintenanceEmailDraft({ ...MINIMAL_INPUT, recipients: poisoned })).toThrow(
       /must be exactly one plain email address/,
     );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// F1-5: the Related Location line (an escalated exception's rack, Staging or
+// Unplaced), and the ladder rung that drops it FIRST.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** An escalated exception's request, as the escalate flow saves it: the
+ *  core prefill's subject and description, the item, and the location. */
+const ESCALATION_INPUT: MaintenanceEmailInput = {
+  ...MINIMAL_INPUT,
+  requestNumber: 'MR-2026-000014',
+  subject: 'Inventory issue: Chromebook charger (CB-CHG-65W)',
+  description: 'Sitting in Staging: 12 units in Staging for at least 9 days. Location: Staging. Ref EX-000042.',
+  category: 'Inventory or equipment',
+  submittedAtDisplay: 'September 27, 2026 at 10:05 AM',
+  relatedItem: {
+    name: 'Chromebook charger',
+    sku: 'CB-CHG-65W',
+    barcode: null,
+    modelNumber: null,
+    warehouseName: 'DC4 Fresno',
+    locationName: '12-B',
+    url: 'https://stockpilotusa.com/dashboard/inventory/22222222-2222-4222-8222-222222222222',
+  },
+  relatedLocation: { name: 'Staging', warehouseName: 'DC4 Fresno' },
+};
+
+/** Whether a draft's web compose url and mailto both fit (the builder's own
+ *  rule, restated from the transport so the test does not trust the code
+ *  under test to measure itself). */
+function draftFits(draft: ReturnType<typeof buildMaintenanceEmailDraft>): boolean {
+  const web = composeOutlookWebUrl({
+    to: draft.to,
+    cc: draft.cc,
+    subject: draft.subject,
+    body: draft.body,
+    toName: draft.toName,
+    ccName: draft.ccName,
+  });
+  return web.length <= DRAFT_URL_LIMIT && composeMailtoUrl(draft).length <= DRAFT_URL_LIMIT;
+}
+
+/** ESCALATION_INPUT with its description padded to `n` extra characters. */
+function padded(n: number, relatedLocation = ESCALATION_INPUT.relatedLocation): MaintenanceEmailInput {
+  return {
+    ...ESCALATION_INPUT,
+    relatedLocation,
+    description: `${ESCALATION_INPUT.description} ${'x'.repeat(n)}`.trim(),
+  };
+}
+
+describe('F1-5: the Related Location line', () => {
+  it('golden: an escalated exception\'s full email, pinned byte for byte', () => {
+    const prepared = prepareMaintenanceEmail(ESCALATION_INPUT);
+    expect(prepared.draft.condensed).toBe(false);
+    expect(prepared.linkFits).toBe(true);
+    expect(prepared.draft.subject).toBe(
+      '[StockPilot Maintenance MR-2026-000014] Inventory issue: Chromebook charger (CB-CHG-65W)',
+    );
+    expect(prepared.draft.body).toBe(
+      [
+        'MAINTENANCE REQUEST',
+        '',
+        'StockPilot Request: MR-2026-000014',
+        'Issue: Inventory issue: Chromebook charger (CB-CHG-65W)',
+        'Category: Inventory or equipment',
+        'Priority: Normal',
+        'Submitted: September 27, 2026 at 10:05 AM',
+        '',
+        'REQUESTER',
+        '',
+        'Name: Jane Smith',
+        '',
+        'ISSUE DESCRIPTION',
+        '',
+        'Sitting in Staging: 12 units in Staging for at least 9 days. Location: Staging. Ref EX-000042.',
+        '',
+        'RELATED STOCKPILOT RECORD',
+        '',
+        'Item: Chromebook charger',
+        'SKU: CB-CHG-65W',
+        'Warehouse: DC4 Fresno',
+        'Location: 12-B',
+        'StockPilot Item: https://stockpilotusa.com/dashboard/inventory/22222222-2222-4222-8222-222222222222',
+        '',
+        'Related Location: Staging (DC4 Fresno)',
+        '',
+        'Please reply to this email thread for updates so the responses remain attached to the same Zendesk ticket.',
+        '',
+        'Generated from StockPilot.',
+        'StockPilot Request: MR-2026-000014',
+      ].join('\n'),
+    );
+    const { params } = decodeCompose(prepared.outlookUrl);
+    expect(params.body).toBe(prepared.draft.body);
+    expect(prepared.clipboardText.endsWith(prepared.draft.body)).toBe(true);
+  });
+
+  it('a location with no warehouse is the name alone; a blank name or none at all adds no line', () => {
+    const noWarehouse = buildMaintenanceEmailDraft({
+      ...ESCALATION_INPUT,
+      relatedLocation: { name: 'Unplaced', warehouseName: null },
+    }).body;
+    expect(noWarehouse).toContain('\n\nRelated Location: Unplaced\n\n');
+    for (const relatedLocation of [null, undefined, { name: '   ', warehouseName: 'DC4 Fresno' }]) {
+      const body = buildMaintenanceEmailDraft({ ...ESCALATION_INPUT, relatedLocation }).body;
+      expect(body).not.toContain('Related Location');
+      expect(body).not.toContain('undefined');
+      expect(body).not.toContain('null');
+    }
+  });
+
+  it('the screens read the same words as the email line (relatedLocationText)', () => {
+    expect(relatedLocationText({ name: ' Staging ', warehouseName: ' DC4 Fresno ' })).toBe('Staging (DC4 Fresno)');
+    expect(relatedLocationText({ name: 'Unplaced', warehouseName: null })).toBe('Unplaced');
+    expect(relatedLocationText({ name: 'Unplaced', warehouseName: '  ' })).toBe('Unplaced');
+    expect(relatedLocationText({ name: '   ', warehouseName: 'DC4 Fresno' })).toBeNull();
+    expect(relatedLocationText(null)).toBeNull();
+    expect(relatedLocationText(undefined)).toBeNull();
+    const loc = { name: '12-B', warehouseName: 'DC4 Fresno' };
+    expect(buildMaintenanceEmailDraft({ ...ESCALATION_INPUT, relatedLocation: loc }).body).toContain(
+      `Related Location: ${relatedLocationText(loc)}`,
+    );
+  });
+
+  it('it is the LAST group under the related-record heading, after item, order and rental', () => {
+    const body = buildMaintenanceEmailDraft({
+      ...ESCALATION_INPUT,
+      relatedRental: { itemNames: ['Projector'], borrowerName: 'Room 12', url: 'https://stockpilotusa.com/r/1' },
+    }).body;
+    expect(body).toContain(
+      'StockPilot Rental: https://stockpilotusa.com/r/1\n\nRelated Location: Staging (DC4 Fresno)\n\nPlease reply',
+    );
+  });
+
+  it('every request from before the field composes byte for byte as it did (no location, no change)', () => {
+    for (const input of [FULL_INPUT, MINIMAL_INPUT, MODERATE_INPUT]) {
+      const before = prepareMaintenanceEmail(input);
+      const explicit = prepareMaintenanceEmail({ ...input, relatedLocation: null });
+      expect(explicit.draft).toEqual(before.draft);
+      expect(explicit.outlookUrl).toBe(before.outlookUrl);
+      expect(explicit.clipboardText).toBe(before.clipboardText);
+    }
+  });
+
+  it('DROPPED FIRST: a request that fits only without the location keeps the FULL body minus that one line, never the condensed body', () => {
+    // The smallest padding at which the full body WITH the location no
+    // longer fits; at that size the body without it still does.
+    let n = 0;
+    while (draftFits(buildMaintenanceEmailDraft(padded(n)))) n += 1;
+    expect(n).toBeGreaterThan(0);
+    const input = padded(n);
+    expect(draftFits(buildMaintenanceEmailDraft(input))).toBe(false);
+    expect(draftFits(buildMaintenanceEmailDraft(input, { omitRelatedLocation: true }))).toBe(true);
+
+    const prepared = prepareMaintenanceEmail(input);
+    expect(prepared.linkFits).toBe(true);
+    expect(prepared.draft.condensed).toBe(false);
+    expect(prepared.draft.body).not.toContain('Related Location');
+    expect(prepared.draft.body).not.toContain(MAINTENANCE_CONDENSED_DISCLOSURE);
+    // Exactly the body this request had before the field existed.
+    expect(prepared.draft.body).toBe(buildMaintenanceEmailDraft({ ...input, relatedLocation: null }).body);
+    // Everything else survives: the item group, category, priority.
+    expect(prepared.draft.body).toContain('Item: Chromebook charger');
+    expect(prepared.draft.body).toContain('Category: Inventory or equipment');
+    // The clipboard still carries the whole thing.
+    expect(prepared.clipboardText).toContain('Related Location: Staging (DC4 Fresno)');
+  });
+
+  it('adding a location never makes a request condense that did not condense without it', () => {
+    for (let n = 0; n <= 1400; n += 7) {
+      const withLocation = prepareMaintenanceEmail(padded(n));
+      const without = prepareMaintenanceEmail(padded(n, null));
+      expect(withLocation.draft.condensed).toBe(without.draft.condensed);
+      expect(withLocation.linkFits).toBe(without.linkFits);
+    }
+  });
+
+  it('the condensed body never carries the location (it is not on the preserve list)', () => {
+    const prepared = prepareMaintenanceEmail({ ...FULL_INPUT, relatedLocation: { name: 'Staging', warehouseName: 'DC4' } });
+    expect(prepared.draft.condensed).toBe(true);
+    expect(prepared.draft.body).not.toContain('Related Location');
+    expect(prepared.draft.body).toBe(prepareMaintenanceEmail(FULL_INPUT).draft.body);
+    expect(prepared.clipboardText).toContain('Related Location: Staging (DC4)');
+  });
+
+  it('the native transport walks the same ladder against its own url', () => {
+    let n = 0;
+    const nativeFits = (i: MaintenanceEmailInput, omit: boolean) => {
+      const d = buildMaintenanceEmailDraft(i, { omitRelatedLocation: omit });
+      return composeOutlookMobileUrl(d).length <= DRAFT_URL_LIMIT && composeMailtoUrl(d).length <= DRAFT_URL_LIMIT;
+    };
+    while (nativeFits(padded(n), false)) n += 1;
+    const input = padded(n);
+    expect(nativeFits(input, true)).toBe(true);
+    const prepared = prepareMaintenanceEmail(input, { transport: 'outlook-native' });
+    expect(prepared.draft.condensed).toBe(false);
+    expect(prepared.draft.body).not.toContain('Related Location');
+    expect(prepared.transport).toBe('outlook-native');
+  });
+
+  it('no cost, price or value ever reaches the body (the input has no such field)', () => {
+    const body = prepareMaintenanceEmail(ESCALATION_INPUT).clipboardText;
+    expect(body).not.toMatch(/\$|\bcost\b|\bprice\b|\bvalue\b|\bunit cost\b/i);
+    // Type-level: a cost-shaped key does not typecheck on the location block.
+    const bad: MaintenanceEmailInput = {
+      ...ESCALATION_INPUT,
+      // @ts-expect-error relatedLocation carries names only
+      relatedLocation: { name: 'Staging', warehouseName: null, unitCost: 12 },
+    };
+    expect(bad).toBeTruthy();
   });
 });
