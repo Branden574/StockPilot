@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   EXCEPTION_ACT_NOT_PERMITTED_COPY,
@@ -172,9 +172,20 @@ async function renderPage(id = ID) {
   return render(await ExceptionDetailPage({ params: Promise.resolve({ id }) }));
 }
 
+// happy-dom never loads an image and reports each one as complete with no
+// width, which a browser reports only for a BROKEN image (the Photos panel
+// shows a broken one as "could not be loaded"). Model a browser in which the
+// photos are still loading.
+const imageComplete = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'complete');
+
 beforeEach(() => {
   vi.clearAllMocks();
   card.suspend = false;
+  Object.defineProperty(HTMLImageElement.prototype, 'complete', { configurable: true, get: () => false });
+});
+afterEach(() => {
+  if (imageComplete) Object.defineProperty(HTMLImageElement.prototype, 'complete', imageComplete);
+  else delete (HTMLImageElement.prototype as { complete?: boolean }).complete;
 });
 
 describe('Exception detail page', () => {

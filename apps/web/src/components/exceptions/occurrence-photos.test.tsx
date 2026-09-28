@@ -153,15 +153,24 @@ function setOnline(value: boolean) {
   Object.defineProperty(window.navigator, 'onLine', { configurable: true, get: () => value });
 }
 
+// happy-dom never loads an image and reports each one as complete with no
+// width, which a browser reports only for a BROKEN image. Model a browser in
+// which the photos are still loading; the one test about an image that had
+// already failed when the page became interactive sets its own state.
+const imageComplete = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'complete');
+
 beforeEach(() => {
   vi.clearAllMocks();
   fetchSpy = vi.fn(async () => ({ ok: true }) as Response);
   vi.stubGlobal('fetch', fetchSpy);
   setOnline(true);
+  Object.defineProperty(HTMLImageElement.prototype, 'complete', { configurable: true, get: () => false });
 });
 afterEach(() => {
   vi.unstubAllGlobals();
   setOnline(true);
+  if (imageComplete) Object.defineProperty(HTMLImageElement.prototype, 'complete', imageComplete);
+  else delete (HTMLImageElement.prototype as { complete?: boolean }).complete;
 });
 
 describe('OccurrencePhotos: adding', () => {
@@ -424,6 +433,32 @@ describe('OccurrencePhotos: who sees what', () => {
     expect(await screen.findByText(EXCEPTION_EVIDENCE_PHOTO_FAILED_COPY)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Try again: Photo 1' }));
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  // Browser walk 2026-09-27: an image that failed while the page was still
+  // loading (before React attached onError) stayed a broken tile. Mutation
+  // caught: relying on the error event alone.
+  it('a photo that had already failed to load when the page became interactive says so too', () => {
+    const complete = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'complete');
+    const naturalWidth = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'naturalWidth');
+    Object.defineProperty(HTMLImageElement.prototype, 'complete', { configurable: true, get: () => true });
+    Object.defineProperty(HTMLImageElement.prototype, 'naturalWidth', { configurable: true, get: () => 0 });
+    try {
+      renderPanel({ evidence: evidence([photo()]) });
+      expect(screen.getByText(EXCEPTION_EVIDENCE_PHOTO_FAILED_COPY)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Try again: Photo 1' })).toBeInTheDocument();
+    } finally {
+      if (complete) Object.defineProperty(HTMLImageElement.prototype, 'complete', complete);
+      else delete (HTMLImageElement.prototype as { complete?: boolean }).complete;
+      if (naturalWidth) Object.defineProperty(HTMLImageElement.prototype, 'naturalWidth', naturalWidth);
+      else delete (HTMLImageElement.prototype as { naturalWidth?: number }).naturalWidth;
+    }
+  });
+
+  it('a photo still loading (or loaded) is not taken for a failed one', () => {
+    renderPanel({ evidence: evidence([photo()]) });
+    expect(screen.queryByText(EXCEPTION_EVIDENCE_PHOTO_FAILED_COPY)).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Photo 1' })).toBeInTheDocument();
   });
 
   it('the full-size photo failing in the viewer says so with Try again, not an endless spinner', async () => {

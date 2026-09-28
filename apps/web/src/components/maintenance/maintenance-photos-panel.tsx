@@ -604,6 +604,17 @@ export function MaintenancePhotosPanel(props: Props) {
                       src={shown}
                       alt={p.originalFilename}
                       onError={photoLoadFailure ? () => markFailed(shown) : undefined}
+                      // An image can fail while the page is still loading,
+                      // before React attaches onError (a server-rendered tile):
+                      // check once it is mounted, so it never stays a broken
+                      // tile (browser walk 2026-09-27).
+                      ref={
+                        photoLoadFailure
+                          ? (el) => {
+                              if (el && el.complete && el.naturalWidth === 0) markFailed(shown);
+                            }
+                          : undefined
+                      }
                       className={cn('w-full rounded-lg border object-cover', card ? 'h-32' : 'h-24')}
                     />
                   </button>
