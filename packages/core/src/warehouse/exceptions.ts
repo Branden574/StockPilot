@@ -892,6 +892,10 @@ export function describeOccurrenceEvent(event: {
   actorLabel: string | null;
   cycleCountNumber?: number | null;
   resolvedReason?: OccurrenceResolvedReason | null;
+  /** For an `escalated` event: the request's handle ("MR-2026-000014") when
+   *  the reader knows it (F1-5). The words stay "escalated to": a request is
+   *  saved, nothing is sent. */
+  maintenanceRequestReference?: string | null;
 }): string {
   const who = event.actorLabel?.trim() || null;
   const by = who ? ` by ${who}` : '';
@@ -913,8 +917,10 @@ export function describeOccurrenceEvent(event: {
       return `Photo added${by}`;
     case 'evidence_removed':
       return `Photo removed${by}`;
-    case 'escalated':
-      return `Escalated to a maintenance request${by}`;
+    case 'escalated': {
+      const mr = event.maintenanceRequestReference?.trim() || null;
+      return mr ? `Escalated to maintenance request ${mr}${by}` : `Escalated to a maintenance request${by}`;
+    }
   }
 }
 

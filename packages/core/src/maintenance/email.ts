@@ -125,6 +125,20 @@ export interface MaintenanceEmailInput {
     url: string | null;
   } | null;
   relatedRental: { itemNames: string[]; borrowerName: string | null; url: string | null } | null;
+  /**
+   * The StockPilot location the request is about (F1-5: an escalated
+   * exception's rack, Staging or Unplaced; any request with a related
+   * location), as `Related Location: <name> (<warehouse>)`. Optional, so
+   * every caller from before it composes byte for byte as it did.
+   *
+   * DROPPED FIRST when the body is shortened: prepareMaintenanceEmail tries
+   * the full body, then the same body without this line (exactly the body
+   * this request would have had before the field existed), and only then
+   * the condensed body, which never carries it. Adding a location can
+   * therefore never make a request condense that did not condense before.
+   * Names only: never a cost, a quantity or a person.
+   */
+  relatedLocation?: { name: string; warehouseName: string | null } | null;
   photoCount: number;
   shareUrl: string | null;
 }
@@ -303,7 +317,12 @@ function photosSection(
 
 export function buildMaintenanceEmailDraft(
   input: MaintenanceEmailInput,
-  opts: { condensed?: boolean } = {},
+  opts: {
+    condensed?: boolean;
+    /** Leave out the Related Location line (the ladder's middle rung; the
+     *  condensed body leaves it out regardless). */
+    omitRelatedLocation?: boolean;
+  } = {},
 ): MaintenanceEmailDraft {
   // Validated at draft time even though the brand already implies it — the
   // type catches the wrong-but-well-formed value a new call site types by
@@ -431,6 +450,15 @@ export function buildMaintenanceEmailDraft(
           .join('\n') || null,
       );
     }
+    // LAST, as its own group: the first thing the ladder drops (see
+    // `relatedLocation` on the input). The warehouse rides in brackets on the
+    // same line, so the item group's own Warehouse/Location lines (the
+    // item's primary location) are never confused with it.
+    if (input.relatedLocation && opts.omitRelatedLocation !== true) {
+      const name = cleanValue(input.relatedLocation.name);
+      const warehouse = cleanValue(input.relatedLocation.warehouseName);
+      groups.push(name ? line('Related Location', warehouse ? `${name} (${warehouse})` : name) : null);
+    }
     const realGroups = groups.filter((g): g is string => Boolean(g));
     blocks.push(realGroups.length ? section('RELATED STOCKPILOT RECORD', [realGroups.join('\n\n')]) : null);
   }
@@ -523,6 +551,12 @@ function urlsFor(draft: MaintenanceEmailDraft): {
  *  (plus the mailto, which every surface can open as the cc-untrusted
  *  reroute), and the result is stamped with what was fitted.
  *
+ *  THE LADDER (F1-5): the full body; then, when the request names a related
+ *  location, the full body without that one line; then the condensed body.
+ *  The middle rung is the pre-location body byte for byte, so it keeps
+ *  `condensed: false` (nothing else was shortened, and the clipboard still
+ *  carries the line).
+ *
  *  The default is `outlook-web` — the WORST case, byte-identical to what
  *  shipped — so both web call sites, which pass no options, are unchanged,
  *  and an unknown or unprobed transport under-fills rather than silently
@@ -576,6 +610,25 @@ export function prepareMaintenanceEmail(
       clipboardText,
       linkFits: true,
     };
+  }
+
+  // The middle rung: the full body without the Related Location line, which
+  // is exactly the body this request had before that line existed. So a
+  // location never pushes a request that used to fit into the condensed
+  // body; the location is what gives way first.
+  if (input.relatedLocation) {
+    const withoutLocation = measure(buildMaintenanceEmailDraft(input, { omitRelatedLocation: true }));
+    if (withoutLocation.fits) {
+      return {
+        draft: withoutLocation.draft,
+        outlookUrl: withoutLocation.outlookUrl,
+        outlookMobileUrl: withoutLocation.outlookMobileUrl,
+        mailtoUrl: withoutLocation.mailtoUrl,
+        transport,
+        clipboardText,
+        linkFits: true,
+      };
+    }
   }
 
   const condensed = measure(buildMaintenanceEmailDraft(input, { condensed: true }));
