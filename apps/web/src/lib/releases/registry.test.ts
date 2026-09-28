@@ -545,8 +545,13 @@ describe('F1-5 (escalate an exception to maintenance) is published', () => {
     expect(list.releases.map((r) => r.id)).toContain(F1_5);
     // The notice offers the newest unread release; the maintenance review
     // wording release was published after this one (and F2-1's after it).
-    expect(list.latestUnread?.id).toBe('maintenance-review-wording-2026-09');
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(F1_5);
+    expect(list.latestUnread?.id).toBe('order-held-and-caught-2026-10');
+    // An old phone build lists at most three unread releases, newest first;
+    // F1-5 comes into that list once the newer releases are read.
+    const newer = Object.fromEntries(
+      RELEASES.slice(0, RELEASES.findIndex((r) => r.id === F1_5)).map((r) => [r.id, true]),
+    );
+    expect(legacyAnnouncementsFor(RELEASES, everyone, newer).map((a) => a.id)).toContain(F1_5);
     expect(registryFingerprint(RELEASES)).toContain(F1_5);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(F1_5);
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-29T00:00:00Z'));
@@ -711,7 +716,7 @@ describe('F2-1 (order readiness) is published', () => {
     expect(list.releases.map((r) => r.id)).toContain(F2_1);
     // The notice offers the newest unread release; the maintenance review
     // wording release was published after this one.
-    expect(list.latestUnread?.id).toBe('maintenance-review-wording-2026-09');
+    expect(list.latestUnread?.id).toBe('order-held-and-caught-2026-10');
     expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(F2_1);
     expect(registryFingerprint(RELEASES)).toContain(F2_1);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(F2_1);
@@ -874,18 +879,18 @@ describe('the maintenance review wording release is published', () => {
   const SENTENCE =
     'Your request has been saved in StockPilot. When you choose Open in Outlook, it opens with the email details filled in; nothing is sent until you send it.';
 
-  it('is published and the newest: every release above it is a draft, and it is dated after every release below it', () => {
+  it('is published, dated after every release below it (releases above it were published later)', () => {
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
-    // Pinned by id: a newer draft (F2-2's release) sits above it until that
-    // is published.
     const at = RELEASES.findIndex((r) => r.id === ID);
-    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
     for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     const list = buildReleaseList(RELEASES, everyone, [], null);
-    expect(list.latestUnread?.id).toBe(ID);
+    expect(list.releases.map((r) => r.id)).toContain(ID);
     expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(ID);
     expect(registryFingerprint(RELEASES)).toContain(ID);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
@@ -937,13 +942,12 @@ describe('the maintenance review wording release is published', () => {
 });
 
 /**
- * F2-2's release (held, and caught before it leaves) is held as a DRAFT until
+ * F2-2's release (held, and caught before it leaves) was held as a DRAFT until
  * its phone release (pnpm release:ota: the digital pick confirm, the
  * departure confirms, the short-line fixes and the hold notices) and the Demo
- * Co walk, as F2-1's was. The follow-up that publishes it sets 'published'
- * and the real publishedAt, and flips the first pin here.
+ * Co walk, as F2-1's was. This follow-up publishes it.
  */
-describe('F2-2 (held, and caught before it leaves) is held as a draft', () => {
+describe('F2-2 (held, and caught before it leaves) is published', () => {
   const F2_2 = 'order-held-and-caught-2026-10';
   const release = () => RELEASES.find((r) => r.id === F2_2)!;
   const everyone: ReleaseViewer = {
@@ -953,18 +957,17 @@ describe('F2-2 (held, and caught before it leaves) is held as a draft', () => {
   };
   const published = (): Release => ({ ...release(), status: 'published' });
 
-  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+  it('is published after the web deploy, the phone update and the Demo Co walk, so every feed carries it', () => {
     expect(release()).toBeDefined();
-    expect(release().status).toBe('draft');
-    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(F2_2);
+    expect(release().status).toBe('published');
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(F2_2);
     const list = buildReleaseList(RELEASES, everyone, [], null);
-    expect(list.releases.map((r) => r.id)).not.toContain(F2_2);
-    expect(list.latestUnread?.id).not.toBe(F2_2);
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(F2_2);
-    expect(registryFingerprint(RELEASES)).not.toContain(F2_2);
-    // Preparing it changes nothing a client can observe.
-    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== F2_2)));
-    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(F2_2);
+    expect(list.releases.map((r) => r.id)).toContain(F2_2);
+    expect(list.latestUnread?.id).toBe(F2_2);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(F2_2);
+    expect(registryFingerprint(RELEASES)).toContain(F2_2);
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(F2_2);
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-29T00:00:00Z'));
   });
 
   it('sits above every published release (pinned by id), dated after every other release, so publishing it makes it the newest', () => {
