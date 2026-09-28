@@ -228,9 +228,14 @@ export function DigitalPick({
                     [line.id]: Math.max(0, Math.min(requested, n)),
                   }))
                 }
-                placeholder={String(requested)}
+                // A word, never a number: the requested quantity as a grey
+                // placeholder made a line with nothing entered look filled
+                // (F2-2 walk). What is asked for sits beside the field, as
+                // on the phone.
+                placeholder="Qty"
                 className="w-24"
               />
+              <span className="text-muted-foreground text-xs tabular-nums">of {requested}</span>
               <Button
                 type="button"
                 size="sm"
