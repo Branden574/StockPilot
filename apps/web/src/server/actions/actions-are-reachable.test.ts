@@ -112,6 +112,15 @@ const KNOWN_UNREACHABLE: ReadonlyArray<{ name: string; file: string; reason: str
     file: 'order-requests.ts',
     reason: 'No caller: public-request token rotation has no settings control yet.',
   },
+  // F1-5 ships in two steps: the backend (the escalate action, route and
+  // RPCs) first, then the screens. The web form's escalate submit is this
+  // action's caller; remove this entry when it lands (the stale-excuse test
+  // below fails until you do).
+  {
+    name: 'escalateExceptionAction',
+    file: 'exceptions.ts',
+    reason: 'F1-5 backend step: the maintenance form wires it in the screens step.',
+  },
 ];
 
 function walk(dir: string, out: string[] = []): string[] {

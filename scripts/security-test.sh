@@ -335,6 +335,11 @@ WEB_TESTS=(
   # finalize (review fixes 2026-09-27).
   src/server/services/exception-evidence.test.ts
   src/lib/image-reencode.test.ts
+  # Escalate to maintenance (F1-5): the module and submit floors before any
+  # read, the item and location taken from the occurrence (client ids
+  # ignored), one request per escalation (a duplicate answers the linked
+  # one), and a request that could not be linked cancelled as its requester.
+  src/server/services/exception-escalation.test.ts
 
   # AI boundaries: org-scoped tool reads, prompt-injection containment, SSRF.
   src/lib/ai/tools.security.test.ts

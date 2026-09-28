@@ -7,10 +7,12 @@ import { can, RECOUNT_MAX_ITEMS, uuidSchema, type RecountUnavailableReason } fro
 import { reportError } from '@/lib/error-reporter';
 import { fetchCountAssignees } from '@/server/lib/count-assignees';
 import { ServiceError, withContext } from '@/server/services/context';
+import { ExceptionEscalationService } from '@/server/services/exception-escalation';
 import { ExceptionEvidenceService } from '@/server/services/exception-evidence';
 import { ExceptionOccurrencesService } from '@/server/services/exception-occurrences';
 import { ExceptionRecountService } from '@/server/services/exception-recount';
 import type { ExceptionRecountResult } from '@/server/services/exception-recount';
+import type { EscalationResult } from '@/server/services/exception-escalation';
 import type {
   EvidenceUploadTicket,
   RecordedEvidence,
@@ -40,6 +42,13 @@ import type {
  *     is linked to them (the database links only the exceptions it is named).
  *   - listItemsRecountTargetsAction: the same for several items, for the
  *     location page's "Recount items here" (F1-3).
+ *   - escalateExceptionAction: "Escalate to maintenance" (F1-5), the same
+ *     ExceptionEscalationService.escalate the phone reaches through
+ *     POST /api/v1/exceptions/[id]/escalate. It saves one maintenance request
+ *     linked to the occurrence; nothing is emailed (the request's review
+ *     screen opens a draft only when the person taps it). An occurrence
+ *     already escalated answers reason already_escalated with the linked
+ *     request's id, which the form opens instead.
  *   - startExceptionEvidenceUploadAction, finalizeExceptionEvidenceAction,
  *     removeExceptionEvidenceAction: photo evidence (F1-4), the same
  *     ExceptionEvidenceService calls the phone reaches through
@@ -297,5 +306,53 @@ export async function removeExceptionEvidenceAction(
     return { ok: true, evidence };
   } catch (e) {
     return fail(e, 'actions.exceptions.evidence_remove');
+  }
+}
+
+/**
+ * "Escalate to maintenance" (F1-5). `values` is the request form's four
+ * fields (subject, description, priority, category); any other key is
+ * ignored, and the item and location come from the occurrence on the server.
+ * Online only, never queued.
+ *
+ * A failure carries `reason` (already_escalated, escalation_in_progress,
+ * occurrence_resolved, escalation_not_claimed, request_not_eligible, busy,
+ * module_disabled; aal2_required from the MFA step-up), and for
+ * already_escalated the linked
+ * request's `requestId` and `reference`, so the form can open it.
+ */
+export async function escalateExceptionAction(
+  id: string,
+  values: unknown,
+): Promise<
+  | ({ ok: true } & EscalationResult)
+  | { error: { message: string; reason: string | null; retryable?: boolean; requestId?: string; reference?: string | null } }
+> {
+  try {
+    if (!uuidSchema.safeParse(id).success) {
+      throw new ServiceError('validation_error', 'That exception id is not valid.');
+    }
+    const ctx = await withContext();
+    const request = await new ExceptionEscalationService(ctx).escalate(id, values);
+    revalidatePath('/dashboard/exceptions');
+    revalidatePath(`/dashboard/exceptions/${id}`);
+    revalidatePath('/dashboard/maintenance');
+    return { ok: true, ...request };
+  } catch (e) {
+    const failure = fail(e, 'actions.exceptions.escalate');
+    if (e instanceof ServiceError && e.code === 'module_disabled' && failure.error.reason === null) {
+      failure.error.reason = 'module_disabled';
+    }
+    const details = e instanceof ServiceError && e.code !== 'internal_error' ? e.details : undefined;
+    if (failure.error.reason === 'already_escalated' && typeof details?.requestId === 'string') {
+      return {
+        error: {
+          ...failure.error,
+          requestId: details.requestId,
+          reference: typeof details.reference === 'string' ? details.reference : null,
+        },
+      };
+    }
+    return failure;
   }
 }

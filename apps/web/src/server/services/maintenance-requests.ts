@@ -1231,6 +1231,34 @@ export class MaintenanceRequestsService {
       }
     }
 
+    // F1-5: the location the request is about (an escalated exception's rack,
+    // Staging or Unplaced; any request with a related location). Names only.
+    // Its read error is bound: a failed read is reported and the line is left
+    // out (the email builder drops this line first anyway), never guessed.
+    let relatedLocation: MaintenanceEmailInput['relatedLocation'] = null;
+    if (detail.relatedLocationId) {
+      const { data: location, error: locationError } = await this.db
+        .from('locations')
+        .select('id, name, warehouses!warehouse_id(name)')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', detail.relatedLocationId)
+        .maybeSingle();
+      if (locationError) {
+        void reportError(new Error('Related location read failed; the email omits it'), {
+          tag: 'maintenance.email_location_read',
+          level: 'warning',
+          organizationId: this.ctx.organizationId,
+          extra: { requestId: id, detail: locationError.message },
+        });
+      } else if (location) {
+        const warehouse = (location.warehouses as unknown as { name: string } | null) ?? null;
+        relatedLocation = {
+          name: location.name as string,
+          warehouseName: warehouse?.name ?? null,
+        };
+      }
+    }
+
     let relatedRental: MaintenanceEmailInput['relatedRental'] = null;
     if (detail.relatedRentalId) {
       // 0131_rentals.sql: rental line items live in `rental_lines`
@@ -1340,6 +1368,7 @@ export class MaintenanceRequestsService {
       relatedItem,
       relatedOrder,
       relatedRental,
+      relatedLocation,
       photoCount: detail.photoCount,
       shareUrl: opts.shareUrl,
     };
