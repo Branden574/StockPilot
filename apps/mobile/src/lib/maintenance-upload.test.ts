@@ -264,6 +264,23 @@ describe('uploadMaintenancePhoto', () => {
     expect(maintenanceApiMock.finalizePhoto).toHaveBeenCalled();
   });
 
+  // F1-4 extraction: the maintenance server still takes a client-made
+  // thumbnail (the evidence server makes its own). Mutation caught: dropping
+  // thumbUploadUrl from the maintenance endpoints.
+  it('still sends the client-made 400px thumbnail to the mint\'s thumbSignedUrl', async () => {
+    await uploadMaintenancePhoto('req-1', { uri: 'file:///a.jpg' }, vi.fn());
+    expect(manipulatorMock.manipulateAsync).toHaveBeenCalledWith(
+      'file:///resized.jpg',
+      [{ resize: { width: 400 } }],
+      expect.objectContaining({ format: manipulatorMock.SaveFormat.JPEG }),
+    );
+    expect(fsMock.uploadAsync).toHaveBeenCalledWith(
+      MINT.thumbSignedUrl,
+      'file:///thumb.jpg',
+      expect.objectContaining({ httpMethod: 'PUT', headers: { 'Content-Type': 'image/jpeg' } }),
+    );
+  });
+
   it('falls back to the literal filename "photo" when no fileName is given', async () => {
     const onProgress = vi.fn();
     await uploadMaintenancePhoto('req-1', { uri: 'file:///a.jpg' }, onProgress);

@@ -25,17 +25,20 @@ import {
   type OccurrenceState,
 } from '@stockpilot/core';
 
+import { ExceptionEvidenceSection } from '@/components/exception-evidence-section';
 import { ExceptionNoteSheet } from '@/components/exception-note-sheet';
 import { ExceptionRecountSheet } from '@/components/exception-recount-sheet';
-import { ItemVerificationCard, useItemVerification } from '@/components/item-verification-card';
+import { ItemVerificationCard, MIN_TAP, useItemVerification } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
+import { evidenceTick, evidenceTimelineLines } from '@/lib/exception-evidence';
 import {
   describeExceptionsRequestError,
+  EXCEPTION_WORKSPACE_UNAVAILABLE,
   exceptionActionRoute,
   exceptionActionsFor,
   exceptionTimeLabel,
@@ -50,6 +53,7 @@ import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
+import { retryWorkspace } from '@/lib/use-workspace';
 import { canOpenCountScreen } from '@/lib/verification-api';
 
 /**
@@ -80,18 +84,38 @@ import { canOpenCountScreen } from '@/lib/verification-api';
  * holding can correct the wrong place, core EXCEPTION_RULES.recountable), and
  * a rule a count can settle has the Recount button. "Count this item" stays
  * on the item screen.
+ *
+ * PHOTOS (F1-4): components/exception-evidence-section.tsx, fed the detail's
+ * `evidence` block. Online only: offline its add control is disabled with the
+ * reason and nothing is queued. A photo counts as added only once the server
+ * recorded it; the section re-reads this screen after each one. Evidence
+ * events in the timeline are worded by core describeEvidenceEvent (the
+ * photo's two times, each named by its clock).
+ *
+ * NO WORKSPACE (a launch offline, or a failed first read after signing in):
+ * the read never starts, so the screen says so with Try again, which loads
+ * the workspace again (retryWorkspace), as the location screen does.
  */
 
 type Loaded =
   | { kind: 'loading' }
-  | { kind: 'ready'; detail: MobileExceptionDetail; receivedAt: string; banner: string | null }
+  | {
+      kind: 'ready';
+      detail: MobileExceptionDetail;
+      receivedAt: string;
+      banner: string | null;
+      /** When the read that produced `detail` started (evidenceTick): the
+       *  Photos section retires an added photo's row once a read that
+       *  started after it lands. 0 for a copy remembered from before. */
+      readTick: number;
+    }
   | { kind: 'error'; message: string };
 
 export default function ExceptionDetailScreen() {
   const { c } = useTheme();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { orgId } = useOrg();
+  const { orgId, loading: workspaceLoading } = useOrg();
   const { user } = useAuth();
   const userId = user?.id ?? null;
   const offline = isOfflineState(useNetworkState());
@@ -102,12 +126,14 @@ export default function ExceptionDetailScreen() {
   const [recountOpen, setRecountOpen] = React.useState(false);
   // Bumped whenever this screen re-reads, so the card re-reads with it.
   const [verificationNonce, setVerificationNonce] = React.useState(0);
+  const [retryingWorkspace, setRetryingWorkspace] = React.useState(false);
   const seqRef = React.useRef(0);
 
   const load = React.useCallback(async () => {
     // Offline there is nothing to ask; the view below is derived instead.
     if (!id || !orgId || offline) return;
     const seq = ++seqRef.current;
+    const readTick = evidenceTick();
     try {
       const detail = await getException(id);
       if (seq !== seqRef.current) return;
@@ -120,7 +146,7 @@ export default function ExceptionDetailScreen() {
       }
       const receivedAt = new Date();
       rememberDetail(userId, orgId, detail, receivedAt);
-      setState({ kind: 'ready', detail, receivedAt: receivedAt.toISOString(), banner: null });
+      setState({ kind: 'ready', detail, receivedAt: receivedAt.toISOString(), banner: null, readTick });
     } catch (e) {
       if (seq !== seqRef.current) return;
       const status = (e as { status?: unknown }).status;
@@ -138,6 +164,7 @@ export default function ExceptionDetailScreen() {
               detail: kept.detail,
               receivedAt: kept.receivedAt,
               banner: `Could not refresh. Showing this exception as of ${exceptionTimeLabel(kept.receivedAt, kept.detail.timeZone)}.`,
+              readTick: 0,
             }
           : { kind: 'error', message },
       );
@@ -159,7 +186,7 @@ export default function ExceptionDetailScreen() {
   if (offline) {
     const kept =
       mine?.kind === 'ready'
-        ? { detail: mine.detail, receivedAt: mine.receivedAt }
+        ? { detail: mine.detail, receivedAt: mine.receivedAt, readTick: mine.readTick }
         : id
           ? recalledDetail(userId, orgId, id)
           : null;
@@ -169,6 +196,7 @@ export default function ExceptionDetailScreen() {
           detail: kept.detail,
           receivedAt: kept.receivedAt,
           banner: `You are offline. Showing this exception as of ${exceptionTimeLabel(kept.receivedAt, kept.detail.timeZone)}.`,
+          readTick: 'readTick' in kept ? kept.readTick : 0,
         }
       : {
           kind: 'error',
@@ -191,6 +219,17 @@ export default function ExceptionDetailScreen() {
     else router.replace('/exceptions' as Href);
   };
 
+  // Try again with no workspace: load the workspace again; the read above
+  // starts once it is there.
+  async function reloadWorkspace() {
+    setRetryingWorkspace(true);
+    try {
+      await retryWorkspace();
+    } finally {
+      setRetryingWorkspace(false);
+    }
+  }
+
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
@@ -199,7 +238,24 @@ export default function ExceptionDetailScreen() {
         </View>
       </SafeAreaView>
 
-      {state.kind === 'loading' ? (
+      {!orgId && !workspaceLoading ? (
+        <View style={{ paddingHorizontal: 20, marginTop: 12 }}>
+          <Card padding={16}>
+            <Body size={14.5} accessibilityRole="alert">
+              {EXCEPTION_WORKSPACE_UNAVAILABLE}
+            </Body>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={retryingWorkspace}
+              onPress={() => void reloadWorkspace()}
+              style={{ alignSelf: 'flex-start', marginTop: 14, minHeight: MIN_TAP }}
+            >
+              Try again
+            </Button>
+          </Card>
+        </View>
+      ) : state.kind === 'loading' ? (
         <ActivityIndicator color={c.ink4} style={{ marginTop: 32 }} />
       ) : state.kind === 'error' ? (
         <View style={{ paddingHorizontal: 20, marginTop: 12 }}>
@@ -208,7 +264,7 @@ export default function ExceptionDetailScreen() {
               {state.message}
             </Body>
             <View style={{ marginTop: 14, alignSelf: 'flex-start' }}>
-              <Button variant="outline" size="sm" onPress={() => void refresh()}>
+              <Button variant="outline" size="sm" onPress={() => void refresh()} style={{ minHeight: MIN_TAP }}>
                 Try again
               </Button>
             </View>
@@ -218,12 +274,14 @@ export default function ExceptionDetailScreen() {
         <Detail
           detail={state.detail}
           banner={state.banner}
+          readTick={state.readTick}
           offline={offline}
           refreshing={refreshing}
           onRefresh={() => void refresh()}
           onOpenSheet={setSheet}
           onRecount={() => setRecountOpen(true)}
           onNavigate={(href) => router.push(href as Href)}
+          onPhotosChanged={() => void load()}
           verificationRefreshKey={verificationNonce}
         />
       )}
@@ -281,22 +339,26 @@ function statePillTone(state: OccurrenceState): 'default' | 'ok' | 'warn' {
 function Detail({
   detail,
   banner,
+  readTick,
   offline,
   refreshing,
   onRefresh,
   onOpenSheet,
   onRecount,
   onNavigate,
+  onPhotosChanged,
   verificationRefreshKey,
 }: {
   detail: MobileExceptionDetail;
   banner: string | null;
+  readTick: number;
   offline: boolean;
   refreshing: boolean;
   onRefresh: () => void;
   onOpenSheet: (mode: ExceptionSheetMode) => void;
   onRecount: () => void;
   onNavigate: (href: string) => void;
+  onPhotosChanged: () => void;
   verificationRefreshKey: number;
 }) {
   const { c } = useTheme();
@@ -451,6 +513,17 @@ function Detail({
         ) : null}
       </View>
 
+      <ExceptionEvidenceSection
+        occurrenceId={o.id}
+        block={detail.evidence}
+        readTick={readTick}
+        resolved={resolved}
+        canAct={o.canAct}
+        online={!offline}
+        timeZone={detail.timeZone}
+        onChanged={onPhotosChanged}
+      />
+
       {showRecount ? (
         <Section title="RECOUNT">
           {o.recount ? (
@@ -521,27 +594,41 @@ function Detail({
             No events yet.
           </Body>
         ) : (
-          detail.timeline.map((e) => (
-            <View key={e.id} style={{ gap: 2 }}>
-              <Body size={14} color={c.ink}>
-                {describeTimelineEvent({
+          detail.timeline.map((e) =>
+            e.kind === 'evidence_added' || e.kind === 'evidence_removed' ? (
+              <EvidenceEvent
+                key={e.id}
+                lines={evidenceTimelineLines({
                   kind: e.kind,
                   actorLabel: e.actor?.label ?? null,
-                  cycleCountNumber: e.cycleCount?.countNumber ?? null,
-                  resolvedReason: o.resolvedReason,
-                  recountOutcome: e.cycleCount?.outcome ?? null,
+                  note: e.note,
+                  evidence: e.evidence,
+                  timeZone: detail.timeZone,
                 })}
-              </Body>
-              <Mono size={11} color={c.ink4}>
-                {exceptionTimeLabel(e.at, detail.timeZone)}
-              </Mono>
-              {e.note ? (
-                <Body size={14} muted>
-                  {e.note}
+                at={exceptionTimeLabel(e.at, detail.timeZone)}
+              />
+            ) : (
+              <View key={e.id} style={{ gap: 2 }}>
+                <Body size={14} color={c.ink}>
+                  {describeTimelineEvent({
+                    kind: e.kind,
+                    actorLabel: e.actor?.label ?? null,
+                    cycleCountNumber: e.cycleCount?.countNumber ?? null,
+                    resolvedReason: o.resolvedReason,
+                    recountOutcome: e.cycleCount?.outcome ?? null,
+                  })}
                 </Body>
-              ) : null}
-            </View>
-          ))
+                <Mono size={11} color={c.ink4}>
+                  {exceptionTimeLabel(e.at, detail.timeZone)}
+                </Mono>
+                {e.note ? (
+                  <Body size={14} muted>
+                    {e.note}
+                  </Body>
+                ) : null}
+              </View>
+            ),
+          )
         )}
       </Section>
 
@@ -579,6 +666,38 @@ function Detail({
           : EXCEPTION_FIRST_CHECK_PENDING_COPY}
       </Body>
     </ScrollView>
+  );
+}
+
+/** A photo event: "Photo added by X", its two times (each named by its
+ *  clock), the event's own time, and the note or the removal's reason. */
+function EvidenceEvent({
+  lines,
+  at,
+}: {
+  lines: { headline: string; detail: string | null; note: string | null };
+  at: string;
+}) {
+  const { c } = useTheme();
+  return (
+    <View style={{ gap: 2 }}>
+      <Body size={14} color={c.ink}>
+        {lines.headline}
+      </Body>
+      {lines.detail ? (
+        <Body size={13} muted>
+          {lines.detail}
+        </Body>
+      ) : null}
+      <Mono size={11} color={c.ink4}>
+        {at}
+      </Mono>
+      {lines.note ? (
+        <Body size={14} muted>
+          {lines.note}
+        </Body>
+      ) : null}
+    </View>
   );
 }
 

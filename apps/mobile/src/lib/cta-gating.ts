@@ -71,3 +71,15 @@ export function showDistributeCta(
   if (role === null) return false;
   return canDistributeBundles(perms === undefined ? { role } : { role, permissions: perms });
 }
+
+/**
+ * The Home screen's Bundles card subtitle, for EVERY role.
+ *
+ * It read "Distribute kits & assembled stock" to everyone (simulator walk
+ * 2026-09-27), which offered staff an action the bundle screen withholds from
+ * them (showDistributeCta above: manager or above). The card opens the bundle
+ * list, which every role may read, so it names what is there and no action.
+ * Role-neutral rather than gated, so Home needs no role or permission read
+ * for one line, and the words never depend on whether those reads arrived.
+ */
+export const HOME_BUNDLES_SUBTITLE = 'Kits and assembled stock';
