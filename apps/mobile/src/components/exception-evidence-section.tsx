@@ -252,6 +252,7 @@ export function ExceptionEvidenceSection({
             {failed ? (
               <View
                 style={[styles.thumb, { backgroundColor: c.paper2 }]}
+                accessible
                 accessibilityLabel={`Photo ${i + 1} of ${parts.photos.length} could not be loaded`}
               />
             ) : (
@@ -331,6 +332,7 @@ export function ExceptionEvidenceSection({
               { backgroundColor: c.paper2, opacity: entry.status === 'error' ? 0.5 : 1 },
             ]}
             contentFit="cover"
+            accessible
             accessibilityLabel="Photo being added"
           />
           <View style={stack ? styles.rowTextStacked : styles.rowText}>

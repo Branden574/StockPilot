@@ -236,6 +236,7 @@ function AddSheetContent({
                     source={{ uri: p.uri }}
                     style={styles.preview}
                     contentFit="cover"
+                    accessible
                     accessibilityLabel={many ? `Photo ${i + 1} of ${photos.length} to add` : 'The photo to add'}
                   />
                 ))}
@@ -420,6 +421,7 @@ function RemoveSheetContent({
               source={{ uri: photo.thumbUrl ?? photo.url }}
               style={styles.preview}
               contentFit="cover"
+              accessible
               accessibilityLabel={`The photo to remove. ${exceptionEvidenceAddedByCopy(photo.uploadedBy.label)}`}
             />
             <Body size={14}>{EXCEPTION_EVIDENCE_REMOVE_COPY}</Body>

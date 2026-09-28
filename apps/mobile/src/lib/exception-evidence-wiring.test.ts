@@ -318,6 +318,23 @@ describe('tap targets and spoken names', () => {
     }
   });
 
+  // Simulator walk 2026-09-27 (review finding 10): expo-image sets
+  // isAccessibilityElement = accessible ?? false on iOS, and a React Native
+  // View is not an accessibility element unless it says so, so a name on
+  // either is never read by VoiceOver: the photo previews in both sheets and
+  // the rows of photos being added were silent. Mutation caught: dropping
+  // `accessible` from any of them.
+  it.each(PHOTO_FILES)('%s: every Image or View with a spoken name is an accessibility element', (file) => {
+    const named = elementsOf(
+      file,
+      (el, sf) => ['Image', 'View'].includes(tagOf(el, sf)) && attrText(el, 'accessibilityLabel', sf) !== undefined,
+    );
+    expect(named.length).toBeGreaterThan(0);
+    for (const n of named) {
+      expect(attrText(n.el, 'accessible', n.sf), `${where(n)} has a name but is not accessible`).toBe('true');
+    }
+  });
+
   it('the Remove on each photo is named for its photo (several "Remove" buttons would sound alike)', () => {
     const removes = elementsOf(PHOTO_FILES[0]!, (el, sf) => tagOf(el, sf) === 'Button' && textOf(el) === 'Remove');
     expect(removes).toHaveLength(1);
