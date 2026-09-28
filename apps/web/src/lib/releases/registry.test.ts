@@ -457,11 +457,13 @@ describe('F1-4 (photos on exceptions) is published', () => {
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-29T00:00:00Z'));
   });
 
-  it('is the newest published release, just below F1-5\'s draft, dated after every release below it', () => {
-    // F1-5's release (below) is a draft above it, which reaches no reader.
-    expect(RELEASES.findIndex((r) => r.id === F1_4)).toBe(1);
+  it('is the newest published release, below only drafts, dated after every release below it', () => {
+    // The drafts above it (F1-5's and the maintenance photo details release)
+    // reach no reader.
+    const at = RELEASES.findIndex((r) => r.id === F1_4);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
     expect(RELEASES.filter((r) => r.status === 'published')[0]!.id).toBe(F1_4);
-    for (const r of RELEASES.slice(2)) {
+    for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -613,5 +615,51 @@ describe('F1-5 (escalate an exception to maintenance) is held as a draft', () =>
     expect(badge.whatChanged).toContain("on the open exceptions of its item's and location's pages");
     expect(badge.whatChanged).toContain('If the request is cancelled, everyone who can see the exception sees that');
     expect(badge.whatChanged).toContain('can be escalated again');
+  });
+});
+
+/**
+ * Maintenance photos are saved without their location and camera details
+ * (fix/maintenance-photo-metadata, review 2026-09-27: the owner's rule is a
+ * What's New entry for every change people can see). Held as a DRAFT until the
+ * web deploy and a Demo Co walk; the follow-up that publishes it sets
+ * 'published' and the real publishedAt, and flips the first pin here.
+ */
+describe('the maintenance photo details release is held as a draft', () => {
+  const ID = 'maintenance-photo-details-2026-09';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+
+  it('is a draft just below F1-5\'s draft, so no feed carries it yet', () => {
+    expect(RELEASES[1]!.id).toBe(ID);
+    expect(release().status).toBe('draft');
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).not.toContain(ID);
+  });
+
+  it('once published, it reaches the people Maintenance is open to, and nobody where the module is off', () => {
+    const published: Release = { ...release(), status: 'published' };
+    const requester: ReleaseViewer = {
+      role: 'staff',
+      permissions: ['maintenance_requests:submit'],
+      enabledModules: ['maintenance_requests'],
+    };
+    expect(visibleReleases([published], requester).map((r) => r.id)).toEqual([ID]);
+    expect(visibleReleases([published], { ...requester, enabledModules: [] })).toEqual([]);
+    expect(visibleReleases([published], { ...requester, permissions: ['items:read'] })).toEqual([]);
+  });
+
+  it('says what the server does and what it does not: every app, older photos unchanged, the 50 megapixel limit', () => {
+    const text = readerText(release()).join(' ');
+    expect(release().summary).toMatch(/^On the web and in the mobile app, /);
+    expect(text).toContain('Photos added before this change are not changed.');
+    expect(text).toContain('whichever app or browser sent it');
+    expect(text).toContain('more than 50 megapixels is now refused');
   });
 });

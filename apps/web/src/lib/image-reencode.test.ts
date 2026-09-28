@@ -3,6 +3,17 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
+/** Every sharp(...) call's arguments, the real sharp doing the work. */
+const sharpCalls = vi.hoisted(() => [] as unknown[][]);
+vi.mock('sharp', async (importOriginal) => {
+  const real = (await importOriginal<{ default: (...a: unknown[]) => unknown }>()).default;
+  const wrapped = Object.assign((...args: unknown[]) => {
+    sharpCalls.push(args);
+    return real(...args);
+  }, real);
+  return { default: wrapped };
+});
+
 import { sniffImage } from './image-signature';
 import { EVIDENCE_THUMB_MAX_EDGE, reencodeWithoutMetadata } from './image-reencode';
 
@@ -117,5 +128,53 @@ describe('reencodeWithoutMetadata', () => {
     expect(
       await reencodeWithoutMetadata(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]), 'jpeg'),
     ).toBeNull();
+  });
+
+  // ─── Options (maintenance, review 2026-09-27). Exception evidence passes
+  // none, so its behaviour is pinned here too: the defaults did not move.
+
+  it('maxInputPixels: refuses (null) an image of more pixels than asked, and takes one of exactly that many', async () => {
+    const input = new Uint8Array(await fixture('webp')); // 60 x 30 = 1800 pixels
+    expect(await reencodeWithoutMetadata(input, 'webp', { maxInputPixels: 1799 })).toBeNull();
+    const at = await reencodeWithoutMetadata(input, 'webp', { maxInputPixels: 1800 });
+    expect([at?.width, at?.height]).toEqual([60, 30]);
+  });
+
+  it('the pixel limit handed to sharp: 100e6 with no options (exception evidence is unchanged), else the one asked for', async () => {
+    const input = new Uint8Array(await fixture('jpeg'));
+    sharpCalls.length = 0;
+    await reencodeWithoutMetadata(input, 'jpeg');
+    expect(sharpCalls[0]![1]).toEqual({ limitInputPixels: 100_000_000 });
+    sharpCalls.length = 0;
+    await reencodeWithoutMetadata(input, 'jpeg', { maxInputPixels: 50_000_000 });
+    expect(sharpCalls[0]![1]).toEqual({ limitInputPixels: 50_000_000 });
+  });
+
+  it.each(['jpeg', 'webp'] as const)(
+    '%s: `quality` sets the master quality; the default is 90, byte for byte',
+    async (f) => {
+      // Photo-like (noise) so the quality shows in the size.
+      const raw = Buffer.alloc(160 * 120 * 3);
+      for (let i = 0; i < raw.length; i += 1) raw[i] = (i * 7919) % 251;
+      const src = await sharp(raw, { raw: { width: 160, height: 120, channels: 3 } })
+        [f]({ quality: 95 })
+        .toBuffer();
+      const input = new Uint8Array(src);
+      const byDefault = await reencodeWithoutMetadata(input, f);
+      const at90 = await reencodeWithoutMetadata(input, f, { quality: 90 });
+      const at75 = await reencodeWithoutMetadata(input, f, { quality: 75 });
+      expect(Buffer.from(byDefault!.master).equals(Buffer.from(at90!.master))).toBe(true);
+      expect(at75!.master.byteLength).toBeLessThan(at90!.master.byteLength);
+      const meta = await sharp(Buffer.from(at75!.master)).metadata();
+      expect(meta.format).toBe(f);
+      expect(meta.exif).toBeUndefined();
+    },
+  );
+
+  it('png ignores `quality` (lossless)', async () => {
+    const input = new Uint8Array(await fixture('png'));
+    const byDefault = await reencodeWithoutMetadata(input, 'png');
+    const at10 = await reencodeWithoutMetadata(input, 'png', { quality: 10 });
+    expect(Buffer.from(byDefault!.master).equals(Buffer.from(at10!.master))).toBe(true);
   });
 });

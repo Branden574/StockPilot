@@ -28,6 +28,18 @@ import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/tes
  */
 
 vi.mock('server-only', () => ({}));
+/** The photo cap, lowered by the tests that need a photo to grow past it on
+ *  re-encode (a real 10 MB case is a 30 MP photo; the rule is the same). */
+const cap = vi.hoisted(() => ({ bytes: null as number | null }));
+vi.mock('@stockpilot/core', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@stockpilot/core')>();
+  return {
+    ...real,
+    get MAINTENANCE_MAX_PHOTO_BYTES() {
+      return cap.bytes ?? real.MAINTENANCE_MAX_PHOTO_BYTES;
+    },
+  };
+});
 vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 const notify = vi.hoisted(() => vi.fn(async (_e: Record<string, unknown>) => undefined));
@@ -221,37 +233,67 @@ async function storageFetch(input: RequestInfo | URL, init?: RequestInit): Promi
 }
 
 /**
- * One service. `recorded` is what the maintenance_request_attachments table
- * holds for the admin's "is this upload recorded?" look (or 'error');
- * `live` the per-kind count the cap reads; `insert` the insert's answer.
+ * One service over one maintenance_request_attachments table. `recorded` is
+ * what the table holds at the start (or 'error': every admin look fails);
+ * `live` the per-kind count the cap reads; `insert` forces the insert's
+ * answer. Otherwise the insert behaves like the table: a second row for the
+ * same (organization_id, storage_path) answers 23505, and a written row is
+ * seen by every later admin look ("is this upload recorded?").
+ *   - `insertCommits`: the forced `insert` answer comes back, but the row IS
+ *     written (an answer lost after the commit).
+ *   - `recordAfterFirstLook`: another finalize records this row right after
+ *     this finalize's step-0 look, so every later step sees it.
+ *   - `lookFailsFrom`: the Nth admin look (1-based) and every later one fail.
  */
 function setup(
   opts: {
     recorded?: Array<Record<string, unknown>> | 'error';
     live?: number;
     insert?: { data: unknown; error: { message: string; code?: string } | null };
+    insertCommits?: boolean;
+    recordAfterFirstLook?: Record<string, unknown>;
+    lookFailsFrom?: number;
   } = {},
 ) {
   const inserted: Array<Record<string, unknown>> = [];
+  const table: Array<Record<string, unknown>> =
+    opts.recorded === 'error' ? [] : [...(opts.recorded ?? [])];
   const user = makeSupabaseStub({
     'maintenance_requests.select': { data: OPEN_REQUEST, error: null },
     'maintenance_request_attachments.select': { data: null, error: null, count: opts.live ?? 0 },
     'maintenance_request_attachments.insert': (call) => {
-      inserted.push(call.args[0]![0] as Record<string, unknown>);
-      return opts.insert ?? { data: { id: 'att-1' }, error: null };
+      const row = call.args[0]![0] as Record<string, unknown>;
+      inserted.push(row);
+      if (opts.insert) {
+        if (opts.insertCommits) table.push(row);
+        return opts.insert;
+      }
+      if (
+        table.some((r) => r.organization_id === row.organization_id && r.storage_path === row.storage_path)
+      ) {
+        return { data: null, error: { message: 'duplicate key value', code: '23505' } };
+      }
+      table.push(row);
+      return { data: { id: 'att-1' }, error: null };
     },
   });
-  const recordedRows = opts.recorded ?? [];
+  const serve = servedLikePostgrest(() => table);
+  let looks = 0;
   const admin = makeSupabaseStub({
-    'maintenance_request_attachments.select':
-      recordedRows === 'error'
-        ? { data: null, error: { message: 'lookup failed' } }
-        : servedLikePostgrest(recordedRows),
+    'maintenance_request_attachments.select': (call) => {
+      looks += 1;
+      if (opts.recorded === 'error' || (opts.lookFailsFrom !== undefined && looks >= opts.lookFailsFrom)) {
+        return { data: null, error: { message: 'lookup failed' } };
+      }
+      const answer = serve(call);
+      if (looks === 1 && opts.recordAfterFirstLook) table.push(opts.recordAfterFirstLook);
+      return answer;
+    },
   });
   admin.client.storage.from = vi.fn(() => bucket);
   adminHolder.client = admin.client;
   const ctx = makeServiceContext(user.client, { organizationId: ORG, enabledModules: ENABLED });
-  return { svc: new MaintenanceAttachmentsService(ctx), user, admin, inserted };
+  return { svc: new MaintenanceAttachmentsService(ctx), user, admin, inserted, table, looks: () => looks };
 }
 
 const finalizeArgs = (kind: Kind, path = `${stem}.${EXT[kind]}`) => ({
@@ -275,6 +317,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  cap.bytes = null;
   limiter.allowed = true;
   limiter.calls = [];
   bucket = new FakeBucket();
@@ -484,37 +527,76 @@ describe('refusals: nothing recorded, and the upload (still the original) delete
     await expectDeletedAndUnrecorded(`${stem}.jpg`, inserted);
   });
 
-  it('the whole read is not the object the range read measured: refused, deleted, nothing recorded', async () => {
-    bucket.put(`${stem}.jpg`, await phonePhoto('jpeg', { width: 320, height: 240, noise: true }), 'image/jpeg');
+  it('the whole read is not the object the range read measured (another finalize wrote over it): "already being saved", nothing deleted, written or recorded', async () => {
+    // Only the service role can change an upload once it is in the bucket
+    // (the bucket has no UPDATE policy), so a changed object means another
+    // finalize of this upload is writing it back. Deleting it here would
+    // delete the photo that finalize is about to record (review 2026-09-27).
+    const photo = await phonePhoto('jpeg', { width: 320, height: 240, noise: true });
+    bucket.put(`${stem}.jpg`, photo, 'image/jpeg');
+    bucket.put(THUMB, clientThumb, 'image/jpeg');
     bucket.downloadOverride = await phonePhoto('jpeg', { width: 20, height: 20 });
     const { svc, inserted } = setup();
 
     await expect(svc.finalize(REQ, finalizeArgs('jpeg'))).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This photo is already being saved.',
+    });
+    expect(bucket.calls.upload).toEqual([]);
+    expect(bucket.calls.remove).toEqual([]);
+    expect(bucket.bytes(`${stem}.jpg`)).toEqual(photo);
+    expect(bucket.objects.has(THUMB)).toBe(true);
+    expect(inserted).toHaveLength(0);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it('a clean JPEG over the 10 MB cap even at the retry quality: refused, deleted, nothing recorded', async () => {
+    const photo = await phonePhoto('jpeg');
+    bucket.put(`${stem}.jpg`, photo, 'image/jpeg');
+    const big = new Uint8Array(MAINTENANCE_MAX_PHOTO_BYTES + 1);
+    big.set(photo);
+    const tooBig = {
+      master: big,
+      thumb: new Uint8Array(8),
+      contentType: 'image/jpeg' as const,
+      width: 60,
+      height: 30,
+    };
+    vi.mocked(reencodeWithoutMetadata).mockResolvedValueOnce(tooBig).mockResolvedValueOnce(tooBig);
+    const { svc, inserted } = setup();
+
+    await expect(svc.finalize(REQ, finalizeArgs('jpeg'))).rejects.toMatchObject({
       message: 'invalid_image',
+    });
+    expect(vi.mocked(reencodeWithoutMetadata)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(reencodeWithoutMetadata).mock.calls[1]![2]).toEqual({
+      maxInputPixels: 50_000_000,
+      quality: 75,
     });
     expect(bucket.calls.upload).toEqual([]);
     await expectDeletedAndUnrecorded(`${stem}.jpg`, inserted);
   });
 
-  it('a clean photo over the 10 MB cap: refused, deleted, nothing recorded', async () => {
-    const photo = await phonePhoto('jpeg');
-    bucket.put(`${stem}.jpg`, photo, 'image/jpeg');
+  it('a clean PNG over the cap: refused without a retry (PNG is lossless; a quality does not shrink it)', async () => {
+    const photo = await phonePhoto('png');
+    bucket.put(`${stem}.png`, photo, 'image/png');
     const big = new Uint8Array(MAINTENANCE_MAX_PHOTO_BYTES + 1);
     big.set(photo);
     vi.mocked(reencodeWithoutMetadata).mockResolvedValueOnce({
       master: big,
       thumb: new Uint8Array(8),
-      contentType: 'image/jpeg',
+      contentType: 'image/png',
       width: 60,
       height: 30,
     });
     const { svc, inserted } = setup();
 
-    await expect(svc.finalize(REQ, finalizeArgs('jpeg'))).rejects.toMatchObject({
+    await expect(svc.finalize(REQ, finalizeArgs('png'))).rejects.toMatchObject({
       message: 'invalid_image',
     });
+    expect(vi.mocked(reencodeWithoutMetadata)).toHaveBeenCalledTimes(1);
     expect(bucket.calls.upload).toEqual([]);
-    await expectDeletedAndUnrecorded(`${stem}.jpg`, inserted);
+    await expectDeletedAndUnrecorded(`${stem}.png`, inserted);
   });
 
   it('a re-encode that answers another format than the upload: refused, deleted, nothing recorded', async () => {
@@ -668,5 +750,333 @@ describe('a recorded photo is never rewritten or deleted by a later finalize', (
       'storage_path',
       [`${stem}.jpg`, `${stem}.jpeg`, `${stem}.png`, `${stem}.webp`],
     ]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+/**
+ * Review 2026-09-27, finding 1: a small file can decode to a very large image
+ * (measured on sharp 0.35.4: a 178 KB 10000x10000 WEBP with orientation 6
+ * peaked at 1.78 GB of memory in the re-encode). Maintenance refuses a photo
+ * over 50 megapixels (a 48 MP phone original is 48.8e6): before anything is
+ * read whole when the header gives the size (JPEG, PNG), and in the re-encode
+ * itself, from the header, before any pixel is decoded (every format; WEBP's
+ * size is not in the sniff).
+ */
+describe('a photo over 50 megapixels is refused before it is decoded', () => {
+  /** A real frame header (SOF0) of the given size, then filler past the 4 KB
+   *  range window, so reading it whole would take a download. */
+  function jpegHeader(width: number, height: number): Uint8Array {
+    const b = new Uint8Array(8192);
+    b.set([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, height >> 8, height & 0xff, width >> 8, width & 0xff, 0x03]);
+    return b;
+  }
+  /** A PNG signature and IHDR of the given size, then filler past 4 KB. */
+  function pngHeader(width: number, height: number): Uint8Array {
+    const b = new Uint8Array(8192);
+    b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52]);
+    new DataView(b.buffer).setUint32(16, width);
+    new DataView(b.buffer).setUint32(20, height);
+    return b;
+  }
+
+  it.each([
+    ['jpeg', () => jpegHeader(10000, 10000)],
+    ['png', () => pngHeader(10000, 5001)],
+  ] as const)(
+    '%s whose header says more than 50e6 pixels: invalid_image, never read whole or re-encoded, deleted, the uploader told',
+    async (kind, make) => {
+      const bytes = make();
+      const sniffed = sniffImage(bytes)!;
+      expect(sniffed.kind).toBe(kind);
+      expect(sniffed.width! * sniffed.height!).toBeGreaterThan(50_000_000);
+      const path = `${stem}.${EXT[kind]}`;
+      bucket.put(path, bytes, MIME[kind]);
+      bucket.put(THUMB, clientThumb, 'image/jpeg');
+      const { svc, inserted } = setup();
+
+      await expect(svc.finalize(REQ, finalizeArgs(kind))).rejects.toMatchObject({
+        code: 'validation_error',
+        message: 'invalid_image',
+      });
+      expect(bucket.calls.download).toEqual([]);
+      expect(vi.mocked(reencodeWithoutMetadata)).not.toHaveBeenCalled();
+      expect(bucket.objects.has(path)).toBe(false);
+      expect(bucket.objects.has(THUMB)).toBe(false);
+      expect(bucket.calls.remove).toEqual([[path, THUMB]]);
+      expect(inserted).toHaveLength(0);
+      expect(notify).toHaveBeenCalledWith(expect.objectContaining({ event: 'photo_rejected' }));
+    },
+  );
+
+  it('exactly 50e6 pixels is not refused by the size rule (it goes on to be read whole)', async () => {
+    bucket.put(`${stem}.jpg`, jpegHeader(10000, 5000), 'image/jpeg');
+    const { svc } = setup();
+
+    // The filler does not decode, so the re-encode refuses it later; what
+    // matters here is that it got that far.
+    await expect(svc.finalize(REQ, finalizeArgs('jpeg'))).rejects.toMatchObject({ message: 'invalid_image' });
+    expect(bucket.calls.download).toEqual([`${stem}.jpg`]);
+    expect(vi.mocked(reencodeWithoutMetadata)).toHaveBeenCalledTimes(1);
+  });
+
+  it('the re-encode is always given the 50e6 limit (it refuses from the header, so a WEBP is covered too)', async () => {
+    bucket.put(`${stem}.webp`, await phonePhoto('webp'), 'image/webp');
+    const { svc } = setup();
+
+    await svc.finalize(REQ, finalizeArgs('webp'));
+
+    expect(vi.mocked(reencodeWithoutMetadata)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reencodeWithoutMetadata).mock.calls[0]!.slice(1)).toEqual([
+      'webp',
+      { maxInputPixels: 50_000_000 },
+    ]);
+  });
+
+  it('a real 7072x7072 WEBP (50.01e6 pixels, 1972 bytes): refused by the re-encode from its header, deleted, nothing recorded', async () => {
+    // Made with sharp 0.35.4: sharp({ create: { width: 7072, height: 7072,
+    // channels: 3, background: '#0ac83c' } }).webp({ lossless: true }). Kept
+    // as bytes because making it takes about 600 MB; reading its header is
+    // cheap.
+    const bytes = new Uint8Array(Buffer.from(WEBP_50MP_B64, 'base64'));
+    const meta = await sharp(Buffer.from(bytes), { limitInputPixels: false }).metadata();
+    expect([meta.format, meta.width, meta.height]).toEqual(['webp', 7072, 7072]);
+    expect(sniffImage(bytes)).toEqual({ kind: 'webp', width: null, height: null });
+    bucket.put(`${stem}.webp`, bytes, 'image/webp');
+    const { svc, inserted } = setup();
+
+    await expect(svc.finalize(REQ, finalizeArgs('webp'))).rejects.toMatchObject({ message: 'invalid_image' });
+    await expect(vi.mocked(reencodeWithoutMetadata).mock.results[0]!.value).resolves.toBeNull();
+    expect(bucket.calls.upload).toEqual([]);
+    expect(bucket.objects.has(`${stem}.webp`)).toBe(false);
+    expect(inserted).toHaveLength(0);
+  });
+});
+
+const WEBP_50MP_B64 =
+  'UklGRqwHAABXRUJQVlA4TJ8HAAAvn9vnBgdQ5CqUp/9BExIk+H+7PSJSMwKSpP//yYj+J1Ag/v6jiMj47z///fef//77z3///ffff/777z///fef//7z33//+e+///z333///ee///7z33//+e+///77z3///ee///777z///fef//7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///vvvv//++++///7777///Pfff//9999///nvv//++++///7777///Pfff//9999//6cTAA==';
+
+// ═══════════════════════════════════════════════════════════════════════════
+/**
+ * Review 2026-09-27, finding 3: the re-encode (quality 90) makes a photo that
+ * was saved at a lower quality BIGGER, so one that fit under the cap before
+ * could be refused. Measured on a 30 MP photo-like JPEG saved at quality 75:
+ * 8.87 MB, 10.39 MB at 90 (over the 10 MB cap), 7.70 MB at 75. A JPEG or WEBP
+ * over the cap is re-encoded once more at quality 75 before it is refused.
+ * Here the cap is lowered to the original's size, so a 320x240 photo shows
+ * the same thing with real sharp.
+ */
+describe('a lossy photo that grows past the cap when re-encoded is re-encoded once more at quality 75', () => {
+  /** Photo-like (blurred noise, as camera grain), saved at a LOW quality, with GPS. */
+  async function lowQualityPhoto(kind: 'jpeg' | 'webp', quality: number): Promise<Uint8Array> {
+    const W = 320;
+    const H = 240;
+    const raw = Buffer.alloc(W * H * 3);
+    let s = 12345;
+    for (let i = 0; i < raw.length; i += 1) {
+      s = (s * 1103515245 + 12345) & 0x7fffffff;
+      raw[i] = s >> 23;
+    }
+    let img = sharp(raw, { raw: { width: W, height: H, channels: 3 } }).blur(0.8);
+    img = kind === 'jpeg' ? img.jpeg({ quality }) : img.webp({ quality });
+    return new Uint8Array(await img.withExif(EXIF).toBuffer());
+  }
+
+  it.each([
+    ['jpeg', 75],
+    ['webp', 70],
+  ] as const)('%s saved at quality %i, exactly at the cap: stored clean and under the cap', async (kind, quality) => {
+    const photo = await lowQualityPhoto(kind, quality);
+    cap.bytes = photo.byteLength;
+    const path = `${stem}.${EXT[kind]}`;
+    bucket.put(path, photo, MIME[kind]);
+    const { svc, inserted } = setup();
+
+    await svc.finalize(REQ, finalizeArgs(kind));
+
+    const calls = vi.mocked(reencodeWithoutMetadata).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[1]![2]).toEqual({ maxInputPixels: 50_000_000, quality: 75 });
+    // Not vacuous: the first (quality 90) re-encode really was over the cap.
+    const first = (await vi.mocked(reencodeWithoutMetadata).mock.results[0]!.value)!;
+    expect(first.master.byteLength).toBeGreaterThan(photo.byteLength);
+    const stored = bucket.bytes(path)!;
+    expect(stored.byteLength).toBeLessThanOrEqual(photo.byteLength);
+    await expectNoMetadata(stored, `${kind} photo`);
+    expect(sniffImage(stored)?.kind).toBe(kind);
+    expect(inserted[0]).toMatchObject({ storage_path: path, byte_size: stored.byteLength });
+  });
+
+  it('a photo the first re-encode keeps under the cap is not re-encoded twice', async () => {
+    bucket.put(`${stem}.jpg`, await phonePhoto('jpeg'), 'image/jpeg');
+    const { svc } = setup();
+    await svc.finalize(REQ, finalizeArgs('jpeg'));
+    expect(vi.mocked(reencodeWithoutMetadata)).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+/**
+ * Review 2026-09-27, finding 2: two finalizes of the same upload at once. A
+ * refusal deletes the upload and its thumbnail name, which are the files of
+ * the photo a racing finalize records. So every refusal after step 0 looks
+ * first: a photo recorded at this path keeps its files and the answer is
+ * "already recorded"; a recorded sibling (another extension of the uuid)
+ * keeps the shared thumbnail name; a failed look deletes nothing.
+ */
+describe('a refusal never deletes the files of a photo another finalize recorded', () => {
+  it("the reviewer's interleaving: A writes back while B is between its range read and its whole read; A's photo keeps its files", async () => {
+    const path = `${stem}.jpg`;
+    const photo = await phonePhoto('jpeg', { width: 320, height: 240, noise: true });
+    expect(photo.byteLength).toBeGreaterThan(4096);
+    bucket.put(path, photo, 'image/jpeg');
+    bucket.put(THUMB, clientThumb, 'image/jpeg');
+    const { svc, inserted, table } = setup();
+
+    // Hold the SECOND whole read until the first finalize's write-back of the
+    // photo has landed (B measured the original, then reads A's clean file).
+    let signalUploaded!: () => void;
+    const uploaded = new Promise<void>((r) => (signalUploaded = r));
+    const realUpload = bucket.upload.bind(bucket);
+    bucket.upload = async (p: string, b: Uint8Array, o?: { contentType?: string; upsert?: boolean }) => {
+      const res = await realUpload(p, b, o);
+      if (p === path) signalUploaded();
+      return res;
+    };
+    const realDownload = bucket.download.bind(bucket);
+    let downloads = 0;
+    bucket.download = async (p: string) => {
+      downloads += 1;
+      if (downloads === 2) await uploaded;
+      return realDownload(p);
+    };
+
+    const [a, b] = await Promise.allSettled([
+      svc.finalize(REQ, finalizeArgs('jpeg')),
+      svc.finalize(REQ, finalizeArgs('jpeg')),
+    ]);
+
+    expect(a).toEqual({ status: 'fulfilled', value: { id: 'att-1', width: 320, height: 240 } });
+    expect(b.status).toBe('rejected');
+    expect((b as PromiseRejectedResult).reason).toMatchObject({ code: 'conflict' });
+    expect(inserted).toHaveLength(1);
+    expect(table.map((r) => r.storage_path)).toEqual([path]);
+    expect(bucket.calls.remove).toEqual([]);
+    await expectNoMetadata(bucket.bytes(path)!, 'photo');
+    await expectNoMetadata(bucket.bytes(THUMB)!, 'thumbnail');
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  /** Each refusal after step 0, and how to cause it. */
+  const REFUSALS: Array<
+    [string, { kind: Kind; declaredMime?: string; live?: number; bytes?: () => Promise<Uint8Array>; arrange?: () => void }]
+  > = [
+    ['the finalize limiter', { kind: 'jpeg', arrange: () => (limiter.allowed = false) }],
+    ['the byte checks (declared type)', { kind: 'jpeg', declaredMime: 'image/png' }],
+    ['the cap', { kind: 'jpeg', live: 8 }],
+    [
+      'the re-encode (bytes that do not decode)',
+      {
+        kind: 'jpeg',
+        bytes: async () =>
+          new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x1e, 0x00, 0x3c, 0x01, 0x00]),
+      },
+    ],
+    ['the write-back', { kind: 'jpeg', arrange: () => bucket.failUpload.add(`${stem}.jpg`) }],
+  ];
+
+  async function arrange(
+    how: (typeof REFUSALS)[number][1],
+    extra: Parameters<typeof setup>[0],
+  ): Promise<{ run: () => Promise<unknown>; photo: Uint8Array; inserted: Array<Record<string, unknown>> }> {
+    const photo = how.bytes ? await how.bytes() : await phonePhoto(how.kind);
+    bucket.put(`${stem}.${EXT[how.kind]}`, photo, MIME[how.kind]);
+    bucket.put(THUMB, clientThumb, 'image/jpeg');
+    how.arrange?.();
+    const { svc, inserted } = setup({ live: how.live, ...extra });
+    const args = { ...finalizeArgs(how.kind), ...(how.declaredMime ? { declaredMime: how.declaredMime } : {}) };
+    return { run: () => svc.finalize(REQ, args), photo, inserted };
+  }
+
+  it.each(REFUSALS)(
+    'refused by %s after another finalize recorded this upload: "already recorded", nothing deleted, the uploader not told',
+    async (_label, how) => {
+      const { run, photo, inserted } = await arrange(how, {
+        recordAfterFirstLook: { organization_id: ORG, storage_path: `${stem}.jpg`, thumbnail_path: THUMB },
+      });
+
+      await expect(run()).rejects.toMatchObject({ code: 'conflict', message: 'This photo was already recorded.' });
+      expect(bucket.calls.remove).toEqual([]);
+      expect(bucket.objects.has(THUMB)).toBe(true);
+      if (bucket.calls.upload.length === 0) expect(bucket.bytes(`${stem}.jpg`)).toEqual(photo);
+      expect(inserted).toHaveLength(0);
+      expect(notify).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(REFUSALS)(
+    'refused by %s after a sibling upload (same uuid, .png) was recorded: only this upload is deleted, the shared thumbnail name kept',
+    async (_label, how) => {
+      const { run, inserted } = await arrange(how, {
+        recordAfterFirstLook: { organization_id: ORG, storage_path: `${stem}.png`, thumbnail_path: THUMB },
+      });
+
+      await expect(run()).rejects.toBeInstanceOf(Error);
+      expect(bucket.calls.remove).toEqual([[`${stem}.jpg`]]);
+      expect(bucket.objects.has(`${stem}.jpg`)).toBe(false);
+      expect(bucket.objects.has(THUMB)).toBe(true);
+      expect(inserted).toHaveLength(0);
+    },
+  );
+
+  it.each(REFUSALS)(
+    'refused by %s when the look before deleting fails: nothing deleted, the refusal stands',
+    async (_label, how) => {
+      const { run, inserted } = await arrange(how, { lookFailsFrom: 2 });
+
+      const err = await run().then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(Error);
+      expect(err).not.toMatchObject({ message: 'This photo was already recorded.' });
+      expect(bucket.calls.remove).toEqual([]);
+      expect(bucket.objects.has(`${stem}.jpg`)).toBe(true);
+      expect(bucket.objects.has(THUMB)).toBe(true);
+      expect(inserted).toHaveLength(0);
+    },
+  );
+
+  it('the insert is written but its answer is lost: "already recorded", the recorded files kept (clean)', async () => {
+    bucket.put(`${stem}.jpg`, await phonePhoto('jpeg'), 'image/jpeg');
+    const { svc, inserted, table } = setup({
+      insert: { data: null, error: { message: 'fetch failed' } },
+      insertCommits: true,
+    });
+
+    await expect(svc.finalize(REQ, finalizeArgs('jpeg'))).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This photo was already recorded.',
+    });
+    expect(inserted).toHaveLength(1);
+    expect(table.map((r) => r.storage_path)).toEqual([`${stem}.jpg`]);
+    expect(bucket.calls.remove).toEqual([]);
+    await expectNoMetadata(bucket.bytes(`${stem}.jpg`)!, 'photo');
+    await expectNoMetadata(bucket.bytes(THUMB)!, 'thumbnail');
+  });
+
+  it('a refusal with nothing recorded still deletes both files and asks only once more (one extra look, on the refusal path only)', async () => {
+    bucket.put(`${stem}.jpg`, await phonePhoto('jpeg'), 'image/jpeg');
+    const { svc, looks } = setup({ live: 8 });
+    await expect(svc.finalize(REQ, finalizeArgs('jpeg'))).rejects.toMatchObject({ code: 'conflict' });
+    expect(bucket.calls.remove).toEqual([[`${stem}.jpg`, THUMB]]);
+    expect(looks()).toBe(2);
+  });
+
+  it('a finalize that succeeds makes one look (step 0) and no other', async () => {
+    bucket.put(`${stem}.jpg`, await phonePhoto('jpeg'), 'image/jpeg');
+    const { svc, looks } = setup();
+    await svc.finalize(REQ, finalizeArgs('jpeg'));
+    expect(looks()).toBe(1);
   });
 });

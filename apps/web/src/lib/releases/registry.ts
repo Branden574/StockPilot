@@ -105,6 +105,44 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'maintenance-photo-details-2026-09',
+    revision: 1,
+    // Held as a draft until the web deploy that re-encodes maintenance photos
+    // (fix/maintenance-photo-metadata) is live and a Demo Co walk shows a
+    // stored photo without EXIF or GPS, on a photo added from the web and one
+    // from the phone. Publishing sets 'published' and the real publishedAt.
+    // Server-side only, so every app build is covered without a phone update.
+    status: 'draft',
+    title: 'Maintenance photos no longer keep location or camera details',
+    summary:
+      'On the web and in the mobile app, a photo added to a maintenance request is now saved without the details a phone or camera stores inside the photo file, such as where it was taken and which device took it. Photos added before this change are not changed.',
+    publishedAt: '2026-09-28T18:00:00Z',
+    entries: [
+      {
+        id: 'maintenance-photo-details',
+        category: 'improved',
+        area: 'Maintenance',
+        title: 'Location and camera details are removed from maintenance photos',
+        whatChanged:
+          'When a photo is added to a maintenance request, StockPilot saves a copy without the details stored inside the photo file, such as where it was taken, which device took it and when. The small preview on the request is made from that copy.',
+        whyItMatters:
+          'A photo taken on a phone can record where it was taken. Anyone who could open the photo, including through a shared link to the request, could read that location.',
+        howItAffectsYou:
+          'This happens when the photo is saved, whichever app or browser sent it. Photos added before this change are not changed. A photo of more than 50 megapixels is now refused.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/maintenance', label: 'Open Maintenance' },
+        audience: {
+          anyPermission: [
+            'maintenance_requests:submit',
+            'maintenance_requests:read_all',
+            'maintenance_requests:manage',
+          ],
+          modules: ['maintenance_requests'],
+        },
+      },
+    ],
+  },
+  {
     id: 'exception-photos-2026-09',
     revision: 1,
     // Held as a draft until the phone update (OTA group 531e3cc0) and the Demo

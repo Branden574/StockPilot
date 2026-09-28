@@ -59,8 +59,25 @@ export interface ReencodedPhoto {
 export const EVIDENCE_THUMB_MAX_EDGE = 400;
 
 /** A decode past this many pixels is refused (a decompression bomb, not a
- *  photo: a 48 MP phone sensor is 48e6). */
+ *  photo: a 48 MP phone sensor is 48e6). The default; a caller may ask for
+ *  less (`maxInputPixels`). */
 const MAX_INPUT_PIXELS = 100_000_000;
+
+/** JPEG and WEBP quality of the master. The default; a caller may ask for
+ *  another (`quality`). */
+const DEFAULT_QUALITY = 90;
+
+export interface ReencodeOptions {
+  /** Refuse (resolve to null) an image of more pixels than this. sharp checks
+   *  it from the header, before any pixel is decoded, so it bounds the
+   *  memory the decode takes: measured on sharp 0.35.4, a 178 KB
+   *  10000x10000 WEBP with EXIF orientation 6 peaked at 1.78 GB, a 50 MP one
+   *  at 0.94 GB (2026-09-27). Default MAX_INPUT_PIXELS. */
+  maxInputPixels?: number;
+  /** JPEG/WEBP quality of the master, 1-100. PNG is lossless and ignores
+   *  it. Default DEFAULT_QUALITY. */
+  quality?: number;
+}
 
 const CONTENT_TYPE: Record<ReencodeKind, ReencodedPhoto['contentType']> = {
   jpeg: 'image/jpeg',
@@ -71,18 +88,22 @@ const CONTENT_TYPE: Record<ReencodeKind, ReencodedPhoto['contentType']> = {
 export async function reencodeWithoutMetadata(
   bytes: Uint8Array,
   kind: ReencodeKind,
+  options: ReencodeOptions = {},
 ): Promise<ReencodedPhoto | null> {
   try {
     const { default: sharp } = await import('sharp');
     const input = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const quality = options.quality ?? DEFAULT_QUALITY;
     // rotate() with no angle applies the EXIF orientation to the pixels.
-    const oriented = sharp(input, { limitInputPixels: MAX_INPUT_PIXELS }).rotate();
+    const oriented = sharp(input, {
+      limitInputPixels: options.maxInputPixels ?? MAX_INPUT_PIXELS,
+    }).rotate();
     const encoded =
       kind === 'jpeg'
-        ? oriented.jpeg({ quality: 90, mozjpeg: true })
+        ? oriented.jpeg({ quality, mozjpeg: true })
         : kind === 'png'
           ? oriented.png({ compressionLevel: 9 })
-          : oriented.webp({ quality: 90 });
+          : oriented.webp({ quality });
     const { data: master, info } = await encoded.toBuffer({ resolveWithObject: true });
     const thumb = await sharp(master)
       .resize({

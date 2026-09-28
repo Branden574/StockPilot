@@ -63,7 +63,29 @@ function uploadNames(path: string): string[] {
 const FINALIZE_LIMIT = 30;
 const FINALIZE_LIMIT_WINDOW_MS = 60 * 1000;
 
-type AdminBucket = ReturnType<ReturnType<typeof createAdminClient>['storage']['from']>;
+/** A photo of more pixels than this is refused before it is decoded (review
+ *  2026-09-27). A small file can decode to a very large image, and the
+ *  re-encode holds it all in memory: measured on sharp 0.35.4, a 178 KB
+ *  10000x10000 WEBP with EXIF orientation 6 peaked at 1.78 GB, a 50 MP one at
+ *  0.94 GB, a 24.5 MP one at 0.57 GB. A 48 MP phone original (48.8e6) still
+ *  fits; the apps send at most 2048 px (web) and 1600 px (phone) unless they
+ *  fall back to the original. Checked from the header before anything is read
+ *  whole when the sniff gives the size (JPEG, PNG), and by the re-encode
+ *  itself, from the header, for every format (a WEBP's size is not sniffed). */
+const MAX_INPUT_PIXELS = 50_000_000;
+
+/** A JPEG or WEBP whose clean master comes out over the cap is re-encoded once
+ *  more at this quality before it is refused (review 2026-09-27): the re-encode
+ *  at quality 90 makes a photo saved at a lower quality bigger. Measured on a
+ *  30 MP photo-like JPEG saved at 75: 8.87 MB, 10.39 MB at 90 (over the 10 MB
+ *  cap), 7.70 MB at 75; a WEBP saved at 70: 9.42 MB, 11.94 MB at 90, 8.92 MB
+ *  at 75 (80 still left it over). PNG is lossless: no quality to lower. */
+const OVER_CAP_RETRY_QUALITY = 75;
+
+const ALREADY_RECORDED = 'This photo was already recorded.';
+
+type AdminClient = ReturnType<typeof createAdminClient>;
+type AdminBucket = ReturnType<AdminClient['storage']['from']>;
 
 /** The whole object, or null when it cannot be read. */
 async function downloadWhole(store: AdminBucket, path: string): Promise<Uint8Array | null> {
@@ -258,6 +280,24 @@ export class MaintenanceAttachmentsService {
     });
   }
 
+  /** The storage paths recorded under this upload's NAME: its uuid with any
+   *  of the four extensions (they all derive the same thumbnail name). Read
+   *  with the service role, so no row is missed for being out of the caller's
+   *  sight. A failed look THROWS (internal_error): it is never taken for
+   *  "nothing recorded". Only called on a path that passed
+   *  `validateFinalizePath`. */
+  private async recordedUploadNames(admin: AdminClient, path: string): Promise<string[]> {
+    const { data, error } = await admin
+      .from('maintenance_request_attachments')
+      .select('storage_path')
+      .eq('organization_id', this.ctx.organizationId)
+      // in-list-bound: the four extensions of one upload name (jpg, jpeg, png, webp)
+      .in('storage_path', uploadNames(path))
+      .limit(4);
+    if (error) throw new ServiceError('internal_error', error.message);
+    return ((data ?? []) as Array<{ storage_path: string }>).map((r) => r.storage_path);
+  }
+
   /** Server-minted signed-upload URL (audit Q8) — the client never talks to
    *  Storage without a mint. Rate-limited per user; capped at
    *  MAINTENANCE_MAX_PHOTOS per request (removing a photo frees its slot,
@@ -351,8 +391,14 @@ export class MaintenanceAttachmentsService {
    *
    * A recorded upload is never read, rewritten or deleted by a later finalize
    * (step 0). Every refusal after that deletes the upload (still the
-   * original, GPS included) and the thumbnail name, and records nothing.
-   * Not deleted: a 23505 (another finalize of the same upload won the row).
+   * original, GPS included) and the thumbnail name, and records nothing,
+   * through `refuse`, which looks first (review 2026-09-27: two finalizes of
+   * one upload at once): a photo recorded at this path meanwhile keeps its
+   * files and the answer is "already recorded"; a recorded sibling keeps the
+   * thumbnail name they share; a failed look deletes nothing. Not deleted
+   * either: a 23505 (another finalize of the same upload won the row), and an
+   * upload that changed between the range read and the whole read (only
+   * another finalize writes over an upload; it is about to record it).
    */
   async finalize(
     requestId: string,
@@ -388,24 +434,45 @@ export class MaintenanceAttachmentsService {
     //    fresh uuid) refuses this upload too, deleting only this upload. Read
     //    with the service role, so no row is missed for being out of the
     //    caller's sight; a failed look touches nothing.
-    const { data: recordedRows, error: recordedErr } = await admin
-      .from('maintenance_request_attachments')
-      .select('storage_path')
-      .eq('organization_id', this.ctx.organizationId)
-      // in-list-bound: the four extensions of one upload name (jpg, jpeg, png, webp)
-      .in('storage_path', uploadNames(args.path))
-      .limit(4);
-    if (recordedErr) throw new ServiceError('internal_error', recordedErr.message);
-    const recordedPaths = ((recordedRows ?? []) as Array<{ storage_path: string }>).map(
-      (r) => r.storage_path,
-    );
+    const recordedPaths = await this.recordedUploadNames(admin, args.path);
     if (recordedPaths.includes(args.path)) {
-      throw new ServiceError('conflict', 'This photo was already recorded.');
+      throw new ServiceError('conflict', ALREADY_RECORDED);
     }
     if (recordedPaths.length > 0) {
       await store.remove([args.path]);
       throw new ServiceError('forbidden', 'Invalid upload path.');
     }
+
+    /**
+     * THE cleanup for every refusal from here on. Step 0 saw nothing
+     * recorded, but another finalize of this upload may have recorded it
+     * since (review 2026-09-27), so it looks again before deleting:
+     *   - a photo recorded at this path: its files are kept, nothing is
+     *     deleted, and the answer is "already recorded";
+     *   - a recorded sibling (another extension of this uuid): only this
+     *     upload is deleted, never the thumbnail name they share;
+     *   - the look fails: nothing is deleted (an orphan nobody can read is
+     *     safer than a recorded photo with no file) and the refusal stands.
+     * Otherwise the upload and the thumbnail name are deleted, as before, and
+     * `notify` tells the uploader.
+     */
+    const refuse = async (err: ServiceError, notify: boolean): Promise<never> => {
+      let recorded: string[];
+      try {
+        recorded = await this.recordedUploadNames(admin, args.path);
+      } catch (lookErr) {
+        void reportError(lookErr instanceof Error ? lookErr : new Error(String(lookErr)), {
+          tag: 'maintenance.finalize_record_unknown',
+          organizationId: this.ctx.organizationId,
+          extra: { requestId },
+        });
+        throw err;
+      }
+      if (recorded.includes(args.path)) throw new ServiceError('conflict', ALREADY_RECORDED);
+      await store.remove(recorded.length > 0 ? [args.path] : [args.path, thumbPath]);
+      if (notify) this.notifyPhotoRejected(requestId, parent);
+      throw err;
+    };
 
     // The per-person finalize limit (FINALIZE_LIMIT), CLOSED. A maintenance
     // retry starts again from a new mint, so the refused upload (still the
@@ -417,8 +484,10 @@ export class MaintenanceAttachmentsService {
       'closed',
     );
     if (!limit.allowed) {
-      await store.remove([args.path, thumbPath]);
-      throw new ServiceError('conflict', 'Too many photos in the last minute. Please wait a moment and try again.');
+      return refuse(
+        new ServiceError('conflict', 'Too many photos in the last minute. Please wait a moment and try again.'),
+        false,
+      );
     }
 
     // Range read (fetchObjectPrefix), not a full download: the sniff verdict
@@ -442,10 +511,15 @@ export class MaintenanceAttachmentsService {
     const sniffed = sniffImage(head.prefix);
     const declaredOk = sniffed !== null && MIME_FOR_KIND[sniffed.kind] === args.declaredMime;
     const sizeOk = head.totalSize > 0 && head.totalSize <= MAINTENANCE_MAX_PHOTO_BYTES;
-    if (!sniffed || !declaredOk || !sizeOk) {
-      await admin.storage.from(BUCKET).remove([args.path, thumbPath]);
-      this.notifyPhotoRejected(requestId, parent);
-      throw new ServiceError('validation_error', 'invalid_image');
+    // MAX_INPUT_PIXELS, from the header, before anything is read whole. A
+    // WEBP's size is not sniffed (null); the re-encode refuses it from its
+    // own header below.
+    const pixelsOk =
+      sniffed?.width == null ||
+      sniffed.height == null ||
+      sniffed.width * sniffed.height <= MAX_INPUT_PIXELS;
+    if (!sniffed || !declaredOk || !sizeOk || !pixelsOk) {
+      return refuse(new ServiceError('validation_error', 'invalid_image'), true);
     }
 
     // IMPORTANT 3 — cap re-check immediately before the insert. Mint's own
@@ -466,26 +540,32 @@ export class MaintenanceAttachmentsService {
       .eq('kind', kind);
     if (countErr) throw new ServiceError('internal_error', countErr.message);
     if ((count ?? 0) >= MAINTENANCE_MAX_PHOTOS) {
-      await admin.storage.from(BUCKET).remove([args.path, thumbPath]);
-      throw new ServiceError('conflict', `A request can carry at most ${MAINTENANCE_MAX_PHOTOS} photos.`);
+      return refuse(
+        new ServiceError('conflict', `A request can carry at most ${MAINTENANCE_MAX_PHOTOS} photos.`),
+        false,
+      );
     }
 
     // PRIVACY (see the doc comment): re-encode WITHOUT metadata and write the
     // clean photo and its server-made thumbnail back. Any failure here is a
     // refusal like the byte checks above: the upload and the thumbnail name
     // are deleted, the uploader is told, and nothing is recorded.
-    const reject = async (): Promise<never> => {
-      await store.remove([args.path, thumbPath]);
-      this.notifyPhotoRejected(requestId, parent);
-      throw new ServiceError('validation_error', 'invalid_image');
-    };
+    const reject = (): Promise<never> =>
+      refuse(new ServiceError('validation_error', 'invalid_image'), true);
     // The whole object: the range read already holds it when it fits in the
     // window (or when the helper widened to a full read); otherwise one
-    // download, which must be the object the range read measured (at most
-    // MAINTENANCE_MAX_PHOTO_BYTES, the bucket's own cap).
+    // download (at most MAINTENANCE_MAX_PHOTO_BYTES, the bucket's own cap).
     const whole =
       head.prefix.byteLength === head.totalSize ? head.prefix : await downloadWhole(store, args.path);
-    if (!whole || whole.byteLength !== head.totalSize) return reject();
+    if (!whole) return reject();
+    if (whole.byteLength !== head.totalSize) {
+      // Not the object the range read measured. Nobody but the service role
+      // can change an upload (the bucket has no UPDATE policy), so another
+      // finalize of this upload has written its clean photo over it and is
+      // about to record it: deleting here would delete that photo's files
+      // (review 2026-09-27). Nothing is deleted, written or recorded.
+      throw new ServiceError('conflict', 'This photo is already being saved.');
+    }
     const wholeSniff = sniffImage(whole);
     if (
       wholeSniff?.kind !== sniffed.kind ||
@@ -493,7 +573,16 @@ export class MaintenanceAttachmentsService {
     ) {
       return reject();
     }
-    const clean = await reencodeWithoutMetadata(whole, sniffed.kind as 'jpeg' | 'png' | 'webp');
+    const photoKind = sniffed.kind as 'jpeg' | 'png' | 'webp';
+    let clean = await reencodeWithoutMetadata(whole, photoKind, { maxInputPixels: MAX_INPUT_PIXELS });
+    if (clean && clean.master.byteLength > MAINTENANCE_MAX_PHOTO_BYTES && photoKind !== 'png') {
+      // Grown past the cap (a photo saved at a lower quality than 90): once
+      // more at OVER_CAP_RETRY_QUALITY before refusing it.
+      clean = await reencodeWithoutMetadata(whole, photoKind, {
+        maxInputPixels: MAX_INPUT_PIXELS,
+        quality: OVER_CAP_RETRY_QUALITY,
+      });
+    }
     if (
       !clean ||
       clean.master.byteLength === 0 ||
@@ -512,8 +601,7 @@ export class MaintenanceAttachmentsService {
       store.upload(thumbPath, clean.thumb, { contentType: 'image/webp', upsert: true }),
     ]);
     if (masterPut.error || thumbPut.error) {
-      await store.remove([args.path, thumbPath]);
-      throw new ServiceError('internal_error', 'Could not save the photo.');
+      return refuse(new ServiceError('internal_error', 'Could not save the photo.'), false);
     }
     const width = clean.width ?? sniffed.width;
     const height = clean.height ?? sniffed.height;
@@ -543,14 +631,18 @@ export class MaintenanceAttachmentsService {
       // 3 migration) caught a second finalize racing the SAME object — one
       // row already backs it. Do NOT remove the storage object here: it
       // still belongs to whichever insert won.
-      throw new ServiceError('conflict', 'This photo was already recorded.');
+      throw new ServiceError('conflict', ALREADY_RECORDED);
     }
     if (error || !row) {
       // An RLS-rejected metadata insert (e.g. the request closed between the
       // guard above and this write) leaves an orphan object — roll it back
       // rather than leave storage holding a file no row will ever reference.
-      await admin.storage.from(BUCKET).remove([args.path, thumbPath]);
-      throw new ServiceError('internal_error', error?.message ?? 'Could not record the photo.');
+      // Through `refuse`, which looks first: an answer lost after the row was
+      // written (or no error and no row) must not delete a recorded photo.
+      return refuse(
+        new ServiceError('internal_error', error?.message ?? 'Could not record the photo.'),
+        false,
+      );
     }
 
     await audit(
