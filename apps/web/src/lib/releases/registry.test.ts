@@ -251,8 +251,12 @@ describe('stock on record wording', () => {
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(FIX);
-    // Second from the top, so an old phone build lists it among its three.
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(FIX);
+    // An old phone build lists at most three unread releases, newest first;
+    // it comes into that list once the newer releases are read.
+    const newer = Object.fromEntries(
+      RELEASES.slice(0, RELEASES.findIndex((r) => r.id === FIX)).map((r) => [r.id, true]),
+    );
+    expect(legacyAnnouncementsFor(RELEASES, everyone, newer).map((a) => a.id)).toContain(FIX);
     expect(registryFingerprint(RELEASES)).toContain(FIX);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(FIX);
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-28T00:00:00Z'));
@@ -324,16 +328,17 @@ describe('the kits release', () => {
     // old phone build lists at most three. The four went out together: kits,
     // then the stock on record fix every counter sees; where Bundles is off,
     // the fix leads them. F1-4's photos release was published after them and
-    // sits above.
+    // sits above (and later releases above that).
     const published = RELEASES.filter((r) => r.status !== 'draft');
-    expect(published.slice(0, 5).map((r) => r.id)).toEqual([
+    const at = published.findIndex((r) => r.id === 'exception-photos-2026-09');
+    expect(published.slice(at, at + 5).map((r) => r.id)).toEqual([
       'exception-photos-2026-09',
       'order-page-kits-2026-09-27',
       'stock-on-record-wording-2026-09-27',
       'order-page-add-full-kit-removed-2026-09-27',
       'bundle-distribute-managers-2026-09-27',
     ]);
-    for (const r of published.slice(1, 5)) {
+    for (const r of published.slice(at + 1, at + 5)) {
       expect(r.status, r.id).toBe('published');
       expect(registryFingerprint(RELEASES), r.id).toContain(r.id);
     }
@@ -450,19 +455,17 @@ describe('F1-4 (photos on exceptions) is published', () => {
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(F1_4);
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(F1_4);
-    expect(list.latestUnread?.id).toBe(F1_4);
     expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(F1_4);
     expect(registryFingerprint(RELEASES)).toContain(F1_4);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(F1_4);
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-29T00:00:00Z'));
   });
 
-  it('is the newest published release, below only drafts, dated after every release below it', () => {
-    // The drafts above it (F1-5's and the maintenance photo details release)
-    // reach no reader.
+  it('is dated after every release below it (the releases above it were published later)', () => {
     const at = RELEASES.findIndex((r) => r.id === F1_4);
-    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
-    expect(RELEASES.filter((r) => r.status === 'published')[0]!.id).toBe(F1_4);
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
     for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
@@ -508,13 +511,13 @@ describe('F1-4 (photos on exceptions) is published', () => {
 });
 
 /**
- * F1-5's release (escalate an exception to maintenance) is held as a DRAFT
+ * F1-5's release (escalate an exception to maintenance) was held as a DRAFT
  * until its phone release (pnpm release:ota) and the Demo Co walk, as F1-3's
- * and F1-4's were: published with the web screens, it would tell phone users
- * about an Escalate their app does not have yet. The follow-up that publishes
- * it sets 'published' and the real publishedAt, and flips the first pin here.
+ * and F1-4's were: published with the web screens, it would have told phone
+ * users about an Escalate their app did not have yet. This follow-up
+ * publishes it.
  */
-describe('F1-5 (escalate an exception to maintenance) is held as a draft', () => {
+describe('F1-5 (escalate an exception to maintenance) is published', () => {
   const F1_5 = 'exception-escalation-2026-09';
   const release = () => RELEASES.find((r) => r.id === F1_5)!;
   /** A reader every audience includes. */
@@ -525,18 +528,17 @@ describe('F1-5 (escalate an exception to maintenance) is held as a draft', () =>
   };
   const published = (): Release => ({ ...release(), status: 'published' });
 
-  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
-    expect(release().status).toBe('draft');
-    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(F1_5);
+  it('is published after the web deploy, the phone update and the Demo Co walk, so every feed carries it', () => {
+    expect(release().status).toBe('published');
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(F1_5);
     const list = buildReleaseList(RELEASES, everyone, [], null);
-    expect(list.releases.map((r) => r.id)).not.toContain(F1_5);
-    // The notice still offers F1-4, the newest published release.
-    expect(list.latestUnread?.id).toBe('exception-photos-2026-09');
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(F1_5);
-    expect(registryFingerprint(RELEASES)).not.toContain(F1_5);
-    // Preparing it changes nothing a client can observe.
-    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== F1_5)));
-    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(F1_5);
+    expect(list.releases.map((r) => r.id)).toContain(F1_5);
+    // The notice offers the newest unread release: this one.
+    expect(list.latestUnread?.id).toBe(F1_5);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(F1_5);
+    expect(registryFingerprint(RELEASES)).toContain(F1_5);
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(F1_5);
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-29T00:00:00Z'));
   });
 
   it('sits at the top, dated after every other release, so publishing it makes it the newest', () => {
@@ -622,10 +624,9 @@ describe('F1-5 (escalate an exception to maintenance) is held as a draft', () =>
  * Maintenance photos are saved without their location and camera details
  * (fix/maintenance-photo-metadata, review 2026-09-27: the owner's rule is a
  * What's New entry for every change people can see). Held as a DRAFT until the
- * web deploy and a Demo Co walk; the follow-up that publishes it sets
- * 'published' and the real publishedAt, and flips the first pin here.
+ * web deploy and a Demo Co check; this follow-up publishes it.
  */
-describe('the maintenance photo details release is held as a draft', () => {
+describe('the maintenance photo details release is published', () => {
   const ID = 'maintenance-photo-details-2026-09';
   const release = () => RELEASES.find((r) => r.id === ID)!;
   const everyone: ReleaseViewer = {
@@ -634,13 +635,14 @@ describe('the maintenance photo details release is held as a draft', () => {
     enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
   };
 
-  it('is a draft just below F1-5\'s draft, so no feed carries it yet', () => {
+  it('is published just below F1-5\'s release, so every feed carries it', () => {
     expect(RELEASES[1]!.id).toBe(ID);
-    expect(release().status).toBe('draft');
-    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
-    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).not.toContain(ID);
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
-    expect(registryFingerprint(RELEASES)).not.toContain(ID);
+    expect(release().status).toBe('published');
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
+    expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).toContain(ID);
+    // Second from the top, so an old phone build lists it among its three.
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(ID);
+    expect(registryFingerprint(RELEASES)).toContain(ID);
   });
 
   it('once published, it reaches the people Maintenance is open to, and nobody where the module is off', () => {
