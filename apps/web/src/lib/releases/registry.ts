@@ -130,6 +130,20 @@ export const RELEASES: Release[] = [
         link: { href: '/dashboard/orders', label: 'View orders' },
         audience: { anyPermission: ['items:update', 'orders:approve'], modules: ['orders'] },
       },
+      {
+        id: 'order-line-hidden-item-name',
+        category: 'fixed',
+        area: 'Orders',
+        title: "A line whose item you can't see says so",
+        whatChanged:
+          "On an order, a line whose item you don't have access to said Deleted item on the web and Unknown item in the mobile app. The web order page, its printed pick list and the mobile app's order screen now all say An item you can't see.",
+        whyItMatters:
+          "The item was not deleted, and items on an order can't be deleted. It is one your access doesn't include, for example an item in a warehouse you aren't assigned to, so its name isn't shown to you.",
+        howItAffectsYou: 'Only the label changed. Which items you can see is unchanged.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: { modules: ['orders'] },
+      },
     ],
   },
   {

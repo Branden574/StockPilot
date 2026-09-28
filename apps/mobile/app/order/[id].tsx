@@ -142,6 +142,7 @@ import {
   deliveryRecipientsForRouting,
   formatOrderNumber,
   derivePickingStatus,
+  orderLineItemName,
   orderReadinessPhase,
   orderStockGates,
   READINESS_NEEDS_CONNECTION_COPY,
@@ -1147,7 +1148,9 @@ export default function OrderDetail() {
             orderRequestLineId: l.id ?? null,
             itemId: l.item_id ?? null,
             createdAt: l.created_at ?? null,
-            name: itemObj?.name ?? 'Unknown item',
+            // Core's label when the viewer's access hides the item (a line's
+            // item cannot be deleted); the web order page says the same.
+            name: orderLineItemName(itemObj),
             sku: itemObj?.sku ?? null,
             requested: Number(l.quantity_requested) || 0,
             fulfilled: Number(l.quantity_fulfilled) || 0,
@@ -1493,11 +1496,20 @@ export default function OrderDetail() {
     onPress: () => void,
     tone: 'primary' | 'danger' | 'default' = 'primary',
     disabledByCaller = false,
+    disabledReason: string | null = null,
   ) => {
     const isBusy = acting === busyKey;
     // Offline every action is disabled ("Needs a connection." shows with
     // them), except the few that change nothing anywhere (WORKS_OFFLINE).
     const disabled = disabledByCaller || (offline && !WORKS_OFFLINE.has(busyKey));
+    // A disabled button says why in its own hint, as the web links its reason
+    // with aria-describedby: the reason shown under the actions is otherwise
+    // read only later, after the other buttons.
+    const hint = disabledByCaller
+      ? (disabledReason ?? undefined)
+      : offline && !WORKS_OFFLINE.has(busyKey)
+        ? READINESS_NEEDS_CONNECTION_COPY
+        : undefined;
     const bg = tone === 'primary' ? c.ink : tone === 'danger' ? '#b42318' : 'transparent';
     const fg = tone === 'default' ? c.ink : tone === 'danger' ? '#fff' : c.paper;
     return (
@@ -1507,6 +1519,7 @@ export default function OrderDetail() {
         disabled={acting !== null || disabled}
         accessibilityRole="button"
         accessibilityState={{ disabled: acting !== null || disabled }}
+        accessibilityHint={hint}
         style={[
           styles.addBtn,
           {
@@ -1940,6 +1953,9 @@ export default function OrderDetail() {
                     // Offline an edit could not be sent: the row is not
                     // tappable, and "Needs a connection." shows below.
                     const editable = canEditItems && l.orderRequestLineId !== null && !offline;
+                    // A row that could be edited with a connection: offline
+                    // VoiceOver says it is disabled, and why.
+                    const editBlockedOffline = canEditItems && l.orderRequestLineId !== null && offline;
                     const lineSubline = describeLineFulfilment({
                       requested: l.requested,
                       fulfilled: l.fulfilled,
@@ -1962,7 +1978,15 @@ export default function OrderDetail() {
                           onPress={
                             editable ? () => setEditLineId(l.orderRequestLineId) : undefined
                           }
-                          accessibilityRole={editable ? 'button' : undefined}
+                          // 'none', never undefined. React Native keeps a
+                          // view's previous traits when its role is removed
+                          // (AccessibilityProps.cpp: no role value keeps
+                          // sourceProps.accessibilityTraits), so a row that
+                          // was editable online stayed a Button offline (F2-1
+                          // phone walk, D1). A removed hint or label resets.
+                          accessibilityRole={editable ? 'button' : 'none'}
+                          accessibilityState={{ disabled: editBlockedOffline }}
+                          accessibilityHint={editBlockedOffline ? READINESS_NEEDS_CONNECTION_COPY : undefined}
                           accessibilityLabel={
                             editable ? `Edit ${l.name}, quantity ${l.requested}` : undefined
                           }
@@ -2176,6 +2200,7 @@ export default function OrderDetail() {
                         () => void act({ action: 'approve_partial' }, 'approve-partial'),
                         'default',
                         stockGates.approvePartial === 'disabled',
+                        stockGates.notice,
                       )
                     : null}
                   {actionBtn('Deny', 'deny', () => setDenyOpen(true), 'danger')}
@@ -2267,6 +2292,7 @@ export default function OrderDetail() {
                       () => void act({ action: 'resume_fulfillment' }, 'resume'),
                       'primary',
                       stockGates.resume === 'disabled',
+                      stockGates.notice,
                     )
                   )}
                   {stockNotice}

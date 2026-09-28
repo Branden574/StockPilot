@@ -99,3 +99,38 @@ describe('order print page with 250 lines', () => {
     });
   });
 });
+
+describe('order print page: a line whose item the reader cannot read', () => {
+  // The order page and the phone name it with core's label; the printed pick
+  // list said "Deleted item" (a line's item cannot be deleted: ON DELETE
+  // RESTRICT; a missing item is one the reader's access hides).
+  it('prints "An item you can\'t see", never "Deleted item"', async () => {
+    orderGet.mockResolvedValue({
+      request: {
+        id: '11111111-1111-1111-1111-111111111111',
+        warehouse_id: 'wh-1',
+        status: 'approved',
+        created_at: '2026-09-01T00:00:00Z',
+        approved_at: null,
+        notes: null,
+      },
+      lines: [
+        {
+          id: 'line-a',
+          quantity_requested: 2,
+          item: { id: itemId(1), name: 'Item 1', sku: 'S-1' },
+        },
+        { id: 'line-b', quantity_requested: 3, item: null },
+      ],
+      warehouseName: 'DC4',
+      requesterDisplay: 'Pat',
+    });
+    stubWith(() => ({ data: [{ id: itemId(1), bin_location: null }], error: null }));
+
+    render(await OrderPrintPage({ params: Promise.resolve({ id: 'o1' }) }));
+
+    const rows = screen.getAllByRole('row').map((r) => r.textContent ?? '');
+    expect(rows.some((t) => t.includes("An item you can't see"))).toBe(true);
+    expect(rows.join('\n')).not.toMatch(/Deleted item|Unknown item/);
+  });
+});

@@ -1,5 +1,7 @@
 import { notFound } from 'next/navigation';
 
+import { orderLineItemName } from '@stockpilot/core';
+
 import { AutoPrint } from '@/components/orders/auto-print';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
@@ -310,7 +312,9 @@ export default async function OrderPrintPage({
                 <td className="py-2 pr-3 font-mono text-xs">
                   {l.item ? (binByItem.get(l.item.id) ?? '—') : '—'}
                 </td>
-                <td className="py-2 pr-3">{l.item?.name ?? 'Deleted item'}</td>
+                {/* Core's label for an item the reader cannot read (the order
+                    page and the phone say the same). */}
+                <td className="py-2 pr-3">{orderLineItemName(l.item)}</td>
                 <td className="py-2 pr-3 font-mono text-xs">{l.item?.sku ?? '—'}</td>
                 <td className="py-2 pr-3 text-right tabular-nums">
                   {formatNumber(l.quantity_requested)}

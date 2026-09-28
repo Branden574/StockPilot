@@ -7,6 +7,7 @@ import {
   EXCEPTION_EVIDENCE_MAX_PHOTOS,
   EXCEPTION_EVIDENCE_NOTE_MAX,
   MODULE_REGISTRY,
+  ORDER_LINE_HIDDEN_ITEM_NAME,
   PERMISSIONS,
   releaseRegistrySchema,
   type ModuleId,
@@ -714,7 +715,7 @@ describe('F2-1 (order readiness) is held as a draft', () => {
     }
   });
 
-  it('is addressed as the order page shows it: the full panel, the one sentence, the gates and the pick message', () => {
+  it('is addressed as the order page shows it: the full panel, the one sentence, the gates, the pick message and the hidden-item label', () => {
     expect(release().audience).toEqual({ modules: ['orders'] });
     expect(release().entries.map((e) => e.id)).toEqual([
       'order-readiness-lines',
@@ -722,6 +723,7 @@ describe('F2-1 (order readiness) is held as a draft', () => {
       'order-readiness-requester',
       'order-stock-actions-say-why',
       'order-pick-staging-message',
+      'order-line-hidden-item-name',
     ]);
     const [lines, holds, requester, gates, pick] = release().entries;
     // core readinessAudience: approvers, pickers and buyers see the full panel.
@@ -744,19 +746,26 @@ describe('F2-1 (order readiness) is held as a draft', () => {
     const reader = (permissions: ReleaseViewer['permissions'], enabledModules: ModuleId[] = ['orders']) =>
       visibleReleases([published()], { role: 'viewer', permissions, enabledModules })[0]?.entries.map((e) => e.id) ??
       [];
-    expect(reader(['orders:request'])).toEqual(['order-readiness-requester']);
+    // The hidden-item label can meet anyone who opens an order.
+    expect(reader(['orders:request'])).toEqual(['order-readiness-requester', 'order-line-hidden-item-name']);
     expect(reader(['items:update'])).toEqual([
       'order-readiness-lines',
       'order-readiness-holds-and-records',
       'order-pick-staging-message',
+      'order-line-hidden-item-name',
     ]);
-    expect(reader(['purchase_orders:manage'])).toEqual(['order-readiness-lines', 'order-readiness-holds-and-records']);
+    expect(reader(['purchase_orders:manage'])).toEqual([
+      'order-readiness-lines',
+      'order-readiness-holds-and-records',
+      'order-line-hidden-item-name',
+    ]);
     expect(reader(['orders:request', 'orders:approve'])).toEqual([
       'order-readiness-lines',
       'order-readiness-holds-and-records',
       'order-readiness-requester',
       'order-stock-actions-say-why',
       'order-pick-staging-message',
+      'order-line-hidden-item-name',
     ]);
     expect(reader(['orders:request', 'orders:approve', 'items:update'], [])).toEqual([]);
   });
@@ -809,5 +818,25 @@ describe('F2-1 (order readiness) is held as a draft', () => {
     expect(text).toContain('how many lines ask for more than is available now');
     expect(text).not.toMatch(/because part of an item is still in Staging/);
     expect(text).toContain("count the item if its locations don't match its stock on record");
+  });
+
+  // F2-1 local walks (web O-5, phone O4): a line whose item the reader cannot
+  // read said "Deleted item" on the web and "Unknown item" on the phone, on
+  // main too. Both now say core's ORDER_LINE_HIDDEN_ITEM_NAME: a fix people
+  // can see, so it is announced (owner rule, 2026-09-25).
+  it("announces the honest label for an item the reader can't see, on both platforms, in core's words", () => {
+    const e = release().entries.find((x) => x.id === 'order-line-hidden-item-name');
+    expect(e).toBeDefined();
+    expect(e!.category).toBe('fixed');
+    // Anyone who opens orders can meet it (a warehouse- or category-scoped
+    // reader, or a requester with no warehouse yet).
+    expect(e!.audience).toEqual({ modules: ['orders'] });
+    expect(e!.whatChanged).toContain(ORDER_LINE_HIDDEN_ITEM_NAME);
+    expect(e!.whatChanged).toContain('Deleted item on the web');
+    expect(e!.whatChanged).toContain('Unknown item in the mobile app');
+    // Never "deleted": a line's item cannot be deleted (ON DELETE RESTRICT).
+    expect(e!.whyItMatters).toContain("items on an order can't be deleted");
+    expect(e!.howItAffectsYou).toContain('Only the label changed.');
+    expect(e!.whatToDo).toBe('No action needed.');
   });
 });

@@ -23,7 +23,8 @@ export function itemPhysicalCountHref(itemId: string): string {
 /**
  * One line's readiness on the order page (F2-1): a chip (words and an icon,
  * never colour alone), one sentence, the hold annotation at hold statuses, and
- * an expandable "Why" with the numbers behind it.
+ * an expandable "Why" with the numbers behind it. The page renders it under
+ * the line's item name, in the Item cell.
  *
  * A server component: every word comes from core readiness-copy (the phone
  * shows the same), and "Why" is a native <details>, so opening it needs no
@@ -72,22 +73,22 @@ export function ReadinessLineCell({
       <span className="sr-only" data-testid="readiness-sr-label">
         {readinessLineAccessibilityLabel(position ? { ...line, position } : line)}.
       </span>
-      <span
-        className={cn(
-          'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10.5px] font-medium',
-          tone.chip,
-        )}
-        aria-hidden
-        data-testid="readiness-chip"
-      >
-        <ReadinessIcon icon={meta.icon} className="size-3 shrink-0" />
-        {meta.label}
-      </span>
-      <p
-        className="text-muted-foreground text-[11px] leading-snug"
-        data-testid="readiness-sentence"
-      >
-        {sentence}
+      {/* The chip leads its sentence on the same line: compact enough to sit
+          under the item's name without a column of its own (the order page's
+          lines card is 641 px wide at every viewport). */}
+      <p className="text-muted-foreground text-[11px] leading-snug">
+        <span
+          className={cn(
+            'mr-1.5 inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-1.5 py-px align-[1px] text-[10.5px] font-medium',
+            tone.chip,
+          )}
+          aria-hidden
+          data-testid="readiness-chip"
+        >
+          <ReadinessIcon icon={meta.icon} className="size-3 shrink-0" />
+          {meta.label}
+        </span>
+        <span data-testid="readiness-sentence">{sentence}</span>
       </p>
       {hold && (
         <p

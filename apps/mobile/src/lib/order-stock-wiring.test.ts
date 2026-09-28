@@ -181,12 +181,14 @@ describe('order screen: Approve partial and Resume come from readiness through c
     expect(screen).toContain("const stockGates = orderStockGates(st ?? '', stockCheck);");
     expect(screen).toMatch(/import \{[^}]*\borderStockGates,[^}]*\} from '@stockpilot\/core';/);
     expect(screen).toMatch(
-      /stockGates\.approvePartial !== 'hidden'\s*\? actionBtn\(\s*'Approve partial',[\s\S]*?stockGates\.approvePartial === 'disabled',\s*\)/,
+      /stockGates\.approvePartial !== 'hidden'\s*\? actionBtn\(\s*'Approve partial',[\s\S]*?stockGates\.approvePartial === 'disabled',\s*stockGates\.notice,\s*\)/,
     );
     expect(screen).toMatch(
       /stockGates\.resume === 'waiting' \? \(\s*<Body[^>]*>\s*Resume unlocks when owed items are back in stock\./,
     );
-    expect(screen).toMatch(/'Resume fulfillment',[\s\S]*?stockGates\.resume === 'disabled',\s*\)/);
+    expect(screen).toMatch(
+      /'Resume fulfillment',[\s\S]*?stockGates\.resume === 'disabled',\s*stockGates\.notice,\s*\)/,
+    );
     // The notice renders in both branches.
     expect(screen.match(/\{stockNotice\}/g)?.length).toBe(2);
   });

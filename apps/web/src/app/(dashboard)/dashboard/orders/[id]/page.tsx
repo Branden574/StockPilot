@@ -46,7 +46,9 @@ import {
   formatOrderReturnSummary,
   isManagerOrAbove,
   lineOwedUnits,
+  ORDER_LINE_HIDDEN_ITEM_NAME,
   ORDER_RETURN_SUMMARY_NOTE,
+  orderLineItemName,
   orderReadinessPhase,
   orderReturnSummary,
   orderStockGates,
@@ -124,6 +126,31 @@ export default async function OrderDetailPage({
   contextStarted.catch(() => {});
   const [{ id }, ctx] = await Promise.all([params, requireOrgContext()]);
   const canApprove = can(ctx, 'orders:approve');
+
+  // ORDER READINESS (F2-1) starts HERE, beside the order read, not after it.
+  // It needs only the order id. Whether the page shows it (the order's phase,
+  // the viewer's audience, whether the order has lines: `readinessGate`
+  // below) is known only once the order is read, so it runs alongside that
+  // read and an answer the page does not show is dropped unread. Started
+  // after the order read, it was a Supabase round trip of its own on the
+  // page's longest chain wherever nothing else was read after the order
+  // (approved and the picking statuses): the local walk (2026-09-28,
+  // production build) measured +11 ms to the lines table on an approved
+  // order and +18 ms on a pending one.
+  //
+  // What starting it early costs: one read on an order the page then shows no
+  // readiness for. It never waits on anything and nothing waits on it, and
+  // for an order past picking or closed the function reads only the order
+  // and its lines (0377, gate 5). It answers any member of the order's org,
+  // who could call it directly, so a dropped answer discloses nothing.
+  //
+  // `result` never rejects (a failed read is `{ state: 'failed' }`, reported
+  // by the service); the service itself can fail to start (its context), and
+  // that is observed here so a dropped read never becomes an unhandled
+  // rejection. Where the page uses the answer, below, it is awaited again and
+  // handled there.
+  const readinessRead = OrderReadinessService.forCurrentUser().then((svc) => svc.result(id));
+  readinessRead.catch(() => {});
 
   // The order fetch and the attachments fetch are independent (both need only
   // the route id) — run them together instead of serially. This page re-renders
@@ -227,10 +254,11 @@ export default async function OrderDetailPage({
   // approved, the picking statuses, backordered). Who sees it is core
   // readinessAudience: the full panel for anyone who approves orders, picks
   // (items:update) or buys (purchase_orders:manage); one sentence for the
-  // requester; nothing, and NO read, for anyone else. It also feeds the two
-  // stock-dependent actions (Approve partial, Resume): an approver always
-  // gets the full panel, so the read that used to be the page's own
-  // on-hand-minus-reservations check is this one.
+  // requester; nothing for anyone else (the read started beside the order
+  // read is dropped unread). It also feeds the two stock-dependent actions
+  // (Approve partial, Resume): an approver always gets the full panel, so the
+  // read that used to be the page's own on-hand-minus-reservations check is
+  // this one.
   const viewerReadinessAudience = readinessAudience({
     canApproveOrders: canApprove,
     canUpdateItems: can(ctx, 'items:update'),
@@ -335,7 +363,7 @@ export default async function OrderDetailPage({
     returnsAccess,
     maintenanceAccess,
     deliveryRequestCharter,
-    orgTimezone,
+    deliveryRequestTimezone,
     deliveryRequestRouting,
     orderReturns,
   ] = await Promise.all([
@@ -346,22 +374,22 @@ export default async function OrderDetailPage({
 
     // Order readiness: one read of the order's facts (order_readiness_facts,
     // SECURITY DEFINER, gated in its body, answering for THIS reader), judged
-    // by core exactly as the phone judges it. In this batch, never a level of
-    // its own. A failure is a result ('failed'), rendered in the strip as
-    // "Couldn't check readiness" and turned into disabled actions with the
-    // reason: never a page-level throw, and never "nothing reserved".
+    // by core exactly as the phone judges it. Already in flight since the
+    // order read (readinessRead, above): awaited here only when the page
+    // shows it, and never a level of its own. A failure is a result
+    // ('failed'), rendered in the strip as "Couldn't check readiness" and
+    // turned into disabled actions with the reason: never a page-level throw,
+    // and never "nothing reserved".
     readinessGate
-      ? OrderReadinessService.forCurrentUser()
-          .then((svc) => svc.result(id))
-          .catch((e: unknown): OrderReadinessResult => {
-            if (isNextControlFlowError(e)) throw e;
-            void reportError(e, {
-              tag: 'orders.readiness_failed',
-              level: 'warning',
-              organizationId: ctx.organizationId,
-            });
-            return { state: 'failed', message: 'Could not check readiness.' };
-          })
+      ? readinessRead.catch((e: unknown): OrderReadinessResult => {
+          if (isNextControlFlowError(e)) throw e;
+          void reportError(e, {
+            tag: 'orders.readiness_failed',
+            level: 'warning',
+            organizationId: ctx.organizationId,
+          });
+          return { state: 'failed', message: 'Could not check readiness.' };
+        })
       : Promise.resolve<OrderReadinessResult | null>(null),
 
     liveTrackingGate ? checkModuleAccess('live_tracking') : Promise.resolve(null),
@@ -518,11 +546,11 @@ export default async function OrderDetailPage({
         })()
       : Promise.resolve<StorefrontCharter | null>(null),
 
-    // The org timezone: the delivery draft's needed-by line, and readiness'
-    // "Checked at" time and dates (the same zone the phone uses). The same
-    // getCachedOrgTimezone call the storefront page makes for the dialog;
-    // read only when one of them renders.
-    showDeliveryRequest || readinessGate
+    // The org timezone the draft's needed-by line is printed in — the same
+    // getCachedOrgTimezone call the storefront page makes for the dialog.
+    // Readiness does not need it: its facts carry the org's zone (0377
+    // order.timeZone), read in the same statement as the rest.
+    showDeliveryRequest
       ? getCachedOrgTimezone(ctx.organizationId)
       : Promise.resolve<string | null>(null),
 
@@ -603,7 +631,13 @@ export default async function OrderDetailPage({
   const readinessNow = readiness
     ? reconcileReadiness(readiness, { status: request.status, lineIds: lines.map((l) => l.id) })
     : null;
-  const readinessTimeZone = resolveOrgTimezone(orgTimezone);
+  // Readiness' times and days ("Checked at", the needed-by day, a count's
+  // day) are in the org's zone as the facts carry it (0377 order.timeZone,
+  // organizations.timezone): the zone core reads the needed-by day in, so the
+  // strip and the signal can never use two zones. A failed read shows no time.
+  const readinessTimeZone = resolveOrgTimezone(
+    readinessNow?.state === 'ok' ? readinessNow.assessment.order.timeZone : null,
+  );
   const readinessStrip = readinessNow
     ? readinessStripView(readinessNow, viewerReadinessAudience, { timeZone: readinessTimeZone })
     : null;
@@ -837,7 +871,7 @@ export default async function OrderDetailPage({
                 // this button is not rendered at all), but a literal here was
                 // one of the two copies of "the default org timezone" that let
                 // web and mobile state different needed-by times for one order.
-                orgTimezone={resolveOrgTimezone(orgTimezone)}
+                orgTimezone={resolveOrgTimezone(deliveryRequestTimezone)}
                 notes={request.notes ?? ''}
                 lines={deliveryRequestLines}
               />
@@ -1045,7 +1079,6 @@ export default async function OrderDetailPage({
                   </TableHead>
                   <TableHead className="text-right">Owed</TableHead>
                   <TableHead className="text-right">On hand</TableHead>
-                  {readinessAssessment && <TableHead>Readiness</TableHead>}
                   {/* A trailing actions column rather than a click-the-number
                       affordance on Requested. The complaint that produced this
                       was "theres no way to" — a hover-to-reveal editor gives no
@@ -1067,7 +1100,7 @@ export default async function OrderDetailPage({
                 {lines.length === 0 && (
                   <TableRow>
                     <TableCell
-                      colSpan={5 + (canEditLines ? 1 : 0) + (readinessAssessment ? 1 : 0)}
+                      colSpan={canEditLines ? 6 : 5}
                       className="text-muted-foreground py-6 text-center text-sm"
                     >
                       No lines on this request.
@@ -1080,7 +1113,13 @@ export default async function OrderDetailPage({
                     quantityFulfilled: l.quantity_fulfilled,
                   });
                   return (
-                    <TableRow key={l.id}>
+                    // With readiness under the item name the row is taller:
+                    // every cell starts at the top, so the numbers and the
+                    // line's controls sit level with the item's name.
+                    <TableRow
+                      key={l.id}
+                      className={readinessAssessment ? '[&>td]:align-top' : undefined}
+                    >
                       <TableCell>
                         {l.item ? (
                           <>
@@ -1104,7 +1143,26 @@ export default async function OrderDetailPage({
                             )}
                           </>
                         ) : (
-                          <span className="text-muted-foreground italic">Deleted item</span>
+                          // A line's item cannot be deleted (ON DELETE
+                          // RESTRICT): a missing item is one this viewer's
+                          // access hides. Core's label, the phone's too.
+                          <span className="text-muted-foreground italic">
+                            {ORDER_LINE_HIDDEN_ITEM_NAME}
+                          </span>
+                        )}
+                        {/* The line's readiness, under its item (F2-1): in
+                            the Item cell, not a column of its own. A
+                            Readiness column made the table wider than its
+                            card at every width (705 px in 641 px) and pushed
+                            each line's edit and remove buttons out of view. */}
+                        {readinessAssessment && (
+                          <div className="mt-2">
+                            <ReadinessLineCell
+                              {...readinessCellFor(l.id)}
+                              timeZone={readinessTimeZone}
+                              position={rowIndex + 1}
+                            />
+                          </div>
                         )}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
@@ -1137,24 +1195,15 @@ export default async function OrderDetailPage({
                       <TableCell className="text-right tabular-nums text-muted-foreground">
                         {l.item ? formatNumber(l.item.quantity_on_hand) : '—'}
                       </TableCell>
-                      {readinessAssessment && (
-                        <TableCell className="min-w-[13rem] max-w-[18rem] whitespace-normal align-top">
-                          <ReadinessLineCell
-                            {...readinessCellFor(l.id)}
-                            timeZone={readinessTimeZone}
-                            position={rowIndex + 1}
-                          />
-                        </TableCell>
-                      )}
                       {canEditLines && (
                         <TableCell className="py-1 pr-2 text-right align-middle">
-                          {/* itemName falls back to the same label the Item
-                              cell shows when the item row is gone, so the
-                              confirmation names what the viewer is looking at. */}
+                          {/* itemName is the same label the Item cell shows
+                              (core orderLineItemName), so the confirmation
+                              names what the viewer is looking at. */}
                           <OrderLineActions
                             orderId={id}
                             lineId={l.id}
-                            itemName={l.item?.name ?? 'Deleted item'}
+                            itemName={orderLineItemName(l.item)}
                             quantityRequested={Number(l.quantity_requested) || 0}
                             quantityFulfilled={Number(l.quantity_fulfilled) || 0}
                             quantityPicked={l.quantity_picked}

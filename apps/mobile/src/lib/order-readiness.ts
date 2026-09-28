@@ -35,6 +35,8 @@
 import {
   assessOrderReadiness,
   can,
+  describeReadinessForRequester,
+  describeReadinessRollup,
   isManagerOrAbove,
   orderReadinessPhase,
   parseOrderReadinessFacts,
@@ -50,6 +52,7 @@ import {
   type OrderStockCheck,
   type Permission,
   type ReadinessAudience,
+  type ReadinessCopyOptions,
   type Role,
 } from '@stockpilot/core';
 
@@ -380,4 +383,28 @@ export const ORDER_OFFLINE_NOTHING_LOADED_COPY =
  */
 export function orderViewAsOf(readiness: OrderReadinessResult | null, receivedAt: string): string {
   return readiness?.state === 'ok' ? readiness.assessment.observedAt : receivedAt;
+}
+
+/**
+ * What VoiceOver announces when a readiness check fails (F2-1 phone walk, O2):
+ * the card's failed headline, with core's reason when it names one (the line
+ * the card shows under it), or the requester's failed sentence. Null for an
+ * answer that did not fail: that headline is read where it is.
+ *
+ * The web marks its failed headline role="alert", which screen readers speak
+ * when it appears. accessibilityRole 'alert' gives iOS no trait, so VoiceOver
+ * said nothing until the reader reached the card; the summary announces this
+ * text itself when it appears (AccessibilityInfo.announceForAccessibility).
+ */
+export function readinessFailureAnnouncement(
+  result: OrderReadinessResult | null,
+  audience: 'full' | 'requester',
+  opts: ReadinessCopyOptions = {},
+): string | null {
+  if (!result || result.state !== 'failed') return null;
+  if (audience === 'requester')
+    return describeReadinessForRequester(result, opts)?.sentence ?? null;
+  const rollup = describeReadinessRollup(result, opts);
+  if (!rollup) return null;
+  return rollup.detail ? `${rollup.headline} ${rollup.detail}` : rollup.headline;
 }

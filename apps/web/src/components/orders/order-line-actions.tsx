@@ -18,7 +18,8 @@ import {
 interface Props {
   orderId: string;
   lineId: string;
-  /** Display name for the item on this line ("Deleted item" rows pass a fallback). */
+  /** Display name for the item on this line (core orderLineItemName: "An item you can't see"
+   *  when the viewer's access hides it). */
   itemName: string;
   quantityRequested: number;
   /** Units physically handed over at pickup/delivery. Hard floor on a reduction. */

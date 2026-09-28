@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { AccessibilityInfo, View } from 'react-native';
 
 import {
   describeReadinessForRequester,
@@ -13,6 +13,7 @@ import { ReadinessIcon, readinessToneColor } from '@/components/order-line-readi
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Body, Eyebrow } from '@/components/ui/text';
+import { readinessFailureAnnouncement } from '@/lib/order-readiness';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -36,6 +37,10 @@ import { useTheme } from '@/lib/use-theme';
  * readinessFailureDetail names (the web page shows the same line). Offline the
  * button is disabled and says it needs a connection. Every word is core's
  * (readiness-copy.ts).
+ *
+ * VoiceOver hears a failure when it appears: the web's role="alert" is spoken
+ * as it renders, but the 'alert' role gives iOS no trait, so the card
+ * announces the failure itself (F2-1 phone walk, O2).
  */
 export function OrderReadinessSummary({
   result,
@@ -57,6 +62,14 @@ export function OrderReadinessSummary({
 }) {
   const { c, mode } = useTheme();
   const opts = { timeZone: timeZone ?? undefined };
+
+  // Announced when the failure appears, keyed on its words: a re-render, or a
+  // Try again that fails the same way, does not repeat it; a new failure (or
+  // one after a success) does.
+  const announcement = readinessFailureAnnouncement(result, audience, opts);
+  React.useEffect(() => {
+    if (announcement) AccessibilityInfo.announceForAccessibility(announcement);
+  }, [announcement]);
 
   // Check again (Try again after a failure), on both cards: 44 pt, disabled
   // while a check runs and offline, with the reason.
