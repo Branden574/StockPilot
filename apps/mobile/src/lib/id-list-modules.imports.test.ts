@@ -17,7 +17,7 @@ const PURE_MODULES = [
   'id-batches.ts',
   'id-reads.ts',
   'list-thumbnails.ts',
-  'order-stock-check.ts',
+  'order-readiness.ts',
   'rental-items.ts',
   'org-members.ts',
   'paginate.ts',
