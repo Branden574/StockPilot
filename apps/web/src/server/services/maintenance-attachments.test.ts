@@ -19,7 +19,14 @@ vi.mock('@/lib/rate-limit', () => ({
 // createSignedUploadUrl (po-imports.parse-suggest.test.ts's own comment: "the
 // shared makeSupabaseStub doesn't implement it"), so the admin client is
 // mocked directly here, same shape as item-images.test.ts.
-const { createAdminClientMock, fetchObjectPrefixMock, adminRemoveMock, adminCreateSignedUrlsMock } = vi.hoisted(() => ({
+const {
+  createAdminClientMock,
+  fetchObjectPrefixMock,
+  adminRemoveMock,
+  adminCreateSignedUrlsMock,
+  adminDownloadMock,
+  adminUploadMock,
+} = vi.hoisted(() => ({
   createAdminClientMock: vi.fn(),
   fetchObjectPrefixMock: vi.fn(),
   adminRemoveMock: vi.fn(),
@@ -27,6 +34,13 @@ const { createAdminClientMock, fetchObjectPrefixMock, adminRemoveMock, adminCrea
   // instead of one createSignedUrl call per row; the mock matches the real
   // storage-js shape: { data: {error,path,signedUrl}[], error }.
   adminCreateSignedUrlsMock: vi.fn(),
+  // finalize() now also reads the WHOLE object when the range read did not
+  // already hold it, and writes the metadata-free photo and its thumbnail
+  // back over the upload (the privacy step; its real behaviour, with real
+  // sharp and real GPS-tagged photos, is proven in
+  // maintenance-attachments.metadata.test.ts).
+  adminDownloadMock: vi.fn(),
+  adminUploadMock: vi.fn(),
 }));
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: createAdminClientMock,
@@ -41,6 +55,28 @@ vi.mock('@/lib/supabase/admin', () => ({
 vi.mock('@/lib/storage-object-prefix', () => ({
   fetchObjectPrefix: fetchObjectPrefixMock,
 }));
+// The metadata strip (lib/image-reencode.ts) is a seam here in the same way:
+// these tests pin the gates and what gets recorded, with byte fixtures that
+// are only as long as a sniff needs (not decodable photos), so the re-encode
+// stands in as the identity: the "clean" photo is the bytes it was given, in
+// the format they sniff as. Its own suite (lib/image-reencode.test.ts) and
+// maintenance-attachments.metadata.test.ts run the REAL sharp on real photos.
+vi.mock('@/lib/image-reencode', async () => {
+  const { sniffImage, MIME_FOR_KIND } =
+    await vi.importActual<typeof import('@/lib/image-signature')>('@/lib/image-signature');
+  return {
+    reencodeWithoutMetadata: vi.fn(async (bytes: Uint8Array, kind: 'jpeg' | 'png' | 'webp') => {
+      const s = sniffImage(bytes);
+      return {
+        master: bytes,
+        thumb: new Uint8Array([0x52, 0x49, 0x46, 0x46]),
+        contentType: MIME_FOR_KIND[kind],
+        width: s?.width ?? null,
+        height: s?.height ?? null,
+      };
+    }),
+  };
+});
 
 import { DEFAULT_MODULE_IDS, MAINTENANCE_MAX_PHOTOS, MAINTENANCE_MAX_PHOTO_BYTES, type ModuleId } from '@stockpilot/core';
 
@@ -116,16 +152,37 @@ beforeEach(() => {
   fetchObjectPrefixMock.mockReset();
   adminRemoveMock.mockReset();
   adminCreateSignedUrlsMock.mockReset();
+  adminDownloadMock.mockReset();
+  adminUploadMock.mockReset();
+  // finalize()'s first read with the service role: "is this upload already
+  // recorded?" (every extension of its uuid). Nothing is, in these tests.
+  const adminRows = makeSupabaseStub({
+    'maintenance_request_attachments.select': { data: [], error: null },
+  });
   createAdminClientMock.mockReturnValue({
+    from: adminRows.client.from,
     storage: {
       from: vi.fn(() => ({
         remove: adminRemoveMock,
         createSignedUrls: adminCreateSignedUrlsMock,
+        download: adminDownloadMock,
+        upload: adminUploadMock,
       })),
     },
   });
   fetchObjectPrefixMock.mockResolvedValue(null);
   adminRemoveMock.mockResolvedValue({ data: null, error: null });
+  // The object behind the range read a test states: its prefix, then filler
+  // up to its full size (so the whole read is the object that was measured).
+  adminDownloadMock.mockImplementation(async () => {
+    const last = fetchObjectPrefixMock.mock.results.at(-1);
+    const head = (last ? await last.value : null) as { prefix: Uint8Array; totalSize: number } | null;
+    if (!head) return { data: null, error: { message: 'Object not found' } };
+    const whole = new Uint8Array(head.totalSize);
+    whole.set(head.prefix);
+    return { data: { arrayBuffer: async () => whole.buffer }, error: null };
+  });
+  adminUploadMock.mockImplementation(async (path: string) => ({ data: { path }, error: null }));
   // Default: sign whatever paths were asked for, echoing each one back with
   // a stable stub URL — matches the real batch response shape (one entry
   // per requested path, keyed by `path`).

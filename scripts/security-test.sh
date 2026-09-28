@@ -349,6 +349,13 @@ WEB_TESTS=(
   # action limited as the phone's route is.
   src/server/services/exception-escalation.test.ts
   src/server/actions/exceptions.escalate.test.ts
+  # Maintenance photos (2026-09-27): what finalize stores carries no EXIF,
+  # GPS, XMP or ICC (real sharp on GPS-tagged JPEG, PNG and WEBP), the
+  # thumbnail is the server's, made from the clean photo at the mint's name,
+  # every refusal deletes the upload (still the original) and records nothing,
+  # the finalize limiter fails closed, and a recorded photo's files are never
+  # rewritten or deleted by a later finalize.
+  src/server/services/maintenance-attachments.metadata.test.ts
 
   # AI boundaries: org-scoped tool reads, prompt-injection containment, SSRF.
   src/lib/ai/tools.security.test.ts
