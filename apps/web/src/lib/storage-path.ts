@@ -201,6 +201,27 @@ export function maintenanceAttachmentPathShape(organizationId: string, requestId
   );
 }
 
+/** `{org}/{occurrenceId}/{uuid}.{ext}` — exception photo evidence (F1-4,
+ *  migration 0375). As strict as the maintenance shape, for the same reason:
+ *  every path is minted server-side (ExceptionEvidenceService.createUploadUrl)
+ *  with a `crypto.randomUUID()` name and one of four image extensions, and
+ *  there are no legacy variants. Both ids are pinned as literals, so a path
+ *  can point at neither another org nor another occurrence. The database
+ *  re-checks the same shape (exception_evidence_record) and the folder
+ *  (exception_evidence_path_in_occurrence). */
+export function exceptionEvidencePathShape(organizationId: string, occurrenceId: string): RegExp {
+  return anchored(
+    `${escapeRegExpLiteral(organizationId)}/${escapeRegExpLiteral(occurrenceId)}/${UUID_SEGMENT}\\.(?:jpg|jpeg|png|webp)`,
+  );
+}
+
+/** The thumbnail path for an evidence master: same folder, same uuid,
+ *  `-thumb.webp`. Derived on the server from a path that already passed
+ *  `exceptionEvidencePathShape`; never accepted from a client. */
+export function exceptionEvidenceThumbPath(masterPath: string): string {
+  return masterPath.replace(/\.(?:jpg|jpeg|png|webp)$/, '-thumb.webp');
+}
+
 /**
  * `{org}/{purchaseOrderId}/{file}` — the po-attachments convention, which is
  * built CLIENT-SIDE on both platforms (web `po-attachments-panel.tsx`:

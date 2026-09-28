@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  exceptionEvidencePathShape,
+  exceptionEvidenceThumbPath,
   hasUnsafeStorageSegment,
   isBoundarySafeStoragePath,
   isValidStoragePath,
@@ -118,6 +120,19 @@ const SHAPES = [
       `${ORG}/${ENTITY}/33333333-3333-4333-8333-333333333333.png`,
       `${ORG}/${ENTITY}/33333333-3333-4333-8333-333333333333.webp`,
       `${ORG}/${ENTITY}/33333333-3333-4333-8333-333333333333.jpeg`,
+    ],
+    wrongOrg: `${OTHER_ORG}/${ENTITY}/33333333-3333-4333-8333-333333333333.jpg`,
+    wrongEntity: `${ORG}/${OTHER_ENTITY}/33333333-3333-4333-8333-333333333333.jpg`,
+  },
+  {
+    name: 'exceptionEvidencePathShape',
+    shape: () => exceptionEvidencePathShape(ORG, ENTITY),
+    dir: `${ORG}/${ENTITY}`,
+    legit: [
+      `${ORG}/${ENTITY}/33333333-3333-4333-8333-333333333333.jpg`,
+      `${ORG}/${ENTITY}/33333333-3333-4333-8333-333333333333.jpeg`,
+      `${ORG}/${ENTITY}/33333333-3333-4333-8333-333333333333.png`,
+      `${ORG}/${ENTITY}/33333333-3333-4333-8333-333333333333.webp`,
     ],
     wrongOrg: `${OTHER_ORG}/${ENTITY}/33333333-3333-4333-8333-333333333333.jpg`,
     wrongEntity: `${ORG}/${OTHER_ENTITY}/33333333-3333-4333-8333-333333333333.jpg`,
@@ -419,5 +434,32 @@ describe('filename segment rules', () => {
     expect(isValidStoragePath(`${ORG}/logo-1.png`, orgLogoPathShape(ORG))).toBe(true);
     expect(isValidStoragePath(`${ORG}/${ENTITY}/logo-1.png`, orgLogoPathShape(ORG))).toBe(false);
     expect(isValidStoragePath('logo-1.png', orgLogoPathShape(ORG))).toBe(false);
+  });
+});
+
+describe('exceptionEvidencePathShape (F1-4) is as strict as the maintenance shape', () => {
+  const shape = () => exceptionEvidencePathShape(ORG, ENTITY);
+  it('refuses a name that is not a server-minted uuid', () => {
+    expect(isValidStoragePath(`${ORG}/${ENTITY}/photo.jpg`, shape())).toBe(false);
+    expect(isValidStoragePath(`${ORG}/${ENTITY}/abc123def456.jpg`, shape())).toBe(false);
+  });
+  it('refuses the thumbnail, other extensions and a nested folder', () => {
+    expect(isValidStoragePath(`${ORG}/${ENTITY}/33333333-3333-4333-8333-333333333333-thumb.webp`, shape())).toBe(false);
+    expect(isValidStoragePath(`${ORG}/${ENTITY}/33333333-3333-4333-8333-333333333333.heic`, shape())).toBe(false);
+    expect(isValidStoragePath(`${ORG}/${ENTITY}/33333333-3333-4333-8333-333333333333.jpg.png`, shape())).toBe(false);
+    expect(isValidStoragePath(`${ORG}/${ENTITY}/x/33333333-3333-4333-8333-333333333333.jpg`, shape())).toBe(false);
+  });
+  it('refuses an uppercase uuid (the mint and Postgres both write lowercase)', () => {
+    expect(isValidStoragePath(`${ORG}/${ENTITY}/33333333-3333-4333-8333-33333333333A.jpg`, shape())).toBe(false);
+  });
+});
+
+describe('exceptionEvidenceThumbPath', () => {
+  it('is the same folder and uuid with -thumb.webp, whatever the master extension', () => {
+    for (const ext of ['jpg', 'jpeg', 'png', 'webp']) {
+      expect(exceptionEvidenceThumbPath(`${ORG}/${ENTITY}/33333333-3333-4333-8333-333333333333.${ext}`)).toBe(
+        `${ORG}/${ENTITY}/33333333-3333-4333-8333-333333333333-thumb.webp`,
+      );
+    }
   });
 });

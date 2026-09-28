@@ -36,7 +36,16 @@ import { countStartBlock } from './lib/count-start-preflight';
 import { fetchAllRowsByIds, rawErrorText, reportDegradedRead } from './lib/fetch-by-ids';
 import { scheduleExceptionSync, type ExceptionSyncReason } from './lib/exception-sync-schedule';
 import { fetchAllRows } from './lib/paginate';
+import { personFor, type OccurrencePerson, type ProfileEmbed } from './lib/occurrence-person';
 import { postgrestErrorText } from './lib/postgrest-error';
+import {
+  buildEvidenceBlock,
+  evidenceEventInfo,
+  readEvidenceRows,
+  type EvidenceEventInfo,
+  type EvidenceRow,
+  type ExceptionEvidenceBlock,
+} from './lib/exception-evidence-read';
 import { buildSystemContext } from './lib/system-context';
 
 /**
@@ -103,13 +112,8 @@ const SYNC_STATE_SELECT =
 
 // ── Public shapes (the API returns these as JSON) ──────────────────────────
 
-/** A person as the reader can see them. `label` is their name, else email;
- *  "Former member" when the profile is no longer visible (they left, or the
- *  account was deleted). */
-export interface OccurrencePerson {
-  id: string | null;
-  label: string;
-}
+/** Re-exported: the occurrence API's person shape (lib/occurrence-person). */
+export { personFor, type OccurrencePerson };
 
 export interface ExceptionOccurrence {
   id: string;
@@ -215,6 +219,11 @@ export interface OccurrenceEvent {
   cycleCount: { id: string; countNumber: number | null; outcome?: RecountOutcome } | null;
   maintenanceRequestId: string | null;
   evidenceId: string | null;
+  /** For an evidence event: the photo's two times (the device's capture time
+   *  and the server's upload time) and whether it has since been removed,
+   *  worded by core describeEvidenceEvent. Null for other kinds, and when the
+   *  photos could not be read (the headline still stands). */
+  evidence: EvidenceEventInfo | null;
 }
 
 export interface OccurrenceHistoryEntry {
@@ -238,6 +247,19 @@ export interface OccurrenceDetail {
   syncState: ExceptionSyncState | null;
   /** The org's time zone, so every surface prints the same clock time. */
   timeZone: string;
+  /** Photo evidence (F1-4): the live photos with 1-hour signed links, or
+   *  `unavailable` when they could not be read; never an empty list for an
+   *  error. */
+  evidence: ExceptionEvidenceBlock;
+}
+
+/** The occurrence a write is about to act on (acknowledge, note, add or
+ *  remove a photo), after the act gate passed. */
+export interface ActableOccurrence {
+  id: string;
+  itemId: string;
+  warehouseId: string | null;
+  resolvedAt: string | null;
 }
 
 /** One exception linked to a count as its recount (F1-2), with the item's
@@ -330,8 +352,6 @@ export type ExceptionSyncOutcome =
 
 // ── Row mapping ────────────────────────────────────────────────────────────
 
-type ProfileEmbed = { full_name: string | null; email: string | null } | null;
-
 type OccurrenceRow = {
   id: string;
   occurrence_number: number | string;
@@ -382,15 +402,6 @@ type SyncStateRow = {
   failed_rules: string[] | null;
   truncated_rules: string[] | null;
 };
-
-/** The profile as the reader sees it. user_profiles_select_orgmates shows a
- *  profile only while its owner still belongs to one of the reader's orgs, so
- *  an invisible profile (or a deleted account, which nulls the id) is a
- *  former member. Same wording as the PO-imports uploader label. */
-export function personFor(id: string | null, profile: ProfileEmbed | undefined): OccurrencePerson {
-  if (!profile) return { id, label: 'Former member' };
-  return { id, label: profile.full_name?.trim() || profile.email?.trim() || 'Unknown' };
-}
 
 function toNumber(value: number | string | null | undefined): number | null {
   if (value === null || value === undefined) return null;
@@ -594,7 +605,7 @@ export class ExceptionOccurrencesService {
     if (!UUID.test(id)) throw new ServiceError('not_found', 'Exception not found.');
     const orgId = this.ctx.organizationId;
 
-    const [row, events, syncState, gate, timeZone] = await Promise.all([
+    const [row, events, syncState, gate, timeZone, evidenceRows] = await Promise.all([
       this.readOccurrenceRow(id),
       fetchAllRows<Record<string, unknown>>(
         (from, to) =>
@@ -611,6 +622,15 @@ export class ExceptionOccurrencesService {
       this.readSyncState(),
       this.actGate(),
       this.readOrgTimeZone(),
+      // Photos are read alongside, and a failed read is contained: the detail
+      // still renders, with photos "unavailable" (never "none").
+      readEvidenceRows(this.ctx, id).then(
+        (rows): EvidenceRow[] | null => rows,
+        (err: unknown): null => {
+          reportDegradedRead('exceptions.evidence_read', err, {});
+          return null;
+        },
+      ),
     ]);
     if (!row) throw new ServiceError('not_found', 'Exception not found.');
     const occurrence = mapOccurrence(row, syncState, gate, countStartBlock(this.ctx));
@@ -660,6 +680,9 @@ export class ExceptionOccurrencesService {
       recurrence_index: number;
     }>;
 
+    const evidence = await this.evidenceBlock(occurrence, evidenceRows);
+    const evidenceInfo = evidenceRows ? evidenceEventInfo(evidenceRows) : null;
+
     return {
       occurrence,
       timeline: events.map((e) => ({
@@ -683,6 +706,7 @@ export class ExceptionOccurrencesService {
           : null,
         maintenanceRequestId: e.maintenance_request_id,
         evidenceId: e.evidence_id,
+        evidence: e.evidence_id && evidenceInfo ? (evidenceInfo.get(e.evidence_id) ?? null) : null,
       })),
       history: chain.slice(0, HISTORY_LIMIT).map((h) => {
         const number = toNumber(h.occurrence_number) ?? 0;
@@ -700,7 +724,45 @@ export class ExceptionOccurrencesService {
       historyTruncated: chain.length > HISTORY_LIMIT,
       syncState,
       timeZone,
+      evidence,
     };
+  }
+
+  /**
+   * The photo block for a detail read. Rows that failed to read, or photos
+   * that failed to sign, are reported and answered `unavailable`: a surface
+   * says photos could not be loaded, never that there are none.
+   */
+  private async evidenceBlock(
+    occurrence: ExceptionOccurrence,
+    rows: EvidenceRow[] | null,
+  ): Promise<ExceptionEvidenceBlock> {
+    if (rows === null) return { status: 'unavailable' };
+    try {
+      return await buildEvidenceBlock(this.ctx, occurrence, rows);
+    } catch (err) {
+      reportDegradedRead('exceptions.evidence_sign', err, { photos: rows.length });
+      return { status: 'unavailable' };
+    }
+  }
+
+  /**
+   * THE app-side act gate, for every write on an occurrence: acknowledge, add
+   * a note, add or remove a photo (pattern #4: it mirrors the database's one
+   * gate, _exc_occurrence_can_act, which every one of those RPCs re-checks).
+   * items:read and stock:adjust; the row visible to the caller (not_found
+   * otherwise, so existence is not leaked); write access to its warehouse,
+   * or the manager role when it has none. Returns the row; resolved rows are
+   * returned too, and each write decides what a resolved row means for it.
+   */
+  async requireActable(id: string): Promise<ActableOccurrence> {
+    assertPermission(this.ctx, 'items:read');
+    assertPermission(this.ctx, 'stock:adjust');
+    if (!UUID.test(id)) throw new ServiceError('not_found', 'Exception not found.');
+    const row = await this.readOccurrenceRow(id);
+    if (!row) throw new ServiceError('not_found', 'Exception not found.');
+    await this.assertCanAct(row);
+    return { id: row.id, itemId: row.item_id, warehouseId: row.warehouse_id, resolvedAt: row.resolved_at };
   }
 
   /**
@@ -732,9 +794,7 @@ export class ExceptionOccurrencesService {
       });
     }
 
-    const row = await this.readOccurrenceRow(id);
-    if (!row) throw new ServiceError('not_found', 'Exception not found.');
-    await this.assertCanAct(row);
+    await this.requireActable(id);
 
     const { error } = await this.ctx.supabase.rpc('exception_occurrence_act', {
       p_id: id,

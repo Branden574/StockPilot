@@ -357,6 +357,18 @@ describe('sniffer coverage vs the bucket allowlists it gates', () => {
       'image/jpeg',
       'image/webp',
     ]);
+    // migration 0375 (F1-4 photo evidence).
+    expect(SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS['exception-evidence']).toEqual([
+      'image/png',
+      'image/jpeg',
+      'image/webp',
+    ]);
+  });
+
+  it('exception-evidence refuses HEIC and AVIF, like maintenance-photos (0375 leaves them out)', () => {
+    expect(isSniffedKindAllowedInBucket('heic', 'exception-evidence')).toBe(false);
+    expect(isSniffedKindAllowedInBucket('avif', 'exception-evidence')).toBe(false);
+    expect(isSniffedKindAllowedInBucket('jpeg', 'exception-evidence')).toBe(true);
   });
 });
 
