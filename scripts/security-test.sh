@@ -281,11 +281,17 @@ PGTAP_TESTS=(
   # warehouse's holding, a disabled account) and call ONE gate
   # (_exc_escalation_refusal: the maintenance module and
   # maintenance_requests:submit; no client role may execute it). A claim
-  # under 2 minutes old refuses every other claim; a link needs the caller's
-  # claim and a request in the same org, for the occurrence's item, made by
-  # the caller within 5 minutes, not cancelled, linked nowhere else; linking
-  # never acknowledges or resolves. The concurrent claim is
-  # scripts/db-concurrency/0376_escalation_claim.sh.
+  # under 2 minutes old refuses every other claim and names its holder; a
+  # person holds one live claim at a time (a per-caller lock, so parallel
+  # calls cannot slip past); a link needs the caller's claim and a request in
+  # the same org, for the occurrence's item AND location, made by the caller
+  # within 5 minutes, not cancelled, linked nowhere else (a UNIQUE index, so
+  # racing finishes cannot link one request twice); linking never
+  # acknowledges or resolves. escalation_request_cancelled (a computed
+  # field, SECURITY DEFINER) answers one boolean, only for a visible
+  # occurrence, reading the link from the table (never the row passed in).
+  # The concurrent claim, the racing finishes and one person's parallel
+  # claims are scripts/db-concurrency/0376_escalation_claim.sh.
   supabase/tests/0376_exception_escalation.test.sql
 
   # Storage and attachment exposure.
@@ -338,8 +344,11 @@ WEB_TESTS=(
   # Escalate to maintenance (F1-5): the module and submit floors before any
   # read, the item and location taken from the occurrence (client ids
   # ignored), one request per escalation (a duplicate answers the linked
-  # one), and a request that could not be linked cancelled as its requester.
+  # one), a request that could not be linked cancelled as its requester only
+  # on a definite refusal (never while the link may still land), and the web
+  # action limited as the phone's route is.
   src/server/services/exception-escalation.test.ts
+  src/server/actions/exceptions.escalate.test.ts
 
   # AI boundaries: org-scoped tool reads, prompt-injection containment, SSRF.
   src/lib/ai/tools.security.test.ts

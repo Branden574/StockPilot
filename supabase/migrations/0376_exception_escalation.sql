@@ -34,6 +34,15 @@
 --   4. exception_escalation_finish(p_id, p_request_id): SECURITY DEFINER,
 --      links the request (or, with a null request, releases the caller's own
 --      claim).
+--   5. escalation_request_cancelled(occurrence): a PostgREST computed field,
+--      SECURITY DEFINER with its gate in its body: whether the occurrence's
+--      linked request was cancelled, for EVERY reader of the occurrence
+--      (the claim already frees a cancelled link for anyone who may
+--      escalate, so this discloses nothing new; without it a reader who
+--      cannot open the request would be told it is still live).
+--   6. A UNIQUE partial index on the link (a request links to at most one
+--      occurrence, even when two finishes race) and a partial index on the
+--      claim's holder (the one-live-claim lookup).
 --
 -- ── THE FLOW (apps/web/src/server/services/exception-escalation.ts) ─────────
 --   claim -> MaintenanceRequestsService.create() with the item and location
@@ -48,14 +57,24 @@
 -- Between the claim and the link the server creates the request in a separate
 -- transaction, so the row cannot stay locked across it. The claim stands in
 -- for the lock: while a claim is under 2 minutes old nobody else starts an
--- escalation of this occurrence (P0001, hint escalation_in_progress). That
--- includes the CALLER'S OWN fresh claim: two tabs or a double tap would
--- otherwise both create a request, and each request sends the new-request
--- notification, so a duplicate would reach the maintenance team before the
--- loser could be cancelled. A claim older than 2 minutes is free (the server
--- crashed between the steps); nothing sweeps it. finish() links only for the
--- caller who holds the claim, so a slow escalation that lost its claim
--- cannot overwrite a newer one.
+-- escalation of this occurrence (P0001, hint escalation_in_progress, with
+-- the holder's user id in the DETAIL so the person refused is told who is
+-- escalating). That includes the CALLER'S OWN fresh claim: two tabs or a
+-- double tap would otherwise both create a request, and each request sends
+-- the new-request notification, so a duplicate would reach the maintenance
+-- team before the loser could be cancelled. A claim older than 2 minutes is
+-- free (the server crashed between the steps); nothing sweeps it. finish()
+-- links only for the caller who holds the claim, so a slow escalation that
+-- lost its claim cannot overwrite a newer one.
+--
+-- ONE LIVE CLAIM PER PERSON. A caller who holds a live claim on another open
+-- occurrence of the same org is refused (P0001, hint
+-- escalation_in_progress_elsewhere). The app never holds two (one
+-- escalation is claim, create, finish in a few seconds), so this only
+-- limits a signed-in member who scripts claims to hold back others'
+-- escalations: one occurrence at a time, named in every refusal. Each
+-- caller's claims run one at a time (a transaction-scoped advisory lock on
+-- the caller's id), so parallel calls cannot slip past the rule.
 --
 -- ── ONE LINKED REQUEST ─────────────────────────────────────────────────────
 -- An occurrence linked to a request that is not cancelled answers the claim
@@ -64,29 +83,40 @@
 -- request that was later archived keeps cancelled_at: 0362). Once the linked
 -- request is cancelled, a new escalation is allowed and replaces the link;
 -- both stay in the timeline as 'escalated' events. A request links to at
--- most one occurrence.
+-- most one occurrence: a UNIQUE partial index enforces it, so two finishes
+-- that race to link one request to two occurrences cannot both succeed (the
+-- loser is answered request_not_eligible).
 --
 -- ── WHAT finish() REQUIRES OF THE REQUEST ──────────────────────────────────
--- The same org, related_item_id = the occurrence's item, requester_user_id =
--- the caller, created within the last 5 minutes (created_at is the database's
--- own time: the 0362 guard stamps it on every API-role insert), and not
--- cancelled. So the link can only name a request the caller has just made
--- for this item; it cannot attach someone else's request, or an old one.
--- maintenance_requests and its 0362 guard are unchanged.
+-- The same org, related_item_id = the occurrence's item,
+-- related_location_id = the occurrence's location (both null for an
+-- item-level rule), requester_user_id = the caller, created within the last
+-- 5 minutes (created_at is the database's own time: the 0362 guard stamps it
+-- on every API-role insert), not cancelled, and linked to no other
+-- occurrence. So the link can only name a request the caller has just made
+-- about this item at this place; it cannot attach someone else's request, an
+-- old one, or one about another rack (the occurrence would read "Escalated:
+-- MR-..." while the request and its email named a different place). The
+-- server always copies the occurrence's own location (resolveRelatedId keeps
+-- it: locations are readable by every member). maintenance_requests and its
+-- 0362 guard are unchanged.
 --
 -- ── RETRYABLE SQLSTATES ────────────────────────────────────────────────────
 -- Never 40001/40P01 (0367). Refusals: 42501 not signed in or not allowed
 -- (hint module_disabled or not_permitted for the gate), P0002 not found or not
 -- visible (existence is not leaked), P0001 with a hint for a state conflict
--- (occurrence_resolved, escalation_in_progress, escalation_not_claimed,
+-- (occurrence_resolved, escalation_in_progress,
+-- escalation_in_progress_elsewhere, escalation_not_claimed,
 -- request_not_eligible, already_escalated), 22023 bad_argument. A lock wait
 -- past lock_timeout is 55P03.
 --
 -- ── DATA SAFETY ────────────────────────────────────────────────────────────
 -- Additive only: seven nullable columns with no default (a catalog change,
 -- no table rewrite), four CHECK constraints and three foreign keys on those
--- new, all-null columns, one partial index, three new functions. No existing
--- row is updated or deleted, nothing is dropped, no column type changes.
+-- new, all-null columns, two partial indexes on them (one UNIQUE: every
+-- value is null when it is built, so it cannot fail and is empty), four new
+-- functions. No existing row is updated or deleted, nothing is dropped, no
+-- column type changes.
 --
 -- ── LOCKS ──────────────────────────────────────────────────────────────────
 -- The CLI applies this file as ONE implicit transaction, so every lock is
@@ -144,11 +174,21 @@ comment on column public.exception_occurrences.escalation_claimed_at is
   'While an escalation is being created (0376): a claim under 2 minutes old '
   'refuses every other claim. Cleared on link or release; an older claim is free.';
 
--- The link lookups (a request links to at most one occurrence) and the
--- foreign key's ON DELETE SET NULL.
-create index if not exists exc_occ_maintenance_request_idx
+-- A request links to at most one occurrence. UNIQUE, so the rule holds even
+-- when two finishes race for two occurrences of the same item (each locks
+-- only its own row, so an EXISTS check could not see the other's link);
+-- finish answers the loser request_not_eligible. Also serves the link
+-- lookups and the foreign key's ON DELETE SET NULL. Every value is null
+-- when this is built.
+create unique index if not exists exc_occ_maintenance_request_uniq
   on public.exception_occurrences (maintenance_request_id)
   where maintenance_request_id is not null;
+
+-- The claim's "does this caller hold a live claim elsewhere" lookup, and the
+-- foreign key's ON DELETE SET NULL.
+create index if not exists exc_occ_escalation_claimed_by_idx
+  on public.exception_occurrences (escalation_claimed_by)
+  where escalation_claimed_by is not null;
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- 2. The escalate gate, in one place
@@ -201,7 +241,9 @@ comment on function public._exc_escalation_refusal(uuid) is
 -- client opens it). Refusals, in this order: 42501 signed out; 22023 no id;
 -- P0002 not found or not visible; 42501 the gate (hint module_disabled or
 -- not_permitted); P0001 occurrence_resolved; P0001 escalation_in_progress (a
--- claim under 2 minutes old, anyone's).
+-- claim under 2 minutes old, anyone's; DETAIL is the holder's user id);
+-- P0001 escalation_in_progress_elsewhere (the caller holds a live claim on
+-- another open occurrence of the org).
 create or replace function public.exception_escalation_claim(p_id uuid)
 returns jsonb
 language plpgsql
@@ -223,6 +265,11 @@ begin
   if p_id is null then
     raise exception 'bad_argument' using errcode = '22023', hint = 'bad_argument';
   end if;
+
+  -- One caller's claims run one at a time (ONE LIVE CLAIM PER PERSON in the
+  -- header): held to the end of this transaction. Taken before the row lock,
+  -- always in that order, and finish never takes it, so no cycle can form.
+  perform pg_advisory_xact_lock(hashtextextended('exc_escalation_claim:' || v_uid::text, 0));
 
   -- Only a row the caller can see is found (and locked): an outsider, a
   -- disabled account and an invisible row all read "not found".
@@ -258,11 +305,27 @@ begin
     end if;
   end if;
 
-  -- A live claim, whoever holds it (see THE CLAIM in the header).
+  -- A live claim, whoever holds it (see THE CLAIM in the header). The
+  -- holder's id rides in the DETAIL: every reader of the occurrence can read
+  -- escalation_claimed_by already, so this discloses nothing new.
   if v_occ.escalation_claimed_by is not null
      and v_occ.escalation_claimed_at > now() - interval '2 minutes' then
     raise exception 'escalation_in_progress'
-      using errcode = 'P0001', hint = 'escalation_in_progress';
+      using errcode = 'P0001', hint = 'escalation_in_progress',
+            detail = v_occ.escalation_claimed_by::text;
+  end if;
+
+  -- One live claim per person (the header). A claim on a resolved row holds
+  -- nothing back, and an expired one is free, so neither counts.
+  if exists (
+       select 1 from public.exception_occurrences o2
+        where o2.escalation_claimed_by = v_uid
+          and o2.organization_id = v_occ.organization_id
+          and o2.id <> v_occ.id
+          and o2.resolved_at is null
+          and o2.escalation_claimed_at > now() - interval '2 minutes') then
+    raise exception 'escalation_in_progress_elsewhere'
+      using errcode = 'P0001', hint = 'escalation_in_progress_elsewhere';
   end if;
 
   update public.exception_occurrences
@@ -280,9 +343,11 @@ grant execute on function public.exception_escalation_claim(uuid) to authenticat
 comment on function public.exception_escalation_claim(uuid) is
   'Start escalating an exception occurrence to a maintenance request (0376). '
   'Visible row, maintenance module on and maintenance_requests:submit; refuses '
-  'a resolved row and a claim under 2 minutes old; answers {state:linked} '
-  'when a request that is not cancelled is already linked; otherwise claims '
-  'the row for the caller. Never acknowledges or resolves.';
+  'a resolved row, a claim under 2 minutes old (DETAIL: its holder) and a '
+  'caller who holds a live claim on another open occurrence of the org; '
+  'answers {state:linked} when a request that is not cancelled is already '
+  'linked; otherwise claims the row for the caller. One caller''s claims run '
+  'one at a time. Never acknowledges or resolves.';
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- 4. exception_escalation_finish
@@ -299,8 +364,8 @@ comment on function public.exception_escalation_claim(uuid) is
 --   occurrence_resolved; P0001 escalation_not_claimed (the caller does not
 --   hold the claim); P0001 already_escalated (a request that is not
 --   cancelled is linked); P0001 request_not_eligible (see WHAT finish()
---   REQUIRES in the header, or the request is already linked to another
---   occurrence).
+--   REQUIRES in the header; a request already linked to another occurrence
+--   is caught by the unique index, even when two finishes race).
 create or replace function public.exception_escalation_finish(
   p_id          uuid,
   p_request_id  uuid default null
@@ -317,6 +382,7 @@ declare
   v_req      public.maintenance_requests%rowtype;
   v_refusal  text;
   v_released uuid;
+  v_conname  text;
 begin
   if v_uid is null then
     raise exception 'not_authenticated' using errcode = '42501';
@@ -382,27 +448,34 @@ begin
   if not found
      or v_req.organization_id <> v_occ.organization_id
      or v_req.related_item_id is distinct from v_occ.item_id
+     or v_req.related_location_id is distinct from v_occ.location_id
      or v_req.requester_user_id is distinct from v_uid
      or v_req.created_at < now() - interval '5 minutes'
-     or v_req.cancelled_at is not null
-     or exists (
-          select 1 from public.exception_occurrences o2
-           where o2.maintenance_request_id = p_request_id
-             and o2.id <> v_occ.id) then
+     or v_req.cancelled_at is not null then
     raise exception 'request_not_eligible' using errcode = 'P0001', hint = 'request_not_eligible';
   end if;
 
   -- Link, and nothing else: acknowledged_* and resolved_* are not touched.
-  update public.exception_occurrences
-     set maintenance_request_id        = v_req.id,
-         escalation_number             = v_req.request_number,
-         escalation_request_created_at = v_req.created_at,
-         escalated_at                  = now(),
-         escalated_by                  = v_uid,
-         escalation_claimed_at         = null,
-         escalation_claimed_by         = null,
-         updated_at                    = now()
-   where id = v_occ.id;
+  -- A request already linked to another occurrence (in order, or by a
+  -- finish racing this one) trips the unique index: request_not_eligible.
+  begin
+    update public.exception_occurrences
+       set maintenance_request_id        = v_req.id,
+           escalation_number             = v_req.request_number,
+           escalation_request_created_at = v_req.created_at,
+           escalated_at                  = now(),
+           escalated_by                  = v_uid,
+           escalation_claimed_at         = null,
+           escalation_claimed_by         = null,
+           updated_at                    = now()
+     where id = v_occ.id;
+  exception when unique_violation then
+    get stacked diagnostics v_conname = constraint_name;
+    if v_conname is distinct from 'exc_occ_maintenance_request_uniq' then
+      raise;
+    end if;
+    raise exception 'request_not_eligible' using errcode = 'P0001', hint = 'request_not_eligible';
+  end;
 
   insert into public.exception_occurrence_events
     (organization_id, occurrence_id, kind, actor_user_id, maintenance_request_id)
@@ -421,9 +494,62 @@ grant execute on function public.exception_escalation_finish(uuid, uuid) to auth
 comment on function public.exception_escalation_finish(uuid, uuid) is
   'Finish escalating an exception occurrence (0376). A null request releases '
   'the caller''s own claim. Otherwise links a request the caller holds the '
-  'claim for: same org, related to the occurrence''s item, requested by the '
-  'caller within the last 5 minutes, not cancelled, linked nowhere else; '
-  'copies its number and writes an escalated event. Never acknowledges or '
-  'resolves.';
+  'claim for: same org, related to the occurrence''s item and location, '
+  'requested by the caller within the last 5 minutes, not cancelled, linked '
+  'nowhere else (a unique index); copies its number and writes an escalated '
+  'event. Never acknowledges or resolves.';
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 5. escalation_request_cancelled (a PostgREST computed field)
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Read as `escalation_request_cancelled` in a select on exception_occurrences.
+-- true: the occurrence's linked request was cancelled (a new escalation may
+-- be made, and the badge says so); false: it is live; null: no link, the
+-- request is gone, the caller is signed out, or the caller cannot see the
+-- occurrence.
+--
+-- SECURITY DEFINER because most readers cannot open the request
+-- (maintenance_requests_select: its requester, read_all or manage), and a
+-- reader who could not tell a cancelled link from a live one was told the
+-- exception could not be escalated again when it could. It answers ONE
+-- boolean, and only for an occurrence the caller can see
+-- (_exc_occurrence_visible, the occurrence policy's own rule), gated here in
+-- its body (the 0346 class). The row passed in is used ONLY for its id: the
+-- link is re-read from the table, so a crafted row cannot ask about another
+-- request. The claim already frees a cancelled link for anyone who may
+-- escalate, so the answer discloses nothing new to them.
+create or replace function public.escalation_request_cancelled(p_occ public.exception_occurrences)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_cancelled boolean;
+begin
+  if auth.uid() is null or p_occ.id is null then
+    return null;
+  end if;
+  select r.cancelled_at is not null into v_cancelled
+    from public.exception_occurrences o
+    join public.maintenance_requests r
+      on r.id = o.maintenance_request_id
+     and r.organization_id = o.organization_id
+   where o.id = p_occ.id
+     and public._exc_occurrence_visible(o.organization_id, o.item_id, o.location_id);
+  return v_cancelled;
+end;
+$$;
+
+revoke all on function public.escalation_request_cancelled(public.exception_occurrences) from public, anon;
+grant execute on function public.escalation_request_cancelled(public.exception_occurrences) to authenticated, service_role;
+
+comment on function public.escalation_request_cancelled(public.exception_occurrences) is
+  'Whether an exception occurrence''s linked maintenance request was cancelled '
+  '(0376), for every reader who can see the occurrence: true cancelled, false '
+  'live, null not linked / not visible / signed out. SECURITY DEFINER, gated '
+  'in its body; the row passed in is used only for its id. A PostgREST '
+  'computed field on exception_occurrences.';
 
 reset lock_timeout;
