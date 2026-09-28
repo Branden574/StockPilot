@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { announceHoldTopUp } from '@/components/orders/hold-top-up-toast';
 import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Button } from '@/components/ui/button';
 import {
@@ -360,7 +361,7 @@ function AddItemsBody({
       toast.error(res.error.message);
       return;
     }
-    const { added, merged, pickSlipStale } = res.data;
+    const { added, merged, pickSlipStale, hold } = res.data;
     toast.success(summarizeAddLines(added, merged));
     if (pickSlipStale) {
       // The sheet in the picker's hand no longer matches the order.
@@ -368,6 +369,11 @@ function AddItemsBody({
         duration: 8000,
       });
     }
+    // F2-2: what the automatic hold did for the added units (approvers at a
+    // hold status only; null otherwise). A failure never undoes the add and
+    // is always said: "Added. Stock was not held for it; use Hold available
+    // stock."
+    announceHoldTopUp(hold, 'added');
     setPicks({});
     onClose();
     router.refresh();

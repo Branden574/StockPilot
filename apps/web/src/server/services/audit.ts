@@ -193,6 +193,12 @@ export type AuditEvent =
   | 'order.delivery_assigned'
   | 'order.in_transit'
   | 'order.fulfillment_resumed'
+  // F2-2 (0378): hold_order_stock held stock for an order (the manual "Hold
+  // available stock", or the top-up after an approver added or raised a
+  // line). after: { trigger, held: [{itemId, added}], stillShort,
+  // hiddenHeldItems, hiddenShortItems } (numbers only for items the holder
+  // can read; others counted). Holds are commitments, not stock: nothing moved.
+  | 'order.stock_held'
   // Manager override: a picked/packed (pre-signature) order was rewound to
   // picking_in_progress to fix a miscount (0289 reopen_picking RPC).
   | 'order.picking_reopened'

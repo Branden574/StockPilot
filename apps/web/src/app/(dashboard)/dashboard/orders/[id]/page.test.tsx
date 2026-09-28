@@ -4,7 +4,7 @@ import path from 'node:path';
 import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { OrderReadinessResult } from '@stockpilot/core';
+import { SHORT_LINE_FINAL_NOTE, type OrderReadinessResult } from '@stockpilot/core';
 
 import {
   hiddenItemFacts,
@@ -74,12 +74,21 @@ vi.mock('@/components/orders/manager-actions-panel', () => ({
 }));
 // A recording spy: the row's edit / remove controls name the line's item.
 const orderLineActionsProps = vi.fn();
+// F2-2: the one-tap fixes on a short line, recorded the same way.
+const shortLineFixesProps = vi.fn();
 vi.mock('@/components/orders/order-line-actions', () => ({
   OrderLineActions: (props: Record<string, unknown>) => {
     orderLineActionsProps(props);
     return null;
   },
+  ShortLineFixes: (props: Record<string, unknown>) => {
+    shortLineFixesProps(props);
+    return null;
+  },
 }));
+// The readiness strip (rendered for real) offers "Hold available stock"
+// through this server action (F2-2).
+vi.mock('@/server/actions/order-requests', () => ({ holdOrderStockAction: vi.fn() }));
 vi.mock('@/components/orders/delivery-location-share', () => ({ DeliveryLocationShare: () => null }));
 vi.mock('@/components/returns/create-return-dialog', () => ({ CreateReturnDialog: () => null }));
 vi.mock('@/components/orders/order-attachments-panel', () => ({ OrderAttachmentsPanel: () => null }));
@@ -1142,5 +1151,331 @@ describe('orders/[id]: one stock check, one definition of owed (pattern #26)', (
     expect(src).not.toMatch(
       /Math\.max\(\s*0\s*,\s*\(Number\(l\.quantity_requested\) \|\| 0\) - \(Number\(l\.quantity_fulfilled\) \|\| 0\)/,
     );
+  });
+});
+
+// ── F2-2: held, and caught before it leaves ─────────────────────────────────
+//
+// The page's wiring of what it already read (the order, its lines, the
+// readiness result) into the hold button, the two confirms and the short-line
+// fixes. The components' own behaviour (the confirm opening instead of the
+// action, the fixes calling the line edits) is pinned in their own tests.
+
+describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
+  const PENS = 'L4L - Pen Black & Rose Gold';
+  function orderLine(id: string, itemId: string, requested: number, over: Record<string, unknown> = {}) {
+    return {
+      id,
+      order_request_id: ORDER_ID,
+      item_id: itemId,
+      quantity_requested: requested,
+      quantity_fulfilled: 0,
+      quantity_picked: null,
+      returned_quantity: 0,
+      unit_cost_at_request: 0,
+      notes: null,
+      item: {
+        id: itemId,
+        name: itemId === 'iP' ? PENS : `Item ${itemId}`,
+        sku: `SKU-${itemId}`,
+        quantity_on_hand: 60,
+        charter_name: null,
+        charter_code: null,
+      },
+      ...over,
+    };
+  }
+  function orderAt(status: string, lines: unknown[], request: Record<string, unknown> = {}) {
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status, ...request }), lines }));
+  }
+  function as(role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer', perms: string[]) {
+    ctxHolder.current = { role, permissions: new Set(['orders:read', ...perms]) };
+  }
+  const asManager = () => as('manager', ['orders:approve']);
+  const lastPanelProps = () => managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>;
+  const fixesFor = (lineId: string) =>
+    shortLineFixesProps.mock.calls.map((c) => c[0] as Record<string, unknown>).find((p) => p.lineId === lineId);
+
+  /** SO-000100 at picking: notebooks held and on the rack, the pens gone. */
+  const so100Facts = (status: string) =>
+    orderReadinessFacts(
+      ORDER_ID,
+      status,
+      [
+        { lineId: 'LN', itemId: 'iN', requested: 60 },
+        { lineId: 'LP', itemId: 'iP', requested: 60 },
+      ],
+      [
+        visibleItemFacts('iN', { here: { rack: 60 }, heldOwn: 60 }),
+        visibleItemFacts('iP', { name: PENS, here: { rack: 0 } }),
+      ],
+    );
+  const SO100_LINES = [orderLine('LN', 'iN', 60), orderLine('LP', 'iP', 60)];
+
+  describe('Hold available stock', () => {
+    it('is offered to an approver on an approved order with a line not held', async () => {
+      asManager();
+      orderAt('approved', SO100_LINES);
+      readinessResult.mockResolvedValue(readinessOk(so100Facts('approved')));
+
+      await renderPage();
+
+      expect(within(screen.getByTestId('readiness-strip')).getByTestId('readiness-hold-stock')).toHaveTextContent(
+        'Hold available stock',
+      );
+    });
+
+    it('never when every line is held, to a picker who may not approve, or on a failed read', async () => {
+      asManager();
+      orderAt('approved', [orderLine('LN', 'iN', 60)]);
+      readinessResult.mockResolvedValue(
+        readinessOk(
+          orderReadinessFacts(ORDER_ID, 'approved', [{ lineId: 'LN', itemId: 'iN', requested: 60 }], [
+            visibleItemFacts('iN', { here: { rack: 60 }, heldOwn: 60 }),
+          ]),
+        ),
+      );
+      const held = await renderPage();
+      expect(screen.queryByTestId('readiness-hold-stock')).toBeNull();
+      held.unmount();
+
+      as('staff', ['items:update']);
+      orderAt('approved', SO100_LINES);
+      readinessResult.mockResolvedValue(readinessOk(so100Facts('approved')));
+      const picker = await renderPage();
+      expect(screen.getByTestId('readiness-strip')).toBeInTheDocument();
+      expect(screen.queryByTestId('readiness-hold-stock')).toBeNull();
+      picker.unmount();
+
+      asManager();
+      readinessResult.mockResolvedValue(READINESS_FAILED);
+      await renderPage();
+      expect(screen.getByTestId('readiness-strip')).toHaveAttribute('data-failed', 'true');
+      expect(screen.queryByTestId('readiness-hold-stock')).toBeNull();
+    });
+  });
+
+  describe('the confirm before Mark picking complete (SO-000100)', () => {
+    it('names the short line from the projection of complete_picking, and points at it', async () => {
+      asManager();
+      orderAt('picking_in_progress', SO100_LINES);
+      readinessResult.mockResolvedValue(readinessOk(so100Facts('picking_in_progress')));
+
+      await renderPage();
+
+      expect(lastPanelProps().completionConfirm).toEqual({
+        title: 'Before you complete picking',
+        paragraphs: [
+          `Not everything will be picked. ${PENS}: 0 of 60. It will be owed at hand-over, or you can remove it from the order first.`,
+        ],
+        reviewLabel: 'Review short lines',
+        confirmLabel: 'Complete picking',
+        focusLineId: 'LP',
+      });
+    });
+
+    it('is never skipped when readiness failed: the confirm says stock could not be checked', async () => {
+      asManager();
+      orderAt('picking_in_progress', SO100_LINES);
+      readinessResult.mockResolvedValue(READINESS_FAILED);
+
+      await renderPage();
+
+      expect(lastPanelProps().completionConfirm).toMatchObject({
+        paragraphs: ["Stock couldn't be checked. Picking may come up short."],
+        focusLineId: null,
+      });
+    });
+
+    it('with everything covered there is nothing to confirm', async () => {
+      asManager();
+      orderAt('pick_slip_generated', [orderLine('LN', 'iN', 60)]);
+      readinessResult.mockResolvedValue(
+        readinessOk(
+          orderReadinessFacts(ORDER_ID, 'pick_slip_generated', [{ lineId: 'LN', itemId: 'iN', requested: 60 }], [
+            visibleItemFacts('iN', { here: { rack: 60 }, heldOwn: 60 }),
+          ]),
+        ),
+      );
+
+      await renderPage();
+
+      expect(lastPanelProps().completionConfirm).toBeNull();
+    });
+
+    it('carries no stock numbers to a viewer who cannot pick, and none outside picking', async () => {
+      as('staff', []);
+      orderAt('picking_in_progress', SO100_LINES);
+      await renderPage();
+      expect(lastPanelProps().completionConfirm).toBeNull();
+
+      asManager();
+      orderAt('approved', SO100_LINES);
+      readinessResult.mockResolvedValue(readinessOk(so100Facts('approved')));
+      await renderPage();
+      expect(lastPanelProps().completionConfirm).toBeNull();
+    });
+  });
+
+  describe('the lines the departure confirm reads', () => {
+    it('once picking is settled: each line with its name and its numbers, as the table shows them', async () => {
+      asManager();
+      orderAt('packing_slip_generated', [
+        orderLine('LN', 'iN', 60, { quantity_picked: 60 }),
+        orderLine('LP', 'iP', 60, { quantity_picked: 0 }),
+      ]);
+
+      await renderPage();
+
+      expect(lastPanelProps().departureLines).toEqual([
+        { lineId: 'LN', itemName: 'Item iN', quantityRequested: 60, quantityFulfilled: 0, quantityPicked: 60 },
+        { lineId: 'LP', itemName: PENS, quantityRequested: 60, quantityFulfilled: 0, quantityPicked: 0 },
+      ]);
+    });
+
+    it('none before picking is settled (the confirm cannot speak there)', async () => {
+      asManager();
+      orderAt('approved', SO100_LINES);
+      await renderPage();
+      expect(lastPanelProps().departureLines).toEqual([]);
+    });
+  });
+
+  describe('the one-tap fixes on a short line', () => {
+    it('to pick: a Short line offers "Lower to N" (what stock covers) and "Remove line"; a ready line nothing', async () => {
+      asManager();
+      orderAt('pending_approval', [orderLine('LA', 'iA', 20), orderLine('LB', 'iB', 25)]);
+      readinessResult.mockResolvedValue(
+        readinessOk(
+          orderReadinessFacts(
+            ORDER_ID,
+            'pending_approval',
+            [
+              { lineId: 'LA', itemId: 'iA', requested: 20 },
+              { lineId: 'LB', itemId: 'iB', requested: 25 },
+            ],
+            [visibleItemFacts('iA', { here: { rack: 40 } }), visibleItemFacts('iB', { here: { rack: 10 } })],
+          ),
+        ),
+      );
+
+      await renderPage();
+
+      expect(fixesFor('LA')).toBeUndefined();
+      expect(fixesFor('LB')).toMatchObject({
+        orderId: ORDER_ID,
+        lineId: 'LB',
+        itemName: 'Item iB',
+        quantityRequested: 25,
+        fixes: {
+          actions: [
+            { kind: 'lower', quantity: 10, label: 'Lower to 10' },
+            { kind: 'remove', label: 'Remove line' },
+          ],
+          note: null,
+        },
+      });
+      // The row the confirms send people to.
+      const row = document.getElementById('order-line-LB')!;
+      expect(row.tagName).toBe('TR');
+      expect(row).toHaveAttribute('tabindex', '-1');
+    });
+
+    // Review 2026-09-28: the one-click completion confirm names a line
+    // waiting on a PO as short ("Item iP: 0 of 60") and "Review short lines"
+    // focuses its row, so that row must carry its fix.
+    it('to pick: a line waiting on a PO that the completion confirm names short carries its fix', async () => {
+      asManager();
+      orderAt('picking_in_progress', [orderLine('LN', 'iN', 30), orderLine('LP', 'iP', 60)]);
+      readinessResult.mockResolvedValue(
+        readinessOk(
+          orderReadinessFacts(
+            ORDER_ID,
+            'picking_in_progress',
+            [
+              { lineId: 'LN', itemId: 'iN', requested: 30 },
+              { lineId: 'LP', itemId: 'iP', requested: 60 },
+            ],
+            [
+              visibleItemFacts('iN', { here: { rack: 30 }, heldOwn: 30 }),
+              visibleItemFacts('iP', {
+                inbound: {
+                  rows: [
+                    { poId: 'po-1', poNumber: 'PO-2026-0042', status: 'ordered', expectedAt: '2026-10-03T16:00:00Z', remaining: 60 },
+                  ],
+                  hiddenRemaining: 0,
+                  truncated: false,
+                  truncatedRemaining: 0,
+                },
+              }),
+            ],
+          ),
+        ),
+      );
+
+      await renderPage();
+
+      expect(lastPanelProps().completionConfirm).toMatchObject({ focusLineId: 'LP' });
+      expect(fixesFor('LN')).toBeUndefined();
+      expect(fixesFor('LP')).toMatchObject({
+        lineId: 'LP',
+        fixes: { actions: [{ kind: 'remove', label: 'Remove line' }], note: null },
+      });
+    });
+
+    it('picked: "Remove from order" for a line nothing was picked for, "Lower to what was picked" for a partial one', async () => {
+      asManager();
+      orderAt('staged_for_pickup', [
+        orderLine('LN', 'iN', 60, { quantity_picked: 30 }),
+        orderLine('LP', 'iP', 60, { quantity_picked: 0 }),
+      ]);
+
+      await renderPage();
+
+      // Judged from the lines alone: the picked phase shows no readiness.
+      expect(screen.queryByTestId('readiness-strip')).toBeNull();
+      expect(fixesFor('LN')).toMatchObject({
+        fixes: { actions: [{ kind: 'lower', quantity: 30, label: 'Lower to what was picked (30)' }], note: null },
+      });
+      expect(fixesFor('LP')).toMatchObject({
+        fixes: { actions: [{ kind: 'remove', label: 'Remove from order' }], note: null },
+      });
+    });
+
+    it('out for delivery the lines are final: the note, to the people who could have edited them', async () => {
+      asManager();
+      orderAt('in_transit', [orderLine('LN', 'iN', 60, { quantity_picked: 60 }), orderLine('LP', 'iP', 60, { quantity_picked: 0 })]);
+      await renderPage();
+      expect(fixesFor('LN')).toBeUndefined();
+      expect(fixesFor('LP')).toMatchObject({ fixes: { actions: [], note: SHORT_LINE_FINAL_NOTE } });
+
+      shortLineFixesProps.mockClear();
+      as('staff', ['items:update']);
+      await renderPage();
+      expect(shortLineFixesProps).not.toHaveBeenCalled();
+    });
+
+    it('never for a viewer who may not edit the lines', async () => {
+      as('staff', ['items:update']);
+      orderAt('pending_approval', [orderLine('LB', 'iB', 25), orderLine('LA', 'iA', 5)]);
+      readinessResult.mockResolvedValue(
+        readinessOk(
+          orderReadinessFacts(
+            ORDER_ID,
+            'pending_approval',
+            [
+              { lineId: 'LB', itemId: 'iB', requested: 25 },
+              { lineId: 'LA', itemId: 'iA', requested: 5 },
+            ],
+            [visibleItemFacts('iB', { here: { rack: 10 } }), visibleItemFacts('iA', { here: { rack: 10 } })],
+          ),
+        ),
+      );
+
+      await renderPage();
+
+      expect(screen.getAllByTestId('readiness-line').map((c) => c.getAttribute('data-state'))).toContain('short');
+      expect(shortLineFixesProps).not.toHaveBeenCalled();
+    });
   });
 });

@@ -43,6 +43,7 @@ import { showWriteCta } from '@/lib/cta-gating';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { readItemElsewhere } from '@/lib/holdings-elsewhere';
 import { signItemImage } from '@/lib/image-cache';
+import { departureConfirmButtons } from '@/lib/order-departure';
 import { resizeForUpload } from '@/lib/image-resize';
 import { SCAN_ADJUST_REASON, submitItemAdjust } from '@/lib/item-adjust';
 import {
@@ -51,6 +52,7 @@ import {
   holdingsKnownInFull,
 } from '@/lib/placement-rows';
 import { resolveScanMatches, sanitizeScanCode } from '@/lib/scan-resolve';
+import { readSignatureOrder, scanSignatureDeparture } from '@/lib/scan-signature-departure';
 import { supabase } from '@/lib/supabase';
 import {
   unconfirmedStock,
@@ -391,11 +393,28 @@ export default function Scan() {
     // Extract the token from the scanned URL and open the SignaturePadModal
     // instead of the system browser. Spoofed QRs can't inject a different host
     // because parseSignToken only extracts the token path segment.
+    // F2-2: the signature hands the order over, so first ask, as the order
+    // screen's Collect signature does, when a line was not fully picked (core
+    // describeDepartureRisk over the slip's order). An order that cannot be
+    // read here opens the pad as before: never blocked for want of facts.
     const signToken = parseSignToken(data);
     if (signToken) {
-      setSignatureToken(signToken);
-      setSignatureModalVisible(true);
+      const scanned = await readSignatureOrder(supabase, orgId, signToken);
+      const risk = scanSignatureDeparture(scanned);
       setBusy(false);
+      if (!risk) {
+        openSignaturePad(signToken);
+        return;
+      }
+      Alert.alert(risk.title, risk.message, departureConfirmButtons(risk, {
+        // "Fix the order" opens the order, where its line fixes are; "Go
+        // back" (out for delivery, lines final) just returns to scanning.
+        onFix: (lineId) => {
+          reset();
+          if (lineId && scanned) router.push(`/order/${scanned.orderId}` as Href);
+        },
+        onProceed: () => openSignaturePad(signToken),
+      }));
       return;
     }
 
@@ -482,6 +501,12 @@ export default function Scan() {
     }
     showScannedItem(found);
     setBusy(false);
+  }
+
+  /** The in-app signature pad for a scanned packing slip's token. */
+  function openSignaturePad(token: string) {
+    setSignatureToken(token);
+    setSignatureModalVisible(true);
   }
 
   function reset() {

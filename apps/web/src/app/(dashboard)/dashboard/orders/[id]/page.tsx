@@ -6,8 +6,9 @@ import * as React from 'react';
 import { AddItemsDialog } from '@/components/orders/add-items-dialog';
 import type { DriverOption } from '@/components/orders/assign-delivery-dialog';
 import { CancelOrderButton } from '@/components/orders/cancel-order-button';
+import { orderLineAnchorId } from '@/components/orders/focus-order-line';
 import { ManagerActionsPanel } from '@/components/orders/manager-actions-panel';
-import { OrderLineActions } from '@/components/orders/order-line-actions';
+import { OrderLineActions, ShortLineFixes } from '@/components/orders/order-line-actions';
 import { DeliveryLocationShare } from '@/components/orders/delivery-location-share';
 import { ReportProblemButton } from '@/components/maintenance/report-problem-button';
 import { CreateReturnDialog } from '@/components/returns/create-return-dialog';
@@ -37,14 +38,17 @@ import {
 } from '@/components/ui/table';
 import {
   approveShortNotice,
+  assessPickedLine,
   can,
   deliveryRecipientsForRouting,
+  describeCompletionConfirm,
   describeLineReturnRefs,
   describeReturnLine,
   describeUnpickedShortfall,
   formatOrderNumber,
   formatOrderReturnSummary,
   isManagerOrAbove,
+  isPickingSettled,
   lineOwedUnits,
   ORDER_LINE_HIDDEN_ITEM_NAME,
   ORDER_RETURN_SUMMARY_NOTE,
@@ -52,6 +56,7 @@ import {
   orderReadinessPhase,
   orderReturnSummary,
   orderStockGates,
+  projectCompletePicking,
   readinessAudience,
   readinessStockFlags,
   reconcileReadiness,
@@ -59,12 +64,16 @@ import {
   returnedFragment,
   returnHandle,
   returnRefsByLine,
+  shortLineActions,
+  shouldOfferHoldStock,
   UNPICKED_SHORTFALL_TITLE,
+  type DepartureLine,
   type OrderReadinessResult,
   type OrderReturnView,
   type OrderStockCheck,
   type OrgEmailRoutingReadState,
   type Role,
+  type ShortLineActions,
 } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
@@ -90,7 +99,7 @@ import {
   type ReturnableLine,
   type ReturnStatus,
 } from '@/server/services/returns';
-import { formatNumber, formatRelative } from '@/lib/utils';
+import { cn, formatNumber, formatRelative } from '@/lib/utils';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { ORDER_DETAIL_TOUR } from '@/lib/onboarding/tours';
 import { HelpTip } from '@/components/onboarding/help-tip';
@@ -676,6 +685,88 @@ export default async function OrderDetailPage({
     : { state: 'not_needed' };
   const stockGates = orderStockGates(request.status, stockCheck);
   const approveNotice = approveShortNotice(stockCheck);
+
+  // ── F2-2: held, and caught before it leaves. Everything below is computed
+  // from what the page already read (the order, its lines, the readiness
+  // result above): no read of its own and no round trip.
+
+  // "Hold available stock" on the strip (core shouldOfferHoldStock): an
+  // approver, a hold status, some line not held or partly held. For lines
+  // added before holds were topped up, or by someone who may not approve.
+  const holdOrderId = shouldOfferHoldStock({
+    assessment: readinessAssessment,
+    canApproveOrders: canApprove,
+  })
+    ? id
+    : null;
+
+  // The confirm before "Mark picking complete" (the SO-000100 button): core
+  // projectCompletePicking over the same readiness result, worded by core
+  // describeCompletionConfirm. Only for a viewer who can pick (the button is
+  // theirs alone; its numbers are stock numbers). A failed or missing read is
+  // a confirm too ("Stock couldn't be checked"): never skipped for want of
+  // facts.
+  const completionProjection =
+    isPickingStatus && readinessNow?.state === 'ok'
+      ? projectCompletePicking(readinessNow.assessment)
+      : null;
+  const completionConfirm =
+    isPickingStatus && viewerCanPick
+      ? describeCompletionConfirm(completionProjection, completionProjection === null)
+      : null;
+
+  // The lines as the departure confirm reads them (core describeDepartureRisk
+  // in the actions panel): staging, "Mark in transit" and both signatures stop
+  // for a confirm when a line is not fully picked. Lines only, so the same
+  // numbers the table shows; only where picking is settled (where the confirm
+  // can speak).
+  const departureLines: DepartureLine[] = isPickingSettled(request.status)
+    ? lines.map((l) => ({
+        lineId: l.id,
+        itemName: orderLineItemName(l.item),
+        quantityRequested: l.quantity_requested,
+        quantityFulfilled: l.quantity_fulfilled,
+        quantityPicked: l.quantity_picked,
+      }))
+    : [];
+
+  // One-tap fixes on a short line (core shortLineActions, decision D18): to
+  // pick, a line readiness calls Short; after picking, a line not fully picked
+  // (judged from the line alone, core assessPickedLine). Offered to the people
+  // who may edit the lines (the row controls' gate); out for delivery the
+  // lines are final and the note says what happens instead, shown to the
+  // people who could have edited them before.
+  const pickedPhase = isPickingSettled(request.status);
+  const showShortLineFixes =
+    canEditLines || (request.status === 'in_transit' && (canApprove || isOwnRequest));
+  const shortFixesFor = (lineId: string, rowIndex: number): ShortLineActions | null => {
+    if (!showShortLineFixes) return null;
+    const isOnlyLine = lines.length === 1;
+    let fixes: ShortLineActions | null = null;
+    if (readinessAssessment) {
+      const line = readinessLineById.get(lineId);
+      fixes = line ? shortLineActions({ phase: 'to_pick', line, isOnlyLine }) : null;
+    } else if (pickedPhase) {
+      const l = lines.find((x) => x.id === lineId);
+      fixes = l
+        ? shortLineActions({
+            phase: 'picked',
+            status: request.status,
+            line: assessPickedLine({
+              lineId: l.id,
+              itemId: l.item_id,
+              position: rowIndex + 1,
+              requested: Number(l.quantity_requested) || 0,
+              fulfilled: Number(l.quantity_fulfilled) || 0,
+              picked: l.quantity_picked === null ? null : Number(l.quantity_picked) || 0,
+            }),
+            isOnlyLine,
+          })
+        : null;
+    }
+    // A line that is not short has no fix and nothing to say.
+    return fixes && (fixes.actions.length > 0 || fixes.note) ? fixes : null;
+  };
   const showLiveTrackingShare = liveTrackingGate && (liveTrackingAccess?.enabled ?? false);
   const { pickers, assignedPickerName } = pickerResult;
   const canBuyLabel = shippingModuleGate && (shippingAccess?.enabled ?? false);
@@ -1052,8 +1143,10 @@ export default async function OrderDetailPage({
                 </p>
               </div>
             )}
-            {/* Readiness (F2-1), directly above the lines it describes. */}
-            {readinessStrip && <ReadinessStrip view={readinessStrip} />}
+            {/* Readiness (F2-1), directly above the lines it describes; with
+                "Hold available stock" for an approver when a line is not
+                held (F2-2). */}
+            {readinessStrip && <ReadinessStrip view={readinessStrip} holdOrderId={holdOrderId} />}
             <Table>
               <TableHeader>
                 <TableRow>
@@ -1112,13 +1205,23 @@ export default async function OrderDetailPage({
                     quantityRequested: l.quantity_requested,
                     quantityFulfilled: l.quantity_fulfilled,
                   });
+                  const shortFixes = shortFixesFor(l.id, rowIndex);
                   return (
                     // With readiness under the item name the row is taller:
                     // every cell starts at the top, so the numbers and the
                     // line's controls sit level with the item's name.
+                    //
+                    // The row is where the completion and departure confirms
+                    // send someone ("Review short lines", "Fix the order",
+                    // F2-2): it has an id and takes focus from script only.
                     <TableRow
                       key={l.id}
-                      className={readinessAssessment ? '[&>td]:align-top' : undefined}
+                      id={orderLineAnchorId(l.id)}
+                      tabIndex={-1}
+                      className={cn(
+                        'scroll-mt-24 focus:outline-none data-[review=true]:bg-amber-50/70 dark:data-[review=true]:bg-amber-950/30',
+                        readinessAssessment || shortFixes ? '[&>td]:align-top' : undefined,
+                      )}
                     >
                       <TableCell>
                         {l.item ? (
@@ -1163,6 +1266,19 @@ export default async function OrderDetailPage({
                               position={rowIndex + 1}
                             />
                           </div>
+                        )}
+                        {/* The one-tap fix on a short line (F2-2): Lower or
+                            Remove, under the line it fixes, in the Item cell
+                            (a column of its own would push the row's edit
+                            controls out of the card). */}
+                        {shortFixes && (
+                          <ShortLineFixes
+                            orderId={id}
+                            lineId={l.id}
+                            itemName={orderLineItemName(l.item)}
+                            quantityRequested={Number(l.quantity_requested) || 0}
+                            fixes={shortFixes}
+                          />
                         )}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
@@ -1316,6 +1432,8 @@ export default async function OrderDetailPage({
               canApprove={canApprove}
               stockGates={stockGates}
               approveNotice={approveNotice}
+              completionConfirm={completionConfirm}
+              departureLines={departureLines}
               orderId={id}
               status={request.status}
               internalNotes={request.internal_notes}

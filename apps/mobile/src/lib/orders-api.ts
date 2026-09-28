@@ -1,3 +1,5 @@
+import { parseHoldOrderStockResult, type HoldOrderStockResult } from '@stockpilot/core';
+
 import { api } from './api';
 import type { CreateReturnBody } from './order-returns';
 
@@ -45,11 +47,30 @@ export type OrderAction =
   // remainder, or close as delivered-partial keeping what shipped.
   | { action: 'resume_fulfillment' }
   | { action: 'close_partial' }
-  | { action: 'cancel'; reason?: string };
+  | { action: 'cancel'; reason?: string }
+  // F2-2 "Hold available stock" (approvers, at approved / pick slip generated
+  // / picking): answers { hold } instead of { order }; see holdOrderStock.
+  | { action: 'hold_stock' };
 
 /** Advance an order. Throws (with the server's message) on a non-2xx. */
 export async function transitionOrder(orderId: string, body: OrderAction): Promise<void> {
   await api(`/api/v1/orders/${orderId}/transition`, { method: 'POST', body });
+}
+
+/**
+ * "Hold available stock" (F2-2): tops the order's holds up to what its lines
+ * still owe, as far as free stock allows (hold_order_stock, 0378). Answers
+ * what was held and what is still short; core describeHoldResult words it.
+ * Throws the server's message on a refusal (403 not an approver or no write
+ * access to the warehouse, 409 not approved or being picked, or busy), and on
+ * an answer it cannot read (never a guessed number).
+ */
+export async function holdOrderStock(orderId: string): Promise<HoldOrderStockResult> {
+  const res = await api<{ hold: unknown }>(`/api/v1/orders/${orderId}/transition`, {
+    method: 'POST',
+    body: { action: 'hold_stock' } satisfies OrderAction,
+  });
+  return parseHoldOrderStockResult(res.hold);
 }
 
 /**

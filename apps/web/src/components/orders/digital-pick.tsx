@@ -6,7 +6,12 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { lineOwedUnits } from '@stockpilot/core';
+import {
+  digitalPickCompletionConfirm,
+  lineOwedUnits,
+  orderLineItemName,
+  type OrderReadinessResult,
+} from '@stockpilot/core';
 
 import { FefoLotHint } from '@/components/orders/fefo-lot-hint';
 import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
@@ -26,6 +31,12 @@ import {
 import type { OrderRequestLineWithItem } from '@/server/services/order-requests';
 import type { FefoSuggestion } from '@/server/services/lots';
 
+/** The DOM id of a line's picked-quantity field ("Review short lines" lands
+ *  on the first short one). */
+function pickLineInputId(lineId: string): string {
+  return `pick-line-${lineId}`;
+}
+
 interface DigitalPickProps {
   orderId: string;
   initialLines: OrderRequestLineWithItem[];
@@ -35,6 +46,15 @@ interface DigitalPickProps {
   canPick: boolean;
   /** Display name of the current claimant, for the locked notice. */
   assignedPickerName: string | null;
+  /**
+   * The order's readiness (F2-2), read by the pick page beside the order: the
+   * completion confirm projects complete_picking over it with what the picker
+   * entered (core digitalPickCompletionConfirm, the phone's too). Null or a
+   * failed read still confirms what was entered short and says stock could
+   * not be checked: the confirm is never skipped for want of facts. Required,
+   * so no caller can skip it by leaving it out.
+   */
+  readiness: OrderReadinessResult | null;
   lotSerial?: { enabled: boolean; fefoByItemId: Record<string, FefoSuggestion[]> };
 }
 
@@ -43,6 +63,7 @@ export function DigitalPick({
   initialLines,
   canPick,
   assignedPickerName,
+  readiness,
   lotSerial,
 }: DigitalPickProps) {
   const router = useRouter();
@@ -112,22 +133,34 @@ export function DigitalPick({
   const allLinesPicked = initialLines.every((l) => (picked[l.id] ?? 0) > 0);
   const anyLinePicked = initialLines.some((l) => (picked[l.id] ?? 0) > 0);
 
-  // Short-completion guard: how much this batch ships vs how much stays owed
-  // after it. If anything is still owed, completing forks the order to
-  // backordered — confirm before doing that silently.
-  const shipsNow = initialLines.reduce((s, l) => s + (picked[l.id] ?? 0), 0);
-  const backorderQty = initialLines.reduce((s, l) => {
-    // Core lineOwedUnits is the one definition of owed (pattern #26).
-    const owedBefore = lineOwedUnits({
-      quantityRequested: l.quantity_requested,
-      quantityFulfilled: l.quantity_fulfilled,
-    });
-    return s + Math.max(0, owedBefore - (picked[l.id] ?? 0));
-  }, 0);
+  // Short-completion guard (F2-2): complete_picking takes min(entered, owed)
+  // per line once the entered numbers are saved, so the confirm projects the
+  // completion with what the picker ENTERED, over the order's readiness (core
+  // digitalPickCompletionConfirm, word for word what the phone's digital pick
+  // and the one-click "Mark picking complete" say). It speaks when a line
+  // comes up short ("Not everything will be picked. L4L - Pen Black & Rose
+  // Gold: 0 of 60. ..."), when the pick would fail (units still in Staging),
+  // and when stock could not be checked; otherwise Complete runs at once.
+  const completionConfirm = digitalPickCompletionConfirm(
+    initialLines.map((l) => ({
+      id: l.id,
+      itemName: l.item?.name ?? null,
+      // Core lineOwedUnits is the one definition of owed (pattern #26).
+      owed: lineOwedUnits({
+        quantityRequested: l.quantity_requested,
+        quantityFulfilled: l.quantity_fulfilled,
+      }),
+      picking: picked[l.id] ?? 0,
+    })),
+    readiness,
+  );
   const [confirmOpen, setConfirmOpen] = React.useState(false);
+  // "Review short lines" lands on the first short line's quantity, once the
+  // dialog has closed (it hands focus back to its opener otherwise).
+  const reviewAfterClose = React.useRef<string | null>(null);
 
   function onCompleteClick() {
-    if (backorderQty > 0) {
+    if (completionConfirm) {
       setConfirmOpen(true);
       return;
     }
@@ -184,6 +217,8 @@ export function DigitalPick({
             </div>
             <div className="mt-3 flex items-center gap-2">
               <BlankZeroNumberInput
+                id={pickLineInputId(line.id)}
+                aria-label={`Picked quantity for ${orderLineItemName(line.item)}`}
                 min={0}
                 max={requested}
                 value={current}
@@ -243,31 +278,51 @@ export function DigitalPick({
         </Button>
       </div>
 
-      {/* Short-completion confirm — completing now backorders the shortfall. */}
+      {/* Short-completion confirm (F2-2): which lines come up short, what
+          would stop the pick, what could not be checked, in core's words.
+          "Review short lines" goes back to the first short line; "Complete
+          picking" goes ahead, and what was not picked is owed at hand-over
+          (the server stays permissive: shipping short is legitimate). */}
       <Dialog
-        open={confirmOpen}
+        open={confirmOpen && completionConfirm !== null}
         onOpenChange={(v) => {
           if (completing) return;
           setConfirmOpen(v);
         }}
       >
-        <DialogContent className="max-w-md">
+        <DialogContent
+          className="max-w-md"
+          data-testid="completion-confirm"
+          onCloseAutoFocus={(e) => {
+            const lineId = reviewAfterClose.current;
+            reviewAfterClose.current = null;
+            const input = lineId ? document.getElementById(pickLineInputId(lineId)) : null;
+            if (!input) return;
+            e.preventDefault();
+            input.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+            input.focus({ preventScroll: true });
+          }}
+        >
           <DialogHeader>
-            <DialogTitle>Ship short and backorder the rest?</DialogTitle>
-            <DialogDescription>
-              This ships {shipsNow} {shipsNow === 1 ? 'unit' : 'units'} now and
-              backorders {backorderQty} {backorderQty === 1 ? 'unit' : 'units'}.
-              The order stays open as “Backordered” so you can fulfill the
-              remainder once stock is available.
+            <DialogTitle>{completionConfirm?.title}</DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-2">
+                {completionConfirm?.paragraphs.map((p, i) => (
+                  <p key={i}>{p}</p>
+                ))}
+              </div>
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setConfirmOpen(false)}
+              onClick={() => {
+                reviewAfterClose.current = completionConfirm?.focusLineId ?? null;
+                setConfirmOpen(false);
+              }}
               disabled={completing}
             >
-              Keep picking
+              {completionConfirm?.reviewLabel}
             </Button>
             <Button
               variant="gradient"
@@ -278,7 +333,7 @@ export function DigitalPick({
               disabled={completing}
             >
               {completing ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Ship {shipsNow} &amp; backorder {backorderQty}
+              {completionConfirm?.confirmLabel}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -28,6 +28,70 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'order-held-and-caught-2026-10',
+    revision: 1,
+    // F2-2 (0378). DRAFT until the phone update (pnpm release:ota: the phone's
+    // digital pick confirm, the departure confirms, the short-line fixes and
+    // the hold notices) and the Demo Co walk. A draft never leaves the server
+    // (visibleReleases, registryFingerprint), so merging the web page
+    // announces nothing. The follow-up that publishes it sets 'published',
+    // sets publishedAt to the real time (still the newest), and flips the pin
+    // in registry.test.ts. Every sentence must be true on both platforms then.
+    //
+    // Addressed where Orders is on. The confirms are for whoever completes,
+    // stages, sends out or signs for an order (items:update, orders:approve);
+    // the line fixes are also on a requester's own order after picking
+    // (orders:request). The holds entry is for approvers (who hold) and for
+    // everyone who places orders (the storefront shows less available: the
+    // behaviour change the plan says to state). Each sentence says who gets
+    // what (review 2026-09-28): the fixes are for people who can change the
+    // order's lines, the digital pick's Review goes to the count, and "Not
+    // held" is what approvers see on the full readiness panel.
+    status: 'draft',
+    title: 'Short lines are caught before an order leaves, and added items are held',
+    summary:
+      'On the web and in the mobile app, completing a pick, staging an order, sending it out for delivery and recording a signature now stop first when a line is short, and name it. When someone who can approve orders adds items to an approved order, or raises a line, the order is held straight away: the new units, and anything else on it not yet held, as far as there is free stock, so the storefront and other orders show fewer of those items available.',
+    publishedAt: '2026-10-02T17:00:00Z',
+    audience: { modules: ['orders'] },
+    entries: [
+      {
+        id: 'order-short-lines-caught',
+        category: 'new',
+        area: 'Orders',
+        title: 'Short lines are caught before an order leaves',
+        whatChanged:
+          "Completing a pick now stops first when a line will come up short and names it, for example: Not everything will be picked. L4L - Pen Black & Rose Gold: 0 of 60. It also says when picking can't finish until units in Staging are put away, and when stock couldn't be checked. Staging an order, marking it in transit and recording a signature, digital or on paper, from the order or from a packing slip scanned in the mobile app, also stop first when a line was not fully picked.",
+        whyItMatters:
+          'Mark picking complete could leave a line with nothing picked without saying so, and the order could be out for delivery minutes later with that line still missing.',
+        howItAffectsYou:
+          "In the digital pick, Review short lines puts you on the short line's count, to check what was entered. On the order, Review short lines and Fix the order take you to the first short line. If you can approve orders, a line that stock does not cover now, including one waiting on a PO, offers Lower to what stock covers or Remove line; after picking, a line not fully picked offers Lower to what was picked or Remove from order, if you can approve orders or it is your own order. Remove is offered only when nothing on the line was picked or handed over and it is not the order's only line.",
+        whatToDo:
+          "When a confirm names a short line, check the count, or lower or remove the line. You can still go ahead: what was not picked is owed at hand-over, as before. Once an order is out for delivery its lines can't be changed.",
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: {
+          anyPermission: ['items:update', 'orders:approve', 'orders:request'],
+          modules: ['orders'],
+        },
+      },
+      {
+        id: 'order-added-items-held',
+        category: 'improved',
+        area: 'Orders',
+        title: 'Items added to an approved order are now held',
+        whatChanged:
+          "When someone who can approve orders adds items to an order that is approved or being picked, or raises a line's quantity, the new units are held for the order straight away, along with anything else on the order not yet held, as far as there is free stock, and you are told what was held and what could not be. On the order, Hold available stock holds what its lines still need, as far as stock is free: for lines added before this change, or by someone who can't approve orders.",
+        whyItMatters:
+          'Stock was held for an order only when it was approved, so items added afterwards were never held, and another order could take the same units first.',
+        howItAffectsYou:
+          "This changes what is shown as available: once they are held, the storefront and other orders show fewer of those items available. Holding never moves stock, never takes stock another order holds, and never stops an item being added. A line added or raised by someone who can't approve orders is not held until someone who can holds it: with Hold available stock, or by adding or raising a line on that order. On the order, people who can approve orders see such a line as Not held.",
+        whatToDo:
+          'If you can approve orders: on an approved order whose lines say Not held, or Held 20 of 40, choose Hold available stock. Otherwise, no action is needed.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: { anyPermission: ['orders:approve', 'orders:request'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
     id: 'maintenance-review-wording-2026-09',
     revision: 1,
     // Owner-approved wording (2026-09-28). The sentence is on the web's review

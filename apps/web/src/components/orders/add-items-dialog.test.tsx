@@ -86,7 +86,7 @@ describe('AddItemsDialog', () => {
     fetchSpy.mockResolvedValue(jsonResponse([]));
     addLines.mockResolvedValue({
       ok: true,
-      data: { added: 1, merged: 0, pickSlipStale: false },
+      data: { added: 1, merged: 0, pickSlipStale: false, hold: null },
     });
   });
 
@@ -272,7 +272,7 @@ describe('AddItemsDialog', () => {
     fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'a', name: 'Widget' })]));
     addLines.mockResolvedValue({
       ok: true,
-      data: { added: 2, merged: 1, pickSlipStale: false },
+      data: { added: 2, merged: 1, pickSlipStale: false, hold: null },
     });
     const user = await open();
 
@@ -293,7 +293,7 @@ describe('AddItemsDialog', () => {
     fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'a', name: 'Widget' })]));
     addLines.mockResolvedValue({
       ok: true,
-      data: { added: 1, merged: 0, pickSlipStale: true },
+      data: { added: 1, merged: 0, pickSlipStale: true, hold: null },
     });
     const user = await open();
 
@@ -304,6 +304,82 @@ describe('AddItemsDialog', () => {
       expect(toastMock.warning).toHaveBeenCalledWith(
         'The printed pick slip is now out of date. Generate it again before picking.',
         { duration: 8000 },
+      );
+    });
+  });
+
+  // F2-2: an approver's add at a hold status is held at once; the outcome is
+  // said, and a failure is never swallowed (the add itself stands).
+  it('says the add stands but its stock was not held when the automatic hold failed', async () => {
+    fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'a', name: 'Widget' })]));
+    addLines.mockResolvedValue({
+      ok: true,
+      data: {
+        added: 1,
+        merged: 0,
+        pickSlipStale: false,
+        hold: { ok: false, reason: 'busy', message: 'Someone else is changing this order or its items right now. Try again in a moment.' },
+      },
+    });
+    const user = await open();
+
+    await user.click(await screen.findByRole('button', { name: 'Select Widget' }));
+    await user.click(screen.getByRole('button', { name: /add to order/i }));
+
+    await vi.waitFor(() => {
+      expect(toastMock.warning).toHaveBeenCalledWith(
+        'Added. Stock was not held for it; use Hold available stock.',
+        expect.objectContaining({
+          description: 'Someone else is changing this order or its items right now. Try again in a moment.',
+        }),
+      );
+    });
+    expect(toastMock.success).toHaveBeenCalledWith('1 item added.');
+    expect(refreshSpy).toHaveBeenCalled();
+  });
+
+  it('says what the automatic hold held for the added items', async () => {
+    fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'a', name: 'Widget' })]));
+    addLines.mockResolvedValue({
+      ok: true,
+      data: {
+        added: 1,
+        merged: 0,
+        pickSlipStale: false,
+        hold: { ok: true, held: [{ itemId: 'a', added: 1 }], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 },
+      },
+    });
+    const user = await open();
+
+    await user.click(await screen.findByRole('button', { name: 'Select Widget' }));
+    await user.click(screen.getByRole('button', { name: /add to order/i }));
+
+    await vi.waitFor(() => {
+      expect(toastMock.success).toHaveBeenCalledWith('Held 1 unit for this order.');
+    });
+    expect(toastMock.warning).not.toHaveBeenCalled();
+  });
+
+  it("warns when an item the adder can't see could not be fully held (counted, never numbered)", async () => {
+    fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'a', name: 'Widget' })]));
+    addLines.mockResolvedValue({
+      ok: true,
+      data: {
+        added: 1,
+        merged: 0,
+        pickSlipStale: false,
+        hold: { ok: true, held: [], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 1 },
+      },
+    });
+    const user = await open();
+
+    await user.click(await screen.findByRole('button', { name: 'Select Widget' }));
+    await user.click(screen.getByRole('button', { name: /add to order/i }));
+
+    await vi.waitFor(() => {
+      expect(toastMock.warning).toHaveBeenCalledWith(
+        "1 item that isn't visible to you could not be fully held.",
+        expect.anything(),
       );
     });
   });

@@ -311,6 +311,23 @@ PGTAP_TESTS=(
   # fixture packages/core/src/orders/readiness-parity-cases.json, and pins
   # the md5 of every function F2 promises not to touch.
   supabase/tests/0377_order_readiness_facts.test.sql
+  # Hold available stock (F2-2, 0378): hold_order_stock writes holds
+  # (stock_reservations) past RLS, so it is SECURITY DEFINER with its gates
+  # in its body: signed in (42501); not a member of the order's org, a
+  # disabled member, a missing or foreign order: the SAME P0002; the orders
+  # module (P0001 module_disabled); the approve gate, manager or
+  # orders:approve (42501, so a viewer or a requester without it never
+  # creates a commitment, and staff with an orders:approve override may, as
+  # approve lets them); write access to the order's warehouse (42501); a
+  # hold status only (P0001 hold_not_applicable). It refuses only with
+  # P0001, P0002 or 42501, never 40001/40P01, writes nothing but holds, never
+  # more than on hand less every active hold (rentals' included), gives
+  # quantities only for items the caller can read (a charter-scoped
+  # approver's unreadable item is held the same and only counted), and locks
+  # the order and then its items in id order, as approve does. The race for
+  # the last units and the lock order against approve and complete_picking,
+  # in both start orders, are scripts/db-concurrency/0378_hold_race.sh.
+  supabase/tests/0378_order_hold_stock.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql

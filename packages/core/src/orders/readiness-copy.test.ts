@@ -6,8 +6,14 @@ import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 import {
+  COMPLETION_CONFIRM_LABEL,
+  COMPLETION_CONFIRM_TITLE,
+  COMPLETION_REVIEW_LABEL,
+  describeCompletionConfirm,
   describeCompletionProjection,
+  describeShortPickLines,
   describeReadinessForRequester,
+  digitalPickCompletionConfirm,
   describeReadinessHold,
   describeReadinessLine,
   describeReadinessRollup,
@@ -519,6 +525,139 @@ describe('holds, why, needed-by, roll-up, requester, completion, offline', () =>
     expect(describeCompletionProjection(projectCompletePicking(fine), false)).toBeNull();
   });
 
+  it('completion confirm (F2-2): the SO-000100 button', () => {
+    // SO-000100: the pens were written off to 0 after approval; one-click
+    // completion took 0 of 60 with no prompt.
+    const so100 = assess('pick_slip_generated', [
+      { item: 'nb', requested: 30 },
+      { item: 'pen', requested: 60 },
+      { item: 'nb', requested: 30 },
+    ], [
+      item('nb', { name: 'Notebook', heldOwn: 60, here: { rack: 60, site: 0, unplaced: 0, staging: 0 } }),
+      item('pen', { name: 'L4L - Pen Black & Rose Gold', heldOwn: 60, onHand: 0 }),
+    ]);
+    expect(describeCompletionConfirm(projectCompletePicking(so100), false)).toEqual({
+      title: 'Before you complete picking',
+      paragraphs: [
+        'Not everything will be picked. L4L - Pen Black & Rose Gold: 0 of 60. It will be owed at hand-over, or you can remove it from the order first.',
+      ],
+      reviewLabel: 'Review short lines',
+      confirmLabel: 'Complete picking',
+      focusLineId: 'l2',
+    });
+    // A pick that would fail (Staging) and nothing short: focus its line.
+    const staging = assess('pick_slip_generated', [{ item: 'a', requested: 1 }, { item: 'maus', requested: 10 }], [
+      item('a', { heldOwn: 1, here: { rack: 1, site: 0, unplaced: 0, staging: 0 } }),
+      item('maus', { name: 'Maus I', heldOwn: 10, here: { rack: 6, site: 0, unplaced: 0, staging: 4 } }),
+    ]);
+    const c = describeCompletionConfirm(projectCompletePicking(staging), false);
+    expect(c?.paragraphs).toEqual(["Picking can't finish until 4 of Maus I in Staging are put away."]);
+    expect(c?.focusLineId).toBe('l2');
+    // The check failed: the confirm is never skipped, and focuses nothing.
+    expect(describeCompletionConfirm(null, true)).toEqual({
+      title: 'Before you complete picking',
+      paragraphs: ["Stock couldn't be checked. Picking may come up short."],
+      reviewLabel: 'Review short lines',
+      confirmLabel: 'Complete picking',
+      focusLineId: null,
+    });
+    expect(describeCompletionConfirm(projectCompletePicking(so100), true)?.paragraphs).toEqual([
+      "Stock couldn't be checked. Picking may come up short.",
+    ]);
+    // Nothing short, nothing failing, everything checked: no confirm.
+    const fine = assess('pick_slip_generated', [{ item: 'a', requested: 1 }], [
+      item('a', { heldOwn: 1, here: { rack: 1, site: 0, unplaced: 0, staging: 0 } }),
+    ]);
+    expect(describeCompletionConfirm(projectCompletePicking(fine), false)).toBeNull();
+    // An item that cannot be checked: said, never skipped.
+    const hidden = assess('pick_slip_generated', [{ item: 'h', requested: 1 }], [{ itemId: 'h', visible: false }]);
+    expect(describeCompletionConfirm(projectCompletePicking(hidden), false)?.paragraphs).toEqual([
+      "Stock couldn't be checked for 1 item. Picking may come up short.",
+    ]);
+  });
+
+  it('the digital pick says the same sentence from what the picker entered', () => {
+    expect(describeShortPickLines([{ itemName: 'Pens', batch: 60, owed: 60 }])).toBeNull();
+    expect(describeShortPickLines([])).toBeNull();
+    expect(describeShortPickLines([{ itemName: 'L4L - Pen Black & Rose Gold', batch: 0, owed: 60 }])).toBe(
+      'Not everything will be picked. L4L - Pen Black & Rose Gold: 0 of 60. It will be owed at hand-over, or you can remove it from the order first.',
+    );
+    expect(
+      describeShortPickLines([
+        { itemName: 'Pens', batch: 2, owed: 60 },
+        { itemName: 'Maus I', batch: 10, owed: 10 },
+        { itemName: null, batch: null, owed: 1 },
+      ]),
+    ).toBe(
+      'Not everything will be picked. Pens: 2 of 60; An item: 0 of 1. They will be owed at hand-over, or you can remove them from the order first.',
+    );
+  });
+
+  it('the digital pick confirm (F2-2): the projection of what the picker entered, never skipped', () => {
+    const lines = [
+      { id: 'l1', itemName: 'Notebook', owed: 60, picking: 60 },
+      { id: 'l2', itemName: 'L4L - Pen Black & Rose Gold', owed: 60, picking: 0 },
+    ];
+    const so100 = assess('picking_in_progress', [
+      { item: 'nb', requested: 60 },
+      { item: 'pen', requested: 60 },
+    ], [
+      item('nb', { name: 'Notebook', heldOwn: 60, here: { rack: 60, site: 0, unplaced: 0, staging: 0 } }),
+      item('pen', { name: 'L4L - Pen Black & Rose Gold', heldOwn: 60, here: { rack: 60, site: 0, unplaced: 0, staging: 0 } }),
+    ]);
+    const ok = { state: 'ok' as const, assessment: so100 };
+    // What was ENTERED decides the batch (the pens are on the rack, but the
+    // picker entered 0).
+    expect(digitalPickCompletionConfirm(lines, ok)).toEqual({
+      title: 'Before you complete picking',
+      paragraphs: [
+        'Not everything will be picked. L4L - Pen Black & Rose Gold: 0 of 60. It will be owed at hand-over, or you can remove it from the order first.',
+      ],
+      reviewLabel: 'Review short lines',
+      confirmLabel: 'Complete picking',
+      focusLineId: 'l2',
+    });
+    // Everything entered and on the shelf: nothing to confirm.
+    const full = lines.map((l) => ({ ...l, picking: 60 }));
+    expect(digitalPickCompletionConfirm(full, ok)).toBeNull();
+    // Entered in full, but 4 of the pens are in Staging: the pick would fail.
+    const staged = assess('picking_in_progress', [{ item: 'pen', requested: 10 }], [
+      item('pen', { name: 'Maus I', heldOwn: 10, here: { rack: 6, site: 0, unplaced: 0, staging: 4 } }),
+    ]);
+    expect(
+      digitalPickCompletionConfirm([{ id: 'l1', itemName: 'Maus I', owed: 10, picking: 10 }], {
+        state: 'ok',
+        assessment: staged,
+      })?.paragraphs,
+    ).toEqual(["Picking can't finish until 4 of Maus I in Staging are put away."]);
+    // Not read, failed, or read for other lines: what was entered is named,
+    // and the check that could not be made is said. Never skipped.
+    for (const readiness of [null, { state: 'failed' as const, message: 'x' }]) {
+      expect(digitalPickCompletionConfirm(full, readiness)).toMatchObject({
+        paragraphs: ["Stock couldn't be checked. Picking may come up short."],
+        focusLineId: null,
+      });
+      expect(digitalPickCompletionConfirm(lines, readiness)).toMatchObject({
+        paragraphs: [
+          'Not everything will be picked. L4L - Pen Black & Rose Gold: 0 of 60. It will be owed at hand-over, or you can remove it from the order first.',
+          "Stock couldn't be checked. Picking may come up short.",
+        ],
+        focusLineId: 'l2',
+      });
+    }
+    const otherLines = [...lines, { id: 'l3', itemName: 'Added since', owed: 1, picking: 1 }];
+    expect(digitalPickCompletionConfirm(otherLines, ok)?.paragraphs.at(-1)).toBe(
+      "Stock couldn't be checked. Picking may come up short.",
+    );
+    // Line ids are matched whatever their case (Postgres and JS differ).
+    expect(
+      digitalPickCompletionConfirm(
+        lines.map((l) => ({ ...l, id: l.id.toUpperCase() })),
+        ok,
+      )?.paragraphs,
+    ).toHaveLength(1);
+  });
+
   it('offline and the pick error', () => {
     expect(readinessOfflineCopy('2026-09-28T21:14:00Z', { timeZone: TZ })).toBe(
       "You're offline. This is how the order looked at 2:14 PM.",
@@ -578,6 +717,11 @@ function everything(): string[] {
     }
   }
   out.push(...(describeCompletionProjection(null, true) ?? []));
+  out.push(COMPLETION_CONFIRM_TITLE, COMPLETION_REVIEW_LABEL, COMPLETION_CONFIRM_LABEL);
+  out.push(
+    describeShortPickLines([{ itemName: 'Pens', batch: 0, owed: 60 }])!,
+    describeShortPickLines([{ itemName: 'Pens', batch: 2, owed: 60 }, { itemName: null, batch: null, owed: 1 }])!,
+  );
   out.push(describeReadinessRollup({ state: 'failed', message: 'x' })!.headline);
   for (const m of [READINESS_ORDER_NOT_FOUND_COPY, READINESS_FORBIDDEN_COPY, READINESS_MODULE_OFF_COPY, READINESS_ORDER_CHANGED_COPY]) {
     out.push(describeReadinessRollup({ state: 'failed', message: m })!.detail!);
@@ -637,7 +781,14 @@ describe('honest words', () => {
 
 describe('readiness source literals', () => {
   const HERE = path.dirname(fileURLToPath(import.meta.url));
-  const files = ['readiness.ts', 'readiness-copy.ts', 'order-stock-gates.ts'];
+  const files = [
+    'readiness.ts',
+    'readiness-copy.ts',
+    'order-stock-gates.ts',
+    'order-hold.ts',
+    'short-line-actions.ts',
+    'pick-shortfall.ts',
+  ];
 
   function literals(file: string): string[] {
     const source = ts.createSourceFile(file, readFileSync(path.join(HERE, file), 'utf8'), ts.ScriptTarget.Latest, true);

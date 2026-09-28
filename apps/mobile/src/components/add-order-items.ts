@@ -1,4 +1,4 @@
-import { can, type Permission, type Role } from '@stockpilot/core';
+import { can, type HoldOutcome, type Permission, type Role } from '@stockpilot/core';
 
 import { searchWordGroups } from '../lib/count-picker';
 import { listStatusPredicate } from '../lib/expected-items';
@@ -13,7 +13,7 @@ import { extractApiErrorMessage } from '../lib/po-import-approve';
  *
  * Server contract these build against (PINNED — apps/web .../orders/[id]/lines):
  *   POST /api/v1/orders/[id]/lines  { lines: [{ itemId, quantity }] }
- *     → 200 { ok: true, added, merged, pickSlipStale }
+ *     → 200 { ok: true, added, merged, pickSlipStale, hold }   (hold: F2-2 top-up)
  * The route hands straight to OrderRequestsService.addLines, the SAME method
  * the web server action calls, so every rule below is a COSMETIC mirror of a
  * server-enforced one — never the boundary.
@@ -212,6 +212,10 @@ export interface AddLinesResult {
   added: number;
   merged: number;
   pickSlipStale: boolean;
+  /** F2-2: the automatic top-up's outcome (null: none tried). Optional because
+   *  a server from before F2-2 does not send it. Core describeHoldTopUp words
+   *  it. */
+  hold?: HoldOutcome | null;
 }
 
 /**

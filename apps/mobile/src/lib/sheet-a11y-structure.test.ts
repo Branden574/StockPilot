@@ -238,6 +238,9 @@ const CONVERTED: {
   // F1-4 photo evidence: built in the converted shape from the start.
   { file: 'src/components/exception-evidence-sheets.tsx', heading: 'Add a photo', layout: 'bottom', close: 'onClose', scrim: "'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)'" },
   { file: 'src/components/exception-evidence-sheets.tsx', heading: 'Remove this photo?', layout: 'bottom', close: 'onClose', scrim: "'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)'" },
+  // F2-2: the line sheet now carries a short line's fixes (the completion and
+  // departure confirms open it), so VoiceOver must reach each of them.
+  { file: 'src/components/edit-order-line-sheet.tsx', heading: 'Edit line', layout: 'bottom', close: 'requestClose', scrim: "'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)'" },
 ];
 
 describe.each(CONVERTED)('$file — "$heading"', ({ file, heading, layout, close, scrim }) => {

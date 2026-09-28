@@ -4,8 +4,12 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  COMPLETION_CONFIRM_LABEL,
+  COMPLETION_REVIEW_LABEL,
+  describeShortPickLines,
   EXCEPTION_EVIDENCE_MAX_PHOTOS,
   EXCEPTION_EVIDENCE_NOTE_MAX,
+  HOLD_AVAILABLE_STOCK_LABEL,
   MODULE_REGISTRY,
   ORDER_LINE_HIDDEN_ITEM_NAME,
   PERMISSIONS,
@@ -870,12 +874,14 @@ describe('the maintenance review wording release is published', () => {
   const SENTENCE =
     'Your request has been saved in StockPilot. When you choose Open in Outlook, it opens with the email details filled in; nothing is sent until you send it.';
 
-  it('is published and the newest: every release above it is a draft, and it is dated after every other release', () => {
+  it('is published and the newest: every release above it is a draft, and it is dated after every release below it', () => {
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
+    // Pinned by id: a newer draft (F2-2's release) sits above it until that
+    // is published.
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
-    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+    for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     const list = buildReleaseList(RELEASES, everyone, [], null);
@@ -927,5 +933,155 @@ describe('the maintenance review wording release is published', () => {
     expect(text).not.toMatch(/mobile app|phone/i);
     expect(text).not.toMatch(/email sent|emailed|automatically sent/i);
     expect(r.entries[0]!.whatToDo).toBe('No action needed.');
+  });
+});
+
+/**
+ * F2-2's release (held, and caught before it leaves) is held as a DRAFT until
+ * its phone release (pnpm release:ota: the digital pick confirm, the
+ * departure confirms, the short-line fixes and the hold notices) and the Demo
+ * Co walk, as F2-1's was. The follow-up that publishes it sets 'published'
+ * and the real publishedAt, and flips the first pin here.
+ */
+describe('F2-2 (held, and caught before it leaves) is held as a draft', () => {
+  const F2_2 = 'order-held-and-caught-2026-10';
+  const release = () => RELEASES.find((r) => r.id === F2_2)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+  const published = (): Release => ({ ...release(), status: 'published' });
+
+  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(F2_2);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).not.toContain(F2_2);
+    expect(list.latestUnread?.id).not.toBe(F2_2);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(F2_2);
+    expect(registryFingerprint(RELEASES)).not.toContain(F2_2);
+    // Preparing it changes nothing a client can observe.
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== F2_2)));
+    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(F2_2);
+  });
+
+  it('sits above every published release (pinned by id), dated after every other release, so publishing it makes it the newest', () => {
+    const at = RELEASES.findIndex((r) => r.id === F2_2);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.filter((x) => x.id !== F2_2)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it("carries the plan's two entries, addressed as the screens show them", () => {
+    expect(release().audience).toEqual({ modules: ['orders'] });
+    expect(release().entries.map((e) => [e.id, e.title])).toEqual([
+      ['order-short-lines-caught', 'Short lines are caught before an order leaves'],
+      ['order-added-items-held', 'Items added to an approved order are now held'],
+    ]);
+    const [caught, held] = release().entries;
+    // The confirms: whoever completes, stages, sends out or signs for an
+    // order; the line fixes also on a requester's own order after picking.
+    expect(caught!.audience).toEqual({
+      anyPermission: ['items:update', 'orders:approve', 'orders:request'],
+      modules: ['orders'],
+    });
+    // Holds: approvers hold; everyone who places orders sees less available.
+    expect(held!.audience).toEqual({ anyPermission: ['orders:approve', 'orders:request'], modules: ['orders'] });
+    for (const e of release().entries) {
+      expect(e.area, e.id).toBe('Orders');
+      expect(e.link, e.id).toEqual({ href: '/dashboard/orders', label: 'View orders' });
+    }
+  });
+
+  it('once published, each reader is told what their screens show them, and nobody where Orders is off', () => {
+    const reader = (permissions: ReleaseViewer['permissions'], enabledModules: ModuleId[] = ['orders']) =>
+      visibleReleases([published()], { role: 'viewer', permissions, enabledModules })[0]?.entries.map((e) => e.id) ??
+      [];
+    expect(reader(['items:update'])).toEqual(['order-short-lines-caught']);
+    expect(reader(['orders:request'])).toEqual(['order-short-lines-caught', 'order-added-items-held']);
+    expect(reader(['orders:approve'])).toEqual(['order-short-lines-caught', 'order-added-items-held']);
+    expect(reader(['items:read'])).toEqual([]);
+    expect(reader(['orders:approve', 'items:update', 'orders:request'], [])).toEqual([]);
+  });
+
+  it('states the behaviour change: added items are held, so less shows as available', () => {
+    const r = release();
+    expect(r.summary).toMatch(/^On the web and in the mobile app, /);
+    expect(r.summary).toContain('the storefront and other orders show fewer of those items available');
+    // The top-up holds the whole order, not just the new units (review
+    // 2026-09-28): the summary says so too, since availability drops for the
+    // order's earlier unheld items as well.
+    expect(r.summary).toContain('the new units, and anything else on it not yet held, as far as there is free stock');
+    expect(r.summary).not.toMatch(/the new units are now held for the order/);
+    const held = r.entries.find((e) => e.id === 'order-added-items-held')!;
+    expect(held.howItAffectsYou).toMatch(/^This changes what is shown as available/);
+    // Only an approver's add holds anything; a requester's line waits.
+    expect(held.whatChanged).toContain('When someone who can approve orders adds items');
+    expect(held.howItAffectsYou).toContain("A line added or raised by someone who can't approve orders is not held until someone who can holds it");
+    // "Not held" is shown on the full readiness panel, so it is worded for
+    // approvers; a requester (orders:request reads this entry) sees one
+    // sentence about the order's stock, not the line's hold.
+    expect(held.howItAffectsYou).toContain('On the order, people who can approve orders see such a line as Not held.');
+    expect(held.howItAffectsYou).not.toMatch(/orders says Not held/);
+    // A hold tops up the whole order (hold_order_stock), so an approver's add
+    // or raise also holds what a requester added before (the F2-2 local e2e
+    // saw it): said, not left for the reader to discover.
+    expect(held.whatChanged).toContain('along with anything else on the order not yet held');
+    expect(held.howItAffectsYou).toContain('with Hold available stock, or by adding or raising a line on that order');
+    // Holding is a commitment: it moves nothing and never refuses an add.
+    expect(held.howItAffectsYou).toContain('Holding never moves stock');
+    expect(held.howItAffectsYou).toContain('never stops an item being added');
+  });
+
+  // Review 2026-09-28: the draft promised every reader the line fixes. They
+  // are offered to people who can change the order's lines (before picking,
+  // approvers, who see the numbers; after picking, approvers and the order's
+  // own requester), on lines stock does not cover now (waiting on a PO
+  // included); the digital pick's Review goes to the line's count; and a
+  // packing slip scanned on the phone asks too.
+  it('claims no more about the fixes than each reader gets', () => {
+    const caught = release().entries.find((e) => e.id === 'order-short-lines-caught')!;
+    expect(caught.howItAffectsYou).toContain(
+      "In the digital pick, Review short lines puts you on the short line's count, to check what was entered.",
+    );
+    expect(caught.howItAffectsYou).toContain(
+      'If you can approve orders, a line that stock does not cover now, including one waiting on a PO, offers Lower to what stock covers or Remove line',
+    );
+    expect(caught.howItAffectsYou).toContain(
+      'after picking, a line not fully picked offers Lower to what was picked or Remove from order, if you can approve orders or it is your own order',
+    );
+    expect(caught.howItAffectsYou).not.toMatch(/takes you to the first short line, which offers/);
+    expect(caught.whatChanged).toContain('from the order or from a packing slip scanned in the mobile app');
+    // The summary (all an old phone shows) promises no fix to everyone.
+    expect(release().summary).not.toMatch(/the fix is on the line/);
+  });
+
+  it("says it in core's words, honestly: on record never \"book\", no percentages, nothing guaranteed", () => {
+    const text = readerText(release()).join(' ');
+    expect(text).not.toMatch(/\bbook\b/i);
+    expect(text).not.toContain('%');
+    expect(text).not.toMatch(/verified|guarantee|will arrive|reserved for sure/i);
+    // The buttons and the sentence the screens show, from core.
+    for (const label of [
+      HOLD_AVAILABLE_STOCK_LABEL,
+      COMPLETION_REVIEW_LABEL,
+      'Fix the order',
+      'Remove line',
+      'Lower to what was picked',
+      'Remove from order',
+      'Not held',
+      'Held 20 of 40',
+    ]) {
+      expect(text, label).toContain(label);
+    }
+    expect(COMPLETION_CONFIRM_LABEL).toBe('Complete picking');
+    const so100 = describeShortPickLines([{ itemName: 'L4L - Pen Black & Rose Gold', batch: 0, owed: 60 }])!;
+    expect(text).toContain(so100.slice(0, so100.indexOf(' It will be owed')));
+    // The server stays permissive: a confirm, never a refusal.
+    expect(text).toContain('You can still go ahead: what was not picked is owed at hand-over, as before.');
   });
 });

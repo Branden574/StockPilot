@@ -9,10 +9,13 @@ import {
   updateOrderRequestLineQuantityAction,
 } from '@/server/actions/order-requests';
 
+import { SHORT_LINE_FINAL_NOTE, type ShortLineActions } from '@stockpilot/core';
+
 import {
   OrderLineActions,
   quantityBlockedReason,
   removalBlockedReason,
+  ShortLineFixes,
 } from './order-line-actions';
 
 const refreshSpy = vi.fn();
@@ -77,7 +80,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   updateLine.mockResolvedValue({
     ok: true,
-    data: { pickSlipStale: false, quantity: 9 },
+    data: { pickSlipStale: false, quantity: 9, hold: null },
   } as Awaited<ReturnType<typeof updateOrderRequestLineQuantityAction>>);
   removeLine.mockResolvedValue({
     ok: true,
@@ -255,7 +258,7 @@ describe('OrderLineActions — changing the quantity', () => {
   it('warns that a printed pick slip is now stale', async () => {
     updateLine.mockResolvedValue({
       ok: true,
-      data: { pickSlipStale: true, quantity: 9 },
+      data: { pickSlipStale: true, quantity: 9, hold: null },
     } as Awaited<ReturnType<typeof updateOrderRequestLineQuantityAction>>);
     const user = renderRow();
     const field = await openEditor(user);
@@ -289,7 +292,7 @@ describe('OrderLineActions — changing the quantity', () => {
     expect(screen.getByLabelText(/requested quantity for blue widget/i)).toBeDisabled();
     expect(screen.getByRole('button', { name: /save quantity for blue widget/i })).toBeDisabled();
 
-    release({ ok: true, data: { pickSlipStale: false, quantity: 9 } });
+    release({ ok: true, data: { pickSlipStale: false, quantity: 9, hold: null } });
   });
 });
 
@@ -468,5 +471,146 @@ describe('OrderLineActions — removing a line', () => {
     expect(
       screen.getByRole('button', { name: /change quantity for blue widget/i }),
     ).not.toBeDisabled();
+  });
+});
+
+// ── F2-2: what the automatic hold did after a raise ─────────────────────────
+
+describe('OrderLineActions — the hold after a raise (F2-2)', () => {
+  async function raiseTo(quantity: string) {
+    const user = renderRow();
+    const field = await openEditor(user);
+    await user.clear(field);
+    await user.type(field, quantity);
+    await user.click(screen.getByRole('button', { name: /save quantity for blue widget/i }));
+  }
+
+  it('a failed hold never undoes the raise and is always said, pointing to Hold available stock', async () => {
+    updateLine.mockResolvedValue({
+      ok: true,
+      data: {
+        pickSlipStale: false,
+        quantity: 9,
+        hold: {
+          ok: false,
+          reason: 'forbidden',
+          message: 'Holding stock for this order needs write access to its warehouse.',
+        },
+      },
+    } as Awaited<ReturnType<typeof updateOrderRequestLineQuantityAction>>);
+    await raiseTo('9');
+
+    expect(toastMock.success).toHaveBeenCalledWith(expect.stringContaining('quantity changed to 9'));
+    expect(toastMock.warning).toHaveBeenCalledWith(
+      'Changed. Stock was not held for the extra units; use Hold available stock.',
+      expect.objectContaining({
+        description: 'Holding stock for this order needs write access to its warehouse.',
+      }),
+    );
+    expect(refreshSpy).toHaveBeenCalled();
+  });
+
+  it('says what was held, and what could not be for want of free stock', async () => {
+    updateLine.mockResolvedValue({
+      ok: true,
+      data: {
+        pickSlipStale: false,
+        quantity: 9,
+        hold: {
+          ok: true,
+          held: [{ itemId: 'i1', added: 3 }],
+          stillShort: [{ itemId: 'i1', quantity: 2 }],
+          hiddenHeldItems: 0,
+          hiddenShortItems: 0,
+        },
+      },
+    } as Awaited<ReturnType<typeof updateOrderRequestLineQuantityAction>>);
+    await raiseTo('9');
+
+    expect(toastMock.warning).toHaveBeenCalledWith(
+      'Held 3 units for this order. 2 units on this order could not be held: there is no free stock for them.',
+      expect.anything(),
+    );
+  });
+
+  it('says nothing about holds when none was attempted (hold: null)', async () => {
+    await raiseTo('9');
+    expect(toastMock.warning).not.toHaveBeenCalled();
+    expect(toastMock.success).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── F2-2: the one-tap fix on a short line ───────────────────────────────────
+
+describe('ShortLineFixes (F2-2, decision D18)', () => {
+  const ORDER = '11111111-1111-4111-8111-111111111111';
+  const LINE = '22222222-2222-4222-8222-222222222222';
+
+  function renderFixes(fixes: ShortLineActions) {
+    const user = userEvent.setup();
+    const view = render(
+      <ShortLineFixes
+        orderId={ORDER}
+        lineId={LINE}
+        itemName="L4L - Pen Black & Rose Gold"
+        quantityRequested={60}
+        fixes={fixes}
+      />,
+    );
+    return { user, ...view };
+  }
+
+  it('"Lower to N" lowers the line in one tap, through the same audited edit as the row', async () => {
+    const { user } = renderFixes({
+      actions: [
+        { kind: 'lower', quantity: 30, label: 'Lower to 30' },
+        { kind: 'remove', label: 'Remove line' },
+      ],
+      note: null,
+    });
+
+    const lower = screen.getByRole('button', { name: 'Lower to 30: L4L - Pen Black & Rose Gold' });
+    expect(lower).toHaveAttribute('data-short-line-fix');
+    await user.click(lower);
+
+    expect(updateLine).toHaveBeenCalledWith({ id: ORDER, lineId: LINE, quantity: 30 });
+    expect(toastMock.success).toHaveBeenCalledWith(expect.stringContaining('quantity changed to 9'));
+    expect(refreshSpy).toHaveBeenCalled();
+  });
+
+  it('"Remove from order" asks by name first, then removes the line', async () => {
+    const { user } = renderFixes({ actions: [{ kind: 'remove', label: 'Remove from order' }], note: null });
+
+    await user.click(screen.getByRole('button', { name: 'Remove from order: L4L - Pen Black & Rose Gold' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('L4L - Pen Black & Rose Gold');
+    expect(removeLine).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: /remove item/i }));
+    expect(removeLine).toHaveBeenCalledWith({ id: ORDER, lineId: LINE });
+    expect(refreshSpy).toHaveBeenCalled();
+  });
+
+  it('a refused lower says the server\'s sentence and changes nothing on screen', async () => {
+    updateLine.mockResolvedValue({
+      ok: false,
+      error: { code: 'conflict', message: 'The order moved on.' },
+    } as Awaited<ReturnType<typeof updateOrderRequestLineQuantityAction>>);
+    const { user } = renderFixes({ actions: [{ kind: 'lower', quantity: 30, label: 'Lower to 30' }], note: null });
+
+    await user.click(screen.getByRole('button', { name: /Lower to 30/ }));
+    expect(toastMock.error).toHaveBeenCalledWith('The order moved on.');
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  it('out for delivery: no fix, and the note says what happens instead', () => {
+    renderFixes({ actions: [], note: SHORT_LINE_FINAL_NOTE });
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.getByTestId('short-line-note')).toHaveTextContent(SHORT_LINE_FINAL_NOTE);
+  });
+
+  it('renders nothing when a line has no fix and nothing to say', () => {
+    const { container } = renderFixes({ actions: [], note: null });
+    expect(container).toBeEmptyDOMElement();
   });
 });

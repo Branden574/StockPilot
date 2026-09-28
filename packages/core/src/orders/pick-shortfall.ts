@@ -228,3 +228,163 @@ export function describeUnpickedShortfall(
 
 /** Short headline for the same notice (banner label / sheet eyebrow). */
 export const UNPICKED_SHORTFALL_TITLE = 'Not everything is picked';
+
+// ── Before the order leaves (F2-2) ──────────────────────────────────────────
+
+/**
+ * The step about to take the order further from the shelf: staging it for
+ * pickup or delivery, sending it out for delivery, or recording the signature
+ * that hands it over (digital or on paper).
+ */
+export type DepartureAction = 'stage' | 'in_transit' | 'signature';
+
+/** A line as the departure confirm reads it: the shortfall columns and the
+ *  item's name (the line id lets a screen focus it). */
+export interface DepartureLine extends ShortfallLine {
+  lineId?: string | null;
+  itemName?: string | null;
+}
+
+export interface DepartureRiskLine {
+  lineId: string | null;
+  itemName: string;
+  /** Units picked for the order's current batch (quantity_picked). */
+  picked: number;
+  /** lineOwedUnits: requested less handed over. */
+  owed: number;
+  /** lineUnpickedUnits: what nobody has pulled. */
+  unpicked: number;
+}
+
+export interface DepartureRisk {
+  title: string;
+  /** "1 line is short: 0 of 60 Pens. <what happens next>" */
+  message: string;
+  lines: DepartureRiskLine[];
+  /** unpickedShortfall over the order. */
+  unpickedUnits: number;
+  /** The button that goes ahead ("Send it anyway", ...). */
+  confirmLabel: string;
+  /** The button that goes back to the order ("Fix the order", or "Go back"
+   *  once its lines are final). */
+  cancelLabel: string;
+}
+
+/** Lines listed by name before the rest are counted. */
+const DEPARTURE_LINES_LISTED = 5;
+
+function qty(n: number): string {
+  const v = Number.isFinite(n) ? n : 0;
+  return v.toLocaleString('en-US', { maximumFractionDigits: 4 });
+}
+
+/** The lines are editable until the order is out for delivery
+ *  (OrderRequestsService.loadEditableOrderHeader refuses at in_transit). */
+function linesAreFinal(status: OrderStatus | string | null | undefined): boolean {
+  return status === 'in_transit';
+}
+
+/** The lines with units nobody picked, in the order's line order. */
+function unpickedLines(lines: readonly DepartureLine[]): DepartureRiskLine[] {
+  return lines
+    .map((l) => ({
+      lineId: l.lineId ?? null,
+      itemName: l.itemName?.trim() || 'An item',
+      picked: n(l.quantityPicked),
+      owed: lineOwedUnits(l),
+      unpicked: lineUnpickedUnits(l),
+    }))
+    .filter((l) => l.unpicked > 0);
+}
+
+/** "1 line is short: 0 of 60 Pens." / "7 lines are short: ...; and 2 more
+ *  lines.": the first five by name (picked of owed), then counted. */
+function describeShortLinesHead(short: readonly DepartureRiskLine[]): string {
+  const listed = short
+    .slice(0, DEPARTURE_LINES_LISTED)
+    .map((l) => `${qty(l.picked)} of ${qty(l.owed)} ${l.itemName}`)
+    .join('; ');
+  const more = short.length - DEPARTURE_LINES_LISTED;
+  return (
+    `${short.length === 1 ? '1 line is' : `${short.length} lines are`} short: ${listed}` +
+    (more > 0 ? `; and ${more} more ${more === 1 ? 'line' : 'lines'}.` : '.')
+  );
+}
+
+/**
+ * What happens to the units nobody picked once the order is out for delivery.
+ * Both "lines are final" notes end with it: the line's own
+ * (SHORT_LINE_FINAL_NOTE, on the web row) and the order's
+ * (describeFinalShortLines, on the phone's order card).
+ */
+export const FINAL_SHORT_LINES_OWED_COPY =
+  'The units not picked will be owed at hand-over; Close partial ends the order afterwards if they will not be sent.';
+
+/**
+ * The confirm before an order with an unpicked shortfall is staged, sent out
+ * for delivery or signed for (F2 decision D17). Null when nothing is short:
+ * built on describeUnpickedShortfall, so it speaks exactly where the order's
+ * standing notice does (a settled pick, the order still open) and is silent
+ * everywhere else, including at a shortfall of 0.
+ *
+ * UI only: the server stays permissive, because shipping short is legitimate
+ * (the backorder model). The confirm names the short lines; fixing one is a
+ * tap on the line itself (Remove, or Lower to what was picked).
+ */
+export function describeDepartureRisk(input: {
+  lines: readonly DepartureLine[];
+  status: OrderStatus | string | null | undefined;
+  action: DepartureAction;
+}): DepartureRisk | null {
+  const { lines, status, action } = input;
+  if (describeUnpickedShortfall(lines, status) === null) return null;
+  const short = unpickedLines(lines);
+  const head = describeShortLinesHead(short);
+
+  const final = linesAreFinal(status);
+  let next: string;
+  let confirmLabel: string;
+  if (action === 'in_transit') {
+    next = "Once the order is out for delivery its lines can't be changed, and these units will be owed at hand-over.";
+    confirmLabel = 'Send it anyway';
+  } else if (action === 'stage') {
+    next = 'If it leaves like this, these units will be owed at hand-over. Its lines can still be changed until it is out for delivery.';
+    confirmLabel = 'Stage it anyway';
+  } else if (final) {
+    next = "Its lines can't be changed now, so these units will be owed at hand-over. Close partial ends the order afterwards if they will not be sent.";
+    confirmLabel = 'Record signature anyway';
+  } else {
+    next = 'The signature hands the order over, and these units will be owed.';
+    confirmLabel = 'Record signature anyway';
+  }
+  return {
+    title: UNPICKED_SHORTFALL_TITLE,
+    message: `${head} ${next}`,
+    lines: short,
+    unpickedUnits: unpickedShortfall(lines, status),
+    confirmLabel,
+    cancelLabel: final ? 'Go back' : 'Fix the order',
+  };
+}
+
+/**
+ * The order-level note once the order is out for delivery and a line is not
+ * fully picked (F2-2 walk F1, 2026-09-28), or null. The lines can no longer be
+ * changed (the line sheet does not open), so the note names the short lines
+ * itself, in the departure confirm's words: the line's own note ("so this
+ * line can't be changed", SHORT_LINE_FINAL_NOTE) belongs on a row, and on the
+ * phone's order card "this line" pointed at nothing.
+ *
+ *   "The order is out for delivery, so its lines can't be changed. 1 line is
+ *    short: 0 of 5 Pens. The units not picked will be owed at hand-over; Close
+ *    partial ends the order afterwards if they will not be sent."
+ */
+export function describeFinalShortLines(
+  lines: readonly DepartureLine[],
+  status: OrderStatus | string | null | undefined,
+): string | null {
+  if (!linesAreFinal(status) || describeUnpickedShortfall(lines, status) === null) return null;
+  const short = unpickedLines(lines);
+  if (short.length === 0) return null;
+  return `The order is out for delivery, so its lines can't be changed. ${describeShortLinesHead(short)} ${FINAL_SHORT_LINES_OWED_COPY}`;
+}

@@ -64,6 +64,8 @@ export * from './orders/order-returns-view';
 export * from './orders/readiness';
 export * from './orders/readiness-copy';
 export * from './orders/order-stock-gates';
+export * from './orders/order-hold';
+export * from './orders/short-line-actions';
 export * from './orders/order-line-item-name';
 export * from './rentals/borrower';
 export * from './rentals/emails';

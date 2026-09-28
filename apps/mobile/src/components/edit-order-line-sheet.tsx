@@ -14,9 +14,11 @@ import {
   View,
 } from 'react-native';
 
+import { MIN_TAP } from '@/components/item-verification-card';
 import { Body, Eyebrow, Mono } from '@/components/ui/text';
 import { api } from '@/lib/api';
-import { ACCENT, FONT } from '@/lib/theme';
+import { parseHoldOutcome } from '@/lib/order-hold';
+import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 import {
@@ -42,6 +44,7 @@ import {
   type EditableOrderLine,
   type LineQuantityResult,
   type LineRemovedResult,
+  type OrderLineShortFix,
 } from './edit-order-line';
 
 /**
@@ -62,6 +65,13 @@ import {
  * picked the wrong number" are the same moment for the person holding the
  * phone, and splitting them would put the fix for half of them behind a second
  * affordance nobody would find.
+ *
+ * SHORT LINES (F2-2, decision D18): the completion and departure confirms
+ * point here. On a short line the sheet leads with core's one-tap fixes
+ * ("Lower to 30" / "Remove line" before picking; "Lower to what was picked
+ * (30)" / "Remove from order" after), through the same two writes. A lower
+ * goes straight through (the button says exactly what it does); a remove asks
+ * first, as it always has.
  */
 export function EditOrderLineSheet({
   visible,
@@ -73,6 +83,7 @@ export function EditOrderLineSheet({
   onChanged,
   onRemoved,
   onRequestReload,
+  shortFix = null,
 }: {
   visible: boolean;
   onClose: () => void;
@@ -92,6 +103,9 @@ export function EditOrderLineSheet({
   /** Called when the failure means the screen's picture of the order is stale
    *  (order shipped, line gone, permission revoked) so it can reload/re-gate. */
   onRequestReload: () => void;
+  /** F2-2: the line's short-line fixes (edit-order-line.ts orderLineShortFix),
+   *  or null when the line is not short. */
+  shortFix?: OrderLineShortFix | null;
 }) {
   const { c, mode } = useTheme();
   const { height } = useWindowDimensions();
@@ -214,13 +228,21 @@ export function EditOrderLineSheet({
     setBusy('save');
     setError(null);
     try {
-      const res = await api<{ ok: true; quantity: number; pickSlipStale: boolean }>(
-        `/api/v1/orders/${orderId}/lines`,
-        { method: 'PATCH', body: { lineId: line.orderRequestLineId, quantity: parsed } },
-      );
+      const res = await api<{
+        ok: true;
+        quantity: number;
+        pickSlipStale: boolean;
+        hold?: unknown;
+      }>(`/api/v1/orders/${orderId}/lines`, {
+        method: 'PATCH',
+        body: { lineId: line.orderRequestLineId, quantity: parsed },
+      });
       onChanged(line, {
         quantity: Number(res.quantity) || parsed,
         pickSlipStale: res.pickSlipStale === true,
+        // F2-2: a raise's automatic hold, read defensively (an older server
+        // sends none). A failure is said in the confirmation, never dropped.
+        hold: parseHoldOutcome(res.hold),
       });
     } catch (e) {
       handleFailure(e);
@@ -263,6 +285,19 @@ export function EditOrderLineSheet({
       { text: 'Remove item', style: 'destructive', onPress: () => void remove() },
     ]);
   }
+
+  /** A short-line fix's "Lower to N": the same write as Save, one tap. */
+  function lowerTo(quantity: number) {
+    if (!line || !line.orderRequestLineId || busy !== null) return;
+    const check = validateLineQuantity(line, quantity);
+    if (!check.ok) {
+      setError(check.reason);
+      return;
+    }
+    void commitSave(line, quantity);
+  }
+
+  const showRemove = !(shortFix?.replacesRemove ?? false);
 
   const stepBtn = (label: string, delta: number, disabled: boolean) => (
     <Pressable
@@ -309,9 +344,16 @@ export function EditOrderLineSheet({
          * this card inside the scrim — taps outside still close because the
          * scrim fills the screen behind it. See add-order-items-sheet.tsx.
          */}
-        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+        <View
+          accessibilityViewIsModal
+          onAccessibilityEscape={requestClose}
+          style={{ flex: 1, justifyContent: 'flex-end' }}
+        >
           <Pressable
             onPress={requestClose}
+            onAccessibilityTap={requestClose}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
             style={[
               StyleSheet.absoluteFill,
               {
@@ -338,7 +380,17 @@ export function EditOrderLineSheet({
               <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
                 Edit line
               </Body>
-              <Pressable onPress={requestClose} hitSlop={8} accessibilityLabel="Close">
+              <Pressable
+                onPress={requestClose}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+                style={{
+                  minWidth: MIN_TAP,
+                  minHeight: MIN_TAP,
+                  alignItems: 'flex-end',
+                  justifyContent: 'center',
+                }}
+              >
                 <X size={18} color={c.ink4} />
               </Pressable>
             </View>
@@ -361,6 +413,49 @@ export function EditOrderLineSheet({
                     {`Ordered ${line.requested}${line.fulfilled > 0 ? ` · ${line.fulfilled} handed over` : ''}${line.picked > 0 ? ` · ${line.picked} staged` : ''}`}
                   </Mono>
                 </View>
+
+                {/* F2-2: the short line's fixes first, in core's words. Each
+                    is its own VoiceOver button, named with the item. */}
+                {shortFix ? (
+                  <View style={{ gap: 8 }}>
+                    <Eyebrow color={ACCENT.warn}>{shortFix.label}</Eyebrow>
+                    {shortFix.actions.map((a) => (
+                      <Pressable
+                        key={a.kind}
+                        onPress={a.kind === 'lower' ? () => lowerTo(a.quantity) : confirmRemove}
+                        disabled={busy !== null}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${a.label}, ${line.name}`}
+                        accessibilityState={{ disabled: busy !== null }}
+                        style={[
+                          styles.action,
+                          {
+                            borderWidth: 1,
+                            borderColor: a.kind === 'remove' ? c.hair : c.ink,
+                            opacity: busy !== null ? 0.45 : 1,
+                          },
+                        ]}
+                      >
+                        {(a.kind === 'remove' ? busy === 'remove' : busy === 'save') ? (
+                          <ActivityIndicator color={a.kind === 'remove' ? ACCENT.crit : c.ink} />
+                        ) : (
+                          <Mono
+                            size={13}
+                            color={a.kind === 'remove' ? ACCENT.crit : c.ink}
+                            maxFontSizeMultiplier={ACTION_CAP}
+                          >
+                            {a.label}
+                          </Mono>
+                        )}
+                      </Pressable>
+                    ))}
+                    {shortFix.note ? (
+                      <Body size={12} color={c.ink3}>
+                        {shortFix.note}
+                      </Body>
+                    ) : null}
+                  </View>
+                ) : null}
 
                 <View style={{ gap: 8 }}>
                   <Eyebrow>QUANTITY</Eyebrow>
@@ -400,38 +495,40 @@ export function EditOrderLineSheet({
                   ) : null}
                 </View>
 
-                <View style={{ gap: 6 }}>
-                  <Pressable
-                    onPress={confirmRemove}
-                    disabled={busy !== null || !removal.ok}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Remove ${line.name} from this order`}
-                    style={[
-                      styles.action,
-                      {
-                        borderWidth: 1,
-                        borderColor: c.hair,
-                        opacity: busy !== null || !removal.ok ? 0.45 : 1,
-                      },
-                    ]}
-                  >
-                    {busy === 'remove' ? (
-                      <ActivityIndicator color={ACCENT.crit} />
-                    ) : (
-                      <Mono size={13} color={ACCENT.crit}>
-                        Remove from order
+                {showRemove ? (
+                  <View style={{ gap: 6 }}>
+                    <Pressable
+                      onPress={confirmRemove}
+                      disabled={busy !== null || !removal.ok}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Remove ${line.name} from this order`}
+                      style={[
+                        styles.action,
+                        {
+                          borderWidth: 1,
+                          borderColor: c.hair,
+                          opacity: busy !== null || !removal.ok ? 0.45 : 1,
+                        },
+                      ]}
+                    >
+                      {busy === 'remove' ? (
+                        <ActivityIndicator color={ACCENT.crit} />
+                      ) : (
+                        <Mono size={13} color={ACCENT.crit}>
+                          Remove from order
+                        </Mono>
+                      )}
+                    </Pressable>
+                    {/* Disabled-with-reason: a greyed-out Remove with no
+                        explanation is how the picker ends up believing the app
+                        is broken. The reason is the service's own wording. */}
+                    {!removal.ok && removal.reason ? (
+                      <Mono size={10.5} color={c.ink4}>
+                        {removal.reason}
                       </Mono>
-                    )}
-                  </Pressable>
-                  {/* Disabled-with-reason: a greyed-out Remove with no
-                      explanation is how the picker ends up believing the app is
-                      broken. The reason is the service's own wording. */}
-                  {!removal.ok && removal.reason ? (
-                    <Mono size={10.5} color={c.ink4}>
-                      {removal.reason}
-                    </Mono>
-                  ) : null}
-                </View>
+                    ) : null}
+                  </View>
+                ) : null}
               </ScrollView>
             )}
 
@@ -461,6 +558,11 @@ export function EditOrderLineSheet({
     </Modal>
   );
 }
+
+/** The fix buttons are fixed-height chrome: their labels stop growing at the
+ *  control ceiling (the Button primitive's), so "Lower to what was picked
+ *  (30)" never clips inside its 44pt frame. */
+const ACTION_CAP = capTo(13, TYPE_CEILING.control);
 
 const styles = StyleSheet.create({
   qtyInput: {

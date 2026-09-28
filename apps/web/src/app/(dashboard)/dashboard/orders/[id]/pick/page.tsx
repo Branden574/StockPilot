@@ -6,9 +6,11 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
-import { isManagerOrAbove } from '@stockpilot/core';
+import { isManagerOrAbove, type OrderReadinessResult } from '@stockpilot/core';
+import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
 import { LotsService } from '@/server/services/lots';
 import type { FefoSuggestion } from '@/server/services/lots';
+import { OrderReadinessService } from '@/server/services/order-readiness';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
 export const dynamic = 'force-dynamic';
@@ -20,6 +22,27 @@ export default async function DigitalPickPage({
 }) {
   const { id } = await params;
   const ctx = await requireOrgContext();
+  // ORDER READINESS (F2-2): the completion confirm projects complete_picking
+  // over it with what the picker enters (core digitalPickCompletionConfirm).
+  // Started here, beside the order read and never after it, so it adds no
+  // round trip of its own to this page; it is awaited below only when the
+  // viewer can pick, and dropped unread otherwise (the function answers any
+  // member of the order's org, so a dropped answer discloses nothing).
+  // `result` never rejects (a failed read is `{ state: 'failed' }`); a
+  // service that cannot start is a failed read too, so the confirm still
+  // speaks ("Stock couldn't be checked").
+  const readinessRead: Promise<OrderReadinessResult> = OrderReadinessService.forCurrentUser()
+    .then((readinessSvc) => readinessSvc.result(id))
+    .catch((e: unknown): OrderReadinessResult => {
+      if (isNextControlFlowError(e)) throw e;
+      void reportError(e, {
+        tag: 'orders.readiness_failed',
+        level: 'warning',
+        organizationId: ctx.organizationId,
+      });
+      return { state: 'failed', message: 'Could not check readiness.' };
+    });
+  readinessRead.catch(() => {});
   const svc = await OrderRequestsService.forCurrentUser();
   const detail = await svc.get(id).catch(() => null);
   if (!detail) notFound();
@@ -63,6 +86,10 @@ export default async function DigitalPickPage({
       : null;
   }
 
+  // Awaited only for a viewer who picks (the confirm is theirs, and its
+  // numbers are stock numbers); in flight since the order read began.
+  const readiness = canPick ? await readinessRead : null;
+
   // Phase 5: advisory FEFO picking hint. Only build the per-item suggestion
   // map when the lot_serial module is enabled — fail closed otherwise so the
   // existing pick/stock logic is completely untouched for non-food orgs.
@@ -104,6 +131,7 @@ export default async function DigitalPickPage({
           initialLines={detail.lines}
           canPick={canPick}
           assignedPickerName={assignedPickerName}
+          readiness={readiness}
           lotSerial={lotSerialEnabled ? { enabled: true, fefoByItemId } : undefined}
         />
       </div>

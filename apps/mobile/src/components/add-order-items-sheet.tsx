@@ -17,6 +17,7 @@ import {
 import { Card, Hair } from '@/components/ui/card';
 import { Body, Eyebrow, Mono } from '@/components/ui/text';
 import { api } from '@/lib/api';
+import { parseHoldOutcome } from '@/lib/order-hold';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -215,14 +216,22 @@ export function AddOrderItemsSheet({
     setSubmitting(true);
     setError(null);
     try {
-      const res = await api<{ ok: true } & AddLinesResult>(`/api/v1/orders/${orderId}/lines`, {
-        method: 'POST',
-        body: { lines: payload.lines },
-      });
+      const res = await api<{ ok: true; hold?: unknown } & Omit<AddLinesResult, 'hold'>>(
+        `/api/v1/orders/${orderId}/lines`,
+        {
+          method: 'POST',
+          body: { lines: payload.lines },
+        },
+      );
       onAdded({
         added: Number(res.added) || 0,
         merged: Number(res.merged) || 0,
         pickSlipStale: res.pickSlipStale === true,
+        // F2-2: the automatic hold for what was just added, read defensively
+        // (an older server sends none). A failure is said in the
+        // confirmation ("Added. Stock was not held for it; use Hold
+        // available stock."), never dropped.
+        hold: parseHoldOutcome(res.hold),
       });
     } catch (e) {
       const message = describeAddLinesError(e);

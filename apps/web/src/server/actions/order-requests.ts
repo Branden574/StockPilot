@@ -7,7 +7,15 @@ import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory
 import { ServiceError, withContext } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
-import { err, isManagerOrAbove, ok, type ActionResult } from '@stockpilot/core';
+import {
+  err,
+  HOLD_FAILED_COPY,
+  isManagerOrAbove,
+  ok,
+  type ActionResult,
+  type HoldOrderStockResult,
+  type HoldOutcome,
+} from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
   if (error instanceof ServiceError) return err(error.code, error.message);
@@ -408,11 +416,15 @@ const addLinesSchema = z.object({
 /**
  * Add items to an EXISTING order (last-minute additions). Permitted any time
  * before the order ships, for the requester or an approver — the service
- * enforces both. See OrderRequestsService.addLines.
+ * enforces both. See OrderRequestsService.addLines. `hold` is the automatic
+ * top-up's outcome (F2-2): null when none was attempted (not an approver, or
+ * not a hold status), else what was held or why nothing was.
  */
 export async function addOrderRequestLinesAction(
   input: z.input<typeof addLinesSchema>,
-): Promise<ActionResult<{ added: number; merged: number; pickSlipStale: boolean }>> {
+): Promise<
+  ActionResult<{ added: number; merged: number; pickSlipStale: boolean; hold: HoldOutcome | null }>
+> {
   const parsed = addLinesSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
@@ -438,11 +450,12 @@ const updateLineSchema = z.object({
 /**
  * Correct the quantity on a line already on the order. Same window and same
  * people as adding — the service refuses to drop below what has been handed
- * over or staged. See OrderRequestsService.updateLineQuantity.
+ * over or staged. See OrderRequestsService.updateLineQuantity. A raise carries
+ * `hold` as addOrderRequestLinesAction does; a lowering carries null.
  */
 export async function updateOrderRequestLineQuantityAction(
   input: z.input<typeof updateLineSchema>,
-): Promise<ActionResult<{ pickSlipStale: boolean; quantity: number }>> {
+): Promise<ActionResult<{ pickSlipStale: boolean; quantity: number; hold: HoldOutcome | null }>> {
   const parsed = updateLineSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
@@ -510,6 +523,37 @@ export async function approveOrderRequestAction(
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {
+    return toResult(e);
+  }
+}
+
+const holdStockSchema = z.object({ id: z.string().uuid() });
+
+/**
+ * "Hold available stock" on the order page's readiness strip (F2-2): tops the
+ * order's holds up to what its lines still owe, as far as free stock allows
+ * (OrderRequestsService.holdStock, hold_order_stock 0378). For lines added
+ * before holds were topped up, or by someone who may not approve orders. Holds
+ * change what the storefront shows as available, so its catalog is refreshed.
+ * Every refusal comes back in the service's words (core HOLD_* copy).
+ */
+export async function holdOrderStockAction(
+  input: z.input<typeof holdStockSchema>,
+): Promise<ActionResult<HoldOrderStockResult>> {
+  const parsed = holdStockSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    const result = await svc.holdStock(parsed.data.id, 'manual');
+    revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    return ok(result);
+  } catch (e) {
+    // A fault is core's "couldn't be held" sentence, as on the phone (the
+    // service has reported it with its cause); a refusal comes in its own
+    // words.
+    if (e instanceof ServiceError && e.code === 'internal_error') return err('internal_error', HOLD_FAILED_COPY);
     return toResult(e);
   }
 }

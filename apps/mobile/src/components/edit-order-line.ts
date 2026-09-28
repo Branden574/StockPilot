@@ -1,4 +1,18 @@
-import { describeRaiseAfterPicking, describeUnpickedShortfall } from '@stockpilot/core';
+import {
+  assessPickedLine,
+  describeFinalShortLines,
+  describeRaiseAfterPicking,
+  describeUnpickedShortfall,
+  orderReadinessPhase,
+  PICKED_LINE_STATES,
+  READINESS_STATES,
+  SHORT_LINE_ONLY_LINE_NOTE,
+  shortLineActions,
+  type HoldOutcome,
+  type ReadinessLineAssessment,
+  type ShortLineAction,
+  type ShortLineActions,
+} from '@stockpilot/core';
 
 import { extractApiErrorMessage } from '../lib/po-import-approve';
 
@@ -13,7 +27,7 @@ import { addLinesErrorStatus, canAddOrderItems, type AddItemsGateInput } from '.
  *
  * Server contract these mirror (PINNED — apps/web .../api/v1/orders/[id]/lines):
  *   PATCH  /api/v1/orders/[id]/lines   { lineId, quantity }
- *     → 200 { ok: true, quantity, pickSlipStale }
+ *     → 200 { ok: true, quantity, pickSlipStale, hold }   (hold: F2-2, a raise's top-up)
  *   DELETE /api/v1/orders/[id]/lines?lineId=…
  *     → 200 { ok: true, removedItemId, pickSlipStale }
  * Both hand straight to OrderRequestsService.updateLineQuantity / removeLine —
@@ -279,11 +293,127 @@ export function removeLineConfirmCopy(line: EditableOrderLine): {
   };
 }
 
+// ── Fixing a short line (F2-2, decision D18) ────────────────────────────────
+
+/**
+ * What the sheet offers on a short line: core's state label ("Short" before
+ * picking, "Not fully picked" after), core's one-tap fixes ("Lower to 30",
+ * "Remove line"; after picking "Lower to what was picked (30)", "Remove from
+ * order") and core's note when the line offers less than that.
+ */
+export interface OrderLineShortFix {
+  label: string;
+  actions: ShortLineAction[];
+  note: string | null;
+  /**
+   * The fix takes the place of the sheet's own Remove: it offers a remove
+   * itself, or its note already says why the line cannot be removed (the
+   * only line). Two Remove buttons, or the same refusal twice, would read as
+   * two different things.
+   */
+  replacesRemove: boolean;
+}
+
+/**
+ * The completion and departure confirms point here (decision D18): a short
+ * line is fixed on the line, with the order's own audited line edits
+ * (updateLineQuantity and removeLine, the PATCH and DELETE on the lines
+ * route). Which fixes a line offers is core's shortLineActions, with the
+ * service's floors, so a button is never offered that the server refuses:
+ *   - before picking (readiness phase to_pick), from the line's readiness,
+ *     and only for the full readiness panel: the covered number is an
+ *     internal stock figure (decision D12). Offered on any line short now
+ *     (Short, Waiting on a PO, or Can't confirm with numbers), under that
+ *     state's label. Null when readiness was not read for this line;
+ *   - after picking (phase picked), from the line alone (core
+ *     assessPickedLine; the picked phase reads no stock).
+ * A lower to a fractional quantity is not offered: the lines route takes
+ * whole numbers only (quantity .int()), and would refuse it.
+ * Null when the line is not short, or nothing can be said about it.
+ */
+export function orderLineShortFix(input: {
+  status: string | null | undefined;
+  line: EditableOrderLine;
+  /** The line's place on the order (1-based). */
+  position: number;
+  totalLines: number;
+  /** Before picking: the line's readiness (full panel only), else null. */
+  readinessLine: ReadinessLineAssessment | null;
+}): OrderLineShortFix | null {
+  const { line } = input;
+  const isOnlyLine = input.totalLines <= 1;
+  const phase = orderReadinessPhase(input.status);
+  let result: ShortLineActions;
+  let label: string;
+  if (phase === 'to_pick') {
+    if (!input.readinessLine || input.readinessLine.lineId !== line.orderRequestLineId) return null;
+    result = shortLineActions({ phase: 'to_pick', line: input.readinessLine, isOnlyLine });
+    // The line's own state: a line short now may be Short, Waiting on a PO
+    // or Can't confirm (core offers the fix on each), never relabelled.
+    label = READINESS_STATES[input.readinessLine.state].label;
+  } else if (phase === 'picked' && line.orderRequestLineId !== null) {
+    const picked = assessPickedLine({
+      lineId: line.orderRequestLineId,
+      itemId: line.itemId ?? '',
+      position: input.position,
+      requested: line.requested,
+      fulfilled: line.fulfilled,
+      picked: line.picked,
+    });
+    result = shortLineActions({
+      phase: 'picked',
+      status: input.status ?? '',
+      line: picked,
+      isOnlyLine,
+    });
+    label = PICKED_LINE_STATES.short_picked.label;
+  } else {
+    return null;
+  }
+  const actions = result.actions.filter((a) => a.kind !== 'lower' || Number.isInteger(a.quantity));
+  if (actions.length === 0 && result.note === null) return null;
+  return {
+    label,
+    actions,
+    note: result.note,
+    replacesRemove:
+      actions.some((a) => a.kind === 'remove') || result.note === SHORT_LINE_ONLY_LINE_NOTE,
+  };
+}
+
+/**
+ * The note under the order's "Not everything is picked" card once the order
+ * is out for delivery (its lines can no longer be changed, so the sheet does
+ * not open): core's order-level sentence, naming the short lines
+ * (describeFinalShortLines, the departure confirm's list). Null otherwise.
+ *
+ * Not the line's own note (SHORT_LINE_FINAL_NOTE, "so this line can't be
+ * changed"): the web shows that on the row, but the card names no line and
+ * its rows cannot be tapped out for delivery, so "this line" pointed at
+ * nothing (walk F1, 2026-09-28).
+ */
+export function orderShortLinesFinalNote(
+  lines: readonly EditableOrderLine[],
+  status: string | null | undefined,
+): string | null {
+  return describeFinalShortLines(
+    lines.map((l) => ({
+      lineId: l.orderRequestLineId,
+      itemName: l.name,
+      ...toShortfallLine(l),
+    })),
+    status,
+  );
+}
+
 // ── Result copy ─────────────────────────────────────────────────────────────
 
 export interface LineQuantityResult {
   quantity: number;
   pickSlipStale: boolean;
+  /** F2-2: a raise's automatic top-up outcome (null: none tried; a lowering
+   *  is always null). Optional: a server from before F2-2 does not send it. */
+  hold?: HoldOutcome | null;
 }
 
 export interface LineRemovedResult {

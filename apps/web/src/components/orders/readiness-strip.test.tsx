@@ -22,6 +22,14 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ refresh: routerRefresh, push: vi.fn() }),
 }));
 
+// "Hold available stock" (F2-2) calls this server action.
+const holdOrderStock = vi.hoisted(() => vi.fn());
+vi.mock('@/server/actions/order-requests', () => ({
+  holdOrderStockAction: (input: unknown) => holdOrderStock(input),
+}));
+const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn() }));
+vi.mock('sonner', () => ({ toast: toastMock }));
+
 const TZ = 'America/Los_Angeles';
 const ORDER = '11111111-1111-1111-1111-111111111111';
 
@@ -34,7 +42,13 @@ const facts = (status: string, items: Record<string, unknown>[], neededBy: strin
     { neededBy },
   );
 
-beforeEach(() => routerRefresh.mockReset());
+beforeEach(() => {
+  routerRefresh.mockReset();
+  holdOrderStock.mockReset();
+  toastMock.success.mockReset();
+  toastMock.error.mockReset();
+  toastMock.warning.mockReset();
+});
 
 describe('readinessStripView: what the strip says, from core', () => {
   it('the full panel: the roll-up, the needed-by signal and when it was checked', () => {
@@ -249,5 +263,94 @@ describe('ReadinessStrip', () => {
     );
     expect(screen.queryByTestId('readiness-details')).toBeNull();
     expect(screen.queryByTestId('readiness-needed-by')).toBeNull();
+  });
+});
+
+describe('ReadinessStrip — Hold available stock (F2-2)', () => {
+  const view = (): ReadinessStripView =>
+    readinessStripView(
+      readinessOk(facts('approved', [visibleItemFacts('a', { here: { rack: 10 }, heldOwn: 0 })])),
+      'full',
+      { timeZone: TZ },
+    )!;
+
+  it('is offered only when the page says so', () => {
+    const { rerender } = render(<ReadinessStrip view={view()} />);
+    expect(screen.queryByRole('button', { name: 'Hold available stock' })).toBeNull();
+    rerender(<ReadinessStrip view={view()} holdOrderId={ORDER} />);
+    expect(screen.getByRole('button', { name: 'Hold available stock' })).toBeEnabled();
+  });
+
+  it('holds for THIS order, says what it held in core\'s words, and reads the page again', async () => {
+    holdOrderStock.mockResolvedValue({
+      ok: true,
+      data: { held: [{ itemId: 'a', added: 10 }], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 },
+    });
+    const user = userEvent.setup();
+    render(<ReadinessStrip view={view()} holdOrderId={ORDER} />);
+
+    await user.click(screen.getByRole('button', { name: 'Hold available stock' }));
+
+    expect(holdOrderStock).toHaveBeenCalledWith({ id: ORDER });
+    expect(toastMock.success).toHaveBeenCalledWith('Held 10 more units for this order.');
+    expect(routerRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('what could not be held for want of free stock is a warning, never hidden', async () => {
+    holdOrderStock.mockResolvedValue({
+      ok: true,
+      data: {
+        held: [{ itemId: 'a', added: 4 }],
+        stillShort: [{ itemId: 'a', quantity: 6 }],
+        hiddenHeldItems: 0,
+        hiddenShortItems: 0,
+      },
+    });
+    const user = userEvent.setup();
+    render(<ReadinessStrip view={view()} holdOrderId={ORDER} />);
+
+    await user.click(screen.getByRole('button', { name: 'Hold available stock' }));
+
+    expect(toastMock.warning).toHaveBeenCalledWith(
+      'Held 4 more units for this order. 6 units are still short: there is no free stock to hold for them.',
+      expect.anything(),
+    );
+  });
+
+  it("an item the caller can't see that is still short is a warning too, counted and never numbered", async () => {
+    holdOrderStock.mockResolvedValue({
+      ok: true,
+      data: {
+        held: [{ itemId: 'a', added: 4 }],
+        stillShort: [],
+        hiddenHeldItems: 1,
+        hiddenShortItems: 1,
+      },
+    });
+    const user = userEvent.setup();
+    render(<ReadinessStrip view={view()} holdOrderId={ORDER} />);
+
+    await user.click(screen.getByRole('button', { name: 'Hold available stock' }));
+
+    expect(toastMock.warning).toHaveBeenCalledWith(
+      "Held 4 more units for this order. Stock was also held for 1 item that isn't visible to you. " +
+        "1 item that isn't visible to you is still short.",
+      expect.anything(),
+    );
+    expect(toastMock.success).not.toHaveBeenCalled();
+  });
+
+  it("a refusal is the service's sentence, and the page is not re-read", async () => {
+    holdOrderStock.mockResolvedValue({
+      ok: false,
+      error: { code: 'forbidden', message: 'Holding stock for this order needs write access to its warehouse.' },
+    });
+    const user = userEvent.setup();
+    render(<ReadinessStrip view={view()} holdOrderId={ORDER} />);
+
+    await user.click(screen.getByRole('button', { name: 'Hold available stock' }));
+
+    expect(toastMock.error).toHaveBeenCalledWith('Holding stock for this order needs write access to its warehouse.');
+    expect(routerRefresh).not.toHaveBeenCalled();
   });
 });
