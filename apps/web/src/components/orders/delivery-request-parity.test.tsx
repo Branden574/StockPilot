@@ -95,6 +95,15 @@ vi.mock('@/components/orders/status-badge', () => ({ OrderStatusBadge: () => nul
 vi.mock('@/components/maintenance/report-problem-button', () => ({ ReportProblemButton: () => null }));
 vi.mock('@/components/onboarding/page-tour', () => ({ PageTour: () => null }));
 vi.mock('@/components/onboarding/help-tip', () => ({ HelpTip: () => null }));
+// Order readiness (F2-1) shows the requester one sentence on these orders.
+// Out of scope here (page.test.tsx drives it): the strip is stubbed, and so is
+// the service, so no read is attempted.
+vi.mock('@/components/orders/readiness-strip', () => ({ ReadinessStrip: () => null }));
+vi.mock('@/server/services/order-readiness', () => ({
+  OrderReadinessService: {
+    forCurrentUser: async () => ({ result: async () => ({ state: 'failed', message: 'out of scope' }) }),
+  },
+}));
 
 /**
  * The ONE captured surface: exactly the props the real page derives. Only the

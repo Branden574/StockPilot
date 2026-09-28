@@ -85,9 +85,14 @@ export async function ItemVerificationCard({
   );
 }
 
+/** The card's anchor: an order line's readiness "Last physical count" links
+ *  to /dashboard/inventory/<id>#physical-count. The skeleton carries it too,
+ *  so the link lands on the card's place while the card streams in. */
+export const PHYSICAL_COUNT_ANCHOR = 'physical-count';
+
 function CardShell({ children, testId }: { children: React.ReactNode; testId: string }) {
   return (
-    <Card data-testid={testId}>
+    <Card data-testid={testId} id={PHYSICAL_COUNT_ANCHOR} className="scroll-mt-20">
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
           <ClipboardCheck className="h-4 w-4" aria-hidden /> Physical count

@@ -15,6 +15,9 @@ import { ReturnStatusBadge, returnReasonLabel } from '@/components/returns/retur
 import { OrderAttachmentsPanel } from '@/components/orders/order-attachments-panel';
 import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh';
 import { OrderTimeline } from '@/components/orders/order-timeline';
+import { ReadinessLineCell } from '@/components/orders/readiness-line-cell';
+import { ReadinessStrip } from '@/components/orders/readiness-strip';
+import { readinessStripView } from '@/components/orders/readiness-view';
 import {
   SendDeliveryRequestButton,
   type DeliveryRequestLine,
@@ -33,6 +36,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import {
+  approveShortNotice,
   can,
   deliveryRecipientsForRouting,
   describeLineReturnRefs,
@@ -41,19 +45,28 @@ import {
   formatOrderNumber,
   formatOrderReturnSummary,
   isManagerOrAbove,
+  lineOwedUnits,
   ORDER_RETURN_SUMMARY_NOTE,
+  orderReadinessPhase,
   orderReturnSummary,
+  orderStockGates,
+  readinessAudience,
+  readinessStockFlags,
   resolveOrgTimezone,
   returnedFragment,
   returnHandle,
   returnRefsByLine,
   UNPICKED_SHORTFALL_TITLE,
+  type OrderReadinessResult,
   type OrderReturnView,
+  type OrderStockCheck,
   type OrgEmailRoutingReadState,
   type Role,
 } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
+import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
 import { ServiceError, withContext } from '@/server/services/context';
+import { canStartCount } from '@/server/services/lib/count-start-preflight';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { getCachedOrgTimezone, getOrgEmailRouting } from '@/lib/dashboard/cached-org';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
@@ -62,7 +75,7 @@ import {
   ATTACHABLE_ORDER_STATUSES,
   OrderAttachmentsService,
 } from '@/server/services/order-attachments';
-import { InventoryService } from '@/server/services/inventory';
+import { OrderReadinessService } from '@/server/services/order-readiness';
 import {
   OrderRequestsService,
   type OrderRequestRow,
@@ -208,14 +221,24 @@ export default async function OrderDetailPage({
       (isAssignedDriver &&
         ['staged_for_delivery', 'in_transit'].includes(request.status)));
 
-  // Stock-awareness gate for the two statuses whose actions depend on
-  // availability: pending_approval → isShortStock (would a strict approve
-  // fall short?); backordered → hasFulfillableStock (does any still-owed item
-  // have stock to pick?). Only a manager on the relevant status pays for the
-  // reservations read fired below.
-  const needsStockCheck =
-    canApprove &&
-    (request.status === 'pending_approval' || request.status === 'backordered') &&
+  // ORDER READINESS (F2-1): per-line readiness and a roll-up while the order
+  // is still to be picked (core orderReadinessPhase 'to_pick': pending,
+  // approved, the picking statuses, backordered). Who sees it is core
+  // readinessAudience: the full panel for anyone who approves orders, picks
+  // (items:update) or buys (purchase_orders:manage); one sentence for the
+  // requester; nothing, and NO read, for anyone else. It also feeds the two
+  // stock-dependent actions (Approve partial, Resume): an approver always
+  // gets the full panel, so the read that used to be the page's own
+  // on-hand-minus-reservations check is this one.
+  const viewerReadinessAudience = readinessAudience({
+    canApproveOrders: canApprove,
+    canUpdateItems: can(ctx, 'items:update'),
+    canManagePurchaseOrders: can(ctx, 'purchase_orders:manage'),
+    isOwnRequest,
+  });
+  const readinessGate =
+    orderReadinessPhase(request.status) === 'to_pick' &&
+    viewerReadinessAudience !== 'none' &&
     lines.length > 0;
 
   // Live tracking: the assigned driver can stream location only while in transit.
@@ -303,7 +326,7 @@ export default async function OrderDetailPage({
   // only the wall-clock dispatch changed from sequential to concurrent. ----
   const [
     warehouseAccess,
-    stockCheck,
+    readiness,
     liveTrackingAccess,
     drivers,
     pickerResult,
@@ -311,7 +334,7 @@ export default async function OrderDetailPage({
     returnsAccess,
     maintenanceAccess,
     deliveryRequestCharter,
-    deliveryRequestTimezone,
+    orgTimezone,
     deliveryRequestRouting,
     orderReturns,
   ] = await Promise.all([
@@ -320,58 +343,25 @@ export default async function OrderDetailPage({
     // paid there only (it's cheap + request-cached via React.cache()).
     isPickingStatus ? getWarehouseAccess(ctx) : Promise.resolve(null),
 
-    // Stock-awareness read: available = on_hand − Σ(active reservations),
-    // grouped PER ITEM first — two lines of the same item must be judged
-    // against their combined demand, or a duplicate-item order slips past
-    // the check line-by-line.
-    needsStockCheck
-      ? (async () => {
-          const itemIds = [
-            ...new Set(
-              lines.map((l) => l.item?.id).filter((x): x is string => Boolean(x)),
-            ),
-          ];
-          if (itemIds.length === 0) {
-            return { isShortStock: false, hasFulfillableStock: false };
-          }
-          // Batched and paged, and THROWS on a failed batch (the error
-          // boundary offers a retry). An order's lines have no total cap, and
-          // one `.in()` of every item fails past ~215 locally and ~395 in
-          // production; read with its error ignored, that was "nothing
-          // reserved", which hid a short-stock order behind a plain Approve.
-          const inventory = await InventoryService.forCurrentUser();
-          const reservedByItem = await inventory.reservedQuantityByItemIds(itemIds);
-          // Group demand per item: requested (approval check) and owed (resume check).
-          const demandByItem = new Map<string, { requested: number; owed: number; onHand: number }>();
-          for (const l of lines) {
-            const itemId = l.item?.id;
-            if (!itemId) continue;
-            const entry = demandByItem.get(itemId) ?? {
-              requested: 0,
-              owed: 0,
-              onHand: Number(l.item?.quantity_on_hand ?? 0),
-            };
-            entry.requested += Number(l.quantity_requested) || 0;
-            entry.owed += Math.max(
-              0,
-              (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0),
-            );
-            demandByItem.set(itemId, entry);
-          }
-          let isShortStock = false;
-          let hasFulfillableStock = false;
-          for (const [itemId, d] of demandByItem) {
-            const available = Math.max(0, d.onHand - (reservedByItem.get(itemId) ?? 0));
-            if (request.status === 'pending_approval' && d.requested > available) {
-              isShortStock = true;
-            }
-            if (request.status === 'backordered' && d.owed > 0 && available > 0) {
-              hasFulfillableStock = true;
-            }
-          }
-          return { isShortStock, hasFulfillableStock };
-        })()
-      : Promise.resolve(null),
+    // Order readiness: one read of the order's facts (order_readiness_facts,
+    // SECURITY DEFINER, gated in its body, answering for THIS reader), judged
+    // by core exactly as the phone judges it. In this batch, never a level of
+    // its own. A failure is a result ('failed'), rendered in the strip as
+    // "Couldn't check readiness" and turned into disabled actions with the
+    // reason: never a page-level throw, and never "nothing reserved".
+    readinessGate
+      ? OrderReadinessService.forCurrentUser()
+          .then((svc) => svc.result(id))
+          .catch((e: unknown): OrderReadinessResult => {
+            if (isNextControlFlowError(e)) throw e;
+            void reportError(e, {
+              tag: 'orders.readiness_failed',
+              level: 'warning',
+              organizationId: ctx.organizationId,
+            });
+            return { state: 'failed', message: 'Could not check readiness.' };
+          })
+      : Promise.resolve<OrderReadinessResult | null>(null),
 
     liveTrackingGate ? checkModuleAccess('live_tracking') : Promise.resolve(null),
 
@@ -527,9 +517,11 @@ export default async function OrderDetailPage({
         })()
       : Promise.resolve<StorefrontCharter | null>(null),
 
-    // The org timezone the draft's needed-by line is printed in — the same
-    // getCachedOrgTimezone call the storefront page makes for the dialog.
-    showDeliveryRequest
+    // The org timezone: the delivery draft's needed-by line, and readiness'
+    // "Checked at" time and dates (the same zone the phone uses). The same
+    // getCachedOrgTimezone call the storefront page makes for the dialog;
+    // read only when one of them renders.
+    showDeliveryRequest || readinessGate
       ? getCachedOrgTimezone(ctx.organizationId)
       : Promise.resolve<string | null>(null),
 
@@ -595,8 +587,50 @@ export default async function OrderDetailPage({
       }
     : null;
 
-  const isShortStock = stockCheck?.isShortStock ?? false;
-  const hasFulfillableStock = stockCheck?.hasFulfillableStock ?? false;
+  // Readiness, as the page shows it. The stock-dependent actions come from
+  // the same result (core readinessStockFlags + orderStockGates, the phone's
+  // gates): a failed read, an item this viewer cannot read, or an order past
+  // the line cap DISABLES Approve partial / Resume with the reason, never
+  // flags defaulted to false.
+  const readinessTimeZone = resolveOrgTimezone(orgTimezone);
+  const readinessStrip = readiness
+    ? readinessStripView(readiness, viewerReadinessAudience, { timeZone: readinessTimeZone })
+    : null;
+  const readinessAssessment =
+    readiness?.state === 'ok' &&
+    readiness.assessment.phase === 'to_pick' &&
+    !readiness.assessment.linesCapped &&
+    viewerReadinessAudience === 'full'
+      ? readiness.assessment
+      : null;
+  const readinessLineById = new Map(readinessAssessment?.lines.map((l) => [l.lineId, l] as const));
+  const readinessItemById = new Map(readinessAssessment?.items.map((it) => [it.itemId, it] as const));
+  // "Count this item" on a line where on record and the locations disagree:
+  // the item page's rule (a manager who can start a count; an item a count
+  // can include). The service context is the one every read above already
+  // used (request-cached), so this costs no round trip.
+  const viewerCanStartCount = readinessAssessment
+    ? await contextStarted.then(canStartCount, () => false)
+    : false;
+  // A line's readiness, its item's, and whether this viewer may count that
+  // item from the line (start_cycle_count's predicate as far as the facts
+  // carry it: not deleted, archived or a kit; items on orders are never
+  // rental equipment).
+  const readinessCellFor = (lineId: string) => {
+    const line = readinessLineById.get(lineId) ?? null;
+    const item = line ? (readinessItemById.get(line.itemId) ?? null) : null;
+    const f = item?.facts ?? null;
+    return {
+      line,
+      item,
+      canCountItem: viewerCanStartCount && f !== null && !f.deleted && !f.archived && !f.isBundle,
+    };
+  };
+  const stockCheck: OrderStockCheck = readiness
+    ? readinessStockFlags(readiness)
+    : { state: 'not_needed' };
+  const stockGates = orderStockGates(request.status, stockCheck);
+  const approveNotice = approveShortNotice(stockCheck);
   const showLiveTrackingShare = liveTrackingGate && (liveTrackingAccess?.enabled ?? false);
   const { pickers, assignedPickerName } = pickerResult;
   const canBuyLabel = shippingModuleGate && (shippingAccess?.enabled ?? false);
@@ -792,7 +826,7 @@ export default async function OrderDetailPage({
                 // this button is not rendered at all), but a literal here was
                 // one of the two copies of "the default org timezone" that let
                 // web and mobile state different needed-by times for one order.
-                orgTimezone={resolveOrgTimezone(deliveryRequestTimezone)}
+                orgTimezone={resolveOrgTimezone(orgTimezone)}
                 notes={request.notes ?? ''}
                 lines={deliveryRequestLines}
               />
@@ -973,6 +1007,8 @@ export default async function OrderDetailPage({
                 </p>
               </div>
             )}
+            {/* Readiness (F2-1), directly above the lines it describes. */}
+            {readinessStrip && <ReadinessStrip view={readinessStrip} />}
             <Table>
               <TableHeader>
                 <TableRow>
@@ -998,6 +1034,7 @@ export default async function OrderDetailPage({
                   </TableHead>
                   <TableHead className="text-right">Owed</TableHead>
                   <TableHead className="text-right">On hand</TableHead>
+                  {readinessAssessment && <TableHead>Readiness</TableHead>}
                   {/* A trailing actions column rather than a click-the-number
                       affordance on Requested. The complaint that produced this
                       was "theres no way to" — a hover-to-reveal editor gives no
@@ -1019,7 +1056,7 @@ export default async function OrderDetailPage({
                 {lines.length === 0 && (
                   <TableRow>
                     <TableCell
-                      colSpan={canEditLines ? 6 : 5}
+                      colSpan={5 + (canEditLines ? 1 : 0) + (readinessAssessment ? 1 : 0)}
                       className="text-muted-foreground py-6 text-center text-sm"
                     >
                       No lines on this request.
@@ -1027,10 +1064,10 @@ export default async function OrderDetailPage({
                   </TableRow>
                 )}
                 {lines.map((l) => {
-                  const owed = Math.max(
-                    0,
-                    (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0),
-                  );
+                  const owed = lineOwedUnits({
+                    quantityRequested: l.quantity_requested,
+                    quantityFulfilled: l.quantity_fulfilled,
+                  });
                   return (
                     <TableRow key={l.id}>
                       <TableCell>
@@ -1089,6 +1126,11 @@ export default async function OrderDetailPage({
                       <TableCell className="text-right tabular-nums text-muted-foreground">
                         {l.item ? formatNumber(l.item.quantity_on_hand) : '—'}
                       </TableCell>
+                      {readinessAssessment && (
+                        <TableCell className="min-w-[13rem] max-w-[18rem] whitespace-normal align-top">
+                          <ReadinessLineCell {...readinessCellFor(l.id)} timeZone={readinessTimeZone} />
+                        </TableCell>
+                      )}
                       {canEditLines && (
                         <TableCell className="py-1 pr-2 text-right align-middle">
                           {/* itemName falls back to the same label the Item
@@ -1208,8 +1250,8 @@ export default async function OrderDetailPage({
             // none of the manager-only controls.
             <ManagerActionsPanel
               canApprove={canApprove}
-              isShortStock={isShortStock}
-              hasFulfillableStock={hasFulfillableStock}
+              stockGates={stockGates}
+              approveNotice={approveNotice}
               orderId={id}
               status={request.status}
               internalNotes={request.internal_notes}
