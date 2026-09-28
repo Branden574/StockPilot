@@ -140,14 +140,15 @@ describe('reencodeWithoutMetadata', () => {
     expect([at?.width, at?.height]).toEqual([60, 30]);
   });
 
-  it('the pixel limit handed to sharp: 100e6 with no options (exception evidence is unchanged), else the one asked for', async () => {
+  it('the pixel limit handed to sharp: 50e6 with no options (exception evidence too), else the one asked for', async () => {
+    // 100e6 let a crafted 178 KB WEBP drive the decode to 1.78 GB.
     const input = new Uint8Array(await fixture('jpeg'));
     sharpCalls.length = 0;
     await reencodeWithoutMetadata(input, 'jpeg');
-    expect(sharpCalls[0]![1]).toEqual({ limitInputPixels: 100_000_000 });
-    sharpCalls.length = 0;
-    await reencodeWithoutMetadata(input, 'jpeg', { maxInputPixels: 50_000_000 });
     expect(sharpCalls[0]![1]).toEqual({ limitInputPixels: 50_000_000 });
+    sharpCalls.length = 0;
+    await reencodeWithoutMetadata(input, 'jpeg', { maxInputPixels: 20_000_000 });
+    expect(sharpCalls[0]![1]).toEqual({ limitInputPixels: 20_000_000 });
   });
 
   it.each(['jpeg', 'webp'] as const)(

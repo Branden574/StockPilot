@@ -59,9 +59,13 @@ export interface ReencodedPhoto {
 export const EVIDENCE_THUMB_MAX_EDGE = 400;
 
 /** A decode past this many pixels is refused (a decompression bomb, not a
- *  photo: a 48 MP phone sensor is 48e6). The default; a caller may ask for
- *  less (`maxInputPixels`). */
-const MAX_INPUT_PIXELS = 100_000_000;
+ *  photo: a 48 MP phone sensor is 48e6, a 50 MP one 49.9e6). 50e6 keeps the
+ *  decode near 1 GB: a crafted 178 KB 10000x10000 WEBP with orientation 6
+ *  peaked at 1.78 GB under the earlier 100e6 limit (sharp 0.35.4,
+ *  2026-09-27). Both phone apps resize to 1600 px before upload, so only an
+ *  unresized or direct upload comes near it. The default for exception
+ *  evidence and maintenance; a caller may ask for less (`maxInputPixels`). */
+const MAX_INPUT_PIXELS = 50_000_000;
 
 /** JPEG and WEBP quality of the master. The default; a caller may ask for
  *  another (`quality`). */
