@@ -4,6 +4,7 @@ import { AccessibilityInfo, View } from 'react-native';
 import {
   describeReadinessForRequester,
   describeReadinessRollup,
+  HOLD_AVAILABLE_STOCK_LABEL,
   READINESS_NEEDS_CONNECTION_COPY,
   type OrderReadinessResult,
 } from '@stockpilot/core';
@@ -41,6 +42,11 @@ import { useTheme } from '@/lib/use-theme';
  * VoiceOver hears a failure when it appears: the web's role="alert" is spoken
  * as it renders, but the 'alert' role gives iOS no trait, so the card
  * announces the failure itself (F2-1 phone walk, O2).
+ *
+ * HOLD AVAILABLE STOCK (F2-2): on the full panel, when the screen offers it
+ * (core shouldOfferHoldStock: approvers, hold statuses, some line not or
+ * partly held), the web strip's button. 44 pt, disabled while anything runs
+ * and offline (the card already says it needs a connection).
  */
 export function OrderReadinessSummary({
   result,
@@ -49,6 +55,7 @@ export function OrderReadinessSummary({
   offline,
   checking,
   onCheckAgain,
+  hold = null,
 }: {
   result: OrderReadinessResult;
   audience: 'full' | 'requester';
@@ -59,6 +66,9 @@ export function OrderReadinessSummary({
   /** A check is running (the button is disabled meanwhile). */
   checking: boolean;
   onCheckAgain: () => void;
+  /** F2-2 "Hold available stock", when offered (full panel only); null: not
+   *  offered. `busy`: the hold is running; `disabled`: another action is. */
+  hold?: { busy: boolean; disabled: boolean; onPress: () => void } | null;
 }) {
   const { c, mode } = useTheme();
   const opts = { timeZone: timeZone ?? undefined };
@@ -169,6 +179,19 @@ export function OrderReadinessSummary({
           <Body size={12.5} muted>
             {rollup.checkedAt}
           </Body>
+        ) : null}
+        {hold ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={offline || checking || hold.disabled}
+            onPress={hold.onPress}
+            accessibilityHint="Holds the stock that is free now for this order's lines"
+            // 44 pt, not the small Button's 36.
+            style={{ alignSelf: 'flex-start', marginTop: 6, minHeight: MIN_TAP }}
+          >
+            {hold.busy ? 'Holding...' : HOLD_AVAILABLE_STOCK_LABEL}
+          </Button>
         ) : null}
         {recheck(failed)}
       </View>

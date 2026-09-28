@@ -47,7 +47,9 @@ import {
   canEditOrderLines,
   lineQuantitySummary,
   lineRemovedSummary,
+  orderLineShortFix,
   orderShortfallNotice,
+  orderShortLinesFinalNote,
   type EditableOrderLine,
   type LineQuantityResult,
   type LineRemovedResult,
@@ -64,6 +66,7 @@ import { profileFromEmbed, resolveRequesterLabel } from '@/lib/requester-label';
 import {
   claimPicking,
   createOrderReturn,
+  holdOrderStock,
   listOrderDrivers,
   releasePicking,
   transitionOrder,
@@ -108,6 +111,13 @@ import {
   shouldReadReadiness,
 } from '@/lib/order-readiness';
 import { isOfflineState } from '@/lib/exceptions-api';
+import { departureConfirmButtons, orderDepartureRisk } from '@/lib/order-departure';
+import {
+  describeHoldError,
+  HOLD_REFUSED_TITLE,
+  holdTopUpNotice,
+  withHoldNotice,
+} from '@/lib/order-hold';
 import { readErrorMessage } from '@/lib/id-batches';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
@@ -140,14 +150,18 @@ import {
   can,
   condensedNoticeText,
   deliveryRecipientsForRouting,
+  describeHoldResult,
   formatOrderNumber,
   derivePickingStatus,
+  HOLD_AVAILABLE_STOCK_LABEL,
   orderLineItemName,
   orderReadinessPhase,
   orderStockGates,
   READINESS_NEEDS_CONNECTION_COPY,
   readinessOfflineCopy,
+  shouldOfferHoldStock,
   UNPICKED_SHORTFALL_TITLE,
+  type DepartureAction,
   type FulfillmentType,
   type OrderReadinessResult,
   type OrderStatus,
@@ -688,7 +702,9 @@ export default function OrderDetail() {
     // next load). Pin it to the slip it was about so the banner clears when
     // that slip is reprinted, not one second later.
     if (res.pickSlipStale) setStaleReportedForSlipAt(order?.pickSlipGeneratedAt ?? null);
-    Alert.alert('Items added', addedSummary(res));
+    // F2-2: what the automatic hold did for the added items, core's words; a
+    // failed hold says so and points to Hold available stock (never dropped).
+    Alert.alert('Items added', withHoldNotice(addedSummary(res), holdTopUpNotice(res.hold, 'added')));
     await load();
   }
 
@@ -732,7 +748,68 @@ export default function OrderDetail() {
   }
 
   function handleLineChanged(line: EditableOrderLine, res: LineQuantityResult) {
-    void afterLineEdit(res.pickSlipStale, 'Quantity updated', lineQuantitySummary(line, res));
+    // F2-2: a raise is held like an add (null for a lowering: nothing said).
+    void afterLineEdit(
+      res.pickSlipStale,
+      'Quantity updated',
+      withHoldNotice(lineQuantitySummary(line, res), holdTopUpNotice(res.hold, 'raised')),
+    );
+  }
+
+  /**
+   * F2-2: the completion and departure confirms point to the first short
+   * line, where its fixes are (decision D18). Opens that line's sheet when
+   * the viewer may change lines and the line is on screen; false otherwise
+   * (the caller then does what it can: the digital pick focuses the line's
+   * quantity, a departure confirm simply closes).
+   */
+  function openShortLine(lineId: string | null): boolean {
+    if (!lineId || !canEditItems || offline || !order) return false;
+    if (!order.lines.some((l) => l.orderRequestLineId === lineId)) return false;
+    setEditLineId(lineId);
+    return true;
+  }
+
+  /**
+   * F2-2 (the SO-000100 slice): before the order is staged, sent out for
+   * delivery or signed for, say which lines are not fully picked (core
+   * describeDepartureRisk, the web page's words). "Fix the order" opens the
+   * first short line; "Send it anyway" (or its staging and signature twins)
+   * goes ahead. With nothing short the step runs at once, as before. UI only:
+   * the server stays permissive (shipping short is the backorder model).
+   */
+  function confirmDeparture(action: DepartureAction, proceed: () => void) {
+    const risk = order ? orderDepartureRisk(order, action) : null;
+    if (!risk) {
+      proceed();
+      return;
+    }
+    Alert.alert(
+      risk.title,
+      risk.message,
+      departureConfirmButtons(risk, { onFix: openShortLine, onProceed: proceed }),
+    );
+  }
+
+  /**
+   * F2-2 "Hold available stock": tops the order's holds up to what its lines
+   * still owe, as far as free stock allows (hold_order_stock, 0378). Says
+   * what was held and what is still short (core describeHoldResult), or why
+   * nothing was (the server's sentence, never raw text), then reads the order
+   * again so each line's hold is current.
+   */
+  async function holdStock() {
+    if (!id || acting !== null) return;
+    setActing('hold');
+    try {
+      const result = await holdOrderStock(id);
+      Alert.alert(HOLD_AVAILABLE_STOCK_LABEL, describeHoldResult(result));
+    } catch (e) {
+      Alert.alert(HOLD_REFUSED_TITLE, describeHoldError(e));
+    } finally {
+      setActing(null);
+    }
+    await load();
   }
 
   function handleLineRemoved(line: EditableOrderLine, res: LineRemovedResult) {
@@ -1338,6 +1415,31 @@ export default function OrderDetail() {
     setSignatureModalVisible(true);
   }
 
+  function promptPhysicalSignature() {
+    Alert.prompt(
+      'Physical signature',
+      "Customer signed on paper? Enter the signer's name — this completes the hand-over exactly like the digital sign page (backordering any still-owed items).",
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Record',
+          onPress: (name?: string) => {
+            const signer = (name ?? '').trim();
+            if (!signer) {
+              Alert.alert('Name required', 'Enter who signed the paper copy.');
+              return;
+            }
+            void act(
+              { action: 'confirm_physical_signature', signerName: signer },
+              'physicalsig',
+            );
+          },
+        },
+      ],
+      'plain-text',
+    );
+  }
+
   // Whether the current status exposes any manager action (so we don't render an
   // empty section at, e.g., a terminal status).
   const ft = order?.fulfillmentType;
@@ -1389,6 +1491,30 @@ export default function OrderDetail() {
   }, [order]);
   const showLineReadiness = readinessShown && readinessAudienceNow === 'full';
 
+  // F2-2 "Hold available stock" on the readiness card: core's rule, the web
+  // strip's own (approvers, hold statuses, some line not or partly held).
+  const offerHold =
+    readinessShown &&
+    shouldOfferHoldStock({
+      assessment: order?.readiness?.state === 'ok' ? order.readiness.assessment : null,
+      canApproveOrders: rpApprove,
+    });
+
+  // F2-2: the fixes the line being edited offers when it is short (core
+  // shortLineActions): before picking from its readiness (the full panel
+  // only), after picking from the line alone.
+  const editLineShortFix = React.useMemo(() => {
+    if (!editLine || !order || editLine.orderRequestLineId === null) return null;
+    const lineId = editLine.orderRequestLineId;
+    return orderLineShortFix({
+      status: order.status,
+      line: editLine,
+      position: order.lines.findIndex((l) => l.orderRequestLineId === lineId) + 1,
+      totalLines: order.lines.length,
+      readinessLine: showLineReadiness ? (readinessByLine?.get(lineId)?.line ?? null) : null,
+    });
+  }, [editLine, order, showLineReadiness, readinessByLine]);
+
   // Every action needs a connection; this is the reason shown with them.
   const connectionNotice = offline ? (
     <Body size={12} color={c.ink3}>
@@ -1433,6 +1559,9 @@ export default function OrderDetail() {
   // @stockpilot/core owns the arithmetic and the status set, so this card and
   // the web order page can never disagree about the number or the wording.
   const shortfallNotice = order ? orderShortfallNotice(order.lines, order.status) : null;
+  // F2-2: out for delivery the lines are final (the line sheet does not
+  // open), so the card says what happens to the units instead (core's note).
+  const shortLinesFinalNote = order ? orderShortLinesFinalNote(order.lines, order.status) : null;
 
   // Picking claim/lock (owner decisions, enforced server-side). This section is
   // visible to ANY role in the picking phase — a staff picker must claim before
@@ -1853,6 +1982,11 @@ export default function OrderDetail() {
                   {shortfallNotice}
                 </Body>
               ) : null}
+              {shortLinesFinalNote ? (
+                <Body size={12} color="#b45309" style={{ marginTop: 6 }}>
+                  {shortLinesFinalNote}
+                </Body>
+              ) : null}
             </Card>
           ) : null}
 
@@ -1868,6 +2002,11 @@ export default function OrderDetail() {
               <Mono size={11} color={ACCENT.warn} style={{ marginTop: 4 }}>
                 {shortfallNotice}
               </Mono>
+              {shortLinesFinalNote ? (
+                <Mono size={11} color={ACCENT.warn} style={{ marginTop: 6 }}>
+                  {shortLinesFinalNote}
+                </Mono>
+              ) : null}
             </Card>
           ) : null}
 
@@ -1881,6 +2020,15 @@ export default function OrderDetail() {
               offline={offline}
               checking={retrying}
               onCheckAgain={() => void retryLoad()}
+              hold={
+                offerHold
+                  ? {
+                      busy: acting === 'hold',
+                      disabled: acting !== null,
+                      onPress: () => void holdStock(),
+                    }
+                  : null
+              }
             />
           ) : null}
 
@@ -2152,6 +2300,11 @@ export default function OrderDetail() {
                   orderId={id!}
                   canPick
                   offline={offline}
+                  // F2-2: the completion confirm projects what the picker
+                  // entered against this order's readiness, and "Review short
+                  // lines" opens the first short line where its fixes are.
+                  readiness={order.readiness}
+                  onReviewLine={openShortLine}
                   onCompleted={() => void load()}
                 />
               ) : !canClaimPick &&
@@ -2222,12 +2375,16 @@ export default function OrderDetail() {
                 : null}
               {order.status === 'packing_slip_generated' && order.fulfillmentType === 'pickup'
                 ? actionBtn('Mark staged for pickup', 'stage', () =>
-                    void act({ action: 'stage', target: 'staged_for_pickup' }, 'stage'),
+                    confirmDeparture('stage', () =>
+                      void act({ action: 'stage', target: 'staged_for_pickup' }, 'stage'),
+                    ),
                   )
                 : null}
               {order.status === 'packing_slip_generated' && order.fulfillmentType === 'delivery'
                 ? actionBtn('Mark staged for delivery', 'stage', () =>
-                    void act({ action: 'stage', target: 'staged_for_delivery' }, 'stage'),
+                    confirmDeparture('stage', () =>
+                      void act({ action: 'stage', target: 'staged_for_delivery' }, 'stage'),
+                    ),
                   )
                 : null}
               {order.status === 'packing_slip_generated' && canReopenPicking
@@ -2243,38 +2400,20 @@ export default function OrderDetail() {
                 : null}
               {order.status === 'staged_for_delivery' && order.assignedDeliveryUserId
                 ? actionBtn('Mark in transit', 'transit', () =>
-                    void act({ action: 'mark_in_transit' }, 'transit'),
+                    confirmDeparture('in_transit', () =>
+                      void act({ action: 'mark_in_transit' }, 'transit'),
+                    ),
                   )
                 : null}
               {order.status === 'staged_for_pickup' || order.status === 'in_transit' ? (
                 <>
-                  {actionBtn('Collect signature', 'sig', collectSignature)}
+                  {actionBtn('Collect signature', 'sig', () =>
+                    confirmDeparture('signature', collectSignature),
+                  )}
                   {actionBtn(
                     'Physical signature',
                     'physicalsig',
-                    () =>
-                      Alert.prompt(
-                        'Physical signature',
-                        "Customer signed on paper? Enter the signer's name — this completes the hand-over exactly like the digital sign page (backordering any still-owed items).",
-                        [
-                          { text: 'Cancel', style: 'cancel' },
-                          {
-                            text: 'Record',
-                            onPress: (name?: string) => {
-                              const signer = (name ?? '').trim();
-                              if (!signer) {
-                                Alert.alert('Name required', 'Enter who signed the paper copy.');
-                                return;
-                              }
-                              void act(
-                                { action: 'confirm_physical_signature', signerName: signer },
-                                'physicalsig',
-                              );
-                            },
-                          },
-                        ],
-                        'plain-text',
-                      ),
+                    () => confirmDeparture('signature', promptPhysicalSignature),
                     'default',
                   )}
                 </>
@@ -3211,6 +3350,7 @@ export default function OrderDetail() {
           line={editLine}
           orderStatus={order.status}
           totalLines={order.lines.length}
+          shortFix={editLineShortFix}
           onChanged={handleLineChanged}
           onRemoved={handleLineRemoved}
           onRequestReload={() => void load()}

@@ -13,7 +13,7 @@ import { extractApiErrorMessage } from '../lib/po-import-approve';
  *
  * Server contract these build against (PINNED — apps/web .../orders/[id]/lines):
  *   POST /api/v1/orders/[id]/lines  { lines: [{ itemId, quantity }] }
- *     → 200 { ok: true, added, merged, pickSlipStale }
+ *     → 200 { ok: true, added, merged, pickSlipStale, hold }   (hold: F2-2 top-up)
  * The route hands straight to OrderRequestsService.addLines, the SAME method
  * the web server action calls, so every rule below is a COSMETIC mirror of a
  * server-enforced one — never the boundary.
