@@ -16,8 +16,9 @@ vi.mock('next/link', () => ({
   ),
 }));
 
+const routerRefresh = vi.hoisted(() => vi.fn());
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ refresh: routerRefresh, push: vi.fn() }),
 }));
 
 vi.mock('sonner', () => ({
@@ -27,7 +28,11 @@ vi.mock('sonner', () => ({
 // The panel + its dialogs import the server-action module; stub every action
 // it references so the client component renders without pulling server deps.
 vi.mock('@/server/actions/order-requests', () => ({
+  approveOrderPartialAction: vi.fn(),
   approveOrderRequestAction: vi.fn(),
+  closePartialAction: vi.fn(),
+  confirmPhysicalSignatureAction: vi.fn(),
+  resumeFulfillmentAction: vi.fn(),
   assignDeliveryAction: vi.fn(),
   assignPickingAction: vi.fn(),
   claimPickingAction: vi.fn(),
@@ -321,5 +326,133 @@ describe('ManagerActionsPanel — reason dialogs clear on cancel', () => {
     await user.click(screen.getByRole('button', { name: 'Deny' }));
     dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByLabelText('Reason')).toHaveValue('');
+  });
+});
+
+/**
+ * The stock-dependent actions (F2-1): the page hands the panel core's
+ * orderStockGates, fed by readiness. Each action is hidden, enabled, or
+ * DISABLED with the reason shown under the actions; a failed check never
+ * reads as "stock is fine" (the old booleans defaulted to false and hid the
+ * action silently).
+ */
+describe('ManagerActionsPanel — stock gates from readiness', () => {
+  const manager = { canApprove: true, viewerRole: 'manager' as const };
+  const gates = (over: Partial<NonNullable<PanelProps['stockGates']>> = {}): PanelProps['stockGates'] => ({
+    approvePartial: 'hidden',
+    resume: 'waiting',
+    notice: null,
+    canRetry: false,
+    ...over,
+  });
+
+  beforeEach(() => routerRefresh.mockReset());
+
+  it('pending, short: Approve partial is offered, and the note under Approve says why a strict Approve fails', () => {
+    render(
+      <ManagerActionsPanel
+        {...baseProps({
+          ...manager,
+          status: 'pending_approval',
+          stockGates: gates({ approvePartial: 'enabled' }),
+          approveNotice: '2 lines ask for more than is available now, so Approve will be refused. Use Approve partial or change the lines.',
+        })}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Approve partial' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled();
+    expect(screen.getByTestId('approve-short-notice')).toHaveTextContent(
+      '2 lines ask for more than is available now, so Approve will be refused. Use Approve partial or change the lines.',
+    );
+  });
+
+  it('pending, not short: no Approve partial and no note', () => {
+    render(<ManagerActionsPanel {...baseProps({ ...manager, status: 'pending_approval', stockGates: gates() })} />);
+    expect(screen.queryByRole('button', { name: 'Approve partial' })).toBeNull();
+    expect(screen.queryByTestId('approve-short-notice')).toBeNull();
+    expect(screen.queryByTestId('order-stock-notice')).toBeNull();
+  });
+
+  it('pending, the check failed: Approve partial is shown DISABLED with the reason and a Try again that re-reads', async () => {
+    const user = userEvent.setup();
+    const notice = 'Could not check stock for this order. Approve partial is unavailable until it loads.';
+    render(
+      <ManagerActionsPanel
+        {...baseProps({
+          ...manager,
+          status: 'pending_approval',
+          stockGates: gates({ approvePartial: 'disabled', notice, canRetry: true }),
+        })}
+      />,
+    );
+    const partial = screen.getByRole('button', { name: 'Approve partial' });
+    expect(partial).toBeDisabled();
+    expect(partial).toHaveAttribute('aria-describedby', 'order-stock-notice');
+    expect(screen.getByTestId('order-stock-notice')).toHaveTextContent(notice);
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(routerRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('a reason no re-read can fix (a hidden item) has no Try again', () => {
+    render(
+      <ManagerActionsPanel
+        {...baseProps({
+          ...manager,
+          status: 'pending_approval',
+          stockGates: gates({
+            approvePartial: 'disabled',
+            notice: 'Some items on this order are not visible to you, so stock could not be checked. Approve partial is unavailable.',
+          }),
+        })}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Approve partial' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
+  it('backordered: Resume enabled, disabled with the reason, or waiting for stock', () => {
+    const { rerender } = render(
+      <ManagerActionsPanel {...baseProps({ ...manager, status: 'backordered', stockGates: gates({ resume: 'enabled' }) })} />,
+    );
+    expect(screen.getByRole('button', { name: 'Resume fulfillment' })).toBeEnabled();
+
+    const notice = 'Could not check stock for this order. Resume fulfillment is unavailable until it loads.';
+    rerender(
+      <ManagerActionsPanel
+        {...baseProps({
+          ...manager,
+          status: 'backordered',
+          stockGates: gates({ resume: 'disabled', notice, canRetry: true }),
+        })}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Resume fulfillment' })).toBeDisabled();
+    expect(screen.getByTestId('order-stock-notice')).toHaveTextContent(notice);
+
+    rerender(<ManagerActionsPanel {...baseProps({ ...manager, status: 'backordered', stockGates: gates() })} />);
+    expect(screen.queryByRole('button', { name: 'Resume fulfillment' })).toBeNull();
+    expect(screen.getByText('Resume unlocks when owed items are back in stock.')).toBeInTheDocument();
+  });
+
+  it('without gates (not a stock-dependent status), nothing is offered or said', () => {
+    render(<ManagerActionsPanel {...baseProps({ ...manager, status: 'pending_approval' })} />);
+    expect(screen.queryByRole('button', { name: 'Approve partial' })).toBeNull();
+    expect(screen.queryByTestId('order-stock-notice')).toBeNull();
+  });
+
+  it('the notices belong to the approver on the two stock-dependent statuses only', () => {
+    render(
+      <ManagerActionsPanel
+        {...baseProps({
+          status: 'approved',
+          canApprove: true,
+          viewerRole: 'manager',
+          stockGates: gates({ notice: 'stale notice' }),
+          approveNotice: 'stale note',
+        })}
+      />,
+    );
+    expect(screen.queryByTestId('order-stock-notice')).toBeNull();
+    expect(screen.queryByTestId('approve-short-notice')).toBeNull();
   });
 });

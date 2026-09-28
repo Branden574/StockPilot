@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { lineOwedUnits } from '@stockpilot/core';
+
 import { FefoLotHint } from '@/components/orders/fefo-lot-hint';
 import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Button } from '@/components/ui/button';
@@ -115,10 +117,11 @@ export function DigitalPick({
   // backordered — confirm before doing that silently.
   const shipsNow = initialLines.reduce((s, l) => s + (picked[l.id] ?? 0), 0);
   const backorderQty = initialLines.reduce((s, l) => {
-    const owedBefore = Math.max(
-      0,
-      Number(l.quantity_requested) - Number(l.quantity_fulfilled ?? 0),
-    );
+    // Core lineOwedUnits is the one definition of owed (pattern #26).
+    const owedBefore = lineOwedUnits({
+      quantityRequested: l.quantity_requested,
+      quantityFulfilled: l.quantity_fulfilled,
+    });
     return s + Math.max(0, owedBefore - (picked[l.id] ?? 0));
   }, 0);
   const [confirmOpen, setConfirmOpen] = React.useState(false);

@@ -1,5 +1,18 @@
-import { render } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
+import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { OrderReadinessResult } from '@stockpilot/core';
+
+import {
+  hiddenItemFacts,
+  orderReadinessFacts,
+  READINESS_FAILED,
+  readinessOk,
+  visibleItemFacts,
+} from '@/test/order-readiness-facts';
 
 /**
  * I1 (fix wave 2, security review sibling of C1's cross-org attach fix):
@@ -36,6 +49,8 @@ vi.mock('next/navigation', () => ({
   notFound: vi.fn(() => {
     throw new Error('notFound');
   }),
+  // The readiness strip's "Check again" (a client component, rendered for real).
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
 }));
 
 vi.mock('next/link', async () => {
@@ -57,7 +72,14 @@ vi.mock('@/components/orders/manager-actions-panel', () => ({
     return null;
   },
 }));
-vi.mock('@/components/orders/order-line-actions', () => ({ OrderLineActions: () => null }));
+// A recording spy: the row's edit / remove controls name the line's item.
+const orderLineActionsProps = vi.fn();
+vi.mock('@/components/orders/order-line-actions', () => ({
+  OrderLineActions: (props: Record<string, unknown>) => {
+    orderLineActionsProps(props);
+    return null;
+  },
+}));
 vi.mock('@/components/orders/delivery-location-share', () => ({ DeliveryLocationShare: () => null }));
 vi.mock('@/components/returns/create-return-dialog', () => ({ CreateReturnDialog: () => null }));
 vi.mock('@/components/orders/order-attachments-panel', () => ({ OrderAttachmentsPanel: () => null }));
@@ -168,12 +190,30 @@ vi.mock('@/server/services/order-attachments', () => ({
 vi.mock('@/server/services/order-requests', () => ({
   OrderRequestsService: { forCurrentUser: vi.fn(async () => ({ get: orderGet })) },
 }));
-// The pending-approval stock check reads reservations through the service's
-// batched, paged, throwing read (see the stock-check describe below).
-const reservedQuantityByItemIds = vi.fn(async (_ids: string[]) => new Map<string, number>());
-vi.mock('@/server/services/inventory', () => ({
-  InventoryService: { forCurrentUser: vi.fn(async () => ({ reservedQuantityByItemIds })) },
+// Order readiness (F2-1): the service's settled result. The default is a
+// failed read, so a test that does not care about readiness never sees a
+// green answer by accident.
+const readinessResult = vi.fn(async (_orderId: string): Promise<OrderReadinessResult> => READINESS_FAILED);
+const readinessForCurrentUser = vi.fn(async () => ({ result: readinessResult }));
+vi.mock('@/server/services/order-readiness', () => ({
+  OrderReadinessService: { forCurrentUser: () => readinessForCurrentUser() },
 }));
+// "Count this item" on a line whose records disagree: the item page's rule
+// (canStartCount) and its button, both recorded here.
+const canStartCountMock = vi.fn((_ctx: unknown) => false);
+vi.mock('@/server/services/lib/count-start-preflight', () => ({
+  canStartCount: (ctx: unknown) => canStartCountMock(ctx),
+}));
+const countThisItemProps = vi.fn();
+vi.mock('@/components/exceptions/count-this-item-button', async () => {
+  const React = await import('react');
+  return {
+    CountThisItemButton: (props: Record<string, unknown>) => {
+      countThisItemProps(props);
+      return React.createElement('button', { type: 'button' }, 'Count this item');
+    },
+  };
+});
 const managerActionsProps = vi.fn();
 
 vi.mock('@/server/services/returns', () => ({
@@ -281,6 +321,8 @@ beforeEach(() => {
   getWarehouseAccessMock.mockResolvedValue({ hasAllAccess: true, writableIds: [] });
   setPermissions(true);
   checkModuleAccessMock.mockResolvedValue({ enabled: true, canManage: false });
+  readinessResult.mockImplementation(async () => READINESS_FAILED);
+  canStartCountMock.mockReturnValue(false);
 });
 
 describe('orders/[id]: the order read', () => {
@@ -472,45 +514,633 @@ describe('orders/[id] host — delivery-request assistant re-entry gating + prop
   });
 });
 
-/**
- * The pending-approval stock check. It read every line's reservations in one
- * `.in()` with the error ignored: an order's lines have no total cap, so past
- * ~215 items the local gateway answered 414 and past ~395 production failed
- * after ~7 s of retries, and the page read that as "nothing reserved",
- * offering a plain Approve on an order that is short. It now goes through
- * InventoryService.reservedQuantityByItemIds, which batches, pages and throws.
- */
-describe('orders/[id]: the pending-approval stock check', () => {
-  const itemId = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
-  const lines = Array.from({ length: 250 }, (_, i) => ({
-    id: `line-${i}`,
-    quantity_requested: 1,
-    quantity_fulfilled: 0,
-    quantity_picked: 0,
-    returned_quantity: 0,
-    item: { id: itemId(i), name: `Item ${i}`, sku: `S-${i}`, quantity_on_hand: 1 },
-  }));
-  function asManager() {
-    ctxHolder.current = { role: 'manager', permissions: new Set(['orders:read', 'orders:approve']) };
-  }
 
-  it('reads reservations for all 250 items through the service, and one fully reserved item makes the order short', async () => {
+/**
+ * ORDER READINESS (F2-1). The page's own stock check (on hand minus a
+ * reservations read, which threw into the error boundary when the read
+ * failed) is gone: readiness is one read in the Tier-2 batch, for the
+ * audience core names, and the same result feeds the strip, the Readiness
+ * column and the Approve partial / Resume gates. A failed read is rendered as
+ * "Couldn't check readiness" and disables the actions with the reason; the
+ * page never throws for it.
+ */
+describe('orders/[id]: order readiness (F2-1)', () => {
+  function orderLine(id: string, itemId: string, requested: number, over: Record<string, unknown> = {}) {
+    return {
+      id,
+      order_request_id: ORDER_ID,
+      item_id: itemId,
+      quantity_requested: requested,
+      quantity_fulfilled: 0,
+      quantity_picked: null,
+      returned_quantity: 0,
+      unit_cost_at_request: 0,
+      notes: null,
+      item: {
+        id: itemId,
+        name: `Item ${itemId}`,
+        sku: `SKU-${itemId}`,
+        quantity_on_hand: 40,
+        charter_name: null,
+        charter_code: null,
+      },
+      ...over,
+    };
+  }
+  const LINE_A = orderLine('LA', 'iA', 20);
+  const LINE_B = orderLine('LB', 'iB', 25);
+
+  function orderAt(status: string, lines: unknown[], request: Record<string, unknown> = {}) {
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status, ...request }), lines }));
+  }
+  function as(role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer', perms: string[]) {
+    ctxHolder.current = { role, permissions: new Set(['orders:read', ...perms]) };
+  }
+  const asManager = () => as('manager', ['orders:approve']);
+
+  /** A ready (40 on a rack) and B needs put-away (10 rack + 30 Staging, 25 asked). */
+  const mixedFacts = (status: string) =>
+    orderReadinessFacts(
+      ORDER_ID,
+      status,
+      [
+        { lineId: 'LA', itemId: 'iA', requested: 20 },
+        { lineId: 'LB', itemId: 'iB', requested: 25 },
+      ],
+      [visibleItemFacts('iA', { here: { rack: 40 } }), visibleItemFacts('iB', { here: { rack: 10, staging: 30 } })],
+    );
+
+  const lastPanelProps = () => managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>;
+
+  it('a manager on a pending order: one read of THIS order, the strip, each line under its item, and gates from the same result', async () => {
     asManager();
-    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'pending_approval' }), lines }));
-    reservedQuantityByItemIds.mockResolvedValue(new Map([[itemId(249), 1]]));
+    orderAt('pending_approval', [LINE_A, LINE_B]);
+    readinessResult.mockResolvedValue(readinessOk(mixedFacts('pending_approval')));
 
     await renderPage();
 
-    expect(reservedQuantityByItemIds).toHaveBeenCalledWith(lines.map((l) => l.item.id));
-    expect(managerActionsProps).toHaveBeenCalledWith(
-      expect.objectContaining({ isShortStock: true }),
+    expect(readinessForCurrentUser).toHaveBeenCalledTimes(1);
+    expect(readinessResult).toHaveBeenCalledWith(ORDER_ID);
+    const strip = screen.getByTestId('readiness-strip');
+    expect(strip).toHaveAttribute('data-mode', 'full');
+    expect(within(strip).getByTestId('readiness-headline')).toHaveTextContent('1 line needs put-away');
+    expect(within(strip).getByTestId('readiness-details')).toHaveTextContent('1 of 2 lines ready to pick');
+    // The org's zone as the facts carry it (America/Los_Angeles here): 17:42Z
+    // is 10:42 AM.
+    expect(within(strip).getByTestId('readiness-checked-at')).toHaveTextContent(
+      'Checked at 10:42 AM. Stock can change after this.',
+    );
+    expect(within(strip).getByTestId('readiness-recheck')).toHaveTextContent('Check again');
+    // Each line's readiness is in its Item cell, not a column of its own.
+    expect(screen.queryByRole('columnheader', { name: 'Readiness' })).toBeNull();
+    const cells = screen.getAllByTestId('readiness-line');
+    expect(cells.map((c) => c.closest('td')!.cellIndex)).toEqual([0, 0]);
+    expect(cells.map((c) => c.getAttribute('data-state'))).toEqual(['ready', 'needs_put_away']);
+    expect(within(cells[0]!).getByTestId('readiness-sentence')).toHaveTextContent('20 on the shelf for this order.');
+    expect(within(cells[1]!).getByTestId('readiness-sentence')).toHaveTextContent(
+      '10 on the shelf. 15 more are in Staging and must be put away before picking can take them.',
+    );
+    // Nothing is short, so Approve partial stays hidden and nothing is noted.
+    expect(lastPanelProps()).toMatchObject({
+      stockGates: { approvePartial: 'hidden', resume: 'waiting', notice: null, canRetry: false },
+      approveNotice: null,
+    });
+  });
+
+  it('a short pending order offers Approve partial and the note under Approve', async () => {
+    asManager();
+    orderAt('pending_approval', [LINE_A]);
+    readinessResult.mockResolvedValue(
+      readinessOk(
+        orderReadinessFacts(ORDER_ID, 'pending_approval', [{ lineId: 'LA', itemId: 'iA', requested: 20 }], [
+          visibleItemFacts('iA', { here: { rack: 5 } }),
+        ]),
+      ),
+    );
+
+    await renderPage();
+
+    expect(screen.getByTestId('readiness-headline')).toHaveTextContent('1 line short');
+    expect(screen.getByTestId('readiness-line')).toHaveAttribute('data-state', 'short');
+    expect(lastPanelProps()).toMatchObject({
+      stockGates: { approvePartial: 'enabled', notice: null },
+      approveNotice: '1 line asks for more than is available now, so Approve will be refused. Use Approve partial or change the lines.',
+    });
+  });
+
+  it("a FAILED read says \"Couldn't check readiness\" with Try again, disables Approve partial with the reason, and never throws", async () => {
+    asManager();
+    orderAt('pending_approval', [LINE_A, LINE_B]);
+    readinessResult.mockResolvedValue(READINESS_FAILED);
+
+    await renderPage();
+
+    const strip = screen.getByTestId('readiness-strip');
+    expect(strip).toHaveAttribute('data-failed', 'true');
+    expect(within(strip).getByTestId('readiness-headline')).toHaveTextContent("Couldn't check readiness. Try again.");
+    expect(within(strip).getByTestId('readiness-recheck')).toHaveTextContent('Try again');
+    expect(within(strip).queryByTestId('readiness-checked-at')).toBeNull();
+    expect(strip.textContent).not.toMatch(/Ready|in stock/);
+    // No per-line claims from a read that failed.
+    expect(screen.queryAllByTestId('readiness-line')).toEqual([]);
+    expect(screen.queryByRole('columnheader', { name: 'Readiness' })).toBeNull();
+    // DISABLED with the reason, never flags defaulted to false (hidden).
+    expect(lastPanelProps()).toMatchObject({
+      stockGates: {
+        approvePartial: 'disabled',
+        notice: 'Could not check stock for this order. Approve partial is unavailable until it loads.',
+        canRetry: true,
+      },
+      approveNotice: null,
+    });
+  });
+
+  it('a failed read on a backordered order disables Resume with the reason', async () => {
+    asManager();
+    orderAt('backordered', [orderLine('LA', 'iA', 20, { quantity_fulfilled: 5 })]);
+    readinessResult.mockResolvedValue(READINESS_FAILED);
+
+    await renderPage();
+
+    expect(lastPanelProps()).toMatchObject({
+      stockGates: {
+        approvePartial: 'hidden',
+        resume: 'disabled',
+        notice: 'Could not check stock for this order. Resume fulfillment is unavailable until it loads.',
+        canRetry: true,
+      },
+    });
+  });
+
+  it('a backordered order with stock free again offers Resume', async () => {
+    asManager();
+    orderAt('backordered', [orderLine('LA', 'iA', 20, { quantity_fulfilled: 5 })]);
+    readinessResult.mockResolvedValue(
+      readinessOk(
+        orderReadinessFacts(ORDER_ID, 'backordered', [{ lineId: 'LA', itemId: 'iA', requested: 20, fulfilled: 5 }], [
+          visibleItemFacts('iA', { here: { rack: 3 } }),
+        ]),
+      ),
+    );
+
+    await renderPage();
+
+    expect(lastPanelProps()).toMatchObject({ stockGates: { resume: 'enabled', notice: null } });
+    expect(screen.getByTestId('readiness-headline')).toHaveTextContent('1 line short');
+  });
+
+  it("an item the viewer cannot read is \"Can't confirm\" on its line, and Approve partial is disabled with why", async () => {
+    asManager();
+    orderAt('pending_approval', [LINE_A, LINE_B]);
+    readinessResult.mockResolvedValue(
+      readinessOk(
+        orderReadinessFacts(
+          ORDER_ID,
+          'pending_approval',
+          [
+            { lineId: 'LA', itemId: 'iA', requested: 20 },
+            { lineId: 'LB', itemId: 'iB', requested: 25 },
+          ],
+          [visibleItemFacts('iA', { here: { rack: 40 } }), hiddenItemFacts('iB')],
+        ),
+      ),
+    );
+
+    await renderPage();
+
+    const cells = screen.getAllByTestId('readiness-line');
+    expect(cells[1]).toHaveAttribute('data-state', 'unknown');
+    expect(within(cells[1]!).getByTestId('readiness-sentence')).toHaveTextContent(
+      "This item isn't visible to you, so its stock can't be checked.",
+    );
+    // No numbers, no Why, no link for an item the viewer cannot read.
+    expect(within(cells[1]!).queryByTestId('readiness-why')).toBeNull();
+    expect(screen.getByTestId('readiness-headline')).toHaveTextContent("1 line can't be confirmed");
+    expect(lastPanelProps()).toMatchObject({
+      stockGates: {
+        approvePartial: 'disabled',
+        notice:
+          'Some items on this order are not visible to you, so stock could not be checked. Approve partial is unavailable.',
+        canRetry: false,
+      },
+    });
+  });
+
+  it('a staff picker (items:update) sees the full panel on a picking order, with the hold on each line', async () => {
+    as('staff', ['items:update']);
+    orderAt('picking_in_progress', [LINE_A]);
+    readinessResult.mockResolvedValue(
+      readinessOk(
+        orderReadinessFacts(ORDER_ID, 'picking_in_progress', [{ lineId: 'LA', itemId: 'iA', requested: 20 }], [
+          visibleItemFacts('iA', { here: { rack: 40 }, heldOwn: 20 }),
+        ]),
+      ),
+    );
+
+    await renderPage();
+
+    expect(screen.getByTestId('readiness-strip')).toHaveAttribute('data-mode', 'full');
+    expect(screen.getByTestId('readiness-headline')).toHaveTextContent('Ready to pick (1 of 1 line)');
+    const cell = screen.getByTestId('readiness-line');
+    expect(within(cell).getByTestId('readiness-hold')).toHaveTextContent('Held for this order');
+    expect(within(cell).getByTestId('readiness-why')).toHaveTextContent('Held for this order 20');
+    // next/link is stubbed to a bare anchor here, so the link is found by its words.
+    expect(within(cell).getByText('Last physical count').closest('a')).toHaveAttribute(
+      'href',
+      '/dashboard/inventory/iA#physical-count',
     );
   });
 
-  it('a failed reservations read fails the page (error boundary), never "nothing reserved"', async () => {
+  it('the requester (no approve, pick or buy permission) gets one sentence: no numbers, no column', async () => {
+    as('viewer', ['orders:request']);
+    orderAt('pending_approval', [LINE_A, LINE_B], { requester_user_id: 'u1' });
+    readinessResult.mockResolvedValue(readinessOk(mixedFacts('pending_approval')));
+
+    await renderPage();
+
+    const strip = screen.getByTestId('readiness-strip');
+    expect(strip).toHaveAttribute('data-mode', 'requester');
+    expect(within(strip).getByTestId('readiness-headline')).toHaveTextContent('All items are in stock.');
+    expect(strip.textContent).not.toMatch(/\d+ (on the shelf|lines?)/);
+    expect(screen.queryAllByTestId('readiness-line')).toEqual([]);
+    expect(screen.queryByRole('columnheader', { name: 'Readiness' })).toBeNull();
+  });
+
+  it("the requester's failed read says it could not be checked, never that it is in stock or being checked", async () => {
+    as('viewer', ['orders:request']);
+    orderAt('approved', [LINE_A], { requester_user_id: 'u1' });
+    readinessResult.mockResolvedValue(READINESS_FAILED);
+
+    await renderPage();
+
+    expect(screen.getByTestId('readiness-headline')).toHaveTextContent("Stock couldn't be checked just now.");
+    expect(screen.getByTestId('readiness-recheck')).toHaveTextContent('Try again');
+    expect(screen.queryByTestId('readiness-checked-at')).toBeNull();
+  });
+
+  it('anyone else (not in the audience, not the requester) gets nothing: the read started beside the order read is dropped', async () => {
+    as('staff', []);
+    orderAt('pending_approval', [LINE_A]);
+    readinessResult.mockResolvedValue(readinessOk(mixedFacts('pending_approval')));
+
+    await renderPage();
+
+    // Started before the order said whose it is (it answers any member, who
+    // could call it directly), and never shown.
+    expect(readinessResult).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('readiness-strip')).toBeNull();
+    expect(screen.queryAllByTestId('readiness-line')).toEqual([]);
+    expect(document.body.textContent).not.toMatch(/on the shelf|Ready to pick|put-away/);
+  });
+
+  it.each(['picking_complete', 'staged_for_pickup', 'in_transit', 'pending_confirmation', 'completed', 'cancelled', 'denied'])(
+    'nothing at %s (readiness is for orders still to be picked): the early read is dropped',
+    async (status) => {
+      asManager();
+      orderAt(status, [LINE_A]);
+      await renderPage();
+      expect(screen.queryByTestId('readiness-strip')).toBeNull();
+      expect(screen.queryAllByTestId('readiness-line')).toEqual([]);
+      // The dropped answer (the default mock's failed read) disables nothing.
+      const panel = managerActionsProps.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined;
+      if (panel) {
+        expect(panel).toMatchObject({ stockGates: { approvePartial: 'hidden', notice: null } });
+      }
+    },
+  );
+
+  it('nothing for an order with no lines (the early read is dropped)', async () => {
     asManager();
-    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'pending_approval' }), lines }));
-    reservedQuantityByItemIds.mockRejectedValue(new Error('internal_error'));
-    await expect(renderPage()).rejects.toThrow('internal_error');
+    orderAt('pending_approval', []);
+    await renderPage();
+    expect(screen.queryByTestId('readiness-strip')).toBeNull();
+    expect(lastPanelProps()).toMatchObject({ stockGates: { approvePartial: 'hidden' }, approveNotice: null });
+  });
+
+  it('a service that cannot even start is a failed read in the strip, not a thrown page', async () => {
+    asManager();
+    orderAt('pending_approval', [LINE_A]);
+    readinessForCurrentUser.mockRejectedValueOnce(new Error('context failed'));
+
+    await renderPage();
+
+    expect(screen.getByTestId('readiness-headline')).toHaveTextContent("Couldn't check readiness. Try again.");
+    expect(lastPanelProps()).toMatchObject({ stockGates: { approvePartial: 'disabled' } });
+  });
+
+  describe('Count this item where on record and the locations disagree', () => {
+    const disagreeFacts = () =>
+      orderReadinessFacts(ORDER_ID, 'pending_approval', [{ lineId: 'LA', itemId: 'iA', requested: 5 }], [
+        visibleItemFacts('iA', { here: { rack: 7 }, onHand: 10 }),
+      ]);
+
+    it('a viewer who can start a count gets the button on that line', async () => {
+      asManager();
+      canStartCountMock.mockReturnValue(true);
+      orderAt('pending_approval', [LINE_A]);
+      readinessResult.mockResolvedValue(readinessOk(disagreeFacts()));
+
+      await renderPage();
+
+      const cell = screen.getByTestId('readiness-line');
+      expect(cell).toHaveAttribute('data-state', 'unknown');
+      expect(within(cell).getByTestId('readiness-sentence')).toHaveTextContent(
+        'On record: 10, but its locations account for 7. A count will settle it.',
+      );
+      expect(within(cell).getByRole('button', { name: 'Count this item' })).toBeInTheDocument();
+      // The org's zone as the facts carry it.
+      expect(countThisItemProps).toHaveBeenCalledWith({ itemId: 'iA', timeZone: 'America/Los_Angeles' });
+    });
+
+    it('a viewer who cannot start a count does not', async () => {
+      asManager();
+      canStartCountMock.mockReturnValue(false);
+      orderAt('pending_approval', [LINE_A]);
+      readinessResult.mockResolvedValue(readinessOk(disagreeFacts()));
+
+      await renderPage();
+
+      expect(screen.getByTestId('readiness-line')).toHaveAttribute('data-state', 'unknown');
+      expect(screen.queryByRole('button', { name: 'Count this item' })).toBeNull();
+    });
+
+    it('never on a kit (a count cannot include one)', async () => {
+      asManager();
+      canStartCountMock.mockReturnValue(true);
+      orderAt('pending_approval', [LINE_A]);
+      readinessResult.mockResolvedValue(
+        readinessOk(
+          orderReadinessFacts(ORDER_ID, 'pending_approval', [{ lineId: 'LA', itemId: 'iA', requested: 5 }], [
+            visibleItemFacts('iA', { here: { rack: 7 }, onHand: 10, isBundle: true }),
+          ]),
+        ),
+      );
+
+      await renderPage();
+
+      expect(screen.queryByRole('button', { name: 'Count this item' })).toBeNull();
+    });
+  });
+
+  it('a line added between the order read and the readiness read: "the order changed", never a mix of two orders (as the phone)', async () => {
+    asManager();
+    orderAt('pending_approval', [LINE_A, LINE_B]);
+    readinessResult.mockResolvedValue(
+      readinessOk(
+        orderReadinessFacts(ORDER_ID, 'pending_approval', [{ lineId: 'LA', itemId: 'iA', requested: 20 }], [
+          visibleItemFacts('iA', { here: { rack: 40 } }),
+        ]),
+      ),
+    );
+
+    await renderPage();
+
+    const strip = screen.getByTestId('readiness-strip');
+    expect(strip).toHaveAttribute('data-failed', 'true');
+    expect(within(strip).getByTestId('readiness-headline')).toHaveTextContent("Couldn't check readiness. Try again.");
+    expect(within(strip).getByTestId('readiness-detail')).toHaveTextContent(
+      'The order changed while it was being checked. Check again.',
+    );
+    expect(screen.queryAllByTestId('readiness-line')).toEqual([]);
+  });
+
+  it('the order moved on between the two reads (pending on the page, approved in the facts): failed, and Approve partial says why', async () => {
+    asManager();
+    orderAt('pending_approval', [LINE_A]);
+    // The facts say approved and fully picked-ready: shown as-is, the strip
+    // would describe an approved order above a header that still says pending.
+    readinessResult.mockResolvedValue(
+      readinessOk(
+        orderReadinessFacts(ORDER_ID, 'approved', [{ lineId: 'LA', itemId: 'iA', requested: 20 }], [
+          visibleItemFacts('iA', { here: { rack: 5 }, heldOwn: 5 }),
+        ]),
+      ),
+    );
+
+    await renderPage();
+
+    const strip = screen.getByTestId('readiness-strip');
+    expect(strip).toHaveAttribute('data-failed', 'true');
+    expect(within(strip).getByTestId('readiness-detail')).toHaveTextContent(
+      'The order changed while it was being checked. Check again.',
+    );
+    expect(strip.textContent).not.toMatch(/Held|short|Ready/);
+    expect(lastPanelProps()).toMatchObject({
+      stockGates: { approvePartial: 'disabled', canRetry: true },
+      approveNotice: null,
+    });
+  });
+
+  it("the screen-reader \"Line N\" is the row's place on the page, whatever order core numbered the lines in", async () => {
+    asManager();
+    // The page lists LB first; core numbers the lines by (created_at, id), LA first.
+    orderAt('pending_approval', [LINE_B, LINE_A]);
+    readinessResult.mockResolvedValue(readinessOk(mixedFacts('pending_approval')));
+
+    await renderPage();
+
+    const cells = screen.getAllByTestId('readiness-line');
+    expect(cells.map((c) => c.getAttribute('data-state'))).toEqual(['needs_put_away', 'ready']);
+    expect(within(cells[0]!).getByTestId('readiness-sr-label')).toHaveTextContent(
+      'Line 1, Needs put-away, 15 in Staging.',
+    );
+    expect(within(cells[1]!).getByTestId('readiness-sr-label')).toHaveTextContent('Line 2, Ready to pick, 20 on the shelf.');
+  });
+
+  it('a backordered order: a handed-over line says so and is not counted as ready', async () => {
+    asManager();
+    orderAt('backordered', [
+      orderLine('LA', 'iA', 20, { quantity_fulfilled: 20 }),
+      orderLine('LB', 'iB', 25, { quantity_fulfilled: 5 }),
+    ]);
+    readinessResult.mockResolvedValue(
+      readinessOk(
+        orderReadinessFacts(
+          ORDER_ID,
+          'backordered',
+          [
+            { lineId: 'LA', itemId: 'iA', requested: 20, fulfilled: 20 },
+            { lineId: 'LB', itemId: 'iB', requested: 25, fulfilled: 5 },
+          ],
+          [visibleItemFacts('iA', { here: { rack: 3 } }), visibleItemFacts('iB')],
+        ),
+      ),
+    );
+
+    await renderPage();
+
+    const cells = screen.getAllByTestId('readiness-line');
+    expect(cells.map((c) => c.getAttribute('data-state'))).toEqual(['handed_over', 'short']);
+    expect(within(cells[0]!).getByTestId('readiness-chip')).toHaveTextContent('Handed over');
+    expect(screen.getByTestId('readiness-details')).toHaveTextContent('0 of 1 line ready to pick · 1 line handed over');
+  });
+
+  // F2-1 local walk D-1: a Readiness column (13rem floor) made the lines
+  // table 705 px inside a 641 px card at every viewport from 1280 to 2560,
+  // so a manager had to scroll the table sideways to reach a line's edit and
+  // remove buttons. Widths are measured in a real browser
+  // (stockpilot-work/f2-1/fix/measure-cols.mjs); this pins the structure the
+  // fix rests on: readiness adds no column and no width floor.
+  it("readiness adds no column: the table keeps the order's columns, Line actions last, and each line's readiness sits under its item", async () => {
+    asManager();
+    orderAt('pending_approval', [LINE_A, LINE_B]);
+    readinessResult.mockResolvedValue(readinessOk(mixedFacts('pending_approval')));
+
+    await renderPage();
+
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent?.trim());
+    expect(headers).toEqual(['Item', 'Requested', 'Fulfilled', 'Owed', 'On hand', 'Line actions']);
+    const cells = screen.getAllByTestId('readiness-line');
+    expect(cells).toHaveLength(2);
+    for (const [i, cell] of cells.entries()) {
+      const td = cell.closest('td')!;
+      // The Item cell of the line's own row.
+      expect(td.cellIndex).toBe(0);
+      expect(within(td).getByText(`Item ${['iA', 'iB'][i]}`)).toBeInTheDocument();
+      expect(td.closest('tr')!.cells).toHaveLength(headers.length);
+    }
+    // No cell sets a minimum width that could push Line actions off the card.
+    expect(document.querySelector('td[class*="min-w-"], th[class*="min-w-"]')).toBeNull();
+  });
+
+  // F2-1 local walk, speed: at approved, pick_slip_generated and
+  // picking_in_progress the readiness read was a round trip AFTER the order
+  // read (production build: +11 ms SO-4, +18 ms SO-3 to the lines table). It
+  // needs only the order id, so it starts with the order read.
+  it('the readiness read starts with the order read, while the order is still being read', async () => {
+    asManager();
+    let releaseOrder!: () => void;
+    orderGet.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseOrder = () =>
+            resolve(detailFixture({ request: requestFixture({ status: 'approved' }), lines: [LINE_A] }));
+        }),
+    );
+    readinessResult.mockResolvedValue(
+      readinessOk(
+        orderReadinessFacts(ORDER_ID, 'approved', [{ lineId: 'LA', itemId: 'iA', requested: 20 }], [
+          visibleItemFacts('iA', { here: { rack: 40 }, heldOwn: 20 }),
+        ]),
+      ),
+    );
+
+    const page = OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }) });
+    await vi.waitFor(() => expect(orderGet).toHaveBeenCalledWith(ORDER_ID));
+    // The order read has not answered, and readiness is already asked for.
+    await vi.waitFor(() => expect(readinessResult).toHaveBeenCalledWith(ORDER_ID));
+    releaseOrder();
+    render(await page);
+
+    expect(readinessForCurrentUser).toHaveBeenCalledTimes(1);
+    expect(readinessResult).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('readiness-headline')).toHaveTextContent('Ready to pick (1 of 1 line)');
+  });
+
+  it("no organizations read for readiness: its times are in the zone the facts carry (0377's order.timeZone)", async () => {
+    asManager();
+    canStartCountMock.mockReturnValue(true);
+    orderAt('pending_approval', [LINE_A]);
+    readinessResult.mockResolvedValue(
+      readinessOk(
+        orderReadinessFacts(
+          ORDER_ID,
+          'pending_approval',
+          [{ lineId: 'LA', itemId: 'iA', requested: 5 }],
+          [visibleItemFacts('iA', { here: { rack: 7 }, onHand: 10 })],
+          { timeZone: 'America/New_York' },
+        ),
+      ),
+    );
+
+    await renderPage();
+
+    // Not the requester's delivery order, so nothing else needs the zone.
+    expect(getCachedOrgTimezoneMock).not.toHaveBeenCalled();
+    // 17:42Z is 1:42 PM in New York (the facts' zone), not 12:42 PM (Chicago,
+    // what the organizations read would have said here).
+    expect(screen.getByTestId('readiness-checked-at')).toHaveTextContent(
+      'Checked at 1:42 PM. Stock can change after this.',
+    );
+    expect(countThisItemProps).toHaveBeenCalledWith({ itemId: 'iA', timeZone: 'America/New_York' });
+  });
+
+  // F2-1 local walk O-5 / phone O4: a line whose item the viewer cannot read
+  // said "Deleted item" here and "Unknown item" on the phone. A line's item
+  // cannot be deleted (order_request_lines.item_id is ON DELETE RESTRICT), so
+  // a missing item is one the viewer's access hides: core's one label says so.
+  it("a line whose item the viewer cannot read says \"An item you can't see\", in the row and to its edit controls", async () => {
+    as('staff', ['items:update']);
+    orderAt('pending_approval', [LINE_A, orderLine('LB', 'iB', 25, { item: null })], { requester_user_id: 'u1' });
+    readinessResult.mockResolvedValue(
+      readinessOk(
+        orderReadinessFacts(
+          ORDER_ID,
+          'pending_approval',
+          [
+            { lineId: 'LA', itemId: 'iA', requested: 20 },
+            { lineId: 'LB', itemId: 'iB', requested: 25 },
+          ],
+          [visibleItemFacts('iA', { here: { rack: 40 } }), hiddenItemFacts('iB')],
+        ),
+      ),
+    );
+
+    await renderPage();
+
+    const rows = screen.getAllByRole('row').slice(1);
+    expect(within(rows[1]!).getByText("An item you can't see")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/Deleted item|Unknown item/);
+    expect(orderLineActionsProps).toHaveBeenCalledWith(
+      expect.objectContaining({ lineId: 'LB', itemName: "An item you can't see" }),
+    );
+    // Its readiness says the same thing in its own words.
+    expect(within(rows[1]!).getByTestId('readiness-sentence')).toHaveTextContent(
+      "This item isn't visible to you, so its stock can't be checked.",
+    );
+  });
+});
+
+describe('orders/[id]: one stock check, one definition of owed (pattern #26)', () => {
+  const src = readFileSync(path.resolve(__dirname, 'page.tsx'), 'utf8');
+
+  it("the page's own stock check is gone: no reservations read, no inline availability sum", () => {
+    expect(src).not.toContain('reservedQuantityByItemIds');
+    expect(src).not.toContain('needsStockCheck');
+    expect(src).not.toContain('InventoryService');
+    expect(src).not.toMatch(/d\.requested > available/);
+    expect(src).not.toMatch(/d\.owed > 0 && available > 0/);
+  });
+
+  it('the readiness read is started once, beside the order read, and awaited in the Tier-2 batch only behind its gate', () => {
+    expect(src.match(/OrderReadinessService\.forCurrentUser\(\)/g)).toHaveLength(1);
+    const start = src.indexOf(
+      'const readinessRead = OrderReadinessService.forCurrentUser().then((svc) => svc.result(id));',
+    );
+    const orderRead = src.indexOf('OrderRequestsService.forCurrentUser().then((svc) => svc.get(id))');
+    expect(start).toBeGreaterThan(0);
+    // Started before the order read is awaited (so before its gate is known),
+    // and observed at once so a dropped read never rejects unhandled.
+    expect(start).toBeLessThan(src.indexOf('await Promise.allSettled([', start));
+    expect(src.indexOf('await Promise.allSettled([')).toBeLessThan(orderRead);
+    expect(src).toContain('readinessRead.catch(() => {});');
+    const batchStart = src.indexOf('] = await Promise.all([', src.indexOf('warehouseAccess,'));
+    const batchEnd = src.indexOf('\n  ]);\n', batchStart);
+    expect(batchStart).toBeGreaterThan(0);
+    const batch = src.slice(batchStart, batchEnd);
+    expect(batch).toMatch(/readinessGate\s*\? readinessRead\.catch\(/);
+    // Its gate is decided before the batch, from the phase and the audience.
+    expect(src.indexOf('const readinessGate')).toBeLessThan(batchStart);
+    // The org's zone comes with the facts; the organizations read is the
+    // delivery draft's alone.
+    expect(batch).toMatch(/showDeliveryRequest\s*\? getCachedOrgTimezone\(ctx\.organizationId\)/);
+    expect(batch).not.toMatch(/readinessGate\s*\?\s*getCachedOrgTimezone|\|\| readinessGate/);
+  });
+
+  it("a line's Owed cell comes from core lineOwedUnits, not an inline copy", () => {
+    expect(src).toContain('lineOwedUnits({');
+    expect(src).not.toMatch(
+      /Math\.max\(\s*0\s*,\s*\(Number\(l\.quantity_requested\) \|\| 0\) - \(Number\(l\.quantity_fulfilled\) \|\| 0\)/,
+    );
   });
 });

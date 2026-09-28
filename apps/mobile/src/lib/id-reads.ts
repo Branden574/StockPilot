@@ -76,30 +76,6 @@ export function sumReservedByItem(rows: readonly ReservationRow[]): Map<string, 
   return out;
 }
 
-// ── On hand ─────────────────────────────────────────────────────────────────
-
-/** quantity_on_hand per item id. An item the viewer cannot read has no entry. */
-export async function readOnHand(
-  client: IdReadClient,
-  orgId: string,
-  itemIds: readonly (string | null | undefined)[],
-): Promise<Map<string, number>> {
-  const rows = await fetchAllRowsByIds<{ id: string; quantity_on_hand: number | string | null }>(
-    itemIds,
-    (batch) => (from, to) =>
-      typed(
-        idReadSelect(client, 'inventory_items', 'id, quantity_on_hand')
-          .eq('organization_id', orgId)
-          .in('id', batch)
-          .order('id', { ascending: true })
-          .range(from, to),
-      ),
-  );
-  const out = new Map<string, number>();
-  for (const r of rows) out.set(r.id, Number(r.quantity_on_hand) || 0);
-  return out;
-}
-
 // ── Primary photos ──────────────────────────────────────────────────────────
 
 export interface PhotoPaths {

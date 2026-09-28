@@ -2,6 +2,8 @@ import { Landmark } from 'lucide-react-native';
 import * as React from 'react';
 import { ActivityIndicator, Alert, Pressable, TextInput, View } from 'react-native';
 
+import { lineOwedUnits, READINESS_NEEDS_CONNECTION_COPY } from '@stockpilot/core';
+
 import { Body, Eyebrow, Mono } from '@/components/ui/text';
 import {
   getOrderDetail,
@@ -30,6 +32,7 @@ export function DigitalPick({
   onCompleted,
   canPick = true,
   reloadToken = 0,
+  offline = false,
 }: {
   orderId: string;
   /** Called after a successful complete so the parent screen can reload. */
@@ -54,6 +57,13 @@ export function DigitalPick({
    * (the server also rejects the write).
    */
   canPick?: boolean;
+  /**
+   * No connection: Save and Complete are disabled with the reason ("Needs a
+   * connection."). The inputs stay, and so does everything typed in them:
+   * the workspace is never unmounted for a dropped connection, because the
+   * typed quantities live only here until Save or Complete.
+   */
+  offline?: boolean;
 }) {
   const { c, mode } = useTheme();
   const [lines, setLines] = React.useState<OrderDetailLine[] | null>(null);
@@ -149,10 +159,11 @@ export function DigitalPick({
     if (!lines) return;
     const shipsNow = lines.reduce((s, l) => s + clampFor(l, qty[l.id] ?? '0'), 0);
     const backorderQty = lines.reduce((s, l) => {
-      const owedBefore = Math.max(
-        0,
-        (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0),
-      );
+      // The one definition of owed (core lineOwedUnits, pattern #26).
+      const owedBefore = lineOwedUnits({
+        quantityRequested: l.quantity_requested,
+        quantityFulfilled: l.quantity_fulfilled,
+      });
       return s + Math.max(0, owedBefore - clampFor(l, qty[l.id] ?? '0'));
     }, 0);
     if (backorderQty > 0) {
@@ -300,14 +311,16 @@ export function DigitalPick({
               <View style={{ flex: 1 }} />
               <Pressable
                 onPress={() => void saveLine(line)}
-                disabled={!dirty || savingLine === line.id}
+                disabled={!dirty || savingLine === line.id || offline}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: !dirty || savingLine === line.id || offline }}
                 style={{
                   borderWidth: 1,
                   borderColor: c.ink,
                   borderRadius: 10,
                   paddingVertical: 8,
                   paddingHorizontal: 16,
-                  opacity: !dirty || savingLine === line.id ? 0.4 : 1,
+                  opacity: !dirty || savingLine === line.id || offline ? 0.4 : 1,
                   backgroundColor: dirty ? c.ink : 'transparent',
                 }}
               >
@@ -322,13 +335,15 @@ export function DigitalPick({
 
       <Pressable
         onPress={onCompleteClick}
-        disabled={!anyPicked || completing}
+        disabled={!anyPicked || completing || offline}
+        accessibilityRole="button"
+        accessibilityState={{ disabled: !anyPicked || completing || offline }}
         style={{
           borderRadius: 12,
           paddingVertical: 14,
           alignItems: 'center',
           backgroundColor: c.ink,
-          opacity: !anyPicked || completing ? 0.4 : 1,
+          opacity: !anyPicked || completing || offline ? 0.4 : 1,
         }}
       >
         <Mono size={13} color={c.paper}>
@@ -339,6 +354,11 @@ export function DigitalPick({
               : 'Complete picking (partial)'}
         </Mono>
       </Pressable>
+      {offline ? (
+        <Body size={12.5} muted>
+          {READINESS_NEEDS_CONNECTION_COPY}
+        </Body>
+      ) : null}
     </View>
   );
 }

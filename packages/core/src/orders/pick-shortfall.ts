@@ -112,6 +112,28 @@ export function lineUnpickedUnits(line: ShortfallLine): number {
 }
 
 /**
+ * Units this line still OWES: requested minus already handed over.
+ *
+ *   owed = max(0, requested - fulfilled)
+ *
+ * The one definition (pattern #26). The fulfilment RPCs compute the same
+ * number in SQL (`greatest(quantity_requested - quantity_fulfilled, 0)`:
+ * resume_fulfillment, complete_picking), and every TypeScript copy goes
+ * through here: the hold re-sync after a line edit or removal, the pick-error
+ * sentence, and readiness (core readiness.ts). Clamped at zero per line, so an
+ * over-receipt on one line (fulfilled above requested) never eats into a
+ * sibling line's share when owed is summed per item.
+ *
+ * Picking is not subtracted: picked units are staged, not yet handed over, so
+ * they are still owed. `lineUnpickedUnits` is the "still to pull" number.
+ */
+export function lineOwedUnits(
+  line: Pick<ShortfallLine, 'quantityRequested' | 'quantityFulfilled'>,
+): number {
+  return Math.max(0, n(line.quantityRequested) - n(line.quantityFulfilled));
+}
+
+/**
  * The order-level shortfall: un-picked units summed across lines, but ONLY at
  * a status where picking is settled (see PICKING_SETTLED_STATUSES). Returns 0
  * everywhere else, so a caller can render on `> 0` without repeating the gate.

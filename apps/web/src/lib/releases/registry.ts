@@ -28,6 +28,125 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'order-readiness-2026-09',
+    revision: 1,
+    // DRAFT until the phone update (pnpm release:ota: the phone's readiness
+    // summary, line cards and the same Approve partial / Resume gates) and the
+    // Demo Co walk (read-only). A draft never leaves the server
+    // (visibleReleases, registryFingerprint), so merging the web page
+    // announces nothing. The follow-up that publishes it sets 'published',
+    // sets publishedAt to the real time (still the newest), and flips the pin
+    // in registry.test.ts. Every sentence must be true on both platforms then.
+    //
+    // Addressed where Orders is on. The full panel is for approvers, pickers
+    // (items:update) and buyers (purchase_orders:manage), core
+    // readinessAudience; the one sentence is for people who place orders
+    // (orders:request); the gates and the note under Approve are for
+    // approvers; the pick message for whoever completes picking.
+    status: 'draft',
+    title: 'See whether an order is ready to pick',
+    summary:
+      "On the web and in the mobile app, an order that is still to be picked shows whether it is ready. Each line says whether its stock is ready to pick, still in Staging and waiting to be put away, waiting on a purchase order, short, or can't be confirmed, and the order says how many lines are in each state and when it was checked. People who placed an order see a short summary of its stock instead. If readiness can't be checked, the order says so rather than showing an answer.",
+    publishedAt: '2026-09-30T17:00:00Z',
+    audience: { modules: ['orders'] },
+    entries: [
+      {
+        id: 'order-readiness-lines',
+        category: 'new',
+        area: 'Orders',
+        title: 'Readiness on every line of an order',
+        whatChanged:
+          "An order that is waiting for approval, approved, being picked or backordered shows each line as Ready to pick, Needs put-away, Waiting on a PO, Short or Can't confirm, with a sentence such as \"6 on the shelf. 4 more are in Staging and must be put away before picking can take them.\" Why shows the numbers behind it: the stock on record, what is held for this order and for other orders, what is in Staging or in other warehouses, and what is on order. Above the lines, the order says how many lines are in each state and when it was checked.",
+        whyItMatters:
+          'Whether an order could be picked was only found out by checking each item or by trying to pick it, so a pick could stop because units were still in Staging.',
+        howItAffectsYou:
+          "Readiness is worked out each time the order is opened and is not stored, and stock can change after the time shown: choose Check again to read it again. Ready to pick is shown for the order only when every line still to be picked is ready and every number could be read; a backordered order's line that was handed over in full says Handed over. Stock in other warehouses is not counted. A purchase order's date is an expected date, not a promise, and units on a purchase order you can't open are counted without its number or date. Nothing on the order changes when readiness is shown.",
+        whatToDo: 'No action needed. Open an order that is waiting for approval or being picked to see it.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: {
+          anyPermission: ['orders:approve', 'items:update', 'purchase_orders:manage'],
+          modules: ['orders'],
+        },
+      },
+      {
+        id: 'order-readiness-holds-and-records',
+        category: 'new',
+        area: 'Orders',
+        title: "Holds, and records that don't match, on an order's lines",
+        whatChanged:
+          "On an approved order or one being picked, each line also says whether its stock is held for this order: Held for this order, Held 20 of 40, or Not held, when another order could take the stock. When the stock on record does not match what the item's locations hold, a line still to be picked says the numbers don't match and gives both.",
+        whyItMatters:
+          "A line that is not held can lose its stock to another order before it is picked, and when the records do not match, neither number can be relied on for picking.",
+        howItAffectsYou:
+          'On the web, a manager who can start counts can choose Count this item on a line whose records do not match. Showing a hold does not change it.',
+        whatToDo: 'No action needed. Where the records do not match, a count settles them.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: {
+          anyPermission: ['orders:approve', 'items:update', 'purchase_orders:manage'],
+          modules: ['orders'],
+        },
+      },
+      {
+        id: 'order-readiness-requester',
+        category: 'new',
+        area: 'Orders',
+        title: 'Your order says whether its items are in stock',
+        whatChanged:
+          "An order you placed that is still to be picked says one of: All items are in stock; Some items are waiting on stock; or We're checking stock for some items. It also says when stock was checked, with a Check again button. If stock can't be checked, it says Stock couldn't be checked just now.",
+        whyItMatters: 'Whether the items on an order were available could only be learned by asking the warehouse.',
+        howItAffectsYou:
+          "The sentence gives no numbers and names no other orders. It is worked out when you open the order, and stock can change after that: choose Check again to read it again. It shows on orders placed from your own account, not on orders someone placed for you. If you can approve or pick orders, you see each line's readiness instead.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+      },
+      {
+        id: 'order-stock-actions-say-why',
+        category: 'improved',
+        area: 'Orders',
+        title: 'Approve partial and Resume fulfillment say why they are unavailable',
+        whatChanged:
+          "On an order waiting for approval, a note under Approve says how many lines ask for more than is available now, that Approve will be refused, and to use Approve partial or change the lines (only to change the lines when an item now belongs to another warehouse). If stock can't be checked, if an item on the order isn't visible to you, or if an item now belongs to another warehouse, Approve partial and Resume fulfillment are shown turned off with the reason. Where trying again can help, a Try again button reads the stock again.",
+        whyItMatters:
+          'Both actions depend on stock. On the web, a stock check that failed could stop the order page from opening. Both apps now decide these actions from the same stock check as the lines.',
+        howItAffectsYou:
+          'Approve still refuses an order that is short, and Approve partial and Resume fulfillment still check stock again when you use them.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: { anyPermission: ['orders:approve'], modules: ['orders'] },
+      },
+      {
+        id: 'order-pick-staging-message',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'A clearer message when picking cannot finish',
+        whatChanged:
+          "When Mark picking complete can't finish because the racks, crates, Sites and Unplaced hold less of an item than the pick needs, the message now says that picking never takes stock from Staging, and to put away any of it that is in Staging, or count the item if its locations don't match its stock on record, then try again. It names the order's lines with how many of each are still needed.",
+        whyItMatters:
+          'The old message said unplaced stock could stop a pick, but picking does take stock from Unplaced, so it sent people to move stock that was not the problem.',
+        howItAffectsYou: 'Only the message changed. Picking takes stock from the same places as before.',
+        whatToDo:
+          "If you see this message, put the needed units away from Staging, or count the item if its locations don't match its stock on record, then choose Mark picking complete again.",
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: { anyPermission: ['items:update', 'orders:approve'], modules: ['orders'] },
+      },
+      {
+        id: 'order-line-hidden-item-name',
+        category: 'fixed',
+        area: 'Orders',
+        title: "A line whose item you can't see says so",
+        whatChanged:
+          "On an order, a line whose item you don't have access to said Deleted item on the web and Unknown item in the mobile app. The web order page, its printed pick list and the mobile app's order screen now all say An item you can't see.",
+        whyItMatters:
+          "The item was not deleted, and items on an order can't be deleted. It is one your access doesn't include, for example an item in a warehouse you aren't assigned to, so its name isn't shown to you.",
+        howItAffectsYou: 'Only the label changed. Which items you can see is unchanged.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: { modules: ['orders'] },
+      },
+    ],
+  },
+  {
     id: 'exception-escalation-2026-09',
     revision: 1,
     // Held as a draft until the phone update (OTA group 1558a067) and the Demo

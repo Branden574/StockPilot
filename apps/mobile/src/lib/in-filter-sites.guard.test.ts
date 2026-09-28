@@ -274,8 +274,10 @@ describe('in-filter guard: the app', () => {
 
   it('scans a real set of sites (the guard is not vacuous)', () => {
     expect(files.length).toBeGreaterThan(100);
-    // The batched readers alone hold nine; the screens hold the rest.
-    expect(scanned.filter((s) => s.allowance === 'batched').length).toBeGreaterThanOrEqual(9);
+    // The batched readers alone hold eight (the ninth, readOnHand, went with
+    // lib/order-stock-check.ts in F2-1: readiness reads stock in one RPC);
+    // the screens hold the rest.
+    expect(scanned.filter((s) => s.allowance === 'batched').length).toBeGreaterThanOrEqual(8);
     expect(scanned.length).toBeGreaterThan(30);
   });
 

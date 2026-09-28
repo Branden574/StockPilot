@@ -7,6 +7,7 @@ import {
   EXCEPTION_EVIDENCE_MAX_PHOTOS,
   EXCEPTION_EVIDENCE_NOTE_MAX,
   MODULE_REGISTRY,
+  ORDER_LINE_HIDDEN_ITEM_NAME,
   PERMISSIONS,
   releaseRegistrySchema,
   type ModuleId,
@@ -541,9 +542,12 @@ describe('F1-5 (escalate an exception to maintenance) is published', () => {
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-29T00:00:00Z'));
   });
 
-  it('sits at the top, dated after every other release, so publishing it makes it the newest', () => {
-    expect(RELEASES[0]!.id).toBe(F1_5);
-    for (const r of RELEASES.slice(1)) {
+  it('sits above every published release, dated after every release below it, so publishing it makes it the newest', () => {
+    // Pinned by id, not by index: newer drafts (F2-1's readiness release)
+    // sit above it until they are published.
+    const at = RELEASES.findIndex((r) => r.id === F1_5);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -636,11 +640,16 @@ describe('the maintenance photo details release is published', () => {
   };
 
   it('is published just below F1-5\'s release, so every feed carries it', () => {
-    expect(RELEASES[1]!.id).toBe(ID);
+    // Pinned by id, not by index: newer drafts (F2-1's readiness release)
+    // sit above F1-5's release until they are published.
+    expect(RELEASES.findIndex((r) => r.id === ID)).toBe(
+      RELEASES.findIndex((r) => r.id === 'exception-escalation-2026-09') + 1,
+    );
     expect(release().status).toBe('published');
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
     expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).toContain(ID);
-    // Second from the top, so an old phone build lists it among its three.
+    // Second among the published releases, so an old phone build lists it
+    // among its three.
     expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(ID);
     expect(registryFingerprint(RELEASES)).toContain(ID);
   });
@@ -663,5 +672,171 @@ describe('the maintenance photo details release is published', () => {
     expect(text).toContain('Photos added before this change are not changed.');
     expect(text).toContain('whichever app or browser sent it');
     expect(text).toContain('more than 50 megapixels is now refused');
+  });
+});
+
+/**
+ * F2-1's release (order readiness) is held as a DRAFT until its phone release
+ * (pnpm release:ota: the phone's summary, line cards and the same Approve
+ * partial / Resume gates) and the Demo Co walk, as F1-3's, F1-4's and F1-5's
+ * were: published with the web page, it would tell phone users about
+ * readiness their app does not show yet. The follow-up that publishes it sets
+ * 'published' and the real publishedAt, and flips the first pin here.
+ */
+describe('F2-1 (order readiness) is held as a draft', () => {
+  const F2_1 = 'order-readiness-2026-09';
+  const release = () => RELEASES.find((r) => r.id === F2_1)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+  const published = (): Release => ({ ...release(), status: 'published' });
+
+  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+    expect(release().status).toBe('draft');
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(F2_1);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).not.toContain(F2_1);
+    expect(list.latestUnread?.id).not.toBe(F2_1);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(F2_1);
+    expect(registryFingerprint(RELEASES)).not.toContain(F2_1);
+    // Preparing it changes nothing a client can observe.
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== F2_1)));
+    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(F2_1);
+  });
+
+  it('sits above every published release (pinned by id), dated after every other release, so publishing it makes it the newest', () => {
+    const at = RELEASES.findIndex((r) => r.id === F2_1);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.filter((x) => x.id !== F2_1)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('is addressed as the order page shows it: the full panel, the one sentence, the gates, the pick message and the hidden-item label', () => {
+    expect(release().audience).toEqual({ modules: ['orders'] });
+    expect(release().entries.map((e) => e.id)).toEqual([
+      'order-readiness-lines',
+      'order-readiness-holds-and-records',
+      'order-readiness-requester',
+      'order-stock-actions-say-why',
+      'order-pick-staging-message',
+      'order-line-hidden-item-name',
+    ]);
+    const [lines, holds, requester, gates, pick] = release().entries;
+    // core readinessAudience: approvers, pickers and buyers see the full panel.
+    for (const full of [lines!, holds!]) {
+      expect(full.audience, full.id).toEqual({
+        anyPermission: ['orders:approve', 'items:update', 'purchase_orders:manage'],
+        modules: ['orders'],
+      });
+    }
+    expect(requester!.audience).toEqual({ anyPermission: ['orders:request'], modules: ['orders'] });
+    expect(gates!.audience).toEqual({ anyPermission: ['orders:approve'], modules: ['orders'] });
+    expect(pick!.audience).toEqual({ anyPermission: ['items:update', 'orders:approve'], modules: ['orders'] });
+    for (const e of release().entries) {
+      expect(e.area, e.id).toBe('Orders');
+      expect(e.link, e.id).toEqual({ href: '/dashboard/orders', label: 'View orders' });
+    }
+  });
+
+  it('once published, each reader is told about what their order page shows them, and nobody where Orders is off', () => {
+    const reader = (permissions: ReleaseViewer['permissions'], enabledModules: ModuleId[] = ['orders']) =>
+      visibleReleases([published()], { role: 'viewer', permissions, enabledModules })[0]?.entries.map((e) => e.id) ??
+      [];
+    // The hidden-item label can meet anyone who opens an order.
+    expect(reader(['orders:request'])).toEqual(['order-readiness-requester', 'order-line-hidden-item-name']);
+    expect(reader(['items:update'])).toEqual([
+      'order-readiness-lines',
+      'order-readiness-holds-and-records',
+      'order-pick-staging-message',
+      'order-line-hidden-item-name',
+    ]);
+    expect(reader(['purchase_orders:manage'])).toEqual([
+      'order-readiness-lines',
+      'order-readiness-holds-and-records',
+      'order-line-hidden-item-name',
+    ]);
+    expect(reader(['orders:request', 'orders:approve'])).toEqual([
+      'order-readiness-lines',
+      'order-readiness-holds-and-records',
+      'order-readiness-requester',
+      'order-stock-actions-say-why',
+      'order-pick-staging-message',
+      'order-line-hidden-item-name',
+    ]);
+    expect(reader(['orders:request', 'orders:approve', 'items:update'], [])).toEqual([]);
+  });
+
+  it('says it plainly and honestly: both platforms, on record never "book", no percentages, a PO date is expected', () => {
+    const r = release();
+    expect(r.summary).toMatch(/^On the web and in the mobile app, /);
+    const text = readerText(r).join(' ');
+    expect(text).not.toMatch(/\bbook\b/i);
+    expect(text).not.toContain('%');
+    expect(text).not.toMatch(/verified|guarantee|will arrive|on track/i);
+    // Every mention of a date on a purchase order says it is not a promise.
+    expect(text).toContain("A purchase order's date is an expected date, not a promise");
+    expect(text).toContain('stock on record');
+    // The labels people see, in core's words.
+    for (const label of ['Ready to pick', 'Needs put-away', 'Waiting on a PO', 'Short', "Can't confirm", 'Handed over']) {
+      expect(text, label).toContain(label);
+    }
+    // "Ready" for the order only under the rule core applies (handed-over
+    // lines have nothing to pick and are not counted).
+    expect(text).toContain(
+      'Ready to pick is shown for the order only when every line still to be picked is ready and every number could be read',
+    );
+    // A failure is said, never shown as an answer; nothing is written.
+    expect(r.summary).toContain("If readiness can't be checked, the order says so rather than showing an answer.");
+    expect(text).toContain('Nothing on the order changes when readiness is shown.');
+    // The requester's sentences, word for word as core writes them.
+    expect(text).toContain('All items are in stock');
+    expect(text).toContain('Some items are waiting on stock');
+    expect(text).toContain("We're checking stock for some items");
+    expect(text).toContain("Stock couldn't be checked just now");
+  });
+
+  it('says nothing that is false for some of its readers (review 2026-09-28)', () => {
+    const text = readerText(release()).join(' ');
+    // The phone offers Approve and Resume to managers only; the web by
+    // permission. "The same actions for the same order" is false for a staff
+    // member with an orders:approve override, so it is not claimed.
+    expect(text).not.toMatch(/same actions/i);
+    // A records-disagree line that is also short shows Short; one that owes
+    // nothing shows Handed over. It is the sentence that says they differ.
+    expect(text).not.toMatch(/says Can't confirm and gives both numbers/);
+    expect(text).toContain("says the numbers don't match and gives both");
+    // The requester sees a sentence, when it was checked and a button.
+    expect(text).not.toMatch(/see one sentence/i);
+    expect(release().summary).toContain('People who placed an order see a short summary of its stock instead.');
+    // The note under Approve is not "short" (the strip's word for a
+    // different count), and the pick message claims no Staging it cannot know.
+    expect(text).not.toMatch(/how many lines are short/);
+    expect(text).toContain('how many lines ask for more than is available now');
+    expect(text).not.toMatch(/because part of an item is still in Staging/);
+    expect(text).toContain("count the item if its locations don't match its stock on record");
+  });
+
+  // F2-1 local walks (web O-5, phone O4): a line whose item the reader cannot
+  // read said "Deleted item" on the web and "Unknown item" on the phone, on
+  // main too. Both now say core's ORDER_LINE_HIDDEN_ITEM_NAME: a fix people
+  // can see, so it is announced (owner rule, 2026-09-25).
+  it("announces the honest label for an item the reader can't see, on both platforms, in core's words", () => {
+    const e = release().entries.find((x) => x.id === 'order-line-hidden-item-name');
+    expect(e).toBeDefined();
+    expect(e!.category).toBe('fixed');
+    // Anyone who opens orders can meet it (a warehouse- or category-scoped
+    // reader, or a requester with no warehouse yet).
+    expect(e!.audience).toEqual({ modules: ['orders'] });
+    expect(e!.whatChanged).toContain(ORDER_LINE_HIDDEN_ITEM_NAME);
+    expect(e!.whatChanged).toContain('Deleted item on the web');
+    expect(e!.whatChanged).toContain('Unknown item in the mobile app');
+    // Never "deleted": a line's item cannot be deleted (ON DELETE RESTRICT).
+    expect(e!.whyItMatters).toContain("items on an order can't be deleted");
+    expect(e!.howItAffectsYou).toContain('Only the label changed.');
+    expect(e!.whatToDo).toBe('No action needed.');
   });
 });

@@ -4,7 +4,9 @@ import {
   can,
   formatOrderNumber,
   formatOrgDateTime,
+  INSUFFICIENT_PLACED_STOCK_COPY,
   isManagerOrAbove,
+  lineOwedUnits,
   resolveOrgTimezone,
   resolveRequesterIdentity,
 } from '@stockpilot/core';
@@ -817,7 +819,13 @@ export class OrderRequestsService {
              charter_id, charter:charters!charter_id ( name, code )
            )`,
         )
-        .eq('order_request_id', id),
+        .eq('order_request_id', id)
+        // (created_at, id): the order readiness numbers the lines in and the
+        // phone lists them in. Unordered, Postgres returned an edited line
+        // after its siblings, so the page's rows moved after a pick save and
+        // no longer matched the phone (or the pick slip from a moment before).
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true }),
       this.ctx.supabase
         .from('stock_reservations')
         .select('id, item_id, warehouse_id, quantity, created_at')
@@ -1550,8 +1558,9 @@ export class OrderRequestsService {
     // over-hold this sync exists to eliminate, so it must be subtracted per
     // line and floored at zero (an over-receipt can leave fulfilled above
     // requested, and a negative would silently shrink a sibling's share).
+    // Core lineOwedUnits is the one definition (pattern #26).
     const owed = (l: { quantity_requested: number | null; quantity_fulfilled: number | null }) =>
-      Math.max(0, (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0));
+      lineOwedUnits({ quantityRequested: l.quantity_requested, quantityFulfilled: l.quantity_fulfilled });
     // Re-assert the item match in JS: the reservation invariant is per item,
     // and summing a row for a different item would hold stock for the wrong one.
     return others
@@ -1766,7 +1775,10 @@ export class OrderRequestsService {
       // lines get. U2 guarantees quantity >= quantity_fulfilled, so this is
       // never negative, but it is floored anyway rather than relying on a
       // guard several branches away.
-      const ownRemaining = Math.max(0, quantity - (Number(line.quantity_fulfilled) || 0));
+      const ownRemaining = lineOwedUnits({
+        quantityRequested: quantity,
+        quantityFulfilled: line.quantity_fulfilled,
+      });
       const remaining = await this.remainingRequestedForItem(
         h.id,
         line.item_id,
@@ -1923,7 +1935,8 @@ export class OrderRequestsService {
       .filter((l) => l.id !== line.id && l.item_id === line.item_id)
       .reduce(
         (sum, l) =>
-          sum + Math.max(0, (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0)),
+          sum +
+          lineOwedUnits({ quantityRequested: l.quantity_requested, quantityFulfilled: l.quantity_fulfilled }),
         0,
       );
     const { effect: reservation, failure: reservationFailure } =
@@ -2393,20 +2406,25 @@ export class OrderRequestsService {
           )
             .map((l) => {
               const it = Array.isArray(l.item) ? l.item[0] : l.item;
-              const owed = Math.max(
-                0,
-                (Number(l.quantity_requested) || 0) - (Number(l.quantity_fulfilled) || 0),
-              );
-              return it ? `${it.name} (${it.sku}) — ${owed} needed` : null;
+              const owed = lineOwedUnits({
+                quantityRequested: l.quantity_requested,
+                quantityFulfilled: l.quantity_fulfilled,
+              });
+              return it ? `${it.name} (${it.sku}), ${owed} needed` : null;
             })
             .filter(Boolean)
             .join('; ');
         } catch {
           /* message still useful without the list */
         }
+        // Core's sentence (F2-1): the draw engine (0373) takes racks,
+        // crates, Sites and Unplaced, never Staging, and raises this when
+        // they hold less than the batch: units in Staging, or stock on record
+        // that no location holds. The sentence names both and claims neither
+        // (the old text blamed Unplaced stock, which picking does take).
         throw new ServiceError(
           'validation_error',
-          `Not enough PUT-AWAY stock to complete this pick. Part of this item's on-hand total is still in Staging (awaiting put-away) or unplaced, and picking can only draw from placed rack/crate stock. Fix: open Inventory → Staging, put away the needed units, then retry.${items ? ` Short line(s): ${items}.` : ''}`,
+          `${INSUFFICIENT_PLACED_STOCK_COPY}${items ? ` Lines on this order: ${items}.` : ''}`,
         );
       }
       if (msg.includes('insufficient_stock'))

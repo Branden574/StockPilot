@@ -11,7 +11,6 @@ import {
 import { IdBatchReadError, IN_FILTER_MAX_VALUES } from './id-batches';
 import {
   readItemRefs,
-  readOnHand,
   readOpenReservations,
   readPoRunGroups,
   readPrimaryPhotos,
@@ -82,28 +81,6 @@ describe('sumReservedByItem', () => {
     ]);
     expect(m.get('a')).toBe(5);
     expect(m.get('b')).toBe(0);
-  });
-});
-
-describe('readOnHand', () => {
-  it('250 ids make 3 org-scoped calls and return on hand per id', async () => {
-    const client = fakePostgrest(
-      rowsServer((call) => (inValues(call, 'id') ?? []).map((id, i) => ({ id, quantity_on_hand: String(i) }))),
-    );
-    const onHand = await readOnHand(client, ORG, ids(250));
-    expect(client.calls).toHaveLength(3);
-    expectBatched(client.calls, 'id');
-    for (const c of client.calls) {
-      expect(c.table).toBe('inventory_items');
-      expect(filterValue(c, 'eq', 'organization_id')).toBe(ORG);
-    }
-    expect(onHand.size).toBe(250);
-    expect(onHand.get(uuid(101))).toBe(1);
-  });
-
-  it('rethrows a failed batch', async () => {
-    const client = fakePostgrest(failingOn('id', uuid(5)));
-    await expect(readOnHand(client, ORG, ids(20))).rejects.toBeInstanceOf(IdBatchReadError);
   });
 });
 

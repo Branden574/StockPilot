@@ -1,0 +1,299 @@
+{
+  "about": [
+    "ONE FIXTURE, TWO ENGINES (F2 plan 3.6). Each case is a small order and the stock around it.",
+    "Core (readiness.parity.test.ts) derives the facts order_readiness_facts would return for it (scripts/gen-readiness-parity-sql.mjs caseFacts) and checks assessOrderReadiness, readinessStockFlags and projectCompletePicking against `expect`.",
+    "pgTAP (supabase/tests/0377_order_readiness_facts.test.sql) builds the same rows, checks that the real facts function returns those facts, and runs the FROZEN RPCs (approve_order_request, approve_partial, resume_fulfillment, complete_picking) against `expect`, each call rolled back.",
+    "After editing this file run: node scripts/gen-readiness-parity-sql.mjs (a vitest guard fails while the SQL block is stale).",
+    "Holdings are [kind, warehouse, quantity]: kind rack | crate | site (NULL kind) | unplaced | staging; warehouse home (the order's) | other | org (no warehouse). On hand is the sum of the holdings unless `onHand` is given (records that disagree).",
+    "Holds: own (this order), otherOrder (an approved order holding exactly what it owes, so it adds nothing to committedOtherShortfall), rental (no order).",
+    "Duplicate-item lines are excluded from the completion parity claim (complete_picking reads on hand from its cursor; 0 duplicate lines in production), so no picking case has one."
+  ],
+  "cases": [
+    {
+      "id": "C1a",
+      "title": "approve succeeds when every item has D <= A, with an other-order hold and a rental hold",
+      "status": "pending_approval",
+      "items": {
+        "a": { "holdings": [["rack", "home", 10]], "holds": { "otherOrder": 3, "rental": 2 } },
+        "b": { "holdings": [["rack", "home", 4], ["staging", "home", 2]] }
+      },
+      "lines": [
+        { "id": "l1", "item": "a", "requested": 5 },
+        { "id": "l2", "item": "b", "requested": 6 }
+      ],
+      "expect": {
+        "lines": {
+          "l1": { "state": "ready", "ready": 5 },
+          "l2": { "state": "needs_put_away", "ready": 4, "putAway": 2 }
+        },
+        "flags": { "isShortStock": false },
+        "approveSucceeds": true,
+        "approvePartialHolds": { "a": 5, "b": 6 },
+        "draftable": { "a": 0, "b": 0 }
+      }
+    },
+    {
+      "id": "C1b",
+      "title": "approve refuses when one item has D > A: the rental hold counts against availability",
+      "status": "pending_approval",
+      "items": {
+        "a": { "holdings": [["rack", "home", 10]], "holds": { "otherOrder": 3, "rental": 2 } }
+      },
+      "lines": [{ "id": "l1", "item": "a", "requested": 6 }],
+      "expect": {
+        "lines": { "l1": { "state": "short", "ready": 5, "short": 1 } },
+        "flags": { "isShortStock": true },
+        "approveSucceeds": false,
+        "approveError": "insufficient_stock",
+        "approvePartialHolds": { "a": 5 },
+        "draftable": { "a": 1 }
+      }
+    },
+    {
+      "id": "C2",
+      "title": "duplicate lines 3 + 3 against 5 on hand: approve refuses, approve_partial holds exactly 5, the units are allocated once",
+      "status": "pending_approval",
+      "items": { "a": { "holdings": [["rack", "home", 5]] } },
+      "lines": [
+        { "id": "l1", "item": "a", "requested": 3 },
+        { "id": "l2", "item": "a", "requested": 3 }
+      ],
+      "expect": {
+        "lines": {
+          "l1": { "state": "ready", "ready": 3 },
+          "l2": { "state": "short", "ready": 2, "short": 1 }
+        },
+        "flags": { "isShortStock": true },
+        "approveSucceeds": false,
+        "approveError": "insufficient_stock",
+        "approvePartialHolds": { "a": 5 },
+        "draftable": { "a": 1 }
+      }
+    },
+    {
+      "id": "C3",
+      "title": "approved, own hold 10 of on hand 10: the own hold is supply, so the line is ready and held",
+      "status": "approved",
+      "items": { "a": { "holdings": [["rack", "home", 10]], "holds": { "own": 10 } } },
+      "lines": [{ "id": "l1", "item": "a", "requested": 10 }],
+      "expect": {
+        "lines": { "l1": { "state": "ready", "ready": 10, "hold": "held" } },
+        "draftable": { "a": 0 }
+      }
+    },
+    {
+      "id": "C4",
+      "title": "backordered, owed 4 (6 requested, 2 handed over), 3 free: resume_fulfillment holds exactly 3",
+      "status": "backordered",
+      "items": { "a": { "holdings": [["rack", "home", 5]], "holds": { "otherOrder": 2 } } },
+      "lines": [{ "id": "l1", "item": "a", "requested": 6, "fulfilled": 2 }],
+      "expect": {
+        "lines": { "l1": { "state": "short", "ready": 3, "short": 1 } },
+        "flags": { "hasFulfillableStock": true },
+        "resumeHolds": { "a": 3 },
+        "draftable": { "a": 1 }
+      }
+    },
+    {
+      "id": "C4b",
+      "title": "backordered with nothing free: resume_fulfillment refuses (no_fulfillable_stock)",
+      "status": "backordered",
+      "items": { "a": { "holdings": [["rack", "home", 2]], "holds": { "otherOrder": 2 } } },
+      "lines": [{ "id": "l1", "item": "a", "requested": 6, "fulfilled": 2 }],
+      "expect": {
+        "lines": { "l1": { "state": "short", "short": 4 } },
+        "flags": { "hasFulfillableStock": false },
+        "resumeError": "no_fulfillable_stock",
+        "draftable": { "a": 4 }
+      }
+    },
+    {
+      "id": "C5",
+      "title": "one-click complete_picking writes quantity_picked = the projection (single-line items), net of other orders' and rentals' holds (d: 8 on hand, 4 held elsewhere, picks 4 of 5)",
+      "status": "pick_slip_generated",
+      "items": {
+        "a": { "holdings": [["rack", "home", 10]], "holds": { "own": 6, "otherOrder": 4 } },
+        "b": { "holdings": [["rack", "home", 3]], "holds": { "own": 3 } },
+        "c": { "holdings": [["site", "home", 4], ["unplaced", "home", 2]], "holds": { "own": 5, "rental": 1 } },
+        "d": { "holdings": [["rack", "home", 8]], "holds": { "own": 5, "otherOrder": 4 } }
+      },
+      "lines": [
+        { "id": "l1", "item": "a", "requested": 6 },
+        { "id": "l2", "item": "b", "requested": 5 },
+        { "id": "l3", "item": "c", "requested": 5 },
+        { "id": "l4", "item": "d", "requested": 5 }
+      ],
+      "expect": {
+        "lines": {
+          "l1": { "state": "ready", "ready": 6, "hold": "held" },
+          "l2": { "state": "short", "ready": 3, "short": 2, "hold": "partly_held" },
+          "l3": { "state": "ready", "ready": 5, "noRack": 5, "hold": "held" },
+          "l4": { "state": "short", "ready": 4, "short": 1, "hold": "held" }
+        },
+        "projectedPicked": { "l1": 6, "l2": 3, "l3": 5, "l4": 4 },
+        "completeFails": false,
+        "draftable": { "a": 0, "b": 2, "c": 0, "d": 1 }
+      }
+    },
+    {
+      "id": "C6",
+      "title": "rack 6 + Staging 4, own hold 10: needs put-away 4, and the one-click pick raises insufficient_placed_stock",
+      "status": "pick_slip_generated",
+      "items": { "a": { "holdings": [["rack", "home", 6], ["staging", "home", 4]], "holds": { "own": 10 } } },
+      "lines": [{ "id": "l1", "item": "a", "requested": 10 }],
+      "expect": {
+        "lines": { "l1": { "state": "needs_put_away", "ready": 6, "putAway": 4, "hold": "held" } },
+        "completeFails": true,
+        "completeError": "insufficient_placed_stock",
+        "completeNeedPutAway": { "a": 4 },
+        "completeUnaccounted": { "a": 0 },
+        "draftable": { "a": 0 }
+      }
+    },
+    {
+      "id": "C6c",
+      "title": "on record 10, a rack of 7 and nothing in Staging, own hold 10: can't confirm, and the one-click pick raises insufficient_placed_stock with nothing to put away (3 on record that no location holds)",
+      "status": "pick_slip_generated",
+      "items": { "a": { "onHand": 10, "holdings": [["rack", "home", 7]], "holds": { "own": 10 } } },
+      "lines": [{ "id": "l1", "item": "a", "requested": 10 }],
+      "expect": {
+        "lines": { "l1": { "state": "unknown", "ready": 7, "gap": 3, "hold": "held" } },
+        "completeFails": true,
+        "completeError": "insufficient_placed_stock",
+        "completeNeedPutAway": { "a": 0 },
+        "completeUnaccounted": { "a": 3 },
+        "draftable": { "a": 0 }
+      }
+    },
+    {
+      "id": "C6b",
+      "title": "rack 6 + Unplaced 4, own hold 10: ready (4 with no rack recorded), and the one-click pick takes all 10",
+      "status": "pick_slip_generated",
+      "items": { "a": { "holdings": [["rack", "home", 6], ["unplaced", "home", 4]], "holds": { "own": 10 } } },
+      "lines": [{ "id": "l1", "item": "a", "requested": 10 }],
+      "expect": {
+        "lines": { "l1": { "state": "ready", "ready": 10, "noRack": 4, "hold": "held" } },
+        "projectedPicked": { "l1": 10 },
+        "completeFails": false,
+        "draftable": { "a": 0 }
+      }
+    },
+    {
+      "id": "C7",
+      "title": "holdings only in another warehouse: complete_picking draws them today (the gap is pinned) while readiness says held elsewhere",
+      "status": "pick_slip_generated",
+      "items": { "a": { "holdings": [["rack", "other", 5]], "holds": { "own": 5 } } },
+      "lines": [{ "id": "l1", "item": "a", "requested": 5 }],
+      "expect": {
+        "lines": { "l1": { "state": "unknown", "gap": 5, "hold": "held" } },
+        "projectedPicked": { "l1": 5 },
+        "completeFails": false,
+        "draftable": { "a": 0 }
+      }
+    },
+    {
+      "id": "C8",
+      "title": "another order holds 5 of rack 10, Staging 5: readiness says ready 5 plus put-away 5 (conservative) while the one-click pick succeeds",
+      "status": "pick_slip_generated",
+      "items": { "a": { "holdings": [["rack", "home", 10], ["staging", "home", 5]], "holds": { "own": 10, "otherOrder": 5 } } },
+      "lines": [{ "id": "l1", "item": "a", "requested": 10 }],
+      "expect": {
+        "lines": { "l1": { "state": "needs_put_away", "ready": 5, "putAway": 5, "hold": "held" } },
+        "projectedPicked": { "l1": 10 },
+        "completeFails": false,
+        "draftable": { "a": 0 }
+      }
+    },
+    {
+      "id": "C9",
+      "title": "explicit picks: complete_picking takes min(picked, owed), and an unpicked line takes 0",
+      "status": "picking_in_progress",
+      "items": {
+        "a": { "holdings": [["rack", "home", 10]], "holds": { "own": 6 } },
+        "b": { "holdings": [["crate", "home", 2]], "holds": { "own": 2 } }
+      },
+      "lines": [
+        { "id": "l1", "item": "a", "requested": 6, "picked": 4 },
+        { "id": "l2", "item": "b", "requested": 2 }
+      ],
+      "expect": {
+        "lines": {
+          "l1": { "state": "ready", "ready": 6, "hold": "held" },
+          "l2": { "state": "ready", "ready": 2, "hold": "held" }
+        },
+        "projectedPicked": { "l1": 4, "l2": 0 },
+        "completeFails": false,
+        "draftable": { "a": 0, "b": 0 }
+      }
+    },
+    {
+      "id": "C10",
+      "title": "an org-level NULL-kind Site is here (no rack recorded); another warehouse's stock is elsewhere, counted in on hand but never supply",
+      "status": "pending_approval",
+      "items": {
+        "a": { "holdings": [["site", "org", 3], ["rack", "other", 2], ["staging", "other", 1]] }
+      },
+      "lines": [{ "id": "l1", "item": "a", "requested": 3 }],
+      "expect": {
+        "lines": { "l1": { "state": "ready", "ready": 3, "noRack": 3 } },
+        "flags": { "isShortStock": false },
+        "approveSucceeds": true,
+        "approvePartialHolds": { "a": 3 },
+        "draftable": { "a": 0 }
+      }
+    },
+    {
+      "id": "C11",
+      "title": "an item moved to another warehouse: readiness says short (item_moved), approve and approve_partial refuse the order",
+      "status": "pending_approval",
+      "items": {
+        "a": { "holdings": [["rack", "home", 5]] },
+        "m": { "moved": true, "holdings": [["rack", "other", 5]] }
+      },
+      "lines": [
+        { "id": "l1", "item": "a", "requested": 2 },
+        { "id": "l2", "item": "m", "requested": 2 }
+      ],
+      "expect": {
+        "lines": {
+          "l1": { "state": "ready", "ready": 2 },
+          "l2": { "state": "short", "short": 2 }
+        },
+        "flags": { "isShortStock": false, "itemMoved": true },
+        "approveSucceeds": false,
+        "approveError": "item_warehouse_mismatch",
+        "approvePartialError": "item_warehouse_mismatch",
+        "draftable": { "a": 0, "m": 0 }
+      }
+    },
+    {
+      "id": "C12",
+      "title": "on record 8 but the locations hold 5: can't confirm (never ready), while approve still decides on the 8 on record",
+      "status": "pending_approval",
+      "items": { "a": { "onHand": 8, "holdings": [["rack", "home", 5]] } },
+      "lines": [{ "id": "l1", "item": "a", "requested": 3 }],
+      "expect": {
+        "lines": { "l1": { "state": "unknown", "ready": 3 } },
+        "flags": { "isShortStock": false },
+        "approveSucceeds": true,
+        "approvePartialHolds": { "a": 3 },
+        "draftable": { "a": 0 }
+      }
+    },
+    {
+      "id": "C13",
+      "title": "a kit item 1 short: short, never drafted",
+      "status": "pending_approval",
+      "items": { "k": { "bundle": true, "holdings": [["rack", "home", 2]] } },
+      "lines": [{ "id": "l1", "item": "k", "requested": 3 }],
+      "expect": {
+        "lines": { "l1": { "state": "short", "ready": 2, "short": 1 } },
+        "flags": { "isShortStock": true },
+        "approveSucceeds": false,
+        "approveError": "insufficient_stock",
+        "approvePartialHolds": { "k": 2 },
+        "draftable": { "k": 0 }
+      }
+    }
+  ]
+}

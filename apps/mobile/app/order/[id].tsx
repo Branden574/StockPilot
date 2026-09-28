@@ -1,6 +1,17 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import { ArrowLeft, Camera, ImagePlus, Landmark, PenLine, Trash2, Truck, X } from 'lucide-react-native';
+import { useNetworkState } from 'expo-network';
+import {
+  ArrowLeft,
+  Camera,
+  ImagePlus,
+  Landmark,
+  PenLine,
+  Trash2,
+  Truck,
+  WifiOff,
+  X,
+} from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -18,6 +29,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { DigitalPick } from '@/components/digital-pick';
+import { OrderLineReadiness } from '@/components/order-line-readiness';
+import { OrderReadinessSummary } from '@/components/order-readiness-summary';
 import { SignaturePadModal } from '@/components/signature-pad-modal';
 import { AddOrderItemsSheet } from '@/components/add-order-items-sheet';
 import {
@@ -82,10 +95,19 @@ import {
 } from '@/lib/order-returns';
 import { extractApiErrorMessage } from '@/lib/po-import-approve';
 import {
-  loadOrderStockCheck,
-  orderStockGates,
-  type OrderStockCheck,
-} from '@/lib/order-stock-check';
+  ORDER_OFFLINE_NOTHING_LOADED_COPY,
+  orderReadinessAudience,
+  orderStockCheckFor,
+  orderViewAsOf,
+  readOrderReadiness,
+  readOrgTimeZone,
+  readinessPermissionsFor,
+  recalledOrderView,
+  reconcileReadiness,
+  rememberOrderView,
+  shouldReadReadiness,
+} from '@/lib/order-readiness';
+import { isOfflineState } from '@/lib/exceptions-api';
 import { readErrorMessage } from '@/lib/id-batches';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
@@ -113,14 +135,21 @@ import {
 } from '@/lib/delivery-request-actions';
 import { nativeOutlookAvailable, type OutlookPlatform } from '@/lib/outlook-transport';
 import {
+  approveShortNotice,
   availableOrderActions,
   can,
   condensedNoticeText,
   deliveryRecipientsForRouting,
   formatOrderNumber,
   derivePickingStatus,
+  orderLineItemName,
+  orderReadinessPhase,
+  orderStockGates,
+  READINESS_NEEDS_CONNECTION_COPY,
+  readinessOfflineCopy,
   UNPICKED_SHORTFALL_TITLE,
   type FulfillmentType,
+  type OrderReadinessResult,
   type OrderStatus,
   type OrgEmailRoutingReadState,
   type Role,
@@ -151,6 +180,12 @@ const KIND_LABELS: Record<string, string> = {
 };
 const KINDS = ['dropoff_photo', 'location', 'signature', 'other'] as const;
 type Kind = (typeof KINDS)[number];
+
+/**
+ * The only actions that still work offline (every other one needs a
+ * connection): copying the delivery request text changes nothing anywhere.
+ */
+const WORKS_OFFLINE = new Set(['delivery-copy']);
 
 const SHIPMENT_STATUS_LABELS: Record<string, string> = {
   draft: 'Label not purchased',
@@ -238,11 +273,16 @@ interface OrderHeader {
    *  fulfilled = provided to the customer (shipped at hand-over). */
   totalRequested: number;
   totalFulfilled: number;
-  /** The stock check behind "Approve partial" (pending: would a strict
-   *  approve fall short?) and "Resume fulfillment" (backordered: does any
-   *  still-owed item have stock?). A failed check is its own state, never a
-   *  check with zeros in it; orderStockGates turns it into what renders. */
-  stockCheck: OrderStockCheck;
+  /** ORDER READINESS (F2-1): core's assessment of order_readiness_facts,
+   *  read alongside this order at a to_pick status for the readiness
+   *  audience, and for a manager (Approve partial and Resume are gated on
+   *  it). Null: not read. A failed read is `{ state: 'failed' }`, never an
+   *  empty or green answer, and core orderStockGates turns it into what the
+   *  stock-dependent actions render (see lib/order-readiness.ts). */
+  readiness: OrderReadinessResult | null;
+  /** When the phone received this view (ISO): the offline banner's time when
+   *  readiness was not read. */
+  receivedAt: string;
   /** The order's returns (RMAs) with their lines — the reverse of the returns
    *  page's "Against order" link. Empty on any non-returnable status (never
    *  read there) and when nothing was ever returned. Decisions about what they
@@ -284,6 +324,16 @@ interface Attachment {
   createdAt: string;
 }
 
+/** What the screen last showed of an order, kept in memory for the app
+ *  session (lib/order-readiness.ts rememberOrderView) so that offline it can
+ *  show how the order looked, with its time, instead of an error. */
+interface RememberedOrder {
+  order: OrderHeader;
+  attachments: Attachment[];
+  attachmentsError: string | null;
+  shipment: OrderShipment | null;
+}
+
 export default function OrderDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -291,19 +341,19 @@ export default function OrderDetail() {
   const { c, mode } = useTheme();
 
   const { activeOrgId: orgId, activeRole: role } = useWorkspace();
-  const [order, setOrder] = React.useState<OrderHeader | null>(null);
+  const [loadedOrder, setOrder] = React.useState<OrderHeader | null>(null);
   // Why the order did not load. The header or the lines read FAILED, which is
   // not "Order not found." and not an order with no items: an empty lines list
   // would show "This order has no items yet.", zero totals, and still offer
   // Add items, pick slips, the delivery request email and returns built from
   // nothing. Set (or cleared) by EVERY load that completes.
-  const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [loadErrorState, setLoadError] = React.useState<string | null>(null);
   // A reload started from a "Try again" button, so the button can be disabled
   // while it runs (a failing read retries for several seconds before its
   // error shows).
   const [retrying, setRetrying] = React.useState(false);
-  const [attachments, setAttachments] = React.useState<Attachment[]>([]);
-  const [attachmentsError, setAttachmentsError] = React.useState<string | null>(null);
+  const [loadedAttachments, setAttachments] = React.useState<Attachment[]>([]);
+  const [loadedAttachmentsError, setAttachmentsError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
@@ -320,7 +370,32 @@ export default function OrderDetail() {
   const [sigUrl, setSigUrl] = React.useState<string | null>(null);
   const [sigLoading, setSigLoading] = React.useState(false);
   const [viewerUrl, setViewerUrl] = React.useState<string | null>(null);
-  const [shipment, setShipment] = React.useState<OrderShipment | null>(null);
+  const [loadedShipment, setShipment] = React.useState<OrderShipment | null>(null);
+
+  // OFFLINE (F2-1): the live network state (expo-network, the rule sync.ts
+  // applies: only a definite "not connected" counts). Offline nothing is
+  // asked, and the view is DERIVED, never fetched: the order on screen stays
+  // under a banner naming when it was loaded; a screen opened offline (or
+  // whose last read failed) shows what this session last loaded of it
+  // (memory only, lib/order-readiness.ts), or says it needs a connection.
+  // Every action is disabled with "Needs a connection.".
+  const offline = isOfflineState(useNetworkState());
+  const userId = user?.id ?? null;
+  const recalled = React.useMemo(
+    () =>
+      offline && loadedOrder === null
+        ? recalledOrderView<RememberedOrder>(userId, orgId, id ?? null)
+        : null,
+    [offline, loadedOrder, userId, orgId, id],
+  );
+  const order = loadedOrder ?? recalled?.view.order ?? null;
+  const attachments = recalled ? recalled.view.attachments : loadedAttachments;
+  const attachmentsError = recalled ? recalled.view.attachmentsError : loadedAttachmentsError;
+  const shipment = recalled ? recalled.view.shipment : loadedShipment;
+  // Why the order is not shown. Offline with nothing to show, it says so
+  // (never "Order not found." and never a stale read error).
+  const loadError =
+    offline && order === null ? ORDER_OFFLINE_NOTHING_LOADED_COPY : loadErrorState;
 
   // Create-return sheet state (staff parity with the web CreateReturnDialog).
   const [returnOpen, setReturnOpen] = React.useState(false);
@@ -375,6 +450,16 @@ export default function OrderDetail() {
   // staffer sees pick affordances immediately and a viewer never does.
   const viewerCanPick =
     isManager || (role !== null && can({ role: role as Role, permissions }, 'items:update'));
+
+  // The viewer's readiness permissions, as three booleans `load` depends on:
+  // they change only when an override changes what this viewer sees (the
+  // effective set loads after the first render, and with the static
+  // defaults it normally agrees), and then the order is read again.
+  const {
+    canApproveOrders: rpApprove,
+    canUpdateItems: rpItems,
+    canManagePurchaseOrders: rpBuy,
+  } = readinessPermissionsFor(role, permissions);
 
   // Returns (RMA) — staff "Create return" parity with the web order page. The
   // affordance shows only when the viewer holds returns:manage (effective set,
@@ -712,8 +797,12 @@ export default function OrderDetail() {
   }
 
 
-  const loadAttachments = React.useCallback(async () => {
-    if (!orgId || !id) return;
+  // Returns what it set, so `load` can remember the whole view for offline.
+  const loadAttachments = React.useCallback(async (): Promise<{
+    attachments: Attachment[];
+    error: string | null;
+  } | null> => {
+    if (!orgId || !id) return null;
     const { data, error } = await supabase
       .from('order_request_attachments')
       .select('id, storage_path, kind, content_type, file_name, created_at')
@@ -733,21 +822,32 @@ export default function OrderDetail() {
         if (u.path) signed.set(u.path, u.signedUrl);
       }
     }
-    setAttachments(
-      rows.map((r) => ({
-        id: r.id as string,
-        storagePath: r.storage_path as string,
-        kind: (r.kind as string | null) ?? 'other',
-        contentType: (r.content_type as string | null) ?? null,
-        fileName: (r.file_name as string | null) ?? null,
-        url: signed.get(r.storage_path as string) ?? null,
-        createdAt: r.created_at as string,
-      })),
-    );
+    const next: Attachment[] = rows.map((r) => ({
+      id: r.id as string,
+      storagePath: r.storage_path as string,
+      kind: (r.kind as string | null) ?? 'other',
+      contentType: (r.content_type as string | null) ?? null,
+      fileName: (r.file_name as string | null) ?? null,
+      url: signed.get(r.storage_path as string) ?? null,
+      createdAt: r.created_at as string,
+    }));
+    setAttachments(next);
+    return { attachments: next, error: error ? error.message : null };
   }, [orgId, id]);
 
   const load = React.useCallback(async () => {
     if (!orgId || !id) return;
+    if (offline) {
+      // OFFLINE: nothing is asked. Every read would fail, and a failed header
+      // read would replace the order on screen with an error. The view is
+      // derived in render (see `recalled`); it loads again on reconnect
+      // (`offline` is a dependency, so the focus effect re-runs). `loading`
+      // is left as it is: a screen opened offline stays "loading" underneath
+      // (the render shows the remembered order or the offline sentence), so
+      // on reconnect it shows the spinner until the order arrives, never a
+      // flash of "Order not found.".
+      return;
+    }
     const { data, error: headerError, status: headerStatus } = await supabase
       .from('order_requests')
       .select(
@@ -774,8 +874,30 @@ export default function OrderDetail() {
       .eq('organization_id', orgId)
       .eq('id', id)
       .maybeSingle();
+    // ORDER READINESS (F2-1). Started as soon as the header says the order's
+    // status and requester, so it runs alongside the lines read and every
+    // read after it; awaited below, where the stock check used to be. Only
+    // at a to_pick status, and only for someone who sees it or a manager
+    // (shouldReadReadiness); everyone else makes no read. Neither read ever
+    // throws: a failure is `{ state: 'failed' }` and an unread zone is null.
+    const headerForReadiness = data as Record<string, unknown> | null;
+    const readinessRead =
+      headerForReadiness &&
+      shouldReadReadiness({
+        status: (headerForReadiness.status as string | null) ?? null,
+        audience: orderReadinessAudience(
+          { canApproveOrders: rpApprove, canUpdateItems: rpItems, canManagePurchaseOrders: rpBuy },
+          userId,
+          (headerForReadiness.requester_user_id as string | null) ?? null,
+        ),
+        role,
+      })
+        ? Promise.all([readOrderReadiness(supabase, id), readOrgTimeZone(supabase, orgId)])
+        : null;
     // Order lines — both the per-line ITEMS list (a manager must SEE what's
-    // being ordered before approving) and the backorder roll-ups.
+    // being ordered before approving) and the backorder roll-ups. In
+    // (created_at, id) order: readiness numbers its lines the same way, and
+    // an unordered read shuffled the list after a line was edited.
     const { data: lineRows, error: linesError, status: linesStatus } = await supabase
       .from('order_request_lines')
       .select(
@@ -784,7 +906,9 @@ export default function OrderDetail() {
         // (or removing the line) would strand that physical stock.
         'id, item_id, created_at, quantity_requested, quantity_fulfilled, quantity_picked, returned_quantity, item:inventory_items(name, sku, charter_id, charter:charters!charter_id(name, code))',
       )
-      .eq('order_request_id', id);
+      .eq('order_request_id', id)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true });
     // FAIL CLOSED on either read. The header used to fall through to "Order
     // not found." and the lines to an order with no items; both are claims
     // about the order made from an error. Nothing below runs on a failure:
@@ -852,23 +976,22 @@ export default function OrderDetail() {
     // nothing had been picked. The service now re-syncs the hold instead of
     // refusing, nothing else on this screen read the result, and the query
     // silently discarded its own error — so it is deleted rather than kept as a
-    // round trip nobody consumes. The reservation read below is a DIFFERENT one
-    // (availability maths for Approve-partial / Resume-fulfillment) and stays.
+    // round trip nobody consumes.
     //
-    // Stock-awareness, mirroring the web page loader:
-    //  - pending_approval → isShortStock (drives "Approve partial"), judged on
-    //    PER-ITEM demand (duplicate-item lines are summed first).
-    //  - backordered → hasFulfillableStock (gates "Resume fulfillment").
-    // Only read on those two statuses to keep load() light. Batched, and a
-    // failed read (or an item this viewer cannot read) is a FAILED check that
-    // disables those actions and says why, never on hand or reserved as 0.
-    // See lib/order-stock-check.ts.
-    const stockCheck = await loadOrderStockCheck(
-      supabase,
-      orgId,
-      (data as Record<string, unknown> | null)?.status as string | null,
-      rows,
-    );
+    // The readiness read started above lands here, where the stock check used
+    // to be (lib/order-stock-check.ts, deleted: its own on-hand and
+    // reservation reads and its copy of the stock flags). Readiness now feeds
+    // Approve partial and Resume through core (readinessStockFlags, then
+    // orderStockGates, the web page's own gates). The answer must describe
+    // the order on screen: a status or line set that moved between the reads
+    // is `failed` (reconcileReadiness), never a mix of two orders.
+    const readinessAnswer = readinessRead ? await readinessRead : null;
+    const readiness: OrderReadinessResult | null = readinessAnswer
+      ? reconcileReadiness(readinessAnswer[0], {
+          status: ((data as Record<string, unknown> | null)?.status as string | null) ?? '',
+          lineIds: rows.map((l) => l.id),
+        })
+      : null;
     // Delivery-request inputs: the destination site and the org's timezone.
     //
     // Gated on ROW-DERIVED facts only — is this a live delivery order — and
@@ -952,7 +1075,11 @@ export default function OrderDetail() {
       }
       orgTimezone = (orgRow?.timezone as string | null) ?? null;
     }
+    // Readiness read the zone too ("Checked at" and PO dates name the org's
+    // clock and day, as the web page does). Either read may supply it.
+    orgTimezone = orgTimezone ?? readinessAnswer?.[1] ?? null;
 
+    let shown: OrderHeader | null = null;
     setLoadError(null);
     if (!data) setOrder(null);
     if (data) {
@@ -964,7 +1091,7 @@ export default function OrderDetail() {
         | { full_name: string | null; email: string | null }[]
         | null;
       const pkObj = Array.isArray(pk) ? pk[0] : pk;
-      setOrder({
+      shown = {
         id: r.id as string,
         orderNumber: (r.order_number as number | null) ?? null,
         status: r.status as string,
@@ -1009,7 +1136,8 @@ export default function OrderDetail() {
         deliveryRouting,
         totalRequested,
         totalFulfilled,
-        stockCheck,
+        readiness,
+        receivedAt: new Date().toISOString(),
         returns: orderReturns,
         lines: rows.map((l) => {
           const itemObj = Array.isArray(l.item) ? l.item[0] : l.item;
@@ -1020,7 +1148,9 @@ export default function OrderDetail() {
             orderRequestLineId: l.id ?? null,
             itemId: l.item_id ?? null,
             createdAt: l.created_at ?? null,
-            name: itemObj?.name ?? 'Unknown item',
+            // Core's label when the viewer's access hides the item (a line's
+            // item cannot be deleted); the web order page says the same.
+            name: orderLineItemName(itemObj),
             sku: itemObj?.sku ?? null,
             requested: Number(l.quantity_requested) || 0,
             fulfilled: Number(l.quantity_fulfilled) || 0,
@@ -1030,15 +1160,28 @@ export default function OrderDetail() {
             charterCode: charterObj?.code ?? null,
           };
         }),
-      });
+      };
+      setOrder(shown);
     }
-    await loadAttachments();
+    const attachmentsRead = await loadAttachments();
     // Read-only carrier tracking. The wrapper soft-gates: if the shipping
     // module is off, the member lacks access, or there is simply no shipment,
     // it returns null and the section below stays hidden.
-    setShipment(await getOrderShipment(id));
+    const shipmentRead = await getOrderShipment(id);
+    setShipment(shipmentRead);
+    // Kept in memory for this app session only (never written to the
+    // device), so the screen can show how the order looked if the phone goes
+    // offline and the order is opened again.
+    if (shown) {
+      rememberOrderView<RememberedOrder>(userId, orgId, id, {
+        order: shown,
+        attachments: attachmentsRead?.attachments ?? [],
+        attachmentsError: attachmentsRead?.error ?? null,
+        shipment: shipmentRead,
+      });
+    }
     setLoading(false);
-  }, [orgId, id, loadAttachments]);
+  }, [orgId, id, loadAttachments, offline, userId, role, rpApprove, rpItems, rpBuy]);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -1214,9 +1357,44 @@ export default function OrderDetail() {
       st === 'in_transit' ||
       st === 'backordered');
 
-  // What the stock-dependent actions render (Approve partial, Resume). A
-  // failed stock check disables them and explains; see lib/order-stock-check.
-  const stockGates = orderStockGates(st ?? '', order?.stockCheck ?? { state: 'not_needed' });
+  // What the stock-dependent actions render (Approve partial, Resume), from
+  // readiness through core: the web page's own gates. A failed, missing or
+  // capped check disables them and explains; see lib/order-readiness.ts.
+  const stockCheck = orderStockCheckFor(st, order?.readiness ?? null);
+  const stockGates = orderStockGates(st ?? '', stockCheck);
+  // "2 lines ask for more than is available now, so Approve will be refused.
+  // ..." under Approve.
+  const approveNotice = approveShortNotice(stockCheck);
+
+  // READINESS (F2-1). Who sees it (core readinessAudience: the full panel for
+  // approvers, pickers and buyers, one sentence for the requester, nothing
+  // for anyone else), and each line's assessment for the full panel.
+  const readinessAudienceNow = orderReadinessAudience(
+    { canApproveOrders: rpApprove, canUpdateItems: rpItems, canManagePurchaseOrders: rpBuy },
+    userId,
+    order?.requesterUserId ?? null,
+  );
+  const readinessShown =
+    order !== null &&
+    order.readiness !== null &&
+    readinessAudienceNow !== 'none' &&
+    orderReadinessPhase(order.status) === 'to_pick';
+  const readinessByLine = React.useMemo(() => {
+    const r = order?.readiness;
+    if (!r || r.state !== 'ok' || r.assessment.phase !== 'to_pick') return null;
+    const items = new Map(r.assessment.items.map((it) => [it.itemId, it]));
+    return new Map(
+      r.assessment.lines.map((l) => [l.lineId, { line: l, item: items.get(l.itemId) ?? null }]),
+    );
+  }, [order]);
+  const showLineReadiness = readinessShown && readinessAudienceNow === 'full';
+
+  // Every action needs a connection; this is the reason shown with them.
+  const connectionNotice = offline ? (
+    <Body size={12} color={c.ink3}>
+      {READINESS_NEEDS_CONNECTION_COPY}
+    </Body>
+  ) : null;
   const stockNotice = stockGates.notice ? (
     <View style={{ gap: 8 }}>
       <Body size={12} color={ACCENT.warn}>
@@ -1317,9 +1495,21 @@ export default function OrderDetail() {
     busyKey: string,
     onPress: () => void,
     tone: 'primary' | 'danger' | 'default' = 'primary',
-    disabled = false,
+    disabledByCaller = false,
+    disabledReason: string | null = null,
   ) => {
     const isBusy = acting === busyKey;
+    // Offline every action is disabled ("Needs a connection." shows with
+    // them), except the few that change nothing anywhere (WORKS_OFFLINE).
+    const disabled = disabledByCaller || (offline && !WORKS_OFFLINE.has(busyKey));
+    // A disabled button says why in its own hint, as the web links its reason
+    // with aria-describedby: the reason shown under the actions is otherwise
+    // read only later, after the other buttons.
+    const hint = disabledByCaller
+      ? (disabledReason ?? undefined)
+      : offline && !WORKS_OFFLINE.has(busyKey)
+        ? READINESS_NEEDS_CONNECTION_COPY
+        : undefined;
     const bg = tone === 'primary' ? c.ink : tone === 'danger' ? '#b42318' : 'transparent';
     const fg = tone === 'default' ? c.ink : tone === 'danger' ? '#fff' : c.paper;
     return (
@@ -1327,7 +1517,9 @@ export default function OrderDetail() {
         key={label}
         onPress={onPress}
         disabled={acting !== null || disabled}
+        accessibilityRole="button"
         accessibilityState={{ disabled: acting !== null || disabled }}
+        accessibilityHint={hint}
         style={[
           styles.addBtn,
           {
@@ -1567,7 +1759,7 @@ export default function OrderDetail() {
         </View>
       </SafeAreaView>
 
-      {loading ? (
+      {loading && !order && !offline ? (
         <ActivityIndicator color={c.ink} style={{ marginTop: 40 }} />
       ) : !order && loadError !== null ? (
         <View style={styles.center}>
@@ -1606,6 +1798,23 @@ export default function OrderDetail() {
               {[order.orgLabel, order.warehouseName].filter(Boolean).join(' · ') || '—'}
             </Mono>
           </View>
+
+          {/* OFFLINE: the order as it was last loaded, and when. Every action
+              below is disabled and says it needs a connection. */}
+          {offline ? (
+            <Card padding={14}>
+              <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+                <View style={{ paddingTop: 3 }}>
+                  <WifiOff size={16} color={ACCENT.warn} strokeWidth={1.8} />
+                </View>
+                <Body size={13.5} color={c.ink} accessibilityRole="alert" style={{ flex: 1 }}>
+                  {readinessOfflineCopy(orderViewAsOf(order.readiness, order.receivedAt), {
+                    timeZone: order.orgTimezone ?? undefined,
+                  })}
+                </Body>
+              </View>
+            </Card>
+          ) : null}
 
           {totalOwed > 0 && (totalFulfilled > 0 || order.status === 'backordered') ? (
             <Card padding={14}>
@@ -1660,6 +1869,19 @@ export default function OrderDetail() {
                 {shortfallNotice}
               </Mono>
             </Card>
+          ) : null}
+
+          {/* READINESS (F2-1): the roll-up above the lines (the full panel),
+              or one sentence for the requester. A failed check says so. */}
+          {readinessShown && order.readiness ? (
+            <OrderReadinessSummary
+              result={order.readiness}
+              audience={readinessAudienceNow}
+              timeZone={order.orgTimezone}
+              offline={offline}
+              checking={retrying}
+              onCheckAgain={() => void retryLoad()}
+            />
           ) : null}
 
           {order.lines.length > 0 || canAddItems ? (
@@ -1728,109 +1950,141 @@ export default function OrderDetail() {
                     // and the row actually carries its id — the PATCH/DELETE
                     // twins address the line by id, so a row without one has
                     // nothing to send.
-                    const editable = canEditItems && l.orderRequestLineId !== null;
+                    // Offline an edit could not be sent: the row is not
+                    // tappable, and "Needs a connection." shows below.
+                    const editable = canEditItems && l.orderRequestLineId !== null && !offline;
+                    // A row that could be edited with a connection: offline
+                    // VoiceOver says it is disabled, and why.
+                    const editBlockedOffline = canEditItems && l.orderRequestLineId !== null && offline;
                     const lineSubline = describeLineFulfilment({
                       requested: l.requested,
                       fulfilled: l.fulfilled,
                       returned: l.returned,
                     });
+                    // The line's readiness, under it (full panel only). A
+                    // SIBLING of the row, never inside it: the row is a
+                    // button, and a button folds everything in it into one
+                    // VoiceOver element.
+                    const lineReadiness =
+                      showLineReadiness && l.orderRequestLineId
+                        ? (readinessByLine?.get(l.orderRequestLineId) ?? null)
+                        : null;
                     return (
-                      <Pressable
-                        key={`${l.sku ?? l.name}-${i}`}
-                        onPress={
-                          editable ? () => setEditLineId(l.orderRequestLineId) : undefined
-                        }
-                        accessibilityRole={editable ? 'button' : undefined}
-                        accessibilityLabel={
-                          editable ? `Edit ${l.name}, quantity ${l.requested}` : undefined
-                        }
-                        style={({ pressed }) => ({
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          gap: 12,
-                          paddingHorizontal: 14,
-                          paddingVertical: 12,
-                          borderTopWidth: i === 0 ? 0 : 1,
-                          borderTopColor: c.hair,
-                          opacity: editable && pressed ? 0.6 : 1,
-                        })}
+                      <View
+                        key={l.orderRequestLineId ?? `${l.sku ?? l.name}-${i}`}
+                        style={{ borderTopWidth: i === 0 ? 0 : 1, borderTopColor: c.hair }}
                       >
-                        <View style={{ flex: 1, minWidth: 0 }}>
-                          <Body size={14} color={c.ink} numberOfLines={2}>
-                            {l.name}
-                          </Body>
-                          {l.sku ? (
-                            <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
-                              {l.sku}
-                            </Mono>
-                          ) : null}
-                          {l.charterName ? (
-                            <View
-                              style={{
-                                flexDirection: 'row',
-                                alignItems: 'center',
-                                alignSelf: 'flex-start',
-                                // maxWidth + flexShrink below are BOTH required for
-                                // numberOfLines to actually ellipsize in RN (default
-                                // flexShrink is 0, and a flex-start chip is otherwise
-                                // measured at max-content and overflows the column).
-                                maxWidth: '100%',
-                                gap: 3,
-                                marginTop: 4,
-                                paddingHorizontal: 6,
-                                paddingVertical: 1,
-                                borderRadius: 999,
-                                backgroundColor: ACCENT.mintSoft,
-                              }}
-                            >
-                              <Landmark
-                                size={10}
-                                color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
-                              />
-                              <Mono
-                                size={10}
-                                tracking={0.02}
-                                color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
-                                numberOfLines={1}
-                                style={{ flexShrink: 1 }}
-                              >
-                                {l.charterCode ? `${l.charterName} (${l.charterCode})` : l.charterName}
+                        <Pressable
+                          onPress={
+                            editable ? () => setEditLineId(l.orderRequestLineId) : undefined
+                          }
+                          // 'none', never undefined. React Native keeps a
+                          // view's previous traits when its role is removed
+                          // (AccessibilityProps.cpp: no role value keeps
+                          // sourceProps.accessibilityTraits), so a row that
+                          // was editable online stayed a Button offline (F2-1
+                          // phone walk, D1). A removed hint or label resets.
+                          accessibilityRole={editable ? 'button' : 'none'}
+                          accessibilityState={{ disabled: editBlockedOffline }}
+                          accessibilityHint={editBlockedOffline ? READINESS_NEEDS_CONNECTION_COPY : undefined}
+                          accessibilityLabel={
+                            editable ? `Edit ${l.name}, quantity ${l.requested}` : undefined
+                          }
+                          style={({ pressed }) => ({
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: 12,
+                            paddingHorizontal: 14,
+                            paddingVertical: 12,
+                            opacity: editable && pressed ? 0.6 : 1,
+                          })}
+                        >
+                          <View style={{ flex: 1, minWidth: 0 }}>
+                            <Body size={14} color={c.ink} numberOfLines={2}>
+                              {l.name}
+                            </Body>
+                            {l.sku ? (
+                              <Mono size={10.5} tracking={0.04} color={c.ink4} style={{ marginTop: 2 }}>
+                                {l.sku}
                               </Mono>
-                            </View>
-                          ) : null}
-                        </View>
-                        <View style={{ alignItems: 'flex-end' }}>
-                          <Mono size={13} color={c.ink}>
-                            ×{l.requested}
-                          </Mono>
-                          {/* The sub-line comes from the shared describer so
-                              web and the phone say the same thing about the
-                              same line: "1 provided · 2 owed", "fulfilled",
-                              and — after a return — "fulfilled · 1 returned".
-                              Fulfilled is the shipped count and is never
-                              rewritten; the returned figure is appended as a
-                              later event. Amber only while units are OWED. */}
-                          {lineSubline ? (
-                            <Mono
-                              size={10.5}
-                              color={l.fulfilled > 0 && l.fulfilled < l.requested ? '#b45309' : c.ink4}
-                              style={{ marginTop: 2 }}
-                            >
-                              {lineSubline}
+                            ) : null}
+                            {l.charterName ? (
+                              <View
+                                style={{
+                                  flexDirection: 'row',
+                                  alignItems: 'center',
+                                  alignSelf: 'flex-start',
+                                  // maxWidth + flexShrink below are BOTH required for
+                                  // numberOfLines to actually ellipsize in RN (default
+                                  // flexShrink is 0, and a flex-start chip is otherwise
+                                  // measured at max-content and overflows the column).
+                                  maxWidth: '100%',
+                                  gap: 3,
+                                  marginTop: 4,
+                                  paddingHorizontal: 6,
+                                  paddingVertical: 1,
+                                  borderRadius: 999,
+                                  backgroundColor: ACCENT.mintSoft,
+                                }}
+                              >
+                                <Landmark
+                                  size={10}
+                                  color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
+                                />
+                                <Mono
+                                  size={10}
+                                  tracking={0.02}
+                                  color={mode === 'dark' ? ACCENT.mintInkDark : ACCENT.mintInk}
+                                  numberOfLines={1}
+                                  style={{ flexShrink: 1 }}
+                                >
+                                  {l.charterCode ? `${l.charterName} (${l.charterCode})` : l.charterName}
+                                </Mono>
+                              </View>
+                            ) : null}
+                          </View>
+                          <View style={{ alignItems: 'flex-end' }}>
+                            <Mono size={13} color={c.ink}>
+                              ×{l.requested}
                             </Mono>
-                          ) : null}
-                          {editable ? (
-                            <Mono size={10} tracking={0.08} upper color={c.ink4} style={{ marginTop: 3 }}>
-                              Edit
-                            </Mono>
-                          ) : null}
-                        </View>
-                      </Pressable>
+                            {/* The sub-line comes from the shared describer so
+                                web and the phone say the same thing about the
+                                same line: "1 provided · 2 owed", "fulfilled",
+                                and — after a return — "fulfilled · 1 returned".
+                                Fulfilled is the shipped count and is never
+                                rewritten; the returned figure is appended as a
+                                later event. Amber only while units are OWED. */}
+                            {lineSubline ? (
+                              <Mono
+                                size={10.5}
+                                color={l.fulfilled > 0 && l.fulfilled < l.requested ? '#b45309' : c.ink4}
+                                style={{ marginTop: 2 }}
+                              >
+                                {lineSubline}
+                              </Mono>
+                            ) : null}
+                            {editable ? (
+                              <Mono size={10} tracking={0.08} upper color={c.ink4} style={{ marginTop: 3 }}>
+                                Edit
+                              </Mono>
+                            ) : null}
+                          </View>
+                        </Pressable>
+                        {lineReadiness ? (
+                          <OrderLineReadiness
+                            line={lineReadiness.line}
+                            item={lineReadiness.item}
+                            position={i + 1}
+                            timeZone={order.orgTimezone}
+                            onOpenItem={(itemId) => router.push(`/item/${itemId}`)}
+                          />
+                        ) : null}
+                      </View>
                     );
                   })}
                 </Card>
               )}
-              {canEditItems && order.lines.length > 0 ? (
+              {canEditItems && order.lines.length > 0 && !offline ? (
                 <Mono size={10.5} color={c.ink4}>
                   Tap a line to change its quantity or take it off the order.
                 </Mono>
@@ -1843,6 +2097,7 @@ export default function OrderDetail() {
                   </Mono>
                 </>
               ) : null}
+              {canEditItems || canAddItems ? connectionNotice : null}
             </View>
           ) : null}
 
@@ -1896,6 +2151,7 @@ export default function OrderDetail() {
                   reloadToken={linesVersion}
                   orderId={id!}
                   canPick
+                  offline={offline}
                   onCompleted={() => void load()}
                 />
               ) : !canClaimPick &&
@@ -1916,6 +2172,7 @@ export default function OrderDetail() {
                     'default',
                   )
                 : null}
+              {canClaimPick || canReleasePick ? connectionNotice : null}
 
               <Mono size={10.5} color={c.ink4}>
                 Same actions as the web dashboard — changes sync instantly.
@@ -1929,6 +2186,13 @@ export default function OrderDetail() {
               {order.status === 'pending_approval' ? (
                 <>
                   {actionBtn('Approve', 'approve', () => void act({ action: 'approve' }, 'approve'))}
+                  {/* A strict Approve would be refused: say so before the tap
+                      (core approveShortNotice, the web page's words). */}
+                  {approveNotice ? (
+                    <Body size={12} color={ACCENT.warn}>
+                      {approveNotice}
+                    </Body>
+                  ) : null}
                   {stockGates.approvePartial !== 'hidden'
                     ? actionBtn(
                         'Approve partial',
@@ -1936,6 +2200,7 @@ export default function OrderDetail() {
                         () => void act({ action: 'approve_partial' }, 'approve-partial'),
                         'default',
                         stockGates.approvePartial === 'disabled',
+                        stockGates.notice,
                       )
                     : null}
                   {actionBtn('Deny', 'deny', () => setDenyOpen(true), 'danger')}
@@ -2027,6 +2292,7 @@ export default function OrderDetail() {
                       () => void act({ action: 'resume_fulfillment' }, 'resume'),
                       'primary',
                       stockGates.resume === 'disabled',
+                      stockGates.notice,
                     )
                   )}
                   {stockNotice}
@@ -2067,6 +2333,7 @@ export default function OrderDetail() {
                   )}
                 </>
               ) : null}
+              {connectionNotice}
               <Mono size={10.5} color={c.ink4}>
                 Same actions as the web dashboard — changes sync instantly.
               </Mono>
@@ -2077,6 +2344,7 @@ export default function OrderDetail() {
             <View style={{ gap: 8 }}>
               <Eyebrow>DELIVERY REQUEST</Eyebrow>
               {actionBtn('Email delivery request', 'delivery-request', handleDeliveryRequestPress)}
+              {connectionNotice}
               {/* Interpolated from the SAME resolved recipients the draft was
                   composed with (per-org email routing), so this sentence can
                   never name mailboxes the mail does not go to. */}
@@ -2247,6 +2515,7 @@ export default function OrderDetail() {
               {showCreateReturn ? (
                 <>
                   {actionBtn('Create return', 'create-return', openReturnSheet)}
+                  {connectionNotice}
                   <Mono size={10.5} color={c.ink4}>
                     Goes to the returns approval queue — stock moves only after it is approved
                     and received.
@@ -2344,8 +2613,13 @@ export default function OrderDetail() {
                 <View style={{ flexDirection: 'row', gap: 10 }}>
                   <Pressable
                     onPress={addProof}
-                    disabled={uploading}
-                    style={[styles.addBtn, { backgroundColor: c.ink, opacity: uploading ? 0.6 : 1 }]}
+                    disabled={uploading || offline}
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: uploading || offline }}
+                    style={[
+                      styles.addBtn,
+                      { backgroundColor: c.ink, opacity: uploading || offline ? 0.6 : 1 },
+                    ]}
                   >
                     {uploading ? (
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -2366,6 +2640,7 @@ export default function OrderDetail() {
                     )}
                   </Pressable>
                 </View>
+                {connectionNotice}
               </View>
             ) : (
               <Mono size={11} color={c.ink4}>
@@ -2404,7 +2679,15 @@ export default function OrderDetail() {
                           {KIND_LABELS[a.kind] ?? 'Other'}
                         </Mono>
                         {isManager ? (
-                          <Pressable onPress={() => void deleteAttachment(a)} hitSlop={8}>
+                          <Pressable
+                            onPress={() => void deleteAttachment(a)}
+                            disabled={offline}
+                            accessibilityRole="button"
+                            accessibilityLabel="Delete attachment"
+                            accessibilityState={{ disabled: offline }}
+                            style={{ opacity: offline ? 0.4 : 1 }}
+                            hitSlop={8}
+                          >
                             <Trash2 size={14} color={c.ink4} />
                           </Pressable>
                         ) : null}

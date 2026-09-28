@@ -6,6 +6,7 @@ import {
   describeRaiseAfterPicking,
   describeUnpickedShortfall,
   isPickingSettled,
+  lineOwedUnits,
   lineUnpickedUnits,
   PICKING_SETTLED_STATUSES,
   projectedLineShortfall,
@@ -16,6 +17,26 @@ import {
 function line(over: Partial<ShortfallLine> = {}): ShortfallLine {
   return { quantityRequested: 40, quantityFulfilled: 0, quantityPicked: 40, ...over };
 }
+
+describe('lineOwedUnits', () => {
+  it('is requested minus handed over', () => {
+    expect(lineOwedUnits({ quantityRequested: 6, quantityFulfilled: 2 })).toBe(4);
+  });
+
+  it('does not subtract picked units: staged is still owed', () => {
+    expect(lineOwedUnits({ ...line(), quantityRequested: 40, quantityFulfilled: 0 })).toBe(40);
+  });
+
+  it('floors an over-fulfilled line at zero, so it never eats a sibling line\'s share', () => {
+    expect(lineOwedUnits({ quantityRequested: 5, quantityFulfilled: 7 })).toBe(0);
+  });
+
+  it('treats nulls and garbage as zero', () => {
+    expect(lineOwedUnits({ quantityRequested: 5, quantityFulfilled: null })).toBe(5);
+    expect(lineOwedUnits({ quantityRequested: undefined, quantityFulfilled: 3 })).toBe(0);
+    expect(lineOwedUnits({ quantityRequested: Number.NaN, quantityFulfilled: 0 })).toBe(0);
+  });
+});
 
 describe('lineUnpickedUnits', () => {
   it('counts nothing picked yet as the whole request', () => {

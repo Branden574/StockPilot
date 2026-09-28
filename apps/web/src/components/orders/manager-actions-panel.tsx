@@ -63,7 +63,12 @@ import {
   stageOrderAction,
   suggestNeededByAction,
 } from '@/server/actions/order-requests';
-import { availableOrderActions, derivePickingStatus, type Role } from '@stockpilot/core';
+import {
+  availableOrderActions,
+  derivePickingStatus,
+  type OrderStockGates,
+  type Role,
+} from '@stockpilot/core';
 
 import type { OrderRequestStatus } from '@/server/services/order-requests';
 
@@ -90,12 +95,17 @@ interface Props {
    *  who sees the panel ONLY for in-transit actions; they shouldn't
    *  see Approve / Deny / Reassign / Internal-Notes. */
   canApprove: boolean;
-  /** Whether a strict approve would fall short of the requested qty. Drives the
-   *  "Approve partial" affordance at pending_approval (server-computed). */
-  isShortStock?: boolean;
-  /** Whether any still-owed line has stock available to pick (server-computed).
-   *  Gates "Resume fulfillment" at backordered — no stock, no resume. */
-  hasFulfillableStock?: boolean;
+  /** The stock-dependent actions (core orderStockGates, fed by readiness on
+   *  the server): "Approve partial" at pending_approval and "Resume
+   *  fulfillment" at backordered, each hidden, enabled or DISABLED with the
+   *  reason in `notice`. A failed readiness read disables them and says why;
+   *  it never hides them as if stock were fine (pattern #1). Omitted: both
+   *  hidden or waiting, no notice. */
+  stockGates?: OrderStockGates;
+  /** The note under Approve when a strict Approve would be refused (core
+   *  approveShortNotice): "2 lines ask for more than is available now, so
+   *  Approve will be refused. Use Approve partial or change the lines." */
+  approveNotice?: string | null;
   /** Picking claim/lock context. The shared state machine
    *  (`availableOrderActions`) reads these to decide which of
    *  claim / reassign / release / pick / complete render for THIS
@@ -136,6 +146,14 @@ type BusyKey =
   | 'notes'
   | null;
 
+/** No stock check: nothing to offer, nothing to say. */
+const NO_STOCK_GATES: OrderStockGates = {
+  approvePartial: 'hidden',
+  resume: 'waiting',
+  notice: null,
+  canRetry: false,
+};
+
 const DOWNSTREAM_PACKING_STATUSES: OrderRequestStatus[] = [
   'packing_slip_generated',
   'staged_for_pickup',
@@ -157,8 +175,8 @@ export function ManagerActionsPanel({
   signedAt,
   drivers,
   canApprove,
-  isShortStock,
-  hasFulfillableStock,
+  stockGates = NO_STOCK_GATES,
+  approveNotice = null,
   viewerRole,
   viewerUserId,
   assignedPickerId,
@@ -168,6 +186,7 @@ export function ManagerActionsPanel({
 }: Props) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<BusyKey>(null);
+  const [rechecking, startRecheck] = React.useTransition();
 
   // Single source of truth for which picking affordances THIS viewer gets.
   // Never branch on status/role for picking here — read the shared machine.
@@ -180,8 +199,15 @@ export function ManagerActionsPanel({
     assignedPickerId,
     assignedDeliveryUserId,
     viewerCanPick,
-    isShortStock,
+    // Offered (enabled, or disabled with the reason) unless the gates hide it.
+    isShortStock: stockGates.approvePartial !== 'hidden',
   });
+  // The stock notice belongs to the two stock-dependent statuses only.
+  const stockNotice =
+    canApprove && (status === 'pending_approval' || status === 'backordered')
+      ? stockGates.notice
+      : null;
+  const shortNotice = canApprove && status === 'pending_approval' ? approveNotice : null;
   const isPickingPhase =
     status === 'pick_slip_generated' || status === 'picking_in_progress';
   const pickingStatus = derivePickingStatus(status, assignedPickerId);
@@ -526,7 +552,8 @@ export function ManagerActionsPanel({
                 <Button
                   variant="outline"
                   onClick={approvePartial}
-                  disabled={busy !== null}
+                  disabled={busy !== null || stockGates.approvePartial === 'disabled'}
+                  aria-describedby={stockNotice ? 'order-stock-notice' : undefined}
                 >
                   {busy === 'approve-partial' ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -805,11 +832,12 @@ export function ManagerActionsPanel({
 
           {status === 'backordered' && canApprove && (
             <>
-              {hasFulfillableStock ? (
+              {stockGates.resume !== 'waiting' ? (
                 <Button
                   variant="gradient"
                   onClick={resumeFulfillment}
-                  disabled={busy !== null}
+                  disabled={busy !== null || stockGates.resume === 'disabled'}
+                  aria-describedby={stockNotice ? 'order-stock-notice' : undefined}
                 >
                   {busy === 'resume-fulfillment' ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -842,6 +870,42 @@ export function ManagerActionsPanel({
             </div>
           )}
         </div>
+
+        {/* Under the actions: why a stock-dependent action is disabled (a
+            failed readiness read, an item the viewer cannot read, a moved
+            item), with Try again when a new read can help; and the note under
+            Approve when a strict Approve would be refused. */}
+        {stockNotice && (
+          <div
+            id="order-stock-notice"
+            role="status"
+            className="flex flex-wrap items-center gap-2 text-xs text-amber-800 dark:text-amber-300"
+            data-testid="order-stock-notice"
+          >
+            <span>{stockNotice}</span>
+            {stockGates.canRetry && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => startRecheck(() => router.refresh())}
+                disabled={rechecking}
+              >
+                {rechecking ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RotateCcw className="h-3.5 w-3.5" />
+                )}
+                Try again
+              </Button>
+            )}
+          </div>
+        )}
+        {shortNotice && (
+          <p className="text-xs text-amber-800 dark:text-amber-300" data-testid="approve-short-notice">
+            {shortNotice}
+          </p>
+        )}
 
         {canApprove && (
           <div className="space-y-1.5 pt-2">
