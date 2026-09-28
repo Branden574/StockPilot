@@ -1,20 +1,30 @@
 import {
+  ESCALATE_AAL2_REQUIRED_COPY,
+  ESCALATE_MFA_REQUIRED_COPY,
   ESCALATE_MODULE_OFF_COPY,
   ESCALATE_NOT_PERMITTED_COPY,
   ESCALATE_OFFLINE_COPY,
   ESCALATE_RESOLVED_COPY,
-  ESCALATION_IN_PROGRESS_COPY,
-  ESCALATION_NOT_LINKED_COPY,
-  EXCEPTION_RULES,
+  ESCALATE_SERVER_PROBLEM_COPY,
+  ESCALATE_TOO_MANY_COPY,
+  ESCALATION_BUSY_COPY,
+  ESCALATION_CHANGED_COPY,
+  ESCALATION_IN_PROGRESS_ELSEWHERE_COPY,
+  ESCALATION_LINK_FAILED_COPY,
   escalateDisabledReason,
   escalationAlreadyEscalatedCopy,
   escalationBadgeCopy,
   escalationDuplicateCopy,
+  escalationFailureCopy,
+  escalationInProgressCopy,
   escalationOpenRequestLabel,
   escalationPrefill,
   escalationRequestStateCopy,
+  escalationSourceLines as coreEscalationSourceLines,
   type EscalateUnavailableReason,
+  type EscalationHolder,
   type EscalationPrefill,
+  type EscalationSavedRequest,
   type ExceptionRule,
   type MaintenancePriority,
 } from '@stockpilot/core';
@@ -46,8 +56,10 @@ import { api } from './api';
  *   5. The item and the location come from the exception on the SERVER; the
  *      phone sends only the four fields a person fills in.
  *   6. Every sentence the web also shows comes from core
- *      (warehouse/exception-escalation.ts). The words here are the phone's
- *      own states only (a lost answer, an answer that could not be read).
+ *      (warehouse/exception-escalation.ts), the failure sentences included
+ *      (busy, in progress and who holds it, what became of a request that
+ *      was saved, a server problem). The words here are the phone's own
+ *      states only (a lost answer, an answer that could not be read).
  *
  * No native imports, so exceptions-api.ts and the node tests can load it.
  */
@@ -73,6 +85,10 @@ export interface MobileOccurrenceEscalation {
   reference: string | null;
   escalatedAt: string;
   escalatedBy: { id: string | null; label: string } | null;
+  /** Whether the linked request was cancelled, told to EVERY reader of the
+   *  exception (the server's computed field): true frees it for a new
+   *  escalation, and the badge says so. null when not known. */
+  requestCancelled: boolean | null;
   /** Whether THIS reader can open the request. null on list reads, or when
    *  the server's check failed. */
   visibleToReader: boolean | null;
@@ -124,6 +140,7 @@ export function parseEscalation(v: unknown): MobileOccurrenceEscalation | null {
     reference: strOrNull(v.reference),
     escalatedAt: v.escalatedAt,
     escalatedBy: isObj(by) && typeof by.label === 'string' ? { id: strOrNull(by.id), label: by.label } : null,
+    requestCancelled: v.requestCancelled === true ? true : v.requestCancelled === false ? false : null,
     visibleToReader: v.visibleToReader === true ? true : v.visibleToReader === false ? false : null,
     request,
   };
@@ -156,13 +173,14 @@ export function openableRequestId(o: EscalatableOccurrence, maintenanceEnabled: 
 export interface EscalationSectionView {
   /** Render the MAINTENANCE section at all. */
   show: boolean;
-  /** "Escalated: MR-2026-000014", to every reader of an escalated exception. */
+  /** "Escalated: MR-2026-000014", to every reader of an escalated exception
+   *  ("(request cancelled)" once it is). */
   badge: string | null;
   /** Who escalated it (null: the system, or a former member). */
   escalatedBy: string | null;
   escalatedAt: string | null;
-  /** "Email draft opened" / "Email draft not yet opened" / "Request cancelled",
-   *  only for a reader who can open the request. */
+  /** "Email draft opened" / "Email draft not yet opened", only for a reader
+   *  who can open the request (a cancelled one: the badge says so). */
   requestState: string | null;
   /** The request the badge opens, or null (the badge is then plain text). */
   openRequestId: string | null;
@@ -200,7 +218,7 @@ export function escalationSectionView(input: {
   const offerButton = o.resolvedAt === null && o.canEscalate && input.maintenanceEnabled && input.canSubmit;
   return {
     show: e !== null || offerButton,
-    badge: e ? escalationBadgeCopy(e.reference) : null,
+    badge: e ? escalationBadgeCopy(e.reference, e.requestCancelled) : null,
     escalatedBy: e?.escalatedBy?.label ?? null,
     escalatedAt: e?.escalatedAt ?? null,
     requestState: e ? escalationRequestStateCopy(e.request) : null,
@@ -284,18 +302,14 @@ export function escalationFormPrefill(o: EscalationSource, asOf: Date = new Date
 }
 
 /** The linked-exception card's lines: the reference and rule, the item, and
- *  the location when the condition is at one. */
+ *  the location when the condition is at one. Core's, so the web's card says
+ *  the same words. */
 export function escalationSourceLines(o: Pick<EscalationSource, 'reference' | 'rule' | 'item' | 'location'>): {
   heading: string;
   item: string | null;
   location: string | null;
 } {
-  const rule = EXCEPTION_RULES[o.rule]?.label ?? 'Inventory exception';
-  return {
-    heading: o.reference ? `${o.reference} · ${rule}` : rule,
-    item: o.item ? `${o.item.name}${o.item.sku ? ` (${o.item.sku})` : ''}` : null,
-    location: o.location ? `${o.location.name}${o.location.archived ? ' (archived)' : ''}` : null,
-  };
+  return coreEscalationSourceLines(o);
 }
 
 /** Escalating is not offered for this exception, and the server gave no
@@ -442,12 +456,11 @@ export async function escalateException(occurrenceId: string, fields: Escalation
 export const ESCALATE_UNCONFIRMED_COPY =
   'The server did not answer, so it is not known whether the request was saved. Try again in a moment: if this exception was escalated, its request opens instead of a new one.';
 
-/** A 5xx: the server may have saved a request it could not link or confirm. */
-export const ESCALATE_SERVER_PROBLEM_COPY =
-  'The server had a problem, so it is not known whether the request was saved. Check your maintenance requests before trying again.';
+/** A 5xx: the server may have saved a request it could not link or confirm
+ *  (core's words; the web says the same). */
+export { ESCALATE_SERVER_PROBLEM_COPY, ESCALATE_TOO_MANY_COPY };
 
 export const ESCALATE_NOT_AVAILABLE_COPY = 'This exception is no longer available to you.';
-export const ESCALATE_TOO_MANY_COPY = 'Too many requests. Wait a moment and try again.';
 
 export interface EscalateErrorView {
   message: string;
@@ -458,10 +471,29 @@ export interface EscalateErrorView {
   retryable: boolean;
 }
 
+/** `details.holder` from a 409 escalation_in_progress: who is escalating
+ *  (this person, or a coworker by name). Anything else names nobody. */
+function parseHolder(v: unknown): EscalationHolder | null {
+  if (!isObj(v)) return null;
+  if (v.self === true) return { self: true };
+  if (v.self === false) return { self: false, label: strOrNull(v.label) };
+  return null;
+}
+
+/** `details.savedRequest`: a request the server saved before the refusal,
+ *  and whether it cancelled it. Only a real boolean counts: "cancelled" is
+ *  never said on a guess. */
+function parseSavedRequest(v: unknown): EscalationSavedRequest | null {
+  if (!isObj(v) || typeof v.cancelled !== 'boolean') return null;
+  return { reference: strOrNull(v.reference), cancelled: v.cancelled };
+}
+
 /**
  * What a failed escalation means, keyed on the HTTP status and the route's
  * app-authored `details` (never on message text). Words from core wherever
- * the web shows the same state.
+ * the web shows the same state; a refusal after the request was saved says
+ * what became of it (core escalationFailureCopy, as the server's message
+ * does).
  */
 export function describeEscalateError(e: unknown): EscalateErrorView {
   if (e instanceof EscalationAnswerError) return { message: e.message, duplicate: null, retryable: false };
@@ -471,6 +503,8 @@ export function describeEscalateError(e: unknown): EscalateErrorView {
   const code = isObj(e) && typeof e.code === 'string' ? e.code : null;
   const retryableFlag = isObj(details) && details.retryable === true;
   const message = e instanceof Error && e.message && !/^[a-z0-9_]+$/.test(e.message) ? e.message : null;
+  const saved = isObj(details) ? parseSavedRequest(details.savedRequest) : null;
+  const say = (base: string) => escalationFailureCopy(base, saved);
 
   if (status === 409) {
     if (reason === 'already_escalated') {
@@ -480,31 +514,42 @@ export function describeEscalateError(e: unknown): EscalateErrorView {
       const reference = isObj(details) ? strOrNull(details.reference) : null;
       return requestId
         ? { message: escalationDuplicateCopy(reference), duplicate: { requestId, reference }, retryable: false }
-        : { message: ESCALATION_NOT_LINKED_COPY, duplicate: null, retryable: false };
+        : { message: say(ESCALATION_CHANGED_COPY), duplicate: null, retryable: false };
     }
     if (reason === 'escalation_in_progress') {
-      return { message: ESCALATION_IN_PROGRESS_COPY, duplicate: null, retryable: true };
+      const holder = isObj(details) ? parseHolder(details.holder) : null;
+      return { message: escalationInProgressCopy(holder), duplicate: null, retryable: true };
     }
-    if (reason === 'occurrence_resolved') return { message: ESCALATE_RESOLVED_COPY, duplicate: null, retryable: false };
+    if (reason === 'escalation_in_progress_elsewhere') {
+      return { message: ESCALATION_IN_PROGRESS_ELSEWHERE_COPY, duplicate: null, retryable: true };
+    }
+    if (reason === 'occurrence_resolved') return { message: say(ESCALATE_RESOLVED_COPY), duplicate: null, retryable: false };
     if (reason === 'escalation_not_claimed' || reason === 'request_not_eligible') {
-      return { message: ESCALATION_NOT_LINKED_COPY, duplicate: null, retryable: false };
+      return { message: say(ESCALATION_CHANGED_COPY), duplicate: null, retryable: false };
     }
-    // busy (a lock wait), or the maintenance create limit: the server's own
-    // sentence says which.
+    if (reason === 'busy') return { message: say(ESCALATION_BUSY_COPY), duplicate: null, retryable: true };
+    if (reason === 'not_linked') return { message: say(ESCALATION_LINK_FAILED_COPY), duplicate: null, retryable: false };
+    // The maintenance create limit (no reason): the server's own sentence.
     return {
-      message: message ?? 'This exception is busy. Try again in a moment.',
+      message: message ?? say(ESCALATION_BUSY_COPY),
       duplicate: null,
       retryable: retryableFlag,
     };
   }
   if (status === 403) {
+    // The MFA gate comes first on the server (assertPermission): word it as
+    // the phone's other flows do, never as a missing permission.
+    if (reason === 'aal2_required') return { message: ESCALATE_AAL2_REQUIRED_COPY, duplicate: null, retryable: false };
+    if (reason === 'mfa_required') return { message: ESCALATE_MFA_REQUIRED_COPY, duplicate: null, retryable: false };
     return {
-      message: reason === 'module_disabled' || code === 'module_disabled' ? ESCALATE_MODULE_OFF_COPY : ESCALATE_NOT_PERMITTED_COPY,
+      message: say(
+        reason === 'module_disabled' || code === 'module_disabled' ? ESCALATE_MODULE_OFF_COPY : ESCALATE_NOT_PERMITTED_COPY,
+      ),
       duplicate: null,
       retryable: false,
     };
   }
-  if (status === 404) return { message: ESCALATE_NOT_AVAILABLE_COPY, duplicate: null, retryable: false };
+  if (status === 404) return { message: say(ESCALATE_NOT_AVAILABLE_COPY), duplicate: null, retryable: false };
   if (status === 429) return { message: ESCALATE_TOO_MANY_COPY, duplicate: null, retryable: true };
   if (status !== null && status >= 500) {
     return { message: ESCALATE_SERVER_PROBLEM_COPY, duplicate: null, retryable: false };

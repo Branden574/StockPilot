@@ -113,9 +113,11 @@ describe('exception screen: the MAINTENANCE section', () => {
 });
 
 describe('Exceptions list', () => {
-  it('shows "Escalated: MR-..." beside the state on an escalated row', () => {
+  // The experience review: the list never said a linked request had been
+  // cancelled. Mutation caught: the pill worded without requestCancelled.
+  it('shows "Escalated: MR-..." beside the state on an escalated row, "(request cancelled)" included', () => {
     expect(list).toMatch(
-      /\{o\.escalation \? \(\s+<Pill status="default" dot=\{false\}>\s+\{escalationBadgeCopy\(o\.escalation\.reference\)\}/,
+      /\{o\.escalation \? \(\s+<Pill status="default" dot=\{false\}>\s+\{escalationBadgeCopy\(o\.escalation\.reference, o\.escalation\.requestCancelled\)\}/,
     );
   });
 });

@@ -5,10 +5,16 @@ import {
   ESCALATE_NOT_PERMITTED_COPY,
   ESCALATE_OFFLINE_COPY,
   ESCALATE_RESOLVED_COPY,
+  ESCALATE_AAL2_REQUIRED_COPY,
+  ESCALATE_MFA_REQUIRED_COPY,
+  ESCALATE_TOO_MANY_COPY,
+  ESCALATION_BUSY_COPY,
+  ESCALATION_CHANGED_COPY,
   ESCALATION_IN_PROGRESS_COPY,
-  ESCALATION_NOT_LINKED_COPY,
+  ESCALATION_IN_PROGRESS_ELSEWHERE_COPY,
   escalationAlreadyEscalatedCopy,
   escalationDuplicateCopy,
+  escalationSourceLines as coreSourceLines,
 } from '@stockpilot/core';
 
 import { REQUEST_TIMED_OUT_COPY } from './connection-copy';
@@ -65,6 +71,7 @@ function esc(o: Partial<MobileOccurrenceEscalation> = {}): MobileOccurrenceEscal
     reference: 'MR-2026-000014',
     escalatedAt: '2026-09-27T18:00:00Z',
     escalatedBy: { id: 'u1', label: 'Dana Keeler' },
+    requestCancelled: false,
     visibleToReader: true,
     request: { status: 'saved', draftOpened: false, cancelled: false },
     ...o,
@@ -105,10 +112,21 @@ describe('parseEscalation', () => {
         reference: 'MR-2026-000014',
         escalatedAt: '2026-09-27T18:00:00Z',
         escalatedBy: { id: 'u1', label: 'Dana Keeler' },
+        requestCancelled: false,
         visibleToReader: true,
         request: { status: 'draft_opened', draftOpened: true, cancelled: false },
       }),
     ).toEqual(esc({ request: { status: 'draft_opened', draftOpened: true, cancelled: false } }));
+  });
+
+  // Mutation caught: `requestCancelled: v.requestCancelled !== false` (a
+  // missing field from an older server would offer a second request).
+  it('requestCancelled is true or false only when the server said so, else null (never a guess)', () => {
+    const base = { requestId: REQ, requestNumber: 14, reference: null, escalatedAt: '2026-09-27T18:00:00Z' };
+    expect(parseEscalation({ ...base, requestCancelled: true })?.requestCancelled).toBe(true);
+    expect(parseEscalation({ ...base, requestCancelled: false })?.requestCancelled).toBe(false);
+    expect(parseEscalation({ ...base })?.requestCancelled).toBeNull();
+    expect(parseEscalation({ ...base, requestCancelled: 'yes' })?.requestCancelled).toBeNull();
   });
 
   it('null for an occurrence never escalated, or a block without its number or time (a badge is never guessed)', () => {
@@ -296,9 +314,35 @@ describe('escalationSectionView', () => {
     expect(view({ canEscalate: false, escalateUnavailableReason: 'module_disabled', escalation: esc() }).badge).toBe('Escalated: MR-2026-000014');
   });
 
-  it('a cancelled request the reader can see frees the exception: the button is offered again beside "Request cancelled"', () => {
-    const v = view({ canEscalate: true, escalation: esc({ request: { status: 'cancelled', draftOpened: false, cancelled: true } }) });
-    expect(v).toMatchObject({ offerButton: true, requestState: 'Request cancelled', openRequestId: REQ, note: null });
+  it('a cancelled request the reader can see frees the exception: the badge says so (once) and the button is offered again', () => {
+    const v = view({
+      canEscalate: true,
+      escalation: esc({ requestCancelled: true, request: { status: 'cancelled', draftOpened: false, cancelled: true } }),
+    });
+    expect(v).toMatchObject({
+      offerButton: true,
+      badge: 'Escalated: MR-2026-000014 (request cancelled)',
+      requestState: null,
+      openRequestId: REQ,
+      note: null,
+    });
+  });
+
+  // The experience review: a staff member or viewer who did not make the
+  // request (and cannot open it) was told it was still live after it was
+  // cancelled, and could not escalate again.
+  it('NOT THE REQUESTER, AFTER A CANCEL: the badge says it was cancelled, links nothing, and the button is offered', () => {
+    const v = view({
+      canEscalate: true,
+      escalation: esc({ requestCancelled: true, visibleToReader: false, request: null }),
+    });
+    expect(v).toMatchObject({
+      offerButton: true,
+      badge: 'Escalated: MR-2026-000014 (request cancelled)',
+      requestState: null,
+      openRequestId: null,
+      note: null,
+    });
   });
 
   it('a deleted request (no id) shows the badge and links nothing', () => {
@@ -422,6 +466,12 @@ describe('the prefill and the linked-exception card', () => {
     expect(p.description).not.toContain('Atlas');
   });
 
+  it('the card\'s lines are core\'s, the web\'s words exactly', () => {
+    for (const o of [source(), source({ item: null, location: { name: 'Rack 9', archived: true }, reference: null })]) {
+      expect(escalationSourceLines(o)).toEqual(coreSourceLines(o));
+    }
+  });
+
   it('the card names the exception, its rule, item and location', () => {
     expect(escalationSourceLines(source())).toEqual({
       heading: 'EX-000042 · Sitting in Staging',
@@ -489,13 +539,15 @@ describe('describeEscalateError', () => {
       retryable: true,
     });
     expect(describeEscalateError(apiError(409, 'x', { reason: 'occurrence_resolved' })).message).toBe(ESCALATE_RESOLVED_COPY);
-    expect(describeEscalateError(apiError(409, 'x', { reason: 'escalation_not_claimed' })).message).toBe(ESCALATION_NOT_LINKED_COPY);
-    expect(describeEscalateError(apiError(409, 'x', { reason: 'request_not_eligible' })).message).toBe(ESCALATION_NOT_LINKED_COPY);
-    expect(describeEscalateError(apiError(409, 'This exception is busy. Try again in a moment.', { reason: 'busy', retryable: true }))).toEqual({
-      message: 'This exception is busy. Try again in a moment.',
+    expect(describeEscalateError(apiError(409, 'x', { reason: 'escalation_not_claimed' })).message).toBe(ESCALATION_CHANGED_COPY);
+    expect(describeEscalateError(apiError(409, 'x', { reason: 'request_not_eligible' })).message).toBe(ESCALATION_CHANGED_COPY);
+    // Busy is core's sentence (the web's), whatever the server's text.
+    expect(describeEscalateError(apiError(409, 'something else', { reason: 'busy', retryable: true }))).toEqual({
+      message: ESCALATION_BUSY_COPY,
       duplicate: null,
       retryable: true,
     });
+    expect(describeEscalateError(apiError(429, 'rate_limited')).message).toBe(ESCALATE_TOO_MANY_COPY);
     // The maintenance create limit (a 409 with the server's sentence).
     expect(describeEscalateError(apiError(409, 'You have submitted too many requests recently.')).message).toBe(
       'You have submitted too many requests recently.',
@@ -508,6 +560,73 @@ describe('describeEscalateError', () => {
     expect(describeEscalateError(apiError(400, 'Describe the issue in a few words (at least 5 characters).')).message).toBe(
       'Describe the issue in a few words (at least 5 characters).',
     );
+  });
+
+  it('an escalation under way names who holds it, from the route\'s details (core words it)', () => {
+    expect(
+      describeEscalateError(
+        apiError(409, 'x', { reason: 'escalation_in_progress', retryable: true, holder: { self: false, label: 'Sam Ortiz' } }),
+      ),
+    ).toEqual({
+      message: 'Sam Ortiz is escalating this exception right now. Try again in a minute.',
+      duplicate: null,
+      retryable: true,
+    });
+    expect(
+      describeEscalateError(apiError(409, 'x', { reason: 'escalation_in_progress', retryable: true, holder: { self: true } }))
+        .message,
+    ).toBe('You are already escalating this exception, in another tab or on another device. Try again in a minute.');
+    expect(
+      describeEscalateError(apiError(409, 'x', { reason: 'escalation_in_progress', holder: { self: false, label: null } }))
+        .message,
+    ).toBe(ESCALATION_IN_PROGRESS_COPY);
+    expect(describeEscalateError(apiError(409, 'x', { reason: 'escalation_in_progress_elsewhere', retryable: true }))).toEqual({
+      message: ESCALATION_IN_PROGRESS_ELSEWHERE_COPY,
+      duplicate: null,
+      retryable: true,
+    });
+  });
+
+  // The experience review: the phone and the web must say the same thing
+  // about a request that was saved and then could (or could not) be
+  // cancelled. Mutation caught: the saved request ignored ("cancelled" said,
+  // or nothing said, whatever happened).
+  it('a refusal after the request was saved says what became of it: cancelled only when it was', () => {
+    const cancelled = { id: REQ, reference: 'MR-2026-000014', cancelled: true };
+    const left = { id: REQ, reference: 'MR-2026-000014', cancelled: false };
+    expect(
+      describeEscalateError(apiError(409, 'x', { reason: 'busy', retryable: true, savedRequest: cancelled })).message,
+    ).toBe('This exception is busy. Try again in a moment. The request saved for it (MR-2026-000014) was cancelled.');
+    expect(describeEscalateError(apiError(409, 'x', { reason: 'request_not_eligible', savedRequest: left })).message).toBe(
+      'The exception changed while it was being escalated. Reload and try again. The request saved for it (MR-2026-000014) is not linked to this exception and could not be cancelled. Check your maintenance requests.',
+    );
+    expect(
+      describeEscalateError(apiError(403, 'x', { reason: 'module_disabled', savedRequest: left }, 'module_disabled')).message,
+    ).toBe(
+      'Maintenance requests are not turned on for this organization. The request saved for it (MR-2026-000014) is not linked to this exception and could not be cancelled. Check your maintenance requests.',
+    );
+    expect(describeEscalateError(apiError(409, 'x', { reason: 'not_linked', savedRequest: cancelled })).message).toBe(
+      'The request could not be linked to this exception. The request saved for it (MR-2026-000014) was cancelled.',
+    );
+    // A malformed savedRequest (no real boolean) says nothing about it.
+    expect(
+      describeEscalateError(apiError(409, 'x', { reason: 'busy', savedRequest: { reference: 'MR-2026-000014', cancelled: 'yes' } }))
+        .message,
+    ).toBe(ESCALATION_BUSY_COPY);
+  });
+
+  // The experience review: an MFA-gated person was told they lacked the
+  // permission to submit maintenance requests.
+  it('the MFA gate is worded as the phone\'s other flows word it, never as a missing permission', () => {
+    expect(describeEscalateError(apiError(403, 'x', { reason: 'aal2_required' }, 'forbidden')).message).toBe(
+      ESCALATE_AAL2_REQUIRED_COPY,
+    );
+    expect(describeEscalateError(apiError(403, 'x', { reason: 'mfa_required' }, 'forbidden')).message).toBe(
+      ESCALATE_MFA_REQUIRED_COPY,
+    );
+    for (const reason of ['aal2_required', 'mfa_required']) {
+      expect(describeEscalateError(apiError(403, 'x', { reason }, 'forbidden')).message).not.toBe(ESCALATE_NOT_PERMITTED_COPY);
+    }
   });
 
   // Mutation caught: a 5xx or a lost answer worded as "nothing was saved"

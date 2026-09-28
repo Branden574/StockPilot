@@ -583,11 +583,11 @@ function OccurrenceRow({
             </Pill>
           ) : null}
           {/* F1-5: every reader of an escalated exception sees its request's
-              handle. The list says nothing about the request's own state
-              (the server does not read it for a list). */}
+              handle, and "(request cancelled)" once it is (the server tells
+              every reader that). Nothing else about the request. */}
           {o.escalation ? (
             <Pill status="default" dot={false}>
-              {escalationBadgeCopy(o.escalation.reference)}
+              {escalationBadgeCopy(o.escalation.reference, o.escalation.requestCancelled)}
             </Pill>
           ) : null}
         </View>
