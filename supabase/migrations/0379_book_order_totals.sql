@@ -649,39 +649,39 @@ comment on function public.book_order_report_range(uuid, text, date, date) is
   'is organizations.timezone when it is an IANA name the server knows, else America/Los_Angeles with '
   'time_zone_fallback = true. SECURITY INVOKER, gated in its body (signed in, member with reports:read, '
   'orders and books modules). 22023 invalid_range for an unknown preset or a bad custom range. Not '
-  'called by the apps directly; over REST it is a set, subject to max_rows.';
+  'called by the apps directly, over REST it is a set, subject to max_rows.';
 
 comment on function public.book_order_report_lines(uuid, text, date, date, text[], uuid, uuid, boolean, text, text[], uuid) is
   'Book Order Totals: THE eligibility definition (0379). The caller''s RLS-visible order lines for '
   'book items (not bundles) of one organization, on orders in the chosen statuses (default: all but '
   'pending_confirmation, denied, cancelled) placed in the chosen range, optionally narrowed by order '
   'warehouse, item category, search or ISBN keys. SECURITY INVOKER: orders, lines, items and warehouses '
-  'RLS all apply. Gated in its body (signed in, member with reports:read, orders and books modules; '
-  'filter ids validated against rows the caller can read, any status). Returns no requester data; '
-  'order_is_mine says only whether the caller placed the order. Not called by the apps directly; over '
+  'RLS all apply. Gated in its body (signed in, member with reports:read, orders and books modules, '
+  'filter ids validated against rows the caller can read, any status). Returns no requester data, '
+  'order_is_mine says only whether the caller placed the order. Not called by the apps directly, over '
   'REST it is a set, subject to max_rows.';
 
 comment on function public.book_order_totals(uuid, text, date, date, text[], uuid, uuid, boolean, text, text[], text, integer, integer, boolean, integer) is
-  'Book Order Totals (0379): ONE jsonb from ONE statement (so max_rows cannot truncate it and the '
+  'Book Order Totals (0379): ONE jsonb from ONE statement (so max_rows cannot cut it short and the '
   'summary, count and rows share one snapshot): summary (copies requested on eligible lines, distinct '
   'book entries, distinct orders), totalCount, the effective page and its grouped rows (25 by default, '
   '1..100), sorted by copies (copy units first), title, orders or latest order, ties by item id. Export '
   'mode (p_all_rows) returns every grouped row in sort order, or tooMany with no rows above '
-  'least(p_max_rows, 50000). SECURITY INVOKER over book_order_report_lines; gated in its body. Writes '
+  'least(p_max_rows, 50000). SECURITY INVOKER over book_order_report_lines, gated in its body. Writes '
   'nothing.';
 
 comment on function public.book_order_totals_orders(uuid, uuid, text, date, date, text[], uuid, integer, integer) is
   'Book Order Totals drill-down (0379): ONE jsonb for one book: its totals over the same range, statuses '
   'and warehouse, and a page of the contributing orders (newest first), duplicate lines of an order '
   'combined with their line ids kept. found:false alike for a hidden, non-book or missing item. mine is '
-  'a boolean about the caller only; no requester data. SECURITY INVOKER; gated in its body. Writes '
+  'a boolean about the caller only, no requester data. SECURITY INVOKER, gated in its body. Writes '
   'nothing.';
 
 comment on function public.book_order_totals_options(uuid) is
   'Book Order Totals filter options (0379): ONE jsonb listing the warehouses (any status) and categories '
   '(deleted ones included, plus whether uncategorized books appear) that occur in the caller''s eligible '
   'lines over every selectable status and all time, and the organization''s order_status_config for '
-  'labels. SECURITY INVOKER; gated in its body. Writes nothing.';
+  'labels. SECURITY INVOKER, gated in its body. Writes nothing.';
 
 -- ═══ Grants: authenticated only ══════════════════════════════════════════
 revoke all on function public.book_order_report_range(uuid, text, date, date) from public, anon, service_role;
