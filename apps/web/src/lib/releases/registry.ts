@@ -30,24 +30,20 @@ export const RELEASES: Release[] = [
   {
     id: 'order-readiness-2026-09',
     revision: 1,
-    // DRAFT until the phone update (pnpm release:ota: the phone's readiness
-    // summary, line cards and the same Approve partial / Resume gates) and the
-    // Demo Co walk (read-only). A draft never leaves the server
-    // (visibleReleases, registryFingerprint), so merging the web page
-    // announces nothing. The follow-up that publishes it sets 'published',
-    // sets publishedAt to the real time (still the newest), and flips the pin
-    // in registry.test.ts. Every sentence must be true on both platforms then.
+    // Held as a draft until the phone update (OTA group c138b401) and the
+    // read-only Demo Co production walk, both done: every number on 15 orders
+    // matched facts rebuilt from the raw records, on web and phone.
     //
     // Addressed where Orders is on. The full panel is for approvers, pickers
     // (items:update) and buyers (purchase_orders:manage), core
     // readinessAudience; the one sentence is for people who place orders
     // (orders:request); the gates and the note under Approve are for
     // approvers; the pick message for whoever completes picking.
-    status: 'draft',
+    status: 'published',
     title: 'See whether an order is ready to pick',
     summary:
       "On the web and in the mobile app, an order that is still to be picked shows whether it is ready. Each line says whether its stock is ready to pick, still in Staging and waiting to be put away, waiting on a purchase order, short, or can't be confirmed, and the order says how many lines are in each state and when it was checked. People who placed an order see a short summary of its stock instead. If readiness can't be checked, the order says so rather than showing an answer.",
-    publishedAt: '2026-09-30T17:00:00Z',
+    publishedAt: '2026-09-28T16:50:00Z',
     audience: { modules: ['orders'] },
     entries: [
       {
