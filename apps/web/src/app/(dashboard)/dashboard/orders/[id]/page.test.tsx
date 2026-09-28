@@ -1415,7 +1415,7 @@ describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
 
       await renderPage();
 
-      expect(lastPanelProps().completionConfirm?.focusLineId).toBe('LP');
+      expect(lastPanelProps().completionConfirm).toMatchObject({ focusLineId: 'LP' });
       expect(fixesFor('LN')).toBeUndefined();
       expect(fixesFor('LP')).toMatchObject({
         lineId: 'LP',
