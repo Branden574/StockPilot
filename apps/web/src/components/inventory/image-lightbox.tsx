@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import * as React from 'react';
 
+import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { cn } from '@/lib/utils';
 
@@ -31,6 +32,10 @@ interface ImageLightboxProps {
    *  proof attachments, where deletion lives in the panel and viewers may
    *  lack permission). */
   onDelete?: (imageId: string) => Promise<void> | void;
+  /** When given, an image that fails to load (an expired signed link, a
+   *  missing file) shows `message` and a Try again that calls `onRetry`,
+   *  instead of the loading spinner forever. */
+  loadFailure?: { message: string; onRetry: () => void };
 }
 
 const MIN_ZOOM = 1;
@@ -55,8 +60,10 @@ export function ImageLightbox({
   open,
   onClose,
   onDelete,
+  loadFailure,
 }: ImageLightboxProps) {
   const [index, setIndex] = React.useState(startIndex);
+  const [failedUrls, setFailedUrls] = React.useState<ReadonlySet<string>>(() => new Set());
   const [zoom, setZoom] = React.useState(1);
   const [pan, setPan] = React.useState({ x: 0, y: 0 });
   const [loadedUrls, setLoadedUrls] = React.useState<Set<string>>(() => new Set());
@@ -347,14 +354,23 @@ export function ImageLightbox({
             onTouchMove={onTouchMove}
             onTouchEnd={onTouchEnd}
           >
-            {!loadedUrls.has(current.url) && (
+            {loadFailure && failedUrls.has(current.url) ? (
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 px-6 text-center text-white">
+                <p role="alert" className="text-sm">
+                  {loadFailure.message}
+                </p>
+                <Button type="button" variant="secondary" size="sm" onClick={loadFailure.onRetry}>
+                  Try again
+                </Button>
+              </div>
+            ) : !loadedUrls.has(current.url) ? (
               <div
                 aria-hidden
                 className="pointer-events-none absolute inset-0 grid place-items-center text-white/50"
               >
                 <Loader2 className="h-8 w-8 animate-spin" />
               </div>
-            )}
+            ) : null}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={current.url}
@@ -369,6 +385,14 @@ export function ImageLightbox({
                   next.add(current.url);
                   return next;
                 })
+              }
+              onError={
+                loadFailure
+                  ? () =>
+                      setFailedUrls((prev) =>
+                        prev.has(current.url) ? prev : new Set(prev).add(current.url),
+                      )
+                  : undefined
               }
               onClick={onImageClick}
               className={cn(

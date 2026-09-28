@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { MAINTENANCE_MAX_PHOTOS, type MaintenanceAttachmentKind } from '@stockpilot/core';
@@ -71,22 +71,46 @@ export interface PhotoPanelEndpoints {
 }
 
 /**
- * Thrown by an endpoint's `finalize` when its answer was lost (the request
- * may or may not have been recorded). The panel keeps that upload's finalize
- * and Retry resends it for the SAME path, which the backend recognises when
- * it is already recorded, instead of uploading the photo a second time.
- * Maintenance never throws it (its Retry starts again from the mint).
+ * Thrown by an endpoint's `finalize` when the photo is on the server and has
+ * NOT been settled: the panel keeps that upload's finalize and Retry resends
+ * it for the SAME path, instead of uploading the photo a second time. A
+ * backend throws it for a refusal that did not look at the upload (a rate
+ * limit), and throws PhotoAnswerLostError when the answer was lost.
+ * Maintenance never throws either (its Retry starts again from the mint).
  */
-export class PhotoAnswerLostError extends Error {}
+export class PhotoFinalizePendingError extends Error {}
 
-/** A finalize whose answer was lost, carried to Retry. */
+/**
+ * A finalize whose answer was lost: the photo may or may not be recorded.
+ * Retry resends that finalize, which the backend recognises when it is
+ * already recorded; dismissing the row re-reads (it may be saved).
+ */
+export class PhotoAnswerLostError extends PhotoFinalizePendingError {}
+
+/**
+ * Thrown by an endpoint when the server refused for good: trying again would
+ * get the same answer (the exception resolved, the cap, the file refused).
+ * The row offers Dismiss only, and the panel re-reads (`onChange`), since
+ * what it shows has changed. Review finding 2026-09-27: a Retry that could
+ * never succeed was the only thing such a row offered.
+ */
+export class PhotoRefusedError extends Error {}
+
+/** A finalize that is not settled, carried to Retry. */
 class FinalizeUnconfirmed extends Error {
   constructor(
     message: string,
     readonly input: PhotoFinalizeInput,
+    readonly lost: boolean,
   ) {
     super(message);
   }
+}
+
+function unsettled(e: unknown, input: PhotoFinalizeInput): unknown {
+  return e instanceof PhotoFinalizePendingError
+    ? new FinalizeUnconfirmed(e.message, input, e instanceof PhotoAnswerLostError)
+    : e;
 }
 
 /** Mint-response shape from POST .../attachments (maintenance-attachments.ts
@@ -110,8 +134,12 @@ interface QueuedUpload {
   note: string | null;
   status: 'uploading' | 'error';
   message?: string;
-  /** Set when a finalize's answer was lost: Retry resends only it. */
+  /** Set when a finalize is not settled: Retry resends only it. */
   pendingFinalize?: PhotoFinalizeInput;
+  /** Its answer was lost: the photo may be saved (dismissing re-reads). */
+  answerLost?: boolean;
+  /** False after a refusal the server would repeat: Dismiss only. */
+  retryable?: boolean;
 }
 
 function extFromMime(mime: string): string {
@@ -228,8 +256,7 @@ async function uploadOne(endpoints: PhotoPanelEndpoints, file: File, note: strin
   try {
     await endpoints.finalize(input);
   } catch (e) {
-    if (e instanceof PhotoAnswerLostError) throw new FinalizeUnconfirmed(e.message, input);
-    throw e;
+    throw unsettled(e, input);
   }
 }
 
@@ -294,6 +321,14 @@ type Props = EndpointProps & {
   /** Small print under the photos (limits, privacy). */
   footnote?: readonly string[];
   ariaLabel?: string;
+  /** Why Remove is unavailable now (offline), or null. While set, each
+   *  removable photo keeps its Remove, disabled, described by this reason
+   *  (never a button that silently disappears). */
+  removeDisabledReason?: string | null;
+  /** What a photo that fails to load says (an expired link, a missing file),
+   *  with a Try again that fetches fresh links. Without it a failed image is
+   *  left as the browser shows it (maintenance). */
+  photoLoadFailure?: { message: string; onRetry: () => void };
 };
 
 const MAINTENANCE_EMPTY_TEXT =
@@ -309,6 +344,8 @@ export function MaintenancePhotosPanel(props: Props) {
     addDisabledReason = null,
     noteField,
     removal,
+    removeDisabledReason = null,
+    photoLoadFailure,
   } = props;
   // Read only by the handlers below; building the default per render keeps it
   // in step with requestId and kind.
@@ -329,7 +366,15 @@ export function MaintenancePhotosPanel(props: Props) {
   const [reason, setReason] = useState('');
   const [removePending, setRemovePending] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  // Image URLs that failed to load. Keyed by URL, so fresh links (a re-read)
+  // are tried again.
+  const [failedUrls, setFailedUrls] = useState<ReadonlySet<string>>(() => new Set());
   const busy = uploads.some((u) => u.status === 'uploading');
+  const removeReasonId = useId();
+
+  function markFailed(url: string) {
+    setFailedUrls((prev) => (prev.has(url) ? prev : new Set(prev).add(url)));
+  }
 
   const trimmedNote = note.trim();
   const noteTooLong = noteField ? Array.from(trimmedNote).length > noteField.max : false;
@@ -344,12 +389,11 @@ export function MaintenancePhotosPanel(props: Props) {
     setUploads((prev) => prev.map((u) => (u.key === item.key ? { ...u, status: 'uploading', message: undefined } : u)));
     try {
       if (item.pendingFinalize) {
-        // The photo is already up; only its finalize's answer was lost.
+        // The photo is already up; only its finalize is unsettled.
         try {
           await endpoints.finalize(item.pendingFinalize);
         } catch (e) {
-          if (e instanceof PhotoAnswerLostError) throw new FinalizeUnconfirmed(e.message, item.pendingFinalize);
-          throw e;
+          throw unsettled(e, item.pendingFinalize);
         }
       } else {
         await uploadOne(endpoints, item.file, item.note);
@@ -358,14 +402,30 @@ export function MaintenancePhotosPanel(props: Props) {
       onChange();
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Photo upload failed.';
-      // Any answer from the server settles the finalize: the next Retry
-      // starts again from the mint. Only a lost answer keeps it.
+      // Any settling answer from the server ends the finalize: the next Retry
+      // starts again from the mint. Only an unsettled one keeps it.
       const pendingFinalize = e instanceof FinalizeUnconfirmed ? e.input : undefined;
+      const answerLost = e instanceof FinalizeUnconfirmed && e.lost;
+      const refused = e instanceof PhotoRefusedError;
       setUploads((prev) =>
-        prev.map((u) => (u.key === item.key ? { ...u, status: 'error', message, pendingFinalize } : u)),
+        prev.map((u) =>
+          u.key === item.key
+            ? { ...u, status: 'error', message, pendingFinalize, answerLost, retryable: !refused }
+            : u,
+        ),
       );
       toast.error(message);
+      // A final refusal means what the panel shows has changed (resolved,
+      // the cap): read it again.
+      if (refused) onChange();
     }
+  }
+
+  function dismissUpload(key: string) {
+    const item = uploads.find((u) => u.key === key);
+    setUploads((prev) => prev.filter((u) => u.key !== key));
+    // Its answer was lost: it may be saved, and a read shows whether.
+    if (item?.answerLost) onChange();
   }
 
   async function handleFiles(files: FileList | null) {
@@ -508,26 +568,54 @@ export function MaintenancePhotosPanel(props: Props) {
         <ul className={card ? 'grid grid-cols-2 gap-3 sm:grid-cols-3' : 'grid grid-cols-3 gap-3 sm:grid-cols-4'}>
           {photos.map((p) => {
             const removable = p.canRemove !== false;
+            const shown = p.thumbUrl ?? p.url;
+            const loadFailed = photoLoadFailure !== undefined && failedUrls.has(shown);
             const tile = (
               <>
-                <button
-                  type="button"
-                  aria-label={`View ${p.originalFilename}`}
-                  className="block w-full cursor-zoom-in rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  onClick={() => setLightboxIndex(photos.findIndex((x) => x.id === p.id))}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={p.thumbUrl ?? p.url}
-                    alt={p.originalFilename}
-                    className={cn('w-full rounded-lg border object-cover', card ? 'h-32' : 'h-24')}
-                  />
-                </button>
+                {loadFailed ? (
+                  <div
+                    role="group"
+                    aria-label={p.originalFilename}
+                    className={cn(
+                      'flex w-full flex-col items-start justify-center gap-1 rounded-lg border p-2',
+                      card ? 'h-32' : 'h-24',
+                    )}
+                  >
+                    <p className="text-muted-foreground text-xs">{photoLoadFailure.message}</p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Try again: ${p.originalFilename}`}
+                      onClick={photoLoadFailure.onRetry}
+                    >
+                      Try again
+                    </Button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    aria-label={`View ${p.originalFilename}`}
+                    className="block w-full cursor-zoom-in rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    onClick={() => setLightboxIndex(photos.findIndex((x) => x.id === p.id))}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={shown}
+                      alt={p.originalFilename}
+                      onError={photoLoadFailure ? () => markFailed(shown) : undefined}
+                      className={cn('w-full rounded-lg border object-cover', card ? 'h-32' : 'h-24')}
+                    />
+                  </button>
+                )}
                 {removable ? (
                   <button
                     type="button"
                     aria-label={`Remove ${p.originalFilename}`}
-                    className="absolute right-1 top-1 rounded bg-background/80 px-1.5 text-xs"
+                    // At least 24px tall (WCAG 2.5.8).
+                    className="absolute right-1 top-1 min-h-6 rounded bg-background/80 px-2 text-xs disabled:opacity-60"
+                    disabled={removeDisabledReason !== null}
+                    aria-describedby={removeDisabledReason !== null ? removeReasonId : undefined}
                     onClick={() => (removal ? askRemove(p) : void removePhoto(p.id))}
                   >
                     Remove
@@ -560,6 +648,11 @@ export function MaintenancePhotosPanel(props: Props) {
       ) : uploads.length === 0 ? (
         <p className="text-sm text-muted-foreground">{emptyText}</p>
       ) : null}
+      {removeDisabledReason !== null && photos.some((p) => p.canRemove !== false) ? (
+        <p id={removeReasonId} className="text-muted-foreground text-xs" data-testid="photos-remove-unavailable">
+          {removeDisabledReason}
+        </p>
+      ) : null}
       {uploads.length > 0 ? (
         <ul className="space-y-1">
           {uploads.map((u) => (
@@ -573,14 +666,25 @@ export function MaintenancePhotosPanel(props: Props) {
               ) : (
                 <span className="flex items-center gap-2">
                   <span className="text-destructive">{u.message ?? 'Upload failed.'}</span>
+                  {u.retryable !== false ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      aria-label={`Retry ${u.name}`}
+                      onClick={() => void retryUpload(u.key)}
+                    >
+                      Retry
+                    </Button>
+                  ) : null}
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
-                    aria-label={`Retry ${u.name}`}
-                    onClick={() => void retryUpload(u.key)}
+                    aria-label={`Dismiss ${u.name}`}
+                    onClick={() => dismissUpload(u.key)}
                   >
-                    Retry
+                    Dismiss
                   </Button>
                 </span>
               )}
@@ -605,6 +709,7 @@ export function MaintenancePhotosPanel(props: Props) {
         startIndex={lightboxIndex ?? 0}
         open={lightboxIndex !== null}
         onClose={() => setLightboxIndex(null)}
+        loadFailure={photoLoadFailure}
       />
       {removal ? (
         <Dialog

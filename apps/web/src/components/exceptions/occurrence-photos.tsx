@@ -6,6 +6,8 @@ import * as React from 'react';
 import {
   MaintenancePhotosPanel,
   PhotoAnswerLostError,
+  PhotoFinalizePendingError,
+  PhotoRefusedError,
   type PanelPhoto,
   type PhotoPanelEndpoints,
 } from '@/components/maintenance/maintenance-photos-panel';
@@ -26,10 +28,13 @@ import {
   EXCEPTION_EVIDENCE_MAX_PHOTOS,
   EXCEPTION_EVIDENCE_NONE_COPY,
   EXCEPTION_EVIDENCE_NOTE_MAX,
+  EXCEPTION_EVIDENCE_PHOTO_FAILED_COPY,
   EXCEPTION_EVIDENCE_PRIVACY_COPY,
   EXCEPTION_EVIDENCE_REJECTED_COPY,
   EXCEPTION_EVIDENCE_REMOVE_COPY,
+  EXCEPTION_EVIDENCE_REMOVE_OFFLINE_COPY,
   EXCEPTION_EVIDENCE_UNAVAILABLE_COPY,
+  EXCEPTION_EVIDENCE_UNCONFIRMED_COPY,
   exceptionEvidenceAddDisabledReason,
   exceptionEvidenceAddedByCopy,
   exceptionEvidenceCountLabel,
@@ -38,9 +43,32 @@ import {
 
 /** A server action that never answered (the connection dropped): nothing is
  *  known about whether it ran. */
-export const EVIDENCE_CONNECTION_COPY = "Couldn't reach the server. Check your connection and try again.";
+export const EVIDENCE_CONNECTION_COPY =
+  "Couldn't reach the server. Check your connection and try again.";
+
+/** A finalize whose answer was lost: the photo may be saved (the phone's
+ *  words too). */
+export const EVIDENCE_NOT_CONFIRMED_COPY = `Not confirmed. ${EXCEPTION_EVIDENCE_UNCONFIRMED_COPY}`;
 
 const ALLOWED_TYPES: ReadonlySet<string> = new Set(EXCEPTION_EVIDENCE_CONTENT_TYPES);
+
+/** Refusals the server would repeat: the row offers Dismiss only and the
+ *  panel re-reads (the phone treats the same reasons as final). */
+const FINAL_REASONS: ReadonlySet<string> = new Set([
+  'occurrence_resolved',
+  'evidence_limit_reached',
+  'invalid_image',
+  'invalid_path',
+  'invalid_extension',
+  'note_too_long',
+  'invalid_captured_at',
+]);
+
+function answered(error: { message: string; reason: string | null }): Error {
+  return error.reason !== null && FINAL_REASONS.has(error.reason)
+    ? new PhotoRefusedError(error.message)
+    : new Error(error.message);
+}
 
 /**
  * The photo panel's endpoints for one occurrence (F1-4): the web twins of
@@ -52,18 +80,27 @@ const ALLOWED_TYPES: ReadonlySet<string> = new Set(EXCEPTION_EVIDENCE_CONTENT_TY
  *   - finalize: sends no capture time. A browser does not know when a photo
  *     was taken (a file's modified time is not that), so the timeline says the
  *     device did not say, rather than presenting a guess as "Taken".
- *     A finalize that never answered throws PhotoAnswerLostError, so Retry
- *     resends it for the same upload; "already_recorded" then means that
- *     earlier finalize landed, which is success, not a second photo.
+ *     A finalize that never answered throws PhotoAnswerLostError ("Not
+ *     confirmed": the photo may be saved), and one the per-person limit
+ *     refused throws PhotoFinalizePendingError (the server kept the upload);
+ *     either way Retry resends it for the same upload, and "already_recorded"
+ *     then means an earlier finalize landed, which is success, not a second
+ *     photo.
  *   - remove: a soft remove with the optional reason.
  *
  * Every failure the server answered carries its message (the action's
- * `error.message`); the gate, the cap and the open check are the server's.
+ * `error.message`); the gate, the cap and the open check are the server's. A
+ * refusal it would repeat (FINAL_REASONS) throws PhotoRefusedError: Dismiss
+ * only, and the panel re-reads.
  */
 export function exceptionEvidenceEndpoints(occurrenceId: string): PhotoPanelEndpoints {
   return {
     async mint({ fileExt, declaredMime, byteSize }) {
-      if (!ALLOWED_TYPES.has(declaredMime) || byteSize <= 0 || byteSize > EXCEPTION_EVIDENCE_MAX_PHOTO_BYTES) {
+      if (
+        !ALLOWED_TYPES.has(declaredMime) ||
+        byteSize <= 0 ||
+        byteSize > EXCEPTION_EVIDENCE_MAX_PHOTO_BYTES
+      ) {
         throw new Error(EXCEPTION_EVIDENCE_REJECTED_COPY);
       }
       let res: Awaited<ReturnType<typeof startExceptionEvidenceUploadAction>>;
@@ -72,7 +109,7 @@ export function exceptionEvidenceEndpoints(occurrenceId: string): PhotoPanelEndp
       } catch {
         throw new Error(EVIDENCE_CONNECTION_COPY);
       }
-      if ('error' in res) throw new Error(res.error.message);
+      if ('error' in res) throw answered(res.error);
       // No thumbnail URL: the server makes the thumbnail from the cleaned photo.
       return { path: res.ticket.path, signedUrl: res.ticket.signedUrl };
     },
@@ -86,11 +123,14 @@ export function exceptionEvidenceEndpoints(occurrenceId: string): PhotoPanelEndp
           note,
         });
       } catch {
-        throw new PhotoAnswerLostError(EVIDENCE_CONNECTION_COPY);
+        throw new PhotoAnswerLostError(EVIDENCE_NOT_CONFIRMED_COPY);
       }
       if ('error' in res) {
         if (res.error.reason === 'already_recorded') return;
-        throw new Error(res.error.message);
+        // Refused before the server looked at it: the upload is still there.
+        if (res.error.reason === 'rate_limited')
+          throw new PhotoFinalizePendingError(res.error.message);
+        throw answered(res.error);
       }
     },
     async remove(photoId, reason) {
@@ -187,11 +227,14 @@ export function OccurrencePhotos({
     originalFilename: `Photo ${i + 1}`,
     url: p.url,
     thumbUrl: p.thumbUrl,
-    // Removing needs a connection too.
-    canRemove: p.canRemove && online,
+    // Offline, Remove stays in place, disabled, with the reason (below).
+    canRemove: p.canRemove,
     caption: {
       note: p.note,
-      lines: [exceptionEvidenceAddedByCopy(p.uploadedBy.label), exceptionEvidenceTimesCopy(p, timeZone)],
+      lines: [
+        exceptionEvidenceAddedByCopy(p.uploadedBy.label),
+        exceptionEvidenceTimesCopy(p, timeZone),
+      ],
     },
   }));
 
@@ -222,7 +265,18 @@ export function OccurrencePhotos({
             confirmLabel: 'Remove photo',
           }}
           emptyText={EXCEPTION_EVIDENCE_NONE_COPY}
-          footnote={readOnly ? [EXCEPTION_EVIDENCE_PRIVACY_COPY] : [EXCEPTION_EVIDENCE_LIMITS_COPY, EXCEPTION_EVIDENCE_PRIVACY_COPY]}
+          removeDisabledReason={online ? null : EXCEPTION_EVIDENCE_REMOVE_OFFLINE_COPY}
+          // Links live an hour: an expired one says so, and Try again reads
+          // the exception again for fresh ones.
+          photoLoadFailure={{
+            message: EXCEPTION_EVIDENCE_PHOTO_FAILED_COPY,
+            onRetry: () => router.refresh(),
+          }}
+          footnote={
+            readOnly
+              ? [EXCEPTION_EVIDENCE_PRIVACY_COPY]
+              : [EXCEPTION_EVIDENCE_LIMITS_COPY, EXCEPTION_EVIDENCE_PRIVACY_COPY]
+          }
         />
       </CardContent>
     </Card>
