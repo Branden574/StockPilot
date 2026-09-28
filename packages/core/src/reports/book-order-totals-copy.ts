@@ -435,3 +435,96 @@ export function bookReportOfflineAsOf(generatedAtLocal: string): string {
 }
 
 export const BOOK_REPORT_KPI_LOAD_ERROR = "Couldn't load these figures. Pull to refresh.";
+
+// ── Controls, table and notices (added with the web page) ───────────────────
+
+/** Labels of the report's controls, table and pager, shared by the web page
+ *  and the phone so both name each control the same way. */
+export const BOOK_REPORT_UI = {
+  filters: 'Filters',
+  dateRange: 'Orders placed',
+  from: 'From',
+  to: 'To',
+  apply: 'Apply',
+  customRangeInvalid:
+    'Choose two real dates between 2000 and 2100, the first on or before the second.',
+  status: 'Status',
+  statusReset: 'Reset to default',
+  statusNoneChosen: 'Choose at least one status.',
+  warehouse: 'Warehouse',
+  category: 'Category',
+  sort: 'Sort',
+  search: 'Search books',
+  searchPlaceholder: 'Title, SKU or ISBN',
+  searching: 'Searching Book Order Totals',
+  clearSearch: 'Clear search',
+  listsLoading: 'Loading the list',
+  retry: 'Retry',
+  refresh: 'Refresh',
+  columnCover: 'Cover',
+  columnBook: 'Book',
+  columnCopies: 'Copies requested',
+  columnOrders: 'Orders',
+  columnLatest: 'Latest order',
+  columnActions: 'Actions',
+  previous: 'Previous',
+  next: 'Next',
+  pagesNav: 'Book Order Totals pages',
+  ordersPagesNav: 'Order pages',
+  summaryRegion: 'Totals for every book that matches these filters',
+  scopeRegion: 'What these totals cover',
+  howCounted: 'How this is counted',
+  close: 'Close',
+  noOrderNumber: 'No order number',
+  loadingOrders: 'Loading orders',
+  tryAgain: 'Try again',
+  mfaEnrollAction: 'Set up two-step verification',
+  mfaVerifyAction: 'Verify now',
+} as const;
+
+/** The pager's nouns: 'Showing 1–25 of 32 book entries · Page 1 of 2'. */
+export const BOOK_REPORT_LIST_NOUN = { one: 'book entry', other: 'book entries' } as const;
+/** The drill-down pager's nouns. */
+export const BOOK_REPORT_ORDERS_NOUN = { one: 'order', other: 'orders' } as const;
+
+/** The table's caption for screen readers: 'Book entries sorted by Most
+ *  copies. Page 1 of 2.' */
+export function bookReportTableCaption(
+  sort: BookReportSort,
+  page: number,
+  totalPages: number,
+): string {
+  return `Book entries sorted by ${BOOK_REPORT_SORT_LABELS[sort]}. Page ${n(page)} of ${n(totalPages)}.`;
+}
+
+/** The row action's spoken name: 'View orders for Book A'. */
+export function bookReportViewOrdersLabel(title: string): string {
+  return `${BOOK_REPORT_VIEW_ORDERS} for ${title}`;
+}
+
+/**
+ * The notice when a report reached through the person's warehouse view is
+ * still showing the warehouse it was opened with, but the view has changed
+ * since: 'Your warehouse view is now DC5. This report still shows DC4.'
+ * `now.id` null means the view now covers every warehouse; a known id whose
+ * name is not at hand is worded without it.
+ */
+export function bookReportViewChangedLine(
+  now: { id: string | null; name: string | null },
+  shownName: string,
+): string {
+  const lead =
+    now.id === null
+      ? 'Your warehouse view is now all warehouses.'
+      : now.name
+        ? `Your warehouse view is now ${now.name}.`
+        : 'Your warehouse view has changed.';
+  return `${lead} This report still shows ${shownName}.`;
+}
+
+/** The notice's link: 'Show DC5', 'Show all warehouses' or 'Show your
+ *  warehouse view'. */
+export function bookReportShowViewLabel(now: { id: string | null; name: string | null }): string {
+  if (now.id === null) return 'Show all warehouses';
+  return now.name ? `Show ${now.name}` : 'Show your warehouse view';
+}

@@ -518,6 +518,12 @@ WEB_TESTS=(
   src/lib/reports/book-order-totals/export-content.test.ts
   src/lib/reports/book-order-totals/trusted-cover-url.test.ts
   src/lib/pdf/image-prefetch.test.ts
+  # The page: one awaited answer for every number, no figures on a failure,
+  # the MFA state, the concrete warehouse in every derived URL, export
+  # controls only for reports:export; the drill-down: order links only where
+  # openable, late or mismatched answers dropped.
+  src/components/reports/book-order-totals/report-body.test.tsx
+  src/components/reports/book-order-totals/orders-drawer.test.tsx
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

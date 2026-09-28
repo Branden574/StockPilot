@@ -93,6 +93,14 @@ function rendered(): string[] {
     copy.bookReportPdfCoverNote({ photos: true, rows: 612, shown: 498, failed: 2, pastCap: 112 }),
     copy.bookReportPdfCoverNote({ photos: false, rows: 612, shown: 0, failed: 0, pastCap: 0 }),
     copy.bookReportOfflineAsOf('2026-09-28 10:42'),
+    copy.bookReportTableCaption('copies', 1, 2),
+    copy.bookReportViewOrdersLabel('Book A'),
+    copy.bookReportViewChangedLine({ id: 'w5', name: 'DC5' }, 'DC4'),
+    copy.bookReportViewChangedLine({ id: 'w5', name: null }, 'DC4'),
+    copy.bookReportViewChangedLine({ id: null, name: null }, 'DC4'),
+    copy.bookReportShowViewLabel({ id: 'w5', name: 'DC5' }),
+    copy.bookReportShowViewLabel({ id: 'w5', name: null }),
+    copy.bookReportShowViewLabel({ id: null, name: null }),
   );
   return out;
 }
@@ -183,6 +191,23 @@ describe('Book Order Totals wording', () => {
     ).toBe('Orders placed during: All time (May 12, 2026 – Sep 25, 2026)');
     expect(copy.bookReportRangeLine({ key: '30d', from: '2026-08-30', to: '2026-09-28' })).toBe(
       'Orders placed during: Last 30 days (Aug 30 – Sep 28, 2026)',
+    );
+  });
+
+  it('the warehouse view notice names the view it moved to, or says it changed', () => {
+    expect(copy.bookReportViewChangedLine({ id: 'w5', name: 'DC5' }, 'DC4')).toBe(
+      'Your warehouse view is now DC5. This report still shows DC4.',
+    );
+    expect(copy.bookReportShowViewLabel({ id: 'w5', name: 'DC5' })).toBe('Show DC5');
+    expect(copy.bookReportViewChangedLine({ id: 'w5', name: null }, 'DC4')).toBe(
+      'Your warehouse view has changed. This report still shows DC4.',
+    );
+    expect(copy.bookReportViewChangedLine({ id: null, name: null }, 'DC4')).toBe(
+      'Your warehouse view is now all warehouses. This report still shows DC4.',
+    );
+    expect(copy.bookReportShowViewLabel({ id: null, name: 'ignored' })).toBe('Show all warehouses');
+    expect(copy.bookReportTableCaption('title', 2, 44)).toBe(
+      'Book entries sorted by Title (A–Z). Page 2 of 44.',
     );
   });
 
