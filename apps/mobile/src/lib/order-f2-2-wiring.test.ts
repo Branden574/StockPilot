@@ -16,7 +16,8 @@ import { parseTsx } from './__fixtures__/jsx-touch-audit';
  *
  *   - the digital pick's Complete opens core's completion confirm;
  *   - staging (pickup and delivery), Mark in transit, Collect signature and
- *     Physical signature each go through the departure confirm;
+ *     Physical signature each go through the departure confirm, and so does
+ *     a packing slip scanned on the Scan tab (it opens the signature pad);
  *   - "Hold available stock" on the readiness card, and the hold said after
  *     an add or a raise;
  *   - a short line's fixes in the line sheet.
@@ -31,6 +32,8 @@ const digitalPick = read('src/components/digital-pick.tsx');
 const summary = read('src/components/order-readiness-summary.tsx');
 const editSheet = read('src/components/edit-order-line-sheet.tsx');
 const addSheet = read('src/components/add-order-items-sheet.tsx');
+const SCAN_FILE = 'app/(drawer)/(tabs)/scan.tsx';
+const scanTab = read(SCAN_FILE);
 
 /** Source with comments stripped, so a comment cannot satisfy a pin. */
 function codeOnly(src: string): string {
@@ -213,6 +216,31 @@ describe('the departure confirm guards every step that takes the order further f
     );
     expect(code.match(/\{shortLinesFinalNote \? \(/g)).toHaveLength(2);
     expect(code.match(/\{shortLinesFinalNote\}/g)).toHaveLength(2);
+  });
+});
+
+// Review 2026-09-28: the Scan tab's packing-slip QR opened the signature pad
+// (a hand-over) with no departure confirm. Mutation caught (each): opening
+// the pad straight from the scan again, or asking without core's risk.
+describe('the Scan tab asks before a scanned packing slip is signed', () => {
+  it("the slip's order is read and core's risk asked before the pad opens; Fix the order opens the order", () => {
+    const code = codeOnly(scanTab);
+    expect(code).toMatch(
+      /const signToken = parseSignToken\(data\);\s*if \(signToken\) \{\s*const scanned = await readSignatureOrder\(supabase, orgId, signToken\);\s*const risk = scanSignatureDeparture\(scanned\);\s*setBusy\(false\);\s*if \(!risk\) \{\s*openSignaturePad\(signToken\);\s*return;\s*\}\s*Alert\.alert\(risk\.title, risk\.message, departureConfirmButtons\(risk, \{/,
+    );
+    expect(code).toMatch(/onProceed: \(\) => openSignaturePad\(signToken\),/);
+    expect(code).toMatch(
+      /onFix: \(lineId\) => \{\s*reset\(\);\s*if \(lineId && scanned\) router\.push\(`\/order\/\$\{scanned\.orderId\}` as Href\);\s*\},/,
+    );
+  });
+
+  it('the pad opens only through openSignaturePad', () => {
+    const code = codeOnly(scanTab);
+    expect(functionBody(scanTab, SCAN_FILE, 'openSignaturePad')).toBe(
+      '{ setSignatureToken(token); setSignatureModalVisible(true); }',
+    );
+    expect(code.match(/setSignatureModalVisible\(true\)/g)).toHaveLength(1);
+    expect(code.match(/openSignaturePad\(signToken\)/g)).toHaveLength(2);
   });
 });
 
