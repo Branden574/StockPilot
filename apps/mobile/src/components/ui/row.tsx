@@ -90,6 +90,9 @@ export function Row({
   );
 }
 
+/** The iOS minimum tap target, in points. */
+const MIN_TAP = 44;
+
 /**
  * IconChip — 38pt round/squircle button-like icon container used in
  * top-bar slots (notifications, refresh, profile, filters, etc.).
@@ -100,6 +103,7 @@ export function IconChip({
   onPress,
   badge,
   accessibilityLabel,
+  minTap = false,
 }: {
   icon: LucideIcon;
   shape?: 'square' | 'circle';
@@ -112,24 +116,27 @@ export function IconChip({
    * one it is also announced as a button.
    */
   accessibilityLabel?: string;
+  /**
+   * A 44pt tap target around the same 38pt chip: the button becomes a
+   * transparent 44 x 44 frame with the chip centred in it. A real frame, not
+   * hitSlop, so the target VoiceOver outlines is the one a finger can hit.
+   * The frame is 3pt wider than the chip on every side, so a caller that
+   * wants the chip where a plain one sits takes 3pt off its own padding.
+   */
+  minTap?: boolean;
 }) {
   const { c } = useTheme();
   const showBadge = typeof badge === 'number' && badge > 0;
-  return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole={accessibilityLabel ? 'button' : undefined}
-      accessibilityLabel={accessibilityLabel}
-      style={({ pressed }) => [
-        styles.chip,
-        {
-          backgroundColor: c.card,
-          borderColor: c.hair,
-          borderRadius: shape === 'circle' ? 19 : 10,
-          opacity: pressed ? 0.7 : 1,
-        },
-      ]}
-    >
+  const chipStyle = [
+    styles.chip,
+    {
+      backgroundColor: c.card,
+      borderColor: c.hair,
+      borderRadius: shape === 'circle' ? 19 : 10,
+    },
+  ];
+  const face = (
+    <>
       <Icon size={18} color={c.ink} strokeWidth={1.5} />
       {showBadge ? (
         <View style={[styles.badge, { borderColor: c.paper }]}>
@@ -148,6 +155,16 @@ export function IconChip({
           </Text>
         </View>
       ) : null}
+    </>
+  );
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole={accessibilityLabel ? 'button' : undefined}
+      accessibilityLabel={accessibilityLabel}
+      style={({ pressed }) => [minTap ? styles.chipTapFrame : chipStyle, { opacity: pressed ? 0.7 : 1 }]}
+    >
+      {minTap ? <View style={chipStyle}>{face}</View> : face}
     </Pressable>
   );
 }
@@ -196,6 +213,12 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chipTapFrame: {
+    width: MIN_TAP,
+    height: MIN_TAP,
     alignItems: 'center',
     justifyContent: 'center',
   },
