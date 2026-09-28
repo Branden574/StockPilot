@@ -8,6 +8,7 @@ import {
   recountUnavailableCopy,
 } from '@stockpilot/core';
 
+import { CONNECTION_FAILURE_COPY, REQUEST_TIMED_OUT_COPY } from './connection-copy';
 import {
   actOnException,
   clientEventIdFor,
@@ -372,6 +373,31 @@ describe('describeExceptionsRequestError', () => {
       'Only a manager can run a check now.',
     );
     expect(describeExceptionsRequestError('weird', 'Fallback.')).toBe('Fallback.');
+  });
+
+  // Simulator walk 2026-09-27 (F1-5, check 5A): with the server unreachable
+  // while iOS still reported a network, the escalation form (and the
+  // exception screen) showed the network layer's own text. A request that got
+  // no answer has no status; it says the phone's one connection sentence.
+  // Mutation caught: passing a status-less error's message through.
+  it('never shows the network layer\'s text: no answer at all is the connection sentence', () => {
+    const lost = new TypeError(
+      'fetch failed: UnexpectedException: The network connection was lost. (at ExpoModulesCore/Promise.swift:56)',
+    );
+    expect(describeExceptionsRequestError(lost, 'Could not load this exception.')).toBe(CONNECTION_FAILURE_COPY);
+    const refused = new Error(
+      'fetch failed: UnexpectedException: Could not connect to the server. (at ExpoModulesCore/Promise.swift:56)',
+    );
+    expect(describeExceptionsRequestError(refused, 'Pull down to try again.')).toBe(CONNECTION_FAILURE_COPY);
+    expect(describeExceptionsRequestError(new Error(''), 'x')).toBe(CONNECTION_FAILURE_COPY);
+  });
+
+  // The app's own sentences with no status stay as they are: api()'s timeout,
+  // and an answer the screens cannot read.
+  it('keeps the app\'s own status-less sentences: the timeout and an unreadable answer', () => {
+    expect(describeExceptionsRequestError(new Error(REQUEST_TIMED_OUT_COPY), 'x')).toBe(REQUEST_TIMED_OUT_COPY);
+    const unreadable = new ExceptionsResponseError();
+    expect(describeExceptionsRequestError(unreadable, 'x')).toBe(unreadable.message);
   });
 });
 

@@ -22,7 +22,7 @@ import {
 } from '@stockpilot/core';
 
 import { api } from './api';
-import { CONNECTION_FAILURE_COPY } from './connection-copy';
+import { CONNECTION_FAILURE_COPY, REQUEST_TIMED_OUT_COPY } from './connection-copy';
 import {
   isEscalateUnavailableReason,
   parseEscalation,
@@ -572,11 +572,24 @@ export function describeActError(e: unknown): string {
  * message would otherwise surface its bare code ("rate_limited",
  * "internal_error") as the text on screen. Otherwise the server's own
  * sentence, and a fallback when there is none.
+ *
+ * No status means no answer at all (offline, a dropped connection, a server
+ * that could not be reached): the phone's one sentence for it
+ * (connection-copy.ts). The error's own text is never shown then: on iOS it
+ * is the network layer's ("fetch failed: UnexpectedException: The network
+ * connection was lost. (at ExpoModulesCore/Promise.swift:56)", simulator
+ * walk 2026-09-27, on the escalation form and the exception screen). Only
+ * the app's own status-less sentences stay: api()'s timeout and an answer
+ * the screens cannot read (ExceptionsResponseError).
  */
 export function describeExceptionsRequestError(e: unknown, fallback: string): string {
   const status = isObj(e) && typeof e.status === 'number' ? e.status : null;
   if (status === 429) return 'Too many requests. Wait a moment and try again.';
   if (status !== null && status >= 500) return 'The server had a problem. Try again in a moment.';
+  if (status === null && e instanceof Error) {
+    if (e instanceof ExceptionsResponseError || e.message === REQUEST_TIMED_OUT_COPY) return e.message;
+    return CONNECTION_FAILURE_COPY;
+  }
   const message = e instanceof Error && e.message ? e.message : null;
   // A lone snake_case token is a code, not a sentence.
   if (!message || /^[a-z0-9_]+$/.test(message)) return fallback;
