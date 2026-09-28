@@ -499,6 +499,25 @@ WEB_TESTS=(
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
   src/lib/locations/scope.test.ts
+
+  # Book Order Totals (0379): the service gate (reports:read with the MFA
+  # step-up, orders and books modules) before any read, the verified
+  # organization only, fixed error words, not_found for a hidden book, order
+  # links only for orders:approve or the caller's own order, covers only for
+  # books the caller's RLS read returned and only from trusted URLs; the read
+  # routes (gate before query, warehouse required, never the view cookie);
+  # the export route (reports:export before the rate limit, one export-mode
+  # statement, refused above its ceiling before any byte or audit row, audit
+  # awaited, streamed, no-store); the CSV (formula guard, CR quoting,
+  # sanitized one-cell metadata lines, parsed back with exceljs and
+  # papaparse); the PDF image prefetch (SSRF: safeFetch with the cover
+  # allowlist for any non-storage host, byte cap) and the cover trust filter.
+  src/server/services/book-order-totals.test.ts
+  src/app/api/v1/reports/book-order-totals/route.test.ts
+  src/app/api/v1/reports/book-order-totals/export/route.test.ts
+  src/lib/reports/book-order-totals/export-content.test.ts
+  src/lib/reports/book-order-totals/trusted-cover-url.test.ts
+  src/lib/pdf/image-prefetch.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

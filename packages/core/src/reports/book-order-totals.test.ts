@@ -34,6 +34,7 @@ import {
   resolvedBookReportQuery,
   serializeBookReportQuery,
   statusesForGroups,
+  sumReportQuantities,
   validateCustomDate,
   type BookReportQuery,
   type BookReportStatusGroup,
@@ -359,6 +360,21 @@ describe('formatReportQuantity', () => {
   });
   it('leaves anything that is not a quantity as it is', () => {
     expect(formatReportQuantity('n/a')).toBe('n/a');
+  });
+});
+
+describe('sumReportQuantities', () => {
+  it('adds exactly, in trim_scale form', () => {
+    expect(sumReportQuantities(['30', '4'])).toBe('34');
+    expect(sumReportQuantities(['1.5', '2.25', '0.25'])).toBe('4');
+    expect(sumReportQuantities(['0.1', '0.2'])).toBe('0.3');
+    expect(sumReportQuantities([])).toBe('0');
+    expect(sumReportQuantities(['12.3456', '0.0001'])).toBe('12.3457');
+    expect(sumReportQuantities(['-2', '1.5'])).toBe('-0.5');
+    expect(sumReportQuantities(['99999999999999999999', '1'])).toBe('100000000000000000000');
+  });
+  it('refuses a value that is not a quantity', () => {
+    expect(() => sumReportQuantities(['1e3'])).toThrow();
   });
 });
 

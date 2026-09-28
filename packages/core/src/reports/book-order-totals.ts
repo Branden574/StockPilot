@@ -1032,6 +1032,33 @@ export function formatReportQuantity(text: string): string {
   return `${isZero ? '' : sign}${groupThousands(intPart)}${frac ? `.${frac}` : ''}`;
 }
 
+/**
+ * Exact sum of quantity strings ('1.5' + '2.25' = '3.75'), in the database's
+ * trim_scale form (no trailing zeros, '0' for zero). BigInt arithmetic, never
+ * a float, so a server-side self-check can compare a sum of rows with the
+ * summary SQL computed. Throws on a value that is not a quantity.
+ */
+export function sumReportQuantities(values: readonly string[]): string {
+  const parsed = values.map((v) => {
+    const m = /^(-?)(\d+)(?:\.(\d+))?$/.exec(v.trim());
+    if (!m)
+      throw new BookReportShapeError('quantity', `${JSON.stringify(v)} is not an exact quantity`);
+    return { neg: m[1] === '-', int: m[2]!, frac: m[3] ?? '' };
+  });
+  const scale = parsed.reduce((max, p) => Math.max(max, p.frac.length), 0);
+  let total = 0n;
+  for (const p of parsed) {
+    const units = BigInt(p.int + p.frac.padEnd(scale, '0'));
+    total += p.neg ? -units : units;
+  }
+  const neg = total < 0n;
+  const digits = (neg ? -total : total).toString().padStart(scale + 1, '0');
+  const intPart = digits.slice(0, digits.length - scale) || '0';
+  const frac = scale > 0 ? digits.slice(digits.length - scale).replace(/0+$/, '') : '';
+  const out = frac ? `${intPart}.${frac}` : intPart;
+  return neg && out !== '0' ? `-${out}` : out;
+}
+
 /** 'YYYY-MM-DD' (org-local, from SQL) -> 'Sep 20, 2026'. */
 export function formatReportDate(ymd: string | null | undefined): string {
   if (!ymd) return '';

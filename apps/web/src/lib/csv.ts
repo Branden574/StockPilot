@@ -107,22 +107,81 @@ export function escapeForSpreadsheet(value: unknown): string {
   return s;
 }
 
-export function toCsv(header: string[], rows: Array<Record<string, string | number | null | undefined>>): string {
-  const escape = (v: unknown) => {
-    // Step 1: defuse spreadsheet-formula injection. Numbers passed as
-    // numbers (not strings) are unaffected; only string-shaped cells
-    // ever start with =/+/-/@/\t/\r.
-    const safe = escapeForSpreadsheet(v);
-    if (safe.length === 0) return '';
-    // Step 2: standard CSV quoting for commas/quotes/newlines.
-    if (safe.includes('"') || safe.includes(',') || safe.includes('\n')) {
-      return `"${safe.replace(/"/g, '""')}"`;
-    }
-    return safe;
-  };
+/**
+ * One CSV cell: formula-injection guard first, then RFC 4180 quoting when
+ * the value holds a quote, a comma, a line feed or a carriage return. A bare
+ * \r must quote too: without it a value containing one ends the row in
+ * readers that accept CR line endings, and the rest of the value becomes a
+ * new row.
+ */
+export function csvCell(v: unknown): string {
+  // Step 1: defuse spreadsheet-formula injection. Numbers passed as
+  // numbers (not strings) are unaffected; only string-shaped cells
+  // ever start with =/+/-/@/\t/\r.
+  const safe = escapeForSpreadsheet(v);
+  if (safe.length === 0) return '';
+  // Step 2: standard CSV quoting for commas/quotes/newlines.
+  if (safe.includes('"') || safe.includes(',') || safe.includes('\n') || safe.includes('\r')) {
+    return `"${safe.replace(/"/g, '""')}"`;
+  }
+  return safe;
+}
+
+/** One data row, in `header` order, every cell through csvCell. */
+export function csvRow(
+  header: readonly string[],
+  row: Record<string, string | number | null | undefined>,
+): string {
+  return header.map((h) => csvCell(row[h])).join(',');
+}
+
+export function toCsv(
+  header: string[],
+  rows: Array<Record<string, string | number | null | undefined>>,
+): string {
   const lines = [header.join(',')];
   for (const row of rows) {
-    lines.push(header.map((h) => escape(row[h])).join(','));
+    lines.push(csvRow(header, row));
   }
   return lines.join('\n');
+}
+
+/** Longest value a metadata line carries before it is cut with an ellipsis. */
+export const CSV_META_VALUE_MAX = 200;
+/** Longest label (the caller's own sentence) a metadata line carries. */
+export const CSV_META_LINE_MAX = 1000;
+
+/**
+ * Text that is safe inside ONE metadata line: every C0 control (U+0000 to
+ * U+001F, which includes tab, CR and LF), DEL and the Unicode line and
+ * paragraph separators become a space; runs of spaces collapse; the result
+ * is trimmed and cut at CSV_META_VALUE_MAX characters with an ellipsis. A
+ * name or search typed by a person can then never end the line and start a
+ * new row.
+ */
+export function sanitizeCsvText(value: unknown, max: number = CSV_META_VALUE_MAX): string {
+  if (value === null || value === undefined) return '';
+  const flat = String(value)
+    .replace(/[\u0000-\u001F\u007F\u2028\u2029]/g, ' ')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+  if (flat.length <= max) return flat;
+  return `${flat.slice(0, max - 1).trimEnd()}…`;
+}
+
+/**
+ * One metadata line above a CSV table: `# <label>: <value>`, the value
+ * sanitized (sanitizeCsvText), the whole line passed through the
+ * formula-injection guard (a no-op, since it starts with '#', kept as a
+ * guard) and ALWAYS emitted as a single RFC 4180 quoted cell, so a comma or
+ * quote in a warehouse name, a category or a search can never split the line
+ * into further cells. `value` omitted: the line is `# <label>`.
+ */
+export function csvMetaLine(label: string, value?: unknown): string {
+  // The label is the caller's own wording (a sentence may run past the value
+  // cap); it is still flattened to one line. The value is capped.
+  const head = sanitizeCsvText(label, CSV_META_LINE_MAX);
+  const text = value === undefined ? `# ${head}` : `# ${head}: ${sanitizeCsvText(value)}`;
+  const guarded = escapeForSpreadsheet(text);
+  return `"${guarded.replace(/"/g, '""')}"`;
 }

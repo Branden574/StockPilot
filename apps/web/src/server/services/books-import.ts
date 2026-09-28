@@ -5,6 +5,7 @@ import {
   forcedWarehouseId,
   ForbiddenError,
 } from '@/lib/auth/warehouse';
+import { COVER_HOST_ALLOWLIST } from '@/lib/books/cover-hosts';
 import { lookupIsbn, normalizeIsbn, type BookMetadata } from '@/lib/books/lookup';
 import { safeFetch } from '@/lib/ssrf-guard';
 import { generateSku } from '@/lib/utils';
@@ -16,20 +17,11 @@ import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { compensateOpeningStockOrThrow } from './opening-stock-compensation';
 
-// Hosts the book-lookup pipeline ever returns thumbnails from. Anything
+// Hosts the book-lookup pipeline ever returns thumbnails from
+// (lib/books/cover-hosts.ts, shared with the report cover paths). Anything
 // else gets rejected by rehostCover() — a poisoned upstream API
 // response with a thumbnail URL pointing at an internal service can't
 // turn into an SSRF probe via the bulk-import flow.
-const COVER_HOST_ALLOWLIST = [
-  'books.google.com',
-  'books.googleusercontent.com',
-  'covers.openlibrary.org',
-  'archive.org',
-  'ia801600.us.archive.org',
-  'ia803000.us.archive.org',
-  'www.loc.gov',
-  'tile.loc.gov',
-];
 
 /** 8s budget. Some cover servers are slow; 8s lets the slow ones resolve
  *  without blocking the whole import. */
