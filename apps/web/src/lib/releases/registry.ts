@@ -28,6 +28,92 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'order-readiness-draft-pos-2026-09',
+    revision: 1,
+    // The Why and the line sentence are core's words, shown by the web order
+    // page and the phone's order screen alike, so this is held as a draft
+    // until the phone update (pnpm release:ota) carries them. The follow-up
+    // that publishes it sets 'published' and the real publishedAt.
+    //
+    // Addressed as the full readiness panel is (core readinessAudience):
+    // approvers, pickers (items:update) and buyers (purchase_orders:manage).
+    status: 'draft',
+    title: 'An item on several draft POs says how many',
+    summary:
+      "On the web and in the mobile app, when an item on an order is on more than one draft purchase order, its readiness now says how many draft POs hold it beside their total, for example On 4 draft POs 100 (not ordered). It used to name only the first draft beside the total of all of them, so that one PO read as holding every unit.",
+    publishedAt: '2026-09-29T17:00:00Z',
+    audience: { modules: ['orders'] },
+    entries: [
+      {
+        id: 'order-readiness-draft-pos-counted',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Draft POs are counted, not named after the first',
+        whatChanged:
+          "When an item on an order is on several draft purchase orders, Why now says On 4 draft POs 100 (not ordered), and a short line says 4 draft POs cover 60 but have not been ordered. A single draft is still named with its own quantity, for example On draft PO-0043 25 (not ordered). Units on draft POs you can't open are shown as a quantity only, as they are for POs that have been ordered.",
+        whyItMatters:
+          'Why named the first draft beside the total of all the drafts, so a draft holding 25 read as holding 100.',
+        howItAffectsYou: 'Only the wording changed. Drafts are still never counted as stock on order.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: {
+          anyPermission: ['orders:approve', 'items:update', 'purchase_orders:manage'],
+          modules: ['orders'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'order-needed-by-org-zone-2026-09',
+    revision: 1,
+    // Web only: the Dates card and the approval panel's needed-by are on the
+    // web order page, and the digital pick's field is the web's (the phone
+    // already shows "of 60" beside a field holding the picked number). So it
+    // is published with the web deploy. The phone's order screen shows no
+    // needed-by time.
+    //
+    // Addressed where Orders is on: the order page is open to every member
+    // (order_requests RLS); the digital pick entry to whoever can pick.
+    status: 'published',
+    title: "An order's needed-by time is shown in your organization's time zone",
+    summary:
+      "On the web, the needed-by time on an order's page is now shown in your organization's time zone. It was shown in UTC, hours off: an order due at 2:00 PM in a Los Angeles organization said 9:00 PM. In the digital pick, a line with nothing entered no longer shows the requested quantity in its field.",
+    publishedAt: '2026-09-28T23:30:00Z',
+    audience: { modules: ['orders'] },
+    entries: [
+      {
+        id: 'order-needed-by-org-zone',
+        category: 'fixed',
+        area: 'Orders',
+        title: "Needed-by times are in your organization's time zone",
+        whatChanged:
+          "On the web, the Needed by time in an order's Dates card is now shown in your organization's time zone, as is the one people who can approve orders see beside Approve on an order waiting for approval.",
+        whyItMatters:
+          'The Dates card showed the time in UTC, so an order in a Los Angeles organization due at 2:00 PM said 9:00 PM, and the time beside Approve could change after the page opened.',
+        howItAffectsYou:
+          "Only how the time is shown changed. The needed-by saved on each order is unchanged, and the other dates on the card still say how long ago each step happened.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: { modules: ['orders'] },
+      },
+      {
+        id: 'digital-pick-blank-quantity',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'A line with nothing entered in the digital pick looks empty',
+        whatChanged:
+          'On the web, in the digital pick, the quantity field of a line with nothing entered no longer shows the requested quantity in grey. The field says Qty, and the requested quantity is shown beside it, for example of 60.',
+        whyItMatters:
+          'The grey number looked like an entered quantity, so a line with nothing picked could look complete.',
+        howItAffectsYou:
+          'Only how the field looks changed. What you enter and save is the same, and completing a pick still stops first when a line is short.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: { anyPermission: ['items:update', 'orders:approve'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
     id: 'order-held-and-caught-2026-10',
     revision: 1,
     // F2-2 (0378). Held as a draft until the phone update (OTA group
