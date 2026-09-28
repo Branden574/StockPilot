@@ -86,7 +86,7 @@ describe('AddItemsDialog', () => {
     fetchSpy.mockResolvedValue(jsonResponse([]));
     addLines.mockResolvedValue({
       ok: true,
-      data: { added: 1, merged: 0, pickSlipStale: false },
+      data: { added: 1, merged: 0, pickSlipStale: false, hold: null },
     });
   });
 
@@ -272,7 +272,7 @@ describe('AddItemsDialog', () => {
     fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'a', name: 'Widget' })]));
     addLines.mockResolvedValue({
       ok: true,
-      data: { added: 2, merged: 1, pickSlipStale: false },
+      data: { added: 2, merged: 1, pickSlipStale: false, hold: null },
     });
     const user = await open();
 
@@ -293,7 +293,7 @@ describe('AddItemsDialog', () => {
     fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'a', name: 'Widget' })]));
     addLines.mockResolvedValue({
       ok: true,
-      data: { added: 1, merged: 0, pickSlipStale: true },
+      data: { added: 1, merged: 0, pickSlipStale: true, hold: null },
     });
     const user = await open();
 

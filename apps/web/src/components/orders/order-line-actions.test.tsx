@@ -77,7 +77,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   updateLine.mockResolvedValue({
     ok: true,
-    data: { pickSlipStale: false, quantity: 9 },
+    data: { pickSlipStale: false, quantity: 9, hold: null },
   } as Awaited<ReturnType<typeof updateOrderRequestLineQuantityAction>>);
   removeLine.mockResolvedValue({
     ok: true,
@@ -255,7 +255,7 @@ describe('OrderLineActions — changing the quantity', () => {
   it('warns that a printed pick slip is now stale', async () => {
     updateLine.mockResolvedValue({
       ok: true,
-      data: { pickSlipStale: true, quantity: 9 },
+      data: { pickSlipStale: true, quantity: 9, hold: null },
     } as Awaited<ReturnType<typeof updateOrderRequestLineQuantityAction>>);
     const user = renderRow();
     const field = await openEditor(user);
@@ -289,7 +289,7 @@ describe('OrderLineActions — changing the quantity', () => {
     expect(screen.getByLabelText(/requested quantity for blue widget/i)).toBeDisabled();
     expect(screen.getByRole('button', { name: /save quantity for blue widget/i })).toBeDisabled();
 
-    release({ ok: true, data: { pickSlipStale: false, quantity: 9 } });
+    release({ ok: true, data: { pickSlipStale: false, quantity: 9, hold: null } });
   });
 });
 

@@ -1,3 +1,4 @@
+import { revalidateTag } from 'next/cache';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
@@ -10,6 +11,17 @@ import { OrderRequestsService } from '@/server/services/order-requests';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/**
+ * A line write moves availability (available = on hand less holds): an add or
+ * a raise by an approver is held (F2-2), a lowering or a removal releases.
+ * Bust the storefront catalog as the web actions do after the same writes
+ * (actions/order-requests.ts revalidateOrdersCatalog), so the phone's edits
+ * show on the Place an Order page without waiting out its cache.
+ */
+function revalidateOrdersCatalog() {
+  revalidateTag('orders-new-v2-catalog', 'max');
+}
 
 const bodySchema = z.object({
   lines: z
@@ -31,7 +43,14 @@ const bodySchema = z.object({
  * enforced identically on both platforms.
  *
  * Body: { lines: [{ itemId: uuid, quantity: number > 0 }] }
- * → 200 { ok: true, added, merged, pickSlipStale }
+ * → 200 { ok: true, added, merged, pickSlipStale, hold }
+ *
+ * `hold` (F2-2) is the automatic top-up's outcome: null when none was tried
+ * (the caller may not approve orders, or the order is not approved or being
+ * picked), `{ ok: true, held, stillShort }` when the new units were held as
+ * far as free stock allows, `{ ok: false, reason, message }` when they were
+ * not (the lines stay added; the phone says so and offers Hold available
+ * stock).
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const ctx = await withApiContext(req);
@@ -61,6 +80,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   try {
     const result = await new OrderRequestsService(ctx).addLines(id, parsed.data.lines);
+    revalidateOrdersCatalog();
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
     if (e instanceof ServiceError) {
@@ -91,7 +111,10 @@ const patchSchema = z.object({
  * and staged floors are enforced identically on both platforms.
  *
  * Body: { lineId: uuid, quantity: number > 0 }
- * → 200 { ok: true, quantity, pickSlipStale }
+ * → 200 { ok: true, quantity, pickSlipStale, hold }
+ *
+ * `hold` as POST's: a raise is topped up the same way; a lowering or no
+ * change carries null.
  */
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const ctx = await withApiContext(req);
@@ -125,6 +148,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       parsed.data.lineId,
       parsed.data.quantity,
     );
+    revalidateOrdersCatalog();
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
     if (e instanceof ServiceError) {
@@ -179,6 +203,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
 
   try {
     const result = await new OrderRequestsService(ctx).removeLine(id, lineId.data);
+    revalidateOrdersCatalog();
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
     if (e instanceof ServiceError) {

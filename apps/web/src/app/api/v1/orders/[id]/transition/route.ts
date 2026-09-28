@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
@@ -20,6 +21,15 @@ export const dynamic = 'force-dynamic';
  * without the right role gets the service's ServiceError → 403, never a bypass).
  *
  * Body: { action, reason?, target?, deliveryUserId?, internalNotes? }
+ *
+ * Every action answers { order }, except hold_stock (F2-2, "Hold available
+ * stock"), which answers { hold: { held: [{itemId, added}], stillShort:
+ * [{itemId, quantity}] } } and leaves the status alone. Its refusals come
+ * mapped from OrderRequestsService.holdStock: 404 order not found, 403
+ * forbidden (not an approver, no write access to the order's warehouse, or a
+ * step-up needed) and module_disabled, 409 conflict (not approved or being
+ * picked; or someone else held the order or an item for 5 s), 500 anything
+ * else.
  */
 const bodySchema = z.object({
   action: z.enum([
@@ -40,6 +50,7 @@ const bodySchema = z.object({
     'close_partial',
     'confirm_physical_signature',
     'cancel',
+    'hold_stock',
   ]),
   reason: z.string().max(500).optional(),
   target: z.enum(['staged_for_pickup', 'staged_for_delivery']).optional(),
@@ -169,6 +180,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       case 'cancel':
         order = await svc.cancel(id, a.reason?.trim() || null);
         break;
+      case 'hold_stock': {
+        // Holds move availability: bust the storefront catalog like every
+        // reserve/release transition, and answer what was held.
+        const hold = await svc.holdStock(id);
+        revalidateTag('orders-new-v2-catalog', 'max');
+        return NextResponse.json({ hold });
+      }
     }
     // complete_picking decrements stock, cancel restocks picked stock, and
     // reopen_picking reverses complete_picking's draw (restocks) — all three
@@ -189,6 +207,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         { error: e.code, message: e.message },
         { status: serviceErrorStatus(e.code) },
       );
+    }
+    // assertWarehouseAccess (every requireWarehouseAccess gate) throws
+    // ForbiddenError, a separate class from ServiceError: without this a
+    // permanent refusal fell through to a generic 500 and an error report
+    // (the lines route's fix, applied here too).
+    if (e instanceof ForbiddenError) {
+      return NextResponse.json({ error: 'forbidden', message: e.message }, { status: 403 });
     }
     void reportError(e, { tag: 'api.v1.orders.transition', extra: { action: a.action } });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });

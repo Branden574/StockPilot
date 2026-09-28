@@ -4,11 +4,23 @@ import {
   can,
   formatOrderNumber,
   formatOrgDateTime,
+  HOLD_BUSY_COPY,
+  HOLD_FAILED_COPY,
+  HOLD_MODULE_OFF_COPY,
+  HOLD_NO_WAREHOUSE_ACCESS_COPY,
+  HOLD_NOT_APPLICABLE_COPY,
+  HOLD_NOT_APPROVER_COPY,
+  HOLD_ORDER_NOT_FOUND_COPY,
   INSUFFICIENT_PLACED_STOCK_COPY,
   isManagerOrAbove,
   lineOwedUnits,
+  parseHoldOrderStockResult,
   resolveOrgTimezone,
   resolveRequesterIdentity,
+  shouldTopUpHolds,
+  type HoldFailureReason,
+  type HoldOrderStockResult,
+  type HoldOutcome,
 } from '@stockpilot/core';
 
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
@@ -400,6 +412,87 @@ const ORDER_GUARD_SENTENCES: ReadonlySet<string> = new Set([
 function orderGuardRefusal(err: { message?: string | null }): ServiceError | null {
   const message = err.message ?? '';
   return ORDER_GUARD_SENTENCES.has(message) ? new ServiceError('validation_error', message) : null;
+}
+
+/** What started a hold (F2-2), recorded on its audit entry. */
+export type HoldTrigger = 'manual' | 'lines_added' | 'line_raised';
+
+/**
+ * hold_order_stock's refusals (0378) as ServiceErrors, each in the words both
+ * platforms show (core HOLD_* copy). `details.reason` is the HoldFailureReason
+ * a line edit reports when its automatic top-up fails. Matched on the
+ * function's own messages and codes only: any other error (a revoked grant's
+ * "permission denied for function", a network fault) is internal_error.
+ */
+function holdStockError(error: {
+  message?: string | null;
+  code?: string | null;
+  hint?: string | null;
+}): ServiceError {
+  const msg = error.message ?? '';
+  const reason = (r: HoldFailureReason) => ({ reason: r });
+  if (msg === 'order_request_not_found') {
+    return new ServiceError('not_found', HOLD_ORDER_NOT_FOUND_COPY, reason('not_found'));
+  }
+  if (msg === 'module_disabled') {
+    return new ServiceError('module_disabled', HOLD_MODULE_OFF_COPY, reason('module_disabled'));
+  }
+  if (msg === 'hold_not_applicable') {
+    return new ServiceError('conflict', HOLD_NOT_APPLICABLE_COPY, reason('not_applicable'));
+  }
+  if (error.code === '42501' && msg === 'forbidden') {
+    return new ServiceError(
+      'forbidden',
+      error.hint === 'warehouse_write' ? HOLD_NO_WAREHOUSE_ACCESS_COPY : HOLD_NOT_APPROVER_COPY,
+      reason('forbidden'),
+    );
+  }
+  if (error.code === '42501' && msg === 'unauthenticated') {
+    return new ServiceError('unauthenticated', 'Sign in again to hold stock.', reason('forbidden'));
+  }
+  // lock_timeout (5 s) on the order or one of its items: someone else is
+  // changing it. Never 40001/40P01 (0367): PostgREST would retry forever.
+  if (error.code === '55P03') {
+    return new ServiceError('conflict', HOLD_BUSY_COPY, reason('busy'));
+  }
+  return new ServiceError('internal_error', msg || 'hold_order_stock failed');
+}
+
+/** assertWarehouseAccess's refusal (ForbiddenError, lib/auth/warehouse). Read
+ *  by name so the service does not depend on that class at runtime. */
+function isWarehouseForbidden(e: unknown): boolean {
+  return e instanceof Error && e.name === 'ForbiddenError';
+}
+
+const HOLD_FAILURE_REASONS: ReadonlySet<string> = new Set<HoldFailureReason>([
+  'forbidden',
+  'not_applicable',
+  'busy',
+  'not_found',
+  'module_disabled',
+  'failed',
+]);
+
+/** Why a top-up failed, for the line edit's `hold` (never swallowed). A
+ *  `details.reason` is used only when it is one of ours (the MFA gate sets
+ *  its own, aal2_required: that is a forbidden). */
+function holdFailureOutcome(e: unknown): Extract<HoldOutcome, { ok: false }> {
+  if (e instanceof ServiceError && e.code !== 'internal_error') {
+    const detail = e.details?.reason;
+    const given =
+      typeof detail === 'string' && HOLD_FAILURE_REASONS.has(detail) ? (detail as HoldFailureReason) : undefined;
+    const reason: HoldFailureReason =
+      given ??
+      (e.code === 'forbidden' || e.code === 'unauthenticated'
+        ? 'forbidden'
+        : e.code === 'not_found'
+          ? 'not_found'
+          : e.code === 'module_disabled'
+            ? 'module_disabled'
+            : 'failed');
+    return { ok: false, reason, message: reason === 'failed' ? HOLD_FAILED_COPY : e.message };
+  }
+  return { ok: false, reason: 'failed', message: HOLD_FAILED_COPY };
 }
 
 export class OrderRequestsService {
@@ -1277,14 +1370,25 @@ export class OrderRequestsService {
    *  • Allowed for the REQUESTER of the order, or anyone with orders:approve.
    *
    * Adding an item already on the order INCREMENTS that line rather than
-   * creating a confusing duplicate row. Stock reservations are minted by the
-   * pick-slip / picking RPCs, so a newly added line is reserved when the slip
-   * is re-generated — which is exactly the reprint the staleness flag prompts.
+   * creating a confusing duplicate row.
+   *
+   * HOLDS (F2-2). Holds are minted by approval (approve_order_request,
+   * approve_partial) and resume only; generating or printing a pick slip
+   * holds nothing. This comment used to say the slip "reserves" an added
+   * line, and nothing did: L4L SO-60 and SO-77 and Demo Co SO-4 carried lines
+   * added after approval that were never held, so the same units read as free
+   * to every other order. Now, once the lines are written, an approver's add
+   * at a hold status (approved, pick slip generated, picking) tops the order's
+   * holds up (holdStock, hold_order_stock 0378) as far as free stock allows.
+   * A requester who may not approve never creates a commitment: their line
+   * stays "Not held" until an approver uses Hold available stock. The top-up
+   * never fails the add: its outcome is returned as `hold` (null when none was
+   * attempted) and a failure is reported.
    */
   async addLines(
     id: string,
     lines: Array<{ itemId: string; quantity: number }>,
-  ): Promise<{ added: number; merged: number; pickSlipStale: boolean }> {
+  ): Promise<{ added: number; merged: number; pickSlipStale: boolean; hold: HoldOutcome | null }> {
     assertModuleEnabled(this.ctx, 'orders');
     if (lines.length === 0) {
       throw new ServiceError('validation_error', 'Pick at least one item to add.');
@@ -1421,7 +1525,106 @@ export class OrderRequestsService {
       this.ctx,
     );
 
-    return { added, merged, pickSlipStale };
+    // After the lines are written (and audited): hold them, when an approver
+    // added them at a hold status. Never undoes the add.
+    const hold = await this.topUpHolds(h, 'lines_added');
+    return { added, merged, pickSlipStale, hold };
+  }
+
+  /**
+   * Hold available stock for an order (F2-2): tops its holds up to what its
+   * lines still owe, as far as free stock allows (hold_order_stock, 0378).
+   * The manual "Hold available stock" (web and phone), and the automatic
+   * top-up after an approver adds or raises a line.
+   *
+   * Gates: the orders module, orders:approve (the approve gate, MFA step-up
+   * included), write access to the order's warehouse; the function repeats
+   * all of them in its own body and adds the hold statuses. It never refuses
+   * for want of stock: what it could not hold comes back in `stillShort`.
+   * Audited (order.stock_held: what was held per item, no costs) and
+   * broadcast only when it held something; a call that holds nothing changed
+   * nothing.
+   */
+  async holdStock(id: string, trigger: HoldTrigger = 'manual'): Promise<HoldOrderStockResult> {
+    return this.holdStockIn(id, null, trigger);
+  }
+
+  /**
+   * holdStock's body. `warehouseId` is the order's warehouse when the caller
+   * has just read the order (a line edit), so the warehouse check needs no
+   * second read of it; null reads it. The function re-checks write access to
+   * the order's warehouse under its lock either way.
+   */
+  private async holdStockIn(
+    id: string,
+    warehouseId: string | null,
+    trigger: HoldTrigger,
+  ): Promise<HoldOrderStockResult> {
+    assertModuleEnabled(this.ctx, 'orders');
+    assertPermission(this.ctx, 'orders:approve');
+    try {
+      if (warehouseId) await assertWarehouseAccess(warehouseId, 'write', this.ctx);
+      else await this.requireWarehouseAccess(id, 'write');
+    } catch (e) {
+      if (isWarehouseForbidden(e)) {
+        throw new ServiceError('forbidden', HOLD_NO_WAREHOUSE_ACCESS_COPY, { reason: 'forbidden' });
+      }
+      throw e;
+    }
+    const { data, error } = await this.ctx.supabase.rpc('hold_order_stock', { p_order_id: id });
+    if (error) throw holdStockError(error);
+    let result: HoldOrderStockResult;
+    try {
+      result = parseHoldOrderStockResult(data);
+    } catch (e) {
+      throw new ServiceError(
+        'internal_error',
+        `hold_order_stock answered a shape it should not: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    if (result.held.length > 0) {
+      await audit(
+        {
+          event: 'order.stock_held',
+          entityType: 'order_request',
+          entityId: id,
+          after: { trigger, held: result.held, stillShort: result.stillShort },
+        },
+        this.ctx,
+      );
+      void broadcastOrderChanged(this.ctx.organizationId, id);
+    }
+    return result;
+  }
+
+  /**
+   * The automatic top-up after a line is added or raised (F2 decision D15):
+   * only at a hold status and only when the editor holds orders:approve
+   * (core shouldTopUpHolds). Null when not attempted. A failure never undoes
+   * the line edit: it is returned as `{ ok: false, reason, message }` and
+   * reported (pattern #28: never a silent swallow), and the screens say
+   * "Stock was not held for it; use Hold available stock."
+   */
+  private async topUpHolds(
+    order: { id: string; status: OrderRequestStatus; warehouse_id: string },
+    trigger: Exclude<HoldTrigger, 'manual'>,
+  ): Promise<HoldOutcome | null> {
+    const orderId = order.id;
+    if (!shouldTopUpHolds({ status: order.status, canApproveOrders: can(this.ctx, 'orders:approve') })) {
+      return null;
+    }
+    try {
+      const result = await this.holdStockIn(orderId, order.warehouse_id, trigger);
+      return { ok: true, ...result };
+    } catch (e) {
+      const outcome = holdFailureOutcome(e);
+      void reportSrvError(e, {
+        tag: 'orders.hold_failed',
+        organizationId: this.ctx.organizationId,
+        extra: { orderId, trigger, reason: outcome.reason },
+      });
+      return outcome;
+    }
   }
 
   /**
@@ -1587,8 +1790,9 @@ export class OrderRequestsService {
    * rows; the target is spread across them oldest-first and any row left with
    * no share is released.
    *
-   * We never GROW a reservation here — see the note at the raise branch in
-   * updateLineQuantity.
+   * This only ever SHRINKS holds. Growing them is hold_order_stock's job
+   * (holdStock, F2-2), which checks free stock under the item lock; see the
+   * note at the raise branch in updateLineQuantity.
    */
   private async syncItemReservation(
     orderId: string,
@@ -1614,8 +1818,9 @@ export class OrderRequestsService {
     if (rows.length === 0) return null;
     const total = rows.reduce((sum, r) => sum + r.quantity, 0);
     const target = Math.max(0, remaining);
-    // Already at or below what the order wants: leave it alone. Raising a line
-    // must not mint or grow a hold (addLines has never done so either).
+    // Already at or below what the order wants: leave it alone. This sync
+    // never grows a hold: a raise is held by holdStock (hold_order_stock),
+    // which checks free stock under the item lock.
     if (target >= total) return null;
 
     const admin = createAdminClient();
@@ -1703,7 +1908,7 @@ export class OrderRequestsService {
     orderId: string,
     lineId: string,
     quantity: number,
-  ): Promise<{ pickSlipStale: boolean; quantity: number }> {
+  ): Promise<{ pickSlipStale: boolean; quantity: number; hold: HoldOutcome | null }> {
     assertModuleEnabled(this.ctx, 'orders');
     if (!Number.isFinite(quantity) || quantity <= 0) {
       throw new ServiceError(
@@ -1725,7 +1930,7 @@ export class OrderRequestsService {
     const pickSlipStale = h.pick_slip_generated_at != null;
     // No-op: succeed quietly. Writing an audit row saying nothing changed only
     // makes the order's history harder to read.
-    if (prior === quantity) return { pickSlipStale, quantity: prior };
+    if (prior === quantity) return { pickSlipStale, quantity: prior, hold: null };
 
     if (quantity < prior) {
       const fulfilled = Number(line.quantity_fulfilled ?? 0);
@@ -1764,9 +1969,13 @@ export class OrderRequestsService {
     }
 
     // LOWERING shrinks the hold: units the order no longer wants must go back
-    // into everyone else's availability. RAISING deliberately does NOT grow it
-    // — addLines has never minted a reservation for an added line either; the
-    // approval/pick-slip path owns minting. The asymmetry is intentional.
+    // into everyone else's availability. RAISING grows it, but not here: this
+    // comment used to say "the approval/pick-slip path owns minting", and no
+    // pick-slip path mints anything, so a raise after approval was never held
+    // (F2-2). Once the line and its audit row are written, an approver's raise
+    // at a hold status is topped up by holdStock (hold_order_stock, 0378), which
+    // checks free stock under the item lock; a requester's raise stays unheld
+    // until an approver holds it.
     let reservation: { from: number; to: number; released: boolean } | null = null;
     let reservationFailure: ServiceError | null = null;
     if (quantity < prior) {
@@ -1827,6 +2036,10 @@ export class OrderRequestsService {
 
     if (reservationFailure) throw reservationFailure;
 
+    // After the line and its audit row: hold a raise, when an approver made it
+    // at a hold status. Never undoes the change.
+    const hold = quantity > prior ? await this.topUpHolds(h, 'line_raised') : null;
+
     await this.announceLineChange({
       orderId: h.id,
       orderNumber: h.order_number,
@@ -1836,7 +2049,7 @@ export class OrderRequestsService {
       body: `${itemName ?? 'An item'} changed from ${prior} to ${quantity}.`,
     });
 
-    return { pickSlipStale, quantity };
+    return { pickSlipStale, quantity, hold };
   }
 
   /**

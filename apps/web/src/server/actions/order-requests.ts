@@ -7,7 +7,13 @@ import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory
 import { ServiceError, withContext } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
-import { err, isManagerOrAbove, ok, type ActionResult } from '@stockpilot/core';
+import {
+  err,
+  isManagerOrAbove,
+  ok,
+  type ActionResult,
+  type HoldOutcome,
+} from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
   if (error instanceof ServiceError) return err(error.code, error.message);
@@ -408,11 +414,15 @@ const addLinesSchema = z.object({
 /**
  * Add items to an EXISTING order (last-minute additions). Permitted any time
  * before the order ships, for the requester or an approver — the service
- * enforces both. See OrderRequestsService.addLines.
+ * enforces both. See OrderRequestsService.addLines. `hold` is the automatic
+ * top-up's outcome (F2-2): null when none was attempted (not an approver, or
+ * not a hold status), else what was held or why nothing was.
  */
 export async function addOrderRequestLinesAction(
   input: z.input<typeof addLinesSchema>,
-): Promise<ActionResult<{ added: number; merged: number; pickSlipStale: boolean }>> {
+): Promise<
+  ActionResult<{ added: number; merged: number; pickSlipStale: boolean; hold: HoldOutcome | null }>
+> {
   const parsed = addLinesSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
@@ -438,11 +448,12 @@ const updateLineSchema = z.object({
 /**
  * Correct the quantity on a line already on the order. Same window and same
  * people as adding — the service refuses to drop below what has been handed
- * over or staged. See OrderRequestsService.updateLineQuantity.
+ * over or staged. See OrderRequestsService.updateLineQuantity. A raise carries
+ * `hold` as addOrderRequestLinesAction does; a lowering carries null.
  */
 export async function updateOrderRequestLineQuantityAction(
   input: z.input<typeof updateLineSchema>,
-): Promise<ActionResult<{ pickSlipStale: boolean; quantity: number }>> {
+): Promise<ActionResult<{ pickSlipStale: boolean; quantity: number; hold: HoldOutcome | null }>> {
   const parsed = updateLineSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');

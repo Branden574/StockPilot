@@ -1,4 +1,8 @@
-import { describeRaiseAfterPicking, describeUnpickedShortfall } from '@stockpilot/core';
+import {
+  describeRaiseAfterPicking,
+  describeUnpickedShortfall,
+  type HoldOutcome,
+} from '@stockpilot/core';
 
 import { extractApiErrorMessage } from '../lib/po-import-approve';
 
@@ -284,6 +288,9 @@ export function removeLineConfirmCopy(line: EditableOrderLine): {
 export interface LineQuantityResult {
   quantity: number;
   pickSlipStale: boolean;
+  /** F2-2: a raise's automatic top-up outcome (null: none tried; a lowering
+   *  is always null). Optional: a server from before F2-2 does not send it. */
+  hold?: HoldOutcome | null;
 }
 
 export interface LineRemovedResult {

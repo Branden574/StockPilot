@@ -1,4 +1,4 @@
-import { can, type Permission, type Role } from '@stockpilot/core';
+import { can, type HoldOutcome, type Permission, type Role } from '@stockpilot/core';
 
 import { searchWordGroups } from '../lib/count-picker';
 import { listStatusPredicate } from '../lib/expected-items';
@@ -212,6 +212,10 @@ export interface AddLinesResult {
   added: number;
   merged: number;
   pickSlipStale: boolean;
+  /** F2-2: the automatic top-up's outcome (null: none tried). Optional because
+   *  a server from before F2-2 does not send it. Core describeHoldTopUp words
+   *  it. */
+  hold?: HoldOutcome | null;
 }
 
 /**

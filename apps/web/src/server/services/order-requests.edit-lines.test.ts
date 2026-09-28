@@ -479,12 +479,14 @@ describe('reservation synchronisation', () => {
     expect(reservationPatch(stub)).toMatchObject({ released_reason: 'line_quantity_lowered' });
   });
 
-  it('leaves the reservation ALONE when the quantity is RAISED', async () => {
-    // Deliberate asymmetry: minting/growing holds belongs to the approval and
-    // pick-slip paths, and addLines has never created one either.
+  it('never writes the reservation table on a RAISE: the hold grows through hold_order_stock', async () => {
+    // This sync only ever shrinks. A raise by an approver at a hold status is
+    // held by holdStock (hold_order_stock, F2-2), which checks free stock
+    // under the item lock (order-requests.hold-stock.test.ts).
     const stub = stubFor({ reservations: [RESERVATION] });
     await svc(stub).updateLineQuantity('order-1', 'line-1', 25);
     expect(stub.chains.has('stock_reservations.update')).toBe(false);
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['hold_order_stock']);
   });
 
   it('removes a line whose item has NO active reservation, writing nothing', async () => {
