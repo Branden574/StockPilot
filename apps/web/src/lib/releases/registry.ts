@@ -30,13 +30,10 @@ export const RELEASES: Release[] = [
   {
     id: 'order-held-and-caught-2026-10',
     revision: 1,
-    // F2-2 (0378). DRAFT until the phone update (pnpm release:ota: the phone's
-    // digital pick confirm, the departure confirms, the short-line fixes and
-    // the hold notices) and the Demo Co walk. A draft never leaves the server
-    // (visibleReleases, registryFingerprint), so merging the web page
-    // announces nothing. The follow-up that publishes it sets 'published',
-    // sets publishedAt to the real time (still the newest), and flips the pin
-    // in registry.test.ts. Every sentence must be true on both platforms then.
+    // F2-2 (0378). Held as a draft until the phone update (OTA group
+    // ff9ac88c) and the Demo Co production walk, both done: a rolled-back hold
+    // probe, one approve + add + cancel on SO-20, and the SO-7 completion
+    // confirm (never completed).
     //
     // Addressed where Orders is on. The confirms are for whoever completes,
     // stages, sends out or signs for an order (items:update, orders:approve);
@@ -47,11 +44,11 @@ export const RELEASES: Release[] = [
     // what (review 2026-09-28): the fixes are for people who can change the
     // order's lines, the digital pick's Review goes to the count, and "Not
     // held" is what approvers see on the full readiness panel.
-    status: 'draft',
+    status: 'published',
     title: 'Short lines are caught before an order leaves, and added items are held',
     summary:
       'On the web and in the mobile app, completing a pick, staging an order, sending it out for delivery and recording a signature now stop first when a line is short, and name it. When someone who can approve orders adds items to an approved order, or raises a line, the order is held straight away: the new units, and anything else on it not yet held, as far as there is free stock, so the storefront and other orders show fewer of those items available.',
-    publishedAt: '2026-10-02T17:00:00Z',
+    publishedAt: '2026-09-28T21:49:00Z',
     audience: { modules: ['orders'] },
     entries: [
       {
