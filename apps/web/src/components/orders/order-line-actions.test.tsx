@@ -528,7 +528,7 @@ describe('OrderLineActions — the hold after a raise (F2-2)', () => {
     await raiseTo('9');
 
     expect(toastMock.warning).toHaveBeenCalledWith(
-      'Held 3 units for this order. 2 units could not be held: there is no free stock for them.',
+      'Held 3 units for this order. 2 units on this order could not be held: there is no free stock for them.',
       expect.anything(),
     );
   });

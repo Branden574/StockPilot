@@ -275,6 +275,12 @@ export function describeHoldResult(result: HoldOrderStockResult): string {
  * to say (no hold was attempted, or it held nothing and nothing is short).
  * A failure always says so, and points to the button (never a silent
  * swallow, pattern #28).
+ *
+ * The top-up holds the whole order, not only the line just changed, so what
+ * it could not hold may sit on any line: those units are said to be "on this
+ * order", never left to read as the changed line's (walk O1, 2026-09-28:
+ * raising one line 5 -> 7 said "6 units could not be held", and the 6 were
+ * another line's). The lines themselves say which are short ("Held 4 of 10").
  */
 export function describeHoldTopUp(outcome: HoldOutcome | null, change: 'added' | 'raised'): string | null {
   if (!outcome) return null;
@@ -288,7 +294,9 @@ export function describeHoldTopUp(outcome: HoldOutcome | null, change: 'added' |
   const parts: string[] = [];
   if (added > 0) parts.push(`Held ${units(added)} for this order.`);
   if (short > 0) {
-    parts.push(`${units(short)} could not be held: there is no free stock for ${Math.abs(short - 1) < 0.00005 ? 'it' : 'them'}.`);
+    parts.push(
+      `${units(short)} on this order could not be held: there is no free stock for ${Math.abs(short - 1) < 0.00005 ? 'it' : 'them'}.`,
+    );
   }
   parts.push(...hiddenSentences(outcome, added > 0, (n) => `${hiddenItems(n)} could not be fully held.`));
   return parts.length > 0 ? parts.join(' ') : null;

@@ -138,7 +138,7 @@ describe('holdTopUpNotice: the sentence the confirmation ends with', () => {
         },
         'added',
       ),
-    ).toBe('Held 8 units for this order. 1 unit could not be held: there is no free stock for it.');
+    ).toBe('Held 8 units for this order. 1 unit on this order could not be held: there is no free stock for it.');
   });
 
   it('an item the editor cannot see is counted, never given numbers', () => {

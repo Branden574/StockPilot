@@ -297,10 +297,54 @@ describe('hold words', () => {
     );
     expect(
       describeHoldTopUp({ ok: true, held: [{ itemId: A, added: 2 }], stillShort: [{ itemId: A, quantity: 6 }], hiddenHeldItems: 0, hiddenShortItems: 0 }, 'raised'),
-    ).toBe('Held 2 units for this order. 6 units could not be held: there is no free stock for them.');
+    ).toBe('Held 2 units for this order. 6 units on this order could not be held: there is no free stock for them.');
     expect(describeHoldTopUp({ ok: true, held: [], stillShort: [{ itemId: A, quantity: 1 }], hiddenHeldItems: 0, hiddenShortItems: 0 }, 'added')).toBe(
-      '1 unit could not be held: there is no free stock for it.',
+      '1 unit on this order could not be held: there is no free stock for it.',
     );
+  });
+
+  // Walk O1 (2026-09-28): the top-up holds the WHOLE order (hold_order_stock),
+  // so what it could not hold can sit on another line. Raising Hold Base Item
+  // 5 -> 7 said "Held 2 units for this order. 6 units could not be held: ...",
+  // and the 6 were the scarce line's (Phone Scarce Item, 4 of 10 held), read
+  // as the raised line's. The sentence now says whose the units are: the
+  // order's, never the line just added or raised.
+  it("after an add or a raise, units still short on another line are the order's, never the changed line's (walk O1)", () => {
+    const raisedBaseWhileScarceShort: HoldOutcome = {
+      ok: true,
+      held: [{ itemId: A, added: 2 }],
+      stillShort: [{ itemId: B, quantity: 6 }],
+      hiddenHeldItems: 0,
+      hiddenShortItems: 0,
+    };
+    expect(describeHoldTopUp(raisedBaseWhileScarceShort, 'raised')).toBe(
+      'Held 2 units for this order. 6 units on this order could not be held: there is no free stock for them.',
+    );
+    expect(describeHoldTopUp(raisedBaseWhileScarceShort, 'added')).toBe(
+      'Held 2 units for this order. 6 units on this order could not be held: there is no free stock for them.',
+    );
+
+    // Never a bare "N units could not be held" after an add or a raise: it
+    // reads as the changed line's units whichever line they are on.
+    const outcomes: HoldOutcome[] = [
+      raisedBaseWhileScarceShort,
+      { ok: true, held: [], stillShort: [{ itemId: B, quantity: 1 }], hiddenHeldItems: 0, hiddenShortItems: 0 },
+      { ok: true, held: [{ itemId: A, added: 4 }], stillShort: [{ itemId: A, quantity: 6 }], hiddenHeldItems: 0, hiddenShortItems: 0 },
+      {
+        ok: true,
+        held: [{ itemId: A, added: 16693 }],
+        stillShort: [{ itemId: A, quantity: 0.5 }, { itemId: B, quantity: 2 }],
+        hiddenHeldItems: 1,
+        hiddenShortItems: 1,
+      },
+    ];
+    for (const outcome of outcomes) {
+      for (const change of ['added', 'raised'] as const) {
+        const sentence = describeHoldTopUp(outcome, change)!;
+        expect(sentence, `${change} ${JSON.stringify(outcome)}`).toMatch(/ on this order could not be held: /);
+        expect(sentence, `${change} ${JSON.stringify(outcome)}`).not.toMatch(/(^|\. )[\d,.]+ units? could not be held/);
+      }
+    }
   });
 
   it('honest words: no "book", no percentage, nothing guaranteed or reserved for sure', () => {
