@@ -1,11 +1,11 @@
 import {
   assessPickedLine,
+  describeFinalShortLines,
   describeRaiseAfterPicking,
   describeUnpickedShortfall,
   orderReadinessPhase,
   PICKED_LINE_STATES,
   READINESS_STATES,
-  SHORT_LINE_FINAL_NOTE,
   SHORT_LINE_ONLY_LINE_NOTE,
   shortLineActions,
   type HoldOutcome,
@@ -384,25 +384,26 @@ export function orderLineShortFix(input: {
 /**
  * The note under the order's "Not everything is picked" card once the order
  * is out for delivery (its lines can no longer be changed, so the sheet does
- * not open): core's, from the first line not fully picked. Null otherwise.
+ * not open): core's order-level sentence, naming the short lines
+ * (describeFinalShortLines, the departure confirm's list). Null otherwise.
+ *
+ * Not the line's own note (SHORT_LINE_FINAL_NOTE, "so this line can't be
+ * changed"): the web shows that on the row, but the card names no line and
+ * its rows cannot be tapped out for delivery, so "this line" pointed at
+ * nothing (walk F1, 2026-09-28).
  */
 export function orderShortLinesFinalNote(
   lines: readonly EditableOrderLine[],
   status: string | null | undefined,
 ): string | null {
-  if (orderReadinessPhase(status) !== 'picked') return null;
-  for (const [i, l] of lines.entries()) {
-    if (l.orderRequestLineId === null) continue;
-    const fix = orderLineShortFix({
-      status,
-      line: l,
-      position: i + 1,
-      totalLines: lines.length,
-      readinessLine: null,
-    });
-    if (fix?.note === SHORT_LINE_FINAL_NOTE) return fix.note;
-  }
-  return null;
+  return describeFinalShortLines(
+    lines.map((l) => ({
+      lineId: l.orderRequestLineId,
+      itemName: l.name,
+      ...toShortfallLine(l),
+    })),
+    status,
+  );
 }
 
 // ── Result copy ─────────────────────────────────────────────────────────────

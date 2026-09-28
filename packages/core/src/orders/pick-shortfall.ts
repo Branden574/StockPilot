@@ -284,6 +284,42 @@ function linesAreFinal(status: OrderStatus | string | null | undefined): boolean
   return status === 'in_transit';
 }
 
+/** The lines with units nobody picked, in the order's line order. */
+function unpickedLines(lines: readonly DepartureLine[]): DepartureRiskLine[] {
+  return lines
+    .map((l) => ({
+      lineId: l.lineId ?? null,
+      itemName: l.itemName?.trim() || 'An item',
+      picked: n(l.quantityPicked),
+      owed: lineOwedUnits(l),
+      unpicked: lineUnpickedUnits(l),
+    }))
+    .filter((l) => l.unpicked > 0);
+}
+
+/** "1 line is short: 0 of 60 Pens." / "7 lines are short: ...; and 2 more
+ *  lines.": the first five by name (picked of owed), then counted. */
+function describeShortLinesHead(short: readonly DepartureRiskLine[]): string {
+  const listed = short
+    .slice(0, DEPARTURE_LINES_LISTED)
+    .map((l) => `${qty(l.picked)} of ${qty(l.owed)} ${l.itemName}`)
+    .join('; ');
+  const more = short.length - DEPARTURE_LINES_LISTED;
+  return (
+    `${short.length === 1 ? '1 line is' : `${short.length} lines are`} short: ${listed}` +
+    (more > 0 ? `; and ${more} more ${more === 1 ? 'line' : 'lines'}.` : '.')
+  );
+}
+
+/**
+ * What happens to the units nobody picked once the order is out for delivery.
+ * Both "lines are final" notes end with it: the line's own
+ * (SHORT_LINE_FINAL_NOTE, on the web row) and the order's
+ * (describeFinalShortLines, on the phone's order card).
+ */
+export const FINAL_SHORT_LINES_OWED_COPY =
+  'The units not picked will be owed at hand-over; Close partial ends the order afterwards if they will not be sent.';
+
 /**
  * The confirm before an order with an unpicked shortfall is staged, sent out
  * for delivery or signed for (F2 decision D17). Null when nothing is short:
@@ -302,23 +338,8 @@ export function describeDepartureRisk(input: {
 }): DepartureRisk | null {
   const { lines, status, action } = input;
   if (describeUnpickedShortfall(lines, status) === null) return null;
-  const short: DepartureRiskLine[] = lines
-    .map((l) => ({
-      lineId: l.lineId ?? null,
-      itemName: l.itemName?.trim() || 'An item',
-      picked: n(l.quantityPicked),
-      owed: lineOwedUnits(l),
-      unpicked: lineUnpickedUnits(l),
-    }))
-    .filter((l) => l.unpicked > 0);
-  const listed = short
-    .slice(0, DEPARTURE_LINES_LISTED)
-    .map((l) => `${qty(l.picked)} of ${qty(l.owed)} ${l.itemName}`)
-    .join('; ');
-  const more = short.length - DEPARTURE_LINES_LISTED;
-  const head =
-    `${short.length === 1 ? '1 line is' : `${short.length} lines are`} short: ${listed}` +
-    (more > 0 ? `; and ${more} more ${more === 1 ? 'line' : 'lines'}.` : '.');
+  const short = unpickedLines(lines);
+  const head = describeShortLinesHead(short);
 
   const final = linesAreFinal(status);
   let next: string;
@@ -344,4 +365,26 @@ export function describeDepartureRisk(input: {
     confirmLabel,
     cancelLabel: final ? 'Go back' : 'Fix the order',
   };
+}
+
+/**
+ * The order-level note once the order is out for delivery and a line is not
+ * fully picked (F2-2 walk F1, 2026-09-28), or null. The lines can no longer be
+ * changed (the line sheet does not open), so the note names the short lines
+ * itself, in the departure confirm's words: the line's own note ("so this
+ * line can't be changed", SHORT_LINE_FINAL_NOTE) belongs on a row, and on the
+ * phone's order card "this line" pointed at nothing.
+ *
+ *   "The order is out for delivery, so its lines can't be changed. 1 line is
+ *    short: 0 of 5 Pens. The units not picked will be owed at hand-over; Close
+ *    partial ends the order afterwards if they will not be sent."
+ */
+export function describeFinalShortLines(
+  lines: readonly DepartureLine[],
+  status: OrderStatus | string | null | undefined,
+): string | null {
+  if (!linesAreFinal(status) || describeUnpickedShortfall(lines, status) === null) return null;
+  const short = unpickedLines(lines);
+  if (short.length === 0) return null;
+  return `The order is out for delivery, so its lines can't be changed. ${describeShortLinesHead(short)} ${FINAL_SHORT_LINES_OWED_COPY}`;
 }

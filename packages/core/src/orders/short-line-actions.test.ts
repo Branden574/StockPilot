@@ -233,6 +233,15 @@ describe('short-line actions, picked (F2-2, D18)', () => {
   it('honest words', () => {
     expect([SHORT_LINE_FINAL_NOTE, SHORT_LINE_ONLY_LINE_NOTE].filter((w) => /\bbooks?\b|%|guarantee/i.test(w))).toEqual([]);
   });
+
+  // Walk F1 (2026-09-28): the phone's order card gets its own sentence, naming
+  // the short lines (describeFinalShortLines). The line's note, which the web
+  // shows on the row itself, keeps its words.
+  it("the line's own note is unchanged: it sits on the row, where 'this line' has a line", () => {
+    expect(SHORT_LINE_FINAL_NOTE).toBe(
+      "The order is out for delivery, so this line can't be changed. The units not picked will be owed at hand-over; Close partial ends the order afterwards if they will not be sent.",
+    );
+  });
 });
 
 describe('short-line actions: a lower is always to a whole number (integration fix)', () => {

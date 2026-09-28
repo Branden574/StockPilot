@@ -1561,7 +1561,8 @@ export default function OrderDetail() {
   // the web order page can never disagree about the number or the wording.
   const shortfallNotice = order ? orderShortfallNotice(order.lines, order.status) : null;
   // F2-2: out for delivery the lines are final (the line sheet does not
-  // open), so the card says what happens to the units instead (core's note).
+  // open), so the card names the short lines and says what happens to their
+  // units (core's order-level note, never the row's "this line").
   const shortLinesFinalNote = order ? orderShortLinesFinalNote(order.lines, order.status) : null;
 
   // Picking claim/lock (owner decisions, enforced server-side). This section is

@@ -29,6 +29,7 @@
  *   a note says what happens instead.
  */
 
+import { FINAL_SHORT_LINES_OWED_COPY } from './pick-shortfall';
 import type { PickedLineAssessment, ReadinessLineAssessment } from './readiness';
 
 export type ShortLineAction =
@@ -43,8 +44,10 @@ export interface ShortLineActions {
   note: string | null;
 }
 
-export const SHORT_LINE_FINAL_NOTE =
-  "The order is out for delivery, so this line can't be changed. The units not picked will be owed at hand-over; Close partial ends the order afterwards if they will not be sent.";
+/** On the line itself (the web row). The order's own note, which names the
+ *  short lines, is describeFinalShortLines (pick-shortfall.ts); both end with
+ *  FINAL_SHORT_LINES_OWED_COPY. */
+export const SHORT_LINE_FINAL_NOTE = `The order is out for delivery, so this line can't be changed. ${FINAL_SHORT_LINES_OWED_COPY}`;
 export const SHORT_LINE_ONLY_LINE_NOTE =
   "This is the only line on the order, so it can't be removed. Cancel the order instead if none of it is wanted.";
 

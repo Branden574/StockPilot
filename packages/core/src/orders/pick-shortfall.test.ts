@@ -4,6 +4,7 @@ import { ALLOWED_TRANSITIONS, type OrderStatus } from '../order-state-machine';
 
 import {
   describeDepartureRisk,
+  describeFinalShortLines,
   describeRaiseAfterPicking,
   describeUnpickedShortfall,
   isPickingSettled,
@@ -17,6 +18,7 @@ import {
   type DepartureLine,
   type ShortfallLine,
 } from './pick-shortfall';
+import { SHORT_LINE_FINAL_NOTE } from './short-line-actions';
 
 function line(over: Partial<ShortfallLine> = {}): ShortfallLine {
   return { quantityRequested: 40, quantityFulfilled: 0, quantityPicked: 40, ...over };
@@ -374,5 +376,80 @@ describe('describeDepartureRisk (the confirm before an order leaves, F2-2)', () 
     }
     expect(all.length).toBeGreaterThan(20);
     expect(all.filter((w) => /\bbooks?\b|%|guarantee|verified|email/i.test(w))).toEqual([]);
+  });
+});
+
+describe('describeFinalShortLines (the order card once it is out for delivery, F2-2 walk F1)', () => {
+  // Walk F1 (2026-09-28): the phone's order card showed the LINE's note,
+  // "The order is out for delivery, so this line can't be changed. ...", where
+  // no line is named and the rows cannot be tapped, so "this line" pointed at
+  // nothing. The card's sentence names the short lines, in the departure
+  // confirm's words; the line's own note (the web row) stays as it is.
+  const so8: DepartureLine[] = [
+    { lineId: 'nb', itemName: 'Phone Variant Notebook', quantityRequested: 5, quantityFulfilled: 0, quantityPicked: 5 },
+    { lineId: 'pen', itemName: 'Phone Variant Pen', quantityRequested: 5, quantityFulfilled: 0, quantityPicked: 0 },
+  ];
+  const TAIL = 'The units not picked will be owed at hand-over; Close partial ends the order afterwards if they will not be sent.';
+
+  it('names the short line, never "this line"', () => {
+    expect(describeFinalShortLines(so8, 'in_transit')).toBe(
+      "The order is out for delivery, so its lines can't be changed. 1 line is short: 0 of 5 Phone Variant Pen. " + TAIL,
+    );
+  });
+
+  it('names every short line, in order, the rest counted past five (the departure confirm\'s list)', () => {
+    const two: DepartureLine[] = [
+      { lineId: 'a', itemName: 'L4L - Pen Black & Rose Gold', quantityRequested: 60, quantityFulfilled: 0, quantityPicked: 0 },
+      { lineId: 'b', itemName: 'Notebook', quantityRequested: 30, quantityFulfilled: 0, quantityPicked: 30 },
+      { lineId: 'c', itemName: 'Maus I', quantityRequested: 10, quantityFulfilled: 4, quantityPicked: 3 },
+    ];
+    expect(describeFinalShortLines(two, 'in_transit')).toBe(
+      "The order is out for delivery, so its lines can't be changed. 2 lines are short: 0 of 60 L4L - Pen Black & Rose Gold; 3 of 6 Maus I. " +
+        TAIL,
+    );
+    const seven: DepartureLine[] = Array.from({ length: 7 }, (_, i) => ({
+      lineId: `l${i}`,
+      itemName: `Item ${i + 1}`,
+      quantityRequested: 16693,
+      quantityFulfilled: 0,
+      quantityPicked: i,
+    }));
+    expect(describeFinalShortLines(seven, 'in_transit')).toBe(
+      "The order is out for delivery, so its lines can't be changed. 7 lines are short: 0 of 16,693 Item 1; 1 of 16,693 Item 2; " +
+        '2 of 16,693 Item 3; 3 of 16,693 Item 4; 4 of 16,693 Item 5; and 2 more lines. ' +
+        TAIL,
+    );
+    // The same list the departure confirm names at the same moment.
+    const confirm = describeDepartureRisk({ lines: seven, status: 'in_transit', action: 'signature' })!;
+    expect(describeFinalShortLines(seven, 'in_transit')).toContain(confirm.message.split(" Its lines can't")[0]!);
+  });
+
+  it('a line with no name is "An item", never blank', () => {
+    expect(
+      describeFinalShortLines([{ quantityRequested: 2, quantityFulfilled: 0, quantityPicked: 1, itemName: ' ' }], 'in_transit'),
+    ).toContain('1 line is short: 1 of 2 An item. ');
+  });
+
+  it('ends with the line note\'s own words, so the card and the web row say the same thing', () => {
+    const tailOfLineNote = SHORT_LINE_FINAL_NOTE.slice(SHORT_LINE_FINAL_NOTE.indexOf('The units not picked'));
+    expect(tailOfLineNote).toBe(TAIL);
+    expect(describeFinalShortLines(so8, 'in_transit')!.endsWith(` ${tailOfLineNote}`)).toBe(true);
+  });
+
+  it('only out for delivery (the lines are final), and only when a line is not fully picked', () => {
+    const statuses = Object.keys(ALLOWED_TRANSITIONS) as OrderStatus[];
+    for (const status of statuses) {
+      expect(describeFinalShortLines(so8, status) === null, status).toBe(status !== 'in_transit');
+    }
+    expect(describeFinalShortLines(so8, null)).toBeNull();
+    const picked = so8.map((l) => ({ ...l, quantityPicked: l.quantityRequested }));
+    expect(describeFinalShortLines(picked, 'in_transit')).toBeNull();
+    expect(describeFinalShortLines([], 'in_transit')).toBeNull();
+  });
+
+  it('honest words: no "book", no percentage, nothing guaranteed, and never "this line"', () => {
+    const s = describeFinalShortLines(so8, 'in_transit')!;
+    expect(s).not.toMatch(/\bbooks?\b|%|guarantee|verified/i);
+    expect(s).not.toMatch(/this line/);
   });
 });

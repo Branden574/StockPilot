@@ -13,6 +13,7 @@
  */
 import {
   assessOrderReadiness,
+  describeFinalShortLines,
   orderReadinessPhase,
   SHORT_LINE_FINAL_NOTE,
   SHORT_LINE_ONLY_LINE_NOTE,
@@ -338,18 +339,51 @@ describe('orderLineShortFix: after picking (from the line alone)', () => {
 });
 
 describe('orderShortLinesFinalNote: the order card once it is out for delivery', () => {
-  it('says the lines are final when a line is not fully picked', () => {
+  // Walk F1 (2026-09-28): the card showed the line's note ("... so this line
+  // can't be changed ..."), but the card names no line and its rows cannot be
+  // tapped out for delivery, so "this line" pointed at nothing. The card now
+  // says core's order-level sentence, naming the short lines.
+  it('says the lines are final and names the short ones, never "this line"', () => {
+    const lines = [
+      line({ orderRequestLineId: 'a', name: 'Phone Variant Notebook', requested: 5, picked: 5 }),
+      line({ orderRequestLineId: 'b', name: 'Phone Variant Pen', requested: 5, picked: 0 }),
+    ];
+    const note = orderShortLinesFinalNote(lines, 'in_transit');
+    expect(note).toBe(
+      "The order is out for delivery, so its lines can't be changed. 1 line is short: 0 of 5 Phone Variant Pen. " +
+        'The units not picked will be owed at hand-over; Close partial ends the order afterwards if they will not be sent.',
+    );
+    expect(note).not.toBe(SHORT_LINE_FINAL_NOTE);
+    expect(note).not.toMatch(/this line/);
+    // Core's sentence, from the same numbers the departure confirm reads.
+    expect(note).toBe(
+      describeFinalShortLines(
+        lines.map((l) => ({
+          lineId: l.orderRequestLineId,
+          itemName: l.name,
+          quantityRequested: l.requested,
+          quantityFulfilled: l.fulfilled,
+          quantityPicked: l.picked,
+        })),
+        'in_transit',
+      ),
+    );
+  });
+
+  it('names every short line, a partly handed-over one by what it still owes', () => {
     expect(
       orderShortLinesFinalNote(
         [
           line({ orderRequestLineId: 'a', picked: 60 }),
-          line({ orderRequestLineId: 'b', picked: 45 }),
+          line({ orderRequestLineId: 'b', name: 'Notebook', requested: 30, picked: 0 }),
+          line({ orderRequestLineId: 'c', name: 'Maus I', requested: 10, fulfilled: 4, picked: 3 }),
         ],
         'in_transit',
       ),
-    ).toBe(SHORT_LINE_FINAL_NOTE);
-    expect(SHORT_LINE_FINAL_NOTE).toMatch(/can't be changed/);
-    expect(SHORT_LINE_FINAL_NOTE).toMatch(/Close partial/);
+    ).toBe(
+      "The order is out for delivery, so its lines can't be changed. 2 lines are short: 0 of 30 Notebook; 3 of 6 Maus I. " +
+        'The units not picked will be owed at hand-over; Close partial ends the order afterwards if they will not be sent.',
+    );
   });
 
   it('says nothing when everything is picked, or the lines can still be fixed', () => {
