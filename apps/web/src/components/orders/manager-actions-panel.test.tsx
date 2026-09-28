@@ -2,7 +2,21 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { reopenPickingAction } from '@/server/actions/order-requests';
+import {
+  COMPLETION_CONFIRM_LABEL,
+  COMPLETION_REVIEW_LABEL,
+  describeCompletionConfirm,
+  type CompletionConfirmCopy,
+  type DepartureLine,
+} from '@stockpilot/core';
+
+import {
+  completePickingAction,
+  confirmPhysicalSignatureAction,
+  markInTransitAction,
+  reopenPickingAction,
+  stageOrderAction,
+} from '@/server/actions/order-requests';
 
 import { ManagerActionsPanel } from './manager-actions-panel';
 
@@ -74,6 +88,8 @@ function baseProps(overrides: Partial<PanelProps> = {}): PanelProps {
     assignedPickerName: null,
     pickers: [],
     viewerCanPick: true,
+    completionConfirm: null,
+    departureLines: [],
     ...overrides,
   };
 }
@@ -454,5 +470,282 @@ describe('ManagerActionsPanel — stock gates from readiness', () => {
     );
     expect(screen.queryByTestId('order-stock-notice')).toBeNull();
     expect(screen.queryByTestId('approve-short-notice')).toBeNull();
+  });
+});
+
+// ── F2-2: caught before it leaves ───────────────────────────────────────────
+//
+// Call-site pins: each test clicks the real button and proves the confirm
+// opens INSTEAD of the action. Deleting the confirm's call from a button (the
+// SO-000100 shape: "Mark picking complete" zeroed a short line with no
+// prompt) makes the action run on the first click, and the test fails.
+
+/** The SO-000100 confirm, as the page builds it (core, from the projection). */
+const SO_000100_CONFIRM: CompletionConfirmCopy = {
+  title: 'Before you complete picking',
+  paragraphs: [
+    'Not everything will be picked. L4L - Pen Black & Rose Gold: 0 of 60. It will be owed at hand-over, or you can remove it from the order first.',
+  ],
+  reviewLabel: COMPLETION_REVIEW_LABEL,
+  confirmLabel: COMPLETION_CONFIRM_LABEL,
+  focusLineId: 'line-pens',
+};
+
+/** A settled pick with the pens line not picked at all (SO-000100). */
+const SHORT_LINES: DepartureLine[] = [
+  {
+    lineId: 'line-notebooks',
+    itemName: 'Notebook',
+    quantityRequested: 60,
+    quantityFulfilled: 0,
+    quantityPicked: 60,
+  },
+  {
+    lineId: 'line-pens',
+    itemName: 'L4L - Pen Black & Rose Gold',
+    quantityRequested: 60,
+    quantityFulfilled: 0,
+    quantityPicked: 0,
+  },
+];
+const PICKED_LINES: DepartureLine[] = SHORT_LINES.map((l) => ({ ...l, quantityPicked: 60 }));
+
+/** A stand-in for the order page's row of a line, with its first fix. */
+function renderLineRow(lineId: string) {
+  const row = document.createElement('div');
+  row.id = `order-line-${lineId}`;
+  row.tabIndex = -1;
+  const fix = document.createElement('button');
+  fix.setAttribute('data-short-line-fix', '');
+  fix.textContent = 'Remove line';
+  row.appendChild(fix);
+  document.body.appendChild(row);
+  return { row, fix, remove: () => row.remove() };
+}
+
+const completePicking = vi.mocked(completePickingAction);
+const stageOrder = vi.mocked(stageOrderAction);
+const markInTransit = vi.mocked(markInTransitAction);
+const physicalSignature = vi.mocked(confirmPhysicalSignatureAction);
+
+describe('ManagerActionsPanel — the confirm before Mark picking complete (F2-2, SO-000100)', () => {
+  const manager = {
+    canApprove: true,
+    viewerRole: 'manager' as const,
+    status: 'picking_in_progress' as const,
+    assignedPickerId: 'me',
+  };
+
+  beforeEach(() => {
+    completePicking.mockReset();
+    completePicking.mockResolvedValue({ ok: true, data: undefined });
+  });
+
+  it('opens the confirm INSTEAD of completing when a line will come up short, then completes on "Complete picking"', async () => {
+    const user = userEvent.setup();
+    render(<ManagerActionsPanel {...baseProps({ ...manager, completionConfirm: SO_000100_CONFIRM })} />);
+
+    await user.click(screen.getByRole('button', { name: 'Mark picking complete' }));
+
+    // Mutation "delete the call": completing on the first click fails here.
+    expect(completePicking).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Before you complete picking')).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(
+      'Not everything will be picked. L4L - Pen Black & Rose Gold: 0 of 60. It will be owed at hand-over, or you can remove it from the order first.',
+    );
+
+    await user.click(within(dialog).getByRole('button', { name: /Complete picking/ }));
+    expect(completePicking).toHaveBeenCalledWith({ id: 'order-1' });
+    expect(completePicking).toHaveBeenCalledTimes(1);
+  });
+
+  it('"Review short lines" completes nothing, closes the confirm and lands on the first short line\'s fix', async () => {
+    const user = userEvent.setup();
+    const row = renderLineRow('line-pens');
+    try {
+      render(<ManagerActionsPanel {...baseProps({ ...manager, completionConfirm: SO_000100_CONFIRM })} />);
+      await user.click(screen.getByRole('button', { name: 'Mark picking complete' }));
+      await user.click(screen.getByRole('button', { name: 'Review short lines' }));
+
+      expect(completePicking).not.toHaveBeenCalled();
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(row.fix).toHaveFocus();
+      expect(row.row).toHaveAttribute('data-review', 'true');
+    } finally {
+      row.remove();
+    }
+  });
+
+  it('is never skipped when stock could not be checked: the confirm says so', async () => {
+    const user = userEvent.setup();
+    // What the page passes for a failed (or missing) readiness read.
+    const failed = describeCompletionConfirm(null, true);
+    expect(failed).not.toBeNull();
+    render(<ManagerActionsPanel {...baseProps({ ...manager, completionConfirm: failed })} />);
+
+    await user.click(screen.getByRole('button', { name: 'Mark picking complete' }));
+
+    expect(completePicking).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toHaveTextContent("Stock couldn't be checked. Picking may come up short.");
+  });
+
+  it('with nothing to say, picking completes at once, as before', async () => {
+    const user = userEvent.setup();
+    render(<ManagerActionsPanel {...baseProps({ ...manager, completionConfirm: null })} />);
+
+    await user.click(screen.getByRole('button', { name: 'Mark picking complete' }));
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(completePicking).toHaveBeenCalledWith({ id: 'order-1' });
+  });
+});
+
+describe('ManagerActionsPanel — the confirm before an order leaves short (F2-2)', () => {
+  const manager = { canApprove: true, viewerRole: 'manager' as const };
+  const openSpy = vi.fn();
+
+  beforeEach(() => {
+    stageOrder.mockReset();
+    stageOrder.mockResolvedValue({ ok: true, data: undefined });
+    markInTransit.mockReset();
+    markInTransit.mockResolvedValue({ ok: true, data: undefined });
+    physicalSignature.mockReset();
+    openSpy.mockReset();
+    vi.stubGlobal('open', openSpy);
+    return () => vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ['pickup', 'Mark staged for pickup', 'staged_for_pickup'],
+    ['delivery', 'Mark staged for delivery', 'staged_for_delivery'],
+  ] as const)(
+    'staging a %s order with a short line asks first, and stages on "Stage it anyway"',
+    async (fulfillmentType, button, target) => {
+      const user = userEvent.setup();
+      render(
+        <ManagerActionsPanel
+          {...baseProps({ ...manager, status: 'packing_slip_generated', fulfillmentType, departureLines: SHORT_LINES })}
+        />,
+      );
+
+      await user.click(screen.getByRole('button', { name: button }));
+
+      // Mutation "delete the call": staging on the first click fails here.
+      expect(stageOrder).not.toHaveBeenCalled();
+      const dialog = screen.getByRole('dialog');
+      expect(within(dialog).getByText('Not everything is picked')).toBeInTheDocument();
+      expect(dialog).toHaveTextContent('1 line is short: 0 of 60 L4L - Pen Black & Rose Gold.');
+      expect(within(dialog).getByRole('button', { name: 'Fix the order' })).toBeInTheDocument();
+
+      await user.click(within(dialog).getByRole('button', { name: 'Stage it anyway' }));
+      expect(stageOrder).toHaveBeenCalledWith({ id: 'order-1', target });
+    },
+  );
+
+  it('"Mark in transit" with a short line asks first, in the plan\'s words, and sends on "Send it anyway"', async () => {
+    const user = userEvent.setup();
+    render(
+      <ManagerActionsPanel
+        {...baseProps({
+          ...manager,
+          status: 'staged_for_delivery',
+          fulfillmentType: 'delivery',
+          assignedDeliveryUserId: 'driver-1',
+          departureLines: SHORT_LINES,
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Mark in transit' }));
+
+    expect(markInTransit).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toHaveTextContent(
+      "1 line is short: 0 of 60 L4L - Pen Black & Rose Gold. Once the order is out for delivery its lines can't be changed, and these units will be owed at hand-over.",
+    );
+    await user.click(screen.getByRole('button', { name: 'Send it anyway' }));
+    expect(markInTransit).toHaveBeenCalledWith({ id: 'order-1' });
+  });
+
+  it('"Collect signature" with a short line asks first; the sign page opens only on "Record signature anyway"', async () => {
+    const user = userEvent.setup();
+    render(
+      <ManagerActionsPanel
+        {...baseProps({ ...manager, status: 'staged_for_pickup', signatureToken: 'tok-1', departureLines: SHORT_LINES })}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Collect signature' }));
+
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toHaveTextContent('The signature hands the order over, and these units will be owed.');
+    await user.click(screen.getByRole('button', { name: 'Record signature anyway' }));
+    expect(openSpy).toHaveBeenCalledWith('/orders/sign/tok-1', '_blank', 'noopener,noreferrer');
+  });
+
+  it('"Physical signature" with a short line asks first; the signer form opens only on "Record signature anyway"', async () => {
+    const user = userEvent.setup();
+    render(
+      <ManagerActionsPanel {...baseProps({ ...manager, status: 'in_transit', departureLines: SHORT_LINES })} />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Physical signature' }));
+
+    expect(screen.queryByText('Record a physical signature')).toBeNull();
+    const dialog = screen.getByRole('dialog');
+    // Out for delivery the lines are final: the way back is "Go back".
+    expect(within(dialog).getByRole('button', { name: 'Go back' })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Its lines can't be changed now, so these units will be owed at hand-over.");
+
+    await user.click(within(dialog).getByRole('button', { name: 'Record signature anyway' }));
+    expect(await screen.findByText('Record a physical signature')).toBeInTheDocument();
+    expect(physicalSignature).not.toHaveBeenCalled();
+  });
+
+  it('"Fix the order" goes nowhere and lands on the first short line', async () => {
+    const user = userEvent.setup();
+    const row = renderLineRow('line-pens');
+    try {
+      render(
+        <ManagerActionsPanel
+          {...baseProps({ ...manager, status: 'packing_slip_generated', departureLines: SHORT_LINES })}
+        />,
+      );
+      await user.click(screen.getByRole('button', { name: 'Mark staged for pickup' }));
+      await user.click(screen.getByRole('button', { name: 'Fix the order' }));
+
+      expect(stageOrder).not.toHaveBeenCalled();
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(row.fix).toHaveFocus();
+    } finally {
+      row.remove();
+    }
+  });
+
+  it('with every line picked, each step runs at once, as before', async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <ManagerActionsPanel
+        {...baseProps({ ...manager, status: 'packing_slip_generated', departureLines: PICKED_LINES })}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Mark staged for pickup' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(stageOrder).toHaveBeenCalledWith({ id: 'order-1', target: 'staged_for_pickup' });
+    unmount();
+
+    render(
+      <ManagerActionsPanel
+        {...baseProps({
+          ...manager,
+          status: 'staged_for_pickup',
+          signatureToken: 'tok-1',
+          departureLines: PICKED_LINES,
+        })}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Collect signature' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(openSpy).toHaveBeenCalledTimes(1);
   });
 });

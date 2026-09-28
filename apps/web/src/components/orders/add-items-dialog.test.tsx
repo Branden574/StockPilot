@@ -308,6 +308,53 @@ describe('AddItemsDialog', () => {
     });
   });
 
+  // F2-2: an approver's add at a hold status is held at once; the outcome is
+  // said, and a failure is never swallowed (the add itself stands).
+  it('says the add stands but its stock was not held when the automatic hold failed', async () => {
+    fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'a', name: 'Widget' })]));
+    addLines.mockResolvedValue({
+      ok: true,
+      data: {
+        added: 1,
+        merged: 0,
+        pickSlipStale: false,
+        hold: { ok: false, reason: 'busy', message: 'Someone else is changing this order or its items right now. Try again in a moment.' },
+      },
+    });
+    const user = await open();
+
+    await user.click(await screen.findByRole('button', { name: 'Select Widget' }));
+    await user.click(screen.getByRole('button', { name: /add to order/i }));
+
+    await vi.waitFor(() => {
+      expect(toastMock.warning).toHaveBeenCalledWith(
+        'Added. Stock was not held for it; use Hold available stock.',
+        expect.objectContaining({
+          description: 'Someone else is changing this order or its items right now. Try again in a moment.',
+        }),
+      );
+    });
+    expect(toastMock.success).toHaveBeenCalledWith('1 item added.');
+    expect(refreshSpy).toHaveBeenCalled();
+  });
+
+  it('says what the automatic hold held for the added items', async () => {
+    fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'a', name: 'Widget' })]));
+    addLines.mockResolvedValue({
+      ok: true,
+      data: { added: 1, merged: 0, pickSlipStale: false, hold: { ok: true, held: [{ itemId: 'a', added: 1 }], stillShort: [] } },
+    });
+    const user = await open();
+
+    await user.click(await screen.findByRole('button', { name: 'Select Widget' }));
+    await user.click(screen.getByRole('button', { name: /add to order/i }));
+
+    await vi.waitFor(() => {
+      expect(toastMock.success).toHaveBeenCalledWith('Held 1 unit for this order.');
+    });
+    expect(toastMock.warning).not.toHaveBeenCalled();
+  });
+
   it('keeps the dialog and the staged tray intact when the action fails', async () => {
     fetchSpy.mockResolvedValue(
       jsonResponse([

@@ -66,10 +66,16 @@ import {
 import {
   availableOrderActions,
   derivePickingStatus,
+  describeDepartureRisk,
+  type CompletionConfirmCopy,
+  type DepartureAction,
+  type DepartureLine,
+  type DepartureRisk,
   type OrderStockGates,
   type Role,
 } from '@stockpilot/core';
 
+import { focusOrderLine } from '@/components/orders/focus-order-line';
 import type { OrderRequestStatus } from '@/server/services/order-requests';
 
 interface Props {
@@ -106,6 +112,23 @@ interface Props {
    *  approveShortNotice): "2 lines ask for more than is available now, so
    *  Approve will be refused. Use Approve partial or change the lines." */
   approveNotice?: string | null;
+  /**
+   * The confirm before "Mark picking complete" (F2-2, the SO-000100 button):
+   * core describeCompletionConfirm over projectCompletePicking, built by the
+   * page from the same readiness read as the strip. Null only when nothing
+   * needs saying: a failed or missing read is a confirm too ("Stock couldn't
+   * be checked"), so the confirm is never skipped for want of facts.
+   * Required, so no caller can skip it by leaving it out.
+   */
+  completionConfirm: CompletionConfirmCopy | null;
+  /**
+   * The order's lines as the departure confirm reads them (core
+   * DepartureLine): staging, "Mark in transit" and both signatures stop for a
+   * confirm when a line is not fully picked (core describeDepartureRisk).
+   * UI only: the server stays permissive, because shipping short is legitimate
+   * (the backorder model).
+   */
+  departureLines: DepartureLine[];
   /** Picking claim/lock context. The shared state machine
    *  (`availableOrderActions`) reads these to decide which of
    *  claim / reassign / release / pick / complete render for THIS
@@ -177,6 +200,8 @@ export function ManagerActionsPanel({
   canApprove,
   stockGates = NO_STOCK_GATES,
   approveNotice = null,
+  completionConfirm,
+  departureLines,
   viewerRole,
   viewerUserId,
   assignedPickerId,
@@ -256,6 +281,41 @@ export function ManagerActionsPanel({
   const [closePartialOpen, setClosePartialOpen] = React.useState(false);
   const [reopenOpen, setReopenOpen] = React.useState(false);
   const [reopenReason, setReopenReason] = React.useState('');
+
+  // F2-2: the two confirms that catch a short order before it moves on. Both
+  // are UI only (decision D17); the fixes live on the lines (D18), so their
+  // "go back" buttons close the dialog and land on the first short line.
+  const [completionOpen, setCompletionOpen] = React.useState(false);
+  const [departure, setDeparture] = React.useState<{
+    risk: DepartureRisk;
+    proceed: () => void;
+  } | null>(null);
+  // Set by a "go back" button, read when the dialog has closed: the dialog
+  // hands focus back to the button that opened it unless told otherwise.
+  const focusLineAfterClose = React.useRef<string | null>(null);
+
+  function landOnLineAfterClose(e: Event) {
+    const lineId = focusLineAfterClose.current;
+    focusLineAfterClose.current = null;
+    if (lineId && focusOrderLine(lineId)) e.preventDefault();
+  }
+
+  /**
+   * Before a step that takes the order further from the shelf (staging it,
+   * sending it out, recording the signature): when a line is not fully
+   * picked, say which, and go ahead only on "Send it anyway" (or its
+   * staging and signature twins). Core describeDepartureRisk decides, on the
+   * lines alone, exactly where the order's "Not everything is picked" notice
+   * shows; with nothing short the step runs at once, as before.
+   */
+  function guardDeparture(action: DepartureAction, proceed: () => void) {
+    const risk = describeDepartureRisk({ lines: departureLines, status, action });
+    if (risk) {
+      setDeparture({ risk, proceed });
+      return;
+    }
+    proceed();
+  }
 
   async function approve() {
     setBusy('approve');
@@ -357,6 +417,20 @@ export function ManagerActionsPanel({
     }
     toast.success('Picking complete.');
     router.refresh();
+  }
+
+  /**
+   * "Mark picking complete" (the SO-000100 button: it zeroed a short line and
+   * nobody was told). When the page's projection of complete_picking says a
+   * line will come up short, the pick would fail, or stock could not be
+   * checked, the confirm says so first; otherwise picking completes at once.
+   */
+  function requestCompletePicking() {
+    if (completionConfirm) {
+      setCompletionOpen(true);
+      return;
+    }
+    void completePicking();
   }
 
   async function generatePackingSlips() {
@@ -635,7 +709,7 @@ export function ManagerActionsPanel({
               {actions.includes('mark_picking_complete') && (
                 <Button
                   variant="outline"
-                  onClick={completePicking}
+                  onClick={requestCompletePicking}
                   disabled={busy !== null}
                 >
                   {busy === 'complete-picking' ? (
@@ -743,7 +817,7 @@ export function ManagerActionsPanel({
           {status === 'packing_slip_generated' && fulfillmentType === 'pickup' && (
             <Button
               variant="default"
-              onClick={stagePickup}
+              onClick={() => guardDeparture('stage', () => void stagePickup())}
               disabled={busy !== null}
             >
               {busy === 'stage-pickup' ? (
@@ -758,7 +832,7 @@ export function ManagerActionsPanel({
           {status === 'packing_slip_generated' && fulfillmentType === 'delivery' && (
             <Button
               variant="default"
-              onClick={stageDelivery}
+              onClick={() => guardDeparture('stage', () => void stageDelivery())}
               disabled={busy !== null}
             >
               {busy === 'stage-delivery' ? (
@@ -794,7 +868,7 @@ export function ManagerActionsPanel({
           {status === 'staged_for_delivery' && assignedDeliveryUserId && (
             <Button
               variant="default"
-              onClick={markInTransit}
+              onClick={() => guardDeparture('in_transit', () => void markInTransit())}
               disabled={busy !== null}
             >
               {busy === 'mark-in-transit' ? (
@@ -808,9 +882,11 @@ export function ManagerActionsPanel({
 
           {(status === 'staged_for_pickup' || status === 'in_transit') && (
             <>
+              {/* The sign page opens in the "anyway" click itself, so the
+                  browser still treats it as the person's own action. */}
               <Button
                 variant="gradient"
-                onClick={collectSignature}
+                onClick={() => guardDeparture('signature', collectSignature)}
                 disabled={busy !== null || !signatureToken}
               >
                 <ClipboardCheck className="h-3.5 w-3.5" />
@@ -818,10 +894,12 @@ export function ManagerActionsPanel({
               </Button>
               <Button
                 variant="outline"
-                onClick={() => {
-                  setPhysicalSignerName('');
-                  setPhysicalSigOpen(true);
-                }}
+                onClick={() =>
+                  guardDeparture('signature', () => {
+                    setPhysicalSignerName('');
+                    setPhysicalSigOpen(true);
+                  })
+                }
                 disabled={busy !== null}
               >
                 <PenLine className="h-3.5 w-3.5" />
@@ -939,6 +1017,102 @@ export function ManagerActionsPanel({
           </div>
         )}
       </div>
+
+      {/* Before "Mark picking complete" (F2-2): what will come up short, what
+          would stop the pick, what could not be checked, in core's words.
+          "Review short lines" closes it and lands on the first short line,
+          where Lower and Remove are; "Complete picking" goes ahead (the
+          server decides, as always). */}
+      <Dialog
+        open={completionOpen && completionConfirm !== null}
+        onOpenChange={(v) => {
+          if (busy === 'complete-picking') return;
+          setCompletionOpen(v);
+        }}
+      >
+        <DialogContent
+          className="max-w-md"
+          data-testid="completion-confirm"
+          onCloseAutoFocus={landOnLineAfterClose}
+        >
+          <DialogHeader>
+            <DialogTitle>{completionConfirm?.title}</DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-2">
+                {completionConfirm?.paragraphs.map((p, i) => (
+                  <p key={i}>{p}</p>
+                ))}
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                focusLineAfterClose.current = completionConfirm?.focusLineId ?? null;
+                setCompletionOpen(false);
+              }}
+              disabled={busy === 'complete-picking'}
+            >
+              {completionConfirm?.reviewLabel}
+            </Button>
+            <Button
+              variant="gradient"
+              onClick={() => {
+                setCompletionOpen(false);
+                void completePicking();
+              }}
+              disabled={busy === 'complete-picking'}
+            >
+              <ClipboardCheck className="h-3.5 w-3.5" />
+              {completionConfirm?.confirmLabel}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Before staging, sending out or signing for an order with lines not
+          fully picked (F2-2): which lines, and what happens to the units.
+          "Fix the order" lands on the first short line; the other button
+          runs the step the person chose. */}
+      <Dialog
+        open={departure !== null}
+        onOpenChange={(v) => {
+          if (!v) setDeparture(null);
+        }}
+      >
+        <DialogContent
+          className="max-w-md"
+          data-testid="departure-confirm"
+          onCloseAutoFocus={landOnLineAfterClose}
+        >
+          <DialogHeader>
+            <DialogTitle>{departure?.risk.title}</DialogTitle>
+            <DialogDescription>{departure?.risk.message}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                focusLineAfterClose.current = departure?.risk.lines[0]?.lineId ?? null;
+                setDeparture(null);
+              }}
+            >
+              {departure?.risk.cancelLabel}
+            </Button>
+            <Button
+              variant="gradient"
+              onClick={() => {
+                const go = departure?.proceed;
+                setDeparture(null);
+                go?.();
+              }}
+            >
+              {departure?.risk.confirmLabel}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Deny-reason dialog. Replaces the old window.prompt() which
           was blocked in iOS Safari webviews and couldn't be styled. */}

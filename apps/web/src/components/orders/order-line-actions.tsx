@@ -1,11 +1,16 @@
 'use client';
 
-import { describeRaiseAfterPicking, type OrderStatus } from '@stockpilot/core';
-import { Check, Loader2, Pencil, Trash2, X } from 'lucide-react';
+import {
+  describeRaiseAfterPicking,
+  type OrderStatus,
+  type ShortLineActions,
+} from '@stockpilot/core';
+import { ArrowDownToLine, Check, Loader2, Pencil, Trash2, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { announceHoldTopUp } from '@/components/orders/hold-top-up-toast';
 import { BlankZeroNumberInput } from '@/components/ui/blank-zero-number-input';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
@@ -195,21 +200,12 @@ export function OrderLineActions({
   async function save() {
     if (blocked != null || unchanged) return;
     setSaving(true);
-    const res = await updateOrderRequestLineQuantityAction({
-      id: orderId,
-      lineId,
-      quantity: draft,
-    });
+    // The server's refusal is shown unedited (it names the fulfilled/staged
+    // number that made the change impossible, which generic copy would throw
+    // away), and the editor stays open with the typed number to adjust it.
+    const saved = await commitLineQuantity({ orderId, lineId, itemName, quantity: draft });
     setSaving(false);
-    if (!res.ok) {
-      // The server's sentence, unedited — it names the fulfilled/staged number
-      // that made the change impossible, which generic copy would throw away.
-      // The editor stays open with the typed number so the user can adjust it.
-      toast.error(res.error.message);
-      return;
-    }
-    toast.success(`${itemName} — quantity changed to ${formatNumber(res.data.quantity)}.`);
-    warnIfPickSlipStale(res.data.pickSlipStale);
+    if (!saved) return;
     // Repeated as a toast as well as in the confirmation: the confirmation is
     // gone by now, and the person who has to act on it may not be the person
     // who clicked. The order's own banner carries it from here.
@@ -223,17 +219,12 @@ export function OrderLineActions({
 
   async function remove() {
     setRemoving(true);
-    const res = await removeOrderRequestLineAction({ id: orderId, lineId });
+    // Left open on a refusal, on purpose: it is nearly always a state the
+    // viewer didn't know about (someone staged the line in another tab), and
+    // it reads better against the item name still on screen.
+    const removed = await commitLineRemoval({ orderId, lineId, itemName });
     setRemoving(false);
-    if (!res.ok) {
-      // Left open on purpose: a refusal here is nearly always a state the
-      // viewer didn't know about (someone staged the line in another tab), and
-      // it reads better against the item name still on screen.
-      toast.error(res.error.message);
-      return;
-    }
-    toast.success(`${itemName} removed from this order.`);
-    warnIfPickSlipStale(res.data.pickSlipStale);
+    if (!removed) return;
     setConfirmOpen(false);
     router.refresh();
   }
@@ -360,24 +351,217 @@ export function OrderLineActions({
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       )}
-      <DestructiveConfirm
+      <RemoveLineConfirm
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title="Remove this item?"
-        description={
-          <>
-            <span className="text-foreground font-medium">{itemName}</span> comes off this
-            order, along with the {formatNumber(quantityRequested)} requested. Nothing has
-            been picked or handed over for it, so no stock moves — any stock this order
-            was holding for it goes back to available.
-          </>
-        }
-        confirmLabel="Remove item"
+        itemName={itemName}
+        quantityRequested={quantityRequested}
         pending={removing}
         onConfirm={remove}
       />
     </div>
   );
+}
+
+/**
+ * THE ONE-TAP FIX ON A SHORT LINE (F2-2, decision D18), under the line's item
+ * on the order page. Which fixes a line offers is core shortLineActions (the
+ * phone's too), with the service's own floors, so a button is never offered
+ * that the server would refuse:
+ *   - to pick, on a Short line: "Lower to N" (what stock covers now) and
+ *     "Remove line";
+ *   - after picking, on a line not fully picked: "Lower to what was picked
+ *     (N)" and "Remove from order";
+ *   - out for delivery the lines are final: no fix, and a note says what
+ *     happens instead (as does a line that is the order's only one).
+ *
+ * The same audited edits as the row's own controls (updateLineQuantity and
+ * removeLine, through the same actions and toasts), and removal asks first
+ * with the same confirm. Lowering is the one tap: it is what the confirms
+ * point to, it changes only this line, and it can be raised again. The
+ * completion and departure confirms land here ("Review short lines", "Fix
+ * the order"): every fix carries `data-short-line-fix` for that.
+ *
+ * The caller renders it only for people who may edit the order's lines (the
+ * row's own gate), and for the out-for-delivery note, the people who could
+ * have edited them before.
+ */
+export function ShortLineFixes({
+  orderId,
+  lineId,
+  itemName,
+  quantityRequested,
+  fixes,
+}: {
+  orderId: string;
+  lineId: string;
+  /** core orderLineItemName, as the row shows it. */
+  itemName: string;
+  quantityRequested: number;
+  fixes: ShortLineActions;
+}) {
+  const router = useRouter();
+  const [lowering, setLowering] = React.useState(false);
+  const [removing, setRemoving] = React.useState(false);
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+
+  if (fixes.actions.length === 0 && !fixes.note) return null;
+
+  async function lower(quantity: number) {
+    setLowering(true);
+    const saved = await commitLineQuantity({ orderId, lineId, itemName, quantity });
+    setLowering(false);
+    if (saved) router.refresh();
+  }
+
+  async function remove() {
+    setRemoving(true);
+    const removed = await commitLineRemoval({ orderId, lineId, itemName });
+    setRemoving(false);
+    if (!removed) return;
+    setConfirmOpen(false);
+    router.refresh();
+  }
+
+  const busy = lowering || removing;
+  return (
+    <div className="mt-1.5 space-y-1" data-testid="short-line-fixes">
+      {fixes.actions.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {fixes.actions.map((a) =>
+            a.kind === 'lower' ? (
+              <Button
+                key="lower"
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                data-short-line-fix=""
+                aria-label={`${a.label}: ${itemName}`}
+                disabled={busy}
+                onClick={() => void lower(a.quantity)}
+              >
+                {lowering ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ArrowDownToLine className="h-3.5 w-3.5" />
+                )}
+                {a.label}
+              </Button>
+            ) : (
+              <Button
+                key="remove"
+                type="button"
+                size="sm"
+                variant="outline"
+                className="text-destructive hover:text-destructive h-7 px-2 text-xs"
+                data-short-line-fix=""
+                aria-label={`${a.label}: ${itemName}`}
+                disabled={busy}
+                onClick={() => setConfirmOpen(true)}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                {a.label}
+              </Button>
+            ),
+          )}
+        </div>
+      )}
+      {fixes.note && (
+        <p className="text-muted-foreground text-[11px] leading-snug" data-testid="short-line-note">
+          {fixes.note}
+        </p>
+      )}
+      <RemoveLineConfirm
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        itemName={itemName}
+        quantityRequested={quantityRequested}
+        pending={removing}
+        onConfirm={remove}
+      />
+    </div>
+  );
+}
+
+/** "Remove this item?": the row's Remove and the short-line fix alike. */
+function RemoveLineConfirm({
+  open,
+  onOpenChange,
+  itemName,
+  quantityRequested,
+  pending,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  itemName: string;
+  quantityRequested: number;
+  pending: boolean;
+  onConfirm: () => void | Promise<void>;
+}) {
+  return (
+    <DestructiveConfirm
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Remove this item?"
+      description={
+        <>
+          <span className="text-foreground font-medium">{itemName}</span> comes off this
+          order, along with the {formatNumber(quantityRequested)} requested. Nothing has
+          been picked or handed over for it, so no stock moves — any stock this order
+          was holding for it goes back to available.
+        </>
+      }
+      confirmLabel="Remove item"
+      pending={pending}
+      onConfirm={onConfirm}
+    />
+  );
+}
+
+/**
+ * One quantity change, as every line control says it: the server's refusal
+ * verbatim, else what it changed to, a stale printed slip, and (F2-2) what
+ * the automatic hold did for a raise. True when the change was saved.
+ */
+async function commitLineQuantity(input: {
+  orderId: string;
+  lineId: string;
+  itemName: string;
+  quantity: number;
+}): Promise<boolean> {
+  const res = await updateOrderRequestLineQuantityAction({
+    id: input.orderId,
+    lineId: input.lineId,
+    quantity: input.quantity,
+  });
+  if (!res.ok) {
+    toast.error(res.error.message);
+    return false;
+  }
+  toast.success(`${input.itemName} — quantity changed to ${formatNumber(res.data.quantity)}.`);
+  warnIfPickSlipStale(res.data.pickSlipStale);
+  // Null on a lowering or when no hold was attempted, so only a raise by
+  // someone who may approve orders, at a hold status, says anything.
+  announceHoldTopUp(res.data.hold, 'raised');
+  return true;
+}
+
+/** One removal, as every line control says it. True when the line is gone. */
+async function commitLineRemoval(input: {
+  orderId: string;
+  lineId: string;
+  itemName: string;
+}): Promise<boolean> {
+  const res = await removeOrderRequestLineAction({ id: input.orderId, lineId: input.lineId });
+  if (!res.ok) {
+    toast.error(res.error.message);
+    return false;
+  }
+  toast.success(`${input.itemName} removed from this order.`);
+  warnIfPickSlipStale(res.data.pickSlipStale);
+  return true;
 }
 
 /**

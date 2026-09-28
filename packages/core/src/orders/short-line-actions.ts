@@ -10,8 +10,9 @@
  *   - Remove: only when nothing on the line was handed over or picked
  *     (fulfilled + picked = 0) and it is not the order's only line (removeLine
  *     R1, R2 and R5; returns need a hand-over, so R3 follows from R1);
- *   - Lower: to a quantity of at least 1 (updateLineQuantity U1), never below
- *     what was handed over or picked (U2, U3), and below what is asked now.
+ *   - Lower: to a whole quantity of at least 1 (updateLineQuantity U1; the
+ *     line edits take whole numbers), never below what was handed over or
+ *     picked (U2, U3), and below what is asked now.
  *
  * To pick (readiness phase to_pick), on a line whose state is short:
  *   "Lower to N", N = what was handed over plus what stock covers for the line
@@ -59,9 +60,12 @@ function q4(v: number): number {
 }
 
 /** The service's floors for a new requested quantity (U1-U3), and below what
- *  is asked now (a lower, never a raise). */
+ *  is asked now (a lower, never a raise). A whole number only: the line edits
+ *  take whole numbers (the web action's and the lines route's quantity is
+ *  .int()), so "Lower to 40.5" would be refused, on web and phone alike. */
 function canLowerTo(target: number, line: { requested: number; fulfilled: number; picked: number | null }): boolean {
   return (
+    Number.isInteger(target) &&
     target >= 1 - EPS &&
     target < n(line.requested) - EPS &&
     target >= n(line.fulfilled) - EPS &&

@@ -1561,6 +1561,15 @@ export class OrderRequestsService {
     trigger: HoldTrigger,
   ): Promise<HoldOrderStockResult> {
     assertModuleEnabled(this.ctx, 'orders');
+    // Someone who may not approve orders is refused in core's words (the
+    // sentence the function's own orders_approve refusal gets), not the
+    // generic "Missing permission": both platforms show a hold refusal as it
+    // comes. The MFA step-up is left to assertPermission, which checks it
+    // first and words it for the step-up prompt; assertPermission still runs
+    // below either way, so this only re-words a refusal, it never admits.
+    if (!(this.ctx.mfaRequired && !this.ctx.mfaSatisfied) && !can(this.ctx, 'orders:approve')) {
+      throw new ServiceError('forbidden', HOLD_NOT_APPROVER_COPY, { reason: 'forbidden' });
+    }
     assertPermission(this.ctx, 'orders:approve');
     try {
       if (warehouseId) await assertWarehouseAccess(warehouseId, 'write', this.ctx);

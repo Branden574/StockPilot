@@ -20,7 +20,7 @@
  * "held", never "reserved for sure".
  */
 
-import { READINESS_HOLD_STATUSES } from './readiness';
+import { READINESS_HOLD_STATUSES, type OrderReadinessAssessment } from './readiness';
 
 // ── The answer ──────────────────────────────────────────────────────────────
 
@@ -118,6 +118,23 @@ export function shouldTopUpHolds(input: {
   canApproveOrders: boolean;
 }): boolean {
   return input.canApproveOrders && isHoldStatus(input.status);
+}
+
+/**
+ * Whether an order offers "Hold available stock" (F2-2), web and phone alike:
+ * to someone who may approve orders, at a hold status, when readiness was
+ * read and some line says "Not held" or "Held 20 of 40". A failed or capped
+ * read offers nothing (no line is known to be unheld; Check again reads it
+ * again), and neither does an order whose every line is held.
+ */
+export function shouldOfferHoldStock(input: {
+  assessment: OrderReadinessAssessment | null;
+  canApproveOrders: boolean;
+}): boolean {
+  const a = input.assessment;
+  if (!input.canApproveOrders || !a || a.phase !== 'to_pick' || !isHoldStatus(a.order.status)) return false;
+  // A capped read carries no lines, so it offers nothing.
+  return a.lines.some((l) => l.hold?.state === 'not_held' || l.hold?.state === 'partly_held');
 }
 
 // ── What a line edit reports ────────────────────────────────────────────────

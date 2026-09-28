@@ -12,6 +12,7 @@ import {
   isManagerOrAbove,
   ok,
   type ActionResult,
+  type HoldOrderStockResult,
   type HoldOutcome,
 } from '@stockpilot/core';
 
@@ -520,6 +521,33 @@ export async function approveOrderRequestAction(
     revalidateOrdersCatalog();
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
+  } catch (e) {
+    return toResult(e);
+  }
+}
+
+const holdStockSchema = z.object({ id: z.string().uuid() });
+
+/**
+ * "Hold available stock" on the order page's readiness strip (F2-2): tops the
+ * order's holds up to what its lines still owe, as far as free stock allows
+ * (OrderRequestsService.holdStock, hold_order_stock 0378). For lines added
+ * before holds were topped up, or by someone who may not approve orders. Holds
+ * change what the storefront shows as available, so its catalog is refreshed.
+ * Every refusal comes back in the service's words (core HOLD_* copy).
+ */
+export async function holdOrderStockAction(
+  input: z.input<typeof holdStockSchema>,
+): Promise<ActionResult<HoldOrderStockResult>> {
+  const parsed = holdStockSchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input');
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    const result = await svc.holdStock(parsed.data.id, 'manual');
+    revalidatePath('/dashboard/orders');
+    revalidateOrdersCatalog();
+    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    return ok(result);
   } catch (e) {
     return toResult(e);
   }

@@ -933,6 +933,41 @@ function neededBySignalFor(
 }
 
 /**
+ * One line of a settled pick (phase `picked`), judged from the line alone:
+ * `short_picked` when some of what it owes was neither handed over nor picked
+ * (core lineUnpickedUnits), else `picked_complete`. The picked phase reads no
+ * stock, so a screen that shows a settled order without reading readiness
+ * (the web order page, F2-2's short-line actions) judges its lines with this,
+ * exactly as assessOrderReadiness does.
+ */
+export function assessPickedLine(line: {
+  lineId: string;
+  itemId: string;
+  position: number;
+  requested: number;
+  fulfilled: number;
+  picked: number | null;
+}): PickedLineAssessment {
+  const unpicked = q4(
+    lineUnpickedUnits({
+      quantityRequested: line.requested,
+      quantityFulfilled: line.fulfilled,
+      quantityPicked: line.picked,
+    }),
+  );
+  return {
+    lineId: line.lineId,
+    itemId: line.itemId,
+    position: line.position,
+    requested: line.requested,
+    fulfilled: line.fulfilled,
+    picked: line.picked,
+    state: unpicked > EPS ? 'short_picked' : 'picked_complete',
+    unpicked: unpicked > EPS ? unpicked : 0,
+  };
+}
+
+/**
  * Judge an order from its facts. Pure: the same facts and `now` give the same
  * answer on the web server and the phone.
  */
@@ -951,24 +986,16 @@ export function assessOrderReadiness(
   if (facts.phase === 'picked') {
     const picked: PickedLineAssessment[] = facts.linesCapped
       ? []
-      : lines.map((l) => {
-          const shortfall = {
-            quantityRequested: l.requested,
-            quantityFulfilled: l.fulfilled,
-            quantityPicked: l.picked,
-          };
-          const unpicked = q4(lineUnpickedUnits(shortfall));
-          return {
+      : lines.map((l) =>
+          assessPickedLine({
             lineId: l.lineId,
             itemId: l.itemId,
             position: position.get(l.lineId) ?? 0,
             requested: l.requested,
             fulfilled: l.fulfilled,
             picked: l.picked,
-            state: unpicked > EPS ? 'short_picked' : 'picked_complete',
-            unpicked: unpicked > EPS ? unpicked : 0,
-          };
-        });
+          }),
+        );
     const counts = { picked_complete: 0, short_picked: 0 };
     for (const l of picked) counts[l.state] += 1;
     return {

@@ -16,6 +16,7 @@ import { formatOrgDate, formatOrgTime, plainSpaces } from '../time/org-timezone'
 
 import {
   PICKED_LINE_STATES,
+  projectCompletePicking,
   READINESS_LINE_CAP,
   READINESS_ORDER_CHANGED_COPY,
   READINESS_STATES,
@@ -708,4 +709,86 @@ export function describeCompletionConfirm(
     confirmLabel: COMPLETION_CONFIRM_LABEL,
     focusLineId,
   };
+}
+
+// ── The digital pick's confirm ──────────────────────────────────────────────
+
+/** One line of a digital pick, as its completion confirm reads it. */
+export interface PickCompletionLine {
+  /** order_request_lines.id */
+  id: string;
+  itemName: string | null;
+  /** lineOwedUnits: requested less handed over. */
+  owed: number;
+  /** What the picker entered (clamped), which Complete saves first. */
+  picking: number;
+}
+
+function sameLineSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const theirs = new Set(a.map((x) => x.toLowerCase()));
+  return b.every((x) => theirs.has(x.toLowerCase()));
+}
+
+/** Prepends what the picker entered short (when the copy could not know it),
+ *  and points the review at the first of those lines. */
+function withEnteredShortLines(
+  copy: CompletionConfirmCopy,
+  lines: readonly PickCompletionLine[],
+): CompletionConfirmCopy {
+  const sentence = describeShortPickLines(
+    lines.map((l) => ({ itemName: l.itemName, batch: Math.min(l.picking, l.owed), owed: l.owed })),
+  );
+  const firstShort = lines.find((l) => Math.min(l.picking, l.owed) < l.owed - 0.00005)?.id ?? null;
+  return {
+    ...copy,
+    paragraphs: sentence ? [sentence, ...copy.paragraphs] : copy.paragraphs,
+    focusLineId: copy.focusLineId ?? firstShort,
+  };
+}
+
+/**
+ * The confirm before a DIGITAL pick is completed (F2-2), web and phone alike,
+ * or null when nothing needs saying.
+ *
+ * The digital pick saves what the picker entered before it completes, so
+ * complete_picking takes min(entered, owed) per line. With readiness read for
+ * these lines, the order's assessment is taken with each line's `picked` set
+ * to what was entered, and projectCompletePicking says which lines come up
+ * short and whether the draw would fail (units in Staging are never picked);
+ * describeCompletionConfirm words it. Without it (not read, failed, or read
+ * for another set of lines), what was entered is still known: its short
+ * lines are named, followed by "Stock couldn't be checked. Picking may come up
+ * short." Never skipped for want of facts. An order past the line cap says so,
+ * with what was entered.
+ */
+export function digitalPickCompletionConfirm(
+  lines: readonly PickCompletionLine[],
+  readiness: OrderReadinessResult | null | undefined,
+): CompletionConfirmCopy | null {
+  const assessment =
+    readiness?.state === 'ok' && readiness.assessment.phase === 'to_pick' ? readiness.assessment : null;
+
+  if (assessment && assessment.linesCapped) {
+    const copy = describeCompletionConfirm(projectCompletePicking(assessment), false);
+    return copy ? withEnteredShortLines(copy, lines) : null;
+  }
+
+  if (
+    assessment &&
+    sameLineSet(
+      assessment.lines.map((l) => l.lineId),
+      lines.map((l) => l.id),
+    )
+  ) {
+    const entered = new Map(lines.map((l) => [l.id.toLowerCase(), l.picking]));
+    const projection = projectCompletePicking({
+      ...assessment,
+      lines: assessment.lines.map((l) => ({ ...l, picked: entered.get(l.lineId.toLowerCase()) ?? 0 })),
+    });
+    return describeCompletionConfirm(projection, false);
+  }
+
+  const failed = describeCompletionConfirm(null, true);
+  return failed ? withEnteredShortLines(failed, lines) : null;
 }

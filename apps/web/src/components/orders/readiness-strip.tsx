@@ -1,11 +1,15 @@
 'use client';
 
-import { CalendarClock, Loader2, RefreshCw } from 'lucide-react';
+import { CalendarClock, Loader2, Lock, RefreshCw } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
+import { toast } from 'sonner';
+
+import { describeHoldResult, holdStillShortUnits, HOLD_AVAILABLE_STOCK_LABEL } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { holdOrderStockAction } from '@/server/actions/order-requests';
 
 import { READINESS_TONE_STYLES, ReadinessIcon, type ReadinessStripView } from './readiness-view';
 
@@ -15,12 +19,42 @@ import { READINESS_TONE_STYLES, ReadinessIcon, type ReadinessStripView } from '.
  * offers "Check again", which re-renders the page and so reads readiness
  * again. Every answer carries when it was checked; a failed read says
  * "Couldn't check readiness" with Try again, never a green or empty answer.
+ *
+ * "Hold available stock" (F2-2): when `holdOrderId` is set (the page decides,
+ * core shouldOfferHoldStock: an approver, a hold status, some line not held or
+ * partly held), it tops the order's holds up as far as free stock allows and
+ * says what it held and what is still short, in core's words. A refusal is
+ * the service's sentence (no write access to the warehouse, the order moved
+ * on, someone else is changing it). The page is read again either way, so the
+ * lines show their holds as they now are.
  */
-export function ReadinessStrip({ view }: { view: ReadinessStripView }) {
+export function ReadinessStrip({
+  view,
+  holdOrderId = null,
+}: {
+  view: ReadinessStripView;
+  holdOrderId?: string | null;
+}) {
   const router = useRouter();
   const [pending, startTransition] = React.useTransition();
+  const [holding, setHolding] = React.useState(false);
   const tone = READINESS_TONE_STYLES[view.tone];
   const text = view.mode === 'full' ? view.headline : view.sentence;
+
+  async function holdAvailableStock() {
+    if (!holdOrderId) return;
+    setHolding(true);
+    const res = await holdOrderStockAction({ id: holdOrderId });
+    setHolding(false);
+    if (!res.ok) {
+      toast.error(res.error.message);
+      return;
+    }
+    const sentence = describeHoldResult(res.data);
+    if (holdStillShortUnits(res.data) > 0) toast.warning(sentence, { duration: 8000 });
+    else toast.success(sentence);
+    startTransition(() => router.refresh());
+  }
 
   return (
     <div
@@ -40,22 +74,42 @@ export function ReadinessStrip({ view }: { view: ReadinessStripView }) {
             {text}
           </span>
         </p>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="h-7 px-2 text-xs"
-          onClick={() => startTransition(() => router.refresh())}
-          disabled={pending}
-          data-testid="readiness-recheck"
-        >
-          {pending ? (
-            <Loader2 className="size-3.5 animate-spin" aria-hidden />
-          ) : (
-            <RefreshCw className="size-3.5" aria-hidden />
+        <div className="flex flex-wrap items-center gap-1.5">
+          {holdOrderId && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={() => void holdAvailableStock()}
+              disabled={holding || pending}
+              data-testid="readiness-hold-stock"
+            >
+              {holding ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              ) : (
+                <Lock className="size-3.5" aria-hidden />
+              )}
+              {HOLD_AVAILABLE_STOCK_LABEL}
+            </Button>
           )}
-          {view.failed ? 'Try again' : 'Check again'}
-        </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 px-2 text-xs"
+            onClick={() => startTransition(() => router.refresh())}
+            disabled={pending}
+            data-testid="readiness-recheck"
+          >
+            {pending ? (
+              <Loader2 className="size-3.5 animate-spin" aria-hidden />
+            ) : (
+              <RefreshCw className="size-3.5" aria-hidden />
+            )}
+            {view.failed ? 'Try again' : 'Check again'}
+          </Button>
+        </div>
       </div>
       {view.mode === 'full' && view.detail && (
         <p className="text-muted-foreground mt-1" data-testid="readiness-detail">

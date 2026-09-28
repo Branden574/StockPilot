@@ -152,6 +152,33 @@ describe('OrderRequestsService.holdStock', () => {
     expect(scoped.rpcCalls).toEqual([]);
   });
 
+  it("a caller who may not approve orders is refused in core's words, as the function's own refusal is; the MFA step-up keeps its own", async () => {
+    // Found by the F2-2 local e2e: staff hold_stock on /api/v1 answered
+    // "Missing permission: orders:approve", while both platforms show the
+    // refusal as it comes (core HOLD_* copy).
+    const staff = stubWith({ data: HELD, error: null });
+    const e = await svc(staff, { role: 'staff' }).holdStock(ORDER).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ServiceError);
+    expect(e).toMatchObject({ code: 'forbidden', message: HOLD_NOT_APPROVER_COPY, details: { reason: 'forbidden' } });
+    expect(staff.rpcCalls).toEqual([]);
+
+    // A manager at AAL1 where MFA is required: the step-up refusal, untouched
+    // (its reason is what the web's step-up prompt reads), never "not an approver".
+    const stepUp = stubWith({ data: HELD, error: null });
+    const s = await svc(stepUp, { mfaRequired: true, mfaSatisfied: false }).holdStock(ORDER).catch((x: unknown) => x);
+    expect(s).toMatchObject({ code: 'forbidden' });
+    expect((s as Error).message).not.toBe(HOLD_NOT_APPROVER_COPY);
+    expect((s as ServiceError).details).not.toEqual({ reason: 'forbidden' });
+    expect(stepUp.rpcCalls).toEqual([]);
+
+    // A staffer who may not approve AND is at AAL1: the step-up comes first,
+    // exactly as assertPermission orders it.
+    const both = stubWith({ data: HELD, error: null });
+    const b = await svc(both, { role: 'staff', mfaRequired: true, mfaSatisfied: false }).holdStock(ORDER).catch((x: unknown) => x);
+    expect((b as Error).message).toBe((s as Error).message);
+    expect(both.rpcCalls).toEqual([]);
+  });
+
   it('staff with an orders:approve override may hold (pattern #4: the approve gate)', async () => {
     const stub = stubWith({ data: HELD, error: null });
     await expect(

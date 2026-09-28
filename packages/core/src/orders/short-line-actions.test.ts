@@ -231,3 +231,30 @@ describe('short-line actions, picked (F2-2, D18)', () => {
     expect([SHORT_LINE_FINAL_NOTE, SHORT_LINE_ONLY_LINE_NOTE].filter((w) => /\bbooks?\b|%|guarantee/i.test(w))).toEqual([]);
   });
 });
+
+describe('short-line actions: a lower is always to a whole number (integration fix)', () => {
+  // The line edits take whole numbers only (the web action's and the lines
+  // route's quantity is .int()), so a lower to 40.5 would be refused with
+  // "Invalid input". The phone already dropped such a lower on its own; the
+  // web offered it. Core decides for both now.
+  it('to pick: stock covering 40.5 of 60 offers Remove only, no "Lower to 40.5"', () => {
+    const a = assess('approved', [{ item: 'a', requested: 60 }, { item: 'b', requested: 1 }], [
+      item('a', { heldOwn: 40.5, here: { rack: 40.5, site: 0, unplaced: 0, staging: 0 } }),
+      item('b', { heldOwn: 1, here: { rack: 1, site: 0, unplaced: 0, staging: 0 } }),
+    ]);
+    const line = toPickLine(a);
+    expect(line.state).toBe('short');
+    expect(shortLineActions({ phase: 'to_pick', line, isOnlyLine: false })).toEqual({
+      actions: [{ kind: 'remove', label: 'Remove line' }],
+      note: null,
+    });
+  });
+
+  it('picked: 2.5 picked of 10 offers no "Lower to what was picked (2.5)"', () => {
+    const a = assess('packing_slip_generated', [{ item: 'a', requested: 10, picked: 2.5 }, { item: 'b', requested: 1, picked: 1 }], []);
+    expect(shortLineActions({ phase: 'picked', status: 'packing_slip_generated', line: pickedLine(a), isOnlyLine: false })).toEqual({
+      actions: [],
+      note: null,
+    });
+  });
+});

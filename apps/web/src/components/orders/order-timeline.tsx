@@ -1,3 +1,9 @@
+import {
+  describeHoldResult,
+  parseHoldOrderStockResult,
+  type HoldOrderStockResult,
+} from '@stockpilot/core';
+
 import { LocalDateTime } from '@/components/ui/local-datetime';
 import { isPlatformAdmin } from '@/lib/auth/platform-admin';
 import { createClient } from '@/lib/supabase/server';
@@ -42,7 +48,35 @@ const EVENT_LABELS: Record<string, string> = {
   'order.signature_collected': 'Signature collected',
   'order.completed': 'Completed',
   'order.delivery_request_drafted': 'Delivery request drafted',
+  // F2-2: hold_order_stock held stock for the order. The label depends on
+  // what started it (eventLabel below); this is the manual "Hold available
+  // stock", and the fallback for an entry without a trigger.
+  'order.stock_held': 'Stock held',
 };
+
+/**
+ * order.stock_held says what started the hold (after.trigger, written by
+ * OrderRequestsService.holdStock): an approver adding items to the order or
+ * raising a line holds the new units at once; "Hold available stock" is the
+ * manual one.
+ */
+const STOCK_HELD_LABELS: Readonly<Record<string, string>> = {
+  lines_added: 'Stock held for added items',
+  line_raised: 'Stock held for a raised quantity',
+  manual: 'Stock held',
+};
+
+function eventLabel(event: string, metadata: Record<string, unknown> | null): string {
+  if (event === 'order.stock_held') {
+    const after = (metadata?.after ?? {}) as Record<string, unknown>;
+    const trigger = typeof after.trigger === 'string' ? after.trigger : '';
+    return STOCK_HELD_LABELS[trigger] ?? EVENT_LABELS[event]!;
+  }
+  return (
+    EVENT_LABELS[event] ??
+    prettyStatus(event.split('.').pop() ?? event).replace(/^\w/, (c) => c.toUpperCase())
+  );
+}
 
 const prettyStatus = (v: unknown): string =>
   typeof v === 'string' ? v.replace(/_/g, ' ') : String(v);
@@ -127,6 +161,19 @@ function humanDetails(
     case 'order.delivery_request_drafted':
       lines.push('A prefilled draft was opened — StockPilot did not send it.');
       break;
+    case 'order.stock_held': {
+      // What was held and what is still short, in core's words (the same
+      // sentence "Hold available stock" says). Holds move no stock. An entry
+      // this page cannot read is described without numbers, never guessed.
+      let held: HoldOrderStockResult | null = null;
+      try {
+        held = parseHoldOrderStockResult({ held: after.held, stillShort: after.stillShort });
+      } catch {
+        held = null;
+      }
+      lines.push(held ? describeHoldResult(held) : 'Stock was held for this order.');
+      break;
+    }
     default:
       break;
   }
@@ -196,11 +243,7 @@ export async function OrderTimeline({ orderId, organizationId }: Props) {
   return (
     <ol className="border-border space-y-3 border-l-2 pl-4">
       {rows.map((row) => {
-        const label =
-          EVENT_LABELS[row.event] ??
-          prettyStatus(row.event.split('.').pop() ?? row.event).replace(/^\w/, (c) =>
-            c.toUpperCase(),
-          );
+        const label = eventLabel(row.event, row.metadata);
         const profile = row.user_id ? usersById.get(row.user_id) ?? null : null;
         const actor =
           profile?.full_name ?? profile?.email ?? (row.user_id ? 'Unknown user' : 'Public');

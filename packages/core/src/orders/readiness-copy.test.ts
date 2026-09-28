@@ -13,6 +13,7 @@ import {
   describeCompletionProjection,
   describeShortPickLines,
   describeReadinessForRequester,
+  digitalPickCompletionConfirm,
   describeReadinessHold,
   describeReadinessLine,
   describeReadinessRollup,
@@ -590,6 +591,71 @@ describe('holds, why, needed-by, roll-up, requester, completion, offline', () =>
     ).toBe(
       'Not everything will be picked. Pens: 2 of 60; An item: 0 of 1. They will be owed at hand-over, or you can remove them from the order first.',
     );
+  });
+
+  it('the digital pick confirm (F2-2): the projection of what the picker entered, never skipped', () => {
+    const lines = [
+      { id: 'l1', itemName: 'Notebook', owed: 60, picking: 60 },
+      { id: 'l2', itemName: 'L4L - Pen Black & Rose Gold', owed: 60, picking: 0 },
+    ];
+    const so100 = assess('picking_in_progress', [
+      { item: 'nb', requested: 60 },
+      { item: 'pen', requested: 60 },
+    ], [
+      item('nb', { name: 'Notebook', heldOwn: 60, here: { rack: 60, site: 0, unplaced: 0, staging: 0 } }),
+      item('pen', { name: 'L4L - Pen Black & Rose Gold', heldOwn: 60, here: { rack: 60, site: 0, unplaced: 0, staging: 0 } }),
+    ]);
+    const ok = { state: 'ok' as const, assessment: so100 };
+    // What was ENTERED decides the batch (the pens are on the rack, but the
+    // picker entered 0).
+    expect(digitalPickCompletionConfirm(lines, ok)).toEqual({
+      title: 'Before you complete picking',
+      paragraphs: [
+        'Not everything will be picked. L4L - Pen Black & Rose Gold: 0 of 60. It will be owed at hand-over, or you can remove it from the order first.',
+      ],
+      reviewLabel: 'Review short lines',
+      confirmLabel: 'Complete picking',
+      focusLineId: 'l2',
+    });
+    // Everything entered and on the shelf: nothing to confirm.
+    const full = lines.map((l) => ({ ...l, picking: 60 }));
+    expect(digitalPickCompletionConfirm(full, ok)).toBeNull();
+    // Entered in full, but 4 of the pens are in Staging: the pick would fail.
+    const staged = assess('picking_in_progress', [{ item: 'pen', requested: 10 }], [
+      item('pen', { name: 'Maus I', heldOwn: 10, here: { rack: 6, site: 0, unplaced: 0, staging: 4 } }),
+    ]);
+    expect(
+      digitalPickCompletionConfirm([{ id: 'l1', itemName: 'Maus I', owed: 10, picking: 10 }], {
+        state: 'ok',
+        assessment: staged,
+      })?.paragraphs,
+    ).toEqual(["Picking can't finish until 4 of Maus I in Staging are put away."]);
+    // Not read, failed, or read for other lines: what was entered is named,
+    // and the check that could not be made is said. Never skipped.
+    for (const readiness of [null, { state: 'failed' as const, message: 'x' }]) {
+      expect(digitalPickCompletionConfirm(full, readiness)).toMatchObject({
+        paragraphs: ["Stock couldn't be checked. Picking may come up short."],
+        focusLineId: null,
+      });
+      expect(digitalPickCompletionConfirm(lines, readiness)).toMatchObject({
+        paragraphs: [
+          'Not everything will be picked. L4L - Pen Black & Rose Gold: 0 of 60. It will be owed at hand-over, or you can remove it from the order first.',
+          "Stock couldn't be checked. Picking may come up short.",
+        ],
+        focusLineId: 'l2',
+      });
+    }
+    const otherLines = [...lines, { id: 'l3', itemName: 'Added since', owed: 1, picking: 1 }];
+    expect(digitalPickCompletionConfirm(otherLines, ok)?.paragraphs.at(-1)).toBe(
+      "Stock couldn't be checked. Picking may come up short.",
+    );
+    // Line ids are matched whatever their case (Postgres and JS differ).
+    expect(
+      digitalPickCompletionConfirm(
+        lines.map((l) => ({ ...l, id: l.id.toUpperCase() })),
+        ok,
+      )?.paragraphs,
+    ).toHaveLength(1);
   });
 
   it('offline and the pick error', () => {

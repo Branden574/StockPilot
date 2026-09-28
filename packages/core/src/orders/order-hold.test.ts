@@ -21,10 +21,16 @@ import {
   HoldResultShapeError,
   isHoldStatus,
   parseHoldOrderStockResult,
+  shouldOfferHoldStock,
   shouldTopUpHolds,
   type HoldOutcome,
 } from './order-hold';
-import { READINESS_HOLD_STATUSES } from './readiness';
+import {
+  assessOrderReadiness,
+  orderReadinessPhase,
+  parseOrderReadinessFacts,
+  READINESS_HOLD_STATUSES,
+} from './readiness';
 import { ALLOWED_TRANSITIONS, type OrderStatus } from '../order-state-machine';
 
 const ORDER_STATUSES = Object.keys(ALLOWED_TRANSITIONS) as OrderStatus[];
@@ -97,6 +103,83 @@ describe('shouldTopUpHolds (decision D15)', () => {
     expect(isHoldStatus(null)).toBe(false);
     expect(isHoldStatus(undefined)).toBe(false);
     expect(isHoldStatus('')).toBe(false);
+  });
+});
+
+describe('shouldOfferHoldStock (the "Hold available stock" button, web and phone)', () => {
+  /** An order's readiness: one line per item, each owing 10, `heldOwn` as given. */
+  function assessed(status: string, heldOwn: number[], opts: { linesCapped?: boolean } = {}) {
+    const items = heldOwn.map((held, i) => ({
+      itemId: `i${i}`,
+      visible: true,
+      name: `Item ${i}`,
+      sku: `SKU-${i}`,
+      supplierId: null,
+      itemWarehouseId: 'wh',
+      deleted: false,
+      archived: false,
+      isBundle: false,
+      onHand: 40,
+      heldOwn: held,
+      heldOtherOrders: 0,
+      heldRentals: 0,
+      here: { rack: 40, site: 0, unplaced: 0, staging: 0 },
+      elsewhere: { pickable: 0, staging: 0 },
+      stagingSources: [],
+      stagingHiddenQty: 0,
+      pendingOthers: null,
+      committedOtherShortfall: 0,
+      inbound: null,
+      drafts: null,
+    }));
+    return assessOrderReadiness(
+      parseOrderReadinessFacts({
+        v: 1,
+        observedAt: '2026-09-28T12:00:00.000Z',
+        phase: orderReadinessPhase(status),
+        linesCapped: opts.linesCapped ?? false,
+        order: {
+          id: 'o1',
+          orderNumber: 1,
+          status,
+          warehouseId: 'wh',
+          neededBy: null,
+          fulfillmentType: 'pickup',
+          timeZone: 'America/Los_Angeles',
+        },
+        lines: opts.linesCapped
+          ? []
+          : items.map((it, i) => ({
+              lineId: `l${i}`,
+              itemId: it.itemId,
+              requested: 10,
+              fulfilled: 0,
+              picked: null,
+              createdAt: new Date(Date.UTC(2026, 8, 1, 0, 0, i)).toISOString(),
+            })),
+        items: opts.linesCapped ? [] : items,
+      }),
+      { now: '2026-09-28T12:00:00.000Z' },
+    );
+  }
+
+  it('offers it to an approver at a hold status when a line is not held or partly held', () => {
+    for (const status of ['approved', 'pick_slip_generated', 'picking_in_progress']) {
+      expect(shouldOfferHoldStock({ assessment: assessed(status, [10, 0]), canApproveOrders: true }), status).toBe(true);
+      expect(shouldOfferHoldStock({ assessment: assessed(status, [10, 4]), canApproveOrders: true }), status).toBe(true);
+    }
+  });
+
+  it('never when every line is held, to someone who may not approve, before approval, or on a capped or failed read', () => {
+    expect(shouldOfferHoldStock({ assessment: assessed('approved', [10, 10]), canApproveOrders: true })).toBe(false);
+    expect(shouldOfferHoldStock({ assessment: assessed('approved', [0]), canApproveOrders: false })).toBe(false);
+    for (const status of ['pending_approval', 'backordered', 'picking_complete', 'in_transit', 'completed']) {
+      expect(shouldOfferHoldStock({ assessment: assessed(status, [0]), canApproveOrders: true }), status).toBe(false);
+    }
+    expect(
+      shouldOfferHoldStock({ assessment: assessed('approved', [0], { linesCapped: true }), canApproveOrders: true }),
+    ).toBe(false);
+    expect(shouldOfferHoldStock({ assessment: null, canApproveOrders: true })).toBe(false);
   });
 });
 

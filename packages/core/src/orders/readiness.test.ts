@@ -4,6 +4,7 @@ import { ALLOWED_TRANSITIONS, type OrderStatus } from '../order-state-machine';
 
 import {
   assessOrderReadiness,
+  assessPickedLine,
   orderReadinessPhase,
   parseOrderReadinessFacts,
   projectCompletePicking,
@@ -797,6 +798,46 @@ describe('picked and closed phases (lines only)', () => {
       ['l3', 'picked_complete', 0],
     ]);
     expect(a.rollup.counts).toEqual({ picked_complete: 2, short_picked: 1 });
+  });
+
+  it('assessPickedLine judges a line from the line alone exactly as the assessment does (F2-2 short-line actions)', () => {
+    const f = facts({
+      status: 'in_transit',
+      lines: [
+        { id: 'l1', item: 'a', requested: 60, picked: 0 },
+        { id: 'l2', item: 'b', requested: 30, picked: 30 },
+        { id: 'l3', item: 'c', requested: 5, fulfilled: 2, picked: 1 },
+        { id: 'l4', item: 'd', requested: 4, picked: null },
+        { id: 'l5', item: 'e', requested: 2.5, picked: 2.49995 },
+        { id: 'l6', item: 'f', requested: 3, picked: 2.5 },
+      ],
+      items: [],
+    });
+    const a = assessOrderReadiness(f, { now: NOW });
+    if (a.phase !== 'picked') throw new Error('expected the picked phase');
+    for (const l of a.lines) {
+      expect(
+        assessPickedLine({
+          lineId: l.lineId,
+          itemId: l.itemId,
+          position: l.position,
+          requested: l.requested,
+          fulfilled: l.fulfilled,
+          picked: l.picked,
+        }),
+        l.lineId,
+      ).toEqual(l);
+    }
+    expect(a.lines.map((l) => [l.lineId, l.state, l.unpicked])).toEqual([
+      ['l1', 'short_picked', 60],
+      ['l2', 'picked_complete', 0],
+      ['l3', 'short_picked', 2],
+      ['l4', 'short_picked', 4],
+      // Within half a unit of the fourth decimal: equal (numeric(14,4)).
+      ['l5', 'picked_complete', 0],
+      // Half a unit not picked is still short.
+      ['l6', 'short_picked', 0.5],
+    ]);
   });
 
   it('closed shows nothing', () => {
