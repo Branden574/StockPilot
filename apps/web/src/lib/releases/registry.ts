@@ -46,7 +46,7 @@ export const RELEASES: Release[] = [
     status: 'draft',
     title: 'See whether an order is ready to pick',
     summary:
-      "On the web and in the mobile app, an order that is still to be picked shows whether it is ready. Each line says whether its stock is ready to pick, still in Staging and waiting to be put away, waiting on a purchase order, short, or can't be confirmed, and the order says how many lines are in each state and when it was checked. People who placed an order see one sentence about its stock instead. If readiness can't be checked, the order says so rather than showing an answer.",
+      "On the web and in the mobile app, an order that is still to be picked shows whether it is ready. Each line says whether its stock is ready to pick, still in Staging and waiting to be put away, waiting on a purchase order, short, or can't be confirmed, and the order says how many lines are in each state and when it was checked. People who placed an order see a short summary of its stock instead. If readiness can't be checked, the order says so rather than showing an answer.",
     publishedAt: '2026-09-30T17:00:00Z',
     audience: { modules: ['orders'] },
     entries: [
@@ -60,7 +60,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Whether an order could be picked was only found out by checking each item or by trying to pick it, so a pick could stop because units were still in Staging.',
         howItAffectsYou:
-          "Readiness is worked out each time the order is opened and is not stored, and stock can change after the time shown: choose Check again to read it again. Ready to pick is shown for the order only when every line is ready and every number could be read. Stock in other warehouses is not counted. A purchase order's date is an expected date, not a promise, and units on a purchase order you can't open are counted without its number or date. Nothing on the order changes when readiness is shown.",
+          "Readiness is worked out each time the order is opened and is not stored, and stock can change after the time shown: choose Check again to read it again. Ready to pick is shown for the order only when every line still to be picked is ready and every number could be read; a backordered order's line that was handed over in full says Handed over. Stock in other warehouses is not counted. A purchase order's date is an expected date, not a promise, and units on a purchase order you can't open are counted without its number or date. Nothing on the order changes when readiness is shown.",
         whatToDo: 'No action needed. Open an order that is waiting for approval or being picked to see it.',
         link: { href: '/dashboard/orders', label: 'View orders' },
         audience: {
@@ -74,7 +74,7 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: "Holds, and records that don't match, on an order's lines",
         whatChanged:
-          "On an approved order or one being picked, each line also says whether its stock is held for this order: Held for this order, Held 20 of 40, or Not held, when another order could take the stock. When the stock on record does not match what the item's locations hold, the line says Can't confirm and gives both numbers.",
+          "On an approved order or one being picked, each line also says whether its stock is held for this order: Held for this order, Held 20 of 40, or Not held, when another order could take the stock. When the stock on record does not match what the item's locations hold, a line still to be picked says the numbers don't match and gives both.",
         whyItMatters:
           "A line that is not held can lose its stock to another order before it is picked, and when the records do not match, neither number can be relied on for picking.",
         howItAffectsYou:
@@ -92,10 +92,10 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Your order says whether its items are in stock',
         whatChanged:
-          "An order you placed that is still to be picked says one of: All items are in stock; Some items are waiting on stock; or We're checking stock for some items.",
+          "An order you placed that is still to be picked says one of: All items are in stock; Some items are waiting on stock; or We're checking stock for some items. It also says when stock was checked, with a Check again button. If stock can't be checked, it says Stock couldn't be checked just now.",
         whyItMatters: 'Whether the items on an order were available could only be learned by asking the warehouse.',
         howItAffectsYou:
-          "The sentence gives no numbers and names no other orders. It is worked out when you open the order, and stock can change after that. It shows on orders placed from your own account, not on orders someone placed for you. If you can approve or pick orders, you see each line's readiness instead.",
+          "The sentence gives no numbers and names no other orders. It is worked out when you open the order, and stock can change after that: choose Check again to read it again. It shows on orders placed from your own account, not on orders someone placed for you. If you can approve or pick orders, you see each line's readiness instead.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/orders', label: 'View orders' },
         audience: { anyPermission: ['orders:request'], modules: ['orders'] },
@@ -106,9 +106,9 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Approve partial and Resume fulfillment say why they are unavailable',
         whatChanged:
-          "On an order waiting for approval, a note under Approve says how many lines are short, that Approve will be refused, and to use Approve partial or change the lines. If stock can't be checked, if an item on the order isn't visible to you, or if an item now belongs to another warehouse, Approve partial and Resume fulfillment are shown turned off with the reason. Where trying again can help, a Try again button reads the stock again.",
+          "On an order waiting for approval, a note under Approve says how many lines ask for more than is available now, that Approve will be refused, and to use Approve partial or change the lines (only to change the lines when an item now belongs to another warehouse). If stock can't be checked, if an item on the order isn't visible to you, or if an item now belongs to another warehouse, Approve partial and Resume fulfillment are shown turned off with the reason. Where trying again can help, a Try again button reads the stock again.",
         whyItMatters:
-          'Both actions depend on stock. On the web, a stock check that failed could stop the order page from opening. Both apps now decide these actions from the same check as the lines, so they offer the same actions for the same order.',
+          'Both actions depend on stock. On the web, a stock check that failed could stop the order page from opening. Both apps now decide these actions from the same stock check as the lines.',
         howItAffectsYou:
           'Approve still refuses an order that is short, and Approve partial and Resume fulfillment still check stock again when you use them.',
         whatToDo: 'No action needed.',
@@ -121,12 +121,12 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'A clearer message when picking cannot finish',
         whatChanged:
-          "When Mark picking complete can't finish because part of an item is still in Staging, the message now says that picking takes stock from racks, crates, Sites and Unplaced, never from Staging, and to put the needed units away and try again. It names the order's lines with how many of each are still needed.",
+          "When Mark picking complete can't finish because the racks, crates, Sites and Unplaced hold less of an item than the pick needs, the message now says that picking never takes stock from Staging, and to put away any of it that is in Staging, or count the item if its locations don't match its stock on record, then try again. It names the order's lines with how many of each are still needed.",
         whyItMatters:
           'The old message said unplaced stock could stop a pick, but picking does take stock from Unplaced, so it sent people to move stock that was not the problem.',
         howItAffectsYou: 'Only the message changed. Picking takes stock from the same places as before.',
         whatToDo:
-          'If you see this message, put the needed units away from Staging, then choose Mark picking complete again.',
+          "If you see this message, put the needed units away from Staging, or count the item if its locations don't match its stock on record, then choose Mark picking complete again.",
         link: { href: '/dashboard/orders', label: 'View orders' },
         audience: { anyPermission: ['items:update', 'orders:approve'], modules: ['orders'] },
       },

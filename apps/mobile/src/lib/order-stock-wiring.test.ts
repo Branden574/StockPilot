@@ -329,8 +329,16 @@ describe('the readiness components', () => {
   it('word everything through core, never a percentage or a promise', () => {
     const s = codeOnly(summary);
     const l = codeOnly(lineCard);
-    expect(s).toContain('describeReadinessRollup(result, { timeZone: timeZone ?? undefined })');
-    expect(s).toContain('readinessSummaryForRequester(result)');
+    expect(s).toContain('const opts = { timeZone: timeZone ?? undefined };');
+    expect(s).toContain('describeReadinessRollup(result, opts)');
+    // The requester's card is core's too, laid out as the web strip's:
+    // the sentence, when it was checked, and Check again / Try again.
+    expect(s).toContain('describeReadinessForRequester(result, opts)');
+    expect(s).toMatch(/\{card\.checkedAt \? \(/);
+    expect(s).toContain('{recheck(card.failed)}');
+    // Under a failed headline, only core's reason (the web shows the same).
+    expect(s).toContain('const detail = rollup.detail;');
+    expect(s).not.toContain('result.message');
     expect(l).toContain('describeReadinessLine(line, item, opts)');
     expect(l).toContain('describeReadinessHold(line.hold)');
     expect(l).toContain('describeReadinessWhy(item, opts).parts');
@@ -343,7 +351,9 @@ describe('the readiness components', () => {
   it('a failed check is an alert with Try again, never an empty or green card', () => {
     const s = codeOnly(summary);
     expect(s).toContain("accessibilityRole={failed ? 'alert' : 'header'}");
-    expect(s).toContain("{checking ? 'Checking...' : failed ? 'Try again' : 'Check again'}");
+    expect(s).toContain("accessibilityRole={card.failed ? 'alert' : 'text'}");
+    expect(s).toContain("{checking ? 'Checking...' : failedNow ? 'Try again' : 'Check again'}");
+    expect(s).toContain('{recheck(failed)}');
     expect(s).toContain('disabled={offline || checking}');
     expect(s).toContain('{READINESS_NEEDS_CONNECTION_COPY}');
   });

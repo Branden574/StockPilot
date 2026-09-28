@@ -2,10 +2,9 @@ import * as React from 'react';
 import { View } from 'react-native';
 
 import {
+  describeReadinessForRequester,
   describeReadinessRollup,
   READINESS_NEEDS_CONNECTION_COPY,
-  READINESS_READ_FAILED_COPY,
-  readinessSummaryForRequester,
   type OrderReadinessResult,
 } from '@stockpilot/core';
 
@@ -27,11 +26,16 @@ import { useTheme } from '@/lib/use-theme';
  * and Check again. Green ("Ready to pick (5 of 5 lines)") only when every line
  * is ready and every fact was readable; there is never an "on track" claim.
  *
- * Requester: one sentence ("Some items are waiting on stock."), no numbers.
+ * Requester: one sentence ("Some items are waiting on stock."), no numbers,
+ * when it was checked, and Check again: the web strip's requester layout,
+ * both from core describeReadinessForRequester.
  *
- * A FAILED CHECK says "Couldn't check readiness. Try again." with Try again,
- * never an empty card or a green one. Offline the button is disabled and says
- * it needs a connection. Every word is core's (readiness-copy.ts).
+ * A FAILED CHECK says "Couldn't check readiness. Try again." (the requester:
+ * "Stock couldn't be checked just now.") with Try again, never an empty card
+ * or a green one. Under the headline, only the reasons core
+ * readinessFailureDetail names (the web page shows the same line). Offline the
+ * button is disabled and says it needs a connection. Every word is core's
+ * (readiness-copy.ts).
  */
 export function OrderReadinessSummary({
   result,
@@ -52,31 +56,69 @@ export function OrderReadinessSummary({
   onCheckAgain: () => void;
 }) {
   const { c, mode } = useTheme();
+  const opts = { timeZone: timeZone ?? undefined };
+
+  // Check again (Try again after a failure), on both cards: 44 pt, disabled
+  // while a check runs and offline, with the reason.
+  const recheck = (failedNow: boolean) => (
+    <>
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={offline || checking}
+        onPress={onCheckAgain}
+        accessibilityHint="Checks this order's stock again"
+        // 44 pt, not the small Button's 36.
+        style={{ alignSelf: 'flex-start', marginTop: 6, minHeight: MIN_TAP }}
+      >
+        {checking ? 'Checking...' : failedNow ? 'Try again' : 'Check again'}
+      </Button>
+      {offline ? (
+        <Body size={12.5} muted>
+          {READINESS_NEEDS_CONNECTION_COPY}
+        </Body>
+      ) : null}
+    </>
+  );
 
   if (audience === 'requester') {
-    const sentence = readinessSummaryForRequester(result);
-    if (!sentence) return null;
+    const card = describeReadinessForRequester(result, opts);
+    if (!card) return null;
+    const tone = readinessToneColor(card.tone, c, mode);
     return (
       <Card padding={14}>
         <Eyebrow>STOCK</Eyebrow>
-        <Body size={14} color={c.ink} style={{ marginTop: 8 }}>
-          {sentence}
-        </Body>
+        <View style={{ marginTop: 8, gap: 4 }}>
+          <View
+            accessible
+            accessibilityRole={card.failed ? 'alert' : 'text'}
+            accessibilityLabel={card.sentence}
+            style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}
+          >
+            <View style={{ paddingTop: 2 }}>
+              <ReadinessIcon icon={card.icon} size={16} color={tone} />
+            </View>
+            <Body size={14} color={c.ink} style={{ flex: 1 }}>
+              {card.sentence}
+            </Body>
+          </View>
+          {card.checkedAt ? (
+            <Body size={12.5} muted>
+              {card.checkedAt}
+            </Body>
+          ) : null}
+          {recheck(card.failed)}
+        </View>
       </Card>
     );
   }
 
-  const rollup = describeReadinessRollup(result, { timeZone: timeZone ?? undefined });
+  const rollup = describeReadinessRollup(result, opts);
   if (!rollup) return null;
   const failed = result.state === 'failed';
   const color = readinessToneColor(rollup.tone, c, mode);
-  // The failure's own reason, when it says more than the headline does.
-  const detail =
-    result.state === 'failed' &&
-    result.message &&
-    !READINESS_READ_FAILED_COPY.startsWith(result.message)
-      ? result.message
-      : null;
+  // A failure's own reason, when core names one (the web strip shows the same).
+  const detail = rollup.detail;
 
   return (
     <Card padding={14}>
@@ -115,22 +157,7 @@ export function OrderReadinessSummary({
             {rollup.checkedAt}
           </Body>
         ) : null}
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={offline || checking}
-          onPress={onCheckAgain}
-          accessibilityHint="Checks this order's stock again"
-          // 44 pt, not the small Button's 36.
-          style={{ alignSelf: 'flex-start', marginTop: 6, minHeight: MIN_TAP }}
-        >
-          {checking ? 'Checking...' : failed ? 'Try again' : 'Check again'}
-        </Button>
-        {offline ? (
-          <Body size={12.5} muted>
-            {READINESS_NEEDS_CONNECTION_COPY}
-          </Body>
-        ) : null}
+        {recheck(failed)}
       </View>
     </Card>
   );

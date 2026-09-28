@@ -57,6 +57,11 @@ export function ReadinessStrip({ view }: { view: ReadinessStripView }) {
           {view.failed ? 'Try again' : 'Check again'}
         </Button>
       </div>
+      {view.mode === 'full' && view.detail && (
+        <p className="text-muted-foreground mt-1" data-testid="readiness-detail">
+          {view.detail}
+        </p>
+      )}
       {view.mode === 'full' && view.details.length > 0 && (
         <p className="text-muted-foreground mt-1 tabular-nums" data-testid="readiness-details">
           {view.details.join(' · ')}

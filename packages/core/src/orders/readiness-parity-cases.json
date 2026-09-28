@@ -145,6 +145,23 @@
         "lines": { "l1": { "state": "needs_put_away", "ready": 6, "putAway": 4, "hold": "held" } },
         "completeFails": true,
         "completeError": "insufficient_placed_stock",
+        "completeNeedPutAway": { "a": 4 },
+        "completeUnaccounted": { "a": 0 },
+        "draftable": { "a": 0 }
+      }
+    },
+    {
+      "id": "C6c",
+      "title": "on record 10, a rack of 7 and nothing in Staging, own hold 10: can't confirm, and the one-click pick raises insufficient_placed_stock with nothing to put away (3 on record that no location holds)",
+      "status": "pick_slip_generated",
+      "items": { "a": { "onHand": 10, "holdings": [["rack", "home", 7]], "holds": { "own": 10 } } },
+      "lines": [{ "id": "l1", "item": "a", "requested": 10 }],
+      "expect": {
+        "lines": { "l1": { "state": "unknown", "ready": 7, "gap": 3, "hold": "held" } },
+        "completeFails": true,
+        "completeError": "insufficient_placed_stock",
+        "completeNeedPutAway": { "a": 0 },
+        "completeUnaccounted": { "a": 3 },
         "draftable": { "a": 0 }
       }
     },

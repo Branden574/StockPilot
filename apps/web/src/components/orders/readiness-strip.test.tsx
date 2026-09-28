@@ -60,6 +60,7 @@ describe('readinessStripView: what the strip says, from core', () => {
       details: ['1 of 2 lines ready to pick'],
       neededBy: 'Past its needed-by date (Sep 20)',
       checkedAt: 'Checked at 10:42 AM. Stock can change after this.',
+      detail: null,
       failed: false,
     });
   });
@@ -92,11 +93,32 @@ describe('readinessStripView: what the strip says, from core', () => {
       mode: 'full',
       headline: "Couldn't check readiness. Try again.",
       checkedAt: null,
+      detail: null,
       failed: true,
     });
   });
 
-  it('the requester: one sentence, toned by what it says; a failed read is "checking", never "in stock"', () => {
+  it("a failure's own reason, in core's words (the phone shows the same line)", () => {
+    for (const message of [
+      'Order not found.',
+      'You are not allowed to check readiness for this order.',
+      'Orders are turned off for this organization.',
+      'The order changed while it was being checked. Check again.',
+    ]) {
+      expect(readinessStripView({ state: 'failed', message }, 'full', { timeZone: TZ })).toMatchObject({
+        headline: "Couldn't check readiness. Try again.",
+        detail: message,
+      });
+    }
+    // An internal fault's generic text is never shown as a reason.
+    expect(
+      readinessStripView({ state: 'failed', message: 'An internal error occurred. Please try again.' }, 'full', {
+        timeZone: TZ,
+      }),
+    ).toMatchObject({ detail: null });
+  });
+
+  it('the requester: one sentence, toned by what it says; a failed read says so, never "in stock" or "checking"', () => {
     expect(
       readinessStripView(
         readinessOk(facts('approved', [visibleItemFacts('a', { here: { rack: 10 } })])),
@@ -127,7 +149,7 @@ describe('readinessStripView: what the strip says, from core', () => {
       icon: 'clock',
     });
     expect(readinessStripView(READINESS_FAILED, 'requester', { timeZone: TZ })).toMatchObject({
-      sentence: "We're checking stock for some items.",
+      sentence: "Stock couldn't be checked just now.",
       tone: 'neutral',
       checkedAt: null,
       failed: true,
@@ -153,6 +175,7 @@ describe('ReadinessStrip', () => {
     details: ['1 line short', '3 of 6 lines ready to pick'],
     neededBy: 'May miss its needed-by date',
     checkedAt: 'Checked at 10:42 AM. Stock can change after this.',
+    detail: null,
     failed: false,
   };
 
@@ -190,8 +213,21 @@ describe('ReadinessStrip', () => {
     render(<ReadinessStrip view={view} />);
     expect(screen.getByRole('alert')).toHaveTextContent("Couldn't check readiness. Try again.");
     expect(screen.queryByTestId('readiness-checked-at')).toBeNull();
+    expect(screen.queryByTestId('readiness-detail')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Try again' }));
     expect(routerRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failure's reason is shown under the headline", () => {
+    const view = readinessStripView(
+      { state: 'failed', message: 'The order changed while it was being checked. Check again.' },
+      'full',
+      { timeZone: TZ },
+    )!;
+    render(<ReadinessStrip view={view} />);
+    expect(screen.getByTestId('readiness-detail')).toHaveTextContent(
+      'The order changed while it was being checked. Check again.',
+    );
   });
 
   it("the requester's sentence, and nothing else", () => {

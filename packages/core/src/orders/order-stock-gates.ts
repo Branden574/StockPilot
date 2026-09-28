@@ -20,7 +20,7 @@ import type { OrderStockCheck } from './readiness';
 /** What the order screen renders for the stock-dependent actions. */
 export interface OrderStockGates {
   /** pending_approval only. Plain Approve is never gated here: the server's
-   *  strict approve refuses a short order with its own clear message (and
+   *  strict approve refuses such an order with its own clear message (and
    *  `approveShortNotice` says so beforehand). */
   approvePartial: 'hidden' | 'enabled' | 'disabled';
   /** backordered only. `waiting` keeps the existing "Resume unlocks…" line. */
@@ -105,12 +105,22 @@ export function orderStockGates(status: string, check: OrderStockCheck): OrderSt
 
 /**
  * The note under Approve on a pending order a strict Approve would refuse:
- * "2 lines are short, so Approve will be refused. Use Approve partial or change
- * the lines." Null otherwise (including a failed check: the gates' own notice
- * speaks then).
+ * "2 lines ask for more than is available now, so Approve will be refused. Use
+ * Approve partial or change the lines." Null otherwise (including a failed
+ * check: the gates' own notice speaks then).
+ *
+ * NOT "short": the count is approve_order_request's own (lines whose item asks
+ * for more than on hand less every hold), which also takes in lines readiness
+ * calls "Waiting on a PO" or "Can't confirm". The readiness strip counts
+ * "short" lines by readiness state; the two numbers answer different
+ * questions, so they must not share a word.
+ *
+ * An item that moved warehouse keeps Approve partial off (orderStockGates), so
+ * the note never suggests it then.
  */
 export function approveShortNotice(check: OrderStockCheck): string | null {
   if (check.state !== 'ok' || !check.isShortStock) return null;
   const n = Math.max(1, check.shortLineCount ?? 1);
-  return `${n} ${n === 1 ? 'line is' : 'lines are'} short, so Approve will be refused. Use Approve partial or change the lines.`;
+  const refused = `${n} ${n === 1 ? 'line asks' : 'lines ask'} for more than is available now, so Approve will be refused.`;
+  return check.itemMoved ? `${refused} Change the lines.` : `${refused} Use Approve partial or change the lines.`;
 }

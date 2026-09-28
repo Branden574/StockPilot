@@ -3,6 +3,10 @@ import 'server-only';
 import {
   assessOrderReadiness,
   parseOrderReadinessFacts,
+  READINESS_FORBIDDEN_COPY,
+  READINESS_MODULE_OFF_COPY,
+  READINESS_ORDER_NOT_FOUND_COPY,
+  readinessAnswersOrder,
   type OrderReadinessAssessment,
   type OrderReadinessResult,
 } from '@stockpilot/core';
@@ -46,10 +50,16 @@ type RpcError = PostgrestLikeError & { code?: string | null; hint?: string | nul
  * The function's refusals as service errors:
  *   P0002 order_request_not_found  -> not_found (a missing order and another
  *                                     org's order read the same)
- *   42501 unauthenticated          -> forbidden
+ *   42501 unauthenticated          -> forbidden (the function's OWN 42501,
+ *                                     0377 gate 1)
  *   P0001 hint module_disabled     -> module_disabled
  *   anything else                  -> internal_error (the raw text stays in
- *                                     internalDetail, server side)
+ *                                     internalDetail, server side), INCLUDING
+ *                                     any other 42501: Postgres raises 42501
+ *                                     "permission denied for function" when
+ *                                     the EXECUTE grant is gone (the 0318
+ *                                     outage class). That is a fault to
+ *                                     report, not "you are not allowed".
  */
 export function mapReadinessRpcError(
   error: RpcError,
@@ -58,18 +68,37 @@ export function mapReadinessRpcError(
   const code = error.code ?? '';
   const message = error.message ?? '';
   if (code === 'P0002' || message === 'order_request_not_found') {
-    return new ServiceError('not_found', 'Order not found.');
+    return new ServiceError('not_found', READINESS_ORDER_NOT_FOUND_COPY);
   }
-  if (code === '42501') {
-    return new ServiceError('forbidden', 'You are not allowed to check readiness for this order.');
+  if (code === '42501' && message === 'unauthenticated') {
+    return new ServiceError('forbidden', READINESS_FORBIDDEN_COPY);
   }
   if (error.hint === 'module_disabled' || message === 'module_disabled') {
-    return new ServiceError('module_disabled', 'Module not enabled for this organization: orders');
+    return new ServiceError('module_disabled', READINESS_MODULE_OFF_COPY);
   }
   return new ServiceError(
     'internal_error',
     `order_readiness_facts failed: ${postgrestErrorText(error, response)}`,
   );
+}
+
+/**
+ * A failed read's message, in core's words for the refusals both platforms can
+ * name (core readinessFailureDetail shows those under "Couldn't check
+ * readiness"); anything else is the generic text, never shown as a reason.
+ */
+function failureMessage(err: unknown): string {
+  if (!(err instanceof ServiceError)) return 'Could not check readiness.';
+  switch (err.code) {
+    case 'not_found':
+      return READINESS_ORDER_NOT_FOUND_COPY;
+    case 'forbidden':
+      return READINESS_FORBIDDEN_COPY;
+    case 'module_disabled':
+      return READINESS_MODULE_OFF_COPY;
+    default:
+      return err.message;
+  }
 }
 
 export class OrderReadinessService {
@@ -86,9 +115,13 @@ export class OrderReadinessService {
   async get(orderId: string): Promise<OrderReadinessAssessment> {
     assertModuleEnabled(this.ctx, 'orders');
     if (typeof orderId !== 'string' || !UUID_RE.test(orderId)) {
-      throw new ServiceError('not_found', 'Order not found.');
+      throw new ServiceError('not_found', READINESS_ORDER_NOT_FOUND_COPY);
     }
-    const res = await this.ctx.supabase.rpc('order_readiness_facts', { p_order_id: orderId });
+    // A uuid is case-insensitive and the database answers in lower case: ask
+    // in that form, so the answer's id is compared like for like (an order
+    // URL typed in upper case is the same order).
+    const id = orderId.toLowerCase();
+    const res = await this.ctx.supabase.rpc('order_readiness_facts', { p_order_id: id });
     const { data, error } = res as { data: unknown; error: RpcError | null };
     if (error) {
       const r = res as { status?: number | null; statusText?: string | null };
@@ -103,7 +136,7 @@ export class OrderReadinessService {
         `order_readiness_facts returned an unexpected shape: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    if (facts.order.id !== orderId) {
+    if (!readinessAnswersOrder(facts, id)) {
       throw new ServiceError('internal_error', 'order_readiness_facts answered for another order');
     }
     return assessOrderReadiness(facts, { now: this.now() });
@@ -127,10 +160,7 @@ export class OrderReadinessService {
           extra: { detail: err instanceof ServiceError ? (err.internalDetail ?? err.message) : String(err) },
         });
       }
-      return {
-        state: 'failed',
-        message: err instanceof ServiceError ? err.message : 'Could not check readiness.',
-      };
+      return { state: 'failed', message: failureMessage(err) };
     }
   }
 }

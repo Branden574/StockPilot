@@ -25,7 +25,8 @@
 --
 -- ── THE ANSWER (v 1; later changes are additive only) ──────────────────────
 --   { v, observedAt, phase, linesCapped,
---     order: { id, orderNumber, status, warehouseId, neededBy, fulfillmentType },
+--     order: { id, orderNumber, status, warehouseId, neededBy, fulfillmentType,
+--              timeZone },
 --     lines: [ { lineId, itemId, requested, fulfilled, picked, createdAt } ]
 --            in (created_at, id) order,
 --     items: [ { itemId, visible:false }
@@ -100,6 +101,11 @@
 --                      hidden POs add to hiddenRemaining (a quantity only).
 --   drafts             the same over 'draft' POs. Drafts are never supply.
 --   onHand             inventory_items.quantity_on_hand.
+--   order.timeZone     organizations.timezone of the order's org: the zone the
+--                      needed-by's calendar day is read in. A PO's expected_at
+--                      is a calendar date (the PO form saves the typed day as
+--                      midnight UTC), so core compares the PO's UTC day with
+--                      the needed-by's day in this zone, never the instants.
 --
 -- ── WHO MAY CALL, AND WHY SECURITY DEFINER ─────────────────────────────────
 -- The facts are aggregates over rows a caller may not read row by row:
@@ -229,7 +235,9 @@ begin
            'status',          o.status,
            'warehouseId',     o.warehouse_id,
            'neededBy',        o.needed_by,
-           'fulfillmentType', o.fulfillment_type)
+           'fulfillmentType', o.fulfillment_type,
+           'timeZone',        (select g.timezone from public.organizations g
+                                where g.id = o.organization_id))
     into v_org, v_wh, v_status, v_order
     from public.order_requests o
    where o.id = p_order_id;
@@ -549,7 +557,8 @@ grant execute on function public.order_readiness_facts(uuid) to authenticated, s
 
 comment on function public.order_readiness_facts(uuid) is
   'F2-1 (0377): the raw facts behind one order''s readiness as one jsonb value '
-  '(v 1, additive changes only): the order, its lines in (created_at, id) '
+  '(v 1, additive changes only): the order (with its org''s time zone), its '
+  'lines in (created_at, id) '
   'order, and per item on hand, holds (own, other orders, rentals), holdings '
   'here by kind (NULL kind = Site) and elsewhere as numbers only, Staging '
   'sources the caller''s holdings scope covers, other pending demand (approvers '

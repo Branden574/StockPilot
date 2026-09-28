@@ -17,7 +17,9 @@ import { OrderRequestsService } from './order-requests';
  * F2-1: complete_picking's insufficient_placed_stock, in words that match the
  * draw engine (0373: racks, crates, Sites and Unplaced, never Staging). The
  * old sentence said Staging "or unplaced" stock blocks a pick; Unplaced does
- * not. The per-line list stays, with each line's owed units from core's
+ * not. The draw raises it with nothing in Staging too (on record more than
+ * the locations hold), so the sentence names both causes and asserts neither.
+ * The per-line list stays, with each line's owed units from core's
  * lineOwedUnits.
  */
 
@@ -28,7 +30,7 @@ function svc(stub: ReturnType<typeof makeSupabaseStub>) {
 }
 
 describe('completePicking: insufficient_placed_stock', () => {
-  it('says Staging (only) blocks the pick, and lists the lines with what each still owes', async () => {
+  it('names both causes (Staging, or on record more than the locations hold), never claims either, and lists the lines with what each still owes', async () => {
     const stub = makeSupabaseStub({
       'order_requests.select.maybeSingle': { data: { warehouse_id: 'wh-1' }, error: null },
       'rpc:complete_picking': {
@@ -56,6 +58,10 @@ describe('completePicking: insufficient_placed_stock', () => {
     );
     expect(err?.message).toMatch(/never from Staging/);
     expect(err?.message).toContain('Sites and Unplaced');
+    // It cannot know Staging holds anything (review 2026-09-28: a rack of 7
+    // against 10 on record, nothing in Staging, raised this error).
+    expect(err?.message).not.toMatch(/still in Staging/);
+    expect(err?.message).toMatch(/count the item if its locations don't match its stock on record/);
   });
 
   it('still says what to do when the line list cannot be read', async () => {

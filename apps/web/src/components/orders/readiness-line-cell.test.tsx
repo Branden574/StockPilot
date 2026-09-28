@@ -45,7 +45,7 @@ function renderLine(
   status: string,
   lines: FactsLine[],
   items: Record<string, unknown>[],
-  opts: { at?: number; canCountItem?: boolean; neededBy?: string | null } = {},
+  opts: { at?: number; canCountItem?: boolean; neededBy?: string | null; position?: number } = {},
 ) {
   const a = assessed(status, lines, items, opts.neededBy ?? null);
   const line = a.lines[opts.at ?? 0]!;
@@ -56,6 +56,7 @@ function renderLine(
       item={item}
       timeZone={TZ}
       canCountItem={opts.canCountItem ?? false}
+      position={opts.position}
     />,
   );
   return screen.getByTestId('readiness-line');
@@ -101,6 +102,39 @@ describe('ReadinessLineCell', () => {
     expect(within(cell).getByTestId('readiness-why')).toHaveTextContent('In Staging 4');
   });
 
+  it("the screen-reader \"Line N\" is the row's place on the page when the page gives it", () => {
+    const cell = renderLine(
+      'approved',
+      [
+        { lineId: 'L1', itemId: 'a', requested: 2 },
+        { lineId: 'L2', itemId: 'b', requested: 10 },
+      ],
+      [
+        visibleItemFacts('a', { here: { rack: 2 }, heldOwn: 2 }),
+        visibleItemFacts('b', { here: { rack: 6, staging: 4 }, heldOwn: 10 }),
+      ],
+      { at: 1, position: 1 },
+    );
+    expect(within(cell).getByTestId('readiness-sr-label')).toHaveTextContent('Line 1, Needs put-away, 4 in Staging.');
+  });
+
+  it('a handed-over line: its own chip (words and an icon), never "Ready to pick"', () => {
+    const cell = renderLine(
+      'backordered',
+      [{ lineId: 'L1', itemId: 'a', requested: 4, fulfilled: 4 }],
+      [visibleItemFacts('a')],
+    );
+    expect(cell).toHaveAttribute('data-state', 'handed_over');
+    const chip = within(cell).getByTestId('readiness-chip');
+    expect(chip).toHaveTextContent('Handed over');
+    expect(chip.querySelector('svg.lucide-package-check')).not.toBeNull();
+    expect(cell).not.toHaveTextContent(/Ready to pick/);
+    expect(within(cell).getByTestId('readiness-sentence')).toHaveTextContent(
+      'Nothing left to pick: all of this line was handed over.',
+    );
+    expect(within(cell).getByTestId('readiness-sr-label')).toHaveTextContent('Line 1, Handed over, nothing left to pick.');
+  });
+
   it('waiting on a PO: the date is expected, not a promise', () => {
     const cell = renderLine(
       'pending_approval',
@@ -114,7 +148,8 @@ describe('ReadinessLineCell', () => {
                 poId: 'p1',
                 poNumber: 'PO-2026-0042',
                 status: 'ordered',
-                expectedAt: '2026-10-03T17:00:00Z',
+                // A calendar date, as the PO form stores it (midnight UTC).
+                expectedAt: '2026-10-03T00:00:00Z',
                 remaining: 12,
               },
             ],

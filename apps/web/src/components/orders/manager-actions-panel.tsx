@@ -103,8 +103,8 @@ interface Props {
    *  hidden or waiting, no notice. */
   stockGates?: OrderStockGates;
   /** The note under Approve when a strict Approve would be refused (core
-   *  approveShortNotice): "2 lines are short, so Approve will be refused. Use
-   *  Approve partial or change the lines." */
+   *  approveShortNotice): "2 lines ask for more than is available now, so
+   *  Approve will be refused. Use Approve partial or change the lines." */
   approveNotice?: string | null;
   /** Picking claim/lock context. The shared state machine
    *  (`availableOrderActions`) reads these to decide which of

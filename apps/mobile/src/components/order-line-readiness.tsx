@@ -5,6 +5,7 @@ import {
   ChevronUp,
   Clock,
   Package,
+  PackageCheck,
   TriangleAlert,
 } from 'lucide-react-native';
 import * as React from 'react';
@@ -63,6 +64,8 @@ export function ReadinessIcon({
       return <Clock size={size} color={color} strokeWidth={2} />;
     case 'alert':
       return <TriangleAlert size={size} color={color} strokeWidth={2} />;
+    case 'handed':
+      return <PackageCheck size={size} color={color} strokeWidth={2} />;
     default:
       return <CircleHelp size={size} color={color} strokeWidth={2} />;
   }

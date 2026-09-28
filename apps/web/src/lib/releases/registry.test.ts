@@ -772,17 +772,42 @@ describe('F2-1 (order readiness) is held as a draft', () => {
     expect(text).toContain("A purchase order's date is an expected date, not a promise");
     expect(text).toContain('stock on record');
     // The labels people see, in core's words.
-    for (const label of ['Ready to pick', 'Needs put-away', 'Waiting on a PO', 'Short', "Can't confirm"]) {
+    for (const label of ['Ready to pick', 'Needs put-away', 'Waiting on a PO', 'Short', "Can't confirm", 'Handed over']) {
       expect(text, label).toContain(label);
     }
-    // "Ready" for the order only under the rule core applies.
-    expect(text).toContain('Ready to pick is shown for the order only when every line is ready and every number could be read');
+    // "Ready" for the order only under the rule core applies (handed-over
+    // lines have nothing to pick and are not counted).
+    expect(text).toContain(
+      'Ready to pick is shown for the order only when every line still to be picked is ready and every number could be read',
+    );
     // A failure is said, never shown as an answer; nothing is written.
     expect(r.summary).toContain("If readiness can't be checked, the order says so rather than showing an answer.");
     expect(text).toContain('Nothing on the order changes when readiness is shown.');
-    // The requester's three sentences, word for word as core writes them.
+    // The requester's sentences, word for word as core writes them.
     expect(text).toContain('All items are in stock');
     expect(text).toContain('Some items are waiting on stock');
     expect(text).toContain("We're checking stock for some items");
+    expect(text).toContain("Stock couldn't be checked just now");
+  });
+
+  it('says nothing that is false for some of its readers (review 2026-09-28)', () => {
+    const text = readerText(release()).join(' ');
+    // The phone offers Approve and Resume to managers only; the web by
+    // permission. "The same actions for the same order" is false for a staff
+    // member with an orders:approve override, so it is not claimed.
+    expect(text).not.toMatch(/same actions/i);
+    // A records-disagree line that is also short shows Short; one that owes
+    // nothing shows Handed over. It is the sentence that says they differ.
+    expect(text).not.toMatch(/says Can't confirm and gives both numbers/);
+    expect(text).toContain("says the numbers don't match and gives both");
+    // The requester sees a sentence, when it was checked and a button.
+    expect(text).not.toMatch(/see one sentence/i);
+    expect(release().summary).toContain('People who placed an order see a short summary of its stock instead.');
+    // The note under Approve is not "short" (the strip's word for a
+    // different count), and the pick message claims no Staging it cannot know.
+    expect(text).not.toMatch(/how many lines are short/);
+    expect(text).toContain('how many lines ask for more than is available now');
+    expect(text).not.toMatch(/because part of an item is still in Staging/);
+    expect(text).toContain("count the item if its locations don't match its stock on record");
   });
 });

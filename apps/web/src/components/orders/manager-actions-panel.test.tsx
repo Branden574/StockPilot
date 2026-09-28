@@ -355,14 +355,14 @@ describe('ManagerActionsPanel — stock gates from readiness', () => {
           ...manager,
           status: 'pending_approval',
           stockGates: gates({ approvePartial: 'enabled' }),
-          approveNotice: '2 lines are short, so Approve will be refused. Use Approve partial or change the lines.',
+          approveNotice: '2 lines ask for more than is available now, so Approve will be refused. Use Approve partial or change the lines.',
         })}
       />,
     );
     expect(screen.getByRole('button', { name: 'Approve partial' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled();
     expect(screen.getByTestId('approve-short-notice')).toHaveTextContent(
-      '2 lines are short, so Approve will be refused. Use Approve partial or change the lines.',
+      '2 lines ask for more than is available now, so Approve will be refused. Use Approve partial or change the lines.',
     );
   });
 

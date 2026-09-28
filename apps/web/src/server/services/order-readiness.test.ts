@@ -4,7 +4,13 @@ vi.mock('server-only', () => ({}));
 const reportError = vi.hoisted(() => vi.fn(async (_err: unknown, _ctx: unknown) => {}));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
-import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
+import {
+  DEFAULT_MODULE_IDS,
+  READINESS_FORBIDDEN_COPY,
+  READINESS_MODULE_OFF_COPY,
+  READINESS_ORDER_NOT_FOUND_COPY,
+  type ModuleId,
+} from '@stockpilot/core';
 
 import { makeServiceContext, makeSupabaseStub, type QueryResult } from '@/test/supabase-mock';
 
@@ -148,6 +154,34 @@ describe('OrderReadinessService.get', () => {
     expect(await codeOf(svc.get(ORDER))).toBe('internal_error');
   });
 
+  it('an order id in upper case is the same order (the database answers in lower case)', async () => {
+    const lower = '0a0f2100-0000-4000-8000-00000000abcd';
+    const { stub, svc } = build({
+      data: facts({
+        order: { id: lower, orderNumber: 17, status: 'pending_approval', warehouseId: WH, neededBy: null, fulfillmentType: 'pickup' },
+      }),
+      error: null,
+    });
+    const a = await svc.get(lower.toUpperCase());
+    expect(a.phase).toBe('to_pick');
+    // Asked once, in the form the database answers in.
+    expect(stub.rpcCalls).toEqual([{ name: 'order_readiness_facts', args: { p_order_id: lower } }]);
+    expect((await svc.result(lower.toUpperCase())).state).toBe('ok');
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('an EXECUTE grant that went missing is a fault (reported), never "not allowed"', async () => {
+    // The function's own 42501 says 'unauthenticated'; Postgres raises 42501
+    // for a missing grant too (the 0318 hazard). Only the first is forbidden.
+    const denied = { message: 'permission denied for function order_readiness_facts', code: '42501' };
+    const { svc } = build({ data: null, error: denied });
+    expect(await codeOf(svc.get(ORDER))).toBe('internal_error');
+    expect(mapReadinessRpcError({ message: 'unauthenticated', code: '42501' }).code).toBe('forbidden');
+    const r = await svc.result(ORDER);
+    expect(r).toEqual({ state: 'failed', message: 'An internal error occurred. Please try again.' });
+    expect(reportError).toHaveBeenCalledTimes(1);
+  });
+
   it('an answer about another order is refused', async () => {
     const other = facts({
       order: { id: '44444444-4444-4444-8444-444444444444', orderNumber: 18, status: 'pending_approval', warehouseId: WH, neededBy: null, fulfillmentType: 'pickup' },
@@ -181,6 +215,18 @@ describe('OrderReadinessService.result', () => {
   it('a refusal is failed with its own words, and is not reported as a fault', async () => {
     const { svc } = build({ data: null, error: { message: 'order_request_not_found', code: 'P0002' } });
     expect(await svc.result(ORDER)).toEqual({ state: 'failed', message: 'Order not found.' });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it("every refusal's words are core's, so the web strip and the phone name it the same way", async () => {
+    const notFound = build({ data: null, error: { message: 'order_request_not_found', code: 'P0002' } });
+    expect(await notFound.svc.result(ORDER)).toEqual({ state: 'failed', message: READINESS_ORDER_NOT_FOUND_COPY });
+    const signedOut = build({ data: null, error: { message: 'unauthenticated', code: '42501' } });
+    expect(await signedOut.svc.result(ORDER)).toEqual({ state: 'failed', message: READINESS_FORBIDDEN_COPY });
+    const off = build({ data: null, error: { message: 'module_disabled', code: 'P0001', hint: 'module_disabled' } });
+    expect(await off.svc.result(ORDER)).toEqual({ state: 'failed', message: READINESS_MODULE_OFF_COPY });
+    const offHere = build({ data: facts(), error: null }, [...DEFAULT_MODULE_IDS].filter((m) => m !== 'orders'));
+    expect(await offHere.svc.result(ORDER)).toEqual({ state: 'failed', message: READINESS_MODULE_OFF_COPY });
     expect(reportError).not.toHaveBeenCalled();
   });
 });

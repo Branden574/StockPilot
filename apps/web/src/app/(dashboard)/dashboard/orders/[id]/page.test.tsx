@@ -614,7 +614,7 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     expect(screen.getByTestId('readiness-line')).toHaveAttribute('data-state', 'short');
     expect(lastPanelProps()).toMatchObject({
       stockGates: { approvePartial: 'enabled', notice: null },
-      approveNotice: '1 line is short, so Approve will be refused. Use Approve partial or change the lines.',
+      approveNotice: '1 line asks for more than is available now, so Approve will be refused. Use Approve partial or change the lines.',
     });
   });
 
@@ -780,15 +780,16 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     expect(screen.queryByRole('columnheader', { name: 'Readiness' })).toBeNull();
   });
 
-  it("the requester's failed read says stock is being checked, never that it is in stock", async () => {
+  it("the requester's failed read says it could not be checked, never that it is in stock or being checked", async () => {
     as('viewer', ['orders:request']);
     orderAt('approved', [LINE_A], { requester_user_id: 'u1' });
     readinessResult.mockResolvedValue(READINESS_FAILED);
 
     await renderPage();
 
-    expect(screen.getByTestId('readiness-headline')).toHaveTextContent("We're checking stock for some items.");
+    expect(screen.getByTestId('readiness-headline')).toHaveTextContent("Stock couldn't be checked just now.");
     expect(screen.getByTestId('readiness-recheck')).toHaveTextContent('Try again');
+    expect(screen.queryByTestId('readiness-checked-at')).toBeNull();
   });
 
   it('anyone else (not in the audience, not the requester) gets nothing, and no read is made', async () => {
@@ -885,7 +886,7 @@ describe('orders/[id]: order readiness (F2-1)', () => {
     });
   });
 
-  it('a line added after readiness was read says it was not checked', async () => {
+  it('a line added between the order read and the readiness read: "the order changed", never a mix of two orders (as the phone)', async () => {
     asManager();
     orderAt('pending_approval', [LINE_A, LINE_B]);
     readinessResult.mockResolvedValue(
@@ -898,7 +899,84 @@ describe('orders/[id]: order readiness (F2-1)', () => {
 
     await renderPage();
 
-    expect(screen.getByTestId('readiness-line-unchecked')).toHaveTextContent('Not checked. Check again to see this line.');
+    const strip = screen.getByTestId('readiness-strip');
+    expect(strip).toHaveAttribute('data-failed', 'true');
+    expect(within(strip).getByTestId('readiness-headline')).toHaveTextContent("Couldn't check readiness. Try again.");
+    expect(within(strip).getByTestId('readiness-detail')).toHaveTextContent(
+      'The order changed while it was being checked. Check again.',
+    );
+    expect(screen.queryAllByTestId('readiness-line')).toEqual([]);
+  });
+
+  it('the order moved on between the two reads (pending on the page, approved in the facts): failed, and Approve partial says why', async () => {
+    asManager();
+    orderAt('pending_approval', [LINE_A]);
+    // The facts say approved and fully picked-ready: shown as-is, the strip
+    // would describe an approved order above a header that still says pending.
+    readinessResult.mockResolvedValue(
+      readinessOk(
+        orderReadinessFacts(ORDER_ID, 'approved', [{ lineId: 'LA', itemId: 'iA', requested: 20 }], [
+          visibleItemFacts('iA', { here: { rack: 5 }, heldOwn: 5 }),
+        ]),
+      ),
+    );
+
+    await renderPage();
+
+    const strip = screen.getByTestId('readiness-strip');
+    expect(strip).toHaveAttribute('data-failed', 'true');
+    expect(within(strip).getByTestId('readiness-detail')).toHaveTextContent(
+      'The order changed while it was being checked. Check again.',
+    );
+    expect(strip.textContent).not.toMatch(/Held|short|Ready/);
+    expect(lastPanelProps()).toMatchObject({
+      stockGates: { approvePartial: 'disabled', canRetry: true },
+      approveNotice: null,
+    });
+  });
+
+  it("the screen-reader \"Line N\" is the row's place on the page, whatever order core numbered the lines in", async () => {
+    asManager();
+    // The page lists LB first; core numbers the lines by (created_at, id), LA first.
+    orderAt('pending_approval', [LINE_B, LINE_A]);
+    readinessResult.mockResolvedValue(readinessOk(mixedFacts('pending_approval')));
+
+    await renderPage();
+
+    const cells = screen.getAllByTestId('readiness-line');
+    expect(cells.map((c) => c.getAttribute('data-state'))).toEqual(['needs_put_away', 'ready']);
+    expect(within(cells[0]!).getByTestId('readiness-sr-label')).toHaveTextContent(
+      'Line 1, Needs put-away, 15 in Staging.',
+    );
+    expect(within(cells[1]!).getByTestId('readiness-sr-label')).toHaveTextContent('Line 2, Ready to pick, 20 on the shelf.');
+  });
+
+  it('a backordered order: a handed-over line says so and is not counted as ready', async () => {
+    asManager();
+    orderAt('backordered', [
+      orderLine('LA', 'iA', 20, { quantity_fulfilled: 20 }),
+      orderLine('LB', 'iB', 25, { quantity_fulfilled: 5 }),
+    ]);
+    readinessResult.mockResolvedValue(
+      readinessOk(
+        orderReadinessFacts(
+          ORDER_ID,
+          'backordered',
+          [
+            { lineId: 'LA', itemId: 'iA', requested: 20, fulfilled: 20 },
+            { lineId: 'LB', itemId: 'iB', requested: 25, fulfilled: 5 },
+          ],
+          [visibleItemFacts('iA', { here: { rack: 3 } }), visibleItemFacts('iB')],
+        ),
+      ),
+    );
+
+    await renderPage();
+
+    const cells = screen.getAllByTestId('readiness-line');
+    expect(cells.map((c) => c.getAttribute('data-state'))).toEqual(['handed_over', 'short']);
+    expect(within(cells[0]!).getByTestId('readiness-chip')).toHaveTextContent('Handed over');
+    expect(screen.getByTestId('readiness-details')).toHaveTextContent('0 of 1 line ready to pick · 1 line handed over');
   });
 });
 

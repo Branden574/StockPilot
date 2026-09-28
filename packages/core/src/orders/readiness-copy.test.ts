@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   describeCompletionProjection,
+  describeReadinessForRequester,
   describeReadinessHold,
   describeReadinessLine,
   describeReadinessRollup,
@@ -17,14 +18,20 @@ import {
   READINESS_NEEDS_CONNECTION_COPY,
   readinessCheckedAtCopy,
   readinessLineAccessibilityLabel,
+  READINESS_FORBIDDEN_COPY,
+  READINESS_MODULE_OFF_COPY,
+  READINESS_ORDER_NOT_FOUND_COPY,
+  readinessFailureDetail,
   readinessOfflineCopy,
   readinessSummaryForRequester,
+  REQUESTER_CHECK_FAILED_COPY,
 } from './readiness-copy';
 import {
   assessOrderReadiness,
   orderReadinessPhase,
   PICKED_LINE_STATES,
   projectCompletePicking,
+  READINESS_ORDER_CHANGED_COPY,
   READINESS_STATES,
   type OrderReadinessAssessment,
   type OrderReadinessFacts,
@@ -77,7 +84,7 @@ function assess(
     observedAt: NOW,
     phase: orderReadinessPhase(status),
     linesCapped,
-    order: { id: 'o', orderNumber: 100, status, warehouseId: 'wh', neededBy, fulfillmentType: 'delivery' },
+    order: { id: 'o', orderNumber: 100, status, warehouseId: 'wh', neededBy, fulfillmentType: 'delivery', timeZone: TZ },
     lines: lines.map((l, i) => ({
       lineId: `l${i + 1}`,
       itemId: l.item,
@@ -141,6 +148,20 @@ describe('line sentences (F2 plan section 6)', () => {
     );
   });
 
+  it("a PO's expected date is the calendar day typed (stored as midnight UTC), never the day before in the org's zone", () => {
+    // The PO form saves <input type="date"> 2026-10-03 as 2026-10-03T00:00:00Z,
+    // which is Oct 2, 5 PM in Los Angeles.
+    expect(lineSentence([{ item: 'a', requested: 4 }], [item('a', { inbound: inbound([po('PO-2026-0042', '2026-10-03T00:00:00Z', 12)]) })])).toBe(
+      '4 short now. PO-2026-0042 expects 12 on Oct 3 (an expected date, not a promise).',
+    );
+    const { item: it } = only(
+      assess('pending_approval', [{ item: 'a', requested: 4 }], [item('a', { inbound: inbound([po('PO-2026-0042', '2026-10-03T00:00:00Z', 12)]) })]),
+    );
+    expect(describeReadinessWhy(it!, { timeZone: TZ }).parts).toContain(
+      'On order PO-2026-0042: 12 expected Oct 3 (an expected date, not a promise)',
+    );
+  });
+
   it('waiting on a PO: a date is expected, never promised', () => {
     expect(lineSentence([{ item: 'a', requested: 4 }], [item('a', { inbound: inbound([po('PO-2026-0042', '2026-10-03T16:00:00Z', 12)]) })])).toBe(
       '4 short now. PO-2026-0042 expects 12 on Oct 3 (an expected date, not a promise).',
@@ -189,6 +210,38 @@ describe('line sentences (F2 plan section 6)', () => {
     );
   });
 
+  it("what is on order but already needed by other orders is never \"nothing on order\"", () => {
+    const taken = { inbound: inbound([po('PO-0042', '2026-10-03T00:00:00Z', 5)]), committedOtherShortfall: 5 };
+    expect(lineSentence([{ item: 'a', requested: 4 }], [item('a', taken)])).toBe(
+      '4 short. What is on order is already needed by other orders.',
+    );
+    // Part of it: the rest of the PO covers 2 of the 4.
+    expect(
+      lineSentence([{ item: 'a', requested: 4 }], [item('a', { ...taken, committedOtherShortfall: 3 })]),
+    ).toBe(
+      '4 short now. PO-0042 expects 5 on Oct 3 (an expected date, not a promise). 2 of them are not covered: the rest of what is on order is already needed by other orders.',
+    );
+    // A draft still says so, after the taken PO.
+    expect(
+      lineSentence(
+        [{ item: 'a', requested: 4 }],
+        [item('a', { ...taken, drafts: { rows: [{ poId: 'd', poNumber: 'PO-D', remaining: 4 }], hiddenRemaining: 0, truncated: false, truncatedRemaining: 0 } })],
+      ),
+    ).toBe('4 short. What is on order is already needed by other orders. Draft PO-D covers 4 but has not been ordered.');
+    // Nothing at all on order is still "Nothing is on order."
+    expect(lineSentence([{ item: 'a', requested: 4 }], [item('a', { committedOtherShortfall: 5 })])).toBe(
+      '4 short. Nothing is on order.',
+    );
+    // Two lines of one item: the first takes the PO, the second says where it went.
+    const two = assess('pending_approval', [{ item: 'a', requested: 5 }, { item: 'a', requested: 4 }], [
+      item('a', { inbound: inbound([po('PO-0042', '2026-10-03T00:00:00Z', 5)]) }),
+    ]);
+    if (two.phase !== 'to_pick') throw new Error('to_pick expected');
+    expect(describeReadinessLine(two.lines[1]!, two.items[0]!, { timeZone: TZ })).toBe(
+      "4 short. What is on order is already needed by this item's other lines on this order.",
+    );
+  });
+
   it("can't confirm", () => {
     expect(lineSentence([{ item: 'a', requested: 4 }], [{ itemId: 'a', visible: false }])).toBe(
       "This item isn't visible to you, so its stock can't be checked.",
@@ -206,7 +259,11 @@ describe('line sentences (F2 plan section 6)', () => {
       'Nothing left to pick: all of this line was handed over.',
     );
     const { line } = only(assess('backordered', [{ item: 'a', requested: 4, fulfilled: 4 }], [item('a')]));
-    expect(readinessLineAccessibilityLabel(line)).toBe('Line 1, Ready to pick, nothing left to pick');
+    expect(readinessLineAccessibilityLabel(line)).toBe('Line 1, Handed over, nothing left to pick');
+    // An item the reader cannot see says the same: what is owed is on the line itself.
+    expect(lineSentence([{ item: 'h', requested: 4, fulfilled: 4 }], [{ itemId: 'h', visible: false }], 'backordered')).toBe(
+      'Nothing left to pick: all of this line was handed over.',
+    );
   });
 
   it('short with a draft covering part of it', () => {
@@ -297,6 +354,7 @@ describe('holds, why, needed-by, roll-up, requester, completion, offline', () =>
       details: [],
       neededBy: null,
       checkedAt: 'Checked at 10:42 AM. Stock can change after this.',
+      detail: null,
     });
     const mixed = assess(
       'pending_approval',
@@ -323,6 +381,12 @@ describe('holds, why, needed-by, roll-up, requester, completion, offline', () =>
     expect(describeReadinessRollup({ state: 'failed', message: 'x' })).toMatchObject({
       headline: "Couldn't check readiness. Try again.",
       checkedAt: null,
+      detail: null,
+    });
+    // A failure with a reason of its own names it, the same words on both platforms.
+    expect(describeReadinessRollup({ state: 'failed', message: READINESS_ORDER_CHANGED_COPY })).toMatchObject({
+      headline: "Couldn't check readiness. Try again.",
+      detail: 'The order changed while it was being checked. Check again.',
     });
     const capped = assess('pending_approval', [], [], null, true);
     expect(describeReadinessRollup({ state: 'ok', assessment: capped })!.headline).toBe(
@@ -336,6 +400,57 @@ describe('holds, why, needed-by, roll-up, requester, completion, offline', () =>
     });
   });
 
+  it('roll-up: handed-over lines are counted apart, never as ready to pick', () => {
+    const backordered = assess(
+      'backordered',
+      [
+        { item: 'a', requested: 2, fulfilled: 2 },
+        { item: 'b', requested: 3, fulfilled: 3 },
+        { item: 'c', requested: 4, fulfilled: 1 },
+      ],
+      [item('a'), item('b'), item('c')],
+    );
+    expect(describeReadinessRollup({ state: 'ok', assessment: backordered }, { timeZone: TZ })).toMatchObject({
+      headline: '1 line short',
+      details: ['0 of 1 line ready to pick', '2 lines handed over'],
+    });
+    const green = assess(
+      'backordered',
+      [
+        { item: 'a', requested: 2, fulfilled: 2 },
+        { item: 'c', requested: 4, fulfilled: 1 },
+      ],
+      [item('a'), item('c', { here: { rack: 3, site: 0, unplaced: 0, staging: 0 } })],
+    );
+    expect(describeReadinessRollup({ state: 'ok', assessment: green }, { timeZone: TZ })).toMatchObject({
+      headline: 'Ready to pick (1 of 1 line)',
+      tone: 'success',
+      details: ['1 line handed over'],
+    });
+    const allHanded = assess('backordered', [{ item: 'a', requested: 2, fulfilled: 2 }], [item('a')]);
+    expect(describeReadinessRollup({ state: 'ok', assessment: allHanded }, { timeZone: TZ })).toMatchObject({
+      headline: 'Nothing left to pick: every line was handed over.',
+      tone: 'neutral',
+      details: [],
+    });
+    expect(readinessSummaryForRequester({ state: 'ok', assessment: allHanded })).toBeNull();
+  });
+
+  it('failure details: only the reasons both platforms can give, in core words', () => {
+    expect(READINESS_ORDER_NOT_FOUND_COPY).toBe('Order not found.');
+    expect(READINESS_FORBIDDEN_COPY).toBe('You are not allowed to check readiness for this order.');
+    expect(READINESS_MODULE_OFF_COPY).toBe('Orders are turned off for this organization.');
+    for (const m of [READINESS_ORDER_NOT_FOUND_COPY, READINESS_FORBIDDEN_COPY, READINESS_MODULE_OFF_COPY, READINESS_ORDER_CHANGED_COPY]) {
+      expect(readinessFailureDetail({ state: 'failed', message: m })).toBe(m);
+    }
+    // An internal fault, no answer or an unreadable answer: the headline alone.
+    for (const m of ['An internal error occurred. Please try again.', 'Could not check readiness.', 'x']) {
+      expect(readinessFailureDetail({ state: 'failed', message: m })).toBeNull();
+    }
+    const fine = assess('approved', [{ item: 'a', requested: 1 }], [item('a', { here: { rack: 1, site: 0, unplaced: 0, staging: 0 } })]);
+    expect(readinessFailureDetail({ state: 'ok', assessment: fine })).toBeNull();
+  });
+
   it('requester: one sentence, no numbers', () => {
     const r = (a: OrderReadinessAssessment) => readinessSummaryForRequester({ state: 'ok', assessment: a });
     expect(r(assess('approved', [{ item: 'a', requested: 1 }], [item('a', { here: { rack: 0, site: 0, unplaced: 0, staging: 1 } })]))).toBe(
@@ -345,8 +460,35 @@ describe('holds, why, needed-by, roll-up, requester, completion, offline', () =>
     expect(r(assess('approved', [{ item: 'a', requested: 1 }], [{ itemId: 'a', visible: false }]))).toBe(
       "We're checking stock for some items.",
     );
-    expect(readinessSummaryForRequester({ state: 'failed', message: 'x' })).toBe("We're checking stock for some items.");
+    // A failed check says it failed, never that stock is being checked.
+    expect(readinessSummaryForRequester({ state: 'failed', message: 'x' })).toBe("Stock couldn't be checked just now.");
+    expect(REQUESTER_CHECK_FAILED_COPY).toBe("Stock couldn't be checked just now.");
     expect(r(assess('in_transit', [{ item: 'a', requested: 1, picked: 1 }], []))).toBeNull();
+  });
+
+  it("requester view: the same layout on both platforms (the sentence, when it was checked, and its tone)", () => {
+    const inStock = assess('approved', [{ item: 'a', requested: 1 }], [item('a', { here: { rack: 1, site: 0, unplaced: 0, staging: 0 } })]);
+    expect(describeReadinessForRequester({ state: 'ok', assessment: inStock }, { timeZone: TZ })).toEqual({
+      sentence: 'All items are in stock.',
+      tone: 'success',
+      icon: 'check',
+      checkedAt: 'Checked at 10:42 AM. Stock can change after this.',
+      failed: false,
+    });
+    const waiting = assess('approved', [{ item: 'a', requested: 1 }], [item('a')]);
+    expect(describeReadinessForRequester({ state: 'ok', assessment: waiting }, { timeZone: TZ })).toMatchObject({
+      sentence: 'Some items are waiting on stock.',
+      tone: 'warning',
+      icon: 'clock',
+    });
+    expect(describeReadinessForRequester({ state: 'failed', message: 'x' }, { timeZone: TZ })).toEqual({
+      sentence: "Stock couldn't be checked just now.",
+      tone: 'neutral',
+      icon: 'help',
+      checkedAt: null,
+      failed: true,
+    });
+    expect(describeReadinessForRequester({ state: 'ok', assessment: assess('in_transit', [], []) })).toBeNull();
   });
 
   it('completion confirm', () => {
@@ -359,6 +501,20 @@ describe('holds, why, needed-by, roll-up, requester, completion, offline', () =>
       "Picking can't finish until 4 of Maus I in Staging are put away.",
     ]);
     expect(describeCompletionProjection(null, true)).toEqual(["Stock couldn't be checked. Picking may come up short."]);
+    // On record 10, a rack of 7 and nothing in Staging: never "in Staging".
+    const disagree = assess('pick_slip_generated', [{ item: 'pen', requested: 10 }], [
+      item('pen', { name: 'Review pens', heldOwn: 10, onHand: 10, here: { rack: 7, site: 0, unplaced: 0, staging: 0 } }),
+    ]);
+    expect(describeCompletionProjection(projectCompletePicking(disagree), false)).toEqual([
+      "Picking can't finish: 3 of Review pens are on record, but no location holds them. A count will settle it.",
+    ]);
+    const both = assess('pick_slip_generated', [{ item: 'pen', requested: 10 }], [
+      item('pen', { name: 'Review pens', heldOwn: 10, onHand: 10, here: { rack: 6, site: 0, unplaced: 0, staging: 1 } }),
+    ]);
+    expect(describeCompletionProjection(projectCompletePicking(both), false)).toEqual([
+      "Picking can't finish until 1 of Review pens in Staging is put away.",
+      "Picking can't finish: 3 of Review pens are on record, but no location holds them. A count will settle it.",
+    ]);
     const fine = assess('pick_slip_generated', [{ item: 'a', requested: 1 }], [item('a', { heldOwn: 1, here: { rack: 1, site: 0, unplaced: 0, staging: 0 } })]);
     expect(describeCompletionProjection(projectCompletePicking(fine), false)).toBeNull();
   });
@@ -371,9 +527,12 @@ describe('holds, why, needed-by, roll-up, requester, completion, offline', () =>
     expect(readinessCheckedAtCopy('2026-09-28T21:14:00Z', { timeZone: TZ })).toBe(
       'Checked at 2:14 PM. Stock can change after this.',
     );
+    // Both causes of insufficient_placed_stock, never a claim about Staging
+    // the error cannot know (it is raised with nothing in Staging too).
     expect(INSUFFICIENT_PLACED_STOCK_COPY).toBe(
-      'Part of this item is still in Staging. Picking takes stock from racks, crates, Sites and Unplaced, never from Staging. Put the needed units away, then try again.',
+      "Picking takes stock from racks, crates, Sites and Unplaced, never from Staging, and they hold less of this item than the pick needs. Put away any of it that is in Staging, or count the item if its locations don't match its stock on record, then try again.",
     );
+    expect(INSUFFICIENT_PLACED_STOCK_COPY).not.toMatch(/still in Staging/);
   });
 
   it('quantities read as people write them', () => {
@@ -397,6 +556,9 @@ function everything(): string[] {
     ['pick_slip_generated', [{ item: 'a', requested: 9 }, { item: 'h', requested: 1 }], [item('a', { heldOwn: 9, here: { rack: 2, site: 0, unplaced: 0, staging: 5 } }), { itemId: 'h', visible: false }], null],
     ['in_transit', [{ item: 'a', requested: 9, picked: 2 }], [], '2026-09-20T00:00:00Z'],
     ['pending_approval', [], [], null],
+    ['pending_approval', [{ item: 'a', requested: 4 }, { item: 'a', requested: 4 }], [item('a', { inbound: inbound([po('PO-3', '2026-10-03T00:00:00Z', 5)]), committedOtherShortfall: 3 })], null],
+    ['pick_slip_generated', [{ item: 'a', requested: 10 }], [item('a', { heldOwn: 10, onHand: 10, here: { rack: 6, site: 0, unplaced: 0, staging: 1 } })], null],
+    ['backordered', [{ item: 'a', requested: 2, fulfilled: 2 }], [item('a')], null],
   ];
   for (const [status, lines, items, neededBy] of scenarios) {
     const a = assess(status, lines, items, neededBy);
@@ -417,6 +579,10 @@ function everything(): string[] {
   }
   out.push(...(describeCompletionProjection(null, true) ?? []));
   out.push(describeReadinessRollup({ state: 'failed', message: 'x' })!.headline);
+  for (const m of [READINESS_ORDER_NOT_FOUND_COPY, READINESS_FORBIDDEN_COPY, READINESS_MODULE_OFF_COPY, READINESS_ORDER_CHANGED_COPY]) {
+    out.push(describeReadinessRollup({ state: 'failed', message: m })!.detail!);
+  }
+  out.push(readinessSummaryForRequester({ state: 'failed', message: 'x' })!);
   out.push(readinessOfflineCopy(NOW, { timeZone: TZ }), READINESS_NEEDS_CONNECTION_COPY, INSUFFICIENT_PLACED_STOCK_COPY);
   for (const s of Object.values(READINESS_STATES)) out.push(s.label);
   for (const s of Object.values(PICKED_LINE_STATES)) out.push(s.label);
@@ -429,6 +595,7 @@ function everything(): string[] {
   const moved = orderStockGates('pending_approval', { state: 'ok', isShortStock: true, hasFulfillableStock: false, itemMoved: true });
   if (moved.notice) out.push(moved.notice);
   out.push(approveShortNotice({ state: 'ok', isShortStock: true, hasFulfillableStock: false, shortLineCount: 3 })!);
+  out.push(approveShortNotice({ state: 'ok', isShortStock: true, hasFulfillableStock: false, itemMoved: true, shortLineCount: 1 })!);
   return out;
 }
 

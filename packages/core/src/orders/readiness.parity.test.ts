@@ -69,6 +69,10 @@ interface ParityCase {
     projectedPicked?: Record<string, number>;
     completeFails?: boolean;
     completeError?: string;
+    /** Core only (the RPC raises one error either way): what the projection
+     *  says to put away, and what is on record that no location holds. */
+    completeNeedPutAway?: Record<string, number>;
+    completeUnaccounted?: Record<string, number>;
     draftable: Record<string, number>;
   };
 }
@@ -123,7 +127,7 @@ describe('the parity fixture', () => {
     }
     // The plan's C1..C8 are all here.
     expect(cases.map((c) => c.id)).toEqual(
-      expect.arrayContaining(['C1a', 'C1b', 'C2', 'C3', 'C4', 'C5', 'C6', 'C6b', 'C7', 'C8']),
+      expect.arrayContaining(['C1a', 'C1b', 'C2', 'C3', 'C4', 'C5', 'C6', 'C6b', 'C6c', 'C7', 'C8']),
     );
   });
 });
@@ -203,6 +207,12 @@ describe.each(cases.map((c, i) => [c.id, c, i + 1] as const))('%s', (_id, c, n) 
     expect(p!.willFail, `${c.id} willFail`).toBe(e.completeFails ?? false);
     if (e.completeFails) {
       expect(p!.failingItems.map((f) => f.reason), c.id).toEqual([e.completeError ?? 'insufficient_placed_stock']);
+    }
+    for (const [key, want] of Object.entries(e.completeNeedPutAway ?? {})) {
+      expect(p!.failingItems.find((f) => f.itemId === ids.items[key])?.needPutAway, `${c.id} ${key} needPutAway`).toBe(want);
+    }
+    for (const [key, want] of Object.entries(e.completeUnaccounted ?? {})) {
+      expect(p!.failingItems.find((f) => f.itemId === ids.items[key])?.unaccounted, `${c.id} ${key} unaccounted`).toBe(want);
     }
     if (e.projectedPicked) {
       const got = Object.fromEntries(

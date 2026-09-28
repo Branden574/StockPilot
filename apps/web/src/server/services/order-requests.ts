@@ -819,7 +819,13 @@ export class OrderRequestsService {
              charter_id, charter:charters!charter_id ( name, code )
            )`,
         )
-        .eq('order_request_id', id),
+        .eq('order_request_id', id)
+        // (created_at, id): the order readiness numbers the lines in and the
+        // phone lists them in. Unordered, Postgres returned an edited line
+        // after its siblings, so the page's rows moved after a pick save and
+        // no longer matched the phone (or the pick slip from a moment before).
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true }),
       this.ctx.supabase
         .from('stock_reservations')
         .select('id, item_id, warehouse_id, quantity, created_at')
@@ -2412,8 +2418,10 @@ export class OrderRequestsService {
           /* message still useful without the list */
         }
         // Core's sentence (F2-1): the draw engine (0373) takes racks,
-        // crates, Sites and Unplaced, never Staging. The old text blamed
-        // Unplaced stock too, which picking does take.
+        // crates, Sites and Unplaced, never Staging, and raises this when
+        // they hold less than the batch: units in Staging, or stock on record
+        // that no location holds. The sentence names both and claims neither
+        // (the old text blamed Unplaced stock, which picking does take).
         throw new ServiceError(
           'validation_error',
           `${INSUFFICIENT_PLACED_STOCK_COPY}${items ? ` Lines on this order: ${items}.` : ''}`,

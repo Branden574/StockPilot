@@ -38,8 +38,14 @@ import {
   isManagerOrAbove,
   orderReadinessPhase,
   parseOrderReadinessFacts,
+  READINESS_FORBIDDEN_COPY,
+  READINESS_MODULE_OFF_COPY,
+  READINESS_ORDER_CHANGED_COPY,
+  READINESS_ORDER_NOT_FOUND_COPY,
+  readinessAnswersOrder,
   readinessAudience,
   readinessStockFlags,
+  reconcileReadiness as reconcileReadinessCore,
   type OrderReadinessResult,
   type OrderStockCheck,
   type Permission,
@@ -67,22 +73,32 @@ interface RpcResponse {
  *  the database as a 22P02). The web service refuses it the same way. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export const READINESS_ORDER_NOT_FOUND_COPY = 'Order not found.';
-export const READINESS_FORBIDDEN_COPY = 'You are not allowed to check readiness for this order.';
-export const READINESS_MODULE_OFF_COPY = 'Orders are turned off for this organization.';
+// The refusals' words are core's (readiness-copy.ts), so the phone and the web
+// page name a failure the same way; re-exported for this module's callers.
+export {
+  READINESS_FORBIDDEN_COPY,
+  READINESS_MODULE_OFF_COPY,
+  READINESS_ORDER_CHANGED_COPY,
+  READINESS_ORDER_NOT_FOUND_COPY,
+};
+/** The answer could not be parsed (logged; shown as the headline alone, as
+ *  the web page shows its internal fault). */
 export const READINESS_UNREADABLE_COPY = 'The readiness answer could not be read.';
-/** The order screen's header and lines were read a moment apart from the
- *  facts; if the order moved in between, the two would describe different
- *  orders. */
-export const READINESS_ORDER_CHANGED_COPY =
-  'The order changed while it was being checked. Check again.';
 /** A manager's Approve partial and Resume need the check, and it was not made. */
 export const READINESS_NOT_CHECKED_COPY = 'Stock was not checked for this order.';
 
 /**
- * The sentence for a refused or failed facts read: the function's own
- * refusals (0377 body gates), and the phone's one sentence for no answer at
- * all (connection-copy.ts). The raw error text is never the sentence.
+ * The message for a refused or failed facts read: the function's own
+ * refusals (0377 body gates) in core's words, and the phone's sentence for no
+ * answer at all (connection-copy.ts). The raw error text is never the
+ * message. Under the headline the screen shows only what core
+ * readinessFailureDetail names (the refusals and "the order changed"), the
+ * same lines the web page shows; the rest is for the log.
+ *
+ * 42501 is "not allowed" ONLY when it is the function's own refusal
+ * ('unauthenticated', 0377 gate 1). Postgres raises 42501 "permission denied
+ * for function" when the EXECUTE grant is gone (the 0318 outage class): that
+ * is a fault, and telling every user they are not allowed would hide it.
  */
 export function readinessFailureMessage(
   error: RpcResponse['error'],
@@ -92,7 +108,7 @@ export function readinessFailureMessage(
   const message = error?.message ?? '';
   if (code === 'P0002' || message === 'order_request_not_found')
     return READINESS_ORDER_NOT_FOUND_COPY;
-  if (code === '42501') return READINESS_FORBIDDEN_COPY;
+  if (code === '42501' && message === 'unauthenticated') return READINESS_FORBIDDEN_COPY;
   if (error?.hint === 'module_disabled' || message === 'module_disabled')
     return READINESS_MODULE_OFF_COPY;
   // No status (or 0) and no SQLSTATE: the request never got an answer.
@@ -120,10 +136,13 @@ export async function readOrderReadiness(
   if (typeof orderId !== 'string' || !UUID_RE.test(orderId)) {
     return failed(READINESS_ORDER_NOT_FOUND_COPY, `not an order id: ${String(orderId)}`);
   }
+  // A uuid is case-insensitive and the database answers in lower case: ask
+  // in that form and compare like for like (the web service does the same).
+  const id = orderId.toLowerCase();
   let res: RpcResponse | null | undefined;
   try {
     res = (await (client.rpc('order_readiness_facts', {
-      p_order_id: orderId,
+      p_order_id: id,
     }) as PromiseLike<RpcResponse>)) as RpcResponse | null | undefined;
   } catch (e) {
     return failed(CONNECTION_FAILURE_COPY, e instanceof Error ? e.message : String(e));
@@ -141,7 +160,7 @@ export async function readOrderReadiness(
   } catch (e) {
     return failed(READINESS_UNREADABLE_COPY, e instanceof Error ? e.message : String(e));
   }
-  if (facts.order.id !== orderId) {
+  if (!readinessAnswersOrder(facts, id)) {
     return failed(READINESS_UNREADABLE_COPY, `answered for order ${facts.order.id}`);
   }
   return { state: 'ok', assessment: assessOrderReadiness(facts, { now: now() }) };
@@ -264,25 +283,21 @@ export function shouldReadReadiness(input: {
  * The facts are read alongside the order's own header and lines, a moment
  * apart. If the order moved in between (another status, a line added or
  * removed), the answer describes a different order than the screen shows: it
- * is `failed`, never a mix of the two.
+ * is `failed`, never a mix of the two. Core's reconcileReadiness, the one the
+ * web page runs too; the phone also logs the difference.
  */
 export function reconcileReadiness(
   result: OrderReadinessResult,
   shown: { status: string; lineIds: readonly (string | null)[] },
 ): OrderReadinessResult {
-  if (result.state === 'failed') return result;
-  const a = result.assessment;
-  if (a.order.status !== shown.status) {
-    return failed(READINESS_ORDER_CHANGED_COPY, `status ${a.order.status}, screen ${shown.status}`);
+  const out = reconcileReadinessCore(result, shown);
+  if (out !== result && result.state === 'ok') {
+    console.warn(
+      '[order-readiness] readiness could not be checked',
+      `the order changed: status ${result.assessment.order.status}, screen ${shown.status}`,
+    );
   }
-  if (a.phase === 'closed' || a.linesCapped) return result;
-  const theirs = new Set(a.lines.map((l) => l.lineId));
-  const ours = new Set(shown.lineIds.filter((x): x is string => typeof x === 'string'));
-  const same = theirs.size === ours.size && [...ours].every((id) => theirs.has(id));
-  if (!same) {
-    return failed(READINESS_ORDER_CHANGED_COPY, `${theirs.size} lines checked, ${ours.size} shown`);
-  }
-  return result;
+  return out;
 }
 
 /**

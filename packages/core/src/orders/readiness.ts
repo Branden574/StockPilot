@@ -41,6 +41,7 @@
  */
 
 import type { OrderStatus } from '../order-state-machine';
+import { resolveOrgTimezone } from '../time/org-timezone';
 
 import { lineOwedUnits, lineUnpickedUnits, PICKING_SETTLED_STATUSES } from './pick-shortfall';
 
@@ -99,6 +100,10 @@ export interface ReadinessOrderFacts {
   warehouseId: string | null;
   neededBy: string | null;
   fulfillmentType: string | null;
+  /** organizations.timezone (additive: an older database does not send it,
+   *  and the parser reads that as null): the zone the needed-by's calendar
+   *  day is read in (core's documented default when absent). */
+  timeZone?: string | null;
 }
 
 export interface ReadinessLineFacts {
@@ -389,6 +394,8 @@ export function parseOrderReadinessFacts(raw: unknown): OrderReadinessFacts {
     warehouseId: strOrNull(order.warehouseId, 'facts.order.warehouseId'),
     neededBy: dateOrNull(order.neededBy, 'facts.order.neededBy'),
     fulfillmentType: strOrNull(order.fulfillmentType, 'facts.order.fulfillmentType'),
+    // Additive: an older database does not send it (absent means unknown).
+    timeZone: strOrNull(order.timeZone, 'facts.order.timeZone'),
   };
   const phase = o.phase;
   if (phase !== 'to_pick' && phase !== 'picked' && phase !== 'closed') {
@@ -434,7 +441,16 @@ export function parseOrderReadinessFacts(raw: unknown): OrderReadinessFacts {
 
 // ── Assessment types ────────────────────────────────────────────────────────
 
-export type ReadinessLineState = 'ready' | 'needs_put_away' | 'awaiting_po' | 'short' | 'unknown';
+export type ReadinessLineState =
+  | 'ready'
+  | 'needs_put_away'
+  | 'awaiting_po'
+  | 'short'
+  | 'unknown'
+  /** The line owes nothing: all of it was handed over (a backordered order's
+   *  finished lines). Nothing to pick, so never "Ready to pick", and not
+   *  counted among the lines that are or are not ready. */
+  | 'handed_over';
 
 /** Why a line is in its state. */
 export type ReadinessReason =
@@ -474,7 +490,7 @@ export type ReadinessNote =
   | 'pending_others'
   /** the item is a kit (its stock is the kit's own, never drafted). */
   | 'kit_stock'
-  /** the line owes nothing (all of it was handed over). */
+  /** the line owes nothing (all of it was handed over): state handed_over. */
   | 'nothing_owed';
 
 export interface ReadinessLineUnits {
@@ -587,8 +603,12 @@ export type NeededBySignal = 'past_due' | 'at_risk';
 
 export interface ReadinessRollup {
   lineCount: number;
+  /** Lines that still owe something (lineCount less the handed-over ones):
+   *  what "N of M lines ready to pick" counts. */
+  owedLineCount: number;
   counts: Record<ReadinessLineState, number>;
-  /** GREEN: every line ready, every fact readable, not capped. */
+  /** GREEN: every owed line ready (at least one), every fact readable, not
+   *  capped. */
   ready: boolean;
   capped: boolean;
   neededBy: string | null;
@@ -660,6 +680,7 @@ export type ReadinessTone = 'success' | 'warning' | 'info' | 'danger' | 'neutral
 export const READINESS_STATES: Readonly<
   Record<ReadinessLineState, { label: string; tone: ReadinessTone; icon: string; precedence: number }>
 > = {
+  handed_over: { label: 'Handed over', tone: 'neutral', icon: 'handed', precedence: -1 },
   ready: { label: 'Ready to pick', tone: 'success', icon: 'check', precedence: 0 },
   needs_put_away: { label: 'Needs put-away', tone: 'warning', icon: 'package', precedence: 1 },
   awaiting_po: { label: 'Waiting on a PO', tone: 'info', icon: 'clock', precedence: 2 },
@@ -722,6 +743,34 @@ function inboundOrder(a: ReadinessInboundRow, b: ReadinessInboundRow): number {
   }
   if (a.poNumber !== b.poNumber) return a.poNumber < b.poNumber ? -1 : 1;
   return a.poId < b.poId ? -1 : a.poId > b.poId ? 1 : 0;
+}
+
+/** A PO's expected date is a CALENDAR DATE: the PO form and the import
+ *  screens save an <input type="date"> day as midnight UTC of that day (the
+ *  PO PDF reads it back in UTC for the same reason, lib/pdf/po.tsx). Its day
+ *  is the UTC one, "YYYY-MM-DD". */
+function poDayKey(iso: string | null): string | null {
+  const t = timeOf(iso);
+  return t === null ? null : new Date(t).toISOString().slice(0, 10);
+}
+
+/** An instant's calendar day in a zone, "YYYY-MM-DD" (null if the runtime
+ *  cannot say). */
+function zonedDayKey(iso: string | null, tz: string): string | null {
+  const t = timeOf(iso);
+  if (t === null) return null;
+  try {
+    const s = new Date(t).toLocaleDateString('en-US', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const m = /(\d{2})\D(\d{2})\D(\d{4})/.exec(s);
+    return m ? `${m[3]}-${m[1]}-${m[2]}` : null;
+  } catch {
+    return null;
+  }
 }
 
 function toTime(now: Date | string | number): number {
@@ -861,6 +910,7 @@ const EMPTY_COUNTS: Record<ReadinessLineState, number> = {
   awaiting_po: 0,
   short: 0,
   unknown: 0,
+  handed_over: 0,
 };
 
 function worstOf(states: readonly ReadinessLineState[]): ReadinessLineState {
@@ -954,6 +1004,7 @@ export function assessOrderReadiness(
       items: [],
       rollup: {
         lineCount: 0,
+        owedLineCount: 0,
         counts: { ...EMPTY_COUNTS },
         ready: false,
         capped: true,
@@ -971,6 +1022,9 @@ export function assessOrderReadiness(
     linesByItem.set(l.itemId, list);
   }
   const neededByMs = timeOf(facts.order.neededBy);
+  // The needed-by's calendar day in the org's zone, for the PO dates (which
+  // are calendar days): a PO expected on the needed-by day is not after it.
+  const neededByDay = zonedDayKey(facts.order.neededBy, resolveOrgTimezone(facts.order.timeZone));
 
   const items: ReadinessItemAssessment[] = [];
   const assessed = new Map<string, ReadinessLineAssessment>();
@@ -982,6 +1036,9 @@ export function assessOrderReadiness(
       items.push({ itemId, visible: false, facts: null, blocked: null, quantities: null });
       for (const l of itemLines) {
         const owed = lineOwedUnits({ quantityRequested: l.requested, quantityFulfilled: l.fulfilled });
+        // What a line owes is on the line itself: a handed-over line is
+        // handed over whether or not its item can be read.
+        const handedOver = owed <= EPS;
         assessed.set(l.lineId, {
           lineId: l.lineId,
           itemId,
@@ -990,9 +1047,9 @@ export function assessOrderReadiness(
           fulfilled: l.fulfilled,
           picked: l.picked,
           owed: q4(owed),
-          state: 'unknown',
-          reasons: ['not_visible'],
-          notes: owed <= EPS ? ['nothing_owed'] : [],
+          state: handedOver ? 'handed_over' : 'unknown',
+          reasons: handedOver ? [] : ['not_visible'],
+          notes: handedOver ? ['nothing_owed'] : [],
           units: null,
           expectedAt: null,
           poShares: [],
@@ -1112,7 +1169,9 @@ export function assessOrderReadiness(
         touched.push('needs_put_away');
         reasons.push('in_staging');
       }
-      const state = worstOf(touched);
+      // A line that owes nothing touches no bucket: it is handed over, never
+      // "Ready to pick".
+      const state: ReadinessLineState = owed <= EPS ? 'handed_over' : worstOf(touched);
 
       const notes: ReadinessNote[] = [];
       if (owed <= EPS) notes.push('nothing_owed');
@@ -1132,9 +1191,17 @@ export function assessOrderReadiness(
           notes.push('no_expected_date');
         }
         if (poShares.some((s) => s.kind === 'hidden')) notes.push('on_hidden_po');
-        if (neededByMs !== null && latestKnown !== null && latestKnown > neededByMs) {
-          notes.push('expected_after_needed_by');
-        }
+        // By calendar day: the PO's (UTC) day after the needed-by's day in
+        // the org's zone. Comparing the instants would read a PO due the day
+        // after an evening needed-by as on time (midnight UTC is the
+        // afternoon before, west of UTC). If the runtime cannot name a day,
+        // the instants are compared (the old, looser rule).
+        const latestDay = poDayKey(latestKnown === null ? null : new Date(latestKnown).toISOString());
+        const after =
+          latestDay !== null && neededByDay !== null
+            ? latestDay > neededByDay
+            : neededByMs !== null && latestKnown !== null && latestKnown > neededByMs;
+        if (after) notes.push('expected_after_needed_by');
       }
       if (units.short > EPS && draftUnits > EPS) notes.push('on_draft_po');
       if (units.short > EPS && (f.pendingOthers?.orders ?? 0) > 0) notes.push('pending_others');
@@ -1178,7 +1245,10 @@ export function assessOrderReadiness(
     .filter((l): l is ReadinessLineAssessment => l !== undefined);
   const counts = { ...EMPTY_COUNTS };
   for (const l of outLines) counts[l.state] += 1;
-  const green = outLines.length > 0 && counts.ready === outLines.length;
+  // Handed-over lines have nothing to pick: green is over the lines still
+  // owed, and needs at least one.
+  const owedLineCount = outLines.length - counts.handed_over;
+  const green = owedLineCount > 0 && counts.ready === owedLineCount;
   const atRisk =
     counts.short > 0 ||
     counts.unknown > 0 ||
@@ -1198,6 +1268,7 @@ export function assessOrderReadiness(
     items,
     rollup: {
       lineCount: outLines.length,
+      owedLineCount,
       counts,
       ready: green,
       capped: false,
@@ -1288,6 +1359,47 @@ export function readinessStockFlags(result: OrderReadinessResult): OrderStockChe
   };
 }
 
+// ── Reconcile (the facts must describe the order on screen) ─────────────────
+
+/** A screen read the order (its header and lines) and its facts a moment
+ *  apart, and the order moved in between. */
+export const READINESS_ORDER_CHANGED_COPY = 'The order changed while it was being checked. Check again.';
+
+/** uuids compare case-insensitively (the database answers in lower case). */
+function sameId(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/**
+ * The web page and the phone read the order (header and lines) and its facts
+ * a moment apart. If the order moved in between (another status, a line added
+ * or removed), the facts describe a different order than the screen shows:
+ * the answer is `failed` ("The order changed while it was being checked."),
+ * never a mix of the two. A capped or closed answer carries no lines, so only
+ * its status is compared. Pure; the same on both platforms.
+ */
+export function reconcileReadiness(
+  result: OrderReadinessResult,
+  shown: { status: string; lineIds: readonly (string | null | undefined)[] },
+): OrderReadinessResult {
+  if (result.state === 'failed') return result;
+  const a = result.assessment;
+  const changed: OrderReadinessResult = { state: 'failed', message: READINESS_ORDER_CHANGED_COPY };
+  if (a.order.status !== shown.status) return changed;
+  if (a.phase === 'closed' || a.linesCapped) return result;
+  const theirs = new Set(a.lines.map((l) => l.lineId.toLowerCase()));
+  const ours = new Set(
+    shown.lineIds.filter((x): x is string => typeof x === 'string').map((x) => x.toLowerCase()),
+  );
+  const same = theirs.size === ours.size && [...ours].every((id) => theirs.has(id));
+  return same ? result : changed;
+}
+
+/** Whether an answer is about this order (uuids, any case). */
+export function readinessAnswersOrder(facts: OrderReadinessFacts, orderId: string): boolean {
+  return sameId(facts.order.id, orderId);
+}
+
 // ── Completion projection (the complete_picking twin) ───────────────────────
 
 export interface CompletionProjectionLine {
@@ -1316,8 +1428,13 @@ export interface CompletionProjection {
     itemId: string;
     itemName: string;
     reason: 'insufficient_placed_stock' | 'insufficient_stock';
-    /** Units that would have to come out of Staging (put them away first). */
+    /** Of the units the draw cannot find, those in Staging (here or in
+     *  another warehouse): put them away first. */
     needPutAway: number;
+    /** The rest: on record, but in no location at all (on record and the
+     *  locations disagree; a count settles it). The draw engine raises the
+     *  same insufficient_placed_stock for these, with nothing in Staging. */
+    unaccounted: number;
   }>;
   /** Items whose numbers are unknown (not readable, or the order is capped):
    *  the projection cannot promise anything about them. */
@@ -1397,13 +1514,19 @@ export function projectCompletePicking(
         itemName: it.facts.name,
         reason: 'insufficient_stock',
         needPutAway: 0,
+        unaccounted: 0,
       });
     } else if (total > drawable + EPS) {
+      // What the draw cannot find: Staging first (putting it away helps),
+      // then what no location holds at all (never "in Staging").
+      const missing = q4(total - drawable);
+      const needPutAway = min(missing, q4(it.facts.here.staging + it.facts.elsewhere.staging));
       failingItems.push({
         itemId,
         itemName: it.facts.name,
         reason: 'insufficient_placed_stock',
-        needPutAway: q4(total - drawable),
+        needPutAway,
+        unaccounted: q4(missing - needPutAway),
       });
     }
   }

@@ -7,8 +7,11 @@ import {
   orderReadinessPhase,
   parseOrderReadinessFacts,
   projectCompletePicking,
+  READINESS_ORDER_CHANGED_COPY,
   READINESS_STATES,
+  readinessAnswersOrder,
   readinessAudience,
+  reconcileReadiness,
   ReadinessFactsShapeError,
   readinessStockFlags,
   type OrderReadinessAssessment,
@@ -69,6 +72,7 @@ function facts(opts: {
   items: ReadinessItemFacts[];
   neededBy?: string | null;
   linesCapped?: boolean;
+  timeZone?: string | null;
 }): OrderReadinessFacts {
   const status = opts.status ?? 'pending_approval';
   return {
@@ -83,6 +87,7 @@ function facts(opts: {
       warehouseId: WH,
       neededBy: opts.neededBy ?? null,
       fulfillmentType: 'pickup',
+      timeZone: opts.timeZone === undefined ? 'America/Los_Angeles' : opts.timeZone,
     },
     lines: opts.lines.map((l, i) => ({
       lineId: l.id,
@@ -340,12 +345,12 @@ describe('line states', () => {
     expect(a.rollup.ready).toBe(false);
   });
 
-  it('the worst state wins: short > unknown > awaiting > put-away > ready', () => {
+  it('the worst state wins: short > unknown > awaiting > put-away > ready (handed over touches nothing)', () => {
     expect(
       Object.entries(READINESS_STATES)
         .sort((x, y) => y[1].precedence - x[1].precedence)
         .map(([s]) => s),
-    ).toEqual(['short', 'unknown', 'awaiting_po', 'needs_put_away', 'ready']);
+    ).toEqual(['short', 'unknown', 'awaiting_po', 'needs_put_away', 'ready', 'handed_over']);
     const a = toPick(
       facts({
         lines: [{ id: 'l1', item: 'a', requested: 20 }],
@@ -369,7 +374,7 @@ describe('line states', () => {
     });
   });
 
-  it('a line that owes nothing is ready with nothing_owed', () => {
+  it('a line that owes nothing is handed over (never "Ready to pick"), with nothing_owed', () => {
     const a = toPick(
       facts({
         status: 'backordered',
@@ -380,8 +385,20 @@ describe('line states', () => {
         items: [item('a', { onHand: 0 })],
       }),
     );
-    expect(lineOf(a, 'l1')).toMatchObject({ state: 'ready', notes: ['nothing_owed'], owed: 0 });
+    expect(lineOf(a, 'l1')).toMatchObject({ state: 'handed_over', reasons: [], notes: ['nothing_owed'], owed: 0 });
     expect(lineOf(a, 'l2')).toMatchObject({ state: 'short', owed: 3 });
+    expect(READINESS_STATES.handed_over).toMatchObject({ label: 'Handed over', tone: 'neutral' });
+  });
+
+  it('a handed-over line of an item the reader cannot see is handed over too (its owed is on the line itself)', () => {
+    const a = toPick(
+      facts({
+        status: 'backordered',
+        lines: [{ id: 'l1', item: 'h', requested: 5, fulfilled: 5 }],
+        items: [{ itemId: 'h', visible: false }],
+      }),
+    );
+    expect(lineOf(a, 'l1')).toMatchObject({ state: 'handed_over', reasons: [], notes: ['nothing_owed'], units: null });
   });
 });
 
@@ -418,6 +435,17 @@ describe('allocation', () => {
     // Mutation: subtracting heldOwn from availability reads 10 short.
     expect(lineOf(a, 'l1')).toMatchObject({ state: 'ready', units: { ready: 10, short: 0 } });
     expect(a.items[0]!.quantities).toMatchObject({ available: 10, approveAvailable: 0 });
+  });
+
+  it('other orders\' holds come off the racks first, so what is left for this order on Unplaced is "no rack recorded"', () => {
+    const a = toPick(
+      facts({
+        lines: [{ id: 'l1', item: 'a', requested: 7 }],
+        items: [item('a', { heldOtherOrders: 3, here: { rack: 5, site: 0, unplaced: 5, staging: 0 } })],
+      }),
+    );
+    // Ready 7 of the 10 on the shelf (3 held elsewhere): 2 from the racks, 5 from Unplaced.
+    expect(lineOf(a, 'l1')).toMatchObject({ state: 'ready', notes: ['no_rack_recorded'], units: { ready: 7, noRack: 5 } });
   });
 
   it('other orders\' holds (rentals included) are charged to shelf stock first', () => {
@@ -631,7 +659,7 @@ describe('roll-up', () => {
   it('green only when every line is ready and every fact readable', () => {
     const a = toPick(facts({ lines: [{ id: 'l1', item: 'a', requested: 5 }], items: [readyItem] }));
     expect(a.rollup).toMatchObject({ ready: true, lineCount: 1, capped: false, neededBySignal: null });
-    expect(a.rollup.counts).toEqual({ ready: 1, needs_put_away: 0, awaiting_po: 0, short: 0, unknown: 0 });
+    expect(a.rollup.counts).toEqual({ ready: 1, needs_put_away: 0, awaiting_po: 0, short: 0, unknown: 0, handed_over: 0 });
   });
 
   it('never green with anything unknown: hidden, records disagree, held elsewhere, capped', () => {
@@ -643,6 +671,37 @@ describe('roll-up', () => {
     ];
     for (const f of cases) expect(toPick(f).rollup.ready).toBe(false);
     expect(toPick(cases[3]!).rollup).toMatchObject({ capped: true, lineCount: 0 });
+  });
+
+  it('handed-over lines are neither ready nor owed: the count and the green are over the lines still owed', () => {
+    const short = toPick(
+      facts({
+        status: 'backordered',
+        lines: [
+          { id: 'l1', item: 'a', requested: 2, fulfilled: 2 },
+          { id: 'l2', item: 'b', requested: 3, fulfilled: 3 },
+          { id: 'l3', item: 'c', requested: 4, fulfilled: 1 },
+        ],
+        items: [item('a'), item('b'), item('c')],
+      }),
+    );
+    expect(short.rollup).toMatchObject({ ready: false, lineCount: 3, owedLineCount: 1 });
+    expect(short.rollup.counts).toEqual({ ready: 0, needs_put_away: 0, awaiting_po: 0, short: 1, unknown: 0, handed_over: 2 });
+    const green = toPick(
+      facts({
+        status: 'backordered',
+        lines: [
+          { id: 'l1', item: 'a', requested: 2, fulfilled: 2 },
+          { id: 'l2', item: 'c', requested: 4, fulfilled: 1 },
+        ],
+        items: [item('a'), item('c', { here: { rack: 3, site: 0, unplaced: 0, staging: 0 } })],
+      }),
+    );
+    expect(green.rollup).toMatchObject({ ready: true, lineCount: 2, owedLineCount: 1 });
+    const allHanded = toPick(
+      facts({ status: 'backordered', lines: [{ id: 'l1', item: 'a', requested: 2, fulfilled: 2 }], items: [item('a')] }),
+    );
+    expect(allHanded.rollup).toMatchObject({ ready: false, lineCount: 1, owedLineCount: 0 });
   });
 
   it('an order with no lines is not green', () => {
@@ -680,6 +739,35 @@ describe('roll-up', () => {
     expect(signal([item('c')])).toBe('at_risk');
     expect(signal([{ itemId: 'c', visible: false }])).toBe('at_risk');
     expect(signal([readyItem], 'a')).toBeNull();
+  });
+
+  it("a PO's expected date is a calendar date (midnight UTC of the day typed), compared by day with the needed-by in the org's zone", () => {
+    // Needed by Oct 9, 5:30 PM in Los Angeles (00:30 UTC on Oct 10).
+    const neededBy = '2026-10-10T00:30:00Z';
+    const po = (expectedAt: string) =>
+      item('c', {
+        inbound: {
+          rows: [{ poId: 'p', poNumber: 'PO-1', status: 'ordered', expectedAt, remaining: 10 }],
+          hiddenRemaining: 0,
+          truncated: false,
+          truncatedRemaining: 0,
+        },
+      });
+    const run = (expectedAt: string, timeZone: string | null = 'America/Los_Angeles') =>
+      toPick(facts({ lines: [{ id: 'l1', item: 'c', requested: 2 }], items: [po(expectedAt)], neededBy, timeZone }));
+    // Expected Oct 10, needed Oct 9: after the needed-by, at risk (the instant
+    // 00:00 UTC is before 00:30 UTC, which hid it).
+    const late = run('2026-10-10T00:00:00Z');
+    expect(late.lines[0]!.notes).toEqual(['expected_after_needed_by']);
+    expect(late.rollup.neededBySignal).toBe('at_risk');
+    // Expected Oct 9, the needed-by day: not after it.
+    const sameDay = run('2026-10-09T00:00:00Z');
+    expect(sameDay.lines[0]!.notes).toEqual([]);
+    expect(sameDay.rollup.neededBySignal).toBeNull();
+    // The zone comes from the facts: in UTC the needed-by is Oct 10, so an Oct 10 PO is on the day.
+    expect(run('2026-10-10T00:00:00Z', 'UTC').lines[0]!.notes).toEqual([]);
+    // No zone in the facts (an older database): the documented default zone (Los Angeles).
+    expect(run('2026-10-10T00:00:00Z', null).lines[0]!.notes).toEqual(['expected_after_needed_by']);
   });
 
   it('no needed-by: no signal at all, never an "on track" claim', () => {
@@ -740,6 +828,15 @@ describe('parseOrderReadinessFacts', () => {
     expect(parsed.items[0]).not.toHaveProperty('futureItemKey');
     expect(parsed).not.toHaveProperty('futureKey');
     expect(parsed.lines[0]).toMatchObject({ lineId: 'l1', requested: 2, picked: null });
+  });
+
+  it("reads the org's zone from the order, and an older answer without it as none", () => {
+    const f = facts({ lines: [], items: [], timeZone: 'America/Chicago' });
+    expect(parseOrderReadinessFacts(JSON.parse(JSON.stringify(f))).order.timeZone).toBe('America/Chicago');
+    const older = JSON.parse(JSON.stringify(f)) as { order: Record<string, unknown> };
+    delete older.order.timeZone;
+    expect(parseOrderReadinessFacts(older).order.timeZone).toBeNull();
+    expect(() => parseOrderReadinessFacts({ ...older, order: { ...older.order, timeZone: 7 } })).toThrow(ReadinessFactsShapeError);
   });
 
   it('accepts an older answer without the truncation keys', () => {
@@ -834,6 +931,21 @@ describe('readinessStockFlags', () => {
     expect(flags(f(6))).toEqual({ state: 'ok', isShortStock: true, hasFulfillableStock: false, itemMoved: false, shortLineCount: 1 });
   });
 
+  it('pending: shortLineCount counts LINES (two lines of one refused item are two), not items', () => {
+    const f = facts({
+      lines: [
+        { id: 'l1', item: 'a', requested: 3 },
+        { id: 'l2', item: 'a', requested: 3 },
+        { id: 'l3', item: 'b', requested: 1 },
+      ],
+      items: [
+        item('a', { here: { rack: 5, site: 0, unplaced: 0, staging: 0 } }),
+        item('b', { here: { rack: 1, site: 0, unplaced: 0, staging: 0 } }),
+      ],
+    });
+    expect(flags(f)).toMatchObject({ state: 'ok', isShortStock: true, shortLineCount: 2 });
+  });
+
   it('backordered: fulfillable when an owed item has anything free', () => {
     const f = (onHand: number) =>
       facts({
@@ -912,8 +1024,47 @@ describe('projectCompletePicking (the complete_picking twin)', () => {
     );
     expect(p).toMatchObject({
       willFail: true,
-      failingItems: [{ itemId: 'a', reason: 'insufficient_placed_stock', needPutAway: 4 }],
+      failingItems: [{ itemId: 'a', reason: 'insufficient_placed_stock', needPutAway: 4, unaccounted: 0 }],
     });
+  });
+
+  it('fails the same way when on record is more than the locations hold, and never blames Staging it does not have', () => {
+    // 10 on record, a rack of 7, nothing in Staging, the order holds 10: the
+    // one-click batch is 10 and the draw finds 7 (insufficient_placed_stock).
+    const disagree = project(
+      facts({
+        status: 'pick_slip_generated',
+        lines: [{ id: 'l1', item: 'a', requested: 10 }],
+        items: [item('a', { heldOwn: 10, onHand: 10, here: { rack: 7, site: 0, unplaced: 0, staging: 0 } })],
+      }),
+    );
+    expect(disagree).toMatchObject({
+      willFail: true,
+      failingItems: [{ itemId: 'a', reason: 'insufficient_placed_stock', needPutAway: 0, unaccounted: 3 }],
+    });
+    // Both at once: 2 in Staging would help, 3 more are on record but nowhere.
+    const both = project(
+      facts({
+        status: 'pick_slip_generated',
+        lines: [{ id: 'l1', item: 'a', requested: 10 }],
+        items: [item('a', { heldOwn: 10, onHand: 10, here: { rack: 5, site: 0, unplaced: 0, staging: 2 } })],
+      }),
+    );
+    expect(both!.failingItems).toEqual([
+      { itemId: 'a', itemName: 'Item a', reason: 'insufficient_placed_stock', needPutAway: 2, unaccounted: 3 },
+    ]);
+  });
+
+  it('an explicit pick above what is owed takes only what is owed', () => {
+    const p = project(
+      facts({
+        status: 'picking_in_progress',
+        lines: [{ id: 'l1', item: 'a', requested: 6, picked: 9 }],
+        items: [item('a', { heldOwn: 6, here: { rack: 10, site: 0, unplaced: 0, staging: 0 } })],
+      }),
+    );
+    expect(p!.lines.map((l) => l.batch)).toEqual([6]);
+    expect(p!.shortLines).toEqual([]);
   });
 
   it('draws other warehouses\' pickable stock like the RPC (no failure), while readiness says held elsewhere', () => {
@@ -934,7 +1085,9 @@ describe('projectCompletePicking (the complete_picking twin)', () => {
         items: [item('a', { here: { rack: 5, site: 0, unplaced: 0, staging: 0 } })],
       }),
     );
-    expect(p!.failingItems).toEqual([{ itemId: 'a', itemName: 'Item a', reason: 'insufficient_stock', needPutAway: 0 }]);
+    expect(p!.failingItems).toEqual([
+      { itemId: 'a', itemName: 'Item a', reason: 'insufficient_stock', needPutAway: 0, unaccounted: 0 },
+    ]);
   });
 
   it('a hidden item cannot be projected in one click, and is reported, never guessed', () => {
@@ -989,5 +1142,53 @@ describe('readinessAudience', () => {
     expect(readinessAudience({ ...base, isOwnRequest: true })).toBe('requester');
     expect(readinessAudience({ ...base, isOwnRequest: true, canUpdateItems: true })).toBe('full');
     expect(readinessAudience(base)).toBe('none');
+  });
+});
+
+// ── Reconcile (the facts must describe the order on screen) ────────────────
+
+describe('reconcileReadiness', () => {
+  const f = facts({
+    status: 'pending_approval',
+    lines: [
+      { id: 'l1', item: 'a', requested: 1 },
+      { id: 'l2', item: 'a', requested: 1 },
+    ],
+    items: [item('a', { here: { rack: 5, site: 0, unplaced: 0, staging: 0 } })],
+  });
+  const result = ok(assessOrderReadiness(f, { now: NOW }));
+
+  it('the same status and the same lines (in any order): the answer stands', () => {
+    expect(reconcileReadiness(result, { status: 'pending_approval', lineIds: ['l2', 'l1'] })).toBe(result);
+  });
+
+  it('another status, or another set of lines: failed ("the order changed"), never a mix of two orders', () => {
+    const changed = { state: 'failed', message: READINESS_ORDER_CHANGED_COPY };
+    expect(reconcileReadiness(result, { status: 'approved', lineIds: ['l1', 'l2'] })).toEqual(changed);
+    expect(reconcileReadiness(result, { status: 'pending_approval', lineIds: ['l1'] })).toEqual(changed);
+    expect(reconcileReadiness(result, { status: 'pending_approval', lineIds: ['l1', 'l2', 'l3'] })).toEqual(changed);
+    expect(reconcileReadiness(result, { status: 'pending_approval', lineIds: ['l1', 'lx'] })).toEqual(changed);
+    expect(READINESS_ORDER_CHANGED_COPY).toBe('The order changed while it was being checked. Check again.');
+  });
+
+  it('a failed read stays failed; a capped or closed answer is judged on its status alone', () => {
+    const failed = { state: 'failed' as const, message: 'x' };
+    expect(reconcileReadiness(failed, { status: 'approved', lineIds: [] })).toBe(failed);
+    const capped = ok(assessOrderReadiness(facts({ lines: [], items: [], linesCapped: true }), { now: NOW }));
+    expect(reconcileReadiness(capped, { status: 'pending_approval', lineIds: ['l1'] })).toBe(capped);
+  });
+
+  it('readinessAnswersOrder: an answer is about this order whatever the case of either id', () => {
+    const f = facts({ lines: [], items: [] });
+    const withId = (id: string) => ({ ...f, order: { ...f.order, id } });
+    expect(readinessAnswersOrder(withId('0a0f2100-0000-4000-8000-00000000abcd'), '0A0F2100-0000-4000-8000-00000000ABCD')).toBe(true);
+    expect(readinessAnswersOrder(withId('0A0F2100-0000-4000-8000-00000000ABCD'), '0a0f2100-0000-4000-8000-00000000abcd')).toBe(true);
+    expect(readinessAnswersOrder(withId('0a0f2100-0000-4000-8000-00000000abcd'), '0a0f2100-0000-4000-8000-00000000abce')).toBe(false);
+  });
+
+  it('line ids compare as uuids (the database answers in lower case)', () => {
+    const upper = facts({ lines: [{ id: 'aa-l1', item: 'a', requested: 1 }], items: [item('a')] });
+    const r = ok(assessOrderReadiness(upper, { now: NOW }));
+    expect(reconcileReadiness(r, { status: 'pending_approval', lineIds: ['AA-L1'] })).toBe(r);
   });
 });

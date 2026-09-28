@@ -40,11 +40,16 @@ export function ReadinessLineCell({
   item,
   timeZone,
   canCountItem,
+  position,
 }: {
   line: ReadinessLineAssessment | null;
   item: ReadinessItemAssessment | null;
   timeZone: string;
   canCountItem: boolean;
+  /** The row's place in the table (1-based): the spoken "Line N" names the
+   *  row the reader is on, as the phone does. Core's own (createdAt, lineId)
+   *  position when absent. */
+  position?: number;
 }) {
   if (!line) {
     return (
@@ -64,7 +69,9 @@ export function ReadinessLineCell({
 
   return (
     <div className="space-y-1" data-testid="readiness-line" data-state={line.state}>
-      <span className="sr-only">{readinessLineAccessibilityLabel(line)}.</span>
+      <span className="sr-only" data-testid="readiness-sr-label">
+        {readinessLineAccessibilityLabel(position ? { ...line, position } : line)}.
+      </span>
       <span
         className={cn(
           'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10.5px] font-medium',

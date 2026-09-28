@@ -1359,7 +1359,8 @@ export default function OrderDetail() {
   // capped check disables them and explains; see lib/order-readiness.ts.
   const stockCheck = orderStockCheckFor(st, order?.readiness ?? null);
   const stockGates = orderStockGates(st ?? '', stockCheck);
-  // "2 lines are short, so Approve will be refused. ..." under Approve.
+  // "2 lines ask for more than is available now, so Approve will be refused.
+  // ..." under Approve.
   const approveNotice = approveShortNotice(stockCheck);
 
   // READINESS (F2-1). Who sees it (core readinessAudience: the full panel for

@@ -15,7 +15,9 @@
 --    caller_can_read_item). stagingSources lists only locations the caller's
 --    holdings scope covers, the rest is stagingHiddenQty. PO rows only where
 --    purchase_order_visible, the rest is hiddenRemaining; more than 10 rows
---    is disclosed. purchase_order_visible equals purchase_orders_select for
+--    is disclosed. A line whose item belongs to another org is hidden even
+--    from a member of both orgs (mutation: drop the item's org filter).
+--    purchase_order_visible equals purchase_orders_select for
 --    every persona and PO (and the one known widening, the FOR ALL write
 --    policy, is pinned in the conservative direction). pendingOthers is null
 --    for staff without orders:approve, set for a manager and for staff with
@@ -26,16 +28,20 @@
 --    kind <> 'staging'); Unplaced is not Staging; another warehouse's stock is
 --    elsewhere, org-level stock is here; released holds are ignored; an
 --    over-received PO line floors at 0; cancelled and received POs are
---    ignored, drafts are listed apart; committedOtherShortfall per status
+--    ignored, drafts are listed apart; an open PO whose line for the item is
+--    fully received brings no row (mutation: drop `having ... > 0`);
+--    committedOtherShortfall per status
 --    class; pending orders are counted in pendingOthers and never netted;
---    lines in (created_at, id) order; picked and closed phases read lines
---    only.
+--    lines in (created_at, id) order; the order carries its org's time zone;
+--    picked and closed phases read lines only.
 -- P. Parity with the FROZEN RPCs, from the shared fixture
 --    packages/core/src/orders/readiness-parity-cases.json (the generated block
 --    below; scripts/gen-readiness-parity-sql.mjs). For every case the real
 --    facts function returns the facts core is fed, and approve_order_request,
 --    approve_partial, resume_fulfillment and complete_picking do exactly what
---    the fixture expects (each call rolled back): C1-C13.
+--    the fixture expects (each call rolled back): C1-C13 (C6c: on record more
+--    than the locations hold, nothing in Staging, and complete_picking still
+--    raises insufficient_placed_stock).
 -- Z. The frozen objects: md5, SECURITY DEFINER, search_path and owner of
 --    every function F2 promises not to touch.
 --
@@ -62,7 +68,7 @@ create temp table rp_expect (case_no int primary key, phase text not null, lines
                              approve jsonb, approve_partial jsonb, resume jsonb, complete jsonb);
 
 -- BEGIN GENERATED: scripts/gen-readiness-parity-sql.mjs from packages/core/src/orders/readiness-parity-cases.json. Do not edit by hand.
--- 16 cases: C1a, C1b, C2, C3, C4, C4b, C5, C6, C6b, C7, C8, C9, C10, C11, C12, C13.
+-- 17 cases: C1a, C1b, C2, C3, C4, C4b, C5, C6, C6c, C6b, C7, C8, C9, C10, C11, C12, C13.
 insert into rp_case (case_no, case_id, status, order_id, holder_id) values
   (1, 'C1a', 'pending_approval', '0377a011-0000-4000-8000-000000000000', '0377a012-0000-4000-8000-000000000000'),
   (2, 'C1b', 'pending_approval', '0377a021-0000-4000-8000-000000000000', '0377a022-0000-4000-8000-000000000000'),
@@ -72,14 +78,15 @@ insert into rp_case (case_no, case_id, status, order_id, holder_id) values
   (6, 'C4b', 'backordered', '0377a061-0000-4000-8000-000000000000', '0377a062-0000-4000-8000-000000000000'),
   (7, 'C5', 'pick_slip_generated', '0377a071-0000-4000-8000-000000000000', '0377a072-0000-4000-8000-000000000000'),
   (8, 'C6', 'pick_slip_generated', '0377a081-0000-4000-8000-000000000000', '0377a082-0000-4000-8000-000000000000'),
-  (9, 'C6b', 'pick_slip_generated', '0377a091-0000-4000-8000-000000000000', '0377a092-0000-4000-8000-000000000000'),
-  (10, 'C7', 'pick_slip_generated', '0377a0a1-0000-4000-8000-000000000000', '0377a0a2-0000-4000-8000-000000000000'),
-  (11, 'C8', 'pick_slip_generated', '0377a0b1-0000-4000-8000-000000000000', '0377a0b2-0000-4000-8000-000000000000'),
-  (12, 'C9', 'picking_in_progress', '0377a0c1-0000-4000-8000-000000000000', '0377a0c2-0000-4000-8000-000000000000'),
-  (13, 'C10', 'pending_approval', '0377a0d1-0000-4000-8000-000000000000', '0377a0d2-0000-4000-8000-000000000000'),
-  (14, 'C11', 'pending_approval', '0377a0e1-0000-4000-8000-000000000000', '0377a0e2-0000-4000-8000-000000000000'),
-  (15, 'C12', 'pending_approval', '0377a0f1-0000-4000-8000-000000000000', '0377a0f2-0000-4000-8000-000000000000'),
-  (16, 'C13', 'pending_approval', '0377a101-0000-4000-8000-000000000000', '0377a102-0000-4000-8000-000000000000');
+  (9, 'C6c', 'pick_slip_generated', '0377a091-0000-4000-8000-000000000000', '0377a092-0000-4000-8000-000000000000'),
+  (10, 'C6b', 'pick_slip_generated', '0377a0a1-0000-4000-8000-000000000000', '0377a0a2-0000-4000-8000-000000000000'),
+  (11, 'C7', 'pick_slip_generated', '0377a0b1-0000-4000-8000-000000000000', '0377a0b2-0000-4000-8000-000000000000'),
+  (12, 'C8', 'pick_slip_generated', '0377a0c1-0000-4000-8000-000000000000', '0377a0c2-0000-4000-8000-000000000000'),
+  (13, 'C9', 'picking_in_progress', '0377a0d1-0000-4000-8000-000000000000', '0377a0d2-0000-4000-8000-000000000000'),
+  (14, 'C10', 'pending_approval', '0377a0e1-0000-4000-8000-000000000000', '0377a0e2-0000-4000-8000-000000000000'),
+  (15, 'C11', 'pending_approval', '0377a0f1-0000-4000-8000-000000000000', '0377a0f2-0000-4000-8000-000000000000'),
+  (16, 'C12', 'pending_approval', '0377a101-0000-4000-8000-000000000000', '0377a102-0000-4000-8000-000000000000'),
+  (17, 'C13', 'pending_approval', '0377a111-0000-4000-8000-000000000000', '0377a112-0000-4000-8000-000000000000');
 
 insert into rp_item (case_no, item_key, item_id, name, sku, on_hand, item_wh, deleted, is_bundle) values
   (1, 'a', '0377a013-0000-4000-8000-000000000001', 'Parity C1a a', 'P-C1a-a', 10, 'home', false, false),
@@ -94,16 +101,17 @@ insert into rp_item (case_no, item_key, item_id, name, sku, on_hand, item_wh, de
   (7, 'c', '0377a073-0000-4000-8000-000000000003', 'Parity C5 c', 'P-C5-c', 6, 'home', false, false),
   (7, 'd', '0377a073-0000-4000-8000-000000000004', 'Parity C5 d', 'P-C5-d', 8, 'home', false, false),
   (8, 'a', '0377a083-0000-4000-8000-000000000001', 'Parity C6 a', 'P-C6-a', 10, 'home', false, false),
-  (9, 'a', '0377a093-0000-4000-8000-000000000001', 'Parity C6b a', 'P-C6b-a', 10, 'home', false, false),
-  (10, 'a', '0377a0a3-0000-4000-8000-000000000001', 'Parity C7 a', 'P-C7-a', 5, 'home', false, false),
-  (11, 'a', '0377a0b3-0000-4000-8000-000000000001', 'Parity C8 a', 'P-C8-a', 15, 'home', false, false),
-  (12, 'a', '0377a0c3-0000-4000-8000-000000000001', 'Parity C9 a', 'P-C9-a', 10, 'home', false, false),
-  (12, 'b', '0377a0c3-0000-4000-8000-000000000002', 'Parity C9 b', 'P-C9-b', 2, 'home', false, false),
-  (13, 'a', '0377a0d3-0000-4000-8000-000000000001', 'Parity C10 a', 'P-C10-a', 6, 'home', false, false),
-  (14, 'a', '0377a0e3-0000-4000-8000-000000000001', 'Parity C11 a', 'P-C11-a', 5, 'home', false, false),
-  (14, 'm', '0377a0e3-0000-4000-8000-000000000002', 'Parity C11 m', 'P-C11-m', 5, 'other', false, false),
-  (15, 'a', '0377a0f3-0000-4000-8000-000000000001', 'Parity C12 a', 'P-C12-a', 8, 'home', false, false),
-  (16, 'k', '0377a103-0000-4000-8000-000000000001', 'Parity C13 k', 'P-C13-k', 2, 'home', false, true);
+  (9, 'a', '0377a093-0000-4000-8000-000000000001', 'Parity C6c a', 'P-C6c-a', 10, 'home', false, false),
+  (10, 'a', '0377a0a3-0000-4000-8000-000000000001', 'Parity C6b a', 'P-C6b-a', 10, 'home', false, false),
+  (11, 'a', '0377a0b3-0000-4000-8000-000000000001', 'Parity C7 a', 'P-C7-a', 5, 'home', false, false),
+  (12, 'a', '0377a0c3-0000-4000-8000-000000000001', 'Parity C8 a', 'P-C8-a', 15, 'home', false, false),
+  (13, 'a', '0377a0d3-0000-4000-8000-000000000001', 'Parity C9 a', 'P-C9-a', 10, 'home', false, false),
+  (13, 'b', '0377a0d3-0000-4000-8000-000000000002', 'Parity C9 b', 'P-C9-b', 2, 'home', false, false),
+  (14, 'a', '0377a0e3-0000-4000-8000-000000000001', 'Parity C10 a', 'P-C10-a', 6, 'home', false, false),
+  (15, 'a', '0377a0f3-0000-4000-8000-000000000001', 'Parity C11 a', 'P-C11-a', 5, 'home', false, false),
+  (15, 'm', '0377a0f3-0000-4000-8000-000000000002', 'Parity C11 m', 'P-C11-m', 5, 'other', false, false),
+  (16, 'a', '0377a103-0000-4000-8000-000000000001', 'Parity C12 a', 'P-C12-a', 8, 'home', false, false),
+  (17, 'k', '0377a113-0000-4000-8000-000000000001', 'Parity C13 k', 'P-C13-k', 2, 'home', false, true);
 
 insert into rp_holding (item_id, kind, wh, qty) values
   ('0377a013-0000-4000-8000-000000000001', 'rack', 'home', 10),
@@ -121,20 +129,21 @@ insert into rp_holding (item_id, kind, wh, qty) values
   ('0377a073-0000-4000-8000-000000000004', 'rack', 'home', 8),
   ('0377a083-0000-4000-8000-000000000001', 'rack', 'home', 6),
   ('0377a083-0000-4000-8000-000000000001', 'staging', 'home', 4),
-  ('0377a093-0000-4000-8000-000000000001', 'rack', 'home', 6),
-  ('0377a093-0000-4000-8000-000000000001', 'unplaced', 'home', 4),
-  ('0377a0a3-0000-4000-8000-000000000001', 'rack', 'other', 5),
-  ('0377a0b3-0000-4000-8000-000000000001', 'rack', 'home', 10),
-  ('0377a0b3-0000-4000-8000-000000000001', 'staging', 'home', 5),
+  ('0377a093-0000-4000-8000-000000000001', 'rack', 'home', 7),
+  ('0377a0a3-0000-4000-8000-000000000001', 'rack', 'home', 6),
+  ('0377a0a3-0000-4000-8000-000000000001', 'unplaced', 'home', 4),
+  ('0377a0b3-0000-4000-8000-000000000001', 'rack', 'other', 5),
   ('0377a0c3-0000-4000-8000-000000000001', 'rack', 'home', 10),
-  ('0377a0c3-0000-4000-8000-000000000002', 'crate', 'home', 2),
-  ('0377a0d3-0000-4000-8000-000000000001', 'site', 'org', 3),
-  ('0377a0d3-0000-4000-8000-000000000001', 'rack', 'other', 2),
-  ('0377a0d3-0000-4000-8000-000000000001', 'staging', 'other', 1),
-  ('0377a0e3-0000-4000-8000-000000000001', 'rack', 'home', 5),
-  ('0377a0e3-0000-4000-8000-000000000002', 'rack', 'other', 5),
+  ('0377a0c3-0000-4000-8000-000000000001', 'staging', 'home', 5),
+  ('0377a0d3-0000-4000-8000-000000000001', 'rack', 'home', 10),
+  ('0377a0d3-0000-4000-8000-000000000002', 'crate', 'home', 2),
+  ('0377a0e3-0000-4000-8000-000000000001', 'site', 'org', 3),
+  ('0377a0e3-0000-4000-8000-000000000001', 'rack', 'other', 2),
+  ('0377a0e3-0000-4000-8000-000000000001', 'staging', 'other', 1),
   ('0377a0f3-0000-4000-8000-000000000001', 'rack', 'home', 5),
-  ('0377a103-0000-4000-8000-000000000001', 'rack', 'home', 2);
+  ('0377a0f3-0000-4000-8000-000000000002', 'rack', 'other', 5),
+  ('0377a103-0000-4000-8000-000000000001', 'rack', 'home', 5),
+  ('0377a113-0000-4000-8000-000000000001', 'rack', 'home', 2);
 
 insert into rp_hold (case_no, item_id, holder, qty) values
   (1, '0377a013-0000-4000-8000-000000000001', 'otherOrder', 3),
@@ -153,11 +162,12 @@ insert into rp_hold (case_no, item_id, holder, qty) values
   (7, '0377a073-0000-4000-8000-000000000004', 'otherOrder', 4),
   (8, '0377a083-0000-4000-8000-000000000001', 'own', 10),
   (9, '0377a093-0000-4000-8000-000000000001', 'own', 10),
-  (10, '0377a0a3-0000-4000-8000-000000000001', 'own', 5),
-  (11, '0377a0b3-0000-4000-8000-000000000001', 'own', 10),
-  (11, '0377a0b3-0000-4000-8000-000000000001', 'otherOrder', 5),
-  (12, '0377a0c3-0000-4000-8000-000000000001', 'own', 6),
-  (12, '0377a0c3-0000-4000-8000-000000000002', 'own', 2);
+  (10, '0377a0a3-0000-4000-8000-000000000001', 'own', 10),
+  (11, '0377a0b3-0000-4000-8000-000000000001', 'own', 5),
+  (12, '0377a0c3-0000-4000-8000-000000000001', 'own', 10),
+  (12, '0377a0c3-0000-4000-8000-000000000001', 'otherOrder', 5),
+  (13, '0377a0d3-0000-4000-8000-000000000001', 'own', 6),
+  (13, '0377a0d3-0000-4000-8000-000000000002', 'own', 2);
 
 insert into rp_line (case_no, line_key, line_id, item_id, requested, fulfilled, picked, created_at) values
   (1, 'l1', '0377a014-0000-4000-8000-000000000001', '0377a013-0000-4000-8000-000000000001', 5, 0, null, '2026-01-01T00:00:01.000Z'),
@@ -174,15 +184,16 @@ insert into rp_line (case_no, line_key, line_id, item_id, requested, fulfilled, 
   (7, 'l4', '0377a074-0000-4000-8000-000000000004', '0377a073-0000-4000-8000-000000000004', 5, 0, null, '2026-01-01T00:00:04.000Z'),
   (8, 'l1', '0377a084-0000-4000-8000-000000000001', '0377a083-0000-4000-8000-000000000001', 10, 0, null, '2026-01-01T00:00:01.000Z'),
   (9, 'l1', '0377a094-0000-4000-8000-000000000001', '0377a093-0000-4000-8000-000000000001', 10, 0, null, '2026-01-01T00:00:01.000Z'),
-  (10, 'l1', '0377a0a4-0000-4000-8000-000000000001', '0377a0a3-0000-4000-8000-000000000001', 5, 0, null, '2026-01-01T00:00:01.000Z'),
-  (11, 'l1', '0377a0b4-0000-4000-8000-000000000001', '0377a0b3-0000-4000-8000-000000000001', 10, 0, null, '2026-01-01T00:00:01.000Z'),
-  (12, 'l1', '0377a0c4-0000-4000-8000-000000000001', '0377a0c3-0000-4000-8000-000000000001', 6, 0, 4, '2026-01-01T00:00:01.000Z'),
-  (12, 'l2', '0377a0c4-0000-4000-8000-000000000002', '0377a0c3-0000-4000-8000-000000000002', 2, 0, null, '2026-01-01T00:00:02.000Z'),
-  (13, 'l1', '0377a0d4-0000-4000-8000-000000000001', '0377a0d3-0000-4000-8000-000000000001', 3, 0, null, '2026-01-01T00:00:01.000Z'),
-  (14, 'l1', '0377a0e4-0000-4000-8000-000000000001', '0377a0e3-0000-4000-8000-000000000001', 2, 0, null, '2026-01-01T00:00:01.000Z'),
-  (14, 'l2', '0377a0e4-0000-4000-8000-000000000002', '0377a0e3-0000-4000-8000-000000000002', 2, 0, null, '2026-01-01T00:00:02.000Z'),
-  (15, 'l1', '0377a0f4-0000-4000-8000-000000000001', '0377a0f3-0000-4000-8000-000000000001', 3, 0, null, '2026-01-01T00:00:01.000Z'),
-  (16, 'l1', '0377a104-0000-4000-8000-000000000001', '0377a103-0000-4000-8000-000000000001', 3, 0, null, '2026-01-01T00:00:01.000Z');
+  (10, 'l1', '0377a0a4-0000-4000-8000-000000000001', '0377a0a3-0000-4000-8000-000000000001', 10, 0, null, '2026-01-01T00:00:01.000Z'),
+  (11, 'l1', '0377a0b4-0000-4000-8000-000000000001', '0377a0b3-0000-4000-8000-000000000001', 5, 0, null, '2026-01-01T00:00:01.000Z'),
+  (12, 'l1', '0377a0c4-0000-4000-8000-000000000001', '0377a0c3-0000-4000-8000-000000000001', 10, 0, null, '2026-01-01T00:00:01.000Z'),
+  (13, 'l1', '0377a0d4-0000-4000-8000-000000000001', '0377a0d3-0000-4000-8000-000000000001', 6, 0, 4, '2026-01-01T00:00:01.000Z'),
+  (13, 'l2', '0377a0d4-0000-4000-8000-000000000002', '0377a0d3-0000-4000-8000-000000000002', 2, 0, null, '2026-01-01T00:00:02.000Z'),
+  (14, 'l1', '0377a0e4-0000-4000-8000-000000000001', '0377a0e3-0000-4000-8000-000000000001', 3, 0, null, '2026-01-01T00:00:01.000Z'),
+  (15, 'l1', '0377a0f4-0000-4000-8000-000000000001', '0377a0f3-0000-4000-8000-000000000001', 2, 0, null, '2026-01-01T00:00:01.000Z'),
+  (15, 'l2', '0377a0f4-0000-4000-8000-000000000002', '0377a0f3-0000-4000-8000-000000000002', 2, 0, null, '2026-01-01T00:00:02.000Z'),
+  (16, 'l1', '0377a104-0000-4000-8000-000000000001', '0377a103-0000-4000-8000-000000000001', 3, 0, null, '2026-01-01T00:00:01.000Z'),
+  (17, 'l1', '0377a114-0000-4000-8000-000000000001', '0377a113-0000-4000-8000-000000000001', 3, 0, null, '2026-01-01T00:00:01.000Z');
 
 insert into rp_expect_item (case_no, item_key, item_id, facts) values
   (1, 'a', '0377a013-0000-4000-8000-000000000001', '{"onHand":10,"heldOwn":0,"heldOtherOrders":3,"heldRentals":2,"here":{"rack":10,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
@@ -197,16 +208,17 @@ insert into rp_expect_item (case_no, item_key, item_id, facts) values
   (7, 'c', '0377a073-0000-4000-8000-000000000003', '{"onHand":6,"heldOwn":5,"heldOtherOrders":0,"heldRentals":1,"here":{"rack":0,"site":4,"unplaced":2,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
   (7, 'd', '0377a073-0000-4000-8000-000000000004', '{"onHand":8,"heldOwn":5,"heldOtherOrders":4,"heldRentals":0,"here":{"rack":8,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
   (8, 'a', '0377a083-0000-4000-8000-000000000001', '{"onHand":10,"heldOwn":10,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":6,"site":0,"unplaced":0,"staging":4},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":4,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
-  (9, 'a', '0377a093-0000-4000-8000-000000000001', '{"onHand":10,"heldOwn":10,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":6,"site":0,"unplaced":4,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
-  (10, 'a', '0377a0a3-0000-4000-8000-000000000001', '{"onHand":5,"heldOwn":5,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":0,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":5,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
-  (11, 'a', '0377a0b3-0000-4000-8000-000000000001', '{"onHand":15,"heldOwn":10,"heldOtherOrders":5,"heldRentals":0,"here":{"rack":10,"site":0,"unplaced":0,"staging":5},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":5,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
-  (12, 'a', '0377a0c3-0000-4000-8000-000000000001', '{"onHand":10,"heldOwn":6,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":10,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
-  (12, 'b', '0377a0c3-0000-4000-8000-000000000002', '{"onHand":2,"heldOwn":2,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":2,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
-  (13, 'a', '0377a0d3-0000-4000-8000-000000000001', '{"onHand":6,"heldOwn":0,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":0,"site":3,"unplaced":0,"staging":0},"elsewhere":{"pickable":2,"staging":1},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
-  (14, 'a', '0377a0e3-0000-4000-8000-000000000001', '{"onHand":5,"heldOwn":0,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":5,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
-  (14, 'm', '0377a0e3-0000-4000-8000-000000000002', '{"onHand":5,"heldOwn":0,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":0,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":5,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d2","visible":true}'::jsonb),
-  (15, 'a', '0377a0f3-0000-4000-8000-000000000001', '{"onHand":8,"heldOwn":0,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":5,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
-  (16, 'k', '0377a103-0000-4000-8000-000000000001', '{"onHand":2,"heldOwn":0,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":2,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":true,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb);
+  (9, 'a', '0377a093-0000-4000-8000-000000000001', '{"onHand":10,"heldOwn":10,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":7,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
+  (10, 'a', '0377a0a3-0000-4000-8000-000000000001', '{"onHand":10,"heldOwn":10,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":6,"site":0,"unplaced":4,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
+  (11, 'a', '0377a0b3-0000-4000-8000-000000000001', '{"onHand":5,"heldOwn":5,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":0,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":5,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
+  (12, 'a', '0377a0c3-0000-4000-8000-000000000001', '{"onHand":15,"heldOwn":10,"heldOtherOrders":5,"heldRentals":0,"here":{"rack":10,"site":0,"unplaced":0,"staging":5},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":5,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
+  (13, 'a', '0377a0d3-0000-4000-8000-000000000001', '{"onHand":10,"heldOwn":6,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":10,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
+  (13, 'b', '0377a0d3-0000-4000-8000-000000000002', '{"onHand":2,"heldOwn":2,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":2,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
+  (14, 'a', '0377a0e3-0000-4000-8000-000000000001', '{"onHand":6,"heldOwn":0,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":0,"site":3,"unplaced":0,"staging":0},"elsewhere":{"pickable":2,"staging":1},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
+  (15, 'a', '0377a0f3-0000-4000-8000-000000000001', '{"onHand":5,"heldOwn":0,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":5,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
+  (15, 'm', '0377a0f3-0000-4000-8000-000000000002', '{"onHand":5,"heldOwn":0,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":0,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":5,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d2","visible":true}'::jsonb),
+  (16, 'a', '0377a103-0000-4000-8000-000000000001', '{"onHand":8,"heldOwn":0,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":5,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":false,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb),
+  (17, 'k', '0377a113-0000-4000-8000-000000000001', '{"onHand":2,"heldOwn":0,"heldOtherOrders":0,"heldRentals":0,"here":{"rack":2,"site":0,"unplaced":0,"staging":0},"elsewhere":{"pickable":0,"staging":0},"stagingHiddenQty":0,"stagingSourcesTotal":0,"committedOtherShortfall":0,"pendingOthers":{"orders":0,"units":0},"inbound":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"drafts":{"rows":[],"hiddenRemaining":0,"truncated":false,"truncatedRemaining":0},"deleted":false,"isBundle":true,"itemWarehouseId":"0377a000-0000-4000-8000-0000000000d1","visible":true}'::jsonb);
 
 insert into rp_expect (case_no, phase, lines, approve, approve_partial, resume, complete) values
   (1, 'to_pick', '[{"lineId":"0377a014-0000-4000-8000-000000000001","itemId":"0377a013-0000-4000-8000-000000000001","requested":5,"fulfilled":0,"picked":null},{"lineId":"0377a014-0000-4000-8000-000000000002","itemId":"0377a013-0000-4000-8000-000000000002","requested":6,"fulfilled":0,"picked":null}]'::jsonb, '{"ok":true}'::jsonb, '{"holds":{"0377a013-0000-4000-8000-000000000001":5,"0377a013-0000-4000-8000-000000000002":6}}'::jsonb, null, null),
@@ -217,18 +229,19 @@ insert into rp_expect (case_no, phase, lines, approve, approve_partial, resume, 
   (6, 'to_pick', '[{"lineId":"0377a064-0000-4000-8000-000000000001","itemId":"0377a063-0000-4000-8000-000000000001","requested":6,"fulfilled":2,"picked":null}]'::jsonb, null, null, '{"error":"no_fulfillable_stock"}'::jsonb, null),
   (7, 'to_pick', '[{"lineId":"0377a074-0000-4000-8000-000000000001","itemId":"0377a073-0000-4000-8000-000000000001","requested":6,"fulfilled":0,"picked":null},{"lineId":"0377a074-0000-4000-8000-000000000002","itemId":"0377a073-0000-4000-8000-000000000002","requested":5,"fulfilled":0,"picked":null},{"lineId":"0377a074-0000-4000-8000-000000000003","itemId":"0377a073-0000-4000-8000-000000000003","requested":5,"fulfilled":0,"picked":null},{"lineId":"0377a074-0000-4000-8000-000000000004","itemId":"0377a073-0000-4000-8000-000000000004","requested":5,"fulfilled":0,"picked":null}]'::jsonb, null, null, null, '{"picked":{"0377a074-0000-4000-8000-000000000001":6,"0377a074-0000-4000-8000-000000000002":3,"0377a074-0000-4000-8000-000000000003":5,"0377a074-0000-4000-8000-000000000004":4}}'::jsonb),
   (8, 'to_pick', '[{"lineId":"0377a084-0000-4000-8000-000000000001","itemId":"0377a083-0000-4000-8000-000000000001","requested":10,"fulfilled":0,"picked":null}]'::jsonb, null, null, null, '{"error":"insufficient_placed_stock"}'::jsonb),
-  (9, 'to_pick', '[{"lineId":"0377a094-0000-4000-8000-000000000001","itemId":"0377a093-0000-4000-8000-000000000001","requested":10,"fulfilled":0,"picked":null}]'::jsonb, null, null, null, '{"picked":{"0377a094-0000-4000-8000-000000000001":10}}'::jsonb),
-  (10, 'to_pick', '[{"lineId":"0377a0a4-0000-4000-8000-000000000001","itemId":"0377a0a3-0000-4000-8000-000000000001","requested":5,"fulfilled":0,"picked":null}]'::jsonb, null, null, null, '{"picked":{"0377a0a4-0000-4000-8000-000000000001":5}}'::jsonb),
-  (11, 'to_pick', '[{"lineId":"0377a0b4-0000-4000-8000-000000000001","itemId":"0377a0b3-0000-4000-8000-000000000001","requested":10,"fulfilled":0,"picked":null}]'::jsonb, null, null, null, '{"picked":{"0377a0b4-0000-4000-8000-000000000001":10}}'::jsonb),
-  (12, 'to_pick', '[{"lineId":"0377a0c4-0000-4000-8000-000000000001","itemId":"0377a0c3-0000-4000-8000-000000000001","requested":6,"fulfilled":0,"picked":4},{"lineId":"0377a0c4-0000-4000-8000-000000000002","itemId":"0377a0c3-0000-4000-8000-000000000002","requested":2,"fulfilled":0,"picked":null}]'::jsonb, null, null, null, '{"picked":{"0377a0c4-0000-4000-8000-000000000001":4,"0377a0c4-0000-4000-8000-000000000002":0}}'::jsonb),
-  (13, 'to_pick', '[{"lineId":"0377a0d4-0000-4000-8000-000000000001","itemId":"0377a0d3-0000-4000-8000-000000000001","requested":3,"fulfilled":0,"picked":null}]'::jsonb, '{"ok":true}'::jsonb, '{"holds":{"0377a0d3-0000-4000-8000-000000000001":3}}'::jsonb, null, null),
-  (14, 'to_pick', '[{"lineId":"0377a0e4-0000-4000-8000-000000000001","itemId":"0377a0e3-0000-4000-8000-000000000001","requested":2,"fulfilled":0,"picked":null},{"lineId":"0377a0e4-0000-4000-8000-000000000002","itemId":"0377a0e3-0000-4000-8000-000000000002","requested":2,"fulfilled":0,"picked":null}]'::jsonb, '{"error":"item_warehouse_mismatch"}'::jsonb, '{"error":"item_warehouse_mismatch"}'::jsonb, null, null),
-  (15, 'to_pick', '[{"lineId":"0377a0f4-0000-4000-8000-000000000001","itemId":"0377a0f3-0000-4000-8000-000000000001","requested":3,"fulfilled":0,"picked":null}]'::jsonb, '{"ok":true}'::jsonb, '{"holds":{"0377a0f3-0000-4000-8000-000000000001":3}}'::jsonb, null, null),
-  (16, 'to_pick', '[{"lineId":"0377a104-0000-4000-8000-000000000001","itemId":"0377a103-0000-4000-8000-000000000001","requested":3,"fulfilled":0,"picked":null}]'::jsonb, '{"error":"insufficient_stock"}'::jsonb, '{"holds":{"0377a103-0000-4000-8000-000000000001":2}}'::jsonb, null, null);
+  (9, 'to_pick', '[{"lineId":"0377a094-0000-4000-8000-000000000001","itemId":"0377a093-0000-4000-8000-000000000001","requested":10,"fulfilled":0,"picked":null}]'::jsonb, null, null, null, '{"error":"insufficient_placed_stock"}'::jsonb),
+  (10, 'to_pick', '[{"lineId":"0377a0a4-0000-4000-8000-000000000001","itemId":"0377a0a3-0000-4000-8000-000000000001","requested":10,"fulfilled":0,"picked":null}]'::jsonb, null, null, null, '{"picked":{"0377a0a4-0000-4000-8000-000000000001":10}}'::jsonb),
+  (11, 'to_pick', '[{"lineId":"0377a0b4-0000-4000-8000-000000000001","itemId":"0377a0b3-0000-4000-8000-000000000001","requested":5,"fulfilled":0,"picked":null}]'::jsonb, null, null, null, '{"picked":{"0377a0b4-0000-4000-8000-000000000001":5}}'::jsonb),
+  (12, 'to_pick', '[{"lineId":"0377a0c4-0000-4000-8000-000000000001","itemId":"0377a0c3-0000-4000-8000-000000000001","requested":10,"fulfilled":0,"picked":null}]'::jsonb, null, null, null, '{"picked":{"0377a0c4-0000-4000-8000-000000000001":10}}'::jsonb),
+  (13, 'to_pick', '[{"lineId":"0377a0d4-0000-4000-8000-000000000001","itemId":"0377a0d3-0000-4000-8000-000000000001","requested":6,"fulfilled":0,"picked":4},{"lineId":"0377a0d4-0000-4000-8000-000000000002","itemId":"0377a0d3-0000-4000-8000-000000000002","requested":2,"fulfilled":0,"picked":null}]'::jsonb, null, null, null, '{"picked":{"0377a0d4-0000-4000-8000-000000000001":4,"0377a0d4-0000-4000-8000-000000000002":0}}'::jsonb),
+  (14, 'to_pick', '[{"lineId":"0377a0e4-0000-4000-8000-000000000001","itemId":"0377a0e3-0000-4000-8000-000000000001","requested":3,"fulfilled":0,"picked":null}]'::jsonb, '{"ok":true}'::jsonb, '{"holds":{"0377a0e3-0000-4000-8000-000000000001":3}}'::jsonb, null, null),
+  (15, 'to_pick', '[{"lineId":"0377a0f4-0000-4000-8000-000000000001","itemId":"0377a0f3-0000-4000-8000-000000000001","requested":2,"fulfilled":0,"picked":null},{"lineId":"0377a0f4-0000-4000-8000-000000000002","itemId":"0377a0f3-0000-4000-8000-000000000002","requested":2,"fulfilled":0,"picked":null}]'::jsonb, '{"error":"item_warehouse_mismatch"}'::jsonb, '{"error":"item_warehouse_mismatch"}'::jsonb, null, null),
+  (16, 'to_pick', '[{"lineId":"0377a104-0000-4000-8000-000000000001","itemId":"0377a103-0000-4000-8000-000000000001","requested":3,"fulfilled":0,"picked":null}]'::jsonb, '{"ok":true}'::jsonb, '{"holds":{"0377a103-0000-4000-8000-000000000001":3}}'::jsonb, null, null),
+  (17, 'to_pick', '[{"lineId":"0377a114-0000-4000-8000-000000000001","itemId":"0377a113-0000-4000-8000-000000000001","requested":3,"fulfilled":0,"picked":null}]'::jsonb, '{"error":"insufficient_stock"}'::jsonb, '{"holds":{"0377a113-0000-4000-8000-000000000001":2}}'::jsonb, null, null);
 
 -- END GENERATED
 
-select plan(47);
+select plan(50);
 
 \set orgA    '\'03770000-0000-0000-0000-00000000000a\''
 \set orgB    '\'03770000-0000-0000-0000-00000000000b\''
@@ -247,6 +260,7 @@ select plan(47);
 \set stfX    '\'03770000-0000-0000-0000-0000000000ac\''
 \set dis     '\'03770000-0000-0000-0000-0000000000ad\''
 \set mgrB    '\'03770000-0000-0000-0000-0000000000b1\''
+\set mgrAB   '\'03770000-0000-0000-0000-0000000000b2\''
 \set nobody  '\'03770000-0000-0000-0000-0000000000c1\''
 \set whA     '\'03770000-0000-0000-0000-0000000000d1\''
 \set whA2    '\'03770000-0000-0000-0000-0000000000d2\''
@@ -290,6 +304,7 @@ select plan(47);
 \set ordBig  '\'03770000-0000-0000-0000-000000000131\''
 \set ordBig2 '\'03770000-0000-0000-0000-000000000132\''
 \set ordB    '\'03770000-0000-0000-0000-000000000141\''
+\set ordForeign '\'03770000-0000-0000-0000-000000000142\''
 \set lMain   '\'03770000-0000-0000-0000-000000000201\''
 \set lAnnex  '\'03770000-0000-0000-0000-000000000202\''
 \set lCharter '\'03770000-0000-0000-0000-000000000203\''
@@ -310,6 +325,7 @@ select plan(47);
 \set poRec   '\'03770000-0000-0000-0000-000000000307\''
 \set poDraft '\'03770000-0000-0000-0000-000000000308\''
 \set poDraftA2 '\'03770000-0000-0000-0000-000000000309\''
+\set poDone  '\'03770000-0000-0000-0000-00000000030a\''
 \set pOrg    '\'0377a000-0000-4000-8000-00000000000a\''
 \set pMgr    '\'0377a000-0000-4000-8000-0000000000a1\''
 \set pHome   '\'0377a000-0000-4000-8000-0000000000d1\''
@@ -332,6 +348,7 @@ insert into auth.users (id, email, raw_user_meta_data) values
   (:stfX,   '0377-stfx@test.local',   '{}'::jsonb),
   (:dis,    '0377-dis@test.local',    '{}'::jsonb),
   (:mgrB,   '0377-mgrb@test.local',   '{}'::jsonb),
+  (:mgrAB,  '0377-mgrab@test.local',  '{}'::jsonb),
   (:nobody, '0377-nobody@test.local', '{}'::jsonb),
   (:pMgr,   '0377-pmgr@test.local',   '{}'::jsonb)
   on conflict (id) do nothing;
@@ -341,6 +358,8 @@ insert into public.organizations (id, name, slug) values
   (:orgA, '0377 Readiness A', '0377-readiness-a'),
   (:orgB, '0377 Readiness B', '0377-readiness-b'),
   (:pOrg, '0377 Parity',      '0377-parity');
+-- Org A works in Chicago (the facts carry the org's own zone, F11).
+update public.organizations set timezone = 'America/Chicago' where id = :orgA;
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   (:orgA, :own,    'owner',   now()),
   (:orgA, :adm,    'admin',   now()),
@@ -357,6 +376,10 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgA, :stfX,   'staff',   now()),
   (:orgA, :dis,    'staff',   now()),
   (:orgB, :mgrB,   'manager', now()),
+  -- A manager of BOTH orgs: org B's items are readable to them, so only the
+  -- facts' own org filter keeps org B's item off an org A order (V16).
+  (:orgA, :mgrAB,  'manager', now()),
+  (:orgB, :mgrAB,  'manager', now()),
   (:pOrg, :pMgr,   'manager', now());
 insert into public.warehouses (id, organization_id, name, code, status) values
   (:whA,    :orgA, '0377 Main',   'WH-0377A',  'active'),
@@ -459,7 +482,8 @@ insert into public.order_requests (id, organization_id, warehouse_id, status, so
   (:ordClosed, :orgA, :whA, 'completed',            'internal', :stf, 'pickup'),
   (:ordBig,    :orgA, :whA, 'pending_approval',     'internal', :stf, 'pickup'),
   (:ordBig2,   :orgA, :whA, 'pending_approval',     'internal', :stf, 'pickup'),
-  (:ordB,      :orgB, :whB, 'pending_approval',     'internal', :mgrB, 'pickup');
+  (:ordB,      :orgB, :whB, 'pending_approval',     'internal', :mgrB, 'pickup'),
+  (:ordForeign, :orgA, :whA, 'pending_approval',    'internal', :mgr, 'pickup');
 
 -- ordMain's lines, created_at set so the order is known; the two tie lines
 -- share a moment and are ordered by id (lTieB, ...208, before lTieA, ...209).
@@ -493,7 +517,10 @@ insert into public.order_request_lines
   (:ordC8,     :iCmt,  3,   0, null),  -- pick_slip_generated, 3 owed, 3 held: 0
   (:ordPicked, :iMain, 1,   0, 1),
   (:ordClosed, :iMain, 1,   1, null),
-  (:ordB,      :iB,    1,   0, null);
+  (:ordB,      :iB,    1,   0, null),
+  -- A line whose item is another org's (no constraint stops it: defence in
+  -- depth, V16).
+  (:ordForeign, :iB,   1,   0, null);
 insert into public.order_request_lines (order_request_id, item_id, quantity_requested)
 select :ordBig, :iMain, 1 from generate_series(1, 201);
 insert into public.order_request_lines (order_request_id, item_id, quantity_requested)
@@ -522,7 +549,10 @@ insert into public.purchase_orders (id, organization_id, po_number, destination_
   (:poCan,     :orgA, 'PO-0377-C',  :rA,      'cancelled',          '2026-10-02 16:00+00'),
   (:poRec,     :orgA, 'PO-0377-R',  :rA,      'received',           '2026-10-02 16:00+00'),
   (:poDraft,   :orgA, 'PO-0377-D',  null,     'draft',              null),
-  (:poDraftA2, :orgA, 'PO-0377-D2', :rA2,     'draft',              null);
+  (:poDraftA2, :orgA, 'PO-0377-D2', :rA2,     'draft',              null),
+  -- Open, but its only line for iPo is fully received: nothing remaining,
+  -- so no row (F15). Not PO-0377-%: the visibility sweep's list is fixed.
+  (:poDone,    :orgA, 'PX-0377-DONE', null,   'partially_received', '2026-10-02 00:00+00');
 insert into public.purchase_order_items (organization_id, purchase_order_id, item_id, quantity_ordered, quantity_received, unit_cost) values
   (:orgA, :poA,       :iPo, 12, 0,   1),
   (:orgA, :poA2,      :iPo, 5,  0,   1),
@@ -533,7 +563,8 @@ insert into public.purchase_order_items (organization_id, purchase_order_id, ite
   (:orgA, :poCan,     :iPo, 50, 0,   1),
   (:orgA, :poRec,     :iPo, 9,  0,   1),
   (:orgA, :poDraft,   :iPo, 4,  0,   1),
-  (:orgA, :poDraftA2, :iPo, 2,  0,   1);
+  (:orgA, :poDraftA2, :iPo, 2,  0,   1),
+  (:orgA, :poDone,    :iPo, 4,  4,   1);
 -- iTrunc: 11 open POs with no destination (visible to every PO reader), one
 -- a day; the 11th (5 units) is past the 10-row cap.
 insert into public.purchase_orders (id, organization_id, po_number, destination_location_id, status, expected_at)
@@ -796,6 +827,9 @@ set local "request.jwt.claim.sub" to :stfX;
 insert into fx select 'stfX', :ordMain, public.order_readiness_facts(:ordMain);
 set local "request.jwt.claim.sub" to :vwrNp;
 insert into fx select 'vwrNp', :ordMain, public.order_readiness_facts(:ordMain);
+set local "request.jwt.claim.sub" to :mgrAB;
+insert into fx select 'mgrABforeign', :ordForeign, public.order_readiness_facts(:ordForeign);
+insert into fx select 'mgrABownB', :ordB, public.order_readiness_facts(:ordB);
 set local "request.jwt.claim.sub" to :mgr;
 insert into fx select 'mgrPicked', :ordPicked, public.order_readiness_facts(:ordPicked);
 insert into fx select 'mgrClosed', :ordClosed, public.order_readiness_facts(:ordClosed);
@@ -902,6 +936,18 @@ select is(
                      'stfAp', jsonb_build_object('orders', 2, 'units', 8)),
   'V12: other pending demand (2 orders, 8 units; the cancelled one and this order left out) goes to a manager and to staff with an orders:approve override, never to other staff (null)');
 
+-- Mutation: drop `and i.organization_id = v_org` from the items the answer
+-- reads -> a member of both orgs gets org B's item, with its numbers, on an
+-- org A order.
+select is(
+  (select r->'items' from fx where who = 'mgrABforeign'),
+  jsonb_build_array(jsonb_build_object('itemId', :iB::text, 'visible', false)),
+  'V16: a line whose item belongs to another org is {itemId, visible:false}, even for a member of both orgs who may read that item');
+select is(
+  (select (pg_temp.item(r, :iB)->>'visible')::boolean from fx where who = 'mgrABownB'),
+  true,
+  'V17 (control): the same member reads that item''s numbers on its own org''s order, so V16 is the org filter, not a lack of access');
+
 -- purchase_order_visible vs purchase_orders_select, every persona x PO.
 do $$
 declare
@@ -1007,9 +1053,10 @@ select is(
   jsonb_build_object('v', 1, 'phase', 'to_pick', 'linesCapped', false,
                      'order', jsonb_build_object('id', :ordMain::text, 'status', 'approved', 'warehouseId', :whA::text,
                                                  'neededBy', null, 'fulfillmentType', 'pickup',
+                                                 'timeZone', 'America/Chicago',
                                                  'orderNumber', (select order_number from public.order_requests where id = :ordMain)),
                      'lineCount', 11, 'itemCount', 9),
-  'F11: the answer''s head: version 1, the to_pick phase, the order''s id, number, status, warehouse, needed-by and fulfilment, one item per distinct item');
+  'F11: the answer''s head: version 1, the to_pick phase, the order''s id, number, status, warehouse, needed-by, fulfilment and its org''s time zone, one item per distinct item');
 select is(
   (select (r->>'observedAt')::timestamptz = now() from fx where who = 'mgr'),
   true,
@@ -1024,6 +1071,15 @@ select is(
   (select x->'committedOtherShortfall' from fx, lateral (select pg_temp.item(r, :iMain) x) i where who = 'mgr'),
   '0'::jsonb,
   'F14: an approved order holding all it owes, and a picked order that picked all it owes, add no committed shortfall');
+select is(
+  (select jsonb_build_object(
+            'rows', (select count(*) from jsonb_array_elements(pg_temp.item(r, :iPo)#>'{inbound,rows}') x
+                      where x->>'poId' = :poDone::text),
+            'zeroRows', (select count(*) from jsonb_array_elements(pg_temp.item(r, :iPo)#>'{inbound,rows}') x
+                          where (x->>'remaining')::numeric = 0))
+     from fx where who = 'mgr'),
+  jsonb_build_object('rows', 0, 'zeroRows', 0),
+  'F15: an open PO whose line for the item is fully received brings no row: nothing remaining is never "on order" (mutation: drop `having ... > 0`, and it takes a row as "0 expected")');
 
 -- ═══ P. Parity with the frozen RPCs (the shared fixture) ═════════════════
 set local role to 'authenticated';
@@ -1076,7 +1132,7 @@ select is(
      from rp_run r join rp_expect e using (case_no) join rp_case c using (case_no)
     where r.rpc = 'complete' and r.result is distinct from e.complete),
   '',
-  'P6: complete_picking picks exactly the projection (C5 one-click, C9 explicit), fails exactly where it projects a failure (C6 Staging), and succeeds from another warehouse (C7) and past other holds (C8)');
+  'P6: complete_picking picks exactly the projection (C5 one-click, C9 explicit), fails exactly where it projects a failure (C6 Staging; C6c on record more than the locations hold, nothing in Staging), and succeeds from another warehouse (C7) and past other holds (C8)');
 select is(
   (select row(count(*) filter (where rpc = 'approve' and result ? 'ok'),
               count(*) filter (where rpc = 'approve' and result ? 'error'),
@@ -1086,7 +1142,7 @@ select is(
               count(*) filter (where rpc = 'complete' and result ? 'picked'),
               count(*) filter (where rpc = 'complete' and result ? 'error'))::text
      from rp_run),
-  row(3, 4, 1, 1, 1, 5, 1)::text,
+  row(3, 4, 1, 1, 1, 5, 2)::text,
   'P7 (control): every outcome was exercised: approvals that pass and fail, partial approvals, resumes that hold and refuse, picks that complete and fail');
 select is(
   (select count(*)::int from public.stock_reservations r join rp_case c on c.order_id = r.order_request_id)

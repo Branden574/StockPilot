@@ -22,7 +22,7 @@ import {
   READINESS_READ_FAILED_COPY,
   readinessStockFlags,
   readinessSummaryForRequester,
-  REQUESTER_CHECKING_COPY,
+  REQUESTER_CHECK_FAILED_COPY,
   type OrderReadinessResult,
   type Permission,
 } from '@stockpilot/core';
@@ -259,6 +259,44 @@ describe('readOrderReadiness', () => {
     },
   );
 
+  it('an order id in upper case is the same order: asked in lower case, the answer accepted', async () => {
+    // ORDER is lower case hex; the database answers in lower case.
+    const client = fakeRpc(() => ok(factsFor()));
+    const r = await readOrderReadiness(client, ORDER.toUpperCase(), () => NOW);
+    expect(ORDER.toUpperCase()).not.toBe(ORDER);
+    expect(r.state).toBe('ok');
+    expect(client.calls).toEqual([{ fn: 'order_readiness_facts', args: { p_order_id: ORDER } }]);
+  });
+
+  it('a missing EXECUTE grant (42501 "permission denied") is a failure, never "not allowed"', async () => {
+    const client = fakeRpc(() => ({
+      data: null,
+      error: { code: '42501', message: 'permission denied for function order_readiness_facts' },
+      status: 403,
+    }));
+    const r = await readOrderReadiness(client, ORDER);
+    expect(r).toEqual({ state: 'failed', message: "Couldn't check readiness." });
+    expect(r.state === 'failed' && r.message).not.toBe(READINESS_FORBIDDEN_COPY);
+    // Shown as the headline alone (no "not allowed" under it).
+    expect(describeReadinessRollup(r)).toMatchObject({ headline: READINESS_READ_FAILED_COPY, detail: null });
+  });
+
+  it('shows under the headline only the reasons the web page shows too (core readinessFailureDetail)', async () => {
+    const notFound = await readOrderReadiness(
+      fakeRpc(() => ({ data: null, error: { code: 'P0002', message: 'order_request_not_found' }, status: 404 })),
+      ORDER,
+    );
+    expect(describeReadinessRollup(notFound)?.detail).toBe('Order not found.');
+    // No answer at all: the headline alone on both platforms.
+    const offline = await readOrderReadiness(
+      fakeRpc(() => ({ data: null, error: { code: '', message: 'TypeError: Network request failed' }, status: 0 })),
+      ORDER,
+    );
+    expect(describeReadinessRollup(offline)?.detail).toBeNull();
+    const unreadable = await readOrderReadiness(fakeRpc(() => ok(null)), ORDER);
+    expect(describeReadinessRollup(unreadable)?.detail).toBeNull();
+  });
+
   it('an answer about another order is failed', async () => {
     const r = await readOrderReadiness(
       fakeRpc(() => ok(factsFor({ orderId: OTHER_ORDER }))),
@@ -284,7 +322,8 @@ describe('readOrderReadiness', () => {
       ORDER,
     );
     expect(describeReadinessRollup(r)?.headline).toBe(READINESS_READ_FAILED_COPY);
-    expect(readinessSummaryForRequester(r)).toBe(REQUESTER_CHECKING_COPY);
+    // The requester is told it could not be checked, never that it is being checked.
+    expect(readinessSummaryForRequester(r)).toBe(REQUESTER_CHECK_FAILED_COPY);
     expect(readinessStockFlags(r)).toMatchObject({ state: 'failed', reason: 'read' });
     expect(
       orderStockGates('pending_approval', orderStockCheckFor('pending_approval', r)),
@@ -536,7 +575,7 @@ describe('orderStockCheckFor + core orderStockGates', () => {
       notice: null,
     });
     expect(approveShortNotice(c)).toBe(
-      '2 lines are short, so Approve will be refused. Use Approve partial or change the lines.',
+      '2 lines ask for more than is available now, so Approve will be refused. Use Approve partial or change the lines.',
     );
   });
 

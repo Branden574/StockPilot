@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { approveShortNotice, orderStockGates } from './order-stock-gates';
+import { describeReadinessRollup } from './readiness-copy';
 import {
   assessOrderReadiness,
   orderReadinessPhase,
@@ -119,11 +120,52 @@ describe('orderStockGates', () => {
 describe('approveShortNotice', () => {
   it('names how many lines a strict Approve refuses', () => {
     expect(approveShortNotice({ state: 'ok', isShortStock: true, hasFulfillableStock: false, shortLineCount: 2 })).toBe(
-      '2 lines are short, so Approve will be refused. Use Approve partial or change the lines.',
+      '2 lines ask for more than is available now, so Approve will be refused. Use Approve partial or change the lines.',
     );
     expect(approveShortNotice({ state: 'ok', isShortStock: true, hasFulfillableStock: false, shortLineCount: 1 })).toBe(
-      '1 line is short, so Approve will be refused. Use Approve partial or change the lines.',
+      '1 line asks for more than is available now, so Approve will be refused. Use Approve partial or change the lines.',
     );
+  });
+
+  it('never suggests Approve partial while an item that moved warehouse keeps it off', () => {
+    const check = { state: 'ok' as const, isShortStock: true, hasFulfillableStock: false, itemMoved: true, shortLineCount: 2 };
+    expect(orderStockGates('pending_approval', check).approvePartial).toBe('disabled');
+    expect(approveShortNotice(check)).toBe(
+      '2 lines ask for more than is available now, so Approve will be refused. Change the lines.',
+    );
+  });
+
+  it('never calls its lines "short": the strip counts short lines by readiness, the note counts what Approve refuses', () => {
+    // One order: line 1 is short now, line 2 waits on a PO (both refused by a
+    // strict Approve), line 3 needs put-away (not refused).
+    const a = assessOrderReadiness(
+      {
+        v: 1,
+        observedAt: '2026-09-28T17:42:00.000Z',
+        phase: 'to_pick',
+        linesCapped: false,
+        order: { id: 'o', orderNumber: 1, status: 'pending_approval', warehouseId: 'wh', neededBy: null, fulfillmentType: 'pickup', timeZone: 'UTC' },
+        lines: ['a', 'b', 'c'].map((itemId, i) => ({
+          lineId: `l${i + 1}`,
+          itemId,
+          requested: 4,
+          fulfilled: 0,
+          picked: null,
+          createdAt: new Date(Date.UTC(2026, 8, 1, 0, 0, i)).toISOString(),
+        })),
+        items: [
+          stockItem('a', {}),
+          stockItem('b', { inbound: { rows: [{ poId: 'p', poNumber: 'PO-1', status: 'ordered', expectedAt: null, remaining: 9 }], hiddenRemaining: 0, truncated: false, truncatedRemaining: 0 } }),
+          stockItem('c', { here: { rack: 0, site: 0, unplaced: 0, staging: 4 } }),
+        ],
+      },
+      { now: '2026-09-28T17:42:00.000Z' },
+    );
+    const result = { state: 'ok' as const, assessment: a };
+    expect(describeReadinessRollup(result)!.headline).toBe('1 line short');
+    const note = approveShortNotice(readinessStockFlags(result));
+    expect(note).toBe('2 lines ask for more than is available now, so Approve will be refused. Use Approve partial or change the lines.');
+    expect(note).not.toMatch(/short/);
   });
 
   it('says nothing when Approve would pass or the check failed', () => {
@@ -361,3 +403,31 @@ describe('readinessStockFlags equals both old stock checks', () => {
     expect(table.filter((s) => s.status === 'backordered').length - fulfillable).toBeGreaterThanOrEqual(5);
   });
 });
+
+function stockItem(itemId: string, over: Partial<ReadinessVisibleItemFacts>): ReadinessVisibleItemFacts {
+  const here = { rack: 0, site: 0, unplaced: 0, staging: 0, ...over.here };
+  return {
+    itemId,
+    visible: true,
+    name: `Item ${itemId}`,
+    sku: null,
+    supplierId: null,
+    itemWarehouseId: 'wh',
+    deleted: false,
+    archived: false,
+    isBundle: false,
+    onHand: here.rack + here.site + here.unplaced + here.staging,
+    heldOwn: 0,
+    heldOtherOrders: 0,
+    heldRentals: 0,
+    stagingSources: [],
+    stagingHiddenQty: 0,
+    pendingOthers: { orders: 0, units: 0 },
+    committedOtherShortfall: 0,
+    inbound: { rows: [], hiddenRemaining: 0, truncated: false, truncatedRemaining: 0 },
+    drafts: { rows: [], hiddenRemaining: 0, truncated: false, truncatedRemaining: 0 },
+    ...over,
+    here,
+    elsewhere: { pickable: 0, staging: 0 },
+  };
+}

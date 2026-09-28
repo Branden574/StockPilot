@@ -188,6 +188,24 @@ describe('OrderRequestsService.get pickSlipStale', () => {
   });
 });
 
+describe('OrderRequestsService.get: the lines come in (created_at, id) order', () => {
+  it('asks the database to order them (an edited line otherwise comes back after its siblings)', async () => {
+    // Readiness numbers an order's lines in (created_at, id) order and the
+    // phone reads them that way; an unordered read returned an updated row
+    // last, so the web page listed the lines in another order than the phone
+    // and its screen-reader "Line N" named the wrong row.
+    const stub = getStub(baseHeader({}));
+    await svc(stub).get('ord-1');
+    const chain = stub.chains.get('order_request_lines.select') ?? [];
+    const args = stub.chainArgs.get('order_request_lines.select') ?? [];
+    const orders = chain.flatMap((m, i) => (m === 'order' ? [args[i]] : []));
+    expect(orders).toEqual([
+      ['created_at', { ascending: true }],
+      ['id', { ascending: true }],
+    ]);
+  });
+});
+
 describe('OrderRequestsService.get: read order', () => {
   it('reads the requester profile alongside the lines, not after them', async () => {
     // A lazy PostgREST-like client: each read starts when awaited; the lines

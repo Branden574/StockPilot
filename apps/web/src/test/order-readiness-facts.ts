@@ -74,7 +74,7 @@ export function orderReadinessFacts(
   status: string,
   lines: FactsLine[],
   items: Json[],
-  opts: { neededBy?: string | null; linesCapped?: boolean; warehouseId?: string } = {},
+  opts: { neededBy?: string | null; linesCapped?: boolean; warehouseId?: string; timeZone?: string | null } = {},
 ): Json {
   return {
     v: 1,
@@ -88,6 +88,8 @@ export function orderReadinessFacts(
       warehouseId: opts.warehouseId ?? 'wh-1',
       neededBy: opts.neededBy ?? null,
       fulfillmentType: 'pickup',
+      // The org's zone, as 0377 answers it (organizations.timezone).
+      timeZone: opts.timeZone === undefined ? 'America/Los_Angeles' : opts.timeZone,
     },
     lines: opts.linesCapped
       ? []

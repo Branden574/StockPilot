@@ -52,6 +52,7 @@ import {
   orderStockGates,
   readinessAudience,
   readinessStockFlags,
+  reconcileReadiness,
   resolveOrgTimezone,
   returnedFragment,
   returnHandle,
@@ -592,16 +593,26 @@ export default async function OrderDetailPage({
   // gates): a failed read, an item this viewer cannot read, or an order past
   // the line cap DISABLES Approve partial / Resume with the reason, never
   // flags defaulted to false.
+  //
+  // The order (Tier 1) and its facts (Tier 2) are read a moment apart. If the
+  // order moved in between (another status, a line added or removed), the
+  // facts describe a different order than the header and table above:
+  // core reconcileReadiness makes that `failed` ("The order changed while it
+  // was being checked."), exactly as the phone does, never a strip for one
+  // order above the lines of another.
+  const readinessNow = readiness
+    ? reconcileReadiness(readiness, { status: request.status, lineIds: lines.map((l) => l.id) })
+    : null;
   const readinessTimeZone = resolveOrgTimezone(orgTimezone);
-  const readinessStrip = readiness
-    ? readinessStripView(readiness, viewerReadinessAudience, { timeZone: readinessTimeZone })
+  const readinessStrip = readinessNow
+    ? readinessStripView(readinessNow, viewerReadinessAudience, { timeZone: readinessTimeZone })
     : null;
   const readinessAssessment =
-    readiness?.state === 'ok' &&
-    readiness.assessment.phase === 'to_pick' &&
-    !readiness.assessment.linesCapped &&
+    readinessNow?.state === 'ok' &&
+    readinessNow.assessment.phase === 'to_pick' &&
+    !readinessNow.assessment.linesCapped &&
     viewerReadinessAudience === 'full'
-      ? readiness.assessment
+      ? readinessNow.assessment
       : null;
   const readinessLineById = new Map(readinessAssessment?.lines.map((l) => [l.lineId, l] as const));
   const readinessItemById = new Map(readinessAssessment?.items.map((it) => [it.itemId, it] as const));
@@ -626,8 +637,8 @@ export default async function OrderDetailPage({
       canCountItem: viewerCanStartCount && f !== null && !f.deleted && !f.archived && !f.isBundle,
     };
   };
-  const stockCheck: OrderStockCheck = readiness
-    ? readinessStockFlags(readiness)
+  const stockCheck: OrderStockCheck = readinessNow
+    ? readinessStockFlags(readinessNow)
     : { state: 'not_needed' };
   const stockGates = orderStockGates(request.status, stockCheck);
   const approveNotice = approveShortNotice(stockCheck);
@@ -1063,7 +1074,7 @@ export default async function OrderDetailPage({
                     </TableCell>
                   </TableRow>
                 )}
-                {lines.map((l) => {
+                {lines.map((l, rowIndex) => {
                   const owed = lineOwedUnits({
                     quantityRequested: l.quantity_requested,
                     quantityFulfilled: l.quantity_fulfilled,
@@ -1128,7 +1139,11 @@ export default async function OrderDetailPage({
                       </TableCell>
                       {readinessAssessment && (
                         <TableCell className="min-w-[13rem] max-w-[18rem] whitespace-normal align-top">
-                          <ReadinessLineCell {...readinessCellFor(l.id)} timeZone={readinessTimeZone} />
+                          <ReadinessLineCell
+                            {...readinessCellFor(l.id)}
+                            timeZone={readinessTimeZone}
+                            position={rowIndex + 1}
+                          />
                         </TableCell>
                       )}
                       {canEditLines && (

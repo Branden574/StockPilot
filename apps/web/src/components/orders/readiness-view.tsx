@@ -4,15 +4,13 @@ import {
   Clock,
   HelpCircle,
   Package,
+  PackageCheck,
   type LucideIcon,
 } from 'lucide-react';
 
 import {
+  describeReadinessForRequester,
   describeReadinessRollup,
-  readinessCheckedAtCopy,
-  readinessSummaryForRequester,
-  REQUESTER_ALL_IN_STOCK_COPY,
-  REQUESTER_WAITING_COPY,
   type OrderReadinessResult,
   type ReadinessAudience,
   type ReadinessTone,
@@ -69,6 +67,7 @@ const ICONS: Readonly<Record<string, LucideIcon>> = {
   clock: Clock,
   help: HelpCircle,
   alert: AlertTriangle,
+  handed: PackageCheck,
 };
 
 export function ReadinessIcon({ icon, className }: { icon: string; className?: string }) {
@@ -87,11 +86,15 @@ export type ReadinessStripView =
       details: string[];
       neededBy: string | null;
       checkedAt: string | null;
+      /** A failed read's reason under the headline (core
+       *  readinessFailureDetail; the phone shows the same line). */
+      detail: string | null;
       /** The read failed: the headline says so and the button says Try again. */
       failed: boolean;
     }
   | {
-      /** The requester: one sentence, no numbers. */
+      /** The requester: one sentence, no numbers (core
+       *  describeReadinessForRequester, the phone's card too). */
       mode: 'requester';
       sentence: string;
       tone: ReadinessTone;
@@ -113,23 +116,8 @@ export function readinessStripView(
   const failed = result.state === 'failed';
   if (audience === 'none') return null;
   if (audience === 'requester') {
-    const sentence = readinessSummaryForRequester(result);
-    if (!sentence) return null;
-    const [tone, icon]: [ReadinessTone, string] =
-      sentence === REQUESTER_ALL_IN_STOCK_COPY
-        ? ['success', 'check']
-        : sentence === REQUESTER_WAITING_COPY
-          ? ['warning', 'clock']
-          : ['neutral', 'help'];
-    return {
-      mode: 'requester',
-      sentence,
-      tone,
-      icon,
-      checkedAt:
-        result.state === 'ok' ? readinessCheckedAtCopy(result.assessment.observedAt, opts) : null,
-      failed,
-    };
+    const card = describeReadinessForRequester(result, opts);
+    return card ? { mode: 'requester', ...card } : null;
   }
   const rollup = describeReadinessRollup(result, opts);
   if (!rollup) return null;
@@ -141,6 +129,7 @@ export function readinessStripView(
     details: rollup.details,
     neededBy: rollup.neededBy,
     checkedAt: rollup.checkedAt,
+    detail: rollup.detail,
     failed,
   };
 }
