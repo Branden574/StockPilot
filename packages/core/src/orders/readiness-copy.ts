@@ -601,6 +601,29 @@ export function describeReadinessForRequester(
 
 // ── Completion confirm ──────────────────────────────────────────────────────
 
+/** A line that will be picked short: what the pick takes against what the
+ *  line owes. `batch` null (unknown) reads as 0. */
+export interface ShortPickLine {
+  itemName: string | null;
+  batch: number | null;
+  owed: number;
+}
+
+/**
+ * "Not everything will be picked. L4L - Pen Black & Rose Gold: 0 of 60. It
+ * will be owed at hand-over, or you can remove it from the order first."
+ * Null when no line is short. One sentence for every completion confirm: the
+ * one-click "Mark picking complete" (from projectCompletePicking) and the
+ * digital pick's own dialog (from what the picker entered), on web and phone.
+ */
+export function describeShortPickLines(lines: readonly ShortPickLine[]): string | null {
+  const short = lines.filter((l) => (l.batch ?? 0) < l.owed - 0.00005);
+  if (short.length === 0) return null;
+  const listed = short.map((l) => `${l.itemName ?? 'An item'}: ${fq(l.batch ?? 0)} of ${fq(l.owed)}`).join('; ');
+  const one = short.length === 1;
+  return `Not everything will be picked. ${listed}. ${one ? 'It' : 'They'} will be owed at hand-over, or you can remove ${one ? 'it' : 'them'} from the order first.`;
+}
+
 /**
  * The confirm before "Mark picking complete" (F2-2 wires it): what will come up
  * short, what would make the pick fail, and what could not be checked. Null
@@ -614,15 +637,8 @@ export function describeCompletionProjection(
   if (readinessFailed || !projection) return ["Stock couldn't be checked. Picking may come up short."];
   if (projection.capped) return [READINESS_LINES_CAPPED_COPY, 'Picking may come up short.'];
   const out: string[] = [];
-  if (projection.shortLines.length > 0) {
-    const listed = projection.shortLines
-      .map((l) => `${l.itemName ?? 'An item'}: ${fq(l.batch ?? 0)} of ${fq(l.owed)}`)
-      .join('; ');
-    const one = projection.shortLines.length === 1;
-    out.push(
-      `Not everything will be picked. ${listed}. ${one ? 'It' : 'They'} will be owed at hand-over, or you can remove ${one ? 'it' : 'them'} from the order first.`,
-    );
-  }
+  const shortSentence = describeShortPickLines(projection.shortLines);
+  if (shortSentence) out.push(shortSentence);
   for (const f of projection.failingItems) {
     if (f.reason !== 'insufficient_placed_stock') {
       out.push(`Picking can't finish: ${f.itemName} has less on record than this pick needs.`);
@@ -647,4 +663,49 @@ export function describeCompletionProjection(
     out.push(`Stock couldn't be checked for ${n} ${n === 1 ? 'item' : 'items'}. Picking may come up short.`);
   }
   return out.length > 0 ? out : null;
+}
+
+/** The completion confirm's title and buttons (web and phone alike). */
+export const COMPLETION_CONFIRM_TITLE = 'Before you complete picking';
+export const COMPLETION_REVIEW_LABEL = 'Review short lines';
+export const COMPLETION_CONFIRM_LABEL = 'Complete picking';
+
+export interface CompletionConfirmCopy {
+  title: string;
+  /** What will come up short, what would stop the pick, what was not checked. */
+  paragraphs: string[];
+  /** "Review short lines": closes the confirm and focuses `focusLineId`. */
+  reviewLabel: string;
+  /** "Complete picking": goes ahead (the server decides, as always). */
+  confirmLabel: string;
+  /** The first line to look at: the first short line, else the first line of
+   *  an item that would stop the pick; null when the check failed. */
+  focusLineId: string | null;
+}
+
+/**
+ * The confirm before "Mark picking complete" (the SO-000100 button) and the
+ * digital pick's Complete, or null when nothing needs saying. It is shown
+ * whenever a line will be picked short, the pick would fail, an item could not
+ * be checked, or the check itself failed: the confirm is never skipped for
+ * want of facts. UI only (F2 decision D17): complete_picking stays permissive.
+ */
+export function describeCompletionConfirm(
+  projection: CompletionProjection | null,
+  readinessFailed: boolean,
+): CompletionConfirmCopy | null {
+  const paragraphs = describeCompletionProjection(projection, readinessFailed);
+  if (!paragraphs) return null;
+  const failing = projection?.failingItems[0]?.itemId ?? null;
+  const focusLineId = readinessFailed || !projection
+    ? null
+    : projection.shortLines[0]?.lineId
+      ?? (failing ? projection.lines.find((l) => l.itemId === failing)?.lineId ?? null : null);
+  return {
+    title: COMPLETION_CONFIRM_TITLE,
+    paragraphs,
+    reviewLabel: COMPLETION_REVIEW_LABEL,
+    confirmLabel: COMPLETION_CONFIRM_LABEL,
+    focusLineId,
+  };
 }
