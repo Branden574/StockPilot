@@ -30,24 +30,18 @@ export const RELEASES: Release[] = [
   {
     id: 'exception-escalation-2026-09',
     revision: 1,
-    // DRAFT until the phone update (pnpm release:ota: the phone's Escalate,
-    // its prefilled form, the badge and draft wording, and the request's
-    // location) and the Demo Co walk (test routing only; the request is
-    // cancelled before the module is turned off again). A draft never leaves
-    // the server (visibleReleases, registryFingerprint), so merging the web
-    // screens announces nothing. The follow-up that publishes it sets
-    // 'published', sets publishedAt to the real time (still the newest), and
-    // flips the pin in registry.test.ts. Every sentence must be true on both
-    // platforms then.
+    // Held as a draft until the phone update (OTA group 1558a067) and the Demo
+    // Co production walk (one escalation, then cancelled), both done. Every
+    // sentence was checked on both platforms.
     //
     // Addressed where Maintenance requests is on, to readers of exceptions
     // (items:read, the Exceptions page's gate); the escalate entry adds
     // maintenance_requests:submit, the action's own gate.
-    status: 'draft',
+    status: 'published',
     title: 'Escalate an exception to maintenance',
     summary:
       "On the web and in the mobile app, where your organization uses Maintenance requests, an open exception can be escalated. Escalate to maintenance opens the request form filled in from the exception, and saving it creates one maintenance request linked to the exception. Nothing is emailed when you save: the email to the maintenance team opens only if you choose it on the next screen. Escalating does not acknowledge or resolve the exception, which then shows the request's number.",
-    publishedAt: '2026-09-29T17:00:00Z',
+    publishedAt: '2026-09-28T08:15:00Z',
     audience: { anyPermission: ['items:read'], modules: ['maintenance_requests'] },
     entries: [
       {
@@ -108,15 +102,15 @@ export const RELEASES: Release[] = [
     id: 'maintenance-photo-details-2026-09',
     revision: 1,
     // Held as a draft until the web deploy that re-encodes maintenance photos
-    // (fix/maintenance-photo-metadata) is live and a Demo Co walk shows a
-    // stored photo without EXIF or GPS, on a photo added from the web and one
-    // from the phone. Publishing sets 'published' and the real publishedAt.
-    // Server-side only, so every app build is covered without a phone update.
-    status: 'draft',
+    // (#279) was live and a Demo Co production check showed stored photos
+    // without EXIF or GPS (a phone-shaped upload was checked locally), both
+    // done. Server-side only, so every app build is covered without a phone
+    // update.
+    status: 'published',
     title: 'Maintenance photos no longer keep location or camera details',
     summary:
       'On the web and in the mobile app, a photo added to a maintenance request is now saved without the details a phone or camera stores inside the photo file, such as where it was taken and which device took it. Photos added before this change are not changed.',
-    publishedAt: '2026-09-28T18:00:00Z',
+    publishedAt: '2026-09-28T08:14:00Z',
     entries: [
       {
         id: 'maintenance-photo-details',
