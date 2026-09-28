@@ -1012,11 +1012,21 @@ describe('F2-2 (held, and caught before it leaves) is held as a draft', () => {
     const r = release();
     expect(r.summary).toMatch(/^On the web and in the mobile app, /);
     expect(r.summary).toContain('the storefront and other orders show fewer of those items available');
+    // The top-up holds the whole order, not just the new units (review
+    // 2026-09-28): the summary says so too, since availability drops for the
+    // order's earlier unheld items as well.
+    expect(r.summary).toContain('the new units, and anything else on it not yet held, as far as there is free stock');
+    expect(r.summary).not.toMatch(/the new units are now held for the order/);
     const held = r.entries.find((e) => e.id === 'order-added-items-held')!;
     expect(held.howItAffectsYou).toMatch(/^This changes what is shown as available/);
     // Only an approver's add holds anything; a requester's line waits.
     expect(held.whatChanged).toContain('When someone who can approve orders adds items');
-    expect(held.howItAffectsYou).toContain("A line added by someone who can't approve orders says Not held");
+    expect(held.howItAffectsYou).toContain("A line added or raised by someone who can't approve orders is not held until someone who can holds it");
+    // "Not held" is shown on the full readiness panel, so it is worded for
+    // approvers; a requester (orders:request reads this entry) sees one
+    // sentence about the order's stock, not the line's hold.
+    expect(held.howItAffectsYou).toContain('On the order, people who can approve orders see such a line as Not held.');
+    expect(held.howItAffectsYou).not.toMatch(/orders says Not held/);
     // A hold tops up the whole order (hold_order_stock), so an approver's add
     // or raise also holds what a requester added before (the F2-2 local e2e
     // saw it): said, not left for the reader to discover.
@@ -1025,6 +1035,29 @@ describe('F2-2 (held, and caught before it leaves) is held as a draft', () => {
     // Holding is a commitment: it moves nothing and never refuses an add.
     expect(held.howItAffectsYou).toContain('Holding never moves stock');
     expect(held.howItAffectsYou).toContain('never stops an item being added');
+  });
+
+  // Review 2026-09-28: the draft promised every reader the line fixes. They
+  // are offered to people who can change the order's lines (before picking,
+  // approvers, who see the numbers; after picking, approvers and the order's
+  // own requester), on lines stock does not cover now (waiting on a PO
+  // included); the digital pick's Review goes to the line's count; and a
+  // packing slip scanned on the phone asks too.
+  it('claims no more about the fixes than each reader gets', () => {
+    const caught = release().entries.find((e) => e.id === 'order-short-lines-caught')!;
+    expect(caught.howItAffectsYou).toContain(
+      "In the digital pick, Review short lines puts you on the short line's count, to check what was entered.",
+    );
+    expect(caught.howItAffectsYou).toContain(
+      'If you can approve orders, a line that stock does not cover now, including one waiting on a PO, offers Lower to what stock covers or Remove line',
+    );
+    expect(caught.howItAffectsYou).toContain(
+      'after picking, a line not fully picked offers Lower to what was picked or Remove from order, if you can approve orders or it is your own order',
+    );
+    expect(caught.howItAffectsYou).not.toMatch(/takes you to the first short line, which offers/);
+    expect(caught.whatChanged).toContain('from the order or from a packing slip scanned in the mobile app');
+    // The summary (all an old phone shows) promises no fix to everyone.
+    expect(release().summary).not.toMatch(/the fix is on the line/);
   });
 
   it("says it in core's words, honestly: on record never \"book\", no percentages, nothing guaranteed", () => {
