@@ -3,6 +3,8 @@ import {
   EXCEPTION_EVIDENCE_EXTENSIONS,
   EXCEPTION_EVIDENCE_REJECTED_COPY,
   EXCEPTION_EVIDENCE_RESOLVED_COPY,
+  EXCEPTION_EVIDENCE_UNCONFIRMED_COPY,
+  EXCEPTION_EVIDENCE_UPLOAD_LIMIT_COPY,
 } from '@stockpilot/core';
 
 import { CONNECTION_FAILURE_COPY } from './connection-copy';
@@ -57,9 +59,14 @@ export class EvidenceUploadFailure extends Error {
   }
 }
 
-/** The photo reached the server but was not confirmed. */
-export const EVIDENCE_UNCONFIRMED_COPY =
-  'The photo was sent, but the server did not confirm it. Retry to finish adding it.';
+/** The photo reached the server but was not confirmed (core's words, the
+ *  web's too). */
+export const EVIDENCE_UNCONFIRMED_COPY = EXCEPTION_EVIDENCE_UNCONFIRMED_COPY;
+
+/** The longest a photo's PUT may run before it is cancelled and the row
+ *  offers Retry and Discard. A resized photo is about 1 MB, so this allows
+ *  roughly 11 KB a second. */
+export const EVIDENCE_PUT_TIMEOUT_MS = 90_000;
 
 /** The photo could not be read or converted on the phone. */
 export const EVIDENCE_PREPARE_FAILED_COPY =
@@ -98,7 +105,7 @@ function beforeUploadFailure(e: unknown, stage: 'prepare' | 'mint' | 'put'): Evi
   const status = statusOf(e);
   if (status === 409 && reasonOf(e) === 'rate_limited') {
     return new EvidenceUploadFailure(
-      sentenceOf(e) ?? 'Too many photo uploads in the last hour. Please try again later.',
+      sentenceOf(e) ?? EXCEPTION_EVIDENCE_UPLOAD_LIMIT_COPY,
       'upload',
       null,
     );
@@ -198,6 +205,10 @@ export async function runEvidenceAttempt(input: EvidenceAttemptInput): Promise<E
         // HEIC is converted by the resize; anything else outside the bucket's
         // types (a small GIF) is converted to JPEG before the mint.
         acceptedExtensions: EXCEPTION_EVIDENCE_EXTENSIONS,
+        // ONLINE ONLY: a foreground session (the default background one waits
+        // for a connection and can finish later on its own) and a time limit,
+        // so a stalled upload ends as a row with Retry and Discard.
+        putOptions: { foreground: true, timeoutMs: EVIDENCE_PUT_TIMEOUT_MS },
         mint: async (photo) => {
           at.stage = 'mint';
           const ticket = await startEvidenceUpload(occurrenceId, photo.ext);

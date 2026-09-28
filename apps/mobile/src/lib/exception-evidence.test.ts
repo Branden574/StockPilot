@@ -2,8 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   EXCEPTION_EVIDENCE_CAP_COPY,
+  EXCEPTION_EVIDENCE_NO_PERMISSION_COPY,
   EXCEPTION_EVIDENCE_NOT_PERMITTED_COPY,
+  EXCEPTION_EVIDENCE_NOTE_TOO_LONG_COPY,
   EXCEPTION_EVIDENCE_OFFLINE_COPY,
+  EXCEPTION_EVIDENCE_REASON_TOO_LONG_COPY,
+  EXCEPTION_EVIDENCE_REMOVE_NOT_ALLOWED_COPY,
+  EXCEPTION_EVIDENCE_REMOVE_OFFLINE_COPY,
   EXCEPTION_EVIDENCE_RESOLVED_COPY,
 } from '@stockpilot/core';
 
@@ -16,7 +21,13 @@ import {
   evidenceAddControl,
   evidenceCapCheck,
   evidenceCapturedAt,
+  EVIDENCE_NO_PERMISSION_COPY,
+  EVIDENCE_NOTE_TOO_LONG_COPY,
+  evidencePhotoFailed,
   evidenceQueueRowCopy,
+  EVIDENCE_REASON_TOO_LONG_COPY,
+  EVIDENCE_REMOVE_OFFLINE_COPY,
+  evidenceSectionParts,
   evidenceRetryDisabledReason,
   evidenceRoomLeft,
   evidenceTextState,
@@ -338,6 +349,41 @@ describe('upload rows: no phantom photo, no photo that vanishes', () => {
     expect(visibleEvidenceQueue([done], { status: 'unavailable' }, 99)).toEqual([done]);
   });
 
+  // Review finding 2026-09-27. Mutation caught: showing the rows only after
+  // a successful read, which hid an upload in flight, an "Added" row and a
+  // failed row with its Retry and Discard whenever a re-read came back
+  // unavailable.
+  it('the section shows every row being added whatever the read says, and never "no photos" for a failed read', () => {
+    const rows = [
+      entry({ key: 'up' }),
+      entry({ key: 'fail', status: 'error', retry: 'upload' }),
+      entry({ key: 'done', status: 'done', evidenceId: null, doneAt: 3 }),
+    ];
+    const unavailable = evidenceSectionParts({ status: 'unavailable' }, rows);
+    expect(unavailable.unavailable).toBe(true);
+    expect(unavailable.queue.map((e) => e.key)).toEqual(['up', 'fail', 'done']);
+    expect(unavailable.photos).toEqual([]);
+    expect(unavailable.showNone).toBe(false);
+
+    const empty = evidenceSectionParts(ok([]), []);
+    expect([empty.unavailable, empty.showNone]).toEqual([false, true]);
+    const listed = evidenceSectionParts(ok(['p1']), rows);
+    expect(listed.photos.map((p) => p.id)).toEqual(['p1']);
+    expect(listed.queue).toHaveLength(3);
+    expect(listed.showNone).toBe(false);
+  });
+
+  it('a photo whose image failed to load is known by its URL: fresh links (a re-read) are tried again', () => {
+    const p = { url: 'https://s/a.jpg?token=1', thumbUrl: 'https://s/a-thumb.webp?token=1' };
+    expect(evidencePhotoFailed(p, new Set())).toBe(false);
+    expect(evidencePhotoFailed(p, new Set([p.thumbUrl]))).toBe(true);
+    expect(evidencePhotoFailed(p, new Set([p.url]))).toBe(true);
+    expect(
+      evidencePhotoFailed({ url: 'https://s/a.jpg?token=2', thumbUrl: null }, new Set([p.url])),
+    ).toBe(false);
+    expect(evidencePhotoFailed({ url: p.url, thumbUrl: null }, new Set([p.url]))).toBe(true);
+  });
+
   it('ticks strictly increase', () => {
     const a = evidenceTick();
     expect(evidenceTick()).toBeGreaterThan(a);
@@ -426,12 +472,24 @@ describe('notes and removal', () => {
       EXCEPTION_EVIDENCE_RESOLVED_COPY,
     );
     expect(describeRemoveEvidenceError(apiError(403, 'forbidden'))).toBe(
-      'Only the person who added a photo, or a manager, can remove it.',
+      EXCEPTION_EVIDENCE_REMOVE_NOT_ALLOWED_COPY,
     );
     expect(describeRemoveEvidenceError(apiError(404, 'Photo not found.'))).toMatch(/no longer available/);
     expect(describeRemoveEvidenceError(apiError(400, 'x', { reason: 'reason_too_long' }))).toMatch(/500/);
     expect(describeRemoveEvidenceError(apiError(503, 'internal_error'))).toMatch(/server had a problem/);
     expect(describeRemoveEvidenceError(new TypeError('Network request failed'))).toBe(CONNECTION_FAILURE_COPY);
+  });
+});
+
+describe("the phone's words are core's (review finding 2026-09-27: one copy, web and phone)", () => {
+  it('note, reason, permission and offline-removal sentences', () => {
+    expect(EVIDENCE_NOTE_TOO_LONG_COPY).toBe(EXCEPTION_EVIDENCE_NOTE_TOO_LONG_COPY);
+    expect(EVIDENCE_REASON_TOO_LONG_COPY).toBe(EXCEPTION_EVIDENCE_REASON_TOO_LONG_COPY);
+    expect(EVIDENCE_NO_PERMISSION_COPY).toBe(EXCEPTION_EVIDENCE_NO_PERMISSION_COPY);
+    expect(EVIDENCE_REMOVE_OFFLINE_COPY).toBe(EXCEPTION_EVIDENCE_REMOVE_OFFLINE_COPY);
+    expect(describeRemoveEvidenceError(apiError(400, 'x', { reason: 'reason_too_long' }))).toBe(
+      EXCEPTION_EVIDENCE_REASON_TOO_LONG_COPY,
+    );
   });
 });
 

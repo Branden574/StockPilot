@@ -6,6 +6,7 @@ import { Alert, Pressable, StyleSheet, useWindowDimensions, View } from 'react-n
 import {
   EXCEPTION_EVIDENCE_LIMITS_COPY,
   EXCEPTION_EVIDENCE_NONE_COPY,
+  EXCEPTION_EVIDENCE_PHOTO_FAILED_COPY,
   EXCEPTION_EVIDENCE_PRIVACY_COPY,
   EXCEPTION_EVIDENCE_UNAVAILABLE_COPY,
   exceptionEvidenceAddedByCopy,
@@ -28,9 +29,11 @@ import {
   EVIDENCE_REMOVE_OFFLINE_COPY,
   evidenceAddControl,
   evidenceCapCheck,
+  evidencePhotoFailed,
   evidenceQueueRowCopy,
   evidenceRetryDisabledReason,
   evidenceRoomLeft,
+  evidenceSectionParts,
   evidenceTick,
   visibleEvidenceQueue,
   type EvidenceQueueEntry,
@@ -59,7 +62,12 @@ import { useTheme } from '@/lib/use-theme';
  *   - Remove is offered where the server says this reader may remove the
  *     photo (the uploader or a manager, while the exception is open).
  *   - The photos could not be read: the section says so, with Try again, and
- *     offers no add (an unknown count is never room to spare).
+ *     offers no add (an unknown count is never room to spare). The rows of
+ *     photos being added stay, with their Retry and Discard, whatever the
+ *     read says (evidenceSectionParts).
+ *   - A photo whose image fails to load (its 1-hour link expired, the file
+ *     cannot be read), in the list or in the viewer, says so with Try again,
+ *     which reads the exception again for fresh links. Never a blank.
  */
 
 function localKey(): string {
@@ -94,11 +102,17 @@ export function ExceptionEvidenceSection({
   const [adding, setAdding] = React.useState(false);
   const [removing, setRemoving] = React.useState<MobileEvidencePhoto | null>(null);
   const [viewing, setViewing] = React.useState<MobileEvidencePhoto | null>(null);
+  // Image URLs that failed to load here; fresh links (a re-read) try again.
+  const [failedUrls, setFailedUrls] = React.useState<ReadonlySet<string>>(() => new Set());
+  const markFailed = React.useCallback((url: string) => {
+    setFailedUrls((prev) => (prev.has(url) ? prev : new Set(prev).add(url)));
+  }, []);
   // One attempt counter per photo row: a late answer from an attempt a Retry
   // replaced is dropped, never applied (createPhotoAttemptGuard).
   const [guard] = React.useState(createPhotoAttemptGuard);
 
   const visible = visibleEvidenceQueue(queue, block, readTick);
+  const parts = evidenceSectionParts(block, visible);
   const liveCount = block.status === 'ok' ? block.liveCount : 0;
   const add = evidenceAddControl({ block, resolved, canAct, online, visible });
   const retryReason = evidenceRetryDisabledReason(online);
@@ -208,7 +222,7 @@ export function ExceptionEvidenceSection({
     <View style={{ gap: 10 }}>
       <Eyebrow>{heading}</Eyebrow>
 
-      {block.status !== 'ok' ? (
+      {parts.unavailable ? (
         <Card padding={14}>
           <Body size={14} accessibilityRole="alert">
             {EXCEPTION_EVIDENCE_UNAVAILABLE_COPY}
@@ -223,20 +237,28 @@ export function ExceptionEvidenceSection({
             Try again
           </Button>
         </Card>
-      ) : (
-        <>
-          {block.photos.length === 0 && visible.length === 0 ? (
-            <Body size={14} muted>
-              {EXCEPTION_EVIDENCE_NONE_COPY}
-            </Body>
-          ) : null}
+      ) : null}
 
-          {block.photos.map((p, i) => (
-            <View key={p.id} style={[styles.row, stack ? styles.stacked : null]}>
+      {parts.showNone ? (
+        <Body size={14} muted>
+          {EXCEPTION_EVIDENCE_NONE_COPY}
+        </Body>
+      ) : null}
+
+      {parts.photos.map((p, i) => {
+        const failed = evidencePhotoFailed(p, failedUrls);
+        return (
+          <View key={p.id} style={[styles.row, stack ? styles.stacked : null]}>
+            {failed ? (
+              <View
+                style={[styles.thumb, { backgroundColor: c.paper2 }]}
+                accessibilityLabel={`Photo ${i + 1} of ${parts.photos.length} could not be loaded`}
+              />
+            ) : (
               <Pressable
                 onPress={() => setViewing(p)}
                 accessibilityRole="imagebutton"
-                accessibilityLabel={`Photo ${i + 1} of ${block.photos.length}. ${exceptionEvidenceAddedByCopy(p.uploadedBy.label)}`}
+                accessibilityLabel={`Photo ${i + 1} of ${parts.photos.length}. ${exceptionEvidenceAddedByCopy(p.uploadedBy.label)}`}
                 accessibilityHint="Opens the photo full screen"
                 style={({ pressed }) => ({ opacity: pressed ? 0.8 : 1, minHeight: MIN_TAP })}
               >
@@ -244,100 +266,131 @@ export function ExceptionEvidenceSection({
                   source={{ uri: p.thumbUrl ?? p.url }}
                   style={[styles.thumb, { backgroundColor: c.paper2 }]}
                   contentFit="cover"
+                  onError={() => markFailed(p.thumbUrl ?? p.url)}
                 />
               </Pressable>
-              <View style={stack ? styles.rowTextStacked : styles.rowText}>
-                <Body size={14} color={c.ink}>
-                  {exceptionEvidenceAddedByCopy(p.uploadedBy.label)}
-                </Body>
-                <Body size={13} muted>
-                  {exceptionEvidenceTimesCopy({ capturedAt: p.capturedAt, uploadedAt: p.uploadedAt }, timeZone)}
-                </Body>
-                {p.note ? <Body size={14}>{p.note}</Body> : null}
-                {p.canRemove ? (
-                  <>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={!online}
-                      onPress={() => setRemoving(p)}
-                      accessibilityLabel={`Remove photo ${i + 1}`}
-                      style={{ alignSelf: 'flex-start', minHeight: MIN_TAP }}
-                    >
-                      Remove
-                    </Button>
-                    {!online ? (
-                      <Body size={12.5} muted>
-                        {EVIDENCE_REMOVE_OFFLINE_COPY}
-                      </Body>
-                    ) : null}
-                  </>
-                ) : null}
-              </View>
-            </View>
-          ))}
-
-          {visible.map((entry) => (
-            <View key={entry.key} style={[styles.row, stack ? styles.stacked : null]}>
-              <Image
-                source={{ uri: entry.uri }}
-                style={[styles.thumb, { backgroundColor: c.paper2, opacity: entry.status === 'error' ? 0.5 : 1 }]}
-                contentFit="cover"
-                accessibilityLabel="Photo being added"
-              />
-              <View style={stack ? styles.rowTextStacked : styles.rowText}>
-                <Body
-                  size={13.5}
-                  color={entry.status === 'error' ? ACCENT.crit : c.ink}
-                  accessibilityRole={entry.status === 'error' ? 'alert' : undefined}
-                  accessibilityLiveRegion="polite"
-                >
-                  {evidenceQueueRowCopy(entry)}
-                </Body>
-                {entry.status === 'uploading' ? (
-                  <View style={[styles.track, { backgroundColor: c.paper2 }]}>
-                    <View
-                      style={[
-                        styles.fill,
-                        { backgroundColor: c.ink, width: `${Math.round(Math.min(1, Math.max(0, entry.progress)) * 100)}%` },
-                      ]}
-                    />
-                  </View>
-                ) : null}
-                {entry.status === 'error' ? (
-                  <View style={styles.rowActions}>
-                    {entry.retry ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={retryReason !== null}
-                        onPress={() => retry(entry.key)}
-                        accessibilityLabel="Retry adding this photo"
-                        style={{ minHeight: MIN_TAP }}
-                      >
-                        Retry
-                      </Button>
-                    ) : null}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onPress={() => discard(entry.key)}
-                      accessibilityLabel="Discard this photo"
-                      style={{ minHeight: MIN_TAP }}
-                    >
-                      Discard
-                    </Button>
-                  </View>
-                ) : null}
-                {entry.status === 'error' && entry.retry && retryReason ? (
-                  <Body size={12.5} muted>
-                    {retryReason}
+            )}
+            <View style={stack ? styles.rowTextStacked : styles.rowText}>
+              {failed ? (
+                <>
+                  <Body size={13.5} color={ACCENT.crit} accessibilityRole="alert">
+                    {EXCEPTION_EVIDENCE_PHOTO_FAILED_COPY}
                   </Body>
-                ) : null}
-              </View>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!online}
+                    onPress={onChanged}
+                    accessibilityLabel={`Try loading photo ${i + 1} again`}
+                    style={{ alignSelf: 'flex-start', minHeight: MIN_TAP }}
+                  >
+                    Try again
+                  </Button>
+                </>
+              ) : null}
+              <Body size={14} color={c.ink}>
+                {exceptionEvidenceAddedByCopy(p.uploadedBy.label)}
+              </Body>
+              <Body size={13} muted>
+                {exceptionEvidenceTimesCopy(
+                  { capturedAt: p.capturedAt, uploadedAt: p.uploadedAt },
+                  timeZone,
+                )}
+              </Body>
+              {p.note ? <Body size={14}>{p.note}</Body> : null}
+              {p.canRemove ? (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!online}
+                    onPress={() => setRemoving(p)}
+                    accessibilityLabel={`Remove photo ${i + 1}`}
+                    style={{ alignSelf: 'flex-start', minHeight: MIN_TAP }}
+                  >
+                    Remove
+                  </Button>
+                  {!online ? (
+                    <Body size={12.5} muted>
+                      {EVIDENCE_REMOVE_OFFLINE_COPY}
+                    </Body>
+                  ) : null}
+                </>
+              ) : null}
             </View>
-          ))}
+          </View>
+        );
+      })}
 
+      {parts.queue.map((entry) => (
+        <View key={entry.key} style={[styles.row, stack ? styles.stacked : null]}>
+          <Image
+            source={{ uri: entry.uri }}
+            style={[
+              styles.thumb,
+              { backgroundColor: c.paper2, opacity: entry.status === 'error' ? 0.5 : 1 },
+            ]}
+            contentFit="cover"
+            accessibilityLabel="Photo being added"
+          />
+          <View style={stack ? styles.rowTextStacked : styles.rowText}>
+            <Body
+              size={13.5}
+              color={entry.status === 'error' ? ACCENT.crit : c.ink}
+              accessibilityRole={entry.status === 'error' ? 'alert' : undefined}
+              accessibilityLiveRegion="polite"
+            >
+              {evidenceQueueRowCopy(entry)}
+            </Body>
+            {entry.status === 'uploading' ? (
+              <View style={[styles.track, { backgroundColor: c.paper2 }]}>
+                <View
+                  style={[
+                    styles.fill,
+                    {
+                      backgroundColor: c.ink,
+                      width: `${Math.round(Math.min(1, Math.max(0, entry.progress)) * 100)}%`,
+                    },
+                  ]}
+                />
+              </View>
+            ) : null}
+            {entry.status === 'error' ? (
+              <View style={styles.rowActions}>
+                {entry.retry ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={retryReason !== null}
+                    onPress={() => retry(entry.key)}
+                    accessibilityLabel="Retry adding this photo"
+                    style={{ minHeight: MIN_TAP }}
+                  >
+                    Retry
+                  </Button>
+                ) : null}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onPress={() => discard(entry.key)}
+                  accessibilityLabel="Discard this photo"
+                  style={{ minHeight: MIN_TAP }}
+                >
+                  Discard
+                </Button>
+              </View>
+            ) : null}
+            {entry.status === 'error' && entry.retry && retryReason ? (
+              <Body size={12.5} muted>
+                {retryReason}
+              </Body>
+            ) : null}
+          </View>
+        </View>
+      ))}
+
+      {parts.unavailable ? null : (
+        <>
           {add.offered ? (
             <Button
               block
@@ -394,6 +447,12 @@ export function ExceptionEvidenceSection({
           visible
           onClose={() => setViewing(null)}
           label={exceptionEvidenceAddedByCopy(viewing.uploadedBy.label)}
+          // The full-size link failed (it lives an hour): the viewer closes
+          // and the photo's row says so, with Try again.
+          onError={() => {
+            markFailed(viewing.url);
+            setViewing(null);
+          }}
         />
       ) : null}
     </View>

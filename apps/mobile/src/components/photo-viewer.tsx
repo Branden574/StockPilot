@@ -37,11 +37,15 @@ export function PhotoViewer({
   visible,
   onClose,
   label,
+  onError,
 }: {
   uri: string;
   visible: boolean;
   onClose: () => void;
   label?: string;
+  /** The image could not be loaded (an expired signed link, a missing
+   *  file). Without it a failed image stays blank, as before. */
+  onError?: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
@@ -88,7 +92,12 @@ export function PhotoViewer({
             accessibilityLabel="Photo — tap to close"
             style={{ width, height }}
           >
-            <CachedImage uri={uri} style={{ width, height }} contentFit="contain" />
+            <CachedImage
+              uri={uri}
+              style={{ width, height }}
+              contentFit="contain"
+              onError={onError}
+            />
           </Pressable>
         </ScrollView>
 

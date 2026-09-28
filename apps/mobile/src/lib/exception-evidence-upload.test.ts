@@ -4,11 +4,14 @@ import {
   EXCEPTION_EVIDENCE_CAP_COPY,
   EXCEPTION_EVIDENCE_REJECTED_COPY,
   EXCEPTION_EVIDENCE_RESOLVED_COPY,
+  EXCEPTION_EVIDENCE_UNCONFIRMED_COPY,
+  EXCEPTION_EVIDENCE_UPLOAD_LIMIT_COPY,
 } from '@stockpilot/core';
 
 import { CONNECTION_FAILURE_COPY } from './connection-copy';
 import {
   asEvidenceFailure,
+  EVIDENCE_PUT_TIMEOUT_MS,
   EVIDENCE_UNCONFIRMED_COPY,
   EvidenceUploadFailure,
   runEvidenceAttempt,
@@ -33,6 +36,7 @@ const fsMock = vi.hoisted(() => ({
   createUploadTask: vi.fn(),
   uploadAsync: vi.fn(),
   FileSystemUploadType: { BINARY_CONTENT: 0, MULTIPART: 1 },
+  FileSystemSessionType: { BACKGROUND: 0, FOREGROUND: 1 },
 }));
 vi.mock('expo-file-system/legacy', () => fsMock);
 
@@ -162,6 +166,43 @@ describe('before the bytes reach the server: retry sends the photo again', () =>
     f = await failureOf(runEvidenceAttempt(input()));
     expect([f.message, f.retry]).toEqual([PHOTO_PUT_FAILED_COPY, 'upload']);
     expect(calls.filter((c) => c.route === 'finalize')).toHaveLength(0);
+  });
+
+  // Review finding 2026-09-27. Mutations caught: the default (BACKGROUND)
+  // session, where an interrupted upload waits for days and finishes on its
+  // own later; and no time limit, where the row said "Uploading" with no way
+  // out.
+  it('the PUT runs in a FOREGROUND session with a time limit; a stalled one is cancelled: "upload" retry, never finalize', async () => {
+    await runEvidenceAttempt(input());
+    expect(fsMock.createUploadTask.mock.calls[0]![2]).toMatchObject({
+      sessionType: fsMock.FileSystemSessionType.FOREGROUND,
+    });
+    expect(EVIDENCE_PUT_TIMEOUT_MS).toBe(90_000);
+
+    vi.useFakeTimers();
+    try {
+      const cancelAsync = vi.fn(async () => {});
+      fsMock.createUploadTask.mockImplementation(() => ({
+        uploadAsync: () => new Promise(() => {}),
+        cancelAsync,
+      }));
+      calls = [];
+      const settled = failureOf(runEvidenceAttempt(input()));
+      await vi.advanceTimersByTimeAsync(EVIDENCE_PUT_TIMEOUT_MS);
+      const f = await settled;
+      expect([f.message, f.retry, f.resume]).toEqual([PHOTO_PUT_FAILED_COPY, 'upload', null]);
+      expect(cancelAsync).toHaveBeenCalledTimes(1);
+      expect(calls.filter((c) => c.route === 'finalize')).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the phone's sentences for a lost answer and the hourly limit are core's", async () => {
+    expect(EVIDENCE_UNCONFIRMED_COPY).toBe(EXCEPTION_EVIDENCE_UNCONFIRMED_COPY);
+    answers.mint = [apiError(409, 'rate_limited', { reason: 'rate_limited' })];
+    const f = await failureOf(runEvidenceAttempt(input()));
+    expect([f.message, f.retry]).toEqual([EXCEPTION_EVIDENCE_UPLOAD_LIMIT_COPY, 'upload']);
   });
 
   it('no answer to the mint (offline): the connection words, "upload" retry', async () => {

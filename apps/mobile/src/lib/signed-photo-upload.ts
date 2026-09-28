@@ -89,6 +89,23 @@ export interface PreparedPhoto {
   originalFilename: string;
 }
 
+/**
+ * How the PUT itself runs. Absent: exactly as maintenance always sent it
+ * (expo-file-system's default session, no time limit).
+ *
+ *   - `foreground`: a FOREGROUND URLSession on iOS. The default is a
+ *     BACKGROUND one, which waits for a connection (for days) and can finish
+ *     the upload on its own later, after the row has given up on it: a
+ *     deferred send, which exception evidence must never do (online only).
+ *   - `timeoutMs`: a PUT still running then is CANCELLED and fails as
+ *     `upload_failed`, so a stalled upload always ends as a row with Retry
+ *     and Discard (review finding 2026-09-27).
+ */
+export interface PutOptions {
+  foreground?: boolean;
+  timeoutMs?: number;
+}
+
 /** What every mint must answer: where to PUT the bytes. */
 export interface SignedUploadTicket {
   signedUrl: string;
@@ -116,6 +133,8 @@ export interface SignedPhotoEndpoints<T extends SignedUploadTicket, R> {
    *  (a small GIF kept as-is by resizeForUpload) is transcoded to JPEG
    *  before the mint. Absent: whatever resizeForUpload returned is sent. */
   acceptedExtensions?: readonly string[];
+  /** How the PUT runs (PutOptions). Absent: unchanged. */
+  putOptions?: PutOptions;
 }
 
 /** Resize/transcode one picked asset (step 1 of every upload). */
@@ -144,12 +163,14 @@ export async function preparePhoto(
 
 /**
  * The PUT (step 3), shared so a caller can re-send bytes it already prepared.
- * Throws UploadError('upload_failed') on any non-2xx answer.
+ * Throws UploadError('upload_failed') on any non-2xx answer, and when a
+ * `timeoutMs` passes first (the task is cancelled then).
  */
 export async function putSignedPhoto(
   signedUrl: string,
   photo: Pick<PreparedPhoto, 'uri' | 'declaredMime'>,
   onProgress: (fraction: number) => void,
+  options: PutOptions = {},
 ): Promise<void> {
   const task = FileSystem.createUploadTask(
     signedUrl,
@@ -158,6 +179,7 @@ export async function putSignedPhoto(
       httpMethod: 'PUT',
       uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
       headers: { 'Content-Type': photo.declaredMime },
+      ...(options.foreground ? { sessionType: FileSystem.FileSystemSessionType.FOREGROUND } : {}),
     },
     (progress) => {
       if (progress.totalBytesExpectedToSend > 0) {
@@ -165,7 +187,33 @@ export async function putSignedPhoto(
       }
     },
   );
-  const result = await task.uploadAsync();
+  const upload = task.uploadAsync();
+  let result: Awaited<typeof upload>;
+  if (options.timeoutMs !== undefined) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<'timed_out'>((resolve) => {
+      timer = setTimeout(() => resolve('timed_out'), options.timeoutMs);
+    });
+    const outcome = await Promise.race([
+      upload.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      ),
+      timedOut,
+    ]);
+    clearTimeout(timer);
+    if (outcome === 'timed_out') {
+      // Cancelled, so it cannot finish later on its own; whatever the native
+      // task answers afterwards is dropped.
+      upload.catch(() => {});
+      void task.cancelAsync().catch(() => {});
+      throw new UploadError('upload_failed', PHOTO_PUT_FAILED_COPY);
+    }
+    if ('error' in outcome) throw outcome.error;
+    result = outcome.value;
+  } else {
+    result = await upload;
+  }
   if (!result || result.status < 200 || result.status >= 300) {
     // The server never saw these bytes: finalize must NEVER be called past
     // this point (it would only fail its own download step).
@@ -187,7 +235,7 @@ export async function uploadSignedPhoto<T extends SignedUploadTicket, R>(
   });
 
   // 3) PUT via createUploadTask: the OTA-safe, progress-reporting route.
-  await putSignedPhoto(ticket.signedUrl, photo, onProgress);
+  await putSignedPhoto(ticket.signedUrl, photo, onProgress, endpoints.putOptions);
   endpoints.onUploaded?.(ticket, photo);
 
   // 4) Thumb (best-effort, only where the server wants a client-made one):

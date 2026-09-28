@@ -1,8 +1,13 @@
 import {
   EXCEPTION_EVIDENCE_CAP_COPY,
   EXCEPTION_EVIDENCE_MAX_PHOTOS,
+  EXCEPTION_EVIDENCE_NO_PERMISSION_COPY,
   EXCEPTION_EVIDENCE_NOTE_MAX,
+  EXCEPTION_EVIDENCE_NOTE_TOO_LONG_COPY,
   EXCEPTION_EVIDENCE_OFFLINE_COPY,
+  EXCEPTION_EVIDENCE_REASON_TOO_LONG_COPY,
+  EXCEPTION_EVIDENCE_REMOVE_NOT_ALLOWED_COPY,
+  EXCEPTION_EVIDENCE_REMOVE_OFFLINE_COPY,
   EXCEPTION_EVIDENCE_RESOLVED_COPY,
   describeEvidenceEvent,
   exceptionEvidenceAddDisabledReason,
@@ -114,9 +119,10 @@ function parsePhoto(v: unknown): MobileEvidencePhoto | null {
   if (!isObj(v) || typeof v.id !== 'string' || !isLink(v.url) || typeof v.uploadedAt !== 'string') {
     return null;
   }
-  const by = isObj(v.uploadedBy) && typeof v.uploadedBy.label === 'string'
-    ? { id: strOrNull(v.uploadedBy.id), label: v.uploadedBy.label }
-    : { id: null, label: 'Former member' };
+  const by =
+    isObj(v.uploadedBy) && typeof v.uploadedBy.label === 'string'
+      ? { id: strOrNull(v.uploadedBy.id), label: v.uploadedBy.label }
+      : { id: null, label: 'Former member' };
   return {
     id: v.id,
     uploadedBy: by,
@@ -163,7 +169,11 @@ export function parseEvidenceBlock(v: unknown): MobileEvidenceBlock {
 /** A timeline event's photo info, or null (another kind, or unreadable). */
 export function parseEvidenceEventInfo(v: unknown): MobileEvidenceEventInfo | null {
   if (!isObj(v) || typeof v.uploadedAt !== 'string') return null;
-  return { capturedAt: strOrNull(v.capturedAt), uploadedAt: v.uploadedAt, removed: v.removed === true };
+  return {
+    capturedAt: strOrNull(v.capturedAt),
+    uploadedAt: v.uploadedAt,
+    removed: v.removed === true,
+  };
 }
 
 // ── Requests ───────────────────────────────────────────────────────────────
@@ -255,7 +265,7 @@ export interface EvidenceResume {
 
 // ── Reading an error (shared with exception-evidence-upload.ts) ────────────
 
-export const EVIDENCE_NO_PERMISSION_COPY = 'You do not have permission to add photos to this exception.';
+export const EVIDENCE_NO_PERMISSION_COPY = EXCEPTION_EVIDENCE_NO_PERMISSION_COPY;
 export const EVIDENCE_NOT_AVAILABLE_COPY = 'This exception is no longer available to you.';
 export const EVIDENCE_TOO_MANY_COPY = 'Too many requests. Wait a moment and try again.';
 export const EVIDENCE_SERVER_PROBLEM_COPY = 'The server had a problem. Try again in a moment.';
@@ -284,7 +294,9 @@ export function sentenceOf(e: unknown): string | null {
  * WITH OffsetTimeOriginal names an instant: a time without its offset could
  * be any of 26 instants, and the timeline would print a wrong one as fact.
  */
-export function exifCaptureInstant(exif: Record<string, unknown> | null | undefined): string | null {
+export function exifCaptureInstant(
+  exif: Record<string, unknown> | null | undefined,
+): string | null {
   if (!exif) return null;
   const dt = exif.DateTimeOriginal;
   const off = exif.OffsetTimeOriginal;
@@ -378,6 +390,44 @@ export function visibleEvidenceQueue(
   });
 }
 
+/**
+ * What the Photos section shows. The rows of photos being added are shown
+ * WHATEVER the read says: an unavailable re-read (after an upload, say) used
+ * to hide an upload in flight, an "Added" row and a failed row with its
+ * Retry and Discard (review finding 2026-09-27). "No photos yet." only after
+ * a successful read with nothing listed and nothing on its way.
+ */
+export function evidenceSectionParts(
+  block: MobileEvidenceBlock,
+  visible: readonly EvidenceQueueEntry[],
+): {
+  unavailable: boolean;
+  photos: MobileEvidencePhoto[];
+  queue: EvidenceQueueEntry[];
+  showNone: boolean;
+} {
+  const photos = block.status === 'ok' ? block.photos : [];
+  return {
+    unavailable: block.status !== 'ok',
+    photos,
+    queue: [...visible],
+    showNone: block.status === 'ok' && photos.length === 0 && visible.length === 0,
+  };
+}
+
+/**
+ * Whether a photo's image failed to load on this screen (a 1-hour link that
+ * has expired, a file that cannot be read): its thumbnail or its full-size
+ * link is among the URLs that failed. Keyed by URL, so a re-read with fresh
+ * links tries again. The row then says so, with Try again, never a blank.
+ */
+export function evidencePhotoFailed(
+  photo: Pick<MobileEvidencePhoto, 'url' | 'thumbUrl'>,
+  failedUrls: ReadonlySet<string>,
+): boolean {
+  return failedUrls.has(photo.thumbUrl ?? photo.url) || failedUrls.has(photo.url);
+}
+
 /** Photos added but not yet in the list, and photos on their way: both take
  *  a slot. Failed rows do not (nothing was recorded, or a retry decides). */
 function queuedSlots(entries: readonly EvidenceQueueEntry[]): { done: number; uploading: number } {
@@ -388,7 +438,10 @@ function queuedSlots(entries: readonly EvidenceQueueEntry[]): { done: number; up
 }
 
 /** How many more photos may be picked now (the library's selection limit). */
-export function evidenceRoomLeft(liveCount: number, visible: readonly EvidenceQueueEntry[]): number {
+export function evidenceRoomLeft(
+  liveCount: number,
+  visible: readonly EvidenceQueueEntry[],
+): number {
   const q = queuedSlots(visible);
   return Math.max(0, EXCEPTION_EVIDENCE_MAX_PHOTOS - liveCount - q.done - q.uploading);
 }
@@ -475,11 +528,12 @@ export function evidenceTextState(text: string): { length: number; tooLong: bool
   return { length, tooLong: length > EXCEPTION_EVIDENCE_NOTE_MAX };
 }
 
-export const EVIDENCE_NOTE_TOO_LONG_COPY = `Notes can be at most ${EXCEPTION_EVIDENCE_NOTE_MAX} characters.`;
-export const EVIDENCE_REASON_TOO_LONG_COPY = `A reason can be at most ${EXCEPTION_EVIDENCE_NOTE_MAX} characters.`;
+/** Core's sentences (one copy for web and phone). */
+export const EVIDENCE_NOTE_TOO_LONG_COPY = EXCEPTION_EVIDENCE_NOTE_TOO_LONG_COPY;
+export const EVIDENCE_REASON_TOO_LONG_COPY = EXCEPTION_EVIDENCE_REASON_TOO_LONG_COPY;
 
 /** Why Remove is disabled: removing needs a connection too. */
-export const EVIDENCE_REMOVE_OFFLINE_COPY = 'You are offline. Removing a photo needs a connection.';
+export const EVIDENCE_REMOVE_OFFLINE_COPY = EXCEPTION_EVIDENCE_REMOVE_OFFLINE_COPY;
 
 /** The sentence for a failed removal, keyed on status and reason. */
 export function describeRemoveEvidenceError(e: unknown): string {
@@ -487,7 +541,7 @@ export function describeRemoveEvidenceError(e: unknown): string {
   const reason = reasonOf(e);
   if (status === 409 && reason === 'occurrence_resolved') return EXCEPTION_EVIDENCE_RESOLVED_COPY;
   if (status === 403) {
-    return sentenceOf(e) ?? 'Only the person who added a photo, or a manager, can remove it.';
+    return sentenceOf(e) ?? EXCEPTION_EVIDENCE_REMOVE_NOT_ALLOWED_COPY;
   }
   if (status === 404) return 'This photo is no longer available. Pull down to refresh.';
   if (status === 400 && reason === 'reason_too_long') return EVIDENCE_REASON_TOO_LONG_COPY;

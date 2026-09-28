@@ -38,6 +38,8 @@ const detail = codeOnly(read('../../app/exceptions/[id].tsx'));
 const section = codeOnly(read('../components/exception-evidence-section.tsx'));
 const sheets = codeOnly(read('../components/exception-evidence-sheets.tsx'));
 const card = codeOnly(read('../components/item-verification-card.tsx'));
+const viewer = codeOnly(read('../components/photo-viewer.tsx'));
+const cachedImage = codeOnly(read('../components/ui/cached-image.tsx'));
 
 describe('exception detail screen', () => {
   it('renders the Photos section from the detail read, fed the live network state and the server\'s hints', () => {
@@ -106,12 +108,43 @@ describe('Photos section', () => {
   });
 
   it('a failed photo read says so, with Try again, and offers no add', () => {
-    expect(section).toContain("{block.status !== 'ok' ? (");
+    expect(section).toContain('{parts.unavailable ? (');
     expect(section).toContain('{EXCEPTION_EVIDENCE_UNAVAILABLE_COPY}');
     expect(section).toMatch(/onPress=\{onChanged\}[\s\S]{0,120}Try again/);
     // "No photos yet." only after a successful read with nothing listed or
-    // on its way.
-    expect(section).toContain('{block.photos.length === 0 && visible.length === 0 ? (');
+    // on its way (evidenceSectionParts).
+    expect(section).toContain('{parts.showNone ? (');
+    expect(section).toMatch(/\{parts\.unavailable \? null : \(\s+<>\s+\{add\.offered \? \(/);
+  });
+
+  // Review finding 2026-09-27. Mutation caught: the rows rendered only in
+  // the successful-read branch, so an unavailable re-read hid an upload in
+  // flight and a failed row with its Retry and Discard.
+  it('the rows being added render whatever the read says: from evidenceSectionParts, at the top level of the section', () => {
+    expect(section).toContain('const parts = evidenceSectionParts(block, visible);');
+    const jsx = section.slice(section.indexOf('  return (\n    <View style={{ gap: 10 }}>'));
+    expect(jsx.length).toBeGreaterThan(0);
+    // A direct child of the section's root View, not inside any branch.
+    expect(jsx).toMatch(/\n {6}\{parts\.queue\.map\(\(entry\) => \(/);
+    expect(jsx).toMatch(/\n {6}\{parts\.photos\.map\(\(p, i\) => \{/);
+    // Every branch goes through the parts, none through the block itself.
+    expect(jsx).not.toMatch(/block\.status/);
+  });
+
+  // Review finding 2026-09-27. Mutation caught: a photo whose 1-hour link
+  // expired (or whose file cannot be read) opening blank.
+  it('a photo that fails to load says so, with Try again that re-reads, in the list and from the viewer', () => {
+    expect(section).toContain('onError={() => markFailed(p.thumbUrl ?? p.url)}');
+    expect(section).toContain('const failed = evidencePhotoFailed(p, failedUrls);');
+    expect(section).toContain('{EXCEPTION_EVIDENCE_PHOTO_FAILED_COPY}');
+    expect(section).toMatch(
+      /\{EXCEPTION_EVIDENCE_PHOTO_FAILED_COPY\}[\s\S]{0,400}onPress=\{onChanged\}[\s\S]{0,200}Try again/,
+    );
+    expect(section).toMatch(
+      /<PhotoViewer[\s\S]{0,300}onError=\{\(\) => \{\s+markFailed\(viewing\.url\);\s+setViewing\(null\);/,
+    );
+    expect(viewer).toMatch(/<CachedImage\s+uri=\{uri\}[^>]*onError=\{onError\}/);
+    expect(cachedImage).toContain('onError={onError}');
   });
 
   it('shows the rows through visibleEvidenceQueue with the read tick, and counts them for the cap', () => {
@@ -160,8 +193,8 @@ describe('Photos section', () => {
 
   it('words each photo through core: who added it and its two times', () => {
     expect(section).toContain('{exceptionEvidenceAddedByCopy(p.uploadedBy.label)}');
-    expect(section).toContain(
-      'exceptionEvidenceTimesCopy({ capturedAt: p.capturedAt, uploadedAt: p.uploadedAt }, timeZone)',
+    expect(section).toMatch(
+      /exceptionEvidenceTimesCopy\(\s*\{ capturedAt: p\.capturedAt, uploadedAt: p\.uploadedAt \},\s*timeZone,?\s*\)/,
     );
     expect(section).toContain('exceptionEvidenceCountLabel(block.liveCount)');
     expect(section).toContain('{EXCEPTION_EVIDENCE_PRIVACY_COPY}');
