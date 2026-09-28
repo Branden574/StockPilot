@@ -17,6 +17,7 @@ export function CachedImage({
   contentFit = 'cover',
   recyclingKey,
   onError,
+  cacheKey,
 }: {
   uri: string;
   style?: StyleProp<ImageStyle>;
@@ -25,10 +26,14 @@ export function CachedImage({
   recyclingKey?: string;
   /** The image could not be loaded (a failed download, an expired link). */
   onError?: () => void;
+  /** The disk cache key, when the caller knows better than cacheKeyForUrl
+   *  (which drops the whole query: right for a signed storage URL, whose
+   *  token rotates, wrong for an external URL whose query IS the picture). */
+  cacheKey?: string;
 }) {
   return (
     <Image
-      source={{ uri, cacheKey: cacheKeyForUrl(uri) }}
+      source={{ uri, cacheKey: cacheKey ?? cacheKeyForUrl(uri) }}
       style={style}
       contentFit={contentFit}
       cachePolicy="memory-disk"

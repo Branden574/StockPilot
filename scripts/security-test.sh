@@ -576,6 +576,15 @@ MOBILE_TESTS=(
   src/lib/session-scope.test.ts
   src/lib/workspace-keys.wiring.test.ts
   src/lib/cycle-count-sync.backoff.sqlite.test.ts
+
+  # Book Order Totals on the phone: an answer for another workspace, warehouse
+  # or account (a sign-out, a switch) is dropped, never shown; remembered
+  # answers are keyed by account, workspace, every filter and the page, and
+  # offline shows only the exact key with its time. The export download sends
+  # the Bearer token and the REPORT's workspace to the API origin only, deletes
+  # a refused or late file, and is never shared after the account changed.
+  src/lib/book-order-totals-api.test.ts
+  src/lib/report-export-download.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
