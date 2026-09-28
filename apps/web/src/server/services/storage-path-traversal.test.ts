@@ -382,17 +382,27 @@ describe('ExceptionEvidenceService.finalize — HI-8', () => {
     const spy = makeStorageSpy(null);
     const download = vi.fn(async () => ({ data: null, error: { message: 'Object not found' } }));
     Object.assign(spy.api, { download });
-    const admin = makeSupabaseStub({ 'exception_evidence.select.maybeSingle': { data: null, error: null } });
+    const admin = makeSupabaseStub({
+      'exception_evidence.select.maybeSingle': { data: null, error: null },
+      // The finalize limiter (closed) answers through the same admin client.
+      'rpc:increment_rate_limit': {
+        data: [{ allowed: true, count: 1, reset_at: '2026-09-27T13:00:00Z' }],
+        error: null,
+      },
+    });
     createAdminClientMock.mockReturnValue({ ...admin.client, storage: spy } as never);
     const { svc } = svcWith();
     const err = await svc
       .finalize(ENTITY, { path: `${ORG}/${ENTITY}/${FILE}.png`, declaredMime: 'image/png' })
       .catch((e: unknown) => e);
     // Reached storage: the object was looked for, found missing, and the
-    // (absent) upload removed; no row can follow.
+    // (absent) upload removed; no row can follow. No thumbnail was written,
+    // so none is removed, and never a name derived from the upload's uuid
+    // (review finding 2026-09-27).
     expect(download).toHaveBeenCalledWith(`${ORG}/${ENTITY}/${FILE}.png`);
     expect((err as ServiceError).code).toBe('validation_error');
-    expect(spy.remove).toHaveBeenCalledWith([`${ORG}/${ENTITY}/${FILE}.png`, `${ORG}/${ENTITY}/${FILE}-thumb.webp`]);
+    expect(spy.remove).toHaveBeenCalledWith([`${ORG}/${ENTITY}/${FILE}.png`]);
+    expect(spy.remove.mock.calls.flat(2)).not.toContain(`${ORG}/${ENTITY}/${FILE}-thumb.webp`);
   });
 });
 

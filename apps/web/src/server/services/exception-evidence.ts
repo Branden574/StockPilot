@@ -1,12 +1,20 @@
 import 'server-only';
 
 import {
+  EXCEPTION_EVIDENCE_CAP_COPY,
   EXCEPTION_EVIDENCE_CAPTURE_SKEW_MS,
   EXCEPTION_EVIDENCE_EXTENSIONS,
+  EXCEPTION_EVIDENCE_FINALIZE_LIMIT_COPY,
   EXCEPTION_EVIDENCE_MAX_PHOTO_BYTES,
   EXCEPTION_EVIDENCE_MAX_PHOTOS,
+  EXCEPTION_EVIDENCE_NO_PERMISSION_COPY,
   EXCEPTION_EVIDENCE_NOTE_MAX,
+  EXCEPTION_EVIDENCE_NOTE_TOO_LONG_COPY,
+  EXCEPTION_EVIDENCE_REASON_TOO_LONG_COPY,
   EXCEPTION_EVIDENCE_REJECTED_COPY,
+  EXCEPTION_EVIDENCE_REMOVE_NOT_ALLOWED_COPY,
+  EXCEPTION_EVIDENCE_RESOLVED_COPY,
+  EXCEPTION_EVIDENCE_UPLOAD_LIMIT_COPY,
   exceptionEvidenceTypeForExtension,
   isManagerOrAbove,
   type ExceptionEvidenceContentType,
@@ -19,6 +27,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import {
   exceptionEvidencePathShape,
   exceptionEvidenceThumbPath,
+  exceptionEvidenceUploadNames,
   isValidStoragePath,
 } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -41,16 +50,29 @@ import { postgrestErrorText } from './lib/postgrest-error';
  *      `{org}/{occurrence}/{uuid}.{ext}`, signed with the caller's session
  *      (the bucket's INSERT policy is the floor).
  *   2. The client PUTs the photo.
- *   3. finalize: the same gate; the STRICT path shape before any storage
- *      call; the whole object read and sniffed against the declared type,
- *      within the size cap;
- *      then the whole object is re-encoded WITHOUT its metadata (EXIF, GPS)
- *      and written back over itself, with a server-made thumbnail; then
+ *   3. finalize: the STRICT path shape before anything else; the per-person
+ *      finalize limit (30 a minute, REFUSING when the limiter fails: each
+ *      finalize downloads and re-encodes up to 10 MB); the same gate; the
+ *      whole object read and sniffed against the declared type, within the
+ *      size cap; then the whole object is re-encoded WITHOUT its metadata
+ *      (EXIF, GPS) and written back over itself, with a thumbnail the server
+ *      makes and names under a FRESH uuid of its own; then
  *      exception_evidence_record (service role) re-checks everything under a
- *      lock and writes the row and the timeline event. On any failure the
- *      uploaded file and the thumbnail are deleted and no row is written
- *      (one exception, below: a second finalize of an upload that is already
- *      recorded leaves the file alone, because it belongs to that row).
+ *      lock and writes the row and the timeline event.
+ *
+ *      A REFUSAL deletes the upload (still the original, GPS included) and
+ *      this finalize's own thumbnail, and records nothing, WHEREVER it comes
+ *      from after the path check: the gate, a resolved occurrence, the note,
+ *      the capture time, the cap, the bytes, the write-back or the database.
+ *      Every deletion goes through refuseUpload, which first asks whether a
+ *      photo is recorded at that path: if one is (a racing or earlier
+ *      finalize of the same upload), its file is never deleted and the answer
+ *      is "already recorded"; if the question cannot be answered, nothing is
+ *      deleted. The thumbnail's fresh name means no finalize can ever reach
+ *      another photo's thumbnail (review findings 2026-09-27). Two things are
+ *      NOT deleted: an upload the limiter refused (the same finalize can be
+ *      sent again), and anything after a database fault (a retry may still
+ *      record it).
  *   4. remove: the uploader or a manager, through the same gate, while the
  *      occurrence is open; a SOFT remove through exception_evidence_remove as
  *      the user. The file is kept.
@@ -68,6 +90,12 @@ import { postgrestErrorText } from './lib/postgrest-error';
 /** Uploads a user may start in UPLOAD_LIMIT_WINDOW_MS. */
 export const EVIDENCE_UPLOAD_LIMIT = 60;
 export const EVIDENCE_UPLOAD_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+
+/** Finalizes a user may send in FINALIZE_LIMIT_WINDOW_MS. Checked in the
+ *  service, so the /api/v1 route and the web action share it, and CLOSED:
+ *  when the limiter cannot answer, nothing is downloaded or re-encoded. */
+export const EVIDENCE_FINALIZE_LIMIT = 30;
+export const EVIDENCE_FINALIZE_LIMIT_WINDOW_MS = 60 * 1000;
 
 const ALLOWED_EXTS: ReadonlySet<string> = new Set(EXCEPTION_EVIDENCE_EXTENSIONS);
 
@@ -109,6 +137,8 @@ export interface RemovedEvidence {
 
 type EvidenceRpcRow = {
   id: string;
+  storage_path?: string;
+  thumbnail_path?: string | null;
   content_type: string;
   byte_size: number | string;
   captured_at: string | null;
@@ -125,15 +155,7 @@ export class ExceptionEvidenceService {
    *  resolved). */
   private async requireOpenActable(occurrenceId: string): Promise<ActableOccurrence> {
     const occ = await new ExceptionOccurrencesService(this.ctx).requireActable(occurrenceId);
-    if (occ.resolvedAt !== null) {
-      throw new ServiceError(
-        'conflict',
-        'This exception is resolved, so its photos can no longer change.',
-        {
-          reason: 'occurrence_resolved',
-        },
-      );
-    }
+    if (occ.resolvedAt !== null) throw resolvedError();
     return occ;
   }
 
@@ -178,22 +200,12 @@ export class ExceptionEvidenceService {
       'closed',
     );
     if (!limit.allowed) {
-      throw new ServiceError(
-        'conflict',
-        'Too many photo uploads in the last hour. Please try again later.',
-        {
-          reason: 'rate_limited',
-        },
-      );
+      throw new ServiceError('conflict', EXCEPTION_EVIDENCE_UPLOAD_LIMIT_COPY, {
+        reason: 'rate_limited',
+      });
     }
 
-    if ((await this.liveCount(occ.id)) >= EXCEPTION_EVIDENCE_MAX_PHOTOS) {
-      throw new ServiceError(
-        'conflict',
-        `An exception can hold at most ${EXCEPTION_EVIDENCE_MAX_PHOTOS} photos. Remove one to add another.`,
-        { reason: 'evidence_limit_reached' },
-      );
-    }
+    if ((await this.liveCount(occ.id)) >= EXCEPTION_EVIDENCE_MAX_PHOTOS) throw capError();
 
     const path = `${this.ctx.organizationId}/${occ.id}/${crypto.randomUUID()}.${ext}`;
     const { data, error } = await this.ctx.supabase.storage
@@ -211,49 +223,93 @@ export class ExceptionEvidenceService {
   }
 
   async finalize(occurrenceId: string, input: EvidenceFinalizeInput): Promise<RecordedEvidence> {
-    const occ = await this.requireOpenActable(occurrenceId);
+    if (!UUID.test(occurrenceId)) throw new ServiceError('not_found', 'Exception not found.');
 
-    const note = (input.note ?? '').trim() || null;
-    if (note !== null && Array.from(note).length > EXCEPTION_EVIDENCE_NOTE_MAX) {
-      throw new ServiceError(
-        'validation_error',
-        `Notes can be at most ${EXCEPTION_EVIDENCE_NOTE_MAX} characters.`,
-        {
-          reason: 'note_too_long',
-        },
-      );
-    }
-    const capturedAt = normalizeCapturedAt(input.capturedAt);
-
-    // STRICT shape before any storage call (maintenance-attachments.ts's
-    // validateFinalizePath: a prefix check alone is escapable with `..`).
+    // STRICT shape FIRST, against the occurrence in the request
+    // (maintenance-attachments.ts's validateFinalizePath: a prefix check alone
+    // is escapable with `..`). Nothing is read, written or deleted for a path
+    // of the wrong shape; every later refusal can then clean up this path.
     const path = String(input.path ?? '');
-    if (!isValidStoragePath(path, exceptionEvidencePathShape(this.ctx.organizationId, occ.id))) {
+    if (
+      !isValidStoragePath(path, exceptionEvidencePathShape(this.ctx.organizationId, occurrenceId))
+    ) {
       throw new ServiceError('forbidden', 'Invalid upload path.', { reason: 'invalid_path' });
     }
-    // Never taken from the client: derived from the validated path.
-    const thumbPath = exceptionEvidenceThumbPath(path);
-    const ext = path.slice(path.lastIndexOf('.') + 1);
+
+    // The per-person limit, CLOSED (see EVIDENCE_FINALIZE_LIMIT). Refused
+    // here, the upload is kept: the same finalize can be sent again.
+    const limit = await checkRateLimit(
+      `exceptions:evidence:finalize:${this.ctx.userId}`,
+      EVIDENCE_FINALIZE_LIMIT,
+      EVIDENCE_FINALIZE_LIMIT_WINDOW_MS,
+      'closed',
+    );
+    if (!limit.allowed) {
+      throw new ServiceError('conflict', EXCEPTION_EVIDENCE_FINALIZE_LIMIT_COPY, {
+        reason: 'rate_limited',
+        retryAt: limit.resetAt,
+      });
+    }
 
     const admin = createAdminClient();
     const store = admin.storage.from(EXCEPTION_EVIDENCE_BUCKET);
+    // The thumbnail THIS finalize wrote, once it has written one.
+    let thumbPath: string | null = null;
+    const refuse = (err: ServiceError, recordedWins = true) =>
+      this.refuseUpload(err, admin, store, path, thumbPath, recordedWins);
 
-    // 0. Nothing is written to storage for a path that is already recorded.
-    //    The steps below write the re-encoded photo back over the upload, so
-    //    without this a second finalize of a recorded photo would replace its
-    //    file (and a lossy re-encode of a re-encode is not the photo that was
-    //    recorded). The database's unique path still settles a race.
-    if (await this.findRecorded(admin, path)) {
-      throw new ServiceError('conflict', 'This photo was already added.', {
-        reason: 'already_recorded',
-      });
+    // The gate. A definite refusal cleans up; a database fault leaves the
+    // upload for a retry of this finalize. A resolved occurrence is refused
+    // only after the gate passed, so for it (and only then) a recorded upload
+    // answers "already recorded" (a lost answer, then the sync resolved it).
+    let occ: ActableOccurrence;
+    try {
+      occ = await this.requireOpenActable(occurrenceId);
+    } catch (e) {
+      if (e instanceof ServiceError && e.code !== 'internal_error') {
+        throw await refuse(e, e.details?.reason === 'occurrence_resolved');
+      }
+      throw e;
+    }
+
+    const note = (input.note ?? '').trim() || null;
+    if (note !== null && Array.from(note).length > EXCEPTION_EVIDENCE_NOTE_MAX) {
+      throw await refuse(
+        new ServiceError('validation_error', EXCEPTION_EVIDENCE_NOTE_TOO_LONG_COPY, {
+          reason: 'note_too_long',
+        }),
+      );
+    }
+    let capturedAt: string | null;
+    try {
+      capturedAt = normalizeCapturedAt(input.capturedAt);
+    } catch (e) {
+      if (e instanceof ServiceError) throw await refuse(e);
+      throw e;
+    }
+    const ext = path.slice(path.lastIndexOf('.') + 1);
+
+    // 0. Nothing is written to storage for an upload that is already
+    //    recorded. The steps below write the re-encoded photo back over the
+    //    upload, so without this a second finalize of a recorded photo would
+    //    replace its file (and a lossy re-encode of a re-encode is not the
+    //    photo that was recorded). ONE UPLOAD NAME, ONE PHOTO (0375): another
+    //    extension of a recorded upload's uuid is not this upload, and none of
+    //    that photo's files is touched. A failed look throws, deleting nothing.
+    const recorded = await this.findRecorded(admin, path);
+    if (recorded) {
+      if (recorded.storage_path === path) throw alreadyRecordedError();
+      throw await refuse(
+        new ServiceError('forbidden', 'Invalid upload path.', { reason: 'invalid_path' }),
+      );
     }
 
     const reject = async (): Promise<never> => {
-      await removeQuietly(store, [path, thumbPath]);
-      throw new ServiceError('validation_error', EXCEPTION_EVIDENCE_REJECTED_COPY, {
-        reason: 'invalid_image',
-      });
+      throw await refuse(
+        new ServiceError('validation_error', EXCEPTION_EVIDENCE_REJECTED_COPY, {
+          reason: 'invalid_image',
+        }),
+      );
     };
 
     // The cap, before the expensive part (the bucket's INSERT policy lets a
@@ -261,12 +317,7 @@ export class ExceptionEvidenceService {
     // is not proof that the mint's own cap check ran). The database re-checks
     // under its lock.
     if ((await this.liveCount(occ.id)) >= EXCEPTION_EVIDENCE_MAX_PHOTOS) {
-      await removeQuietly(store, [path, thumbPath]);
-      throw new ServiceError(
-        'conflict',
-        `An exception can hold at most ${EXCEPTION_EVIDENCE_MAX_PHOTOS} photos. Remove one to add another.`,
-        { reason: 'evidence_limit_reached' },
-      );
+      throw await refuse(capError());
     }
 
     // 1. The declared type must be the extension's, and the bytes must be
@@ -307,18 +358,20 @@ export class ExceptionEvidenceService {
     if (!cleanKind || MIME_FOR_KIND[cleanKind.kind] !== clean.contentType) return reject();
 
     // 3. Written back over the upload (the service role; the bucket has no
-    //    UPDATE policy, so the uploader cannot replace it afterwards).
+    //    UPDATE policy, so the uploader cannot replace it afterwards), and the
+    //    thumbnail under its own fresh name, never over an existing object.
+    thumbPath = exceptionEvidenceThumbPath(this.ctx.organizationId, occ.id);
     const [masterPut, thumbPut] = await Promise.all([
       store.upload(path, clean.master, { contentType: clean.contentType, upsert: true }),
-      store.upload(thumbPath, clean.thumb, { contentType: 'image/webp', upsert: true }),
+      store.upload(thumbPath, clean.thumb, { contentType: 'image/webp', upsert: false }),
     ]);
     if (masterPut.error || thumbPut.error) {
-      await removeQuietly(store, [path, thumbPath]);
-      throw new ServiceError('internal_error', 'Could not save the photo.');
+      throw await refuse(new ServiceError('internal_error', 'Could not save the photo.'));
     }
 
     // 4. Recorded by the database, which re-checks the gate for this uploader
-    //    under a lock on the occurrence.
+    //    under a lock on the occurrence, and answers 23505 already_recorded
+    //    before any other refusal when this upload is already recorded.
     const { data, error } = await admin.rpc('exception_evidence_record', {
       p_occurrence_id: occ.id,
       p_uploaded_by: this.ctx.userId,
@@ -332,35 +385,34 @@ export class ExceptionEvidenceService {
 
     let row = (data as EvidenceRpcRow | null) ?? null;
     if (error) {
-      if (error.code === '23505') {
-        // A second finalize of an upload that is already recorded: the file
-        // belongs to that row, so it is left alone.
-        throw new ServiceError('conflict', 'This photo was already added.', {
-          reason: 'already_recorded',
-        });
-      }
-      const mapped = mapRecordError(error);
-      if (mapped) {
-        await removeQuietly(store, [path, thumbPath]);
-        throw mapped;
-      }
-      // An answer we do not recognise (a dropped connection, a timeout): the
-      // row may have been written before the answer was lost. Look before
-      // deleting, so a recorded photo never loses its file.
-      row = await this.findRecorded(admin, path);
-      if (!row) {
-        await removeQuietly(store, [path, thumbPath]);
-        throw new ServiceError('internal_error', postgrestErrorText(error));
+      // A refusal. Whichever it is, refuseUpload looks first: a row for this
+      // path (a racing finalize of the same upload won) keeps its file and
+      // answers "already recorded"; otherwise the upload goes. A 23505 with
+      // no row for this path is another name colliding: not "already added".
+      const mapped =
+        error.code === '23505'
+          ? new ServiceError('internal_error', 'The photo could not be recorded.')
+          : mapRecordError(error);
+      if (mapped) throw await refuse(mapped);
+    }
+    if (error || !row?.id) {
+      // An answer we do not recognise (a dropped connection, a timeout), or
+      // no error and no row (pattern #2): the row may have been written
+      // before the answer was lost. Look before deleting, so a recorded photo
+      // never loses its file; a failed look deletes nothing.
+      const found = await this.findRecorded(admin, path);
+      if (found && found.storage_path === path && found.thumbnail_path === thumbPath) {
+        row = found;
+      } else {
+        throw await refuse(
+          new ServiceError(
+            'internal_error',
+            error ? postgrestErrorText(error) : 'The photo could not be recorded.',
+          ),
+        );
       }
     }
-    if (!row?.id) {
-      // No error and no row is not a success (pattern #2).
-      row = await this.findRecorded(admin, path);
-      if (!row) {
-        await removeQuietly(store, [path, thumbPath]);
-        throw new ServiceError('internal_error', 'The photo could not be recorded.');
-      }
-    }
+    if (!row?.id) throw new ServiceError('internal_error', 'The photo could not be recorded.');
 
     await audit(
       {
@@ -388,9 +440,45 @@ export class ExceptionEvidenceService {
   }
 
   /**
-   * Is a row recorded for this path? For the lost-answer case only. A failed
-   * look is not "no": the file is kept (an orphan is safer than a recorded
-   * photo with no file), the failure reported, and the caller told it failed.
+   * THE cleanup for a refused finalize. Deletes what this finalize put in
+   * storage and nothing a recorded photo owns:
+   *   - no photo recorded at `path`: the upload and this finalize's
+   *     thumbnail are deleted;
+   *   - a photo recorded at `path` (a racing or earlier finalize of the same
+   *     upload): its file is kept, only this finalize's own thumbnail goes
+   *     (it is never that row's), and, when `recordedWins`, the answer is
+   *     "already recorded" (the caller's photo IS recorded);
+   *   - the look fails: nothing is deleted (an orphan is safer than a
+   *     recorded photo with no file) and the refusal stands.
+   * Returns the error to throw.
+   */
+  private async refuseUpload(
+    err: ServiceError,
+    admin: ReturnType<typeof createAdminClient>,
+    store: AdminStore,
+    path: string,
+    thumb: string | null,
+    recordedWins: boolean,
+  ): Promise<ServiceError> {
+    let row: EvidenceRpcRow | null;
+    try {
+      row = await this.findRecorded(admin, path);
+    } catch {
+      return err;
+    }
+    if (row && row.storage_path === path) {
+      if (thumb && row.thumbnail_path !== thumb) await removeQuietly(store, [thumb]);
+      return recordedWins ? alreadyRecordedError() : err;
+    }
+    await removeQuietly(store, thumb ? [path, thumb] : [path]);
+    return err;
+  }
+
+  /**
+   * The photo recorded under this upload's NAME (its uuid, any extension:
+   * 0375 records one uuid once), or null. The caller compares storage_path
+   * with its own path. A failed look is not "no": the failure is reported and
+   * THROWN, so nothing is deleted on the strength of it.
    */
   private async findRecorded(
     admin: ReturnType<typeof createAdminClient>,
@@ -398,9 +486,12 @@ export class ExceptionEvidenceService {
   ): Promise<EvidenceRpcRow | null> {
     const { data, error } = await admin
       .from('exception_evidence')
-      .select('id, content_type, byte_size, captured_at, created_at, removed_at')
+      .select(
+        'id, storage_path, thumbnail_path, content_type, byte_size, captured_at, created_at, removed_at',
+      )
       .eq('organization_id', this.ctx.organizationId)
-      .eq('storage_path', path)
+      // in-list-bound: the four extensions of one upload name (jpg, jpeg, png, webp)
+      .in('storage_path', exceptionEvidenceUploadNames(path))
       .maybeSingle();
     if (error) {
       void reportError(new Error('Evidence record check failed; upload kept'), {
@@ -423,11 +514,9 @@ export class ExceptionEvidenceService {
     if (!UUID.test(evidenceId)) throw new ServiceError('not_found', 'Photo not found.');
     const reason = (reasonInput ?? '').trim() || null;
     if (reason !== null && Array.from(reason).length > EXCEPTION_EVIDENCE_NOTE_MAX) {
-      throw new ServiceError(
-        'validation_error',
-        `A reason can be at most ${EXCEPTION_EVIDENCE_NOTE_MAX} characters.`,
-        { reason: 'reason_too_long' },
-      );
+      throw new ServiceError('validation_error', EXCEPTION_EVIDENCE_REASON_TOO_LONG_COPY, {
+        reason: 'reason_too_long',
+      });
     }
 
     const occ = await new ExceptionOccurrencesService(this.ctx).requireActable(occurrenceId);
@@ -447,20 +536,9 @@ export class ExceptionEvidenceService {
     } | null;
     if (!photo) throw new ServiceError('not_found', 'Photo not found.');
     if (photo.uploaded_by !== this.ctx.userId && !isManagerOrAbove(this.ctx.role)) {
-      throw new ServiceError(
-        'forbidden',
-        'Only the person who added a photo, or a manager, can remove it.',
-      );
+      throw new ServiceError('forbidden', EXCEPTION_EVIDENCE_REMOVE_NOT_ALLOWED_COPY);
     }
-    if (photo.removed_at === null && occ.resolvedAt !== null) {
-      throw new ServiceError(
-        'conflict',
-        'This exception is resolved, so its photos can no longer change.',
-        {
-          reason: 'occurrence_resolved',
-        },
-      );
-    }
+    if (photo.removed_at === null && occ.resolvedAt !== null) throw resolvedError();
 
     const { data, error } = await this.ctx.supabase.rpc('exception_evidence_remove', {
       p_id: evidenceId,
@@ -530,6 +608,27 @@ async function removeQuietly(store: AdminStore, paths: string[]): Promise<void> 
   }
 }
 
+/** The refusals web and phone both word from core (review finding
+ *  2026-09-27: the service had its own sentences). */
+function resolvedError(): ServiceError {
+  return new ServiceError('conflict', EXCEPTION_EVIDENCE_RESOLVED_COPY, {
+    reason: 'occurrence_resolved',
+  });
+}
+
+function capError(): ServiceError {
+  return new ServiceError('conflict', EXCEPTION_EVIDENCE_CAP_COPY, {
+    reason: 'evidence_limit_reached',
+  });
+}
+
+/** This upload is already recorded: the clients read it as success. */
+function alreadyRecordedError(): ServiceError {
+  return new ServiceError('conflict', 'This photo was already added.', {
+    reason: 'already_recorded',
+  });
+}
+
 /** exception_evidence_record's refusals, by SQLSTATE and hint (pattern #28).
  *  Null for anything else: the caller then checks before deleting. */
 function mapRecordError(error: {
@@ -539,29 +638,12 @@ function mapRecordError(error: {
 }): ServiceError | null {
   switch (error.code) {
     case '42501':
-      return new ServiceError(
-        'forbidden',
-        'You do not have permission to add photos to this exception.',
-      );
+      return new ServiceError('forbidden', EXCEPTION_EVIDENCE_NO_PERMISSION_COPY);
     case 'P0002':
       return new ServiceError('not_found', 'Exception not found.');
     case 'P0001':
-      if (error.hint === 'occurrence_resolved') {
-        return new ServiceError(
-          'conflict',
-          'This exception is resolved, so its photos can no longer change.',
-          {
-            reason: 'occurrence_resolved',
-          },
-        );
-      }
-      if (error.hint === 'evidence_limit_reached') {
-        return new ServiceError(
-          'conflict',
-          `An exception can hold at most ${EXCEPTION_EVIDENCE_MAX_PHOTOS} photos. Remove one to add another.`,
-          { reason: 'evidence_limit_reached' },
-        );
-      }
+      if (error.hint === 'occurrence_resolved') return resolvedError();
+      if (error.hint === 'evidence_limit_reached') return capError();
       return null;
     case '22023':
       return new ServiceError('validation_error', EXCEPTION_EVIDENCE_REJECTED_COPY, {
@@ -586,32 +668,17 @@ function mapRemoveError(error: {
 }): ServiceError {
   switch (error.code) {
     case '42501':
-      return new ServiceError(
-        'forbidden',
-        'Only the person who added a photo, or a manager, can remove it.',
-      );
+      return new ServiceError('forbidden', EXCEPTION_EVIDENCE_REMOVE_NOT_ALLOWED_COPY);
     case 'P0002':
       return new ServiceError('not_found', 'Photo not found.');
     case 'P0001':
-      if (error.hint === 'occurrence_resolved') {
-        return new ServiceError(
-          'conflict',
-          'This exception is resolved, so its photos can no longer change.',
-          {
-            reason: 'occurrence_resolved',
-          },
-        );
-      }
+      if (error.hint === 'occurrence_resolved') return resolvedError();
       break;
     case '22023':
       if (error.hint === 'reason_too_long') {
-        return new ServiceError(
-          'validation_error',
-          `A reason can be at most ${EXCEPTION_EVIDENCE_NOTE_MAX} characters.`,
-          {
-            reason: 'reason_too_long',
-          },
-        );
+        return new ServiceError('validation_error', EXCEPTION_EVIDENCE_REASON_TOO_LONG_COPY, {
+          reason: 'reason_too_long',
+        });
       }
       break;
     case '55P03':

@@ -40,8 +40,8 @@ import { personFor, type OccurrencePerson, type ProfileEmbed } from './lib/occur
 import { postgrestErrorText } from './lib/postgrest-error';
 import {
   buildEvidenceBlock,
-  evidenceEventInfo,
-  readEvidenceRows,
+  readEvidenceEventInfo,
+  readLiveEvidenceRows,
   type EvidenceEventInfo,
   type EvidenceRow,
   type ExceptionEvidenceBlock,
@@ -605,7 +605,7 @@ export class ExceptionOccurrencesService {
     if (!UUID.test(id)) throw new ServiceError('not_found', 'Exception not found.');
     const orgId = this.ctx.organizationId;
 
-    const [row, events, syncState, gate, timeZone, evidenceRows] = await Promise.all([
+    const [row, events, syncState, gate, timeZone, liveEvidence] = await Promise.all([
       this.readOccurrenceRow(id),
       fetchAllRows<Record<string, unknown>>(
         (from, to) =>
@@ -622,9 +622,9 @@ export class ExceptionOccurrencesService {
       this.readSyncState(),
       this.actGate(),
       this.readOrgTimeZone(),
-      // Photos are read alongside, and a failed read is contained: the detail
-      // still renders, with photos "unavailable" (never "none").
-      readEvidenceRows(this.ctx, id).then(
+      // The live photos are read alongside, and a failed read is contained:
+      // the detail still renders, with photos "unavailable" (never "none").
+      readLiveEvidenceRows(this.ctx, id).then(
         (rows): EvidenceRow[] | null => rows,
         (err: unknown): null => {
           reportDegradedRead('exceptions.evidence_read', err, {});
@@ -680,8 +680,22 @@ export class ExceptionOccurrencesService {
       recurrence_index: number;
     }>;
 
-    const evidence = await this.evidenceBlock(occurrence, evidenceRows);
-    const evidenceInfo = evidenceRows ? evidenceEventInfo(evidenceRows) : null;
+    // The photo links are signed while the timeline's photo times are read:
+    // exactly the photos its events name, removed ones included. A failed
+    // times read leaves each event's times out (never a guessed time).
+    const namedEvidence = events.flatMap((e) => (e.evidence_id ? [e.evidence_id] : []));
+    const [evidence, evidenceInfo] = await Promise.all([
+      this.evidenceBlock(occurrence, liveEvidence),
+      readEvidenceEventInfo(this.ctx, id, namedEvidence).then(
+        (info): Map<string, EvidenceEventInfo> | null => info,
+        (err: unknown): null => {
+          reportDegradedRead('exceptions.evidence_info_read', err, {
+            photos: namedEvidence.length,
+          });
+          return null;
+        },
+      ),
+    ]);
 
     return {
       occurrence,

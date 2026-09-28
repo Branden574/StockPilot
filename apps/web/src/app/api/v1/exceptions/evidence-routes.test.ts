@@ -266,18 +266,39 @@ describe('POST /api/v1/exceptions/[id]/evidence/finalize', () => {
     expect(admin.rpcCalls.map((c) => c.name)).toEqual(['exception_evidence_record']);
   });
 
-  it('has its own per-person limit (30 a minute) and answers 429 with Retry-After', async () => {
+  it("the service's per-person limit (30 a minute, CLOSED) is checked once and answers 429 with Retry-After, keeping the upload", async () => {
     ctxWith();
     await FINALIZE(bearer(F, json({ path: PATH, declaredMime: 'image/jpeg' })), params(OCC));
-    expect(limiter.calls[0]).toEqual(['exceptions-evidence-finalize:u-1', 30, 60_000]);
+    // One limiter call: the service's, failing closed (the route no longer
+    // has its own fail-open one).
+    expect(limiter.calls).toEqual([['exceptions:evidence:finalize:u-1', 30, 60_000, 'closed']]);
     limiter.allowed = false;
-    ctxWith();
+    const { storage } = ctxWith();
     const res = await FINALIZE(
       bearer(F, json({ path: PATH, declaredMime: 'image/jpeg' })),
       params(OCC),
     );
     expect(res.status).toBe(429);
     expect(res.headers.get('retry-after')).toBeTruthy();
+    expect((await res.json()).error).toBe('rate_limited');
+    // The phone resends this same finalize: the upload must still be there.
+    expect(storage.remove).not.toHaveBeenCalled();
+    expect(storage.download).not.toHaveBeenCalled();
+  });
+
+  it('the resolved-since-mint refusal deletes the unrecorded upload (it still carries its GPS)', async () => {
+    const { storage } = ctxWith({
+      occurrence: occRow({ resolved_at: '2026-09-27T11:00:00Z', resolved_reason: 'cleared' }),
+    });
+    const res = await FINALIZE(
+      bearer(F, json({ path: PATH, declaredMime: 'image/jpeg' })),
+      params(OCC),
+    );
+    expect([res.status, (await res.json()).details]).toEqual([
+      409,
+      { reason: 'occurrence_resolved' },
+    ]);
+    expect(storage.remove).toHaveBeenCalledWith([PATH]);
   });
 
   it('400 invalid_image for a PNG declared as JPEG, and the upload is deleted', async () => {

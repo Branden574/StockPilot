@@ -33,7 +33,9 @@ import {
   buildEvidenceBlock,
   evidenceEventInfo,
   EVIDENCE_VIEW_URL_TTL_SEC,
-  readEvidenceRows,
+  LIVE_EVIDENCE_READ_BOUND,
+  readEvidenceEventInfo,
+  readLiveEvidenceRows,
   signEvidencePaths,
   SIGN_PATHS_PER_CALL,
   type EvidenceRow,
@@ -211,18 +213,21 @@ describe('buildEvidenceBlock', () => {
   });
 });
 
-describe('readEvidenceRows / evidenceEventInfo', () => {
-  it("reads the occurrence's rows through the caller's client, org-scoped, oldest first", async () => {
+describe('readLiveEvidenceRows / readEvidenceEventInfo / evidenceEventInfo', () => {
+  it("reads the occurrence's LIVE rows through the caller's client, org-scoped, oldest first", async () => {
     const stub = makeSupabaseStub({
       'exception_evidence.select': { data: [row({ id: 'e1' })], error: null },
     });
     const ctx = makeServiceContext(stub.client, { organizationId: 'org-1' });
-    const rows = await readEvidenceRows(ctx as never, 'occ-1');
+    const rows = await readLiveEvidenceRows(ctx as never, 'occ-1');
     expect(rows.map((r) => r.id)).toEqual(['e1']);
     const args = stub.chainArgs.get('exception_evidence.select')!;
     expect(args).toContainEqual(['organization_id', 'org-1']);
     expect(args).toContainEqual(['occurrence_id', 'occ-1']);
+    expect(args).toContainEqual(['removed_at', null]);
     expect(args).toContainEqual(['created_at', { ascending: true }]);
+    // One row past the bound is asked for, so "more" is seen.
+    expect(args).toContainEqual([0, LIVE_EVIDENCE_READ_BOUND]);
   });
 
   it('a failed read throws (the caller shows "unavailable", never "no photos")', async () => {
@@ -230,7 +235,60 @@ describe('readEvidenceRows / evidenceEventInfo', () => {
       'exception_evidence.select': { data: null, error: { message: 'boom' } },
     });
     const ctx = makeServiceContext(stub.client);
-    await expect(readEvidenceRows(ctx as never, 'occ-1')).rejects.toBeTruthy();
+    await expect(readLiveEvidenceRows(ctx as never, 'occ-1')).rejects.toBeTruthy();
+  });
+
+  it('more live rows than the bound THROWS: never a list cut short and shown as complete', async () => {
+    const many = Array.from({ length: LIVE_EVIDENCE_READ_BOUND + 1 }, (_, i) =>
+      row({ id: `e${i}` }),
+    );
+    const stub = makeSupabaseStub({ 'exception_evidence.select': { data: many, error: null } });
+    const ctx = makeServiceContext(stub.client);
+    await expect(readLiveEvidenceRows(ctx as never, 'occ-1')).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+  });
+
+  it('reads the times of exactly the photos named, however many (batched by id), org and occurrence scoped', async () => {
+    const ids = Array.from({ length: 1500 }, (_, i) => `e${i}`);
+    const stub = makeSupabaseStub({
+      'exception_evidence.select': ((call: { methods: string[]; args: unknown[][] }) => {
+        const inArgs = call.args[call.methods.indexOf('in')]!;
+        return {
+          data: (inArgs[1] as string[]).map((id) => ({
+            id,
+            captured_at: null,
+            created_at: '2026-09-27T12:00:00Z',
+            removed_at: id === 'e1499' ? '2026-09-27T13:00:00Z' : null,
+          })),
+          error: null,
+        };
+      }) as never,
+    });
+    const ctx = makeServiceContext(stub.client, { organizationId: 'org-1' });
+    const info = await readEvidenceEventInfo(ctx as never, 'occ-1', [...ids, 'e0']);
+    expect(info.size).toBe(1500);
+    expect(info.get('e1499')).toMatchObject({ removed: true });
+    const reads = stub.chainArgsAll.get('exception_evidence.select')!;
+    expect(reads.length).toBeGreaterThan(1);
+    for (const args of reads) {
+      expect(args).toContainEqual(['organization_id', 'org-1']);
+      expect(args).toContainEqual(['occurrence_id', 'occ-1']);
+    }
+  });
+
+  it('no photos named: no read at all; a failed read throws', async () => {
+    const quiet = makeSupabaseStub({});
+    expect(
+      (await readEvidenceEventInfo(makeServiceContext(quiet.client) as never, 'occ-1', [])).size,
+    ).toBe(0);
+    expect(quiet.fromCalls).toEqual([]);
+    const failing = makeSupabaseStub({
+      'exception_evidence.select': { data: null, error: { message: 'boom' } },
+    });
+    await expect(
+      readEvidenceEventInfo(makeServiceContext(failing.client) as never, 'occ-1', ['e1']),
+    ).rejects.toBeTruthy();
   });
 
   it("gives the timeline each photo's times, removed ones included", () => {

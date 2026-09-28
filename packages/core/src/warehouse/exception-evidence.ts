@@ -94,6 +94,44 @@ export const EXCEPTION_EVIDENCE_PRIVACY_COPY =
 /** The limits, stated where photos are added (the database enforces them). */
 export const EXCEPTION_EVIDENCE_LIMITS_COPY = `Up to ${EXCEPTION_EVIDENCE_MAX_PHOTOS} photos on an exception, each a JPEG, PNG or WEBP of up to ${EXCEPTION_EVIDENCE_MAX_PHOTO_BYTES / (1024 * 1024)} MB.`;
 
+/** A note longer than the limit (the server's words and the phone's). */
+export const EXCEPTION_EVIDENCE_NOTE_TOO_LONG_COPY = `Notes can be at most ${EXCEPTION_EVIDENCE_NOTE_MAX} characters.`;
+
+/** A removal reason longer than the limit. */
+export const EXCEPTION_EVIDENCE_REASON_TOO_LONG_COPY = `A reason can be at most ${EXCEPTION_EVIDENCE_NOTE_MAX} characters.`;
+
+/** The server refused an upload for this reader (the act gate). */
+export const EXCEPTION_EVIDENCE_NO_PERMISSION_COPY =
+  'You do not have permission to add photos to this exception.';
+
+/** The server refused a removal: neither the uploader nor a manager. */
+export const EXCEPTION_EVIDENCE_REMOVE_NOT_ALLOWED_COPY =
+  'Only the person who added a photo, or a manager, can remove it.';
+
+/** The per-person upload limit (60 an hour) was reached. */
+export const EXCEPTION_EVIDENCE_UPLOAD_LIMIT_COPY =
+  'Too many photo uploads in the last hour. Please try again later.';
+
+/** The per-person limit on recording photos (a burst of finalizes) was
+ *  reached. The upload is kept: Retry records the same one. */
+export const EXCEPTION_EVIDENCE_FINALIZE_LIMIT_COPY =
+  'Too many photos are being added right now. Wait a moment, then Retry.';
+
+/** The photo reached the server, but its answer did not come back, so it may
+ *  or may not be recorded. Retry records THAT upload (never a second copy).
+ *  Shown after "Not confirmed." on web and phone. */
+export const EXCEPTION_EVIDENCE_UNCONFIRMED_COPY =
+  'The photo was sent, but the server did not confirm it. Retry to finish adding it.';
+
+/** Why Remove is disabled offline (removing needs a connection too). */
+export const EXCEPTION_EVIDENCE_REMOVE_OFFLINE_COPY =
+  'You are offline. Removing a photo needs a connection.';
+
+/** One photo that did not load (its link expired, or the file could not be
+ *  read). Never a blank space where a photo should be. */
+export const EXCEPTION_EVIDENCE_PHOTO_FAILED_COPY =
+  'This photo could not be loaded. Try again to get a fresh link.';
+
 /** What removing a photo does, said before it is done (exception_evidence_remove
  *  is a soft remove: the row and the stored file are kept, and an
  *  evidence_removed event records who removed it and why). */

@@ -248,8 +248,12 @@ export async function startExceptionEvidenceUploadAction(
 }
 
 /** Records an uploaded photo (F1-4): the server checks the bytes, removes the
- *  photo's metadata (location included) and records it. On a refusal the
- *  upload is deleted and nothing is recorded. */
+ *  photo's metadata (location included) and records it. On a refusal nothing
+ *  is recorded and the upload is deleted, except when the per-person finalize
+ *  limit refused it (reason rate_limited: the same finalize can be sent
+ *  again) or it is already recorded (reason already_recorded: success for
+ *  the caller). The limit is ExceptionEvidenceService's, the same one the
+ *  /api/v1 route applies. */
 export async function finalizeExceptionEvidenceAction(
   id: string,
   input: { path: string; declaredMime: string; capturedAt?: string | null; note?: string | null },

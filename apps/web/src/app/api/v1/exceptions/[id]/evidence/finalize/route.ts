@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { checkRateLimit } from '@/lib/rate-limit';
+import { ServiceError } from '@/server/services/context';
 import { ExceptionEvidenceService } from '@/server/services/exception-evidence';
 
 import { exceptionsErrorResponse, exceptionsRateLimitedResponse } from '../../../error-response';
@@ -30,8 +30,15 @@ const bodySchema = z.object({
  * 10 MB), re-encodes the photo WITHOUT its metadata (EXIF, including GPS
  * location), makes the thumbnail itself, and records it through
  * exception_evidence_record, which re-checks the act gate, the open state,
- * the path and the cap of 8 under a lock. On any refusal the uploaded file is
- * deleted and nothing is recorded.
+ * the path and the cap of 8 under a lock.
+ *
+ * On a refusal nothing is recorded and the upload is deleted, with three
+ * exceptions: a path of the wrong shape (nothing is touched), a finalize the
+ * per-person limit refused (429: the same finalize can be sent again), and an
+ * upload that turns out to be recorded already (its file is kept, and the
+ * answer is 409 already_recorded, which a client reads as success). The limit
+ * (30 a minute, refusing when the limiter itself fails) is the service's, so
+ * the web action shares it.
  *
  * Body: `{ path, declaredMime, capturedAt?, note? }`. `capturedAt` is the
  * device's clock (ISO 8601); a time more than 5 minutes ahead of the server
@@ -55,11 +62,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       { status: 400 },
     );
   }
-
-  // A finalize downloads and re-encodes up to 10 MB, so it has its own
-  // per-person limit on top of the mint's hourly one.
-  const rl = await checkRateLimit(`exceptions-evidence-finalize:${ctx.userId}`, 30, 60_000);
-  if (!rl.allowed) return exceptionsRateLimitedResponse(rl.resetAt);
 
   let body: z.infer<typeof bodySchema>;
   try {
@@ -87,6 +89,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     });
     return NextResponse.json({ evidence }, { status: 201 });
   } catch (e) {
+    // The service's finalize limit: a 429 with Retry-After, so the phone
+    // resends this same finalize later (the upload is kept).
+    if (
+      e instanceof ServiceError &&
+      e.details?.reason === 'rate_limited' &&
+      typeof e.details.retryAt === 'number'
+    ) {
+      return exceptionsRateLimitedResponse(e.details.retryAt);
+    }
     return exceptionsErrorResponse(e, 'api.v1.exceptions.evidence.finalize', ctx);
   }
 }

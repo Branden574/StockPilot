@@ -83,6 +83,7 @@ const EV_ROWS = [
   {
     id: 'e1',
     uploaded_by: 'user-test',
+    occurrence_id: OCC,
     storage_path: `org/${OCC}/e1.jpg`,
     thumbnail_path: `org/${OCC}/e1-thumb.webp`,
     content_type: 'image/jpeg',
@@ -97,6 +98,7 @@ const EV_ROWS = [
   {
     id: 'e2',
     uploaded_by: 'user-test',
+    occurrence_id: OCC,
     storage_path: `org/${OCC}/e2.jpg`,
     thumbnail_path: null,
     content_type: 'image/jpeg',
@@ -156,27 +158,58 @@ const EVENTS = [
   },
 ];
 
+type Call = { methods: string[]; args: unknown[][] };
+
+/**
+ * A table as PostgREST would answer it: the chain's eq / is / in filters and
+ * its range applied to `rows` (in the order given), and nothing more. So a
+ * read that asks for the wrong rows, or stops at a page, gets what the
+ * database would give it.
+ */
+function table(rows: ReadonlyArray<Record<string, unknown>>) {
+  return (call: Call) => {
+    let out = [...rows];
+    let range: [number, number] | null = null;
+    call.methods.forEach((m, i) => {
+      const a = call.args[i]!;
+      if (m === 'eq' && a[0] !== 'organization_id')
+        out = out.filter((r) => r[a[0] as string] === a[1]);
+      if (m === 'is') out = out.filter((r) => r[a[0] as string] === a[1]);
+      if (m === 'in') out = out.filter((r) => (a[1] as unknown[]).includes(r[a[0] as string]));
+      if (m === 'range') range = [a[0] as number, a[1] as number];
+    });
+    if (range) out = out.slice(range[0], range[1] + 1);
+    return { data: out, error: null };
+  };
+}
+
 function service(
   opts: {
     evidence?: 'ok' | 'error';
     occurrence?: Record<string, unknown>;
     role?: 'staff' | 'viewer' | 'manager';
+    evidenceRows?: ReadonlyArray<Record<string, unknown>>;
+    events?: ReadonlyArray<Record<string, unknown>>;
   } = {},
 ) {
   const stub = makeSupabaseStub({
     'exception_occurrences.select.maybeSingle': { data: opts.occurrence ?? occRow(), error: null },
     'exception_occurrences.select': { data: [opts.occurrence ?? occRow()], error: null },
-    'exception_occurrence_events.select': { data: EVENTS, error: null },
+    'exception_occurrence_events.select': opts.events
+      ? (table(opts.events) as never)
+      : { data: EVENTS, error: null },
     'exception_sync_state.select.maybeSingle': { data: null, error: null },
     'organizations.select.maybeSingle': { data: { timezone: 'America/Chicago' }, error: null },
     'exception_evidence.select':
       opts.evidence === 'error'
         ? { data: null, error: { message: 'evidence read failed' } }
-        : { data: EV_ROWS, error: null },
+        : (table(opts.evidenceRows ?? EV_ROWS) as never),
   });
+  lastStub = stub;
   const ctx = makeServiceContext(stub.client, { role: opts.role ?? 'staff' });
   return new ExceptionOccurrencesService(ctx as never);
 }
+let lastStub: ReturnType<typeof makeSupabaseStub> | null = null;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -244,6 +277,74 @@ describe('ExceptionOccurrencesService.get: photo evidence', () => {
     if (d.evidence.status !== 'ok') throw new Error('unavailable');
     expect(d.evidence.canAdd).toBe(false);
     expect(d.evidence.photos.every((p) => !p.canRemove)).toBe(true);
+  });
+
+  it('READ CAP (review finding 2026-09-27): 1,200 removed photos before the live ones never hide a live photo or a time', async () => {
+    const removed = Array.from({ length: 1200 }, (_, i) => ({
+      ...EV_ROWS[1]!,
+      id: `old-${i}`,
+      storage_path: `org/${OCC}/old-${i}.jpg`,
+      occurrence_id: OCC,
+      created_at: `2026-09-2${i < 600 ? 5 : 6}T10:00:00Z`,
+      removed_at: '2026-09-26T11:00:00Z',
+    }));
+    const live = [
+      {
+        ...EV_ROWS[0]!,
+        id: 'new-1',
+        storage_path: `org/${OCC}/new-1.jpg`,
+        thumbnail_path: null,
+        occurrence_id: OCC,
+      },
+      {
+        ...EV_ROWS[0]!,
+        id: 'new-2',
+        storage_path: `org/${OCC}/new-2.jpg`,
+        thumbnail_path: null,
+        occurrence_id: OCC,
+      },
+    ];
+    // Oldest first, as the database orders them.
+    const rows = [...removed, ...live];
+    const events = rows.map((r, i) => ({
+      id: `ev-${i}`,
+      kind: 'evidence_added',
+      actor_user_id: 'user-test',
+      cycle_count_id: null,
+      evidence_id: r.id,
+      maintenance_request_id: null,
+      note: null,
+      created_at: r.created_at,
+      actor: { full_name: 'Test User', email: null },
+      occurrence_id: OCC,
+    }));
+    const d = await service({ evidenceRows: rows, events }).get(OCC);
+    if (d.evidence.status !== 'ok') throw new Error('unavailable');
+    expect(d.evidence.photos.map((p) => p.id)).toEqual(['new-1', 'new-2']);
+    expect(d.evidence.liveCount).toBe(2);
+    // Every evidence event the timeline shows has its photo's times.
+    expect(d.timeline).toHaveLength(1202);
+    expect(d.timeline.filter((e) => e.evidence === null)).toEqual([]);
+    expect(d.timeline.find((e) => e.evidenceId === 'old-0')!.evidence).toMatchObject({
+      removed: true,
+    });
+    expect(d.timeline.find((e) => e.evidenceId === 'new-2')!.evidence).toMatchObject({
+      removed: false,
+    });
+  });
+
+  it('two reads: the LIVE photos (removed_at is null) for the block, and the times of exactly the photos the events name', async () => {
+    await service().get(OCC);
+    const reads = lastStub!.chainArgsAll.get('exception_evidence.select')!;
+    const live = reads.filter((args) => args.some((a) => a[0] === 'removed_at' && a[1] === null));
+    const byIds = reads.filter((args) => args.some((a) => a[0] === 'id' && Array.isArray(a[1])));
+    expect(live).toHaveLength(1);
+    expect(byIds).toHaveLength(1);
+    expect(byIds[0]!.find((a) => a[0] === 'id')![1]).toEqual(['e1', 'e2']);
+    for (const args of reads) {
+      expect(args).toContainEqual(['organization_id', 'org-test']);
+      expect(args).toContainEqual(['occurrence_id', OCC]);
+    }
   });
 
   it('a resolved occurrence keeps its photos visible, with nothing to add or remove', async () => {

@@ -1,6 +1,17 @@
 import sharp from 'sharp';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  EXCEPTION_EVIDENCE_CAP_COPY,
+  EXCEPTION_EVIDENCE_FINALIZE_LIMIT_COPY,
+  EXCEPTION_EVIDENCE_NO_PERMISSION_COPY,
+  EXCEPTION_EVIDENCE_NOTE_TOO_LONG_COPY,
+  EXCEPTION_EVIDENCE_REASON_TOO_LONG_COPY,
+  EXCEPTION_EVIDENCE_REMOVE_NOT_ALLOWED_COPY,
+  EXCEPTION_EVIDENCE_RESOLVED_COPY,
+  EXCEPTION_EVIDENCE_UPLOAD_LIMIT_COPY,
+} from '@stockpilot/core';
+
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 /**
@@ -13,6 +24,13 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
  * from what is stored, the record through the service-role RPC, and the
  * upload deleted with no row on every refusal (and NOT deleted when it may
  * belong to a recorded row).
+ *
+ * Review findings 2026-09-27 pinned here: the thumbnail is named from a FRESH
+ * uuid (never the upload's), so no finalize can reach a recorded photo's
+ * thumbnail; a recorded photo's files are never deleted, whatever answer a
+ * later finalize gets; refusals before the storage steps delete the
+ * unrecorded upload too (it still carries its GPS); the finalize limiter is
+ * the service's and fails CLOSED; the messages are core's.
  */
 
 vi.mock('server-only', () => ({}));
@@ -62,7 +80,14 @@ const OTHER_OCC = '22222222-2222-4222-8222-222222222222';
 const FILE = '33333333-3333-4333-8333-333333333333';
 const EVID = '44444444-4444-4444-8444-444444444444';
 const PATH = `${ORG}/${OCC}/${FILE}.jpg`;
-const THUMB = `${ORG}/${OCC}/${FILE}-thumb.webp`;
+/** The name a thumbnail was derived as before the review: shared by every
+ *  extension of FILE. Nothing may ever touch it now. */
+const DERIVED_THUMB = `${ORG}/${OCC}/${FILE}-thumb.webp`;
+/** Another finalize's thumbnail (the one a recorded row names). */
+const OTHER_THUMB = `${ORG}/${OCC}/66666666-6666-4666-8666-666666666666-thumb.webp`;
+const FRESH_THUMB = new RegExp(
+  `^${ORG}/${OCC}/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}-thumb\\.webp$`,
+);
 
 let gpsJpeg: Buffer;
 let pngBytes: Buffer;
@@ -128,7 +153,10 @@ function setup(
     userId?: string;
     occurrence?: Record<string, unknown> | null;
     live?: number | 'error';
-    recorded?: Array<Record<string, unknown> | null | 'error'>;
+    /** The admin's "is this upload recorded?" answers, in order. 'ours' is
+     *  a row for PATH naming the thumbnail THIS finalize wrote; 'theirs' a
+     *  row for PATH naming another finalize's thumbnail. */
+    recorded?: Array<Record<string, unknown> | null | 'error' | 'ours' | 'theirs'>;
     rpc?: RpcResult;
     object?: Uint8Array | null;
     uploadError?: boolean;
@@ -169,12 +197,23 @@ function setup(
   user.client.storage.from = vi.fn(() => ({ createSignedUploadUrl }));
 
   const recorded = [...(opts.recorded ?? [null])];
+  const rowFor = (thumb: string | undefined) => ({
+    id: EVID,
+    storage_path: PATH,
+    thumbnail_path: thumb ?? null,
+    content_type: 'image/jpeg',
+    byte_size: 99,
+    captured_at: null,
+    created_at: '2026-09-27T12:00:00Z',
+    removed_at: null,
+  });
   const admin = makeSupabaseStub({
     'exception_evidence.select.maybeSingle': () => {
       const next = recorded.length > 1 ? recorded.shift()! : recorded[0]!;
-      return next === 'error'
-        ? { data: null, error: { message: 'lookup failed' } }
-        : { data: next, error: null };
+      if (next === 'error') return { data: null, error: { message: 'lookup failed' } };
+      if (next === 'ours') return { data: rowFor(writtenThumb()), error: null };
+      if (next === 'theirs') return { data: rowFor(OTHER_THUMB), error: null };
+      return { data: next, error: null };
     },
     'rpc:exception_evidence_record': opts.rpc ?? {
       data: {
@@ -205,6 +244,9 @@ function setup(
   };
   admin.client.storage.from = vi.fn(() => storage);
   adminHolder.client = admin.client;
+  function writtenThumb(): string | undefined {
+    return storage.upload.mock.calls.map((c) => c[0]).find((p) => p.endsWith('-thumb.webp'));
+  }
 
   const ctx = makeServiceContext(user.client, {
     organizationId: ORG,
@@ -217,7 +259,17 @@ function setup(
     admin,
     storage,
     createSignedUploadUrl,
+    writtenThumb,
   };
+}
+
+/** Every path any storage call touched (downloads, uploads, removals). */
+function touched(storage: ReturnType<typeof setup>['storage']): string[] {
+  return [
+    ...storage.download.mock.calls.map((c) => (c as unknown[])[0] as string),
+    ...storage.upload.mock.calls.map((c) => c[0]),
+    ...storage.remove.mock.calls.flatMap((c) => (c as unknown as [string[]])[0]),
+  ];
 }
 
 const recordArgs = (admin: ReturnType<typeof makeSupabaseStub>) =>
@@ -266,6 +318,7 @@ describe('createUploadUrl', () => {
     const { svc, createSignedUploadUrl } = setup();
     await expect(svc.createUploadUrl(OCC, { fileExt: 'jpg' })).rejects.toMatchObject({
       code: 'conflict',
+      message: EXCEPTION_EVIDENCE_UPLOAD_LIMIT_COPY,
       details: { reason: 'rate_limited' },
     });
     expect(createSignedUploadUrl).not.toHaveBeenCalled();
@@ -275,6 +328,7 @@ describe('createUploadUrl', () => {
     const { svc, user, createSignedUploadUrl } = setup({ live: 8 });
     await expect(svc.createUploadUrl(OCC, { fileExt: 'jpg' })).rejects.toMatchObject({
       code: 'conflict',
+      message: EXCEPTION_EVIDENCE_CAP_COPY,
       details: { reason: 'evidence_limit_reached' },
     });
     expect(createSignedUploadUrl).not.toHaveBeenCalled();
@@ -346,8 +400,8 @@ describe('createUploadUrl', () => {
 
 // ═══════════════════════════════════════════════════════════════════════════
 describe('finalize', () => {
-  it('records through the service-role RPC as the caller, with the derived thumbnail and the stored size', async () => {
-    const { svc, admin, storage } = setup();
+  it('records through the service-role RPC as the caller, with a FRESH thumbnail and the stored size', async () => {
+    const { svc, admin, storage, writtenThumb } = setup();
     const res = await svc.finalize(OCC, {
       path: PATH,
       declaredMime: 'image/jpeg',
@@ -357,11 +411,14 @@ describe('finalize', () => {
     expect(res.id).toBe(EVID);
     const args = recordArgs(admin)!;
     const stored = storage.upload.mock.calls.find((c) => c[0] === PATH)![1] as Uint8Array;
+    const thumb = writtenThumb()!;
+    expect(thumb).toMatch(FRESH_THUMB);
+    expect(thumb).not.toBe(DERIVED_THUMB);
     expect(args).toEqual({
       p_occurrence_id: OCC,
       p_uploaded_by: 'user-test',
       p_storage_path: PATH,
-      p_thumbnail_path: THUMB,
+      p_thumbnail_path: thumb,
       p_content_type: 'image/jpeg',
       p_byte_size: stored.byteLength,
       p_captured_at: '2026-09-27T11:50:00.000Z',
@@ -378,9 +435,19 @@ describe('finalize', () => {
     );
   });
 
+  it('each finalize names its own thumbnail: two uploads never share one', async () => {
+    const a = setup();
+    await a.svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' });
+    const b = setup();
+    await b.svc.finalize(OCC, { path: `${ORG}/${OCC}/${FILE}.jpeg`, declaredMime: 'image/jpeg' });
+    expect(a.writtenThumb()).toMatch(FRESH_THUMB);
+    expect(b.writtenThumb()).toMatch(FRESH_THUMB);
+    expect(a.writtenThumb()).not.toBe(b.writtenThumb());
+  });
+
   it('PRIVACY: what is written back over the upload carries no EXIF, no GPS, no camera make', async () => {
     expect((await sharp(gpsJpeg).metadata()).exif).toBeDefined();
-    const { svc, storage } = setup();
+    const { svc, storage, writtenThumb } = setup();
     await svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' });
     const [, master, masterOpts] = storage.upload.mock.calls.find((c) => c[0] === PATH)!;
     const meta = await sharp(Buffer.from(master as Uint8Array)).metadata();
@@ -388,12 +455,13 @@ describe('finalize', () => {
     expect(Buffer.from(master as Uint8Array).includes(Buffer.from('SvcCam'))).toBe(false);
     // Over the upload itself, so the original bytes are gone.
     expect(masterOpts).toEqual({ contentType: 'image/jpeg', upsert: true });
-    const [, thumb, thumbOpts] = storage.upload.mock.calls.find((c) => c[0] === THUMB)!;
+    const [, thumb, thumbOpts] = storage.upload.mock.calls.find((c) => c[0] === writtenThumb())!;
     expect((await sharp(Buffer.from(thumb as Uint8Array)).metadata()).format).toBe('webp');
-    expect(thumbOpts).toEqual({ contentType: 'image/webp', upsert: true });
+    // A thumbnail never replaces an existing object.
+    expect(thumbOpts).toEqual({ contentType: 'image/webp', upsert: false });
   });
 
-  it('a PNG declared as JPEG: the file and the thumbnail are deleted and no row is written', async () => {
+  it('a PNG declared as JPEG: the upload is deleted and no row is written', async () => {
     const { svc, admin, storage } = setup({ object: new Uint8Array(pngBytes) });
     await expect(
       svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' }),
@@ -401,7 +469,7 @@ describe('finalize', () => {
       code: 'validation_error',
       details: { reason: 'invalid_image' },
     });
-    expect(storage.remove).toHaveBeenCalledWith([PATH, THUMB]);
+    expect(storage.remove).toHaveBeenCalledWith([PATH]);
     expect(storage.upload).not.toHaveBeenCalled();
     expect(recordArgs(admin)).toBeUndefined();
   });
@@ -424,19 +492,60 @@ describe('finalize', () => {
       ).rejects.toMatchObject({
         code: 'validation_error',
       });
-      expect(storage.remove).toHaveBeenCalledWith([PATH, THUMB]);
+      expect(storage.remove).toHaveBeenCalledWith([PATH]);
       expect(recordArgs(admin)).toBeUndefined();
     }
   });
 
-  it("a declared type that disagrees with the path's extension is refused and deleted, even for genuine bytes", async () => {
+  it("a declared type that disagrees with the path's extension deletes only that upload, never a derived thumbnail", async () => {
     const { svc, admin, storage } = setup();
     await expect(
       svc.finalize(OCC, { path: `${ORG}/${OCC}/${FILE}.png`, declaredMime: 'image/jpeg' }),
     ).rejects.toMatchObject({ code: 'validation_error' });
-    expect(storage.remove).toHaveBeenCalledWith([`${ORG}/${OCC}/${FILE}.png`, THUMB]);
+    expect(storage.remove).toHaveBeenCalledWith([`${ORG}/${OCC}/${FILE}.png`]);
+    expect(touched(storage)).not.toContain(DERIVED_THUMB);
     expect(recordArgs(admin)).toBeUndefined();
   });
+
+  it.each(['png', 'jpeg'])(
+    "THUMBNAIL SAFETY: {uuid}.%s against a recorded {uuid}.jpg is refused and touches none of the recorded photo's files",
+    async (ext) => {
+      const sibling = `${ORG}/${OCC}/${FILE}.${ext}`;
+      const recordedJpg = {
+        id: EVID,
+        storage_path: PATH,
+        thumbnail_path: OTHER_THUMB,
+        content_type: 'image/jpeg',
+        byte_size: 99,
+        captured_at: null,
+        created_at: '2026-09-27T12:00:00Z',
+        removed_at: null,
+      };
+      const { svc, admin, storage } = setup({ recorded: [recordedJpg] });
+      await expect(
+        svc.finalize(OCC, {
+          path: sibling,
+          declaredMime: ext === 'png' ? 'image/png' : 'image/jpeg',
+        }),
+      ).rejects.toMatchObject({ code: 'forbidden', details: { reason: 'invalid_path' } });
+      // Only the sibling upload itself (never recorded) is removed.
+      expect(storage.remove.mock.calls).toEqual([[[sibling]]]);
+      expect(storage.upload).not.toHaveBeenCalled();
+      expect(storage.download).not.toHaveBeenCalled();
+      for (const p of [PATH, OTHER_THUMB, DERIVED_THUMB]) expect(touched(storage)).not.toContain(p);
+      expect(recordArgs(admin)).toBeUndefined();
+      // The lookup asked for every extension of the upload name.
+      expect(admin.chainArgs.get('exception_evidence.select')).toContainEqual([
+        'storage_path',
+        [
+          PATH,
+          `${ORG}/${OCC}/${FILE}.jpeg`,
+          `${ORG}/${OCC}/${FILE}.png`,
+          `${ORG}/${OCC}/${FILE}.webp`,
+        ],
+      ]);
+    },
+  );
 
   it('a path outside this occurrence, or not server-shaped, is refused BEFORE any storage call', async () => {
     const bad = [
@@ -456,45 +565,57 @@ describe('finalize', () => {
       expect(storage.remove).not.toHaveBeenCalled();
       expect(admin.fromCalls).toEqual([]);
     }
+    expect(limiter.calls).toEqual([]);
   });
 
   it('an ALREADY RECORDED path is refused before anything touches storage (a recorded photo is never rewritten)', async () => {
-    const { svc, storage, admin } = setup({ recorded: [{ id: EVID }] });
+    const { svc, storage, admin } = setup({ recorded: ['theirs'] });
     await expect(
       svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' }),
     ).rejects.toMatchObject({
       code: 'conflict',
       details: { reason: 'already_recorded' },
     });
-    expect(storage.download).not.toHaveBeenCalled();
-    expect(storage.upload).not.toHaveBeenCalled();
-    expect(storage.remove).not.toHaveBeenCalled();
+    expect(touched(storage)).toEqual([]);
     expect(recordArgs(admin)).toBeUndefined();
   });
 
-  it('at the cap the upload is refused and deleted before it is read or re-encoded', async () => {
+  it('at the cap the upload is refused and deleted before it is read or re-encoded (core copy)', async () => {
     const { svc, storage, admin } = setup({ live: 8 });
     await expect(
       svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' }),
     ).rejects.toMatchObject({
+      message: EXCEPTION_EVIDENCE_CAP_COPY,
       details: { reason: 'evidence_limit_reached' },
     });
     expect(storage.download).not.toHaveBeenCalled();
-    expect(storage.remove).toHaveBeenCalledWith([PATH, THUMB]);
+    expect(storage.remove).toHaveBeenCalledWith([PATH]);
     expect(recordArgs(admin)).toBeUndefined();
   });
 
   it.each([
-    ['42501', undefined, 'forbidden', undefined],
-    ['P0002', undefined, 'not_found', undefined],
-    ['P0001', 'occurrence_resolved', 'conflict', 'occurrence_resolved'],
-    ['P0001', 'evidence_limit_reached', 'conflict', 'evidence_limit_reached'],
-    ['22023', 'invalid_path', 'validation_error', 'invalid_path'],
-    ['55P03', undefined, 'conflict', 'busy'],
+    ['42501', undefined, 'forbidden', undefined, EXCEPTION_EVIDENCE_NO_PERMISSION_COPY],
+    ['P0002', undefined, 'not_found', undefined, undefined],
+    [
+      'P0001',
+      'occurrence_resolved',
+      'conflict',
+      'occurrence_resolved',
+      EXCEPTION_EVIDENCE_RESOLVED_COPY,
+    ],
+    [
+      'P0001',
+      'evidence_limit_reached',
+      'conflict',
+      'evidence_limit_reached',
+      EXCEPTION_EVIDENCE_CAP_COPY,
+    ],
+    ['22023', 'invalid_path', 'validation_error', 'invalid_path', undefined],
+    ['55P03', undefined, 'conflict', 'busy', undefined],
   ])(
-    'the RPC refuses (%s %s): the upload is deleted and the refusal mapped',
-    async (code, hint, want, reason) => {
-      const { svc, storage } = setup({
+    'the RPC refuses (%s %s) and nothing is recorded for the path: the upload and THIS thumbnail are deleted',
+    async (code, hint, want, reason, message) => {
+      const { svc, storage, writtenThumb } = setup({
         rpc: { data: null, error: { message: 'refused', code, hint } },
       });
       const err = await svc
@@ -502,33 +623,70 @@ describe('finalize', () => {
         .catch((e) => e);
       expect(err).toMatchObject({ code: want });
       if (reason) expect(err.details).toMatchObject({ reason });
-      expect(storage.remove).toHaveBeenCalledWith([PATH, THUMB]);
+      if (message) expect(err.message).toBe(message);
+      expect(storage.remove).toHaveBeenCalledWith([PATH, writtenThumb()]);
     },
   );
 
-  it('a unique violation (a racing finalize won) leaves the file alone: it belongs to that row', async () => {
-    const { svc, storage } = setup({
-      rpc: { data: null, error: { message: 'duplicate', code: '23505' } },
+  it.each([
+    ['P0001', 'evidence_limit_reached'],
+    ['P0001', 'occurrence_resolved'],
+    ['42501', undefined],
+  ])(
+    'RACE: the RPC refuses (%s %s) but a racing finalize has recorded this upload: its file is KEPT, only this thumbnail goes, and the answer is already_recorded',
+    async (code, hint) => {
+      const { svc, storage, writtenThumb } = setup({
+        recorded: [null, 'theirs'],
+        rpc: { data: null, error: { message: 'refused', code, hint } },
+      });
+      await expect(
+        svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' }),
+      ).rejects.toMatchObject({ code: 'conflict', details: { reason: 'already_recorded' } });
+      expect(storage.remove.mock.calls).toEqual([[[writtenThumb()]]]);
+      expect(storage.remove.mock.calls.flat(2)).not.toContain(PATH);
+      expect(storage.remove.mock.calls.flat(2)).not.toContain(OTHER_THUMB);
+    },
+  );
+
+  it('a unique violation (a racing finalize won): its file is left alone and only this thumbnail goes', async () => {
+    const { svc, storage, writtenThumb } = setup({
+      recorded: [null, 'theirs'],
+      rpc: { data: null, error: { message: 'duplicate', code: '23505', hint: 'already_recorded' } },
     });
     await expect(
       svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' }),
     ).rejects.toMatchObject({
       details: { reason: 'already_recorded' },
     });
-    expect(storage.remove).not.toHaveBeenCalled();
+    expect(storage.remove.mock.calls).toEqual([[[writtenThumb()]]]);
   });
 
-  it('a LOST answer: when the row turns out to be recorded, finalize succeeds and deletes nothing', async () => {
-    const row = {
-      id: EVID,
-      content_type: 'image/jpeg',
-      byte_size: 99,
-      captured_at: null,
-      created_at: '2026-09-27T12:00:00Z',
-      removed_at: null,
-    };
+  it('a unique violation when the check then fails: NOTHING is deleted', async () => {
     const { svc, storage } = setup({
-      recorded: [null, row],
+      recorded: [null, 'error'],
+      rpc: { data: null, error: { message: 'duplicate', code: '23505', hint: 'already_recorded' } },
+    });
+    await expect(
+      svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' }),
+    ).rejects.toBeTruthy();
+    expect(storage.remove).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalled();
+  });
+
+  it('a unique violation with no row for this path (another name collided): the upload and this thumbnail go', async () => {
+    const { svc, storage, writtenThumb } = setup({
+      recorded: [null, null],
+      rpc: { data: null, error: { message: 'duplicate', code: '23505' } },
+    });
+    await expect(
+      svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' }),
+    ).rejects.toMatchObject({ code: 'internal_error' });
+    expect(storage.remove).toHaveBeenCalledWith([PATH, writtenThumb()]);
+  });
+
+  it('a LOST answer: when the row turns out to be recorded with this thumbnail, finalize succeeds and deletes nothing', async () => {
+    const { svc, storage } = setup({
+      recorded: [null, 'ours'],
       rpc: { data: null, error: { message: 'TypeError: fetch failed' } },
     });
     await expect(
@@ -537,8 +695,19 @@ describe('finalize', () => {
     expect(storage.remove).not.toHaveBeenCalled();
   });
 
+  it('a LOST answer and a racing finalize recorded it: already_recorded, and only this thumbnail goes', async () => {
+    const { svc, storage, writtenThumb } = setup({
+      recorded: [null, 'theirs'],
+      rpc: { data: null, error: { message: 'TypeError: fetch failed' } },
+    });
+    await expect(
+      svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' }),
+    ).rejects.toMatchObject({ details: { reason: 'already_recorded' } });
+    expect(storage.remove.mock.calls).toEqual([[[writtenThumb()]]]);
+  });
+
   it('a LOST answer with no row: deleted, and reported as a failure', async () => {
-    const { svc, storage } = setup({
+    const { svc, storage, writtenThumb } = setup({
       recorded: [null, null],
       rpc: { data: null, error: { message: 'TypeError: fetch failed' } },
     });
@@ -547,7 +716,7 @@ describe('finalize', () => {
     ).rejects.toMatchObject({
       code: 'internal_error',
     });
-    expect(storage.remove).toHaveBeenCalledWith([PATH, THUMB]);
+    expect(storage.remove).toHaveBeenCalledWith([PATH, writtenThumb()]);
   });
 
   it('a LOST answer and the check itself fails: the file is KEPT (never delete what may be recorded)', async () => {
@@ -565,44 +734,160 @@ describe('finalize', () => {
   });
 
   it('no error and no row is not a success (pattern #2)', async () => {
-    const { svc, storage } = setup({ recorded: [null, null], rpc: { data: null, error: null } });
+    const { svc, storage, writtenThumb } = setup({
+      recorded: [null, null],
+      rpc: { data: null, error: null },
+    });
     await expect(
       svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' }),
     ).rejects.toMatchObject({
       code: 'internal_error',
     });
-    expect(storage.remove).toHaveBeenCalledWith([PATH, THUMB]);
+    expect(storage.remove).toHaveBeenCalledWith([PATH, writtenThumb()]);
   });
 
-  it('a failed write-back deletes both and records nothing', async () => {
-    const { svc, storage, admin } = setup({ uploadError: true });
+  it('a failed write-back deletes the upload and this thumbnail and records nothing', async () => {
+    const { svc, storage, admin, writtenThumb } = setup({ uploadError: true });
     await expect(
       svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' }),
     ).rejects.toMatchObject({
       code: 'internal_error',
     });
-    expect(storage.remove).toHaveBeenCalledWith([PATH, THUMB]);
+    expect(storage.remove).toHaveBeenCalledWith([PATH, writtenThumb()]);
     expect(recordArgs(admin)).toBeUndefined();
   });
 
-  it('a note over 500 characters is refused before any storage call', async () => {
+  // ── Refusals before the storage steps (review finding 2026-09-27) ────────
+  // The upload is still the ORIGINAL (EXIF and GPS included): it is deleted
+  // like any other refused upload, unless a photo is recorded at that path.
+
+  it('a note over 500 characters: refused before any read, and the unrecorded upload is deleted (core copy)', async () => {
     const { svc, storage } = setup();
     await expect(
       svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg', note: 'n'.repeat(501) }),
-    ).rejects.toMatchObject({ code: 'validation_error', details: { reason: 'note_too_long' } });
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      message: EXCEPTION_EVIDENCE_NOTE_TOO_LONG_COPY,
+      details: { reason: 'note_too_long' },
+    });
     expect(storage.download).not.toHaveBeenCalled();
+    expect(storage.remove).toHaveBeenCalledWith([PATH]);
   });
 
-  it('a resolved occurrence refuses before any storage call', async () => {
+  it('an unreadable capture time: refused, and the unrecorded upload is deleted', async () => {
+    const { svc, storage } = setup();
+    await expect(
+      svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg', capturedAt: 'yesterday' }),
+    ).rejects.toMatchObject({ details: { reason: 'invalid_captured_at' } });
+    expect(storage.remove).toHaveBeenCalledWith([PATH]);
+  });
+
+  it('the occurrence resolved since the mint: refused before any read, and the unrecorded upload is deleted (core copy)', async () => {
     const { svc, storage } = setup({
       occurrence: occRow({ resolved_at: '2026-09-27T11:00:00Z', resolved_reason: 'cleared' }),
     });
     await expect(
       svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' }),
     ).rejects.toMatchObject({
+      message: EXCEPTION_EVIDENCE_RESOLVED_COPY,
       details: { reason: 'occurrence_resolved' },
     });
     expect(storage.download).not.toHaveBeenCalled();
+    expect(storage.remove).toHaveBeenCalledWith([PATH]);
+  });
+
+  it('resolved since, but THIS upload was recorded (a lost answer): nothing is deleted and the answer is already_recorded', async () => {
+    const { svc, storage } = setup({
+      occurrence: occRow({ resolved_at: '2026-09-27T11:00:00Z', resolved_reason: 'cleared' }),
+      recorded: ['theirs'],
+    });
+    await expect(
+      svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' }),
+    ).rejects.toMatchObject({ details: { reason: 'already_recorded' } });
+    expect(storage.remove).not.toHaveBeenCalled();
+  });
+
+  it('access removed since the mint (a viewer now, or the warehouse taken away) or the row gone: the unrecorded upload is deleted', async () => {
+    for (const make of [
+      () => setup({ role: 'viewer' }),
+      () => {
+        access.writableIds = ['wh-b'];
+        return setup();
+      },
+      () => setup({ occurrence: null }),
+    ]) {
+      const { svc, storage } = make();
+      await expect(
+        svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' }),
+      ).rejects.toMatchObject({
+        code: expect.stringMatching(/^(forbidden|not_found)$/),
+      });
+      expect(storage.remove).toHaveBeenCalledWith([PATH]);
+      access.writableIds = ['wh-a'];
+    }
+  });
+
+  it('a refusal for a caller without access never reveals or deletes a RECORDED photo', async () => {
+    const { svc, storage } = setup({ role: 'viewer', recorded: ['theirs'] });
+    await expect(
+      svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' }),
+    ).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+    expect(storage.remove).not.toHaveBeenCalled();
+  });
+
+  it('when the "is it recorded" check fails after a refusal, the upload is KEPT and the refusal still stands', async () => {
+    const { svc, storage } = setup({
+      occurrence: occRow({ resolved_at: '2026-09-27T11:00:00Z', resolved_reason: 'cleared' }),
+      recorded: ['error'],
+    });
+    await expect(
+      svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' }),
+    ).rejects.toMatchObject({
+      details: { reason: 'occurrence_resolved' },
+    });
+    expect(storage.remove).not.toHaveBeenCalled();
+  });
+
+  it('a database fault reading the occurrence deletes nothing (a retry of this finalize can still record it)', async () => {
+    const { svc, storage, user } = setup();
+    user.client.from = vi.fn(() => {
+      throw new Error('socket hang up');
+    }) as never;
+    await expect(
+      svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' }),
+    ).rejects.toBeTruthy();
+    expect(storage.remove).not.toHaveBeenCalled();
+  });
+
+  // ── The finalize limiter (review finding 2026-09-27) ─────────────────────
+
+  it("the finalize limiter is the SERVICE's (route and web action share it), 30 a minute per person, and FAILS CLOSED", async () => {
+    const { svc } = setup();
+    await svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' });
+    expect(limiter.calls).toEqual([
+      {
+        key: 'exceptions:evidence:finalize:user-test',
+        limit: 30,
+        windowMs: 60_000,
+        mode: 'closed',
+      },
+    ]);
+  });
+
+  it('refused by the limiter: nothing is read, written or deleted (the same finalize can be sent again), with its reset time', async () => {
+    limiter.allowed = false;
+    const { svc, storage, admin } = setup();
+    const err = await svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' }).catch((e) => e);
+    expect(err).toMatchObject({
+      code: 'conflict',
+      message: EXCEPTION_EVIDENCE_FINALIZE_LIMIT_COPY,
+      details: { reason: 'rate_limited', retryAt: expect.any(Number) },
+    });
+    expect(touched(storage)).toEqual([]);
+    expect(admin.fromCalls).toEqual([]);
+    expect(recordArgs(admin)).toBeUndefined();
   });
 });
 
@@ -641,11 +926,14 @@ describe('remove', () => {
     );
   });
 
-  it('another staff member cannot remove it; a manager can', async () => {
+  it('another staff member cannot remove it (core copy); a manager can', async () => {
     const other = setup({
       evidenceRow: { id: EVID, occurrence_id: OCC, uploaded_by: 'someone-else', removed_at: null },
     });
-    await expect(other.svc.remove(OCC, EVID)).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(other.svc.remove(OCC, EVID)).rejects.toMatchObject({
+      code: 'forbidden',
+      message: EXCEPTION_EVIDENCE_REMOVE_NOT_ALLOWED_COPY,
+    });
     expect(other.user.rpcCalls).toEqual([]);
     const mgr = setup({
       role: 'manager',
@@ -672,6 +960,7 @@ describe('remove', () => {
   it('a resolved occurrence refuses a live photo, but a repeat removal still answers (no audit)', async () => {
     const resolved = occRow({ resolved_at: '2026-09-27T11:00:00Z', resolved_reason: 'cleared' });
     await expect(setup({ occurrence: resolved }).svc.remove(OCC, EVID)).rejects.toMatchObject({
+      message: EXCEPTION_EVIDENCE_RESOLVED_COPY,
       details: { reason: 'occurrence_resolved' },
     });
     const again = setup({
@@ -718,6 +1007,7 @@ describe('remove', () => {
   it('a reason over 500 characters is refused before anything is read', async () => {
     const { svc, user } = setup();
     await expect(svc.remove(OCC, EVID, 'r'.repeat(501))).rejects.toMatchObject({
+      message: EXCEPTION_EVIDENCE_REASON_TOO_LONG_COPY,
       details: { reason: 'reason_too_long' },
     });
     expect(user.fromCalls).toEqual([]);

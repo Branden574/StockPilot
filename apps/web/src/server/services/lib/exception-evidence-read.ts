@@ -10,8 +10,9 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 import { ServiceError, type ServiceContext } from '../context';
 
+import { fetchAllRowsByIds } from './fetch-by-ids';
 import { personFor, type OccurrencePerson, type ProfileEmbed } from './occurrence-person';
-import { fetchAllRows } from './paginate';
+import { postgrestErrorText } from './postgrest-error';
 
 /**
  * READING photo evidence (F1-4, migration 0375): the rows, through the
@@ -38,9 +39,15 @@ export const EVIDENCE_VIEW_URL_TTL_SEC = 60 * 60;
  *  inside the limit. */
 export const SIGN_PATHS_PER_CALL = 1000;
 
-/** Rows read for one occurrence, removed ones included (a backstop: 8 live,
- *  and removals accumulate one at a time). */
-const EVIDENCE_READ_CAP = 1000;
+/** The most LIVE photos one read accepts. 0375 holds at most 8 live photos
+ *  per occurrence (under a lock), so a read that finds more than this means
+ *  that rule broke: it is THROWN (the surface says photos could not be
+ *  loaded), never cut short and shown as the whole list. */
+export const LIVE_EVIDENCE_READ_BOUND = 100;
+
+/** What the timeline needs about a photo: its two times and whether it has
+ *  been removed. */
+const EVIDENCE_INFO_SELECT = 'id, captured_at, created_at, removed_at';
 
 export const EVIDENCE_SELECT =
   'id, uploaded_by, storage_path, thumbnail_path, content_type, byte_size, captured_at, note, created_at, removed_at, removed_by, uploader:user_profiles!exception_evidence_uploaded_by_fkey(full_name, email)';
@@ -107,25 +114,69 @@ export interface EvidenceEventInfo {
   removed: boolean;
 }
 
-/** Every photo row on the occurrence, removed ones included, oldest first.
- *  THROWS on a failed read (the caller turns it into `unavailable`). */
-export async function readEvidenceRows(
+/**
+ * The LIVE photos on the occurrence (removed_at is null), oldest first.
+ * THROWS on a failed read, and on more rows than LIVE_EVIDENCE_READ_BOUND
+ * (the caller turns either into `unavailable`).
+ *
+ * Live photos only, on purpose (review finding 2026-09-27): a read of every
+ * row, removed ones included, oldest first, stopped quietly at 1,000 rows,
+ * so on an occurrence with many removals the newest photos, which are the
+ * live ones, were left out and the panel said "No photos yet."
+ */
+export async function readLiveEvidenceRows(
   ctx: ServiceContext,
   occurrenceId: string,
 ): Promise<EvidenceRow[]> {
-  const rows = await fetchAllRows<Record<string, unknown>>(
-    (from, to) =>
+  const { data, error } = await ctx.supabase
+    .from('exception_evidence')
+    .select(EVIDENCE_SELECT)
+    .eq('organization_id', ctx.organizationId)
+    .eq('occurrence_id', occurrenceId)
+    .is('removed_at', null)
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true })
+    // One row past the bound, so "more than the bound" is seen, not assumed.
+    .range(0, LIVE_EVIDENCE_READ_BOUND);
+  if (error) throw new ServiceError('internal_error', postgrestErrorText(error));
+  const rows = (data ?? []) as unknown as EvidenceRow[];
+  if (rows.length > LIVE_EVIDENCE_READ_BOUND) {
+    throw new ServiceError(
+      'internal_error',
+      `More than ${LIVE_EVIDENCE_READ_BOUND} live photos on one exception.`,
+    );
+  }
+  return rows;
+}
+
+/**
+ * The timeline's times for EXACTLY the photos its events name (removed ones
+ * included), read by id in batches, so every named photo is answered however
+ * many rows the occurrence holds. THROWS on a failed read (the caller leaves
+ * the times out rather than guessing them).
+ */
+export async function readEvidenceEventInfo(
+  ctx: ServiceContext,
+  occurrenceId: string,
+  evidenceIds: readonly string[],
+): Promise<Map<string, EvidenceEventInfo>> {
+  const ids = [...new Set(evidenceIds)];
+  if (ids.length === 0) return new Map();
+  const rows = await fetchAllRowsByIds<
+    Pick<EvidenceRow, 'id' | 'captured_at' | 'created_at' | 'removed_at'>
+  >(
+    ids,
+    (batch) => (from, to) =>
       ctx.supabase
         .from('exception_evidence')
-        .select(EVIDENCE_SELECT)
+        .select(EVIDENCE_INFO_SELECT)
         .eq('organization_id', ctx.organizationId)
         .eq('occurrence_id', occurrenceId)
-        .order('created_at', { ascending: true })
+        .in('id', batch)
         .order('id', { ascending: true })
         .range(from, to),
-    { cap: EVIDENCE_READ_CAP },
   );
-  return rows as unknown as EvidenceRow[];
+  return evidenceEventInfo(rows);
 }
 
 /**
@@ -202,7 +253,9 @@ export async function buildEvidenceBlock(
 }
 
 /** Each photo's times, by id, for the timeline's evidence events. */
-export function evidenceEventInfo(rows: readonly EvidenceRow[]): Map<string, EvidenceEventInfo> {
+export function evidenceEventInfo(
+  rows: ReadonlyArray<Pick<EvidenceRow, 'id' | 'captured_at' | 'created_at' | 'removed_at'>>,
+): Map<string, EvidenceEventInfo> {
   return new Map(
     rows.map((r) => [
       r.id,

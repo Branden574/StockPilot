@@ -215,11 +215,41 @@ export function exceptionEvidencePathShape(organizationId: string, occurrenceId:
   );
 }
 
-/** The thumbnail path for an evidence master: same folder, same uuid,
- *  `-thumb.webp`. Derived on the server from a path that already passed
- *  `exceptionEvidencePathShape`; never accepted from a client. */
-export function exceptionEvidenceThumbPath(masterPath: string): string {
-  return masterPath.replace(/\.(?:jpg|jpeg|png|webp)$/, '-thumb.webp');
+/** `{org}/{occurrenceId}/{uuid}-thumb.webp` — an evidence thumbnail. The
+ *  server writes it, under a FRESH uuid of its own, when it records a photo
+ *  (ExceptionEvidenceService.finalize). Never derived from the upload's name:
+ *  `{uuid}.jpg` and `{uuid}.png` would share one thumbnail, so a second
+ *  upload could overwrite or delete a recorded photo's thumbnail (review
+ *  finding 2026-09-27). No client may create this name (0375's INSERT policy
+ *  admits only the upload shape). */
+export function exceptionEvidenceThumbPath(
+  organizationId: string,
+  occurrenceId: string,
+  thumbId: string = crypto.randomUUID(),
+): string {
+  if (!new RegExp(`^${UUID_SEGMENT}$`).test(thumbId)) {
+    throw new Error('exceptionEvidenceThumbPath: the thumbnail id must be a lowercase uuid');
+  }
+  return `${organizationId}/${occurrenceId}/${thumbId}-thumb.webp`;
+}
+
+/** The shape exceptionEvidenceThumbPath makes, pinned to one occurrence. */
+export function exceptionEvidenceThumbPathShape(
+  organizationId: string,
+  occurrenceId: string,
+): RegExp {
+  return anchored(
+    `${escapeRegExpLiteral(organizationId)}/${escapeRegExpLiteral(occurrenceId)}/${UUID_SEGMENT}-thumb\\.webp`,
+  );
+}
+
+/** Every name of ONE upload: its uuid with each allowed extension. 0375
+ *  records an upload's uuid once, whatever the extension, so a lookup for
+ *  "is this upload recorded" asks for all four. `masterPath` must already
+ *  have passed exceptionEvidencePathShape. */
+export function exceptionEvidenceUploadNames(masterPath: string): string[] {
+  const stem = masterPath.replace(/\.(?:jpg|jpeg|png|webp)$/, '');
+  return ['jpg', 'jpeg', 'png', 'webp'].map((ext) => `${stem}.${ext}`);
 }
 
 /**
