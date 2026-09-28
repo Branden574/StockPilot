@@ -10,6 +10,35 @@
  * /dashboard/* → home. Non-/dashboard paths pass through untouched.
  */
 const UUID = '([0-9a-fA-F-]{36})';
+const UUID_ONLY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The native new-request form for a web /dashboard/maintenance/new link
+ * (F1-5). Keeps only the two hints the phone's form reads from a link, and
+ * only as well-formed uuids: `exceptionOccurrenceId` (the exception's
+ * "Escalate to maintenance", whose form Save is still the explicit act, and
+ * the server re-checks everything) and `locationId` (a related location).
+ * Everything else in the query is dropped. Parsed by hand: React Native's
+ * URLSearchParams has no working get().
+ */
+function maintenanceNewTarget(query: string | undefined): string {
+  const kept: string[] = [];
+  for (const pair of (query ?? '').replace(/^\?/, '').split('&')) {
+    const eq = pair.indexOf('=');
+    if (eq <= 0) continue;
+    const key = pair.slice(0, eq);
+    if (key !== 'exceptionOccurrenceId' && key !== 'locationId') continue;
+    if (kept.some((k) => k.startsWith(`${key}=`))) continue;
+    let value: string;
+    try {
+      value = decodeURIComponent(pair.slice(eq + 1));
+    } catch {
+      continue;
+    }
+    if (UUID_ONLY.test(value)) kept.push(`${key}=${value}`);
+  }
+  return kept.length ? `/maintenance/new?${kept.join('&')}` : '/maintenance/new';
+}
 
 const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
   { re: new RegExp(`/dashboard/orders/${UUID}`), to: (m) => `/order/${m[1]}` },
@@ -70,7 +99,11 @@ const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
   // only, matching the staging/item-detail precedent above). Query (the
   // ?scope= filter) is dropped → the full list.
   { re: new RegExp(`/dashboard/maintenance/${UUID}`), to: (m) => `/maintenance/${m[1]}` },
-  { re: /\/dashboard\/maintenance\/new$/, to: () => '/maintenance/new' },
+  // F1-5: the new-request link may carry a query (the exception's "Escalate
+  // to maintenance" link is /dashboard/maintenance/new?exceptionOccurrenceId=
+  // <uuid>). It fell through to home before; now it opens the form with the
+  // hints the phone reads (maintenanceNewTarget).
+  { re: /\/dashboard\/maintenance\/new(\?.*)?$/, to: (m) => maintenanceNewTarget(m[1]) },
   { re: /\/dashboard\/maintenance(\?.*)?$/, to: () => '/maintenance' },
   // Exceptions (F1-1) has native twins: the list and one occurrence. F1 sends
   // no push to either, but a What's New CTA, a shared link or a pasted URL

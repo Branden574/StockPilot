@@ -1,4 +1,5 @@
 import * as ImagePicker from 'expo-image-picker';
+import { useNetworkState } from 'expo-network';
 import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
 import {
   AlertCircle,
@@ -26,6 +27,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
+  ESCALATE_TO_MAINTENANCE_HELP,
+  ESCALATION_FORM_NOTE_COPY,
   MAINTENANCE_CATEGORIES,
   MAINTENANCE_MAX_PHOTOS,
   MAINTENANCE_PRIORITIES,
@@ -33,6 +36,7 @@ import {
   type MaintenancePriority,
 } from '@stockpilot/core';
 
+import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, FieldLabel, Mono } from '@/components/ui/text';
@@ -40,19 +44,38 @@ import { useAuth } from '@/lib/auth-context';
 import { showWriteCta } from '@/lib/cta-gating';
 import { footerReservation, shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEnabledModules } from '@/lib/enabled-modules';
+import {
+  describeEscalateError,
+  duplicateOutcome,
+  ESCALATE_BAD_LINK_COPY,
+  escalateException,
+  escalationFormPrefill,
+  escalationFormState,
+  escalationSourceLines,
+  escalationTarget,
+  listedCategory,
+  uuidParam,
+  type EscalationFormState,
+  type EscalationLoad,
+} from '@/lib/exception-escalation';
+import {
+  describeExceptionsRequestError,
+  EXCEPTION_WORKSPACE_UNAVAILABLE,
+  getException,
+  isOfflineState,
+} from '@/lib/exceptions-api';
 import { createMaintenanceRequest } from '@/lib/maintenance-api';
 import {
   checkPhotoCap,
   createPhotoAttemptGuard,
   uploadMaintenancePhoto,
   UploadError,
-  type PhotoAttemptGuard,
 } from '@/lib/maintenance-upload';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useTheme } from '@/lib/use-theme';
-import { useWorkspace } from '@/lib/use-workspace';
+import { retryWorkspace, useWorkspace } from '@/lib/use-workspace';
 
 /**
  * New maintenance request — mobile twin of the web /dashboard/maintenance/new
@@ -75,6 +98,26 @@ import { useWorkspace } from '@/lib/use-workspace';
  * "email sent", or names a recipient — there is no recipient field anywhere
  * in the schema this form validates against, by construction, and none is
  * added here either.
+ *
+ * RELATED LOCATION (F1-5): a `locationId` launch param (a well-formed uuid)
+ * rides as relatedLocationId on EVERY flow; the request used to hard-code
+ * null. A hint only: create() re-derives it against this org.
+ *
+ * ESCALATING AN EXCEPTION (F1-5, Outlook rule 3): with `exceptionOccurrenceId`
+ * this is the exception's "Escalate to maintenance" form. It reads the
+ * exception (GET /api/v1/exceptions/[id]) for the card that says what is
+ * being escalated and for the prefill (core escalationPrefill, the web's
+ * words), shows only the four fields the escalate route takes (subject,
+ * description, category, priority: the item and the location come from the
+ * exception on the server), and Save POSTs /api/v1/exceptions/[id]/escalate,
+ * which saves ONE request linked to the exception. Then it replaces itself
+ * with the request's screen, where the email opens only if the person taps
+ * Outlook, the default mail app or Copy: nothing here opens a composer or
+ * sends anything. An exception already escalated opens that request instead.
+ * Online only: offline Save is disabled with the reason, and nothing is kept
+ * to try later, so an offline replay can never open a composer. Photos are
+ * added on the request's screen once it is saved (they are not copied from
+ * the exception). Every decision is in lib/exception-escalation.ts.
  */
 const PRIORITY_LABELS: Record<MaintenancePriority, string> = {
   low: 'Low',
@@ -107,7 +150,7 @@ export default function NewMaintenanceRequest() {
   const { c } = useTheme();
   const router = useRouter();
   const { user } = useAuth();
-  const { activeOrgId: orgId } = useWorkspace();
+  const { activeOrgId: orgId, loading: workspaceLoading } = useWorkspace();
   const enabledModules = useEnabledModules();
   const enabled = enabledModules.has('maintenance_requests');
   const perms = useEffectivePermissions();
@@ -123,11 +166,20 @@ export default function NewMaintenanceRequest() {
     rentalId?: string;
     charterId?: string;
     subject?: string;
+    exceptionOccurrenceId?: string;
+    locationId?: string;
   }>();
   const relatedItemId = params.itemId || null;
   const relatedOrderRequestId = params.orderRequestId || null;
   const relatedRentalId = params.rentalId || null;
-  const hasLinkedRecord = Boolean(relatedItemId || relatedOrderRequestId || relatedRentalId);
+  const relatedLocationId = uuidParam(params.locationId);
+  const hasLinkedRecord = Boolean(relatedItemId || relatedOrderRequestId || relatedRentalId || relatedLocationId);
+  // Escalating an exception (F1-5): the exception this form escalates, or
+  // null. A malformed exception param is refused below, never an ordinary
+  // (unlinked) request.
+  const target = escalationTarget(params.exceptionOccurrenceId);
+  const escalationId = target.kind === 'escalate' ? target.occurrenceId : null;
+  const offline = isOfflineState(useNetworkState());
 
   // ── Form state ────────────────────────────────────────────────────────
   const [subject, setSubject] = React.useState(params.subject ?? '');
@@ -142,7 +194,7 @@ export default function NewMaintenanceRequest() {
   const [department, setDepartment] = React.useState('');
   const [accessInstructions, setAccessInstructions] = React.useState('');
 
-  const [sites, setSites] = React.useState<Array<{ id: string; name: string }>>([]);
+  const [sites, setSites] = React.useState<{ id: string; name: string }[]>([]);
   const [categories, setCategories] = React.useState<string[]>([...MAINTENANCE_CATEGORIES]);
 
   // Sites (charters) + org-configured categories + the caller's own default
@@ -170,7 +222,7 @@ export default function NewMaintenanceRequest() {
           .maybeSingle(),
       ]);
       if (cancelled) return;
-      setSites((chartersResp.data ?? []) as Array<{ id: string; name: string }>);
+      setSites((chartersResp.data ?? []) as { id: string; name: string }[]);
 
       const configured = (settingsResp.data as { settings?: { categories?: unknown } } | null)?.settings
         ?.categories;
@@ -208,11 +260,15 @@ export default function NewMaintenanceRequest() {
   const [saving, setSaving] = React.useState(false);
   const [createdId, setCreatedId] = React.useState<string | null>(null);
 
+  // A category is shown selected, and saved, only while the org's list has it
+  // (the escalation prefill suggests one the org may not use).
+  const shownCategory = listedCategory(categories, category);
+
   function formValues(): unknown {
     return {
       subject,
       description,
-      category: category || null,
+      category: shownCategory,
       priority,
       charterId: charterId || null,
       warehouseId: warehouseId || null,
@@ -224,7 +280,7 @@ export default function NewMaintenanceRequest() {
       relatedItemId,
       relatedOrderRequestId,
       relatedRentalId,
-      relatedLocationId: null,
+      relatedLocationId,
     };
   }
 
@@ -249,6 +305,117 @@ export default function NewMaintenanceRequest() {
     } catch (e) {
       Alert.alert('Could not save', e instanceof Error ? e.message : 'Unknown error');
     } finally {
+      setSaving(false);
+    }
+  }
+
+  // ── Escalating an exception (F1-5) ────────────────────────────────────
+  // The exception, read once it can be (a workspace, a connection), for the
+  // "From exception" card, the prefill and whether it can be escalated.
+  const [escLoad, setEscLoad] = React.useState<EscalationLoad>({ kind: 'loading' });
+  const [escReadNonce, setEscReadNonce] = React.useState(0);
+  // The prefill fills the fields once, and never over what the person typed.
+  const prefilled = React.useRef(false);
+  React.useEffect(() => {
+    if (!escalationId || !orgId || offline) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const detail = await getException(escalationId);
+        if (cancelled) return;
+        if (detail.organizationId !== orgId) {
+          setEscLoad({
+            kind: 'error',
+            message: 'The server answered for a different workspace. Go back and switch workspace from the menu.',
+          });
+          return;
+        }
+        setEscLoad({ kind: 'ready', occurrence: detail.occurrence });
+        if (!prefilled.current) {
+          prefilled.current = true;
+          const prefill = escalationFormPrefill(detail.occurrence);
+          setSubject((typed) => typed || prefill.subject);
+          setDescription((typed) => typed || prefill.description);
+          setCategory((chosen) => chosen ?? prefill.category);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        const status = (e as { status?: unknown }).status;
+        setEscLoad({
+          kind: 'error',
+          message:
+            status === 404
+              ? 'This exception is not available to you, or it no longer exists.'
+              : describeExceptionsRequestError(e, 'Could not load this exception.'),
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [escalationId, orgId, offline, escReadNonce]);
+
+  function rereadEscalation() {
+    setEscLoad({ kind: 'loading' });
+    setEscReadNonce((n) => n + 1);
+  }
+
+  // Fed the LIVE network state: offline, Save is disabled with the reason.
+  const escState = escalationFormState({ load: escLoad, online: !offline, saving, maintenanceEnabled: enabled });
+  // A second tap while the first is on its way is dropped here (the server's
+  // claim refuses it too: one request per exception).
+  const escalating = React.useRef(false);
+
+  async function onEscalate() {
+    if (!escalationId || escalating.current || !escState.saveEnabled) return;
+    // The request form's own rules, on the four fields the route takes.
+    const parsed = maintenanceRequestFormSchema.safeParse({
+      subject,
+      description,
+      category: shownCategory,
+      priority,
+    });
+    if (!parsed.success) {
+      Alert.alert('Check the form', parsed.error.issues[0]?.message ?? 'Check the form and try again.');
+      return;
+    }
+    escalating.current = true;
+    setSaving(true);
+    try {
+      const created = await escalateException(escalationId, {
+        subject: parsed.data.subject,
+        description: parsed.data.description,
+        priority: parsed.data.priority,
+        category: parsed.data.category ?? null,
+      });
+      // The request's own screen: the email opens there only on a tap.
+      router.replace(`/maintenance/${created.id}` as Href);
+    } catch (e) {
+      const failure = describeEscalateError(e);
+      if (failure.duplicate) {
+        // Already escalated (someone got there first). Nothing was saved.
+        // Open that request only for a reader who can open it: read the
+        // exception again to know (a failed read opens nothing).
+        const fresh = await getException(escalationId).then(
+          (d) => (d.organizationId === orgId ? d.occurrence : null),
+          () => null,
+        );
+        const outcome = duplicateOutcome(failure.duplicate, fresh, enabled);
+        Alert.alert('Already escalated', outcome.message);
+        if (outcome.kind === 'open') {
+          router.replace(`/maintenance/${outcome.requestId}` as Href);
+          return;
+        }
+        if (fresh) setEscLoad({ kind: 'ready', occurrence: fresh });
+        else rereadEscalation();
+        return;
+      }
+      Alert.alert('Could not escalate', failure.message);
+      // The exception may have changed (resolved, escalated elsewhere): read
+      // it again so the form says so. A retryable failure keeps what is shown.
+      if (!failure.retryable) rereadEscalation();
+    } finally {
+      escalating.current = false;
       setSaving(false);
     }
   }
@@ -378,6 +545,14 @@ export default function NewMaintenanceRequest() {
     else router.replace('/');
   };
 
+  const escalationView: EscalationFormView = {
+    load: escLoad,
+    online: !offline,
+    state: escState,
+    onRetry: rereadEscalation,
+    onOpenRequest: (requestId) => router.replace(`/maintenance/${requestId}` as Href),
+  };
+
   // ── Gates ────────────────────────────────────────────────────────────
   if (!enabled) {
     return (
@@ -394,6 +569,23 @@ export default function NewMaintenanceRequest() {
       </GateScreen>
     );
   }
+  if (target.kind === 'malformed') {
+    return (
+      <GateScreen c={c} onBack={goBack}>
+        {ESCALATE_BAD_LINK_COPY}
+      </GateScreen>
+    );
+  }
+  // Escalating with no workspace (a launch offline, or a failed first read):
+  // the exception can never load, so say so, with Try again that loads the
+  // workspace again.
+  if (escalationId && !orgId && !workspaceLoading) {
+    return (
+      <GateScreen c={c} onBack={goBack} action={<WorkspaceRetry />}>
+        {EXCEPTION_WORKSPACE_UNAVAILABLE}
+      </GateScreen>
+    );
+  }
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
@@ -404,12 +596,18 @@ export default function NewMaintenanceRequest() {
         <View style={styles.head}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <Wrench size={16} color={c.ink3} strokeWidth={1.5} />
-            <Eyebrow>{createdId ? 'ADD PHOTOS' : 'NEW MAINTENANCE REQUEST'}</Eyebrow>
+            <Eyebrow>
+              {createdId ? 'ADD PHOTOS' : escalationId ? 'ESCALATE TO MAINTENANCE' : 'NEW MAINTENANCE REQUEST'}
+            </Eyebrow>
           </View>
           <Display size={32} style={{ marginTop: 10 }}>
             {createdId ? (
               <>
                 Add <Em>photos.</Em>
+              </>
+            ) : escalationId ? (
+              <>
+                Escalate an <Em>exception.</Em>
               </>
             ) : (
               <>
@@ -428,13 +626,20 @@ export default function NewMaintenanceRequest() {
           onRetry={retryPhoto}
           onFinish={finish}
         />
+      ) : escalationId && !escState.showForm ? (
+        // Escalating, but no form: the exception is loading, could not be
+        // read, or cannot be escalated (with its request to open when it is
+        // already escalated). The web shows no form either.
+        <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }}>
+          <EscalationSourceCard view={escalationView} />
+        </ScrollView>
       ) : (
         <FormStep
           subject={subject}
           setSubject={setSubject}
           description={description}
           setDescription={setDescription}
-          category={category}
+          category={shownCategory}
           setCategory={setCategory}
           categories={categories}
           priority={priority}
@@ -454,7 +659,8 @@ export default function NewMaintenanceRequest() {
           setAccessInstructions={setAccessInstructions}
           hasLinkedRecord={hasLinkedRecord}
           saving={saving}
-          onSave={onSave}
+          onSave={escalationId ? () => void onEscalate() : onSave}
+          escalation={escalationId ? escalationView : null}
         />
       )}
     </View>
@@ -465,10 +671,13 @@ function GateScreen({
   c,
   onBack,
   children,
+  action,
 }: {
   c: ReturnType<typeof useTheme>['c'];
   onBack: () => void;
   children: React.ReactNode;
+  /** A control under the message (Try again). */
+  action?: React.ReactNode;
 }) {
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
@@ -480,10 +689,39 @@ function GateScreen({
       <View style={{ paddingHorizontal: 20, marginTop: 24 }}>
         <Card padding={16}>
           <Body size={14.5}>{children}</Body>
+          {action}
         </Card>
       </View>
     </View>
   );
+}
+
+/** Try again for a missing workspace (use-workspace retryWorkspace). */
+function WorkspaceRetry() {
+  const [retrying, setRetrying] = React.useState(false);
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={retrying}
+      onPress={() => {
+        setRetrying(true);
+        void retryWorkspace().finally(() => setRetrying(false));
+      }}
+      style={{ alignSelf: 'flex-start', marginTop: 14, minHeight: 44 }}
+    >
+      Try again
+    </Button>
+  );
+}
+
+/** What the form shows and does while it escalates an exception. */
+interface EscalationFormView {
+  load: EscalationLoad;
+  online: boolean;
+  state: EscalationFormState;
+  onRetry: () => void;
+  onOpenRequest: (requestId: string) => void;
 }
 
 function FormStep({
@@ -512,6 +750,7 @@ function FormStep({
   hasLinkedRecord,
   saving,
   onSave,
+  escalation,
 }: {
   subject: string;
   setSubject: (v: string) => void;
@@ -524,7 +763,7 @@ function FormStep({
   setPriority: (v: MaintenancePriority) => void;
   charterId: string | null;
   setCharterId: (v: string | null) => void;
-  sites: Array<{ id: string; name: string }>;
+  sites: { id: string; name: string }[];
   requesterPhone: string;
   setRequesterPhone: (v: string) => void;
   building: string;
@@ -538,9 +777,14 @@ function FormStep({
   hasLinkedRecord: boolean;
   saving: boolean;
   onSave: () => void;
+  /** Escalating an exception (F1-5): only the four fields the escalate route
+   *  takes are shown (a field it would drop is never offered), and Save
+   *  follows the escalation gate. null for an ordinary request. */
+  escalation: EscalationFormView | null;
 }) {
   const { c } = useTheme();
   const [footerHeight, setFooterHeight] = React.useState<number | null>(null);
+  const saveDisabled = saving || (escalation !== null && !escalation.state.saveEnabled);
 
   return (
     <>
@@ -552,6 +796,7 @@ function FormStep({
           }}
           keyboardShouldPersistTaps="handled"
         >
+          {escalation ? <EscalationSourceCard view={escalation} /> : null}
           <SectionLabel>WHAT&apos;S THE ISSUE</SectionLabel>
           <Field label="SUBJECT">
             <TextInput
@@ -575,7 +820,9 @@ function FormStep({
           </Field>
 
           <SectionLabel>DETAILS</SectionLabel>
-          <ChipPickerField label="SITE" options={sites} valueId={charterId} onChange={setCharterId} emptyText="No sites configured." />
+          {escalation ? null : (
+            <ChipPickerField label="SITE" options={sites} valueId={charterId} onChange={setCharterId} emptyText="No sites configured." />
+          )}
           <ChipTextPickerField
             label="CATEGORY"
             options={categories}
@@ -619,58 +866,62 @@ function FormStep({
             </Card>
           ) : null}
 
-          <Field label="CONTACT PHONE (OPTIONAL)">
-            <TextInput
-              value={requesterPhone}
-              onChangeText={setRequesterPhone}
-              placeholder="(555) 555-0100"
-              placeholderTextColor={c.ink4}
-              keyboardType="phone-pad"
-              style={[styles.input, { color: c.ink, borderColor: c.hair }]}
-            />
-          </Field>
+          {escalation ? null : (
+            <>
+              <Field label="CONTACT PHONE (OPTIONAL)">
+                <TextInput
+                  value={requesterPhone}
+                  onChangeText={setRequesterPhone}
+                  placeholder="(555) 555-0100"
+                  placeholderTextColor={c.ink4}
+                  keyboardType="phone-pad"
+                  style={[styles.input, { color: c.ink, borderColor: c.hair }]}
+                />
+              </Field>
 
-          <SectionLabel>LOCATION</SectionLabel>
-          <Row>
-            <Field flex label="BUILDING">
-              <TextInput
-                value={building}
-                onChangeText={setBuilding}
-                placeholder="Main building"
-                placeholderTextColor={c.ink4}
-                style={[styles.input, { color: c.ink, borderColor: c.hair }]}
-              />
-            </Field>
-            <Field flex label="ROOM OR AREA">
-              <TextInput
-                value={roomOrArea}
-                onChangeText={setRoomOrArea}
-                placeholder="Room 204"
-                placeholderTextColor={c.ink4}
-                style={[styles.input, { color: c.ink, borderColor: c.hair }]}
-              />
-            </Field>
-          </Row>
-          <Field label="DEPARTMENT">
-            <TextInput
-              value={department}
-              onChangeText={setDepartment}
-              placeholderTextColor={c.ink4}
-              style={[styles.input, { color: c.ink, borderColor: c.hair }]}
-            />
-          </Field>
-          <Field label="ADDITIONAL ACCESS INSTRUCTIONS">
-            <TextInput
-              value={accessInstructions}
-              onChangeText={setAccessInstructions}
-              multiline
-              numberOfLines={2}
-              placeholderTextColor={c.ink4}
-              style={[styles.input, styles.multiline, { color: c.ink, borderColor: c.hair }]}
-            />
-          </Field>
+              <SectionLabel>LOCATION</SectionLabel>
+              <Row>
+                <Field flex label="BUILDING">
+                  <TextInput
+                    value={building}
+                    onChangeText={setBuilding}
+                    placeholder="Main building"
+                    placeholderTextColor={c.ink4}
+                    style={[styles.input, { color: c.ink, borderColor: c.hair }]}
+                  />
+                </Field>
+                <Field flex label="ROOM OR AREA">
+                  <TextInput
+                    value={roomOrArea}
+                    onChangeText={setRoomOrArea}
+                    placeholder="Room 204"
+                    placeholderTextColor={c.ink4}
+                    style={[styles.input, { color: c.ink, borderColor: c.hair }]}
+                  />
+                </Field>
+              </Row>
+              <Field label="DEPARTMENT">
+                <TextInput
+                  value={department}
+                  onChangeText={setDepartment}
+                  placeholderTextColor={c.ink4}
+                  style={[styles.input, { color: c.ink, borderColor: c.hair }]}
+                />
+              </Field>
+              <Field label="ADDITIONAL ACCESS INSTRUCTIONS">
+                <TextInput
+                  value={accessInstructions}
+                  onChangeText={setAccessInstructions}
+                  multiline
+                  numberOfLines={2}
+                  placeholderTextColor={c.ink4}
+                  style={[styles.input, styles.multiline, { color: c.ink, borderColor: c.hair }]}
+                />
+              </Field>
+            </>
+          )}
 
-          {hasLinkedRecord ? (
+          {hasLinkedRecord && !escalation ? (
             <Card padding={12} style={{ marginTop: 16 }}>
               {/* M3 (web parity): only claims what was LAUNCHED WITH, never
                   what the server actually kept — create() re-derives the id
@@ -688,12 +939,19 @@ function FormStep({
         style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}
         onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
       >
+        {escalation?.state.reason ? (
+          <Body size={13} muted accessibilityRole="alert" style={{ marginBottom: 10 }}>
+            {escalation.state.reason}
+          </Body>
+        ) : null}
         <Pressable
           onPress={onSave}
-          disabled={saving}
+          disabled={saveDisabled}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: saveDisabled, busy: saving }}
           style={({ pressed }) => [
             styles.saveBtn,
-            { backgroundColor: c.ink, opacity: pressed || saving ? 0.7 : 1 },
+            { backgroundColor: c.ink, opacity: pressed || saveDisabled ? 0.7 : 1 },
           ]}
         >
           {saving ? (
@@ -706,6 +964,85 @@ function FormStep({
         </Pressable>
       </View>
     </>
+  );
+}
+
+/**
+ * The exception being escalated (F1-5): its reference and rule, its item and
+ * location, and what escalating does and does not do (core's words, as on
+ * the web). Loading, a failed read (with Try again) and offline say so. With
+ * no form (the exception cannot be escalated), why, and its request to open
+ * when it is already escalated and this reader can open it.
+ */
+function EscalationSourceCard({ view }: { view: EscalationFormView }) {
+  const { c } = useTheme();
+  const { load, state } = view;
+  const lines = load.kind === 'ready' ? escalationSourceLines(load.occurrence) : null;
+  return (
+    <Card padding={14} style={{ marginTop: 16, gap: 6 }}>
+      <Eyebrow>LINKED EXCEPTION</Eyebrow>
+      {load.kind === 'loading' ? (
+        view.online ? (
+          <ActivityIndicator
+            color={c.ink4}
+            style={{ alignSelf: 'flex-start' }}
+            accessibilityLabel="Loading the exception"
+          />
+        ) : null
+      ) : load.kind === 'error' ? (
+        <>
+          <Body size={14} accessibilityRole="alert">
+            {load.message}
+          </Body>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!view.online}
+            onPress={view.onRetry}
+            style={{ alignSelf: 'flex-start', minHeight: 44 }}
+          >
+            Try again
+          </Button>
+        </>
+      ) : lines ? (
+        <>
+          <Mono size={12} color={c.ink3}>
+            {lines.heading}
+          </Mono>
+          {lines.item ? (
+            <Body size={14.5} color={c.ink}>
+              {`Item: ${lines.item}`}
+            </Body>
+          ) : null}
+          {lines.location ? (
+            <Body size={14} color={c.ink}>
+              {`Location: ${lines.location}`}
+            </Body>
+          ) : null}
+        </>
+      ) : null}
+      {!state.showForm && state.reason ? (
+        <Body size={14} color={c.ink} accessibilityRole="alert" style={{ marginTop: 4 }}>
+          {state.reason}
+        </Body>
+      ) : null}
+      {state.openExisting ? (
+        <Button
+          block
+          variant="outline"
+          onPress={() => view.onOpenRequest(state.openExisting!.requestId)}
+          style={{ marginTop: 6 }}
+        >
+          {state.openExisting.label}
+        </Button>
+      ) : null}
+      <Body size={13} muted style={{ marginTop: 4 }}>
+        {ESCALATE_TO_MAINTENANCE_HELP}
+      </Body>
+      <Body size={13} muted>
+        {ESCALATION_FORM_NOTE_COPY}
+      </Body>
+    </Card>
   );
 }
 
@@ -894,7 +1231,7 @@ function ChipPickerField({
   emptyText,
 }: {
   label: string;
-  options: Array<{ id: string; name: string }>;
+  options: { id: string; name: string }[];
   valueId: string | null;
   onChange: (id: string | null) => void;
   emptyText?: string;

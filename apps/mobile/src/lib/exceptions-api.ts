@@ -17,11 +17,17 @@ import {
   type OccurrenceResolvedReason,
   type RecountOutcome,
   type RecountResultInput,
+  type EscalateUnavailableReason,
   type RecountUnavailableReason,
 } from '@stockpilot/core';
 
 import { api } from './api';
 import { CONNECTION_FAILURE_COPY } from './connection-copy';
+import {
+  isEscalateUnavailableReason,
+  parseEscalation,
+  type MobileOccurrenceEscalation,
+} from './exception-escalation';
 import {
   parseEvidenceBlock,
   parseEvidenceEventInfo,
@@ -95,6 +101,18 @@ export interface MobileExceptionOccurrence {
    *  otherwise, and from an older server (core recountUnavailableCopy then
    *  reads as the permission rule). */
   recountUnavailableReason: RecountUnavailableReason | null;
+  /** The maintenance request this exception was escalated to (F1-5), or
+   *  null. Every reader sees its handle ("Escalated: MR-..."); what the
+   *  request records (a draft opened, cancelled) only a reader who can open
+   *  it, and only on the detail read. */
+  escalation: MobileOccurrenceEscalation | null;
+  /** The server's hint that this reader may escalate this exception (open,
+   *  the maintenance module on, maintenance_requests:submit, no live linked
+   *  request). Anything but an explicit true is "no". The database decides. */
+  canEscalate: boolean;
+  /** Why not, when not (worded by core escalateDisabledReason); null when
+   *  offered, and from an older server. */
+  escalateUnavailableReason: EscalateUnavailableReason | null;
 }
 
 /** A linked recount as the phone reads it. `outcome` is what that count has
@@ -152,6 +170,9 @@ export interface MobileExceptionEvent {
    *  since removed; null for other kinds, or when the photos could not be
    *  read (the headline still stands). */
   evidence: MobileEvidenceEventInfo | null;
+  /** For an escalated event (F1-5): the request's handle when this reader
+   *  knows it (core describeOccurrenceEvent names it); null otherwise. */
+  maintenanceRequestReference: string | null;
 }
 
 export interface MobileExceptionHistoryEntry {
@@ -309,6 +330,11 @@ function parseOccurrence(v: unknown): MobileExceptionOccurrence | null {
     recountUnavailableReason: isRecountUnavailableReason(v.recountUnavailableReason)
       ? v.recountUnavailableReason
       : null,
+    escalation: parseEscalation(v.escalation),
+    canEscalate: v.canEscalate === true,
+    escalateUnavailableReason: isEscalateUnavailableReason(v.escalateUnavailableReason)
+      ? v.escalateUnavailableReason
+      : null,
   };
 }
 
@@ -386,6 +412,7 @@ export function parseExceptionDetail(res: unknown): MobileExceptionDetail {
         e.kind === 'evidence_added' || e.kind === 'evidence_removed'
           ? parseEvidenceEventInfo(e.evidence)
           : null,
+      maintenanceRequestReference: e.kind === 'escalated' ? strOrNull(e.maintenanceRequestReference) : null,
     });
   }
   const history: MobileExceptionHistoryEntry[] = Array.isArray(res.history)

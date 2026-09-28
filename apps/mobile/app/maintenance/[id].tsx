@@ -117,7 +117,14 @@ import {
   type OutlookPlatform,
 } from '@/lib/maintenance-email-actions';
 import { nativeOutlookAvailable } from '@/lib/outlook-transport';
-import { resolutionProofCaption, shouldShowResolutionCard, splitPhotosByKind, statusPillTone } from '@/lib/maintenance-filters';
+import {
+  maintenanceRelatedRows,
+  resolutionProofCaption,
+  shouldShowResolutionCard,
+  splitPhotosByKind,
+  statusPillTone,
+  type MaintenanceRelatedRow,
+} from '@/lib/maintenance-filters';
 import {
   PHOTO_UPLOAD_GENERIC_ERROR,
   REQUEST_PHOTOS_ADD_LABEL,
@@ -162,6 +169,13 @@ import { useTheme } from '@/lib/use-theme';
  * there behaviorally. This file is orchestration + rendering only, same
  * "source-pin honesty" posture Task 9/18/19 established (this repo's
  * vitest cannot render `app/`).
+ *
+ * RELATED RECORDS (F1-5): the item and the StockPilot location the request is
+ * about (an escalated exception's rack, Staging or Unplaced), named as the
+ * email's RELATED STOCKPILOT RECORD section names them ("Staging (DC4)"), each
+ * opening its native screen (lib/maintenance-filters.ts maintenanceRelatedRows).
+ * An escalated request lands here from the exception's form: the email card
+ * below opens a draft only when the person taps it.
  */
 /** Detail-page analog of the list screen's brief-section-22 note (web's own
  *  detail page shows this exact sentence under "StockPilot activity" —
@@ -269,6 +283,42 @@ function PhotoSourceButton({
       <Mono size={10} tracking={0.06} color={c.ink} style={{ marginLeft: 6 }}>
         {label}
       </Mono>
+    </Pressable>
+  );
+}
+
+/**
+ * A related StockPilot record (F1-5: the item and the location a request is
+ * about, such as an escalated exception's). Opens the record's screen when
+ * the request carries its id; plain text otherwise. Nothing when absent.
+ */
+function RelatedRow({
+  label,
+  row,
+  onOpen,
+}: {
+  label: string;
+  row: MaintenanceRelatedRow | null;
+  onOpen: (href: string) => void;
+}) {
+  const { c } = useTheme();
+  if (!row) return null;
+  if (!row.href) return <DetailRow label={label} value={row.value} />;
+  const href = row.href;
+  return (
+    <Pressable
+      onPress={() => onOpen(href)}
+      accessibilityRole="link"
+      accessibilityLabel={`${label.toLowerCase()}: ${row.value}`}
+      accessibilityHint="Opens it in StockPilot"
+      style={({ pressed }) => [styles.detailRow, { minHeight: 44, opacity: pressed ? 0.7 : 1 }]}
+    >
+      <Mono size={11} tracking={0.04} upper color={c.ink4}>
+        {label}
+      </Mono>
+      <Body size={13} color={c.ink} style={{ flexShrink: 1, textAlign: 'right', textDecorationLine: 'underline' }}>
+        {row.value}
+      </Body>
     </Pressable>
   );
 }
@@ -938,6 +988,14 @@ export default function MaintenanceRequestDetailScreen() {
     ? routingAdminNotice(emailRouting)
     : null;
   const showResolutionCard = shouldShowResolutionCard(detail);
+  // The item and location the request is about (F1-5), named as the email's
+  // RELATED STOCKPILOT RECORD section names them.
+  const related = maintenanceRelatedRows({
+    relatedItemId: detail.relatedItemId,
+    relatedLocationId: detail.relatedLocationId,
+    relatedItem: emailContent?.relatedItem,
+    relatedLocation: emailContent?.relatedLocation,
+  });
   const { requester: requesterPhotos, resolution: resolutionPhotos } = splitPhotosByKind(photos);
 
   // Request-photo card. The add affordance follows web's gate and ONLY web's
@@ -1032,6 +1090,10 @@ export default function MaintenanceRequestDetailScreen() {
           <DetailRow label="CATEGORY" value={detail.category} />
           <Hair inset={16} />
           <DetailRow label="ACCESS INSTRUCTIONS" value={detail.accessInstructions} />
+          {related.item ? <Hair inset={16} /> : null}
+          <RelatedRow label="RELATED ITEM" row={related.item} onOpen={(href) => router.push(href as Href)} />
+          {related.location ? <Hair inset={16} /> : null}
+          <RelatedRow label="RELATED LOCATION" row={related.location} onOpen={(href) => router.push(href as Href)} />
         </Card>
 
         {/* Request photos. Renders ALWAYS — web's own section does (page.tsx),

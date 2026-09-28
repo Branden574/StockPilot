@@ -25,6 +25,7 @@ import {
   recountOutcomeCopy,
   recountSelectedLabel,
   recountSelectionProblem,
+  escalationBadgeCopy,
   recurrenceBadge,
   type ExceptionRuleMeta,
   type OccurrenceState,
@@ -579,6 +580,14 @@ function OccurrenceRow({
           {recurred ? (
             <Pill status="default" dot={false}>
               {recurred}
+            </Pill>
+          ) : null}
+          {/* F1-5: every reader of an escalated exception sees its request's
+              handle. The list says nothing about the request's own state
+              (the server does not read it for a list). */}
+          {o.escalation ? (
+            <Pill status="default" dot={false}>
+              {escalationBadgeCopy(o.escalation.reference)}
             </Pill>
           ) : null}
         </View>

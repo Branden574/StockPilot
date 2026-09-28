@@ -132,3 +132,41 @@ export function resolutionProofCaption(resolvedAt: string | null): string {
     ? 'Added by the team when this request was marked resolved.'
     : 'Staged by the team while preparing to mark this request resolved.';
 }
+
+/**
+ * The detail screen's related-record rows (F1-5): the StockPilot item and
+ * location a request is about, from the server's email content (the names
+ * the email's RELATED STOCKPILOT RECORD section carries, so the screen and the
+ * email say the same thing). The location reads as the email's
+ * "Related Location" line does: `<name> (<warehouse>)`. Each row opens its
+ * record only when the request carries that record's id; null when the
+ * request has none (the row is not shown).
+ */
+export interface MaintenanceRelatedRow {
+  value: string;
+  /** The record's native screen, or null (plain text). */
+  href: string | null;
+}
+
+export function maintenanceRelatedRows(input: {
+  relatedItemId: string | null;
+  relatedLocationId: string | null;
+  relatedItem: { name: string; sku: string | null } | null | undefined;
+  relatedLocation: { name: string; warehouseName: string | null } | null | undefined;
+}): { item: MaintenanceRelatedRow | null; location: MaintenanceRelatedRow | null } {
+  const itemName = input.relatedItem?.name?.trim() || '';
+  const sku = input.relatedItem?.sku?.trim() || '';
+  const locationName = input.relatedLocation?.name?.trim() || '';
+  const warehouse = input.relatedLocation?.warehouseName?.trim() || '';
+  return {
+    item: itemName
+      ? { value: sku ? `${itemName} (${sku})` : itemName, href: input.relatedItemId ? `/item/${input.relatedItemId}` : null }
+      : null,
+    location: locationName
+      ? {
+          value: warehouse ? `${locationName} (${warehouse})` : locationName,
+          href: input.relatedLocationId ? `/location/${input.relatedLocationId}` : null,
+        }
+      : null,
+  };
+}

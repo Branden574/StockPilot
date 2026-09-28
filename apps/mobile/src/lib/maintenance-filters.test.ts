@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   MAINTENANCE_STATUS_CHIPS,
+  maintenanceRelatedRows,
   resolutionProofCaption,
   shouldShowResolutionCard,
   splitPhotosByKind,
@@ -129,5 +130,49 @@ describe('resolutionProofCaption', () => {
     const captionWhenResolved = resolutionProofCaption('2026-08-05T00:00:00.000Z');
     const captionWhenStaged = resolutionProofCaption(null);
     expect(captionWhenResolved).not.toBe(captionWhenStaged);
+  });
+});
+
+describe('maintenanceRelatedRows (F1-5: the request detail shows its item and location)', () => {
+  const ITEM = '22222222-2222-4222-8222-222222222222';
+  const LOC = '55555555-5555-4555-8555-555555555555';
+
+  // Mutation caught: the location row left out, or worded differently from
+  // the email's "Related Location: <name> (<warehouse>)" line.
+  it('names the location as the email does, and opens its screen', () => {
+    const rows = maintenanceRelatedRows({
+      relatedItemId: ITEM,
+      relatedLocationId: LOC,
+      relatedItem: { name: 'Atlas', sku: 'A1' },
+      relatedLocation: { name: 'Staging', warehouseName: 'DC4' },
+    });
+    expect(rows.location).toEqual({ value: 'Staging (DC4)', href: `/location/${LOC}` });
+    expect(rows.item).toEqual({ value: 'Atlas (A1)', href: `/item/${ITEM}` });
+  });
+
+  it('no warehouse or SKU: the name alone; no id: plain text', () => {
+    const rows = maintenanceRelatedRows({
+      relatedItemId: null,
+      relatedLocationId: null,
+      relatedItem: { name: 'Atlas', sku: null },
+      relatedLocation: { name: 'Staging', warehouseName: null },
+    });
+    expect(rows.item).toEqual({ value: 'Atlas', href: null });
+    expect(rows.location).toEqual({ value: 'Staging', href: null });
+  });
+
+  // Mutation caught: a row rendered from the id alone (a blank value).
+  it('no record, or a blank name: no row', () => {
+    expect(
+      maintenanceRelatedRows({ relatedItemId: ITEM, relatedLocationId: LOC, relatedItem: null, relatedLocation: undefined }),
+    ).toEqual({ item: null, location: null });
+    expect(
+      maintenanceRelatedRows({
+        relatedItemId: ITEM,
+        relatedLocationId: LOC,
+        relatedItem: { name: '  ', sku: 'A1' },
+        relatedLocation: { name: '', warehouseName: 'DC4' },
+      }),
+    ).toEqual({ item: null, location: null });
   });
 });
