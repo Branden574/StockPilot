@@ -99,6 +99,7 @@ import {
   type ReturnableLine,
   type ReturnStatus,
 } from '@/server/services/returns';
+import { formatNeededBy } from '@/lib/orders/needed-by-format';
 import { cn, formatNumber, formatRelative } from '@/lib/utils';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { ORDER_DETAIL_TOUR } from '@/lib/onboarding/tours';
@@ -351,6 +352,17 @@ export default async function OrderDetailPage({
     request.fulfillment_type === 'delivery' &&
     !DELIVERY_REQUEST_BLOCKED.includes(request.status);
 
+  // Whether this page prints a time in the ORG's zone: the Dates card's
+  // needed-by, and the approval panel's needed-by chip or its AI-suggested
+  // deadline (pending, for an approver, from the requester's note).
+  const neededBy = (request as { needed_by?: string | null }).needed_by ?? null;
+  const printsOrgTime =
+    Boolean(neededBy) ||
+    (showActionsPanel &&
+      canApprove &&
+      request.status === 'pending_approval' &&
+      Boolean(request.notes?.trim()));
+
   // ---- Tier 2: every independent round trip the render might need, fired
   // together instead of one-at-a-time. Each slot is gated by a sync boolean
   // above and resolves to a cheap placeholder when its gate is false, so a
@@ -375,6 +387,7 @@ export default async function OrderDetailPage({
     deliveryRequestTimezone,
     deliveryRequestRouting,
     orderReturns,
+    zoneFacts,
   ] = await Promise.all([
     // Picking claim/lock — whether THIS viewer can actually pick THIS order.
     // Only the picking phase reads it, so the extra warehouse-access query is
@@ -592,6 +605,17 @@ export default async function OrderDetailPage({
           }
         })()
       : Promise.resolve<OrderReturnView[]>([]),
+
+    // The org's zone for a page that prints a needed-by but shows no
+    // readiness: the readiness read already in flight since the order read
+    // carries it (0377 order.timeZone, organizations.timezone) for any member
+    // of the order's org, in every phase, so no organizations read is added.
+    // Only the zone is used: the answer discloses nothing the member could
+    // not read directly. Formatting only, so a failure is silent here and
+    // degrades to the documented default zone below.
+    !readinessGate && printsOrgTime
+      ? readinessRead.catch((): OrderReadinessResult | null => null)
+      : Promise.resolve<OrderReadinessResult | null>(null),
   ]);
 
   let viewerCanPick = true;
@@ -640,15 +664,22 @@ export default async function OrderDetailPage({
   const readinessNow = readiness
     ? reconcileReadiness(readiness, { status: request.status, lineIds: lines.map((l) => l.id) })
     : null;
-  // Readiness' times and days ("Checked at", the needed-by day, a count's
-  // day) are in the org's zone as the facts carry it (0377 order.timeZone,
-  // organizations.timezone): the zone core reads the needed-by day in, so the
-  // strip and the signal can never use two zones. A failed read shows no time.
-  const readinessTimeZone = resolveOrgTimezone(
-    readinessNow?.state === 'ok' ? readinessNow.assessment.order.timeZone : null,
+  // THE ORG'S ZONE for every time this page prints: readiness' times and
+  // days ("Checked at", the needed-by day, a count's day), the Dates card's
+  // needed-by and the approval panel's. It is the zone the readiness facts
+  // carry (0377 order.timeZone, organizations.timezone), the zone core reads
+  // the needed-by day in, so the strip, the signal and the card can never use
+  // two zones: from the read the page shows, else from the same read in
+  // flight (zoneFacts). A failed read shows no readiness time; a needed-by it
+  // prints in the delivery request's zone when that was read, else in core's
+  // documented default (resolveOrgTimezone), never in the server's zone.
+  const factsTimeZone = (r: OrderReadinessResult | null): string | null =>
+    r?.state === 'ok' ? (r.assessment.order.timeZone ?? null) : null;
+  const orgTimeZone = resolveOrgTimezone(
+    factsTimeZone(readinessGate ? readiness : zoneFacts) ?? deliveryRequestTimezone,
   );
   const readinessStrip = readinessNow
-    ? readinessStripView(readinessNow, viewerReadinessAudience, { timeZone: readinessTimeZone })
+    ? readinessStripView(readinessNow, viewerReadinessAudience, { timeZone: orgTimeZone })
     : null;
   const readinessAssessment =
     readinessNow?.state === 'ok' &&
@@ -956,7 +987,7 @@ export default async function OrderDetailPage({
                 destination={deliveryRequestCharter}
                 requestedFor={detail.requesterName ?? requesterDisplay}
                 requesterEmail={detail.requesterEmail}
-                neededBy={(request as { needed_by?: string | null }).needed_by ?? ''}
+                neededBy={neededBy ?? ''}
                 // Through the shared resolver, never a second hardcoded zone.
                 // This slot is null only when showDeliveryRequest is false (so
                 // this button is not rendered at all), but a literal here was
@@ -1262,7 +1293,7 @@ export default async function OrderDetailPage({
                           <div className="mt-2">
                             <ReadinessLineCell
                               {...readinessCellFor(l.id)}
-                              timeZone={readinessTimeZone}
+                              timeZone={orgTimeZone}
                               position={rowIndex + 1}
                             />
                           </div>
@@ -1437,7 +1468,8 @@ export default async function OrderDetailPage({
               orderId={id}
               status={request.status}
               internalNotes={request.internal_notes}
-              neededBy={(request as { needed_by?: string | null }).needed_by ?? null}
+              neededBy={neededBy}
+              orgTimeZone={orgTimeZone}
               hasRequesterNote={Boolean(request.notes?.trim())}
               fulfillmentType={request.fulfillment_type}
               assignedDeliveryUserId={request.assigned_delivery_user_id}
@@ -1510,17 +1542,13 @@ export default async function OrderDetailPage({
               Dates
             </h2>
             <dl className="space-y-1.5 text-[11.5px]">
-              {(request as { needed_by?: string | null }).needed_by && (
+              {neededBy && (
                 <div className="flex justify-between gap-3">
                   <dt className="text-muted-foreground">Needed by</dt>
-                  <dd className="text-right font-medium">
-                    {new Date(
-                      (request as { needed_by?: string | null }).needed_by as string,
-                    ).toLocaleString('en-US', {
-                      weekday: 'short', month: 'short', day: 'numeric',
-                      hour: 'numeric', minute: '2-digit',
-                    })}
-                  </dd>
+                  {/* In the org's zone, not the server's (UTC on Vercel). The
+                      rows below are relative ("2 hours ago"): a difference
+                      from now, the same in every zone. */}
+                  <dd className="text-right font-medium">{formatNeededBy(neededBy, orgTimeZone)}</dd>
                 </div>
               )}
               {TIMELINE_FIELDS.map(({ key, label }) => {

@@ -170,3 +170,24 @@ describe('DigitalPick — the confirm before completing a short pick (F2-2)', ()
     expect(complete).not.toHaveBeenCalled();
   });
 });
+
+// F2-2 walk (2026-09-28): a line with nothing entered showed the requested
+// quantity as a grey placeholder ("60"), so an unentered line looked filled.
+// The placeholder is now a word, never a number, and "of 60" sits outside the
+// field, as on the phone. What is typed and saved is unchanged (the tests
+// above: raising the pens to 60 records 60).
+describe('DigitalPick — an unentered line does not look filled', () => {
+  it('the blank field shows no quantity; "of N" sits beside it', () => {
+    renderPick();
+
+    const pens = screen.getByLabelText('Picked quantity for L4L - Pen Black & Rose Gold');
+    expect(pens).toHaveValue(null);
+    expect(pens.getAttribute('placeholder') ?? '').not.toMatch(/\d/);
+    expect(pens.nextElementSibling).toHaveTextContent('of 60');
+
+    // A line that was picked still shows its number.
+    const notebooks = screen.getByLabelText('Picked quantity for Notebook');
+    expect(notebooks).toHaveValue(60);
+    expect(notebooks.nextElementSibling).toHaveTextContent('of 60');
+  });
+});

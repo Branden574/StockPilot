@@ -544,8 +544,9 @@ describe('F1-5 (escalate an exception to maintenance) is published', () => {
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(F1_5);
     // The notice offers the newest unread release; the maintenance review
-    // wording release was published after this one (and F2-1's after it).
-    expect(list.latestUnread?.id).toBe('order-held-and-caught-2026-10');
+    // wording release was published after this one (and F2-1's, F2-2's and
+    // the needed-by time's after it).
+    expect(list.latestUnread?.id).toBe('order-needed-by-org-zone-2026-09');
     // An old phone build lists at most three unread releases, newest first;
     // F1-5 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -715,9 +716,15 @@ describe('F2-1 (order readiness) is published', () => {
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(F2_1);
     // The notice offers the newest unread release; the maintenance review
-    // wording release was published after this one.
-    expect(list.latestUnread?.id).toBe('order-held-and-caught-2026-10');
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(F2_1);
+    // wording, F2-2's and the needed-by time's releases were published after
+    // this one.
+    expect(list.latestUnread?.id).toBe('order-needed-by-org-zone-2026-09');
+    // An old phone build lists at most three unread releases, newest first;
+    // F2-1 comes into that list once the newer releases are read.
+    const newer = Object.fromEntries(
+      RELEASES.slice(0, RELEASES.findIndex((r) => r.id === F2_1)).map((r) => [r.id, true]),
+    );
+    expect(legacyAnnouncementsFor(RELEASES, everyone, newer).map((a) => a.id)).toContain(F2_1);
     expect(registryFingerprint(RELEASES)).toContain(F2_1);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(F2_1);
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-29T00:00:00Z'));
@@ -963,18 +970,22 @@ describe('F2-2 (held, and caught before it leaves) is published', () => {
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(F2_2);
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(F2_2);
-    expect(list.latestUnread?.id).toBe(F2_2);
+    // The notice offers the newest unread release: the needed-by time's
+    // release was published after this one.
+    expect(list.latestUnread?.id).toBe('order-needed-by-org-zone-2026-09');
     expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(F2_2);
     expect(registryFingerprint(RELEASES)).toContain(F2_2);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(F2_2);
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-29T00:00:00Z'));
   });
 
-  it('sits above every published release (pinned by id), dated after every other release, so publishing it makes it the newest', () => {
+  it('is dated after every release below it (the releases above it were published later)', () => {
     const at = RELEASES.findIndex((r) => r.id === F2_2);
     expect(at).toBeGreaterThanOrEqual(0);
-    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
-    for (const r of RELEASES.filter((x) => x.id !== F2_2)) {
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
+    for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -1086,5 +1097,99 @@ describe('F2-2 (held, and caught before it leaves) is published', () => {
     expect(text).toContain(so100.slice(0, so100.indexOf(' It will be owed')));
     // The server stays permissive: a confirm, never a refusal.
     expect(text).toContain('You can still go ahead: what was not picked is owed at hand-over, as before.');
+  });
+});
+
+/**
+ * The needed-by time and the digital pick's blank field (F2-1 and F2-2
+ * production walks, 2026-09-28): web only, so published with the web deploy.
+ */
+describe('the needed-by time release is published', () => {
+  const ID = 'order-needed-by-org-zone-2026-09';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+
+  it('is published and the newest: every release above it is a draft, and it is dated after every release below it', () => {
+    expect(release().status).toBe('published');
+    expect(release().revision).toBe(1);
+    // Pinned by id: the drafts count's release (both platforms) sits above it
+    // as a draft until the phone update carries it.
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.slice(at + 1)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.latestUnread?.id).toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(ID);
+    expect(registryFingerprint(RELEASES)).toContain(ID);
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
+  });
+
+  it('reaches every member where Orders is on; the digital pick entry only whoever can pick', () => {
+    expect(release().audience).toEqual({ modules: ['orders'] });
+    expect(release().entries.map((e) => e.id)).toEqual(['order-needed-by-org-zone', 'digital-pick-blank-quantity']);
+    const reader = (permissions: ReleaseViewer['permissions'], enabledModules: ModuleId[] = ['orders']) =>
+      visibleReleases([release()], { role: 'viewer', permissions, enabledModules })[0]?.entries.map((e) => e.id) ?? [];
+    expect(reader(['items:read'])).toEqual(['order-needed-by-org-zone']);
+    expect(reader([])).toEqual(['order-needed-by-org-zone']);
+    expect(reader(['items:update'])).toEqual(['order-needed-by-org-zone', 'digital-pick-blank-quantity']);
+    expect(reader(['orders:approve'])).toEqual(['order-needed-by-org-zone', 'digital-pick-blank-quantity']);
+    expect(reader(['orders:approve', 'items:update'], [])).toEqual([]);
+  });
+
+  it('says it plainly: web only, the example the walk saw, only how it is shown changed', () => {
+    const r = release();
+    // Old phone builds show only the summary: it names the platform.
+    expect(r.summary).toMatch(/^On the web, /);
+    expect(r.summary).toContain('an order due at 2:00 PM in a Los Angeles organization said 9:00 PM');
+    const text = readerText(r).join(' ');
+    expect(text).not.toMatch(/mobile app|phone/i);
+    expect(text).toContain('Only how the time is shown changed.');
+    expect(text).toContain('Only how the field looks changed.');
+    // The digital pick field's placeholder and the words beside it, as the screen shows them.
+    const pick = readFileSync(resolve(__dirname, '../../components/orders/digital-pick.tsx'), 'utf8');
+    expect(pick).toContain('placeholder="Qty"');
+    expect(pick).toContain('of {requested}');
+    for (const e of r.entries) expect(e.whatToDo, e.id).toBe('No action needed.');
+  });
+});
+
+/**
+ * The draft POs count is core's copy (web and phone), so its release is held
+ * as a DRAFT until the phone update carries it. The follow-up that publishes
+ * it sets 'published' and the real publishedAt, and flips the first pin here.
+ */
+describe('the draft POs count release is held as a draft', () => {
+  const ID = 'order-readiness-draft-pos-2026-09';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+
+  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+    expect(release().status).toBe('draft');
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).not.toContain(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(ID);
+  });
+
+  it('is addressed as the full readiness panel is, and quotes the words core composes', () => {
+    const gate = { anyPermission: ['orders:approve', 'items:update', 'purchase_orders:manage'], modules: ['orders'] };
+    expect(release().entries.map((e) => e.audience)).toEqual([gate]);
+    const text = readerText(release()).join(' ');
+    expect(release().summary).toMatch(/^On the web and in the mobile app, /);
+    expect(text).toContain('On 4 draft POs 100 (not ordered)');
+    expect(text).toContain('4 draft POs cover 60 but have not been ordered');
+    expect(text).not.toMatch(/\bbook\b/i);
   });
 });

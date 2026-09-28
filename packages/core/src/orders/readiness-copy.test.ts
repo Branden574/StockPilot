@@ -343,6 +343,64 @@ describe('holds, why, needed-by, roll-up, requester, completion, offline', () =>
     expect(describeReadinessWhy(hidden.item!).parts).toEqual(["This item isn't visible to you, so its stock can't be checked."]);
   });
 
+  // F2-1 production walk (2026-09-28): an item on four draft POs of 25 each
+  // said "On draft PO-1785135627464 100", the FIRST draft's number beside the
+  // TOTAL of all four, so that PO read as holding 100. A draft's number is
+  // named only when it is the only draft; otherwise the drafts are counted.
+  describe('an item on several draft POs', () => {
+    const draft = (poNumber: string, remaining: number) => ({ poId: poNumber, poNumber, remaining });
+    const drafts = (rows: ReturnType<typeof draft>[], hiddenRemaining = 0, truncatedRemaining = 0) => ({
+      rows,
+      hiddenRemaining,
+      truncated: truncatedRemaining > 0,
+      truncatedRemaining,
+    });
+    const FOUR = drafts([draft('PO-1785135627464', 25), draft('PO-B', 25), draft('PO-C', 25), draft('PO-D', 25)]);
+    const why = (d: ReturnType<typeof drafts>) =>
+      describeReadinessWhy(only(assess('pending_approval', [{ item: 'a', requested: 100 }], [item('a', { drafts: d })])).item!, {
+        timeZone: TZ,
+      });
+
+    it("the Why counts them beside their total, never one draft's number", () => {
+      expect(why(FOUR).parts).toEqual(['On record 0', 'On 4 draft POs 100 (not ordered)']);
+      expect(why(FOUR).text).not.toContain('PO-1785135627464');
+      // One draft is still named, with its own quantity.
+      expect(why(drafts([draft('PO-D', 6)])).parts).toContain('On draft PO-D 6 (not ordered)');
+      // Past the facts' row cap (0377 lists 10): more than 10.
+      const eleven = drafts(
+        Array.from({ length: 10 }, (_, i) => draft(`PO-${i + 1}`, 10)),
+        0,
+        30,
+      );
+      expect(why(eleven).parts).toContain('On more than 10 draft POs 130 (not ordered)');
+      // Drafts the reader can't open are a quantity only, as on-order POs are.
+      expect(why(drafts([draft('PO-D', 20)], 5)).parts).toEqual([
+        'On record 0',
+        'On draft PO-D 20 (not ordered)',
+        "On draft POs you can't open 5 (not ordered)",
+      ]);
+      expect(why(drafts([], 5)).parts).toEqual(['On record 0', "On draft POs you can't open 5 (not ordered)"]);
+    });
+
+    it('the line sentence says how many drafts cover the shortfall', () => {
+      expect(lineSentence([{ item: 'a', requested: 60 }], [item('a', { drafts: FOUR })])).toBe(
+        '60 short. 4 draft POs cover 60 but have not been ordered.',
+      );
+      expect(lineSentence([{ item: 'a', requested: 60 }], [item('a', { drafts: FOUR })])).not.toContain('PO-1785135627464');
+      // One draft: named, as before.
+      expect(lineSentence([{ item: 'a', requested: 4 }], [item('a', { drafts: drafts([draft('PO-D', 25)]) })])).toBe(
+        '4 short. Draft PO-D covers 4 but has not been ordered.',
+      );
+      // A draft the reader can't open: how many there are is not known.
+      expect(lineSentence([{ item: 'a', requested: 30 }], [item('a', { drafts: drafts([draft('PO-D', 20)], 5) })])).toBe(
+        '30 short. Draft POs cover 25 but have not been ordered.',
+      );
+      expect(
+        lineSentence([{ item: 'a', requested: 200 }], [item('a', { drafts: drafts(Array.from({ length: 10 }, (_, i) => draft(`PO-${i + 1}`, 10)), 0, 30) })]),
+      ).toBe('200 short. More than 10 draft POs cover 130 but have not been ordered.');
+    });
+  });
+
   it('needed-by', () => {
     expect(neededBySignalCopy('past_due', '2026-09-20T19:00:00Z', { timeZone: TZ })).toBe('Past its needed-by date (Sep 20)');
     expect(neededBySignalCopy('at_risk', '2026-10-20T19:00:00Z')).toBe('May miss its needed-by date');

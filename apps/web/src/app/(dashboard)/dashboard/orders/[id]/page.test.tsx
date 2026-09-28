@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { render, screen, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SHORT_LINE_FINAL_NOTE, type OrderReadinessResult } from '@stockpilot/core';
 
@@ -1477,5 +1477,133 @@ describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
       expect(screen.getAllByTestId('readiness-line').map((c) => c.getAttribute('data-state'))).toContain('short');
       expect(shortLineFixesProps).not.toHaveBeenCalled();
     });
+  });
+});
+
+/**
+ * THE DATES CARD'S NEEDED-BY, in the org's zone (F2-1 production walk,
+ * 2026-09-28): an order in a Los Angeles org due at 2:00 PM said 9:00 PM,
+ * because the page formatted it with toLocaleString and no zone, in the
+ * SERVER's zone (UTC on Vercel). These tests run the page with the server in
+ * UTC, as production does; the org is in another zone.
+ *
+ * Where the zone comes from: the readiness facts carry it (0377
+ * order.timeZone) in every phase, and that read is in flight for every order
+ * from the moment the order is read, so no organizations read is added. A
+ * failed read degrades as every surface does (core resolveOrgTimezone), never
+ * to the server's zone.
+ */
+describe('orders/[id]: the Dates card prints the needed-by in the org zone', () => {
+  const runtimeZone = process.env.TZ;
+  beforeEach(() => {
+    process.env.TZ = 'UTC';
+  });
+  afterEach(() => {
+    if (runtimeZone === undefined) delete process.env.TZ;
+    else process.env.TZ = runtimeZone;
+  });
+
+  // 2:00 PM in Los Angeles, 4:00 PM in Chicago, 5:00 PM in New York, 9:00 PM UTC.
+  const NEEDED_BY = '2026-09-28T21:00:00Z';
+  const LINE = {
+    id: 'LA',
+    order_request_id: ORDER_ID,
+    item_id: 'iA',
+    quantity_requested: 5,
+    quantity_fulfilled: 0,
+    quantity_picked: null,
+    returned_quantity: 0,
+    unit_cost_at_request: 0,
+    notes: null,
+    item: { id: 'iA', name: 'Item iA', sku: 'SKU-iA', quantity_on_hand: 10, charter_name: null, charter_code: null },
+  };
+  function neededByRow(): HTMLElement {
+    const dt = screen.getByText('Needed by', { selector: 'dt' });
+    return dt.nextElementSibling as HTMLElement;
+  }
+  function asManager() {
+    ctxHolder.current = { role: 'manager', permissions: new Set(['orders:read', 'orders:approve']) };
+  }
+  function orderAt(status: string, request: Record<string, unknown> = {}) {
+    orderGet.mockResolvedValue(
+      detailFixture({ request: requestFixture({ status, needed_by: NEEDED_BY, ...request }), lines: [LINE] }),
+    );
+  }
+  function factsIn(status: string, timeZone: string) {
+    return readinessOk(
+      orderReadinessFacts(
+        ORDER_ID,
+        status,
+        [{ lineId: 'LA', itemId: 'iA', requested: 5 }],
+        [visibleItemFacts('iA', { here: { rack: 10 } })],
+        { timeZone, neededBy: NEEDED_BY },
+      ),
+    );
+  }
+
+  it('an order past picking: the zone the readiness read in flight carries, never the server zone', async () => {
+    orderAt('completed');
+    readinessResult.mockResolvedValue(factsIn('completed', 'America/Los_Angeles'));
+
+    await renderPage();
+
+    expect(neededByRow()).toHaveTextContent('Mon, Sep 28, 2:00 PM');
+    expect(neededByRow()).not.toHaveTextContent('9:00 PM');
+    expect(readinessResult).toHaveBeenCalledTimes(1);
+    expect(getCachedOrgTimezoneMock).not.toHaveBeenCalled();
+  });
+
+  it('where readiness is shown: its zone, to the card and the approval panel', async () => {
+    asManager();
+    orderAt('pending_approval');
+    readinessResult.mockResolvedValue(factsIn('pending_approval', 'America/New_York'));
+
+    await renderPage();
+
+    expect(neededByRow()).toHaveTextContent('Mon, Sep 28, 5:00 PM');
+    expect(getCachedOrgTimezoneMock).not.toHaveBeenCalled();
+    // The approval panel's needed-by chip prints in the same zone.
+    expect(managerActionsProps).toHaveBeenCalledWith(
+      expect.objectContaining({ neededBy: NEEDED_BY, orgTimeZone: 'America/New_York' }),
+    );
+  });
+
+  it('a viewer who is shown no readiness, on an order still to pick: the same read gives the zone', async () => {
+    // Staff with orders:read on someone else's order: readiness audience none.
+    orderAt('approved');
+    readinessResult.mockResolvedValue(factsIn('approved', 'America/Chicago'));
+
+    await renderPage();
+
+    expect(screen.queryByTestId('readiness-strip')).toBeNull();
+    expect(neededByRow()).toHaveTextContent('Mon, Sep 28, 4:00 PM');
+    expect(getCachedOrgTimezoneMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed readiness read: the delivery request's zone when it was read, else core's default, never the server's", async () => {
+    readinessResult.mockResolvedValue(READINESS_FAILED);
+
+    // Nothing else read the zone: core's documented default (Los Angeles).
+    orderAt('completed');
+    const { unmount } = await renderPage();
+    expect(neededByRow()).toHaveTextContent('Mon, Sep 28, 2:00 PM');
+    expect(getCachedOrgTimezoneMock).not.toHaveBeenCalled();
+    unmount();
+
+    // The requester's own delivery order read the org's zone for its email
+    // draft (America/Chicago here): the card uses that read.
+    orderAt('approved', { fulfillment_type: 'delivery', requester_user_id: 'u1' });
+    await renderPage();
+    expect(neededByRow()).toHaveTextContent('Mon, Sep 28, 4:00 PM');
+    expect(getCachedOrgTimezoneMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('no needed-by: no Needed by row and no organizations read', async () => {
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status: 'completed' }), lines: [LINE] }));
+
+    await renderPage();
+
+    expect(screen.queryByText('Needed by', { selector: 'dt' })).toBeNull();
+    expect(getCachedOrgTimezoneMock).not.toHaveBeenCalled();
   });
 });
