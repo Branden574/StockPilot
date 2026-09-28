@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
+import { describeCompletionConfirm } from './readiness-copy';
 import {
   assessOrderReadiness,
   orderReadinessPhase,
+  projectCompletePicking,
   type OrderReadinessAssessment,
   type OrderReadinessFacts,
   type PickedLineAssessment,
+  type ReadinessInboundFacts,
   type ReadinessItemFacts,
   type ReadinessLineAssessment,
   type ReadinessVisibleItemFacts,
@@ -140,7 +143,7 @@ describe('short-line actions, to pick (F2-2, D18)', () => {
     expect(shortLineActions({ phase: 'to_pick', line, isOnlyLine: false })).toEqual({ actions: [], note: null });
   });
 
-  it('ready, put-away, waiting, unknown and handed-over lines offer nothing', () => {
+  it('ready, put-away, hidden and handed-over lines offer nothing (none is short now)', () => {
     const a = assess('approved', [
       { item: 'ready', requested: 1 },
       { item: 'staged', requested: 2 },
@@ -256,5 +259,131 @@ describe('short-line actions: a lower is always to a whole number (integration f
       actions: [],
       note: null,
     });
+  });
+});
+
+// ── Every line the completion confirm names short offers its fix ─────────────
+// Review 2026-09-28: the one-click confirm ("Not everything will be picked.
+// L4L - Pen: 0 of 60 ... or you can remove it from the order first") also
+// names a line waiting on a PO, or one whose records disagree, and "Review
+// short lines" focuses it, yet only state 'short' offered Lower or Remove.
+// A line is short now when stock does not cover what it owes (units.awaiting
+// + units.short > 0), whatever its worst state; that is exactly when the
+// one-click pick takes less than it owes.
+
+function inbound(remaining: number): ReadinessInboundFacts {
+  return {
+    rows: [{ poId: 'po-1', poNumber: 'PO-2026-0042', status: 'ordered', expectedAt: '2026-10-03T16:00:00Z', remaining }],
+    hiddenRemaining: 0,
+    truncated: false,
+    truncatedRemaining: 0,
+  };
+}
+
+const B_READY = item('b', { heldOwn: 1, here: { rack: 1, site: 0, unplaced: 0, staging: 0 } });
+
+describe('short-line actions: every line the completion confirm names short has its fix', () => {
+  it('a line waiting on a PO with nothing on the shelf: the confirm names it, and it offers Remove line', () => {
+    const a = assess('pick_slip_generated', [{ item: 'pen', requested: 60 }, { item: 'b', requested: 1 }], [
+      item('pen', { onHand: 0, inbound: inbound(60) }),
+      B_READY,
+    ]);
+    const line = toPickLine(a);
+    expect(line.state).toBe('awaiting_po');
+    const confirm = describeCompletionConfirm(projectCompletePicking(a), false);
+    expect(confirm?.paragraphs[0]).toContain('Item pen: 0 of 60');
+    expect(confirm?.focusLineId).toBe('l1');
+    expect(shortLineActions({ phase: 'to_pick', line, isOnlyLine: false })).toEqual({
+      actions: [{ kind: 'remove', label: 'Remove line' }],
+      note: null,
+    });
+    // The only line: no Remove, and the note says why (never a bare line).
+    expect(shortLineActions({ phase: 'to_pick', line, isOnlyLine: true })).toEqual({
+      actions: [],
+      note: SHORT_LINE_ONLY_LINE_NOTE,
+    });
+  });
+
+  it('a line waiting on a PO for part of it: Lower to what stock covers now, and Remove line', () => {
+    const a = assess('approved', [{ item: 'pen', requested: 60 }, { item: 'b', requested: 1 }], [
+      item('pen', { heldOwn: 20, here: { rack: 20, site: 0, unplaced: 0, staging: 0 }, inbound: inbound(40) }),
+      B_READY,
+    ]);
+    const line = toPickLine(a);
+    expect(line.state).toBe('awaiting_po');
+    expect(shortLineActions({ phase: 'to_pick', line, isOnlyLine: false })).toEqual({
+      actions: [
+        { kind: 'lower', quantity: 20, label: 'Lower to 20' },
+        { kind: 'remove', label: 'Remove line' },
+      ],
+      note: null,
+    });
+  });
+
+  it("a line whose records disagree and is short now: its fixes too (the confirm names it)", () => {
+    // On record 30, the locations hold 10: "Can't confirm". 20 of it is
+    // held for another order, so 10 of 40 are covered and a PO brings 30.
+    const a = assess('pick_slip_generated', [{ item: 'a', requested: 40 }, { item: 'b', requested: 1 }], [
+      item('a', {
+        onHand: 30,
+        heldOtherOrders: 20,
+        here: { rack: 10, site: 0, unplaced: 0, staging: 0 },
+        inbound: inbound(30),
+      }),
+      B_READY,
+    ]);
+    const line = toPickLine(a);
+    expect(line.state).toBe('unknown');
+    expect(line.reasons).toContain('records_disagree');
+    const confirm = describeCompletionConfirm(projectCompletePicking(a), false);
+    expect(confirm?.focusLineId).toBe('l1');
+    expect(shortLineActions({ phase: 'to_pick', line, isOnlyLine: false })).toEqual({
+      actions: [
+        { kind: 'lower', quantity: 10, label: 'Lower to 10' },
+        { kind: 'remove', label: 'Remove line' },
+      ],
+      note: null,
+    });
+  });
+
+  it('property: over many stock situations, the confirm\'s focus line and every line it names short offer a fix or say why not', () => {
+    let checked = 0;
+    for (const onHand of [0, 5, 12, 60]) {
+      for (const staging of [0, 4]) {
+        for (const others of [0, 3, 50]) {
+          for (const po of [0, 10, 60]) {
+            for (const disagree of [0, 7]) {
+              for (const isOnlyLine of [false, true]) {
+                const rack = Math.max(0, onHand - staging - disagree);
+                const lines = isOnlyLine ? [{ item: 'x', requested: 40 }] : [{ item: 'x', requested: 40 }, { item: 'b', requested: 1 }];
+                const a = assess('pick_slip_generated', lines, [
+                  item('x', {
+                    onHand,
+                    heldOtherOrders: others,
+                    heldOwn: Math.max(0, Math.min(40, onHand - others)),
+                    here: { rack, site: 0, unplaced: 0, staging: Math.min(staging, onHand) },
+                    inbound: po > 0 ? inbound(po) : null,
+                  }),
+                  ...(isOnlyLine ? [] : [B_READY]),
+                ]);
+                if (a.phase !== 'to_pick') throw new Error('to_pick expected');
+                const projection = projectCompletePicking(a)!;
+                const confirm = describeCompletionConfirm(projection, false);
+                const named = new Set(projection.shortLines.map((l) => l.lineId));
+                if (confirm?.focusLineId && projection.shortLines.length > 0) named.add(confirm.focusLineId);
+                for (const lineId of named) {
+                  const line = a.lines.find((l) => l.lineId === lineId)!;
+                  const fixes = shortLineActions({ phase: 'to_pick', line, isOnlyLine });
+                  const situation = JSON.stringify({ onHand, staging, others, po, disagree, isOnlyLine, state: line.state });
+                  expect(fixes.actions.length > 0 || fixes.note !== null, situation).toBe(true);
+                  checked += 1;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(50);
   });
 });

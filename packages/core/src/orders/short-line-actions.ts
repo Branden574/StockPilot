@@ -14,10 +14,15 @@
  *     line edits take whole numbers), never below what was handed over or
  *     picked (U2, U3), and below what is asked now.
  *
- * To pick (readiness phase to_pick), on a line whose state is short:
+ * To pick (readiness phase to_pick), on a line that is short NOW, whatever
+ * its worst state (Short, Waiting on a PO, or Can't confirm with numbers):
+ * stock here does not cover what it owes (units.awaiting + units.short > 0).
+ * That is exactly when the one-click pick takes less than the line owes, so
+ * every line the completion confirm names short offers its fix:
  *   "Lower to N", N = what was handed over plus what stock covers for the line
  *   now (ready, needs put-away, or on record here without a location), and
- *   "Remove line".
+ *   "Remove line". A line whose item the viewer cannot read has no numbers,
+ *   and the confirm never names it short ("Stock couldn't be checked").
  * Picked (phase picked), on a line not fully picked:
  *   "Lower to what was picked (N)", N = handed over plus picked, and
  *   "Remove from order". Out for delivery the lines are final: no action, and
@@ -88,9 +93,11 @@ export function shortLineActions(
 
   if (input.phase === 'to_pick') {
     const { line } = input;
-    // Short only: an unknown line (hidden item, records disagree) offers no
-    // number to lower to, and the other states are not short.
-    if (line.state !== 'short' || !line.units) return none;
+    // Short now: what stock covers falls below what the line owes. Waiting on
+    // a PO and records that disagree are short now too (review 2026-09-28:
+    // the confirm named them, and Review landed on a line with no fix). A
+    // hidden item has no numbers; ready and put-away lines are covered.
+    if (!line.units || line.units.awaiting + line.units.short <= EPS) return none;
     const covered = q4(line.units.ready + line.units.putAway + line.units.gap);
     const target = q4(n(line.fulfilled) + covered);
     if (canLowerTo(target, line)) {

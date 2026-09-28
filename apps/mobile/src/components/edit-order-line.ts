@@ -322,8 +322,9 @@ export interface OrderLineShortFix {
  * service's floors, so a button is never offered that the server refuses:
  *   - before picking (readiness phase to_pick), from the line's readiness,
  *     and only for the full readiness panel: the covered number is an
- *     internal stock figure (decision D12). Null when readiness was not read
- *     for this line;
+ *     internal stock figure (decision D12). Offered on any line short now
+ *     (Short, Waiting on a PO, or Can't confirm with numbers), under that
+ *     state's label. Null when readiness was not read for this line;
  *   - after picking (phase picked), from the line alone (core
  *     assessPickedLine; the picked phase reads no stock).
  * A lower to a fractional quantity is not offered: the lines route takes
@@ -347,7 +348,9 @@ export function orderLineShortFix(input: {
   if (phase === 'to_pick') {
     if (!input.readinessLine || input.readinessLine.lineId !== line.orderRequestLineId) return null;
     result = shortLineActions({ phase: 'to_pick', line: input.readinessLine, isOnlyLine });
-    label = READINESS_STATES.short.label;
+    // The line's own state: a line short now may be Short, Waiting on a PO
+    // or Can't confirm (core offers the fix on each), never relabelled.
+    label = READINESS_STATES[input.readinessLine.state].label;
   } else if (phase === 'picked' && line.orderRequestLineId !== null) {
     const picked = assessPickedLine({
       lineId: line.orderRequestLineId,

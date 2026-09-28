@@ -1381,6 +1381,48 @@ describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
       expect(row).toHaveAttribute('tabindex', '-1');
     });
 
+    // Review 2026-09-28: the one-click completion confirm names a line
+    // waiting on a PO as short ("Item iP: 0 of 60") and "Review short lines"
+    // focuses its row, so that row must carry its fix.
+    it('to pick: a line waiting on a PO that the completion confirm names short carries its fix', async () => {
+      asManager();
+      orderAt('picking_in_progress', [orderLine('LN', 'iN', 30), orderLine('LP', 'iP', 60)]);
+      readinessResult.mockResolvedValue(
+        readinessOk(
+          orderReadinessFacts(
+            ORDER_ID,
+            'picking_in_progress',
+            [
+              { lineId: 'LN', itemId: 'iN', requested: 30 },
+              { lineId: 'LP', itemId: 'iP', requested: 60 },
+            ],
+            [
+              visibleItemFacts('iN', { here: { rack: 30 }, heldOwn: 30 }),
+              visibleItemFacts('iP', {
+                inbound: {
+                  rows: [
+                    { poId: 'po-1', poNumber: 'PO-2026-0042', status: 'ordered', expectedAt: '2026-10-03T16:00:00Z', remaining: 60 },
+                  ],
+                  hiddenRemaining: 0,
+                  truncated: false,
+                  truncatedRemaining: 0,
+                },
+              }),
+            ],
+          ),
+        ),
+      );
+
+      await renderPage();
+
+      expect(lastPanelProps().completionConfirm?.focusLineId).toBe('LP');
+      expect(fixesFor('LN')).toBeUndefined();
+      expect(fixesFor('LP')).toMatchObject({
+        lineId: 'LP',
+        fixes: { actions: [{ kind: 'remove', label: 'Remove line' }], note: null },
+      });
+    });
+
     it('picked: "Remove from order" for a line nothing was picked for, "Lower to what was picked" for a partial one', async () => {
       asManager();
       orderAt('staged_for_pickup', [

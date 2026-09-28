@@ -45,7 +45,7 @@ function line(over: Partial<EditableOrderLine> = {}): EditableOrderLine {
 /** The line's readiness before picking, with `onHand` on a rack. */
 function readinessLine(
   onHand: number,
-  over: { requested?: number; fulfilled?: number } = {},
+  over: { requested?: number; fulfilled?: number; onOrder?: number } = {},
 ): ReadinessLineAssessment {
   const status = 'picking_in_progress';
   const facts: OrderReadinessFacts = {
@@ -92,7 +92,22 @@ function readinessLine(
         stagingHiddenQty: 0,
         pendingOthers: null,
         committedOtherShortfall: 0,
-        inbound: null,
+        inbound: over.onOrder
+          ? {
+              rows: [
+                {
+                  poId: 'po-1',
+                  poNumber: 'PO-2026-0042',
+                  status: 'ordered',
+                  expectedAt: '2026-10-03T16:00:00Z',
+                  remaining: over.onOrder,
+                },
+              ],
+              hiddenRemaining: 0,
+              truncated: false,
+              truncatedRemaining: 0,
+            }
+          : null,
         drafts: null,
       },
     ],
@@ -103,6 +118,28 @@ function readinessLine(
 }
 
 describe('orderLineShortFix: before picking (from the line’s readiness)', () => {
+  // Review 2026-09-28: the completion confirm names a line waiting on a PO
+  // as short (the one-click pick takes 0 of 60), so its fixes are there too,
+  // under the line's own state, never labelled "Short".
+  it('a line waiting on a PO is short now: its fixes, under "Waiting on a PO"', () => {
+    const rl = readinessLine(0, { onOrder: 60 });
+    expect(rl.state).toBe('awaiting_po');
+    expect(
+      orderLineShortFix({
+        status: 'picking_in_progress',
+        line: line(),
+        position: 1,
+        totalLines: 2,
+        readinessLine: rl,
+      }),
+    ).toEqual({
+      label: 'Waiting on a PO',
+      actions: [{ kind: 'remove', label: 'Remove line' }],
+      note: null,
+      replacesRemove: true,
+    });
+  });
+
   it('SO-000100: the pens written off to 0 offer Remove line only (nothing to lower to)', () => {
     expect(
       orderLineShortFix({
