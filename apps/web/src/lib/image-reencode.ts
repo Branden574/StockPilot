@@ -24,6 +24,9 @@ import 'server-only';
  *     then uploaded untouched.
  * So location data reaches storage on every platform in some case. Doing the
  * strip here covers all of them, and a direct PUT that skipped the app too.
+ * Maintenance finalize (server/services/maintenance-attachments.ts) now runs
+ * this step as well (2026-09-27), so the first point above describes it
+ * before that change.
  *
  * ═══ WHAT COMES OUT ═══
  *

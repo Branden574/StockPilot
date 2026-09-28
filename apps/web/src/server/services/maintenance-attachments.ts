@@ -11,7 +11,8 @@ import {
 
 import { reportError } from '@/lib/error-reporter';
 import { sanitizeFilenameSegment } from '@/lib/exports/filename';
-import { MIME_FOR_KIND, sniffImage } from '@/lib/image-signature';
+import { reencodeWithoutMetadata } from '@/lib/image-reencode';
+import { isSniffedKindAllowedInBucket, MIME_FOR_KIND, sniffImage } from '@/lib/image-signature';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -43,6 +44,36 @@ function escapeRegExp(value: string): string {
  *  already passed `validateFinalizePath`. */
 function deriveThumbPath(path: string): string {
   return path.replace(/\.(jpg|jpeg|png|webp)$/, '-thumb.webp');
+}
+
+/** Every name of ONE upload: its uuid with each allowed extension. They all
+ *  derive the same thumbnail name, so "is this upload recorded?" asks for all
+ *  four. Only called on a path that passed `validateFinalizePath`. */
+function uploadNames(path: string): string[] {
+  const stem = path.replace(/\.(jpg|jpeg|png|webp)$/, '');
+  return ['jpg', 'jpeg', 'png', 'webp'].map((ext) => `${stem}.${ext}`);
+}
+
+/** Finalizes one person may send per FINALIZE_LIMIT_WINDOW_MS. Each finalize
+ *  now decodes and re-encodes up to the bucket's 10 MB (and a small file can
+ *  decode to a very large image), and the bucket's INSERT policy lets a member
+ *  put objects without a mint, so the mint's own limit does not bound this
+ *  work. The same numbers as exception evidence's finalize, and CLOSED: when
+ *  the limiter cannot answer, nothing is read or re-encoded. */
+const FINALIZE_LIMIT = 30;
+const FINALIZE_LIMIT_WINDOW_MS = 60 * 1000;
+
+type AdminBucket = ReturnType<ReturnType<typeof createAdminClient>['storage']['from']>;
+
+/** The whole object, or null when it cannot be read. */
+async function downloadWhole(store: AdminBucket, path: string): Promise<Uint8Array | null> {
+  try {
+    const { data, error } = await store.download(path);
+    if (error || !data) return null;
+    return new Uint8Array(await data.arrayBuffer());
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -295,11 +326,33 @@ export class MaintenanceAttachmentsService {
 
   /**
    * Range-reads the just-uploaded object's leading bytes, sniffs REAL bytes
-   * (never the client's declared MIME), and records the row. A body that is
-   * not the image it claims to be — wrong bytes, or bytes/declared-MIME
-   * mismatch, or oversize — is DELETED, never stored, and writes NO row
-   * (photo test 6). The recorded byte_size is the object's FULL size (from
-   * the range response's own headers), not the sniffed prefix's length.
+   * (never the client's declared MIME), re-encodes the photo WITHOUT its
+   * metadata, and records the row. A body that is not the image it claims to
+   * be — wrong bytes, or bytes/declared-MIME mismatch, or oversize — is
+   * DELETED, never stored, and writes NO row (photo test 6).
+   *
+   * ═══ PRIVACY: WHAT IS STORED CARRIES NO METADATA ═══
+   * A phone photo's EXIF can say where it was taken (GPS), with which device,
+   * and by whom, and the clients do not always remove it: the web uploads the
+   * ORIGINAL file when its canvas re-encode is not smaller, cannot decode it,
+   * or has no canvas (lib/image-variants.ts); the iOS picker returns a WEBP
+   * byte for byte and lib/image-resize.ts uploads small JPEG/PNG/WEBP
+   * untouched; Android's picker copies EXIF, GPS included. So after the byte
+   * checks, finalize reads the whole object (at most the bucket's 10 MB),
+   * re-encodes it with lib/image-reencode.ts (the step exception evidence
+   * uses: orientation applied to the pixels, then no EXIF, GPS, XMP, IPTC or
+   * ICC), and writes the clean photo OVER the upload. The thumbnail is made
+   * from the clean photo on the server and written at the name the mint
+   * handed out ({uuid}-thumb.webp, derived below exactly as before),
+   * replacing whatever the client sent there (the web and phone still PUT
+   * their own before finalize; the ticket cannot replace an existing object,
+   * because the mint signs without upsert). The row describes the STORED
+   * file: its byte_size, and its width/height after orientation.
+   *
+   * A recorded upload is never read, rewritten or deleted by a later finalize
+   * (step 0). Every refusal after that deletes the upload (still the
+   * original, GPS included) and the thumbnail name, and records nothing.
+   * Not deleted: a 23505 (another finalize of the same upload won the row).
    */
   async finalize(
     requestId: string,
@@ -324,14 +377,59 @@ export class MaintenanceAttachmentsService {
     const thumbPath = deriveThumbPath(args.path);
 
     const admin = createAdminClient();
+    const store = admin.storage.from(BUCKET);
+
+    // 0. A recorded upload is never touched again. The steps below write over
+    //    the upload and its thumbnail name, so without this a second finalize
+    //    of a recorded photo (a retry after a lost answer) would rewrite its
+    //    file, and at the cap the refusal below would DELETE it. The four
+    //    extensions of this upload's uuid share one thumbnail name, so a
+    //    recorded sibling (only a direct PUT can make one: every mint is a
+    //    fresh uuid) refuses this upload too, deleting only this upload. Read
+    //    with the service role, so no row is missed for being out of the
+    //    caller's sight; a failed look touches nothing.
+    const { data: recordedRows, error: recordedErr } = await admin
+      .from('maintenance_request_attachments')
+      .select('storage_path')
+      .eq('organization_id', this.ctx.organizationId)
+      // in-list-bound: the four extensions of one upload name (jpg, jpeg, png, webp)
+      .in('storage_path', uploadNames(args.path))
+      .limit(4);
+    if (recordedErr) throw new ServiceError('internal_error', recordedErr.message);
+    const recordedPaths = ((recordedRows ?? []) as Array<{ storage_path: string }>).map(
+      (r) => r.storage_path,
+    );
+    if (recordedPaths.includes(args.path)) {
+      throw new ServiceError('conflict', 'This photo was already recorded.');
+    }
+    if (recordedPaths.length > 0) {
+      await store.remove([args.path]);
+      throw new ServiceError('forbidden', 'Invalid upload path.');
+    }
+
+    // The per-person finalize limit (FINALIZE_LIMIT), CLOSED. A maintenance
+    // retry starts again from a new mint, so the refused upload (still the
+    // original) is deleted rather than kept for a resend.
+    const limit = await checkRateLimit(
+      `maintenance:finalize:${this.ctx.userId}`,
+      FINALIZE_LIMIT,
+      FINALIZE_LIMIT_WINDOW_MS,
+      'closed',
+    );
+    if (!limit.allowed) {
+      await store.remove([args.path, thumbPath]);
+      throw new ServiceError('conflict', 'Too many photos in the last minute. Please wait a moment and try again.');
+    }
+
     // Range read (fetchObjectPrefix), not a full download: the sniff verdict
     // lives in the leading 4 KB for everything but metadata-heavy JPEGs (the
-    // helper widens to a full read on its own for those), and this used to
-    // buffer up to the bucket's 10 MB cap per finalize just to reach it.
+    // helper widens to a full read on its own for those), so a fake or an
+    // oversize object is refused before anything is read whole. The whole
+    // read the re-encode needs comes after these checks and the cap (below).
     // `totalSize` is the
     // object's FULL size from storage's own response headers — it is what the
-    // size gate and the recorded byte_size use below, never the prefix length.
-    const head = await fetchObjectPrefix(admin.storage.from(BUCKET), args.path);
+    // size gate uses below, never the prefix length.
+    const head = await fetchObjectPrefix(store, args.path);
     // A prefix-read failure here also means "the object was never actually
     // uploaded" (signing a nonexistent object errors) — the finalize-time
     // existence check (no phantom rows for a mint that was never followed by
@@ -372,6 +470,54 @@ export class MaintenanceAttachmentsService {
       throw new ServiceError('conflict', `A request can carry at most ${MAINTENANCE_MAX_PHOTOS} photos.`);
     }
 
+    // PRIVACY (see the doc comment): re-encode WITHOUT metadata and write the
+    // clean photo and its server-made thumbnail back. Any failure here is a
+    // refusal like the byte checks above: the upload and the thumbnail name
+    // are deleted, the uploader is told, and nothing is recorded.
+    const reject = async (): Promise<never> => {
+      await store.remove([args.path, thumbPath]);
+      this.notifyPhotoRejected(requestId, parent);
+      throw new ServiceError('validation_error', 'invalid_image');
+    };
+    // The whole object: the range read already holds it when it fits in the
+    // window (or when the helper widened to a full read); otherwise one
+    // download, which must be the object the range read measured (at most
+    // MAINTENANCE_MAX_PHOTO_BYTES, the bucket's own cap).
+    const whole =
+      head.prefix.byteLength === head.totalSize ? head.prefix : await downloadWhole(store, args.path);
+    if (!whole || whole.byteLength !== head.totalSize) return reject();
+    const wholeSniff = sniffImage(whole);
+    if (
+      wholeSniff?.kind !== sniffed.kind ||
+      !isSniffedKindAllowedInBucket(sniffed.kind, 'maintenance-photos')
+    ) {
+      return reject();
+    }
+    const clean = await reencodeWithoutMetadata(whole, sniffed.kind as 'jpeg' | 'png' | 'webp');
+    if (
+      !clean ||
+      clean.master.byteLength === 0 ||
+      clean.master.byteLength > MAINTENANCE_MAX_PHOTO_BYTES ||
+      clean.contentType !== MIME_FOR_KIND[sniffed.kind] ||
+      sniffImage(clean.master)?.kind !== sniffed.kind
+    ) {
+      return reject();
+    }
+    // Over the upload (the service role; the bucket has no UPDATE policy, so
+    // the uploader cannot put the original back), and the thumbnail at the
+    // mint's name, replacing the client's. Step 0 proved no recorded photo
+    // owns either name.
+    const [masterPut, thumbPut] = await Promise.all([
+      store.upload(args.path, clean.master, { contentType: clean.contentType, upsert: true }),
+      store.upload(thumbPath, clean.thumb, { contentType: 'image/webp', upsert: true }),
+    ]);
+    if (masterPut.error || thumbPut.error) {
+      await store.remove([args.path, thumbPath]);
+      throw new ServiceError('internal_error', 'Could not save the photo.');
+    }
+    const width = clean.width ?? sniffed.width;
+    const height = clean.height ?? sniffed.height;
+
     const { data: row, error } = await this.ctx.supabase
       .from('maintenance_request_attachments')
       .insert({
@@ -381,10 +527,11 @@ export class MaintenanceAttachmentsService {
         thumbnail_path: thumbPath,
         original_filename: args.originalFilename.slice(0, 300),
         safe_filename: sanitizeFilenameSegment(args.originalFilename).slice(0, 300) || 'photo',
-        mime_type: MIME_FOR_KIND[sniffed.kind],
-        byte_size: head.totalSize,
-        width: sniffed.width,
-        height: sniffed.height,
+        // The STORED (clean) file, not the upload it replaced.
+        mime_type: clean.contentType,
+        byte_size: clean.master.byteLength,
+        width,
+        height,
         uploaded_by: this.ctx.userId,
         verified_at: new Date().toISOString(),
         kind,
@@ -411,11 +558,11 @@ export class MaintenanceAttachmentsService {
         event: 'maintenance_request.attachment_added',
         entityType: 'maintenance_request',
         entityId: requestId,
-        extra: { attachment_id: row.id, byte_size: head.totalSize },
+        extra: { attachment_id: row.id, byte_size: clean.master.byteLength },
       },
       this.ctx,
     );
-    return { id: row.id as string, width: sniffed.width, height: sniffed.height };
+    return { id: row.id as string, width, height };
   }
 
   /** Deletes the row and both storage objects. Row-confirmed on BOTH the
