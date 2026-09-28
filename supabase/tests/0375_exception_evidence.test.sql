@@ -6,7 +6,11 @@
 -- B. Bucket: private, PNG/JPEG/WEBP, 10 MB; exactly one policy, INSERT only.
 --    An accepted member writes under their org's folder; another org's
 --    folder, a first folder that is not a uuid, a pending invite and a
---    disabled account are refused (42501). No SELECT, UPDATE or DELETE for
+--    disabled account are refused (42501). A member may create only the name
+--    a mint hands out ({org}/{occurrence}/{uuid}.{ext}): never a server
+--    thumbnail name ({uuid}-thumb.webp), another file name, a nested folder
+--    or another extension (review finding 2026-09-27: a member could fill a
+--    thumbnail path the server had emptied). No SELECT, UPDATE or DELETE for
 --    authenticated: a member sees 0 rows, updates 0 and deletes 0, and the
 --    object is still there.
 -- G. Grants: authenticated has SELECT only on exception_evidence (insert,
@@ -31,12 +35,23 @@
 --    without stock:adjust 42501, a null-warehouse occurrence needs a
 --    manager; a resolved occurrence gets occurrence_resolved; the path must
 --    be this occurrence's folder, the extension must match the type, the
---    thumbnail must be the derived one; size, note and capture-time bounds;
---    a second record of one path is 23505; the request claims are restored
---    after the call (mutation: forget to restore).
+--    thumbnail must be a server thumbnail name ({uuid}-thumb.webp) and may
+--    carry its own uuid; size, note and capture-time bounds; ONE UPLOAD NAME,
+--    ONE PHOTO: a second record of a recorded upload name, whatever its
+--    extension, is 23505 already_recorded, and so is a second row naming a
+--    recorded thumbnail (review finding 2026-09-27: {uuid}.jpg and
+--    {uuid}.png shared one thumbnail); the request claims are restored after
+--    the call (mutation: forget to restore).
 -- K. The cap: 8 live photos, the 9th refused (mutation: drop the cap); a
---    removed photo frees its slot (mutation: count removed photos too). The
---    concurrent case is scripts/db-concurrency/0375_evidence_cap.sh.
+--    removed photo frees its slot (mutation: count removed photos too); at
+--    the cap a second record of a recorded upload is still 23505
+--    already_recorded, never evidence_limit_reached (a mapped refusal makes
+--    the server delete the upload, which there is the recorded photo's
+--    file). The concurrent case is scripts/db-concurrency/0375_evidence_cap.sh.
+-- L. The locks the cap and the remove rely on, pinned in the catalog (no
+--    sequential test can see a missing lock): the record RPC locks the
+--    occurrence before it counts, the remove RPC locks the occurrence and
+--    then the photo (mutation: drop any of the three FOR UPDATEs).
 -- M. exception_evidence_remove, as authenticated: the uploader removes their
 --    own (soft: the row and the stored object stay, removed_at/by set, one
 --    evidence_removed event with the reason); another staff member who did
@@ -44,8 +59,9 @@
 --    a manager may remove anyone's; a repeat is a no-op with no second event;
 --    a viewer gets 42501; staff of another warehouse and another org get
 --    P0002; a resolved occurrence gets occurrence_resolved (mutation: drop
---    the open check); signed out 42501; reason bound; it never deletes a row
---    and never touches the occurrence's resolution.
+--    the open check), and a second record of a photo already on it is still
+--    23505 already_recorded; signed out 42501; reason bound; it never
+--    deletes a row and never touches the occurrence's resolution.
 -- V. RLS: photos are visible exactly where the occurrence is.
 --
 -- Roles: fixtures as the test superuser; records as service_role; removes and
@@ -54,7 +70,7 @@
 
 begin;
 
-select plan(102);
+select plan(113);
 
 \set orgA    03750000-0000-0000-0000-00000000000a
 \set orgB    03750000-0000-0000-0000-00000000000b
@@ -254,6 +270,26 @@ select throws_ok(
   $$insert into storage.objects (bucket_id, name) values ('exception-evidence', 'not-a-uuid/x/y.jpg')$$,
   '42501', null,
   'B7: a first folder that is not a uuid is a plain refusal, not a cast error');
+select throws_ok(
+  format($$insert into storage.objects (bucket_id, name) values ('exception-evidence', %L)$$,
+         pg_temp.thumb(pg_temp.path(:'orgA', :'occL', 1))),
+  '42501', null,
+  'B14: a member cannot create a server thumbnail name ({uuid}-thumb.webp), even in their own org''s folder');
+select throws_ok(
+  format($$insert into storage.objects (bucket_id, name) values ('exception-evidence', %L)$$,
+         :'orgA' || '/' || :'occL' || '/photo.jpg'),
+  '42501', null,
+  'B15: a member cannot create a file name that is not a uuid');
+select throws_ok(
+  format($$insert into storage.objects (bucket_id, name) values ('exception-evidence', %L)$$,
+         :'orgA' || '/' || :'occL' || '/x/' || split_part(pg_temp.path(:'orgA', :'occL', 906), '/', 3)),
+  '42501', null,
+  'B16: a member cannot create a nested folder');
+select throws_ok(
+  format($$insert into storage.objects (bucket_id, name) values ('exception-evidence', %L)$$,
+         pg_temp.path(:'orgA', :'occL', 907, 'gif')),
+  '42501', null,
+  'B17: a member cannot create a name with another extension');
 select is(
   (select count(*)::int from storage.objects where bucket_id = 'exception-evidence'),
   0,
@@ -500,7 +536,10 @@ select is(pg_temp.rec(:'orgA', :'occL', :'stf', 17, 'jpg', 'image/gif'), '22023:
   'R20: a type outside the three is refused');
 select is(pg_temp.rec(:'orgA', :'occL', :'stf', 18, 'jpg', 'image/jpeg', null, null,
                       pg_temp.path(:'orgA', :'occL', 99, 'webp')), '22023:invalid_thumbnail_path',
-  'R21: a thumbnail that is not the derived one is refused');
+  'R21: a thumbnail that is not a server thumbnail name ({uuid}-thumb.webp in this folder) is refused');
+select is(pg_temp.rec(:'orgA', :'occN', :'mgr', 31, 'jpg', 'image/jpeg', null, null,
+                      pg_temp.thumb(pg_temp.path(:'orgA', :'occN', 131))), 'ok',
+  'R21b: a thumbnail with its own uuid (the server names each thumbnail afresh) is allowed');
 select is(pg_temp.rec(:'orgA', :'occL', :'stf', 19, 'webp', 'image/webp', null, null, 'none'), 'ok',
   'R22: a photo with no thumbnail is allowed (webp, matching type)');
 select is(pg_temp.rec(:'orgA', :'occL', :'stf', 20, 'jpg', 'image/jpeg', null, null, 'derived', 0),
@@ -511,8 +550,13 @@ select is(pg_temp.rec(:'orgA', :'occL', :'stf', 22, 'jpg', 'image/jpeg', repeat(
   '22023:note_too_long', 'R25: a note over 500 characters is refused');
 select is(pg_temp.rec(:'orgA', :'occL', :'stf', 23, 'jpg', 'image/jpeg', null, now() + interval '1 hour'),
   '22023:captured_at_in_future', 'R26: a capture time an hour ahead is refused');
-select is(pg_temp.rec(:'orgA', :'occL', :'stf', 1), '23505',
-  'R27: recording the same path twice is refused by the unique path (the first row stands)');
+select is(pg_temp.rec(:'orgA', :'occL', :'stf', 1), '23505:already_recorded',
+  'R27: recording the same path twice answers 23505 already_recorded (the first row stands)');
+select is(pg_temp.rec(:'orgA', :'occL', :'stf', 1, 'png', 'image/png'), '23505:already_recorded',
+  'R34: {uuid}.png after {uuid}.jpg is the same upload name: 23505 already_recorded, no second row');
+select is(pg_temp.rec(:'orgA', :'occL', :'stf', 32, 'jpg', 'image/jpeg', null, null,
+                      pg_temp.thumb(pg_temp.path(:'orgA', :'occL', 1))), '23505',
+  'R35: a second row naming a recorded photo''s thumbnail is refused (unique thumbnail)');
 reset role;
 
 -- The request claims are restored after the call.
@@ -561,6 +605,8 @@ select is(pg_temp.rec(:'orgA', :'occC', :'stf', 111), 'ok',
   'K5: a removed photo frees its slot. Mutation: count removed photos too');
 select is(pg_temp.rec(:'orgA', :'occC', :'stf', 112), 'P0001:evidence_limit_reached',
   'K6: and the cap is full again');
+select is(pg_temp.rec(:'orgA', :'occC', :'stf', 111), '23505:already_recorded',
+  'K8: at the cap, a second record of a recorded upload is already_recorded, not evidence_limit_reached');
 reset role;
 select is(
   (select format('%s live, %s total', count(*) filter (where removed_at is null), count(*))
@@ -655,6 +701,10 @@ select is(pg_temp.rm(:'m3'), 'P0001:occurrence_resolved',
   'M16: a photo on a resolved occurrence cannot be removed. Mutation: drop the open check');
 select is(pg_temp.rm(:'m1'), 'ok', 'M17: a repeat removal after resolution still answers (no change)');
 reset role;
+set local role to 'service_role';
+select is(pg_temp.rec(:'orgA', :'occZ', :'stf', 202), '23505:already_recorded',
+  'M20: on a resolved occurrence a second record of a recorded photo is already_recorded, not occurrence_resolved');
+reset role;
 select is(
   (select format('%s|%s', resolved_reason, (select count(*) from public.exception_occurrence_events
                                               where occurrence_id = :'occZ' and kind = 'resolved'))
@@ -663,6 +713,20 @@ select is(
   'M18: removing photos never touched the occurrence''s resolution or wrote a resolved event');
 select is((select count(*)::int from public.exception_evidence), :'rowsBefore'::int,
   'M19: removal never deletes a row');
+
+-- ═══ L. Locks (catalog) ══════════════════════════════════════════════════
+select ok(
+  (select p.prosrc ~ 'from public\.exception_occurrences o\s+where o\.id = p_occurrence_id\s+for update;'
+          and strpos(p.prosrc, 'for update') < strpos(p.prosrc, 'select count(*) into v_live')
+     from pg_proc p
+    where p.oid = 'public.exception_evidence_record(uuid, uuid, text, text, text, bigint, timestamptz, text)'::regprocedure),
+  'L1: the record RPC locks the occurrence row before it counts live photos. Mutation: drop the FOR UPDATE');
+select ok(
+  (select p.prosrc ~ '_exc_occurrence_visible\(o\.organization_id, o\.item_id, o\.location_id\)\s+for update;'
+          and p.prosrc ~ 'and e\.organization_id = v_occ\.organization_id\s+for update;'
+     from pg_proc p
+    where p.oid = 'public.exception_evidence_remove(uuid, text)'::regprocedure),
+  'L2: the remove RPC locks the occurrence, then the photo. Mutation: drop either FOR UPDATE');
 
 -- ═══ V. RLS ═══════════════════════════════════════════════════════════════
 create function pg_temp.visible(p_occ uuid) returns int language sql as $$

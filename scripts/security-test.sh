@@ -266,7 +266,13 @@ PGTAP_TESTS=(
   # exception_evidence_remove is a soft remove by the uploader or a manager,
   # through the same gate, only while open; it never deletes. Acknowledge,
   # note, add and remove share ONE gate (_exc_occurrence_can_act, service_role
-  # only). The concurrent cap is scripts/db-concurrency/0375_evidence_cap.sh.
+  # only). Review fixes 2026-09-27: a member may create only the upload name
+  # a mint hands out ({uuid}.{ext}), never a thumbnail name; one upload name
+  # is one photo (a second record of a recorded upload's uuid, any
+  # extension, is 23505 already_recorded BEFORE the gate, open and cap
+  # checks) and each thumbnail belongs to one row; the record and remove
+  # locks are pinned in the catalog. The concurrent cap is
+  # scripts/db-concurrency/0375_evidence_cap.sh.
   supabase/tests/0375_exception_evidence.test.sql
 
   # Storage and attachment exposure.
@@ -308,9 +314,12 @@ WEB_TESTS=(
   src/server/services/capture-byte-guard.test.ts
   src/server/services/po-imports.scan-byte-verification.test.ts
   # Photo evidence (F1-4): the byte check against the declared type, the
-  # strict path before any storage call, delete-and-no-row on every refusal,
-  # the upload limiter failing closed, and the photo's EXIF (GPS location
-  # included) stripped from what is stored.
+  # strict path before any storage call, delete-and-no-row on every refusal
+  # (the refusals before the storage steps included), the upload and
+  # finalize limiters failing closed, the photo's EXIF (GPS location
+  # included) stripped from what is stored, the thumbnail under a fresh
+  # uuid, and a recorded photo's files never deleted or rewritten by a later
+  # finalize (review fixes 2026-09-27).
   src/server/services/exception-evidence.test.ts
   src/lib/image-reencode.test.ts
 

@@ -8,33 +8,51 @@
 -- an evidence_removed event.
 --
 -- ── WHAT IT ADDS ───────────────────────────────────────────────────────────
---   1. Bucket `exception-evidence` (private; PNG, JPEG, WEBP; 10 MB), cloned
---      from 0315: ONE INSERT policy (the first folder is one of the caller's
---      accepted orgs, plus the inline disabled-account guard) and NO select,
---      update or delete policy. Every read is a 1-hour signed link minted by
---      the server after an RLS-visible read of the row.
---   2. Table exception_evidence: one row per recorded photo. Signed-in users
---      hold SELECT only, visible exactly where the parent occurrence is.
---   3. _exc_occurrence_can_act(): THE act gate (stock:adjust, and write
+--   1. Table exception_evidence: one row per recorded photo. Signed-in users
+--      hold SELECT only, visible exactly where the parent occurrence is. ONE
+--      UPLOAD NAME, ONE PHOTO: an upload's uuid is recorded at most once in
+--      the org (whatever its extension), and each thumbnail belongs to one
+--      row.
+--   2. _exc_occurrence_can_act(): THE act gate (stock:adjust, and write
 --      access to the occurrence's warehouse for the item's charter, or the
 --      manager role when it has no warehouse), lifted out of
 --      exception_occurrence_act so acknowledge, note, add photo and remove
 --      photo share one copy. exception_occurrence_act is re-created to call
 --      it; nothing else in its body changes.
---   4. exception_evidence_record(): the ONLY writer of a photo row.
+--   3. exception_evidence_record(): the ONLY writer of a photo row.
 --      service_role only: the web server calls it after it has checked the
 --      bytes (sniffed type, size, re-encoded without metadata). Under a row
---      lock on the occurrence it re-checks that the occurrence is open, that
---      the UPLOADER passes the act gate, the path shape, and that fewer than
---      8 live photos exist; then it inserts the row and an evidence_added
---      event.
---   5. exception_evidence_remove(): soft remove, for signed-in users. The
+--      lock on the occurrence it re-checks the path shape, that the upload
+--      is not already recorded (23505 already_recorded, before any other
+--      refusal), that the occurrence is open, that the UPLOADER passes the
+--      act gate, and that fewer than 8 live photos exist; then it inserts the
+--      row and an evidence_added event.
+--   4. exception_evidence_remove(): soft remove, for signed-in users. The
 --      uploader or a manager, both through the act gate, while the occurrence
 --      is open. Writes an evidence_removed event; the stored file is kept.
---   6. exception_occurrence_events.evidence_id gets its foreign key (0370 left
+--   5. exception_occurrence_events.evidence_id gets its foreign key (0370 left
 --      the column waiting for this table), added NOT VALID and then
 --      VALIDATEd, and a CHECK that evidence events, and only they, name a
 --      photo.
+--   6. Bucket `exception-evidence` (private; PNG, JPEG, WEBP; 10 MB), cloned
+--      from 0315: ONE INSERT policy (the first folder is one of the caller's
+--      accepted orgs, plus the inline disabled-account guard; and only the
+--      name a mint hands out, {org}/{occurrence}/{uuid}.{ext}) and NO select,
+--      update or delete policy. Every read is a 1-hour signed link minted by
+--      the server after an RLS-visible read of the row. LAST in the file:
+--      see LOCKS.
+--
+-- ── FILE NAMES ─────────────────────────────────────────────────────────────
+--   {org}/{occurrence}/{uuid}.{ext}        the upload (the client PUTs it to
+--                                          a mint's signed URL; the server
+--                                          re-encodes it in place)
+--   {org}/{occurrence}/{uuid2}-thumb.webp  the thumbnail, written by the
+--                                          server under a FRESH uuid of its
+--                                          own at finalize
+-- A thumbnail is never named from the upload: {uuid}.jpg and {uuid}.png
+-- would share it, so a second upload could reach a recorded photo's
+-- thumbnail (review finding 2026-09-27). No client may create a thumbnail
+-- name at all (the INSERT policy admits only the upload shape).
 --
 -- ── WHY THE RECORD RPC IS service_role ONLY ────────────────────────────────
 -- A row says "the server looked at these bytes". If a signed-in user could
@@ -68,57 +86,34 @@
 -- argument (hint names it). A lock wait past lock_timeout is 55P03.
 --
 -- ── DATA SAFETY ────────────────────────────────────────────────────────────
--- Additive only: a new bucket row, a new table, new functions, a re-created
--- function body (exception_occurrence_act, same signature and behaviour), a
--- new storage policy, and two constraints plus an index on
--- exception_occurrence_events. No existing row is updated or deleted. The
--- events FK and CHECK are added NOT VALID and validated in a second step,
--- which takes only SHARE UPDATE EXCLUSIVE on the events table.
+-- Additive only: a new table, new functions, a re-created function body
+-- (exception_occurrence_act, same signature and behaviour), two constraints
+-- plus an index on exception_occurrence_events, a new bucket row and a new
+-- storage policy. No existing row is updated or deleted. The events FK and
+-- CHECK are added NOT VALID and then validated.
+--
+-- ── LOCKS ──────────────────────────────────────────────────────────────────
+-- The CLI applies this file as ONE implicit transaction (the batch is
+-- atomic), so every lock a statement takes is held until the whole file
+-- commits. In particular, NOT VALID followed by VALIDATE only avoids a table
+-- scan under the heavier lock: the ACCESS EXCLUSIVE lock that ADD CONSTRAINT
+-- takes on exception_occurrence_events is still held to the end.
+-- storage.objects is the table that matters: every attachment render in
+-- every org reads it (0312/0315), and CREATE POLICY takes ACCESS EXCLUSIVE on
+-- it. So the storage DDL is the LAST thing in the file: storage.objects is
+-- locked only for that statement and the commit, never while this file waits
+-- up to lock_timeout for another lock (organizations, user_profiles and
+-- exception_occurrences for the new foreign keys, exception_occurrence_events
+-- for its constraints). apps/web/src/server/services/storage-policy-order.guard.test.ts
+-- pins that order for this and every later migration.
 
 -- PLAIN `set`, not `set local` (0303/0358): the CLI batch is atomic but is not
--- a transaction block. Reset at the end. The storage policy DDL below takes a
--- lock on storage.objects, which every attachment render reads (0312/0315):
--- fail fast and retry in a quiet window rather than queue readers behind it.
+-- a transaction block. Reset at the end. Fail fast (and retry in a quiet
+-- window) rather than queue readers behind a lock this file waits for.
 set lock_timeout = '5s';
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- 1. Bucket exception-evidence (cloned from 0315)
--- ═══════════════════════════════════════════════════════════════════════════
--- Path scheme: {organization_id}/{occurrence_id}/{uuid}.{ext}
---              {organization_id}/{occurrence_id}/{uuid}-thumb.webp
--- The server re-encodes the master (dropping EXIF, including GPS) and writes
--- the thumbnail itself, both with the service role; the INSERT policy is the
--- floor for the client's signed-upload PUT of the original.
-insert into storage.buckets (id, name, public, allowed_mime_types, file_size_limit)
-values (
-  'exception-evidence', 'exception-evidence', false,
-  array['image/png','image/jpeg','image/webp'],
-  10 * 1024 * 1024
-)
-on conflict (id) do nothing;
-
--- Org-prefix write with the 0312/0315 INLINE disabled-account guard
--- (account_is_disabled() is EXECUTE-revoked from authenticated, so only the
--- inlined form works inside a storage policy). One difference from 0315: the
--- first folder is compared as TEXT, so a first folder that is not a uuid is
--- a plain RLS refusal (42501) instead of a 22P02 cast error.
-create policy "exception-evidence org write"
-  on storage.objects for insert to authenticated
-  with check (
-    bucket_id = 'exception-evidence'
-    and (storage.foldername(name))[1] in (
-      select m.organization_id::text
-        from public.organization_members m
-       where m.user_id = (select auth.uid()) and m.accepted_at is not null
-    )
-    and not exists (
-      select 1 from public.user_profiles up
-       where up.id = (select auth.uid()) and up.disabled_at is not null
-    )
-  );
-
--- ═══════════════════════════════════════════════════════════════════════════
--- 2. exception_evidence
+-- 1. exception_evidence
 -- ═══════════════════════════════════════════════════════════════════════════
 create table if not exists public.exception_evidence (
   id              uuid primary key default gen_random_uuid(),
@@ -193,6 +188,18 @@ comment on column public.exception_evidence.removed_at is
 
 create unique index if not exists exception_evidence_org_path_uniq
   on public.exception_evidence (organization_id, storage_path);
+-- ONE UPLOAD NAME, ONE PHOTO: the upload's uuid, whatever its extension, is
+-- recorded once in the org ({uuid}.jpg and {uuid}.png are one name). The
+-- record RPC checks the same expression first, under its lock, so a retried
+-- finalize is told "already recorded" before any other refusal; this index
+-- settles anything that check cannot see.
+create unique index if not exists exception_evidence_org_stem_uniq
+  on public.exception_evidence
+     (organization_id, (regexp_replace(storage_path, '\.(jpg|jpeg|png|webp)$', '')));
+-- A thumbnail belongs to one photo.
+create unique index if not exists exception_evidence_org_thumb_uniq
+  on public.exception_evidence (organization_id, thumbnail_path)
+  where thumbnail_path is not null;
 create index if not exists exception_evidence_occurrence_idx
   on public.exception_evidence (occurrence_id, created_at);
 
@@ -216,7 +223,7 @@ create policy exception_evidence_select on public.exception_evidence
        and o.organization_id = exception_evidence.organization_id));
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- 3. The act gate, in one place
+-- 2. The act gate, in one place
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Byte for byte the rule exception_occurrence_act applied inline in 0370:
 -- stock:adjust in the org, and then
@@ -386,7 +393,7 @@ revoke all on function public.exception_occurrence_act(uuid, text, text, text) f
 grant execute on function public.exception_occurrence_act(uuid, text, text, text) to authenticated;
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- 4. exception_evidence_record: the only writer of a photo row
+-- 3. exception_evidence_record: the only writer of a photo row
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Called by the web server (service role) after it has:
 --   * checked the path against this occurrence's folder,
@@ -394,16 +401,22 @@ grant execute on function public.exception_occurrence_act(uuid, text, text, text
 --   * re-encoded the master without metadata and written the thumbnail.
 -- Everything a caller could get wrong is re-checked here under the lock.
 --
--- p_thumbnail_path is null or exactly the path the master's name implies
--- ({uuid}-thumb.webp next to it). p_content_type must agree with the
--- master's extension.
+-- p_thumbnail_path is null or a server thumbnail name in the same folder,
+-- {uuid}-thumb.webp, under a uuid the server chose for it (see FILE NAMES).
+-- p_content_type must agree with the master's extension.
 --
 -- Refusals: 42501 not a server call, or the uploader may not act; P0002 the
 -- occurrence does not exist or the uploader cannot see it; P0001
 -- occurrence_resolved, evidence_limit_reached; 22023 bad_argument,
 -- invalid_path, invalid_thumbnail_path, invalid_content_type,
--- byte_size_out_of_range, note_too_long, captured_at_in_future; 23505 the
--- path was already recorded (a second finalize of the same upload).
+-- byte_size_out_of_range, note_too_long, captured_at_in_future; 23505 (hint
+-- already_recorded) the upload name is already recorded: a second finalize
+-- of the same upload. That answer comes BEFORE the gate, open and cap
+-- checks, because the server deletes an upload it was refused, and for a
+-- recorded upload that file is the recorded photo's (review finding
+-- 2026-09-27: at the cap a retried finalize got evidence_limit_reached and
+-- the server deleted the recorded photo's file). A 23505 with no hint is
+-- the unique thumbnail index.
 create or replace function public.exception_evidence_record(
   p_occurrence_id   uuid,
   p_uploaded_by     uuid,
@@ -483,8 +496,19 @@ begin
     raise exception 'invalid_content_type' using errcode = '22023', hint = 'invalid_content_type';
   end if;
   if p_thumbnail_path is not null
-     and p_thumbnail_path <> regexp_replace(p_storage_path, '\.(jpg|jpeg|png|webp)$', '-thumb.webp') then
+     and p_thumbnail_path !~ ('^' || v_prefix || c_uuid || '-thumb\.webp$') then
     raise exception 'invalid_thumbnail_path' using errcode = '22023', hint = 'invalid_thumbnail_path';
+  end if;
+
+  -- ── One upload name, one photo ──────────────────────────────────────────
+  -- Under the lock, and before every other refusal (see the header). The
+  -- expression is exception_evidence_org_stem_uniq's, so the index answers.
+  if exists (
+       select 1 from public.exception_evidence e
+        where e.organization_id = v_occ.organization_id
+          and regexp_replace(e.storage_path, '\.(jpg|jpeg|png|webp)$', '')
+              = regexp_replace(p_storage_path, '\.(jpg|jpeg|png|webp)$', '')) then
+    raise exception 'already_recorded' using errcode = '23505', hint = 'already_recorded';
   end if;
 
   -- ── The uploader, judged by the act gate as themselves ──────────────────
@@ -556,7 +580,7 @@ comment on function public.exception_evidence_record(uuid, uuid, text, text, tex
   'and fewer than 8 live photos. Inserts the row and an evidence_added event.';
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- 5. exception_evidence_remove: soft remove
+-- 4. exception_evidence_remove: soft remove
 -- ═══════════════════════════════════════════════════════════════════════════
 -- The uploader or a manager, both through the act gate, while the
 -- occurrence is open. Sets removed_at/removed_by and writes an
@@ -663,14 +687,16 @@ comment on function public.exception_evidence_remove(uuid, text) is
   'visible; P0001 occurrence_resolved.';
 
 -- ═══════════════════════════════════════════════════════════════════════════
--- 6. The timeline's evidence reference
+-- 5. The timeline's evidence reference
 -- ═══════════════════════════════════════════════════════════════════════════
 -- 0370 left exception_occurrence_events.evidence_id as a bare uuid. It gets
--- its foreign key now, NOT VALID first (a brief lock, no scan) and then
--- VALIDATEd (SHARE UPDATE EXCLUSIVE: reads and writes go on). No row names a
--- photo yet, so validation cannot fail. NO ACTION on delete: a photo row is
--- never deleted on its own (removal is soft); it goes only with its
--- occurrence or org, in the same statement as the events that name it.
+-- its foreign key now, NOT VALID first and then VALIDATEd, so the table is
+-- not scanned under the ACCESS EXCLUSIVE lock that ADD CONSTRAINT takes. In
+-- this single-transaction file that lock is still held until the commit
+-- (see LOCKS); the table is small. No row names a photo yet, so validation
+-- cannot fail. NO ACTION on delete: a photo row is never deleted on its own
+-- (removal is soft); it goes only with its occurrence or org, in the same
+-- statement as the events that name it.
 alter table public.exception_occurrence_events
   add constraint exception_occurrence_events_evidence_id_fkey
   foreign key (evidence_id) references public.exception_evidence(id)
@@ -688,5 +714,50 @@ alter table public.exception_occurrence_events
 
 create index if not exists exc_occ_events_evidence_idx
   on public.exception_occurrence_events (evidence_id) where evidence_id is not null;
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 6. Bucket exception-evidence (cloned from 0315). LAST: see LOCKS.
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Nothing may follow the policy below but the lock_timeout reset
+-- (storage-policy-order.guard.test.ts).
+--
+-- The server re-encodes the upload (dropping EXIF, including GPS) and writes
+-- the thumbnail itself, both with the service role; the INSERT policy is the
+-- floor for the client's signed-upload PUT of the original.
+insert into storage.buckets (id, name, public, allowed_mime_types, file_size_limit)
+values (
+  'exception-evidence', 'exception-evidence', false,
+  array['image/png','image/jpeg','image/webp'],
+  10 * 1024 * 1024
+)
+on conflict (id) do nothing;
+
+-- Org-prefix write with the 0312/0315 INLINE disabled-account guard
+-- (account_is_disabled() is EXECUTE-revoked from authenticated, so only the
+-- inlined form works inside a storage policy). Two differences from 0315:
+--   * the first folder is compared as TEXT, so a first folder that is not a
+--     uuid is a plain RLS refusal (42501) instead of a 22P02 cast error;
+--   * the WHOLE name must be the shape a mint hands out,
+--     {uuid}/{uuid}/{uuid}.(jpg|jpeg|png|webp). A thumbnail name
+--     ({uuid}-thumb.webp) is the server's alone: no member can create one, so
+--     no member can ever put their own bytes where a thumbnail is read from.
+create policy "exception-evidence org write"
+  on storage.objects for insert to authenticated
+  with check (
+    bucket_id = 'exception-evidence'
+    and name ~ ('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+                || '/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+                || '/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+                || '\.(jpg|jpeg|png|webp)$')
+    and (storage.foldername(name))[1] in (
+      select m.organization_id::text
+        from public.organization_members m
+       where m.user_id = (select auth.uid()) and m.accepted_at is not null
+    )
+    and not exists (
+      select 1 from public.user_profiles up
+       where up.id = (select auth.uid()) and up.disabled_at is not null
+    )
+  );
 
 reset lock_timeout;
