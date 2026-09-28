@@ -23,6 +23,8 @@ export function Button({
   leading,
   trailing,
   style,
+  accessibilityLabel,
+  accessibilityHint,
 }: {
   children: React.ReactNode;
   onPress?: () => void;
@@ -33,8 +35,12 @@ export function Button({
   leading?: React.ReactNode;
   trailing?: React.ReactNode;
   style?: ViewStyle;
+  /** The spoken name when the visible label alone is ambiguous (a "Remove"
+   *  on each of several photos). Defaults to the label's text. */
+  accessibilityLabel?: string;
+  accessibilityHint?: string;
 }) {
-  const { c, mode } = useTheme();
+  const { c } = useTheme();
 
   const bg =
     variant === 'primary'
@@ -66,6 +72,8 @@ export function Button({
       // VoiceOver and TalkBack announce it as a button, and as dimmed /
       // disabled when `disabled` (Pressable maps it into accessibilityState).
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityHint={accessibilityHint}
       style={({ pressed }) => [
         styles.base,
         {

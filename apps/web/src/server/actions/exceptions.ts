@@ -7,9 +7,15 @@ import { can, RECOUNT_MAX_ITEMS, uuidSchema, type RecountUnavailableReason } fro
 import { reportError } from '@/lib/error-reporter';
 import { fetchCountAssignees } from '@/server/lib/count-assignees';
 import { ServiceError, withContext } from '@/server/services/context';
+import { ExceptionEvidenceService } from '@/server/services/exception-evidence';
 import { ExceptionOccurrencesService } from '@/server/services/exception-occurrences';
 import { ExceptionRecountService } from '@/server/services/exception-recount';
 import type { ExceptionRecountResult } from '@/server/services/exception-recount';
+import type {
+  EvidenceUploadTicket,
+  RecordedEvidence,
+  RemovedEvidence,
+} from '@/server/services/exception-evidence';
 
 /**
  * Server actions for the Exception Center (F1-1). Thin wrappers over
@@ -34,6 +40,11 @@ import type { ExceptionRecountResult } from '@/server/services/exception-recount
  *     is linked to them (the database links only the exceptions it is named).
  *   - listItemsRecountTargetsAction: the same for several items, for the
  *     location page's "Recount items here" (F1-3).
+ *   - startExceptionEvidenceUploadAction, finalizeExceptionEvidenceAction,
+ *     removeExceptionEvidenceAction: photo evidence (F1-4), the same
+ *     ExceptionEvidenceService calls the phone reaches through
+ *     /api/v1/exceptions/[id]/evidence. The browser PUTs the photo to the
+ *     signed URL between the first two. Online only.
  *
  * Only plain result objects cross this boundary. No type is re-exported from
  * here (recurring pattern #25: `export type { X }` in a 'use server' module
@@ -213,5 +224,78 @@ export async function listItemsRecountTargetsAction(itemIds: string[]): Promise<
     };
   } catch (e) {
     return fail(e, 'actions.exceptions.items_recount_targets');
+  }
+}
+
+/** Starts a photo upload (F1-4): returns the signed URL the browser PUTs the
+ *  photo to, and the path to finalize. */
+export async function startExceptionEvidenceUploadAction(
+  id: string,
+  input: { fileExt: string },
+): Promise<{ ok: true; ticket: EvidenceUploadTicket } | Failure> {
+  try {
+    if (!uuidSchema.safeParse(id).success) {
+      throw new ServiceError('validation_error', 'That exception id is not valid.');
+    }
+    const ctx = await withContext();
+    const ticket = await new ExceptionEvidenceService(ctx).createUploadUrl(id, {
+      fileExt: typeof input?.fileExt === 'string' ? input.fileExt : '',
+    });
+    return { ok: true, ticket };
+  } catch (e) {
+    return fail(e, 'actions.exceptions.evidence_mint');
+  }
+}
+
+/** Records an uploaded photo (F1-4): the server checks the bytes, removes the
+ *  photo's metadata (location included) and records it. On a refusal nothing
+ *  is recorded and the upload is deleted, except when the per-person finalize
+ *  limit refused it (reason rate_limited: the same finalize can be sent
+ *  again) or it is already recorded (reason already_recorded: success for
+ *  the caller). The limit is ExceptionEvidenceService's, the same one the
+ *  /api/v1 route applies. */
+export async function finalizeExceptionEvidenceAction(
+  id: string,
+  input: { path: string; declaredMime: string; capturedAt?: string | null; note?: string | null },
+): Promise<{ ok: true; evidence: RecordedEvidence } | Failure> {
+  try {
+    if (!uuidSchema.safeParse(id).success) {
+      throw new ServiceError('validation_error', 'That exception id is not valid.');
+    }
+    const ctx = await withContext();
+    const evidence = await new ExceptionEvidenceService(ctx).finalize(id, {
+      path: typeof input?.path === 'string' ? input.path : '',
+      declaredMime: typeof input?.declaredMime === 'string' ? input.declaredMime : '',
+      capturedAt: typeof input?.capturedAt === 'string' ? input.capturedAt : null,
+      note: typeof input?.note === 'string' ? input.note : null,
+    });
+    revalidatePath(`/dashboard/exceptions/${id}`);
+    return { ok: true, evidence };
+  } catch (e) {
+    return fail(e, 'actions.exceptions.evidence_finalize');
+  }
+}
+
+/** Removes a photo (F1-4): a soft remove that keeps the file and records who
+ *  removed it and why. */
+export async function removeExceptionEvidenceAction(
+  id: string,
+  evidenceId: string,
+  reason?: string | null,
+): Promise<{ ok: true; evidence: RemovedEvidence } | Failure> {
+  try {
+    if (!uuidSchema.safeParse(id).success || !uuidSchema.safeParse(evidenceId).success) {
+      throw new ServiceError('validation_error', 'That photo id is not valid.');
+    }
+    const ctx = await withContext();
+    const evidence = await new ExceptionEvidenceService(ctx).remove(
+      id,
+      evidenceId,
+      typeof reason === 'string' ? reason : null,
+    );
+    revalidatePath(`/dashboard/exceptions/${id}`);
+    return { ok: true, evidence };
+  } catch (e) {
+    return fail(e, 'actions.exceptions.evidence_remove');
   }
 }

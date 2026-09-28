@@ -24,6 +24,7 @@ vi.mock('next/cache', () => ({
 vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
 
 import { ServiceError } from './context';
+import { ExceptionEvidenceService } from './exception-evidence';
 import { ItemImagesService } from './item-images';
 import { OrderAttachmentsService } from './order-attachments';
 import { PoAttachmentsService } from './po-attachments';
@@ -329,6 +330,79 @@ describe('ProcedureVideosService.record — HI-8', () => {
       thumbnailPath: `${ORG}/${ENTITY}/${FILE}.poster.jpg`,
     } as never);
     expect(row).toMatchObject({ id: 'vid-1' });
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// 3b. ExceptionEvidenceService.finalize — exception-evidence bucket (F1-4)
+// ───────────────────────────────────────────────────────────────────────────
+describe('ExceptionEvidenceService.finalize — HI-8', () => {
+  // The occurrence the path must belong to is ENTITY; the caller is an admin
+  // (write access everywhere), so the only thing that can refuse is the path.
+  function svcWith() {
+    const stub = makeSupabaseStub({
+      'exception_occurrences.select.maybeSingle': {
+        data: {
+          id: ENTITY, occurrence_number: 1, rule: 'label_mismatch', item_id: 'item-1', location_id: null,
+          warehouse_id: null, facts: {}, condition_since: null, first_seen_at: '2026-09-27T10:00:00Z',
+          last_seen_at: '2026-09-27T10:00:00Z', acknowledged_at: null, acknowledged_by: null,
+          recount_cycle_count_id: null, resolved_at: null, resolved_reason: null, previous_occurrence_id: null,
+          recurrence_index: 0, item: null, location: null, recount: null, acknowledger: null,
+        },
+        error: null,
+      },
+      'exception_evidence.select': { data: null, error: null, count: 0 },
+    });
+    return {
+      svc: new ExceptionEvidenceService(makeServiceContext(stub.client, { role: 'admin', organizationId: ORG }) as never),
+    };
+  }
+
+  it.each(TRAVERSALS(ORG, ENTITY))('REFUSES the traversal %s before the storage client is touched', async (bad) => {
+    const spy = makeStorageSpy(pngBytes());
+    const { svc } = svcWith();
+    const err = await svc.finalize(ENTITY, { path: bad, declaredMime: 'image/png' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ServiceError);
+    expect((err as ServiceError).code).toBe('forbidden');
+    expect(createAdminClientMock).not.toHaveBeenCalled();
+    expect(spy.from).not.toHaveBeenCalled();
+  });
+
+  it('REFUSES a path pinned to a DIFFERENT occurrence — one exception cannot claim another\'s upload', async () => {
+    makeStorageSpy(pngBytes());
+    const { svc } = svcWith();
+    const err = await svc
+      .finalize(ENTITY, { path: `${ORG}/88888888-8888-4888-8888-888888888888/${FILE}.png`, declaredMime: 'image/png' })
+      .catch((e: unknown) => e);
+    expect((err as ServiceError).code).toBe('forbidden');
+    expect(createAdminClientMock).not.toHaveBeenCalled();
+  });
+
+  it('PAIRED POSITIVE — the real minted path passes the gate and reaches the byte check', async () => {
+    const spy = makeStorageSpy(null);
+    const download = vi.fn(async () => ({ data: null, error: { message: 'Object not found' } }));
+    Object.assign(spy.api, { download });
+    const admin = makeSupabaseStub({
+      'exception_evidence.select.maybeSingle': { data: null, error: null },
+      // The finalize limiter (closed) answers through the same admin client.
+      'rpc:increment_rate_limit': {
+        data: [{ allowed: true, count: 1, reset_at: '2026-09-27T13:00:00Z' }],
+        error: null,
+      },
+    });
+    createAdminClientMock.mockReturnValue({ ...admin.client, storage: spy } as never);
+    const { svc } = svcWith();
+    const err = await svc
+      .finalize(ENTITY, { path: `${ORG}/${ENTITY}/${FILE}.png`, declaredMime: 'image/png' })
+      .catch((e: unknown) => e);
+    // Reached storage: the object was looked for, found missing, and the
+    // (absent) upload removed; no row can follow. No thumbnail was written,
+    // so none is removed, and never a name derived from the upload's uuid
+    // (review finding 2026-09-27).
+    expect(download).toHaveBeenCalledWith(`${ORG}/${ENTITY}/${FILE}.png`);
+    expect((err as ServiceError).code).toBe('validation_error');
+    expect(spy.remove).toHaveBeenCalledWith([`${ORG}/${ENTITY}/${FILE}.png`]);
+    expect(spy.remove.mock.calls.flat(2)).not.toContain(`${ORG}/${ENTITY}/${FILE}-thumb.webp`);
   });
 });
 

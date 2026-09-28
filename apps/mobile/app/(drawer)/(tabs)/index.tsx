@@ -37,6 +37,7 @@ import { StatCard } from '@/components/ui/stat-card';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
 import { useAuth } from '@/lib/auth-context';
+import { HOME_BUNDLES_SUBTITLE } from '@/lib/cta-gating';
 import { useProfile } from '@/lib/use-profile';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
@@ -427,7 +428,7 @@ export default function Home() {
                       <Thumb size={40} icon={Link2} pip={ACCENT.pipTeal} />
                     }
                     title="Bundles"
-                    subtitle="Distribute kits & assembled stock"
+                    subtitle={HOME_BUNDLES_SUBTITLE}
                     trailing={<Pill status="ok">OPEN</Pill>}
                     chevron
                   />

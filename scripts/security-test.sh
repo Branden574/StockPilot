@@ -251,6 +251,29 @@ PGTAP_TESTS=(
   # item_stock_levels RLS for every persona and location, so a location page
   # never shows hidden holdings as an empty location.
   supabase/tests/0374_verification_summaries.test.sql
+  # Photo evidence (F1-4, 0375): the exception-evidence bucket is private,
+  # pinned to png/jpeg/webp and 10 MB, with one INSERT policy (the caller's
+  # accepted org folder, disabled accounts refused) and no select, update or
+  # delete for authenticated. exception_evidence is SELECT-only to signed-in
+  # users, visible where the occurrence is. Only exception_evidence_record
+  # writes a row, and it is service_role only (catalog, plus an in-body role
+  # check that holds after a grant slip); under a lock on the occurrence it
+  # judges the UPLOADER with the act gate (not found for another warehouse,
+  # another org, a disabled or pending account; refused for viewers and
+  # staff without stock:adjust; a manager when there is no warehouse),
+  # refuses a resolved occurrence, pins the path to the occurrence's folder,
+  # caps live photos at 8, and restores the request claims it borrowed.
+  # exception_evidence_remove is a soft remove by the uploader or a manager,
+  # through the same gate, only while open; it never deletes. Acknowledge,
+  # note, add and remove share ONE gate (_exc_occurrence_can_act, service_role
+  # only). Review fixes 2026-09-27: a member may create only the upload name
+  # a mint hands out ({uuid}.{ext}), never a thumbnail name; one upload name
+  # is one photo (a second record of a recorded upload's uuid, any
+  # extension, is 23505 already_recorded BEFORE the gate, open and cap
+  # checks) and each thumbnail belongs to one row; the record and remove
+  # locks are pinned in the catalog. The concurrent cap is
+  # scripts/db-concurrency/0375_evidence_cap.sh.
+  supabase/tests/0375_exception_evidence.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
@@ -290,6 +313,15 @@ WEB_TESTS=(
   src/server/services/attachment-byte-guard.test.ts
   src/server/services/capture-byte-guard.test.ts
   src/server/services/po-imports.scan-byte-verification.test.ts
+  # Photo evidence (F1-4): the byte check against the declared type, the
+  # strict path before any storage call, delete-and-no-row on every refusal
+  # (the refusals before the storage steps included), the upload and
+  # finalize limiters failing closed, the photo's EXIF (GPS location
+  # included) stripped from what is stored, the thumbnail under a fresh
+  # uuid, and a recorded photo's files never deleted or rewritten by a later
+  # finalize (review fixes 2026-09-27).
+  src/server/services/exception-evidence.test.ts
+  src/lib/image-reencode.test.ts
 
   # AI boundaries: org-scoped tool reads, prompt-injection containment, SSRF.
   src/lib/ai/tools.security.test.ts

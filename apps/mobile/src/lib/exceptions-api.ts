@@ -22,6 +22,12 @@ import {
 
 import { api } from './api';
 import { CONNECTION_FAILURE_COPY } from './connection-copy';
+import {
+  parseEvidenceBlock,
+  parseEvidenceEventInfo,
+  type MobileEvidenceBlock,
+  type MobileEvidenceEventInfo,
+} from './exception-evidence';
 
 /**
  * The Exception Center on the phone (F1-1): thin typed wrappers over the
@@ -142,6 +148,10 @@ export interface MobileExceptionEvent {
   /** For recount_closed, `outcome` is what that count came to for the item
    *  (null for other kinds, or from an older server). */
   cycleCount: { id: string; countNumber: number | null; outcome: RecountOutcome | null } | null;
+  /** For an evidence event (F1-4): the photo's two times and whether it was
+   *  since removed; null for other kinds, or when the photos could not be
+   *  read (the headline still stands). */
+  evidence: MobileEvidenceEventInfo | null;
 }
 
 export interface MobileExceptionHistoryEntry {
@@ -164,6 +174,9 @@ export interface MobileExceptionDetail {
   syncState: MobileExceptionSyncState | null;
   /** The org's time zone (see MobileExceptionList.timeZone). */
   timeZone: string | null;
+  /** Photo evidence (F1-4): the live photos with 1-hour signed links, or
+   *  `unavailable` (never an empty list for a failed read). */
+  evidence: MobileEvidenceBlock;
 }
 
 export interface ExceptionCheckResult {
@@ -369,6 +382,10 @@ export function parseExceptionDetail(res: unknown): MobileExceptionDetail {
                 e.cycleCount.outcome === undefined ? null : parseRecountOutcome(e.cycleCount.outcome),
             }
           : null,
+      evidence:
+        e.kind === 'evidence_added' || e.kind === 'evidence_removed'
+          ? parseEvidenceEventInfo(e.evidence)
+          : null,
     });
   }
   const history: MobileExceptionHistoryEntry[] = Array.isArray(res.history)
@@ -402,6 +419,7 @@ export function parseExceptionDetail(res: unknown): MobileExceptionDetail {
     historyTruncated: res.historyTruncated === true,
     syncState: parseSyncState(res.syncState),
     timeZone: strOrNull(res.timeZone),
+    evidence: parseEvidenceBlock(res.evidence),
   };
 }
 
@@ -643,6 +661,12 @@ export function exceptionTimeLabel(iso: string | null | undefined, timeZone?: st
 export function offlineAsOfCopy(receivedAt: string, timeZone?: string | null): string {
   return `You are offline. Showing the list as of ${exceptionTimeLabel(receivedAt, timeZone)}.`;
 }
+
+/** No workspace could be loaded (a launch offline, or a failed first read
+ *  after signing in): the detail read never starts, so Try again loads the
+ *  workspace again (use-workspace.ts retryWorkspace). */
+export const EXCEPTION_WORKSPACE_UNAVAILABLE =
+  'Your workspace could not be loaded, so this exception cannot be shown. Check your connection and try again.';
 
 /** Offline with nothing remembered: say so, never show an empty list. */
 export const EXCEPTIONS_OFFLINE_NOTHING_LOADED_COPY =

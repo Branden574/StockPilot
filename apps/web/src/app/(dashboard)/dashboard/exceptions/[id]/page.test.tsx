@@ -1,10 +1,17 @@
 // @vitest-environment happy-dom
 import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   EXCEPTION_ACT_NOT_PERMITTED_COPY,
   EXCEPTION_ACT_RESOLVED_COPY,
+  EXCEPTION_EVIDENCE_CAP_COPY,
+  EXCEPTION_EVIDENCE_LIMITS_COPY,
+  EXCEPTION_EVIDENCE_NONE_COPY,
+  EXCEPTION_EVIDENCE_NOT_PERMITTED_COPY,
+  EXCEPTION_EVIDENCE_PRIVACY_COPY,
+  EXCEPTION_EVIDENCE_RESOLVED_COPY,
+  EXCEPTION_EVIDENCE_UNAVAILABLE_COPY,
   EXCEPTION_RULES,
 } from '@stockpilot/core';
 
@@ -15,7 +22,11 @@ import {
  *   - Acknowledge and Add note are rendered only for a reader the server says
  *     may act; a viewer, or a reader without warehouse write access, sees why
  *     instead; a resolved occurrence offers neither;
- *   - it reads, never syncs.
+ *   - it reads, never syncs;
+ *   - photos (F1-4): everyone who can open it sees them; Add photos only for
+ *     a reader who may act on an open exception, under the cap; a failed
+ *     photo read is never "No photos yet."; a photo's timeline entries say
+ *     who, the two clocks, and the note or the removal's reason.
  */
 
 const { get } = vi.hoisted(() => ({ get: vi.fn() }));
@@ -42,6 +53,9 @@ vi.mock('@/server/services/exception-occurrences', () => ({
 vi.mock('@/server/actions/exceptions', () => ({
   requestExceptionCheckAction: vi.fn(),
   actOnExceptionAction: vi.fn(),
+  startExceptionEvidenceUploadAction: vi.fn(),
+  finalizeExceptionEvidenceAction: vi.fn(),
+  removeExceptionEvidenceAction: vi.fn(),
 }));
 vi.mock('@/server/services/lib/exception-sync-schedule', () => ({ scheduleExceptionSync }));
 vi.mock('@/server/services/context', async (importOriginal) => ({
@@ -131,7 +145,26 @@ function detail(o: Record<string, unknown> = {}, extra: Record<string, unknown> 
     ],
     historyTruncated: false,
     syncState: SYNCED,
+    evidence: NO_PHOTOS,
     ...extra,
+  };
+}
+
+const NO_PHOTOS = { status: 'ok', photos: [], liveCount: 0, maxPhotos: 8, canAdd: true };
+
+function photo(o: Record<string, unknown> = {}) {
+  return {
+    id: 'ph-1',
+    uploadedBy: { id: 'u1', label: 'Dana Lee' },
+    capturedAt: '2026-09-24T17:02:00Z',
+    uploadedAt: '2026-09-24T17:40:00Z',
+    note: 'Shelf 39-C, bottom row',
+    contentType: 'image/jpeg',
+    byteSize: 1000,
+    url: 'https://files.example.test/ph-1.jpg',
+    thumbUrl: 'https://files.example.test/ph-1-thumb.webp',
+    canRemove: false,
+    ...o,
   };
 }
 
@@ -139,9 +172,20 @@ async function renderPage(id = ID) {
   return render(await ExceptionDetailPage({ params: Promise.resolve({ id }) }));
 }
 
+// happy-dom never loads an image and reports each one as complete with no
+// width, which a browser reports only for a BROKEN image (the Photos panel
+// shows a broken one as "could not be loaded"). Model a browser in which the
+// photos are still loading.
+const imageComplete = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'complete');
+
 beforeEach(() => {
   vi.clearAllMocks();
   card.suspend = false;
+  Object.defineProperty(HTMLImageElement.prototype, 'complete', { configurable: true, get: () => false });
+});
+afterEach(() => {
+  if (imageComplete) Object.defineProperty(HTMLImageElement.prototype, 'complete', imageComplete);
+  else delete (HTMLImageElement.prototype as { complete?: boolean }).complete;
 });
 
 describe('Exception detail page', () => {
@@ -350,5 +394,155 @@ describe('Exception detail page', () => {
     );
     await renderPage();
     expect(screen.getByRole('link', { name: 'Staging' })).toHaveAttribute('href', '/dashboard/locations/loc-1');
+  });
+
+  // ── F1-4: photo evidence ──────────────────────────────────────────────────
+
+  it('a reader who may act on an open exception can add photos, with a note, and is told the limits', async () => {
+    get.mockResolvedValue(detail());
+    await renderPage();
+    const panel = screen.getByRole('region', { name: 'Exception photos' });
+    expect(panel).toHaveTextContent('Photos (0 of 8)');
+    expect(screen.getByRole('button', { name: 'Add photos' })).toBeEnabled();
+    expect(screen.getByLabelText(/^Note \(optional, saved with each photo you add\)/)).toBeInTheDocument();
+    expect(panel).toHaveTextContent(EXCEPTION_EVIDENCE_NONE_COPY);
+    expect(panel).toHaveTextContent(EXCEPTION_EVIDENCE_LIMITS_COPY);
+    expect(panel).toHaveTextContent(EXCEPTION_EVIDENCE_PRIVACY_COPY);
+  });
+
+  // Mutation caught: the panel rendered without the act gate (a viewer would
+  // be offered an upload the server always refuses).
+  it('a viewer sees the photos read-only: no Add photos, no note field, no Remove, and why', async () => {
+    get.mockResolvedValue(
+      detail({ canAct: false }, { evidence: { ...NO_PHOTOS, photos: [photo()], liveCount: 1, canAdd: false } }),
+    );
+    await renderPage();
+    const panel = screen.getByRole('region', { name: 'Exception photos' });
+    expect(screen.queryByRole('button', { name: 'Add photos' })).not.toBeInTheDocument();
+    expect(panel.querySelector('input[type="file"]')).toBeNull();
+    expect(screen.queryByLabelText(/^Note \(optional, saved/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('photos-add-unavailable')).toHaveTextContent(EXCEPTION_EVIDENCE_NOT_PERMITTED_COPY);
+    expect(screen.getByAltText('Photo 1')).toHaveAttribute('src', 'https://files.example.test/ph-1-thumb.webp');
+    expect(panel).toHaveTextContent('Photos (1 of 8)');
+    expect(panel).toHaveTextContent('Shelf 39-C, bottom row');
+    expect(panel).toHaveTextContent('Added by Dana Lee');
+    expect(panel).toHaveTextContent("Taken 10:02 AM (device's clock) · uploaded 10:40 AM (server's clock)");
+    expect(screen.queryByRole('button', { name: 'Remove Photo 1' })).not.toBeInTheDocument();
+  });
+
+  it('Remove is offered on the photos the server says this reader may remove, and only those', async () => {
+    get.mockResolvedValue(
+      detail({}, {
+        evidence: {
+          ...NO_PHOTOS,
+          photos: [photo({ canRemove: true }), photo({ id: 'ph-2', canRemove: false, note: null })],
+          liveCount: 2,
+        },
+      }),
+    );
+    await renderPage();
+    expect(screen.getByRole('button', { name: 'Remove Photo 1' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove Photo 2' })).not.toBeInTheDocument();
+  });
+
+  it('a resolved exception shows its photos but offers neither Add nor Remove', async () => {
+    get.mockResolvedValue(
+      detail(
+        { resolvedAt: '2026-09-24T19:00:00Z', resolvedReason: 'cleared', canAct: true },
+        { evidence: { ...NO_PHOTOS, photos: [photo({ canRemove: false })], liveCount: 1, canAdd: false } },
+      ),
+    );
+    await renderPage();
+    expect(screen.queryByRole('button', { name: 'Add photos' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('photos-add-unavailable')).toHaveTextContent(EXCEPTION_EVIDENCE_RESOLVED_COPY);
+    expect(screen.getByAltText('Photo 1')).toBeInTheDocument();
+  });
+
+  it('at 8 photos, Add photos is turned off and the cap is stated', async () => {
+    const eight = Array.from({ length: 8 }, (_, i) => photo({ id: `ph-${i}` }));
+    get.mockResolvedValue(detail({}, { evidence: { ...NO_PHOTOS, photos: eight, liveCount: 8, canAdd: false } }));
+    await renderPage();
+    expect(screen.getByRole('region', { name: 'Exception photos' })).toHaveTextContent('Photos (8 of 8)');
+    expect(screen.getByRole('button', { name: 'Add photos' })).toBeDisabled();
+    expect(screen.getByTestId('photos-add-unavailable')).toHaveTextContent(EXCEPTION_EVIDENCE_CAP_COPY);
+  });
+
+  // Mutation caught: an unreadable photo block rendered as an empty list.
+  it('photos that could not be read say so, never "No photos yet."', async () => {
+    get.mockResolvedValue(detail({}, { evidence: { status: 'unavailable' } }));
+    await renderPage();
+    const card = screen.getByTestId('occurrence-photos');
+    expect(card).toHaveTextContent(EXCEPTION_EVIDENCE_UNAVAILABLE_COPY);
+    expect(card).not.toHaveTextContent(EXCEPTION_EVIDENCE_NONE_COPY);
+    expect(screen.queryByRole('button', { name: 'Add photos' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    // The rest of the page is unaffected.
+    expect(screen.getByRole('button', { name: 'Acknowledge' })).toBeInTheDocument();
+  });
+
+  it("a photo's timeline entries: who, the two clocks, and the note or the removal's reason", async () => {
+    get.mockResolvedValue(
+      detail({}, {
+        timeline: [
+          { id: 'e1', kind: 'raised', at: '2026-09-24T15:00:00Z', actor: null, note: null, cycleCount: null, maintenanceRequestId: null, evidenceId: null, evidence: null },
+          {
+            id: 'e2',
+            kind: 'evidence_added',
+            at: '2026-09-24T17:40:00Z',
+            actor: { id: 'u1', label: 'Dana Lee' },
+            note: 'Shelf 39-C, bottom row',
+            cycleCount: null,
+            maintenanceRequestId: null,
+            evidenceId: 'ph-1',
+            evidence: { capturedAt: '2026-09-24T17:02:00Z', uploadedAt: '2026-09-24T17:40:00Z', removed: true },
+          },
+          {
+            id: 'e3',
+            kind: 'evidence_removed',
+            at: '2026-09-24T18:00:00Z',
+            actor: { id: 'u2', label: 'Sam Reed' },
+            note: 'Blurry',
+            cycleCount: null,
+            maintenanceRequestId: null,
+            evidenceId: 'ph-1',
+            evidence: { capturedAt: '2026-09-24T17:02:00Z', uploadedAt: '2026-09-24T17:40:00Z', removed: true },
+          },
+        ],
+      }),
+    );
+    await renderPage();
+    const timeline = screen.getByText('Photo added by Dana Lee').closest('ol')!;
+    expect(timeline).toHaveTextContent("Taken 10:02 AM (device's clock) · uploaded 10:40 AM (server's clock)");
+    expect(timeline).toHaveTextContent('Shelf 39-C, bottom row');
+    expect(screen.getByText('Photo removed by Sam Reed')).toBeInTheDocument();
+    expect(screen.getByText('Reason: Blurry')).toBeInTheDocument();
+  });
+
+  // Mutation caught: the times line built from a missing photo row, which
+  // prints "Upload time not available." under an entry that has a time.
+  it('when the photos could not be read, a photo entry keeps its headline and guesses no times', async () => {
+    get.mockResolvedValue(
+      detail({}, {
+        evidence: { status: 'unavailable' },
+        timeline: [
+          {
+            id: 'e2',
+            kind: 'evidence_added',
+            at: '2026-09-24T17:40:00Z',
+            actor: { id: 'u1', label: 'Dana Lee' },
+            note: null,
+            cycleCount: null,
+            maintenanceRequestId: null,
+            evidenceId: 'ph-1',
+            evidence: null,
+          },
+        ],
+      }),
+    );
+    await renderPage();
+    const entry = screen.getByText('Photo added by Dana Lee').closest('li')!;
+    expect(entry).not.toHaveTextContent('Upload time not available.');
+    expect(entry).not.toHaveTextContent("device's clock");
+    expect(entry).toHaveTextContent(/Sep 24/);
   });
 });

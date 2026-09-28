@@ -90,6 +90,9 @@ export const SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS = {
   // uploads rejected, not protected.
   'cycle-count-scans': ['image/png', 'image/jpeg', 'image/webp'],
   'size-count-training': ['image/png', 'image/jpeg', 'image/webp'],
+  // migration 0375 (F1-4 photo evidence) — cloned from 0315, HEIC excluded
+  // for the same reason: both platforms convert to JPEG before upload.
+  'exception-evidence': ['image/png', 'image/jpeg', 'image/webp'],
 } as const;
 
 export type SnifferGatedBucket = keyof typeof SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS;

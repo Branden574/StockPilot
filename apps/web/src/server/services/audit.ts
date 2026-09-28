@@ -138,6 +138,14 @@ export type AuditEvent =
    * why. No migration: audit_logs.event is un-CHECKed text.
    */
   | 'exception.recount_started'
+  /**
+   * Photo evidence on an exception occurrence (F1-4, 0375): a photo recorded
+   * (after the server checked and re-encoded it) and a photo soft-removed.
+   * entityId is the occurrence; `after` carries the evidence id. The
+   * occurrence timeline records the same two moments for readers.
+   */
+  | 'exception.evidence_added'
+  | 'exception.evidence_removed'
   | 'size_count.started'
   | 'size_count.completed'
   | 'bundle.created'

@@ -28,6 +28,56 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'exception-photos-2026-09',
+    revision: 1,
+    // DRAFT until the phone update (pnpm release:ota) and the Demo Co walk: a
+    // draft never leaves the server (visibleReleases, registryFingerprint), so
+    // merging the web photo panel does not announce photos the phone cannot
+    // add yet. The follow-up that publishes it sets 'published', sets
+    // publishedAt to the real time (still the newest), and flips the pin in
+    // registry.test.ts. Every sentence must still be true on both platforms
+    // then (for example: the web sends no capture time, so photos added on the
+    // web show only their upload time).
+    status: 'draft',
+    title: 'Photos on exceptions',
+    summary:
+      'On the web and in the mobile app, an exception now has a Photos section. The people who can acknowledge an exception can add up to 8 photos to it while it is open, each with an optional note. They can remove their own photos, and managers among them can remove any. A removed photo is hidden, not deleted, and the timeline records who added or removed each photo. Location and camera details are removed from each photo when it is saved.',
+    publishedAt: '2026-09-28T17:00:00Z',
+    entries: [
+      {
+        id: 'exception-photos',
+        category: 'new',
+        area: 'Inventory',
+        title: 'Photos on an exception',
+        whatChanged:
+          "An exception's page has a Photos section. Everyone who can open the exception sees its photos, each with its note, who added it and when it was uploaded, by StockPilot's clock. When the app that added a photo reports when it was taken, that time is shown too, labelled as the device's clock, because a device's clock can be wrong. The web does not report it, so a photo added on the web shows only its upload time. The timeline lists each photo added or removed, by whom, with its note or the reason it was removed.",
+        whyItMatters:
+          'What someone found at the shelf, such as a label naming another rack or an empty bin, could only be described in a note, so the next person looking at the exception could not see it.',
+        howItAffectsYou:
+          'Photos do not change stock, do not resolve an exception, and send no notifications. On a resolved exception the photos stay visible, but none can be added or removed. If the photos cannot be loaded, the section says so instead of showing none.',
+        whatToDo: 'No action needed. Open an exception to see its photos.',
+        link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        id: 'exception-photos-add-remove',
+        category: 'new',
+        area: 'Inventory',
+        title: 'Add and remove photos on an open exception',
+        whatChanged:
+          'The people who can acknowledge an exception and add notes to it, that is, those who can adjust stock in its warehouse, can add photos to it while it is open, with an optional note of up to 500 characters. An exception holds up to 8 photos, each a JPEG, PNG or WEBP of up to 10 MB. The person who added a photo, or a manager who can acknowledge the exception, can remove it, with an optional reason.',
+        whyItMatters:
+          'A photo shows the next person what was found, and removing one leaves a record of who removed it and why, so what an exception showed can always be traced.',
+        howItAffectsYou:
+          'Adding and removing photos needs a connection: photos are not saved offline to send later. Location and camera details are removed from each photo when it is saved. A removed photo no longer shows on the exception but is not deleted, and removing one makes room for another.',
+        whatToDo:
+          'Open an exception that is still open, type a note if you want one, and add the photo in its Photos section.',
+        link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
+        audience: { anyPermission: ['stock:adjust'] },
+      },
+    ],
+  },
+  {
     id: 'order-page-kits-2026-09-27',
     revision: 1,
     // Held as a draft (#275) until the web deploy and the Demo Co walk; the New
