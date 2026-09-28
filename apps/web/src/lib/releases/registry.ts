@@ -78,7 +78,7 @@ export const RELEASES: Release[] = [
     title: "An order's needed-by time is shown in your organization's time zone",
     summary:
       "On the web, the needed-by time on an order's page is now shown in your organization's time zone. It was shown in UTC, hours off: an order due at 2:00 PM in a Los Angeles organization said 9:00 PM. In the digital pick, a line with nothing entered no longer shows the requested quantity in its field.",
-    publishedAt: '2026-09-28T23:30:00Z',
+    publishedAt: '2026-09-28T22:27:00Z',
     audience: { modules: ['orders'] },
     entries: [
       {
