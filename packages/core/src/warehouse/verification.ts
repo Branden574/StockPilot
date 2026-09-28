@@ -4,6 +4,7 @@ import { isRackShelfLocation } from '../inventory/location-groups';
 import { formatHoldingLabel, formatStockQuantity } from '../inventory/stock-writeoff';
 import { formatOrgDateTime, resolveOrgTimezone } from '../time/org-timezone';
 
+import { escalationBadgeCopy } from './exception-escalation';
 import { recountOutcomeCopy, RECOUNT_MAX_ITEMS } from './exception-recount';
 import {
   EXCEPTION_FIRST_CHECK_PENDING_COPY,
@@ -438,15 +439,24 @@ export interface VerificationIssue {
   number: number | null;
   rule: string;
   locationId: string | null;
+  /** The maintenance request it was escalated to (F1-5): its handle, and
+   *  whether it was cancelled (null: not known). Absent or null when it was
+   *  never escalated. */
+  escalation?: { reference: string | null; cancelled: boolean | null } | null;
 }
 
-/** "EX-000042 · Count did not match the stock on record". A rule this build does not
+/** "EX-000042 · Count did not match the stock on record", and, for an
+ *  escalated exception, " · Escalated: MR-2026-000014" in the words every
+ *  other surface uses (core escalationBadgeCopy). A rule this build does not
  *  know reads as its reference alone. */
 export function verificationIssueChipCopy(
-  issue: Pick<VerificationIssue, 'number' | 'rule'>,
+  issue: Pick<VerificationIssue, 'number' | 'rule' | 'escalation'>,
 ): string {
   const ref = formatOccurrenceNumber(issue.number) ?? 'Open exception';
-  return isExceptionRule(issue.rule) ? `${ref} · ${EXCEPTION_RULES[issue.rule].label}` : ref;
+  const base = isExceptionRule(issue.rule) ? `${ref} · ${EXCEPTION_RULES[issue.rule].label}` : ref;
+  return issue.escalation
+    ? `${base} · ${escalationBadgeCopy(issue.escalation.reference, issue.escalation.cancelled)}`
+    : base;
 }
 
 // ── The location page ───────────────────────────────────────────────────────

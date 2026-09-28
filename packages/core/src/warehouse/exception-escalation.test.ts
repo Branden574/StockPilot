@@ -9,23 +9,35 @@ import {
   ESCALATE_NOT_PERMITTED_COPY,
   ESCALATE_OFFLINE_COPY,
   ESCALATE_RESOLVED_COPY,
+  ESCALATE_SERVER_PROBLEM_COPY,
+  ESCALATION_BUSY_COPY,
+  ESCALATION_CHANGED_COPY,
   ESCALATION_DESCRIPTION_MIN,
   ESCALATION_DESCRIPTION_PREFILL_MAX,
   ESCALATION_EXCEPTION_UNAVAILABLE_COPY,
   ESCALATION_FORM_NOTE_COPY,
+  ESCALATION_IN_PROGRESS_COPY,
   ESCALATION_SUBJECT_MAX,
   ESCALATION_SUBJECT_MIN,
   escalateDisabledReason,
   escalationAlreadyEscalatedCopy,
   escalationBadgeCopy,
   escalationDuplicateCopy,
+  escalationFailureCopy,
+  escalationInProgressCopy,
   escalationOpenRequestLabel,
   escalationPrefill,
   escalationRequestStateCopy,
+  escalationSavedRequestCopy,
+  escalationSourceLines,
   escalationSubject,
   type EscalationPrefillInput,
 } from './exception-escalation';
-import { describeOccurrenceEvent, EXCEPTION_RULE_IDS, type ExceptionRule } from './exceptions';
+import { describeOccurrenceEvent, EXCEPTION_RULE_IDS, EXCEPTION_RULES, type ExceptionRule } from './exceptions';
+
+const EXCEPTION_RULES_LABEL = Object.fromEntries(
+  EXCEPTION_RULE_IDS.map((r) => [r, EXCEPTION_RULES[r].label]),
+) as Record<ExceptionRule, string>;
 
 /**
  * F1-5: the escalation prefill and every sentence about an escalation, for
@@ -229,6 +241,12 @@ describe('the escalation wording (web and phone): honest about what StockPilot r
     for (const ref of ['MR-2026-000014', null, '']) {
       out.push(
         escalationBadgeCopy(ref),
+        escalationBadgeCopy(ref, true),
+        escalationBadgeCopy(ref, false),
+        escalationSavedRequestCopy({ reference: ref, cancelled: true }),
+        escalationSavedRequestCopy({ reference: ref, cancelled: false }),
+        escalationFailureCopy(ESCALATION_BUSY_COPY, { reference: ref, cancelled: true }),
+        escalationFailureCopy(ESCALATION_CHANGED_COPY, { reference: ref, cancelled: false }),
         escalationDuplicateCopy(ref),
         escalationAlreadyEscalatedCopy(ref),
         escalationOpenRequestLabel(ref),
@@ -247,6 +265,16 @@ describe('the escalation wording (web and phone): honest about what StockPilot r
     for (const rule of EXCEPTION_RULE_IDS) {
       const p = escalationPrefill(input(rule));
       out.push(p.subject, p.description);
+      const lines = escalationSourceLines({
+        reference: 'EX-000042',
+        rule,
+        item: { name: 'Chromebook charger', sku: 'CB-65' },
+        location: { name: 'Staging', archived: true },
+      });
+      out.push(lines.heading, lines.item ?? '', lines.location ?? '');
+    }
+    for (const holder of [null, { self: true as const }, { self: false as const, label: 'Pat Lee' }, { self: false as const, label: null }]) {
+      out.push(escalationInProgressCopy(holder));
     }
     out.push(describeOccurrenceEvent({ kind: 'escalated', actorLabel: 'Pat Lee' }));
     out.push(describeOccurrenceEvent({ kind: 'escalated', actorLabel: null }));
@@ -276,16 +304,78 @@ describe('the escalation wording (web and phone): honest about what StockPilot r
     expect(escalationBadgeCopy('MR-2026-000014')).not.toMatch(/acknowledg|resolv/i);
   });
 
-  it('the request line: only what StockPilot records, and nothing for a reader who cannot open the request', () => {
+  it('a cancelled link says so on the badge, for every reader (not known: the plain badge)', () => {
+    expect(escalationBadgeCopy('MR-2026-000014', true)).toBe('Escalated: MR-2026-000014 (request cancelled)');
+    expect(escalationBadgeCopy(null, true)).toBe('Escalated to maintenance (request cancelled)');
+    expect(escalationBadgeCopy('MR-2026-000014', false)).toBe('Escalated: MR-2026-000014');
+    expect(escalationBadgeCopy('MR-2026-000014', null)).toBe('Escalated: MR-2026-000014');
+  });
+
+  it('the request line: only what StockPilot records about the email, and nothing for a reader who cannot open the request', () => {
     expect(escalationRequestStateCopy(null)).toBeNull();
     expect(escalationRequestStateCopy({ draftOpened: true, cancelled: false })).toBe('Email draft opened');
     expect(escalationRequestStateCopy({ draftOpened: false, cancelled: false })).toBe('Email draft not yet opened');
-    expect(escalationRequestStateCopy({ draftOpened: true, cancelled: true })).toBe('Request cancelled');
+    // Cancelled: the badge says it (to everyone), so no second line.
+    expect(escalationRequestStateCopy({ draftOpened: true, cancelled: true })).toBeNull();
   });
 
-  it('the help says escalating neither acknowledges nor resolves, and that the email opens only by choice', () => {
+  it('the help says escalating neither acknowledges nor resolves, and that the email opens only by choice, after saving', () => {
     expect(escalation.ESCALATE_TO_MAINTENANCE_HELP).toContain('does not acknowledge or resolve');
     expect(escalation.ESCALATE_TO_MAINTENANCE_HELP).toContain('opens only if you choose it');
+    expect(escalation.ESCALATE_TO_MAINTENANCE_HELP).toContain('After it is saved');
+    // It is shown on the exception page too, where the next screen is the
+    // form (which has no email action): it must not point at "the next screen".
+    expect(escalation.ESCALATE_TO_MAINTENANCE_HELP).not.toMatch(/next screen/i);
+  });
+
+  it('an escalation under way names who holds it, so the person refused knows whom to ask', () => {
+    expect(escalationInProgressCopy({ self: false, label: 'Pat Lee' })).toBe(
+      'Pat Lee is escalating this exception right now. Try again in a minute.',
+    );
+    expect(escalationInProgressCopy({ self: true })).toBe(
+      'You are already escalating this exception, in another tab or on another device. Try again in a minute.',
+    );
+    expect(escalationInProgressCopy({ self: false, label: null })).toBe(ESCALATION_IN_PROGRESS_COPY);
+    expect(escalationInProgressCopy({ self: false, label: '  ' })).toBe(ESCALATION_IN_PROGRESS_COPY);
+    expect(escalationInProgressCopy(null)).toBe(ESCALATION_IN_PROGRESS_COPY);
+  });
+
+  it('a failure after a request was saved says what became of it: cancelled only when it was', () => {
+    expect(escalationSavedRequestCopy({ reference: 'MR-2026-000014', cancelled: true })).toBe(
+      'The request saved for it (MR-2026-000014) was cancelled.',
+    );
+    expect(escalationSavedRequestCopy({ reference: 'MR-2026-000014', cancelled: false })).toBe(
+      'The request saved for it (MR-2026-000014) is not linked to this exception and could not be cancelled. Check your maintenance requests.',
+    );
+    expect(escalationFailureCopy(ESCALATION_BUSY_COPY, { reference: 'MR-2026-000014', cancelled: true })).toBe(
+      'This exception is busy. Try again in a moment. The request saved for it (MR-2026-000014) was cancelled.',
+    );
+    expect(escalationFailureCopy(ESCALATION_BUSY_COPY, null)).toBe(ESCALATION_BUSY_COPY);
+    // The changed-meanwhile sentence claims nothing about the request itself.
+    expect(ESCALATION_CHANGED_COPY).not.toMatch(/cancel/i);
+    expect(ESCALATE_SERVER_PROBLEM_COPY).toContain('not known whether the request was saved');
+  });
+
+  it('the linked-exception card lines, the same on the web and the phone', () => {
+    expect(
+      escalationSourceLines({
+        reference: 'EX-000042',
+        rule: 'stale_staging',
+        item: { name: 'Chromebook charger', sku: 'CB-65' },
+        location: { name: 'Staging', archived: false },
+      }),
+    ).toEqual({ heading: 'EX-000042 · Sitting in Staging', item: 'Chromebook charger (CB-65)', location: 'Staging' });
+    expect(
+      escalationSourceLines({
+        reference: null,
+        rule: 'orphaned_stock',
+        item: { name: 'Chromebook charger', sku: null },
+        location: { name: '40-C', archived: true },
+      }),
+    ).toEqual({ heading: EXCEPTION_RULES_LABEL.orphaned_stock, item: 'Chromebook charger', location: '40-C (archived)' });
+    expect(
+      escalationSourceLines({ reference: 'EX-000042', rule: 'over_reserved', item: null, location: null }),
+    ).toEqual({ heading: `EX-000042 · ${EXCEPTION_RULES_LABEL.over_reserved}`, item: null, location: null });
   });
 
   it('why Escalate is unavailable: reasons reconnecting would not change come before offline', () => {

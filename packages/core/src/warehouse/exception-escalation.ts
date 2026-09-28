@@ -10,11 +10,12 @@
  * ONLY"). Escalating SAVES a maintenance request; it does not send anything.
  * The email to the maintenance team opens only when the person chooses it on
  * the request's review screen, and StockPilot never learns whether it was
- * sent or whether a ticket exists. So the copy says "Escalated: MR-...", and,
+ * sent or whether a ticket exists. So the copy says "Escalated: MR-..." (with
+ * "(request cancelled)" once that request is cancelled, to every reader), and,
  * to a reader who can open the request, "Email draft opened" or "Email draft
- * not yet opened" (maintenance_requests.outlook_draft_opened_at, which the
- * review screen records when a draft really opened). Never "sent", never
- * "ticket created", never "notified".
+ * not yet opened" (maintenance_requests.outlook_draft_opened_at: see
+ * EscalationRequestView.draftOpened for exactly when it is recorded). Never
+ * "sent", never "ticket created", never "notified".
  *
  * Escalating neither acknowledges nor resolves the exception: only the
  * system check resolves one, when the condition is gone.
@@ -186,9 +187,11 @@ export function escalationPrefill(input: EscalationPrefillInput): EscalationPref
 /** The button, on the web and the phone. */
 export const ESCALATE_TO_MAINTENANCE_LABEL = 'Escalate to maintenance';
 
-/** What escalating does, and what it does not do. */
+/** What escalating does, and what it does not do. Shown under the button on
+ *  the exception and on the escalation form, so it names no screen: the
+ *  email choice is on the request's screen, after Save. */
 export const ESCALATE_TO_MAINTENANCE_HELP =
-  'Saves one maintenance request for this exception. The email to the maintenance team opens only if you choose it on the next screen. Escalating does not acknowledge or resolve this exception.';
+  'Saves one maintenance request for this exception. After it is saved, the email to the maintenance team opens only if you choose it. Escalating does not acknowledge or resolve this exception.';
 
 /** Why Escalate is not offered: the organization has no maintenance requests. */
 export const ESCALATE_MODULE_OFF_COPY = 'Maintenance requests are not turned on for this organization.';
@@ -204,14 +207,90 @@ export const ESCALATE_RESOLVED_COPY = 'This exception is resolved, so it can no 
 export const ESCALATE_OFFLINE_COPY =
   'You are offline. Escalating needs a connection, and it is not saved to try later.';
 
-/** Someone (possibly this person, in another tab) is escalating right now. */
+/** Someone is escalating right now, and who is not known (an older server,
+ *  or the name could not be read). */
 export const ESCALATION_IN_PROGRESS_COPY =
   'This exception is being escalated right now. Try again in a minute.';
 
-/** The occurrence resolved, or its claim was taken over, while escalating:
- *  the request that was saved for it has been cancelled. */
-export const ESCALATION_NOT_LINKED_COPY =
-  'The exception changed while it was being escalated, so the request was cancelled. Reload and try again.';
+/** Who holds the escalation under way: this person (another tab, another
+ *  device), or someone else, by name when it could be read. */
+export type EscalationHolder = { self: true } | { self: false; label: string | null };
+
+/**
+ * Someone is escalating this exception right now (the claim, under 2
+ * minutes old). Names who, so the person refused knows whom to ask; a
+ * holder who could not be named reads as ESCALATION_IN_PROGRESS_COPY.
+ */
+export function escalationInProgressCopy(holder: EscalationHolder | null): string {
+  if (holder?.self === true) {
+    return 'You are already escalating this exception, in another tab or on another device. Try again in a minute.';
+  }
+  const label = holder ? oneLine(holder.label) : '';
+  return label ? `${label} is escalating this exception right now. Try again in a minute.` : ESCALATION_IN_PROGRESS_COPY;
+}
+
+/** This person is escalating ANOTHER exception right now: one at a time. */
+export const ESCALATION_IN_PROGRESS_ELSEWHERE_COPY =
+  'You are escalating another exception right now. Try again in a minute.';
+
+/** The row was held by something else (a check, another escalation) past
+ *  the wait. Retrying is safe. */
+export const ESCALATION_BUSY_COPY = 'This exception is busy. Try again in a moment.';
+
+/** The occurrence resolved, or its claim was taken over, while escalating,
+ *  so the request could not be linked. Says nothing about that request:
+ *  escalationSavedRequestCopy says what became of it. */
+export const ESCALATION_CHANGED_COPY =
+  'The exception changed while it was being escalated. Reload and try again.';
+
+/** The database refused the link for a reason this build does not name
+ *  (never "the exception changed": that is not known). */
+export const ESCALATION_LINK_FAILED_COPY = 'The request could not be linked to this exception.';
+
+/** Too many escalations from this person in a minute. */
+export const ESCALATE_TOO_MANY_COPY = 'Too many requests. Wait a moment and try again.';
+
+/** The server failed in a way that leaves it unknown whether a request was
+ *  saved (or linked). Never "try again" alone: a retry could save a second
+ *  request. The web and the phone both say this for a server problem. */
+export const ESCALATE_SERVER_PROBLEM_COPY =
+  'The server had a problem, so it is not known whether the request was saved. Check your maintenance requests before trying again.';
+
+/** The session is not verified with the authenticator app this account
+ *  uses (the phone has no in-place step-up). Nothing was saved. */
+export const ESCALATE_AAL2_REQUIRED_COPY =
+  'Your account uses an authenticator app, and this session did not sign in with it. Sign out and sign back in with your code, then escalate again. Nothing was saved.';
+
+/** The organization requires two-factor authentication and this account
+ *  has none. Nothing was saved. */
+export const ESCALATE_MFA_REQUIRED_COPY =
+  'Your organization requires two-factor authentication. Set it up on the web, then sign in again. Nothing was saved.';
+
+/** A request this escalation saved before it failed, and what became of it:
+ *  cancelled (as its requester), or left as saved because the cancel failed
+ *  (for example, the maintenance module was turned off meanwhile). */
+export interface EscalationSavedRequest {
+  reference: string | null;
+  cancelled: boolean;
+}
+
+/** The sentence about a request an escalation saved but did not link. Only
+ *  what happened: "cancelled" only when the cancel succeeded. */
+export function escalationSavedRequestCopy(saved: EscalationSavedRequest): string {
+  const ref = oneLine(saved.reference);
+  if (saved.cancelled) {
+    return ref ? `The request saved for it (${ref}) was cancelled.` : 'The request saved for it was cancelled.';
+  }
+  return ref
+    ? `The request saved for it (${ref}) is not linked to this exception and could not be cancelled. Check your maintenance requests.`
+    : 'The request saved for it is not linked to this exception and could not be cancelled. Check your maintenance requests.';
+}
+
+/** A failed escalation's message: why (`base`), then what became of a
+ *  request it had saved, when it had saved one. */
+export function escalationFailureCopy(base: string, saved: EscalationSavedRequest | null): string {
+  return saved ? `${base} ${escalationSavedRequestCopy(saved)}` : base;
+}
 
 /** The escalation form's note under the linked exception (web and phone):
  *  what the form does not carry, so nobody expects it on the request. */
@@ -281,17 +360,31 @@ export function escalationAlreadyEscalatedCopy(reference: string | null): string
 
 // ── Copy: the occurrence ───────────────────────────────────────────────────
 
-/** "Escalated: MR-2026-000014", the badge beside the occurrence's state on
- *  every surface. Every reader of the occurrence sees it. */
-export function escalationBadgeCopy(reference: string | null): string {
+/**
+ * "Escalated: MR-2026-000014", the badge beside the occurrence's state on
+ * every surface (the lists, the exception, the item and location chips).
+ * Every reader of the occurrence sees it: the handle is a copy on the
+ * occurrence. `cancelled` true (the escalation_request_cancelled computed
+ * field, answered to every reader) adds "(request cancelled)": a new
+ * escalation may then be made.
+ */
+export function escalationBadgeCopy(reference: string | null, cancelled?: boolean | null): string {
   const ref = oneLine(reference);
-  return ref ? `Escalated: ${ref}` : 'Escalated to maintenance';
+  const badge = ref ? `Escalated: ${ref}` : 'Escalated to maintenance';
+  return cancelled === true ? `${badge} (request cancelled)` : badge;
 }
 
 /** What a reader who can open the linked request sees of it. */
 export interface EscalationRequestView {
-  /** maintenance_requests.outlook_draft_opened_at is set: a draft really
-   *  opened on some device (recorded after the open, never before). */
+  /**
+   * maintenance_requests.outlook_draft_opened_at is set: the request's
+   * screen recorded that the person opened the email draft. On the phone it
+   * is recorded after the Outlook or mail app opened. On the web it is
+   * recorded when an Outlook tab opened, and also when a blocked pop-up fell
+   * back to the email app, which the browser cannot confirm opened (the
+   * maintenance module's existing rule; the words say "opened", nothing
+   * about sending).
+   */
   draftOpened: boolean;
   /** cancelled_at is set: the escalation may be made again. */
   cancelled: boolean;
@@ -299,12 +392,31 @@ export interface EscalationRequestView {
 
 /**
  * The line under the badge for a reader who can open the request; null for
- * one who cannot (they are told nothing about the request's state). Only
- * what StockPilot records: a draft opened, or not yet; or the request was
- * cancelled.
+ * one who cannot (they are told nothing about the email). Only what
+ * StockPilot records: a draft opened, or not yet. Null for a cancelled
+ * request: the badge already says "(request cancelled)", to every reader.
  */
 export function escalationRequestStateCopy(request: EscalationRequestView | null): string | null {
-  if (!request) return null;
-  if (request.cancelled) return 'Request cancelled';
+  if (!request || request.cancelled) return null;
   return request.draftOpened ? 'Email draft opened' : 'Email draft not yet opened';
+}
+
+/**
+ * The linked-exception card on the escalation form (web and phone): the
+ * reference and rule, the item with its SKU, and the location when the
+ * condition is at one ("(archived)" when that location was archived since).
+ */
+export function escalationSourceLines(o: {
+  reference: string | null;
+  rule: ExceptionRule;
+  item: { name: string; sku: string | null } | null;
+  location: { name: string; archived: boolean } | null;
+}): { heading: string; item: string | null; location: string | null } {
+  const rule = EXCEPTION_RULES[o.rule]?.label ?? 'Inventory exception';
+  const ref = oneLine(o.reference);
+  return {
+    heading: ref ? `${ref} · ${rule}` : rule,
+    item: o.item ? `${o.item.name}${o.item.sku ? ` (${o.item.sku})` : ''}` : null,
+    location: o.location ? `${o.location.name}${o.location.archived ? ' (archived)' : ''}` : null,
+  };
 }

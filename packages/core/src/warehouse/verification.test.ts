@@ -684,6 +684,30 @@ describe('verificationIssueChipCopy', () => {
     expect(verificationIssueChipCopy({ number: 8, rule: 'future_rule' })).toBe('EX-000008');
     expect(verificationIssueChipCopy({ number: null, rule: 'future_rule' })).toBe('Open exception');
   });
+
+  it('F1-5: an escalated exception says so on the item and location chips, as on every other surface', () => {
+    expect(
+      verificationIssueChipCopy({
+        number: 42,
+        rule: 'count_variance',
+        escalation: { reference: 'MR-2026-000014', cancelled: false },
+      }),
+    ).toBe('EX-000042 · Count did not match the stock on record · Escalated: MR-2026-000014');
+    expect(
+      verificationIssueChipCopy({
+        number: 7,
+        rule: 'stale_staging',
+        escalation: { reference: 'MR-2026-000014', cancelled: true },
+      }),
+    ).toBe('EX-000007 · Sitting in Staging · Escalated: MR-2026-000014 (request cancelled)');
+    // Not known whether it was cancelled (an older server): the plain badge.
+    expect(
+      verificationIssueChipCopy({ number: 7, rule: 'stale_staging', escalation: { reference: null, cancelled: null } }),
+    ).toBe('EX-000007 · Sitting in Staging · Escalated to maintenance');
+    expect(verificationIssueChipCopy({ number: 7, rule: 'stale_staging', escalation: null })).toBe(
+      'EX-000007 · Sitting in Staging',
+    );
+  });
 });
 
 describe('parseItemVerificationSummary (the phone reads the API)', () => {
