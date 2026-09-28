@@ -33,6 +33,7 @@ export * from './inventory/stock-availability';
 export * from './warehouse/exceptions';
 export * from './warehouse/exception-recount';
 export * from './warehouse/verification';
+export * from './warehouse/exception-evidence';
 export * from './inventory/rack-label';
 export * from './inventory/rack-near-match';
 export * from './inventory/group-by-sku';
