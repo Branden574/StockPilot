@@ -23,6 +23,7 @@ import {
   type CompletionProjection,
   type NeededBySignal,
   type OrderReadinessResult,
+  type ReadinessDraftFacts,
   type ReadinessHold,
   type ReadinessItemAssessment,
   type ReadinessLineAssessment,
@@ -184,15 +185,37 @@ function inboundTakenBy(line: ReadinessLineAssessment, item: ReadinessItemAssess
   return null;
 }
 
+/**
+ * The draft POs the reader can open, in words: "draft PO-0043" when there is
+ * exactly one, "4 draft POs" for several, "more than 10 draft POs" past the
+ * facts' row cap (0377 lists 10). Null when none can be opened.
+ *
+ * A draft's number is named only when it is the only one. F2-1 production
+ * walk (2026-09-28): an item on four drafts of 25 said "On draft
+ * PO-1785135627464 100", the first draft's number beside the total of all
+ * four, so that PO read as holding 100.
+ */
+function openDraftsPhrase(drafts: ReadinessDraftFacts): string | null {
+  const n = drafts.rows.length;
+  if (drafts.truncated) return `more than ${n} draft POs`;
+  if (n === 1) return `draft ${drafts.rows[0]!.poNumber}`;
+  if (n > 1) return `${n} draft POs`;
+  return null;
+}
+
 function draftSentence(item: ReadinessItemAssessment | null, shortUnits: number): string | null {
   const drafts = item?.facts?.drafts;
   if (!drafts) return null;
   const covers = Math.min(shortUnits, item?.quantities?.draftRemaining ?? 0);
   if (covers <= 0) return null;
-  const first = drafts.rows[0];
-  return first
-    ? `Draft ${first.poNumber} covers ${fq(covers)} but has not been ordered.`
-    : `A draft PO covers ${fq(covers)} but has not been ordered.`;
+  // Units on drafts the reader can't open are a quantity only (0377): how
+  // many drafts hold them is not known, so none is counted or named.
+  const open = drafts.hiddenRemaining > 0 ? null : openDraftsPhrase(drafts);
+  if (!open) return `Draft POs cover ${fq(covers)} but have not been ordered.`;
+  if (drafts.rows.length === 1 && !drafts.truncated) {
+    return `Draft ${drafts.rows[0]!.poNumber} covers ${fq(covers)} but has not been ordered.`;
+  }
+  return `${open.charAt(0).toUpperCase()}${open.slice(1)} cover ${fq(covers)} but have not been ordered.`;
 }
 
 /**
@@ -347,11 +370,15 @@ export function describeReadinessWhy(
     }
   }
   if (f.drafts && q.draftRemaining > 0) {
-    parts.push(
-      f.drafts.rows[0]
-        ? `On draft ${f.drafts.rows[0].poNumber} ${fq(q.draftRemaining)} (not ordered)`
-        : `On draft POs ${fq(q.draftRemaining)} (not ordered)`,
-    );
+    // As on-order POs above: the drafts the reader can open (named when
+    // there is one, counted when there are several), then a quantity only
+    // for the ones they can't.
+    const open = openDraftsPhrase(f.drafts);
+    const openUnits = f.drafts.rows.reduce((s, r) => s + r.remaining, 0) + f.drafts.truncatedRemaining;
+    if (open && openUnits > 0) parts.push(`On ${open} ${fq(openUnits)} (not ordered)`);
+    if (f.drafts.hiddenRemaining > 0) {
+      parts.push(`On draft POs you can't open ${fq(f.drafts.hiddenRemaining)} (not ordered)`);
+    }
   }
   if (f.pendingOthers && f.pendingOthers.orders > 0) {
     const n = f.pendingOthers.orders;
