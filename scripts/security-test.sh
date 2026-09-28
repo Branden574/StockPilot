@@ -328,6 +328,20 @@ PGTAP_TESTS=(
   # the last units and the lock order against approve and complete_picking,
   # in both start orders, are scripts/db-concurrency/0378_hold_race.sh.
   supabase/tests/0378_order_hold_stock.test.sql
+  # Book Order Totals (0379): five SECURITY INVOKER functions (so orders,
+  # lines, items and warehouses RLS all apply), each with its gates in its
+  # body (signed in: 42501 unauthenticated; a member holding reports:read,
+  # else the SAME 42501 forbidden for a non-member, a disabled member or a
+  # revoked permission; the orders and books modules: P0001
+  # module_disabled), EXECUTE to authenticated only (anon, service_role and
+  # PUBLIC revoked). Every total is limited to the books and warehouses the
+  # caller can read: warehouse-, charter- and category-scoped members, and a
+  # member of two orgs with a cross-org line planted each way. Filter ids
+  # are validated against rows the caller can read. No answer carries
+  # requester data; `mine` is a boolean about the caller. Writes nothing and
+  # never raises 40001/40P01. The same file holds the brief's acceptance
+  # numbers and the reconciliation of totals, pages, drill-downs and exports.
+  supabase/tests/0379_book_order_totals.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
