@@ -11,12 +11,15 @@ import {
   ESCALATE_RESOLVED_COPY,
   ESCALATION_DESCRIPTION_MIN,
   ESCALATION_DESCRIPTION_PREFILL_MAX,
+  ESCALATION_EXCEPTION_UNAVAILABLE_COPY,
+  ESCALATION_FORM_NOTE_COPY,
   ESCALATION_SUBJECT_MAX,
   ESCALATION_SUBJECT_MIN,
   escalateDisabledReason,
   escalationAlreadyEscalatedCopy,
   escalationBadgeCopy,
   escalationDuplicateCopy,
+  escalationOpenRequestLabel,
   escalationPrefill,
   escalationRequestStateCopy,
   escalationSubject,
@@ -224,7 +227,12 @@ describe('the escalation wording (web and phone): honest about what StockPilot r
       if (typeof value === 'string') out.push(`${name}: ${value}`);
     }
     for (const ref of ['MR-2026-000014', null, '']) {
-      out.push(escalationBadgeCopy(ref), escalationDuplicateCopy(ref), escalationAlreadyEscalatedCopy(ref));
+      out.push(
+        escalationBadgeCopy(ref),
+        escalationDuplicateCopy(ref),
+        escalationAlreadyEscalatedCopy(ref),
+        escalationOpenRequestLabel(ref),
+      );
       for (const reason of ['module_disabled', 'not_permitted', 'resolved', 'already_escalated', null] as const) {
         for (const online of [true, false]) {
           const s = escalateDisabledReason({ reason, reference: ref, online });
@@ -293,6 +301,18 @@ describe('the escalation wording (web and phone): honest about what StockPilot r
 
   it('offline copy says nothing is saved to try later (online only, never queued)', () => {
     expect(ESCALATE_OFFLINE_COPY).toContain('not saved to try later');
+  });
+
+  it('an escalated exception the reader can open offers to open that request, by its handle', () => {
+    expect(escalationOpenRequestLabel('MR-2026-000014')).toBe('Open MR-2026-000014');
+    expect(escalationOpenRequestLabel(null)).toBe('Open the maintenance request');
+    expect(escalationOpenRequestLabel('  ')).toBe('Open the maintenance request');
+  });
+
+  it('the form note says where the item and location come from, and that photos are not copied', () => {
+    expect(ESCALATION_FORM_NOTE_COPY).toContain('come from the exception');
+    expect(ESCALATION_FORM_NOTE_COPY).toContain('Photos on the exception are not copied to the request');
+    expect(ESCALATION_EXCEPTION_UNAVAILABLE_COPY).toContain('cannot be escalated right now');
   });
 });
 

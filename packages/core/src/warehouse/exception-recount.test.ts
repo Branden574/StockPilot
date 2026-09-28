@@ -378,6 +378,19 @@ describe('activeRecountCopy / describeTimelineEvent', () => {
       }),
     ).toBe('Recount CC-000002 linked by Ana');
   });
+
+  it('an escalated entry names the maintenance request when the reader knows it (F1-5)', () => {
+    expect(
+      describeTimelineEvent({
+        kind: 'escalated',
+        actorLabel: 'Ana',
+        maintenanceRequestReference: 'MR-2026-000014',
+      }),
+    ).toBe('Escalated to maintenance request MR-2026-000014 by Ana');
+    expect(describeTimelineEvent({ kind: 'escalated', actorLabel: 'Ana', maintenanceRequestReference: null })).toBe(
+      'Escalated to a maintenance request by Ana',
+    );
+  });
 });
 
 describe('countStartAllowed', () => {

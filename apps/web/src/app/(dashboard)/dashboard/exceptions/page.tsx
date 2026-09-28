@@ -6,6 +6,7 @@ import { CheckNowButton } from '@/components/exceptions/check-now-button';
 import { RecountCheckbox, RecountSelectionProvider } from '@/components/exceptions/recount-selection';
 import {
   CheckedAt,
+  EscalationChip,
   ExceptionsUnavailable,
   exceptionTime,
   FirstCheckPending,
@@ -357,6 +358,9 @@ function OccurrenceRow({
               <div className="flex flex-wrap items-center gap-1.5">
                 <StateChip state={state} />
                 <RecurrenceChip recurrenceIndex={o.recurrenceIndex} />
+                {/* "Escalated: MR-..." (F1-5): text only here, since the row
+                    is a link already; the occurrence page links it. */}
+                <EscalationChip escalation={o.escalation} />
                 {recountNote ? (
                   <span className="text-muted-foreground text-xs" data-testid="recount-note">
                     {recountNote}

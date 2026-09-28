@@ -404,6 +404,9 @@ export function describeTimelineEvent(event: {
   resolvedReason?: OccurrenceResolvedReason | null;
   /** For recount_closed: what that count came to for the item. */
   recountOutcome?: RecountOutcome | null;
+  /** For escalated: the request's handle when the reader knows it (F1-5;
+   *  describeOccurrenceEvent words it). */
+  maintenanceRequestReference?: string | null;
 }): string {
   const base = describeOccurrenceEvent(event);
   return event.kind === 'recount_closed' && event.recountOutcome

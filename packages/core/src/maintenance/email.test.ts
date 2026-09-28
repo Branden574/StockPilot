@@ -4,6 +4,7 @@ import {
   buildMaintenanceEmailDraft,
   prepareMaintenanceEmail,
   MAINTENANCE_CONDENSED_DISCLOSURE,
+  relatedLocationText,
   type MaintenanceEmailInput,
 } from './email';
 import {
@@ -1325,6 +1326,19 @@ describe('F1-5: the Related Location line', () => {
       expect(body).not.toContain('undefined');
       expect(body).not.toContain('null');
     }
+  });
+
+  it('the screens read the same words as the email line (relatedLocationText)', () => {
+    expect(relatedLocationText({ name: ' Staging ', warehouseName: ' DC4 Fresno ' })).toBe('Staging (DC4 Fresno)');
+    expect(relatedLocationText({ name: 'Unplaced', warehouseName: null })).toBe('Unplaced');
+    expect(relatedLocationText({ name: 'Unplaced', warehouseName: '  ' })).toBe('Unplaced');
+    expect(relatedLocationText({ name: '   ', warehouseName: 'DC4 Fresno' })).toBeNull();
+    expect(relatedLocationText(null)).toBeNull();
+    expect(relatedLocationText(undefined)).toBeNull();
+    const loc = { name: '12-B', warehouseName: 'DC4 Fresno' };
+    expect(buildMaintenanceEmailDraft({ ...ESCALATION_INPUT, relatedLocation: loc }).body).toContain(
+      `Related Location: ${relatedLocationText(loc)}`,
+    );
   });
 
   it('it is the LAST group under the related-record heading, after item, order and rental', () => {

@@ -264,6 +264,21 @@ function cleanValue(value: string | null | undefined): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+/**
+ * A request's related location as one line of text, "Staging (DC4
+ * Warehouse)": the name, with its warehouse in brackets when known; null
+ * without a name. The email's Related Location line is this text, and the
+ * request's screens (web and phone) show the same words (F1-5).
+ */
+export function relatedLocationText(
+  location: { name: string | null; warehouseName: string | null } | null | undefined,
+): string | null {
+  const name = cleanValue(location?.name);
+  if (!name) return null;
+  const warehouse = cleanValue(location?.warehouseName);
+  return warehouse ? `${name} (${warehouse})` : name;
+}
+
 /** 'Label: value' only when the value is real — blocks omit empty lines
  *  entirely (never `undefined`, never `null`, never a bare label). */
 function line(label: string, value: string | null | undefined): string | null {
@@ -455,9 +470,7 @@ export function buildMaintenanceEmailDraft(
     // same line, so the item group's own Warehouse/Location lines (the
     // item's primary location) are never confused with it.
     if (input.relatedLocation && opts.omitRelatedLocation !== true) {
-      const name = cleanValue(input.relatedLocation.name);
-      const warehouse = cleanValue(input.relatedLocation.warehouseName);
-      groups.push(name ? line('Related Location', warehouse ? `${name} (${warehouse})` : name) : null);
+      groups.push(line('Related Location', relatedLocationText(input.relatedLocation)));
     }
     const realGroups = groups.filter((g): g is string => Boolean(g));
     blocks.push(realGroups.length ? section('RELATED STOCKPILOT RECORD', [realGroups.join('\n\n')]) : null);

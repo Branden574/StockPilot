@@ -6,11 +6,12 @@ import { can, RECOUNT_MAX_ITEMS, uuidSchema, type RecountUnavailableReason } fro
 
 import { reportError } from '@/lib/error-reporter';
 import { fetchCountAssignees } from '@/server/lib/count-assignees';
-import { ServiceError, withContext } from '@/server/services/context';
+import { ServiceError, withContext, type ServiceContext } from '@/server/services/context';
 import { ExceptionEscalationService } from '@/server/services/exception-escalation';
 import { ExceptionEvidenceService } from '@/server/services/exception-evidence';
 import { ExceptionOccurrencesService } from '@/server/services/exception-occurrences';
 import { ExceptionRecountService } from '@/server/services/exception-recount';
+import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
 import type { ExceptionRecountResult } from '@/server/services/exception-recount';
 import type { EscalationResult } from '@/server/services/exception-escalation';
 import type {
@@ -310,6 +311,26 @@ export async function removeExceptionEvidenceAction(
 }
 
 /**
+ * Whether this reader can open the maintenance request (its requester, or a
+ * holder of maintenance_requests:read_all or :manage), asked the way its page
+ * asks: MaintenanceRequestsService.get under the reader's own RLS. The answer
+ * decides where the form sends them, so the read's error is bound: anything
+ * but a clean read is "no" (the exception page is always safe to land on),
+ * and a failure that is not simply "not visible" is reported.
+ */
+async function canOpenRequest(ctx: ServiceContext, requestId: string): Promise<boolean> {
+  try {
+    await new MaintenanceRequestsService(ctx).get(requestId);
+    return true;
+  } catch (e) {
+    if (!(e instanceof ServiceError && e.code === 'not_found')) {
+      void reportError(e, { tag: 'actions.exceptions.escalate_duplicate_read', level: 'warning' });
+    }
+    return false;
+  }
+}
+
+/**
  * "Escalate to maintenance" (F1-5). `values` is the request form's four
  * fields (subject, description, priority, category); any other key is
  * ignored, and the item and location come from the occurrence on the server.
@@ -317,22 +338,35 @@ export async function removeExceptionEvidenceAction(
  *
  * A failure carries `reason` (already_escalated, escalation_in_progress,
  * occurrence_resolved, escalation_not_claimed, request_not_eligible, busy,
- * module_disabled; aal2_required from the MFA step-up), and for
- * already_escalated the linked
- * request's `requestId` and `reference`, so the form can open it.
+ * module_disabled; aal2_required from the MFA step-up). For already_escalated
+ * it also carries the linked request's `requestId` and `reference`, and
+ * `requestVisible`: whether this reader can open that request (the form opens
+ * it when they can, and goes back to the exception when they cannot). The
+ * exception's pages are revalidated then too: the page the person came from
+ * still offered Escalate.
  */
 export async function escalateExceptionAction(
   id: string,
   values: unknown,
 ): Promise<
   | ({ ok: true } & EscalationResult)
-  | { error: { message: string; reason: string | null; retryable?: boolean; requestId?: string; reference?: string | null } }
+  | {
+      error: {
+        message: string;
+        reason: string | null;
+        retryable?: boolean;
+        requestId?: string;
+        reference?: string | null;
+        requestVisible?: boolean;
+      };
+    }
 > {
+  let ctx: ServiceContext | null = null;
   try {
     if (!uuidSchema.safeParse(id).success) {
       throw new ServiceError('validation_error', 'That exception id is not valid.');
     }
-    const ctx = await withContext();
+    ctx = await withContext();
     const request = await new ExceptionEscalationService(ctx).escalate(id, values);
     revalidatePath('/dashboard/exceptions');
     revalidatePath(`/dashboard/exceptions/${id}`);
@@ -345,11 +379,14 @@ export async function escalateExceptionAction(
     }
     const details = e instanceof ServiceError && e.code !== 'internal_error' ? e.details : undefined;
     if (failure.error.reason === 'already_escalated' && typeof details?.requestId === 'string') {
+      revalidatePath('/dashboard/exceptions');
+      revalidatePath(`/dashboard/exceptions/${id}`);
       return {
         error: {
           ...failure.error,
           requestId: details.requestId,
           reference: typeof details.reference === 'string' ? details.reference : null,
+          requestVisible: ctx ? await canOpenRequest(ctx, details.requestId) : false,
         },
       };
     }

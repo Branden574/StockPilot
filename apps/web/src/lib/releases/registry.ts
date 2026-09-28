@@ -28,6 +28,83 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'exception-escalation-2026-09',
+    revision: 1,
+    // DRAFT until the phone update (pnpm release:ota: the phone's Escalate,
+    // its prefilled form, the badge and draft wording, and the request's
+    // location) and the Demo Co walk (test routing only; the request is
+    // cancelled before the module is turned off again). A draft never leaves
+    // the server (visibleReleases, registryFingerprint), so merging the web
+    // screens announces nothing. The follow-up that publishes it sets
+    // 'published', sets publishedAt to the real time (still the newest), and
+    // flips the pin in registry.test.ts. Every sentence must be true on both
+    // platforms then.
+    //
+    // Addressed where Maintenance requests is on, to readers of exceptions
+    // (items:read, the Exceptions page's gate); the escalate entry adds
+    // maintenance_requests:submit, the action's own gate.
+    status: 'draft',
+    title: 'Escalate an exception to maintenance',
+    summary:
+      "On the web and in the mobile app, where your organization uses Maintenance requests, an open exception can be escalated. Escalate to maintenance opens the request form filled in from the exception, and saving it creates one maintenance request linked to the exception. Nothing is emailed when you save: the email to the maintenance team opens only if you choose it on the next screen. Escalating does not acknowledge or resolve the exception, which then shows the request's number.",
+    publishedAt: '2026-09-29T17:00:00Z',
+    audience: { anyPermission: ['items:read'], modules: ['maintenance_requests'] },
+    entries: [
+      {
+        id: 'exception-escalate-to-maintenance',
+        category: 'new',
+        area: 'Inventory',
+        title: 'Escalate an exception to maintenance',
+        whatChanged:
+          "An open exception has an Escalate to maintenance action. It opens the maintenance request form with a subject naming the item and its SKU, and a description saying what is wrong, where, and the exception's number, such as EX-000042. You can change any of it before you save. Saving creates one maintenance request linked to the exception, with the exception's item and, for a condition at a location, that location, and then shows the request.",
+        whyItMatters:
+          'When an exception needed the maintenance team, the request had to be written from scratch, and nothing on the exception showed that it had been passed on.',
+        howItAffectsYou:
+          'Nothing is emailed when you save: the email opens only if you choose it on the next screen, and you send it yourself. An exception has one request at a time. A new one can be made only if that one is cancelled, and if you can open that request, the exception links to it instead. Escalating needs a connection and is not saved to try later. It does not acknowledge or resolve the exception. Photos on the exception are not copied; you can add photos to the request after it is saved. The request notifies the same people as one made from the maintenance form.',
+        whatToDo:
+          'Open an exception that is still open, choose Escalate to maintenance, check the request and save it. Then, on the next screen, open the email if the maintenance team should be told.',
+        link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
+        audience: { anyPermission: ['maintenance_requests:submit'], modules: ['maintenance_requests'] },
+      },
+      {
+        id: 'exception-escalated-badge',
+        category: 'new',
+        area: 'Inventory',
+        title: 'An escalated exception shows its maintenance request',
+        whatChanged:
+          "An exception that was escalated shows Escalated with the request's number, such as MR-2026-000014, in the Exceptions list and on the exception, and its timeline records who escalated it. If you can open the request, the number links to it, and the exception says whether an email draft has been opened from StockPilot for it, or that the request was cancelled.",
+        whyItMatters:
+          'Anyone looking at the exception can see that it was passed to the maintenance team, so it is not escalated twice.',
+        howItAffectsYou:
+          'StockPilot shows only what it records: the request, whether an email draft was opened from it, and whether it was cancelled. It does not know whether an email went out or what the maintenance team did.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/exceptions', label: 'Open Exceptions' },
+        audience: { anyPermission: ['items:read'], modules: ['maintenance_requests'] },
+      },
+      {
+        id: 'maintenance-request-related-location',
+        category: 'improved',
+        area: 'Maintenance',
+        title: 'A request made from an exception names its location',
+        whatChanged:
+          'A maintenance request made from an exception at a location, such as a rack or Staging, shows that location and its warehouse on the request, and its email draft includes it as Related Location.',
+        whyItMatters: 'Whoever handles the request can see where the problem is without looking up the exception.',
+        howItAffectsYou:
+          'When the email has to be shortened to fit, the location is the first line left out; copying the email details always includes it.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/maintenance', label: 'Open Maintenance' },
+        audience: {
+          anyPermission: [
+            'maintenance_requests:submit',
+            'maintenance_requests:read_all',
+            'maintenance_requests:manage',
+          ],
+          modules: ['maintenance_requests'],
+        },
+      },
+    ],
+  },
+  {
     id: 'exception-photos-2026-09',
     revision: 1,
     // Held as a draft until the phone update (OTA group 531e3cc0) and the Demo

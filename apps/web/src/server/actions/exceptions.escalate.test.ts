@@ -3,12 +3,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * escalateExceptionAction (F1-5) is a thin wrapper over the service the
  * phone's escalate route uses. Pinned here: a bad id never reaches the
- * service; a duplicate answers the linked request's id and handle (the form
- * opens it); the module-off answer names itself; raw database text never
- * crosses; a success revalidates the exception and the maintenance list.
+ * service; a duplicate answers the linked request's id and handle, and
+ * whether THIS reader can open it (the form opens it only then, and goes
+ * back to the exception otherwise), and revalidates the exception pages the
+ * person came from; the module-off answer names itself; raw database text
+ * never crosses; a success revalidates the exception and the maintenance
+ * list.
  */
 
-const { escalate, withContextMock } = vi.hoisted(() => ({ escalate: vi.fn(), withContextMock: vi.fn() }));
+const { escalate, withContextMock, getRequest } = vi.hoisted(() => ({
+  escalate: vi.fn(),
+  withContextMock: vi.fn(),
+  getRequest: vi.fn(),
+}));
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
@@ -17,12 +24,19 @@ vi.mock('@/server/services/exception-escalation', () => ({
     escalate = escalate;
   },
 }));
+vi.mock('@/server/services/maintenance-requests', () => ({
+  MaintenanceRequestsService: class {
+    get = getRequest;
+  },
+}));
 vi.mock('@/server/services/context', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/server/services/context')>()),
   withContext: withContextMock,
 }));
 
 import { revalidatePath } from 'next/cache';
+
+import { reportError } from '@/lib/error-reporter';
 
 import { ServiceError } from '@/server/services/context';
 
@@ -60,23 +74,65 @@ describe('escalateExceptionAction', () => {
     expect(escalate).not.toHaveBeenCalled();
   });
 
-  it('a duplicate answers the linked request\'s id and handle, so the form opens it', async () => {
-    escalate.mockRejectedValue(
-      new ServiceError('conflict', 'This exception is already escalated to MR-2026-000009. Opening that request.', {
-        reason: 'already_escalated',
-        requestId: REQ,
-        requestNumber: 9,
-        reference: 'MR-2026-000009',
-      }),
-    );
+  function duplicate() {
+    return new ServiceError('conflict', 'This exception is already escalated to MR-2026-000009. Opening that request.', {
+      reason: 'already_escalated',
+      requestId: REQ,
+      requestNumber: 9,
+      reference: 'MR-2026-000009',
+    });
+  }
+
+  it('a duplicate the reader can open answers its id, handle and requestVisible true, so the form opens it', async () => {
+    escalate.mockRejectedValue(duplicate());
+    getRequest.mockResolvedValue({ id: REQ });
     await expect(escalateExceptionAction(ID, VALUES)).resolves.toEqual({
       error: {
         message: 'This exception is already escalated to MR-2026-000009. Opening that request.',
         reason: 'already_escalated',
         requestId: REQ,
         reference: 'MR-2026-000009',
+        requestVisible: true,
       },
     });
+    // Asked the way the request's page asks: get() under the reader's RLS.
+    expect(getRequest).toHaveBeenCalledWith(REQ);
+    // The exception pages the person came from still offered Escalate.
+    expect(revalidatePath).toHaveBeenCalledWith('/dashboard/exceptions');
+    expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/exceptions/${ID}`);
+    expect(revalidatePath).not.toHaveBeenCalledWith('/dashboard/maintenance');
+  });
+
+  // Mutation caught: requestVisible true without the read (a reader who
+  // cannot open the request would be sent to a 404).
+  it('a duplicate the reader cannot open answers requestVisible false, so the form goes back to the exception', async () => {
+    escalate.mockRejectedValue(duplicate());
+    getRequest.mockRejectedValue(new ServiceError('not_found', 'Maintenance request not found'));
+    const res = await escalateExceptionAction(ID, VALUES);
+    expect(res).toMatchObject({ error: { reason: 'already_escalated', requestId: REQ, requestVisible: false } });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('a failed visibility read is "cannot open" (the exception page is always safe), and is reported', async () => {
+    escalate.mockRejectedValue(duplicate());
+    getRequest.mockRejectedValue(new ServiceError('internal_error', 'read failed'));
+    const res = await escalateExceptionAction(ID, VALUES);
+    expect(res).toMatchObject({ error: { reason: 'already_escalated', requestVisible: false } });
+    expect(reportError).toHaveBeenCalledWith(
+      expect.any(ServiceError),
+      expect.objectContaining({ tag: 'actions.exceptions.escalate_duplicate_read' }),
+    );
+  });
+
+  it('no other failure asks about a request or revalidates', async () => {
+    escalate.mockRejectedValue(
+      new ServiceError('conflict', 'This exception is being escalated right now. Try again in a minute.', {
+        reason: 'escalation_in_progress',
+        retryable: true,
+      }),
+    );
+    await escalateExceptionAction(ID, VALUES);
+    expect(getRequest).not.toHaveBeenCalled();
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 

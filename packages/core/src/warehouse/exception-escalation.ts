@@ -213,6 +213,26 @@ export const ESCALATION_IN_PROGRESS_COPY =
 export const ESCALATION_NOT_LINKED_COPY =
   'The exception changed while it was being escalated, so the request was cancelled. Reload and try again.';
 
+/** The escalation form's note under the linked exception (web and phone):
+ *  what the form does not carry, so nobody expects it on the request. */
+export const ESCALATION_FORM_NOTE_COPY =
+  'The item and the location come from the exception, not from this form. Photos on the exception are not copied to the request; you can add photos on the request after it is saved.';
+
+/** The escalation form could not read its exception, so it offers no form
+ *  (a plain request would not be linked to the exception). */
+export const ESCALATION_EXCEPTION_UNAVAILABLE_COPY =
+  'This exception could not be loaded, so it cannot be escalated right now. Reload the page to try again.';
+
+/**
+ * The action on an exception already escalated to a request this reader can
+ * open: it opens that request instead of making another ("Open
+ * MR-2026-000014").
+ */
+export function escalationOpenRequestLabel(reference: string | null): string {
+  const ref = oneLine(reference);
+  return ref ? `Open ${ref}` : 'Open the maintenance request';
+}
+
 /** The answer to an Escalate that found a request already linked (the 409):
  *  the client opens that request instead. */
 export function escalationDuplicateCopy(reference: string | null): string {

@@ -1,4 +1,5 @@
 import { AlertTriangle, Clock } from 'lucide-react';
+import Link from 'next/link';
 
 import { Badge } from '@/components/ui/badge';
 
@@ -6,6 +7,7 @@ import {
   EXCEPTION_FIRST_CHECK_PENDING_COPY,
   EXCEPTION_LIST_UNAVAILABLE_COPY,
   EXCEPTION_RULES,
+  escalationBadgeCopy,
   exceptionCheckedAtCopy,
   exceptionUncheckedRulesCopy,
   exceptionUnrecognizedCopy,
@@ -17,7 +19,11 @@ import {
   type OccurrenceState,
 } from '@stockpilot/core';
 
-import type { ExceptionOccurrence, ExceptionSyncState } from '@/server/services/exception-occurrences';
+import type {
+  ExceptionOccurrence,
+  ExceptionSyncState,
+  OccurrenceEscalation,
+} from '@/server/services/exception-occurrences';
 
 /**
  * Display pieces shared by the Exceptions list and the occurrence page
@@ -59,6 +65,36 @@ export function StateChip({ state }: { state: OccurrenceState }) {
 export function RecurrenceChip({ recurrenceIndex }: { recurrenceIndex: number }) {
   const label = recurrenceBadge(recurrenceIndex);
   return label ? <Badge variant="outline">{label}</Badge> : null;
+}
+
+/**
+ * "Escalated: MR-2026-000014" (F1-5), beside the state on the list and the
+ * occurrence page. Every reader of the occurrence sees it: the handle is a
+ * copy on the occurrence itself. It links to the request only when `href` is
+ * given, which the page does for a reader who can open the request (and never
+ * inside a list row, which is a link already). Nothing for an occurrence
+ * never escalated.
+ */
+export function EscalationChip({
+  escalation,
+  href = null,
+}: {
+  escalation: OccurrenceEscalation | null;
+  href?: string | null;
+}) {
+  if (!escalation) return null;
+  const label = escalationBadgeCopy(escalation.reference);
+  return (
+    <Badge variant="outline" data-testid="escalation-badge">
+      {href ? (
+        <Link href={href} className="hover:underline">
+          {label}
+        </Link>
+      ) : (
+        label
+      )}
+    </Badge>
+  );
 }
 
 export function SeverityChip({ rule }: { rule: ExceptionRule }) {
