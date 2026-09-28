@@ -76,6 +76,7 @@ import {
 } from '@stockpilot/core';
 
 import { focusOrderLine } from '@/components/orders/focus-order-line';
+import { formatNeededBy } from '@/lib/orders/needed-by-format';
 import type { OrderRequestStatus } from '@/server/services/order-requests';
 
 interface Props {
@@ -84,6 +85,10 @@ interface Props {
   internalNotes: string | null;
   /** Order's needed-by deadline (null = unset). Drives the AI suggest chip. */
   neededBy: string | null;
+  /** The org's time zone (the page's one zone, from the readiness facts):
+   *  the needed-by chip and the AI's suggested deadline print in it, so the
+   *  server's HTML and the browser's hydration say the same time. */
+  orgTimeZone: string;
   /** Whether the requester wrote a free-text note the AI could parse. */
   hasRequesterNote: boolean;
   fulfillmentType: 'pickup' | 'delivery';
@@ -189,6 +194,7 @@ export function ManagerActionsPanel({
   status,
   internalNotes,
   neededBy,
+  orgTimeZone,
   hasRequesterNote,
   fulfillmentType,
   assignedDeliveryUserId,
@@ -612,6 +618,7 @@ export function ManagerActionsPanel({
               <NeededBySuggest
                 orderId={orderId}
                 neededBy={neededBy}
+                timeZone={orgTimeZone}
                 hasRequesterNote={hasRequesterNote}
               />
               <Button variant="gradient" onClick={approve} disabled={busy !== null}>
@@ -1355,10 +1362,14 @@ export function ManagerActionsPanel({
 function NeededBySuggest({
   orderId,
   neededBy,
+  timeZone,
   hasRequesterNote,
 }: {
   orderId: string;
   neededBy: string | null;
+  /** The org's zone: both times print in it (formatNeededBy), never in the
+   *  runtime's, which differ between the server and the browser. */
+  timeZone: string;
   hasRequesterNote: boolean;
 }) {
   const router = useRouter();
@@ -1370,11 +1381,7 @@ function NeededBySuggest({
       <div className="text-muted-foreground -mt-1 mb-1 flex w-full items-center gap-1.5 text-xs">
         <CalendarClock className="size-3.5" />
         Needed by{' '}
-        <span className="text-foreground font-medium">
-          {new Date(neededBy).toLocaleString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-          })}
-        </span>
+        <span className="text-foreground font-medium">{formatNeededBy(neededBy, timeZone)}</span>
         <span>— approval adds it to the Schedule.</span>
       </div>
     );
@@ -1422,10 +1429,8 @@ function NeededBySuggest({
           <span className="text-muted-foreground inline-flex items-center gap-1.5">
             <Sparkles className="size-3.5" /> AI read the note as
             <span className="text-foreground font-medium">
-              {iso &&
-                new Date(iso).toLocaleString('en-US', {
-                  weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-                })}
+              {/* The action read the note in the org's zone; it prints there too. */}
+              {iso && formatNeededBy(iso, timeZone)}
             </span>
           </span>
           <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={apply} disabled={phase === 'applying'}>

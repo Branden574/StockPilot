@@ -1,6 +1,9 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react';
+import { hydrateRoot } from 'react-dom/client';
+import { renderToString } from 'react-dom/server';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   COMPLETION_CONFIRM_LABEL,
@@ -73,6 +76,7 @@ function baseProps(overrides: Partial<PanelProps> = {}): PanelProps {
     status: 'pick_slip_generated',
     internalNotes: null,
     neededBy: null,
+    orgTimeZone: 'America/Los_Angeles',
     hasRequesterNote: false,
     fulfillmentType: 'pickup',
     assignedDeliveryUserId: null,
@@ -747,5 +751,63 @@ describe('ManagerActionsPanel — the confirm before an order leaves short (F2-2
     await user.click(screen.getByRole('button', { name: 'Collect signature' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(openSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// React #418 on an order with a needed-by (F2-1 walk, 2026-09-28): the
+// approval panel's "Needed by" chip formatted the time with toLocaleString and
+// no zone, so the server (UTC on Vercel) printed 9:00 PM and the browser
+// (Pacific) 2:00 PM, and hydration failed. The chip prints in the org's zone,
+// the same words on the server and in any browser.
+describe('ManagerActionsPanel — the needed-by chip hydrates in any zone', () => {
+  const runtimeZone = process.env.TZ;
+  afterEach(() => {
+    if (runtimeZone === undefined) delete process.env.TZ;
+    else process.env.TZ = runtimeZone;
+    document.body.innerHTML = '';
+  });
+
+  it('server in UTC, browser in New York, org in Los Angeles: one time, no hydration error', async () => {
+    const ui = (
+      <ManagerActionsPanel
+        {...baseProps({
+          status: 'pending_approval',
+          canApprove: true,
+          viewerRole: 'manager',
+          // 2:00 PM in Los Angeles; 9:00 PM UTC; 5:00 PM in New York.
+          neededBy: '2026-09-28T21:00:00Z',
+          orgTimeZone: 'America/Los_Angeles',
+        })}
+      />
+    );
+    process.env.TZ = 'UTC';
+    const html = renderToString(ui);
+
+    const container = document.createElement('div');
+    container.innerHTML = html;
+    document.body.appendChild(container);
+    process.env.TZ = 'America/New_York';
+    const errors: unknown[] = [];
+    const consoleError = vi.spyOn(console, 'error').mockImplementation((...args) => {
+      errors.push(args);
+    });
+    // React's own act (hydrateRoot is not RTL's render): tell React this is
+    // a test environment, so the only errors collected are the hydration's.
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const wasActEnvironment = env.IS_REACT_ACT_ENVIRONMENT;
+    env.IS_REACT_ACT_ENVIRONMENT = true;
+    try {
+      await act(async () => {
+        hydrateRoot(container, ui, { onRecoverableError: (e) => errors.push(e) });
+      });
+    } finally {
+      env.IS_REACT_ACT_ENVIRONMENT = wasActEnvironment;
+      consoleError.mockRestore();
+    }
+    // The mismatch itself first: on the old code this is React's "server
+    // rendered text didn't match the client" (production's #418).
+    expect(errors).toEqual([]);
+    expect(html).toContain('Mon, Sep 28, 2:00 PM');
+    expect(container.textContent).toContain('Needed by Mon, Sep 28, 2:00 PM');
   });
 });
