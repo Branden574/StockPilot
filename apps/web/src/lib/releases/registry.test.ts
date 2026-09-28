@@ -456,7 +456,12 @@ describe('F1-4 (photos on exceptions) is published', () => {
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(F1_4);
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(F1_4);
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(F1_4);
+    // An old phone build lists at most three unread releases, newest first;
+    // F1-4 comes into that list once the newer releases are read.
+    const newer = Object.fromEntries(
+      RELEASES.slice(0, RELEASES.findIndex((r) => r.id === F1_4)).map((r) => [r.id, true]),
+    );
+    expect(legacyAnnouncementsFor(RELEASES, everyone, newer).map((a) => a.id)).toContain(F1_4);
     expect(registryFingerprint(RELEASES)).toContain(F1_4);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(F1_4);
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-29T00:00:00Z'));
@@ -534,19 +539,20 @@ describe('F1-5 (escalate an exception to maintenance) is published', () => {
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(F1_5);
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(F1_5);
-    // The notice offers the newest unread release: this one.
-    expect(list.latestUnread?.id).toBe(F1_5);
+    // The notice offers the newest unread release; F2-1's readiness release
+    // was published after this one.
+    expect(list.latestUnread?.id).toBe('order-readiness-2026-09');
     expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(F1_5);
     expect(registryFingerprint(RELEASES)).toContain(F1_5);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(F1_5);
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-29T00:00:00Z'));
   });
 
-  it('sits above every published release, dated after every release below it, so publishing it makes it the newest', () => {
-    // Pinned by id, not by index: newer drafts (F2-1's readiness release)
-    // sit above it until they are published.
+  it('is dated after every release below it (releases above it were published later)', () => {
     const at = RELEASES.findIndex((r) => r.id === F1_5);
-    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
     for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
@@ -640,15 +646,15 @@ describe('the maintenance photo details release is published', () => {
   };
 
   it('is published just below F1-5\'s release, so every feed carries it', () => {
-    // Pinned by id, not by index: newer drafts (F2-1's readiness release)
-    // sit above F1-5's release until they are published.
+    // Pinned by id, not by index: newer releases (F2-1's readiness release)
+    // sit above F1-5's release.
     expect(RELEASES.findIndex((r) => r.id === ID)).toBe(
       RELEASES.findIndex((r) => r.id === 'exception-escalation-2026-09') + 1,
     );
     expect(release().status).toBe('published');
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
     expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).toContain(ID);
-    // Second among the published releases, so an old phone build lists it
+    // Third among the published releases, so an old phone build lists it
     // among its three.
     expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(ID);
     expect(registryFingerprint(RELEASES)).toContain(ID);
@@ -676,14 +682,12 @@ describe('the maintenance photo details release is published', () => {
 });
 
 /**
- * F2-1's release (order readiness) is held as a DRAFT until its phone release
+ * F2-1's release (order readiness) was held as a DRAFT until its phone release
  * (pnpm release:ota: the phone's summary, line cards and the same Approve
  * partial / Resume gates) and the Demo Co walk, as F1-3's, F1-4's and F1-5's
- * were: published with the web page, it would tell phone users about
- * readiness their app does not show yet. The follow-up that publishes it sets
- * 'published' and the real publishedAt, and flips the first pin here.
+ * were. This follow-up publishes it.
  */
-describe('F2-1 (order readiness) is held as a draft', () => {
+describe('F2-1 (order readiness) is published', () => {
   const F2_1 = 'order-readiness-2026-09';
   const release = () => RELEASES.find((r) => r.id === F2_1)!;
   const everyone: ReleaseViewer = {
@@ -693,17 +697,16 @@ describe('F2-1 (order readiness) is held as a draft', () => {
   };
   const published = (): Release => ({ ...release(), status: 'published' });
 
-  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
-    expect(release().status).toBe('draft');
-    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(F2_1);
+  it('is published after the web deploy, the phone update and the Demo Co walk, so every feed carries it', () => {
+    expect(release().status).toBe('published');
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(F2_1);
     const list = buildReleaseList(RELEASES, everyone, [], null);
-    expect(list.releases.map((r) => r.id)).not.toContain(F2_1);
-    expect(list.latestUnread?.id).not.toBe(F2_1);
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(F2_1);
-    expect(registryFingerprint(RELEASES)).not.toContain(F2_1);
-    // Preparing it changes nothing a client can observe.
-    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== F2_1)));
-    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(F2_1);
+    expect(list.releases.map((r) => r.id)).toContain(F2_1);
+    expect(list.latestUnread?.id).toBe(F2_1);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(F2_1);
+    expect(registryFingerprint(RELEASES)).toContain(F2_1);
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(F2_1);
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-29T00:00:00Z'));
   });
 
   it('sits above every published release (pinned by id), dated after every other release, so publishing it makes it the newest', () => {
