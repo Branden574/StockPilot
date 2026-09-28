@@ -39,8 +39,11 @@ import { useTheme } from '@/lib/use-theme';
  * picked), or stock could not be checked: core digitalPickCompletionConfirm
  * decides (the web digital pick's own), lib/pick-completion.ts makes it an
  * Alert.
- * "Review short lines" goes back to the first short line (the screen opens
- * it, where its fixes are; else its quantity here takes the focus).
+ * "Review short lines" puts the cursor in the first short line's quantity
+ * here, as the web digital pick does: the confirm's line comes from what the
+ * picker typed, so the count is what to check first. The line's own fixes
+ * (lower, remove) stay on the order screen, where a line short by readiness
+ * offers them.
  */
 export function DigitalPick({
   orderId,
@@ -49,7 +52,6 @@ export function DigitalPick({
   reloadToken = 0,
   offline = false,
   readiness = null,
-  onReviewLine,
 }: {
   orderId: string;
   /** Called after a successful complete so the parent screen can reload. */
@@ -88,12 +90,6 @@ export function DigitalPick({
    * checked, and is never skipped.
    */
   readiness?: OrderReadinessResult | null;
-  /**
-   * F2-2 "Review short lines": the screen opens that line where its fixes are
-   * and answers true; false (or absent) and this workspace focuses the line's
-   * quantity instead.
-   */
-  onReviewLine?: (lineId: string | null) => boolean;
 }) {
   const { c, mode } = useTheme();
   const [lines, setLines] = React.useState<OrderDetailLine[] | null>(null);
@@ -222,11 +218,11 @@ export function DigitalPick({
     void complete();
   }
 
-  // "Review short lines": the screen opens the line where its fixes are;
-  // when it cannot (the viewer may not change lines), the line's quantity
-  // here takes the focus so the count can be checked.
+  // "Review short lines": the first short line's quantity takes the focus so
+  // the count can be checked (the web digital pick's behaviour). Never the
+  // order-line editor: a mistyped count is fixed here, not by changing the
+  // customer's order.
   function reviewLine(lineId: string | null) {
-    if (onReviewLine?.(lineId)) return;
     if (lineId) inputs.current[lineId]?.focus();
   }
 

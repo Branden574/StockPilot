@@ -757,11 +757,12 @@ export default function OrderDetail() {
   }
 
   /**
-   * F2-2: the completion and departure confirms point to the first short
+   * F2-2: the departure confirm's "Fix the order" points to the first short
    * line, where its fixes are (decision D18). Opens that line's sheet when
    * the viewer may change lines and the line is on screen; false otherwise
-   * (the caller then does what it can: the digital pick focuses the line's
-   * quantity, a departure confirm simply closes).
+   * (the confirm then simply closes). The digital pick's completion confirm
+   * does not come here: its Review focuses the line's pick quantity, as on
+   * the web.
    */
   function openShortLine(lineId: string | null): boolean {
     if (!lineId || !canEditItems || offline || !order) return false;
@@ -2301,10 +2302,9 @@ export default function OrderDetail() {
                   canPick
                   offline={offline}
                   // F2-2: the completion confirm projects what the picker
-                  // entered against this order's readiness, and "Review short
-                  // lines" opens the first short line where its fixes are.
+                  // entered against this order's readiness; its "Review short
+                  // lines" focuses that line's quantity in the pick.
                   readiness={order.readiness}
-                  onReviewLine={openShortLine}
                   onCompleted={() => void load()}
                 />
               ) : !canClaimPick &&

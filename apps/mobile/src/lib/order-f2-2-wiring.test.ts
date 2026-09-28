@@ -129,22 +129,29 @@ describe('the digital pick asks before it completes (SO-000100)', () => {
     expect(code).not.toContain('Ship short and backorder the rest?');
   });
 
-  it('Review short lines lets the screen open the line, else focuses its quantity', () => {
+  // The web digital pick's behaviour (its Review focuses the pick quantity,
+  // pick-line-<id>): the confirm's line comes from what the picker TYPED, so
+  // Review takes them to that count. Mutation caught (review 2026-09-28):
+  // opening the order-line editor instead, which on a line readiness calls
+  // ready offers no fix and steers a manager who mistyped a count into
+  // changing the customer's order.
+  it('Review short lines focuses the short line\'s pick quantity, as on the web, never the order-line editor', () => {
     expect(functionBody(digitalPick, 'digital-pick.tsx', 'reviewLine')).toBe(
-      '{ if (onReviewLine?.(lineId)) return; if (lineId) inputs.current[lineId]?.focus(); }',
+      '{ if (lineId) inputs.current[lineId]?.focus(); }',
     );
     expect(codeOnly(digitalPick)).toMatch(
       /ref=\{\(el\) => \{\s*inputs\.current\[line\.id\] = el;\s*\}\}/,
     );
+    expect(codeOnly(digitalPick)).not.toMatch(/onReviewLine/);
   });
 
   // Mutation caught: not handing readiness over (the confirm would always say
-  // stock couldn't be checked) or not letting Review open the line.
-  it('the screen hands the pick its readiness and the line opener', () => {
+  // stock couldn't be checked), or handing the pick the line opener again.
+  it('the screen hands the pick its readiness, and no line opener', () => {
     const code = codeOnly(screen);
-    expect(code).toMatch(
-      /<DigitalPick[\s\S]*?readiness=\{order\.readiness\}[\s\S]*?onReviewLine=\{openShortLine\}[\s\S]*?\/>/,
-    );
+    expect(code).toMatch(/<DigitalPick[\s\S]*?readiness=\{order\.readiness\}[\s\S]*?\/>/);
+    const pick = code.match(/<DigitalPick[\s\S]*?\/>/)![0];
+    expect(pick).not.toMatch(/onReviewLine|openShortLine/);
   });
 });
 
