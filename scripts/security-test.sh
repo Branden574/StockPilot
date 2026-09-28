@@ -293,6 +293,24 @@ PGTAP_TESTS=(
   # The concurrent claim, the racing finishes and one person's parallel
   # claims are scripts/db-concurrency/0376_escalation_claim.sh.
   supabase/tests/0376_exception_escalation.test.sql
+  # Order readiness facts (F2-1, 0377): order_readiness_facts reads holds,
+  # holdings, other orders and POs past RLS, so it is SECURITY DEFINER with
+  # its gates in its body (signed in: 42501; not a member of the order's org,
+  # a disabled member, a missing or foreign order: the SAME P0002; the orders
+  # module: P0001 module_disabled; more than 200 lines: linesCapped, never a
+  # partial answer). Per field: an item the caller cannot read (warehouse,
+  # charter, category) is {itemId, visible:false} with no number; Staging
+  # sources only where location_holdings_visible; PO numbers, statuses and
+  # dates only where purchase_order_visible (held equal to
+  # purchase_orders_select for every persona and PO; the FOR ALL write-policy
+  # widening pinned in the safe direction), the rest a quantity; other
+  # pending demand only for a manager or an orders:approve holder; other
+  # warehouses' stock as totals only. It writes nothing and never raises
+  # 40001/40P01. The same file proves parity with the frozen fulfilment RPCs
+  # (approve, approve_partial, resume, complete_picking) over the shared
+  # fixture packages/core/src/orders/readiness-parity-cases.json, and pins
+  # the md5 of every function F2 promises not to touch.
+  supabase/tests/0377_order_readiness_facts.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql

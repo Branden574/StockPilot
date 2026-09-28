@@ -1,0 +1,494 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import ts from 'typescript';
+import { describe, expect, it } from 'vitest';
+
+import {
+  describeCompletionProjection,
+  describeReadinessHold,
+  describeReadinessLine,
+  describeReadinessRollup,
+  describeReadinessWhy,
+  formatReadinessQty,
+  INSUFFICIENT_PLACED_STOCK_COPY,
+  neededBySignalCopy,
+  READINESS_NEEDS_CONNECTION_COPY,
+  readinessCheckedAtCopy,
+  readinessLineAccessibilityLabel,
+  readinessOfflineCopy,
+  readinessSummaryForRequester,
+} from './readiness-copy';
+import {
+  assessOrderReadiness,
+  orderReadinessPhase,
+  PICKED_LINE_STATES,
+  projectCompletePicking,
+  READINESS_STATES,
+  type OrderReadinessAssessment,
+  type OrderReadinessFacts,
+  type ReadinessItemFacts,
+  type ReadinessVisibleItemFacts,
+} from './readiness';
+import { approveShortNotice, orderStockGates } from './order-stock-gates';
+
+const TZ = 'America/Los_Angeles';
+const NOW = '2026-09-28T17:42:00.000Z'; // 10:42 AM in Los Angeles
+
+function item(itemId: string, over: Partial<ReadinessVisibleItemFacts> = {}): ReadinessVisibleItemFacts {
+  const here = { rack: 0, site: 0, unplaced: 0, staging: 0, ...over.here };
+  const elsewhere = { pickable: 0, staging: 0, ...over.elsewhere };
+  return {
+    itemId,
+    visible: true,
+    name: over.name ?? `Item ${itemId}`,
+    sku: null,
+    supplierId: null,
+    itemWarehouseId: 'wh',
+    deleted: false,
+    archived: false,
+    isBundle: false,
+    heldOwn: 0,
+    heldOtherOrders: 0,
+    heldRentals: 0,
+    stagingSources: [],
+    stagingHiddenQty: 0,
+    pendingOthers: { orders: 0, units: 0 },
+    committedOtherShortfall: 0,
+    inbound: { rows: [], hiddenRemaining: 0, truncated: false, truncatedRemaining: 0 },
+    drafts: { rows: [], hiddenRemaining: 0, truncated: false, truncatedRemaining: 0 },
+    ...over,
+    here,
+    elsewhere,
+    onHand: over.onHand ?? here.rack + here.site + here.unplaced + here.staging + elsewhere.pickable + elsewhere.staging,
+  };
+}
+
+function assess(
+  status: string,
+  lines: Array<{ item: string; requested: number; fulfilled?: number; picked?: number | null }>,
+  items: ReadinessItemFacts[],
+  neededBy: string | null = null,
+  linesCapped = false,
+): OrderReadinessAssessment {
+  const facts: OrderReadinessFacts = {
+    v: 1,
+    observedAt: NOW,
+    phase: orderReadinessPhase(status),
+    linesCapped,
+    order: { id: 'o', orderNumber: 100, status, warehouseId: 'wh', neededBy, fulfillmentType: 'delivery' },
+    lines: lines.map((l, i) => ({
+      lineId: `l${i + 1}`,
+      itemId: l.item,
+      requested: l.requested,
+      fulfilled: l.fulfilled ?? 0,
+      picked: l.picked ?? null,
+      createdAt: new Date(Date.UTC(2026, 8, 1, 0, 0, i)).toISOString(),
+    })),
+    items,
+  };
+  return assessOrderReadiness(facts, { now: NOW });
+}
+
+function only(a: OrderReadinessAssessment) {
+  if (a.phase !== 'to_pick') throw new Error('to_pick expected');
+  const line = a.lines[0]!;
+  return { line, item: a.items.find((i) => i.itemId === line.itemId) ?? null, a };
+}
+
+const po = (poNumber: string, expectedAt: string | null, remaining: number) => ({
+  poId: poNumber,
+  poNumber,
+  status: 'ordered',
+  expectedAt,
+  remaining,
+});
+
+const inbound = (rows: ReturnType<typeof po>[], hiddenRemaining = 0, truncatedRemaining = 0) => ({
+  rows,
+  hiddenRemaining,
+  truncated: truncatedRemaining > 0,
+  truncatedRemaining,
+});
+
+/** One sentence per scenario the plan's copy table names. */
+function lineSentence(
+  lines: Array<{ item: string; requested: number; fulfilled?: number }>,
+  items: ReadinessItemFacts[],
+  status = 'pending_approval',
+): string {
+  const { line, item: it } = only(assess(status, lines, items));
+  return describeReadinessLine(line, it, { timeZone: TZ });
+}
+
+describe('line sentences (F2 plan section 6)', () => {
+  it('ready', () => {
+    expect(lineSentence([{ item: 'a', requested: 10 }], [item('a', { here: { rack: 10, site: 0, unplaced: 0, staging: 0 } })])).toBe(
+      '10 on the shelf for this order.',
+    );
+    expect(lineSentence([{ item: 'a', requested: 20 }], [item('a', { here: { rack: 8, site: 0, unplaced: 12, staging: 0 } })])).toBe(
+      '20 on the shelf for this order. Includes 12 with no rack recorded.',
+    );
+  });
+
+  it('needs put-away', () => {
+    expect(lineSentence([{ item: 'a', requested: 10 }], [item('a', { here: { rack: 6, site: 0, unplaced: 0, staging: 4 } })])).toBe(
+      '6 on the shelf. 4 more are in Staging and must be put away before picking can take them.',
+    );
+    expect(lineSentence([{ item: 'a', requested: 1 }], [item('a', { here: { rack: 0, site: 0, unplaced: 0, staging: 4 } })])).toBe(
+      '1 is in Staging and must be put away before picking can take it.',
+    );
+  });
+
+  it('waiting on a PO: a date is expected, never promised', () => {
+    expect(lineSentence([{ item: 'a', requested: 4 }], [item('a', { inbound: inbound([po('PO-2026-0042', '2026-10-03T16:00:00Z', 12)]) })])).toBe(
+      '4 short now. PO-2026-0042 expects 12 on Oct 3 (an expected date, not a promise).',
+    );
+    expect(lineSentence([{ item: 'a', requested: 4 }], [item('a', { inbound: inbound([po('PO-2026-0042', null, 12)]) })])).toBe(
+      '4 short now. PO-2026-0042 has 12 on order, with no expected date on the PO.',
+    );
+    expect(lineSentence([{ item: 'a', requested: 4 }], [item('a', { inbound: inbound([], 12) })])).toBe(
+      "4 short now. 4 are on a PO you can't open.",
+    );
+    expect(lineSentence([{ item: 'a', requested: 4 }], [item('a', { inbound: inbound([], 0, 9) })])).toBe(
+      '4 short now. 4 are on a PO not listed here, so no expected date is shown.',
+    );
+    expect(
+      lineSentence(
+        [{ item: 'a', requested: 8 }],
+        [item('a', { here: { rack: 2, site: 0, unplaced: 0, staging: 0 }, inbound: inbound([po('PO-1', '2026-10-03T16:00:00Z', 3), po('PO-2', '2026-10-09T16:00:00Z', 9)]) })],
+      ),
+    ).toBe('2 on the shelf. 6 short now. PO-1 expects 3 on Oct 3 (an expected date, not a promise). 3 more are on another PO.');
+    expect(
+      lineSentence(
+        [{ item: 'a', requested: 30 }],
+        [item('a', { inbound: inbound([po('PO-1', '2026-10-03T16:00:00Z', 10), po('PO-2', null, 5)], 4, 3) })],
+      ),
+    ).toBe(
+      "30 short now. PO-1 expects 10 on Oct 3 (an expected date, not a promise). 12 more are on other POs, 4 of them on POs you can't open. 8 of them are not on order.",
+    );
+  });
+
+  it('short', () => {
+    expect(lineSentence([{ item: 'a', requested: 4 }], [item('a')])).toBe('4 short. Nothing is on order.');
+    expect(
+      lineSentence(
+        [{ item: 'a', requested: 4 }],
+        [item('a', { drafts: { rows: [{ poId: 'd', poNumber: 'PO-2026-0043', remaining: 4 }], hiddenRemaining: 0, truncated: false, truncatedRemaining: 0 } })],
+      ),
+    ).toBe('4 short. Draft PO-2026-0043 covers 4 but has not been ordered.');
+    expect(
+      lineSentence([{ item: 'a', requested: 9 }], [item('a', { here: { rack: 2, site: 0, unplaced: 0, staging: 0 }, inbound: inbound([po('PO-1', '2026-10-03T16:00:00Z', 3)]) })]),
+    ).toBe('2 on the shelf. 7 short now. PO-1 expects 3 on Oct 3 (an expected date, not a promise). 4 of them are not on order.');
+    // The purchase_orders module off: nothing is claimed about POs at all.
+    expect(lineSentence([{ item: 'a', requested: 4 }], [item('a', { inbound: null, drafts: null })])).toBe('4 short.');
+    expect(lineSentence([{ item: 'a', requested: 4 }], [item('a', { deleted: true })])).toBe('This item was deleted. Remove the line.');
+    expect(lineSentence([{ item: 'a', requested: 4 }], [item('a', { itemWarehouseId: 'wh-2' })])).toBe(
+      'This item now belongs to another warehouse. Approval will refuse it.',
+    );
+  });
+
+  it("can't confirm", () => {
+    expect(lineSentence([{ item: 'a', requested: 4 }], [{ itemId: 'a', visible: false }])).toBe(
+      "This item isn't visible to you, so its stock can't be checked.",
+    );
+    expect(lineSentence([{ item: 'a', requested: 4 }], [item('a', { onHand: 10, here: { rack: 7, site: 0, unplaced: 0, staging: 0 } })])).toBe(
+      '4 on the shelf. On record: 10, but its locations account for 7. A count will settle it.',
+    );
+    expect(lineSentence([{ item: 'a', requested: 3 }], [item('a', { elsewhere: { pickable: 3, staging: 0 } })])).toBe(
+      '3 are in another warehouse and are not counted here.',
+    );
+  });
+
+  it('a line that owes nothing', () => {
+    expect(lineSentence([{ item: 'a', requested: 4, fulfilled: 4 }], [item('a')], 'backordered')).toBe(
+      'Nothing left to pick: all of this line was handed over.',
+    );
+    const { line } = only(assess('backordered', [{ item: 'a', requested: 4, fulfilled: 4 }], [item('a')]));
+    expect(readinessLineAccessibilityLabel(line)).toBe('Line 1, Ready to pick, nothing left to pick');
+  });
+
+  it('short with a draft covering part of it', () => {
+    expect(
+      lineSentence(
+        [{ item: 'a', requested: 9 }],
+        [
+          item('a', {
+            inbound: inbound([po('PO-1', '2026-10-03T16:00:00Z', 4)]),
+            drafts: { rows: [{ poId: 'd', poNumber: 'PO-D', remaining: 3 }], hiddenRemaining: 0, truncated: false, truncatedRemaining: 0 },
+          }),
+        ],
+      ),
+    ).toBe(
+      '9 short now. PO-1 expects 4 on Oct 3 (an expected date, not a promise). 5 of them are not on order. Draft PO-D covers 3 but has not been ordered.',
+    );
+  });
+
+  it('screen-reader labels name the line, its state and the number', () => {
+    const { line } = only(assess('pending_approval', [{ item: 'a', requested: 4 }], [item('a', { here: { rack: 0, site: 0, unplaced: 0, staging: 4 } })]));
+    expect(readinessLineAccessibilityLabel({ ...line, position: 2 })).toBe('Line 2, Needs put-away, 4 in Staging');
+  });
+});
+
+describe('holds, why, needed-by, roll-up, requester, completion, offline', () => {
+  it('holds', () => {
+    expect(describeReadinessHold({ state: 'held', held: 10, of: 10 })).toBe('Held for this order');
+    expect(describeReadinessHold({ state: 'partly_held', held: 20, of: 40 })).toBe('Held 20 of 40');
+    expect(describeReadinessHold({ state: 'not_held', held: 0, of: 5 })).toBe('Not held: another order could take this stock.');
+    expect(describeReadinessHold(null)).toBeNull();
+  });
+
+  it('why', () => {
+    const { item: it } = only(
+      assess('approved', [{ item: 'a', requested: 10 }], [
+        item('a', {
+          heldOwn: 10,
+          heldOtherOrders: 7,
+          heldRentals: 1,
+          here: { rack: 16, site: 0, unplaced: 0, staging: 4 },
+          pendingOthers: { orders: 2, units: 12 },
+        }),
+      ]),
+    );
+    expect(describeReadinessWhy(it!, { timeZone: TZ }).text).toBe(
+      'On record 20 · Held for other orders 8, including 1 for rentals · Held for this order 10 · In Staging 4 · 2 other orders waiting for approval also ask for this item (12); stock is held by whichever is approved first',
+    );
+    const po2 = only(
+      assess('pending_approval', [{ item: 'b', requested: 30 }], [
+        item('b', {
+          here: { rack: 0, site: 2, unplaced: 1, staging: 0 },
+          elsewhere: { pickable: 3, staging: 0 },
+          inbound: inbound([po('PO-9', '2026-10-03T16:00:00Z', 12), po('PO-10', null, 2)], 5, 4),
+          drafts: { rows: [{ poId: 'd', poNumber: 'PO-D', remaining: 6 }], hiddenRemaining: 0, truncated: false, truncatedRemaining: 0 },
+          isBundle: true,
+        }),
+      ]),
+    );
+    expect(describeReadinessWhy(po2.item!, { timeZone: TZ }).parts).toEqual([
+      'On record 6',
+      'No rack recorded 3',
+      'In other warehouses 3, not counted here',
+      'On order PO-9: 12 expected Oct 3 (an expected date, not a promise)',
+      'On order PO-10: 2, no expected date',
+      'On other POs 4',
+      "On POs you can't open 5",
+      'On draft PO-D 6 (not ordered)',
+      "A kit: its stock is the kit's own",
+    ]);
+    const hidden = only(assess('pending_approval', [{ item: 'h', requested: 1 }], [{ itemId: 'h', visible: false }]));
+    expect(describeReadinessWhy(hidden.item!).parts).toEqual(["This item isn't visible to you, so its stock can't be checked."]);
+  });
+
+  it('needed-by', () => {
+    expect(neededBySignalCopy('past_due', '2026-09-20T19:00:00Z', { timeZone: TZ })).toBe('Past its needed-by date (Sep 20)');
+    expect(neededBySignalCopy('at_risk', '2026-10-20T19:00:00Z')).toBe('May miss its needed-by date');
+    expect(neededBySignalCopy(null, null)).toBeNull();
+  });
+
+  it('roll-up: green only when all ready; worst first; checked at', () => {
+    const ready = assess('approved', Array.from({ length: 5 }, () => ({ item: 'a', requested: 1 })), [
+      item('a', { heldOwn: 5, here: { rack: 5, site: 0, unplaced: 0, staging: 0 } }),
+    ]);
+    expect(describeReadinessRollup({ state: 'ok', assessment: ready }, { timeZone: TZ })).toEqual({
+      headline: 'Ready to pick (5 of 5 lines)',
+      tone: 'success',
+      icon: 'check',
+      details: [],
+      neededBy: null,
+      checkedAt: 'Checked at 10:42 AM. Stock can change after this.',
+    });
+    const mixed = assess(
+      'pending_approval',
+      [
+        { item: 'a', requested: 1 },
+        { item: 'b', requested: 5 },
+        { item: 'c', requested: 5 },
+        { item: 'd', requested: 1 },
+      ],
+      [
+        item('a', { here: { rack: 1, site: 0, unplaced: 0, staging: 0 } }),
+        item('b', { here: { rack: 0, site: 0, unplaced: 0, staging: 5 } }),
+        item('c', { here: { rack: 0, site: 0, unplaced: 0, staging: 5 } }),
+        item('d'),
+      ],
+      '2026-10-20T19:00:00Z',
+    );
+    expect(describeReadinessRollup({ state: 'ok', assessment: mixed }, { timeZone: TZ })).toMatchObject({
+      headline: '1 line short',
+      tone: 'danger',
+      details: ['2 lines need put-away', '1 of 4 lines ready to pick'],
+      neededBy: 'May miss its needed-by date',
+    });
+    expect(describeReadinessRollup({ state: 'failed', message: 'x' })).toMatchObject({
+      headline: "Couldn't check readiness. Try again.",
+      checkedAt: null,
+    });
+    const capped = assess('pending_approval', [], [], null, true);
+    expect(describeReadinessRollup({ state: 'ok', assessment: capped })!.headline).toBe(
+      "This order has more than 200 lines, so readiness isn't checked.",
+    );
+    expect(describeReadinessRollup({ state: 'ok', assessment: assess('completed', [], []) })).toBeNull();
+    const picked = assess('in_transit', [{ item: 'a', requested: 60, picked: 0 }, { item: 'b', requested: 1, picked: 1 }], []);
+    expect(describeReadinessRollup({ state: 'ok', assessment: picked })).toMatchObject({
+      headline: '1 line not fully picked',
+      details: ['1 of 2 lines picked'],
+    });
+  });
+
+  it('requester: one sentence, no numbers', () => {
+    const r = (a: OrderReadinessAssessment) => readinessSummaryForRequester({ state: 'ok', assessment: a });
+    expect(r(assess('approved', [{ item: 'a', requested: 1 }], [item('a', { here: { rack: 0, site: 0, unplaced: 0, staging: 1 } })]))).toBe(
+      'All items are in stock.',
+    );
+    expect(r(assess('approved', [{ item: 'a', requested: 1 }], [item('a')]))).toBe('Some items are waiting on stock.');
+    expect(r(assess('approved', [{ item: 'a', requested: 1 }], [{ itemId: 'a', visible: false }]))).toBe(
+      "We're checking stock for some items.",
+    );
+    expect(readinessSummaryForRequester({ state: 'failed', message: 'x' })).toBe("We're checking stock for some items.");
+    expect(r(assess('in_transit', [{ item: 'a', requested: 1, picked: 1 }], []))).toBeNull();
+  });
+
+  it('completion confirm', () => {
+    const a = assess('pick_slip_generated', [{ item: 'pen', requested: 60 }, { item: 'maus', requested: 10 }], [
+      item('pen', { name: 'L4L - Pen Black & Rose Gold', heldOwn: 60 }),
+      item('maus', { name: 'Maus I', heldOwn: 10, here: { rack: 6, site: 0, unplaced: 0, staging: 4 } }),
+    ]);
+    expect(describeCompletionProjection(projectCompletePicking(a), false)).toEqual([
+      'Not everything will be picked. L4L - Pen Black & Rose Gold: 0 of 60. It will be owed at hand-over, or you can remove it from the order first.',
+      "Picking can't finish until 4 of Maus I in Staging are put away.",
+    ]);
+    expect(describeCompletionProjection(null, true)).toEqual(["Stock couldn't be checked. Picking may come up short."]);
+    const fine = assess('pick_slip_generated', [{ item: 'a', requested: 1 }], [item('a', { heldOwn: 1, here: { rack: 1, site: 0, unplaced: 0, staging: 0 } })]);
+    expect(describeCompletionProjection(projectCompletePicking(fine), false)).toBeNull();
+  });
+
+  it('offline and the pick error', () => {
+    expect(readinessOfflineCopy('2026-09-28T21:14:00Z', { timeZone: TZ })).toBe(
+      "You're offline. This is how the order looked at 2:14 PM.",
+    );
+    expect(READINESS_NEEDS_CONNECTION_COPY).toBe('Needs a connection.');
+    expect(readinessCheckedAtCopy('2026-09-28T21:14:00Z', { timeZone: TZ })).toBe(
+      'Checked at 2:14 PM. Stock can change after this.',
+    );
+    expect(INSUFFICIENT_PLACED_STOCK_COPY).toBe(
+      'Part of this item is still in Staging. Picking takes stock from racks, crates, Sites and Unplaced, never from Staging. Put the needed units away, then try again.',
+    );
+  });
+
+  it('quantities read as people write them', () => {
+    expect(formatReadinessQty(16693)).toBe('16,693');
+    expect(formatReadinessQty(2.5)).toBe('2.5');
+    expect(formatReadinessQty(Number.NaN)).toBe('0');
+  });
+});
+
+// ── Honesty rules over EVERY sentence readiness can compose ────────────────
+
+function everything(): string[] {
+  const out: string[] = [];
+  const scenarios: Array<[string, Array<{ item: string; requested: number; fulfilled?: number; picked?: number | null }>, ReadinessItemFacts[], string | null]> = [
+    ['pending_approval', [{ item: 'a', requested: 10 }], [item('a', { here: { rack: 4, site: 2, unplaced: 1, staging: 2 } })], '2026-09-20T00:00:00Z'],
+    ['approved', [{ item: 'a', requested: 10 }, { item: 'a', requested: 5 }], [item('a', { heldOwn: 8, heldOtherOrders: 2, heldRentals: 1, here: { rack: 20, site: 0, unplaced: 0, staging: 0 } })], null],
+    ['pending_approval', [{ item: 'a', requested: 30 }], [item('a', { inbound: inbound([po('PO-1', '2026-10-03T16:00:00Z', 10), po('PO-2', null, 5)], 4, 3), drafts: { rows: [{ poId: 'd', poNumber: 'PO-D', remaining: 2 }], hiddenRemaining: 1, truncated: false, truncatedRemaining: 0 }, pendingOthers: { orders: 1, units: 3 } })], '2026-10-01T00:00:00Z'],
+    ['pending_approval', [{ item: 'h', requested: 1 }, { item: 'd', requested: 1 }, { item: 'm', requested: 1 }], [{ itemId: 'h', visible: false }, item('d', { deleted: true }), item('m', { itemWarehouseId: 'x' })], null],
+    ['pending_approval', [{ item: 'a', requested: 3 }], [item('a', { onHand: 9, here: { rack: 1, site: 0, unplaced: 0, staging: 0 }, elsewhere: { pickable: 2, staging: 1 }, isBundle: true })], null],
+    ['backordered', [{ item: 'a', requested: 3, fulfilled: 3 }, { item: 'a', requested: 4, fulfilled: 1 }], [item('a', { inbound: null, drafts: null })], null],
+    ['pick_slip_generated', [{ item: 'a', requested: 9 }, { item: 'h', requested: 1 }], [item('a', { heldOwn: 9, here: { rack: 2, site: 0, unplaced: 0, staging: 5 } }), { itemId: 'h', visible: false }], null],
+    ['in_transit', [{ item: 'a', requested: 9, picked: 2 }], [], '2026-09-20T00:00:00Z'],
+    ['pending_approval', [], [], null],
+  ];
+  for (const [status, lines, items, neededBy] of scenarios) {
+    const a = assess(status, lines, items, neededBy);
+    const r = describeReadinessRollup({ state: 'ok', assessment: a }, { timeZone: TZ });
+    if (r) out.push(r.headline, ...r.details, ...(r.neededBy ? [r.neededBy] : []), ...(r.checkedAt ? [r.checkedAt] : []));
+    const req = readinessSummaryForRequester({ state: 'ok', assessment: a });
+    if (req) out.push(req);
+    if (a.phase === 'to_pick') {
+      for (const l of a.lines) {
+        const it = a.items.find((i) => i.itemId === l.itemId) ?? null;
+        out.push(describeReadinessLine(l, it, { timeZone: TZ }), readinessLineAccessibilityLabel(l));
+        const h = describeReadinessHold(l.hold);
+        if (h) out.push(h);
+      }
+      for (const it of a.items) out.push(...describeReadinessWhy(it, { timeZone: TZ }).parts);
+      out.push(...(describeCompletionProjection(projectCompletePicking(a), false) ?? []));
+    }
+  }
+  out.push(...(describeCompletionProjection(null, true) ?? []));
+  out.push(describeReadinessRollup({ state: 'failed', message: 'x' })!.headline);
+  out.push(readinessOfflineCopy(NOW, { timeZone: TZ }), READINESS_NEEDS_CONNECTION_COPY, INSUFFICIENT_PLACED_STOCK_COPY);
+  for (const s of Object.values(READINESS_STATES)) out.push(s.label);
+  for (const s of Object.values(PICKED_LINE_STATES)) out.push(s.label);
+  for (const reason of ['read', 'hidden_items', 'lines_capped'] as const) {
+    for (const status of ['pending_approval', 'backordered']) {
+      const g = orderStockGates(status, { state: 'failed', reason, message: 'x' });
+      if (g.notice) out.push(g.notice);
+    }
+  }
+  const moved = orderStockGates('pending_approval', { state: 'ok', isShortStock: true, hasFulfillableStock: false, itemMoved: true });
+  if (moved.notice) out.push(moved.notice);
+  out.push(approveShortNotice({ state: 'ok', isShortStock: true, hasFulfillableStock: false, shortLineCount: 3 })!);
+  return out;
+}
+
+describe('honest words', () => {
+  const lines = everything();
+
+  it('covers the copy (not vacuous)', () => {
+    expect(lines.length).toBeGreaterThan(60);
+  });
+
+  it('never "book" for a quantity, never a percentage', () => {
+    expect(lines.filter((l) => /\bbooks?\b/i.test(l))).toEqual([]);
+    expect(lines.filter((l) => l.includes('%'))).toEqual([]);
+  });
+
+  it('never "verified", "guaranteed", "will arrive", and never says an email was sent', () => {
+    expect(lines.filter((l) => /verif|guarantee|will arrive|email/i.test(l))).toEqual([]);
+  });
+
+  it('"Ready" only for the ready state and the all-ready roll-up', () => {
+    const allowed = new Set([READINESS_STATES.ready.label]);
+    const offenders = lines.filter(
+      (l) => /\bready\b/i.test(l) && !allowed.has(l) && !/^Ready to pick \(\d+ of \d+ lines?\)$/.test(l)
+        && !/^\d+ of \d+ lines? ready to pick$/.test(l) && !/^Line \d+, Ready to pick, /.test(l),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it('a PO date is always "expected", always with "not a promise"', () => {
+    const dated = lines.filter((l) => /\bexpect(s|ed)?\b[^.]*\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d/.test(l));
+    expect(dated.length).toBeGreaterThan(1);
+    expect(dated.filter((l) => !l.includes('(an expected date, not a promise)'))).toEqual([]);
+    // No date without "expected" either: "arrives Oct 3" would be a promise.
+    expect(lines.filter((l) => /\b(arriv|deliver)\w*\b[^.]*\b(Oct|Nov) \d/i.test(l))).toEqual([]);
+  });
+});
+
+// ── The source: no jargon can come back in a string literal ────────────────
+
+describe('readiness source literals', () => {
+  const HERE = path.dirname(fileURLToPath(import.meta.url));
+  const files = ['readiness.ts', 'readiness-copy.ts', 'order-stock-gates.ts'];
+
+  function literals(file: string): string[] {
+    const source = ts.createSourceFile(file, readFileSync(path.join(HERE, file), 'utf8'), ts.ScriptTarget.Latest, true);
+    const out: string[] = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isImportDeclaration(node)) return;
+      if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) out.push(node.text);
+      else if (ts.isTemplateExpression(node)) {
+        out.push(node.head.text + node.templateSpans.map((s) => '${…}' + s.literal.text).join(''));
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    return out;
+  }
+
+  it.each(files)('%s says no "book", no "%", no "guarantee"', (file) => {
+    const found = literals(file).filter((t) => /\bbooks?\b|%|guarantee|verified/i.test(t));
+    expect(found).toEqual([]);
+  });
+});
