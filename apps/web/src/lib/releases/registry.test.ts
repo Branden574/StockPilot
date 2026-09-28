@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -539,9 +539,9 @@ describe('F1-5 (escalate an exception to maintenance) is published', () => {
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(F1_5);
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(F1_5);
-    // The notice offers the newest unread release; F2-1's readiness release
-    // was published after this one.
-    expect(list.latestUnread?.id).toBe('order-readiness-2026-09');
+    // The notice offers the newest unread release; the maintenance review
+    // wording release was published after this one (and F2-1's after it).
+    expect(list.latestUnread?.id).toBe('maintenance-review-wording-2026-09');
     expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(F1_5);
     expect(registryFingerprint(RELEASES)).toContain(F1_5);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(F1_5);
@@ -654,9 +654,12 @@ describe('the maintenance photo details release is published', () => {
     expect(release().status).toBe('published');
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
     expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).toContain(ID);
-    // Third among the published releases, so an old phone build lists it
-    // among its three.
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(ID);
+    // An old phone build lists at most three unread releases, newest first;
+    // it comes into that list once the newer releases are read.
+    const newer = Object.fromEntries(
+      RELEASES.slice(0, RELEASES.findIndex((r) => r.id === ID)).map((r) => [r.id, true]),
+    );
+    expect(legacyAnnouncementsFor(RELEASES, everyone, newer).map((a) => a.id)).toContain(ID);
     expect(registryFingerprint(RELEASES)).toContain(ID);
   });
 
@@ -702,18 +705,22 @@ describe('F2-1 (order readiness) is published', () => {
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(F2_1);
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(F2_1);
-    expect(list.latestUnread?.id).toBe(F2_1);
+    // The notice offers the newest unread release; the maintenance review
+    // wording release was published after this one.
+    expect(list.latestUnread?.id).toBe('maintenance-review-wording-2026-09');
     expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(F2_1);
     expect(registryFingerprint(RELEASES)).toContain(F2_1);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(F2_1);
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-29T00:00:00Z'));
   });
 
-  it('sits above every published release (pinned by id), dated after every other release, so publishing it makes it the newest', () => {
+  it('is dated after every release below it (the releases above it were published later)', () => {
     const at = RELEASES.findIndex((r) => r.id === F2_1);
     expect(at).toBeGreaterThanOrEqual(0);
-    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
-    for (const r of RELEASES.filter((x) => x.id !== F2_1)) {
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
+    for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -841,5 +848,84 @@ describe('F2-1 (order readiness) is published', () => {
     expect(e!.whyItMatters).toContain("items on an order can't be deleted");
     expect(e!.howItAffectsYou).toContain('Only the label changed.');
     expect(e!.whatToDo).toBe('No action needed.');
+  });
+});
+
+/**
+ * The maintenance review screen's wording (owner-approved, 2026-09-28). The
+ * web's review screen said "Outlook will open with the email details filled
+ * in", which read as if Outlook opened by itself; it opens only on Open in
+ * Outlook. The sentence is web only and live with the web deploy, so the
+ * release is published in the same change.
+ */
+describe('the maintenance review wording release is published', () => {
+  const ID = 'maintenance-review-wording-2026-09';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+  /** The sentence the web's review screen shows when the maintenance email is set up. */
+  const SENTENCE =
+    'Your request has been saved in StockPilot. When you choose Open in Outlook, it opens with the email details filled in; nothing is sent until you send it.';
+
+  it('is published and the newest: every release above it is a draft, and it is dated after every other release', () => {
+    expect(release().status).toBe('published');
+    expect(release().revision).toBe(1);
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.latestUnread?.id).toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(ID);
+    expect(registryFingerprint(RELEASES)).toContain(ID);
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-29T00:00:00Z'));
+  });
+
+  it('is addressed as the review screen is reached: Maintenance requests on, and maintenance_requests:submit', () => {
+    const gate = { anyPermission: ['maintenance_requests:submit'], modules: ['maintenance_requests'] };
+    expect(release().audience).toEqual(gate);
+    expect(release().entries.map((e) => e.id)).toEqual(['maintenance-review-wording']);
+    const [entry] = release().entries;
+    expect(entry!.category).toBe('improved');
+    expect(entry!.area).toBe('Maintenance');
+    expect(entry!.audience).toEqual(gate);
+    expect(entry!.link).toEqual({ href: '/dashboard/maintenance/new', label: 'New maintenance request' });
+    const reader = (permissions: ReleaseViewer['permissions'], enabledModules: ModuleId[]) =>
+      visibleReleases([release()], { role: 'staff', permissions, enabledModules }).map((r) => r.id);
+    expect(reader(['maintenance_requests:submit'], ['maintenance_requests'])).toEqual([ID]);
+    expect(reader(['maintenance_requests:submit'], [])).toEqual([]);
+    expect(reader(['maintenance_requests:read_all', 'maintenance_requests:manage'], ['maintenance_requests'])).toEqual(
+      [],
+    );
+  });
+
+  // Mutation caught: the screen's sentence edited and the release left
+  // quoting the old one, or the release quoting words the screen never shows.
+  it('quotes the sentence the web review screen shows, word for word', () => {
+    const screen = readFileSync(
+      resolve(__dirname, '../../components/maintenance/maintenance-review.tsx'),
+      'utf8',
+    );
+    expect(screen).toContain(`'${SENTENCE}'`);
+    expect(screen).not.toContain('Outlook will open');
+    expect(release().entries[0]!.whatChanged).toContain(`"${SENTENCE}"`);
+  });
+
+  it('says it plainly: web only, Outlook opens only when chosen, nothing sent until you send it, only the wording changed', () => {
+    const r = release();
+    expect(r.summary).toMatch(/^On the web, /);
+    expect(r.summary).toContain('Outlook opens only when you choose Open in Outlook');
+    expect(r.summary).toContain('nothing is sent until you send it');
+    const text = readerText(r).join(' ');
+    expect(text).toContain('Only the wording changed.');
+    expect(text).toContain('Saving a request does not open Outlook');
+    expect(text).not.toMatch(/mobile app|phone/i);
+    expect(text).not.toMatch(/email sent|emailed|automatically sent/i);
+    expect(r.entries[0]!.whatToDo).toBe('No action needed.');
   });
 });

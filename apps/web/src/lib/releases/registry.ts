@@ -28,6 +28,40 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'maintenance-review-wording-2026-09',
+    revision: 1,
+    // Owner-approved wording (2026-09-28). The sentence is on the web's review
+    // screen only (the phone's has no copy of it), so it is live with the web
+    // deploy and published with it. The phone's back-arrow label, in the same
+    // change, is not announced.
+    //
+    // Addressed as the review screen is reached: people who can submit a
+    // maintenance request, where Maintenance requests is on.
+    status: 'published',
+    title: 'The maintenance review screen says when Outlook opens',
+    summary:
+      'On the web, the screen shown after you save a maintenance request now says that Outlook opens only when you choose Open in Outlook, and that nothing is sent until you send it. It used to read as if Outlook opened by itself.',
+    publishedAt: '2026-09-28T17:45:00Z',
+    audience: { anyPermission: ['maintenance_requests:submit'], modules: ['maintenance_requests'] },
+    entries: [
+      {
+        id: 'maintenance-review-wording',
+        category: 'improved',
+        area: 'Maintenance',
+        title: 'Outlook opens only when you choose it',
+        whatChanged:
+          'After you save a maintenance request on the web, the review screen now says: "Your request has been saved in StockPilot. When you choose Open in Outlook, it opens with the email details filled in; nothing is sent until you send it."',
+        whyItMatters:
+          'The sentence it replaces said Outlook would open with the email details filled in, which read as if Outlook opened by itself. It opens only when you choose Open in Outlook.',
+        howItAffectsYou:
+          'Only the wording changed. Saving a request does not open Outlook, and Open in Outlook works as before. Where your organization has not set up the maintenance email, the screen says only that your request has been saved, as before.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/maintenance/new', label: 'New maintenance request' },
+        audience: { anyPermission: ['maintenance_requests:submit'], modules: ['maintenance_requests'] },
+      },
+    ],
+  },
+  {
     id: 'order-readiness-2026-09',
     revision: 1,
     // Held as a draft until the phone update (OTA group c138b401) and the

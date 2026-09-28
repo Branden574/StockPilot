@@ -112,14 +112,17 @@ export function MaintenanceReview({
         <MaintenanceStatusBadge status={detail.status} />
       </div>
 
-      {/* Spec line 8's exact helper sentence — the honesty anchor for this
-          whole screen: saved, but not sent, and never automatically. The
-          Outlook half of the sentence only renders when a compose action
-          actually exists (routing 'valid'); an unconfigured org must not be
-          promised an Outlook window that will never open. */}
+      {/* The helper sentence — the honesty anchor for this whole screen:
+          saved, but not sent, and never automatically. Owner-approved wording
+          (2026-09-28), replacing the brief's original line, which read as if
+          Outlook opened by itself: Outlook opens only when the person chooses
+          Open in Outlook, and nothing is sent until they send it. The Outlook
+          half of the sentence only renders when a compose action actually
+          exists (routing 'valid'); an unconfigured org must not be promised an
+          Outlook window that will never open. */}
       <p className="rounded-md border border-dashed p-3 text-sm">
         {emailRouting.state === 'valid'
-          ? 'Your request has been saved in StockPilot. Outlook will open with the email details filled in, but the email will not be sent automatically.'
+          ? 'Your request has been saved in StockPilot. When you choose Open in Outlook, it opens with the email details filled in; nothing is sent until you send it.'
           : 'Your request has been saved in StockPilot.'}
       </p>
 

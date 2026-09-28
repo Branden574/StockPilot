@@ -96,7 +96,7 @@ const PHOTOS: PanelPhoto[] = [
 
 describe('MaintenanceReview owner-mandated copy (brief §10, §12)', () => {
   it('pins the review title, the saved-not-sent sentence, and the Outlook-photos sentence verbatim, exactly once', () => {
-    render(
+    const { container } = render(
       <MaintenanceReview
         detail={DETAIL}
         photos={PHOTOS}
@@ -109,9 +109,12 @@ describe('MaintenanceReview owner-mandated copy (brief §10, §12)', () => {
     expect(screen.getByText('Review maintenance request')).toBeInTheDocument();
     expect(
       screen.getByText(
-        'Your request has been saved in StockPilot. Outlook will open with the email details filled in, but the email will not be sent automatically.',
+        'Your request has been saved in StockPilot. When you choose Open in Outlook, it opens with the email details filled in; nothing is sent until you send it.',
       ),
     ).toBeInTheDocument();
+    // Owner-approved wording (2026-09-28): the brief's original line read as
+    // if Outlook opened by itself. It must not come back.
+    expect(container.textContent).not.toContain('Outlook will open');
     // Minor 6: photoDownloads is no longer passed into MaintenanceEmailAction,
     // so this sentence and its "Download Photos for Outlook" heading render
     // exactly once — getByText throws on a duplicate.
