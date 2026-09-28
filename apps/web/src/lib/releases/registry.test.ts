@@ -4,6 +4,8 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  EXCEPTION_EVIDENCE_MAX_PHOTOS,
+  EXCEPTION_EVIDENCE_NOTE_MAX,
   MODULE_REGISTRY,
   PERMISSIONS,
   releaseRegistrySchema,
@@ -15,7 +17,7 @@ import {
 import { ANNOUNCEMENTS } from '@/lib/onboarding/announcements';
 
 import { LEGACY_ANNOUNCEMENTS } from './legacy-announcements.fixture';
-import { legacyAnnouncementsFor, registryFingerprint, visibleReleases } from './logic';
+import { buildReleaseList, legacyAnnouncementsFor, registryFingerprint, visibleReleases } from './logic';
 import { RELEASES } from './registry';
 
 /**
@@ -317,17 +319,20 @@ describe('stock on record wording', () => {
 describe('the kits release', () => {
   const release = () => RELEASES.find((r) => r.id === 'order-page-kits-2026-09-27')!;
 
-  it('is the newest release, so it is the one the notice offers, and the three it shipped with follow', () => {
+  it('is the newest published release, so it is the one the notice offers, and the three it shipped with follow', () => {
     // The notice offers only the top unread release a reader can see, and an
     // old phone build lists at most three. Kits lead, then the stock on record
-    // fix every counter sees; where Bundles is off, the fix is the top.
-    expect(RELEASES.slice(0, 4).map((r) => r.id)).toEqual([
+    // fix every counter sees; where Bundles is off, the fix is the top. A
+    // draft above them (F1-4's, below) reaches no reader, so it changes none
+    // of that until it is published.
+    const published = RELEASES.filter((r) => r.status !== 'draft');
+    expect(published.slice(0, 4).map((r) => r.id)).toEqual([
       'order-page-kits-2026-09-27',
       'stock-on-record-wording-2026-09-27',
       'order-page-add-full-kit-removed-2026-09-27',
       'bundle-distribute-managers-2026-09-27',
     ]);
-    for (const r of RELEASES.slice(0, 4)) {
+    for (const r of published.slice(0, 4)) {
       expect(r.status, r.id).toBe('published');
       expect(registryFingerprint(RELEASES), r.id).toContain(r.id);
     }
@@ -420,5 +425,83 @@ describe('the Add full kit removal release', () => {
   it('the kits release no longer carries the removal, so no reader gets it twice', () => {
     const kits = RELEASES.find((r) => r.id === KITS)!;
     expect(readerText(kits).join(' ')).not.toMatch(/Add full kit/);
+  });
+});
+
+/**
+ * F1-4's release (photos on exceptions) is held as a DRAFT until its phone
+ * release (pnpm release:ota) and the Demo Co walk, as F1-3's was: published
+ * with the web photo panel, it would tell phone users about photos their app
+ * cannot add yet. The follow-up that publishes it sets 'published' and the
+ * real publishedAt, and flips the first pin here.
+ */
+describe('F1-4 (photos on exceptions) is held as a draft', () => {
+  const F1_4 = 'exception-photos-2026-09';
+  const release = () => RELEASES.find((r) => r.id === F1_4)!;
+  /** A reader every audience includes. */
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+
+  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+    expect(release().status).toBe('draft');
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(F1_4);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).not.toContain(F1_4);
+    expect(list.latestUnread?.id).toBe('order-page-kits-2026-09-27');
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(F1_4);
+    expect(registryFingerprint(RELEASES)).not.toContain(F1_4);
+    // Preparing it changes nothing a client can observe.
+    expect(registryFingerprint(RELEASES)).toBe(
+      registryFingerprint(RELEASES.filter((r) => r.id !== F1_4)),
+    );
+    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(F1_4);
+  });
+
+  it('sits at the top, dated after every other release, so publishing it makes it the newest', () => {
+    expect(RELEASES[0]!.id).toBe(F1_4);
+    for (const r of RELEASES.slice(1)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('is new in Inventory, addressed as the page gates it: seeing photos is items:read, adding them stock:adjust', () => {
+    expect(release().audience).toBeUndefined();
+    expect(release().entries.map((e) => e.id)).toEqual(['exception-photos', 'exception-photos-add-remove']);
+    for (const e of release().entries) {
+      expect(e.category, e.id).toBe('new');
+      expect(e.area, e.id).toBe('Inventory');
+      expect(e.link, e.id).toEqual({ href: '/dashboard/exceptions', label: 'Open Exceptions' });
+    }
+    const [see, add] = release().entries;
+    expect(see!.audience).toEqual({ anyPermission: ['items:read'] });
+    expect(add!.audience).toEqual({ anyPermission: ['stock:adjust'] });
+  });
+
+  it('once published, a reader who can only view is told about seeing photos, not adding them', () => {
+    const published: Release = { ...release(), status: 'published' };
+    const viewer: ReleaseViewer = { role: 'viewer', permissions: ['items:read'], enabledModules: [] };
+    const staff: ReleaseViewer = { ...viewer, role: 'staff', permissions: ['items:read', 'stock:adjust'] };
+    expect(visibleReleases([published], viewer)[0]!.entries.map((e) => e.id)).toEqual(['exception-photos']);
+    expect(visibleReleases([published], staff)[0]!.entries.map((e) => e.id)).toEqual([
+      'exception-photos',
+      'exception-photos-add-remove',
+    ]);
+  });
+
+  it("says the owner's decisions plainly: both platforms, online only, soft removal, location removed, no notifications", () => {
+    const r = release();
+    expect(r.summary).toMatch(/^On the web and in the mobile app, /);
+    const text = readerText(r).join(' ');
+    expect(text).toContain(`up to ${EXCEPTION_EVIDENCE_MAX_PHOTOS} photos`);
+    expect(text).toContain(`up to ${EXCEPTION_EVIDENCE_NOTE_MAX} characters`);
+    expect(text).toContain('photos are not saved offline');
+    expect(text).toContain('is not deleted');
+    expect(text).toContain('Location and camera details are removed from each photo when it is saved.');
+    expect(text).toContain('send no notifications');
+    // The web sends no capture time: never promise every photo shows one.
+    expect(text).toContain('a photo added on the web shows only its upload time');
   });
 });

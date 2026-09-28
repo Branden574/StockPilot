@@ -91,10 +91,26 @@ export const EXCEPTION_EVIDENCE_REJECTED_COPY =
 export const EXCEPTION_EVIDENCE_PRIVACY_COPY =
   'Location and camera details are removed from each photo when it is saved.';
 
+/** The limits, stated where photos are added (the database enforces them). */
+export const EXCEPTION_EVIDENCE_LIMITS_COPY = `Up to ${EXCEPTION_EVIDENCE_MAX_PHOTOS} photos on an exception, each a JPEG, PNG or WEBP of up to ${EXCEPTION_EVIDENCE_MAX_PHOTO_BYTES / (1024 * 1024)} MB.`;
+
+/** What removing a photo does, said before it is done (exception_evidence_remove
+ *  is a soft remove: the row and the stored file are kept, and an
+ *  evidence_removed event records who removed it and why). */
+export const EXCEPTION_EVIDENCE_REMOVE_COPY =
+  'The photo will no longer show on this exception. It is not deleted: the file is kept, and the timeline records who removed it, with your reason if you give one.';
+
 /** "Photos (3 of 8)". */
 export function exceptionEvidenceCountLabel(liveCount: number): string {
   const n = Math.max(0, Math.floor(liveCount));
   return `Photos (${n} of ${EXCEPTION_EVIDENCE_MAX_PHOTOS})`;
+}
+
+/** Who added a photo, under the photo: "Added by Maria Lopez". The label is
+ *  the one the service gives (a name, else an email, else "Former member"). */
+export function exceptionEvidenceAddedByCopy(uploaderLabel: string | null | undefined): string {
+  const who = uploaderLabel?.trim();
+  return who ? `Added by ${who}` : 'Added by a former member';
 }
 
 /**

@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { Suspense } from 'react';
 
 import { OccurrenceActions } from '@/components/exceptions/occurrence-actions';
+import { OccurrencePhotos } from '@/components/exceptions/occurrence-photos';
 import { RecountButton } from '@/components/exceptions/recount-selection';
 import {
   CheckedAt,
@@ -26,10 +27,12 @@ import { ServiceError, withContext, type ServiceContext } from '@/server/service
 import {
   ExceptionOccurrencesService,
   type OccurrenceDetail,
+  type OccurrenceEvent,
 } from '@/server/services/exception-occurrences';
 
 import {
   activeRecountCopy,
+  describeEvidenceEvent,
   describeOccurrence,
   describeTimelineEvent,
   EXCEPTION_ACTION_LABELS,
@@ -71,6 +74,14 @@ export const metadata = { title: 'Exception' };
  * and shown only when the reader can see the item. The location of a holding
  * rule links to that location's page.
  *
+ * Photos (F1-4) come with the read (1-hour signed links). Everyone who can
+ * open the exception sees them; adding is offered through the same act gate
+ * as Acknowledge and Add note, removing where the server says so (the
+ * uploader or a manager, while open). A failed photo read says so, never "no
+ * photos". A photo's timeline entries are core's describeEvidenceEvent: who
+ * added or removed it, its two times (the device's clock and the server's),
+ * and its note or the removal's reason.
+ *
  * Reads only, never syncs. Not found and not visible are the same answer
  * (404), so existence is not leaked; any other failed read renders
  * "unavailable", never an empty page.
@@ -87,6 +98,43 @@ function actionHref(kind: ExceptionActionKind, itemId: string): string {
   // Put-away is the Staging worklist; opening the item and editing its label
   // both start on the item page (its Edit form holds the label).
   return kind === 'put_away' ? '/dashboard/inventory/staging' : `/dashboard/inventory/${itemId}`;
+}
+
+/**
+ * One timeline entry's words. A photo's entries are core's
+ * describeEvidenceEvent: the headline, the photo's two times (each named by
+ * its clock) and its note, or the removal's reason. The times line is left out
+ * when the photos could not be read (`e.evidence` null): the headline stands,
+ * and no time is guessed. Every other kind is describeTimelineEvent with the
+ * event's own note.
+ */
+function timelineLine(
+  e: OccurrenceEvent,
+  resolvedReason: OccurrenceDetail['occurrence']['resolvedReason'],
+  timeZone: string,
+): { headline: string; detail: string | null; note: string | null } {
+  if (e.kind === 'evidence_added' || e.kind === 'evidence_removed') {
+    const ev = describeEvidenceEvent({
+      kind: e.kind,
+      actorLabel: e.actor?.label ?? null,
+      capturedAt: e.evidence?.capturedAt ?? null,
+      uploadedAt: e.evidence?.uploadedAt ?? null,
+      note: e.note,
+      timeZone,
+    });
+    return { headline: ev.headline, detail: e.evidence ? ev.detail : null, note: ev.note };
+  }
+  return {
+    headline: describeTimelineEvent({
+      kind: e.kind,
+      actorLabel: e.actor?.label ?? null,
+      cycleCountNumber: e.cycleCount?.countNumber ?? null,
+      resolvedReason,
+      recountOutcome: e.cycleCount?.outcome ?? null,
+    }),
+    detail: null,
+    note: e.note,
+  };
 }
 
 export default async function ExceptionDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -276,6 +324,14 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
         </CardContent>
       </Card>
 
+      <OccurrencePhotos
+        occurrenceId={o.id}
+        evidence={detail.evidence}
+        resolved={resolved}
+        canAct={o.canAct}
+        timeZone={timeZone}
+      />
+
       <div className="grid gap-4 sm:grid-cols-2">
         <Card>
           <CardHeader className="pb-2">
@@ -310,17 +366,11 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
             <ol className="space-y-3">
               {detail.timeline.map((e) => {
                 const cc = e.cycleCount ? formatCycleCountNumber(e.cycleCount.countNumber) : null;
+                const line = timelineLine(e, o.resolvedReason, timeZone);
                 return (
                   <li key={e.id} className="text-sm">
-                    <p className="font-medium">
-                      {describeTimelineEvent({
-                        kind: e.kind,
-                        actorLabel: e.actor?.label ?? null,
-                        cycleCountNumber: e.cycleCount?.countNumber ?? null,
-                        resolvedReason: o.resolvedReason,
-                        recountOutcome: e.cycleCount?.outcome ?? null,
-                      })}
-                    </p>
+                    <p className="font-medium">{line.headline}</p>
+                    {line.detail ? <p className="text-muted-foreground text-xs">{line.detail}</p> : null}
                     <p className="text-muted-foreground text-xs">
                       {exceptionTime(e.at, timeZone)}
                       {e.cycleCount ? (
@@ -332,7 +382,7 @@ function Detail({ detail, timeZone }: { detail: OccurrenceDetail; timeZone: stri
                         </>
                       ) : null}
                     </p>
-                    {e.note ? <p className="mt-1 whitespace-pre-wrap">{e.note}</p> : null}
+                    {line.note ? <p className="mt-1 whitespace-pre-wrap">{line.note}</p> : null}
                   </li>
                 );
               })}

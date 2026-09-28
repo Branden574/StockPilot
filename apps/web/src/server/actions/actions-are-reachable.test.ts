@@ -112,28 +112,6 @@ const KNOWN_UNREACHABLE: ReadonlyArray<{ name: string; file: string; reason: str
     file: 'order-requests.ts',
     reason: 'No caller: public-request token rotation has no settings control yet.',
   },
-  // F1-4 photo evidence: the backend landed first. These are the web twins of
-  // POST/DELETE /api/v1/exceptions/[id]/evidence, which the phone calls; their
-  // caller is the occurrence detail's photo panel, the next F1-4 step. That
-  // step must delete these three entries (the guard fails once they gain one).
-  {
-    name: 'startExceptionEvidenceUploadAction',
-    file: 'exceptions.ts',
-    reason:
-      'API-only action with no UI yet: the F1-4 photo panel on the occurrence detail is its caller.',
-  },
-  {
-    name: 'finalizeExceptionEvidenceAction',
-    file: 'exceptions.ts',
-    reason:
-      'API-only action with no UI yet: the F1-4 photo panel on the occurrence detail is its caller.',
-  },
-  {
-    name: 'removeExceptionEvidenceAction',
-    file: 'exceptions.ts',
-    reason:
-      'API-only action with no UI yet: the F1-4 photo panel on the occurrence detail is its caller.',
-  },
 ];
 
 function walk(dir: string, out: string[] = []): string[] {

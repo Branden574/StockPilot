@@ -13,6 +13,7 @@ import {
   EXCEPTION_EVIDENCE_CAPTURE_SKEW_MS,
   EXCEPTION_EVIDENCE_CONTENT_TYPES,
   EXCEPTION_EVIDENCE_EXTENSIONS,
+  EXCEPTION_EVIDENCE_LIMITS_COPY,
   EXCEPTION_EVIDENCE_MAX_PHOTO_BYTES,
   EXCEPTION_EVIDENCE_MAX_PHOTOS,
   EXCEPTION_EVIDENCE_NONE_COPY,
@@ -21,9 +22,11 @@ import {
   EXCEPTION_EVIDENCE_OFFLINE_COPY,
   EXCEPTION_EVIDENCE_PRIVACY_COPY,
   EXCEPTION_EVIDENCE_REJECTED_COPY,
+  EXCEPTION_EVIDENCE_REMOVE_COPY,
   EXCEPTION_EVIDENCE_RESOLVED_COPY,
   EXCEPTION_EVIDENCE_UNAVAILABLE_COPY,
   exceptionEvidenceAddDisabledReason,
+  exceptionEvidenceAddedByCopy,
   exceptionEvidenceCountLabel,
   exceptionEvidenceTimesCopy,
   exceptionEvidenceTypeForExtension,
@@ -250,6 +253,26 @@ describe('panel copy', () => {
     expect(exceptionEvidenceCountLabel(-1)).toBe('Photos (0 of 8)');
   });
 
+  it('states the limits the database enforces, from the constants', () => {
+    expect(EXCEPTION_EVIDENCE_LIMITS_COPY).toBe(
+      'Up to 8 photos on an exception, each a JPEG, PNG or WEBP of up to 10 MB.',
+    );
+  });
+
+  it('says a removal is soft before it is done: hidden, the file kept, the removal recorded', () => {
+    expect(EXCEPTION_EVIDENCE_REMOVE_COPY).toContain('It is not deleted: the file is kept');
+    expect(EXCEPTION_EVIDENCE_REMOVE_COPY).toContain('the timeline records who removed it');
+    // Never promises the file is gone (0375 keeps it) or that removal is final.
+    expect(EXCEPTION_EVIDENCE_REMOVE_COPY).not.toMatch(/permanently|cannot be undone|erased/i);
+  });
+
+  it('names who added a photo, and never shows a blank name', () => {
+    expect(exceptionEvidenceAddedByCopy('Maria Lopez')).toBe('Added by Maria Lopez');
+    expect(exceptionEvidenceAddedByCopy('Former member')).toBe('Added by Former member');
+    expect(exceptionEvidenceAddedByCopy('  ')).toBe('Added by a former member');
+    expect(exceptionEvidenceAddedByCopy(null)).toBe('Added by a former member');
+  });
+
   it('a failed read is never worded as "no photos"', () => {
     expect(EXCEPTION_EVIDENCE_UNAVAILABLE_COPY).not.toBe(EXCEPTION_EVIDENCE_NONE_COPY);
     expect(EXCEPTION_EVIDENCE_UNAVAILABLE_COPY.toLowerCase()).not.toContain('no photos');
@@ -265,6 +288,9 @@ describe('panel copy', () => {
       EXCEPTION_EVIDENCE_NONE_COPY,
       EXCEPTION_EVIDENCE_REJECTED_COPY,
       EXCEPTION_EVIDENCE_PRIVACY_COPY,
+      EXCEPTION_EVIDENCE_LIMITS_COPY,
+      EXCEPTION_EVIDENCE_REMOVE_COPY,
+      exceptionEvidenceAddedByCopy('Maria Lopez'),
       exceptionEvidenceCountLabel(2),
       exceptionEvidenceTimesCopy({ capturedAt: null, uploadedAt: '2026-09-27T15:40:00Z' }, TZ),
     ];
