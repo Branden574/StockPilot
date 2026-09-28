@@ -11,6 +11,7 @@ import {
   HOLD_NOT_APPLICABLE_COPY,
   HOLD_NOT_APPROVER_COPY,
   HOLD_ORDER_NOT_FOUND_COPY,
+  holdAddedAny,
   INSUFFICIENT_PLACED_STOCK_COPY,
   isManagerOrAbove,
   lineOwedUnits,
@@ -422,7 +423,10 @@ export type HoldTrigger = 'manual' | 'lines_added' | 'line_raised';
  * platforms show (core HOLD_* copy). `details.reason` is the HoldFailureReason
  * a line edit reports when its automatic top-up fails. Matched on the
  * function's own messages and codes only: any other error (a revoked grant's
- * "permission denied for function", a network fault) is internal_error.
+ * "permission denied for function", a 40P01 deadlock with a writer that locks
+ * items out of id order, a network fault) is internal_error, whose public
+ * message is the generic sentence; the Postgres code and text stay on
+ * `internalDetail` for the error report (holdFailureCause), never on screen.
  */
 function holdStockError(error: {
   message?: string | null;
@@ -451,11 +455,25 @@ function holdStockError(error: {
     return new ServiceError('unauthenticated', 'Sign in again to hold stock.', reason('forbidden'));
   }
   // lock_timeout (5 s) on the order or one of its items: someone else is
-  // changing it. Never 40001/40P01 (0367): PostgREST would retry forever.
-  if (error.code === '55P03') {
+  // changing it. The authenticated role's statement_timeout (8 s) can end a
+  // call that waited on the order row and then an item first (57014): the
+  // same situation, so the same answer. Never 40001/40P01 from the function
+  // (0367): PostgREST would retry 40001 forever.
+  if (error.code === '55P03' || error.code === '57014') {
     return new ServiceError('conflict', HOLD_BUSY_COPY, reason('busy'));
   }
-  return new ServiceError('internal_error', msg || 'hold_order_stock failed');
+  return new ServiceError(
+    'internal_error',
+    `hold_order_stock failed: ${error.code ?? 'no code'}: ${msg || 'no message'}`,
+    reason('failed'),
+  );
+}
+
+/** What an error report of a failed hold carries: the raw cause (Postgres
+ *  code and text, or the unreadable answer) that an internal_error keeps off
+ *  its public message. */
+function holdFailureCause(e: unknown): unknown {
+  return e instanceof ServiceError && e.internalDetail ? new Error(e.internalDetail) : e;
 }
 
 /** assertWarehouseAccess's refusal (ForbiddenError, lib/auth/warehouse). Read
@@ -1541,12 +1559,29 @@ export class OrderRequestsService {
    * included), write access to the order's warehouse; the function repeats
    * all of them in its own body and adds the hold statuses. It never refuses
    * for want of stock: what it could not hold comes back in `stillShort`.
+   * Quantities only for items the caller can read; any other item is held
+   * the same and only counted (hiddenHeldItems, hiddenShortItems).
    * Audited (order.stock_held: what was held per item, no costs) and
    * broadcast only when it held something; a call that holds nothing changed
-   * nothing.
+   * nothing. A fault (internal_error) on this manual path is reported with
+   * its cause; the automatic top-up reports its own failures (topUpHolds).
    */
   async holdStock(id: string, trigger: HoldTrigger = 'manual'): Promise<HoldOrderStockResult> {
-    return this.holdStockIn(id, null, trigger);
+    try {
+      return await this.holdStockIn(id, null, trigger);
+    } catch (e) {
+      // A refusal is the caller's answer. Anything else is a fault nobody
+      // would otherwise hear of (the action and the route show only core's
+      // "couldn't be held" sentence): report it with its cause.
+      if (e instanceof ServiceError && e.code === 'internal_error') {
+        void reportSrvError(holdFailureCause(e), {
+          tag: 'orders.hold_failed',
+          organizationId: this.ctx.organizationId,
+          extra: { orderId: id, trigger, reason: 'failed', detail: e.internalDetail ?? null },
+        });
+      }
+      throw e;
+    }
   }
 
   /**
@@ -1591,13 +1626,21 @@ export class OrderRequestsService {
         `hold_order_stock answered a shape it should not: ${e instanceof Error ? e.message : String(e)}`,
       );
     }
-    if (result.held.length > 0) {
+    // An item the caller cannot read that was held counts too (0378 gives it
+    // as a count only): the order's holds changed either way.
+    if (holdAddedAny(result)) {
       await audit(
         {
           event: 'order.stock_held',
           entityType: 'order_request',
           entityId: id,
-          after: { trigger, held: result.held, stillShort: result.stillShort },
+          after: {
+            trigger,
+            held: result.held,
+            stillShort: result.stillShort,
+            hiddenHeldItems: result.hiddenHeldItems,
+            hiddenShortItems: result.hiddenShortItems,
+          },
         },
         this.ctx,
       );
@@ -1627,10 +1670,15 @@ export class OrderRequestsService {
       return { ok: true, ...result };
     } catch (e) {
       const outcome = holdFailureOutcome(e);
-      void reportSrvError(e, {
+      void reportSrvError(holdFailureCause(e), {
         tag: 'orders.hold_failed',
         organizationId: this.ctx.organizationId,
-        extra: { orderId, trigger, reason: outcome.reason },
+        extra: {
+          orderId,
+          trigger,
+          reason: outcome.reason,
+          detail: e instanceof ServiceError ? e.internalDetail ?? null : null,
+        },
       });
       return outcome;
     }

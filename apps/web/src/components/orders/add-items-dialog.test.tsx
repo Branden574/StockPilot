@@ -342,7 +342,12 @@ describe('AddItemsDialog', () => {
     fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'a', name: 'Widget' })]));
     addLines.mockResolvedValue({
       ok: true,
-      data: { added: 1, merged: 0, pickSlipStale: false, hold: { ok: true, held: [{ itemId: 'a', added: 1 }], stillShort: [] } },
+      data: {
+        added: 1,
+        merged: 0,
+        pickSlipStale: false,
+        hold: { ok: true, held: [{ itemId: 'a', added: 1 }], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 },
+      },
     });
     const user = await open();
 
@@ -353,6 +358,30 @@ describe('AddItemsDialog', () => {
       expect(toastMock.success).toHaveBeenCalledWith('Held 1 unit for this order.');
     });
     expect(toastMock.warning).not.toHaveBeenCalled();
+  });
+
+  it("warns when an item the adder can't see could not be fully held (counted, never numbered)", async () => {
+    fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'a', name: 'Widget' })]));
+    addLines.mockResolvedValue({
+      ok: true,
+      data: {
+        added: 1,
+        merged: 0,
+        pickSlipStale: false,
+        hold: { ok: true, held: [], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 1 },
+      },
+    });
+    const user = await open();
+
+    await user.click(await screen.findByRole('button', { name: 'Select Widget' }));
+    await user.click(screen.getByRole('button', { name: /add to order/i }));
+
+    await vi.waitFor(() => {
+      expect(toastMock.warning).toHaveBeenCalledWith(
+        "1 item that isn't visible to you could not be fully held.",
+        expect.anything(),
+      );
+    });
   });
 
   it('keeps the dialog and the staged tray intact when the action fails', async () => {

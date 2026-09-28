@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { HOLD_NOT_APPLICABLE_COPY, type ModuleId } from '@stockpilot/core';
+import { HOLD_FAILED_COPY, HOLD_NOT_APPLICABLE_COPY, type ModuleId } from '@stockpilot/core';
 
 import { withContext } from '@/server/services/context';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
@@ -24,6 +24,7 @@ vi.mock('@/lib/auth/warehouse', async (importOriginal) => ({
 }));
 vi.mock('@/server/services/audit', () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock('@/lib/realtime/broadcast', () => ({ broadcastOrderChanged: vi.fn(async () => undefined) }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 vi.mock('next/cache', async (importOriginal) => ({
   ...(await importOriginal<typeof import('next/cache')>()),
   revalidateTag: vi.fn(),
@@ -31,6 +32,8 @@ vi.mock('next/cache', async (importOriginal) => ({
 }));
 
 import { revalidatePath, revalidateTag } from 'next/cache';
+
+import { reportError } from '@/lib/error-reporter';
 
 import { holdOrderStockAction } from './order-requests';
 
@@ -57,12 +60,18 @@ function arrange(
 beforeEach(() => {
   vi.mocked(revalidateTag).mockReset();
   vi.mocked(revalidatePath).mockReset();
+  vi.mocked(reportError).mockClear();
 });
 
 describe('holdOrderStockAction (F2-2)', () => {
   it('holds for THIS order, answers what was held and still short, and refreshes the storefront catalog', async () => {
     const stub = arrange({
-      data: { held: [{ itemId: 'i1', added: '8.0000' }], stillShort: [{ itemId: 'i2', quantity: 6 }] },
+      data: {
+        held: [{ itemId: 'i1', added: '8.0000' }],
+        stillShort: [{ itemId: 'i2', quantity: 6 }],
+        hiddenHeldItems: 0,
+        hiddenShortItems: 0,
+      },
       error: null,
     });
 
@@ -70,7 +79,12 @@ describe('holdOrderStockAction (F2-2)', () => {
 
     expect(res).toEqual({
       ok: true,
-      data: { held: [{ itemId: 'i1', added: 8 }], stillShort: [{ itemId: 'i2', quantity: 6 }] },
+      data: {
+        held: [{ itemId: 'i1', added: 8 }],
+        stillShort: [{ itemId: 'i2', quantity: 6 }],
+        hiddenHeldItems: 0,
+        hiddenShortItems: 0,
+      },
     });
     expect(stub.rpcCalls).toEqual([{ name: 'hold_order_stock', args: { p_order_id: ORDER } }]);
     expect(revalidateTag).toHaveBeenCalledWith('orders-new-v2-catalog', 'max');
@@ -84,10 +98,23 @@ describe('holdOrderStockAction (F2-2)', () => {
       error: { code: 'conflict', message: HOLD_NOT_APPLICABLE_COPY },
     });
     expect(revalidateTag).not.toHaveBeenCalled();
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it("an internal failure says core's hold sentence (never the database's text, never the generic one), and is reported with its cause", async () => {
+    arrange({ data: null, error: { message: 'canceling statement due to conflict with recovery', code: '40001' } });
+    const res = await holdOrderStockAction({ id: ORDER });
+    expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: HOLD_FAILED_COPY } });
+    expect(JSON.stringify(res)).not.toMatch(/conflict with recovery|40001/);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [reported, context] = vi.mocked(reportError).mock.calls[0]!;
+    expect((reported as Error).message).toContain('40001: canceling statement due to conflict with recovery');
+    expect(context).toMatchObject({ tag: 'orders.hold_failed', extra: { trigger: 'manual', reason: 'failed' } });
+    expect(revalidateTag).not.toHaveBeenCalled();
   });
 
   it('someone who may not approve orders is refused before the function is called', async () => {
-    const stub = arrange({ data: { held: [], stillShort: [] }, error: null }, { role: 'viewer' });
+    const stub = arrange({ data: { held: [], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 }, error: null }, { role: 'viewer' });
     const res = await holdOrderStockAction({ id: ORDER });
     expect(res.ok).toBe(false);
     expect(stub.rpcCalls).toEqual([]);
@@ -96,7 +123,7 @@ describe('holdOrderStockAction (F2-2)', () => {
   });
 
   it('refuses an id that is not a uuid without calling anything', async () => {
-    const stub = arrange({ data: { held: [], stillShort: [] }, error: null });
+    const stub = arrange({ data: { held: [], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 }, error: null });
     await expect(holdOrderStockAction({ id: 'not-a-uuid' })).resolves.toEqual({
       ok: false,
       error: { code: 'validation_error', message: 'Invalid input' },

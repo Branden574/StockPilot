@@ -16,7 +16,9 @@ import {
   HOLD_NOT_APPLICABLE_COPY,
   HOLD_NOT_APPROVER_COPY,
   HOLD_ORDER_NOT_FOUND_COPY,
+  holdAddedAny,
   holdAddedUnits,
+  holdLeftShort,
   holdStillShortUnits,
   HoldResultShapeError,
   isHoldStatus,
@@ -44,37 +46,79 @@ describe('parseHoldOrderStockResult (hold_order_stock 0378)', () => {
       parseHoldOrderStockResult({
         held: [{ itemId: A, added: 8 }],
         stillShort: [{ itemId: B, quantity: '6.0000' }],
+        hiddenHeldItems: 1,
+        hiddenShortItems: '2',
       }),
-    ).toEqual({ held: [{ itemId: A, added: 8 }], stillShort: [{ itemId: B, quantity: 6 }] });
-    expect(parseHoldOrderStockResult({ held: [], stillShort: [] })).toEqual({ held: [], stillShort: [] });
+    ).toEqual({
+      held: [{ itemId: A, added: 8 }],
+      stillShort: [{ itemId: B, quantity: 6 }],
+      hiddenHeldItems: 1,
+      hiddenShortItems: 2,
+    });
+    expect(parseHoldOrderStockResult({ held: [], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 })).toEqual({
+      held: [],
+      stillShort: [],
+      hiddenHeldItems: 0,
+      hiddenShortItems: 0,
+    });
   });
 
   it('tolerates keys it does not know (a later additive change never breaks an older phone)', () => {
     expect(
-      parseHoldOrderStockResult({ held: [{ itemId: A, added: 1, note: 'x' }], stillShort: [], v: 2 }),
-    ).toEqual({ held: [{ itemId: A, added: 1 }], stillShort: [] });
+      parseHoldOrderStockResult({
+        held: [{ itemId: A, added: 1, note: 'x' }],
+        stillShort: [],
+        hiddenHeldItems: 0,
+        hiddenShortItems: 0,
+        v: 2,
+      }),
+    ).toEqual({ held: [{ itemId: A, added: 1 }], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 });
   });
 
   it.each([
     ['null', null],
     ['a list', []],
-    ['no held', { stillShort: [] }],
-    ['no stillShort', { held: [] }],
-    ['held not a list', { held: {}, stillShort: [] }],
-    ['an entry not an object', { held: [1], stillShort: [] }],
-    ['no item id', { held: [{ added: 1 }], stillShort: [] }],
-    ['a zero added', { held: [{ itemId: A, added: 0 }], stillShort: [] }],
-    ['a negative quantity', { held: [], stillShort: [{ itemId: A, quantity: -1 }] }],
-    ['a non-number', { held: [{ itemId: A, added: 'lots' }], stillShort: [] }],
-    ['NaN', { held: [{ itemId: A, added: Number.NaN }], stillShort: [] }],
+    ['no held', { stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 }],
+    ['no stillShort', { held: [], hiddenHeldItems: 0, hiddenShortItems: 0 }],
+    // The counts of items the caller cannot read (0378): required, whole and
+    // never negative. A missing count is never taken as "none hidden".
+    ['no hiddenHeldItems', { held: [], stillShort: [], hiddenShortItems: 0 }],
+    ['no hiddenShortItems', { held: [], stillShort: [], hiddenHeldItems: 0 }],
+    ['a negative hidden count', { held: [], stillShort: [], hiddenHeldItems: -1, hiddenShortItems: 0 }],
+    ['a fractional hidden count', { held: [], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 1.5 }],
+    ['a hidden count not a number', { held: [], stillShort: [], hiddenHeldItems: 'one', hiddenShortItems: 0 }],
+    ['held not a list', { held: {}, stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 }],
+    ['an entry not an object', { held: [1], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 }],
+    ['no item id', { held: [{ added: 1 }], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 }],
+    ['a zero added', { held: [{ itemId: A, added: 0 }], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 }],
+    ['a negative quantity', { held: [], stillShort: [{ itemId: A, quantity: -1 }], hiddenHeldItems: 0, hiddenShortItems: 0 }],
+    ['a non-number', { held: [{ itemId: A, added: 'lots' }], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 }],
+    ['NaN', { held: [{ itemId: A, added: Number.NaN }], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 }],
   ])('refuses a wrong shape: %s (never guesses a number)', (_name, raw) => {
     expect(() => parseHoldOrderStockResult(raw)).toThrow(HoldResultShapeError);
   });
 
   it('adds up what was held and what is still short', () => {
-    const r = { held: [{ itemId: A, added: 8 }, { itemId: B, added: 2 }], stillShort: [{ itemId: B, quantity: 6 }] };
+    const r = {
+      held: [{ itemId: A, added: 8 }, { itemId: B, added: 2 }],
+      stillShort: [{ itemId: B, quantity: 6 }],
+      hiddenHeldItems: 0,
+      hiddenShortItems: 0,
+    };
     expect(holdAddedUnits(r)).toBe(10);
     expect(holdStillShortUnits(r)).toBe(6);
+  });
+
+  it('whether a call held anything, and whether anything is left short, counting items the caller cannot read', () => {
+    const none = { held: [], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 };
+    expect(holdAddedAny(none)).toBe(false);
+    expect(holdLeftShort(none)).toBe(false);
+    // Only an item the caller cannot read was held, or is short: the call
+    // still changed the order (audit, broadcast) and still left it short.
+    expect(holdAddedAny({ ...none, hiddenHeldItems: 1 })).toBe(true);
+    expect(holdLeftShort({ ...none, hiddenShortItems: 1 })).toBe(true);
+    expect(holdAddedAny({ ...none, held: [{ itemId: A, added: 2 }] })).toBe(true);
+    expect(holdLeftShort({ ...none, stillShort: [{ itemId: A, quantity: 2 }] })).toBe(true);
   });
 });
 
@@ -186,18 +230,51 @@ describe('shouldOfferHoldStock (the "Hold available stock" button, web and phone
 describe('hold words', () => {
   it('what "Hold available stock" says', () => {
     expect(HOLD_AVAILABLE_STOCK_LABEL).toBe('Hold available stock');
-    expect(describeHoldResult({ held: [{ itemId: A, added: 8 }, { itemId: B, added: 2 }], stillShort: [] })).toBe(
+    expect(describeHoldResult({ held: [{ itemId: A, added: 8 }, { itemId: B, added: 2 }], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 })).toBe(
       'Held 10 more units for this order.',
     );
-    expect(describeHoldResult({ held: [{ itemId: A, added: 1 }], stillShort: [{ itemId: B, quantity: 6 }] })).toBe(
+    expect(describeHoldResult({ held: [{ itemId: A, added: 1 }], stillShort: [{ itemId: B, quantity: 6 }], hiddenHeldItems: 0, hiddenShortItems: 0 })).toBe(
       'Held 1 more unit for this order. 6 units are still short: there is no free stock to hold for them.',
     );
-    expect(describeHoldResult({ held: [], stillShort: [{ itemId: B, quantity: 1 }] })).toBe(
+    expect(describeHoldResult({ held: [], stillShort: [{ itemId: B, quantity: 1 }], hiddenHeldItems: 0, hiddenShortItems: 0 })).toBe(
       '1 unit is still short: there is no free stock to hold for it.',
     );
-    expect(describeHoldResult({ held: [], stillShort: [] })).toBe('Nothing more to hold for this order.');
-    expect(describeHoldResult({ held: [{ itemId: A, added: 16693 }], stillShort: [] })).toBe(
+    expect(describeHoldResult({ held: [], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 })).toBe('Nothing more to hold for this order.');
+    expect(describeHoldResult({ held: [{ itemId: A, added: 16693 }], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 })).toBe(
       'Held 16,693 more units for this order.',
+    );
+  });
+
+  it('items the caller cannot read are counted, never given numbers (0378: numbers only where caller_can_read_item)', () => {
+    expect(
+      describeHoldResult({
+        held: [{ itemId: A, added: 4 }],
+        stillShort: [{ itemId: A, quantity: 2 }],
+        hiddenHeldItems: 1,
+        hiddenShortItems: 1,
+      }),
+    ).toBe(
+      'Held 4 more units for this order. 2 units are still short: there is no free stock to hold for them. ' +
+        "Stock was also held for 1 item that isn't visible to you. 1 item that isn't visible to you is still short.",
+    );
+    // Only hidden items: never "Nothing more to hold" (there was, or is).
+    expect(describeHoldResult({ held: [], stillShort: [], hiddenHeldItems: 2, hiddenShortItems: 0 })).toBe(
+      "Stock was held for 2 items that aren't visible to you.",
+    );
+    expect(describeHoldResult({ held: [], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 3 })).toBe(
+      "3 items that aren't visible to you are still short.",
+    );
+    expect(
+      describeHoldTopUp({ ok: true, held: [], stillShort: [], hiddenHeldItems: 1, hiddenShortItems: 0 }, 'added'),
+    ).toBe("Stock was held for 1 item that isn't visible to you.");
+    expect(
+      describeHoldTopUp(
+        { ok: true, held: [{ itemId: A, added: 2 }], stillShort: [], hiddenHeldItems: 1, hiddenShortItems: 2 },
+        'raised',
+      ),
+    ).toBe(
+      "Held 2 units for this order. Stock was also held for 1 item that isn't visible to you. " +
+        "2 items that aren't visible to you could not be fully held.",
     );
   });
 
@@ -214,14 +291,14 @@ describe('hold words', () => {
 
   it('after an add or a raise: what was held, what could not be, or nothing to say', () => {
     expect(describeHoldTopUp(null, 'added')).toBeNull();
-    expect(describeHoldTopUp({ ok: true, held: [], stillShort: [] }, 'raised')).toBeNull();
-    expect(describeHoldTopUp({ ok: true, held: [{ itemId: A, added: 8 }], stillShort: [] }, 'added')).toBe(
+    expect(describeHoldTopUp({ ok: true, held: [], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 }, 'raised')).toBeNull();
+    expect(describeHoldTopUp({ ok: true, held: [{ itemId: A, added: 8 }], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 }, 'added')).toBe(
       'Held 8 units for this order.',
     );
     expect(
-      describeHoldTopUp({ ok: true, held: [{ itemId: A, added: 2 }], stillShort: [{ itemId: A, quantity: 6 }] }, 'raised'),
+      describeHoldTopUp({ ok: true, held: [{ itemId: A, added: 2 }], stillShort: [{ itemId: A, quantity: 6 }], hiddenHeldItems: 0, hiddenShortItems: 0 }, 'raised'),
     ).toBe('Held 2 units for this order. 6 units could not be held: there is no free stock for them.');
-    expect(describeHoldTopUp({ ok: true, held: [], stillShort: [{ itemId: A, quantity: 1 }] }, 'added')).toBe(
+    expect(describeHoldTopUp({ ok: true, held: [], stillShort: [{ itemId: A, quantity: 1 }], hiddenHeldItems: 0, hiddenShortItems: 0 }, 'added')).toBe(
       '1 unit could not be held: there is no free stock for it.',
     );
   });
@@ -236,11 +313,13 @@ describe('hold words', () => {
       HOLD_ORDER_NOT_FOUND_COPY,
       HOLD_MODULE_OFF_COPY,
       HOLD_FAILED_COPY,
-      describeHoldResult({ held: [{ itemId: A, added: 2 }], stillShort: [{ itemId: B, quantity: 3 }] }),
-      describeHoldResult({ held: [], stillShort: [] }),
+      describeHoldResult({ held: [{ itemId: A, added: 2 }], stillShort: [{ itemId: B, quantity: 3 }], hiddenHeldItems: 0, hiddenShortItems: 0 }),
+      describeHoldResult({ held: [], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 }),
+      describeHoldResult({ held: [], stillShort: [], hiddenHeldItems: 2, hiddenShortItems: 1 }),
+      describeHoldTopUp({ ok: true, held: [], stillShort: [], hiddenHeldItems: 1, hiddenShortItems: 2 }, 'added')!,
       describeHoldTopUp({ ok: false, reason: 'busy', message: HOLD_BUSY_COPY }, 'added')!,
       describeHoldTopUp({ ok: false, reason: 'busy', message: HOLD_BUSY_COPY }, 'raised')!,
-      describeHoldTopUp({ ok: true, held: [{ itemId: A, added: 2 }], stillShort: [{ itemId: B, quantity: 3 }] }, 'added')!,
+      describeHoldTopUp({ ok: true, held: [{ itemId: A, added: 2 }], stillShort: [{ itemId: B, quantity: 3 }], hiddenHeldItems: 0, hiddenShortItems: 0 }, 'added')!,
     ];
     expect(words.filter((w) => /\bbooks?\b|%|guarantee|verified|reserved/i.test(w))).toEqual([]);
   });

@@ -43,6 +43,15 @@ const ORDER = 'order-1';
 const HELD = {
   held: [{ itemId: 'item-1', added: 8 }],
   stillShort: [{ itemId: 'item-2', quantity: 6 }],
+  hiddenHeldItems: 0,
+  hiddenShortItems: 0,
+};
+/** What the audit entry records: the answer as it came, and what started it. */
+const HELD_AFTER = {
+  held: HELD.held,
+  stillShort: HELD.stillShort,
+  hiddenHeldItems: 0,
+  hiddenShortItems: 0,
 };
 
 function svc(
@@ -112,7 +121,7 @@ describe('OrderRequestsService.holdStock', () => {
       event: 'order.stock_held',
       entityType: 'order_request',
       entityId: ORDER,
-      after: { trigger: 'manual', held: HELD.held, stillShort: HELD.stillShort },
+      after: { trigger: 'manual', ...HELD_AFTER },
     });
     // No costs on the audit entry.
     expect(JSON.stringify(vi.mocked(audit).mock.calls[0]![0])).not.toMatch(/cost/i);
@@ -120,13 +129,22 @@ describe('OrderRequestsService.holdStock', () => {
   });
 
   it('a call that held nothing changed nothing: no audit, no broadcast', async () => {
-    const stub = stubWith({ data: { held: [], stillShort: [{ itemId: 'item-2', quantity: 6 }] }, error: null });
-    await expect(svc(stub).holdStock(ORDER)).resolves.toEqual({
-      held: [],
-      stillShort: [{ itemId: 'item-2', quantity: 6 }],
-    });
+    const nothing = { held: [], stillShort: [{ itemId: 'item-2', quantity: 6 }], hiddenHeldItems: 0, hiddenShortItems: 1 };
+    const stub = stubWith({ data: nothing, error: null });
+    await expect(svc(stub).holdStock(ORDER)).resolves.toEqual(nothing);
     expect(audit).not.toHaveBeenCalled();
     expect(broadcastOrderChanged).not.toHaveBeenCalled();
+  });
+
+  it('a call that held only for an item the caller cannot read still changed the order: audited (a count, no numbers) and broadcast', async () => {
+    // 0378: a charter-scoped approver's order can carry an item they cannot
+    // read; it is held all the same and only counted in the answer.
+    const hidden = { held: [], stillShort: [], hiddenHeldItems: 1, hiddenShortItems: 1 };
+    const stub = stubWith({ data: hidden, error: null });
+    await expect(svc(stub).holdStock(ORDER)).resolves.toEqual(hidden);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(audit).mock.calls[0]![0].after).toEqual({ trigger: 'manual', ...hidden });
+    expect(broadcastOrderChanged).toHaveBeenCalledWith('org-test', ORDER);
   });
 
   it('gates: the orders module, orders:approve (with the MFA step-up), write access to the warehouse; none reaches the function', async () => {
@@ -202,6 +220,10 @@ describe('OrderRequestsService.holdStock', () => {
     [{ message: 'unauthenticated', code: '42501' }, 'unauthenticated', 'Sign in again to hold stock.', 'forbidden'],
     [{ message: 'hold_not_applicable', code: 'P0001', hint: 'hold_not_applicable', details: 'picking_complete' }, 'conflict', HOLD_NOT_APPLICABLE_COPY, 'not_applicable'],
     [{ message: 'canceling statement due to lock timeout', code: '55P03' }, 'conflict', HOLD_BUSY_COPY, 'busy'],
+    // The authenticated role's statement_timeout (8 s) can end a call that
+    // waited on the order row and then an item (5 s lock_timeout each): the
+    // same "someone else is changing it" as a lock timeout.
+    [{ message: 'canceling statement due to statement timeout', code: '57014' }, 'conflict', HOLD_BUSY_COPY, 'busy'],
   ] as const)('maps %o to %s', async (error, code, message, reason) => {
     const stub = stubWith({ data: null, error: { ...error } });
     const e = await svc(stub).holdStock(ORDER).catch((x: unknown) => x);
@@ -210,17 +232,41 @@ describe('OrderRequestsService.holdStock', () => {
     expect(audit).not.toHaveBeenCalled();
   });
 
-  it('anything else is internal_error and never shows the raw text (a revoked grant, a fault, an unreadable answer)', async () => {
-    for (const rpc of [
-      { data: null, error: { message: 'permission denied for function hold_order_stock', code: '42501' } },
-      { data: null, error: { message: 'boom', code: 'XX000' } },
-      { data: { held: 'nope' }, error: null },
-      { data: null, error: null },
-    ] as QueryResult[]) {
+  it('anything else is internal_error, never shows the raw text, and is reported with its cause (a revoked grant, a deadlock, a fault, an unreadable answer)', async () => {
+    for (const [rpc, cause] of [
+      [
+        { data: null, error: { message: 'permission denied for function hold_order_stock', code: '42501' } },
+        '42501: permission denied for function hold_order_stock',
+      ],
+      [{ data: null, error: { message: 'deadlock detected', code: '40P01' } }, '40P01: deadlock detected'],
+      [{ data: null, error: { message: 'boom', code: 'XX000' } }, 'XX000: boom'],
+      [{ data: { held: 'nope' }, error: null }, 'held is not a list'],
+      [{ data: null, error: null }, 'the answer is not an object'],
+    ] as Array<[QueryResult, string]>) {
+      vi.mocked(reportError).mockClear();
       const e = await svc(stubWith(rpc)).holdStock(ORDER).catch((x: unknown) => x);
       expect(e).toMatchObject({ code: 'internal_error' });
       expect((e as Error).message).toBe('An internal error occurred. Please try again.');
+      // The manual "Hold available stock" is reported too, and the report
+      // keeps what went wrong (the public message is the generic sentence).
+      expect(reportError, cause).toHaveBeenCalledTimes(1);
+      const [reported, context] = vi.mocked(reportError).mock.calls[0]!;
+      expect((reported as Error).message, cause).toContain(cause);
+      expect(context).toMatchObject({
+        tag: 'orders.hold_failed',
+        organizationId: 'org-test',
+        extra: { orderId: ORDER, trigger: 'manual', reason: 'failed' },
+      });
+      expect(JSON.stringify(context.extra), cause).toContain(cause);
     }
+  });
+
+  it('a refusal of the manual hold is the caller\'s answer, not an error report', async () => {
+    const e = await svc(stubWith({ data: null, error: { message: 'hold_not_applicable', code: 'P0001' } }))
+      .holdStock(ORDER)
+      .catch((x: unknown) => x);
+    expect(e).toMatchObject({ code: 'conflict' });
+    expect(reportError).not.toHaveBeenCalled();
   });
 });
 
@@ -257,7 +303,7 @@ describe('addLines holds what an approver adds at a hold status (D15)', () => {
       expect(log).toEqual(['line insert', 'hold']);
       expect(stub.rpcCalls).toEqual([{ name: 'hold_order_stock', args: { p_order_id: ORDER } }]);
       const held = vi.mocked(audit).mock.calls.map((c) => c[0]).find((p) => p.event === 'order.stock_held');
-      expect(held?.after).toEqual({ trigger: 'lines_added', held: HELD.held, stillShort: HELD.stillShort });
+      expect(held?.after).toEqual({ trigger: 'lines_added', ...HELD_AFTER });
     },
   );
 
@@ -304,8 +350,16 @@ describe('addLines holds what an approver adds at a hold status (D15)', () => {
     const stub = addStub('approved', { data: null, error: { message: 'boom', code: 'XX000' } });
     const res = await svc(stub).addLines(ORDER, [{ itemId: 'item-1', quantity: 3 }]);
     expect(res.hold).toEqual({ ok: false, reason: 'failed', message: HOLD_FAILED_COPY });
+    // Reported once (not again by the manual path), with the Postgres code
+    // and text, which the ServiceError's public message no longer carries.
     expect(reportError).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(reportError).mock.calls[0]![0]).toBeInstanceOf(ServiceError);
+    const [reported, context] = vi.mocked(reportError).mock.calls[0]!;
+    expect((reported as Error).message).toContain('XX000: boom');
+    expect(context).toMatchObject({
+      tag: 'orders.hold_failed',
+      extra: { orderId: ORDER, trigger: 'lines_added', reason: 'failed' },
+    });
+    expect(JSON.stringify(context.extra)).toContain('XX000: boom');
   });
 
   it('an approver who cannot write the warehouse (a viewer with an orders:approve override): the add stands, the hold says why', async () => {

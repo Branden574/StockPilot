@@ -27,7 +27,30 @@
 #           for item 1, approve holds item 1 and waits for item 2: Postgres
 #           kills one with 40P01 (deadlock_detected), which PostgREST does not
 #           retry. This is what taking the items in id order prevents.
-#   No session running the real function (1, 3, 4, 5a) ever sees 40001 or
+#   6. complete_picking against a hold (complete_picking takes the same locks
+#      in the same order: the order row, then the items by id):
+#        a. complete_picking on one order first, a hold on another order that
+#           shares its two items meanwhile: the hold waits, then holds only
+#           what the pick left on hand (3 of each) and says 2 of each are still
+#           short.
+#        b. the hold first, complete_picking on the other order meanwhile:
+#           complete_picking waits, then completes; the hold keeps the 3 of
+#           each it took, no more than is left on hand.
+#        c. the SAME order, the hold first: it tops the order up (3 + 5), then
+#           complete_picking waits, picks, and releases every hold the order
+#           had, the new ones included.
+#        d. the SAME order, complete_picking first: the hold then finds the
+#           order picked and refuses (P0001 hold_not_applicable, detail
+#           picking_complete), holding nothing.
+#        e. the SAME order, cancel first: the hold refuses (hold_not_applicable,
+#           detail cancelled), holding nothing.
+#        f. MUTATION of d: a copy that reads the status WITHOUT locking the
+#           order row (public._probe_hold_unlocked_status, dropped at the end)
+#           reads "pick slip generated" while the pick is still running, waits
+#           on the items, and then holds stock for an order that is already
+#           picked: a hold nothing will ever release. Taking the order row
+#           lock before the status check is what prevents it.
+#   No session running the real function (1, 3, 4, 5a, 6) ever sees 40001 or
 #   40P01, and every item ends with no more held than is on hand.
 #
 # Runs against the LOCAL stack only (docker container supabase_db_stockpilot).
@@ -69,6 +92,27 @@ P5A='03781111-0000-0000-0000-0000000000d9'
 X5A='03781111-0000-0000-0000-0000000000da'
 P5B='03781111-0000-0000-0000-0000000000db'
 X5B='03781111-0000-0000-0000-0000000000dc'
+# Section 6: items (8 on hand each) and orders.
+J1='03781111-0000-0000-0000-0000000000e1'
+J2='03781111-0000-0000-0000-0000000000e2'
+J3='03781111-0000-0000-0000-0000000000e3'
+J4='03781111-0000-0000-0000-0000000000e4'
+K1='03781111-0000-0000-0000-0000000000e5'
+K2='03781111-0000-0000-0000-0000000000e6'
+K3='03781111-0000-0000-0000-0000000000e7'
+K4='03781111-0000-0000-0000-0000000000e8'
+L1='03781111-0000-0000-0000-0000000000e9'
+L2='03781111-0000-0000-0000-0000000000ea'
+C6A='03781111-0000-0000-0000-0000000000f1'
+H6A='03781111-0000-0000-0000-0000000000f2'
+C6B='03781111-0000-0000-0000-0000000000f3'
+H6B='03781111-0000-0000-0000-0000000000f4'
+S6C='03781111-0000-0000-0000-0000000000f5'
+S6D='03781111-0000-0000-0000-0000000000f6'
+S6E='03781111-0000-0000-0000-0000000000f7'
+S6F='03781111-0000-0000-0000-0000000000f8'
+M1='03781111-0000-0000-0000-0000000000eb'
+M2='03781111-0000-0000-0000-0000000000ec'
 
 FAILS=0
 ok()   { printf 'ok     %s\n' "$*"; }
@@ -88,6 +132,7 @@ cleanup() {
   "${PSQL[@]}" >/dev/null 2>"$TMP/cleanup.err" <<SQL
 drop function if exists public._probe_hold_nolock(uuid);
 drop function if exists public._probe_hold_paced(uuid, boolean);
+drop function if exists public._probe_hold_unlocked_status(uuid);
 delete from public.stock_reservations where organization_id = '$ORG';
 delete from public.order_request_lines where order_request_id in (select id from public.order_requests where organization_id = '$ORG');
 delete from public.order_requests where organization_id = '$ORG';
@@ -95,6 +140,11 @@ delete from public.organizations where id = '$ORG';
 delete from auth.users where id = '$MGR';
 SQL
   if [ $? -ne 0 ]; then echo "cleanup failed:"; cat "$TMP/cleanup.err"; return 1; fi
+  # Section 6's picks write ledger rows; the org delete must have taken them
+  # (and everything else under the org) with it.
+  local left
+  left="$("${PSQL[@]}" -c "select (select count(*) from public.stock_movements where organization_id = '$ORG') + (select count(*) from public.inventory_items where organization_id = '$ORG')")"
+  if [ "$left" != "0" ]; then echo "cleanup left $left fixture rows"; return 1; fi
 }
 
 cleanup || exit 1
@@ -116,7 +166,19 @@ insert into public.inventory_items (id, organization_id, warehouse_id, name, sku
   ('$I7',   '$ORG', '$WH', '2S pair 4a',  'SKU-0378-2S7',  8,  'active'),
   ('$I8',   '$ORG', '$WH', '2S pair 4b',  'SKU-0378-2S8',  8,  'active'),
   ('$I9',   '$ORG', '$WH', '2S pair 5a',  'SKU-0378-2S9',  8,  'active'),
-  ('$I10',  '$ORG', '$WH', '2S pair 5b',  'SKU-0378-2S10', 8,  'active');
+  ('$I10',  '$ORG', '$WH', '2S pair 5b',  'SKU-0378-2S10', 8,  'active'),
+  ('$J1',   '$ORG', '$WH', '2S pick 1a',  'SKU-0378-2SJ1', 8,  'active'),
+  ('$J2',   '$ORG', '$WH', '2S pick 1b',  'SKU-0378-2SJ2', 8,  'active'),
+  ('$J3',   '$ORG', '$WH', '2S pick 2a',  'SKU-0378-2SJ3', 8,  'active'),
+  ('$J4',   '$ORG', '$WH', '2S pick 2b',  'SKU-0378-2SJ4', 8,  'active'),
+  ('$K1',   '$ORG', '$WH', '2S pick 3a',  'SKU-0378-2SK1', 8,  'active'),
+  ('$K2',   '$ORG', '$WH', '2S pick 3b',  'SKU-0378-2SK2', 8,  'active'),
+  ('$K3',   '$ORG', '$WH', '2S pick 4a',  'SKU-0378-2SK3', 8,  'active'),
+  ('$K4',   '$ORG', '$WH', '2S pick 4b',  'SKU-0378-2SK4', 8,  'active'),
+  ('$L1',   '$ORG', '$WH', '2S pick 5a',  'SKU-0378-2SL1', 8,  'active'),
+  ('$L2',   '$ORG', '$WH', '2S pick 5b',  'SKU-0378-2SL2', 8,  'active'),
+  ('$M1',   '$ORG', '$WH', '2S pick 6a',  'SKU-0378-2SM1', 8,  'active'),
+  ('$M2',   '$ORG', '$WH', '2S pick 6b',  'SKU-0378-2SM2', 8,  'active');
 insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type) values
   ('$X',   '$ORG', '$WH', 'approved',         'internal', '$MGR', 'pickup'),
   ('$Y',   '$ORG', '$WH', 'approved',         'internal', '$MGR', 'pickup'),
@@ -129,14 +191,28 @@ insert into public.order_requests (id, organization_id, warehouse_id, status, so
   ('$P5A', '$ORG', '$WH', 'pending_approval', 'internal', '$MGR', 'pickup'),
   ('$X5A', '$ORG', '$WH', 'approved',         'internal', '$MGR', 'pickup'),
   ('$P5B', '$ORG', '$WH', 'pending_approval', 'internal', '$MGR', 'pickup'),
-  ('$X5B', '$ORG', '$WH', 'approved',         'internal', '$MGR', 'pickup');
+  ('$X5B', '$ORG', '$WH', 'approved',         'internal', '$MGR', 'pickup'),
+  ('$C6A', '$ORG', '$WH', 'pick_slip_generated', 'internal', '$MGR', 'pickup'),
+  ('$H6A', '$ORG', '$WH', 'approved',            'internal', '$MGR', 'pickup'),
+  ('$C6B', '$ORG', '$WH', 'pick_slip_generated', 'internal', '$MGR', 'pickup'),
+  ('$H6B', '$ORG', '$WH', 'approved',            'internal', '$MGR', 'pickup'),
+  ('$S6C', '$ORG', '$WH', 'pick_slip_generated', 'internal', '$MGR', 'pickup'),
+  ('$S6D', '$ORG', '$WH', 'pick_slip_generated', 'internal', '$MGR', 'pickup'),
+  ('$S6E', '$ORG', '$WH', 'approved',            'internal', '$MGR', 'pickup'),
+  ('$S6F', '$ORG', '$WH', 'pick_slip_generated', 'internal', '$MGR', 'pickup');
 insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values
   ('$X',   '$ITEM', 10), ('$Y',   '$ITEM', 10),
   ('$X2',  '$ITEM', 10), ('$Y2',  '$ITEM', 10),
   ('$P3',  '$I1', 5), ('$P3',  '$I2', 5), ('$X3',  '$I1', 5), ('$X3',  '$I2', 5),
   ('$P4',  '$I3', 5), ('$P4',  '$I4', 5), ('$X4',  '$I3', 5), ('$X4',  '$I4', 5),
   ('$P5A', '$I5', 5), ('$P5A', '$I6', 5), ('$X5A', '$I5', 5), ('$X5A', '$I6', 5),
-  ('$P5B', '$I7', 5), ('$P5B', '$I8', 5), ('$X5B', '$I7', 5), ('$X5B', '$I8', 5);
+  ('$P5B', '$I7', 5), ('$P5B', '$I8', 5), ('$X5B', '$I7', 5), ('$X5B', '$I8', 5),
+  ('$C6A', '$J1', 5), ('$C6A', '$J2', 5), ('$H6A', '$J1', 5), ('$H6A', '$J2', 5),
+  ('$C6B', '$J3', 5), ('$C6B', '$J4', 5), ('$H6B', '$J3', 5), ('$H6B', '$J4', 5),
+  ('$S6C', '$K1', 5), ('$S6C', '$K2', 5),
+  ('$S6D', '$K3', 5), ('$S6D', '$K4', 5),
+  ('$S6E', '$L1', 5), ('$S6E', '$L2', 5),
+  ('$S6F', '$M1', 5), ('$S6F', '$M2', 5);
 SQL
 if [ $? -ne 0 ]; then echo "fixture setup failed"; cleanup; exit 1; fi
 
@@ -205,7 +281,7 @@ race real "public.hold_order_stock('$X')" "public.hold_order_stock('$Y')"
 WAITED="$(cat "$TMP/real.waited")"
 check "1a: A held all 10" "$(held_for "$ITEM" "$X")" "10"
 check "1a: and said so, with nothing short" \
-  "$(has 'A={"held": [{"added": 10' "$TMP/real.A.out"),$(has '"itemId": "'"$ITEM"'"}], "stillShort": []}' "$TMP/real.A.out")" "1,1"
+  "$(has 'A={"held": [{"added": 10' "$TMP/real.A.out"),$(has '"itemId": "'"$ITEM"'"}], "stillShort": [], "hiddenHeldItems": 0, "hiddenShortItems": 0}' "$TMP/real.A.out")" "1,1"
 if [ "$WAITED" -ge 1500 ]; then ok "1b: B waited for A's item lock ($WAITED ms)"; else bad "1b: B did not wait ($WAITED ms)"; fi
 check "1c: B then held nothing and says 10 are still short" \
   "$(has 'B={"held": [], "stillShort": [{"itemId": "'"$ITEM"'", "quantity": 10' "$TMP/real.B.out")" "1"
@@ -283,8 +359,81 @@ paced desc false "$X5B" "$P5B"
 check "5b: MUTATION, in descending id order: one of the two was killed with 40P01 (deadlock_detected)" \
   "$(cat "$TMP/desc.A.out" "$TMP/desc.B.out" | grep -c '40P01')" "1"
 
-check "no session running the real function saw 40001 or 40P01 (1, 3, 4, 5a)" \
-  "$(cat "$TMP"/real.*.out "$TMP"/apfirst.*.out "$TMP"/holdfirst.*.out "$TMP"/asc.*.out | grep -cE '40001|40P01')" "0"
+# ═══ 6. complete_picking against a hold ═══════════════════════════════════
+echo "== 6. complete_picking and a hold at the same moment (other order, and the same order)"
+on_hand()   { q "select trim_scale(quantity_on_hand)::text from public.inventory_items where id = '$1'"; }
+# The picking orders hold what approve would have (5 + 5); S6C was held for 2
+# of K1 only (a line raised after approval, never held). Planted here, after
+# section 2 cleared the org's holds.
+"${PSQL[@]}" >/dev/null <<SQL || bad "6: could not plant the holds"
+insert into public.stock_reservations (organization_id, item_id, warehouse_id, order_request_id, quantity) values
+  ('$ORG', '$J1', '$WH', '$C6A', 5), ('$ORG', '$J2', '$WH', '$C6A', 5),
+  ('$ORG', '$J3', '$WH', '$C6B', 5), ('$ORG', '$J4', '$WH', '$C6B', 5),
+  ('$ORG', '$K1', '$WH', '$S6C', 2),
+  ('$ORG', '$K3', '$WH', '$S6D', 5), ('$ORG', '$K4', '$WH', '$S6D', 5),
+  ('$ORG', '$L1', '$WH', '$S6E', 5), ('$ORG', '$L2', '$WH', '$S6E', 5),
+  ('$ORG', '$M1', '$WH', '$S6F', 5), ('$ORG', '$M2', '$WH', '$S6F', 5);
+SQL
+
+race cpfirst "(public.complete_picking('$C6A')).status" "public.hold_order_stock('$H6A')"
+WAITED="$(cat "$TMP/cpfirst.waited")"
+check "6a: complete_picking went through" "$(grep -c '^A=picking_complete' "$TMP/cpfirst.A.out")" "1"
+if [ "$WAITED" -ge 1500 ]; then ok "6a: the hold waited for complete_picking's locks ($WAITED ms)"; else bad "6a: the hold did not wait ($WAITED ms)"; fi
+check "6a: the pick took 5 of each (3 left on hand)" "$(on_hand "$J1"),$(on_hand "$J2")" "3,3"
+check "6a: the hold then took only what the pick left (3 of each)" "$(held_for "$J1" "$H6A"),$(held_for "$J2" "$H6A")" "3,3"
+check "6a: and says 2 of each are still short" \
+  "$(has '"stillShort": [{"itemId": "'"$J1"'", "quantity": 2' "$TMP/cpfirst.B.out"),$(has '{"itemId": "'"$J2"'", "quantity": 2' "$TMP/cpfirst.B.out")" "1,1"
+check "6a: the picked order holds nothing any more" "$(held_for "$J1" "$C6A"),$(held_for "$J2" "$C6A")" "0,0"
+
+race cphold "public.hold_order_stock('$H6B')" "(public.complete_picking('$C6B')).status"
+WAITED="$(cat "$TMP/cphold.waited")"
+check "6b: the hold took what the picking order had not (3 of each)" "$(held_for "$J3" "$H6B"),$(held_for "$J4" "$H6B")" "3,3"
+if [ "$WAITED" -ge 1500 ]; then ok "6b: complete_picking waited for the hold's locks ($WAITED ms)"; else bad "6b: complete_picking did not wait ($WAITED ms)"; fi
+check "6b: then completed" "$(grep -c '^B=picking_complete' "$TMP/cphold.B.out")" "1"
+check "6b: the hold keeps its 3 of each, all that is left on hand" "$(held "$J3"):$(on_hand "$J3"),$(held "$J4"):$(on_hand "$J4")" "3:3,3:3"
+
+race samehold "public.hold_order_stock('$S6C')" "(public.complete_picking('$S6C')).status"
+check "6c: the hold topped the order up first (3 more of K1, 5 of K2)" \
+  "$(has '"added": 3' "$TMP/samehold.A.out"),$(has '"added": 5' "$TMP/samehold.A.out")" "1,1"
+check "6c: complete_picking then picked the order" "$(grep -c '^B=picking_complete' "$TMP/samehold.B.out"),$(on_hand "$K1"),$(on_hand "$K2")" "1,3,3"
+check "6c: and released every hold it had, the new ones included" "$(held_for "$K1" "$S6C"),$(held_for "$K2" "$S6C")" "0,0"
+
+race samecp "(public.complete_picking('$S6D')).status" "public.hold_order_stock('$S6D')"
+check "6d: complete_picking first" "$(grep -c '^A=picking_complete' "$TMP/samecp.A.out")" "1"
+check "6d: the hold then refuses: P0001 hold_not_applicable, detail picking_complete" \
+  "$(grep -c 'P0001: hold_not_applicable' "$TMP/samecp.B.out"),$(grep -c 'DETAIL:  picking_complete' "$TMP/samecp.B.out")" "1,1"
+check "6d: and holds nothing" "$(held_for "$K3" "$S6D"),$(held_for "$K4" "$S6D")" "0,0"
+
+race samecancel "(public.cancel_order_request('$S6E', '0378 race')).status" "public.hold_order_stock('$S6E')"
+check "6e: cancel first" "$(grep -c '^A=cancelled' "$TMP/samecancel.A.out")" "1"
+check "6e: the hold then refuses: hold_not_applicable, detail cancelled" \
+  "$(grep -c 'P0001: hold_not_applicable' "$TMP/samecancel.B.out"),$(grep -c 'DETAIL:  cancelled' "$TMP/samecancel.B.out")" "1,1"
+check "6e: and holds nothing" "$(held_for "$L1" "$S6E"),$(held_for "$L2" "$S6E")" "0,0"
+
+# 6f. The mutation: the status read without the order row lock.
+q "select pg_get_functiondef('public.hold_order_stock(uuid)'::regprocedure)" > "$TMP/real3.sql"
+python3 - "$TMP/real3.sql" "$TMP/unlocked.sql" <<'PY'
+import sys
+d = open(sys.argv[1]).read()
+lock = "   where o.id = p_order_id\n     for update;\n"
+assert d.count(lock) == 1, d.count(lock)
+d = d.replace(lock, "   where o.id = p_order_id;\n", 1)
+d = d.replace('public.hold_order_stock(p_order_id uuid)', 'public._probe_hold_unlocked_status(p_order_id uuid)', 1)
+assert '_probe_hold_unlocked_status' in d
+open(sys.argv[2], 'w').write(d + ';\n')
+PY
+"${PSQL[@]}" >/dev/null < "$TMP/unlocked.sql" || bad "6f: could not create the unlocked-status copy"
+q "revoke all on function public._probe_hold_unlocked_status(uuid) from public, anon; grant execute on function public._probe_hold_unlocked_status(uuid) to authenticated" >/dev/null
+race mutcp "(public.complete_picking('$S6F')).status" "public._probe_hold_unlocked_status('$S6F')"
+check "6f: MUTATION: complete_picking went through" "$(grep -c '^A=picking_complete' "$TMP/mutcp.A.out")" "1"
+check "6f: MUTATION: the copy read the old status and held 3 of each for a PICKED order (a stranded hold)" \
+  "$(q "select status from public.order_requests where id = '$S6F'"):$(held_for "$M1" "$S6F"),$(held_for "$M2" "$S6F")" "picking_complete:3,3"
+
+check "6: no item holds more than it has on hand" \
+  "$(q "select count(*) from public.inventory_items ii where ii.id in ('$J1', '$J2', '$J3', '$J4', '$K1', '$K2', '$K3', '$K4', '$L1', '$L2') and (select coalesce(sum(r.quantity), 0) from public.stock_reservations r where r.item_id = ii.id and r.released_at is null) > ii.quantity_on_hand")" "0"
+
+check "no session running the real function saw 40001 or 40P01 (1, 3, 4, 5a, 6)" \
+  "$(cat "$TMP"/real.*.out "$TMP"/apfirst.*.out "$TMP"/holdfirst.*.out "$TMP"/asc.*.out "$TMP"/cpfirst.*.out "$TMP"/cphold.*.out "$TMP"/samehold.*.out "$TMP"/samecp.*.out "$TMP"/samecancel.*.out | grep -cE '40001|40P01')" "0"
 
 cleanup || FAILS=$((FAILS + 1))
 check "cleanup: no fixture left" "$(q "select count(*) from public.organizations where id = '$ORG'")" "0"

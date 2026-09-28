@@ -321,10 +321,12 @@ PGTAP_TESTS=(
   # approve lets them); write access to the order's warehouse (42501); a
   # hold status only (P0001 hold_not_applicable). It refuses only with
   # P0001, P0002 or 42501, never 40001/40P01, writes nothing but holds, never
-  # more than on hand less every active hold (rentals' included), and locks
+  # more than on hand less every active hold (rentals' included), gives
+  # quantities only for items the caller can read (a charter-scoped
+  # approver's unreadable item is held the same and only counted), and locks
   # the order and then its items in id order, as approve does. The race for
-  # the last units and the lock order against approve, in both start orders,
-  # are scripts/db-concurrency/0378_hold_race.sh.
+  # the last units and the lock order against approve and complete_picking,
+  # in both start orders, are scripts/db-concurrency/0378_hold_race.sh.
   supabase/tests/0378_order_hold_stock.test.sql
 
   # Storage and attachment exposure.

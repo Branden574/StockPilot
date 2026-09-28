@@ -9,6 +9,7 @@ import { OrderRequestsService } from '@/server/services/order-requests';
 
 import {
   err,
+  HOLD_FAILED_COPY,
   isManagerOrAbove,
   ok,
   type ActionResult,
@@ -549,6 +550,10 @@ export async function holdOrderStockAction(
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(result);
   } catch (e) {
+    // A fault is core's "couldn't be held" sentence, as on the phone (the
+    // service has reported it with its cause); a refusal comes in its own
+    // words.
+    if (e instanceof ServiceError && e.code === 'internal_error') return err('internal_error', HOLD_FAILED_COPY);
     return toResult(e);
   }
 }

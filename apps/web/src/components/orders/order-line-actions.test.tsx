@@ -516,7 +516,13 @@ describe('OrderLineActions — the hold after a raise (F2-2)', () => {
       data: {
         pickSlipStale: false,
         quantity: 9,
-        hold: { ok: true, held: [{ itemId: 'i1', added: 3 }], stillShort: [{ itemId: 'i1', quantity: 2 }] },
+        hold: {
+          ok: true,
+          held: [{ itemId: 'i1', added: 3 }],
+          stillShort: [{ itemId: 'i1', quantity: 2 }],
+          hiddenHeldItems: 0,
+          hiddenShortItems: 0,
+        },
       },
     } as Awaited<ReturnType<typeof updateOrderRequestLineQuantityAction>>);
     await raiseTo('9');

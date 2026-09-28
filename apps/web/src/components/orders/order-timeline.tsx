@@ -57,12 +57,14 @@ const EVENT_LABELS: Record<string, string> = {
 /**
  * order.stock_held says what started the hold (after.trigger, written by
  * OrderRequestsService.holdStock): an approver adding items to the order or
- * raising a line holds the new units at once; "Hold available stock" is the
- * manual one.
+ * raising a line; "Hold available stock" is the manual one. The label names
+ * the trigger only, never a scope: the top-up holds everything on the order
+ * not yet held (a requester's earlier line too), and the detail line says how
+ * much.
  */
 const STOCK_HELD_LABELS: Readonly<Record<string, string>> = {
-  lines_added: 'Stock held for added items',
-  line_raised: 'Stock held for a raised quantity',
+  lines_added: 'Stock held after items were added',
+  line_raised: 'Stock held after a quantity was raised',
   manual: 'Stock held',
 };
 
@@ -163,11 +165,17 @@ function humanDetails(
       break;
     case 'order.stock_held': {
       // What was held and what is still short, in core's words (the same
-      // sentence "Hold available stock" says). Holds move no stock. An entry
-      // this page cannot read is described without numbers, never guessed.
+      // sentence "Hold available stock" says). Holds move no stock. Items the
+      // holder could not see are counted, never numbered. An entry this page
+      // cannot read is described without numbers, never guessed.
       let held: HoldOrderStockResult | null = null;
       try {
-        held = parseHoldOrderStockResult({ held: after.held, stillShort: after.stillShort });
+        held = parseHoldOrderStockResult({
+          held: after.held,
+          stillShort: after.stillShort,
+          hiddenHeldItems: after.hiddenHeldItems,
+          hiddenShortItems: after.hiddenShortItems,
+        });
       } catch {
         held = null;
       }

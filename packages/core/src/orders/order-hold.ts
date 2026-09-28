@@ -24,12 +24,24 @@ import { READINESS_HOLD_STATUSES, type OrderReadinessAssessment } from './readin
 
 // ── The answer ──────────────────────────────────────────────────────────────
 
-/** hold_order_stock's answer: what this call held, and what it could not. */
+/**
+ * hold_order_stock's answer: what this call held, and what it could not.
+ *
+ * Quantities only for items the caller can read (caller_can_read_item, the
+ * rule F2-1's readiness keeps). An approver scoped to one charter of the
+ * warehouse can hold an order that carries another charter's item: that item
+ * is held all the same (as approve would hold it), but an added or a short
+ * amount there is its free stock, so it is only counted.
+ */
 export interface HoldOrderStockResult {
-  /** Holds this call inserted, one per item, item ids ascending. */
+  /** Holds this call inserted, one per readable item, item ids ascending. */
   held: Array<{ itemId: string; added: number }>;
-  /** What each item still needs after this call (no free stock), ascending. */
+  /** What each readable item still needs after this call (no free stock), ascending. */
   stillShort: Array<{ itemId: string; quantity: number }>;
+  /** Items the caller cannot read that this call held stock for. */
+  hiddenHeldItems: number;
+  /** Items the caller cannot read that are still short after this call. */
+  hiddenShortItems: number;
 }
 
 export class HoldResultShapeError extends Error {
@@ -51,6 +63,14 @@ function positiveNumber(v: unknown, where: string): number {
   return n;
 }
 
+function itemCount(v: unknown, where: string): number {
+  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+  if (typeof n !== 'number' || !Number.isInteger(n) || n < 0) {
+    throw new HoldResultShapeError(`${where} is not a count`);
+  }
+  return n;
+}
+
 function itemIdOf(v: unknown, where: string): string {
   if (typeof v !== 'string' || v.trim() === '') {
     throw new HoldResultShapeError(`${where} has no item id`);
@@ -60,12 +80,13 @@ function itemIdOf(v: unknown, where: string): string {
 
 /**
  * Reads hold_order_stock's answer. Throws HoldResultShapeError on a wrong
- * shape (never guesses a number); tolerates keys it does not know, so a later
- * additive change never breaks an older phone.
+ * shape (never guesses a number, and a missing count of hidden items is never
+ * taken as none); tolerates keys it does not know, so a later additive change
+ * never breaks an older phone.
  */
 export function parseHoldOrderStockResult(raw: unknown): HoldOrderStockResult {
   if (!isRecord(raw)) throw new HoldResultShapeError('the answer is not an object');
-  const { held, stillShort } = raw;
+  const { held, stillShort, hiddenHeldItems, hiddenShortItems } = raw;
   if (!Array.isArray(held)) throw new HoldResultShapeError('held is not a list');
   if (!Array.isArray(stillShort)) throw new HoldResultShapeError('stillShort is not a list');
   return {
@@ -80,6 +101,8 @@ export function parseHoldOrderStockResult(raw: unknown): HoldOrderStockResult {
         quantity: positiveNumber(s.quantity, `stillShort[${i}].quantity`),
       };
     }),
+    hiddenHeldItems: itemCount(hiddenHeldItems, 'hiddenHeldItems'),
+    hiddenShortItems: itemCount(hiddenShortItems, 'hiddenShortItems'),
   };
 }
 
@@ -91,6 +114,18 @@ export function holdAddedUnits(result: HoldOrderStockResult): number {
 /** Units still short after this call, over every item. */
 export function holdStillShortUnits(result: HoldOrderStockResult): number {
   return result.stillShort.reduce((s, h) => s + h.quantity, 0);
+}
+
+/** Whether this call held anything, an item the caller cannot read included
+ *  (the order changed: audit it, tell other screens). */
+export function holdAddedAny(result: HoldOrderStockResult): boolean {
+  return result.held.length > 0 || result.hiddenHeldItems > 0;
+}
+
+/** Whether anything is left short after this call, an item the caller cannot
+ *  read included (the screens say it as a warning). */
+export function holdLeftShort(result: HoldOrderStockResult): boolean {
+  return holdStillShortUnits(result) > 0 || result.hiddenShortItems > 0;
 }
 
 // ── When to hold ────────────────────────────────────────────────────────────
@@ -193,11 +228,34 @@ function isAre(n: number): string {
   return Math.abs(n - 1) < 0.00005 ? 'is' : 'are';
 }
 
+/** "1 item that isn't visible to you" / "2 items that aren't visible to you". */
+function hiddenItems(n: number): string {
+  return n === 1 ? "1 item that isn't visible to you" : `${fq(n)} items that aren't visible to you`;
+}
+
+/**
+ * The sentences for items the caller cannot read: counted, never numbered.
+ * `alsoHeld`: a sentence before this one already said units were held.
+ */
+function hiddenSentences(
+  result: HoldOrderStockResult,
+  alsoHeld: boolean,
+  shortSentence: (n: number) => string,
+): string[] {
+  const parts: string[] = [];
+  if (result.hiddenHeldItems > 0) {
+    parts.push(`Stock was ${alsoHeld ? 'also ' : ''}held for ${hiddenItems(result.hiddenHeldItems)}.`);
+  }
+  if (result.hiddenShortItems > 0) parts.push(shortSentence(result.hiddenShortItems));
+  return parts;
+}
+
 /**
  * What "Hold available stock" says when it answers: what it held and what is
  * still short (there was no free stock for it). Items the call skips (deleted,
  * or now in another warehouse) are not claimed either way: readiness names
- * them on their lines.
+ * them on their lines. Items the caller cannot read are counted, never given
+ * numbers.
  */
 export function describeHoldResult(result: HoldOrderStockResult): string {
   const added = holdAddedUnits(result);
@@ -207,6 +265,7 @@ export function describeHoldResult(result: HoldOrderStockResult): string {
   if (short > 0) {
     parts.push(`${units(short)} ${isAre(short)} still short: there is no free stock to hold for ${Math.abs(short - 1) < 0.00005 ? 'it' : 'them'}.`);
   }
+  parts.push(...hiddenSentences(result, added > 0, (n) => `${hiddenItems(n)} ${isAre(n)} still short.`));
   if (parts.length === 0) return 'Nothing more to hold for this order.';
   return parts.join(' ');
 }
@@ -231,5 +290,6 @@ export function describeHoldTopUp(outcome: HoldOutcome | null, change: 'added' |
   if (short > 0) {
     parts.push(`${units(short)} could not be held: there is no free stock for ${Math.abs(short - 1) < 0.00005 ? 'it' : 'them'}.`);
   }
+  parts.push(...hiddenSentences(outcome, added > 0, (n) => `${hiddenItems(n)} could not be fully held.`));
   return parts.length > 0 ? parts.join(' ') : null;
 }

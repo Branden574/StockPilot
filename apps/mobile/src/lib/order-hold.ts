@@ -56,7 +56,9 @@ const UNREADABLE: HoldOutcome = { ok: false, reason: 'failed', message: HOLD_FAI
  *   - absent or null: no hold was tried (the order is not at a hold status,
  *     the editor may not approve orders, a lowering), or a server from before
  *     F2-2 answered. Nothing to say;
- *   - `{ ok: true, held, stillShort }`: read with core's parser;
+ *   - `{ ok: true, held, stillShort, hiddenHeldItems, hiddenShortItems }`:
+ *     read with core's parser (numbers only for items the editor can read;
+ *     others counted);
  *   - `{ ok: false, reason, message }`: the server's reason when it is one of
  *     core's, else 'failed'; its message when it has one, else core's.
  * An answer that cannot be read is a failure (the line itself was saved):

@@ -48,7 +48,7 @@ function req(method: 'POST' | 'PATCH', body: unknown) {
 
 describe('POST /api/v1/orders/[id]/lines returns the hold outcome', () => {
   it.each([
-    ['held', { ok: true, held: [{ itemId: ITEM, added: 3 }], stillShort: [] }],
+    ['held', { ok: true, held: [{ itemId: ITEM, added: 3 }], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 }],
     ['a failure, said', { ok: false, reason: 'busy', message: HOLD_BUSY_COPY }],
     ['none tried', null],
   ])('%s', async (_name, hold) => {
@@ -63,7 +63,7 @@ describe('POST /api/v1/orders/[id]/lines returns the hold outcome', () => {
 
 describe('PATCH /api/v1/orders/[id]/lines returns the hold outcome', () => {
   it.each([
-    ['held', { ok: true, held: [{ itemId: ITEM, added: 4 }], stillShort: [{ itemId: ITEM, quantity: 1 }] }],
+    ['held', { ok: true, held: [{ itemId: ITEM, added: 4 }], stillShort: [{ itemId: ITEM, quantity: 1 }], hiddenHeldItems: 0, hiddenShortItems: 1 }],
     ['a failure, said', { ok: false, reason: 'forbidden', message: 'x' }],
     ['none tried', null],
   ])('%s', async (_name, hold) => {

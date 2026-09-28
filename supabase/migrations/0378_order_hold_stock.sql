@@ -31,12 +31,25 @@
 -- item; a deleted one is removed from the order; readiness says which).
 --
 -- Returns
---   { held:       [ {itemId, added} ],        -- holds this call inserted
---     stillShort: [ {itemId, quantity} ] }    -- need left after it (no free stock)
+--   { held:             [ {itemId, added} ],     -- holds this call inserted
+--     stillShort:       [ {itemId, quantity} ],  -- need left after it (no free stock)
+--     hiddenHeldItems:  n,                       -- items held for, numbers withheld
+--     hiddenShortItems: n }                      -- items still short, numbers withheld
 -- item ids ascending, non-zero entries only. It never refuses for want of
 -- stock (F2 decision D16: adding a line must not fail because stock is short;
 -- readiness shows the rest as short). Idempotent by convergence: a second call
 -- adds 0 (the need is met, or nothing is free).
+--
+-- NUMBERS ONLY FOR ITEMS THE CALLER CAN READ (F2-1's rule, plan section 5:
+-- order_readiness_facts gives numbers only where caller_can_read_item). An
+-- approver may be scoped to one charter of the warehouse (a charter-scoped
+-- user_warehouse_assignments row passes the warehouse write gate, as it does
+-- for approve_order_request), so the order can carry an item they cannot
+-- read. Such an item is held exactly as approve would hold it (the commitment
+-- does not depend on who asks), but the answer never gives its quantities:
+-- an added or a still-short amount there is that item's free stock. It is
+-- counted instead (hiddenHeldItems, hiddenShortItems), which says no more
+-- than approve's own yes-or-no insufficient_stock does.
 --
 -- The arithmetic is approve_partial's and resume_fulfillment's (0348),
 -- min(owed, on_hand - active holds), applied to the gap: the order's own holds
@@ -78,7 +91,14 @@
 -- the first shared item and never cross. The item lock is also what keeps two
 -- orders from holding the same last units: the second waits, then reads the
 -- first's hold (every statement of a VOLATILE function takes a new snapshot).
--- scripts/db-concurrency/0378_hold_race.sh proves both with two sessions.
+-- scripts/db-concurrency/0378_hold_race.sh proves both with two sessions,
+-- and a hold against complete_picking in both start orders.
+-- NOT covered by this order (pre-existing, recorded as a follow-up): writers
+-- that lock several items in their payload's order rather than by id, such as
+-- post_receipt_v2 (frozen), can cross an id-ordered writer. Postgres then
+-- ends one of the two with 40P01 (it runs once under PostgREST, never a retry
+-- loop); for a hold the service reports it and says the hold could not be
+-- made, and the line edit that triggered it stands.
 -- lock_timeout 5s: a caller waits at most 5 s, then gets 55P03 (the web
 -- service says "try again").
 --
@@ -132,6 +152,8 @@ declare
   v_add    numeric;
   v_held   jsonb := '[]'::jsonb;
   v_short  jsonb := '[]'::jsonb;
+  v_hidden_held  integer := 0;
+  v_hidden_short integer := 0;
 begin
   -- Gate 1: a signed-in caller.
   if v_uid is null then
@@ -232,17 +254,32 @@ begin
         insert into public.stock_reservations
           (organization_id, item_id, warehouse_id, order_request_id, quantity)
         values (v_org, v_item.id, v_wh, p_order_id, v_add);
-        v_held := v_held || jsonb_build_array(
-          jsonb_build_object('itemId', v_item.id, 'added', v_add));
       end if;
-      if v_need - v_add > 0 then
-        v_short := v_short || jsonb_build_array(
-          jsonb_build_object('itemId', v_item.id, 'quantity', v_need - v_add));
+      -- Numbers only where the caller can read the item (see the header): an
+      -- item they cannot read is held all the same, and only counted.
+      if public.caller_can_read_item(v_item.id) then
+        if v_add > 0 then
+          v_held := v_held || jsonb_build_array(
+            jsonb_build_object('itemId', v_item.id, 'added', v_add));
+        end if;
+        if v_need - v_add > 0 then
+          v_short := v_short || jsonb_build_array(
+            jsonb_build_object('itemId', v_item.id, 'quantity', v_need - v_add));
+        end if;
+      else
+        if v_add > 0 then
+          v_hidden_held := v_hidden_held + 1;
+        end if;
+        if v_need - v_add > 0 then
+          v_hidden_short := v_hidden_short + 1;
+        end if;
       end if;
     end if;
   end loop;
 
-  return jsonb_build_object('held', v_held, 'stillShort', v_short);
+  return jsonb_build_object('held', v_held, 'stillShort', v_short,
+                            'hiddenHeldItems', v_hidden_held,
+                            'hiddenShortItems', v_hidden_short);
 end;
 $$;
 
@@ -254,7 +291,10 @@ comment on function public.hold_order_stock(uuid) is
   'still owe, as far as free stock allows: per item (item id order), need = '
   'owed - this order''s active holds, one new hold of least(need, max(0, '
   'on_hand - every active hold)). Deleted, moved and other-org items are '
-  'skipped. Returns {held:[{itemId, added}], stillShort:[{itemId, quantity}]}. '
+  'skipped. Returns {held:[{itemId, added}], stillShort:[{itemId, quantity}], '
+  'hiddenHeldItems, hiddenShortItems}: quantities only for items the caller '
+  'can read (caller_can_read_item); an item they cannot read is held the same '
+  'and only counted. '
   'Never refuses for want of stock, never shrinks or releases a hold, never '
   'moves stock; a second call adds 0. Gates in its body: signed in (42501), '
   'member of the order''s org (P0002 order_request_not_found, the same for a '

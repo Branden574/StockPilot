@@ -47,8 +47,9 @@ const bodySchema = z.object({
  *
  * `hold` (F2-2) is the automatic top-up's outcome: null when none was tried
  * (the caller may not approve orders, or the order is not approved or being
- * picked), `{ ok: true, held, stillShort }` when the new units were held as
- * far as free stock allows, `{ ok: false, reason, message }` when they were
+ * picked), `{ ok: true, held, stillShort, hiddenHeldItems, hiddenShortItems }`
+ * when the order was held as far as free stock allows (numbers only for items
+ * the editor can read), `{ ok: false, reason, message }` when they were
  * not (the lines stay added; the phone says so and offers Hold available
  * stock).
  */

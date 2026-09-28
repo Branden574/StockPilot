@@ -282,7 +282,10 @@ describe('ReadinessStrip — Hold available stock (F2-2)', () => {
   });
 
   it('holds for THIS order, says what it held in core\'s words, and reads the page again', async () => {
-    holdOrderStock.mockResolvedValue({ ok: true, data: { held: [{ itemId: 'a', added: 10 }], stillShort: [] } });
+    holdOrderStock.mockResolvedValue({
+      ok: true,
+      data: { held: [{ itemId: 'a', added: 10 }], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 },
+    });
     const user = userEvent.setup();
     render(<ReadinessStrip view={view()} holdOrderId={ORDER} />);
 
@@ -296,7 +299,12 @@ describe('ReadinessStrip — Hold available stock (F2-2)', () => {
   it('what could not be held for want of free stock is a warning, never hidden', async () => {
     holdOrderStock.mockResolvedValue({
       ok: true,
-      data: { held: [{ itemId: 'a', added: 4 }], stillShort: [{ itemId: 'a', quantity: 6 }] },
+      data: {
+        held: [{ itemId: 'a', added: 4 }],
+        stillShort: [{ itemId: 'a', quantity: 6 }],
+        hiddenHeldItems: 0,
+        hiddenShortItems: 0,
+      },
     });
     const user = userEvent.setup();
     render(<ReadinessStrip view={view()} holdOrderId={ORDER} />);
@@ -307,6 +315,29 @@ describe('ReadinessStrip — Hold available stock (F2-2)', () => {
       'Held 4 more units for this order. 6 units are still short: there is no free stock to hold for them.',
       expect.anything(),
     );
+  });
+
+  it("an item the caller can't see that is still short is a warning too, counted and never numbered", async () => {
+    holdOrderStock.mockResolvedValue({
+      ok: true,
+      data: {
+        held: [{ itemId: 'a', added: 4 }],
+        stillShort: [],
+        hiddenHeldItems: 1,
+        hiddenShortItems: 1,
+      },
+    });
+    const user = userEvent.setup();
+    render(<ReadinessStrip view={view()} holdOrderId={ORDER} />);
+
+    await user.click(screen.getByRole('button', { name: 'Hold available stock' }));
+
+    expect(toastMock.warning).toHaveBeenCalledWith(
+      "Held 4 more units for this order. Stock was also held for 1 item that isn't visible to you. " +
+        "1 item that isn't visible to you is still short.",
+      expect.anything(),
+    );
+    expect(toastMock.success).not.toHaveBeenCalled();
   });
 
   it("a refusal is the service's sentence, and the page is not re-read", async () => {

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { describeHoldResult, holdStillShortUnits, HOLD_AVAILABLE_STOCK_LABEL } from '@stockpilot/core';
+import { describeHoldResult, holdLeftShort, HOLD_AVAILABLE_STOCK_LABEL } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -51,7 +51,7 @@ export function ReadinessStrip({
       return;
     }
     const sentence = describeHoldResult(res.data);
-    if (holdStillShortUnits(res.data) > 0) toast.warning(sentence, { duration: 8000 });
+    if (holdLeftShort(res.data)) toast.warning(sentence, { duration: 8000 });
     else toast.success(sentence);
     startTransition(() => router.refresh());
   }

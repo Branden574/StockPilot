@@ -10,6 +10,8 @@ import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
+import { HOLD_FAILED_COPY } from '@stockpilot/core';
+
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
@@ -28,8 +30,10 @@ export const dynamic = 'force-dynamic';
  * mapped from OrderRequestsService.holdStock: 404 order not found, 403
  * forbidden (not an approver, no write access to the order's warehouse, or a
  * step-up needed) and module_disabled, 409 conflict (not approved or being
- * picked; or someone else held the order or an item for 5 s), 500 anything
- * else.
+ * picked; or someone else held the order or an item too long), 500 anything
+ * else (core's HOLD_FAILED_COPY; the service reports it with its cause). Its
+ * answer has quantities only for items the caller can read, and counts the
+ * others (hiddenHeldItems, hiddenShortItems).
  */
 const bodySchema = z.object({
   action: z.enum([
@@ -203,8 +207,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ order });
   } catch (e) {
     if (e instanceof ServiceError) {
+      // hold_stock: a fault is core's "couldn't be held" sentence (the
+      // service reported it with its cause), the web action's words too.
+      const message =
+        a.action === 'hold_stock' && e.code === 'internal_error' ? HOLD_FAILED_COPY : e.message;
       return NextResponse.json(
-        { error: e.code, message: e.message },
+        { error: e.code, message },
         { status: serviceErrorStatus(e.code) },
       );
     }

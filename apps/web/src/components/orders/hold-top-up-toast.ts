@@ -1,4 +1,4 @@
-import { describeHoldTopUp, holdStillShortUnits, type HoldOutcome } from '@stockpilot/core';
+import { describeHoldTopUp, holdLeftShort, type HoldOutcome } from '@stockpilot/core';
 import { toast } from 'sonner';
 
 /**
@@ -10,7 +10,8 @@ import { toast } from 'sonner';
  * A failure is ALWAYS said, never swallowed (pattern #28): "Added. Stock was
  * not held for it; use Hold available stock.", with the reason underneath
  * (the service's sentence, e.g. no write access to the order's warehouse).
- * Units that could not be held for want of free stock are a warning too.
+ * Units that could not be held for want of free stock are a warning too,
+ * and so is an item the editor can't see that could not be fully held.
  */
 export function announceHoldTopUp(outcome: HoldOutcome | null, change: 'added' | 'raised'): void {
   const sentence = describeHoldTopUp(outcome, change);
@@ -19,7 +20,7 @@ export function announceHoldTopUp(outcome: HoldOutcome | null, change: 'added' |
     toast.warning(sentence, { description: outcome.message, duration: 10000 });
     return;
   }
-  if (holdStillShortUnits(outcome) > 0) {
+  if (holdLeftShort(outcome)) {
     toast.warning(sentence, { duration: 8000 });
     return;
   }

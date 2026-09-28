@@ -53,11 +53,15 @@ describe('parseHoldOutcome: the hold beside an add or a raise', () => {
         ok: true,
         held: [{ itemId: 'i1', added: '8.0000' }],
         stillShort: [{ itemId: 'i2', quantity: 6 }],
+        hiddenHeldItems: 1,
+        hiddenShortItems: 0,
       }),
     ).toEqual({
       ok: true,
       held: [{ itemId: 'i1', added: 8 }],
       stillShort: [{ itemId: 'i2', quantity: 6 }],
+      hiddenHeldItems: 1,
+      hiddenShortItems: 0,
     });
   });
 
@@ -85,9 +89,14 @@ describe('parseHoldOutcome: the hold beside an add or a raise', () => {
   it.each([
     ['a string', 'held'],
     ['a list', []],
-    ['no ok flag', { held: [], stillShort: [] }],
-    ['ok with a bad number', { ok: true, held: [{ itemId: 'i1', added: 'lots' }], stillShort: [] }],
+    ['no ok flag', { held: [], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 }],
+    [
+      'ok with a bad number',
+      { ok: true, held: [{ itemId: 'i1', added: 'lots' }], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 },
+    ],
     ['ok with no lists', { ok: true }],
+    // A missing count of items the editor cannot see is never read as none.
+    ['ok with no hidden counts', { ok: true, held: [], stillShort: [] }],
   ])('an answer it cannot read (%s) is a failure, never a guessed number', (_label, raw) => {
     expect(parseHoldOutcome(raw)).toEqual({
       ok: false,
@@ -124,16 +133,31 @@ describe('holdTopUpNotice: the sentence the confirmation ends with', () => {
           ok: true,
           held: [{ itemId: 'i1', added: 8 }],
           stillShort: [{ itemId: 'i2', quantity: 1 }],
+          hiddenHeldItems: 0,
+          hiddenShortItems: 0,
         },
         'added',
       ),
     ).toBe('Held 8 units for this order. 1 unit could not be held: there is no free stock for it.');
   });
 
+  it('an item the editor cannot see is counted, never given numbers', () => {
+    expect(
+      holdTopUpNotice(
+        { ok: true, held: [], stillShort: [], hiddenHeldItems: 1, hiddenShortItems: 1 },
+        'raised',
+      ),
+    ).toBe(
+      "Stock was held for 1 item that isn't visible to you. 1 item that isn't visible to you could not be fully held.",
+    );
+  });
+
   it('nothing tried, or nothing held and nothing short: nothing said', () => {
     expect(holdTopUpNotice(null, 'added')).toBeNull();
     expect(holdTopUpNotice(undefined, 'raised')).toBeNull();
-    expect(holdTopUpNotice({ ok: true, held: [], stillShort: [] }, 'added')).toBeNull();
+    expect(
+      holdTopUpNotice({ ok: true, held: [], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 }, 'added'),
+    ).toBeNull();
   });
 
   it('rides as its own paragraph, and leaves the message alone when there is none', () => {
@@ -148,7 +172,10 @@ describe('holdTopUpNotice: the sentence the confirmation ends with', () => {
       ADDED_FAILED,
       RAISED_FAILED,
       HOLD_REFUSED_TITLE,
-      holdTopUpNotice({ ok: true, held: [{ itemId: 'a', added: 2 }], stillShort: [] }, 'added'),
+      holdTopUpNotice(
+        { ok: true, held: [{ itemId: 'a', added: 2 }], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 },
+        'added',
+      ),
     ].join(' ');
     expect(words).not.toMatch(/\bbook\b|%|guarantee|verified/i);
   });

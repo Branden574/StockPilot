@@ -16,11 +16,18 @@ const ORDER = '11111111-1111-1111-1111-111111111111';
 describe('holdOrderStock (F2-2 "Hold available stock", phone)', () => {
   it('POSTs the hold_stock transition and reads the answer with the core parser', async () => {
     apiMock.api.mockResolvedValueOnce({
-      hold: { held: [{ itemId: 'i1', added: 8 }], stillShort: [{ itemId: 'i2', quantity: '6.0000' }] },
+      hold: {
+        held: [{ itemId: 'i1', added: 8 }],
+        stillShort: [{ itemId: 'i2', quantity: '6.0000' }],
+        hiddenHeldItems: 0,
+        hiddenShortItems: 1,
+      },
     });
     await expect(holdOrderStock(ORDER)).resolves.toEqual({
       held: [{ itemId: 'i1', added: 8 }],
       stillShort: [{ itemId: 'i2', quantity: 6 }],
+      hiddenHeldItems: 0,
+      hiddenShortItems: 1,
     });
     expect(apiMock.api).toHaveBeenCalledWith(`/api/v1/orders/${ORDER}/transition`, {
       method: 'POST',

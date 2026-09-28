@@ -14,7 +14,10 @@
 --    warehouse_write). Staff with an orders:approve override in the order's
 --    warehouse SUCCEED (pattern #4: the approve gate), as do a manager, a
 --    manager whose orders:approve was revoked (approve keeps has_org_role),
---    an admin and the owner. No refusal writes anything.
+--    an admin and the owner. No refusal writes anything. A staff approver
+--    scoped to one charter holds an order carrying another charter's item
+--    (held the same), but the answer gives numbers only for items they can
+--    read (caller_can_read_item); the other is only counted.
 -- S. Status: every status but approved, pick_slip_generated and
 --    picking_in_progress gives P0001 hold_not_applicable with the status as
 --    its detail, and writes nothing; the three hold statuses are answered.
@@ -43,7 +46,7 @@
 
 begin;
 
-select plan(36);
+select plan(38);
 
 \set orgA    '\'03780000-0000-0000-0000-00000000000a\''
 \set orgB    '\'03780000-0000-0000-0000-00000000000b\''
@@ -88,6 +91,12 @@ select plan(36);
 \set ordLkX1 '\'03780000-0000-0000-0000-000000000152\''
 \set ordLkP2 '\'03780000-0000-0000-0000-000000000153\''
 \set ordLkX2 '\'03780000-0000-0000-0000-000000000154\''
+\set stfCh   '\'03780000-0000-0000-0000-0000000000aa\''
+\set chX     '\'03780000-0000-0000-0000-0000000000e2\''
+\set chY     '\'03780000-0000-0000-0000-0000000000e3\''
+\set iChX    '\'03780000-0000-0000-0000-000000000f11\''
+\set iChY    '\'03780000-0000-0000-0000-000000000f12\''
+\set ordCh   '\'03780000-0000-0000-0000-000000000106\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
@@ -140,6 +149,25 @@ insert into public.user_permission_overrides (organization_id, user_id, permissi
   -- has_org_role term), so they still hold.
   (:orgA, :mgrNo,  'orders:approve', false);
 
+-- A staff approver scoped to ONE charter of warehouse A (a charter-scoped
+-- assignment passes the warehouse write gate, user_can_access_inventory with
+-- a null charter, as it does for approve), and an order carrying an item of
+-- another charter, which they cannot read (G15, G16).
+insert into auth.users (id, email, raw_user_meta_data) values
+  (:stfCh, '0378-stfch@test.local', '{}'::jsonb) on conflict (id) do nothing;
+insert into public.organization_members (organization_id, user_id, role, accepted_at) values
+  (:orgA, :stfCh, 'staff', now());
+insert into public.charters (id, organization_id, name) values
+  (:chX, :orgA, '0378 Charter X'),
+  (:chY, :orgA, '0378 Charter Y');
+insert into public.warehouse_charters (organization_id, warehouse_id, charter_id) values
+  (:orgA, :whA, :chX),
+  (:orgA, :whA, :chY);
+insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, charter_id, is_primary) values
+  (:orgA, :stfCh, :whA, :chX, true);
+insert into public.user_permission_overrides (organization_id, user_id, permission, granted) values
+  (:orgA, :stfCh, 'orders:approve', true);
+
 insert into public.inventory_items
   (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, deleted_at) values
   (:iGap,   :orgA, :whA,  'X0378-GAP',   'Gap item',       30, 'active', null),
@@ -159,6 +187,10 @@ insert into public.inventory_items
   (:iLk3,   :orgA, :whA,  'X0378-LK3',   'Lock item 3',    8,  'active', null),
   (:iLk4,   :orgA, :whA,  'X0378-LK4',   'Lock item 4',    8,  'active', null),
   (:iSt,    :orgA, :whA,  'X0378-ST',    'Status item',    50, 'active', null);
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, charter_id, sku, name, quantity_on_hand, status) values
+  (:iChX, :orgA, :whA, :chX, 'X0378-CHX', 'Charter X item', 4, 'active'),
+  (:iChY, :orgA, :whA, :chY, 'X0378-CHY', 'Charter Y item', 7, 'active');
 
 insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type) values
   (:ordTop,   :orgA, :whA, 'approved',            'internal', :stf,  'pickup'),
@@ -170,7 +202,8 @@ insert into public.order_requests (id, organization_id, warehouse_id, status, so
   (:ordLkP1,  :orgA, :whA, 'pending_approval',    'internal', :stf,  'pickup'),
   (:ordLkX1,  :orgA, :whA, 'approved',            'internal', :stf,  'pickup'),
   (:ordLkP2,  :orgA, :whA, 'pending_approval',    'internal', :stf,  'pickup'),
-  (:ordLkX2,  :orgA, :whA, 'approved',            'internal', :stf,  'pickup');
+  (:ordLkX2,  :orgA, :whA, 'approved',            'internal', :stf,  'pickup'),
+  (:ordCh,    :orgA, :whA, 'approved',            'internal', :stfCh, 'pickup');
 -- One order per status that is NOT a hold status (S1), each with a line.
 create temp table st_order (status text primary key, id uuid not null);
 insert into st_order (status, id) values
@@ -231,7 +264,11 @@ insert into public.order_request_lines
   (:ordLkP2, :iLk3, 5, 0, '2026-09-01 10:00:00+00'),
   (:ordLkP2, :iLk4, 5, 0, '2026-09-01 10:00:01+00'),
   (:ordLkX2, :iLk3, 5, 0, '2026-09-01 10:00:00+00'),
-  (:ordLkX2, :iLk4, 5, 0, '2026-09-01 10:00:01+00');
+  (:ordLkX2, :iLk4, 5, 0, '2026-09-01 10:00:01+00'),
+  -- ordCh: 10 of the unreadable charter Y item (7 on hand) and 6 of the
+  -- readable charter X item (4 on hand).
+  (:ordCh, :iChY, 10, 0, '2026-09-01 10:00:00+00'),
+  (:ordCh, :iChX, 6,  0, '2026-09-01 10:00:01+00');
 -- The deleted and the moved item were fine when their lines were added.
 update public.inventory_items set deleted_at = now() where id = :iDel;
 
@@ -424,7 +461,7 @@ reset role;
 select is(
   (select r from ans where who = 'stfAp'),
   jsonb_build_object('held', jsonb_build_array(jsonb_build_object('itemId', :iSt::text, 'added', 3)),
-                     'stillShort', '[]'::jsonb),
+                     'stillShort', '[]'::jsonb, 'hiddenHeldItems', 0, 'hiddenShortItems', 0),
   'G12: staff with an orders:approve override in the order''s warehouse hold (3 of a free 50), as approve lets them');
 select is(
   (select string_agg(who || '=' || r, ', ' order by who) from fx),
@@ -432,6 +469,31 @@ select is(
   'G13: a manager, a manager whose orders:approve was revoked (the 0348 has_org_role term), an admin and the owner are answered');
 select is(pg_temp.own(:ordGate, :iSt), 3::numeric,
   'G14: and those later calls held nothing more (the need was met)');
+delete from fx;
+
+-- Numbers only for items the caller can read (F2-1's rule): the
+-- charter-scoped approver holds the order, the item they cannot read
+-- included, but its quantities (7 held, 3 short: its free stock) are never
+-- in the answer, only counted.
+set local role to 'authenticated';
+set local "request.jwt.claim.sub" to :stfCh;
+insert into fx select 'stfCh reads', public.caller_can_read_item(:iChY)::text || ',' || public.caller_can_read_item(:iChX)::text;
+insert into ans select 'stfCh', public.hold_order_stock(:ordCh);
+reset role;
+select is(
+  (select jsonb_build_object('reads', (select r from fx where who = 'stfCh reads'),
+                             'answer', (select r from ans where who = 'stfCh'))),
+  jsonb_build_object(
+    'reads', 'false,true',
+    'answer', jsonb_build_object(
+      'held', jsonb_build_array(jsonb_build_object('itemId', :iChX::text, 'added', 4)),
+      'stillShort', jsonb_build_array(jsonb_build_object('itemId', :iChX::text, 'quantity', 2)),
+      'hiddenHeldItems', 1, 'hiddenShortItems', 1)),
+  'G15: a staff approver scoped to one charter (who cannot read the other charter''s item) gets numbers only for the item they can read (4 held, 2 short); the unreadable item is only counted (1 held for, 1 still short), never its 7 and 3 (mutation: no caller_can_read_item filter gives its numbers)');
+select is(
+  array[pg_temp.own(:ordCh, :iChY), pg_temp.own(:ordCh, :iChX)],
+  array[7, 4]::numeric[],
+  'G16: and the unreadable item is held all the same (7 of 7, as approve would hold it): only the answer is withheld, never the commitment');
 delete from fx;
 
 -- ═══ S. Status ═══════════════════════════════════════════════════════════
@@ -461,7 +523,7 @@ reset role;
 select is(
   (select r from ans where who = 'pip'),
   jsonb_build_object('held', jsonb_build_array(jsonb_build_object('itemId', :iSt::text, 'added', 2)),
-                     'stillShort', '[]'::jsonb),
+                     'stillShort', '[]'::jsonb, 'hiddenHeldItems', 0, 'hiddenShortItems', 0),
   'S4: approved (G12), pick_slip_generated (A8) and picking_in_progress are answered: picking_in_progress holds its 2');
 
 -- ═══ A. Arithmetic ═══════════════════════════════════════════════════════
@@ -486,8 +548,8 @@ select is(
   'A2: stillShort is what could not be held (6 and 1), ascending; the fully held and the over-held item are in neither list');
 select is(
   (select array_agg(k order by k) from ans, jsonb_object_keys(r) k where who = 'top'),
-  array['held', 'stillShort'],
-  'A3: the answer is exactly {held, stillShort}');
+  array['held', 'hiddenHeldItems', 'hiddenShortItems', 'stillShort'],
+  'A3: the answer is exactly {held, stillShort, hiddenHeldItems, hiddenShortItems}');
 select is(
   array[pg_temp.own(:ordTop, :iGap), pg_temp.own(:ordTop, :iShort), pg_temp.own(:ordTop, :iFull),
         pg_temp.own(:ordTop, :iOver), pg_temp.own(:ordTop, :iDup)],
@@ -521,7 +583,7 @@ reset role;
 select is(
   (select r from ans where who = 'res'),
   jsonb_build_object('held', jsonb_build_array(jsonb_build_object('itemId', :iRes::text, 'added', 3)),
-                     'stillShort', '[]'::jsonb),
+                     'stillShort', '[]'::jsonb, 'hiddenHeldItems', 0, 'hiddenShortItems', 0),
   'A8: a resumed order (pick_slip_generated) owes per line: an over-received line owes 0, never less, so 0 + 4 less the 1 held = 3 (mutation: floor per item gives -3 + 4 - 1 = 0)');
 
 select pg_temp.holds() as "holds2" \gset
@@ -535,8 +597,8 @@ select is(
   jsonb_build_object(
     'top', jsonb_build_object('held', '[]'::jsonb, 'stillShort', jsonb_build_array(
              jsonb_build_object('itemId', :iShort::text, 'quantity', 6),
-             jsonb_build_object('itemId', :iDup::text,   'quantity', 1))),
-    'res', jsonb_build_object('held', '[]'::jsonb, 'stillShort', '[]'::jsonb)),
+             jsonb_build_object('itemId', :iDup::text,   'quantity', 1)), 'hiddenHeldItems', 0, 'hiddenShortItems', 0),
+    'res', jsonb_build_object('held', '[]'::jsonb, 'stillShort', '[]'::jsonb, 'hiddenHeldItems', 0, 'hiddenShortItems', 0)),
   'A9: a re-run adds 0 (idempotent by convergence) and still says what is short');
 select is(pg_temp.holds(), :'holds2',
   'A10: and writes nothing');
@@ -553,7 +615,7 @@ select is(
     'held', jsonb_build_array(jsonb_build_object('itemId', :iShort::text, 'added', 4)),
     'stillShort', jsonb_build_array(
       jsonb_build_object('itemId', :iShort::text, 'quantity', 2),
-      jsonb_build_object('itemId', :iDup::text,   'quantity', 1))),
+      jsonb_build_object('itemId', :iDup::text,   'quantity', 1)), 'hiddenHeldItems', 0, 'hiddenShortItems', 0),
   'A11: when 4 more come in, the next call holds those 4 and no more');
 
 -- Another org's order with the same shape is answered for its own manager
@@ -567,7 +629,7 @@ reset role;
 select is(
   (select jsonb_build_object('b', (select r from ans where who = 'orgB'), 'a', (select r from fx where who = 'mgrA on B'))),
   jsonb_build_object('b', jsonb_build_object('held', jsonb_build_array(jsonb_build_object('itemId', :iB::text, 'added', 1)),
-                                             'stillShort', '[]'::jsonb),
+                                             'stillShort', '[]'::jsonb, 'hiddenHeldItems', 0, 'hiddenShortItems', 0),
                      'a', 'P0002::order_request_not_found'),
   'A12: org B''s manager holds on org B''s order; org A''s manager gets P0002 for it');
 delete from fx;
@@ -614,7 +676,7 @@ select is(
                        'held', jsonb_build_array(jsonb_build_object('itemId', :iLk1::text, 'added', 3),
                                                  jsonb_build_object('itemId', :iLk2::text, 'added', 3)),
                        'stillShort', jsonb_build_array(jsonb_build_object('itemId', :iLk1::text, 'quantity', 2),
-                                                       jsonb_build_object('itemId', :iLk2::text, 'quantity', 2)))),
+                                                       jsonb_build_object('itemId', :iLk2::text, 'quantity', 2)), 'hiddenHeldItems', 0, 'hiddenShortItems', 0)),
   'L3: approve first, then hold, on the same items: the hold takes only what approve left (3 of 8 each)');
 select is(
   (select jsonb_build_object('hold', (select r from ans where who = 'hold X2'),
@@ -624,7 +686,7 @@ select is(
   jsonb_build_object('hold', jsonb_build_object(
                        'held', jsonb_build_array(jsonb_build_object('itemId', :iLk3::text, 'added', 5),
                                                  jsonb_build_object('itemId', :iLk4::text, 'added', 5)),
-                       'stillShort', '[]'::jsonb),
+                       'stillShort', '[]'::jsonb, 'hiddenHeldItems', 0, 'hiddenShortItems', 0),
                      'approve', 'insufficient_stock',
                      'partial', 'no error',
                      'p2holds', jsonb_build_array(3, 3)),

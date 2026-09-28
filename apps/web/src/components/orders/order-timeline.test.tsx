@@ -2,9 +2,10 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 // F2-2: the order's timeline names a hold by what started it (an approver
-// adding items or raising a line holds the new units at once; "Hold available
-// stock" is the manual one) and says what was held in core's words. No costs,
-// no raw metadata.
+// adding items or raising a line tops up the WHOLE order at once, so the label
+// says what started it, never that only the new units were held; "Hold
+// available stock" is the manual one) and says what was held in core's words.
+// No costs, no raw metadata.
 
 const auditRows = vi.hoisted(() => ({ current: [] as unknown[] }));
 
@@ -50,20 +51,40 @@ describe('OrderTimeline — stock held (F2-2)', () => {
         trigger: 'lines_added',
         held: [{ itemId: 'i1', added: 8 }],
         stillShort: [{ itemId: 'i2', quantity: 6 }],
+        hiddenHeldItems: 0,
+        hiddenShortItems: 0,
       }),
-      stockHeld('b', { trigger: 'line_raised', held: [{ itemId: 'i1', added: 1 }], stillShort: [] }),
-      stockHeld('c', { trigger: 'manual', held: [{ itemId: 'i1', added: 2 }, { itemId: 'i2', added: 3 }], stillShort: [] }),
+      stockHeld('b', { trigger: 'line_raised', held: [{ itemId: 'i1', added: 1 }], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 }),
+      stockHeld('c', {
+        trigger: 'manual',
+        held: [{ itemId: 'i1', added: 2 }, { itemId: 'i2', added: 3 }],
+        stillShort: [],
+        hiddenHeldItems: 0,
+        hiddenShortItems: 0,
+      }),
     ]);
 
-    expect(screen.getByText('Stock held for added items')).toBeInTheDocument();
+    // What started it, not a claim that only the added or raised units were
+    // held: the top-up holds anything on the order not yet held.
+    expect(screen.getByText('Stock held after items were added')).toBeInTheDocument();
     expect(
       screen.getByText('Held 8 more units for this order. 6 units are still short: there is no free stock to hold for them.'),
     ).toBeInTheDocument();
-    expect(screen.getByText('Stock held for a raised quantity')).toBeInTheDocument();
+    expect(screen.getByText('Stock held after a quantity was raised')).toBeInTheDocument();
+    expect(screen.queryByText(/for added items|for a raised quantity/)).toBeNull();
     expect(screen.getByText('Held 1 more unit for this order.')).toBeInTheDocument();
     expect(screen.getByText('Stock held')).toBeInTheDocument();
     expect(screen.getByText('Held 5 more units for this order.')).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/cost|itemId|\{/i);
+  });
+
+  it("items the holder couldn't see are counted, never numbered", async () => {
+    await renderTimeline([
+      stockHeld('a', { trigger: 'manual', held: [], stillShort: [], hiddenHeldItems: 1, hiddenShortItems: 1 }),
+    ]);
+    expect(
+      screen.getByText("Stock was held for 1 item that isn't visible to you. 1 item that isn't visible to you is still short."),
+    ).toBeInTheDocument();
   });
 
   it('an entry it cannot read is described without numbers, never guessed', async () => {

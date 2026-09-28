@@ -4,6 +4,7 @@ import { NextRequest } from 'next/server';
 
 import {
   HOLD_BUSY_COPY,
+  HOLD_FAILED_COPY,
   HOLD_MODULE_OFF_COPY,
   HOLD_NO_WAREHOUSE_ACCESS_COPY,
   HOLD_NOT_APPLICABLE_COPY,
@@ -73,7 +74,12 @@ beforeEach(() => {
 
 describe('POST /api/v1/orders/[id]/transition — hold_stock', () => {
   it('answers what was held, and busts the storefront catalog', async () => {
-    const hold = { held: [{ itemId: 'i1', added: 8 }], stillShort: [{ itemId: 'i2', quantity: 6 }] };
+    const hold = {
+      held: [{ itemId: 'i1', added: 8 }],
+      stillShort: [{ itemId: 'i2', quantity: 6 }],
+      hiddenHeldItems: 0,
+      hiddenShortItems: 0,
+    };
     const stub = asCaller({ data: hold, error: null });
     const res = await POST(req({ action: 'hold_stock' }), { params });
     expect(res.status).toBe(200);
@@ -91,13 +97,25 @@ describe('POST /api/v1/orders/[id]/transition — hold_stock', () => {
     [{ message: 'unauthenticated', code: '42501' }, 401, 'unauthenticated', 'Sign in again to hold stock.'],
     [{ message: 'hold_not_applicable', code: 'P0001', hint: 'hold_not_applicable', details: 'in_transit' }, 409, 'conflict', HOLD_NOT_APPLICABLE_COPY],
     [{ message: 'canceling statement due to lock timeout', code: '55P03' }, 409, 'conflict', HOLD_BUSY_COPY],
-    [{ message: 'permission denied for function hold_order_stock', code: '42501' }, 500, 'internal_error', 'An internal error occurred. Please try again.'],
+    [{ message: 'canceling statement due to statement timeout', code: '57014' }, 409, 'conflict', HOLD_BUSY_COPY],
+    // Anything else: core's hold sentence (never the database's text), and
+    // reported with its cause by the service.
+    [{ message: 'permission denied for function hold_order_stock', code: '42501' }, 500, 'internal_error', HOLD_FAILED_COPY],
+    [{ message: 'deadlock detected', code: '40P01' }, 500, 'internal_error', HOLD_FAILED_COPY],
   ] as const)('%o -> %i %s', async (error, status, code, message) => {
     asCaller({ data: null, error: { ...error } });
     const res = await POST(req({ action: 'hold_stock' }), { params });
     expect(res.status).toBe(status);
     expect(await res.json()).toEqual({ error: code, message });
     expect(revalidateTag).not.toHaveBeenCalled();
+    if (status === 500) {
+      expect(reportError).toHaveBeenCalledTimes(1);
+      const [reported, context] = vi.mocked(reportError).mock.calls[0]!;
+      expect((reported as Error).message).toContain(`${error.code}: ${error.message}`);
+      expect(context).toMatchObject({ tag: 'orders.hold_failed', extra: { trigger: 'manual', reason: 'failed' } });
+    } else {
+      expect(reportError).not.toHaveBeenCalled();
+    }
   });
 
   it('the service gates answer before the function: staff without orders:approve 403, module off 403', async () => {
