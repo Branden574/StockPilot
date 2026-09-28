@@ -159,6 +159,7 @@ describe('the list read: the escalation every reader sees', () => {
       reference: 'MR-2026-000014',
       escalatedAt: '2027-01-01T00:00:01Z',
       escalatedBy: { id: 'user-2', label: 'Pat Lee' },
+      requestCancelled: null,
       visibleToReader: null,
       request: null,
     });
@@ -172,6 +173,28 @@ describe('the list read: the escalation every reader sees', () => {
       expect(select).toContain(col);
     }
     expect(select).toContain('escalator:user_profiles!exception_occurrences_escalated_by_fkey(full_name, email)');
+    // The computed field (0376) every reader may read: is the link cancelled?
+    expect(select).toContain('escalation_request_cancelled');
+  });
+
+  it('A CANCELLED LINK, for every reader: the list knows (the computed field), and offers Escalate again', async () => {
+    const { stub, svc } = service({ occurrence: occRow({ ...ESCALATED, escalation_request_cancelled: true }) });
+    const o = (await svc.list()).occurrences[0]!;
+    expect(o.escalation?.requestCancelled).toBe(true);
+    expect(o.escalation?.reference).toBe('MR-2026-000014');
+    expect(o.canEscalate).toBe(true);
+    expect(o.escalateUnavailableReason).toBeNull();
+    // Without reading the request itself (most readers cannot).
+    expect(stub.fromCalls).not.toContain('maintenance_requests');
+  });
+
+  it('a live link (false), or one whose state is not known (null), is never offered again', async () => {
+    for (const cancelled of [false, null]) {
+      const o = (await service({ occurrence: occRow({ ...ESCALATED, escalation_request_cancelled: cancelled }) }).svc.list())
+        .occurrences[0]!;
+      expect(o.escalation?.requestCancelled).toBe(cancelled);
+      expect([o.canEscalate, o.escalateUnavailableReason]).toEqual([false, 'already_escalated']);
+    }
   });
 
   it('never escalated: no escalation, and Escalate is offered to a member with the module and submit', async () => {
@@ -239,6 +262,16 @@ describe('the detail read: what THIS reader can see of the request', () => {
     const { svc } = service({ requests: [request({ status: 'cancelled', cancelled_at: '2026-09-27T13:00:00Z' })] });
     const d = await svc.get(OCC);
     expect(d.occurrence.escalation?.request?.cancelled).toBe(true);
+    expect(d.occurrence.canEscalate).toBe(true);
+    expect(d.occurrence.escalateUnavailableReason).toBeNull();
+  });
+
+  it('NOT THE REQUESTER, AFTER A CANCEL: a reader who cannot open the request (staff, a viewer) is told it was cancelled and offered Escalate again', async () => {
+    const { svc } = service({ occurrence: occRow({ ...ESCALATED, escalation_request_cancelled: true }), requests: [] });
+    const d = await svc.get(OCC);
+    expect(d.occurrence.escalation?.visibleToReader).toBe(false);
+    expect(d.occurrence.escalation?.request).toBeNull();
+    expect(d.occurrence.escalation?.requestCancelled).toBe(true);
     expect(d.occurrence.canEscalate).toBe(true);
     expect(d.occurrence.escalateUnavailableReason).toBeNull();
   });

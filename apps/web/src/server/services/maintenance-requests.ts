@@ -29,6 +29,7 @@ import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from './context';
 import { maintenanceShareLinksEnabled, MaintenanceShareLinksService } from './maintenance-share-links';
 import { notifyMaintenanceEvent } from './maintenance-notify';
+import { isDefiniteRefusal } from './lib/postgrest-error';
 
 /**
  * The ONLY audit_logs events the detail page's "StockPilot activity"
@@ -369,7 +370,18 @@ export class MaintenanceRequestsService {
       })
       .select('id, request_number, created_at')
       .single();
-    if (error || !row) throw new ServiceError('internal_error', error?.message ?? 'Could not save the request.');
+    if (error || !row) {
+      // F1-5: an insert that failed without a database answer (no SQLSTATE:
+      // a dropped connection, a gateway timeout) may have committed with its
+      // answer lost. `insertUnconfirmed` tells a caller that must not assume
+      // nothing was saved (ExceptionEscalationService); it is never sent to
+      // a client (internal_error details are dropped at every boundary).
+      throw new ServiceError(
+        'internal_error',
+        error?.message ?? 'Could not save the request.',
+        isDefiniteRefusal(error) ? undefined : { insertUnconfirmed: true },
+      );
+    }
 
     await audit(
       {

@@ -106,7 +106,7 @@ const OUTCOME_CONCURRENCY = 4;
 // PostgREST refuses an embed that more than one relationship could satisfy.
 // Single string literals, so supabase-js can type the rows.
 const OCCURRENCE_SELECT =
-  'id, occurrence_number, rule, item_id, location_id, warehouse_id, facts, condition_since, first_seen_at, last_seen_at, acknowledged_at, acknowledged_by, recount_cycle_count_id, resolved_at, resolved_reason, previous_occurrence_id, recurrence_index, maintenance_request_id, escalation_number, escalation_request_created_at, escalated_at, escalated_by, item:inventory_items!exception_occurrences_item_id_fkey(name, sku), location:locations!exception_occurrences_location_id_fkey(name, kind, deleted_at), recount:cycle_counts!exception_occurrences_recount_cycle_count_id_fkey(id, count_number, status, completed_at), acknowledger:user_profiles!exception_occurrences_acknowledged_by_fkey(full_name, email), escalator:user_profiles!exception_occurrences_escalated_by_fkey(full_name, email)';
+  'id, occurrence_number, rule, item_id, location_id, warehouse_id, facts, condition_since, first_seen_at, last_seen_at, acknowledged_at, acknowledged_by, recount_cycle_count_id, resolved_at, resolved_reason, previous_occurrence_id, recurrence_index, maintenance_request_id, escalation_number, escalation_request_created_at, escalated_at, escalated_by, escalation_request_cancelled, item:inventory_items!exception_occurrences_item_id_fkey(name, sku), location:locations!exception_occurrences_location_id_fkey(name, kind, deleted_at), recount:cycle_counts!exception_occurrences_recount_cycle_count_id_fkey(id, count_number, status, completed_at), acknowledger:user_profiles!exception_occurrences_acknowledged_by_fkey(full_name, email), escalator:user_profiles!exception_occurrences_escalated_by_fkey(full_name, email)';
 
 /** The linked maintenance requests a detail read looks up, under the
  *  reader's own RLS (requester, read_all or manage see a request). */
@@ -195,6 +195,11 @@ export interface OccurrenceEscalation {
   reference: string | null;
   escalatedAt: string;
   escalatedBy: OccurrencePerson | null;
+  /** Whether the linked request was cancelled, for EVERY reader of the
+   *  occurrence (the escalation_request_cancelled computed field, 0376):
+   *  true frees the occurrence for a new escalation, and the badge says so;
+   *  null when not known (an older database, or no link). */
+  requestCancelled: boolean | null;
   /** Whether THIS reader can open the request (its requester, or a holder of
    *  maintenance_requests:read_all or :manage). null when not checked (list
    *  reads) or when the check failed. */
@@ -422,6 +427,8 @@ type OccurrenceRow = {
   escalation_request_created_at?: string | null;
   escalated_at?: string | null;
   escalated_by?: string | null;
+  /** The escalation_request_cancelled computed field (0376). */
+  escalation_request_cancelled?: boolean | null;
   item?: { name: string; sku: string | null } | null;
   location?: { name: string; kind: string | null; deleted_at: string | null } | null;
   recount?: {
@@ -506,6 +513,8 @@ function mapEscalation(row: OccurrenceRow): OccurrenceEscalation | null {
     reference: formatMaintenanceRequestNumber(requestNumber, row.escalation_request_created_at ?? null),
     escalatedAt: row.escalated_at,
     escalatedBy: personFor(row.escalated_by ?? null, row.escalator),
+    requestCancelled:
+      typeof row.escalation_request_cancelled === 'boolean' ? row.escalation_request_cancelled : null,
     visibleToReader: null,
     request: null,
   };
@@ -513,9 +522,11 @@ function mapEscalation(row: OccurrenceRow): OccurrenceEscalation | null {
 
 /**
  * Why Escalate is not offered on this row, or null. `escBlock` is the
- * reader's floors (escalateBlock). A linked request blocks unless the reader
- * can see that it was cancelled (the claim frees a cancelled one); a reader
- * who cannot open it is not offered a second escalation.
+ * reader's floors (escalateBlock). A linked request blocks unless it is
+ * known to be cancelled (the claim frees a cancelled one): the computed
+ * field tells every reader, and a reader who can open the request also
+ * sees it on the request. Not known (null) blocks: a second request is
+ * never offered on a guess.
  */
 function escalateReason(
   o: Pick<ExceptionOccurrence, 'resolvedAt' | 'escalation'>,
@@ -524,7 +535,9 @@ function escalateReason(
   if (escBlock !== null) return escBlock;
   if (o.resolvedAt !== null) return 'resolved';
   const e = o.escalation;
-  if (e && e.requestId !== null && !(e.request?.cancelled === true)) return 'already_escalated';
+  if (e && e.requestId !== null && !(e.requestCancelled === true || e.request?.cancelled === true)) {
+    return 'already_escalated';
+  }
   return null;
 }
 

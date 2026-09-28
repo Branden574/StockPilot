@@ -69,9 +69,11 @@ export function RecurrenceChip({ recurrenceIndex }: { recurrenceIndex: number })
 
 /**
  * "Escalated: MR-2026-000014" (F1-5), beside the state on the list and the
- * occurrence page. Every reader of the occurrence sees it: the handle is a
- * copy on the occurrence itself. It links to the request only when `href` is
- * given, which the page does for a reader who can open the request (and never
+ * occurrence page, with "(request cancelled)" once that request is
+ * cancelled. Every reader of the occurrence sees it: the handle is a copy on
+ * the occurrence itself, and whether it was cancelled is the computed field
+ * every reader may read. It links to the request only when `href` is given,
+ * which the page does for a reader who can open the request (and never
  * inside a list row, which is a link already). Nothing for an occurrence
  * never escalated.
  */
@@ -83,7 +85,7 @@ export function EscalationChip({
   href?: string | null;
 }) {
   if (!escalation) return null;
-  const label = escalationBadgeCopy(escalation.reference);
+  const label = escalationBadgeCopy(escalation.reference, escalation.requestCancelled);
   return (
     <Badge variant="outline" data-testid="escalation-badge">
       {href ? (

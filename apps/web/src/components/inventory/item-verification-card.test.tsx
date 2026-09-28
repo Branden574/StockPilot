@@ -289,6 +289,40 @@ describe('ItemVerificationCardView', () => {
     expect(within(issues).getByText(/^Checked at /)).toBeTruthy();
   });
 
+  it('F1-5: an escalated exception says "Escalated: MR-..." on its chip, as on every other surface (cancelled too)', () => {
+    view(
+      verification(
+        {},
+        {
+          openIssues: [
+            {
+              id: 'o-1',
+              number: 42,
+              reference: 'EX-000042',
+              rule: 'count_variance',
+              itemId: ITEM,
+              locationId: null,
+              escalation: { reference: 'MR-2026-000014', cancelled: false },
+            },
+            {
+              id: 'o-2',
+              number: 43,
+              reference: 'EX-000043',
+              rule: 'stale_staging',
+              itemId: ITEM,
+              locationId: LOC,
+              escalation: { reference: 'MR-2026-000009', cancelled: true },
+            },
+          ],
+        },
+      ),
+    );
+    const chips = screen.getAllByTestId('verification-issue-chip');
+    expect(chips[0]).toHaveTextContent('EX-000042 · Count did not match the stock on record · Escalated: MR-2026-000014');
+    expect(chips[1]).toHaveTextContent('EX-000043 · Sitting in Staging · Escalated: MR-2026-000009 (request cancelled)');
+    expect(card().textContent).not.toMatch(/\bsent\b|ticket/i);
+  });
+
   it("an exception's page leaves its own exception out, and says the rest are the other ones", () => {
     view(
       verification(

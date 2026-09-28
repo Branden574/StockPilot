@@ -18,7 +18,7 @@ import {
   ESCALATION_FORM_NOTE_COPY,
   escalationOpenRequestLabel,
   escalationPrefill,
-  EXCEPTION_RULES,
+  escalationSourceLines,
   MAINTENANCE_CATEGORIES,
   uuidSchema,
   type MaintenanceRequestFormValues,
@@ -239,30 +239,37 @@ function escalationDefaults(o: ExceptionOccurrence, categories: string[]): Parti
  *  condition at a location, that location (the server takes both from the
  *  exception). */
 function LinkedException({ occurrence: o }: { occurrence: ExceptionOccurrence }) {
+  // Core's lines: the phone's card says the same words.
+  const lines = escalationSourceLines({
+    reference: o.reference,
+    rule: o.rule,
+    item: o.item,
+    location: o.location ? { name: o.location.name, archived: o.location.archived } : null,
+  });
   return (
     <section
       aria-label="Linked exception"
       className="bg-muted/40 mb-6 rounded-md border p-3 text-sm"
       data-testid="escalation-linked-exception"
     >
-      <p className="font-medium">
-        {o.reference ? <span className="font-mono">{o.reference}</span> : 'Exception'}
-        <span className="text-muted-foreground"> · {EXCEPTION_RULES[o.rule].label}</span>
+      <p className="font-medium" data-testid="escalation-linked-heading">
+        {lines.heading}
       </p>
       <dl className="mt-2 grid gap-x-3 gap-y-1 sm:grid-cols-[6rem_1fr]">
-        {o.item ? (
+        {lines.item ? (
           <>
             <dt className="text-muted-foreground">Item</dt>
-            <dd className="break-words">
-              {o.item.name}
-              {o.item.sku ? <span className="text-muted-foreground font-mono"> ({o.item.sku})</span> : null}
+            <dd className="break-words" data-testid="escalation-linked-item">
+              {lines.item}
             </dd>
           </>
         ) : null}
-        {o.location ? (
+        {lines.location ? (
           <>
             <dt className="text-muted-foreground">Location</dt>
-            <dd className="break-words">{o.location.name}</dd>
+            <dd className="break-words" data-testid="escalation-linked-location">
+              {lines.location}
+            </dd>
           </>
         ) : null}
       </dl>

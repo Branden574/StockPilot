@@ -2,9 +2,17 @@
 
 import { revalidatePath } from 'next/cache';
 
-import { can, RECOUNT_MAX_ITEMS, uuidSchema, type RecountUnavailableReason } from '@stockpilot/core';
+import {
+  can,
+  ESCALATE_SERVER_PROBLEM_COPY,
+  ESCALATE_TOO_MANY_COPY,
+  RECOUNT_MAX_ITEMS,
+  uuidSchema,
+  type RecountUnavailableReason,
+} from '@stockpilot/core';
 
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { fetchCountAssignees } from '@/server/lib/count-assignees';
 import { ServiceError, withContext, type ServiceContext } from '@/server/services/context';
 import { ExceptionEscalationService } from '@/server/services/exception-escalation';
@@ -367,6 +375,13 @@ export async function escalateExceptionAction(
       throw new ServiceError('validation_error', 'That exception id is not valid.');
     }
     ctx = await withContext();
+    // The phone's route limits escalations to 10 a minute per person
+    // (api/v1/exceptions/[id]/escalate); the web's path is limited the same,
+    // under the same key, so neither path is a way around it.
+    const rl = await checkRateLimit(`exceptions-escalate:${ctx.userId}`, 10, 60_000);
+    if (!rl.allowed) {
+      return { error: { message: ESCALATE_TOO_MANY_COPY, reason: 'rate_limited', retryable: true } };
+    }
     const request = await new ExceptionEscalationService(ctx).escalate(id, values);
     revalidatePath('/dashboard/exceptions');
     revalidatePath(`/dashboard/exceptions/${id}`);
@@ -374,6 +389,11 @@ export async function escalateExceptionAction(
     return { ok: true, ...request };
   } catch (e) {
     const failure = fail(e, 'actions.exceptions.escalate');
+    if (!(e instanceof ServiceError) || e.code === 'internal_error') {
+      // A failure that may have left a request saved (or linked): the phone's
+      // words for a 5xx, never a bare "try again" that could save a second.
+      failure.error.message = ESCALATE_SERVER_PROBLEM_COPY;
+    }
     if (e instanceof ServiceError && e.code === 'module_disabled' && failure.error.reason === null) {
       failure.error.reason = 'module_disabled';
     }

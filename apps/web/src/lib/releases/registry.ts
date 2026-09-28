@@ -56,7 +56,7 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: 'Escalate an exception to maintenance',
         whatChanged:
-          "An open exception has an Escalate to maintenance action. It opens the maintenance request form with a subject naming the item and its SKU, and a description saying what is wrong, where, and the exception's number, such as EX-000042. You can change any of it before you save. Saving creates one maintenance request linked to the exception, with the exception's item and, for a condition at a location, that location, and then shows the request.",
+          "An open exception has an Escalate to maintenance action. It opens the maintenance request form with a subject naming the item and its SKU, and a description saying what is wrong, where it is when the exception is at a location, and the exception's number, such as EX-000042. You can change any of it before you save. Saving creates one maintenance request linked to the exception, with the exception's item and, for a condition at a location, that location, and then shows the request.",
         whyItMatters:
           'When an exception needed the maintenance team, the request had to be written from scratch, and nothing on the exception showed that it had been passed on.',
         howItAffectsYou:
@@ -72,7 +72,7 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: 'An escalated exception shows its maintenance request',
         whatChanged:
-          "An exception that was escalated shows Escalated with the request's number, such as MR-2026-000014, in the Exceptions list and on the exception, and its timeline records who escalated it. If you can open the request, the number links to it, and the exception says whether an email draft has been opened from StockPilot for it, or that the request was cancelled.",
+          "An exception that was escalated shows Escalated with the request's number, such as MR-2026-000014, in the Exceptions list, on the exception, and on the open exceptions of its item's and location's pages, and its timeline records who escalated it. If the request is cancelled, everyone who can see the exception sees that, and it can be escalated again. If you can open the request, the number links to it, and the exception says whether an email draft has been opened from StockPilot for it.",
         whyItMatters:
           'Anyone looking at the exception can see that it was passed to the maintenance team, so it is not escalated twice.',
         howItAffectsYou:

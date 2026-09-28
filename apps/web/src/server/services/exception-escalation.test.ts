@@ -57,8 +57,16 @@ interface Setup {
   /** The occurrence as re-read after a failed finish (the lost-answer check). */
   occurrenceAfter?: Record<string, unknown> | null | 'error';
   claim?: RpcResult;
-  finish?: RpcResult;
+  /** finish's answer; an array answers the Nth send with its Nth entry (the
+   *  last one repeats). */
+  finish?: RpcResult | QueryResult[];
   release?: QueryResult;
+  /** The insert's answer (create()). */
+  insert?: QueryResult;
+  /** The cancel's guarded update (cancel()). */
+  cancelUpdate?: QueryResult;
+  /** user_profiles as read for the claim's holder (and create()'s snapshot). */
+  profile?: QueryResult;
   enabledModules?: Set<ModuleId>;
   permissions?: ReadonlySet<string>;
   role?: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer';
@@ -79,6 +87,7 @@ function occRow(o: Record<string, unknown> = {}) {
 
 function build(s: Setup = {}) {
   let occurrenceReads = 0;
+  let finishSends = 0;
   const stub = makeSupabaseStub({
     'exception_occurrences.select.maybeSingle': () => {
       occurrenceReads += 1;
@@ -92,11 +101,13 @@ function build(s: Setup = {}) {
     'rpc:exception_escalation_finish': (call: MockCall) => {
       const args = call.args[0]?.[0] as { p_request_id: string | null };
       if (args.p_request_id === null) return s.release ?? { data: { state: 'released' }, error: null };
+      finishSends += 1;
       const f = s.finish ?? { data: { state: 'linked', id: REQ, number: 14, createdAt: '2026-09-27T12:00:01Z' }, error: null };
+      if (Array.isArray(f)) return f[Math.min(finishSends - 1, f.length - 1)]!;
       return typeof f === 'function' ? f(call) : f;
     },
     // create(): the profile snapshot, the org checks on the related ids, the insert.
-    'user_profiles.select': { data: { full_name: 'Pat Lee', email: 'pat@example.test' }, error: null },
+    'user_profiles.select': s.profile ?? { data: { full_name: 'Pat Lee', email: 'pat@example.test' }, error: null },
     'inventory_items.select': servedLikePostgrest([
       { id: ITEM, organization_id: ORG },
       { id: CLIENT_ITEM, organization_id: ORG },
@@ -105,7 +116,7 @@ function build(s: Setup = {}) {
       { id: LOC, organization_id: ORG },
       { id: CLIENT_LOC, organization_id: ORG },
     ]),
-    'maintenance_requests.insert.single': {
+    'maintenance_requests.insert.single': s.insert ?? {
       data: { id: REQ, request_number: 14, created_at: '2026-09-27T12:00:01Z' },
       error: null,
     },
@@ -132,14 +143,15 @@ function build(s: Setup = {}) {
       },
       error: null,
     },
-    'maintenance_requests.update.maybeSingle': { data: { id: REQ }, error: null },
+    'maintenance_requests.update.maybeSingle': s.cancelUpdate ?? { data: { id: REQ }, error: null },
   });
   const ctx = makeServiceContext(stub.client, {
     role: s.role ?? 'staff',
     enabledModules: s.enabledModules ?? WITH_MAINTENANCE,
     ...(s.permissions ? { permissions: s.permissions } : {}),
   });
-  return { stub, ctx, svc: new ExceptionEscalationService(ctx) };
+  // No pauses between finish's resends in tests.
+  return { stub, ctx, svc: new ExceptionEscalationService(ctx, { finishBackoffMs: [0, 0] }) };
 }
 
 async function refusal(p: Promise<unknown>): Promise<ServiceError> {
@@ -158,6 +170,13 @@ const releases = (stub: ReturnType<typeof build>['stub']) =>
     (c) => c.name === 'exception_escalation_finish' && (c.args as { p_request_id: unknown }).p_request_id === null,
   ).length;
 const inserts = (stub: ReturnType<typeof build>['stub']) => stub.chainsAll.get('maintenance_requests.insert') ?? [];
+const finishes = (stub: ReturnType<typeof build>['stub']) =>
+  stub.rpcCalls.filter(
+    (c) => c.name === 'exception_escalation_finish' && (c.args as { p_request_id: unknown }).p_request_id !== null,
+  ).length;
+const LINKED = { data: { state: 'linked', id: REQ, number: 14, createdAt: '2026-09-27T12:00:01Z' }, error: null };
+const LOST = { data: null, error: { message: 'TypeError: fetch failed', code: '' } };
+const BUSY = { data: null, error: { code: '55P03', message: 'canceling statement due to lock timeout' } };
 const cancelled = (stub: ReturnType<typeof build>['stub']) =>
   (stub.chainArgsAll.get('maintenance_requests.update') ?? []).filter(
     (args) => (args[0]?.[0] as { status?: string } | undefined)?.status === 'cancelled',
@@ -263,6 +282,70 @@ describe('the occurrence and the claim', () => {
     expect(inserts(stub)).toEqual([]);
   });
 
+  const HOLDER = '88888888-8888-4888-8888-888888888888';
+  const inProgress = (detail: string) => ({
+    data: null,
+    error: { code: 'P0001', message: 'escalation_in_progress', hint: 'escalation_in_progress', details: detail },
+  });
+
+  it('HOLDER NAMED: the refusal names who is escalating (the claim\'s DETAIL), read under the reader\'s RLS', async () => {
+    const { stub, svc } = build({
+      claim: inProgress(HOLDER),
+      profile: { data: { full_name: 'Sam Ortiz', email: 'sam@example.test' }, error: null },
+    });
+    const e = await refusal(svc.escalate(OCC, BODY));
+    expect(e.message).toBe('Sam Ortiz is escalating this exception right now. Try again in a minute.');
+    expect(e.details).toEqual({
+      reason: 'escalation_in_progress',
+      retryable: true,
+      holder: { self: false, label: 'Sam Ortiz' },
+    });
+    expect(stub.chainArgs.get('user_profiles.select')).toContainEqual(['id', HOLDER]);
+    expect(inserts(stub)).toEqual([]);
+  });
+
+  it('HOLDER IS ME: another tab or device of this person; no profile read', async () => {
+    const { stub, svc } = build({ claim: inProgress('user-test') });
+    // The stub context's user id is 'user-test' (not a uuid): a non-uuid
+    // detail names nobody, so pin the self case with the real shape below.
+    expect((await refusal(svc.escalate(OCC, BODY))).details).toEqual({ reason: 'escalation_in_progress', retryable: true });
+    expect(stub.fromCalls).not.toContain('user_profiles');
+
+    const me = build({ claim: inProgress(HOLDER) });
+    (me.ctx as { userId: string }).userId = HOLDER.toUpperCase();
+    const e = await refusal(me.svc.escalate(OCC, BODY));
+    expect(e.message).toBe(
+      'You are already escalating this exception, in another tab or on another device. Try again in a minute.',
+    );
+    expect(e.details).toEqual({ reason: 'escalation_in_progress', retryable: true, holder: { self: true } });
+    expect(me.stub.fromCalls).not.toContain('user_profiles');
+  });
+
+  it('a holder whose profile cannot be read is named as nobody (a failed read is reported, never guessed)', async () => {
+    const { svc } = build({ claim: inProgress(HOLDER), profile: { data: null, error: { message: 'boom' } } });
+    const e = await refusal(svc.escalate(OCC, BODY));
+    expect(e.message).toBe('This exception is being escalated right now. Try again in a minute.');
+    expect(e.details).toEqual({ reason: 'escalation_in_progress', retryable: true, holder: { self: false, label: null } });
+    expect(reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tag: 'exceptions.escalate_holder_read' }),
+    );
+  });
+
+  it('this person is escalating ANOTHER exception: 409 escalation_in_progress_elsewhere (retryable), nothing created', async () => {
+    const { stub, svc } = build({
+      claim: {
+        data: null,
+        error: { code: 'P0001', message: 'x', hint: 'escalation_in_progress_elsewhere' },
+      },
+    });
+    const e = await refusal(svc.escalate(OCC, BODY));
+    expect(e.code).toBe('conflict');
+    expect(e.message).toBe('You are escalating another exception right now. Try again in a minute.');
+    expect(e.details).toEqual({ reason: 'escalation_in_progress_elsewhere', retryable: true });
+    expect(inserts(stub)).toEqual([]);
+  });
+
   it('the database\'s gate answers are mapped by SQLSTATE and hint', async () => {
     const cases: Array<[Record<string, string>, string, unknown]> = [
       [{ code: '42501', hint: 'module_disabled' }, 'module_disabled', 'module_disabled'],
@@ -340,48 +423,156 @@ describe('when something fails after the claim', () => {
     expect(cancelled(stub)).toBe(0);
   });
 
-  it('finish refused and the occurrence does not link the request: release, cancel the request as its requester, and say so', async () => {
+  it('create\'s insert refused by the database (a SQLSTATE): nothing was saved, so the claim is released', async () => {
+    const { stub, svc } = build({ insert: { data: null, error: { code: '42501', message: 'rls' } } });
+    expect((await refusal(svc.escalate(OCC, BODY))).code).toBe('internal_error');
+    expect(releases(stub)).toBe(1);
+    expect(finishes(stub)).toBe(0);
+  });
+
+  it('CREATE\'S ANSWER LOST (no SQLSTATE): the request may exist, so the claim is KEPT (a retry cannot save a second one), reported, nothing cancelled', async () => {
+    const { stub, svc } = build({ insert: LOST });
+    const e = await refusal(svc.escalate(OCC, BODY));
+    expect(e.code).toBe('internal_error');
+    expect(releases(stub)).toBe(0);
+    expect(finishes(stub)).toBe(0);
+    expect(cancelled(stub)).toBe(0);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tag: 'exceptions.escalate_unconfirmed', extra: expect.objectContaining({ stage: 'create' }) }),
+    );
+  });
+
+  it('finish refused and the request cancelled: release, cancel as its requester, and the message says it was cancelled', async () => {
     const { stub, svc } = build({
       finish: { data: null, error: { code: 'P0001', message: 'escalation_not_claimed', hint: 'escalation_not_claimed' } },
-      occurrenceAfter: occRow(),
     });
     const e = await refusal(svc.escalate(OCC, BODY));
     expect(e.code).toBe('conflict');
-    expect(e.details?.reason).toBe('escalation_not_claimed');
+    expect(e.details).toEqual({
+      reason: 'escalation_not_claimed',
+      savedRequest: { id: REQ, reference: 'MR-2026-000014', cancelled: true },
+    });
+    expect(e.message).toBe(
+      'The exception changed while it was being escalated. Reload and try again. The request saved for it (MR-2026-000014) was cancelled.',
+    );
     expect(releases(stub)).toBe(1);
     expect(cancelled(stub)).toBe(1);
+    // A definite refusal is final: sent once, never re-read.
+    expect(finishes(stub)).toBe(1);
     // The guarded cancel: only an open request is cancelled.
     const update = (stub.chainArgsAll.get('maintenance_requests.update') ?? [])[0] ?? [];
     expect(update).toContainEqual(['id', REQ]);
     expect(update).toContainEqual(['cancelled_at', null]);
   });
 
-  it('finish refused because the module went off meanwhile: module_disabled, and the saved request is cancelled', async () => {
-    const { stub, svc } = build({
+  it('MODULE OFF MEANWHILE: finish refuses, and the cancel is refused too (the update policy needs the module): reported as an orphan, and the message says it could NOT be cancelled', async () => {
+    const { svc } = build({
       finish: { data: null, error: { code: '42501', message: 'escalation_not_allowed', hint: 'module_disabled' } },
-      occurrenceAfter: occRow(),
+      // maintenance_requests_update WITH CHECK module_enabled (0314): the
+      // real answer to the requester's cancel once the module is off.
+      cancelUpdate: { data: null, error: { code: '42501', message: 'new row violates row-level security policy for table "maintenance_requests"' } },
     });
-    expect((await refusal(svc.escalate(OCC, BODY))).code).toBe('module_disabled');
+    const e = await refusal(svc.escalate(OCC, BODY));
+    expect(e.code).toBe('module_disabled');
+    expect(e.details).toEqual({
+      reason: 'module_disabled',
+      savedRequest: { id: REQ, reference: 'MR-2026-000014', cancelled: false },
+    });
+    expect(e.message).toBe(
+      'Maintenance requests are not turned on for this organization. The request saved for it (MR-2026-000014) is not linked to this exception and could not be cancelled. Check your maintenance requests.',
+    );
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'exceptions.escalate_orphan_request', extra: { occurrenceId: OCC, requestId: REQ } }),
+    );
+  });
+
+  it('a cancel that throws is never claimed as cancelled', async () => {
+    const { svc } = build({
+      finish: { data: null, error: { code: 'P0001', message: 'x', hint: 'request_not_eligible' } },
+      cancelUpdate: { data: null, error: { message: 'fetch failed' } },
+    });
+    const e = await refusal(svc.escalate(OCC, BODY));
+    expect(e.message).not.toMatch(/was cancelled/);
+    expect(e.message).toMatch(/could not be cancelled/);
+    expect(e.details?.savedRequest).toEqual({ id: REQ, reference: 'MR-2026-000014', cancelled: false });
+  });
+
+  it('BUSY ONCE: finish answers 55P03 and then links: sent again, a success; nothing released or cancelled', async () => {
+    const { stub, svc } = build({ finish: [BUSY, LINKED] });
+    await expect(svc.escalate(OCC, BODY)).resolves.toMatchObject({ id: REQ, reference: 'MR-2026-000014' });
+    expect(finishes(stub)).toBe(2);
+    expect(releases(stub)).toBe(0);
+    expect(cancelled(stub)).toBe(0);
+  });
+
+  it('BUSY EVERY TIME: after the resends, busy (retryable): released, the request cancelled, and the message says so', async () => {
+    const { stub, svc } = build({ finish: [BUSY] });
+    const e = await refusal(svc.escalate(OCC, BODY));
+    expect(finishes(stub)).toBe(3);
+    expect(e.code).toBe('conflict');
+    expect(e.details).toEqual({
+      reason: 'busy',
+      retryable: true,
+      savedRequest: { id: REQ, reference: 'MR-2026-000014', cancelled: true },
+    });
+    expect(e.message).toBe(
+      'This exception is busy. Try again in a moment. The request saved for it (MR-2026-000014) was cancelled.',
+    );
+    expect(releases(stub)).toBe(1);
     expect(cancelled(stub)).toBe(1);
   });
 
-  it('A LOST ANSWER: finish failed on the wire but the occurrence links the request: success, never cancelled', async () => {
-    const { stub, svc } = build({
-      finish: { data: null, error: { message: 'fetch failed' } },
-      occurrenceAfter: occRow({ maintenance_request_id: REQ, escalation_number: 14 }),
-    });
-    await expect(svc.escalate(OCC, BODY)).resolves.toMatchObject({ id: REQ, reference: 'MR-2026-000014' });
+  it('A LOST ANSWER, RESENT: the resend answers linked (the replay of a link that landed): a success, never cancelled or released', async () => {
+    const { stub, svc } = build({ finish: [LOST, LINKED] });
+    await expect(svc.escalate(OCC, BODY)).resolves.toMatchObject({ id: REQ });
+    expect(finishes(stub)).toBe(2);
     expect(cancelled(stub)).toBe(0);
     expect(releases(stub)).toBe(0);
   });
 
-  it('UNKNOWN: finish failed and the re-read failed too: the request is left as saved (it may be linked), reported, and the caller gets an error', async () => {
+  it('REVERSE RACE: an answer lost while its link was still being written, then a lock wait: never released or cancelled (the link may land); reported as unconfirmed', async () => {
+    // The first send is still holding the row (its answer lost); the resends
+    // wait past lock_timeout. The re-read sees no link YET.
+    const { stub, svc } = build({ finish: [LOST, BUSY, BUSY], occurrenceAfter: occRow() });
+    const e = await refusal(svc.escalate(OCC, BODY));
+    expect(e.code).toBe('internal_error');
+    expect(releases(stub)).toBe(0);
+    expect(cancelled(stub)).toBe(0);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tag: 'exceptions.escalate_unconfirmed', extra: expect.objectContaining({ stage: 'finish' }) }),
+    );
+  });
+
+  it('a lost answer, then a definite refusal: the resend saw the row without the link, so it is final: release and cancel', async () => {
     const { stub, svc } = build({
-      finish: { data: null, error: { message: 'fetch failed' } },
-      occurrenceAfter: 'error',
+      finish: [LOST, { data: null, error: { code: 'P0001', message: 'x', hint: 'occurrence_resolved' } }],
     });
+    const e = await refusal(svc.escalate(OCC, BODY));
+    expect(e.details?.reason).toBe('occurrence_resolved');
+    expect(e.details?.savedRequest).toEqual({ id: REQ, reference: 'MR-2026-000014', cancelled: true });
+    expect(releases(stub)).toBe(1);
+    expect(cancelled(stub)).toBe(1);
+  });
+
+  it('EVERY ANSWER LOST, but the occurrence links the request: success, never cancelled', async () => {
+    const { stub, svc } = build({
+      finish: [LOST],
+      occurrenceAfter: occRow({ maintenance_request_id: REQ, escalation_number: 14 }),
+    });
+    await expect(svc.escalate(OCC, BODY)).resolves.toMatchObject({ id: REQ, reference: 'MR-2026-000014' });
+    expect(finishes(stub)).toBe(3);
+    expect(cancelled(stub)).toBe(0);
+    expect(releases(stub)).toBe(0);
+  });
+
+  it('UNKNOWN: every answer lost and the re-read failed too: the request is left as saved (it may be linked), the claim kept, reported', async () => {
+    const { stub, svc } = build({ finish: [LOST], occurrenceAfter: 'error' });
     expect((await refusal(svc.escalate(OCC, BODY))).code).toBe('internal_error');
     expect(cancelled(stub)).toBe(0);
+    expect(releases(stub)).toBe(0);
     expect(reportError).toHaveBeenCalledWith(
       expect.any(Error),
       expect.objectContaining({ tag: 'exceptions.escalate_unconfirmed' }),
@@ -396,6 +587,24 @@ describe('when something fails after the claim', () => {
     expect(reportError).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ tag: 'exceptions.escalate_release_failed' }),
+    );
+  });
+
+  it('a refusal this build does not name, after the request was saved: said as "could not be linked" with what became of the request, and reported', async () => {
+    const { stub, svc } = build({ finish: { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } } });
+    const e = await refusal(svc.escalate(OCC, BODY));
+    expect(e.code).toBe('conflict');
+    expect(e.message).toBe(
+      'The request could not be linked to this exception. The request saved for it (MR-2026-000014) was cancelled.',
+    );
+    expect(e.details).toEqual({
+      reason: 'not_linked',
+      savedRequest: { id: REQ, reference: 'MR-2026-000014', cancelled: true },
+    });
+    expect(cancelled(stub)).toBe(1);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tag: 'exceptions.escalate_finish_failed' }),
     );
   });
 

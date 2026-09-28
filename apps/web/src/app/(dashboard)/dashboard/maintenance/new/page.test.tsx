@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -7,6 +7,7 @@ import {
   ESCALATION_FORM_NOTE_COPY,
   escalationPrefill,
   MAINTENANCE_CATEGORIES,
+  escalationSourceLines,
 } from '@stockpilot/core';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
@@ -138,6 +139,23 @@ beforeEach(() => {
 });
 
 describe('escalating an exception (?exceptionOccurrenceId=)', () => {
+  it('the linked-exception lines are core\'s, the same words as the phone (an archived location says so)', async () => {
+    getOccurrence.mockResolvedValue({
+      occurrence: occurrence({ location: { name: 'Staging North', kind: 'staging', archived: true } }),
+    });
+    await renderPage({ exceptionOccurrenceId: OCC });
+    const linked = screen.getByTestId('escalation-linked-exception');
+    const lines = escalationSourceLines({
+      reference: 'EX-000042',
+      rule: 'stale_staging',
+      item: { name: 'Atlas', sku: 'A1' },
+      location: { name: 'Staging North', archived: true },
+    });
+    expect(within(linked).getByTestId('escalation-linked-heading')).toHaveTextContent(lines.heading);
+    expect(within(linked).getByTestId('escalation-linked-item')).toHaveTextContent(lines.item!);
+    expect(within(linked).getByTestId('escalation-linked-location')).toHaveTextContent('Staging North (archived)');
+  });
+
   it('prefills the form from the exception, shows what it links to, and saves through the escalation client', async () => {
     getOccurrence.mockResolvedValue({ occurrence: occurrence() });
     await renderPage({ exceptionOccurrenceId: OCC });

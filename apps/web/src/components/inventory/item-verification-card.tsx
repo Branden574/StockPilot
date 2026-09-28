@@ -249,7 +249,13 @@ export function ItemVerificationCardView({
 export function VerificationIssueChips({
   issues,
 }: {
-  issues: ReadonlyArray<{ id: string; number: number | null; rule: string }>;
+  issues: ReadonlyArray<{
+    id: string;
+    number: number | null;
+    rule: string;
+    /** F1-5: the request it was escalated to; the chip says so. */
+    escalation?: { reference: string | null; cancelled: boolean | null } | null;
+  }>;
 }) {
   return (
     <ul className="flex flex-wrap gap-1.5">

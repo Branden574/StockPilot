@@ -2585,3 +2585,32 @@ describe('emailInput: the related location (F1-5)', () => {
     expect(JSON.stringify(content)).not.toMatch(/cost|price|\bvalue\b|quantity/i);
   });
 });
+
+describe('create: an insert whose answer never came (F1-5)', () => {
+  it('an insert error with no SQLSTATE is internal_error marked insertUnconfirmed: the row may have committed', async () => {
+    const { ctx } = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'maintenance_requests.insert': { data: null, error: { message: 'TypeError: fetch failed', code: '' } },
+    });
+    const e = await new MaintenanceRequestsService(ctx).create(VALID).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(e).toBeInstanceOf(ServiceError);
+    expect((e as ServiceError).code).toBe('internal_error');
+    expect((e as ServiceError).details).toEqual({ insertUnconfirmed: true });
+  });
+
+  it('an insert the database refused (a SQLSTATE) is internal_error with no such mark: nothing was saved', async () => {
+    const { ctx } = build({
+      'user_profiles.select': { data: PROFILE, error: null },
+      'maintenance_requests.insert': { data: null, error: { message: 'new row violates row-level security policy', code: '42501' } },
+    });
+    const e = await new MaintenanceRequestsService(ctx).create(VALID).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect((e as ServiceError).code).toBe('internal_error');
+    expect((e as ServiceError).details).toBeUndefined();
+  });
+});

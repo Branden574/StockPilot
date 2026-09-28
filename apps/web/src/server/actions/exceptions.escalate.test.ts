@@ -11,11 +11,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * list.
  */
 
-const { escalate, withContextMock, getRequest } = vi.hoisted(() => ({
+const { escalate, withContextMock, getRequest, checkRateLimit } = vi.hoisted(() => ({
   escalate: vi.fn(),
   withContextMock: vi.fn(),
   getRequest: vi.fn(),
+  checkRateLimit: vi.fn(),
 }));
+
+vi.mock('@/lib/rate-limit', () => ({ checkRateLimit }));
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
@@ -48,7 +51,8 @@ const VALUES = { subject: 'Inventory issue: Atlas (A1)', description: 'Label wil
 
 beforeEach(() => {
   vi.clearAllMocks();
-  withContextMock.mockResolvedValue({ organizationId: 'org-1', role: 'staff', supabase: { tag: 'caller' } });
+  withContextMock.mockResolvedValue({ organizationId: 'org-1', userId: 'user-1', role: 'staff', supabase: { tag: 'caller' } });
+  checkRateLimit.mockResolvedValue({ allowed: true, count: 1, resetAt: Date.now() + 60_000 });
 });
 
 describe('escalateExceptionAction', () => {
@@ -156,10 +160,48 @@ describe('escalateExceptionAction', () => {
     });
   });
 
-  it('never forwards raw database text', async () => {
+  it('never forwards raw database text; a server failure says it is not known whether a request was saved (the phone\'s words), never a bare "try again"', async () => {
     escalate.mockRejectedValue(new ServiceError('internal_error', 'relation "maintenance_requests" violates policy'));
     expect(await escalateExceptionAction(ID, VALUES)).toEqual({
-      error: { message: 'Something went wrong. Please try again.', reason: null },
+      error: {
+        message:
+          'The server had a problem, so it is not known whether the request was saved. Check your maintenance requests before trying again.',
+        reason: null,
+      },
     });
+    // Anything that is not a ServiceError too.
+    escalate.mockRejectedValue(new TypeError('boom'));
+    expect(await escalateExceptionAction(ID, VALUES)).toMatchObject({
+      error: { message: expect.stringContaining('not known whether the request was saved') },
+    });
+  });
+
+  it('a refusal after the request was saved passes the service\'s own words (cancelled or not) through', async () => {
+    const message =
+      'This exception is busy. Try again in a moment. The request saved for it (MR-2026-000014) was cancelled.';
+    escalate.mockRejectedValue(
+      new ServiceError('conflict', message, {
+        reason: 'busy',
+        retryable: true,
+        savedRequest: { id: REQ, reference: 'MR-2026-000014', cancelled: true },
+      }),
+    );
+    expect(await escalateExceptionAction(ID, VALUES)).toEqual({ error: { message, reason: 'busy', retryable: true } });
+  });
+
+  it('RATE LIMIT: the same 10-a-minute limit as the phone\'s route, per person, before the service is called', async () => {
+    checkRateLimit.mockResolvedValue({ allowed: false, count: 11, resetAt: Date.now() + 30_000 });
+    expect(await escalateExceptionAction(ID, VALUES)).toEqual({
+      error: { message: 'Too many requests. Wait a moment and try again.', reason: 'rate_limited', retryable: true },
+    });
+    expect(checkRateLimit).toHaveBeenCalledWith('exceptions-escalate:user-1', 10, 60_000);
+    expect(escalate).not.toHaveBeenCalled();
+  });
+
+  it('under the limit, the limiter is asked once and the service runs', async () => {
+    escalate.mockResolvedValue({ id: REQ, requestNumber: 14, reference: 'MR-2026-000014', createdAt: '2026-09-27T12:00:00Z' });
+    await escalateExceptionAction(ID, VALUES);
+    expect(checkRateLimit).toHaveBeenCalledTimes(1);
+    expect(escalate).toHaveBeenCalledTimes(1);
   });
 });

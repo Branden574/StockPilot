@@ -563,6 +563,7 @@ describe('Exception detail page', () => {
       reference: 'MR-2026-000014',
       escalatedAt: '2026-09-24T17:00:00Z',
       escalatedBy: { id: 'u1', label: 'Dana Lee' },
+      requestCancelled: false,
       visibleToReader: true,
       request: { status: 'saved', draftOpened: false, cancelled: false },
       ...o,
@@ -658,17 +659,44 @@ describe('Exception detail page', () => {
     expect(screen.queryByRole('link', { name: /Open MR-/ })).not.toBeInTheDocument();
   });
 
-  it('a cancelled request the reader can see: says so, and Escalate is offered again', async () => {
+  it('a cancelled request the reader can see: the badge says so (once), and Escalate is offered again', async () => {
     get.mockResolvedValue(
       detail({
-        escalation: escalated({ request: { status: 'cancelled', draftOpened: false, cancelled: true } }),
+        escalation: escalated({
+          requestCancelled: true,
+          request: { status: 'cancelled', draftOpened: false, cancelled: true },
+        }),
         canEscalate: true,
         escalateUnavailableReason: null,
       }),
     );
     await renderPage();
-    expect(screen.getByTestId('escalation-request-state')).toHaveTextContent('Request cancelled');
+    expect(screen.getByTestId('escalation-badge')).toHaveTextContent('Escalated: MR-2026-000014 (request cancelled)');
+    expect(screen.getByTestId('escalation-status')).toHaveTextContent('Escalated: MR-2026-000014 (request cancelled)');
+    expect(screen.queryByTestId('escalation-request-state')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Escalate to maintenance' })).toBeInTheDocument();
+  });
+
+  // The experience review: once the linked request was cancelled, a staff
+  // member or viewer who did not make it (and cannot open it) was still told
+  // it was live and could not escalate again.
+  it('NOT THE REQUESTER, AFTER A CANCEL: the badge says the request was cancelled, links nowhere, and Escalate is offered again', async () => {
+    get.mockResolvedValue(
+      detail({
+        escalation: escalated({ requestCancelled: true, visibleToReader: false, request: null }),
+        canEscalate: true,
+        escalateUnavailableReason: null,
+      }),
+    );
+    await renderPage();
+    const badge = screen.getByTestId('escalation-badge');
+    expect(badge).toHaveTextContent('Escalated: MR-2026-000014 (request cancelled)');
+    expect(badge.querySelector('a')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Escalate to maintenance' })).toHaveAttribute(
+      'href',
+      `/dashboard/maintenance/new?exceptionOccurrenceId=${ID}`,
+    );
+    expect(screen.queryByTestId('escalate-unavailable')).not.toBeInTheDocument();
   });
 
   it('with the module off, the handle still shows but links nowhere (the request page would say not enabled)', async () => {

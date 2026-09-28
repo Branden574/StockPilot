@@ -971,10 +971,13 @@ describe('related location (F1-5)', () => {
     expect(screen.queryByText('Related location')).toBeNull();
   });
 
-  it('the review screen (?review=1) names it under the related record, as the email does', async () => {
+  it('the review screen (?review=1) names it under the related record as "Related location", as the detail page and the email do', async () => {
     withLocation({ name: '12-B', warehouseName: null });
     render(await MaintenanceRequestDetailPage(args({ review: '1' })));
-    expect(screen.getByText('Location: 12-B')).toBeInTheDocument();
+    // Never a bare "Location:": the email's item block has its own
+    // "Location" (the item's primary location), a different place.
+    expect(screen.getByText('Related location: 12-B')).toBeInTheDocument();
+    expect(screen.queryByText('Location: 12-B')).toBeNull();
     expect(screen.getByText('Related StockPilot record')).toBeInTheDocument();
   });
 });

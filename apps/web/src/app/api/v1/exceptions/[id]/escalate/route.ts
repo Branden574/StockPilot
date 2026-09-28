@@ -30,15 +30,27 @@ export const dynamic = 'force-dynamic';
  *       saved and linked. Nothing was emailed; the request's review screen
  *       opens the draft only when the person taps it.
  *   400 bad id, bad JSON, or the form's rules (`message` says which);
- *   403 `module_disabled` or `forbidden`; 404 not found or not visible;
+ *   403 `module_disabled` or `forbidden` (details.reason aal2_required or
+ *       mfa_required from the MFA gate); 404 not found or not visible;
  *   409 `details.reason`:
  *       already_escalated (+ requestId, requestNumber, reference: open that
- *         request), escalation_in_progress (retryable), occurrence_resolved,
+ *         request), escalation_in_progress (retryable; + holder {self} or
+ *         {self:false, label}: who is escalating),
+ *         escalation_in_progress_elsewhere (retryable: this person is
+ *         escalating another exception), occurrence_resolved,
  *         escalation_not_claimed or request_not_eligible (the exception
- *         changed meanwhile; the request that was saved was cancelled),
- *         busy (retryable); a create refused by the maintenance rate limit
- *         is also 409 (the maintenance create route's contract);
- *   429 too many escalations from this user.
+ *         changed meanwhile), busy (retryable), not_linked (a refusal this
+ *         build does not name); a create refused by the maintenance rate
+ *         limit is also 409 (the maintenance create route's contract);
+ *   Any refusal AFTER the request was saved (409, 403 or 404) carries
+ *       details.savedRequest {id, reference, cancelled}: whether that
+ *       request was cancelled, which `message` also says (core
+ *       escalationFailureCopy). Never "cancelled" unless it was.
+ *   429 too many escalations from this user (the web action shares the
+ *       limit and its key);
+ *   500 a failure that leaves it unknown whether a request was saved or
+ *       linked (the claim is kept for 2 minutes so a retry cannot save a
+ *       second one); the phone says so (core ESCALATE_SERVER_PROBLEM_COPY).
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const ctx = await withApiContext(req);

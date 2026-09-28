@@ -163,7 +163,7 @@ export function MaintenanceReview({
                   {emailInput.relatedItem.sku ? ` (${emailInput.relatedItem.sku})` : ''}
                 </p>
               ) : null}
-              {relatedLocation ? <p className="text-sm">Location: {relatedLocation}</p> : null}
+              {relatedLocation ? <p className="text-sm">Related location: {relatedLocation}</p> : null}
               {emailInput.relatedOrder ? (
                 <p className="text-sm">
                   Order:{' '}

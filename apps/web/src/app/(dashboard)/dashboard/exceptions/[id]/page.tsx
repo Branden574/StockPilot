@@ -509,7 +509,7 @@ function EscalationCard({
       <CardContent className="space-y-3 text-sm">
         {escalation ? (
           <div className="space-y-0.5" data-testid="escalation-status">
-            <p className="font-medium">{escalationBadgeCopy(escalation.reference)}</p>
+            <p className="font-medium">{escalationBadgeCopy(escalation.reference, escalation.requestCancelled)}</p>
             <p className="text-muted-foreground text-xs">
               {escalation.escalatedBy?.label ?? 'Former member'}, {exceptionTime(escalation.escalatedAt, timeZone)}
             </p>

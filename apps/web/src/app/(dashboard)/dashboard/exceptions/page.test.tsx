@@ -426,6 +426,7 @@ describe('Exceptions list page', () => {
               reference: 'MR-2026-000014',
               escalatedAt: '2026-09-24T17:00:00Z',
               escalatedBy: { id: 'u1', label: 'Dana Lee' },
+              requestCancelled: false,
               visibleToReader: null,
               request: null,
             },
@@ -446,5 +447,32 @@ describe('Exceptions list page', () => {
     // Escalating neither acknowledges nor resolves.
     expect(within(row).getByTestId('occurrence-state')).toHaveTextContent('Open');
     expect(document.body.textContent).not.toMatch(/\bsent\b|ticket/i);
+  });
+
+  // The experience review: the list never said the linked request had been
+  // cancelled, so every reader kept seeing a live escalation.
+  it('a row whose linked request was cancelled says so, for every reader', async () => {
+    list.mockResolvedValue(
+      listResult({
+        occurrences: [
+          occurrence({
+            escalation: {
+              requestId: '44444444-4444-4444-8444-444444444444',
+              requestNumber: 14,
+              reference: 'MR-2026-000014',
+              escalatedAt: '2026-09-24T17:00:00Z',
+              escalatedBy: { id: 'u1', label: 'Dana Lee' },
+              requestCancelled: true,
+              visibleToReader: null,
+              request: null,
+            },
+            canEscalate: true,
+            escalateUnavailableReason: null,
+          }),
+        ],
+      }),
+    );
+    await renderPage();
+    expect(screen.getByTestId('escalation-badge')).toHaveTextContent('Escalated: MR-2026-000014 (request cancelled)');
   });
 });

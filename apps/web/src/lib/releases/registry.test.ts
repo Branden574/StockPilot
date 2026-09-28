@@ -601,4 +601,17 @@ describe('F1-5 (escalate an exception to maintenance) is held as a draft', () =>
     // Never a claim StockPilot cannot observe.
     expect(text).not.toMatch(/\bsent\b|ticket|delivered|submitted/i);
   });
+
+  it('says the prefill names a place only when the exception is at one (item-level rules have none)', () => {
+    const escalate = release().entries.find((e) => e.id === 'exception-escalate-to-maintenance')!;
+    expect(escalate.whatChanged).toContain('where it is when the exception is at a location');
+    expect(escalate.whatChanged).not.toMatch(/what is wrong, where, and/);
+  });
+
+  it('says every surface shows the escalation, the item and location pages included, and a cancelled request to everyone', () => {
+    const badge = release().entries.find((e) => e.id === 'exception-escalated-badge')!;
+    expect(badge.whatChanged).toContain("on the open exceptions of its item's and location's pages");
+    expect(badge.whatChanged).toContain('If the request is cancelled, everyone who can see the exception sees that');
+    expect(badge.whatChanged).toContain('can be escalated again');
+  });
 });
