@@ -30,19 +30,15 @@ export const RELEASES: Release[] = [
   {
     id: 'exception-photos-2026-09',
     revision: 1,
-    // DRAFT until the phone update (pnpm release:ota) and the Demo Co walk: a
-    // draft never leaves the server (visibleReleases, registryFingerprint), so
-    // merging the web photo panel does not announce photos the phone cannot
-    // add yet. The follow-up that publishes it sets 'published', sets
-    // publishedAt to the real time (still the newest), and flips the pin in
-    // registry.test.ts. Every sentence must still be true on both platforms
-    // then (for example: the web sends no capture time, so photos added on the
-    // web show only their upload time).
-    status: 'draft',
+    // Held as a draft until the phone update (OTA group 531e3cc0) and the Demo
+    // Co production walk, both done. Every sentence was checked on both
+    // platforms (the web sends no capture time, so photos added on the web
+    // show only their upload time).
+    status: 'published',
     title: 'Photos on exceptions',
     summary:
       'On the web and in the mobile app, an exception now has a Photos section. The people who can acknowledge an exception can add up to 8 photos to it while it is open, each with an optional note. They can remove their own photos, and managers among them can remove any. A removed photo is hidden, not deleted, and the timeline records who added or removed each photo. Location and camera details are removed from each photo when it is saved.',
-    publishedAt: '2026-09-28T17:00:00Z',
+    publishedAt: '2026-09-28T03:01:00Z',
     entries: [
       {
         id: 'exception-photos',
