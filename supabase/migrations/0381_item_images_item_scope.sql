@@ -56,10 +56,20 @@
 --   * read: an object is readable when the item its path names is readable,
 --     OR a photo row the caller can read names it (the duplicate's photo is
 --     that file). A row the caller can read is itself pinned to a readable
---     item, and new rows can only name objects of items their writer could
+--     item, and a new row can only carry a path its writer could already
 --     read, so this grants nothing the writer could not already see.
---   * write: a row's path must name the row's own item, or another item of
---     the same org that the caller can read (the duplicate shape).
+--   * write: a row's path must name the row's own item, or be a path that a
+--     photo row of the same org the caller can read already carries (what
+--     duplicate_inventory_item copies). Not "any path in another readable
+--     item's folder": that would let a writer alias a file no row carries yet
+--     (a future upload, or the books import's cover, which is overwritten in
+--     place), and it refused a duplicate of a duplicate whose source the
+--     caller cannot read, or that is gone, since the copy carries the
+--     ORIGINAL item's path. Production has 24 such rows, every one written in
+--     the same second as its duplicate (stockpilot-work/sec-image2/review/
+--     prod-shared-rows-check.sql: re-run it just before and after the push;
+--     a row that is not a duplicate's copy keeps its object readable through
+--     the read rule above, because this migration changes no data).
 --
 -- ── WHO SEES WHAT AFTER ─────────────────────────────────────────────────────
 -- Owners, admins and managers read every item of their org that has a
@@ -87,9 +97,10 @@
 -- policy is 0229's hashed sets (built once per statement). The bucket read
 -- policy is one pkey probe per object for the path's item; the shared-file
 -- branch is a hashed set built at most once per statement, only when the
--- probe refuses an object (section 3 says why it is not an EXISTS). Measured
--- on the local stack at ten times L4L's volume (stockpilot-work/sec-image2/
--- perf-*.txt).
+-- probe refuses an object (section 3 says why it is not an EXISTS), from the
+-- caller's own orgs' rows only, so no other tenant's photo rows can slow it.
+-- Measured on the local stack at ten times L4L's volume (stockpilot-work/
+-- sec-image2/perf-*.txt, review/flood-*.txt).
 --
 -- Rules: lock_timeout 5s; DROP POLICY IF EXISTS + CREATE POLICY in this one
 -- transaction; CREATE OR REPLACE FUNCTION; COMMENT (public objects only);
@@ -190,8 +201,23 @@ comment on function public.item_image_item_writable(uuid, uuid) is
   'warehouse, or warehouse write access), in that org (0381). SECURITY INVOKER.';
 
 -- A path a photo ROW of (p_org, p_item) may carry: in p_org's folder, one of
--- the two shapes, naming p_item itself or, for a duplicated item's shared
--- file, another item of the same org that the caller can read.
+-- the two shapes, and naming p_item itself or, for a duplicated item's shared
+-- file, a path that a photo row of p_org the caller can read already carries.
+--
+-- The second branch reads item_images under the caller's own
+-- item_images_select (SECURITY INVOKER), so it only ever accepts a path the
+-- caller can already read through the bucket's shared-file branch: it grants
+-- no object, it only lets a row be copied. It runs only when the path names
+-- another item (OR stops at the first true), and its org and path equalities
+-- are leakproof, so they filter before the per-row policy. What it accepts:
+--   * duplicate_inventory_item's copy of a readable item's rows (the source's
+--     own rows carry the paths);
+--   * a duplicate of a duplicate, whose rows carry the ORIGINAL item's path,
+--     even when the caller cannot read the original or it is gone (the
+--     duplicate's own rows carry it);
+--   * an UPDATE (reorder, set primary) of such a row: the row itself carries
+--     the path in the statement's snapshot.
+-- What it refuses: any new name in another item's folder, readable or not.
 create or replace function public.item_image_row_path_ok(p_org uuid, p_item uuid, p_path text)
 returns boolean
 language sql
@@ -204,16 +230,17 @@ as $$
     and (public.item_image_path_item_id(p_path) = p_item
          or exists (
            select 1
-             from public.inventory_items i
-            where i.id = public.item_image_path_item_id(p_path)
-              and i.organization_id = p_org)),
+             from public.item_images r
+            where r.organization_id = p_org
+              and (r.storage_path = p_path or r.thumb_path = p_path))),
     false);
 $$;
 
 comment on function public.item_image_row_path_ok(uuid, uuid, text) is
   'True when an item_images row of (org, item) may carry this path: the org''s '
   'folder, a photo shape, naming this item or (duplicate_inventory_item''s '
-  'shared file) another item of the org the caller can read (0381).';
+  'shared file) already carried by a photo row of the org the caller can '
+  'read (0381). SECURITY INVOKER.';
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- 3. Shared (duplicated) files the caller may read, as one hashed set
@@ -237,12 +264,24 @@ comment on function public.item_image_row_path_ok(uuid, uuid, text) is
 -- photos never builds it. Measured: ~2 ms at 6,400 photo rows (ten times
 -- L4L), ~0.2 ms at production volume.
 --
--- SECURITY DEFINER so the scan can use a cheap filter first (the row's own
--- item id does not appear in its master path) instead of evaluating
--- item_images' policy on every row; the caller's scope is then applied to the few rows
--- left by caller_can_read_item (0361: inventory_items_select's predicate for
--- DEFINER callers), plus the row-org checks the policy states. It answers
--- only for auth.uid() and returns nothing without one.
+-- SECURITY DEFINER so the scan can use cheap filters first instead of
+-- evaluating item_images' policy on every row of the table (which has no
+-- index on organization_id or the paths), in this order:
+--   1. only the caller's orgs' rows (rls_member_org_ids, a tiny hashed set),
+--      so another tenant's photo rows cost a hash probe each, never a scope
+--      check: any signed-in user can create an org and file rows in it;
+--   2. only rows whose master path does not contain their own item id
+--      (duplicates' shared files), behind a MATERIALIZED fence so the
+--      planner cannot push the scope check below it;
+--   3. the caller's read scope on the row's item, written inline as
+--      inventory_items_select's predicate against 0229's hashed sets (built
+--      once per statement), the same predicate caller_can_read_item (0361)
+--      states for DEFINER callers. Keep the three in step (pgTAP 0381 C12).
+--      Not caller_can_read_item itself: as a per-row DEFINER call it is not
+--      inlined and rebuilds those sets per row (~190-515 us a row, measured:
+--      19 s with 100,000 shared-shape rows in ANOTHER org, 51 s in the
+--      caller's own; now ~15 ms and ~45-160 ms).
+-- It answers only for auth.uid() and returns nothing without one.
 create or replace function public.rls_item_image_shared_paths()
 returns setof text
 language sql
@@ -251,34 +290,41 @@ security definer
 set search_path = public
 rows 50
 as $$
-  -- MATERIALIZED fences the cheap row filter (the row's own item id does not
-  -- appear in its master path): without the fence the planner pushes the
-  -- per-item scope check below it and runs it for every photo row (measured:
-  -- 3 s instead of ~1.5 ms at 6,400 rows). Only the master path is scanned:
-  -- duplicate_inventory_item copies master and thumb together, and a row
-  -- whose master is in its own folder reads its thumb through the policy's
-  -- first branch like any other (no writer produces anything else).
+  -- Only the master path is scanned: duplicate_inventory_item copies master
+  -- and thumb together, and a row whose master is in its own folder reads
+  -- its thumb through the policy's first branch like any other (no writer
+  -- produces anything else).
   with shared_rows as materialized (
     select ii.item_id, ii.organization_id, ii.storage_path, ii.thumb_path
       from public.item_images ii
-     where strpos(ii.storage_path, ii.item_id::text) = 0
+     where ii.organization_id in (select public.rls_member_org_ids())
+       and strpos(ii.storage_path, ii.item_id::text) = 0
   )
   select p.path
     from shared_rows s
+    join public.inventory_items it
+      on it.id = s.item_id
+     and it.organization_id = s.organization_id
    cross join lateral (values (s.storage_path), (s.thumb_path)) p(path)
-   where p.path is not null
+   where (select auth.uid()) is not null
+     and p.path is not null
      and strpos(p.path, s.item_id::text) = 0
-     and (select auth.uid()) is not null
      and split_part(p.path, '/', 1) = s.organization_id::text
-     and exists (select 1 from public.inventory_items i
-                  where i.id = s.item_id and i.organization_id = s.organization_id)
-     and public.caller_can_read_item(s.item_id);
+     and (it.warehouse_id in (select public.rls_inv_read_full_warehouse_ids())
+          or (it.charter_id is null
+              and it.warehouse_id in (select public.rls_inv_read_assigned_warehouse_ids()))
+          or (it.warehouse_id, it.charter_id) in
+             (select r.warehouse_id, r.charter_id from public.rls_inv_read_warehouse_charter_ids() r))
+     and (it.organization_id in (select public.rls_cat_unrestricted_org_ids())
+          or (it.organization_id, it.category_id) in
+             (select c.organization_id, c.category_id from public.rls_cat_allowed_category_ids() c));
 $$;
 
 comment on function public.rls_item_image_shared_paths() is
-  'RLS helper (0381): paths carried by item_images rows outside their own item '
-  'folder (duplicated items'' shared files), for rows whose item the caller can '
-  'read (caller_can_read_item). For a hashed IN in the item-images read policy.';
+  'RLS helper (0381): paths carried by item_images rows of the caller''s orgs '
+  'outside their own item folder (duplicated items'' shared files), for rows '
+  'whose item the caller can read (inventory_items_select''s predicate, as in '
+  'caller_can_read_item). For a hashed IN in the item-images read policy.';
 
 revoke all on function public.item_image_path_item_id(text) from public, anon;
 revoke all on function public.item_image_path_org_id(text) from public, anon;
@@ -347,7 +393,8 @@ create policy item_images_delete on public.item_images
 
 comment on policy item_images_insert on public.item_images is
   'Only for an item the caller can read and change, with paths in the org''s '
-  'folder naming that item (or a readable item of the org: duplicates) (0381).';
+  'folder naming that item (or already carried by a readable photo row of the '
+  'org: duplicates) (0381).';
 comment on policy item_images_update on public.item_images is
   'Only rows of an item the caller can read and change, and the new row obeys '
   'item_images_insert''s rule (0381).';

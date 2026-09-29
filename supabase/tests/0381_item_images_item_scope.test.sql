@@ -11,33 +11,47 @@
 -- R. Rows: each persona sees exactly the photo rows of the items it can read
 --    (owner, admin, manager, all-warehouse auditor: all 7 of org A; staff of
 --    warehouse A1: 5; charter-scoped staff: 4; category viewer: 4; warehouse
---    viewer: 5; org B's manager: org B's 1; disabled, pending, anon: 0).
+--    viewer: 5; staff of the annex only: 2; org B's manager: org B's 1;
+--    disabled, pending, anon: 0), and never a row filed in another org naming
+--    a readable item.
 -- S. Objects, both path shapes ({org}/items/{item}/{file}, books import
 --    {org}/{item}/{file}): each persona reads exactly the objects of items it
 --    can read; a duplicated item's shared file is readable through the
 --    duplicate's row even when its source item is not (charter-scoped
---    staff); an object whose item no longer exists and a name in no photo
---    shape are readable by nobody's own client; the service role reads all.
+--    staff), master AND thumbnail, and not by a member who can read neither
+--    the source nor the duplicate (the shared-file set answers per caller);
+--    an object whose item no longer exists, a name in no photo shape and an
+--    object in one org's folder naming another org's item are readable by
+--    nobody's own client; the service role reads all.
 -- W. Row writes: only for an item the caller can read and change, with paths
---    in the org's folder naming that item or another readable item of the org
---    (the duplicate shape); never another org's item, another org's folder,
---    an unreadable item's object or a third shape; viewers (even one granted
+--    in the org's folder naming that item, or a path a photo row the caller
+--    can read already carries (duplicate_inventory_item's shared file); never
+--    a new path in another item's folder, another org's item or folder, an
+--    unreadable item's object or a third shape; viewers (even one granted
 --    items:update) never; update and delete of an unreadable item's row touch
---    0 rows; duplicate_inventory_item still copies photo rows.
--- O. Object writes: upload, overwrite and remove only in the folder of an
---    item the caller can read and change, for both shapes; a name that is not
---    a photo shape (including a first folder that is not a uuid) is a plain
---    refusal, never a cast error.
+--    0 rows; duplicate_inventory_item still copies photo rows, including a
+--    duplicate of a duplicate whose source the caller cannot read or that is
+--    gone, and such a row can still be reordered.
+-- O. Object writes: upload, overwrite (the Storage API's upsert included) and
+--    remove only in the folder of an item the caller can read and change, in
+--    that item's own org folder, for both shapes; a name that is not a photo
+--    shape (including a first folder that is not a uuid) is a plain refusal,
+--    never a cast error.
 -- C. Catalog: the policy set on both tables, no FOR ALL policy left on
 --    item_images, the helpers are SECURITY INVOKER with a pinned search_path
---    and closed to anon, and the path parser's answers.
+--    and closed to anon, the path parser's answers, and the measured shapes
+--    (pkey-probe org correlation, starts_with, the shared-file set scoped to
+--    the caller's orgs with the read-scope sets inline, in step with
+--    caller_can_read_item).
+-- P. Cost: another org's shared-shape photo rows do not slow the caller's
+--    reads (20,000 planted in org B; the per-row check made that ~4 s).
 --
 -- Fixtures as the test superuser; reads and writes as `authenticated` with
 -- request.jwt.claim.sub. begin/rollback: nothing leaks. Namespace 03810000.
 
 begin;
 
-select plan(84);
+select plan(112);
 
 \set orgA    03810000-0000-0000-0000-00000000000a
 \set orgB    03810000-0000-0000-0000-00000000000b
@@ -52,6 +66,7 @@ select plan(84);
 \set vwrUpd  03810000-0000-0000-0000-0000000000a8
 \set dis     03810000-0000-0000-0000-0000000000a9
 \set pend    03810000-0000-0000-0000-0000000000aa
+\set stfA2   03810000-0000-0000-0000-0000000000ab
 \set mgrB    03810000-0000-0000-0000-0000000000b1
 \set whA1    03810000-0000-0000-0000-0000000000c1
 \set whA2    03810000-0000-0000-0000-0000000000c2
@@ -126,6 +141,28 @@ create function pg_temp.objects_seen() returns text language sql as $$
             from storage.objects o
            where o.bucket_id = 'item-images' and o.name like '0381%') s $$;
 
+-- What the bucket read policy's SECURITY DEFINER shared-file set answers for
+-- the current caller, as fixture file names ('ERROR <sqlstate>' if absent).
+-- This is the one place in 0381 where RLS does not apply, so its per-caller
+-- scope is pinned directly, not only through objects_seen().
+create function pg_temp.shared_seen() returns text language plpgsql as $$
+declare r text;
+begin
+  execute $q$select coalesce(string_agg(regexp_replace(x, '^.*/', ''), ' ' order by regexp_replace(x, '^.*/', '')), '(none)')
+                from public.rls_item_image_shared_paths() x where x like '0381%'$q$ into r;
+  return r;
+exception when others then
+  return 'ERROR ' || sqlstate;
+end $$;
+
+-- Wall-clock milliseconds a statement takes (its result is discarded).
+create function pg_temp.ms(p_sql text) returns int language plpgsql as $$
+declare t0 timestamptz := clock_timestamp();
+begin
+  execute p_sql;
+  return extract(epoch from (clock_timestamp() - t0)) * 1000;
+end $$;
+
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
   (:'own', '0381-own@test.local', '{}'::jsonb),
@@ -139,6 +176,7 @@ insert into auth.users (id, email, raw_user_meta_data) values
   (:'vwrUpd', '0381-vwrupd@test.local', '{}'::jsonb),
   (:'dis', '0381-dis@test.local', '{}'::jsonb),
   (:'pend', '0381-pend@test.local', '{}'::jsonb),
+  (:'stfA2', '0381-stfa2@test.local', '{}'::jsonb),
   (:'mgrB', '0381-mgrb@test.local', '{}'::jsonb)
   on conflict (id) do nothing;
 insert into public.organizations (id, name, slug) values
@@ -156,6 +194,7 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:'orgA', :'vwrUpd', 'viewer',  now(), false),
   (:'orgA', :'dis',    'staff',   now(), false),
   (:'orgA', :'pend',   'staff',   null,  false),
+  (:'orgA', :'stfA2',  'staff',   now(), false),
   (:'orgB', :'mgrB',   'manager', now(), false);
 update public.user_profiles set disabled_at = now() where id = :'dis';
 insert into public.warehouses (id, organization_id, name, code, status) values
@@ -184,7 +223,8 @@ select v.org, v.usr, v.wh, v.prim, v.ch
     (:'orgA'::uuid, :'aud'::uuid,    :'whA2'::uuid, false, null::uuid),
     (:'orgA'::uuid, :'vwrUpd'::uuid, :'whA1'::uuid, true,  null::uuid),
     (:'orgA'::uuid, :'dis'::uuid,    :'whA1'::uuid, true,  null::uuid),
-    (:'orgA'::uuid, :'pend'::uuid,   :'whA1'::uuid, true,  null::uuid)) v(org, usr, wh, prim, ch)
+    (:'orgA'::uuid, :'pend'::uuid,   :'whA1'::uuid, true,  null::uuid),
+    (:'orgA'::uuid, :'stfA2'::uuid,  :'whA2'::uuid, true,  null::uuid)) v(org, usr, wh, prim, ch)
  where not exists (select 1 from public.user_warehouse_assignments u
                     where u.user_id = v.usr and u.warehouse_id = v.wh
                       and u.charter_id is not distinct from v.ch);
@@ -207,10 +247,15 @@ insert into public.item_images (organization_id, item_id, storage_path, thumb_pa
   (:'orgA', :'iWh',     pg_temp.pa(:'orgA', :'iWh',  'm3.png'), pg_temp.pa(:'orgA', :'iWh', 'm3-thumb.webp'), true, 0),
   (:'orgA', :'iBook',   pg_temp.pb(:'orgA', :'iBook'),   null, true, 0),
   (:'orgA', :'iBookIn', pg_temp.pb(:'orgA', :'iBookIn'), null, true, 0),
-  (:'orgA', :'iSrc',    pg_temp.pa(:'orgA', :'iSrc', 'm6.png'), null, true, 0),
-  -- duplicate_inventory_item's shape: the copy names the SOURCE's file.
-  (:'orgA', :'iDup',    pg_temp.pa(:'orgA', :'iSrc', 'm6.png'), null, true, 0),
-  (:'orgB', :'iB',      pg_temp.pa(:'orgB', :'iB',   'm9.png'), null, true, 0);
+  (:'orgA', :'iSrc',    pg_temp.pa(:'orgA', :'iSrc', 'm6.png'), pg_temp.pa(:'orgA', :'iSrc', 'm6-thumb.webp'), true, 0),
+  -- duplicate_inventory_item's shape: the copy names the SOURCE's files,
+  -- master and thumbnail (it copies both columns).
+  (:'orgA', :'iDup',    pg_temp.pa(:'orgA', :'iSrc', 'm6.png'), pg_temp.pa(:'orgA', :'iSrc', 'm6-thumb.webp'), true, 0),
+  (:'orgB', :'iB',      pg_temp.pa(:'orgB', :'iB',   'm9.png'), null, true, 0),
+  -- A row filed in org B naming org A's item (the pre-0381 write policy
+  -- allowed it; nothing in the table forbids it): readable by nobody's own
+  -- client, even one who reads iIn.
+  (:'orgB', :'iIn',     pg_temp.pa(:'orgB', :'iIn',  'cross.png'), null, false, 0);
 insert into storage.objects (bucket_id, name) values
   ('item-images', pg_temp.pa(:'orgA', :'iIn',  'm1.png')),
   ('item-images', pg_temp.pa(:'orgA', :'iIn',  'm1-thumb.webp')),
@@ -220,7 +265,11 @@ insert into storage.objects (bucket_id, name) values
   ('item-images', pg_temp.pb(:'orgA', :'iBook')),
   ('item-images', pg_temp.pb(:'orgA', :'iBookIn')),
   ('item-images', pg_temp.pa(:'orgA', :'iSrc', 'm6.png')),
+  ('item-images', pg_temp.pa(:'orgA', :'iSrc', 'm6-thumb.webp')),
   ('item-images', pg_temp.pa(:'orgB', :'iB',   'm9.png')),
+  -- An object in org B's folder naming org A's item iIn: the path's org
+  -- folder must be its item's org, for reads as for writes.
+  ('item-images', pg_temp.pa(:'orgB', :'iIn',  'cross.png')),
   -- An object whose item was hard-deleted and that no row names, and a name
   -- in no photo shape: org members could read both before 0381.
   ('item-images', pg_temp.pa(:'orgA', :'iGhost', 'gone.png')),
@@ -231,27 +280,29 @@ set local role authenticated;
 
 set local "request.jwt.claim.sub" to :'own';
 select is(pg_temp.rows_seen(), 'book bookin cat dup in src wh', 'R1: owner sees every photo row of org A (as before)');
-select is(pg_temp.objects_seen(), 'book-cover bookin-cover m1-thumb.webp m1.png m2.png m3-thumb.webp m3.png m6.png',
+select is(pg_temp.q(format($$select count(*)::text from public.item_images where organization_id = %L$$, :'orgB')), '0',
+  'R15: a row filed in another org naming a readable item stays invisible (the org correlation holds)');
+select is(pg_temp.objects_seen(), 'book-cover bookin-cover m1-thumb.webp m1.png m2.png m3-thumb.webp m3.png m6-thumb.webp m6.png',
   'S1: owner reads every photo object of org A, both shapes; not the ghost object or the odd-shaped name');
 
 set local "request.jwt.claim.sub" to :'adm';
 select is(pg_temp.rows_seen(), 'book bookin cat dup in src wh', 'R2: admin sees every photo row of org A');
-select is(pg_temp.objects_seen(), 'book-cover bookin-cover m1-thumb.webp m1.png m2.png m3-thumb.webp m3.png m6.png',
+select is(pg_temp.objects_seen(), 'book-cover bookin-cover m1-thumb.webp m1.png m2.png m3-thumb.webp m3.png m6-thumb.webp m6.png',
   'S2: admin reads every photo object of org A');
 
 set local "request.jwt.claim.sub" to :'mgr';
 select is(pg_temp.rows_seen(), 'book bookin cat dup in src wh', 'R3: manager sees every photo row of org A');
-select is(pg_temp.objects_seen(), 'book-cover bookin-cover m1-thumb.webp m1.png m2.png m3-thumb.webp m3.png m6.png',
+select is(pg_temp.objects_seen(), 'book-cover bookin-cover m1-thumb.webp m1.png m2.png m3-thumb.webp m3.png m6-thumb.webp m6.png',
   'S3: manager reads every photo object of org A');
 
 set local "request.jwt.claim.sub" to :'aud';
 select is(pg_temp.rows_seen(), 'book bookin cat dup in src wh', 'R4: an all-warehouse auditor (viewer) sees every photo row');
-select is(pg_temp.objects_seen(), 'book-cover bookin-cover m1-thumb.webp m1.png m2.png m3-thumb.webp m3.png m6.png',
+select is(pg_temp.objects_seen(), 'book-cover bookin-cover m1-thumb.webp m1.png m2.png m3-thumb.webp m3.png m6-thumb.webp m6.png',
   'S4: an all-warehouse auditor reads every photo object');
 
 set local "request.jwt.claim.sub" to :'stf';
 select is(pg_temp.rows_seen(), 'bookin cat dup in src', 'R5: staff of Main see Main''s photo rows only (not the annex item or book)');
-select is(pg_temp.objects_seen(), 'bookin-cover m1-thumb.webp m1.png m2.png m6.png',
+select is(pg_temp.objects_seen(), 'bookin-cover m1-thumb.webp m1.png m2.png m6-thumb.webp m6.png',
   'S5: staff of Main read Main''s objects only, both shapes (not the annex photo, thumb or book cover)');
 select is(pg_temp.q(format($$select count(*)::text from storage.objects where bucket_id = 'item-images' and name = %L$$,
                            pg_temp.pa(:'orgA', :'iWh', 'm3.png'))), '0',
@@ -262,22 +313,35 @@ select is(pg_temp.q(format($$select count(*)::text from storage.objects where bu
 
 set local "request.jwt.claim.sub" to :'stfC';
 select is(pg_temp.rows_seen(), 'bookin cat dup in', 'R6: charter-scoped staff see Main''s no-charter rows and their charter''s duplicate, not the other charter''s source');
-select is(pg_temp.objects_seen(), 'bookin-cover m1-thumb.webp m1.png m2.png m6.png',
-  'S8: charter-scoped staff read the duplicate''s shared file (named by a row they can read) though its source item is out of scope');
+select is(pg_temp.objects_seen(), 'bookin-cover m1-thumb.webp m1.png m2.png m6-thumb.webp m6.png',
+  'S8: charter-scoped staff read the duplicate''s shared file, master AND thumbnail (named by a row they can read), though its source item is out of scope');
+select is(pg_temp.shared_seen(), 'm6-thumb.webp m6.png',
+  'S16: the shared-file set answers the duplicate''s master and thumbnail for charter-scoped staff');
+
+set local "request.jwt.claim.sub" to :'stfA2';
+select is(pg_temp.rows_seen(), 'book wh', 'R14: staff of the annex only see the annex rows (not the duplicate or its source)');
+select is(pg_temp.objects_seen(), 'book-cover m3-thumb.webp m3.png',
+  'S17: staff of the annex only read the annex objects: not the duplicate''s shared file, master or thumbnail');
+select is(pg_temp.q(format($$select count(*)::text from storage.objects where bucket_id = 'item-images' and name in (%L, %L)$$,
+                           pg_temp.pa(:'orgA', :'iSrc', 'm6.png'), pg_temp.pa(:'orgA', :'iSrc', 'm6-thumb.webp'))), '0',
+  'S18: ... nor sign them (a member who reads neither the source nor the duplicate)');
+select is(pg_temp.shared_seen(), '(none)',
+  'S19: the shared-file set answers nothing for a member who reads neither the source nor the duplicate');
 
 set local "request.jwt.claim.sub" to :'vwrC';
 select is(pg_temp.rows_seen(), 'bookin dup in src', 'R7: a category-scoped viewer sees only their category''s rows');
-select is(pg_temp.objects_seen(), 'bookin-cover m1-thumb.webp m1.png m6.png',
+select is(pg_temp.objects_seen(), 'bookin-cover m1-thumb.webp m1.png m6-thumb.webp m6.png',
   'S9: a category-scoped viewer reads only their category''s objects');
 
 set local "request.jwt.claim.sub" to :'vwrW';
 select is(pg_temp.rows_seen(), 'bookin cat dup in src', 'R8: a warehouse viewer sees their warehouse''s rows');
-select is(pg_temp.objects_seen(), 'bookin-cover m1-thumb.webp m1.png m2.png m6.png',
+select is(pg_temp.objects_seen(), 'bookin-cover m1-thumb.webp m1.png m2.png m6-thumb.webp m6.png',
   'S10: a warehouse viewer reads their warehouse''s objects');
 
 set local "request.jwt.claim.sub" to :'mgrB';
 select is(pg_temp.rows_seen(), 'orgb', 'R9: another org''s manager sees only their own org''s row');
-select is(pg_temp.objects_seen(), 'm9.png', 'S11: another org''s manager reads only their own org''s object');
+select is(pg_temp.objects_seen(), 'm9.png', 'S11: another org''s manager reads only their own org''s object (not an object in their folder naming org A''s item)');
+select is(pg_temp.shared_seen(), '(none)', 'S20: the shared-file set answers nothing of org A for another org''s manager');
 
 set local "request.jwt.claim.sub" to :'dis';
 select is(pg_temp.rows_seen(), '(none)', 'R10: a disabled account sees no photo row');
@@ -296,9 +360,9 @@ select is(pg_temp.q($$select count(*)::text from storage.objects where bucket_id
   'S14: anon reads no object');
 reset role;
 set local role service_role;
-select is(pg_temp.q($$select count(*)::text from storage.objects where bucket_id = 'item-images' and name like '0381%'$$), '11',
+select is(pg_temp.q($$select count(*)::text from storage.objects where bucket_id = 'item-images' and name like '0381%'$$), '13',
   'S15: the service role (web signing, /r, /p/items, exports) still reads every object');
-select is(pg_temp.q($$select count(*)::text from public.item_images where item_id::text like '03810000-%'$$), '8',
+select is(pg_temp.q($$select count(*)::text from public.item_images where item_id::text like '03810000-%'$$), '9',
   'R13: the service role still reads every photo row');
 reset role;
 
@@ -313,7 +377,13 @@ select is(pg_temp.n(format($$insert into public.item_images (organization_id, it
   'W2: staff add a books-import-shape row to an item they can change');
 select is(pg_temp.n(format($$insert into public.item_images (organization_id, item_id, storage_path) values (%L, %L, %L)$$,
                            :'orgA', :'iIn', pg_temp.pa(:'orgA', :'iCat', 'm2.png'))), '1',
-  'W3: a row may name another READABLE item''s file of the same org (duplicate_inventory_item''s shape)');
+  'W3: a row may name a file a READABLE photo row of the org carries (duplicate_inventory_item''s shape)');
+select is(pg_temp.n(format($$insert into public.item_images (organization_id, item_id, storage_path) values (%L, %L, %L)$$,
+                           :'orgA', :'iIn', pg_temp.pa(:'orgA', :'iCat', 'future.png'))), 'ERROR 42501',
+  'W28: ... but not a new name in another item''s folder, even a readable one''s (no alias to a file no row carries yet)');
+select is(pg_temp.n(format($$insert into public.item_images (organization_id, item_id, storage_path) values (%L, %L, %L)$$,
+                           :'orgA', :'iIn', :'orgA' || '/' || :'iBookIn' || '/cover.jpg')), 'ERROR 42501',
+  'W29: ... nor a books-import cover name of another item that no row carries (rehostCover overwrites that name in place)');
 select is(pg_temp.n(format($$insert into public.item_images (organization_id, item_id, storage_path) values (%L, %L, %L)$$,
                            :'orgA', :'iWh', pg_temp.pa(:'orgA', :'iWh', 'w4.jpg'))), 'ERROR 42501',
   'W4: staff cannot add a photo row to another warehouse''s item');
@@ -356,12 +426,38 @@ select is((select count(*)::int from public.item_images where item_id = :'iWh'),
 set local role authenticated;
 set local "request.jwt.claim.sub" to :'stfC';
 select is(pg_temp.n(format($$insert into public.item_images (organization_id, item_id, storage_path) values (%L, %L, %L)$$,
-                           :'orgA', :'iDup', pg_temp.pa(:'orgA', :'iSrc', 'm6.png'))), 'ERROR 42501',
-  'W18: charter-scoped staff cannot name the out-of-charter source''s file in a NEW row (it must be readable to the writer)');
+                           :'orgA', :'iDup', pg_temp.pa(:'orgA', :'iSrc', 'w18.png'))), 'ERROR 42501',
+  'W18: charter-scoped staff cannot name a new file in the out-of-charter source''s folder (no readable row carries it)');
+select is(pg_temp.n(format($$update public.item_images set sort_order = sort_order + 1, is_primary = true where item_id = %L$$, :'iDup')), '1',
+  'W30: charter-scoped staff can reorder their duplicate''s row, whose files are the out-of-charter source''s');
+select is(pg_temp.q(format($$select public.duplicate_inventory_item(%L, '{"sku": "0381-DUP-COPY"}'::jsonb) is not null$$, :'iDup')), 'true',
+  'W31: charter-scoped staff can duplicate that duplicate (its rows carry the source''s files)');
+select is(pg_temp.n(format($$insert into public.item_images (organization_id, item_id, storage_path, thumb_path) values (%L, %L, %L, %L)$$,
+                           :'orgA', :'iDup', pg_temp.pa(:'orgA', :'iSrc', 'm6.png'), pg_temp.pa(:'orgA', :'iSrc', 'm6-thumb.webp'))), '1',
+  'W32: ... and add a row naming the files a row they can read already carries (nothing they cannot already read)');
 select is(pg_temp.n(format($$insert into public.item_images (organization_id, item_id, storage_path) values (%L, %L, %L)$$,
                            :'orgA', :'iSrc', pg_temp.pa(:'orgA', :'iSrc', 'w19.jpg'))), 'ERROR 42501',
   'W19: charter-scoped staff cannot add a row to another charter''s item');
 
+reset role;
+select is((select count(*)::int from public.item_images ii join public.inventory_items i on i.id = ii.item_id
+            where i.sku = '0381-DUP-COPY'
+              and ii.storage_path = pg_temp.pa(:'orgA', :'iSrc', 'm6.png')
+              and ii.thumb_path = pg_temp.pa(:'orgA', :'iSrc', 'm6-thumb.webp')), 1,
+  'W33: the duplicate''s copy carries the source''s master and thumbnail');
+
+-- The source is gone (hard-deleted; its own row cascades): the duplicate's
+-- row still carries the file, and duplicating the duplicate still works.
+savepoint src_gone;
+delete from public.inventory_items where id = :'iSrc';
+set local role authenticated;
+set local "request.jwt.claim.sub" to :'own';
+select is(pg_temp.q(format($$select public.duplicate_inventory_item(%L, '{"sku": "0381-DUP-COPY-2"}'::jsonb) is not null$$, :'iDup')), 'true',
+  'W34: the owner can duplicate a duplicate whose source item was deleted');
+reset role;
+rollback to savepoint src_gone;
+
+set local role authenticated;
 set local "request.jwt.claim.sub" to :'mgr';
 select is(pg_temp.n(format($$insert into public.item_images (organization_id, item_id, storage_path) values (%L, %L, %L)$$,
                            :'orgA', :'iWh', pg_temp.pa(:'orgA', :'iWh', 'w20.jpg'))), '1',
@@ -434,6 +530,23 @@ select is(pg_temp.n(format($$update storage.objects set metadata = '{"x":1}'::js
 select is(pg_temp.n(format($$update storage.objects set name = %L where bucket_id = 'item-images' and name = %L$$,
                            pg_temp.pa(:'orgA', :'iWh', 'moved.png'), pg_temp.pa(:'orgA', :'iIn', 'o1.jpg'))), 'ERROR 42501',
   'O12: staff cannot move their own object into another warehouse''s item folder');
+select is(pg_temp.n(format($$insert into storage.objects (bucket_id, name) values ('item-images', %L)$$,
+                           pg_temp.pa(:'orgB', :'iIn', 'o21.jpg'))), 'ERROR 42501',
+  'O21: staff cannot upload into ANOTHER org''s folder under their own writable item''s id');
+select is(pg_temp.n(format($$insert into storage.objects (bucket_id, name) values ('item-images', %L)$$,
+                           :'orgB' || '/' || :'iIn' || '/cover.jpg')), 'ERROR 42501',
+  'O22: ... nor the books-import shape there');
+select is(pg_temp.n(format($$update storage.objects set name = %L where bucket_id = 'item-images' and name = %L$$,
+                           pg_temp.pa(:'orgB', :'iIn', 'moved.png'), pg_temp.pa(:'orgA', :'iIn', 'm1-thumb.webp'))), 'ERROR 42501',
+  'O23: ... nor move their own object into another org''s folder');
+select is(pg_temp.q(format($$insert into storage.objects (bucket_id, name) values ('item-images', %L)
+                              on conflict (bucket_id, name) do update set metadata = '{"upsert":1}'::jsonb returning name$$,
+                           pg_temp.pb(:'orgA', :'iBookIn'))), pg_temp.pb(:'orgA', :'iBookIn'),
+  'O24: the books cover rehost''s upsert (INSERT .. ON CONFLICT DO UPDATE .. RETURNING) works for an item staff can change');
+select is(pg_temp.q(format($$insert into storage.objects (bucket_id, name) values ('item-images', %L)
+                              on conflict (bucket_id, name) do update set metadata = '{"upsert":1}'::jsonb returning name$$,
+                           pg_temp.pb(:'orgA', :'iBook'))), 'ERROR 42501',
+  'O25: ... and is refused for another warehouse''s book');
 select set_config('storage.allow_delete_query', 'true', true);
 select is(pg_temp.n(format($$delete from storage.objects where bucket_id = 'item-images' and name = %L$$,
                            pg_temp.pa(:'orgA', :'iWh', 'm3.png'))), '0',
@@ -524,6 +637,73 @@ select is(pg_temp.q(format($$select coalesce(public.item_image_path_item_id(%L):
                            :'orgA' || '/items/' || :'iIn' || '/')),
   'null|null|null|null|null|null',
   'C9: traversal, a nested folder, a percent sign, an empty file name, null and a non-uuid folder name no item');
+
+select is(
+  pg_temp.q($$select p.prosecdef::text || ':' ||
+                  coalesce((select c from unnest(p.proconfig) c where c like 'search_path=%'), 'unpinned') || ':' ||
+                  has_function_privilege('anon', p.oid, 'execute')::text || ':' ||
+                  has_function_privilege('authenticated', p.oid, 'execute')::text
+                from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+               where n.nspname = 'public' and p.proname = 'rls_item_image_shared_paths'$$),
+  'true:search_path=public:false:true',
+  'C10: the shared-file set is the one SECURITY DEFINER helper: pinned search_path, closed to anon (the policy needs authenticated)');
+select is(
+  pg_temp.q($$select (p.prosrc ~* 'materialized')::text || ':' ||
+                     (p.prosrc ~ 'organization_id\s+in\s+\(select\s+public\.rls_member_org_ids\(\)\)')::text || ':' ||
+                     (p.prosrc ~ 'auth\.uid\(\)')::text || ':' ||
+                     (p.prosrc !~ 'caller_can_read_item')::text
+                from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+               where n.nspname = 'public' and p.proname = 'rls_item_image_shared_paths'$$),
+  'true:true:true:true',
+  'C11: the shared-file set scans only the caller''s orgs'' rows behind a MATERIALIZED fence, answers only with auth.uid(), and makes no per-row SECURITY DEFINER call');
+select is(
+  pg_temp.q($$select coalesce(string_agg(f, ' ' order by f), '(none)')
+                from (select distinct m[1] as f
+                        from pg_proc p join pg_namespace n on n.oid = p.pronamespace,
+                             regexp_matches(p.prosrc, '(rls_(?:inv_read|cat)_[a-z_]+)', 'g') m
+                       where n.nspname = 'public' and p.proname = 'caller_can_read_item') c
+               where f not in (select m2[1]
+                                 from pg_proc p2 join pg_namespace n2 on n2.oid = p2.pronamespace,
+                                      regexp_matches(p2.prosrc, '(rls_(?:inv_read|cat)_[a-z_]+)', 'g') m2
+                                where n2.nspname = 'public' and p2.proname = 'rls_item_image_shared_paths')$$),
+  '(none)',
+  'C12: the shared-file set applies every read-scope set caller_can_read_item (inventory_items_select''s DEFINER twin) applies');
+select is(
+  (select (qual ~ 'NOT \(i\.organization_id IS DISTINCT FROM item_images\.organization_id\)')::text
+     from pg_policies where schemaname = 'public' and tablename = 'item_images' and policyname = 'item_images_select'),
+  'true',
+  'C13: item_images_select correlates the org with IS NOT DISTINCT FROM (one pkey probe per row, not a hashed scan of every readable item)');
+select is(
+  (select (qual ~ 'starts_with\(objects\.name' and qual ~ 'rls_member_org_ids\(\)' and qual ~ 'rls_item_image_shared_paths\(\)')::text
+     from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname = 'item-images authenticated read'),
+  'true',
+  'C14: the bucket read policy keeps starts_with for the org (a pkey probe) and gates the shared-file set on the caller''s orgs');
+
+-- ══ P: another org's photo rows do not slow the caller ═══════════════════
+-- 20,000 shared-shape rows (a path naming another item) planted in org B, as
+-- any owner of any org can: row_path_ok accepted them from an owner with two
+-- items, and nothing needs a stored object. With the set scanning every
+-- tenant and checking each row's item per row (~190 us), a charter-scoped
+-- member of org A waited ~4 s here; scoped to the caller's orgs it is a few
+-- ms. The budget is generous so a busy machine never flakes it.
+insert into public.item_images (organization_id, item_id, storage_path, is_primary, sort_order)
+select :'orgB', :'iB', :'orgB' || '/items/03810000-0000-0000-0000-00000000f0f0/' || lpad(g::text, 8, '0') || '.png', false, 0
+  from generate_series(1, 20000) g;
+analyze public.item_images;
+set local role authenticated;
+set local "request.jwt.claim.sub" to :'stfC';
+select is(pg_temp.q(format($$select count(*)::text from storage.objects where bucket_id = 'item-images' and name = %L$$,
+                           pg_temp.pa(:'orgA', :'iSrc', 'm6.png'))), '1',
+  'P1: with 20,000 foreign shared-shape rows, charter-scoped staff still read the duplicate''s shared file');
+select cmp_ok(pg_temp.ms(format($$select count(*) from storage.objects where bucket_id = 'item-images' and name = %L$$,
+                                pg_temp.pa(:'orgA', :'iSrc', 'm6.png'))), '<', 1000,
+  'P2: ... in well under a second (another org''s rows are never scanned per row)');
+select cmp_ok(pg_temp.ms(format($$select count(*) from storage.objects where bucket_id = 'item-images' and name = %L$$,
+                                pg_temp.pa(:'orgA', :'iWh', 'm3.png'))), '<', 1000,
+  'P3: ... and a refused own-org object is refused as fast');
+select cmp_ok(pg_temp.ms($$select count(*) from public.rls_item_image_shared_paths()$$), '<', 1000,
+  'P4: ... and so is a direct call of the shared-file set (authenticated can execute it)');
+reset role;
 
 select * from finish();
 rollback;

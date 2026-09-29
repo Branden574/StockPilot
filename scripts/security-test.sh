@@ -374,11 +374,15 @@ PGTAP_TESTS=(
   # read, per persona (owner, admin, manager, all-warehouse auditor, staff,
   # charter-scoped staff, category and warehouse viewers, another org,
   # disabled, pending, anon; the service role still reads all). A duplicated
-  # item's shared file reads through the duplicate's row. Rows and objects are
-  # writable only for an item the caller can read and change, at a path that
-  # names it (or, for a row, another readable item of the org); never another
-  # org's item or folder, an unreadable item's object, a third shape, or a
-  # non-uuid folder (a plain refusal, not a cast error).
+  # item's shared file (master and thumbnail) reads through the duplicate's
+  # row, and the SECURITY DEFINER set behind that answers per caller, from the
+  # caller's own orgs only (another org's rows cannot slow it). Rows and
+  # objects are writable only for an item the caller can read and change, at a
+  # path that names it in its own org's folder (or, for a row, a path a
+  # readable row already carries: duplicates, duplicates of duplicates);
+  # never a new name in another item's folder, another org's item or folder,
+  # an unreadable item's object, a third shape, or a non-uuid folder (a plain
+  # refusal, not a cast error). The books cover upsert is pinned.
   supabase/tests/0381_item_images_item_scope.test.sql
 
   # Auth material and trusted writers.
