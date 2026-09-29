@@ -31,22 +31,24 @@ export const RELEASES: Release[] = [
     id: 'order-fix-holding-up-2026-10',
     revision: 1,
     // F2-3 (no migration). Held as a draft until the web order page's
-    // put-away links and approve-partial preview, the phone's (OTA), and the
-    // Demo Co production walk (SO-17 put-away, SO-21 approve partial) are
-    // done, as F2-1's and F2-2's were. The follow-up that publishes it sets the
-    // real publishedAt and re-reads these words against what shipped.
+    // put-away links and approve-partial preview (web build 97a6ea48f9ac),
+    // the phone's (OTA group 83d6a10f), and the Demo Co production walk
+    // (SO-17 put-away, SO-21 approve partial) were done, as F2-1's and F2-2's
+    // were. Published once all three were live and the walk passed; its words
+    // were re-read against what shipped (the walk's fixes: the order's own
+    // warehouse, View items, the moved-on and order-changed sentences).
     //
     // Addressed where Orders is on. Put away is offered on the full readiness
     // panel (core readinessAudience: approvers, pickers with items:update,
-    // buyers with purchase_orders:manage); its text says placing needs the
-    // Transfer stock permission, and the order says so to anyone without it.
-    // Approve partial and Resume fulfillment are for orders:approve, the
-    // permission both actions assert.
-    status: 'draft',
+    // buyers with purchase_orders:manage); its text names the Transfer stock
+    // and View items permissions Put away needs, and the order says which is
+    // missing to anyone without them. Approve partial and Resume fulfillment
+    // are for orders:approve, the permission both actions assert.
+    status: 'published',
     title: "Fix what's holding an order up",
     summary:
-      "On the web and in the mobile app, an order's readiness now opens the Staging list for just the items that must be put away before picking can take them. Approve partial and Resume fulfillment now show what they will hold before you confirm, and afterwards say what was held, including when stock changed in between.",
-    publishedAt: '2026-10-05T17:00:00Z',
+      "On the web and in the mobile app, an order's readiness now offers Put away, which opens the Staging list with just the items that must be put away before picking can take them. Approve partial and Resume fulfillment now show what they will hold before you confirm, and afterwards say what was held, including when stock changed in between.",
+    publishedAt: '2026-09-29T15:42:00Z',
     audience: { modules: ['orders'] },
     entries: [
       {
@@ -55,11 +57,11 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Put away what an order is waiting for, from the order',
         whatChanged:
-          "When items on an order are in Staging, where picking cannot take them, the order's readiness offers Put away on each of those lines, and above the lines one button for all of them, such as Put away 3 items. It opens the Staging list showing only those items, marked Showing items from SO-000123, with Show all and Back to the order. The mobile app opens its Staging list the same way from the order.",
+          "When an order needs stock that is still in Staging, where picking cannot take it, the order's readiness offers Put away on each of those lines, and above the lines one button for all of them, such as Put away 3 items. It opens the Staging list showing only those items, marked Showing items from SO-000123, with Show all and Back to the order. The mobile app opens its Staging list the same way from the order.",
         whyItMatters:
           "Stock received into Staging stops a pick until it is placed on a rack, and finding an order's items in a long Staging list meant searching for each one.",
         howItAffectsYou:
-          "Placing stock works as it always has and needs the Transfer stock permission; without it the order says so instead of offering Put away. The list shows the stock at the order's own warehouse, where its pick comes from, and says when stock at other warehouses was left out. It also shows the items' Unplaced stock, which picking can already take. Back on the order, choose Check again to see its readiness now.",
+          "Placing stock works as it always has and needs the Transfer stock permission, and opening the Staging list needs the View items permission; without them the order says which is missing instead of offering Put away. The list shows the stock at the order's own warehouse, where its pick comes from, and says when stock at other warehouses was left out. It also shows the items' Unplaced stock, which picking can already take. Back on the order, its readiness shows what you placed, and Check again reads it again at any time.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/orders', label: 'View orders' },
         audience: {
@@ -73,11 +75,11 @@ export const RELEASES: Release[] = [
         area: 'Orders',
         title: 'Approve partial and Resume fulfillment show what they will hold',
         whatChanged:
-          'Approve partial, on an order waiting for approval, and Resume fulfillment, on a backordered order, now show for each item how many units they will hold now and how many ship when they arrive, before you confirm. Afterwards the order says what was held, for example Approved. Holding 36 of 40 units.',
+          'Approve partial, on an order waiting for approval, and Resume fulfillment, on a backordered order, now show before you confirm how many units of each item they will hold now, such as Holds 36 of 40, and how many ship when they arrive. An item on several lines of the order is shown once, with its lines combined. After you confirm, it says what was held, in the same window on the web and in a message in the mobile app, for example Approved. Holding 36 of 40 units.',
         whyItMatters:
           'Both hold only what is free at the moment you confirm, and nothing showed how much that was until the order had been approved or resumed.',
         howItAffectsYou:
-          "What was held is read from the order after it is approved or resumed, never copied from the preview. If stock changed in between, it says so, for example Holding 34 of 40 units, 2 fewer than shown because stock changed after you looked. If the order's own lines changed in between, it says the order changed instead. An item on several lines of the order is shown once, with its lines combined.",
+          "What was held is read from the order after it is approved or resumed, never copied from the preview. If stock changed in between, it says so, for example Holding 34 of 40 units, 2 fewer than shown because stock changed after you looked. If the order's own lines changed in between, it says The order changed after you looked instead. If the order moved on first, such as when someone else approved or resumed it, the preview is cleared: Approve partial says This order is no longer waiting for approval, and Resume fulfillment says Only a backordered order can be resumed.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/orders', label: 'View orders' },
         audience: { anyPermission: ['orders:approve'], modules: ['orders'] },
@@ -88,12 +90,12 @@ export const RELEASES: Release[] = [
     id: 'small-fixes-2026-09',
     revision: 1,
     // Fixes from the 2026-09-28/29 walks (fix/small-walk-fixes, no migration).
-    // Held as a DRAFT until the phone update (OTA) carries the phone fixes and
-    // they are walked on the simulator: published with the web deploy alone,
-    // it would tell phone users about a greeting, buttons and fields their
-    // app does not have yet. The follow-up that publishes it sets the real
-    // publishedAt (after every release below it) and re-reads these words
-    // against what shipped, the keyboard entry's in particular.
+    // Held as a draft until the phone update (OTA group 83d6a10f) carried the
+    // phone fixes and they were walked on the simulator and in the Demo Co
+    // production walk; the web fixes went live with build 08974b535640.
+    // Published after F2-3's walk, just before F2-3's release. The keyboard
+    // entry says a field can be scrolled into view above the keyboard, what
+    // the iPad walk showed, not that the screen brings it there by itself.
     //
     // Addressed to everyone: the top bar, the greeting and the VoiceOver and
     // larger-target fixes are for every member. The pick and keyboard entries
@@ -102,11 +104,11 @@ export const RELEASES: Release[] = [
     // only field on an order's screen that takes typing, and only a picker is
     // offered it. The page titles entry is for every member; the unit count
     // entry for anyone who can open an order (every member, where Orders is on).
-    status: 'draft',
+    status: 'published',
     title: "The top bar fits small screens, and the mobile app's buttons and fields are easier to use",
     summary:
-      "On the web, the top bar now fits narrow screens, so your account button is never cut off, your account menu has Help & Learning, Support & feedback and the theme, and a page's title keeps its name or number beside its buttons. In the mobile app, Home greets you by the time of day, the top-bar buttons and the Add items steppers work with VoiceOver and are easier to tap, and the digital pick's quantity shows every digit at the largest text sizes and is no longer left under the keyboard.",
-    publishedAt: '2026-10-02T17:00:00Z',
+      "On the web, the top bar now fits narrow screens, so your account button is never cut off, your account menu has Help & Learning, Support & feedback and the theme, and a page's title keeps its name or number on a narrow screen. In the mobile app, Home greets you by the time of day, the top-bar buttons and the Add items steppers work with VoiceOver and are easier to tap, and the digital pick's quantity shows every digit at the largest text sizes and can be scrolled above the keyboard.",
+    publishedAt: '2026-09-29T15:41:00Z',
     entries: [
       {
         id: 'web-top-bar-fits',
@@ -114,11 +116,11 @@ export const RELEASES: Release[] = [
         area: 'Web app',
         title: 'The top bar fits narrow screens, with your account button always in view',
         whatChanged:
-          "On the web, the bar at the top of each page now fits its width. On a phone it shows the menu, the warehouse filter, notifications, What's new and your account button. With more room, such as beside the sidebar on a tablet, it adds search, and with more again Keyboard shortcuts, Help & Learning, Support & feedback and the theme switch. A long warehouse name is shortened to fit. Your account menu now also has Help & Learning, Support & feedback and the theme: Light, Dark or System, with the one in use marked. On Staging, the breadcrumb now reads Inventory / Staging.",
+          "On the web, the bar at the top of each page now fits its width. On a phone it shows the menu, the warehouse filter, notifications, What's new and your account button. With more room, such as beside the sidebar on a tablet, it adds search, then the breadcrumb, then Keyboard shortcuts, Help & Learning, Support & feedback and the theme switch. A long warehouse name is shortened to fit. Your account menu now also has Help & Learning, Support & feedback and the theme: Light, Dark or System, with the one in use marked. On Staging, the breadcrumb now reads Inventory / Staging.",
         whyItMatters:
-          "On a phone the account button was cut off at the right edge, and beside the sidebar on a tablet it was off the screen entirely, with the other buttons squeezed to half their size. The breadcrumb called Staging an item's page (Items / Detail), and did the same on Labels and Recurring purchase orders, which now have their own names.",
+          "On a phone the account button was cut off at the right edge, and beside the sidebar on a tablet it was off the screen entirely, with the other buttons squeezed to half their size. The breadcrumb called Staging and Labels an item's page (Items / Detail) and Recurring purchase orders a purchase order's page; each now has its own name.",
         howItAffectsYou:
-          'Where the bar has room for everything, as on most laptop and desktop screens, it is unchanged. Search stays in the bar wherever it was before. Where the bar leaves the rest out, Help & Learning, Support & feedback and the theme are in your account menu, and the ? key still opens Keyboard shortcuts. On a short screen, such as a phone held sideways, the account menu scrolls.',
+          'Where the bar has room for everything, as on most laptop and desktop screens, it is unchanged. Search stays in the bar wherever it was before. Where the bar leaves the rest out, Help & Learning, Support & feedback and the theme are in your account menu, and the ? key still opens Keyboard shortcuts. On a phone held upright the breadcrumb is left out; it had no room there before either. On a short screen, such as a phone held sideways, the account menu scrolls.',
         whatToDo: 'No action needed.',
       },
       {
@@ -142,7 +144,7 @@ export const RELEASES: Release[] = [
           'Home in the mobile app now says Good morning before noon, Good afternoon until 5 PM and Good evening after that, by the clock on your phone. It said Good morning at every hour.',
         whyItMatters: 'The greeting was fixed text, so it was wrong for most of the day.',
         howItAffectsYou:
-          'Only the greeting changed. It follows the time on your phone, and it is checked again whenever you come back to Home.',
+          'Only the greeting changed. It follows the time on your phone: it is checked again when you come back to Home or refresh it, and it changes by itself at noon, 5 PM and midnight while Home stays open.',
         whatToDo: 'Update the app when it offers the new version.',
       },
       {
@@ -151,7 +153,7 @@ export const RELEASES: Release[] = [
         area: 'Mobile app',
         title: 'Buttons in the mobile app work with VoiceOver and are easier to tap',
         whatChanged:
-          "In the mobile app, the icon buttons at the top of each screen, such as Back, Open menu, Notifications, Refresh, New item and Edit item, now say what they do to VoiceOver and have a 44-point touch area around the same icon. So do Home's profile picture (Account settings), the Back links on a cycle count, the AI count review and Bundles, and Done and Cancel on the counting cameras. On an order's Add items sheet, the plus and minus buttons name their item, for example Increase quantity of Blue Pens, and have 44-point touch areas.",
+          "In the mobile app, the icon buttons at the top of each screen, such as Back, Open menu, Notifications, Refresh, New item and Edit item, now say what they do to VoiceOver and have a 44-point touch area around the same icon. So do Home's profile picture (Account settings), the Back links on a cycle count, the AI count review and Bundles, Refresh on Bundles, and Done and Cancel on the counting cameras. On an order's Add items sheet, the plus and minus buttons name their item, for example Increase quantity of Blue Pens, and have 44-point touch areas.",
         whyItMatters:
           "Most of these buttons had no name, so VoiceOver could not say what they did, and every item's plus and minus buttons were read the same way. Most were also smaller than the 44 points Apple recommends.",
         howItAffectsYou:
@@ -164,9 +166,9 @@ export const RELEASES: Release[] = [
         area: 'Mobile app',
         title: "More of the mobile app's controls work with VoiceOver",
         whatChanged:
-          "In the mobile app, Maintenance's New, New item's Scan instead, the AI shelf scan's capture button (Capture photo) and the Staging list's All, Books and Items filters are now buttons to VoiceOver, and the X that closes What's New and a screen tour has a 44-point touch area.",
+          "In the mobile app, Maintenance's New, New item's Scan instead, the AI shelf scan's capture button (Capture photo) and the Staging list's All, Books and Items filters are now buttons to VoiceOver, with New read as New maintenance request and the filter in use read as selected, and the X that closes What's New and a screen tour has a 44-point touch area.",
         whyItMatters:
-          'VoiceOver read these as plain text, or found no name at all for the capture button, and the X could only be tapped within a small area around it.',
+          'VoiceOver read these as plain text, or found no name at all for the capture button, nothing said which Staging filter was on, and the X could only be tapped within a small area around it.',
         howItAffectsYou: 'They look the same and sit where they did.',
         whatToDo: 'Update the app when it offers the new version.',
       },
@@ -189,9 +191,9 @@ export const RELEASES: Release[] = [
         id: 'phone-order-screen-keyboard',
         category: 'fixed',
         area: 'Orders',
-        title: 'Fields on an order in the mobile app are no longer left under the keyboard',
+        title: 'A field low on an order in the mobile app can be scrolled above the keyboard',
         whatChanged:
-          'On an order in the mobile app, the screen now ends where the keyboard begins, so no field is left underneath it. A field near the bottom, such as a pick quantity, can be scrolled into view while you type.',
+          'On an order in the mobile app, the screen now ends where the keyboard begins, so a field near the bottom, such as a pick quantity, can be scrolled into view above the keyboard while you type.',
         whyItMatters:
           'On an iPad with the keyboard docked, a pick quantity near the bottom of an order could sit under the keyboard while you typed in it, and could not be scrolled above it.',
         howItAffectsYou: 'Nothing changes until the keyboard opens.',
