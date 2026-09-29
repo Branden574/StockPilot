@@ -31,13 +31,17 @@ import {
   isApparelAlphaSize,
   normalizeRackFields,
   groupKeyUsesColor,
+  isAttributeRequired,
+  isRequiredAttributeField,
   placementWarningMessage,
-  DEFAULT_SUBCATEGORY_PROFILES,
+  requiredAttributeProblems,
+  resolveSubcategoryProfile,
   type BulkCreateSizedVariantsInput,
   type CountingUnit,
   type CreateItemInput,
+  type RequiredAttributeField,
   type SportsAttribute,
-  type SportsSubcategoryKey,
+  type SubcategoryTrackingProfile,
 } from '@stockpilot/core';
 
 import { api } from './api';
@@ -201,8 +205,10 @@ export function buildCreateItemInput(form: ItemFormState): BuildResult<CreateIte
  * screen falls back to the narrow select.
  */
 export interface SportsCategoryFacts {
-  /** `categories.sports_subcategory_key` — the ONLY thing that makes a create sports-shaped. */
+  /** `categories.sports_subcategory_key` — with the jsonb profile below, what makes a create sports-shaped. */
   subcategoryKey: string | null;
+  /** `categories.tracking_profile`: a custom subcategory's own profile (the server reads it too). */
+  trackingProfile?: unknown;
   /** `categories.default_unit_of_measure`, then the parent's. */
   defaultUnitOfMeasure: string | null;
   parentDefaultUnitOfMeasure?: string | null;
@@ -262,10 +268,9 @@ export const EMPTY_SPORTS_GROUP_FIELDS: SportsGroupFieldValues = {
  */
 export function sportsGroupFieldsFor(
   subcategoryKey: string | null,
+  trackingProfile: unknown = null,
 ): { key: keyof SportsGroupFieldValues; label: string; placeholder: string }[] {
-  const profile = subcategoryKey
-    ? (DEFAULT_SUBCATEGORY_PROFILES[subcategoryKey as SportsSubcategoryKey] ?? null)
-    : null;
+  const profile = sportsProfileFor(subcategoryKey, trackingProfile);
   if (!profile) return [];
   const has = (attr: SportsAttribute) => profile.supportedAttributes.includes(attr);
   const fields: { key: keyof SportsGroupFieldValues; label: string; placeholder: string }[] = [];
@@ -285,19 +290,108 @@ export function sportsGroupFieldsFor(
 }
 
 /** True when this subcategory shows the home / away picker. */
-export function sportsShowsHomeAway(subcategoryKey: string | null): boolean {
-  const profile = subcategoryKey
-    ? (DEFAULT_SUBCATEGORY_PROFILES[subcategoryKey as SportsSubcategoryKey] ?? null)
-    : null;
-  return profile?.supportedAttributes.includes('home_away') ?? false;
+export function sportsShowsHomeAway(
+  subcategoryKey: string | null,
+  trackingProfile: unknown = null,
+): boolean {
+  return (
+    sportsProfileFor(subcategoryKey, trackingProfile)?.supportedAttributes.includes('home_away') ??
+    false
+  );
 }
 
 /** The subcategory's display name ('Shoes'), for the section heading. */
-export function sportsProfileLabelFor(subcategoryKey: string | null): string {
-  const profile = subcategoryKey
-    ? (DEFAULT_SUBCATEGORY_PROFILES[subcategoryKey as SportsSubcategoryKey] ?? null)
-    : null;
-  return profile?.label ?? '';
+export function sportsProfileLabelFor(
+  subcategoryKey: string | null,
+  trackingProfile: unknown = null,
+): string {
+  return sportsProfileFor(subcategoryKey, trackingProfile)?.label ?? '';
+}
+
+/**
+ * The profile a category resolves to, by the SERVER's own rule (core
+ * `resolveSubcategoryProfile`): the built-in profile for its
+ * `sports_subcategory_key`, else the category's own `tracking_profile`. This
+ * screen used to read the built-in table alone, so a custom subcategory showed
+ * nothing while the server enforced its required attributes.
+ */
+export function sportsProfileFor(
+  subcategoryKey: string | null,
+  trackingProfile: unknown = null,
+): SubcategoryTrackingProfile | null {
+  return resolveSubcategoryProfile(subcategoryKey, trackingProfile);
+}
+
+/**
+ * Which variant inputs a create MUST show so its required attributes can be
+ * given (2026-09-29: a Jersey create refused "A size is required" with no size
+ * box on screen). A size run answers the size itself (one row per size) and
+ * cannot carry a size system (the category's scale supplies it, server-side),
+ * so only a required jersey number is asked for on that path.
+ */
+export function sportsRequiredInputs(
+  profile: SubcategoryTrackingProfile | null,
+  opts: { sizeRun: boolean },
+): { size: boolean; sizeSystem: boolean; jerseyNumber: boolean } {
+  return {
+    size: !opts.sizeRun && isAttributeRequired(profile, 'size'),
+    sizeSystem: !opts.sizeRun && isAttributeRequired(profile, 'size_system'),
+    jerseyNumber: isAttributeRequired(profile, 'jersey_number'),
+  };
+}
+
+const REQUIRED_FIELD_LABELS: Record<RequiredAttributeField, string> = {
+  variantSize: 'Size',
+  variantSizeSystem: 'Size system',
+  jerseyNumber: 'Jersey number',
+};
+
+/**
+ * The alert for a create the server would refuse for a missing required
+ * attribute, or null. The SAME core rule the server runs
+ * (`requiredAttributeProblems`), asked before the request so the person is told
+ * which field to fill instead of reading a refusal after the round trip.
+ *
+ * `scaleSystemKnown: false` (the scale's system could not be read) leaves the
+ * size-system question to the server, which reads the scale itself: the phone
+ * must never be stricter than the server because a read failed.
+ */
+export function sportsRequirementAlert(
+  profile: SubcategoryTrackingProfile | null,
+  values: { variantSize?: string | null; variantSizeSystem?: string | null; jerseyNumber?: string | null },
+  opts: { sizeRun: boolean; scaleSizeSystem: string | null; scaleSystemKnown: boolean },
+): { title: string; body: string; field: RequiredAttributeField } | null {
+  const problem = requiredAttributeProblems(profile, values, {
+    sizeRun: opts.sizeRun,
+    scaleSizeSystem: opts.scaleSizeSystem,
+    // A single-item create on the phone has no size chips to offer: the
+    // screen only takes that path when the category has no size run.
+    sizeRunAvailable: opts.sizeRun,
+  }).find((p) => opts.scaleSystemKnown || p.attribute !== 'size_system');
+  if (!problem) return null;
+  return {
+    title: `${REQUIRED_FIELD_LABELS[problem.field]} required`,
+    body: problem.message,
+    field: problem.field,
+  };
+}
+
+/**
+ * The alert for a refused save. A required-attribute refusal carries the field
+ * in `details.field` (the server's assertVariantAttributesValid), so its title
+ * names the box to fill; anything else keeps the old "Could not add".
+ * Duck-typed on `details` rather than `instanceof ApiError` so it holds for any
+ * error shape the api client raises.
+ */
+export function saveErrorAlert(e: unknown): { title: string; body: string } {
+  const body = e instanceof Error ? e.message : 'Unknown error';
+  const details = (e as { details?: unknown } | null)?.details;
+  const field =
+    details && typeof details === 'object' ? (details as { field?: unknown }).field : undefined;
+  if (isRequiredAttributeField(field)) {
+    return { title: `${REQUIRED_FIELD_LABELS[field]} required`, body };
+  }
+  return { title: 'Could not add', body };
 }
 
 /**
@@ -342,10 +436,10 @@ export function buildSportsGroupPayload(input: {
   groupId?: string | null;
 }): { groupId?: string | null; productGroup?: CreateItemInput['productGroup'] } {
   if (input.groupId) return { groupId: input.groupId };
-  const key = input.category?.subcategoryKey ?? null;
-  const profile = key
-    ? (DEFAULT_SUBCATEGORY_PROFILES[key as SportsSubcategoryKey] ?? null)
-    : null;
+  const profile = sportsProfileFor(
+    input.category?.subcategoryKey ?? null,
+    input.category?.trackingProfile ?? null,
+  );
   if (!profile) return {};
   const name = input.itemName.trim();
   // The group is named after the item, so a nameless item has no group to name.
@@ -428,6 +522,9 @@ export function buildSizedVariantsInput(
     customFields: Object.keys(form.customFields).length > 0 ? form.customFields : undefined,
     groupId: form.groupId,
     productGroup: form.productGroup,
+    // Shared by the whole run, exactly as the web form sends it (a number is
+    // worn in M and in XL). Unset on every screen that shows no number box.
+    jerseyNumber: form.jerseyNumber,
     variants,
   });
   if (!parsed.success) return firstIssue(parsed.error);
@@ -675,6 +772,7 @@ const FIELD_LABELS: Record<string, string> = {
   customFields: 'Custom fields',
   variants: 'Sizes',
   variantSize: 'Size',
+  variantSizeSystem: 'Size system',
   jerseyNumber: 'Jersey number',
   playerName: 'Player name',
 };

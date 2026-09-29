@@ -15,8 +15,12 @@ import {
   deriveRackFields,
   describeFailure,
   placementAlertFor,
+  saveErrorAlert,
   sizeOptionsFromScale,
   sportsGroupFieldsFor,
+  sportsProfileFor,
+  sportsRequirementAlert,
+  sportsRequiredInputs,
   sportsProfileLabelFor,
   sportsShowsHomeAway,
   submitCreateItem,
@@ -1062,5 +1066,148 @@ describe('placementAlertFor — the create screens must interrupt when stock mis
     expect(alert?.body).toBe(
       placementWarningMessage('Item created', { rackName: '9-C', count: 4 }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-09-29, L4L: a Jersey create was refused "A size is required for this
+// product." on web. The phone asks the SAME core rule before it sends, shows
+// the inputs a single-item create needs, and names the field in its alerts.
+// ---------------------------------------------------------------------------
+
+const CUSTOM_PROFILE = {
+  key: 'custom_singlets',
+  label: 'Singlets',
+  defaultMode: 'QUANTITY_BY_VARIANT',
+  allowedModes: ['QUANTITY_BY_VARIANT'],
+  supportedAttributes: ['team', 'size', 'jersey_number'],
+  requiredAttributes: ['jersey_number'],
+  defaultCountingUnit: 'each',
+  supportsNumbers: true,
+  supportsSizes: true,
+  supportsColors: false,
+  individualTrackingAllowed: false,
+};
+
+describe('sportsProfileFor — the server rule, on the phone', () => {
+  it('reads the built-in profile, else the category jsonb profile', () => {
+    expect(sportsProfileFor('jerseys', null)?.label).toBe('Jerseys');
+    expect(sportsProfileFor('custom_singlets', CUSTOM_PROFILE)?.label).toBe('Singlets');
+    expect(sportsProfileFor(null, null)).toBeNull();
+  });
+
+  it('drives the group inputs from a custom profile too', () => {
+    expect(sportsGroupFieldsFor('custom_singlets', CUSTOM_PROFILE).map((f) => f.key)).toEqual([
+      'team',
+    ]);
+    expect(sportsProfileLabelFor('custom_singlets', CUSTOM_PROFILE)).toBe('Singlets');
+  });
+});
+
+describe('sportsRequiredInputs — which variant inputs a phone create must show', () => {
+  const jerseys = sportsProfileFor('jerseys', null);
+  const shoes = sportsProfileFor('shoes', null);
+
+  it('shows Size (and Size system for shoes) on a single-item create', () => {
+    expect(sportsRequiredInputs(jerseys, { sizeRun: false })).toEqual({
+      size: true,
+      sizeSystem: false,
+      jerseyNumber: false,
+    });
+    expect(sportsRequiredInputs(shoes, { sizeRun: false })).toEqual({
+      size: true,
+      sizeSystem: true,
+      jerseyNumber: false,
+    });
+  });
+
+  it('shows nothing for a size run, whose rows carry the size and whose scale carries the system', () => {
+    expect(sportsRequiredInputs(shoes, { sizeRun: true })).toEqual({
+      size: false,
+      sizeSystem: false,
+      jerseyNumber: false,
+    });
+  });
+
+  it('shows a required jersey number on either path', () => {
+    const custom = sportsProfileFor('custom_singlets', CUSTOM_PROFILE);
+    expect(sportsRequiredInputs(custom, { sizeRun: true }).jerseyNumber).toBe(true);
+    expect(sportsRequiredInputs(null, { sizeRun: false })).toEqual({
+      size: false,
+      sizeSystem: false,
+      jerseyNumber: false,
+    });
+  });
+});
+
+describe('sportsRequirementAlert — refused before the request, naming the field', () => {
+  const jerseys = sportsProfileFor('jerseys', null);
+  const shoes = sportsProfileFor('shoes', null);
+  const known = (scaleSizeSystem: string | null) => ({ scaleSizeSystem, scaleSystemKnown: true });
+
+  it('names a missing Jersey size on a single-item create (no size chips to offer)', () => {
+    expect(
+      sportsRequirementAlert(jerseys, { variantSize: '  ' }, { sizeRun: false, ...known(null) }),
+    ).toEqual({
+      title: 'Size required',
+      body: 'Size is required for Jerseys: enter a size.',
+      field: 'variantSize',
+    });
+  });
+
+  it('is satisfied by a typed size, or by a size run', () => {
+    expect(
+      sportsRequirementAlert(jerseys, { variantSize: 'M' }, { sizeRun: false, ...known(null) }),
+    ).toBeNull();
+    expect(sportsRequirementAlert(jerseys, {}, { sizeRun: true, ...known(null) })).toBeNull();
+  });
+
+  it("lets the category's scale supply a shoe's size system, and asks when it sets none", () => {
+    expect(
+      sportsRequirementAlert(shoes, { variantSize: '10' }, { sizeRun: false, ...known('US_MENS') }),
+    ).toBeNull();
+    expect(
+      sportsRequirementAlert(shoes, { variantSize: '10' }, { sizeRun: false, ...known(null) }),
+    ).toMatchObject({ title: 'Size system required', field: 'variantSizeSystem' });
+  });
+
+  it('leaves the size-system question to the server when the scale could not be read', () => {
+    expect(
+      sportsRequirementAlert(
+        shoes,
+        { variantSize: '10' },
+        { sizeRun: false, scaleSizeSystem: null, scaleSystemKnown: false },
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('saveErrorAlert — a server refusal names its field', () => {
+  it('titles a required-attribute refusal by the field', () => {
+    const e = Object.assign(new Error('Size is required for Jerseys: enter a size.'), {
+      details: { code: 'SHOE_SIZE_REQUIRED', field: 'variantSize' },
+    });
+    expect(saveErrorAlert(e)).toEqual({
+      title: 'Size required',
+      body: 'Size is required for Jerseys: enter a size.',
+    });
+  });
+
+  it('keeps the generic title for anything else', () => {
+    expect(saveErrorAlert(new Error('Network down'))).toEqual({
+      title: 'Could not add',
+      body: 'Network down',
+    });
+    expect(saveErrorAlert('nope')).toEqual({ title: 'Could not add', body: 'Unknown error' });
+  });
+});
+
+describe('buildSizedVariantsInput — a run carries its shared jersey number', () => {
+  it('forwards the number, as the web form does', () => {
+    const res = buildSizedVariantsInput(
+      { ...BASE_FORM, categoryId: CAT, jerseyNumber: '07' },
+      [{ size: 'M', quantity: 1 }],
+    );
+    expect(res.ok && res.input.jerseyNumber).toBe('07');
   });
 });

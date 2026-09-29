@@ -17,7 +17,13 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { itemPhotoPath, randomPhotoFileBase } from '@stockpilot/core';
+import {
+  itemPhotoPath,
+  randomPhotoFileBase,
+  SIZE_SYSTEM_LABELS,
+  SIZE_SYSTEMS,
+  sizePlaceholder,
+} from '@stockpilot/core';
 
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, FieldLabel, Mono } from '@/components/ui/text';
@@ -39,6 +45,10 @@ import {
   type SportsGroupFieldValues,
   sizeOptionsFromScale,
   placementAlertFor,
+  saveErrorAlert,
+  sportsProfileFor,
+  sportsRequiredInputs,
+  sportsRequirementAlert,
   submitCreateItem,
   submitSizedVariants,
   type ItemFormState,
@@ -311,6 +321,8 @@ export default function NewItem() {
       /** 0294. Non-null is what makes a create SPORTS-shaped; null everywhere else. */
       sports_subcategory_key: string | null;
       default_unit_of_measure: string | null;
+      /** 0294. A custom subcategory's own profile; read by the server's rule. */
+      tracking_profile: unknown;
     }[]
   >([]);
   const [suppliers, setSuppliers] = React.useState<{ id: string; name: string }[]>([]);
@@ -365,6 +377,20 @@ export default function NewItem() {
     EMPTY_SPORTS_GROUP_FIELDS,
   );
 
+  // Variant attributes the category REQUIRES on a single-item create
+  // (2026-09-29: a Jersey create was refused "A size is required" with no size
+  // box anywhere on the screen). Cleared whenever the category changes, so a
+  // size typed for Jerseys never rides along on a plain item.
+  const [variantSize, setVariantSize] = React.useState('');
+  const [variantSizeSystem, setVariantSizeSystem] = React.useState<string | null>(null);
+  const [jerseyNumber, setJerseyNumber] = React.useState('');
+  function chooseCategory(id: string | null) {
+    setCategoryId(id);
+    setVariantSize('');
+    setVariantSizeSystem(null);
+    setJerseyNumber('');
+  }
+
   // Photos staged in-memory. Each entry holds the local URI + extension;
   // they upload after the inventory_items row is created (the storage
   // path needs the new item id).
@@ -387,17 +413,24 @@ export default function NewItem() {
   const sportsSubcategoryKey = isBook
     ? null
     : (selectedCategory?.sports_subcategory_key ?? null);
+  // The category's own profile too (a custom subcategory), read by the server's
+  // rule — the same one that decides what a save is refused for.
+  const sportsTrackingProfile = isBook ? null : (selectedCategory?.tracking_profile ?? null);
+  const sportsProfile = React.useMemo(
+    () => sportsProfileFor(sportsSubcategoryKey, sportsTrackingProfile),
+    [sportsSubcategoryKey, sportsTrackingProfile],
+  );
   const sportsGroupFieldDefs = React.useMemo(
-    () => sportsGroupFieldsFor(sportsSubcategoryKey),
-    [sportsSubcategoryKey],
+    () => sportsGroupFieldsFor(sportsSubcategoryKey, sportsTrackingProfile),
+    [sportsSubcategoryKey, sportsTrackingProfile],
   );
   const sportsHomeAway = React.useMemo(
-    () => sportsShowsHomeAway(sportsSubcategoryKey),
-    [sportsSubcategoryKey],
+    () => sportsShowsHomeAway(sportsSubcategoryKey, sportsTrackingProfile),
+    [sportsSubcategoryKey, sportsTrackingProfile],
   );
   const sportsProfileLabel = React.useMemo(
-    () => sportsProfileLabelFor(sportsSubcategoryKey).toUpperCase(),
-    [sportsSubcategoryKey],
+    () => sportsProfileLabelFor(sportsSubcategoryKey, sportsTrackingProfile).toUpperCase(),
+    [sportsSubcategoryKey, sportsTrackingProfile],
   );
 
   const sizesEnabled = !isBook && (selectedCategory?.supports_sizes ?? false);
@@ -406,6 +439,51 @@ export default function NewItem() {
   // ON HAND box back) instead of stranding the user on a Create button that can
   // only ever say "pick a size".
   const variantsEnabled = sizesEnabled && sizeOptions.length > 0;
+
+  // ── What the category requires ───────────────────────────────────────────
+  // The scale the SERVER checks against (the category's own, else its
+  // parent's) and that scale's size system, which fills an omitted one on save.
+  const requirementScaleId =
+    selectedCategory?.size_scale_id ??
+    categories.find((c) => c.id === selectedCategory?.parent_id)?.size_scale_id ??
+    null;
+  const [scaleSystemRead, setScaleSystemRead] = React.useState<{
+    scaleId: string;
+    system: string | null;
+    known: boolean;
+  } | null>(null);
+  React.useEffect(() => {
+    if (!requirementScaleId || !sportsProfile) return;
+    let cancelled = false;
+    void Promise.resolve(
+      supabase.from('size_scales').select('size_system').eq('id', requirementScaleId).maybeSingle(),
+    )
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        setScaleSystemRead({
+          scaleId: requirementScaleId,
+          system: (data as { size_system: string | null } | null)?.size_system ?? null,
+          // A failed read is UNKNOWN, never "no system": the size-system
+          // question is then left to the server, which reads the scale itself.
+          known: !error,
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setScaleSystemRead({ scaleId: requirementScaleId, system: null, known: false });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [requirementScaleId, sportsProfile]);
+  const scaleRead = scaleSystemRead?.scaleId === requirementScaleId ? scaleSystemRead : null;
+  const scaleSizeSystem = scaleRead?.system ?? null;
+  const scaleSystemKnown = !requirementScaleId || (scaleRead?.known ?? false);
+  // Which variant inputs this create must show. While the size scale is still
+  // loading the path is not decided yet, so nothing extra flashes on screen.
+  const requiredInputs = sportsRequiredInputs(sportsProfile, {
+    sizeRun: variantsEnabled || sizesLoading,
+  });
+  const sizeExample = sizePlaceholder({ profile: sportsProfile, sizeSystem: scaleSizeSystem });
 
   /**
    * The category list, with each category's size scale when the database has
@@ -427,6 +505,7 @@ export default function NewItem() {
       parent_id?: string | null;
       sports_subcategory_key?: string | null;
       default_unit_of_measure?: string | null;
+      tracking_profile?: unknown;
     };
     const run = (columns: string) =>
       supabase
@@ -435,11 +514,12 @@ export default function NewItem() {
         .eq('organization_id', org)
         .is('deleted_at', null)
         .order('name', { ascending: true });
-    // `sports_subcategory_key` and `default_unit_of_measure` arrive with 0294
-    // alongside `size_scale_id`, so they ride the SAME widened select and the
-    // SAME fallback — one extra column set, not a second round trip.
+    // `sports_subcategory_key`, `default_unit_of_measure` and `tracking_profile`
+    // arrive with 0294 alongside `size_scale_id`, so they ride the SAME widened
+    // select and the SAME fallback — one extra column set, not a second round
+    // trip.
     let resp = await run(
-      'id, name, supports_sizes, size_scale_id, parent_id, sports_subcategory_key, default_unit_of_measure',
+      'id, name, supports_sizes, size_scale_id, parent_id, sports_subcategory_key, default_unit_of_measure, tracking_profile',
     );
     if (resp.error) resp = await run('id, name, supports_sizes');
     return ((resp.data ?? []) as unknown as Row[]).map((r) => ({
@@ -450,6 +530,7 @@ export default function NewItem() {
       parent_id: r.parent_id ?? null,
       sports_subcategory_key: r.sports_subcategory_key ?? null,
       default_unit_of_measure: r.default_unit_of_measure ?? null,
+      tracking_profile: r.tracking_profile ?? null,
     }));
   }, []);
 
@@ -662,6 +743,7 @@ export default function NewItem() {
       category: selectedCategory
         ? {
             subcategoryKey: selectedCategory.sports_subcategory_key,
+            trackingProfile: selectedCategory.tracking_profile,
             defaultUnitOfMeasure: selectedCategory.default_unit_of_measure,
             parentDefaultUnitOfMeasure:
               categories.find((c) => c.id === selectedCategory.parent_id)
@@ -692,6 +774,12 @@ export default function NewItem() {
       unitOfMeasure,
       itemType,
       customFields: {},
+      // Only what the screen is SHOWING. A value typed for the previous
+      // category is already cleared (chooseCategory); this also keeps a
+      // hidden box from ever reaching the server.
+      ...(requiredInputs.size ? { variantSize } : {}),
+      ...(requiredInputs.sizeSystem ? { variantSizeSystem } : {}),
+      ...(requiredInputs.jerseyNumber ? { jerseyNumber } : {}),
     };
   }
 
@@ -760,6 +848,17 @@ export default function NewItem() {
           );
           return;
         }
+        // The category's required attributes, by the server's own rule, asked
+        // BEFORE the request so the alert can say which field to fill.
+        const runRequirement = sportsRequirementAlert(sportsProfile, form, {
+          sizeRun: true,
+          scaleSizeSystem,
+          scaleSystemKnown,
+        });
+        if (runRequirement) {
+          Alert.alert(runRequirement.title, runRequirement.body);
+          return;
+        }
         const checked = buildSizedVariantsInput(form, variants);
         if (!checked.ok) {
           Alert.alert('Check the form', describeFailure(checked));
@@ -801,6 +900,15 @@ export default function NewItem() {
       // No adjust_stock call afterwards: the server writes the `initial`
       // stock movement inside create(), so calling the RPC from here would
       // double-count the opening quantity.
+      const singleRequirement = sportsRequirementAlert(sportsProfile, form, {
+        sizeRun: false,
+        scaleSizeSystem,
+        scaleSystemKnown,
+      });
+      if (singleRequirement) {
+        Alert.alert(singleRequirement.title, singleRequirement.body);
+        return;
+      }
       const checked = buildCreateItemInput(form);
       if (!checked.ok) {
         Alert.alert('Check the form', describeFailure(checked));
@@ -833,7 +941,9 @@ export default function NewItem() {
       }
       router.replace({ pathname: '/item/[id]', params: { id } });
     } catch (e) {
-      Alert.alert('Could not add', e instanceof Error ? e.message : 'Unknown error');
+      // A required-attribute refusal names its field in the title.
+      const failed = saveErrorAlert(e);
+      Alert.alert(failed.title, failed.body);
     } finally {
       setBusy(false);
     }
@@ -984,7 +1094,7 @@ export default function NewItem() {
             label="CATEGORY"
             options={categories}
             valueId={categoryId}
-            onChange={setCategoryId}
+            onChange={chooseCategory}
           />
 
           <ChipPickerField
@@ -1197,6 +1307,80 @@ export default function NewItem() {
                   </View>
                 </>
               )}
+            </>
+          ) : null}
+
+          {/*
+            REQUIRED VARIANT ATTRIBUTES. Only what the category's profile
+            requires, and only where this path can carry it: a size run answers
+            the size itself (one row per size) and takes its size system from
+            the category's scale, so on that path only a required jersey number
+            appears. The same rule refuses the save if one is left empty.
+          */}
+          {requiredInputs.size || requiredInputs.sizeSystem || requiredInputs.jerseyNumber ? (
+            <>
+              <SectionLabel>{sportsProfileLabel} VARIANT</SectionLabel>
+              <Mono size={11} tracking={0.04} color={c.ink4} style={{ marginTop: 4 }}>
+                Required for {sportsProfile?.label ?? 'this category'}.
+              </Mono>
+              {requiredInputs.size ? (
+                <Field label="SIZE">
+                  <TextInput
+                    value={variantSize}
+                    onChangeText={setVariantSize}
+                    placeholder={`e.g. ${sizeExample}`}
+                    placeholderTextColor={c.ink4}
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                    spellCheck={false}
+                    accessibilityLabel="Size, required"
+                    style={[styles.input, { color: c.ink, borderColor: c.hair }]}
+                  />
+                </Field>
+              ) : null}
+              {requiredInputs.sizeSystem ? (
+                <Field label="SIZE SYSTEM">
+                  <View style={styles.chipRow}>
+                    {SIZE_SYSTEMS.map((sys) => {
+                      const selected = variantSizeSystem === sys;
+                      return (
+                        <Pressable
+                          key={sys}
+                          onPress={() => setVariantSizeSystem(selected ? null : sys)}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected }}
+                          style={({ pressed }) => [
+                            styles.chip,
+                            {
+                              borderColor: selected ? c.ink : c.hair,
+                              backgroundColor: selected ? c.card : 'transparent',
+                              opacity: pressed ? 0.8 : 1,
+                            },
+                          ]}
+                        >
+                          <Body size={13} color={c.ink} style={{ fontFamily: FONT.display }}>
+                            {SIZE_SYSTEM_LABELS[sys]}
+                          </Body>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </Field>
+              ) : null}
+              {requiredInputs.jerseyNumber ? (
+                <Field label="JERSEY NUMBER">
+                  <TextInput
+                    value={jerseyNumber}
+                    onChangeText={setJerseyNumber}
+                    placeholder="e.g. 07"
+                    placeholderTextColor={c.ink4}
+                    keyboardType="number-pad"
+                    maxLength={4}
+                    accessibilityLabel="Jersey number, required"
+                    style={[styles.input, { color: c.ink, borderColor: c.hair }]}
+                  />
+                </Field>
+              ) : null}
             </>
           ) : null}
 
