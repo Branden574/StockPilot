@@ -44,6 +44,15 @@ export const BOOK_PDF_ROW_PADDING_PT = 4;
 export const BOOK_PDF_COVER_BOX_PT = { width: 36, height: 54 } as const;
 export const BOOK_PDF_HEADER_FONT_SIZE_PT = 8;
 export const BOOK_PDF_HEADER_LETTER_SPACING_PT = 0.4;
+/** The summary box: three equal metrics side by side. A figure is printed
+ *  alone at this size with its words ("copies requested") on a smaller line
+ *  below, so a five-digit total never wraps and splits a word
+ *  ("request-ed"). */
+export const BOOK_PDF_METRIC_VALUE_FONT_SIZE_PT = 15;
+export const BOOK_PDF_METRIC_UNIT_FONT_SIZE_PT = 8;
+export const BOOK_PDF_METRIC_PADDING_PT = 8;
+/** Hairlines around and between the three metrics. */
+export const BOOK_PDF_METRIC_BORDER_PT = 0.5;
 /** Longest title printed in full; longer ones are cut with an ellipsis so a
  *  row stays within about three lines. */
 export const BOOK_PDF_TITLE_MAX_CHARS = 160;
@@ -103,14 +112,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     marginTop: 10,
     marginBottom: 8,
-    borderWidth: 0.5,
+    borderWidth: BOOK_PDF_METRIC_BORDER_PT,
     borderColor: PDF_COLORS.lineStrong,
     borderStyle: 'solid',
     borderRadius: 3,
   },
-  metric: { flexGrow: 1, flexBasis: 0, padding: 8 },
+  metric: { flexGrow: 1, flexBasis: 0, padding: BOOK_PDF_METRIC_PADDING_PT },
   metricDivider: {
-    borderLeftWidth: 0.5,
+    borderLeftWidth: BOOK_PDF_METRIC_BORDER_PT,
     borderLeftColor: PDF_COLORS.line,
     borderLeftStyle: 'solid',
   },
@@ -121,7 +130,13 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.4,
   },
-  metricValue: { fontSize: 15, fontFamily: 'Helvetica-Bold', color: PDF_COLORS.ink, marginTop: 3 },
+  metricValue: {
+    fontSize: BOOK_PDF_METRIC_VALUE_FONT_SIZE_PT,
+    fontFamily: 'Helvetica-Bold',
+    color: PDF_COLORS.ink,
+    marginTop: 3,
+  },
+  metricUnit: { fontSize: BOOK_PDF_METRIC_UNIT_FONT_SIZE_PT, color: PDF_COLORS.ink2, marginTop: 1 },
   metricDefinition: { fontSize: 7, color: PDF_COLORS.ink3, marginTop: 3 },
   note: { fontSize: 8, color: PDF_COLORS.ink3, marginBottom: 2 },
   table: {
@@ -293,11 +308,21 @@ function BookRow({ item, columns }: { item: BookPdfRow; columns: BookPdfColumn[]
 export function BookOrderTotalsPdf(props: BookOrderTotalsPdfProps) {
   const columns = bookPdfColumns(props.photos);
   const generated = formatReportDateTime(props.generatedAtLocal);
-  const metrics = [
+  const copies = formatReportQuantity(props.summary.copies);
+  const metrics: {
+    key: string;
+    label: string;
+    definition: string;
+    value: string;
+    unit?: string;
+  }[] = [
     {
       key: 'copies',
       ...BOOK_REPORT_METRICS.copies,
-      value: copiesRequestedText(props.summary.copies),
+      value: copies,
+      // 'copies requested' (or 'copy requested'), the same words the page's
+      // card prints beside the figure.
+      unit: copiesRequestedText(props.summary.copies).slice(copies.length + 1),
     },
     {
       key: 'entries',
@@ -348,6 +373,7 @@ export function BookOrderTotalsPdf(props: BookOrderTotalsPdfProps) {
             >
               <Text style={styles.metricLabel}>{m.label}</Text>
               <Text style={styles.metricValue}>{m.value}</Text>
+              {m.unit ? <Text style={styles.metricUnit}>{m.unit}</Text> : null}
               <Text style={styles.metricDefinition}>{m.definition}</Text>
             </View>
           ))}

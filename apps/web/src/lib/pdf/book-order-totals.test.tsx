@@ -9,6 +9,10 @@ import { bookReportPdfCoverNote, type BookReportRow } from '@stockpilot/core';
 import {
   BOOK_PDF_CONTENT_WIDTH_PT,
   BOOK_PDF_HEADER_FONT_SIZE_PT,
+  BOOK_PDF_METRIC_BORDER_PT,
+  BOOK_PDF_METRIC_PADDING_PT,
+  BOOK_PDF_METRIC_UNIT_FONT_SIZE_PT,
+  BOOK_PDF_METRIC_VALUE_FONT_SIZE_PT,
   BOOK_PDF_HEADER_LETTER_SPACING_PT,
   BOOK_PDF_ROW_PADDING_PT,
   BOOK_PDF_TITLE_MAX_CHARS,
@@ -132,7 +136,9 @@ describe('BookOrderTotalsPdf structure', () => {
     );
     const all = texts(tree);
     expect(all).toContain('Total books ordered');
-    expect(all).toContain('34 copies requested');
+    // The figure alone, its words on their own line (as the page's card).
+    expect(all).toContain('34');
+    expect(all).toContain('copies requested');
     expect(all).toContain(
       'Copies requested through Orders; not copies purchased or current stock.',
     );
@@ -189,6 +195,46 @@ describe('Book Order Totals PDF headers fit', () => {
       }
     });
   }
+});
+
+describe('Book Order Totals PDF summary box', () => {
+  // Three equal metrics inside one hairline box. A figure that does not fit
+  // its box on one line wraps, and react-pdf hyphenates the words: an
+  // 18,790 total printed as "18,790 copies request-" / "ed" (seen in the
+  // local e2e export, 2026-09-28). The figure is therefore printed alone and
+  // must fit for any total the report can reach.
+  const box =
+    (BOOK_PDF_CONTENT_WIDTH_PT - BOOK_PDF_METRIC_BORDER_PT * 4) / 3 -
+    BOOK_PDF_METRIC_PADDING_PT * 2;
+  it('a nine-digit total with decimals fits its box on one line', () => {
+    const shown = '123,456,789.1234';
+    expect(
+      width(shown, 'Helvetica-Bold', BOOK_PDF_METRIC_VALUE_FONT_SIZE_PT),
+      `"${shown}" needs more than ${box.toFixed(1)}pt`,
+    ).toBeLessThanOrEqual(box);
+    expect(
+      width('copies requested', 'Helvetica', BOOK_PDF_METRIC_UNIT_FONT_SIZE_PT),
+    ).toBeLessThanOrEqual(box);
+  });
+  it('prints the figure and its words as separate lines, never one long value', () => {
+    const tree = BookOrderTotalsPdf(
+      props({ summary: { copies: '18790', entries: 1151, orders: 1500 } }),
+    );
+    const all = texts(tree);
+    expect(all).toContain('18,790');
+    expect(all).toContain('copies requested');
+    expect(all).not.toContain('18,790 copies requested');
+    expect(all).toContain('1,151');
+    expect(all).toContain('1,500');
+    expect(all).toContain(
+      'Grand total: 18,790 copies requested in 1,500 orders · 1,151 book entries.',
+    );
+  });
+  it('one copy reads "copy requested"', () => {
+    expect(
+      texts(BookOrderTotalsPdf(props({ summary: { copies: '1', entries: 1, orders: 1 } }))),
+    ).toContain('copy requested');
+  });
 });
 
 describe('Book Order Totals PDF render', () => {
