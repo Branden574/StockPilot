@@ -272,9 +272,9 @@ comment on function public.item_image_row_path_ok(uuid, uuid, text) is
 --   1. only the caller's orgs' rows (rls_member_org_ids, a tiny hashed set),
 --      so another tenant's photo rows cost a hash probe each, never a scope
 --      check: any signed-in user can create an org and file rows in it;
---   2. only rows with a path outside their own item folder (duplicates'
---      shared files), behind a MATERIALIZED fence so the planner cannot push
---      the scope check below it;
+--   2. only rows whose master is outside their own item folder
+--      (duplicates' shared files), behind a MATERIALIZED fence so the
+--      planner cannot push the scope check below it;
 --   3. the caller's read scope on the row's item, written inline as
 --      inventory_items_select's predicate against 0229's hashed sets (built
 --      once per statement), the same predicate caller_can_read_item (0361)
@@ -292,25 +292,33 @@ security definer
 set search_path = public
 rows 50
 as $$
-  -- "In the row's own item folder" is "the row's item id first appears at
-  -- character 38 or 44": the item folder of {org}/{item}/{file} starts at
-  -- 38 and of {org}/items/{item}/{file} at 44 (a 36-character org id, then
-  -- "/" or "/items/"), and a uuid cannot start at the other offset of
-  -- either shape (it would have to contain "/" or start with "items").
-  -- Exact for both photo shapes, where a bare "contains the id" test missed
-  -- a foreign file whose NAME contains the row's item id; one strpos per
-  -- path, measured as cheap as that test ("/" || id || "/" cost ~1 us a row
-  -- more). Master AND thumbnail: every path a readable row carries must be
-  -- readable, because item_image_row_path_ok lets a writer copy any such
-  -- path into a new row (a carried path its readers could not read would be
-  -- revealed by the copy). pgTAP 0381 I1-I8 pin this per persona.
+  -- Every path a readable row carries must be readable, because
+  -- item_image_row_path_ok lets a writer copy any such path into a new row
+  -- (a carried path its readers could not read would be revealed by the
+  -- copy); pgTAP 0381 I1-I8 pin this per persona. So:
+  --   * "in the row's own item folder" is "the row's item id first appears
+  --     at character 38 or 44": the item folder of {org}/{item}/{file}
+  --     starts at 38 and of {org}/items/{item}/{file} at 44 (a 36-character
+  --     org id, then "/" or "/items/"), and a uuid cannot start at the other
+  --     offset of either shape (it would have to contain "/" or start with
+  --     "items"). Exact for both photo shapes; a bare "contains the id" test
+  --     missed a foreign file whose NAME contains the row's item id.
+  --   * only the master is tested here: a thumbnail must sit in its
+  --     master's item folder (item_images_insert/_update, section 4), so a
+  --     row whose master is its own has its own thumbnail, and a row whose
+  --     master is foreign contributes both through the lateral below.
+  --   * the test is written as `(case ... end) = 1`, an equality the planner
+  --     estimates at its default 0.5%: `not in (38, 44)` (or `(x in (..)) =
+  --     false`, which it rewrites to that) is estimated to keep nearly every
+  --     row, and the planner then hashes every item the caller can read
+  --     instead of probing the few shared rows' items by key (measured 3.7
+  --     against 2.0 ms at 6,400 rows).
   with shared_rows as materialized (
     select ii.item_id, ii.organization_id, ii.storage_path, ii.thumb_path
       from public.item_images ii
      where ii.organization_id in (select public.rls_member_org_ids())
-       and (strpos(ii.storage_path, ii.item_id::text) not in (38, 44)
-            or (ii.thumb_path is not null
-                and strpos(ii.thumb_path, ii.item_id::text) not in (38, 44)))
+       and (case when strpos(ii.storage_path, ii.item_id::text) in (38, 44)
+                 then 0 else 1 end) = 1
   )
   select p.path
     from shared_rows s
@@ -382,13 +390,20 @@ drop policy if exists item_images_insert on public.item_images;
 drop policy if exists item_images_update on public.item_images;
 drop policy if exists item_images_delete on public.item_images;
 
+-- A thumbnail sits in its master's item folder (every writer puts it there:
+-- the web uploader, the thumb backfill, duplicate_inventory_item's copy;
+-- production 2026-09-29: 559 of 559). Section 3 relies on it: a row whose
+-- master is its own then never carries a foreign thumbnail its readers
+-- could not read.
 create policy item_images_insert on public.item_images
   for insert to authenticated
   with check (
     public.item_image_item_writable(organization_id, item_id)
     and public.item_image_row_path_ok(organization_id, item_id, storage_path)
     and (thumb_path is null
-         or public.item_image_row_path_ok(organization_id, item_id, thumb_path)));
+         or (public.item_image_row_path_ok(organization_id, item_id, thumb_path)
+             and public.item_image_path_item_id(thumb_path)
+                 = public.item_image_path_item_id(storage_path))));
 
 create policy item_images_update on public.item_images
   for update to authenticated
@@ -397,7 +412,9 @@ create policy item_images_update on public.item_images
     public.item_image_item_writable(organization_id, item_id)
     and public.item_image_row_path_ok(organization_id, item_id, storage_path)
     and (thumb_path is null
-         or public.item_image_row_path_ok(organization_id, item_id, thumb_path)));
+         or (public.item_image_row_path_ok(organization_id, item_id, thumb_path)
+             and public.item_image_path_item_id(thumb_path)
+                 = public.item_image_path_item_id(storage_path))));
 
 create policy item_images_delete on public.item_images
   for delete to authenticated
@@ -406,7 +423,7 @@ create policy item_images_delete on public.item_images
 comment on policy item_images_insert on public.item_images is
   'Only for an item the caller can read and change, with paths in the org''s '
   'folder naming that item (or already carried by a readable photo row of the '
-  'org: duplicates) (0381).';
+  'org: duplicates), the thumbnail in its master''s item folder (0381).';
 comment on policy item_images_update on public.item_images is
   'Only rows of an item the caller can read and change, and the new row obeys '
   'item_images_insert''s rule (0381).';

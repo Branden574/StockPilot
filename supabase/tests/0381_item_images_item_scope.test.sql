@@ -45,8 +45,10 @@
 --    caller_can_read_item).
 -- I. Soundness of the row rule: for every persona, every stored file a photo
 --    row they can read carries is a file they can read (so copying a carried
---    path into a new row can never reveal one), including a foreign thumbnail
---    on an own-folder row and a foreign name containing the row's item id.
+--    path into a new row can never reveal one), including a foreign file
+--    whose name contains the row's item id; a thumbnail must sit in its
+--    master's item folder (W35, W36), so a readable row cannot carry a
+--    foreign thumbnail beside its own master.
 -- P. Cost: another org's shared-shape photo rows do not slow the caller's
 --    reads (20,000 planted in org B; the per-row check made that ~4 s).
 --
@@ -55,7 +57,7 @@
 
 begin;
 
-select plan(120);
+select plan(122);
 
 \set orgA    03810000-0000-0000-0000-00000000000a
 \set orgB    03810000-0000-0000-0000-00000000000b
@@ -391,6 +393,12 @@ select is(pg_temp.n(format($$insert into public.item_images (organization_id, it
 select is(pg_temp.n(format($$insert into public.item_images (organization_id, item_id, storage_path) values (%L, %L, %L)$$,
                            :'orgA', :'iIn', :'orgA' || '/' || :'iBookIn' || '/cover.jpg')), 'ERROR 42501',
   'W29: ... nor a books-import cover name of another item that no row carries (rehostCover overwrites that name in place)');
+select is(pg_temp.n(format($$insert into public.item_images (organization_id, item_id, storage_path, thumb_path) values (%L, %L, %L, %L)$$,
+                           :'orgA', :'iIn', pg_temp.pa(:'orgA', :'iIn', 'w35.png'), pg_temp.pa(:'orgA', :'iCat', 'm2.png'))), 'ERROR 42501',
+  'W35: a row''s thumbnail must sit in its master''s item folder, even when the thumbnail is a path a readable row carries');
+select is(pg_temp.n(format($$update public.item_images set thumb_path = %L where item_id = %L and storage_path = %L$$,
+                           pg_temp.pa(:'orgA', :'iCat', 'm2.png'), :'iIn', pg_temp.pa(:'orgA', :'iIn', 'm1.png'))), 'ERROR 42501',
+  'W36: ... and an update cannot move it out');
 select is(pg_temp.n(format($$insert into public.item_images (organization_id, item_id, storage_path) values (%L, %L, %L)$$,
                            :'orgA', :'iWh', pg_temp.pa(:'orgA', :'iWh', 'w4.jpg'))), 'ERROR 42501',
   'W4: staff cannot add a photo row to another warehouse''s item');
@@ -655,14 +663,14 @@ select is(
   'true:search_path=public:false:true',
   'C10: the shared-file set is the one SECURITY DEFINER helper: pinned search_path, closed to anon (the policy needs authenticated)');
 select is(
-  pg_temp.q($$select (p.prosrc ~* 'materialized')::text || ':' ||
+  pg_temp.q($$select (p.prosrc ~* 'materialized' and p.prosrc ~ 'in \(38, 44\)\s+then 0 else 1 end\)\s*=\s*1')::text || ':' ||
                      (p.prosrc ~ 'organization_id\s+in\s+\(select\s+public\.rls_member_org_ids\(\)\)')::text || ':' ||
                      (p.prosrc ~ 'auth\.uid\(\)')::text || ':' ||
                      (p.prosrc !~ 'caller_can_read_item')::text
                 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
                where n.nspname = 'public' and p.proname = 'rls_item_image_shared_paths'$$),
   'true:true:true:true',
-  'C11: the shared-file set scans only the caller''s orgs'' rows behind a MATERIALIZED fence, answers only with auth.uid(), and makes no per-row SECURITY DEFINER call');
+  'C11: the shared-file set scans only the caller''s orgs'' rows behind a MATERIALIZED fence with an equality filter (so the planner probes items by key), answers only with auth.uid(), and makes no per-row SECURITY DEFINER call');
 select is(
   pg_temp.q($$select coalesce(string_agg(f, ' ' order by f), '(none)')
                 from (select distinct m[1] as f
@@ -690,17 +698,16 @@ select is(
 -- The row write rule accepts a path "already carried by a photo row the
 -- caller can read", which is sound only if every such path is readable to
 -- that caller; otherwise a reader could copy an unreadable path into a new
--- row of their own item and read it through the shared-file branch. Two row
--- shapes no app writer produces, planted as the superuser: a row whose master
--- is in its own folder but whose THUMBNAIL is another item's, and a row whose
--- foreign file's NAME contains the row's own item id. Then, for each persona,
--- nothing a readable row carries may be unreadable. Rolled back afterwards.
+-- row of their own item and read it through the shared-file branch. A row
+-- whose thumbnail is another item's while its master is its own can no
+-- longer be written (W35, W36); the other shape no app writer produces is a
+-- foreign file whose NAME contains the row's own item id, planted here as
+-- the superuser. Then, for each persona, nothing a readable row carries may
+-- be unreadable. Rolled back afterwards.
 savepoint carried;
 insert into storage.objects (bucket_id, name) values
-  ('item-images', pg_temp.pa(:'orgA', :'iIn', 'x1.png')),
   ('item-images', pg_temp.pa(:'orgA', :'iWh', :'iIn' || '.png'));
 insert into public.item_images (organization_id, item_id, storage_path, thumb_path, is_primary, sort_order) values
-  (:'orgA', :'iIn', pg_temp.pa(:'orgA', :'iIn', 'x1.png'), pg_temp.pa(:'orgA', :'iWh', 'm3-thumb.webp'), false, 5),
   (:'orgA', :'iIn', pg_temp.pa(:'orgA', :'iWh', :'iIn' || '.png'), null, false, 6);
 create temp table sec_objs as
   select name from storage.objects where bucket_id = 'item-images' and name like '0381%';
@@ -717,10 +724,10 @@ create function pg_temp.carried_unreadable() returns text language sql as $$
 set local role authenticated;
 set local "request.jwt.claim.sub" to :'stf';
 select is(pg_temp.carried_unreadable(), '(none)',
-  'I1: staff of Main can read every stored file a row they can read carries (a foreign thumbnail on an own-folder row; a foreign name containing their item''s id)');
-select is(pg_temp.q(format($$select count(*)::text from storage.objects where bucket_id = 'item-images' and name in (%L, %L)$$,
-                           pg_temp.pa(:'orgA', :'iWh', 'm3-thumb.webp'), pg_temp.pa(:'orgA', :'iWh', :'iIn' || '.png'))), '2',
-  'I2: ... so the phone can sign that row''s thumbnail and master');
+  'I1: staff of Main can read every stored file a row they can read carries (including a foreign file whose name contains their item''s id)');
+select is(pg_temp.q(format($$select count(*)::text from storage.objects where bucket_id = 'item-images' and name = %L$$,
+                           pg_temp.pa(:'orgA', :'iWh', :'iIn' || '.png'))), '1',
+  'I2: ... so the phone can sign that row''s photo');
 set local "request.jwt.claim.sub" to :'stfC';
 select is(pg_temp.carried_unreadable(), '(none)', 'I3: the same for charter-scoped staff');
 set local "request.jwt.claim.sub" to :'stfA2';
