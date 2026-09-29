@@ -391,6 +391,67 @@ describe('Exception detail page', () => {
     );
   });
 
+  // Review 2026-09-29: Recount was the filled button while the card said to
+  // wait for the linked recount; pressing it then only links that count.
+  it('Recount is filled on an open count difference, and outline while a linked recount is in progress', async () => {
+    get.mockResolvedValue(detail({ ...VARIANCE, canRecount: true }));
+    const { unmount } = await renderPage();
+    expect(within(screen.getByTestId('count-variance-clears')).getByTestId('recount-button')).toHaveAttribute(
+      'data-variant',
+      'default',
+    );
+    unmount();
+    get.mockResolvedValue(
+      detail({
+        ...VARIANCE,
+        canRecount: true,
+        recount: {
+          cycleCountId: 'cc-2',
+          countNumber: 2,
+          status: 'in_progress',
+          completedAt: null,
+          outcome: { kind: 'in_progress', counted: 1, total: 3 },
+        },
+      }),
+    );
+    await renderPage();
+    expect(within(screen.getByTestId('count-variance-clears')).getByTestId('recount-button')).toHaveAttribute(
+      'data-variant',
+      'outline',
+    );
+  });
+
+  // Review 2026-09-29: the Acknowledge help told a manager to recount while
+  // the card, for the same row, said the next check would update it.
+  it('a posted recount being checked: the card and the Acknowledge step both say the next check', async () => {
+    get.mockResolvedValue(
+      detail({
+        ...VARIANCE,
+        canRecount: true,
+        recount: {
+          cycleCountId: 'cc-2',
+          countNumber: 2,
+          status: 'completed',
+          completedAt: '2026-09-24T18:30:00Z',
+          outcome: { kind: 'matched', quantity: 21 },
+        },
+      }),
+    );
+    await renderPage();
+    const next = 'A newer count of this item was posted and is being checked. This updates at the next check, within 15 minutes.';
+    expect(screen.getByTestId('count-variance-clears')).toHaveTextContent(next);
+    expect(
+      screen.getByText(
+        `CC-000001 found 21 where 20 was on record, and posting it changed the stock on record by +1. Acknowledging tells others this is being looked at. It does not clear this exception. ${next}`,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/To close it, count it once more with Recount\./)).not.toBeInTheDocument();
+    expect(within(screen.getByTestId('count-variance-clears')).getByTestId('recount-button')).toHaveAttribute(
+      'data-variant',
+      'outline',
+    );
+  });
+
   // ── Count differences: what clears them (owner decision 2026-09-29) ──────
 
   it('a count difference says what clears it at the top, above the facts, and not again at the bottom', async () => {

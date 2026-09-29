@@ -94,7 +94,9 @@ export const RELEASES: Release[] = [
     // the top of the page, and the Acknowledge step's help. Nothing about
     // confirming a count: that is release 2's note (count-confirm-2026-10).
     // Addressed to readers of exceptions where Cycle Counts is on: count
-    // differences come only from posted counts.
+    // differences come only from posted counts. Most of them cannot start a
+    // recount (viewers, staff without cycle_counts:assign), so the entry says
+    // a manager starts it, as the page itself does.
     status: 'draft',
     title: 'Count differences say what clears them',
     summary:
@@ -107,7 +109,7 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: 'A count difference says what clears it',
         whatChanged:
-          'Each count difference now reads, for example, CC-000035 found 2 where 100 was on record (-98), and its page says at the top what clears it: a later count that matches the stock on record, which you can start with Recount. The Acknowledge step says that acknowledging does not clear it.',
+          'Each count difference now reads, for example, CC-000035 found 2 where 100 was on record (-98), and its page says at the top what clears it: a later count that matches the stock on record, which a manager can start with Recount. The Acknowledge step says that acknowledging does not clear it.',
         whyItMatters:
           'The old wording read "on record 100" after the count had already changed the stock on record, and acknowledging looked like the way to close the exception.',
         howItAffectsYou:

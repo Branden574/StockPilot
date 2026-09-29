@@ -110,9 +110,10 @@ describe('exception detail: Recount', () => {
     expect(detail).toContain('{o.canRecount ? (');
     expect(detail).toContain('recountUnavailableCopy(o.recountUnavailableReason)');
     expect(detail).toContain('const showRecount = isRecountableRule(o.rule) && !countVariance && !resolved;');
-    // In the top section: Recount on the server's canRecount, and why not
-    // from core (view.clear.recountLine).
-    expect(detail).toContain('{occurrence.canRecount ? (');
+    // In the top section: Recount on core's offerRecount (the server's
+    // canRecount, except once the item can no longer be counted), and why
+    // not from core (view.clear.recountLine).
+    expect(detail).toContain('{view.clear.offerRecount ? (');
     expect(detail).toContain('{view.clear.recountLine}');
   });
 

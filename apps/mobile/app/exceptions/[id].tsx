@@ -885,10 +885,14 @@ function historyReason(copy: string | null): string {
  * WHAT CLEARS THIS for an open count difference, directly under the header:
  * core's lead and what clears it for this reader, who counted and posted it,
  * the linked recount (tap to open the count), then Confirm this count (only
- * when the server offers it; filled) and Recount (outline beside Confirm,
- * filled otherwise), what a count covers or why this reader cannot recount,
- * and why Confirm is withheld. Both buttons are 52 pt blocks; offline each
- * stays on screen, disabled, with the reason read by VoiceOver as its hint.
+ * when the server offers it; filled) and Recount, what a count covers or why
+ * this reader cannot recount, and why Confirm is withheld. Whether Recount
+ * shows and how much weight it has are core's (offerRecount,
+ * recountEmphasis), as on the web: filled only where it is the reader's way
+ * to clear the row, outline beside Confirm and while the row settles by
+ * itself, and hidden once the item can no longer be counted. Both buttons are
+ * 52 pt blocks; offline each stays on screen, disabled, with the reason read
+ * by VoiceOver as its hint.
  */
 function CountVarianceClears({
   view,
@@ -929,7 +933,7 @@ function CountVarianceClears({
             {activeRecountCopy(occurrence.recount)}
           </Body>
         </Pressable>
-      ) : occurrence.canRecount ? (
+      ) : view.clear.offerRecount ? (
         <Body size={14} muted>
           {RECOUNT_NONE_LINKED_COPY}
         </Body>
@@ -945,10 +949,10 @@ function CountVarianceClears({
           {CONFIRM_COUNT_LABEL}
         </Button>
       ) : null}
-      {occurrence.canRecount ? (
+      {view.clear.offerRecount ? (
         <Button
           block
-          variant={view.clear.offerConfirm ? 'outline' : 'primary'}
+          variant={view.clear.recountEmphasis}
           disabled={recountReason !== null}
           accessibilityHint={recountReason ?? undefined}
           onPress={onRecount}
@@ -961,7 +965,7 @@ function CountVarianceClears({
           {view.clear.recountLine}
         </Body>
       ) : null}
-      {recountReason ? (
+      {view.clear.offerRecount && recountReason ? (
         <Body size={13} muted>
           {recountReason}
         </Body>

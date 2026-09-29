@@ -1904,7 +1904,11 @@ describe('count differences say what clears them (release 1) is held as a draft'
     }).detail;
     expect(example).toBe('CC-000035 found 2 where 100 was on record (-98)');
     expect(text).toContain(`for example, ${example}, and its page says at the top what clears it`);
-    expect(text).toContain('a later count that matches the stock on record, which you can start with Recount');
+    // Review 2026-09-29: the audience is every reader of exceptions (most
+    // L4L members are viewers), and only a manager who may assign counts
+    // sees Recount; the page tells everyone else who to ask.
+    expect(text).toContain('a later count that matches the stock on record, which a manager can start with Recount');
+    expect(text).not.toMatch(/which you can start/);
     expect(text).toContain('the Acknowledge step says that acknowledging does not');
     expect(text).toContain('Nothing changes in when these exceptions are raised or cleared.');
     // Release 2 introduces confirming: nothing here may promise it.

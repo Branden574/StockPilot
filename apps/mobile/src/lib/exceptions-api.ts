@@ -1,4 +1,5 @@
 import {
+  confirmUnavailableCopy,
   describeConfirmError,
   EXCEPTION_ACT_RESOLVED_COPY,
   EXCEPTION_CONFIRM_OFFLINE_COPY,
@@ -692,6 +693,13 @@ export function describeConfirmCountError(
   if (status === 409 || (status === 403 && reason === 'not_counter')) {
     return describeConfirmError(reason, { surface: 'phone', ...ctx });
   }
+  // A 404 that is not our JSON (no `error` code) is a server without the
+  // confirm route, such as a web rollback while this phone still holds the
+  // block: nothing was written and the exception is still there. After a
+  // pull-down the block is gone and Confirm with it.
+  if (status === 404 && !(isObj(e) && typeof e.code === 'string' && e.code !== '')) {
+    return describeConfirmError(null, { surface: 'phone', ...ctx });
+  }
   if (status === null) {
     // No answer at all: the phone's one sentence for it, unless it is one of
     // the app's own (the timeout, an answer it could not read).
@@ -889,7 +897,7 @@ export function exceptionSheetSubmit(input: {
   if (input.mode === 'confirm_count') {
     if (input.resolved) return { enabled: false, reason: EXCEPTION_ACT_RESOLVED_COPY };
     if (input.canConfirm !== true) {
-      return { enabled: false, reason: input.confirmUnavailable ?? 'This count cannot be confirmed right now.' };
+      return { enabled: false, reason: input.confirmUnavailable ?? confirmUnavailableCopy('phone') };
     }
     if (!input.online) return { enabled: false, reason: EXCEPTION_CONFIRM_OFFLINE_COPY };
   } else {

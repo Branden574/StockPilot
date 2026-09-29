@@ -77,9 +77,23 @@ describe('exception screen: a count difference opens with what clears it', () =>
     expect(top).toContain('RECOUNT_NONE_LINKED_COPY');
     expect(top).toContain('{view.clear.recountLine}');
     expect(top).toContain('{view.clear.reason}');
-    // Recount is filled when Confirm is not offered, outline beside it.
-    expect(top).toContain("variant={view.clear.offerConfirm ? 'outline' : 'primary'}");
+    // Review 2026-09-29: Recount's weight is core's. Filled only where it is
+    // the reader's way to clear the row; outline beside Confirm and while the
+    // row settles by itself (a linked recount in progress, the next check).
+    expect(top).toContain('variant={view.clear.recountEmphasis}');
+    expect(top).not.toContain("variant={view.clear.offerConfirm ? 'outline' : 'primary'}");
     expect(top).toContain('disabled={recountReason !== null}');
+  });
+
+  // Review 2026-09-29: the server's canRecount does not ask whether the item
+  // can still be counted, and a recount skips one that cannot (0372). The
+  // section showed Recount under "This item can no longer be counted".
+  it('Recount, "no recount is linked" and the offline reason follow core\'s offerRecount, not canRecount', () => {
+    const top = component(detail, 'CountVarianceClears');
+    expect(top).toContain('{view.clear.offerRecount ? (');
+    expect(top).toContain(') : view.clear.offerRecount ? (');
+    expect(top).toContain('{view.clear.offerRecount && recountReason ? (');
+    expect(top).not.toContain('occurrence.canRecount');
   });
 
   // Mutation caught: Confirm rendered without the server's yes.
@@ -194,5 +208,43 @@ describe('the Acknowledge / Add note / Confirm this count sheet', () => {
     expect(sheet).toContain('accessibilityRole="alert"');
     expect(sheet).toContain('AccessibilityInfo.announceForAccessibility(error)');
     expect(sheet).toMatch(/function requestClose\(\) \{\s+if \(submitting\) return;\s+onClose\(\);/);
+  });
+
+  // Review 2026-09-29: Android's back button called onClose directly, so it
+  // could dismiss a confirm under way and lose a refusal.
+  it('the system back gesture follows the same rule: never while a request is under way', () => {
+    expect(sheet).toContain('onRequestClose={requestCloseIfIdle}');
+    expect(sheet).not.toContain('onRequestClose={onClose}');
+    expect(sheet).toMatch(/function requestCloseIfIdle\(\) \{\s+if \(busyRef\.current\) return;\s+onClose\(\);/);
+    // The flag is set with the state, and cleared for every new opening.
+    expect(sheet).toMatch(/function setBusy\(value: boolean\) \{\s+busyRef\.current = value;\s+setSubmitting\(value\);/);
+    expect(sheet).not.toMatch(/(?<!function )setSubmitting\((true|false)\)/);
+    expect(sheet).toMatch(/React\.useEffect\(\(\) => \{\s+busyRef\.current = false;\s+\}, \[busyRef\]\);/);
+  });
+
+  // Review 2026-09-29: the body was a fixed 420 pt, so on a small iPhone at
+  // AX5, or with the keyboard up, the sheet ran off the top and took the
+  // title, Close and the numbers with it.
+  it('fits the screen: the sheet never taller than the space above the keyboard, the body scrolls, the title is capped', () => {
+    expect(sheet).not.toContain('maxHeight: 420');
+    expect(sheet).toContain('const { height } = useWindowDimensions();');
+    expect(sheet).toContain('const insets = useSafeAreaInsets();');
+    expect(sheet).toContain('onLayout={(e) => setAvailableHeight(e.nativeEvent.layout.height)}');
+    expect(sheet).toMatch(
+      /exceptionSheetLayout\(\{\s+windowHeight: height,\s+availableHeight,\s+topInset: insets\.top,\s+\}\)/,
+    );
+    expect(sheet).toContain('{ backgroundColor: c.card, maxHeight: layout.sheetMaxHeight }');
+    expect(sheet).toContain('style={{ maxHeight: layout.bodyMaxHeight, flexShrink: 1 }}');
+    expect(sheet).toContain('const TITLE_CAP = capTo(16, TYPE_CEILING.display);');
+    expect(sheet).toContain('maxFontSizeMultiplier={TITLE_CAP}');
+    // Sending puts the keyboard away, so the answer (a refusal) has room.
+    expect(sheet).toMatch(/if \(!submitState\.enabled\) return;\s+Keyboard\.dismiss\(\);/);
+  });
+
+  it('every word in confirm mode is core\'s, even once the server stopped offering it', () => {
+    expect(sheet).toContain('(dialog?.notePlaceholder ?? CONFIRM_COUNT_NOTE_PLACEHOLDER)');
+    expect(sheet).toContain('{CONFIRM_COUNT_CLOSE_LABEL}');
+    expect(sheet).not.toContain("?? 'How you checked'");
+    expect(sheet).not.toMatch(/>\s*Close\s*</);
   });
 });

@@ -27,8 +27,12 @@ import {
  * itself, and what a count covers or why this reader cannot start one.
  *
  * `countConfirm` is the server's block; this release never sends one, so the
- * words are the recount-only ones and nothing here offers Confirm. Recount is
- * then the filled button, since it is the one action that closes it.
+ * words are the recount-only ones and nothing here offers Confirm. Whether
+ * Recount shows, and whether it is the filled button, is core's too
+ * (offerRecount, recountEmphasis): filled only where it is this reader's way
+ * to clear the row, outline beside Confirm and while the row settles by
+ * itself (a linked recount in progress, a posted one being checked), and
+ * hidden once the item can no longer be counted.
  *
  * Server-safe (no 'use client'): the page renders it, and RecountButton is its
  * own client component (recurring pattern #8).
@@ -71,16 +75,16 @@ export function CountVarianceClearCard({
               {activeRecountCopy(o.recount)}
             </Link>
           </p>
-        ) : o.canRecount ? (
+        ) : copy.offerRecount ? (
           <p className="text-muted-foreground">{RECOUNT_NONE_LINKED_COPY}</p>
         ) : null}
-        {o.canRecount ? (
+        {copy.offerRecount ? (
           <div className="flex flex-wrap gap-2">
             <RecountButton
               occurrenceId={o.id}
               reference={o.reference}
               timeZone={timeZone}
-              variant={copy.offerConfirm ? 'outline' : 'default'}
+              variant={copy.recountEmphasis === 'primary' ? 'default' : 'outline'}
               size="default"
               className="pointer-coarse:min-h-11"
             />

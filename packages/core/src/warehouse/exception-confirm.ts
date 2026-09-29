@@ -299,18 +299,65 @@ export const COUNT_VARIANCE_CLEARS_TITLE = 'What clears this';
 export const CONFIRM_COUNT_LABEL = 'Confirm this count';
 export const CONFIRM_COUNT_INSTEAD_LABEL = 'Confirm this count instead';
 export const EXCEPTION_CONFIRM_OFFLINE_COPY = 'You are offline. Confirming a count needs a connection.';
+/** The confirmation step's note placeholder, also shown by a sheet whose
+ *  confirm the server stopped offering. */
+export const CONFIRM_COUNT_NOTE_PLACEHOLDER = 'How you checked, for example counted twice on the floor';
+/** The one button of a confirm sheet whose confirm the server stopped
+ *  offering while it was open: nothing is left to confirm. */
+export const CONFIRM_COUNT_CLOSE_LABEL = 'Close';
 const ACK = 'Acknowledging does not clear this.';
 const MODULE_OFF =
   'Cycle Counts is turned off for this organization, so it cannot be recounted until it is turned on again.';
 const RECHECKING = `A newer count of this item was posted and is being checked. This updates at the next check, within ${EXCEPTION_SYNC_INTERVAL_MINUTES} minutes.`;
 const NOT_COUNTABLE = 'This item can no longer be counted, so this exception closes at the next check.';
+/** The counter, when the act gate refuses them (no stock:adjust, or no write
+ *  access to the item's live warehouse, or an item with no warehouse). */
+const COUNTER_NOT_PERMITTED =
+  'You counted it, but you cannot change stock for this item, so only a manager can confirm this count.';
 
 type Surface = 'web' | 'phone';
 
-function unavailableCopy(surface: Surface): string {
+/** Confirming could not be worked out or is refused for a reason this build
+ *  does not know: try again after a fresh read. */
+export function confirmUnavailableCopy(surface: Surface): string {
   return surface === 'phone'
     ? 'Confirming is unavailable right now. Pull down to try again.'
     : 'Confirming is unavailable right now. Reload to try again.';
+}
+
+/**
+ * The state the words follow: the server's (countConfirm) with the feature
+ * on; with it off, what the displayed state already tells (a linked recount
+ * in progress, or a posted one being checked), else null. The top card, the
+ * Acknowledge help and the Recount button all read this, so they never give
+ * different advice on the same row.
+ */
+function wordedStateOf(
+  displayed: Pick<OccurrenceState, 'kind'>,
+  c: Pick<CountConfirmBlock, 'state'> | null,
+): CountConfirmState | null {
+  if (c) return c.state;
+  if (displayed.kind === 'recount_in_progress') return 'recount_in_progress';
+  if (displayed.kind === 'rechecking') return 'rechecking';
+  return null;
+}
+
+/** States in which the row settles by itself (a recount or another count
+ *  being posted, or the next check): Recount is not the way to clear it. */
+const SETTLES_BY_ITSELF: readonly CountConfirmState[] = [
+  'recount_in_progress',
+  'count_in_progress',
+  'rechecking',
+  'count_changed',
+];
+
+/** Another count in progress recorded a different number (count_in_progress). */
+function otherCountSentence(other: { countNumber: number | null; counted: number } | null): string {
+  if (!other) {
+    return 'Another count in progress has already recorded a different number for this item. When it is posted, this exception shows its numbers.';
+  }
+  const ref = formatCycleCountNumber(other.countNumber);
+  return `${ref ?? 'Another count'}, which is in progress, has already recorded ${formatStockQuantity(other.counted)} for this item. When it is posted, this exception shows its numbers.`;
 }
 
 /** Whether this reader can start a recount, or why not. */
@@ -400,10 +447,13 @@ export interface CountVarianceClearInput {
   canRecount: boolean;
   recountUnavailableReason: RecountUnavailableReason | null;
   /** The server's countConfirm block; null when the feature is off. */
-  confirm: Pick<
-    CountConfirmBlock,
-    'state' | 'canConfirm' | 'unavailableReason' | 'onRecordNow' | 'countedBy' | 'postedBy' | 'otherCount'
-  > | null;
+  confirm:
+    | (Pick<
+        CountConfirmBlock,
+        'state' | 'canConfirm' | 'unavailableReason' | 'onRecordNow' | 'countedBy' | 'postedBy' | 'otherCount'
+      > &
+        Partial<Pick<CountConfirmBlock, 'readerIsCounter'>>)
+    | null;
   /** The phone's live network state (default online): offline, Confirm stays
    *  on screen, disabled, with the reason. */
   online?: boolean;
@@ -421,8 +471,17 @@ export interface CountVarianceClearCopy {
   /** "Counted by X, posted by Y." (feature on only). */
   who: string | null;
   /** The line under Recount: what a count covers, or why this reader cannot
-   *  start one when `options` does not already say so; null otherwise. */
+   *  start one when `options` does not already say so; null otherwise (and
+   *  always null once the item can no longer be counted). */
   recountLine: string | null;
+  /** Show Recount: the server's canRecount, except once the item can no
+   *  longer be counted (a recount skips it; 0372 not_countable). */
+  offerRecount: boolean;
+  /** Recount's weight: 'primary' (the filled button) only when it is this
+   *  reader's way to clear the row; 'outline' beside Confirm, and while the
+   *  row settles by itself (a recount or another count in progress, or the
+   *  next check), when pressing it would only link the count under way. */
+  recountEmphasis: 'primary' | 'outline';
   /** Show Confirm this count (the server's canConfirm, on a confirmable row). */
   offerConfirm: boolean;
   /** Why the offered Confirm is disabled (offline), or null. */
@@ -494,11 +553,17 @@ export function countVarianceClearCopy(input: CountVarianceClearInput): CountVar
           }
           if (!online) reason = EXCEPTION_CONFIRM_OFFLINE_COPY;
         } else {
-          const who = counterLabel ? `${counterLabel}, who counted it, or a manager` : 'a manager';
+          // The counter the act gate refuses is never named to themselves
+          // in the third person: only a manager can confirm it now, and the
+          // reason says why.
+          const counterRefused = c.readerIsCounter === true && c.unavailableReason === 'not_permitted';
+          const who =
+            counterLabel && !counterRefused ? `${counterLabel}, who counted it, or a manager` : 'a manager';
           const what = counted === null ? 'the counted number is right' : `${counted} is right`;
           const orRecount = ability === 'module_disabled' ? '' : ', or when a recount matches the stock on record';
           options = sentences(`It clears when ${who} confirms that ${what}${orRecount}.`, ack);
           if (c.unavailableReason === 'not_counter') reason = notCounterReason(counterLabel);
+          else if (counterRefused) reason = COUNTER_NOT_PERMITTED;
         }
         break;
       }
@@ -507,14 +572,8 @@ export function countVarianceClearCopy(input: CountVarianceClearInput): CountVar
         if (confirmCanAct) reason = recountInProgressReason(r);
         break;
       case 'count_in_progress': {
-        const other = c.otherCount;
-        const otherRef = formatCycleCountNumber(other?.countNumber ?? null);
-        options = sentences(
-          other
-            ? `${otherRef ?? 'Another count'}, which is in progress, has already recorded ${formatStockQuantity(other.counted)} for this item. When it is posted, this exception shows its numbers.`
-            : 'Another count in progress has already recorded a different number for this item. When it is posted, this exception shows its numbers.',
-          ack,
-        );
+        const otherRef = formatCycleCountNumber(c.otherCount?.countNumber ?? null);
+        options = sentences(otherCountSentence(c.otherCount), ack);
         if (confirmCanAct) {
           reason = `Confirm this count is not offered while ${otherRef ?? 'another count'} is in progress with a different number for this item.`;
         }
@@ -529,7 +588,7 @@ export function countVarianceClearCopy(input: CountVarianceClearInput): CountVar
           'It clears when the counted number is confirmed or a later count matches the stock on record.',
           ack,
         );
-        if (confirmCanAct) reason = unavailableCopy(surface);
+        if (confirmCanAct) reason = confirmUnavailableCopy(surface);
         break;
       case 'not_countable':
         options = NOT_COUNTABLE;
@@ -553,9 +612,16 @@ export function countVarianceClearCopy(input: CountVarianceClearInput): CountVar
     }
   }
 
+  const worded = wordedStateOf(input.displayed, c);
+  // A recount skips an item that can no longer be counted (0372), whatever
+  // the server's canRecount says, and the options already say it closes.
+  const notCountable = worded === 'not_countable';
   let recountLine: string | null = null;
-  if (ability === 'can') recountLine = RECOUNT_COUNTS_TOTAL_COPY;
+  if (notCountable) recountLine = null;
+  else if (ability === 'can') recountLine = RECOUNT_COUNTS_TOTAL_COPY;
   else if (!explainsRecount) recountLine = recountUnavailableCopy(input.recountUnavailableReason);
+  const offerRecount = ability === 'can' && !notCountable;
+  const settlesByItself = worded !== null && SETTLES_BY_ITSELF.includes(worded);
 
   return {
     lead: countVarianceLead(input.facts),
@@ -563,6 +629,8 @@ export function countVarianceClearCopy(input: CountVarianceClearInput): CountVar
     reason,
     who: c ? countedAndPostedByCopy(c.countedBy, c.postedBy) : null,
     recountLine,
+    offerRecount,
+    recountEmphasis: offerConfirm || settlesByItself ? 'outline' : 'primary',
     offerConfirm,
     confirmDisabledReason: offerConfirm && !online ? EXCEPTION_CONFIRM_OFFLINE_COPY : null,
   };
@@ -573,26 +641,38 @@ export function countVarianceClearCopy(input: CountVarianceClearInput): CountVar
  * phone sheet; other rules keep EXCEPTION_ACKNOWLEDGE_HELP): the lead with
  * its numbers, that acknowledging does not clear it, and one way it does.
  * With `confirm.canConfirm` the surface also offers CONFIRM_COUNT_INSTEAD_LABEL.
+ *
+ * The way it clears follows the same state as the top card (wordedStateOf):
+ * where the card says the row settles by itself (a recount or another count
+ * being posted, the next check) or that the item can no longer be counted,
+ * this says the same, never "count it once more with Recount".
  */
 export function countVarianceAcknowledgeHelp(input: {
   facts: unknown;
   displayed: OccurrenceState;
   recount: { countNumber: number | null; outcome: RecountOutcome } | null;
   canRecount: boolean;
-  confirm: Pick<CountConfirmBlock, 'state' | 'canConfirm'> | null;
+  confirm: (Pick<CountConfirmBlock, 'state' | 'canConfirm'> & Partial<Pick<CountConfirmBlock, 'otherCount'>>) | null;
 }): string {
   const n = countVarianceNumbers(input.facts);
   const counted = n.counted === null ? null : formatStockQuantity(n.counted);
   const c = input.confirm;
+  const state = wordedStateOf(input.displayed, c);
   let tail: string;
   if (c?.canConfirm && c.state === 'confirmable') {
     tail = `If you have checked that ${counted ?? 'the counted number'} is right, confirm the count instead.`;
-  } else if (input.displayed.kind === 'recount_in_progress' || c?.state === 'recount_in_progress') {
+  } else if (state === 'recount_in_progress') {
     const r = recountRefOf(input.displayed, input.recount);
     tail = `It clears when ${r.ref ? `recount ${r.ref}` : 'the recount'} is posted and matches the stock on record.`;
+  } else if (state === 'rechecking' || state === 'count_changed') {
+    tail = RECHECKING;
+  } else if (state === 'count_in_progress') {
+    tail = otherCountSentence(c?.otherCount ?? null);
+  } else if (state === 'not_countable') {
+    tail = NOT_COUNTABLE;
   } else if (input.canRecount) {
     tail = 'To close it, count it once more with Recount.';
-  } else if (c && (c.state === 'confirmable' || c.state === 'unavailable')) {
+  } else if (state === 'confirmable' || state === 'unavailable') {
     // Only where a confirmation can still close it: a row whose state
     // refuses one never promises it.
     tail = 'It clears when the count is confirmed or a later count matches the stock on record.';
@@ -670,7 +750,7 @@ export function confirmCountDialogCopy(input: {
     numbersLabel: sentences(`${numbers.join('. ')}.`, who),
     consequence: `Confirming records that ${counted} is right. It closes ${ex ?? 'this exception'} now, without a second count. If a later count does not match the stock on record, a new exception opens.`,
     noteLabel: 'Note (optional)',
-    notePlaceholder: 'How you checked, for example counted twice on the floor',
+    notePlaceholder: CONFIRM_COUNT_NOTE_PLACEHOLDER,
     noteMax: CONFIRM_COUNT_NOTE_MAX,
     cancelLabel: 'Cancel',
     confirmLabel: 'Confirm and close',
@@ -722,7 +802,7 @@ export function describeConfirmError(
     case 'busy':
       return 'A check is running. Try again in a moment.';
     case 'unavailable':
-      return unavailableCopy(ctx.surface);
+      return confirmUnavailableCopy(ctx.surface);
     default:
       return phone
         ? 'This count could not be confirmed. Pull down to refresh and try again.'

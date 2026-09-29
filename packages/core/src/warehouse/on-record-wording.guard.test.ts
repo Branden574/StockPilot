@@ -293,6 +293,28 @@ function countConfirmCopy(facts: Record<string, unknown>): string[] {
       }
     }
   }
+  // The counter the act gate refuses (the item moved to a warehouse they
+  // cannot change stock in): only a manager, and why.
+  const counterRefused: CountConfirmBlock = {
+    ...confirmBlock('confirmable', false),
+    unavailableReason: 'not_permitted',
+    readerIsCounter: true,
+  };
+  for (const canAct of [true, false]) {
+    for (const ability of abilities) {
+      const c = countVarianceClearCopy({
+        facts,
+        displayed: { kind: 'open' },
+        recount: null,
+        canAct,
+        canRecount: ability === 'can',
+        recountUnavailableReason: ability === 'can' ? null : ability,
+        confirm: counterRefused,
+      });
+      out.push(c.options);
+      if (c.reason) out.push(c.reason);
+    }
+  }
   const dialog = confirmCountDialogCopy({ reference: 'EX-000058', confirm: confirmBlock('confirmable', true) });
   out.push(dialog.title, dialog.consequence, dialog.numbersLabel, dialog.success, ...dialog.numbers);
   for (const as of ['counter', 'manager', null] as const) {

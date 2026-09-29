@@ -124,6 +124,32 @@ describe('countVarianceView', () => {
     expect(v.confirm.unavailable).toBe('Only Dana Lee, who counted it, or a manager can confirm this count.');
   });
 
+  // Review 2026-09-29 (the phone keeps this core after the server turns
+  // Confirm on): the counter the act gate refuses is told why, never named
+  // to themselves in the third person.
+  it('feature on, the counter who cannot act on the item: only a manager, and why, handed to the sheet', () => {
+    const v = countVarianceView(
+      detail({}, { countConfirm: { ...COUNT_CONFIRM, canConfirm: false, unavailableReason: 'not_permitted', readerIsCounter: true } }),
+      { online: true },
+    )!;
+    const why = 'You counted it, but you cannot change stock for this item, so only a manager can confirm this count.';
+    expect(v.clear.options).toBe(
+      'It clears when a manager confirms that 2 is right, or when a recount matches the stock on record. Acknowledging does not clear this.',
+    );
+    expect(v.clear.reason).toBe(why);
+    expect(v.confirm.unavailable).toBe(why);
+  });
+
+  it('feature on, the item can no longer be counted: no Recount, and the Acknowledge help agrees', () => {
+    const v = countVarianceView(
+      detail({}, { countConfirm: { ...COUNT_CONFIRM, state: 'not_countable', canConfirm: false, unavailableReason: 'not_countable' } }),
+      { online: true },
+    )!;
+    expect(v.clear.offerRecount).toBe(false);
+    expect(v.clear.recountLine).toBeNull();
+    expect(v.acknowledgeHelp).toMatch(/This item can no longer be counted, so this exception closes at the next check\.$/);
+  });
+
   it('the active recount names the count for the error words', () => {
     const v = countVarianceView(
       detail(

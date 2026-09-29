@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CONFIRM_COUNT_CLOSE_LABEL,
   CONFIRM_COUNT_INSTEAD_LABEL,
   CONFIRM_COUNT_LABEL,
+  CONFIRM_COUNT_NOTE_PLACEHOLDER,
   confirmationFactsRow,
+  confirmUnavailableCopy,
   confirmCountButtonHint,
   confirmCountDialogCopy,
   COUNT_CONFIRM_REASONS,
@@ -496,6 +499,37 @@ describe('countVarianceClearCopy: feature on (the server sends countConfirm)', (
     ).toBe('Counted by Dana Lee, posted by Sam Ortiz.');
   });
 
+  // Review 2026-09-29: a counter who fails the act gate (for example the item
+  // moved to a warehouse they cannot change stock in; pgTAP C16) read their
+  // own name in the third person as someone who can confirm, with no reason.
+  it('confirmable, the reader counted it but fails the act gate: only a manager, and why', () => {
+    const counterNotPermitted = (canAct: boolean, ability: RecountAbility) =>
+      countVarianceClearCopy(
+        clearInput('confirmable', { canAct, confirm: 'not_permitted' }, ability, {
+          confirm: block('confirmable', { canAct, confirm: 'not_permitted' }, { readerIsCounter: true }),
+        }),
+      );
+    const WHY = 'You counted it, but you cannot change stock for this item, so only a manager can confirm this count.';
+    // The occurrence's own act hint (the warehouse stamp) can still show
+    // Acknowledge: the sentence then says acknowledging does not clear it.
+    expect(counterNotPermitted(true, 'can')).toMatchObject({
+      options: `It clears when a manager confirms that 2 is right, or when a recount matches the stock on record. ${ACK}`,
+      reason: WHY,
+      offerConfirm: false,
+    });
+    expect(counterNotPermitted(false, 'not_permitted')).toMatchObject({
+      options: 'It clears when a manager confirms that 2 is right, or when a recount matches the stock on record.',
+      reason: WHY,
+    });
+    expect(counterNotPermitted(false, 'module_disabled')).toMatchObject({
+      options: 'It clears when a manager confirms that 2 is right.',
+      reason: WHY,
+    });
+    for (const c of [counterNotPermitted(true, 'can'), counterNotPermitted(false, 'not_permitted')]) {
+      expect(c.options).not.toContain('Dana Lee');
+    }
+  });
+
   it('a withheld Confirm leaves the server\'s canConfirm as the only yes: a malformed block never offers it', () => {
     const c = countVarianceClearCopy(
       clearInput('stock_moved', CAN_CONFIRM, 'can', { confirm: { ...block('stock_moved', CAN_CONFIRM), canConfirm: true } }),
@@ -579,6 +613,57 @@ describe('countVarianceClearCopy: the line under Recount', () => {
   });
 });
 
+// Review 2026-09-29: the server's canRecount does not ask whether the item can
+// still be counted, and start_targeted_recount skips an item that cannot
+// (0372, not_countable). The card said "This item can no longer be counted"
+// above a Recount button and "Counts record each item's total".
+describe('countVarianceClearCopy: Recount is offered only where it can help', () => {
+  it('not offered, and no line under it, once the item can no longer be counted', () => {
+    for (const reader of [CAN_CONFIRM, NOT_COUNTER, VIEWER]) {
+      for (const ability of ABILITIES) {
+        const c = countVarianceClearCopy(clearInput('not_countable', reader, ability));
+        expect(c.offerRecount).toBe(false);
+        expect(c.recountLine).toBeNull();
+        expect(c.options).toBe('This item can no longer be counted, so this exception closes at the next check.');
+      }
+    }
+  });
+
+  it('offered to a reader who can recount in every other state, and with the feature off', () => {
+    for (const state of [null, ...COUNT_CONFIRM_STATES.filter((s) => s !== 'not_countable')]) {
+      expect(countVarianceClearCopy(clearInput(state, NOT_COUNTER, 'can')).offerRecount, String(state)).toBe(true);
+      expect(countVarianceClearCopy(clearInput(state, NOT_COUNTER, 'not_permitted')).offerRecount).toBe(false);
+      expect(countVarianceClearCopy(clearInput(state, NOT_COUNTER, 'module_disabled')).offerRecount).toBe(false);
+    }
+  });
+});
+
+// Review 2026-09-29: Recount was the filled button whenever Confirm was not
+// offered, including while the card said to wait for a linked recount, the
+// next check or another count; pressing it then only links the count already
+// under way (0372).
+describe('countVarianceClearCopy: Recount is the filled button only when it is the way to clear it', () => {
+  it('feature off: filled on an open row, outline while a recount is in progress or being checked', () => {
+    expect(countVarianceClearCopy(clearInput(null, CAN_CONFIRM, 'can')).recountEmphasis).toBe('primary');
+    for (const displayed of [
+      { kind: 'recount_in_progress', cycleCountId: 'cc-40', countNumber: 40 },
+      { kind: 'rechecking', cycleCountId: 'cc-40', countNumber: 40 },
+    ] as OccurrenceState[]) {
+      expect(countVarianceClearCopy({ ...clearInput(null, CAN_CONFIRM, 'can'), displayed }).recountEmphasis).toBe('outline');
+    }
+  });
+
+  it('feature on: outline beside Confirm, and in the states that say to wait; filled otherwise', () => {
+    expect(countVarianceClearCopy(clearInput('confirmable', CAN_CONFIRM, 'can')).recountEmphasis).toBe('outline');
+    for (const state of ['recount_in_progress', 'count_in_progress', 'rechecking', 'count_changed'] as const) {
+      expect(countVarianceClearCopy(clearInput(state, NOT_COUNTER, 'can')).recountEmphasis, state).toBe('outline');
+    }
+    for (const state of ['confirmable', 'unavailable', 'stock_moved', 'already_confirmed'] as const) {
+      expect(countVarianceClearCopy(clearInput(state, NOT_COUNTER, 'can')).recountEmphasis, state).toBe('primary');
+    }
+  });
+});
+
 describe('countVarianceClearCopy: the whole matrix', () => {
   const READERS: Array<[string, Reader]> = [
     ['can confirm', CAN_CONFIRM],
@@ -650,11 +735,80 @@ describe('countVarianceAcknowledgeHelp', () => {
       `${LEAD} ${SAYS} It clears when the count is confirmed or a later count matches the stock on record.`,
     );
     // A row nobody can confirm never promises a confirmation.
-    for (const state of ['stock_moved', 'already_confirmed', 'count_in_progress', 'not_countable'] as const) {
+    for (const state of ['stock_moved', 'already_confirmed'] as const) {
       expect(help({ confirm: { state, canConfirm: false } })).toBe(
         `${LEAD} ${SAYS} It clears when a later count matches the stock on record.`,
       );
     }
+  });
+
+  // Review 2026-09-29: the tail followed only "recount in progress", then
+  // Recount, so a manager read "count it once more with Recount" under a card
+  // that said to wait for the next check, for the other count, or that the
+  // item can no longer be counted. The phone keeps these words after R2.
+  describe('the tail follows the top card\'s state, whoever reads it', () => {
+    const OTHER_COUNT =
+      'CC-000041, which is in progress, has already recorded 3 for this item. When it is posted, this exception shows its numbers.';
+    const NOT_COUNTABLE = 'This item can no longer be counted, so this exception closes at the next check.';
+
+    it('feature off, a posted recount being checked: the next check, not Recount', () => {
+      for (const canRecount of [true, false]) {
+        expect(
+          help({ displayed: { kind: 'rechecking', cycleCountId: 'cc-40', countNumber: 40 }, canRecount }),
+        ).toBe(`${LEAD} ${SAYS} ${RECHECKING}`);
+      }
+    });
+
+    it('feature on, re-checking or a newer count: the next check', () => {
+      for (const state of ['rechecking', 'count_changed'] as const) {
+        for (const canRecount of [true, false]) {
+          expect(help({ canRecount, confirm: { state, canConfirm: false } })).toBe(`${LEAD} ${SAYS} ${RECHECKING}`);
+        }
+      }
+    });
+
+    it('feature on, another count in progress: its numbers arrive when it is posted', () => {
+      const otherCount = { countNumber: 41, counted: 3 };
+      expect(help({ canRecount: true, confirm: { state: 'count_in_progress', canConfirm: false, otherCount } })).toBe(
+        `${LEAD} ${SAYS} ${OTHER_COUNT}`,
+      );
+      expect(help({ canRecount: false, confirm: { state: 'count_in_progress', canConfirm: false, otherCount: null } })).toBe(
+        `${LEAD} ${SAYS} Another count in progress has already recorded a different number for this item. When it is posted, this exception shows its numbers.`,
+      );
+    });
+
+    it('feature on, the item can no longer be counted: it closes at the next check, never Recount', () => {
+      for (const canRecount of [true, false]) {
+        expect(help({ canRecount, confirm: { state: 'not_countable', canConfirm: false } })).toBe(
+          `${LEAD} ${SAYS} ${NOT_COUNTABLE}`,
+        );
+      }
+    });
+
+    it('feature on, the state decides, not the displayed recount: a recount whose line cannot re-check it does not settle it', () => {
+      const displayed: OccurrenceState = { kind: 'recount_in_progress', cycleCountId: 'cc-40', countNumber: 40 };
+      expect(
+        help({ displayed, recount: IN_PROGRESS_RECOUNT, canRecount: true, confirm: { state: 'stock_moved', canConfirm: false } }),
+      ).toBe(`${LEAD} ${SAYS} To close it, count it once more with Recount.`);
+      expect(
+        help({ displayed, recount: IN_PROGRESS_RECOUNT, canRecount: true, confirm: { state: 'recount_in_progress', canConfirm: false } }),
+      ).toBe(`${LEAD} ${SAYS} It clears when recount CC-000040 is posted and matches the stock on record.`);
+    });
+
+    it('agrees with the card in every state: never Recount where the card says to wait or that it cannot be counted', () => {
+      for (const state of COUNT_CONFIRM_STATES) {
+        const card = countVarianceClearCopy(clearInput(state, NOT_COUNTER, 'can'));
+        const h = help({
+          displayed: displayedFor(state),
+          recount: state === 'recount_in_progress' ? IN_PROGRESS_RECOUNT : null,
+          canRecount: true,
+          confirm: block(state, NOT_COUNTER),
+        });
+        if (/next check|shows its numbers|is in progress \(/.test(card.options)) {
+          expect(h, state).not.toContain('Recount.');
+        }
+      }
+    });
   });
 });
 
@@ -696,6 +850,18 @@ describe('confirmCountDialogCopy', () => {
       'Confirming records that 2 is right. It closes this exception now, without a second count. If a later count does not match the stock on record, a new exception opens.',
     );
     expect(c.success).toBe('Count confirmed. This exception is closed.');
+  });
+
+  // Review 2026-09-29: the phone's sheet kept its own fallbacks for a confirm
+  // the server stopped offering. They are core's now, like every other word.
+  it('the words a sheet shows once the server stopped offering the confirm', () => {
+    expect(CONFIRM_COUNT_NOTE_PLACEHOLDER).toBe('How you checked, for example counted twice on the floor');
+    expect(
+      confirmCountDialogCopy({ reference: null, confirm: block('confirmable', CAN_CONFIRM) }).notePlaceholder,
+    ).toBe(CONFIRM_COUNT_NOTE_PLACEHOLDER);
+    expect(CONFIRM_COUNT_CLOSE_LABEL).toBe('Close');
+    expect(confirmUnavailableCopy('phone')).toBe('Confirming is unavailable right now. Pull down to try again.');
+    expect(confirmUnavailableCopy('web')).toBe('Confirming is unavailable right now. Reload to try again.');
   });
 });
 

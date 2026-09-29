@@ -105,8 +105,10 @@ function listBody(o: Record<string, unknown> = {}) {
 }
 
 /** An ApiError-shaped rejection (the real class lives in the mocked ./api). */
-function apiError(status: number, message: string, details?: unknown) {
-  return Object.assign(new Error(message), { status, details });
+/** A refused request as api() throws it: `code` is the JSON body's `error`,
+ *  absent when the answer was not our JSON (a route this server lacks). */
+function apiError(status: number, message: string, details?: unknown, code?: string) {
+  return Object.assign(new Error(message), { status, details, ...(code === undefined ? {} : { code }) });
 }
 
 describe('listExceptions', () => {
@@ -431,13 +433,32 @@ describe('describeConfirmCountError', () => {
     expect(describeConfirmCountError(apiError(403, 'x', { reason: 'not_permitted' }), ctx)).toBe(
       'You do not have permission to act on this exception.',
     );
-    expect(describeConfirmCountError(apiError(404, 'x'), ctx)).toBe('This exception is no longer available to you.');
+    expect(describeConfirmCountError(apiError(404, 'x', undefined, 'not_found'), ctx)).toBe(
+      'This exception is no longer available to you.',
+    );
     expect(describeConfirmCountError(apiError(429, 'x'), ctx)).toBe('Too many requests. Wait a moment and try again.');
     expect(describeConfirmCountError(apiError(503, '<html>'), ctx)).toBe('The server had a problem. Try again in a moment.');
     expect(describeConfirmCountError(apiError(400, 'x', { reason: 'note_too_long' }), ctx)).toBe(
       'Notes can be at most 1,000 characters.',
     );
     expect(describeConfirmCountError(new Error('fetch failed: UnexpectedException'), ctx)).toBe(CONNECTION_FAILURE_COPY);
+  });
+});
+
+// Review 2026-09-29: a confirm sent to a server without the route (a web
+// rollback to release 1 while a phone still holds the block) is a framework
+// 404 with no JSON code. It read "This exception is no longer available to
+// you." while the exception was still there; nothing was written.
+describe('describeConfirmCountError: a server without the confirm route', () => {
+  const ctx = { recount: 'can' as const, recountNumber: null, counterLabel: null };
+
+  it('a 404 that is not our JSON reads the generic confirm line; a real not_found keeps its words', () => {
+    expect(describeConfirmCountError(apiError(404, 'That is not available on this version of the app.'), ctx)).toBe(
+      'This count could not be confirmed. Pull down to refresh and try again.',
+    );
+    expect(describeConfirmCountError(apiError(404, 'Not found.', undefined, 'not_found'), ctx)).toBe(
+      'This exception is no longer available to you.',
+    );
   });
 });
 
@@ -535,6 +556,11 @@ describe('exceptionSheetSubmit (the Acknowledge and Note sheets)', () => {
       expect(exceptionSheetSubmit({ ...confirm, canConfirm: false, confirmUnavailable: 'Why not.' })).toEqual({
         enabled: false,
         reason: 'Why not.',
+      });
+      // No reason from the screen: core's words, never the sheet's own.
+      expect(exceptionSheetSubmit({ ...confirm, canConfirm: false, confirmUnavailable: null })).toEqual({
+        enabled: false,
+        reason: 'Confirming is unavailable right now. Pull down to try again.',
       });
     });
 

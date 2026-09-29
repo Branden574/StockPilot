@@ -2,6 +2,7 @@ import { X } from 'lucide-react-native';
 import * as React from 'react';
 import {
   AccessibilityInfo,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -9,12 +10,16 @@ import {
   ScrollView,
   StyleSheet,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
+  CONFIRM_COUNT_CLOSE_LABEL,
   CONFIRM_COUNT_INSTEAD_LABEL,
   CONFIRM_COUNT_LABEL,
+  CONFIRM_COUNT_NOTE_PLACEHOLDER,
   confirmCountDialogCopy,
   EXCEPTION_ACKNOWLEDGE_HELP,
 } from '@stockpilot/core';
@@ -23,6 +28,7 @@ import { MIN_TAP } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
 import type { ExceptionSheetConfirm } from '@/lib/exception-confirm-view';
+import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import {
   actOnException,
   clientEventIdFor,
@@ -34,8 +40,13 @@ import {
   type ExceptionSheetMode,
   type MobileExceptionOccurrence,
 } from '@/lib/exceptions-api';
-import { ACCENT, FONT } from '@/lib/theme';
+import { ACCENT, capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+
+/** The sheet's title is a heading in a bottom sheet: it grows with Dynamic
+ *  Type up to the display ceiling, never so far that it pushes the numbers
+ *  and the buttons off a small phone. */
+const TITLE_CAP = capTo(16, TYPE_CEILING.display);
 
 /** The words for a refused confirm when the screen sent no context. */
 const FALLBACK_ERROR_CONTEXT: ExceptionSheetConfirm['errorContext'] = {
@@ -74,10 +85,14 @@ const FALLBACK_ERROR_CONTEXT: ExceptionSheetConfirm['errorContext'] = {
  * VoiceOver and 44 pt, to the approve-partial sheet's standard: the sheet is
  * modal and escapable, its title is a header, Close and the backdrop are
  * buttons (Close 44 pt), the confirm's numbers are one element, and a refusal
- * is shown in place and announced. A confirm under way cannot be dismissed,
- * so its answer is never lost. Button labels stop growing at the control
- * ceiling (the Button primitive); the sentences are content and grow with
- * Dynamic Type, scrolling inside the body while the buttons stay on screen.
+ * is shown in place and announced. A request under way cannot be dismissed
+ * (Close, the backdrop, the VoiceOver escape and Android's back button), so
+ * its answer is never lost. Button labels stop growing at the control
+ * ceiling (the Button primitive), the title at the display ceiling; the
+ * sentences are content and grow with Dynamic Type, scrolling inside the
+ * body. The sheet is never taller than the space above the keyboard
+ * (exceptionSheetLayout), so the title, Close and the buttons stay on screen
+ * on a small phone at the largest text size, with the keyboard up.
  */
 export function ExceptionNoteSheet({
   visible,
@@ -102,13 +117,21 @@ export function ExceptionNoteSheet({
   onClose: () => void;
   onDone: (updated: MobileExceptionOccurrence, done: { mode: ExceptionSheetMode; replay: boolean }) => void;
 }) {
+  // Whether a request is under way, for Android's back button (the Modal's
+  // onRequestClose), which sits outside the content that owns the state.
+  const busyRef = React.useRef(false);
+  function requestCloseIfIdle() {
+    if (busyRef.current) return;
+    onClose();
+  }
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={requestCloseIfIdle}>
       {/* Remounted per opening (key), so every opening starts blank with no
           earlier attempt to resend. Switching to Confirm inside an opening
           does not remount it. */}
       <SheetContent
         key={`${String(visible)}:${mode}`}
+        busyRef={busyRef}
         initialMode={mode}
         occurrence={occurrence}
         acknowledgeHelp={acknowledgeHelp}
@@ -122,6 +145,7 @@ export function ExceptionNoteSheet({
 }
 
 function SheetContent({
+  busyRef,
   initialMode,
   occurrence,
   acknowledgeHelp,
@@ -130,6 +154,7 @@ function SheetContent({
   onClose,
   onDone,
 }: {
+  busyRef: React.MutableRefObject<boolean>;
   initialMode: ExceptionSheetMode;
   occurrence: MobileExceptionOccurrence;
   acknowledgeHelp: string | null;
@@ -143,6 +168,16 @@ function SheetContent({
   const [note, setNote] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const { height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  // The height the keyboard-avoiding wrapper leaves, measured; null until
+  // the first layout pass.
+  const [availableHeight, setAvailableHeight] = React.useState<number | null>(null);
+  const layout = exceptionSheetLayout({
+    windowHeight: height,
+    availableHeight,
+    topInset: insets.top,
+  });
   // The last act attempt that did not succeed. Its clientEventId is reused
   // ONLY for a resend of the same action and note (clientEventIdFor); an
   // edited note is a new request, so it is never dropped as a "replay" of the
@@ -163,6 +198,17 @@ function SheetContent({
     confirmUnavailable: confirm?.unavailable ?? null,
   });
 
+  // Every opening starts idle (a success closes the sheet without clearing
+  // the flag).
+  React.useEffect(() => {
+    busyRef.current = false;
+  }, [busyRef]);
+
+  function setBusy(value: boolean) {
+    busyRef.current = value;
+    setSubmitting(value);
+  }
+
   // A refusal is announced as it appears (iOS gives the alert role no
   // trait), keyed on its words.
   React.useEffect(() => {
@@ -181,12 +227,13 @@ function SheetContent({
 
   async function submit() {
     if (!submitState.enabled) return;
-    setSubmitting(true);
+    Keyboard.dismiss();
+    setBusy(true);
     setError(null);
     const payloadNote = note.trim() || null;
     if (mode === 'confirm_count') {
       if (!block) {
-        setSubmitting(false);
+        setBusy(false);
         return;
       }
       try {
@@ -198,7 +245,7 @@ function SheetContent({
         onDone(res.occurrence, { mode, replay: res.replay });
       } catch (e) {
         setError(describeConfirmCountError(e, confirm?.errorContext ?? FALLBACK_ERROR_CONTEXT));
-        setSubmitting(false);
+        setBusy(false);
       }
       return;
     }
@@ -217,7 +264,7 @@ function SheetContent({
       const reason = (e as { details?: { reason?: unknown } } | null)?.details?.reason;
       if (reason === 'client_event_id_conflict') lastAttempt.current = null;
       setError(describeActError(e));
-      setSubmitting(false);
+      setBusy(false);
     }
   }
 
@@ -238,6 +285,7 @@ function SheetContent({
       <View
         accessibilityViewIsModal
         onAccessibilityEscape={requestClose}
+        onLayout={(e) => setAvailableHeight(e.nativeEvent.layout.height)}
         style={{ flex: 1, justifyContent: 'flex-end' }}
       >
         <Pressable
@@ -250,9 +298,15 @@ function SheetContent({
             { backgroundColor: themeMode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
           ]}
         />
-        <View style={[styles.sheet, { backgroundColor: c.card }]}>
+        <View style={[styles.sheet, { backgroundColor: c.card, maxHeight: layout.sheetMaxHeight }]}>
           <View style={styles.header}>
-            <Body size={16} color={c.ink} accessibilityRole="header" style={{ fontFamily: FONT.display, flex: 1 }}>
+            <Body
+              size={16}
+              color={c.ink}
+              accessibilityRole="header"
+              maxFontSizeMultiplier={TITLE_CAP}
+              style={{ fontFamily: FONT.display, flex: 1 }}
+            >
               {title}
             </Body>
             <Pressable
@@ -272,7 +326,13 @@ function SheetContent({
             </Pressable>
           </View>
 
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 12 }} style={{ maxHeight: 420 }}>
+          {/* The one part that scrolls, and the one that gives way: it
+              shrinks before the title, Close or the buttons leave the screen. */}
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ gap: 12 }}
+            style={{ maxHeight: layout.bodyMaxHeight, flexShrink: 1 }}
+          >
             {occurrence.reference ? (
               <Mono size={12} color={c.ink4}>
                 {occurrence.reference}
@@ -328,7 +388,7 @@ function SheetContent({
                     ? 'What you are checking, if anything'
                     : mode === 'note'
                       ? 'Write a note'
-                      : (dialog?.notePlaceholder ?? 'How you checked')
+                      : (dialog?.notePlaceholder ?? CONFIRM_COUNT_NOTE_PLACEHOLDER)
                 }
                 placeholderTextColor={c.ink4}
                 accessibilityLabel={mode === 'note' ? 'Note' : 'Note, optional'}
@@ -374,7 +434,7 @@ function SheetContent({
             // The server stopped offering it (a re-read while the sheet was
             // open): the reason above says why; nothing to confirm.
             <Button block variant="outline" onPress={requestClose}>
-              Close
+              {CONFIRM_COUNT_CLOSE_LABEL}
             </Button>
           ) : (
             <Button block disabled={!submitState.enabled} onPress={() => void submit()}>
