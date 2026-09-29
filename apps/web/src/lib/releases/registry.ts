@@ -40,13 +40,13 @@ export const RELEASES: Release[] = [
     //
     // Addressed to everyone: the top bar, the greeting and the VoiceOver and
     // larger-target fixes are for every member. The two order entries link to
-    // Orders and are addressed as that page is reached: the pick field to
-    // whoever can pick (items:update, orders:approve), the keyboard to anyone
-    // with Orders on.
+    // Orders and are for whoever can pick (items:update, orders:approve, where
+    // Orders is on): the digital pick's quantity is the only field on an
+    // order's screen that takes typing, and only a picker is offered it.
     status: 'draft',
     title: "The top bar fits small screens, and the mobile app's buttons and fields are easier to use",
     summary:
-      "On the web, the top bar now fits narrow screens, so your account button is never cut off, and your account menu has Help & Learning, Support & feedback and the theme. In the mobile app, Home greets you by the time of day, the top-bar icon buttons and the Add items steppers work with VoiceOver and are easier to tap, the digital pick's quantity shows every digit at the largest text sizes, and an order's fields are no longer left under the keyboard.",
+      "On the web, the top bar now fits narrow screens, so your account button is never cut off, and your account menu has Help & Learning, Support & feedback and the theme. In the mobile app, Home greets you by the time of day, the top-bar buttons and the Add items steppers work with VoiceOver and are easier to tap, and the digital pick's quantity shows every digit at the largest text sizes and is no longer left under the keyboard.",
     publishedAt: '2026-10-02T17:00:00Z',
     entries: [
       {
@@ -55,11 +55,11 @@ export const RELEASES: Release[] = [
         area: 'Web app',
         title: 'The top bar fits narrow screens, with your account button always in view',
         whatChanged:
-          "On the web, the bar at the top of each page now fits its width. On a phone, or beside the sidebar on a tablet, it shows the menu, the warehouse filter, notifications, What's new and your account button, and adds Keyboard shortcuts, Help & Learning, Support & feedback, the theme switch and search when there is room. A long warehouse name is shortened to fit. Your account menu now also has Help & Learning, Support & feedback and the theme: Light, Dark or System.",
+          "On the web, the bar at the top of each page now fits its width. On a phone it shows the menu, the warehouse filter, notifications, What's new and your account button. With more room, such as beside the sidebar on a tablet, it adds search, and with more again Keyboard shortcuts, Help & Learning, Support & feedback and the theme switch. A long warehouse name is shortened to fit. Your account menu now also has Help & Learning, Support & feedback and the theme: Light, Dark or System, with the one in use marked.",
         whyItMatters:
           'On a phone the account button was cut off at the right edge, and beside the sidebar on a tablet it was off the screen entirely, with the other buttons squeezed to half their size.',
         howItAffectsYou:
-          'Where the bar has room for everything, as on most laptop and desktop screens, it is unchanged. Where it does not, what it leaves out is in your account menu, and the ? key still opens Keyboard shortcuts.',
+          'Where the bar has room for everything, as on most laptop and desktop screens, it is unchanged. Search stays in the bar wherever it was before. Where the bar leaves the rest out, Help & Learning, Support & feedback and the theme are in your account menu, and the ? key still opens Keyboard shortcuts. On a short screen, such as a phone held sideways, the account menu scrolls.',
         whatToDo: 'No action needed.',
       },
       {
@@ -80,11 +80,11 @@ export const RELEASES: Release[] = [
         area: 'Mobile app',
         title: 'Buttons in the mobile app work with VoiceOver and are easier to tap',
         whatChanged:
-          "In the mobile app, the icon buttons at the top of each screen, such as Back, Open menu, Notifications, Refresh, New item and Edit item, now say what they do to VoiceOver, and each has a 44-point touch area around the same icon. On an order's Add items sheet, the plus and minus buttons name their item, for example Increase quantity of Blue Pens, and have 44-point touch areas too. Home's profile picture says Account settings.",
+          "In the mobile app, the icon buttons at the top of each screen, such as Back, Open menu, Notifications, Refresh, New item and Edit item, now say what they do to VoiceOver and have a 44-point touch area around the same icon. So do Home's profile picture (Account settings), the Back links on a cycle count, the AI count review and Bundles, and Done and Cancel on the counting cameras. On an order's Add items sheet, the plus and minus buttons name their item, for example Increase quantity of Blue Pens, and have 44-point touch areas.",
         whyItMatters:
           "Most of these buttons had no name, so VoiceOver could not say what they did, and every item's plus and minus buttons were read the same way. Most were also smaller than the 44 points Apple recommends.",
         howItAffectsYou:
-          'The buttons look the same and sit where they did; only the area you can tap is larger. A help button that did nothing when tapped was removed from one screen.',
+          "The buttons look the same and the icon buttons sit where they did; only the area you can tap is larger. On a cycle count, a bundle and the AI count review, the heading sits a few points lower to make room for the larger Back button. A help button that did nothing when tapped was removed from one screen, and the menu button beside it moved into its place.",
         whatToDo: 'Update the app when it offers the new version.',
       },
       {
@@ -114,7 +114,7 @@ export const RELEASES: Release[] = [
         howItAffectsYou: 'Nothing changes until the keyboard opens.',
         whatToDo: 'Update the app when it offers the new version.',
         link: { href: '/dashboard/orders', label: 'View orders' },
-        audience: { modules: ['orders'] },
+        audience: { anyPermission: ['items:update', 'orders:approve'], modules: ['orders'] },
       },
     ],
   },

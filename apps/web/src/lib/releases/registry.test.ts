@@ -1425,10 +1425,16 @@ describe('the small-fixes release is held as a draft', () => {
       expect(e.audience, e.id).toBeUndefined();
       expect(e.link, e.id).toBeUndefined();
     }
-    // The pick field: whoever can pick, where Orders is on (as the web digital
-    // pick's entry is addressed).
-    expect(pick!.audience).toEqual({ anyPermission: ['items:update', 'orders:approve'], modules: ['orders'] });
-    expect(keyboard!.audience).toEqual({ modules: ['orders'] });
+    // The pick field and the keyboard: whoever can pick, where Orders is on
+    // (as the web digital pick's entry is addressed). The only field on the
+    // order screen that takes typing is the digital pick's quantity (the
+    // delivery text is read-only; Deny, Reopen and the driver's fields are in
+    // their own windows), and it is offered only to a picker: manager and up,
+    // or items:update (order/[id].tsx viewerCanPick). Review of 2026-09-29:
+    // the keyboard entry was addressed to every Orders user.
+    const picker = { anyPermission: ['items:update', 'orders:approve'], modules: ['orders'] };
+    expect(pick!.audience).toEqual(picker);
+    expect(keyboard!.audience).toEqual(picker);
     for (const e of [pick!, keyboard!]) {
       expect(e.link, e.id).toEqual({ href: '/dashboard/orders', label: 'View orders' });
     }
@@ -1441,10 +1447,17 @@ describe('the small-fixes release is held as a draft', () => {
       'phone-pick-quantity-large-text',
       'phone-order-screen-keyboard',
     ]);
+    // A requester types nothing on an order's screen: neither order entry.
     expect(reader(['orders:request'])).toEqual([
       'web-top-bar-fits',
       'phone-home-greeting',
       'phone-buttons-voiceover-targets',
+    ]);
+    expect(reader(['orders:approve'])).toEqual([
+      'web-top-bar-fits',
+      'phone-home-greeting',
+      'phone-buttons-voiceover-targets',
+      'phone-pick-quantity-large-text',
       'phone-order-screen-keyboard',
     ]);
     expect(reader([], [])).toEqual(['web-top-bar-fits', 'phone-home-greeting', 'phone-buttons-voiceover-targets']);
@@ -1468,6 +1481,14 @@ describe('the small-fixes release is held as a draft', () => {
     expect(text).toContain('Increase quantity of Blue Pens');
     expect(text).toContain('a typed 30 showed as 3');
     expect(text).toContain('Help & Learning, Support & feedback and the theme');
+    // Search is in the bar wherever it was before (review of 2026-09-29), and
+    // the menu scrolls on a short screen.
+    expect(bar!.howItAffectsYou).toContain('Search stays in the bar wherever it was before');
+    expect(bar!.howItAffectsYou).toContain('scrolls');
+    // The text Back links and the cameras' Done and Cancel; and what moved.
+    expect(buttons!.whatChanged).toContain('Done and Cancel on the counting cameras');
+    expect(buttons!.howItAffectsYou).toContain('a few points lower');
+    expect(buttons!.howItAffectsYou).toContain('moved into its place');
     // Nothing it cannot stand behind: the keyboard entry claims room, not a
     // scroll it has not been seen to do; no measured claims; no "book".
     expect(keyboard!.whatChanged).toContain('can be scrolled into view');
