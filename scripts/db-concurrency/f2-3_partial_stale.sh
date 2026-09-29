@@ -7,8 +7,11 @@
 # commit, the commit re-checks inside its own transaction, and the message
 # (core describePartialResult) is computed from readiness read AFTER the
 # commit, so when stock moves in between the message reports the difference
-# instead of echoing the preview. Numbered 0380 as the next free number at
-# build time (the plan's "<next>"); it pins no migration of its own.
+# instead of echoing the preview. Named for the feature, not a migration:
+# every other script here carries the number of the migration it proves, F2-3
+# has none, and 0380 (the number this one had while it was built) is
+# 0380_report_rpcs_caller_scope on main. The fixture ids keep their
+# 03801111-... namespace (it collides with nothing).
 #
 #   0. Control. A pending order asks 8 + 4 of an item with 10 on hand (two
 #      lines of the same item). Preview: holds 10 of 12. Nothing moves;
@@ -53,7 +56,7 @@
 # Fixtures are committed under the 03801111-... namespace and removed at the
 # start and the end. Exit status 0 = every check passed.
 #
-# Usage: bash scripts/db-concurrency/0380_partial_stale.sh
+# Usage: bash scripts/db-concurrency/f2-3_partial_stale.sh
 
 set -uo pipefail
 
@@ -134,17 +137,17 @@ cleanup || exit 1
 # hold when the other session calls it. The backordered order has handed 6 of
 # 10 over, so it owes 4.
 "${PSQL[@]}" >/dev/null <<SQL
-insert into auth.users (id, email, raw_user_meta_data) values ('$MGR', '0380-2s-mgr@test.local', '{}'::jsonb);
-insert into public.organizations (id, name, slug) values ('$ORG', '0380 Two Session Org', '0380-two-session');
+insert into auth.users (id, email, raw_user_meta_data) values ('$MGR', 'f23-2s-mgr@test.local', '{}'::jsonb);
+insert into public.organizations (id, name, slug) values ('$ORG', 'F2-3 Two Session Org', 'f2-3-two-session');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values ('$ORG', '$MGR', 'manager', now());
-insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', '0380 2S Main', 'WH-0380-2S', 'active');
+insert into public.warehouses (id, organization_id, name, code, status) values ('$WH', '$ORG', 'F2-3 2S Main', 'WH-F23-2S', 'active');
 insert into public.inventory_items (id, organization_id, warehouse_id, name, sku, quantity_on_hand, status) values
-  ('$A0', '$ORG', '$WH', '2S control',    'SKU-0380-A0', 10, 'active'),
-  ('$A1', '$ORG', '$WH', '2S stale seq',  'SKU-0380-A1', 10, 'active'),
-  ('$A2', '$ORG', '$WH', '2S stale conc', 'SKU-0380-A2', 10, 'active'),
-  ('$A3', '$ORG', '$WH', '2S open hold',  'SKU-0380-A3', 10, 'active'),
-  ('$A4', '$ORG', '$WH', '2S no lock',    'SKU-0380-A4', 10, 'active'),
-  ('$R1', '$ORG', '$WH', '2S resume',     'SKU-0380-R1', 6,  'active');
+  ('$A0', '$ORG', '$WH', '2S control',    'SKU-F23-A0', 10, 'active'),
+  ('$A1', '$ORG', '$WH', '2S stale seq',  'SKU-F23-A1', 10, 'active'),
+  ('$A2', '$ORG', '$WH', '2S stale conc', 'SKU-F23-A2', 10, 'active'),
+  ('$A3', '$ORG', '$WH', '2S open hold',  'SKU-F23-A3', 10, 'active'),
+  ('$A4', '$ORG', '$WH', '2S no lock',    'SKU-F23-A4', 10, 'active'),
+  ('$R1', '$ORG', '$WH', '2S resume',     'SKU-F23-R1', 6,  'active');
 insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type) values
   ('$P0', '$ORG', '$WH', 'pending_approval', 'internal', '$MGR', 'pickup'),
   ('$P1', '$ORG', '$WH', 'pending_approval', 'internal', '$MGR', 'pickup'),

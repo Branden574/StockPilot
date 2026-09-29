@@ -6,7 +6,7 @@ import { describePartialResult, previewPartialFulfilment, type PartialAction } f
 import { assessOrderReadiness, parseOrderReadinessFacts, type OrderReadinessResult } from './readiness';
 
 /**
- * THE MESSAGE HALF OF scripts/db-concurrency/0380_partial_stale.sh (F2-3).
+ * THE MESSAGE HALF OF scripts/db-concurrency/f2-3_partial_stale.sh (F2-3).
  *
  * The script runs the real functions on the LOCAL stack in two sessions: it
  * reads order_readiness_facts for the preview, lets another session hold
@@ -42,7 +42,7 @@ function resultOf(raw: unknown): OrderReadinessResult {
   return { state: 'ok', assessment: assessOrderReadiness(facts, { now: facts.observedAt }) };
 }
 
-describe.skipIf(!CASES_FILE)('two-session partial stale (0380_partial_stale.sh): the message from the real re-read', () => {
+describe.skipIf(!CASES_FILE)('two-session partial stale (f2-3_partial_stale.sh): the message from the real re-read', () => {
   const cases: StaleCase[] = CASES_FILE ? JSON.parse(readFileSync(CASES_FILE, 'utf8')) : [];
 
   it('has the cases the script wrote', () => {
