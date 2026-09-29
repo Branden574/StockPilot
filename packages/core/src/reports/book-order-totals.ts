@@ -1149,6 +1149,35 @@ export function bookReportRowIdentity(row: {
   };
 }
 
+export interface BookReportIdentityPart {
+  /** An SKU, ISBN/Barcode or rack label is one unit and is never broken
+   *  across lines; a warehouse name may wrap. */
+  kind: 'sku' | 'identifier' | 'warehouse' | 'rack';
+  text: string;
+}
+
+/** The pieces of the identity line, in order, for a screen that lays each
+ *  one out (keeping 'ISBN 978-0-14-044913-6' whole). Joined with ' · ' they
+ *  are exactly formatBookReportIdentityLine. */
+export function bookReportIdentityParts(row: {
+  sku: string | null;
+  identifier: string | null;
+  warehouseName: string | null;
+  binLocation: string | null;
+}): BookReportIdentityPart[] {
+  const id = bookReportRowIdentity(row);
+  const warehouse = row.warehouseName?.trim() || null;
+  const bin = row.binLocation?.trim() || null;
+  const parts: BookReportIdentityPart[] = [];
+  if (id.skuLabel) parts.push({ kind: 'sku', text: id.skuLabel });
+  if (id.identifier && id.identifierLabel) {
+    parts.push({ kind: 'identifier', text: `${id.identifierLabel} ${id.identifier}` });
+  }
+  if (warehouse) parts.push({ kind: 'warehouse', text: warehouse });
+  if (bin) parts.push({ kind: 'rack', text: `Rack ${bin}` });
+  return parts;
+}
+
 /** One line: 'SKU BK-123 · ISBN 9780140449136 · DC4 · Rack 12-B'. */
 export function formatBookReportIdentityLine(row: {
   sku: string | null;
@@ -1156,13 +1185,8 @@ export function formatBookReportIdentityLine(row: {
   warehouseName: string | null;
   binLocation: string | null;
 }): string {
-  const id = bookReportRowIdentity(row);
-  return [
-    id.skuLabel,
-    id.identifier && id.identifierLabel ? `${id.identifierLabel} ${id.identifier}` : null,
-    id.place || null,
-  ]
-    .filter(Boolean)
+  return bookReportIdentityParts(row)
+    .map((part) => part.text)
     .join(' · ');
 }
 

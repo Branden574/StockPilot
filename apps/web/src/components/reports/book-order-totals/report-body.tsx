@@ -42,7 +42,6 @@ import {
   bookReportWarehouseLine,
   bookReportZoneLine,
   copiesRequestedText,
-  formatBookReportIdentityLine,
   formatListFooter,
   formatReportDate,
   formatReportQuantity,
@@ -65,6 +64,7 @@ import { BookCover, type BookCoverSource } from './book-cover';
 import { BookReportExportMenu } from './export-menu';
 import { BookReportFilterBar } from './filter-bar';
 import { BOOK_REPORT_PATH } from './hrefs';
+import { BookIdentityLine } from './identity-line';
 import { BookOrdersDrawer, ViewOrdersButton } from './orders-drawer';
 import {
   BookReportBusyRegion,
@@ -452,7 +452,7 @@ function BooksTable({
             <TableHead scope="col" className="hidden md:table-cell">
               {BOOK_REPORT_UI.columnLatest}
             </TableHead>
-            <TableHead scope="col" className="px-2 sm:px-3">
+            <TableHead scope="col" className="hidden sm:table-cell sm:px-3">
               <span className="sr-only">{BOOK_REPORT_UI.columnActions}</span>
             </TableHead>
           </TableRow>
@@ -468,7 +468,6 @@ function BooksTable({
 }
 
 function BookRow({ row, cover }: { row: BookReportRow; cover: Promise<BookCoverSource> }) {
-  const identity = formatBookReportIdentityLine(row);
   const badges = bookReportRowBadges(row);
   return (
     <TableRow data-item-id={row.itemId}>
@@ -477,9 +476,7 @@ function BookRow({ row, cover }: { row: BookReportRow; cover: Promise<BookCoverS
       </TableCell>
       <th scope="row" className="px-2 py-2 text-left align-middle font-normal sm:px-3">
         <span className="block font-medium [overflow-wrap:anywhere]">{row.name}</span>
-        {identity ? (
-          <span className="text-muted-foreground block text-xs [overflow-wrap:anywhere]">{identity}</span>
-        ) : null}
+        <BookIdentityLine row={row} className="text-muted-foreground block text-xs" />
         <span className="text-muted-foreground block text-xs sm:hidden">
           {[ordersCountText(row.orders), latestOrderText(row.latestOrderDate)].filter(Boolean).join(' · ')}
         </span>
@@ -495,6 +492,12 @@ function BookRow({ row, cover }: { row: BookReportRow; cover: Promise<BookCoverS
       </th>
       <TableCell className="px-2 text-right font-semibold tabular-nums sm:px-3">
         {row.countsAsCopies ? formatReportQuantity(row.copies) : rowQuantityText(row)}
+        {/* At phone width View orders sits under the total, so the Book
+            column has room to keep an ISBN whole and the table fits a
+            390 px screen; from sm up it has its own column (below). */}
+        <span className="mt-2 block sm:hidden">
+          <ViewOrdersButton itemId={row.itemId} title={row.name} />
+        </span>
       </TableCell>
       <TableCell className="hidden text-right tabular-nums sm:table-cell">
         {row.orders.toLocaleString('en-US')}
@@ -502,7 +505,7 @@ function BookRow({ row, cover }: { row: BookReportRow; cover: Promise<BookCoverS
       <TableCell className="hidden whitespace-nowrap md:table-cell">
         {formatReportDate(row.latestOrderDate)}
       </TableCell>
-      <TableCell className="px-2 text-right sm:px-3">
+      <TableCell className="hidden text-right sm:table-cell sm:px-3">
         <ViewOrdersButton itemId={row.itemId} title={row.name} />
       </TableCell>
     </TableRow>

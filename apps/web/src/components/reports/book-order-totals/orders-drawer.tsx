@@ -37,7 +37,6 @@ import {
   bookReportViewOrdersLabel,
   bookReportWarehouseLine,
   combinedLinesText,
-  formatBookReportIdentityLine,
   formatListFooter,
   formatOrderNumber,
   formatReportDate,
@@ -51,6 +50,7 @@ import {
 } from '@stockpilot/core';
 
 import { bookReportOrdersApiUrl, readBookReportDrawer, withBookReportDrawer } from './hrefs';
+import { BookIdentityLine } from './identity-line';
 
 /**
  * VIEW ORDERS: the orders behind one book's total, in a side sheet.
@@ -266,7 +266,6 @@ function OrdersBody({
 }) {
   const book = answer.book!;
   const wording = bookReportQuantityWording(book);
-  const identity = formatBookReportIdentityLine(book);
   const fulfilled = fulfilledReturnedLine(answer.totals);
   const totalPages = totalPagesFor(answer.totalCount, answer.pageSize);
   const footer = formatListFooter(
@@ -283,7 +282,7 @@ function OrdersBody({
   return (
     <div className="space-y-4">
       <div className="text-muted-foreground space-y-1 text-xs">
-        {identity ? <p>{identity}</p> : null}
+        <BookIdentityLine row={book} className="block" />
         <p>{bookReportRangeLine(answer.range)}</p>
         <p>{bookReportStatusLine(query.statusGroups, statusLabels)}</p>
         <p>{bookReportWarehouseLine(answer.filters.warehouse, answer.warehouse.source)}</p>
@@ -304,10 +303,10 @@ function OrdersBody({
             <caption className="sr-only">{bookReportDrawerHeader(book, answer.totals)}</caption>
             <thead className="bg-muted/40 text-muted-foreground text-[11px] uppercase tracking-wider">
               <tr>
-                <th scope="col" className="px-3 py-2 text-left font-semibold">
+                <th scope="col" className="whitespace-nowrap px-3 py-2 text-left font-semibold">
                   {BOOK_REPORT_ORDER_COLUMNS.orderNumber}
                 </th>
-                <th scope="col" className="px-3 py-2 text-left font-semibold">
+                <th scope="col" className="whitespace-nowrap px-3 py-2 text-left font-semibold">
                   {BOOK_REPORT_ORDER_COLUMNS.orderDate}
                 </th>
                 <th scope="col" className="px-3 py-2 text-left font-semibold">
@@ -328,7 +327,13 @@ function OrdersBody({
                 const combined = combinedLinesText(row.lines);
                 return (
                   <tr key={row.orderId} className="border-t">
-                    <th scope="row" className="px-3 py-2 text-left font-mono text-xs font-medium">
+                    {/* An order number is one unit: 'SO-' never sits over
+                        '001494' (a browser breaks after the hyphen). A
+                        narrow sheet scrolls the table inside its border. */}
+                    <th
+                      scope="row"
+                      className="whitespace-nowrap px-3 py-2 text-left font-mono text-xs font-medium tabular-nums"
+                    >
                       {href ? (
                         <Link href={href} prefetch={false} className="text-primary underline-offset-2 hover:underline">
                           {number}

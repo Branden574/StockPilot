@@ -184,12 +184,22 @@ describe('Book Order Totals page body', () => {
     }
     const rowA = screen.getByRole('row', { name: /Book A/ });
     expect(within(rowA).getByRole('rowheader')).toHaveTextContent('Book A');
-    expect(
-      within(rowA).getByText('SKU BK-A · ISBN 9780140449136 · North · Rack 12-B'),
-    ).toBeInTheDocument();
+    // The identity line reads exactly as before; its SKU, ISBN and rack are
+    // each kept whole (a narrow column breaks only between pieces).
+    const identity = rowA.querySelector('[data-book-identity]');
+    expect(identity).toHaveTextContent(/^SKU BK-A · ISBN 9780140449136 · North · Rack 12-B$/);
+    for (const kind of ['sku', 'identifier', 'rack']) {
+      expect(identity!.querySelector(`[data-part="${kind}"]`)).toHaveClass('whitespace-nowrap');
+    }
+    expect(identity!.querySelector('[data-part="warehouse"]')).not.toHaveClass('whitespace-nowrap');
     expect(within(rowA).getByText('30')).toBeInTheDocument();
     expect(within(rowA).getByText('Sep 20, 2026')).toBeInTheDocument();
-    expect(within(rowA).getByRole('button', { name: 'View orders for Book A' })).toBeInTheDocument();
+    // One View orders action per layout (the other is display:none): under
+    // the total at phone width, in its own column from sm up.
+    const actions = within(rowA).getAllByRole('button', { name: 'View orders for Book A' });
+    expect(actions).toHaveLength(2);
+    expect(actions[0]!.parentElement).toHaveClass('sm:hidden');
+    expect(actions[1]!.closest('td')).toHaveClass('hidden', 'sm:table-cell');
   });
 
   it('heads the quantity column "Quantity requested" when any book is in another unit', async () => {

@@ -92,6 +92,23 @@ describe('View orders drawer', () => {
     expect(within(dialog).getByText('Showing 1–3 of 3 orders · Page 1 of 1')).toBeInTheDocument();
   });
 
+  // Walk 2026-09-28: at 1440 px 'SO-' sat over '001494' (a browser breaks
+  // after the hyphen) and the identity line could break an ISBN mid-number.
+  it('keeps order numbers and identifiers whole, and lets the table scroll inside its border', async () => {
+    render(drawer());
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('SO-000003');
+    for (const number of ['SO-000001', 'SO-000002', 'SO-000003']) {
+      expect(within(dialog).getByText(number).closest('th')).toHaveClass('whitespace-nowrap');
+    }
+    const orderHeader = within(dialog).getByRole('columnheader', { name: 'Order #' });
+    expect(orderHeader).toHaveClass('whitespace-nowrap');
+    expect(within(dialog).getByRole('table').parentElement).toHaveClass('overflow-x-auto');
+    const identity = dialog.querySelector('[data-book-identity]');
+    expect(identity).toHaveTextContent(/^SKU BK-A · ISBN 9780140449136 · North · Rack 12-B$/);
+    expect(identity!.querySelector('[data-part="identifier"]')).toHaveClass('whitespace-nowrap');
+  });
+
   it('links an order only when the API says it may be opened; every other number is plain text', async () => {
     render(drawer());
     const dialog = await screen.findByRole('dialog');

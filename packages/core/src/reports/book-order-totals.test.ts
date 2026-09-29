@@ -17,6 +17,7 @@ import {
   bookReportOrderLink,
   bookReportQuantityWording,
   bookReportQueryKey,
+  bookReportIdentityParts,
   bookReportRowIdentity,
   bookReportStatusLabels,
   formatBookReportIdentityLine,
@@ -414,6 +415,30 @@ describe('row identity and wording', () => {
         binLocation: '12-B',
       }),
     ).toBe('SKU BK-123 · ISBN 9780140449136 · DC4 · Rack 12-B');
+  });
+  it('gives the identity line as pieces that join to exactly the line', () => {
+    const rows = [
+      { sku: 'BK-1', identifier: '978-0-14-044913-6', warehouseName: 'DC4', binLocation: '12-B' },
+      { sku: ' BK-2 ', identifier: null, warehouseName: null, binLocation: ' 7-A ' },
+      { sku: null, identifier: '9780140449137', warehouseName: 'Main DC', binLocation: null },
+      { sku: null, identifier: null, warehouseName: '  ', binLocation: null },
+    ];
+    expect(bookReportIdentityParts(rows[0]!)).toEqual([
+      { kind: 'sku', text: 'SKU BK-1' },
+      { kind: 'identifier', text: 'ISBN 978-0-14-044913-6' },
+      { kind: 'warehouse', text: 'DC4' },
+      { kind: 'rack', text: 'Rack 12-B' },
+    ]);
+    expect(bookReportIdentityParts(rows[3]!)).toEqual([]);
+    for (const row of rows) {
+      expect(
+        bookReportIdentityParts(row)
+          .map((p) => p.text)
+          .join(' · '),
+      ).toBe(formatBookReportIdentityLine(row));
+    }
+    expect(formatBookReportIdentityLine(rows[1]!)).toBe('SKU BK-2 · Rack 7-A');
+    expect(formatBookReportIdentityLine(rows[2]!)).toBe('Barcode 9780140449137 · Main DC');
   });
   it('says copies only for single-copy units', () => {
     expect(bookReportQuantityWording({ countsAsCopies: true, unit: 'ea' }).column).toBe(
