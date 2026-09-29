@@ -228,6 +228,20 @@ describe('loaders parse strictly and refuse answers for another workspace', () =
     });
   });
 
+  it('covers name the asked books whose cover could not be loaded (an older server sends none)', async () => {
+    apiMock.api.mockResolvedValueOnce({
+      organizationId: ORG,
+      covers: {},
+      unresolved: [BOOK_A.toUpperCase(), 'not-asked', 7],
+    });
+    expect(await getBookReportCovers(ORG, [BOOK_A, BOOK_B])).toEqual({
+      urls: {},
+      unresolved: [BOOK_A.toLowerCase()],
+    });
+    apiMock.api.mockResolvedValueOnce({ organizationId: ORG, covers: {} });
+    expect((await getBookReportCovers(ORG, [BOOK_A])).unresolved).toEqual([]);
+  });
+
   it('getBookOrderOptions parses the lists and the organization words', async () => {
     apiMock.api.mockResolvedValueOnce(optionsAnswer());
     const res = await getBookOrderOptions(ORG);
@@ -241,7 +255,8 @@ describe('loaders parse strictly and refuse answers for another workspace', () =
       covers: { [BOOK_A]: 'https://x.supabase.co/a.jpg?token=t', [BOOK_B]: 42, other: 'https://x/o.jpg' },
     });
     expect(await getBookReportCovers(ORG, [BOOK_A, BOOK_B])).toEqual({
-      [BOOK_A]: 'https://x.supabase.co/a.jpg?token=t',
+      urls: { [BOOK_A]: 'https://x.supabase.co/a.jpg?token=t' },
+      unresolved: [],
     });
     apiMock.api.mockResolvedValueOnce({ organizationId: OTHER_ORG, covers: {} });
     await expect(getBookReportCovers(ORG, [BOOK_A])).rejects.toMatchObject({ problem: 'workspace' });
@@ -367,6 +382,12 @@ describe('remembered answers: the key and offline honesty', () => {
 });
 
 describe('covers kept for the session', () => {
+  it('a cover that could not be loaded is not kept, so the next visit asks again', () => {
+    rememberBookReportCovers(ORG, {}, [BOOK_A, BOOK_B], [BOOK_A]);
+    expect(bookReportCoversKnown(ORG, [BOOK_B])).toBe(true);
+    expect(bookReportCoversKnown(ORG, [BOOK_A])).toBe(false);
+    forgetBookReportMemory();
+  });
   it('remembers asked books, with or without a cover, for this account only', () => {
     rememberBookReportCovers(ORG, { [BOOK_A]: 'https://x/a.jpg' }, [BOOK_A, BOOK_B]);
     expect(recallBookReportCover(ORG, BOOK_A)).toBe('https://x/a.jpg');

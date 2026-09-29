@@ -158,6 +158,13 @@ export async function resolveBookReportWarehouse(
 
 export type BookReportExportFormat = 'csv' | 'pdf';
 
+/** Cover URLs by item id, and the ids whose cover could not be loaded (not
+ *  those with no cover at all). */
+export interface BookCoverLookup {
+  urls: Record<string, string>;
+  unresolved: string[];
+}
+
 export const BOOK_REPORT_EXPORT_MAX_ROWS: Readonly<Record<BookReportExportFormat, number>> = {
   csv: BOOK_REPORT_CSV_MAX_ROWS,
   pdf: BOOK_REPORT_PDF_MAX_ROWS,
@@ -308,6 +315,22 @@ export class BookOrderTotalsService {
     itemIds: readonly string[],
     opts: { max?: number } = {},
   ): Promise<Record<string, string>> {
+    return (await this.coverLookup(itemIds, opts)).urls;
+  }
+
+  /**
+   * covers(), plus the books whose cover could not be LOADED, as distinct
+   * from books that have none: the lookup failed, or the book's image row
+   * could not be signed, or its URL was untrusted. The PDF counts these as
+   * "could not be loaded" and the page and the phone say "Cover could not be
+   * loaded" for them; "No cover" is only for a book with no image at all. A
+   * book the caller's read does not return is simply absent from both, like
+   * a book with no cover, so the answer says nothing RLS would not.
+   */
+  async coverLookup(
+    itemIds: readonly string[],
+    opts: { max?: number } = {},
+  ): Promise<BookCoverLookup> {
     this.gate();
     const max = opts.max ?? BOOK_REPORT_COVERS_MAX;
     const ids = [...new Set(itemIds.filter(isUuid).map((id) => id.toLowerCase()))];
@@ -316,8 +339,10 @@ export class BookOrderTotalsService {
         reason: 'too_many_ids',
       });
     }
-    if (ids.length === 0) return {};
+    if (ids.length === 0) return { urls: {}, unresolved: [] };
     const out: Record<string, string> = {};
+    const unresolvedOf = (resolvedOrNone: ReadonlySet<string>) =>
+      ids.filter((id) => !(id in out) && !resolvedOrNone.has(id));
     try {
       const ctx = this.ctx;
       const readable = await fetchAllRowsByIds<{ id: string }>(
@@ -334,12 +359,21 @@ export class BookOrderTotalsService {
             .range(from, to),
       );
       const allowed = readable.map((r) => r.id).filter((id) => ids.includes(id));
-      if (allowed.length === 0) return out;
-      const urls = await new ItemImagesService(ctx).primaryMasterUrlsForItems(allowed);
+      // Unreadable (hidden or missing) books are absent, never "unresolved".
+      const none = new Set(ids.filter((id) => !allowed.includes(id)));
+      if (allowed.length === 0) return { urls: out, unresolved: [] };
+      const imaged = new Set<string>();
+      const urls = await new ItemImagesService(ctx).primaryMasterUrlsForItems(allowed, {
+        imaged,
+      });
       let dropped = 0;
+      // A readable book with no URL and no image row simply has no cover.
       for (const id of allowed) {
         const url = urls.get(id);
-        if (!url) continue;
+        if (!url) {
+          if (!imaged.has(id)) none.add(id);
+          continue;
+        }
         if (isTrustedCoverUrl(url, env.NEXT_PUBLIC_SUPABASE_URL)) out[id] = url;
         else dropped += 1;
       }
@@ -351,7 +385,7 @@ export class BookOrderTotalsService {
           extra: { count: allowed.length, dropped },
         });
       }
-      return out;
+      return { urls: out, unresolved: unresolvedOf(none) };
     } catch (e) {
       void reportError(e instanceof ServiceError ? new Error(`covers failed: ${e.code}`) : e, {
         tag: 'reports.book_order_totals.covers',
@@ -359,13 +393,13 @@ export class BookOrderTotalsService {
         organizationId: this.ctx.organizationId,
         extra: { count: ids.length, failed: ids.length - Object.keys(out).length },
       });
-      return out;
+      return { urls: out, unresolved: unresolvedOf(new Set()) };
     }
   }
 
   /** The PDF's covers: the first BOOK_REPORT_PDF_COVER_CAP rows only. */
-  async pdfCovers(itemIds: readonly string[]): Promise<Record<string, string>> {
-    return this.covers(itemIds.slice(0, BOOK_REPORT_PDF_COVER_CAP), {
+  async pdfCovers(itemIds: readonly string[]): Promise<BookCoverLookup> {
+    return this.coverLookup(itemIds.slice(0, BOOK_REPORT_PDF_COVER_CAP), {
       max: BOOK_REPORT_PDF_COVER_CAP,
     });
   }

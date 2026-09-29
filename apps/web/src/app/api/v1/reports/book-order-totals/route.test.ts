@@ -226,10 +226,20 @@ describe('GET .../covers', () => {
     expect((await coversGET(req('/covers?ids='))).status).toBe(400);
     expect((await coversGET(req('/covers?ids=not-a-uuid'))).status).toBe(400);
   });
-  it('answers { organizationId, covers } (a hidden book is simply absent)', async () => {
+  it('answers { organizationId, covers, unresolved } (a hidden book is simply absent)', async () => {
     setup({ 'inventory_items.select': { data: [], error: null } });
     const res = await coversGET(req(`/covers?ids=${ITEM}`));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ organizationId: 'org-1', covers: {} });
+    expect(await res.json()).toEqual({ organizationId: 'org-1', covers: {}, unresolved: [] });
+  });
+  it('names the books whose cover lookup failed, so the phone never says "No cover" for them', async () => {
+    setup({ 'inventory_items.select': { data: null, error: { message: 'timeout' } } });
+    const res = await coversGET(req(`/covers?ids=${ITEM}`));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      organizationId: 'org-1',
+      covers: {},
+      unresolved: [ITEM.toLowerCase()],
+    });
   });
 });

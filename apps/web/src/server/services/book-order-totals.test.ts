@@ -18,7 +18,9 @@ import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supa
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn() }));
 vi.mock('@/lib/env', () => ({ env: { NEXT_PUBLIC_SUPABASE_URL: 'https://proj.supabase.co' } }));
 vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilter: vi.fn(async () => null) }));
-const primaryMasterUrlsForItems = vi.fn(async (_ids: string[]) => new Map<string, string>());
+const primaryMasterUrlsForItems = vi.fn(
+  async (_ids: string[], _opts?: { imaged?: Set<string> }) => new Map<string, string>(),
+);
 vi.mock('./item-images', () => ({ ItemImagesService: vi.fn() }));
 
 import { reportError } from '@/lib/error-reporter';
@@ -457,7 +459,7 @@ describe('covers', () => {
       ]),
     );
     const covers = await svc.covers([ITEM_A, HIDDEN]);
-    expect(primaryMasterUrlsForItems).toHaveBeenCalledWith([ITEM_A]);
+    expect(primaryMasterUrlsForItems).toHaveBeenCalledWith([ITEM_A], { imaged: expect.any(Set) });
     expect(Object.keys(covers)).toEqual([ITEM_A]);
     // The authorizing read is the caller's own, scoped to books of this org.
     const chain = stub.chainArgsAll.get('inventory_items.select')![0]!;
@@ -487,6 +489,34 @@ describe('covers', () => {
     expect(await svc.covers([ITEM_A])).toEqual({});
     const extra = vi.mocked(reportError).mock.calls.at(-1)![1].extra;
     expect(extra).toEqual({ count: 1, failed: 1 });
+  });
+  it('coverLookup: a failed lookup is "could not be loaded", never "no cover"', async () => {
+    const { svc } = service({ 'inventory_items.select': readableItems([ITEM_A, ITEM_B]) });
+    primaryMasterUrlsForItems.mockRejectedValue(new Error('sign failed'));
+    expect(await svc.coverLookup([ITEM_A, ITEM_B])).toEqual({
+      urls: {},
+      unresolved: [ITEM_A, ITEM_B],
+    });
+  });
+  it('coverLookup: an image that could not be signed and an untrusted URL are unresolved; a book with no image and a book the caller cannot read are not', async () => {
+    const C = '0e000000-0000-4000-8000-000000000f0c';
+    const { svc } = service({ 'inventory_items.select': readableItems([ITEM_A, ITEM_B, C]) });
+    primaryMasterUrlsForItems.mockImplementation(
+      async (_ids: string[], opts?: { imaged?: Set<string> }) => {
+        // A has an image row that failed to sign; C has an untrusted URL; B has none.
+        opts?.imaged?.add(ITEM_A);
+        opts?.imaged?.add(C);
+        return new Map([[C, 'http://169.254.169.254/latest/meta-data']]);
+      },
+    );
+    const got = await svc.coverLookup([ITEM_A, ITEM_B, C, HIDDEN]);
+    expect(got.urls).toEqual({});
+    expect([...got.unresolved].sort()).toEqual([ITEM_A, C].sort());
+  });
+  it('pdfCovers answers the lookup (urls and unresolved) for the first 500 rows', async () => {
+    const { svc } = service({ 'inventory_items.select': readableItems([ITEM_A]) });
+    primaryMasterUrlsForItems.mockRejectedValue(new Error('down'));
+    expect(await svc.pdfCovers([ITEM_A])).toEqual({ urls: {}, unresolved: [ITEM_A] });
   });
   it('refuses more ids than the page size', async () => {
     const { svc } = service({});

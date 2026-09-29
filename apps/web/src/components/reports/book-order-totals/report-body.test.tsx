@@ -44,7 +44,7 @@ vi.mock('@/lib/dashboard/request-cache', () => ({
   })),
 }));
 vi.mock('@/server/services/item-images', () => ({ ItemImagesService: vi.fn() }));
-const svc = vi.hoisted(() => ({ page: vi.fn(), covers: vi.fn() }));
+const svc = vi.hoisted(() => ({ page: vi.fn(), coverLookup: vi.fn() }));
 vi.mock('@/server/services/book-order-totals', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/server/services/book-order-totals')>()),
   BookOrderTotalsService: { forCurrentUser: vi.fn(async () => svc) },
@@ -115,7 +115,7 @@ beforeEach(() => {
   svc.page.mockImplementation(async (_q: unknown, w: { id: string | null; source: string }) =>
     totalsResponse({}, w as never),
   );
-  svc.covers.mockResolvedValue({});
+  svc.coverLookup.mockResolvedValue({ urls: {}, unresolved: [] });
   fetchMock.mockImplementation(async (url: string) => {
     if (url.endsWith('/options')) return jsonResponse(optionsResponse());
     return jsonResponse(ordersJson());
@@ -428,30 +428,43 @@ describe('Book Order Totals page body', () => {
   });
 
   it('covers arrive after the numbers; a missing or failed cover is a placeholder and never changes a total', async () => {
-    let release!: (v: Record<string, string>) => void;
-    svc.covers.mockReturnValue(new Promise((r) => (release = r)));
+    let release!: (v: { urls: Record<string, string>; unresolved: string[] }) => void;
+    svc.coverLookup.mockReturnValue(new Promise((r) => (release = r)));
     render(await body());
     // Numbers first, covers still pending.
     expect(screen.getByRole('group', { name: 'Total books ordered' })).toHaveTextContent('34');
     expect(document.querySelectorAll('[data-cover-state="loading"]').length).toBe(2);
     await act(async () => {
       release({
-        [ITEM_A]: 'https://proj.supabase.co/storage/v1/object/sign/item-images/a.jpg?token=t',
+        urls: {
+          [ITEM_A]: 'https://proj.supabase.co/storage/v1/object/sign/item-images/a.jpg?token=t',
+        },
+        unresolved: [],
       });
     });
     expect(await screen.findByAltText('Cover of Book A')).toBeInTheDocument();
     const rowB = screen.getByRole('row', { name: /Book B/ });
     expect(within(rowB).getByText('No cover')).toBeInTheDocument();
-    expect(svc.covers).toHaveBeenCalledWith([ITEM_A, ITEM_B]);
+    expect(svc.coverLookup).toHaveBeenCalledWith([ITEM_A, ITEM_B]);
     expect(screen.getByRole('group', { name: 'Total books ordered' })).toHaveTextContent('34');
   });
 
-  it('covers that fail to resolve at all leave every row and total in place', async () => {
-    svc.covers.mockRejectedValue(new Error('sign failed'));
+  it('covers that fail to resolve at all leave every row and total in place, and say they could not be loaded', async () => {
+    svc.coverLookup.mockRejectedValue(new Error('sign failed'));
     render(await body());
-    await waitFor(() => expect(screen.getAllByText('No cover')).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByText('Cover could not be loaded')).toHaveLength(2));
+    expect(screen.queryByText('No cover')).toBeNull();
     expect(screen.getByRole('group', { name: 'Total books ordered' })).toHaveTextContent('34');
     expect(screen.getAllByRole('row')).toHaveLength(3);
+  });
+
+  it('a cover the lookup could not load says so; a book with no cover says "No cover"', async () => {
+    svc.coverLookup.mockResolvedValue({ urls: {}, unresolved: [ITEM_A] });
+    render(await body());
+    const rowA = screen.getByRole('row', { name: /Book A/ });
+    const rowB = screen.getByRole('row', { name: /Book B/ });
+    expect(await within(rowA).findByText('Cover could not be loaded')).toBeInTheDocument();
+    expect(within(rowB).getByText('No cover')).toBeInTheDocument();
   });
 
   it('marks a row in another unit and leaves it out of the copy total with a disclosure', async () => {

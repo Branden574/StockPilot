@@ -131,6 +131,8 @@ export default function BookOrdersScreen() {
   const [refreshing, setRefreshing] = React.useState(false);
   const [viewer, setViewer] = React.useState<string | null>(null);
   const [coverUrl, setCoverUrl] = React.useState<string | null>(null);
+  // The cover could not be loaded (a failed lookup), as distinct from none.
+  const [coverFailed, setCoverFailed] = React.useState(false);
 
   const key = switched ? null : bookReportOrdersKey(userId, orgId, itemId, request, page);
   const view = bookReportView(stored, key, offline);
@@ -218,12 +220,17 @@ export default function BookOrdersScreen() {
     const ctrl = new AbortController();
     const epoch = accountEpoch();
     getBookReportCovers(orgId, [itemId], ctrl.signal).then(
-      (urls) => {
+      ({ urls, unresolved }) => {
         if (ctrl.signal.aborted || epoch !== accountEpoch() || orgRef.current !== orgId) return;
-        rememberBookReportCovers(orgId, urls, [itemId]);
-        setCoverUrl(urls[itemId] ?? null);
+        rememberBookReportCovers(orgId, urls, [itemId], unresolved);
+        const url = urls[itemId.toLowerCase()] ?? null;
+        setCoverUrl(url);
+        setCoverFailed(url === null && unresolved.includes(itemId.toLowerCase()));
       },
-      () => undefined,
+      () => {
+        if (ctrl.signal.aborted || epoch !== accountEpoch() || orgRef.current !== orgId) return;
+        setCoverFailed(true);
+      },
     );
     return () => ctrl.abort();
   }, [orgId, itemId, offline, switched]);
@@ -320,6 +327,7 @@ export default function BookOrdersScreen() {
         answer={view.data.answer}
         banner={view.banner}
         cover={coverUrl ?? recallBookReportCover(orgId, view.data.answer.book?.itemId ?? '')}
+        coverFailed={coverFailed}
         statusGroups={baseQuery.statusGroups}
         statusLabels={statusLabels}
         stacked={stacked}
@@ -370,6 +378,7 @@ function OrdersBody({
   answer,
   banner,
   cover,
+  coverFailed,
   statusGroups,
   statusLabels,
   stacked,
@@ -380,6 +389,7 @@ function OrdersBody({
   answer: BookOrderOrdersResponse;
   banner: string | null;
   cover: string | null;
+  coverFailed: boolean;
   statusGroups: readonly BookReportStatusGroup[];
   statusLabels: Readonly<Record<OrderStatusKey, string>>;
   stacked: boolean;
@@ -422,6 +432,7 @@ function OrdersBody({
         <BookCover
           uri={cover}
           title={book.name}
+          failed={coverFailed}
           width={72}
           height={108}
           onPress={cover ? () => onViewCover(cover) : undefined}

@@ -188,9 +188,15 @@ export default function BookOrderTotalsScreen() {
   const [viewer, setViewer] = React.useState<{ uri: string; title: string } | null>(null);
   // Covers that arrived while this screen is open (state, so a row re-renders
   // with its picture); the session memo fills in the rest, offline included.
-  const [covers, setCovers] = React.useState<{ orgId: string | null; urls: Record<string, string> }>({
+  const [covers, setCovers] = React.useState<{
+    orgId: string | null;
+    urls: Record<string, string>;
+    /** Books whose cover could not be loaded (never "No cover"). */
+    failed: Record<string, true>;
+  }>({
     orgId: null,
     urls: {},
+    failed: {},
   });
   const [options, setOptions] = React.useState<{ orgId: string; data: BookOrderOptionsResponse } | null>(
     () => {
@@ -347,16 +353,32 @@ export default function BookOrderTotalsScreen() {
     if (bookReportCoversKnown(orgId, ids)) return;
     const ctrl = new AbortController();
     const epoch = accountEpoch();
+    const markFailed = (failedIds: readonly string[]) => (prev: typeof covers) => {
+      const failed: Record<string, true> = { ...(prev.orgId === orgId ? prev.failed : {}) };
+      for (const id of failedIds) failed[id.toLowerCase()] = true;
+      return failed;
+    };
     getBookReportCovers(orgId, ids, ctrl.signal).then(
-      (urls) => {
+      ({ urls, unresolved }) => {
         if (ctrl.signal.aborted || epoch !== accountEpoch() || orgRef.current !== orgId) return;
-        rememberBookReportCovers(orgId, urls, ids);
+        rememberBookReportCovers(orgId, urls, ids, unresolved);
         setCovers((prev) => ({
           orgId,
           urls: { ...(prev.orgId === orgId ? prev.urls : {}), ...urls },
+          failed: markFailed(unresolved)(prev),
         }));
       },
-      () => undefined,
+      () => {
+        // The lookup itself failed: every cover on the page could not be
+        // loaded (never "No cover"). Nothing is remembered, so a later visit
+        // asks again.
+        if (ctrl.signal.aborted || epoch !== accountEpoch() || orgRef.current !== orgId) return;
+        setCovers((prev) => ({
+          orgId,
+          urls: prev.orgId === orgId ? prev.urls : {},
+          failed: markFailed(ids)(prev),
+        }));
+      },
     );
     return () => ctrl.abort();
   }, [orgId, offline, coverIds]);
@@ -717,6 +739,9 @@ export default function BookOrderTotalsScreen() {
               (covers.orgId === orgId ? covers.urls[item.itemId.toLowerCase()] : undefined) ??
               recallBookReportCover(orgId, item.itemId)
             }
+            coverFailed={
+              covers.orgId === orgId && covers.failed[item.itemId.toLowerCase()] === true
+            }
             stacked={stacked}
             onOpen={() => {
               if (data) router.push(bookReportDrillDownHref(item.itemId, data.query) as Href);
@@ -987,12 +1012,14 @@ function Metric({
 function BookRow({
   row,
   cover,
+  coverFailed,
   stacked,
   onOpen,
   onViewCover,
 }: {
   row: BookReportRow;
   cover: string | null;
+  coverFailed: boolean;
   stacked: boolean;
   onOpen: () => void;
   onViewCover: (uri: string) => void;
@@ -1016,6 +1043,7 @@ function BookRow({
         <BookCover
           uri={cover}
           title={row.name}
+          failed={coverFailed}
           onPress={cover ? () => onViewCover(cover) : undefined}
         />
         <Pressable

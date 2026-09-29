@@ -316,6 +316,9 @@ export function bookCoverAlt(title: string): string {
   return `Cover of ${title}`;
 }
 export const BOOK_COVER_PLACEHOLDER = 'No cover';
+/** A cover exists (or could not be looked up) but did not load: never called
+ *  "No cover". */
+export const BOOK_COVER_UNAVAILABLE = 'Cover could not be loaded';
 
 /** The drill-down header: 'Copies of this book requested: 30 in 3 orders',
  *  or 'Quantity requested (pack of 10): 12 in 2 orders'. Always the book's

@@ -23,6 +23,7 @@ import { NextResponse } from 'next/server';
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { audit } from '@/server/services/audit';
+import { BookOrderTotalsService } from '@/server/services/book-order-totals';
 
 import { GET } from './route';
 
@@ -225,6 +226,20 @@ describe('GET /api/v1/reports/book-order-totals/export', () => {
     expect(text).toContain('"# Warehouse: North (your warehouse view)"');
     expect(text).toContain(`${ITEM},Book A,BK-A,SKU BK-A,ISBN,9780140449136,ISBN 9780140449136`);
     expect(text).not.toMatch(/https?:/);
+  });
+
+  it('PDF with covers: a cover lookup that failed is counted as could not be loaded, never as no cover', async () => {
+    setup();
+    const spy = vi
+      .spyOn(BookOrderTotalsService.prototype, 'pdfCovers')
+      .mockResolvedValue({ urls: {}, unresolved: [ITEM] });
+    const res = await GET(url('format=pdf&photos=1&warehouse=all'));
+    expect(res.status).toBe(200);
+    expect(vi.mocked(audit).mock.calls[0]![0]).toMatchObject({
+      event: 'pdf.exported',
+      extra: { photos: true, coversShown: 0, coversFailed: 1, coversPastCap: 0 },
+    });
+    spy.mockRestore();
   });
 
   it('PDF without covers: inline, audited as pdf.exported, a real PDF body', async () => {

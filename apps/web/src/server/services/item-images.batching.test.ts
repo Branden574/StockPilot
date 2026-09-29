@@ -236,6 +236,24 @@ describe('ItemImagesService signing on a cold cache', () => {
     });
   });
 
+  it('primaryMasterUrlsForItems names, on request, every item that HAS an image row, signed or not', async () => {
+    // Book Order Totals tells "could not be loaded" from "no cover" with it.
+    createSignedUrlsMock.mockRejectedValue(new TypeError('fetch failed'));
+    slowSigner((path) => lost(path.split('/')[1]!));
+    const stub = makeSupabaseStub({
+      'item_images.select': imageTable({ withImages: (id) => !id.endsWith('99') }).fn,
+      'inventory_items.select': { data: [], error: null },
+    });
+    const ids = Array.from({ length: 100 }, (_, i) => itemId('7', i));
+    const imaged = new Set<string>();
+    const map = await service(stub.client).primaryMasterUrlsForItems(ids, { imaged });
+    // 99 items have an image row; 10 of them (every tenth) failed to sign.
+    expect(imaged.size).toBe(99);
+    expect(imaged.has(itemId('7', 99))).toBe(false);
+    expect(map.size).toBe(89);
+    expect(ids.filter((id) => imaged.has(id) && !map.has(id))).toHaveLength(10);
+  });
+
   it('exports: per-item signing keeps at most 20 in flight and reports the items left without a photo', async () => {
     const signer = slowSigner((path) => lost(path.split('/')[1]!));
     const stub = makeSupabaseStub({

@@ -296,9 +296,14 @@ describe('8. accessibility', () => {
   it('covers are contained, never cropped, with a spoken placeholder', () => {
     const cover = codeOnly(read('src/components/book-cover.tsx'));
     expect(cover).toContain('contentFit="contain"');
-    expect(cover).toContain('accessibilityLabel={BOOK_COVER_PLACEHOLDER}');
     expect(cover).toContain('accessibilityLabel={bookCoverAlt(title)}');
     expect(cover).toContain('onError={() => setFailedUri(uri)}');
+    // A cover that exists but failed (a failed load or lookup) is never "No cover".
+    expect(cover).toContain(
+      'failed || failedUri === uri ? BOOK_COVER_UNAVAILABLE : BOOK_COVER_PLACEHOLDER',
+    );
+    expect(codeOnly(read(LIST))).toContain('failed={coverFailed}');
+    expect(codeOnly(read(ORDERS))).toContain('failed={coverFailed}');
   });
 
   it("the list's cover and row are sibling buttons, never nested", () => {

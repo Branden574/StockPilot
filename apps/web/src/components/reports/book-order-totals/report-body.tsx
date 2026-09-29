@@ -61,7 +61,7 @@ import {
   type ResolvedBookReportWarehouse,
 } from '@stockpilot/core';
 
-import { BookCover } from './book-cover';
+import { BookCover, type BookCoverSource } from './book-cover';
 import { BookReportExportMenu } from './export-menu';
 import { BookReportFilterBar } from './filter-bar';
 import { BOOK_REPORT_PATH, bookReportPageHref, withBookReportPage } from './hrefs';
@@ -186,10 +186,17 @@ export async function BookOrderTotalsBody(props: BookOrderTotalsBodyProps) {
 
   const rows = answer.rows;
   // Covers for this page only, after the numbers, never awaited here. The
-  // promise never rejects; each cell gets its own one-URL promise.
-  const covers = svc.covers(rows.map((r) => r.itemId)).catch(() => ({}) as Record<string, string>);
-  const coverFor = (itemId: string): Promise<string | null> =>
-    covers.then((map) => map[itemId] ?? null);
+  // promise never rejects; each cell gets its own promise: a URL, no cover,
+  // or a cover that could not be loaded (a failed lookup counts as that).
+  const ids = rows.map((r) => r.itemId);
+  const covers = svc
+    .coverLookup(ids)
+    .catch(() => ({ urls: {} as Record<string, string>, unresolved: ids }));
+  const coverFor = (itemId: string): Promise<BookCoverSource> =>
+    covers.then((l) => ({
+      url: l.urls[itemId] ?? null,
+      failed: !(itemId in l.urls) && l.unresolved.includes(itemId),
+    }));
 
   const [row, viewNowId] = await Promise.all([orgRow, viewNow]);
   const statusLabels = bookReportStatusLabels(row?.order_status_config ?? null);
@@ -449,7 +456,7 @@ function BooksTable({
 }: {
   answer: BookOrderTotalsResponse;
   totalPages: number;
-  coverFor: (itemId: string) => Promise<string | null>;
+  coverFor: (itemId: string) => Promise<BookCoverSource>;
 }) {
   return (
     <div className="border-border bg-card rounded-md border">
@@ -489,7 +496,7 @@ function BooksTable({
   );
 }
 
-function BookRow({ row, cover }: { row: BookReportRow; cover: Promise<string | null> }) {
+function BookRow({ row, cover }: { row: BookReportRow; cover: Promise<BookCoverSource> }) {
   const identity = formatBookReportIdentityLine(row);
   const badges = bookReportRowBadges(row);
   return (

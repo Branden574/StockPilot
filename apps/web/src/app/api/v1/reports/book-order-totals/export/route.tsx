@@ -108,15 +108,19 @@ export async function GET(req: NextRequest) {
     } else {
       const ids = answer.rows.map((r) => r.itemId);
       let coverByItem = new Map<string, string | null>();
+      // Books whose cover lookup failed (not books with no cover): counted
+      // as "could not be loaded" in the note and the audit row.
+      let lookupFailed = 0;
       if (photos && ids.length > 0) {
-        const urls = await svc.pdfCovers(ids);
-        coverByItem = await prefetchImagesAsDataUris(Object.entries(urls), {
+        const lookup = await svc.pdfCovers(ids);
+        lookupFailed = lookup.unresolved.length;
+        coverByItem = await prefetchImagesAsDataUris(Object.entries(lookup.urls), {
           maxEdgePx: PDF_COVER_EDGE_PX,
         });
       }
       const withinCap = Math.min(ids.length, BOOK_REPORT_PDF_COVER_CAP);
       let shown = 0;
-      let failed = 0;
+      let failed = lookupFailed;
       for (const [, uri] of coverByItem) {
         if (uri) shown += 1;
         else failed += 1;

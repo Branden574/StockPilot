@@ -197,24 +197,33 @@ export async function getBookOrderOptions(
   return parsed;
 }
 
+/** Cover URLs by item id, and the asked books whose cover could not be
+ *  loaded (as distinct from books with no cover, which are simply absent). */
+export interface BookReportCovers {
+  urls: Record<string, string>;
+  unresolved: string[];
+}
+
 /**
- * Covers for the given books, as { itemId: url }. Only ids that were asked
- * for and only string URLs are kept; a book without a cover is absent. The
- * server authorizes each book before it signs anything. Covers never change
- * a number, so a caller treats a failure as "placeholders".
+ * Covers for the given books, as { itemId: url }, plus the books whose cover
+ * could not be loaded (`unresolved`; an older server sends none). Only ids
+ * that were asked for and only string URLs are kept; a book without a cover
+ * is absent. The server authorizes each book before it signs anything.
+ * Covers never change a number, so a caller treats a failure as
+ * "placeholders" saying the cover could not be loaded.
  */
 export async function getBookReportCovers(
   orgId: string,
   ids: readonly string[],
   signal?: AbortSignal,
-): Promise<Record<string, string>> {
+): Promise<BookReportCovers> {
   const path = bookReportCoversPath(ids);
-  if (!path) return {};
+  if (!path) return { urls: {}, unresolved: [] };
   const raw = await api<unknown>(path, { orgId, signal });
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new BookReportResponseError('shape');
   }
-  const o = raw as { organizationId?: unknown; covers?: unknown };
+  const o = raw as { organizationId?: unknown; covers?: unknown; unresolved?: unknown };
   if (o.organizationId !== orgId) throw new BookReportResponseError('workspace');
   if (!o.covers || typeof o.covers !== 'object' || Array.isArray(o.covers)) {
     throw new BookReportResponseError('shape');
@@ -226,7 +235,17 @@ export async function getBookReportCovers(
       out[id.toLowerCase()] = url;
     }
   }
-  return out;
+  const unresolved = Array.isArray(o.unresolved)
+    ? [
+        ...new Set(
+          o.unresolved
+            .filter((id): id is string => typeof id === 'string')
+            .map((id) => id.toLowerCase())
+            .filter((id) => asked.has(id) && !(id in out)),
+        ),
+      ]
+    : [];
+  return { urls: out, unresolved };
 }
 
 // ── Only the newest answer, for the workspace and account on screen ─────────
@@ -329,10 +348,15 @@ export function rememberBookReportCovers(
   orgId: string,
   covers: Record<string, string>,
   asked: readonly string[] = [],
+  unresolved: readonly string[] = [],
 ): void {
   const epoch = accountEpoch();
   const byId = new Map(Object.entries(covers).map(([id, url]) => [id.toLowerCase(), url]));
+  // A cover that could not be loaded is not "asked, none": leave it out so
+  // the next visit asks again.
+  const failed = new Set(unresolved.map((x) => x.toLowerCase()));
   for (const id of new Set([...asked.map((x) => x.toLowerCase()), ...byId.keys()])) {
+    if (failed.has(id) && !byId.has(id)) continue;
     const k = coverKey(orgId, id);
     coverMemo.delete(k);
     coverMemo.set(k, { epoch, url: byId.get(id) ?? '' });

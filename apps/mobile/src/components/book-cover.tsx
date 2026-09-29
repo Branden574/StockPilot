@@ -2,7 +2,7 @@ import { BookOpen } from 'lucide-react-native';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 
-import { BOOK_COVER_PLACEHOLDER, bookCoverAlt } from '@stockpilot/core';
+import { BOOK_COVER_PLACEHOLDER, BOOK_COVER_UNAVAILABLE, bookCoverAlt } from '@stockpilot/core';
 
 import { CachedImage } from '@/components/ui/cached-image';
 import { bookCoverCacheKey } from '@/lib/book-order-totals-view';
@@ -16,9 +16,11 @@ import { useTheme } from '@/lib/use-theme';
  *   - The disk cache key is the storage path without the signed token, so a
  *     rotated URL is still the same picture; an external cover keeps its
  *     whole URL as the key (bookCoverCacheKey).
- *   - No URL yet, no cover, or a failed load: a neutral book glyph read as
- *     "No cover". A missing picture never removes or changes a number; the
- *     row around it is drawn from the API's figures either way.
+ *   - No URL yet or no cover: a neutral book glyph read as "No cover". A
+ *     cover that could not be loaded (`failed`: the lookup failed, or the
+ *     picture failed to load) is the same glyph read as "Cover could not be
+ *     loaded". A missing picture never removes or changes a number; the row
+ *     around it is drawn from the API's figures either way.
  *   - With `onPress` and a picture, the cover is its own button ("Cover of
  *     <title>", opens it larger). It is a sibling of the row's button, never
  *     inside it: a touchable inside a touchable is unreachable with
@@ -30,12 +32,15 @@ export function BookCover({
   width = 48,
   height = 72,
   onPress,
+  failed = false,
 }: {
   uri: string | null;
   title: string;
   width?: number;
   height?: number;
   onPress?: () => void;
+  /** The cover exists or could not be looked up, but is not available. */
+  failed?: boolean;
 }) {
   const { c } = useTheme();
   // The URL that failed, so a new URL (a refreshed signature) gets its own try.
@@ -59,7 +64,9 @@ export function BookCover({
         style={frame}
         accessible
         accessibilityRole="image"
-        accessibilityLabel={BOOK_COVER_PLACEHOLDER}
+        accessibilityLabel={
+          failed || failedUri === uri ? BOOK_COVER_UNAVAILABLE : BOOK_COVER_PLACEHOLDER
+        }
       >
         <BookOpen size={Math.round(width * 0.42)} color={c.ink4} strokeWidth={1.4} />
       </View>
