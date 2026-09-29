@@ -59,7 +59,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           "Stock received into Staging stops a pick until it is placed on a rack, and finding an order's items in a long Staging list meant searching for each one.",
         howItAffectsYou:
-          "Placing stock works as it always has and needs the Transfer stock permission; without it the order says so instead of offering Put away. The list also shows the items' Unplaced stock, which picking can already take. Back on the order, choose Check again to see its readiness now.",
+          "Placing stock works as it always has and needs the Transfer stock permission; without it the order says so instead of offering Put away. The list shows the stock at the order's own warehouse, where its pick comes from, and says when stock at other warehouses was left out. It also shows the items' Unplaced stock, which picking can already take. Back on the order, choose Check again to see its readiness now.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/orders', label: 'View orders' },
         audience: {
@@ -77,7 +77,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Both hold only what is free at the moment you confirm, and nothing showed how much that was until the order had been approved or resumed.',
         howItAffectsYou:
-          'What was held is read from the order after it is approved or resumed, never copied from the preview. If stock changed in between, it says so, for example Holding 34 of 40 units, 2 fewer than shown because stock changed after you looked. An item on several lines of the order is shown once, with its lines combined.',
+          "What was held is read from the order after it is approved or resumed, never copied from the preview. If stock changed in between, it says so, for example Holding 34 of 40 units, 2 fewer than shown because stock changed after you looked. If the order's own lines changed in between, it says the order changed instead. An item on several lines of the order is shown once, with its lines combined.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/orders', label: 'View orders' },
         audience: { anyPermission: ['orders:approve'], modules: ['orders'] },

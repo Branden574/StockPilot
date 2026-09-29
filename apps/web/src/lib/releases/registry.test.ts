@@ -13,6 +13,7 @@ import {
   MODULE_REGISTRY,
   ORDER_LINE_HIDDEN_ITEM_NAME,
   PERMISSIONS,
+  PUT_AWAY_NEEDS_TRANSFER_COPY,
   releaseRegistrySchema,
   type ModuleId,
   type Release,
@@ -1435,7 +1436,15 @@ describe("F2-3 (fix what's holding an order up) is held as a draft", () => {
     expect(r.summary).toMatch(/^On the web and in the mobile app, /);
     const text = readerText(r).join(' ');
     expect(text).toContain('needs the Transfer stock permission');
+    // The same permission name the order itself shows (core), so the two
+    // cannot drift apart if the owner renames it.
+    expect(text).toContain(PUT_AWAY_NEEDS_TRANSFER_COPY.match(/the .+ permission/)![0]);
     expect(text).toContain('Showing items from SO-000123');
+    // Only the order's own warehouse is listed, and the list says so.
+    expect(text).toContain("the stock at the order's own warehouse");
+    expect(text).toContain('says when stock at other warehouses was left out');
+    // Lines changed in between are not blamed on stock.
+    expect(text).toContain("If the order's own lines changed in between, it says the order changed instead.");
     expect(text).toContain('Approved. Holding 36 of 40 units.');
     expect(text).toContain('2 fewer than shown because stock changed after you looked');
     expect(text).toContain('never copied from the preview');
