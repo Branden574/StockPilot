@@ -46,12 +46,21 @@ function ResolvedCover({ cover, title }: { cover: Promise<BookCoverSource>; titl
   const [failed, setFailed] = React.useState(false);
   if (!src || failed) return <CoverBox failed={failed || lookupFailed} />;
   const alt = bookCoverAlt(title);
+  // The cover is a focusable image ("Cover of <title>"), so the larger
+  // preview opens from the keyboard as well as on hover; Escape closes it.
+  // The wrapper carries the name; the inner <img> is decorative (alt=""),
+  // so the cover is announced once.
   return (
     <ImageHoverPreview src={src} alt={alt} title={title}>
-      <span className="border-border bg-muted/40 relative block h-14 w-10 overflow-hidden rounded-[3px] border">
+      <span
+        role="img"
+        aria-label={alt}
+        tabIndex={0}
+        className="border-border bg-muted/40 focus-visible:ring-ring relative block h-14 w-10 overflow-hidden rounded-[3px] border focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+      >
         <Image
           src={src}
-          alt={alt}
+          alt=""
           width={40}
           height={56}
           sizes="40px"

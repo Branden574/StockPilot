@@ -442,7 +442,7 @@ describe('Book Order Totals page body', () => {
         unresolved: [],
       });
     });
-    expect(await screen.findByAltText('Cover of Book A')).toBeInTheDocument();
+    expect(await screen.findByRole('img', { name: 'Cover of Book A' })).toBeInTheDocument();
     const rowB = screen.getByRole('row', { name: /Book B/ });
     expect(within(rowB).getByText('No cover')).toBeInTheDocument();
     expect(svc.coverLookup).toHaveBeenCalledWith([ITEM_A, ITEM_B]);
