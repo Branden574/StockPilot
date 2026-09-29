@@ -53,11 +53,13 @@ export type ExceptionRule =
    */
   | 'label_mismatch'
   /**
-   * The item's latest posted count found a different quantity than the book
-   * (F1-2). Posting already changed the book to the counted number, so the
-   * open question is whether that number is right: a recount answers it. The
-   * row opens for counts completed in the last COUNT_VARIANCE_OPEN_WINDOW_DAYS
-   * and clears only when a later completed count matches the book exactly.
+   * The item's latest posted count found a different quantity than the stock
+   * on record (F1-2). Posting already applied the difference, so the open
+   * question is whether the counted number is right. The row opens for counts
+   * completed in the last COUNT_VARIANCE_OPEN_WINDOW_DAYS; the system clears
+   * it when a later completed count matches the stock on record exactly, and
+   * (once the server offers it) the person who counted it or a manager can
+   * confirm the counted number, which closes it (exception-confirm.ts).
    */
   | 'count_variance';
 
@@ -182,8 +184,10 @@ export const EXCEPTION_RULES: Record<ExceptionRule, ExceptionRuleMeta> = {
     rule: 'count_variance',
     severity: 'warning',
     label: 'Count did not match the stock on record',
+    // Worded to stay true before and after counts can be confirmed: a phone
+    // keeps the core it shipped with after the server turns Confirm on.
     action:
-      'A posted count found a different quantity than StockPilot had on record, and posting changed the stock on record to the counted number. Recount to confirm that number before relying on it.',
+      'Posting each of these counts changed the stock on record by the difference shown. Open one to see what clears it. Acknowledging does not clear them.',
     explanations: [
       'Stock moved without the movement being recorded, such as a pick, transfer, return or receipt.',
       'Some of the units are stored in a place the count did not cover.',
@@ -191,7 +195,7 @@ export const EXCEPTION_RULES: Record<ExceptionRule, ExceptionRuleMeta> = {
       'An earlier adjustment or import left the stock on record wrong, and this count corrected it.',
     ],
     clearedBy:
-      'Clears when a later completed count of this item matches the stock on record exactly. A recount that finds another difference keeps it open with the new numbers.',
+      'Clears when a later completed count of this item matches the stock on record exactly, or when the counted number is confirmed on the exception where that is offered. A recount that finds another difference keeps it open with the new numbers. Acknowledging does not clear it.',
     actions: ['open_item'],
     recountable: true,
   },
@@ -557,24 +561,56 @@ export function describeOccurrence(
       return { title: itemName, detail, units: null };
     }
     case 'count_variance': {
-      const expected = num(f.expected);
-      const counted = num(f.counted);
-      const stored = num(f.variance);
-      const variance =
-        stored !== null && stored !== 0
-          ? stored
-          : expected !== null && counted !== null
-            ? roundQuantity(counted - expected)
-            : null;
-      const cc = formatCycleCountNumber(num(f.countNumber));
-      const ref = cc ? ` (${cc})` : '';
-      const detail =
-        variance === null || expected === null || counted === null
-          ? `a count did not match the stock on record${ref}`
-          : `found ${signedQuantity(variance)}: counted ${formatStockQuantity(counted)}, on record ${formatStockQuantity(expected)}${ref}`;
-      return { title: itemName, detail, units: variance === null ? null : Math.abs(variance) };
+      const n = countVarianceNumbers(f);
+      const found = countFoundSentence(n);
+      const cc = formatCycleCountNumber(n.countNumber);
+      const detail = found ?? `a count did not match the stock on record${cc ? ` (${cc})` : ''}`;
+      return { title: itemName, detail, units: n.variance === null ? null : Math.abs(n.variance) };
     }
   }
+}
+
+/** The numbers a count_variance row's facts carry, read defensively. */
+export interface CountVarianceNumbers {
+  /** The count the row names (facts.cycleCountId); null when unreadable. */
+  cycleCountId: string | null;
+  countNumber: number | null;
+  /** What was on record when the count was taken (the line's expected). */
+  expected: number | null;
+  counted: number | null;
+  /** counted - expected: what the post applied. */
+  variance: number | null;
+}
+
+export function countVarianceNumbers(facts: unknown): CountVarianceNumbers {
+  const f = record(facts);
+  const expected = num(f.expected);
+  const counted = num(f.counted);
+  const stored = num(f.variance);
+  const variance =
+    stored !== null && stored !== 0
+      ? stored
+      : expected !== null && counted !== null
+        ? roundQuantity(counted - expected)
+        : null;
+  return { cycleCountId: str(f.cycleCountId), countNumber: num(f.countNumber), expected, counted, variance };
+}
+
+/**
+ * "CC-000035 found 2 where 100 was on record (-98)", or "a count found ..."
+ * without a count number; null when the numbers cannot be read.
+ *
+ * Always true: what the count found, and what was on record when it was
+ * taken. The from/to form ("changed the stock on record from 100 to 2") is
+ * not used: the post applies counted minus expected on top of the stock on
+ * record at posting, so it is exact only when nothing moved in between.
+ */
+export function countFoundSentence(
+  n: Pick<CountVarianceNumbers, 'countNumber' | 'expected' | 'counted' | 'variance'>,
+): string | null {
+  if (n.variance === null || n.expected === null || n.counted === null) return null;
+  const cc = formatCycleCountNumber(n.countNumber);
+  return `${cc ?? 'a count'} found ${formatStockQuantity(n.counted)} where ${formatStockQuantity(n.expected)} was on record (${signedQuantity(n.variance)})`;
 }
 
 /** A quantity rounded to the columns' 4 decimal places, so a difference of two
@@ -593,19 +629,59 @@ export function signedQuantity(value: number): string {
 
 // ── Displayed state ─────────────────────────────────────────────────────────
 
-export type OccurrenceResolvedReason = 'cleared' | 'reclassified' | 'subject_gone';
+export type OccurrenceResolvedReason = 'cleared' | 'reclassified' | 'subject_gone' | 'confirmed';
+
+/** Every reason an occurrence can be resolved with (resolved_reason). */
+export const OCCURRENCE_RESOLVED_REASONS: readonly OccurrenceResolvedReason[] = [
+  'cleared',
+  'reclassified',
+  'subject_gone',
+  'confirmed',
+];
+
+/** A stored reason this build can word. A reason a newer build stored is not:
+ *  it reads as a plain "Resolved", never as one of these. */
+export function isOccurrenceResolvedReason(value: unknown): value is OccurrenceResolvedReason {
+  return typeof value === 'string' && (OCCURRENCE_RESOLVED_REASONS as readonly string[]).includes(value);
+}
+
+/** Who confirmed a counted number (exception_occurrences.confirmed_as): the
+ *  person who recorded the counted line, or a manager who did not. */
+export type CountConfirmedAs = 'counter' | 'manager';
+
+export function isCountConfirmedAs(value: unknown): value is CountConfirmedAs {
+  return value === 'counter' || value === 'manager';
+}
 
 /**
- * How each resolution reason reads. None of them says a person resolved it.
- * subject_gone: the item was archived or deleted, or (count_variance, 0372)
- * it can no longer be counted (discontinued, rental equipment, a kit), so no
- * count will ever re-check it: never worded as "cleared".
+ * How each resolution reason reads. Three are the system's own: the check
+ * no longer found the condition. subject_gone: the item was archived or
+ * deleted, or (count_variance, 0372) it can no longer be counted
+ * (discontinued, rental equipment, a kit), so no count will ever re-check it:
+ * never worded as "cleared". `confirmed` is the one a person resolves: the
+ * counter or a manager confirmed a count_variance row's counted number
+ * (resolvedReasonCopy adds who).
  */
 export const OCCURRENCE_RESOLVED_REASON_COPY: Record<OccurrenceResolvedReason, string> = {
   cleared: 'Cleared',
   reclassified: 'Now reported under another rule',
   subject_gone: 'Item archived, deleted or no longer counted',
+  confirmed: 'Count confirmed',
 };
+
+/**
+ * A resolution reason in words, or null when it cannot be worded (null, or a
+ * reason a newer build stored): the caller then says only "Resolved". A count
+ * confirmation reads with who confirmed it when that is known.
+ */
+export function resolvedReasonCopy(reason: unknown, confirmedAs?: CountConfirmedAs | null): string | null {
+  if (!isOccurrenceResolvedReason(reason)) return null;
+  if (reason === 'confirmed') {
+    if (confirmedAs === 'counter') return 'Confirmed by the counter';
+    if (confirmedAs === 'manager') return 'Confirmed by a manager';
+  }
+  return OCCURRENCE_RESOLVED_REASON_COPY[reason];
+}
 
 /** The recount linked to an occurrence, as far as the reader can see it. */
 export interface OccurrenceRecountRef {
@@ -617,14 +693,19 @@ export interface OccurrenceRecountRef {
 
 export interface OccurrenceStateInput {
   resolvedAt: string | null;
+  /** Null when not resolved, or when the stored reason could not be read. */
   resolvedReason: OccurrenceResolvedReason | null;
+  /** For a row resolved `confirmed`: who confirmed it (null when unknown). */
+  confirmedAs?: CountConfirmedAs | null;
   acknowledgedAt: string | null;
   acknowledgedBy: string | null;
   recount: OccurrenceRecountRef | null;
 }
 
 export type OccurrenceState =
-  | { kind: 'resolved'; reason: OccurrenceResolvedReason; at: string }
+  /** `reason` null: resolved, for a reason this build cannot word. It is
+   *  never guessed as "cleared", which would claim a later count matched. */
+  | { kind: 'resolved'; reason: OccurrenceResolvedReason | null; at: string; confirmedAs?: CountConfirmedAs | null }
   | { kind: 'rechecking'; cycleCountId: string; countNumber: number | null }
   | { kind: 'recount_in_progress'; cycleCountId: string; countNumber: number | null }
   | { kind: 'acknowledged'; at: string; by: string | null }
@@ -632,7 +713,8 @@ export type OccurrenceState =
 
 /**
  * The state a reader sees, in this order of precedence:
- *   1. Resolved, with its reason.
+ *   1. Resolved, with its reason (null when it cannot be worded), and for a
+ *      count confirmation who confirmed it.
  *   2. Re-checking: the linked recount is completed and the stored state
  *      predates it (the last applied evaluation was before the count
  *      completed, or there has been none). Display only — the next sync
@@ -648,7 +730,10 @@ export function occurrenceState(
   lastEvaluatedAt: string | null,
 ): OccurrenceState {
   if (o.resolvedAt !== null) {
-    return { kind: 'resolved', reason: o.resolvedReason ?? 'cleared', at: o.resolvedAt };
+    const reason = isOccurrenceResolvedReason(o.resolvedReason) ? o.resolvedReason : null;
+    return reason === 'confirmed'
+      ? { kind: 'resolved', reason, at: o.resolvedAt, confirmedAs: isCountConfirmedAs(o.confirmedAs) ? o.confirmedAs : null }
+      : { kind: 'resolved', reason, at: o.resolvedAt };
   }
   const rc = o.recount;
   if (rc) {
@@ -764,7 +849,7 @@ export const EXCEPTION_ALL_CLEAR_TITLE = 'Nothing needs attention';
 /** The line under EXCEPTION_ALL_CLEAR_TITLE: what "nothing" covers. One copy
  *  for the web page and the phone; a new rule updates it here. */
 export const EXCEPTION_ALL_CLEAR_BODY =
-  'No archived locations holding stock, nothing over-promised, nothing stranded in Staging or Unplaced, every rack label agrees with where the stock is, and every recent count matched the stock on record.';
+  'No archived locations holding stock, nothing over-promised, nothing stranded in Staging or Unplaced, every rack label agrees with where the stock is, and every recent count matched the stock on record or was confirmed.';
 
 /**
  * Open exceptions this build cannot word: rows of a rule a newer build added
@@ -854,8 +939,10 @@ export function exceptionActDisabledReason(input: {
 /** The chip for a displayed state (see occurrenceState). */
 export function occurrenceStateLabel(state: OccurrenceState): string {
   switch (state.kind) {
-    case 'resolved':
-      return `Resolved: ${OCCURRENCE_RESOLVED_REASON_COPY[state.reason]}`;
+    case 'resolved': {
+      const copy = resolvedReasonCopy(state.reason, state.confirmedAs ?? null);
+      return copy ? `Resolved: ${copy}` : 'Resolved';
+    }
     case 'rechecking':
       return 'Re-checking';
     case 'recount_in_progress': {
@@ -879,13 +966,69 @@ export type OccurrenceEventKind =
   | 'resolved'
   | 'evidence_added'
   | 'evidence_removed'
-  | 'escalated';
+  | 'escalated'
+  /** The counter or a manager confirmed a count_variance row's counted
+   *  number, which resolved it. Always has an actor. */
+  | 'count_confirmed';
+
+/** Every event kind this build can word. */
+export const OCCURRENCE_EVENT_KINDS: readonly OccurrenceEventKind[] = [
+  'raised',
+  'acknowledged',
+  'note',
+  'recount_linked',
+  'recount_closed',
+  'resolved',
+  'evidence_added',
+  'evidence_removed',
+  'escalated',
+  'count_confirmed',
+];
+
+/** A stored kind this build can word. A timeline leaves any other kind out
+ *  (a newer build's), rather than render it with no words. */
+export function isOccurrenceEventKind(value: unknown): value is OccurrenceEventKind {
+  return typeof value === 'string' && (OCCURRENCE_EVENT_KINDS as readonly string[]).includes(value);
+}
+
+/** What a `count_confirmed` event's headline says about the count: who
+ *  confirmed it and the row's numbers (countConfirmationFor builds it). */
+export interface CountConfirmationWords {
+  as: CountConfirmedAs | null;
+  countNumber: number | null;
+  counted: number | null;
+  expected: number | null;
+  variance: number | null;
+}
+
+/**
+ * The numbers for a `count_confirmed` event, from the occurrence's facts
+ * (frozen once it resolved), who confirmed it, and the event's own count
+ * number (the count it names).
+ */
+export function countConfirmationFor(
+  facts: unknown,
+  confirmedAs: CountConfirmedAs | null | undefined,
+  countNumber: number | null | undefined,
+): CountConfirmationWords {
+  const n = countVarianceNumbers(facts);
+  return {
+    as: isCountConfirmedAs(confirmedAs) ? confirmedAs : null,
+    countNumber: countNumber ?? n.countNumber,
+    counted: n.counted,
+    expected: n.expected,
+    variance: n.variance,
+  };
+}
 
 /**
  * The headline of one timeline event. `actorLabel` is the person's name as
  * the reader sees it, or null for the system (raised, recount closed,
  * resolved). `resolvedReason` is the occurrence's own reason, used by the
- * `resolved` event: an occurrence resolves at most once.
+ * `resolved` event: an occurrence resolves at most once. A count
+ * confirmation writes no `resolved` event: its `count_confirmed` event is the
+ * record, worded with who confirmed it, whether they counted it, and that no
+ * second count was made.
  */
 export function describeOccurrenceEvent(event: {
   kind: OccurrenceEventKind;
@@ -896,6 +1039,9 @@ export function describeOccurrenceEvent(event: {
    *  the reader knows it (F1-5). The words stay "escalated to": a request is
    *  saved, nothing is sent. */
   maintenanceRequestReference?: string | null;
+  /** For a `count_confirmed` event: who confirmed it and the row's numbers
+   *  (countConfirmationFor). */
+  confirmation?: CountConfirmationWords | null;
 }): string {
   const who = event.actorLabel?.trim() || null;
   const by = who ? ` by ${who}` : '';
@@ -911,8 +1057,28 @@ export function describeOccurrenceEvent(event: {
       return `${cc ? `Recount ${cc}` : 'A recount'} linked${by}`;
     case 'recount_closed':
       return `${cc ? `Recount ${cc}` : 'The linked recount'} closed`;
-    case 'resolved':
-      return `Resolved by the system check: ${OCCURRENCE_RESOLVED_REASON_COPY[event.resolvedReason ?? 'cleared']}`;
+    case 'resolved': {
+      // Never written for a confirmation (its count_confirmed event is the
+      // record); were one read, it would not claim the system resolved it.
+      if (event.resolvedReason === 'confirmed') return `Resolved: ${OCCURRENCE_RESOLVED_REASON_COPY.confirmed}`;
+      const copy = resolvedReasonCopy(event.resolvedReason ?? null);
+      return copy ? `Resolved by the system check: ${copy}` : 'Resolved by the system check';
+    }
+    case 'count_confirmed': {
+      const c = event.confirmation ?? null;
+      const role =
+        c?.as === 'counter' ? ', who counted it,' : c?.as === 'manager' ? ', who did not count it,' : '';
+      const head = who ? `Count confirmed by ${who}${role} without a second count` : 'Count confirmed without a second count';
+      const found = c
+        ? countFoundSentence({
+            countNumber: c.countNumber ?? event.cycleCountNumber ?? null,
+            expected: c.expected,
+            counted: c.counted,
+            variance: c.variance,
+          })
+        : null;
+      return found ? `${head}: ${found}` : head;
+    }
     case 'evidence_added':
       return `Photo added${by}`;
     case 'evidence_removed':

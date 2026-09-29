@@ -40,10 +40,24 @@ import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 import {
+  COUNT_CONFIRM_STATES,
+  confirmationFactsRow,
+  confirmCountDialogCopy,
+  countVarianceAcknowledgeHelp,
+  countVarianceClearCopy,
+  describeConfirmError,
+  type CountConfirmBlock,
+  type CountConfirmState,
+  type RecountAbility,
+} from './exception-confirm';
+import {
+  countConfirmationFor,
   describeOccurrence,
+  describeOccurrenceEvent,
   EXCEPTION_ALL_CLEAR_BODY,
   EXCEPTION_RULE_IDS,
   EXCEPTION_RULES,
+  occurrenceStateLabel,
 } from './exceptions';
 import {
   activeRecountCopy,
@@ -222,6 +236,79 @@ function composedCopy(): string[] {
   }
   out.push(...verificationSummaryCopy(chromebook({ lastCount: null }), { canCount: true }).lines);
   out.push(...verificationSummaryCopy(null).lines);
+  out.push(...countConfirmCopy(facts));
+  return out;
+}
+
+/** Every line a count difference's "What clears this", Acknowledge step,
+ *  confirmation step, errors and afterwards can show (exception-confirm.ts). */
+function countConfirmCopy(facts: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const confirmBlock = (state: CountConfirmState, canConfirm: boolean): CountConfirmBlock => ({
+    state,
+    canConfirm,
+    unavailableReason: canConfirm ? null : state === 'confirmable' ? 'not_counter' : state,
+    cycleCountId: 'cc-58',
+    countNumber: 58,
+    counted: 0,
+    onRecordBefore: 50,
+    onRecordNow: state === 'stock_moved' ? 5 : 0,
+    countedBy: { id: 'u-a', label: 'Avery' },
+    postedBy: { id: 'u-b', label: 'Blake' },
+    readerIsCounter: canConfirm,
+    otherCount: state === 'count_in_progress' ? { countNumber: 59, counted: 3 } : null,
+  });
+  const abilities: RecountAbility[] = ['can', 'not_permitted', 'module_disabled'];
+  for (const state of [null, ...COUNT_CONFIRM_STATES]) {
+    for (const canConfirm of [true, false]) {
+      for (const canAct of [true, false]) {
+        for (const ability of abilities) {
+          const confirm = state === null ? null : confirmBlock(state, canConfirm && state === 'confirmable');
+          const c = countVarianceClearCopy({
+            facts,
+            displayed:
+              state === 'recount_in_progress'
+                ? { kind: 'recount_in_progress', cycleCountId: 'cc-60', countNumber: 60 }
+                : { kind: 'open' },
+            recount: { countNumber: 60, outcome: { kind: 'in_progress', counted: 0, total: 1 } },
+            canAct,
+            canRecount: ability === 'can',
+            recountUnavailableReason: ability === 'can' ? null : ability,
+            confirm,
+            online: canAct,
+          });
+          out.push(c.lead, c.options);
+          for (const line of [c.reason, c.who, c.recountLine, c.confirmDisabledReason]) if (line) out.push(line);
+          out.push(
+            countVarianceAcknowledgeHelp({
+              facts,
+              displayed: { kind: 'open' },
+              recount: null,
+              canRecount: ability === 'can',
+              confirm,
+            }),
+          );
+          out.push(describeConfirmError(state ?? 'unknown', { surface: canAct ? 'web' : 'phone', recount: ability }));
+        }
+      }
+    }
+  }
+  const dialog = confirmCountDialogCopy({ reference: 'EX-000058', confirm: confirmBlock('confirmable', true) });
+  out.push(dialog.title, dialog.consequence, dialog.numbersLabel, dialog.success, ...dialog.numbers);
+  for (const as of ['counter', 'manager', null] as const) {
+    out.push(confirmationFactsRow({ at: '2026-09-29T17:41:00Z', by: { id: 'u', label: 'Avery' }, as }, 'Sep 29').value);
+    out.push(
+      describeOccurrenceEvent({
+        kind: 'count_confirmed',
+        actorLabel: 'Avery',
+        confirmation: countConfirmationFor(facts, as, 58),
+      }),
+    );
+    out.push(occurrenceStateLabel({ kind: 'resolved', reason: 'confirmed', at: 'x', confirmedAs: as }));
+  }
+  for (const reason of ['occurrence_resolved', 'count_changed', 'stock_moved', 'already_confirmed', 'busy']) {
+    out.push(describeConfirmError(reason, { surface: 'phone', recount: 'can' }));
+  }
   return out;
 }
 
@@ -244,6 +331,15 @@ describe('counts and exceptions word the recorded quantity as "stock on record"'
     // The fixtures reach the count lines, not only the empty states.
     expect(lines.length).toBeGreaterThan(60);
     expect(lines.filter((l) => BOOK_WORD.test(l))).toEqual([]);
+  });
+
+  it('a count difference\'s words reach every state and reader, and say "stock on record"', () => {
+    const lines = countConfirmCopy({ itemName: 'A', cycleCountId: 'cc-58', countNumber: 58, expected: 50, counted: 0, variance: -50 });
+    expect(lines.length).toBeGreaterThan(300);
+    expect(lines).toContain('CC-000058 found 0 where 50 was on record, and posting it changed the stock on record by -50.');
+    expect(lines.filter((l) => BOOK_WORD.test(l))).toEqual([]);
+    // No percentages and no system claim of correctness.
+    expect(lines.filter((l) => /%|verified|accurate/i.test(l))).toEqual([]);
   });
 });
 
@@ -303,6 +399,7 @@ describe("core's copy never brings the jargon back", () => {
       expect.arrayContaining([
         'warehouse/exceptions.ts',
         'warehouse/exception-recount.ts',
+        'warehouse/exception-confirm.ts',
         'warehouse/verification.ts',
         'cycle-counts/capture-label.ts',
       ]),

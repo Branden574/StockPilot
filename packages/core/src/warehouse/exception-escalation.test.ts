@@ -123,7 +123,9 @@ describe('escalationPrefill: the words', () => {
       'Label will not lead to the stock: labelled 40-C, stock is on 39-C. Ref EX-000042.',
     );
     expect(escalationPrefill(input('count_variance')).description).toBe(
-      'Count did not match the stock on record: found +2: counted 12, on record 10 (CC-000031). Location: 12-B. Ref EX-000042.',
+      // The row sentence (always true: what the count found and what was on
+      // record then); requests already saved keep their stored text.
+      'Count did not match the stock on record: CC-000031 found 12 where 10 was on record (+2). Location: 12-B. Ref EX-000042.',
     );
   });
 

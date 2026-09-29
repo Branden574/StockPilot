@@ -43,6 +43,10 @@ import {
   type OccurrenceStateInput,
   type WarehouseException,
   exceptionCheckedAtCopy,
+  isOccurrenceEventKind,
+  isOccurrenceResolvedReason,
+  OCCURRENCE_EVENT_KINDS,
+  resolvedReasonCopy,
 } from './exceptions';
 
 const ex = (o: Partial<WarehouseException> & Pick<WarehouseException, 'rule' | 'key'>): WarehouseException => ({
@@ -198,14 +202,31 @@ describe('EXCEPTION_RULES occurrence metadata', () => {
     ]);
   });
 
-  it('count_variance is a warning that says what a recount is for and what clears it', () => {
+  it('count_variance is a warning that says what clears it and that acknowledging does not', () => {
     const meta = EXCEPTION_RULES.count_variance;
     expect(meta.severity).toBe('warning');
-    expect(meta.action).toMatch(/Recount/);
-    // Clears only on an exact later match (owner decision F1 Q2).
+    // Owner decision 2026-09-29 (EX-000059): the group header says plainly
+    // that acknowledging does not clear these, and sends the reader to the
+    // exception for what does.
+    expect(meta.action).toMatch(/Acknowledging does not clear/);
+    // A later exact match still clears it (owner decision F1 Q2).
     expect(meta.clearedBy).toMatch(/matches the stock on record exactly/);
     expect(meta.actions).toEqual(['open_item']);
     expect(COUNT_VARIANCE_OPEN_WINDOW_DAYS).toBe(30);
+  });
+
+  // The phone keeps the core it shipped with (R1) after the server turns
+  // Confirm on (R2), so both sentences must be true before and after: neither
+  // promises a Confirm the reader may not have, and neither says only a
+  // recount clears it.
+  it('count_variance words stay true whether or not counts can be confirmed yet', () => {
+    const meta = EXCEPTION_RULES.count_variance;
+    expect(meta.action).toBe(
+      'Posting each of these counts changed the stock on record by the difference shown. Open one to see what clears it. Acknowledging does not clear them.',
+    );
+    expect(meta.clearedBy).toBe(
+      'Clears when a later completed count of this item matches the stock on record exactly, or when the counted number is confirmed on the exception where that is offered. A recount that finds another difference keeps it open with the new numbers. Acknowledging does not clear it.',
+    );
   });
 
   it('Staging and Unplaced offer put-away; a label mismatch offers a label edit', () => {
@@ -357,7 +378,7 @@ describe('describeOccurrence', () => {
     }
   });
 
-  it('count_variance states what the count found against the book, with the count', () => {
+  it('count_variance says what the count found and what was on record then, with the count', () => {
     const facts = {
       itemName: 'Atlas',
       sku: 'A1',
@@ -372,25 +393,40 @@ describe('describeOccurrence', () => {
       aiAssisted: false,
       capturedOfflineAt: null,
     };
+    // Always true: what the count found and what was on record when it was
+    // taken. Never "changed the stock on record from 10 to 11", which is
+    // exact only when nothing moved between the count and its post.
     expect(describeOccurrence('count_variance', facts)).toEqual({
       title: 'Atlas',
-      detail: 'found +1: counted 11, on record 10 (CC-000024)',
+      detail: 'CC-000024 found 11 where 10 was on record (+1)',
       units: 1,
     });
-    // Fewer than the book: the sign is kept and the units at stake are the size.
+    // Fewer than on record: the sign is kept and the units at stake are the size.
     expect(describeOccurrence('count_variance', { ...facts, counted: 7.5, variance: -2.5 })).toMatchObject({
-      detail: 'found -2.5: counted 7.5, on record 10 (CC-000024)',
+      detail: 'CC-000024 found 7.5 where 10 was on record (-2.5)',
       units: 2.5,
     });
+    // The owner's case (EX-000059): 2 counted where 100 was on record.
+    expect(
+      describeOccurrence('count_variance', { ...facts, countNumber: 35, expected: 100, counted: 2, variance: -98 }).detail,
+    ).toBe('CC-000035 found 2 where 100 was on record (-98)');
+    // Zero reads as 0.
+    expect(describeOccurrence('count_variance', { ...facts, counted: 0, variance: -10 }).detail).toBe(
+      'CC-000024 found 0 where 10 was on record (-10)',
+    );
     // No number yet: no made-up reference.
     expect(describeOccurrence('count_variance', { ...facts, countNumber: null }).detail).toBe(
-      'found +1: counted 11, on record 10',
+      'a count found 11 where 10 was on record (+1)',
     );
     // A stored variance that is missing is derived from the two quantities,
     // exactly (10.1 - 10 is 0.1, not 0.0999…).
     expect(
       describeOccurrence('count_variance', { itemName: 'A', expected: 10, counted: 10.1 }).detail,
-    ).toBe('found +0.1: counted 10.1, on record 10');
+    ).toBe('a count found 10.1 where 10 was on record (+0.1)');
+    // Unreadable numbers: the words-only line, unchanged.
+    expect(describeOccurrence('count_variance', { itemName: 'A', countNumber: 24 }).detail).toBe(
+      'a count did not match the stock on record (CC-000024)',
+    );
   });
 
   it('the live item name wins over the stored one', () => {
@@ -478,6 +514,28 @@ describe('occurrenceState — precedence', () => {
 
   it('a cancelled recount does not change the state', () => {
     expect(occurrenceState({ ...base, recount: recount('canceled') }, null)).toEqual({ kind: 'open' });
+  });
+
+  // Review finding (R1): a reason this build could not read reached the
+  // state as null and read "Resolved: Cleared", which claims a later count
+  // matched. A row resolved by a count confirmation on a phone that did not
+  // know the reason said exactly that.
+  it('a resolved row whose reason is unknown stays unknown, never "cleared"', () => {
+    const s = occurrenceState({ ...base, resolvedAt: '2026-09-24T11:00:00Z' }, null);
+    expect(s).toEqual({ kind: 'resolved', reason: null, at: '2026-09-24T11:00:00Z' });
+    expect(occurrenceStateLabel(s)).toBe('Resolved');
+  });
+
+  it('a count confirmation carries who confirmed it: the counter or a manager', () => {
+    const at = '2026-09-29T17:41:00Z';
+    const counter = occurrenceState({ ...base, resolvedAt: at, resolvedReason: 'confirmed', confirmedAs: 'counter' }, null);
+    expect(counter).toEqual({ kind: 'resolved', reason: 'confirmed', at, confirmedAs: 'counter' });
+    expect(occurrenceStateLabel(counter)).toBe('Resolved: Confirmed by the counter');
+    const manager = occurrenceState({ ...base, resolvedAt: at, resolvedReason: 'confirmed', confirmedAs: 'manager' }, null);
+    expect(occurrenceStateLabel(manager)).toBe('Resolved: Confirmed by a manager');
+    // No role known: the reason alone.
+    const unknown = occurrenceState({ ...base, resolvedAt: at, resolvedReason: 'confirmed' }, null);
+    expect(occurrenceStateLabel(unknown)).toBe('Resolved: Count confirmed');
   });
 
   it('resolved outranks everything', () => {
@@ -578,6 +636,38 @@ describe('occurrenceStateLabel', () => {
       'Resolved: Item archived, deleted or no longer counted',
     );
   });
+
+  it('a reason it cannot word reads "Resolved", never "Resolved: Cleared" or "Resolved: undefined"', () => {
+    expect(occurrenceStateLabel({ kind: 'resolved', reason: null, at: 'x' })).toBe('Resolved');
+    expect(
+      occurrenceStateLabel({ kind: 'resolved', reason: 'a_newer_reason' as never, at: 'x' }),
+    ).toBe('Resolved');
+  });
+});
+
+describe('resolvedReasonCopy', () => {
+  it('words every known reason, and a count confirmation by who confirmed it', () => {
+    expect(resolvedReasonCopy('cleared')).toBe('Cleared');
+    expect(resolvedReasonCopy('reclassified')).toBe('Now reported under another rule');
+    expect(resolvedReasonCopy('subject_gone')).toBe('Item archived, deleted or no longer counted');
+    expect(resolvedReasonCopy('confirmed')).toBe('Count confirmed');
+    expect(resolvedReasonCopy('confirmed', 'counter')).toBe('Confirmed by the counter');
+    expect(resolvedReasonCopy('confirmed', 'manager')).toBe('Confirmed by a manager');
+    expect(resolvedReasonCopy('confirmed', null)).toBe('Count confirmed');
+    // The role only ever qualifies a confirmation.
+    expect(resolvedReasonCopy('cleared', 'counter')).toBe('Cleared');
+  });
+
+  it('a null or unknown reason has no words, so the caller says only "Resolved"', () => {
+    for (const r of [null, undefined, '', 'a_newer_reason', 42, {}]) expect(resolvedReasonCopy(r)).toBeNull();
+  });
+
+  it('knows exactly the four stored reasons', () => {
+    for (const r of ['cleared', 'reclassified', 'subject_gone', 'confirmed']) {
+      expect(isOccurrenceResolvedReason(r)).toBe(true);
+    }
+    for (const r of [null, undefined, '', 'Cleared', 'a_newer_reason']) expect(isOccurrenceResolvedReason(r)).toBe(false);
+  });
 });
 
 describe('describeOccurrenceEvent', () => {
@@ -591,7 +681,14 @@ describe('describeOccurrenceEvent', () => {
     'evidence_added',
     'evidence_removed',
     'escalated',
+    'count_confirmed',
   ];
+
+  it('the kinds are exactly the stored ones, and nothing else is one', () => {
+    expect([...OCCURRENCE_EVENT_KINDS].sort()).toEqual([...KINDS].sort());
+    for (const k of KINDS) expect(isOccurrenceEventKind(k)).toBe(true);
+    for (const k of [null, undefined, '', 'a_newer_kind', 'Raised']) expect(isOccurrenceEventKind(k)).toBe(false);
+  });
 
   it('words every kind', () => {
     for (const kind of KINDS) {
@@ -613,6 +710,61 @@ describe('describeOccurrenceEvent', () => {
     expect(
       describeOccurrenceEvent({ kind: 'recount_closed', actorLabel: null, cycleCountNumber: 7 }),
     ).toBe('Recount CC-000007 closed');
+  });
+
+  // Before: a null reason read "Resolved by the system check: Cleared".
+  it('a system resolution with no reason it can word adds no reason word', () => {
+    expect(describeOccurrenceEvent({ kind: 'resolved', actorLabel: null, resolvedReason: null })).toBe(
+      'Resolved by the system check',
+    );
+    expect(describeOccurrenceEvent({ kind: 'resolved', actorLabel: null })).toBe('Resolved by the system check');
+    // A confirmation writes no resolved event; were one ever read, it would
+    // not claim the system check resolved it.
+    expect(describeOccurrenceEvent({ kind: 'resolved', actorLabel: null, resolvedReason: 'confirmed' })).toBe(
+      'Resolved: Count confirmed',
+    );
+  });
+
+  it('a count confirmation says who confirmed it, whether they counted it, and that no second count was made', () => {
+    const numbers = { countNumber: 35, counted: 2, expected: 100, variance: -98 };
+    expect(
+      describeOccurrenceEvent({
+        kind: 'count_confirmed',
+        actorLabel: 'Dana Lee',
+        confirmation: { as: 'counter', ...numbers },
+      }),
+    ).toBe('Count confirmed by Dana Lee, who counted it, without a second count: CC-000035 found 2 where 100 was on record (-98)');
+    expect(
+      describeOccurrenceEvent({
+        kind: 'count_confirmed',
+        actorLabel: 'Sam Ortiz',
+        confirmation: { as: 'manager', ...numbers },
+      }),
+    ).toBe('Count confirmed by Sam Ortiz, who did not count it, without a second count: CC-000035 found 2 where 100 was on record (-98)');
+    // No role known.
+    expect(
+      describeOccurrenceEvent({
+        kind: 'count_confirmed',
+        actorLabel: 'Dana Lee',
+        confirmation: { as: null, ...numbers },
+      }),
+    ).toBe('Count confirmed by Dana Lee without a second count: CC-000035 found 2 where 100 was on record (-98)');
+    // No numbers.
+    expect(describeOccurrenceEvent({ kind: 'count_confirmed', actorLabel: 'Dana Lee' })).toBe(
+      'Count confirmed by Dana Lee without a second count',
+    );
+    // A count without a number, and a former member.
+    expect(
+      describeOccurrenceEvent({
+        kind: 'count_confirmed',
+        actorLabel: 'Former member',
+        confirmation: { as: 'counter', countNumber: null, counted: 0, expected: 3, variance: -3 },
+      }),
+    ).toBe('Count confirmed by Former member, who counted it, without a second count: a count found 0 where 3 was on record (-3)');
+    // Never "by the system check": a person confirmed it.
+    expect(describeOccurrenceEvent({ kind: 'count_confirmed', actorLabel: null })).toBe(
+      'Count confirmed without a second count',
+    );
   });
 });
 
@@ -685,6 +837,9 @@ describe('copy that keeps the all-clear honest', () => {
   it('the all-clear body is one shared sentence that covers every rule, counts included', () => {
     expect(EXCEPTION_ALL_CLEAR_BODY).toMatch(/^No archived locations holding stock/);
     expect(EXCEPTION_ALL_CLEAR_BODY).toMatch(/count matched the stock on record/);
+    // True before and after counts can be confirmed (the phone keeps this
+    // copy through R2): nothing is open either way.
+    expect(EXCEPTION_ALL_CLEAR_BODY).toMatch(/every recent count matched the stock on record or was confirmed\.$/);
   });
 
   it('rows this build cannot word are counted, never silently dropped', () => {

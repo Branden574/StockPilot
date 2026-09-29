@@ -11,6 +11,7 @@ import {
   isExceptionRule,
   roundQuantity,
   signedQuantity,
+  type CountConfirmationWords,
   type OccurrenceEventKind,
   type OccurrenceResolvedReason,
 } from './exceptions';
@@ -65,6 +66,10 @@ export function recountNotes(items: ReadonlyArray<{ name: string | null | undefi
 
 /** The recount dialog's line about what a count covers (web and phone). */
 export const RECOUNT_COUNTS_TOTAL_COPY = 'Counts record each item’s total, wherever it is stored.';
+
+/** An open exception a recount can settle, with no recount linked (web and
+ *  phone, for a reader who can start one). */
+export const RECOUNT_NONE_LINKED_COPY = 'No recount is linked to this exception.';
 
 /** Why Recount is not offered to this reader. */
 export const RECOUNT_MANAGER_ONLY_COPY =
@@ -407,6 +412,9 @@ export function describeTimelineEvent(event: {
   /** For escalated: the request's handle when the reader knows it (F1-5;
    *  describeOccurrenceEvent words it). */
   maintenanceRequestReference?: string | null;
+  /** For count_confirmed: who confirmed it and the row's numbers
+   *  (countConfirmationFor; describeOccurrenceEvent words it). */
+  confirmation?: CountConfirmationWords | null;
 }): string {
   const base = describeOccurrenceEvent(event);
   return event.kind === 'recount_closed' && event.recountOutcome
