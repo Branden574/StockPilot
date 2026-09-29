@@ -382,7 +382,9 @@ PGTAP_TESTS=(
   # readable row already carries: duplicates, duplicates of duplicates);
   # never a new name in another item's folder, another org's item or folder,
   # an unreadable item's object, a third shape, or a non-uuid folder (a plain
-  # refusal, not a cast error). The books cover upsert is pinned.
+  # refusal, not a cast error). The books cover upsert is pinned, and for
+  # every persona every stored file a readable row carries is readable (so
+  # copying a carried path into a new row can never reveal one).
   supabase/tests/0381_item_images_item_scope.test.sql
 
   # Auth material and trusted writers.

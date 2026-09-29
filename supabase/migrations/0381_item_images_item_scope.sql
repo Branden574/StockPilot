@@ -206,8 +206,10 @@ comment on function public.item_image_item_writable(uuid, uuid) is
 --
 -- The second branch reads item_images under the caller's own
 -- item_images_select (SECURITY INVOKER), so it only ever accepts a path the
--- caller can already read through the bucket's shared-file branch: it grants
--- no object, it only lets a row be copied. It runs only when the path names
+-- caller can already read (every path a readable row carries is readable:
+-- the bucket read policy's first branch when it is in that row's own item
+-- folder, the shared-file set otherwise; section 3): it grants no object, it
+-- only lets a row be copied. It runs only when the path names
 -- another item (OR stops at the first true), and its org and path equalities
 -- are leakproof, so they filter before the per-row policy. What it accepts:
 --   * duplicate_inventory_item's copy of a readable item's rows (the source's
@@ -278,9 +280,9 @@ comment on function public.item_image_row_path_ok(uuid, uuid, text) is
 --      once per statement), the same predicate caller_can_read_item (0361)
 --      states for DEFINER callers. Keep the three in step (pgTAP 0381 C12).
 --      Not caller_can_read_item itself: as a per-row DEFINER call it is not
---      inlined and rebuilds those sets per row (~190-515 us a row, measured:
---      19 s with 100,000 shared-shape rows in ANOTHER org, 51 s in the
---      caller's own; now ~15 ms and ~45-160 ms).
+--      inlined and rebuilds those sets per row (~180-500 us a row, measured
+--      locally: 18 s with 100,000 shared-shape rows planted in ANOTHER org,
+--      29-50 s in the caller's own; now ~20 ms and ~45-160 ms).
 -- It answers only for auth.uid() and returns nothing without one.
 create or replace function public.rls_item_image_shared_paths()
 returns setof text
