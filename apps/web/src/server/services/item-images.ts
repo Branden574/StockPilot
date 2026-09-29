@@ -37,9 +37,10 @@ import { withStorageSignSlot } from './lib/storage-sign-limiter';
  * Why service-role: signing a path is org-agnostic — the resulting
  * URL is identical regardless of who minted it, so caching across
  * users is safe. Authorization already happened in the outer
- * primaryImagesForItems / list call (the storage_path was selected
- * via the user's RLS-scoped query). The admin client just performs
- * the signing op without needing a per-request supabase instance.
+ * primaryImagesForItems / list call: the storage_path was selected by
+ * the caller's RLS-scoped query, joined to the ITEM it belongs to (see
+ * ITEM-LEVEL AUTHORIZATION on the class below). The admin client just
+ * performs the signing op without needing a per-request supabase instance.
  */
 const SIGNED_URL_TTL_SEC = 30 * 24 * 60 * 60;
 const SIGNED_URL_CACHE_SEC = 25 * 24 * 60 * 60;
@@ -303,6 +304,40 @@ function reportSignFailures(
 // consumers should BATCH via storage.createSignedUrls inside their own
 // coarse-grained cache instead (see orders/new/page.tsx's thumb map).
 
+/**
+ * ITEM-LEVEL AUTHORIZATION (2026-09-28). Every `item_images` read in this
+ * class embeds `item:inventory_items!item_id!inner(id)`, and it must stay that
+ * way.
+ *
+ * Why the embed. `item_images_select` (0003, 0140) lets ANY org member read
+ * every image row of the org, while `inventory_items_select` (0229) is
+ * narrower: a staff member or viewer sees only the items of their warehouses,
+ * charters and (viewers) categories. The image rows alone therefore
+ * authorized nothing, and the paths they carried were signed with the
+ * service-role client, which bypasses storage RLS. So any member could have
+ * the photo of an item they cannot see signed for them:
+ * `/api/items/:id/image-master` for any id, a PO's lines, report PDFs built
+ * from org-wide movement rows. Proven on the local stack on 2026-09-28: a
+ * category-scoped viewer and a warehouse-scoped staff member both got 200 and
+ * a working signed URL for items outside their scope.
+ *
+ * How the embed closes it. PostgREST runs an embed as the same role, so the
+ * `inventory_items` RLS policy decides the embedded row, and `!inner` drops
+ * every image row whose item the caller cannot read. That is the caller's
+ * OWN item authorization, in the same request that picks the paths, before
+ * any service-role signing, with no extra round trip. A service-role context
+ * (the public catalog thumbnails route) bypasses RLS, so the embed changes
+ * nothing there. Methods that take PATHS instead of item ids (`signedUrls`)
+ * sign whatever they are handed: their callers select those paths through
+ * `list()` after the item has cleared its own read (item-detail.tsx), or
+ * through the manager-only cached inventory loader.
+ *
+ * The residual this does not close: a member's own client can still read
+ * every `item_images` row of the org and sign any org object itself, because
+ * the table policy and the bucket's read policy are org-member wide. That
+ * needs a migration on those two policies, not a service change, and is
+ * tracked as its own follow-up.
+ */
 export class ItemImagesService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -313,7 +348,8 @@ export class ItemImagesService {
   async list(itemId: string) {
     const { data, error } = await this.ctx.supabase
       .from('item_images')
-      .select('id, storage_path, alt, sort_order, is_primary')
+      // Item-level authorization: see the class comment.
+      .select('id, storage_path, alt, sort_order, is_primary, item:inventory_items!item_id!inner(id)')
       .eq('organization_id', this.ctx.organizationId)
       .eq('item_id', itemId)
       .order('sort_order', { ascending: true });
@@ -439,7 +475,8 @@ export class ItemImagesService {
       (batch) => (from, to) =>
         ctx.supabase
           .from('item_images')
-          .select('item_id, storage_path, is_primary, sort_order')
+          // Item-level authorization: see the class comment.
+          .select('item_id, storage_path, is_primary, sort_order, item:inventory_items!item_id!inner(id)')
           .eq('organization_id', ctx.organizationId)
           .in('item_id', batch)
           .order('is_primary', { ascending: false })
@@ -499,7 +536,10 @@ export class ItemImagesService {
       (batch) => (from, to) =>
         ctx.supabase
           .from('item_images')
-          .select('item_id, storage_path, thumb_path, lqip, is_primary, sort_order')
+          // Item-level authorization: see the class comment.
+          .select(
+            'item_id, storage_path, thumb_path, lqip, is_primary, sort_order, item:inventory_items!item_id!inner(id)',
+          )
           .eq('organization_id', ctx.organizationId)
           .in('item_id', batch)
           .order('is_primary', { ascending: false })
@@ -571,7 +611,10 @@ export class ItemImagesService {
       (batch) => (from, to) =>
         ctx.supabase
           .from('item_images')
-          .select('item_id, storage_path, thumb_path, is_primary, sort_order')
+          // Item-level authorization: see the class comment.
+          .select(
+            'item_id, storage_path, thumb_path, is_primary, sort_order, item:inventory_items!item_id!inner(id)',
+          )
           .eq('organization_id', ctx.organizationId)
           .in('item_id', batch)
           .order('is_primary', { ascending: false })
@@ -807,7 +850,8 @@ export class ItemImagesService {
       (batch) => (from, to) =>
         ctx.supabase
           .from('item_images')
-          .select('item_id, storage_path, is_primary, sort_order')
+          // Item-level authorization: see the class comment.
+          .select('item_id, storage_path, is_primary, sort_order, item:inventory_items!item_id!inner(id)')
           .eq('organization_id', ctx.organizationId)
           .in('item_id', batch)
           .order('is_primary', { ascending: false })
@@ -1011,9 +1055,14 @@ export class ItemImagesService {
     // removal on web left its `-thumb.webp` sidecar in the bucket forever
     // (there is no orphan-sweep cron). A column you don't select is a column
     // you can't clean up.
+    //
+    // The item embed is the same item-level authorization every read in this
+    // class carries (see the class comment): the image of an item the caller
+    // cannot read answers "not found", so a warehouse-scoped staff member can
+    // no longer delete the photos of another warehouse's items by image id.
     const { data: img } = await this.ctx.supabase
       .from('item_images')
-      .select('storage_path, thumb_path, item_id')
+      .select('storage_path, thumb_path, item_id, item:inventory_items!item_id!inner(id)')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', imageId)
       .maybeSingle();

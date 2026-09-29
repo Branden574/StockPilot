@@ -11,7 +11,7 @@ import {
   type CatalogItemMedia,
 } from '@/server/loaders/orders-new-catalog';
 import { InventoryService } from '@/server/services/inventory';
-import { ServiceError } from '@/server/services/context';
+import { ServiceError, withContext } from '@/server/services/context';
 import { fetchAllRowsByIds, reportDegradedRead } from '@/server/services/lib/fetch-by-ids';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { RentalsService } from '@/server/services/rentals';
@@ -69,9 +69,13 @@ export default async function NewRentalPage({
 
   const params = await searchParams;
 
-  const [warehousesSvc, rentalsSvc] = await Promise.all([
+  // withContext() is the request's one service context (React-cached: the
+  // same one both services are built on). Its client is the caller's own
+  // cookie client, so row level security applies to what it reads.
+  const [warehousesSvc, rentalsSvc, { supabase: callerClient }] = await Promise.all([
     WarehousesService.forCurrentUser(),
     RentalsService.forCurrentUser(),
+    withContext(),
   ]);
 
   const warehouses = (await warehousesSvc.listNames()).map((w) => ({
@@ -100,9 +104,20 @@ export default async function NewRentalPage({
   const warehouseId =
     warehouses.find((w) => w.id === requestedId)?.id ?? fallbackId;
 
-  // Load rental items (is_rental=true) for the selected warehouse
-  // We use the admin client here so we can do a direct .eq('is_rental', true) query
-  // similar to how orders/new page loads its catalog.
+  // Load rental items (is_rental=true) for the selected warehouse.
+  //
+  // WITH THE CALLER'S OWN CLIENT, so inventory_items_select decides which rows
+  // come back: the caller's warehouses, the charter of a charter-scoped
+  // assignment, and a restricted viewer's categories. This read used the
+  // service-role client, filtered by org, warehouse, status, is_rental and
+  // deleted_at only, so a charter- or category-scoped member with
+  // rentals:create was shown the names, SKUs, stock, prices and unit costs of
+  // rental items they cannot read, each with a signed photo URL (2026-09-28).
+  // create_rental refuses those items anyway (0361, caller_can_read_item), so
+  // they were never rentable here. EVERYTHING below is keyed by the ids this
+  // read returns: the reservations, the rack holdings, the category names and
+  // the photos. The service-role client that remains reads only rows of
+  // those ids.
   //
   // Three reads that need only the warehouse run together: the rental items,
   // the team members for the borrower picker, and the item PHOTOS.
@@ -120,6 +135,11 @@ export default async function NewRentalPage({
   // when a photo changes, so the form's deferred request (rental items only)
   // reads the photos fresh and corrects any card whose photo was added,
   // replaced or removed since the map was built, or whose map failed.
+  //
+  // The map is WAREHOUSE-WIDE (every photographed item, whoever asks). It
+  // only ever decorates the items the caller's own read returned, and the
+  // map itself never leaves the server (the Orders storefront's rule,
+  // loadCatalogBundle).
   const supabase = createAdminClient();
   const [
     { data: rentalItemsData, error: rentalItemsError },
@@ -132,7 +152,7 @@ export default async function NewRentalPage({
     // (api/orders/catalog-thumbnails) repeats this read filter for filter.
     fetchAllRows(
       (from, to) =>
-        supabase
+        callerClient
           .from('inventory_items')
           .select(
             'id, name, sku, quantity_on_hand, warehouse_id, item_type, custom_fields, bin_location, category_id, retail_price, unit_cost, reorder_point',
