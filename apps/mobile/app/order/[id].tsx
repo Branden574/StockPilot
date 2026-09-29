@@ -17,6 +17,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
@@ -1918,6 +1919,14 @@ export default function OrderDetail() {
           <Display size={18}>Order not <Em>found.</Em></Display>
         </View>
       ) : (
+        // A focused field low on the screen (a pick quantity) sat under the
+        // iPad's docked keyboard: the same wrapper as the form screens keeps
+        // the list above it. (The list inside keeps its indentation, so this
+        // file's other open branches merge cleanly.)
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={{ flex: 1 }}
+        >
         <ScrollView
           contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 60, gap: 16 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
@@ -2841,6 +2850,7 @@ export default function OrderDetail() {
             )}
           </View>
         </ScrollView>
+        </KeyboardAvoidingView>
       )}
 
       <Modal visible={sigOpen} transparent animationType="fade" onRequestClose={() => setSigOpen(false)}>
