@@ -248,12 +248,9 @@ begin
                      from public.order_requests o                                     -- orders RLS
                      join public.warehouses w on w.id = o.warehouse_id                -- warehouses RLS
                      join public.order_request_lines l on l.order_request_id = o.id   -- lines RLS
-                     join public.inventory_items i on i.id = l.item_id                -- items RLS
                     where o.delivery_charter_id = c.id
                       and o.organization_id = p_organization_id
-                      and i.organization_id = p_organization_id
                       and o.status = any (c_allowed)
-                      and i.item_type = 'book' and not i.is_bundle
                       and (not v_scoped                                               -- E2b-pre (leakproof)
                            or o.warehouse_id = any (v_full)
                            or o.delivery_charter_id = any (v_pairs_ch))
@@ -262,6 +259,18 @@ begin
                            or (o.warehouse_id, o.delivery_charter_id) in
                                 (select r.warehouse_id, r.charter_id
                                    from public.rls_inv_read_warehouse_charter_ids() r))
+                      -- The book test, per line, by the items primary key (items
+                      -- RLS applies) and fenced so it stays a probe: the first
+                      -- book line ends A3. Joined instead, the planner scanned
+                      -- every readable book against every line of the charter's
+                      -- orders (perf lab: 48 ms for a charter of 1,267 orders,
+                      -- 2 ms fenced).
+                      and exists (select 1
+                                    from public.inventory_items i                    -- items RLS
+                                   where i.id = l.item_id
+                                     and i.organization_id = p_organization_id
+                                     and i.item_type = 'book' and not i.is_bundle
+                                  offset 0)
                    offset 0)));
 end $$;
 
@@ -902,19 +911,24 @@ begin
                            from public.book_order_report_charters(p_organization_id) c), '[]'::jsonb),
     -- "No charter" only when an eligible, visible book line exists on an order
     -- with no charter. For such an order E2b-pre always holds and E2b reduces
-    -- to the clause below.
+    -- to the clause below. Probed book first, like ordered: per readable book,
+    -- its lines by item, stopping at the first line on such an order. Orders
+    -- first, a caller whose orders with no charter hold no book line paid for
+    -- every readable book against every line of those orders (perf lab: 207
+    -- ms against 63).
     'noCharter', exists (select 1
-                           from public.order_requests o                             -- orders RLS
-                           join public.warehouses w on w.id = o.warehouse_id        -- warehouses RLS
-                           join public.order_request_lines l on l.order_request_id = o.id  -- lines RLS
-                           join public.inventory_items i on i.id = l.item_id        -- items RLS
-                          where o.delivery_charter_id is null
-                            and o.organization_id = p_organization_id
-                            and i.organization_id = p_organization_id
-                            and o.status = any (c_allowed)
-                            and i.item_type = 'book' and not i.is_bundle
-                            and (not v_scoped or o.warehouse_id = any (v_full)
-                                 or o.warehouse_id = any (v_assigned))
+                           from books b
+                          where exists (select 1
+                                          from public.order_request_lines l                 -- lines RLS
+                                          join public.order_requests o on o.id = l.order_request_id  -- orders RLS
+                                          join public.warehouses w on w.id = o.warehouse_id -- warehouses RLS
+                                         where l.item_id = b.id
+                                           and o.delivery_charter_id is null
+                                           and o.organization_id = p_organization_id
+                                           and o.status = any (c_allowed)
+                                           and (not v_scoped or o.warehouse_id = any (v_full)
+                                                or o.warehouse_id = any (v_assigned))
+                                        offset 0)
                          offset 0))
     into v_result;
 

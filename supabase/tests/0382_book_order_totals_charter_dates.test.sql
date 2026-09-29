@@ -9,7 +9,9 @@
 --    names a charter's address, contact or geocode columns, the item's owning
 --    charter or a purchase order; the week preset is today minus its day of
 --    week (Sunday start), never an ISO week; E2b-pre and the A3 guard appear
---    where the plan puts them.
+--    where the plan puts them; the A3 probe tests the book per line by the
+--    items key and the No-charter option probes book first (the perf lab's
+--    probe shapes).
 -- CB. The charters block's own gates (it is callable over REST): signed out,
 --    another org's manager, a disabled member, a viewer without reports:read,
 --    a manager with reports:read revoked, a module off.
@@ -39,6 +41,9 @@
 --    rows, union of drill-down orders = summary orders.
 -- P. Options and charter-list parity per persona; the same lists and figures
 --    with E2b-pre and the A3 guard removed.
+-- NB. History with no book: a charter whose only order holds a product line
+--    is not offered and is refused; a pickup with only a product line does
+--    not offer No charter; with a book line added, both appear (control).
 -- Z. Today and This week in four zones; the week arithmetic swept over
 --    2025-12-01..2027-01-31.
 -- C. Current behaviour pinned: an order moved to another charter moves its
@@ -51,7 +56,7 @@
 -- nothing leaks. Namespace 03820000.
 
 begin;
-select plan(67);
+select plan(71);
 
 \set orgA     '\'03820000-0000-0000-0000-00000000000a\''
 \set orgB     '\'03820000-0000-0000-0000-00000000000b\''
@@ -815,6 +820,16 @@ select is(
   'book_order_totals:0:0:0,book_order_totals_options:2:2:0,book_order_totals_orders:0:0:0',
   'S7: E2b-pre (leakproof) sits in front of every exact E2b (the lines helper, the charters block''s A3 probe, the two option probes), and the A3 guard is in the charters block');
 
+select is(
+  (select (c.prosrc ~ $re$and exists \(select 1\s+from public\.inventory_items i\s+-- items RLS\s+where i\.id = l\.item_id\s+and i\.organization_id = p_organization_id\s+and i\.item_type = 'book' and not i\.is_bundle\s+offset 0\)\s+offset 0\)\)\);$re$)::text
+          || '|' || (c.prosrc !~ 'join public\.inventory_items')::text
+          || '|' || (o.prosrc ~ $re$'noCharter', exists \(select 1\s+from books b\s+where exists \(select 1\s+from public\.order_request_lines l[^\n]*\n\s+join public\.order_requests o on o\.id = l\.order_request_id[^\n]*\n\s+join public\.warehouses w on w\.id = o\.warehouse_id[^\n]*\n\s+where l\.item_id = b\.id\s+and o\.delivery_charter_id is null$re$)::text
+     from pg_proc c, pg_proc o
+    where c.oid = 'public.book_order_report_charters(uuid, uuid)'::regprocedure
+      and o.oid = 'public.book_order_totals_options(uuid)'::regprocedure),
+  'true|true|true',
+  'S8: the A3 probe tests the book per line by the items key, fenced (a join scanned every readable book against every line of the charter''s orders), and the No-charter option probes book first');
+
 -- ═══ CB. The charters block's own gates ═══════════════════════════════════
 set local "request.jwt.claims" to '';
 select is(
@@ -1250,6 +1265,50 @@ select is(
   'fp.mgr:true,fp.mgrAB.A:true,fp.mgrAB.B:true,fp.stfW2:true,fp.vCat:true,fp.vCh:true,fp.vMix:true,fp.vOld:true,fp.vW4:true',
   'P7: without E2b-pre and the A3 guard every persona gets the same options, charter lists and figures (default, all statuses, No charter, each charter): both are exact');
 rollback to savepoint no_pre;
+
+-- ═══ NB. History with no book ════════════════════════════════════════════
+-- Charter Supply (inactive, still on W1's list) has one order, holding only a
+-- product: A3 must find no book line, so a manager is not offered it and is
+-- refused. W4 gets a product of its own and a pickup holding only that
+-- product: vW4 (all of W4, where every other order has a charter) must still
+-- not be offered No charter. The control adds a book line to each order.
+savepoint nb_products;
+\set chSup  '\'03820000-0000-0000-0000-0000000000cc\''
+\set iProd4 '\'03820000-0000-0000-0000-000000000f0d\''
+\set OSup   '\'03820000-0000-0000-0000-000000000161\''
+\set OPk4   '\'03820000-0000-0000-0000-000000000162\''
+insert into public.charters (id, organization_id, name, code, status) values
+  (:chSup, :orgA, 'Charter Supply', null, 'inactive');
+insert into public.warehouse_charters (organization_id, warehouse_id, charter_id) values (:orgA, :W1, :chSup);
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, item_type, unit_of_measure, category_id, charter_id,
+   custom_fields, quantity_on_hand, status) values
+  (:iProd4, :orgA, :W4, 'SUP-4', 'Supplies box W4', 'product', 'unit', null, null, '{}'::jsonb, 0, 'active');
+insert into public.order_requests
+  (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type, delivery_charter_id, created_at) values
+  (:OSup, :orgA, :W1, 'approved', 'internal', :mgr, 'delivery', :chSup, '2026-06-20 18:00+00'),
+  (:OPk4, :orgA, :W4, 'approved', 'internal', :mgr, 'pickup',   null,   '2026-08-20 18:00+00');
+insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values
+  (:OSup, :iProd, 12), (:OPk4, :iProd4, 6);
+select is(
+  (pg_temp.cl(pg_temp.bopt(:mgr, :orgA)->'charters') ~ 'Charter Supply')::text
+    || '|' || pg_temp.bch(:mgr, :orgA, :chSup)::text
+    || '|' || pg_temp.err_as(:mgr, format('select public.book_order_totals(%L, p_charter_id => %L)', :orgA, :chSup)),
+  'false|[]|22023:invalid_charter',
+  'NB1: a charter whose only history is a product line is not offered to a manager and is refused (A3 finds no book line)');
+select is(
+  (pg_temp.bopt(:vW4, :orgA)->>'noCharter')
+    || '|' || jsonb_array_length(pg_temp.lines_json(:vW4, :orgA, :all13, p_none => true))::text,
+  'false|0',
+  'NB2: a pickup holding only a product does not offer No charter (vW4 sees it, and it has no book line)');
+insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values
+  (:OSup, :bkA, 1), (:OPk4, :bkOwn, 1);
+select is(
+  (pg_temp.cl(pg_temp.bopt(:mgr, :orgA)->'charters') ~ 'Charter Supply/inactive')::text
+    || '|' || (pg_temp.bopt(:vW4, :orgA)->>'noCharter'),
+  'true|true',
+  'NB3 (control): with a book line on each order, Charter Supply is offered (inactive, by its history) and No charter is offered to vW4');
+rollback to savepoint nb_products;
 
 -- ═══ Z. Today and This week ══════════════════════════════════════════════
 savepoint z_zones;
