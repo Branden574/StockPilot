@@ -1363,3 +1363,114 @@ describe('the report scope release is published', () => {
     for (const e of r.entries) expect(e.whatToDo, e.id).toBe('No action needed.');
   });
 });
+
+/**
+ * The small fixes from the 2026-09-28/29 walks (fix/small-walk-fixes): the web
+ * top bar, and on the phone the greeting, the top-bar buttons' VoiceOver names
+ * and 44pt targets, the digital pick's quantity at the largest text sizes and
+ * the order screen's keyboard. Held as a DRAFT until the phone update (OTA)
+ * carries the phone fixes and they are walked. Pinned by id, never by index:
+ * the follow-up that publishes it sets 'published' and the real publishedAt,
+ * re-reads its words against what shipped, and flips the first pin here.
+ */
+describe('the small-fixes release is held as a draft', () => {
+  const ID = 'small-fixes-2026-09';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+  const published = (): Release => ({ ...release(), status: 'published' });
+
+  // Mutation caught: 'published' set before the phone update ships.
+  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).not.toContain(ID);
+    expect(list.latestUnread?.id).not.toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).not.toContain(ID);
+    // Preparing it changes nothing a client can observe.
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(ID);
+  });
+
+  // Other drafts may sit above it (F2-3's, dated later); every published
+  // release sits below it and is older, so publishing it makes it the newest.
+  it('sits above every published release (pinned by id), dated after every one of them', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.filter((x) => x.status === 'published')) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('is for everyone, and each order entry is addressed as the page it links to is reached', () => {
+    expect(release().audience).toBeUndefined();
+    expect(release().entries.map((e) => e.id)).toEqual([
+      'web-top-bar-fits',
+      'phone-home-greeting',
+      'phone-buttons-voiceover-targets',
+      'phone-pick-quantity-large-text',
+      'phone-order-screen-keyboard',
+    ]);
+    const [bar, greeting, buttons, pick, keyboard] = release().entries;
+    // The top bar, the greeting and the accessibility fixes: every member.
+    for (const e of [bar!, greeting!, buttons!]) {
+      expect(e.audience, e.id).toBeUndefined();
+      expect(e.link, e.id).toBeUndefined();
+    }
+    // The pick field: whoever can pick, where Orders is on (as the web digital
+    // pick's entry is addressed).
+    expect(pick!.audience).toEqual({ anyPermission: ['items:update', 'orders:approve'], modules: ['orders'] });
+    expect(keyboard!.audience).toEqual({ modules: ['orders'] });
+    for (const e of [pick!, keyboard!]) {
+      expect(e.link, e.id).toEqual({ href: '/dashboard/orders', label: 'View orders' });
+    }
+    const reader = (permissions: ReleaseViewer['permissions'], enabledModules: ModuleId[] = ['orders']) =>
+      visibleReleases([published()], { role: 'viewer', permissions, enabledModules })[0]?.entries.map((e) => e.id) ?? [];
+    expect(reader(['items:update'])).toEqual([
+      'web-top-bar-fits',
+      'phone-home-greeting',
+      'phone-buttons-voiceover-targets',
+      'phone-pick-quantity-large-text',
+      'phone-order-screen-keyboard',
+    ]);
+    expect(reader(['orders:request'])).toEqual([
+      'web-top-bar-fits',
+      'phone-home-greeting',
+      'phone-buttons-voiceover-targets',
+      'phone-order-screen-keyboard',
+    ]);
+    expect(reader([], [])).toEqual(['web-top-bar-fits', 'phone-home-greeting', 'phone-buttons-voiceover-targets']);
+  });
+
+  it('names the platform in every entry and says it plainly', () => {
+    const r = release();
+    // Old phone builds show only the summary: it names both platforms.
+    expect(r.summary).toMatch(/^On the web, /);
+    expect(r.summary).toContain('In the mobile app, ');
+    const [bar, greeting, buttons, pick, keyboard] = r.entries;
+    expect(bar!.whatChanged).toMatch(/^On the web, /);
+    for (const e of [greeting!, buttons!, pick!, keyboard!]) expect(e.whatChanged, e.id).toContain('mobile app');
+    for (const e of [greeting!, buttons!, pick!, keyboard!]) {
+      expect(e.whatToDo, e.id).toBe('Update the app when it offers the new version.');
+    }
+    expect(bar!.whatToDo).toBe('No action needed.');
+    const text = readerText(r).join(' ');
+    // The words the screens use.
+    expect(text).toContain('Good morning before noon, Good afternoon until 5 PM and Good evening after that');
+    expect(text).toContain('Increase quantity of Blue Pens');
+    expect(text).toContain('a typed 30 showed as 3');
+    expect(text).toContain('Help & Learning, Support & feedback and the theme');
+    // Nothing it cannot stand behind: the keyboard entry claims room, not a
+    // scroll it has not been seen to do; no measured claims; no "book".
+    expect(keyboard!.whatChanged).toContain('can be scrolled into view');
+    expect(text).not.toMatch(/\bbook\b|%|faster|always visible|guarantee/i);
+  });
+});
