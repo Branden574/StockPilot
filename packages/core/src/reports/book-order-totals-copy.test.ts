@@ -247,6 +247,35 @@ describe('Book Order Totals wording', () => {
     );
   });
 
+  it('words every export refusal from its status and reason, never raw text', () => {
+    const t = copy.bookReportExportRefusalText;
+    expect(t({ status: 429, retryAfterSeconds: 700 })).toBe(
+      'Too many exports in the last hour. Try again in 12 minutes.',
+    );
+    expect(t({ status: 429 })).toMatch(/Wait a few minutes/);
+    expect(t({ status: 400, reason: 'too_many_rows', count: 20001, limit: 20000 })).toBe(
+      'Too many books for one file (20,001; the limit is 20,000). Narrow the filters.',
+    );
+    expect(t({ status: 400, message: 'These filters are not valid: sort.' })).toBe(
+      'These filters are not valid: sort.',
+    );
+    expect(t({ status: 400, message: 'invalid_query' })).toBe(copy.BOOK_REPORT_FILTERS_INVALID);
+    expect(t({ status: 401 })).toBe('Your session has ended. Sign in again.');
+    expect(t({ status: 403, code: 'forbidden' })).toBe(copy.BOOK_REPORT_EXPORT_FORBIDDEN);
+    expect(t({ status: 403, code: 'module_disabled' })).toBe(copy.BOOK_REPORT_MODULE_OFF);
+    expect(
+      t({
+        status: 403,
+        reason: 'aal2_required',
+        message: 'Re-authenticate with MFA before performing this action.',
+      }),
+    ).toBe('Re-authenticate with MFA before performing this action.');
+    expect(t({ status: 503, reason: 'timeout' })).toBe(copy.BOOK_REPORT_TIMEOUT);
+    expect(t({ status: 500, message: 'relation "x" does not exist' })).toBe(
+      copy.BOOK_REPORT_SERVER_PROBLEM,
+    );
+  });
+
   it('the warehouse view notice names the view it moved to, or says it changed', () => {
     expect(copy.bookReportViewChangedLine({ id: 'w5', name: 'DC5' }, 'DC4')).toBe(
       'Your warehouse view is now DC5. This report still shows DC4.',

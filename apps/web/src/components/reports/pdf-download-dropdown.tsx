@@ -37,21 +37,38 @@ import {
  *     as a cap on how many covers the file embeds.
  *   • `disabledReason`: the file cannot be made for this view (too many
  *     rows); the button is disabled and the reason is shown beside it.
+ *   • `onDownload`: the page fetches the file itself (a plain click calls
+ *     it with the item's URL instead of opening a tab), so a refusal can be
+ *     said on the page. The items keep their real hrefs, so a new tab or a
+ *     copied link still works.
+ *   • `busy`: a file is being prepared; the button says so and is disabled.
  */
 export function PdfDownloadDropdown({
   baseUrl,
   labels,
   note,
   disabledReason,
+  onDownload,
+  busy = false,
 }: {
   baseUrl: string;
   labels?: { withImages: string; withoutImages: string };
   note?: string | null;
   disabledReason?: string | null;
+  onDownload?: (href: string) => void;
+  busy?: boolean;
 }) {
   const sep = baseUrl.includes('?') ? '&' : '?';
   const noPhotosUrl = `${baseUrl}${sep}photos=0`;
   const reasonId = React.useId();
+  const intercept = (href: string) => (e: React.MouseEvent<HTMLAnchorElement>) => {
+    if (!onDownload) return;
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
+      return;
+    }
+    e.preventDefault();
+    onDownload(href);
+  };
   if (disabledReason) {
     return (
       <div className="flex max-w-xs flex-col items-start gap-1">
@@ -67,7 +84,7 @@ export function PdfDownloadDropdown({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline">
+        <Button variant="outline" disabled={busy} aria-busy={busy || undefined}>
           <FileText className="h-4 w-4" /> PDF
         </Button>
       </DropdownMenuTrigger>
@@ -87,6 +104,7 @@ export function PdfDownloadDropdown({
             target="_blank"
             rel="noopener noreferrer"
             className="cursor-pointer"
+            onClick={intercept(baseUrl)}
           >
             <ImageIcon className="mr-2 h-4 w-4" />
             <span className="flex-1">{labels?.withImages ?? 'With images'}</span>
@@ -98,6 +116,7 @@ export function PdfDownloadDropdown({
             target="_blank"
             rel="noopener noreferrer"
             className="cursor-pointer"
+            onClick={intercept(noPhotosUrl)}
           >
             <FileX2 className="mr-2 h-4 w-4" />
             <div className="flex-1">

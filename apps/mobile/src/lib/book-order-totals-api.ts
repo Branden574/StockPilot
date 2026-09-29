@@ -1,11 +1,15 @@
 import {
   BOOK_REPORT_COVERS_MAX,
+  BOOK_REPORT_EXPORT_FORBIDDEN,
+  BOOK_REPORT_FILTERS_INVALID,
   BOOK_REPORT_FORBIDDEN,
   BOOK_REPORT_MODULE_OFF,
   BOOK_REPORT_NOT_IN_SCOPE,
   BOOK_REPORT_OFFLINE_NEEDS_CONNECTION,
+  BOOK_REPORT_SERVER_PROBLEM,
   BOOK_REPORT_TIMEOUT,
   VERIFICATION_SESSION_ENDED_COPY,
+  bookReportExportRetryText,
   bookReportOfflineAsOf,
   bookReportQueryKey,
   bookReportTooManyText,
@@ -463,14 +467,12 @@ export const BOOK_REPORT_PHONE_AAL2 =
   'Your account uses an authenticator app, and this session did not sign in with it. Sign out and sign back in with your code to open this report.';
 export const BOOK_REPORT_PHONE_MFA_REQUIRED =
   'Your organization requires two-step verification for this report. Set it up on the web, then sign in again.';
-export const BOOK_REPORT_EXPORT_FORBIDDEN = "You don't have access to export reports.";
 export const BOOK_REPORT_WORKSPACE_MISMATCH =
   'The server answered for a different workspace. Go back, check the workspace in the menu, and try again.';
 export const BOOK_REPORT_UNREADABLE =
   'The server sent an answer this version of the app cannot read. Try again, or update the app.';
-export const BOOK_REPORT_SERVER_PROBLEM = 'The server had a problem. Try again in a moment.';
-export const BOOK_REPORT_FILTERS_INVALID =
-  'These filters could not be used. Reset the filters and try again.';
+// The export and server words are core's, shared with the web page.
+export { BOOK_REPORT_EXPORT_FORBIDDEN, BOOK_REPORT_FILTERS_INVALID, BOOK_REPORT_SERVER_PROBLEM };
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -485,14 +487,8 @@ function view(
   return { detail, retry, keepShown, notFound };
 }
 
-/** 'Too many exports. Try again in 12 minutes.' */
-export function exportRetryText(retryAfterSeconds: number | null): string {
-  if (retryAfterSeconds === null || !Number.isFinite(retryAfterSeconds) || retryAfterSeconds <= 0) {
-    return 'Too many exports in the last hour. Wait a few minutes and try again.';
-  }
-  const minutes = Math.max(1, Math.ceil(retryAfterSeconds / 60));
-  return `Too many exports in the last hour. Try again in ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}.`;
-}
+/** 'Too many exports. Try again in 12 minutes.' (core's words). */
+export const exportRetryText = bookReportExportRetryText;
 
 /**
  * Why a Book Order Totals request failed, in words. Keyed on the HTTP status

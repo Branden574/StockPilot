@@ -12,6 +12,7 @@
  */
 
 import type { OrderStatusKey } from '../customization/order-status';
+import { VERIFICATION_SESSION_ENDED_COPY } from '../warehouse/verification';
 
 import {
   BOOK_REPORT_PDF_COVER_CAP,
@@ -397,6 +398,62 @@ export const BOOK_REPORT_OPEN_ON_WEB = 'Open this report on the web';
 /** 'Too many books for one file (21,340; the limit is 20,000). Narrow the filters.' */
 export function bookReportTooManyText(count: number, limit: number): string {
   return `Too many books for one file (${n(count)}; the limit is ${n(limit)}). Narrow the filters.`;
+}
+
+export const BOOK_REPORT_EXPORT_FORBIDDEN = "You don't have access to export reports.";
+export const BOOK_REPORT_SERVER_PROBLEM = 'The server had a problem. Try again in a moment.';
+export const BOOK_REPORT_FILTERS_INVALID =
+  'These filters could not be used. Reset the filters and try again.';
+export const BOOK_REPORT_EXPORT_CONNECTION =
+  'The file could not be downloaded. Check the connection and try again.';
+export const BOOK_REPORT_EXPORT_PREPARING = 'Preparing the file';
+
+/** 'Too many exports in the last hour. Try again in 12 minutes.' (the
+ *  shared export budget, from the route's Retry-After seconds). */
+export function bookReportExportRetryText(retryAfterSeconds: number | null): string {
+  if (retryAfterSeconds === null || !Number.isFinite(retryAfterSeconds) || retryAfterSeconds <= 0) {
+    return 'Too many exports in the last hour. Wait a few minutes and try again.';
+  }
+  const minutes = Math.max(1, Math.ceil(retryAfterSeconds / 60));
+  return `Too many exports in the last hour. Try again in ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}.`;
+}
+
+/**
+ * Why the export route refused a file, in words, keyed on the HTTP status and
+ * the route's own code and details.reason (never on raw text, except a 400's
+ * or an MFA refusal's own sentence, which the server writes for people).
+ */
+export function bookReportExportRefusalText(r: {
+  status: number;
+  code?: string | null;
+  reason?: string | null;
+  count?: number | null;
+  limit?: number | null;
+  message?: string | null;
+  retryAfterSeconds?: number | null;
+}): string {
+  const sentence = r.message && /\s/.test(r.message) ? r.message : null;
+  if (r.status === 400) {
+    if (
+      r.reason === 'too_many_rows' &&
+      typeof r.count === 'number' &&
+      typeof r.limit === 'number'
+    ) {
+      return bookReportTooManyText(r.count, r.limit);
+    }
+    return sentence ?? BOOK_REPORT_FILTERS_INVALID;
+  }
+  if (r.status === 401) return VERIFICATION_SESSION_ENDED_COPY;
+  if (r.status === 403) {
+    if (r.reason === 'aal2_required' || r.reason === 'mfa_required') {
+      return sentence ?? BOOK_REPORT_EXPORT_FORBIDDEN;
+    }
+    if (r.code === 'module_disabled') return BOOK_REPORT_MODULE_OFF;
+    return BOOK_REPORT_EXPORT_FORBIDDEN;
+  }
+  if (r.status === 429) return bookReportExportRetryText(r.retryAfterSeconds ?? null);
+  if (r.status === 503 && r.reason === 'timeout') return BOOK_REPORT_TIMEOUT;
+  return BOOK_REPORT_SERVER_PROBLEM;
 }
 
 export const BOOK_REPORT_MFA_ENROLL =
