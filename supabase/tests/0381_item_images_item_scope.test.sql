@@ -155,12 +155,15 @@ exception when others then
   return 'ERROR ' || sqlstate;
 end $$;
 
--- Wall-clock milliseconds a statement takes (its result is discarded).
+-- Wall-clock milliseconds a statement takes (its result is discarded); an
+-- error counts as never finishing, so it is a red assertion, not an abort.
 create function pg_temp.ms(p_sql text) returns int language plpgsql as $$
 declare t0 timestamptz := clock_timestamp();
 begin
   execute p_sql;
   return extract(epoch from (clock_timestamp() - t0)) * 1000;
+exception when others then
+  return 2147483647;
 end $$;
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
