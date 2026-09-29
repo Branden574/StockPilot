@@ -106,7 +106,7 @@ export default async function ReturnDetailPage({
           ← Back to returns
         </Link>
         <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 basis-72">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="truncate text-2xl font-semibold tracking-tight">
                 {detail.return_number ?? 'Return'}
