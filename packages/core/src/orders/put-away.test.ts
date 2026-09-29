@@ -334,13 +334,34 @@ describe('parseStagingItemFilter (web ?item / ?order, phone itemIds / orderId)',
   it('the web link and the phone params both read back to the same filter', () => {
     const filter = { orderId: ORDER, itemIds: [A, B] };
     const href = stagingPutAwayHref(filter);
-    expect(href).toBe(`/dashboard/inventory/staging?order=${ORDER}&item=${A}&item=${B}`);
+    // One comma list, not a repeated param (the page reads both spellings).
+    expect(href).toBe(`/dashboard/inventory/staging?order=${ORDER}&item=${A},${B}`);
     const q = new URL(href, 'https://x.test').searchParams;
+    expect(q.getAll('item')).toEqual([`${A},${B}`]);
     expect(parseStagingItemFilter({ item: q.getAll('item'), order: q.get('order') })).toEqual({ state: 'ok', filter });
+    // A link in the older repeated spelling still reads the same.
+    expect(parseStagingItemFilter({ item: [A, B], order: ORDER })).toEqual({ state: 'ok', filter });
     const params = stagingPutAwayParams(filter);
     expect(params).toEqual({ itemIds: `${A},${B}`, orderId: ORDER });
     expect(parseStagingItemFilter({ item: params.itemIds, order: params.orderId })).toEqual({ state: 'ok', filter });
     expect(stagingPutAwayParams({ orderId: null, itemIds: [A] })).toEqual({ itemIds: A });
+  });
+
+  // Every request the filtered Staging page makes (the document, and each
+  // refresh or server action after a Place) carries this URL in its request
+  // line, and Node's server refuses a request whose line and headers pass
+  // 16 KB (431). Next 16 strips the page's search params from its router-state
+  // header, and browsers cut a Referer over 4096 bytes to the origin, so the
+  // URL is sent once; the rest is the session's cookies. The comma list keeps
+  // the largest link (200 items) near 7.5 KB, leaving room for them.
+  it('the largest web link (200 items) stays under 7.6 KB', () => {
+    const ids = Array.from({ length: STAGING_FILTER_MAX_ITEMS }, (_, i) => uuid(i + 1));
+    const href = stagingPutAwayHref({ orderId: ORDER, itemIds: ids });
+    expect(new TextEncoder().encode(href).length).toBeLessThan(7_600);
+    expect(parseStagingItemFilter({ item: new URL(href, 'https://x.test').searchParams.getAll('item'), order: ORDER })).toEqual({
+      state: 'ok',
+      filter: { orderId: ORDER, itemIds: ids },
+    });
   });
 
   it('builds its links by hand: React Native has no working URLSearchParams', () => {

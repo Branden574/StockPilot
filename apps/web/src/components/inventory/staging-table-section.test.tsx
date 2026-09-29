@@ -100,6 +100,11 @@ describe('Staging page data path: ?item and ?order (F2-3)', () => {
     );
   });
 
+  it("reads the order page's link, one comma list (?item=a,b), the same as a repeated ?item", async () => {
+    await renderSection(parseStagingItemFilter({ item: `${A},${B}`, order: ORDER }));
+    expect(calls.worklist).toEqual([{ itemType: undefined, itemIds: [A, B] }]);
+  });
+
   it('without ?item: the whole worklist in the active warehouse, as before, no chip, no order read', async () => {
     await renderSection(parseStagingItemFilter({ order: ORDER }), 'book');
     expect(calls.worklist).toEqual([{ itemType: 'book', warehouseId: 'wh-cookie' }]);

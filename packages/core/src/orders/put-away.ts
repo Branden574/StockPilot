@@ -151,11 +151,18 @@ export function parseStagingItemFilter(input: { item?: ParamValue; order?: Param
   return { state: 'ok', filter: { itemIds: ids, orderId: isUuid(order) ? order : null } };
 }
 
-/** The web Staging page for these items: `/dashboard/inventory/staging?order=…&item=…&item=…`. */
+/**
+ * The web Staging page for these items: `/dashboard/inventory/staging?order=…&item=a,b,c`.
+ * One comma list rather than a repeated `item=` (the page reads both): every
+ * request the filtered page makes carries this URL, and the list keeps the
+ * largest link (200 items) near 7.5 KB instead of 8.5 KB, under Node's 16 KB
+ * limit on a request's line and headers with room for the session's cookies.
+ * The commas are left bare (legal in a query); each id is encoded.
+ */
 export function stagingPutAwayHref(filter: { orderId: string | null; itemIds: readonly string[] }): string {
   const parts: string[] = [];
   if (filter.orderId) parts.push(`order=${encodeURIComponent(filter.orderId)}`);
-  for (const id of filter.itemIds) parts.push(`item=${encodeURIComponent(id)}`);
+  if (filter.itemIds.length > 0) parts.push(`item=${filter.itemIds.map(encodeURIComponent).join(',')}`);
   return parts.length > 0 ? `/dashboard/inventory/staging?${parts.join('&')}` : '/dashboard/inventory/staging';
 }
 

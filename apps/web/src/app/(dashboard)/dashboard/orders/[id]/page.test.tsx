@@ -1516,8 +1516,7 @@ describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', (
     ctxHolder.current = { role, permissions: new Set(['orders:read', ...perms]) };
   }
   const lastPanelProps = () => managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>;
-  const stagingHref = (...items: string[]) =>
-    `/dashboard/inventory/staging?order=${ORDER_ID}${items.map((i) => `&item=${i}`).join('')}`;
+  const stagingHref = (...items: string[]) => `/dashboard/inventory/staging?order=${ORDER_ID}&item=${items.join(',')}`;
   /** The line cells' put-away links, by row. */
   const lineLinks = () =>
     screen.getAllByTestId('readiness-line').map((cell) => within(cell).queryByTestId('readiness-put-away-line'));

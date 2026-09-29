@@ -391,7 +391,7 @@ describe('readinessStripPutAway / readinessLinePutAwayHref: where put away goes,
     expect(readinessStripPutAway(putAwayTargets(assessment()), opts)).toEqual({
       kind: 'link',
       label: 'Put away 2 items',
-      href: `/dashboard/inventory/staging?order=${ORDER}&item=b&item=c`,
+      href: `/dashboard/inventory/staging?order=${ORDER}&item=b,c`,
     });
   });
 

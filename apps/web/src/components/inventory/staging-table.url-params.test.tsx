@@ -18,7 +18,8 @@ beforeAll(() => {
 const A = '00000000-0000-4000-8000-00000000000a';
 const B = '00000000-0000-4000-8000-00000000000b';
 const ORDER = '0f0f0f0f-0000-4000-8000-000000000001';
-const QUERY = `order=${ORDER}&item=${A}&item=${B}`;
+// The order page's link (core stagingPutAwayHref): one comma list.
+const QUERY = `order=${ORDER}&item=${A},${B}`;
 
 const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }));
 vi.mock('next/navigation', () => ({
@@ -80,7 +81,7 @@ describe('the Staging table leaves ?item and ?order alone (pattern #18)', () => 
     await userEvent.click(screen.getByRole('button', { name: 'Books' }));
     expect(router.push).toHaveBeenCalledTimes(1);
     const next = new URLSearchParams(String(router.push.mock.calls[0]![0]).replace(/^\?/, ''));
-    expect(next.getAll('item')).toEqual([A, B]);
+    expect(next.getAll('item')).toEqual([`${A},${B}`]);
     expect(next.get('order')).toBe(ORDER);
     expect(next.get('type')).toBe('book');
     expect(router.replace).not.toHaveBeenCalled();
