@@ -203,21 +203,29 @@ function FiltersContent({
                 />
               ))}
               {draft.range === 'custom' ? (
-                <View style={styles.dates}>
-                  <DateField
-                    label="FROM"
-                    value={draft.from ?? ''}
-                    problem={touchedDates ? problems.from : null}
-                    onChange={(v) => setDraft((d) => ({ ...d, from: v.trim() || null }))}
-                    onBlur={() => setTouchedDates(true)}
-                  />
-                  <DateField
-                    label="TO"
-                    value={draft.to ?? ''}
-                    problem={touchedDates ? problems.to : null}
-                    onChange={(v) => setDraft((d) => ({ ...d, to: v.trim() || null }))}
-                    onBlur={() => setTouchedDates(true)}
-                  />
+                <View style={{ gap: 8 }}>
+                  <View style={styles.dates}>
+                    <DateField
+                      label="FROM"
+                      value={draft.from ?? ''}
+                      invalid={touchedDates && problems.fromInvalid}
+                      onChange={(v) => setDraft((d) => ({ ...d, from: v.trim() || null }))}
+                      onBlur={() => setTouchedDates(true)}
+                    />
+                    <DateField
+                      label="TO"
+                      value={draft.to ?? ''}
+                      invalid={touchedDates && problems.toInvalid}
+                      onChange={(v) => setDraft((d) => ({ ...d, to: v.trim() || null }))}
+                      onBlur={() => setTouchedDates(true)}
+                    />
+                  </View>
+                  {/* One sentence for the range, core's (the web page's words). */}
+                  {touchedDates && problems.dates ? (
+                    <Body size={12.5} color={ACCENT.crit} accessibilityRole="alert">
+                      {problems.dates}
+                    </Body>
+                  ) : null}
                 </View>
               ) : null}
             </Section>
@@ -413,13 +421,14 @@ function OptionRow({
 function DateField({
   label,
   value,
-  problem,
+  invalid,
   onChange,
   onBlur,
 }: {
   label: string;
   value: string;
-  problem: string | null;
+  /** Outlined when the range's refusal (said once, under both dates) is about this date. */
+  invalid: boolean;
   onChange: (v: string) => void;
   onBlur: () => void;
 }) {
@@ -443,17 +452,12 @@ function DateField({
           styles.input,
           {
             color: c.ink,
-            borderColor: problem ? ACCENT.crit : c.hair,
+            borderColor: invalid ? ACCENT.crit : c.hair,
             backgroundColor: c.paper,
             fontFamily: FONT.mono,
           },
         ]}
       />
-      {problem ? (
-        <Body size={12.5} color={ACCENT.crit} accessibilityRole="alert">
-          {problem}
-        </Body>
-      ) : null}
     </View>
   );
 }

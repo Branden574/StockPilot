@@ -10,6 +10,7 @@ import {
   BOOK_REPORT_EXPORT_COVER_CAP_NOTE,
   BOOK_REPORT_ORDER_LINK_HINT,
   BOOK_REPORT_PDF_MAX_ROWS,
+  BOOK_REPORT_UI,
   DEFAULT_BOOK_REPORT_QUERY,
   DEFAULT_BOOK_REPORT_STATUS_GROUPS,
   bookReportStatusLabels,
@@ -22,9 +23,6 @@ import {
 
 import { BOOK_A, ORDER_1, W1, W2, ordersAnswer, orderRow, totalsAnswer } from './__fixtures__/book-order-totals';
 import {
-  BOOK_REPORT_DATE_FORMAT_PROBLEM,
-  BOOK_REPORT_DATE_ORDER_PROBLEM,
-  BOOK_REPORT_STATUS_PROBLEM,
   applyBookReportDraft,
   bookReportDateChip,
   bookReportDraftIsValid,
@@ -141,19 +139,52 @@ describe('link parameters', () => {
 });
 
 describe('the filters sheet', () => {
-  it('checks a custom range with core rules', () => {
-    expect(bookReportDraftProblems(q({ range: 'custom', from: '2026-02-30', to: '2026-03-01' }))).toMatchObject({
-      from: BOOK_REPORT_DATE_FORMAT_PROBLEM,
-      to: null,
+  // Plan 13.7 step 3: a custom range is refused in CORE copy, the same
+  // sentence the web page shows (BOOK_REPORT_UI.customRangeInvalid). The
+  // phone once had its own two sentences ("Enter a date as YYYY-MM-DD, from
+  // 2000 to 2100." and "The first date must be on or before the last
+  // date."), so the two platforms refused the same range in different words.
+  it('refuses an impossible date in the web page\'s words, and marks that date', () => {
+    expect(bookReportDraftProblems(q({ range: 'custom', from: '2026-02-30', to: '2026-03-01' }))).toEqual({
+      dates: BOOK_REPORT_UI.customRangeInvalid,
+      fromInvalid: true,
+      toInvalid: false,
+      status: null,
     });
-    expect(bookReportDraftProblems(q({ range: 'custom', from: '2026-03-02', to: '2026-03-01' }))).toMatchObject({
-      to: BOOK_REPORT_DATE_ORDER_PROBLEM,
+    expect(bookReportDraftProblems(q({ range: 'custom', from: '2026-03-01', to: '2101-01-01' }))).toMatchObject({
+      dates: BOOK_REPORT_UI.customRangeInvalid,
+      fromInvalid: false,
+      toInvalid: true,
     });
+    expect(bookReportDraftProblems(q({ range: 'custom', from: null, to: null }))).toMatchObject({
+      dates: BOOK_REPORT_UI.customRangeInvalid,
+      fromInvalid: true,
+      toInvalid: true,
+    });
+  });
+  it('refuses a range whose first date is after its last in the same words, marking both dates', () => {
+    expect(bookReportDraftProblems(q({ range: 'custom', from: '2026-03-02', to: '2026-03-01' }))).toEqual({
+      dates: BOOK_REPORT_UI.customRangeInvalid,
+      fromInvalid: true,
+      toInvalid: true,
+      status: null,
+    });
+  });
+  it('a real range, or any preset, has no date problem', () => {
+    expect(bookReportDraftProblems(q({ range: 'custom', from: '2026-03-01', to: '2026-03-01' }))).toEqual({
+      dates: null,
+      fromInvalid: false,
+      toInvalid: false,
+      status: null,
+    });
+    expect(bookReportDraftProblems(q({ range: 'month', from: null, to: null })).dates).toBeNull();
     expect(bookReportDraftIsValid(q({ range: 'custom', from: '2026-03-01', to: '2026-03-01' }))).toBe(true);
     expect(bookReportDraftIsValid(q({ range: 'custom', from: null, to: '2026-03-01' }))).toBe(false);
+    expect(bookReportDraftIsValid(q({ range: 'custom', from: '2026-03-02', to: '2026-03-01' }))).toBe(false);
   });
-  it('needs at least one status', () => {
-    expect(bookReportDraftProblems(q({ statusGroups: [] })).status).toBe(BOOK_REPORT_STATUS_PROBLEM);
+  it('needs at least one status, in core\'s words (the web page\'s)', () => {
+    expect(bookReportDraftProblems(q({ statusGroups: [] })).status).toBe(BOOK_REPORT_UI.statusNoneChosen);
+    expect(bookReportDraftIsValid(q({ statusGroups: [] }))).toBe(false);
   });
   it('Apply goes back to page 1 and drops dates outside a custom range', () => {
     expect(applyBookReportDraft(q({ page: 4, range: '30d', from: '2026-01-01', to: '2026-01-02' }))).toMatchObject({

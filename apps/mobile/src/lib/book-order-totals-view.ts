@@ -15,6 +15,7 @@ import {
   BOOK_REPORT_RANGE_LABELS,
   BOOK_REPORT_SORT_LABELS,
   BOOK_REPORT_STATUS_GROUP_KEYS,
+  BOOK_REPORT_UI,
   DEFAULT_BOOK_REPORT_QUERY,
   DEFAULT_BOOK_REPORT_STATUS_GROUPS,
   ROLES,
@@ -261,35 +262,46 @@ export function bookReportSortChip(query: BookReportQuery): string {
 
 /** What the filters sheet refuses before Apply. */
 export interface BookReportDraftProblems {
-  from: string | null;
-  to: string | null;
+  /** The custom range's refusal, said once under both dates, or null. */
+  dates: string | null;
+  /** The date field(s) the refusal is about (outlined on the sheet). */
+  fromInvalid: boolean;
+  toInvalid: boolean;
   status: string | null;
 }
 
-export const BOOK_REPORT_DATE_FORMAT_PROBLEM = 'Enter a date as YYYY-MM-DD, from 2000 to 2100.';
-export const BOOK_REPORT_DATE_ORDER_PROBLEM = 'The first date must be on or before the last date.';
-export const BOOK_REPORT_STATUS_PROBLEM = 'Choose at least one status.';
-
-/** Custom dates are checked by core's calendar rule (the SQL's bounds); a
- *  status filter needs at least one group. */
+/**
+ * Custom dates are checked by core's calendar rule (the SQL's bounds); a
+ * status filter needs at least one group. The refusals are core's sentences,
+ * the ones the web page shows (plan 13.7 step 3): one sentence for the range
+ * (an impossible date, or the first after the last) and one for status. The
+ * field(s) at fault are marked: an impossible date marks that date; the
+ * first date after the last marks both.
+ */
 export function bookReportDraftProblems(draft: BookReportQuery): BookReportDraftProblems {
-  const problems: BookReportDraftProblems = { from: null, to: null, status: null };
+  const problems: BookReportDraftProblems = {
+    dates: null,
+    fromInvalid: false,
+    toInvalid: false,
+    status: null,
+  };
   if (draft.range === 'custom') {
     const fromOk = validateCustomDate(draft.from);
     const toOk = validateCustomDate(draft.to);
-    if (!fromOk) problems.from = BOOK_REPORT_DATE_FORMAT_PROBLEM;
-    if (!toOk) problems.to = BOOK_REPORT_DATE_FORMAT_PROBLEM;
-    if (fromOk && toOk && (draft.from as string) > (draft.to as string)) {
-      problems.to = BOOK_REPORT_DATE_ORDER_PROBLEM;
+    const reversed = fromOk && toOk && (draft.from as string) > (draft.to as string);
+    problems.fromInvalid = !fromOk || reversed;
+    problems.toInvalid = !toOk || reversed;
+    if (problems.fromInvalid || problems.toInvalid) {
+      problems.dates = BOOK_REPORT_UI.customRangeInvalid;
     }
   }
-  if (draft.statusGroups.length === 0) problems.status = BOOK_REPORT_STATUS_PROBLEM;
+  if (draft.statusGroups.length === 0) problems.status = BOOK_REPORT_UI.statusNoneChosen;
   return problems;
 }
 
 export function bookReportDraftIsValid(draft: BookReportQuery): boolean {
   const p = bookReportDraftProblems(draft);
-  return p.from === null && p.to === null && p.status === null;
+  return p.dates === null && p.status === null;
 }
 
 /**

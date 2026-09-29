@@ -412,3 +412,31 @@ describe('8. accessibility', () => {
     expect(nested).toEqual([]);
   });
 });
+
+describe('9. the filters sheet refuses in core copy (plan 13.7 step 3)', () => {
+  const view = codeOnly(read('src/lib/book-order-totals-view.ts'));
+  const sheetFile = 'src/components/book-order-filters-sheet.tsx';
+  const sheet = codeOnly(read(sheetFile));
+
+  it('the phone writes no refusal sentence of its own; it uses the web page\'s core sentences', () => {
+    expect(view).not.toMatch(/Enter a date as/);
+    expect(view).not.toMatch(/on or before the last date/);
+    expect(view).not.toMatch(/'Choose at least one status\.'/);
+    expect(sheet).not.toMatch(/Enter a date as|on or before|Choose at least one status/);
+    expect(view).toContain('BOOK_REPORT_UI.customRangeInvalid');
+    expect(view).toContain('BOOK_REPORT_UI.statusNoneChosen');
+  });
+
+  it('the range refusal is said once, under both dates, as an alert, after the dates were touched', () => {
+    const sf = parseTsx(read(sheetFile), sheetFile);
+    const alerts: string[] = [];
+    walkJsx(sf, (el) => {
+      if (attrText(el, 'accessibilityRole', sf) !== 'alert') return;
+      alerts.push(el.getText(sf));
+    });
+    expect(alerts.filter((a) => a.includes('problems.dates'))).toHaveLength(1);
+    expect(sheet).toContain('{touchedDates && problems.dates ? (');
+    expect(sheet).toContain('invalid={touchedDates && problems.fromInvalid}');
+    expect(sheet).toContain('invalid={touchedDates && problems.toInvalid}');
+  });
+});

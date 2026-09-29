@@ -15,6 +15,7 @@ vi.mock('next/navigation', () => ({
 }));
 
 import {
+  BOOK_REPORT_UI,
   DEFAULT_BOOK_REPORT_QUERY,
   bookReportStatusLabels,
   type BookReportQuery,
@@ -137,6 +138,23 @@ describe('Book Order Totals filter bar', () => {
     const href = nav.push.mock.calls[0]![0] as string;
     expect(href).toContain('range=custom&from=2026-09-01&to=2026-09-28');
     expect(href).not.toContain('page=');
+  });
+
+  // Plan 13.7 step 3: the web page and the phone refuse a custom range in the
+  // same core sentence (the phone's filters sheet uses it too).
+  it('refuses a custom range whose first date is after its last in core copy, and changes nothing', async () => {
+    render(bar());
+    await userEvent.selectOptions(screen.getByLabelText('Orders placed'), 'custom');
+    await userEvent.type(screen.getByLabelText('From'), '2026-09-28');
+    await userEvent.type(screen.getByLabelText('To'), '2026-09-01');
+    await userEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(BOOK_REPORT_UI.customRangeInvalid);
+    expect(BOOK_REPORT_UI.customRangeInvalid).toBe(
+      'Choose two real dates between 2000 and 2100, the first on or before the second.',
+    );
+    expect(screen.getByLabelText('From')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText('To')).toHaveAttribute('aria-invalid', 'true');
+    expect(nav.push).not.toHaveBeenCalled();
   });
 
   it('desktop layout: the warehouse column is the widest, and a custom range takes its own row instead of pushing Sort onto a second one', async () => {
