@@ -39,8 +39,6 @@ export const maxDuration = 60;
 export async function GET(request: Request) {
   try {
     const ctx = await withApiContext(request);
-    const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
-    if (limited) return limited;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
@@ -52,6 +50,10 @@ export async function GET(request: Request) {
     if (!can(ctx, 'orders:approve')) {
       return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }
+    // The export budget is spent only once the caller may have this export
+    // (a refused caller must not spend it or trip the abuse alert).
+    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    if (limited) return limited;
 
     const params = new URL(request.url).searchParams;
 

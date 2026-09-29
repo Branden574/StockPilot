@@ -41,8 +41,6 @@ export async function GET(
     // as cookie sessions — /api/* bypasses middleware so this is the only
     // place auth is resolved.
     const ctx = await withApiContext(req);
-    const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
-    if (limited) return limited;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
@@ -53,6 +51,10 @@ export async function GET(
     if (!can(ctx, 'purchase_orders:read')) {
       return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }
+    // The export budget is spent only once the caller may have this export
+    // (a refused caller must not spend it or trip the abuse alert).
+    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    if (limited) return limited;
 
     const poSvc = new PurchaseOrdersService(ctx);
     const inventorySvc = new InventoryService(ctx);

@@ -14,9 +14,16 @@ import { checkRateLimit } from './rate-limit';
  * hijacked session — can't spam react-pdf rendering / large CSV generation to
  * exhaust serverless compute (DoS + cost). Security audit 2026-06-09.
  *
- * Usage in a route handler, right after resolving the auth context:
- *   const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
+ * Usage in a route handler: AFTER the caller's session, permission and request
+ * checks, BEFORE the data (see app/api/export-routes.limit-order.test.ts):
+ *   if (!ctx) return 401;
+ *   if (!can(ctx, '<the export permission>')) return 403;
+ *   // ...validate the request (400)...
+ *   const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
  *   if (limited) return limited;
+ * Never run it before the permission check: a refused caller would spend the
+ * shared budget, write an audit row and trip the abuse alert, and after 40
+ * refusals be told 429 instead of 403.
  *
  * Returns a ready 429 NextResponse to return early, or null to proceed. 40/hr
  * is far above a human generating reports but stops scripted abuse.

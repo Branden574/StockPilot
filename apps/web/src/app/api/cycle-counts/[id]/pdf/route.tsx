@@ -26,8 +26,6 @@ export async function GET(
   const { id } = await params;
   try {
     const ctx = await withApiContext(req);
-    const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
-    if (limited) return limited;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
@@ -46,6 +44,10 @@ export async function GET(
       ctx,
       can(ctx, 'cycle_counts:read') ? 'cycle_counts:read' : 'stock:adjust',
     );
+    // The export budget is spent only once the caller may have this export
+    // (a refused caller must not spend it or trip the abuse alert).
+    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    if (limited) return limited;
 
     const ccSvc = new CycleCountsService(ctx);
     const warehousesSvc = new WarehousesService(ctx);

@@ -566,6 +566,14 @@ WEB_TESTS=(
   'src/app/api/reports/[slug]/pdf/route.test.ts'
   src/app/api/reports/inventory-snapshot/pdf/route.test.tsx
   src/app/api/reports/item-cost-history/xlsx/route.test.ts
+
+  # Every export route (2026-09-29): the caller's session, permission and
+  # request are checked BEFORE the shared export budget, so a refused caller
+  # never spends it, never writes a security.export_rate_limited audit row and
+  # never trips the abuse alert; the order slips answer a ServiceError with
+  # its real status. Self-policing: a route that calls the limiter must be
+  # listed there, and the limiter-first idiom fails it.
+  src/app/api/export-routes.limit-order.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

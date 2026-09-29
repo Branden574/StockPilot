@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
+import { reportError } from '@/lib/error-reporter';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { env } from '@/lib/env';
 import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
@@ -10,6 +11,7 @@ import { renderWarehousePackingSlipPdf } from '@/lib/pdf/packing-slip-warehouse'
 import type { WarehouseInfo } from '@/lib/pdf/packing-slip-shared';
 import { ItemImagesService } from '@/server/services/item-images';
 import { OrderRequestsService } from '@/server/services/order-requests';
+import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
 
 export const runtime = 'nodejs';
@@ -29,8 +31,6 @@ export async function GET(
 ) {
   const { id } = await params;
   const ctx = await withApiContext(req);
-  const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
-  if (limited) return limited;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
@@ -43,6 +43,11 @@ export async function GET(
         { status: 400 },
       );
     }
+    // The export budget is spent only on an order the caller can open, in a
+    // state that has this slip (a refused caller must not spend the shared
+    // budget or trip the export abuse alert).
+    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    if (limited) return limited;
 
     const token = detail.request.signature_token;
     let qrDataUrl: string | null = null;
@@ -171,8 +176,21 @@ export async function GET(
       },
     });
   } catch (e) {
+    // A ServiceError keeps its real status (an order the caller cannot open
+    // is 404, the orders module off is 403); it used to be a 500 carrying the
+    // raw message. Anything else is reported and answered generically.
+    if (e instanceof ServiceError) {
+      if (e.code === 'internal_error') {
+        void reportError(e, { tag: 'pdf.packing_slip_warehouse', extra: { detail: e.internalDetail ?? null } });
+      }
+      return NextResponse.json(
+        { error: e.code, message: e.message },
+        { status: serviceErrorStatus(e.code) },
+      );
+    }
+    void reportError(e, { tag: 'pdf.packing_slip_warehouse' });
     return NextResponse.json(
-      { error: 'internal_error', message: e instanceof Error ? e.message : 'pdf failed' },
+      { error: 'internal_error', message: 'The PDF could not be made. Please try again.' },
       { status: 500 },
     );
   }
