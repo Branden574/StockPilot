@@ -30,26 +30,21 @@ export const RELEASES: Release[] = [
   {
     id: 'book-order-totals-2026-09',
     revision: 1,
-    // HELD AS A DRAFT until the phone update (pnpm release:ota: the phone's
-    // Book Order Totals screens) and the Demo Co walk, as F1-3's, F1-4's,
-    // F1-5's and F2-1's were: published with the web page alone, it would
-    // tell phone users about a report their app does not have yet. The
-    // follow-up that publishes it sets 'published' and the real
-    // publishedAt, re-reads every sentence against what shipped (the phone's
-    // export is iPhone only; Android shows "Export from the web on Android
-    // for now.", said in the files entry), and flips the draft pin in
-    // registry.test.ts.
+    // Held as a draft until the phone update (OTA group 46e8f566, the phone's
+    // Book Order Totals screens) and the Demo Co production walk, as F1-3's,
+    // F1-4's, F1-5's and F2-1's were. Published once 0379 was applied, the web
+    // was live and the walk matched the figures SQL gave for Demo Co.
     //
     // Addressed as the report is reached: Orders on (the release), then Books
     // on with reports:read, the permission the linked page checks, for both
     // entries. The files entry is not addressed by reports:export: an
     // export-only override would be told about a page that redirects it. Its
     // text says the buttons need export access.
-    status: 'draft',
+    status: 'published',
     title: 'See which books were ordered, with their covers',
     summary:
       'Reports has a new Book Order Totals report on the web and in the mobile app. It lists each book people asked for through Orders with its cover, the copies requested, how many orders asked for it and the latest order date, with the total across every matching book at the top. View orders shows the orders behind each total.',
-    publishedAt: '2026-09-30T17:00:00Z',
+    publishedAt: '2026-09-29T05:41:00Z',
     audience: { modules: ['orders'] },
     entries: [
       {
@@ -88,17 +83,16 @@ export const RELEASES: Release[] = [
     id: 'order-readiness-draft-pos-2026-09',
     revision: 1,
     // The Why and the line sentence are core's words, shown by the web order
-    // page and the phone's order screen alike, so this is held as a draft
-    // until the phone update (pnpm release:ota) carries them. The follow-up
-    // that publishes it sets 'published' and the real publishedAt.
+    // page and the phone's order screen alike, so this was held as a draft
+    // until the phone update carried them (OTA group 46e8f566).
     //
     // Addressed as the full readiness panel is (core readinessAudience):
     // approvers, pickers (items:update) and buyers (purchase_orders:manage).
-    status: 'draft',
+    status: 'published',
     title: 'An item on several draft POs says how many',
     summary:
       "On the web and in the mobile app, when an item on an order is on more than one draft purchase order, its readiness now says how many draft POs hold it beside their total, for example On 4 draft POs 100 (not ordered). It used to name only the first draft beside the total of all of them, so that one PO read as holding every unit.",
-    publishedAt: '2026-09-29T17:00:00Z',
+    publishedAt: '2026-09-29T05:40:00Z',
     audience: { modules: ['orders'] },
     entries: [
       {
