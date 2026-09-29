@@ -174,6 +174,18 @@ export function stepAddQuantity(current: number, delta: number): number {
   return Math.max(0, Math.min(ADD_LINES_MAX_QUANTITY, next));
 }
 
+/**
+ * What VoiceOver says for a row's - / + stepper in the add-items sheet. It
+ * names the item: every row's steppers used to read the same two words
+ * ("Increase quantity"), so moving through the list gave no way to tell which
+ * item a stepper belonged to (F2-2 walk).
+ */
+export function addItemsStepperLabel(delta: number, itemName: string): string {
+  const action = delta > 0 ? 'Increase quantity' : 'Decrease quantity';
+  const name = itemName.trim();
+  return name ? `${action} of ${name}` : action;
+}
+
 export interface AddLinesRequestLine {
   itemId: string;
   quantity: number;
