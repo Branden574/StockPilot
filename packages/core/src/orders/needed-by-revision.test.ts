@@ -1,0 +1,216 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  isNeededByRevisable,
+  NEEDED_BY_BUSY_COPY,
+  NEEDED_BY_CLOSED_COPY,
+  NEEDED_BY_FAILED_COPY,
+  NEEDED_BY_IN_PAST_COPY,
+  NEEDED_BY_MODULE_OFF_COPY,
+  NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY,
+  NEEDED_BY_NOT_APPROVER_COPY,
+  NEEDED_BY_NOT_FOUND_COPY,
+  NEEDED_BY_NOT_PENDING_COPY,
+  NEEDED_BY_REASON_MAX,
+  NEEDED_BY_REASON_REQUIRED_COPY,
+  NEEDED_BY_REVISABLE_STATUSES,
+  NEEDED_BY_RELOAD_COPY,
+  NEEDED_BY_REVISED_TIMELINE_LABEL,
+  NEEDED_BY_SIGN_IN_COPY,
+  NEEDED_BY_TIMEZONE_UNREADABLE_COPY,
+  neededByChangedCopy,
+  neededByInvalidTimeCopy,
+  neededByLabel,
+  neededByPreviewCopy,
+  neededByRevisedCopy,
+  neededByZoneNote,
+  NeededByResultShapeError,
+  normalizeNeededByReason,
+  orderBelongsOnSchedule,
+  orderScheduleEventDetails,
+  parseNeededByRevisionResult,
+  type NeededByRevisionOutcome,
+  type NeededBySchedule,
+} from './needed-by-revision';
+import { ALLOWED_TRANSITIONS, type OrderStatus } from '../order-state-machine';
+
+const LA = 'America/Los_Angeles';
+const NOW = Date.parse('2026-09-29T17:00:00Z');
+
+describe('statuses', () => {
+  it('every open status may be revised; closed ones (and the unconfirmed public request) may not', () => {
+    const all = Object.keys(ALLOWED_TRANSITIONS) as OrderStatus[];
+    const closed = all.filter((s) => !isNeededByRevisable(s)).sort();
+    expect(closed).toEqual(['cancelled', 'completed', 'denied', 'pending_confirmation']);
+    expect(NEEDED_BY_REVISABLE_STATUSES).toHaveLength(all.length - 4);
+    expect(isNeededByRevisable(null)).toBe(false);
+  });
+
+  it('a pending order has no Schedule entry yet; every later open status belongs on the Schedule', () => {
+    expect(orderBelongsOnSchedule('pending_approval')).toBe(false);
+    expect(NEEDED_BY_REVISABLE_STATUSES.filter(orderBelongsOnSchedule)).toEqual(
+      NEEDED_BY_REVISABLE_STATUSES.filter((s) => s !== 'pending_approval'),
+    );
+    expect(orderBelongsOnSchedule('completed')).toBe(false);
+  });
+});
+
+describe('orderScheduleEventDetails (the one Schedule description)', () => {
+  it('names the order and the needed-by in the org zone, never UTC', () => {
+    expect(
+      orderScheduleEventDetails({ id: 'abc', orderNumber: 16, neededBy: '2026-10-03T21:00:00Z' }, LA),
+    ).toBe('Auto-created from order SO-000016. Needed by Oct 3, 2026, 2:00 PM.');
+    expect(
+      orderScheduleEventDetails(
+        { id: 'abc', orderNumber: 16, neededBy: '2026-10-03T21:00:00Z' },
+        'America/New_York',
+      ),
+    ).toBe('Auto-created from order SO-000016. Needed by Oct 3, 2026, 5:00 PM.');
+  });
+
+  it('falls back to the id when the order has no number yet, and to the default zone for a bad one', () => {
+    expect(
+      orderScheduleEventDetails(
+        { id: 'deadbeef-0000', orderNumber: null, neededBy: '2026-10-03T21:00:00Z' },
+        'Not/AZone',
+      ),
+    ).toBe('Auto-created from order DEADBEEF. Needed by Oct 3, 2026, 2:00 PM.');
+  });
+
+  it('stays within the function limit for any order number', () => {
+    expect(
+      orderScheduleEventDetails({ id: 'x', orderNumber: 999_999_999, neededBy: NOW }, LA).length,
+    ).toBeLessThan(200);
+  });
+});
+
+describe('parseNeededByRevisionResult', () => {
+  const answer = {
+    changed: true,
+    previous: '2026-10-01T21:00:00+00:00',
+    neededBy: '2026-10-03T21:00:00+00:00',
+    eventId: 'e1',
+    eventUpdated: true,
+    status: 'approved',
+  };
+
+  it('reads the answer and normalises the times', () => {
+    expect(parseNeededByRevisionResult(answer)).toEqual({
+      changed: true,
+      previous: '2026-10-01T21:00:00.000Z',
+      neededBy: '2026-10-03T21:00:00.000Z',
+      eventId: 'e1',
+      eventUpdated: true,
+      status: 'approved',
+    });
+  });
+
+  it('takes a null previous and a null event, and ignores keys it does not know', () => {
+    expect(
+      parseNeededByRevisionResult({ ...answer, previous: null, eventId: null, eventUpdated: false, later: 1 }),
+    ).toMatchObject({ previous: null, eventId: null, eventUpdated: false });
+  });
+
+  it.each([
+    ['not an object', null],
+    ['a list', []],
+    ['changed missing', { ...answer, changed: undefined }],
+    ['changed as a string', { ...answer, changed: 'true' }],
+    ['neededBy missing', { ...answer, neededBy: null }],
+    ['neededBy unreadable', { ...answer, neededBy: 'soon' }],
+    ['previous unreadable', { ...answer, previous: 'yesterday' }],
+    ['eventId empty', { ...answer, eventId: '' }],
+    ['eventUpdated missing', { ...answer, eventUpdated: undefined }],
+    ['status missing', { ...answer, status: undefined }],
+  ])('refuses %s, never guessing', (_label, raw) => {
+    expect(() => parseNeededByRevisionResult(raw)).toThrow(NeededByResultShapeError);
+  });
+});
+
+describe('words', () => {
+  const outcome = (schedule: NeededBySchedule): NeededByRevisionOutcome => ({
+    changed: schedule !== 'unchanged',
+    previous: '2026-10-01T21:00:00.000Z',
+    neededBy: '2026-10-03T21:00:00.000Z',
+    eventId: null,
+    eventUpdated: schedule === 'moved',
+    status: 'approved',
+    schedule,
+    timeZone: LA,
+  });
+
+  it('prints a needed-by in the org zone, with the year only when it is not this year', () => {
+    expect(neededByLabel('2026-10-03T21:00:00Z', LA, NOW)).toBe('Sat, Oct 3, 2:00 PM');
+    expect(neededByLabel('2027-01-08T17:00:00Z', LA, NOW)).toBe('Fri, Jan 8, 2027, 9:00 AM');
+    // New Year's Eve evening in LA is already next year in UTC: the year is LA's.
+    expect(neededByLabel('2027-01-01T05:00:00Z', LA, Date.parse('2026-12-31T20:00:00Z'))).toBe(
+      'Thu, Dec 31, 9:00 PM',
+    );
+    expect(neededByLabel('soon', LA, NOW)).toBe('—');
+  });
+
+  it('the dialog and sheet sentences', () => {
+    expect(neededByZoneNote(LA)).toBe('Times are in America/Los_Angeles.');
+    expect(neededByPreviewCopy('2026-10-03T21:00:00Z', LA, NOW)).toBe('New needed-by: Sat, Oct 3, 2:00 PM');
+    expect(neededByChangedCopy('2026-10-03T21:00:00Z', LA, NOW)).toBe(
+      'Someone changed this date to Sat, Oct 3, 2:00 PM while you were editing.',
+    );
+    expect(neededByInvalidTimeCopy(LA)).toBe(
+      "That date and time don't exist in America/Los_Angeles. Pick another time.",
+    );
+  });
+
+  it('the confirmation says what the server did to the Schedule entry', () => {
+    expect(neededByRevisedCopy(outcome('moved'), NOW)).toBe(
+      'Needed-by changed to Sat, Oct 3, 2:00 PM. The Schedule entry moved too, and its reminders are set for the new time.',
+    );
+    expect(neededByRevisedCopy(outcome('created'), NOW)).toContain("It's on the Schedule now.");
+    expect(neededByRevisedCopy(outcome('none_yet'), NOW)).toContain('Approving the order puts it on the Schedule.');
+    expect(neededByRevisedCopy(outcome('left_closed'), NOW)).toContain('left as it was');
+    expect(neededByRevisedCopy(outcome('not_moved'), NOW)).toContain("couldn't be updated");
+    expect(neededByRevisedCopy(outcome('unchanged'), NOW)).toBe(
+      'The needed-by date is already Sat, Oct 3, 2:00 PM. Nothing changed.',
+    );
+  });
+
+  it('honest words: no email or notification claim, no percentage, no "book", no guarantee', () => {
+    const all = [
+      NEEDED_BY_REASON_REQUIRED_COPY,
+      NEEDED_BY_IN_PAST_COPY,
+      NEEDED_BY_CLOSED_COPY,
+      NEEDED_BY_NOT_APPROVER_COPY,
+      NEEDED_BY_NO_WAREHOUSE_ACCESS_COPY,
+      NEEDED_BY_BUSY_COPY,
+      NEEDED_BY_NOT_FOUND_COPY,
+      NEEDED_BY_MODULE_OFF_COPY,
+      NEEDED_BY_FAILED_COPY,
+      NEEDED_BY_TIMEZONE_UNREADABLE_COPY,
+      NEEDED_BY_NOT_PENDING_COPY,
+      NEEDED_BY_SIGN_IN_COPY,
+      NEEDED_BY_RELOAD_COPY,
+      NEEDED_BY_REVISED_TIMELINE_LABEL,
+      neededByZoneNote(LA),
+      neededByPreviewCopy(NOW, LA, NOW),
+      neededByChangedCopy(null, LA),
+      neededByChangedCopy('2026-10-03T21:00:00Z', LA, NOW),
+      neededByInvalidTimeCopy(LA),
+      ...(['moved', 'created', 'none_yet', 'left_closed', 'not_moved', 'unchanged'] as const).map((s) =>
+        neededByRevisedCopy(outcome(s), NOW),
+      ),
+    ];
+    expect(all.filter((l) => /email|notif|sent|verif|guarantee|\bbooks?\b|%/i.test(l))).toEqual([]);
+  });
+});
+
+describe('normalizeNeededByReason', () => {
+  it('trims, and refuses empty or too long, counting characters as the function does', () => {
+    expect(normalizeNeededByReason('  Pushed by the school  ')).toBe('Pushed by the school');
+    expect(normalizeNeededByReason('   ')).toBeNull();
+    expect(normalizeNeededByReason(null)).toBeNull();
+    expect(normalizeNeededByReason('x'.repeat(NEEDED_BY_REASON_MAX))).toHaveLength(NEEDED_BY_REASON_MAX);
+    expect(normalizeNeededByReason('x'.repeat(NEEDED_BY_REASON_MAX + 1))).toBeNull();
+    // 500 characters outside the BMP (two UTF-16 units each) are 500
+    // characters to char_length, not 1000.
+    expect(normalizeNeededByReason('\u{20000}'.repeat(NEEDED_BY_REASON_MAX))).not.toBeNull();
+  });
+});
