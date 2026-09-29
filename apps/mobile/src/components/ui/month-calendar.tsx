@@ -1,6 +1,6 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react-native';
 import * as React from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { AccessibilityInfo, Pressable, StyleSheet, View } from 'react-native';
 
 import type { CalendarMonth, CalendarRangeDraft } from '@stockpilot/core';
 
@@ -20,9 +20,11 @@ import { useTheme } from '@/lib/use-theme';
  *   - Previous month / Next month are 44 pt buttons; there is no swipe (a
  *     gesture would fight VoiceOver's own swipes).
  *   - Every day is its own button, named 'Tuesday, September 1, 2026', with
- *     its selected state and 'Start date' / 'End date' / 'Today' as a hint.
- *     The weekday letters are hidden from VoiceOver (each day says its
- *     weekday already).
+ *     its selected state and 'Start date' / 'End date' / 'In the chosen
+ *     range' / 'Today' as a hint. The weekday letters are hidden from
+ *     VoiceOver (each day says its weekday already).
+ *   - Paging months says the month now shown (VoiceOver stays on the
+ *     button, and the header does not announce itself).
  *   - Day numbers stop growing at the control ceiling, so seven columns
  *     still fit at the largest text sizes.
  *
@@ -49,7 +51,10 @@ export function MonthCalendar({
     <View style={{ gap: 4 }}>
       <View style={styles.head}>
         <Pressable
-          onPress={() => onMonthChange(view.previous.month)}
+          onPress={() => {
+            onMonthChange(view.previous.month);
+            AccessibilityInfo.announceForAccessibility(view.previous.announce);
+          }}
           disabled={!view.previous.enabled}
           accessibilityRole="button"
           accessibilityLabel={view.previous.label}
@@ -72,7 +77,10 @@ export function MonthCalendar({
           {view.title}
         </Mono>
         <Pressable
-          onPress={() => onMonthChange(view.next.month)}
+          onPress={() => {
+            onMonthChange(view.next.month);
+            AccessibilityInfo.announceForAccessibility(view.next.announce);
+          }}
           disabled={!view.next.enabled}
           accessibilityRole="button"
           accessibilityLabel={view.next.label}

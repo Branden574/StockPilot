@@ -38,7 +38,8 @@ export interface MonthCalendarDay {
   text: string;
   /** 'Tuesday, September 1, 2026'. */
   label: string;
-  /** 'Start date', 'End date', 'Today', joined; null when none applies. */
+  /** 'Start date', 'End date', 'In the chosen range', 'Today', joined; null
+   *  when none applies. */
   hint: string | null;
   /** The start or the end (filled). */
   selected: boolean;
@@ -55,8 +56,11 @@ export interface MonthCalendarView {
   title: string;
   weekdays: readonly { short: string; long: string }[];
   weeks: MonthCalendarWeek[];
-  previous: { label: string; enabled: boolean; month: CalendarMonth };
-  next: { label: string; enabled: boolean; month: CalendarMonth };
+  /** Each month button: its name, whether it can go further, the month it
+   *  shows, and what VoiceOver says once it has (that month's title: the
+   *  header is not announced when it changes). */
+  previous: { label: string; enabled: boolean; month: CalendarMonth; announce: string };
+  next: { label: string; enabled: boolean; month: CalendarMonth; announce: string };
 }
 
 export function monthCalendarView(
@@ -71,6 +75,7 @@ export function monthCalendarView(
       const hint = [
         st.isStart ? CALENDAR_COPY.startDate : null,
         st.isEnd ? CALENDAR_COPY.endDate : null,
+        st.inRange ? CALENDAR_COPY.inRange : null,
         st.isToday ? BOOK_REPORT_RANGE_LABELS.today : null,
       ].filter((x): x is string => x !== null);
       return {
@@ -95,11 +100,13 @@ export function monthCalendarView(
       label: CALENDAR_COPY.previousMonth,
       enabled: canShowPreviousMonth(month),
       month: addMonths(month, -1),
+      announce: calendarMonthTitle(addMonths(month, -1)),
     },
     next: {
       label: CALENDAR_COPY.nextMonth,
       enabled: canShowNextMonth(month),
       month: addMonths(month, 1),
+      announce: calendarMonthTitle(addMonths(month, 1)),
     },
   };
 }

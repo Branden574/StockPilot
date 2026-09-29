@@ -32,7 +32,6 @@ import {
   BOOK_REPORT_AS_SAVED,
   BOOK_REPORT_BY_CHARTER_TITLE,
   BOOK_REPORT_EMPTY,
-  BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE,
   BOOK_REPORT_EMPTY_DEFAULT_STATUS,
   BOOK_REPORT_EMPTY_SEARCH,
   BOOK_REPORT_EXPORT_ANDROID,
@@ -116,13 +115,14 @@ import {
   BOOK_ENTRY_NOUN,
   bookCoverCacheKey,
   bookReportByCharterView,
+  bookReportCharterEmptyHint,
   bookReportCharterLabelsFor,
-  bookReportCharterWarehouseEmpty,
   bookReportChipEchoes,
   bookReportDrillDownHref,
   bookReportExportMode,
   bookReportHasFiltersToClear,
   bookReportIdentifiersLine,
+  bookReportLinkKey,
   bookReportPhoneChips,
   bookReportPlaceLine,
   bookReportQueryFromParams,
@@ -177,6 +177,9 @@ import { retryWorkspace, useWorkspace } from '@/lib/use-workspace';
  * orders; a row applies that charter. A charter, warehouse or category the
  * server refuses is reset with the "filters were reset" notice. Every choice
  * goes back to page 1; a choice that changes nothing sends no request.
+ *
+ * A link's filters apply when the list opens, and again when a link is
+ * opened while the list is already on screen (P7b).
  *
  * Offline, only an answer for exactly these filters and page is shown, with
  * its time; otherwise the report says it needs a connection. A workspace
@@ -279,6 +282,24 @@ export default function BookOrderTotalsScreen() {
       setExportError(null);
       setViewer(null);
     }
+  }
+
+  // A link opened while this list is already on screen (P7b): expo-router
+  // hands the open list the link's parameters instead of a new screen, so
+  // its filters are applied here too (during render, like the workspace
+  // switch above), with the reset notice when the link carried a refused
+  // value. The same link again changes nothing.
+  const linkKey = bookReportLinkKey(params);
+  const [appliedLink, setAppliedLink] = React.useState(linkKey);
+  if (appliedLink !== linkKey) {
+    setAppliedLink(linkKey);
+    const link = bookReportQueryFromParams(params);
+    setQuery((q) => keepIfSame(q, link.query));
+    setDraftQ(link.query.q);
+    setLinkWasReset(link.invalid.length > 0);
+    setSheet(null);
+    setExportOpen(false);
+    setExportError(null);
   }
 
   // The query a request is built from: always a concrete warehouse. The
@@ -605,6 +626,7 @@ export default function BookOrderTotalsScreen() {
     activeWarehouseName: ws.activeWarehouseName,
   });
   const canClear = bookReportHasFiltersToClear(query);
+  const charterEmptyHint = answer ? bookReportCharterEmptyHint(answer) : null;
 
   const header = (
     <View style={{ gap: 14 }}>
@@ -777,9 +799,9 @@ export default function BookOrderTotalsScreen() {
             {BOOK_REPORT_EMPTY_DEFAULT_STATUS}
           </Body>
         ) : null}
-        {bookReportCharterWarehouseEmpty(answer) ? (
+        {charterEmptyHint ? (
           <Body size={13.5} muted style={{ marginTop: 6 }}>
-            {BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE}
+            {charterEmptyHint}
           </Body>
         ) : null}
         {answer.scope.restricted ? (
@@ -901,7 +923,13 @@ export default function BookOrderTotalsScreen() {
             }
             stacked={stacked}
             onOpen={() => {
-              if (data) router.push(bookReportDrillDownHref(item.itemId, data.query) as Href);
+              // The row's days, not the preset again (brief 13: the orders
+              // add up to the row even after the organization's midnight).
+              if (data) {
+                router.push(
+                  bookReportDrillDownHref(item.itemId, data.query, data.answer.range) as Href,
+                );
+              }
             }}
             onViewCover={(uri) => setViewer({ uri, title: item.name })}
           />

@@ -33,6 +33,8 @@ import {
   bookReportCharterOptionLabel,
   bookReportCharterOptionLabels,
   bookReportClearedQuery,
+  bookReportDrillDownQuery,
+  bookReportEmptyCharterHint,
   bookReportFilterIsSet,
   bookReportOrderCharterText,
   bookReportOrderLink,
@@ -187,9 +189,26 @@ export function bookReportQueryFromParams(
   };
 }
 
-/** The filters the server may refuse by id (400): a charter, warehouse or
- *  category the reader cannot see, or that no longer exists. */
-export type BookReportUnreadableKey = 'charter' | 'warehouse' | 'category';
+/**
+ * What a link asks the list for, as one comparable string: the filters and
+ * page core reads from its parameters, plus whether the link was rewritten
+ * with a refused value dropped (reset=1). The list applies a link's filters
+ * when it mounts, and again whenever this changes while it is on screen (a
+ * link opened with the list already open: expo-router gives the open list
+ * the new parameters instead of a new screen). Keys a link never carries
+ * (the route's own, unknown ones) do not change it.
+ */
+export function bookReportLinkKey(
+  params: Record<string, string | string[] | undefined | null>,
+): string {
+  const { query, invalid } = bookReportQueryFromParams(params);
+  return `${serializeBookReportQuery(query)}|${invalid.length > 0 ? 'reset' : ''}`;
+}
+
+/** The filters the server may refuse (400): a charter, warehouse or
+ *  category the reader cannot see (or that no longer exists), and dates an
+ *  older server does not know (Today and This week before 0382). */
+export type BookReportUnreadableKey = 'charter' | 'warehouse' | 'category' | 'range';
 
 /**
  * A 400 naming a charter, warehouse or category filter the reader cannot see
@@ -206,6 +225,7 @@ export function bookReportUnreadableFilter(e: unknown): BookReportUnreadableKey 
   if (reason === 'invalid_charter') return 'charter';
   if (reason === 'invalid_warehouse') return 'warehouse';
   if (reason === 'invalid_category') return 'category';
+  if (reason === 'invalid_range') return 'range';
   return null;
 }
 
@@ -213,9 +233,10 @@ export function bookReportUnreadableFilter(e: unknown): BookReportUnreadableKey 
  * The query without that filter, as the web page reads such a link: a
  * charter falls back to all charters, a warehouse the link named to the
  * warehouse view, the view's own warehouse to all warehouses, a category to
- * all categories; page 1. Null when there is nothing left to drop (the
- * refusal is then shown, never retried in a loop): with three filters that
- * can be refused, a link resets at most four times.
+ * all categories, refused dates to All time; page 1. Null when there is
+ * nothing left to drop (the refusal is then shown, never retried in a
+ * loop): with four filters that can be refused (the warehouse twice), a link
+ * resets at most five times.
  */
 export function bookReportWithoutUnreadableFilter(
   query: BookReportQuery,
@@ -234,6 +255,10 @@ export function bookReportWithoutUnreadableFilter(
       warehouseFromView: false,
     };
   }
+  if (which === 'range') {
+    if (query.range === 'all') return null;
+    return { ...base, range: 'all', from: null, to: null };
+  }
   if (query.category === 'all') return null;
   return { ...base, category: 'all' };
 }
@@ -248,9 +273,17 @@ export function bookReportQueryFromListParams(
 
 /** The phone route for one book's orders, carrying the list's resolved
  *  filters, the charter and dates included (never its page: the drill-down
- *  has its own). */
-export function bookReportDrillDownHref(itemId: string, query: BookReportQuery): string {
-  const qs = serializeBookReportQuery({ ...query, page: 1 }, { includePage: false });
+ *  has its own). Given the range of the answer on screen, a rolling preset
+ *  goes as the exact days that answer covered (core
+ *  bookReportDrillDownQuery), so the orders add up to the row even when
+ *  the organization's midnight passes in between (brief 13). */
+export function bookReportDrillDownHref(
+  itemId: string,
+  query: BookReportQuery,
+  range?: Pick<BookReportRangeEcho, 'key' | 'from' | 'to'> | null,
+): string {
+  const pinned = bookReportDrillDownQuery(query, range);
+  const qs = serializeBookReportQuery({ ...pinned, page: 1 }, { includePage: false });
   return `/reports/book-order-totals/${itemId}${qs ? `?${qs}` : ''}`;
 }
 
@@ -549,15 +582,15 @@ export function bookReportShowingView(
   };
 }
 
-/** Whether the answer is for one charter at one warehouse and found nothing:
- *  then the empty state adds that the charter's orders may be elsewhere. */
-export function bookReportCharterWarehouseEmpty(answer: {
+/** The empty state's extra line when the answer is for one charter at one
+ *  warehouse and found nothing: the charter's orders may be elsewhere, or,
+ *  with dates chosen, outside them (core's words, the web page's). */
+export function bookReportCharterEmptyHint(answer: {
   totalCount: number;
+  range: Pick<BookReportRangeEcho, 'key'>;
   filters: BookReportCharterFilters & { warehouse: BookReportWarehouseEcho | null };
-}): boolean {
-  return (
-    answer.totalCount === 0 && Boolean(answer.filters.charter) && answer.filters.warehouse !== null
-  );
+}): string | null {
+  return answer.totalCount === 0 ? bookReportEmptyCharterHint(answer) : null;
 }
 
 // ── "Books ordered by charter" ──────────────────────────────────────────────
@@ -872,14 +905,18 @@ export function bookReportOrderRowPresentation(
   row: BookReportOrderRowOut,
   book: { countsAsCopies: boolean; unit: string | null },
   statusLabels: Readonly<Record<OrderStatusKey, string>>,
-  opts: { showCharter?: boolean } = {},
+  opts: {
+    showCharter?: boolean;
+    /** The charter sheet's labels, so two same-named charters read apart. */
+    charterLabels?: ReadonlyMap<string, string> | null;
+  } = {},
 ): BookReportOrderRowPresentation {
   const title = formatOrderNumber(row.orderNumber) ?? 'Order';
   const status = statusLabels[row.status as OrderStatusKey] ?? row.status;
   const details = [formatReportDate(row.orderDate), row.warehouseName, status]
     .filter(Boolean)
     .join(' · ');
-  const charterText = opts.showCharter ? bookReportOrderCharterText(row) : null;
+  const charterText = opts.showCharter ? bookReportOrderCharterText(row, opts.charterLabels) : null;
   const charter = charterText ? `${BOOK_REPORT_ORDER_COLUMNS.charter}: ${charterText}` : null;
   const quantity = rowQuantityText({
     copies: row.copies,

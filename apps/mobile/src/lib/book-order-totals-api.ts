@@ -11,6 +11,7 @@ import {
   VERIFICATION_SESSION_ENDED_COPY,
   bookReportCharterEchoMatches,
   bookReportExportRetryText,
+  bookReportRangeEchoMatches,
   bookReportOfflineAsOf,
   bookReportQueryKey,
   bookReportTooManyText,
@@ -46,7 +47,7 @@ import { CONNECTION_FAILURE_COPY, REQUEST_TIMED_OUT_COPY } from './connection-co
  *   2. Every request names a CONCRETE warehouse (all or a uuid), never the
  *      default, and the workspace it is for (X-Organization-Id). An answer for
  *      another workspace, another warehouse, another charter or another book
- *      is refused. The charter check (core bookReportCharterEchoMatches) also
+ *      (or, for a book's orders, other days) is refused. The charter check (core bookReportCharterEchoMatches) also
  *      covers a server that predates the charter filter (a web rollback): it
  *      answers a charter request with organization-wide figures and no
  *      charter echo, and the phone never shows those under a charter's name.
@@ -191,6 +192,11 @@ export async function getBookOrderOrders(
     throw new BookReportResponseError('mismatch');
   }
   if (!bookReportCharterEchoMatches(query, parsed.filters)) {
+    throw new BookReportResponseError('mismatch');
+  }
+  // The row's days (the list pins a rolling preset to them): orders read
+  // for other days would not add up to the row (brief 13).
+  if (!bookReportRangeEchoMatches(query, parsed.range)) {
     throw new BookReportResponseError('mismatch');
   }
   return parsed;

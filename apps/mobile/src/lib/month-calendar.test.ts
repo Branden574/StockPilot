@@ -51,8 +51,20 @@ describe('monthCalendarView', () => {
     const day = (ymd: string) => v.weeks.flat().find((d) => d?.ymd === ymd)!;
     expect(day('2026-09-01')).toMatchObject({ selected: true, inRange: false, hint: 'Start date' });
     expect(day('2026-09-30')).toMatchObject({ selected: true, inRange: false, hint: 'End date' });
-    expect(day('2026-09-15')).toMatchObject({ selected: false, inRange: true, hint: null });
-    expect(day('2026-09-29')).toMatchObject({ inRange: true, isToday: true, hint: 'Today' });
+    // A day inside the range says so (VoiceOver cannot see the tint).
+    expect(day('2026-09-15')).toMatchObject({
+      selected: false,
+      inRange: true,
+      hint: 'In the chosen range',
+    });
+    expect(day('2026-09-29')).toMatchObject({
+      inRange: true,
+      isToday: true,
+      hint: 'In the chosen range. Today',
+    });
+    // Outside the range: nothing to say.
+    const oct = monthCalendarView({ y: 2026, m: 10 }, draft, null);
+    expect(oct.weeks.flat().find((d) => d?.ymd === '2026-10-01')!.hint).toBeNull();
     // A one-day range: the one day is both ends.
     const one = rangePick(rangePick(empty, '2026-09-10'), '2026-09-10');
     const w = monthCalendarView({ y: 2026, m: 9 }, one, null);
@@ -78,6 +90,15 @@ describe('monthCalendarView', () => {
       y: 2025,
       m: 12,
     });
+  });
+
+  it('paging months names the month now shown, for VoiceOver to say (the title is not announced by itself)', () => {
+    const v = monthCalendarView({ y: 2026, m: 1 }, empty, null);
+    expect(v.previous.announce).toBe('December 2025');
+    expect(v.next.announce).toBe('February 2026');
+    const src = readFileSync(path.join(__dirname, '../components/ui/month-calendar.tsx'), 'utf8');
+    expect(src).toMatch(/AccessibilityInfo\.announceForAccessibility\(view\.previous\.announce\)/);
+    expect(src).toMatch(/AccessibilityInfo\.announceForAccessibility\(view\.next\.announce\)/);
   });
 
   it('every day and month button is at least a 44 pt target', () => {

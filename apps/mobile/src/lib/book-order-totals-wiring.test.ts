@@ -179,7 +179,11 @@ describe('4. one concrete warehouse for the row, its orders and the file', () =>
   });
 
   it("the drill-down and the export use the answer's own query", () => {
-    expect(list).toContain('router.push(bookReportDrillDownHref(item.itemId, data.query) as Href)');
+    // The answer's own query, with a rolling preset pinned to the answer's
+    // days (brief 13).
+    expect(list).toMatch(
+      /router\.push\(\s*bookReportDrillDownHref\(item\.itemId, data\.query, data\.answer\.range\) as Href,?\s*\)/,
+    );
     expect(list).toContain('path: bookReportExportPath(choice.format, choice.photos, source.query),');
     expect(list).toContain('onChoose={(choice) => void runExport(choice, data)}');
     expect(orders).toContain('bookReportQueryFromListParams(params)');
@@ -218,7 +222,9 @@ describe('6. drill-down order links (plan gap 7)', () => {
   it('a row is a button only when the presentation has a link', () => {
     const src = fn.getText(sf);
     expect(src).toMatch(/if \(p\.href\) \{[\s\S]*<Pressable[\s\S]*onPress=\{\(\) => onOpen\(href\)\}/);
-    expect(orders).toContain('p: bookReportOrderRowPresentation(row, book, statusLabels, { showCharter }),');
+    expect(orders).toContain(
+      'p: bookReportOrderRowPresentation(row, book, statusLabels, { showCharter, charterLabels }),',
+    );
   });
 
   it('otherwise it is words with role text and the reason, with no onPress anywhere', () => {
@@ -528,8 +534,12 @@ describe('10. charter and dates (plan 5)', () => {
     expect(list).toContain(
       'bookReportCharterLine(answer.filters.charter, answer.filters.noCharter, charterLabels),',
     );
-    expect(list).toContain('{bookReportCharterWarehouseEmpty(answer) ? (');
-    expect(list).toContain('{BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE}');
+    // Core's words, the web page's: the dates are named only when chosen.
+    expect(list).toContain(
+      'const charterEmptyHint = answer ? bookReportCharterEmptyHint(answer) : null;',
+    );
+    expect(list).toContain('{charterEmptyHint}');
+    expect(list).not.toContain('BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE');
     expect(list).toContain('const byCharter = bookReportByCharterView(answer, charterLabels);');
     expect(list).toContain('onPress={() => onApplyCharter(row.charter)}');
     expect(list).toContain('accessibilityState={{ expanded: byCharterOpen }}');
@@ -575,6 +585,20 @@ describe('10. charter and dates (plan 5)', () => {
     expect(orders).toContain('[request, baseQuery],');
   });
 
+  it('a drill-down link opened while a drill-down is on screen reads its filters again (as the list does)', () => {
+    // The book is part of it: a link to another book is a new drill-down.
+    expect(orders).toContain('const linkKey = `${rawItemId}|${bookReportLinkKey(params)}`;');
+    const block = orders.slice(
+      orders.indexOf('if (appliedLink !== linkKey) {'),
+      orders.indexOf('const viewWarehouse ='),
+    );
+    expect(block).toContain('setAppliedLink(linkKey);');
+    expect(block).toContain('setBaseQuery(bookReportQueryFromListParams(params));');
+    expect(block).toContain('setFiltersReset(false);');
+    expect(block).toContain('setPage(1);');
+    expect(block).not.toMatch(/useEffect/);
+  });
+
   it("the drill-down's cold Back opens the list with the same (reset) filters, never the defaults", () => {
     expect(orders).toContain('else router.replace(bookReportListHref(baseQuery) as Href);');
     expect(orders).not.toContain("router.replace('/reports/book-order-totals' as Href)");
@@ -585,7 +609,35 @@ describe('10. charter and dates (plan 5)', () => {
       /const scope = \[\s+bookReportCharterLine\(answer\.filters\.charter, answer\.filters\.noCharter, charterLabels\),\s+bookReportRangeLine\(answer\.range\),/,
     );
     expect(orders).toContain('const showCharter = bookReportOrdersShowCharter(answer.filters);');
-    expect(orders).toContain('p: bookReportOrderRowPresentation(row, book, statusLabels, { showCharter }),');
+    // With the charter sheet's labels, so two same-named charters read apart.
+    expect(orders).toContain(
+      'p: bookReportOrderRowPresentation(row, book, statusLabels, { showCharter, charterLabels }),',
+    );
+  });
+
+  it("a row's orders are read for the days the row was read for (brief 13), never the preset again", () => {
+    expect(list).toMatch(
+      /router\.push\(\s*bookReportDrillDownHref\(item\.itemId, data\.query, data\.answer\.range\) as Href,?\s*\);/,
+    );
+    expect(list).not.toMatch(/bookReportDrillDownHref\(item\.itemId, data\.query\)/);
+  });
+
+  it('a link opened while the list is on screen applies its filters (P7b), and says when it reset one', () => {
+    // Read on mount, then again whenever the link's parameters change.
+    expect(list).toContain('const linkKey = bookReportLinkKey(params);');
+    expect(list).toContain('const [appliedLink, setAppliedLink] = React.useState(linkKey);');
+    const block = list.slice(
+      list.indexOf('if (appliedLink !== linkKey) {'),
+      list.indexOf('const viewWarehouse ='),
+    );
+    expect(block).toContain('setAppliedLink(linkKey);');
+    expect(block).toContain('const link = bookReportQueryFromParams(params);');
+    expect(block).toContain('setQuery((q) => keepIfSame(q, link.query));');
+    expect(block).toContain('setDraftQ(link.query.q);');
+    expect(block).toContain('setLinkWasReset(link.invalid.length > 0);');
+    expect(block).toContain('setSheet(null);');
+    // During render, like the workspace switch (no effect, no extra frame).
+    expect(block).not.toMatch(/useEffect/);
   });
 
   it('the old one-sheet chip builders are gone (the chips are core\'s)', () => {

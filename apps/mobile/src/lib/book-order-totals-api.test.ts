@@ -269,6 +269,33 @@ describe('loaders parse strictly and refuse answers for another workspace', () =
       );
     });
 
+    it("the drill-down refuses orders read for other days than the row's (brief 13)", async () => {
+      // The list pinned Today (Sep 29) to its days; an answer for another day
+      // or for the preset is not these orders.
+      const pinned = q({ warehouse: 'all', range: 'custom', from: '2026-09-29', to: '2026-09-29' });
+      const range = (key: string, from: string | null, to: string | null) => ({
+        range: { key, from, to, timeZone: 'America/Los_Angeles', timeZoneFallback: false },
+      });
+      apiMock.api.mockResolvedValueOnce(ordersAnswer(range('custom', '2026-09-30', '2026-09-30')));
+      await expect(getBookOrderOrders(ORG, BOOK_A, pinned, 1)).rejects.toMatchObject({
+        problem: 'mismatch',
+      });
+      apiMock.api.mockResolvedValueOnce(ordersAnswer(range('today', '2026-09-29', '2026-09-29')));
+      await expect(getBookOrderOrders(ORG, BOOK_A, pinned, 1)).rejects.toMatchObject({
+        problem: 'mismatch',
+      });
+      apiMock.api.mockResolvedValueOnce(ordersAnswer(range('custom', '2026-09-29', '2026-09-29')));
+      const ok = await getBookOrderOrders(ORG, BOOK_A, pinned, 1);
+      expect(ok.range).toMatchObject({ from: '2026-09-29', to: '2026-09-29' });
+      // All time is answered as All time.
+      apiMock.api.mockResolvedValueOnce(ordersAnswer(range('month', '2026-09-01', '2026-09-30')));
+      await expect(
+        getBookOrderOrders(ORG, BOOK_A, q({ warehouse: 'all' }), 1),
+      ).rejects.toMatchObject({
+        problem: 'mismatch',
+      });
+    });
+
     it('a refusal says the app cannot read the answer (try again, or update), never zeros', () => {
       expect(describeBookReportError(new BookReportResponseError('mismatch'), 'report')).toMatchObject({
         detail: BOOK_REPORT_UNREADABLE,

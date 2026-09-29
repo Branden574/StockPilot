@@ -7,6 +7,8 @@ import {
   BOOK_COVER_PLACEHOLDER,
   BOOK_COVER_UNAVAILABLE,
   BOOK_REPORT_CSV_MAX_ROWS,
+  BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE,
+  BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE_DATES,
   BOOK_REPORT_EXPORT_COVER_CAP_NOTE,
   BOOK_REPORT_ORDER_LINK_HINT,
   BOOK_REPORT_PDF_MAX_ROWS,
@@ -60,7 +62,8 @@ import {
   bookReportByCharterView,
   bookReportCharterChoices,
   bookReportCharterLabelsFor,
-  bookReportCharterWarehouseEmpty,
+  bookReportCharterEmptyHint,
+  bookReportLinkKey,
   bookReportCustomRangeQuery,
   bookReportDateTile,
   bookReportDatesSheetStart,
@@ -457,6 +460,30 @@ describe('drill-down rows (plan gap 7): a link only when openable', () => {
     expect(b!.charter).toBe('Charter: No charter');
   });
 
+  it('two same-named charters read apart on the rows, as in the charter sheet', () => {
+    const CH = '0a0a0a0a-0000-4000-8000-00000000000a';
+    const CH2 = '0b0b0b0b-0000-4000-8000-00000000000b';
+    const parsed = parseBookOrderOrdersResponse(
+      ordersAnswer({
+        filters: { warehouse: null, charter: null, noCharter: false },
+        rows: [
+          { ...orderRow, charterId: CH, charterName: 'Alder', charterCode: null },
+          { ...orderRow, orderId: BOOK_B, charterId: CH2, charterName: 'Alder', charterCode: null },
+        ],
+      }),
+    );
+    const charterLabels = new Map([
+      [CH, 'Alder (id 0a0a0a0a)'],
+      [CH2, 'Alder (id 0b0b0b0b)'],
+    ]);
+    const [a, b] = parsed.rows.map((r) =>
+      bookReportOrderRowPresentation(r, book, labels, { showCharter: true, charterLabels }),
+    );
+    expect(a!.charter).toBe('Charter: Alder (id 0a0a0a0a)');
+    expect(b!.charter).toBe('Charter: Alder (id 0b0b0b0b)');
+    expect(b!.accessibilityLabel).toContain('Charter: Alder (id 0b0b0b0b).');
+  });
+
   it('with one charter chosen (or No charter) the rows do not repeat it; an older server names none', () => {
     const one = parseBookOrderOrdersResponse(
       ordersAnswer({
@@ -487,7 +514,10 @@ describe('a warehouse or category the reader cannot see (400), as the web page h
     expect(bookReportUnreadableFilter(refusal('invalid_charter'))).toBe('charter');
     expect(bookReportUnreadableFilter(refusal('invalid_warehouse'))).toBe('warehouse');
     expect(bookReportUnreadableFilter(refusal('invalid_category'))).toBe('category');
-    expect(bookReportUnreadableFilter(refusal('invalid_range'))).toBeNull();
+    // A server before 0382 (a SQL-only revert) refuses Today and This week
+    // as a bad range: the dates reset, as a refused id does (never an error).
+    expect(bookReportUnreadableFilter(refusal('invalid_range'))).toBe('range');
+    expect(bookReportUnreadableFilter(refusal('invalid_status'))).toBeNull();
     expect(bookReportUnreadableFilter(Object.assign(new Error('x'), { status: 403 }))).toBeNull();
   });
   it('drops it and reads again: a link warehouse falls back to the view, the view to all, a category to all', () => {
@@ -524,17 +554,95 @@ describe('a warehouse or category the reader cannot see (400), as the web page h
     expect(bookReportWithoutUnreadableFilter(q({ charter: 'none' }), 'charter')).toMatchObject({ charter: 'all' });
     expect(bookReportWithoutUnreadableFilter(q(), 'charter')).toBeNull();
   });
-  it('a link refused on every id resets at most four times, then stops (never a loop)', () => {
-    let cur: BookReportQuery | null = q({ charter: W1, warehouse: W2, category: BOOK_B });
+  it('refused dates (Today or This week from an older server) go back to All time on page 1; nothing left: null', () => {
+    const base = q({ charter: W2, range: 'today', q: 'x', page: 3 });
+    expect(bookReportWithoutUnreadableFilter(base, 'range')).toEqual({
+      ...base,
+      range: 'all',
+      from: null,
+      to: null,
+      page: 1,
+    });
+    expect(
+      bookReportWithoutUnreadableFilter(
+        q({ range: 'custom', from: '2026-09-01', to: '2026-09-30' }),
+        'range',
+      ),
+    ).toMatchObject({ range: 'all', from: null, to: null });
+    expect(bookReportWithoutUnreadableFilter(q(), 'range')).toBeNull();
+  });
+  it('a link refused on every id and its dates resets at most five times, then stops (never a loop)', () => {
+    let cur: BookReportQuery | null = q({
+      charter: W1,
+      warehouse: W2,
+      category: BOOK_B,
+      range: 'week',
+    });
     const seen: string[] = [];
-    for (const key of ['charter', 'warehouse', 'warehouse', 'category', 'charter', 'warehouse', 'category'] as const) {
+    for (const key of [
+      'range',
+      'charter',
+      'warehouse',
+      'warehouse',
+      'category',
+      'range',
+      'charter',
+      'warehouse',
+      'category',
+    ] as const) {
       const next: BookReportQuery | null = cur ? bookReportWithoutUnreadableFilter(cur, key) : null;
       if (!next) continue;
       seen.push(key);
       cur = next;
     }
-    expect(seen).toEqual(['charter', 'warehouse', 'warehouse', 'category']);
-    expect(cur).toMatchObject({ charter: 'all', warehouse: 'all', category: 'all' });
+    expect(seen).toEqual(['range', 'charter', 'warehouse', 'warehouse', 'category']);
+    expect(cur).toMatchObject({ charter: 'all', warehouse: 'all', category: 'all', range: 'all' });
+  });
+});
+
+describe("a row's drill-down asks for the days the row was read for (brief 13)", () => {
+  it('a rolling preset goes as the exact days of the answer on screen, every other filter kept', () => {
+    const listQuery = q({ charter: W2, range: 'today', warehouse: W1, statusGroups: ['awaiting'] });
+    // The list read Today on Sep 29; the drill-down opens after midnight.
+    const href = bookReportDrillDownHref(BOOK_A, listQuery, {
+      key: 'today',
+      from: '2026-09-29',
+      to: '2026-09-29',
+    });
+    expect(href).toBe(
+      `/reports/book-order-totals/${BOOK_A}?charter=${W2}&range=custom&from=2026-09-29&to=2026-09-29&status=awaiting&warehouse=${W1}`,
+    );
+  });
+  it('All time, a custom range, or no answer yet: the query as it is', () => {
+    const custom = q({ range: 'custom', from: '2026-09-01', to: '2026-09-30', warehouse: 'all' });
+    expect(
+      bookReportDrillDownHref(BOOK_A, custom, {
+        key: 'custom',
+        from: '2026-09-01',
+        to: '2026-09-30',
+      }),
+    ).toBe(bookReportDrillDownHref(BOOK_A, custom));
+    expect(bookReportDrillDownHref(BOOK_A, q({ range: 'week', warehouse: 'all' }))).toBe(
+      `/reports/book-order-totals/${BOOK_A}?range=week&warehouse=all`,
+    );
+  });
+});
+
+describe('a link opened while the list is already on screen (P7b)', () => {
+  it('the key changes with any filter the link carries, and with a reset link', () => {
+    const CH = '0a0a0a0a-0000-4000-8000-00000000000a';
+    const none = bookReportLinkKey({});
+    const alder = bookReportLinkKey({ charter: CH });
+    expect(alder).not.toBe(none);
+    expect(bookReportLinkKey({ charter: CH.toUpperCase() })).toBe(alder);
+    expect(bookReportLinkKey({ charter: CH, from: '2026-09-01', to: '2026-09-30' })).not.toBe(
+      alder,
+    );
+    // The rewritten link's reset flag (a refused value was dropped) counts.
+    expect(bookReportLinkKey({ charter: CH, reset: '1' })).not.toBe(alder);
+    // Keys a link never carries (the route's own, unknown ones) do not.
+    expect(bookReportLinkKey({ itemId: 'x', utm: 'y' })).toBe(none);
+    expect(bookReportLinkKey({ page: '1' })).toBe(none);
   });
 });
 
@@ -788,21 +896,34 @@ describe('Showing (brief 8, plan D20) and the empty state', () => {
     expect(bookReportShowingView(none, DEFAULT_BOOK_REPORT_STATUS_GROUPS, new Map()).title).toBe('No charter');
   });
 
-  it("the charter-at-another-warehouse hint: a charter, one warehouse (chosen or the view's), nothing found", () => {
+  it("the charter-at-another-warehouse hint: a charter, one warehouse (chosen or the view's), nothing found; the dates named only when chosen", () => {
     const base = {
       totalCount: 0,
+      range: { key: 'all' as const },
       filters: {
         warehouse: { id: W1, name: 'DC4', status: 'active' },
         charter: { id: CH, name: 'Alder', code: null, status: 'active' },
         noCharter: false,
       },
     };
-    expect(bookReportCharterWarehouseEmpty(base)).toBe(true);
-    expect(bookReportCharterWarehouseEmpty({ ...base, totalCount: 1 })).toBe(false);
-    expect(bookReportCharterWarehouseEmpty({ ...base, filters: { ...base.filters, warehouse: null } })).toBe(false);
-    expect(bookReportCharterWarehouseEmpty({ ...base, filters: { ...base.filters, charter: null, noCharter: true } })).toBe(
-      false,
+    // The same words as the web page (core).
+    expect(bookReportCharterEmptyHint(base)).toBe(BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE);
+    expect(bookReportCharterEmptyHint({ ...base, range: { key: 'today' } })).toBe(
+      BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE_DATES,
     );
+    expect(bookReportCharterEmptyHint({ ...base, range: { key: 'custom' } })).toBe(
+      BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE_DATES,
+    );
+    expect(bookReportCharterEmptyHint({ ...base, totalCount: 1 })).toBeNull();
+    expect(
+      bookReportCharterEmptyHint({ ...base, filters: { ...base.filters, warehouse: null } }),
+    ).toBeNull();
+    expect(
+      bookReportCharterEmptyHint({
+        ...base,
+        filters: { ...base.filters, charter: null, noCharter: true },
+      }),
+    ).toBeNull();
     void labels;
   });
 });

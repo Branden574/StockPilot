@@ -68,6 +68,7 @@ import {
   bookCoverCacheKey,
   bookReportCharterLabelsFor,
   bookReportIdentifiersLine,
+  bookReportLinkKey,
   bookReportListHref,
   bookReportOrderRowPresentation,
   bookReportOrdersShowCharter,
@@ -98,9 +99,12 @@ import { useWorkspace } from '@/lib/use-workspace';
  *   - It keeps the list's scope: the charter, the dates, the statuses and
  *     the warehouse (the header says each). With All charters each order
  *     names its charter.
- *   - A charter, warehouse or category the server refuses (a link's) is
- *     dropped, the orders are read again, and the screen says the link's
- *     filters were reset, as the list does.
+ *   - A charter, warehouse or category the server refuses (a link's), or
+ *     dates an older server does not know (Today, This week), is dropped,
+ *     the orders are read again, and the screen says the link's filters
+ *     were reset, as the list does.
+ *   - Opened from the list, a rolling preset arrives as the exact days the
+ *     row was read for, so the orders add up to the row (brief 13).
  *   - The list stays mounted underneath, so Back returns to the same
  *     filters and page. Opened from a link with no list underneath, Back
  *     opens the list with the same (reset) filters.
@@ -123,10 +127,24 @@ export default function BookOrdersScreen() {
   const offline = isOfflineState(useNetworkState());
   const stacked = shouldStackRow(useWindowDimensions().fontScale);
 
-  // The list's own resolved filters (a concrete warehouse), read once, then
-  // changed only to drop a filter the server refused.
+  // The list's own resolved filters (a concrete warehouse), read when the
+  // screen opens (or a new link arrives), then changed only to drop a filter
+  // the server refused.
   const [baseQuery, setBaseQuery] = React.useState(() => bookReportQueryFromListParams(params));
   const [filtersReset, setFiltersReset] = React.useState(false);
+  // The page of orders shown (1 for a new book or new filters).
+  const [page, setPage] = React.useState(1);
+  // A drill-down link opened while this screen is on top (expo-router hands
+  // it the new parameters instead of a new screen): read its filters again,
+  // as the list does.
+  const linkKey = `${rawItemId}|${bookReportLinkKey(params)}`;
+  const [appliedLink, setAppliedLink] = React.useState(linkKey);
+  if (appliedLink !== linkKey) {
+    setAppliedLink(linkKey);
+    setBaseQuery(bookReportQueryFromListParams(params));
+    setFiltersReset(false);
+    setPage(1);
+  }
   const viewWarehouse = baseQuery.warehouse === 'default' ? ws.activeWarehouseId : null;
   const request = React.useMemo(
     () => resolveBookReportRequest(baseQuery, viewWarehouse),
@@ -143,7 +161,6 @@ export default function BookOrdersScreen() {
   const switched =
     (boundOrg !== null && orgId !== boundOrg) || (boundUser !== null && userId !== boundUser);
 
-  const [page, setPage] = React.useState(1);
   const [stored, setStored] = React.useState<StoredBookReport<OrdersData> | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
   const [viewer, setViewer] = React.useState<string | null>(null);
@@ -454,7 +471,7 @@ function OrdersBody({
   const showCharter = bookReportOrdersShowCharter(answer.filters);
   const rows = answer.rows.map((row) => ({
     row,
-    p: bookReportOrderRowPresentation(row, book, statusLabels, { showCharter }),
+    p: bookReportOrderRowPresentation(row, book, statusLabels, { showCharter, charterLabels }),
   }));
   const someClosed = rows.some(({ p }) => p.href === null);
   // The brief's order: the charter, then the dates, then the rest.
