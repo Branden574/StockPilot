@@ -8,6 +8,12 @@ import {
   BLOCKING_LINE_RESULTS,
   LINE_RESULT_LABELS,
   SIZE_SYSTEMS,
+  asSizeSystem,
+  isAttributeRequired,
+  requiredAttributeProblems,
+  resolveSubcategoryProfile,
+  sizePlaceholder,
+  type SubcategoryTrackingProfile,
 } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
@@ -60,7 +66,13 @@ interface CreateItemsModalProps {
    * tracking profile server-side, which is what turns a size run into one
    * product group instead of N unrelated items.
    */
-  categories: Array<{ id: string; name: string; sportsSubcategoryKey: string | null }>;
+  categories: Array<{
+    id: string;
+    name: string;
+    sportsSubcategoryKey: string | null;
+    /** `categories.tracking_profile`: a custom subcategory's own profile. */
+    trackingProfile?: unknown;
+  }>;
   /** Server-resolved verdicts, keyed by line id (Task 14). */
   resolutions?: Record<string, LineResolution>;
   /** Called after a successful create so the parent can refresh data. */
@@ -94,6 +106,48 @@ type Decision =
  */
 export function autoCleanItemName(description: string): string {
   return description.replace(/\s*\([^)]*\)\s*$/, '').trim();
+}
+
+/**
+ * Whether a line's "Missing attribute" verdict is ANSWERED by what the reviewer
+ * typed on it. The verdict prop is resolved on the server WITHOUT the per-line
+ * inputs, so read alone it kept the line blocked however the size box was
+ * filled: a dead end. This asks the same core rule the server uses, on the
+ * values the create call will send (typed override, else the document's own
+ * value, the size system read exactly as the resolver reads it). The server
+ * re-resolves with those values and stays the authority.
+ */
+function missingAttributeAnswered(
+  profile: SubcategoryTrackingProfile | null,
+  values: { size: string | null; sizeSystem: string | null; jerseyNumber: string | null },
+): boolean {
+  return (
+    requiredAttributeProblems(profile, {
+      variantSize: values.size,
+      variantSizeSystem: asSizeSystem(values.sizeSystem),
+      jerseyNumber: values.jerseyNumber,
+    }).length === 0
+  );
+}
+
+/**
+ * The values a line will be created with, by the server's own precedence: the
+ * submit sends a typed value trimmed (blank becomes null), and the server's
+ * `toVariantLine` takes `override ?? the document's value`. So a box the
+ * reviewer cleared falls back to what the document said, here as there.
+ */
+function lineVariantValues(
+  line: PoImportLineRow,
+  typed: { size?: string; sizeSystem?: string; jerseyNumber?: string } | undefined,
+): { size: string | null; sizeSystem: string | null; jerseyNumber: string | null } {
+  const pick = (t: string | undefined, stored: unknown) =>
+    (t?.trim() || null) ?? (((stored as string | null | undefined) ?? '').trim() || null);
+  const row = line as unknown as Record<string, unknown>;
+  return {
+    size: pick(typed?.size, row.variant_size),
+    sizeSystem: pick(typed?.sizeSystem, row.variant_size_system),
+    jerseyNumber: pick(typed?.jerseyNumber, row.jersey_number),
+  };
 }
 
 export function CreateItemsModal({
@@ -141,6 +195,28 @@ export function CreateItemsModal({
   const [duplicates, setDuplicates] = React.useState<Record<string, DuplicateCandidate[]>>({});
   const [scanning, setScanning] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+
+  // The chosen category's profile, by the server's own rule (built-in by key,
+  // else the category's own jsonb profile). Drives which per-line inputs are
+  // required and the example size.
+  const chosenCategory = categories.find((c) => c.id === categoryId) ?? null;
+  const profile = resolveSubcategoryProfile(
+    chosenCategory?.sportsSubcategoryKey ?? null,
+    chosenCategory?.trackingProfile ?? null,
+  );
+  const sizeRequired = isAttributeRequired(profile, 'size');
+  const sizeSystemRequired = isAttributeRequired(profile, 'size_system');
+  const numberRequired = isAttributeRequired(profile, 'jersey_number');
+  const sizeExample = sizePlaceholder({ profile });
+
+  /** A blocking verdict this line still has, after what the reviewer typed. */
+  function stillBlocked(line: PoImportLineRow, res: LineResolution | undefined): boolean {
+    if (!res || !BLOCKING_LINE_RESULTS.has(res.result)) return false;
+    if (res.result === 'missing_required_attribute') {
+      return !missingAttributeAnswered(profile, lineVariantValues(line, variants[line.id]));
+    }
+    return true;
+  }
 
   // Reset the editable name map every time the modal opens with a new
   // set of lines so we don't carry stale edits between batches.
@@ -254,7 +330,7 @@ export function CreateItemsModal({
       // human already settled.
       if (decisions[l.id]?.mode !== 'create') return false;
       const res = effectiveResolutions?.[l.id];
-      if (!res || !BLOCKING_LINE_RESULTS.has(res.result)) return false;
+      if (!res || !stillBlocked(l, res)) return false;
       const settleable =
         res.result === 'possible_duplicate' || res.result === 'ambiguous_variant_match';
       return !settleable || !groupChoices[l.id];
@@ -386,10 +462,13 @@ export function CreateItemsModal({
             const dupes = duplicates[l.id] ?? [];
             const decision = decisions[l.id] ?? { mode: 'create' };
             const res = effectiveResolutions?.[l.id];
-            const blocked =
-              decision.mode === 'create' && res != null && BLOCKING_LINE_RESULTS.has(res.result);
+            const blocked = decision.mode === 'create' && res != null && stillBlocked(l, res);
             const groupChoice = groupChoices[l.id];
             const v = variants[l.id] ?? {};
+            const lineValues = lineVariantValues(l, variants[l.id]);
+            const sizeMissing = sizeRequired && !lineValues.size;
+            const sizeSystemMissing = sizeSystemRequired && !asSizeSystem(lineValues.sizeSystem);
+            const numberMissing = numberRequired && !lineValues.jerseyNumber;
 
             return (
               <div key={l.id} className="space-y-2 p-3">
@@ -614,12 +693,17 @@ export function CreateItemsModal({
                           [l.id]: { ...(m[l.id] ?? {}), size: e.target.value },
                         }))
                       }
-                      placeholder="Size"
+                      // Required is SAID, not only styled: the category decides
+                      // it (its profile's requiredAttributes, the server's rule).
+                      aria-label={`Size for line ${l.line_number}`}
+                      aria-required={sizeRequired || undefined}
+                      aria-invalid={(blocked && sizeMissing) || undefined}
+                      placeholder={`Size${sizeRequired ? ' (required)' : ''}, e.g. ${sizeExample}`}
                       maxLength={40}
                       disabled={busy}
-                      className="h-8 w-[110px] text-xs"
+                      className="h-8 w-[170px] text-xs"
                     />
-                    <div className="w-[150px]">
+                    <div className="w-[170px]">
                       <Select
                         value={v.sizeSystem ?? l.variant_size_system ?? NO_SIZE_SYSTEM}
                         onValueChange={(val) =>
@@ -633,11 +717,18 @@ export function CreateItemsModal({
                         }
                         disabled={busy}
                       >
-                        <SelectTrigger className="h-8 text-xs">
+                        <SelectTrigger
+                          className="h-8 text-xs"
+                          aria-label={`Size system for line ${l.line_number}`}
+                          aria-required={sizeSystemRequired || undefined}
+                          aria-invalid={(blocked && sizeSystemMissing) || undefined}
+                        >
                           <SelectValue placeholder="Size system" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value={NO_SIZE_SYSTEM}>No size system</SelectItem>
+                          <SelectItem value={NO_SIZE_SYSTEM}>
+                            {sizeSystemRequired ? 'Size system (required)' : 'No size system'}
+                          </SelectItem>
                           {SIZE_SYSTEMS.map((sys) => (
                             <SelectItem key={sys} value={sys}>
                               {sys.replace(/_/g, ' ')}
@@ -656,10 +747,13 @@ export function CreateItemsModal({
                       }
                       // NEVER labelled "serial": a uniform number is not one,
                       // and leading zeroes are meaningful, so this stays text.
-                      placeholder="Number"
+                      aria-label={`Number for line ${l.line_number}`}
+                      aria-required={numberRequired || undefined}
+                      aria-invalid={(blocked && numberMissing) || undefined}
+                      placeholder={numberRequired ? 'Number (required)' : 'Number'}
                       maxLength={4}
                       disabled={busy}
-                      className="h-8 w-[90px] text-xs"
+                      className={`h-8 text-xs ${numberRequired ? 'w-[140px]' : 'w-[90px]'}`}
                     />
                   </div>
                 )}
