@@ -281,13 +281,23 @@ export default function Home() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <IconChip icon={Menu} onPress={openDrawer} />
-            <Avatar size={38} onPress={() => router.push('/settings')} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+            <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
+            <Avatar
+              size={38}
+              onPress={() => router.push('/settings')}
+              accessibilityLabel="Account settings"
+            />
           </View>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <IconChip icon={Bell} badge={unread} onPress={() => router.push('/notifications')} />
-            <IconChip icon={RefreshCcw} onPress={onRefresh} />
+          <View style={{ flexDirection: 'row', gap: 2 }}>
+            <IconChip
+              icon={Bell}
+              badge={unread}
+              onPress={() => router.push('/notifications')}
+              accessibilityLabel={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'}
+              minTap
+            />
+            <IconChip icon={RefreshCcw} onPress={onRefresh} accessibilityLabel="Refresh" minTap />
           </View>
         </View>
         <View style={styles.head}>
@@ -550,16 +560,21 @@ const styles = StyleSheet.create({
     height: 5,
     borderRadius: 3,
   },
+  // The chips' 44pt frames (IconChip minTap) are 3pt wider than the 38pt chip
+  // on every side, so the bar takes 3pt off its padding (12, 8), the gap
+  // between two chips 6pt (8 -> 2), the gap from the menu chip to the avatar
+  // 3pt (8 -> 5) and the head 3pt off its top: the chips, the avatar and the
+  // greeting sit where they did.
   topbar: {
-    paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingHorizontal: 9,
+    paddingTop: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
   head: {
     paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingTop: 9,
     paddingBottom: 16,
   },
   statGrid: {

@@ -1886,6 +1886,8 @@ export default function OrderDetail() {
               if (router.canGoBack()) router.back();
               else router.replace('/');
             }}
+            accessibilityLabel="Back"
+            minTap
           />
         </View>
       </SafeAreaView>
@@ -1920,7 +1922,7 @@ export default function OrderDetail() {
           contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 60, gap: 16 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
         >
-          <View style={{ paddingTop: 4 }}>
+          <View style={{ paddingTop: 1 }}>
             <Eyebrow>{`ORDER${order.orderNumber ? ` ${formatOrderNumber(order.orderNumber)}` : ''} · ${order.status.replace(/_/g, ' ').toUpperCase()}`}</Eyebrow>
             <Display size={30} style={{ marginTop: 10 }}>
               {order.requester ?? 'Order'}
@@ -3433,7 +3435,10 @@ export default function OrderDetail() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  topbar: { paddingHorizontal: 12, paddingTop: 8, flexDirection: 'row' },
+  // The back chip's 44pt frame (IconChip minTap) is 3pt wider than the 38pt
+  // chip on every side: the bar takes 3pt off its padding (12, 8) and the
+  // order's heading 3pt off its top (4 -> 1), so both sit where they did.
+  topbar: { paddingHorizontal: 9, paddingTop: 5, flexDirection: 'row' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
   addBtn: {
     flexDirection: 'row',

@@ -961,10 +961,10 @@ export default function MaintenanceRequestDetailScreen() {
       <View style={[styles.root, { backgroundColor: c.paper }]}>
         <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
           <View style={styles.topbar}>
-            <IconChip icon={ArrowLeft} onPress={goBack} />
+            <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
           </View>
         </SafeAreaView>
-        <ActivityIndicator color={c.ink4} style={{ marginTop: 40 }} />
+        <ActivityIndicator color={c.ink4} style={{ marginTop: 37 }} />
       </View>
     );
   }
@@ -1033,7 +1033,7 @@ export default function MaintenanceRequestDetailScreen() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={ArrowLeft} onPress={goBack} />
+          <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
         </View>
         <View style={styles.head}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -1619,10 +1619,10 @@ function GateScreen({
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={ArrowLeft} onPress={onBack} />
+          <IconChip icon={ArrowLeft} onPress={onBack} accessibilityLabel="Back" minTap />
         </View>
       </SafeAreaView>
-      <View style={{ paddingHorizontal: 20, marginTop: 24 }}>
+      <View style={{ paddingHorizontal: 20, marginTop: 21 }}>
         <Card padding={16}>
           <Body size={14.5}>{children}</Body>
         </Card>
@@ -1633,15 +1633,19 @@ function GateScreen({
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  // The back chip's 44pt frame (IconChip minTap) is 3pt wider than the 38pt
+  // chip on every side, so the bar takes 3pt off its padding (12, 8) and what
+  // sits under it 3pt off its top (the head 12 -> 9, the loading spinner
+  // 40 -> 37, the gate card 24 -> 21), as app/maintenance/new.tsx does.
   topbar: {
-    paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingHorizontal: 9,
+    paddingTop: 5,
     flexDirection: 'row',
     alignItems: 'center',
   },
   head: {
     paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingTop: 9,
     paddingBottom: 4,
   },
   body: {

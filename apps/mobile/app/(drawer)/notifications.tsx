@@ -167,7 +167,16 @@ export default function NotificationsScreen() {
       onRefresh={refresh}
       trailing={
         rows.some((r) => !r.read_at) ? (
-          <IconChip icon={CheckCheck} onPress={() => void markAllRead()} />
+          // marginRight -3: the chip's 44pt frame is 3pt wider each side, so
+          // the chip stays at the bar's right padding.
+          <View style={{ marginRight: -3 }}>
+            <IconChip
+              icon={CheckCheck}
+              onPress={() => void markAllRead()}
+              accessibilityLabel="Mark all as read"
+              minTap
+            />
+          </View>
         ) : null
       }
       keyExtractor={(n) => n.id}

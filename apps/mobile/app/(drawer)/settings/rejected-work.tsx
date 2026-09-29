@@ -157,6 +157,8 @@ export default function RejectedWorkScreen() {
               if (router.canGoBack()) router.back();
               else router.replace('/settings' as never);
             }}
+            accessibilityLabel="Back"
+            minTap
           />
         </View>
         <View style={styles.head}>
@@ -324,13 +326,16 @@ export default function RejectedWorkScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  // The chip's 44pt frame (IconChip minTap) is 3pt wider than the 38pt chip
+  // on every side, so the bar takes 3pt off its padding (12, 8) and what sits
+  // under it 3pt off its top: the chip and the title sit where they did.
   topbar: {
-    paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingHorizontal: 9,
+    paddingTop: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  head: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 4 },
+  head: { paddingHorizontal: 20, paddingTop: 9, paddingBottom: 4 },
   empty: { paddingVertical: 22, paddingHorizontal: 16 },
   row: { paddingVertical: 14, paddingHorizontal: 16 },
   rowHead: {

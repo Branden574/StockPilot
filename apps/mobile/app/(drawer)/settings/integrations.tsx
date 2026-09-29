@@ -62,7 +62,7 @@ export default function IntegrationsScreen() {
   const allowed = enabled.has('integrations') && isAdmin;
 
   const [loading, setLoading] = React.useState(true);
-  const [refreshing, setRefreshing] = React.useState(false);
+  const [, setRefreshing] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [forbidden, setForbidden] = React.useState(false);
   const [connection, setConnection] = React.useState<ConnectionView | null>(null);
@@ -188,8 +188,12 @@ export default function IntegrationsScreen() {
               if (router.canGoBack()) router.back();
               else router.replace('/settings');
             }}
+            accessibilityLabel="Back"
+            minTap
           />
-          {allowed ? <IconChip icon={RefreshCcw} onPress={refresh} /> : null}
+          {allowed ? (
+            <IconChip icon={RefreshCcw} onPress={refresh} accessibilityLabel="Refresh" minTap />
+          ) : null}
         </View>
         <View style={styles.head}>
           <Eyebrow>SETTINGS · INTEGRATIONS</Eyebrow>
@@ -527,13 +531,16 @@ function formatDateTime(iso: string | null): string {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  // The chips' 44pt frames (IconChip minTap) are 3pt wider than the 38pt chip
+  // on every side, so the bar takes 3pt off its padding (12, 8) and what sits
+  // under it 3pt off its top: the chips and the title sit where they did.
   topbar: {
-    paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingHorizontal: 9,
+    paddingTop: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  head: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 4 },
+  head: { paddingHorizontal: 20, paddingTop: 9, paddingBottom: 4 },
   center: {
     flex: 1,
     alignItems: 'center',

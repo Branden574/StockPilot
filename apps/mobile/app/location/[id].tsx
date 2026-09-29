@@ -198,7 +198,7 @@ export default function LocationScreen() {
       {view.kind === 'loading' ? (
         <ActivityIndicator
           color={c.ink4}
-          style={{ marginTop: 32 }}
+          style={{ marginTop: 29 }}
           accessibilityLabel="Loading this location"
         />
       ) : view.kind === 'error' ? (
@@ -532,7 +532,7 @@ function TopBar({ onBack }: { onBack: () => void }) {
   return (
     <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
       <View style={styles.topbar}>
-        <IconChip icon={ChevronLeft} onPress={onBack} accessibilityLabel="Back" />
+        <IconChip icon={ChevronLeft} onPress={onBack} accessibilityLabel="Back" minTap />
       </View>
     </SafeAreaView>
   );
@@ -540,7 +540,11 @@ function TopBar({ onBack }: { onBack: () => void }) {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  topbar: { paddingHorizontal: 12, paddingTop: 8, flexDirection: 'row', alignItems: 'center' },
-  pad: { paddingHorizontal: 20, marginTop: 12 },
-  body: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40, gap: 18 },
+  // The back chip's 44pt frame (IconChip minTap) is 3pt wider than the 38pt
+  // chip on every side, so the bar takes 3pt off its padding (12, 8) and what
+  // sits under it 3pt off its top (pad and body 12 -> 9, the loading spinner
+  // 32 -> 29): everything sits where it did.
+  topbar: { paddingHorizontal: 9, paddingTop: 5, flexDirection: 'row', alignItems: 'center' },
+  pad: { paddingHorizontal: 20, marginTop: 9 },
+  body: { paddingHorizontal: 20, paddingTop: 9, paddingBottom: 40, gap: 18 },
 });

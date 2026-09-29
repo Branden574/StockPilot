@@ -17,10 +17,16 @@ export function Avatar({
   size = 38,
   bordered = true,
   onPress,
+  accessibilityLabel,
 }: {
   size?: number;
   bordered?: boolean;
   onPress?: () => void;
+  /**
+   * What VoiceOver says for a tappable avatar ("Account settings"). Without
+   * one it read the initials ("SD"), or nothing over a photo.
+   */
+  accessibilityLabel?: string;
 }) {
   const { c } = useTheme();
   const profile = useProfile();
@@ -89,6 +95,8 @@ export function Avatar({
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
       style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
       hitSlop={8}
     >

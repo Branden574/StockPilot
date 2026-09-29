@@ -20,12 +20,7 @@ import { IconChip } from '@/components/ui/row';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { showWriteCta } from '@/lib/cta-gating';
-import {
-  createDebouncedScheduler,
-  createSequenceGuard,
-  type DebouncedScheduler,
-  type SequenceGuard,
-} from '@/lib/debounced-list-load';
+import { createDebouncedScheduler, createSequenceGuard } from '@/lib/debounced-list-load';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   listMaintenanceRequests,
@@ -127,12 +122,12 @@ export default function MaintenanceListScreen() {
     // sequence-guard machinery `q`/`scope` already ride — a chip tap while a
     // slower earlier request is still in flight must not let that stale
     // response overwrite the rows the new filter now owns (Task 18 guard).
-  }, [enabled, scope, q, status]);
+  }, [enabled, scope, q, status, guard]);
 
   React.useEffect(() => {
     scheduler.schedule(() => void load());
     return () => scheduler.cancel();
-  }, [load]);
+  }, [load, scheduler]);
 
   function onRefresh() {
     setRefreshing(true);
@@ -149,9 +144,9 @@ export default function MaintenanceListScreen() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <IconChip icon={ArrowLeft} onPress={goBack} />
-            <IconChip icon={Menu} onPress={openDrawer} />
+          <View style={styles.chips}>
+            <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
+            <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
           </View>
           {enabled && canSubmit ? (
             <Pressable
@@ -352,13 +347,19 @@ function MaintenanceRow({
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  // The chips' 44pt frames (IconChip minTap) are 3pt wider than the 38pt chip
+  // on every side: the chip group takes 3pt off the bar's left padding
+  // (marginLeft; the right padding stays 12 for the New button), the gap
+  // between the chips 6pt (8 -> 2), the bar and the head 3pt off their tops,
+  // so the chips, the New button and the title sit where they did.
   topbar: {
     paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingTop: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
+  chips: { flexDirection: 'row', alignItems: 'center', gap: 2, marginLeft: -3 },
   newBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -370,7 +371,7 @@ const styles = StyleSheet.create({
   },
   head: {
     paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingTop: 9,
     paddingBottom: 4,
   },
   toolbar: {

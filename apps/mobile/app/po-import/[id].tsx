@@ -519,16 +519,19 @@ export default function PoImportDetailScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: c.paper }}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
+        {/* The back chip's 44pt frame (IconChip minTap) is 3pt wider than the
+            38pt chip on every side, so the bar takes 3pt off each padding
+            (12, 8, 4): the chip and the title sit where they did. */}
         <View
           style={{
-            paddingHorizontal: 12,
-            paddingTop: 8,
-            paddingBottom: 4,
+            paddingHorizontal: 9,
+            paddingTop: 5,
+            paddingBottom: 1,
             flexDirection: 'row',
             alignItems: 'center',
           }}
         >
-          <IconChip icon={ArrowLeft} onPress={goBack} />
+          <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
         </View>
         <View style={{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 }}>
           <Eyebrow>PROCUREMENT · PO IMPORT</Eyebrow>

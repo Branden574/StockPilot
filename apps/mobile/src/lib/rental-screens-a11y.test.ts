@@ -108,9 +108,10 @@ describe('the words VoiceOver reads', () => {
   // Re-walk 2026-09-26: the shared list header's back arrow and menu chips
   // (DataListScreen, on the Rentals list and about two dozen other screens)
   // were unnamed elements. Mutation caught: the two chips without a label.
-  it("the shared list header's back and menu chips say Back and Menu", () => {
+  // The menu chip says "Open menu", as every other screen's does (2026-09-29).
+  it("the shared list header's back and menu chips say Back and Open menu", () => {
     const chips = elementsOf('src/components/data-list-screen.tsx', (el, sf) => tagOf(el, sf) === 'IconChip');
-    expect(chips.map((c) => attrText(c.el, 'accessibilityLabel', c.sf))).toEqual(['Back', 'Menu']);
+    expect(chips.map((c) => attrText(c.el, 'accessibilityLabel', c.sf))).toEqual(['Back', 'Open menu']);
     expect(chips.map((c) => attrText(c.el, 'icon', c.sf))).toEqual(['ArrowLeft', 'Menu']);
   });
 

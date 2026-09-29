@@ -212,14 +212,20 @@ export default function Settings() {
                 router.replace('/');
               }
             }}
+            accessibilityLabel="Back"
+            minTap
           />
-          <View style={{ flexDirection: 'row', gap: 8 }}>
+          <View style={{ flexDirection: 'row', gap: 2 }}>
             <IconChip
               icon={Menu}
               onPress={() => (navigation as { openDrawer?: () => void }).openDrawer?.()}
+              accessibilityLabel="Open menu"
+              minTap
             />
             <IconChip
               icon={HelpCircle}
+              accessibilityLabel="Email StockPilot support"
+              minTap
               onPress={() =>
                 Linking.openURL(
                   'mailto:hello@stockpilot.app?subject=StockPilot%20mobile%20support',
@@ -748,13 +754,16 @@ function promptDeleteConfirmation(signOut: SignOutFn): void {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  // The chips' 44pt frames (IconChip minTap) are 3pt wider than the 38pt chip
+  // on every side, so the bar takes 3pt off its padding (12, 8) and what sits
+  // under it 3pt off its top: the chips and the title sit where they did (gap between chips 8 -> 2).
   topbar: {
-    paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingHorizontal: 9,
+    paddingTop: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  head: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 4 },
+  head: { paddingHorizontal: 20, paddingTop: 9, paddingBottom: 4 },
   identity: {
     flexDirection: 'row',
     alignItems: 'center',

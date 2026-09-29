@@ -273,12 +273,12 @@ export default function ExceptionDetailScreen() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={ArrowLeft} onPress={goBack} />
+          <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
         </View>
       </SafeAreaView>
 
       {!orgId && !workspaceLoading ? (
-        <View style={{ paddingHorizontal: 20, marginTop: 12 }}>
+        <View style={{ paddingHorizontal: 20, marginTop: 9 }}>
           <Card padding={16}>
             <Body size={14.5} accessibilityRole="alert">
               {EXCEPTION_WORKSPACE_UNAVAILABLE}
@@ -295,9 +295,9 @@ export default function ExceptionDetailScreen() {
           </Card>
         </View>
       ) : state.kind === 'loading' ? (
-        <ActivityIndicator color={c.ink4} style={{ marginTop: 32 }} />
+        <ActivityIndicator color={c.ink4} style={{ marginTop: 29 }} />
       ) : state.kind === 'error' ? (
-        <View style={{ paddingHorizontal: 20, marginTop: 12 }}>
+        <View style={{ paddingHorizontal: 20, marginTop: 9 }}>
           <Card padding={16}>
             <Body size={14.5} accessibilityRole="alert">
               {state.message}
@@ -878,6 +878,10 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  topbar: { paddingHorizontal: 12, paddingTop: 8, flexDirection: 'row', alignItems: 'center' },
-  body: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 40, gap: 18 },
+  // The back chip's 44pt frame (IconChip minTap) is 3pt wider than the 38pt
+  // chip on every side, so the bar takes 3pt off its padding (12, 8) and what
+  // sits under it 3pt off its top (the cards and the body 12 -> 9, the loading
+  // spinner 32 -> 29): everything sits where it did.
+  topbar: { paddingHorizontal: 9, paddingTop: 5, flexDirection: 'row', alignItems: 'center' },
+  body: { paddingHorizontal: 20, paddingTop: 9, paddingBottom: 40, gap: 18 },
 });

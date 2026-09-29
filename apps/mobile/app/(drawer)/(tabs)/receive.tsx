@@ -22,7 +22,6 @@ import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { StockBar } from '@/components/ui/stock-bar';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
-import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
 import { ACCENT, FONT } from '@/lib/theme';
@@ -44,7 +43,6 @@ const RECEIVABLE_STATUSES = ['expected_inbound', 'ordered', 'partially_received'
 export default function Receive() {
   const router = useRouter();
   const navigation = useNavigation();
-  const { user } = useAuth();
   const { c } = useTheme();
   const tabBarHeight = useBottomTabBarHeight();
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
@@ -125,15 +123,17 @@ export default function Receive() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
             <IconChip
               icon={ArrowLeft}
               onPress={() => {
                 if (router.canGoBack()) router.back();
                 else router.replace('/');
               }}
+              accessibilityLabel="Back"
+              minTap
             />
-            <IconChip icon={Menu} onPress={openDrawer} />
+            <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
           </View>
         </View>
         <View style={styles.head}>
@@ -303,15 +303,18 @@ function SmallStat({ label, value, mono = false }: { label: string; value: strin
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  // The chips' 44pt frames (IconChip minTap) are 3pt wider than the 38pt chip
+  // on every side, so the bar takes 3pt off its padding (12, 8) and what sits
+  // under it 3pt off its top: the chips and the title sit where they did (gap between chips 8 -> 2).
   topbar: {
-    paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingHorizontal: 9,
+    paddingTop: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
   head: {
     paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingTop: 9,
     paddingBottom: 4,
   },
   aiCard: {

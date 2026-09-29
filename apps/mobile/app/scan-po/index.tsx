@@ -448,6 +448,8 @@ export default function ScanPo() {
             if (router.canGoBack()) router.back();
             else router.replace('/');
           }}
+          accessibilityLabel="Back"
+          minTap
         />
       </View>
       <ScrollView
@@ -638,10 +640,13 @@ export default function ScanPo() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.bg },
+  // The back chip's 44pt frame (IconChip minTap) is 3pt wider than the 38pt
+  // chip on every side, so the bar takes 3pt off each padding (12, 8, 4): the
+  // chip and the page under it sit where they did.
   topbar: {
-    paddingHorizontal: 12,
-    paddingTop: 8,
-    paddingBottom: 4,
+    paddingHorizontal: 9,
+    paddingTop: 5,
+    paddingBottom: 1,
     flexDirection: 'row',
     alignItems: 'center',
   },
