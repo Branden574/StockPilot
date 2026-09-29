@@ -293,6 +293,17 @@ describe('8. accessibility', () => {
     },
   );
 
+  it('a 400 for a warehouse or category the reader cannot see drops it, says the filters were reset, and reads again', () => {
+    expect(list).toContain('const unreadable = bookReportUnreadableFilter(e);');
+    expect(list).toContain(
+      'if (unreadable && bookReportWithoutUnreadableFilter(target, unreadable)) {',
+    );
+    expect(list).toContain('setLinkWasReset(true);');
+    expect(list).toContain(
+      'setQuery((q) => bookReportWithoutUnreadableFilter(q, unreadable) ?? q);',
+    );
+  });
+
   it('covers are contained, never cropped, with a spoken placeholder', () => {
     const cover = codeOnly(read('src/components/book-cover.tsx'));
     expect(cover).toContain('contentFit="contain"');

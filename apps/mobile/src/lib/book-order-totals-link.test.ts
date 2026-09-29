@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { W1 } from './__fixtures__/book-order-totals';
 import { bookReportNativePath, bookReportNativePathFromParams, queryStringRecord } from './book-order-totals-link';
+import { bookReportQueryFromParams } from './book-order-totals-view';
 import { rewriteWebPath } from './web-path-rewrite';
 
 /**
@@ -31,9 +32,12 @@ describe('rewriteWebPath: Book Order Totals', () => {
     ).toBe(`/reports/book-order-totals?warehouse=${W1}`);
   });
 
-  it('a malformed value falls back to its default rather than riding along', () => {
+  it('a malformed value falls back to its default rather than riding along, and the screen is told (reset=1)', () => {
     expect(rewriteWebPath('/dashboard/reports/book-order-totals?range=forever&status=nope&page=-1')).toBe(
-      '/reports/book-order-totals',
+      '/reports/book-order-totals?reset=1',
+    );
+    expect(rewriteWebPath('/dashboard/reports/book-order-totals?sort=bogus&warehouse=all')).toBe(
+      '/reports/book-order-totals?warehouse=all&reset=1',
     );
     expect(rewriteWebPath('/dashboard/reports/book-order-totals?warehouse=%E0%A4%A')).toBe(
       '/reports/book-order-totals',
@@ -76,6 +80,18 @@ describe('the link helpers', () => {
     expect(bookReportNativePathFromParams({ range: 'year', warehouse: 'all', wview: '1' })).toBe(
       bookReportNativePath('range=year&warehouse=all&wview=1'),
     );
+  });
+});
+
+describe('a link whose filters were reset says so on the phone, as the web page does', () => {
+  it('the rewritten route reads as reset; a clean link does not', () => {
+    const reset = bookReportNativePathFromParams({ sort: 'bogus', warehouse: 'all' });
+    const params = queryStringRecord(reset.split('?')[1]);
+    expect(bookReportQueryFromParams(params).invalid.length).toBeGreaterThan(0);
+    expect(bookReportQueryFromParams(params).query.warehouse).toBe('all');
+    const clean = bookReportNativePathFromParams({ sort: 'title', warehouse: 'all' });
+    expect(clean).not.toContain('reset');
+    expect(bookReportQueryFromParams(queryStringRecord(clean.split('?')[1])).invalid).toEqual([]);
   });
 });
 

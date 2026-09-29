@@ -131,7 +131,52 @@ export function bookReportQueryFromParams(
   params: Record<string, string | string[] | undefined | null>,
 ): { query: BookReportQuery; invalid: string[] } {
   const { query, invalid } = parseBookReportQuery(params);
-  return { query: { ...query, warehouseFromView: false }, invalid };
+  // A web link rewritten onto the phone has its refused values dropped
+  // already and carries reset=1 instead (book-order-totals-link.ts).
+  const raw = params.reset;
+  const reset = (Array.isArray(raw) ? raw[0] : raw) === '1';
+  return {
+    query: { ...query, warehouseFromView: false },
+    invalid: reset && invalid.length === 0 ? ['link'] : invalid,
+  };
+}
+
+/**
+ * A 400 naming a warehouse or category filter the reader cannot see (or
+ * that no longer exists): which one, else null.
+ */
+export function bookReportUnreadableFilter(e: unknown): 'warehouse' | 'category' | null {
+  if (!e || typeof e !== 'object') return null;
+  const o = e as { status?: unknown; details?: unknown };
+  if (o.status !== 400 || !o.details || typeof o.details !== 'object') return null;
+  const reason = (o.details as { reason?: unknown }).reason;
+  if (reason === 'invalid_warehouse') return 'warehouse';
+  if (reason === 'invalid_category') return 'category';
+  return null;
+}
+
+/**
+ * The query without that filter, as the web page reads such a link: a
+ * warehouse the link named falls back to the warehouse view, the view's own
+ * warehouse to all warehouses, a category to all categories; page 1. Null
+ * when there is nothing left to drop (the refusal is then shown, never
+ * retried in a loop).
+ */
+export function bookReportWithoutUnreadableFilter(
+  query: BookReportQuery,
+  which: 'warehouse' | 'category',
+): BookReportQuery | null {
+  const base = { ...query, statusGroups: [...query.statusGroups], page: 1 };
+  if (which === 'warehouse') {
+    if (query.warehouse === 'all') return null;
+    return {
+      ...base,
+      warehouse: query.warehouse === 'default' ? 'all' : 'default',
+      warehouseFromView: false,
+    };
+  }
+  if (query.category === 'all') return null;
+  return { ...base, category: 'all' };
 }
 
 /** The same, for a drill-down opened from the list: its params are the

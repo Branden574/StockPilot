@@ -111,8 +111,10 @@ import {
   bookReportRowAccessibilityLabel,
   bookReportSortChip,
   bookReportStatusChip,
+  bookReportUnreadableFilter,
   bookReportWarehouseChip,
   bookReportWebUrl,
+  bookReportWithoutUnreadableFilter,
   copiesMetric,
   isRole,
   resolveBookReportRequest,
@@ -280,6 +282,15 @@ export default function BookOrderTotalsScreen() {
         }
       } catch (e) {
         if (ctrl.signal.aborted || token !== seq.current || epoch !== accountEpoch()) return;
+        // A warehouse or category this reader cannot see (a link's, or the
+        // view's): drop it, say the link's filters were reset, and read
+        // again, as the web page does. Nothing left to drop: the refusal.
+        const unreadable = bookReportUnreadableFilter(e);
+        if (unreadable && bookReportWithoutUnreadableFilter(target, unreadable)) {
+          setLinkWasReset(true);
+          setQuery((q) => bookReportWithoutUnreadableFilter(q, unreadable) ?? q);
+          return;
+        }
         setStored((prev) => bookReportFailure(prev, targetKey, e, 'report'));
       }
     },

@@ -38,7 +38,9 @@ import {
   bookReportRowAccessibilityLabel,
   bookReportRowFiguresLine,
   bookReportStatusChip,
+  bookReportUnreadableFilter,
   bookReportWarehouseChip,
+  bookReportWithoutUnreadableFilter,
   bookReportWebUrl,
   bookCoverCacheKey,
   copiesMetric,
@@ -244,6 +246,50 @@ describe('drill-down rows (plan gap 7): a link only when openable', () => {
   it('another unit is named, never called copies', () => {
     const p = bookReportOrderRowPresentation(answer.rows[0]!, { countsAsCopies: false, unit: 'pack of 10' }, labels);
     expect(p.quantity).toBe('10 (pack of 10)');
+  });
+});
+
+describe('a warehouse or category the reader cannot see (400), as the web page handles it', () => {
+  const refusal = (reason: string) =>
+    Object.assign(new Error('That warehouse is not one you can see.'), {
+      name: 'ApiError',
+      status: 400,
+      code: 'validation_error',
+      details: { reason },
+    });
+  it('names which filter the server refused', () => {
+    expect(bookReportUnreadableFilter(refusal('invalid_warehouse'))).toBe('warehouse');
+    expect(bookReportUnreadableFilter(refusal('invalid_category'))).toBe('category');
+    expect(bookReportUnreadableFilter(refusal('invalid_range'))).toBeNull();
+    expect(bookReportUnreadableFilter(Object.assign(new Error('x'), { status: 403 }))).toBeNull();
+  });
+  it('drops it and reads again: a link warehouse falls back to the view, the view to all, a category to all', () => {
+    const base = {
+      ...DEFAULT_BOOK_REPORT_QUERY,
+      statusGroups: [...DEFAULT_BOOK_REPORT_STATUS_GROUPS],
+      page: 3,
+    };
+    expect(
+      bookReportWithoutUnreadableFilter({ ...base, warehouse: W1 }, 'warehouse'),
+    ).toMatchObject({
+      warehouse: 'default',
+      page: 1,
+    });
+    expect(
+      bookReportWithoutUnreadableFilter({ ...base, warehouse: 'default' }, 'warehouse'),
+    ).toMatchObject({
+      warehouse: 'all',
+      page: 1,
+    });
+    // Nothing left to drop: the refusal is shown, never a loop.
+    expect(
+      bookReportWithoutUnreadableFilter({ ...base, warehouse: 'all' }, 'warehouse'),
+    ).toBeNull();
+    expect(bookReportWithoutUnreadableFilter({ ...base, category: W2 }, 'category')).toMatchObject({
+      category: 'all',
+      page: 1,
+    });
+    expect(bookReportWithoutUnreadableFilter({ ...base, category: 'all' }, 'category')).toBeNull();
   });
 });
 

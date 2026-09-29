@@ -42,13 +42,24 @@ export function queryStringRecord(query: string | null | undefined): Record<stri
   return out;
 }
 
+/** Set on the phone route when the link carried a filter core refused, so
+ *  the screen says "Some filters in this link were not valid" as the web
+ *  page does (the refused value itself is dropped before the screen sees
+ *  it). */
+export const BOOK_REPORT_LINK_RESET_KEY = 'reset';
+
 /** The phone route for a record of link parameters (the cold-start shim
  *  reads them from the router). */
 export function bookReportNativePathFromParams(
   params: Record<string, string | string[] | undefined | null>,
 ): string {
-  const { query } = parseBookReportQuery(params);
-  const qs = serializeBookReportQuery({ ...query, warehouseFromView: false });
+  const { query, invalid } = parseBookReportQuery(params);
+  const qs = [
+    serializeBookReportQuery({ ...query, warehouseFromView: false }),
+    invalid.length > 0 ? `${BOOK_REPORT_LINK_RESET_KEY}=1` : '',
+  ]
+    .filter(Boolean)
+    .join('&');
   return qs ? `${BOOK_REPORT_NATIVE_PATH}?${qs}` : BOOK_REPORT_NATIVE_PATH;
 }
 
