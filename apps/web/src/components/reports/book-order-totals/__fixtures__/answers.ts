@@ -17,6 +17,14 @@ export const ITEM_B = '0e000000-0000-4000-8000-000000000f02';
 export const O1 = '0e000000-0000-4000-8000-000000000101';
 export const O2 = '0e000000-0000-4000-8000-000000000102';
 export const O3 = '0e000000-0000-4000-8000-000000000103';
+/** Order charters (0382): Charter Alder CH-A, Charter Birch (no code),
+ *  Charter Cedar CH-C. */
+export const CH_A = '0e000000-0000-4000-8000-0000000000a1';
+export const CH_B = '0e000000-0000-4000-8000-0000000000a2';
+export const CH_C = '0e000000-0000-4000-8000-0000000000a3';
+export const ALDER = { id: CH_A, name: 'Charter Alder', code: 'CH-A', status: 'active' };
+export const BIRCH = { id: CH_B, name: 'Charter Birch', code: null, status: 'active' };
+export const CEDAR = { id: CH_C, name: 'Charter Cedar', code: 'CH-C', status: 'archived' };
 
 export const DEFAULT_11 = [
   'pending_approval',
@@ -78,6 +86,8 @@ export function totalsResponse(
       warehouse: warehouse.id ? { id: warehouse.id, name: 'North', status: 'active' } : null,
       category: null,
       uncategorized: false,
+      charter: null,
+      noCharter: false,
     },
     scope: { restricted: false },
     summary: {
@@ -161,7 +171,7 @@ export function ordersJson(
       timeZoneFallback: false,
     },
     statuses: DEFAULT_11,
-    filters: { warehouse: null },
+    filters: { warehouse: null, charter: null, noCharter: false },
     totals: { copies: '30', orders: 3, lines: 4, fulfilled: '8', returned: '2' },
     totalCount: rows.length,
     page: 1,

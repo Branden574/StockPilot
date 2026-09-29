@@ -576,9 +576,15 @@ WEB_TESTS=(
   # The page: one awaited answer for every number, no figures on a failure,
   # the MFA state, the concrete warehouse in every derived URL, export
   # controls only for reports:export; the drill-down: order links only where
-  # openable, late or mismatched answers dropped.
+  # openable, late or mismatched answers dropped. 0382: a charter in the link
+  # the caller may not use is dropped on the server (never named, never
+  # zeros), and the drawer drops an answer for another charter.
   src/components/reports/book-order-totals/report-body.test.tsx
   src/components/reports/book-order-totals/orders-drawer.test.tsx
+  # 0382 (plan D17): the order page's "Back to Book Order Totals" renders a
+  # user-controlled ?return= only when it passes safeReturnPath AND is the
+  # report's own path; every open-redirect shape falls back.
+  src/components/reports/book-order-totals/return-path.test.ts
 
   # Every other report (2026-09-28, 0380): ReportsService reads with the
   # CALLER'S client (never the service role) and checks reports:read (MFA

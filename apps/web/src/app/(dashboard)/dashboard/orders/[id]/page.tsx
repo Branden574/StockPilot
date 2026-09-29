@@ -18,6 +18,7 @@ import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh
 import { OrderTimeline } from '@/components/orders/order-timeline';
 import { ReadinessLineCell } from '@/components/orders/readiness-line-cell';
 import { ReadinessStrip } from '@/components/orders/readiness-strip';
+import { bookReportReturnPath } from '@/components/reports/book-order-totals/return-path';
 import {
   readinessLinePutAwayHref,
   readinessStripPutAway,
@@ -43,6 +44,7 @@ import {
 import {
   approveShortNotice,
   assessPickedLine,
+  BOOK_REPORT_BACK_TO_REPORT,
   can,
   deliveryRecipientsForRouting,
   describeCompletionConfirm,
@@ -130,8 +132,12 @@ const TIMELINE_FIELDS: Array<{
 
 export default async function OrderDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  /** `return`: the Book Order Totals view this order was opened from (plan
+   *  D17). Accepted only through bookReportReturnPath. */
+  searchParams?: Promise<{ return?: string | string[] }>;
 }) {
   // The service context starts now, beside the request context, not after
   // it: the order and attachment reads below go through withContext, which
@@ -974,15 +980,20 @@ export default async function OrderDetailPage({
       ]
     : [];
 
+  // Opened from Book Order Totals' View orders: the way back to that exact
+  // view, only when `return` passes safeReturnPath AND is the report's own
+  // path (anything else keeps "Back to orders").
+  const backToReport = bookReportReturnPath((await searchParams)?.return);
+
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
       <OrderRealtimeRefresh orderId={id} />
       <div className="mb-6">
         <Link
-          href="/dashboard/orders"
+          href={backToReport ?? '/dashboard/orders'}
           className="text-muted-foreground hover:text-foreground text-sm"
         >
-          ← Back to orders
+          ← {backToReport ? BOOK_REPORT_BACK_TO_REPORT : 'Back to orders'}
         </Link>
         <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
           {/* basis-72: the title column asks for 18rem before the actions may

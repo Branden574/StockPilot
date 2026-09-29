@@ -1,4 +1,10 @@
-import { isUuid, serializeBookReportQuery, type BookReportQuery } from '@stockpilot/core';
+import {
+  bookReportWithFilter,
+  bookReportWithPage,
+  isUuid,
+  serializeBookReportQuery,
+  type BookReportQuery,
+} from '@stockpilot/core';
 
 /**
  * BOOK ORDER TOTALS: every URL the web page builds, in one place.
@@ -33,18 +39,13 @@ export function bookReportPageHref(query: BookReportQuery): string {
 }
 
 /** A filter change: the new value and page 1 (a new filter always starts at
- *  the first page). */
-export function withBookReportFilter(
-  query: BookReportQuery,
-  patch: Partial<Omit<BookReportQuery, 'page'>>,
-): BookReportQuery {
-  return { ...query, ...patch, statusGroups: [...(patch.statusGroups ?? query.statusGroups)], page: 1 };
-}
+ *  the first page). Core's rule, the same one the phone uses: this file used
+ *  to keep its own copy (recurring pattern 26), so these are the core
+ *  functions themselves, not wrappers (hrefs.test.ts pins the identity). */
+export const withBookReportFilter = bookReportWithFilter;
 
-/** The same report on another page. */
-export function withBookReportPage(query: BookReportQuery, page: number): BookReportQuery {
-  return { ...query, statusGroups: [...query.statusGroups], page: Math.max(1, Math.trunc(page)) };
-}
+/** The same report on another page: every filter kept. Core's rule. */
+export const withBookReportPage = bookReportWithPage;
 
 /**
  * An export link: the whole filtered report (never the page), CSV or PDF,
@@ -107,4 +108,23 @@ export function withBookReportDrawer(
   }
   const qs = sp.toString();
   return qs ? `${current.pathname}?${qs}` : current.pathname;
+}
+
+/**
+ * The way back from an order opened in View orders (plan D17): this report
+ * page (its canonical URL, with the page) with the drawer open on the same
+ * book and drill-down page. The drawer hands it to core's
+ * bookReportOrderLink, which carries it as `?return=`; the order page accepts
+ * it only through bookReportReturnPath (./return-path.ts).
+ */
+export function bookReportDrawerReturnHref(
+  query: BookReportQuery,
+  itemId: string,
+  page: number,
+): string {
+  const href = bookReportPageHref(query);
+  const view = `${BOOK_REPORT_VIEW_KEY}=${encodeURIComponent(itemId)}`;
+  const p = Math.max(1, Math.trunc(page));
+  const vpage = p > 1 ? `&${BOOK_REPORT_VIEW_PAGE_KEY}=${p}` : '';
+  return `${href}${href.includes('?') ? '&' : '?'}${view}${vpage}`;
 }

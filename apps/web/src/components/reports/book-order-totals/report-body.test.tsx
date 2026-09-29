@@ -4,7 +4,10 @@
 // every derived URL (pages, filters, the drill-down fetch, both exports)
 // carries the concrete warehouse, never "default"; export controls only for
 // reports:export; the filter lists and the covers never hold back or change
-// a total.
+// a total. 0382: a charter in the link the caller may not use is dropped on
+// the server and said, never named and never shown as zeros; the Showing
+// block states the charter, the dates and any single warehouse from the
+// answer's echoes.
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -55,17 +58,25 @@ import { ServiceError } from '@/server/services/context';
 import {
   BOOK_REPORT_CSV_MAX_ROWS,
   BOOK_REPORT_EMPTY,
+  BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE,
   BOOK_REPORT_EMPTY_DEFAULT_STATUS,
   BOOK_REPORT_EMPTY_SEARCH,
   BOOK_REPORT_FILTERS_RESET,
+  BOOK_REPORT_INVALID_CHARTER,
   BOOK_REPORT_MFA_ENROLL,
   BOOK_REPORT_MFA_VERIFY,
   BOOK_REPORT_PDF_MAX_ROWS,
   BOOK_REPORT_RESTRICTED,
   BOOK_REPORT_TIMEOUT,
+  BOOK_REPORT_UI,
+  type BookReportQuery,
 } from '@stockpilot/core';
 
 import {
+  ALDER,
+  BIRCH,
+  CH_A,
+  CH_B,
   ITEM_A,
   ITEM_B,
   ORG,
@@ -232,7 +243,15 @@ describe('Book Order Totals page body', () => {
 
     expect(svc.page).toHaveBeenCalledTimes(1);
     expect(svc.page.mock.calls[0]![1]).toEqual({ id: W1, source: 'view' });
-    expect(screen.getByText('Warehouse: North (your warehouse view)')).toBeInTheDocument();
+    // Said twice on purpose: in the Showing block above the figures (plan
+    // D20) and in the scope lines under them.
+    const showing = document.querySelector('[data-showing]') as HTMLElement;
+    expect(within(showing).getByText('Warehouse: North (your warehouse view)')).toBeInTheDocument();
+    // (The open sheet hides the page from the accessibility tree.)
+    const scope = document.querySelector(
+      `section[aria-label="${BOOK_REPORT_UI.scopeRegion}"]`,
+    ) as HTMLElement;
+    expect(within(scope).getByText('Warehouse: North (your warehouse view)')).toBeInTheDocument();
 
     const carried = `warehouse=${W1}&wview=1`;
     // The drill-down sheet is open (view= in the URL), so the page behind it
@@ -329,6 +348,7 @@ describe('Book Order Totals page body', () => {
       await screen.findByText(/Couldn't load the charter, warehouse and category lists\./),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Charter')).toBeDisabled();
     expect(screen.getByLabelText('Warehouse')).toBeDisabled();
     expect(screen.getByLabelText('Category')).toBeDisabled();
     expect(screen.getByLabelText('Orders placed')).toBeEnabled();
@@ -377,12 +397,13 @@ describe('Book Order Totals page body', () => {
   it('a custom range with the first date after the second is refused in place', async () => {
     render(await body());
     await userEvent.selectOptions(screen.getByLabelText('Orders placed'), 'custom');
-    const from = screen.getByLabelText('From');
-    const to = screen.getByLabelText('To');
+    const dialog = await screen.findByRole('dialog', { name: 'Orders placed' });
+    const from = within(dialog).getByLabelText('Start date');
+    const to = within(dialog).getByLabelText('End date');
     await userEvent.type(from, '2026-09-28');
     await userEvent.type(to, '2026-09-01');
-    await userEvent.click(screen.getByRole('button', { name: 'Apply' }));
-    expect(screen.getByRole('alert')).toHaveTextContent('first on or before the second');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('first on or before the second');
     expect(nav.push).not.toHaveBeenCalled();
   });
 
@@ -495,5 +516,324 @@ describe('Book Order Totals page body', () => {
     expect(
       screen.getAllByText('Leaves out 1 book entry ordered in another unit (12 pack of 10).').length,
     ).toBeGreaterThan(0);
+  });
+});
+
+function queryOf(call: number): BookReportQuery {
+  return svc.page.mock.calls[call]![0] as BookReportQuery;
+}
+
+function refusal(reason: string) {
+  return new ServiceError('validation_error', BOOK_REPORT_INVALID_CHARTER, { reason });
+}
+
+describe('the charter in the link (0382)', () => {
+  it('a charter the caller may not use is dropped, read again as All charters, and said, never named', async () => {
+    svc.page
+      .mockRejectedValueOnce(refusal('invalid_charter'))
+      .mockImplementationOnce(async (_q: unknown, w: never) => totalsResponse({}, w));
+    render(
+      await body({
+        charter: CH_B,
+        range: 'custom',
+        from: '2026-09-01',
+        to: '2026-09-30',
+        page: '2',
+      }),
+    );
+    expect(svc.page).toHaveBeenCalledTimes(2);
+    expect(queryOf(0).charter).toBe(CH_B);
+    const again = queryOf(1);
+    expect(again.charter).toBe('all');
+    // Only the charter was dropped; the dates stay, and the page starts over.
+    expect(again.range).toBe('custom');
+    expect(again.from).toBe('2026-09-01');
+    expect(again.page).toBe(1);
+    expect(screen.getByText(BOOK_REPORT_FILTERS_RESET)).toBeInTheDocument();
+    // Nothing on the page names or carries the refused charter: no name, no
+    // "0 results", and no link built from the refused query.
+    expect(document.body.textContent).not.toContain('Charter Birch');
+    expect(document.body.innerHTML).not.toContain(CH_B);
+    expect(screen.getByRole('group', { name: 'Total books ordered' })).toHaveTextContent('34');
+  });
+
+  it('a link with a refused warehouse, category AND charter still renders after four reads', async () => {
+    svc.page
+      .mockRejectedValueOnce(refusal('invalid_warehouse'))
+      .mockRejectedValueOnce(refusal('invalid_category'))
+      .mockRejectedValueOnce(refusal('invalid_charter'))
+      .mockImplementationOnce(async (_q: unknown, w: never) => totalsResponse({}, w));
+    render(
+      await body({
+        warehouse: W2,
+        category: '0e000000-0000-4000-8000-0000000000c9',
+        charter: CH_B,
+      }),
+    );
+    expect(svc.page).toHaveBeenCalledTimes(4);
+    const last = queryOf(3);
+    expect(last.warehouse).toBe('default');
+    expect(last.category).toBe('all');
+    expect(last.charter).toBe('all');
+    expect(screen.getByText(BOOK_REPORT_FILTERS_RESET)).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Total books ordered' })).toHaveTextContent('34');
+  });
+
+  it('a refusal that dropping the key cannot cure is not retried: it goes to the error boundary', async () => {
+    svc.page.mockRejectedValue(refusal('invalid_charter'));
+    await expect(body({ charter: CH_B })).rejects.toBeInstanceOf(ServiceError);
+    // The first read, then one read as All charters; never a loop.
+    expect(svc.page).toHaveBeenCalledTimes(2);
+  });
+
+  it('an unreadable charter value in the link is reset and said, before any read', async () => {
+    render(await body({ charter: 'Charter Birch' }));
+    expect(queryOf(0).charter).toBe('all');
+    expect(screen.getByText(BOOK_REPORT_FILTERS_RESET)).toBeInTheDocument();
+  });
+});
+
+describe('Showing, the chips and the scope lines', () => {
+  it('Showing names the charter and the dates from the answer, with the status, and no warehouse line for all warehouses', async () => {
+    svc.page.mockImplementation(async (_q: unknown, w: never) =>
+      totalsResponse(
+        {
+          range: {
+            key: 'custom',
+            from: '2026-09-01',
+            to: '2026-09-30',
+            timeZone: 'America/Los_Angeles',
+            timeZoneFallback: false,
+          },
+          filters: {
+            warehouse: null,
+            category: null,
+            uncategorized: false,
+            charter: ALDER,
+            noCharter: false,
+          },
+        },
+        w,
+      ),
+    );
+    render(await body({ charter: CH_A, from: '2026-09-01', to: '2026-09-30', warehouse: 'all' }));
+    const showing = document.querySelector('[data-showing]') as HTMLElement;
+    expect(within(showing).getByRole('heading', { name: 'Showing' })).toBeInTheDocument();
+    expect(within(showing).getByRole('status')).toHaveTextContent(
+      'Charter Alder · CH-A·, Sep 1 – Sep 30, 2026',
+    );
+    expect(within(showing).getByText('Eligible orders')).toBeInTheDocument();
+    expect(within(showing).queryByText(/^Warehouse:/)).toBeNull();
+    // It sits above the figures.
+    const cards = screen.getByRole('region', { name: BOOK_REPORT_UI.summaryRegion });
+    expect(showing.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The scope lines under the cards say it in full, the charter right
+    // after the dates.
+    const scope = screen.getByRole('region', { name: BOOK_REPORT_UI.scopeRegion });
+    const lines = [...scope.querySelectorAll(':scope > p')].map((p) => p.textContent);
+    expect(lines.slice(0, 2)).toEqual([
+      'Orders placed during: Sep 1 – Sep 30, 2026',
+      'Charter: Charter Alder · CH-A',
+    ]);
+  });
+
+  it('All charters and All time read as such, and the scope line says All charters', async () => {
+    render(await body());
+    const showing = document.querySelector('[data-showing]') as HTMLElement;
+    expect(within(showing).getByRole('status')).toHaveTextContent(
+      'All charters·, All time (May 12, 2026 – Sep 20, 2026)',
+    );
+    expect(screen.getByText('Charter: All charters')).toBeInTheDocument();
+    // Nothing is filtered: no chip, no Clear filters.
+    expect(within(showing).queryByRole('link', { name: 'Clear filters' })).toBeNull();
+  });
+
+  it("a manager's warehouse view on a warehouse with nothing in it: Showing still names the warehouse", async () => {
+    view.current = W2;
+    svc.page.mockImplementation(async () =>
+      totalsResponse(
+        {
+          rows: [],
+          totalCount: 0,
+          summary: { ...totalsResponse().summary, copies: '0', entries: 0, orders: 0 },
+          filters: {
+            warehouse: { id: W2, name: 'South', status: 'active' },
+            category: null,
+            uncategorized: false,
+            charter: null,
+            noCharter: false,
+          },
+        },
+        { id: W2, source: 'view' },
+      ),
+    );
+    render(await body());
+    const showing = document.querySelector('[data-showing]') as HTMLElement;
+    expect(within(showing).getByText('Warehouse: South (your warehouse view)')).toBeInTheDocument();
+    // A view warehouse is not a chip: Clear filters goes back to it.
+    expect(within(showing).queryByRole('link', { name: 'Remove warehouse filter' })).toBeNull();
+  });
+
+  it('a charter with one warehouse in effect and nothing matched says its orders may be elsewhere', async () => {
+    svc.page.mockImplementation(async (_q: unknown, w: never) =>
+      totalsResponse(
+        {
+          rows: [],
+          totalCount: 0,
+          summary: { ...totalsResponse().summary, copies: '0', entries: 0, orders: 0 },
+          filters: {
+            warehouse: { id: W1, name: 'North', status: 'active' },
+            category: null,
+            uncategorized: false,
+            charter: ALDER,
+            noCharter: false,
+          },
+        },
+        w,
+      ),
+    );
+    render(await body({ charter: CH_A, warehouse: W1 }));
+    expect(screen.getByText(BOOK_REPORT_EMPTY)).toBeInTheDocument();
+    // The empty state's description, the charter hint first.
+    expect(document.body.textContent).toContain(
+      `${BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE} ${BOOK_REPORT_EMPTY_DEFAULT_STATUS}`,
+    );
+  });
+
+  it('with all warehouses, an empty charter does not blame the warehouse', async () => {
+    svc.page.mockImplementation(async (_q: unknown, w: never) =>
+      totalsResponse(
+        {
+          rows: [],
+          totalCount: 0,
+          summary: { ...totalsResponse().summary, copies: '0', entries: 0, orders: 0 },
+          filters: {
+            warehouse: null,
+            category: null,
+            uncategorized: false,
+            charter: ALDER,
+            noCharter: false,
+          },
+        },
+        w,
+      ),
+    );
+    render(await body({ charter: CH_A, warehouse: 'all' }));
+    expect(screen.getByText(BOOK_REPORT_EMPTY)).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain(BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE);
+  });
+
+  it('each filter set is a chip with its own remove link on page 1, and Clear filters keeps only the sort', async () => {
+    svc.page.mockImplementation(async (_q: unknown, w: never) =>
+      totalsResponse(
+        {
+          page: 2,
+          totalCount: 60,
+          range: {
+            key: 'custom',
+            from: '2026-09-01',
+            to: '2026-09-30',
+            timeZone: 'America/Los_Angeles',
+            timeZoneFallback: false,
+          },
+          filters: {
+            warehouse: null,
+            category: null,
+            uncategorized: false,
+            charter: ALDER,
+            noCharter: false,
+          },
+        },
+        w,
+      ),
+    );
+    render(
+      await body({
+        charter: CH_A,
+        range: 'custom',
+        from: '2026-09-01',
+        to: '2026-09-30',
+        q: 'Outsiders',
+        sort: 'title',
+        warehouse: 'all',
+        page: '2',
+      }),
+    );
+    const showing = document.querySelector('[data-showing]') as HTMLElement;
+    const chips = [...showing.querySelectorAll('[data-chip]')].map((c) => c.textContent);
+    expect(chips).toEqual([
+      'Charter: Charter Alder · CH-A',
+      'Orders placed: Sep 1 – Sep 30, 2026',
+      'Search: "Outsiders"',
+    ]);
+    const removeCharter = within(showing).getByRole('link', { name: 'Remove charter filter' });
+    const href = removeCharter.getAttribute('href')!;
+    expect(href).not.toContain('charter=');
+    expect(href).toContain('range=custom&from=2026-09-01&to=2026-09-30');
+    expect(href).toContain('q=Outsiders');
+    expect(href).not.toContain('page=');
+    const removeDates = within(showing).getByRole('link', { name: 'Remove date filter' });
+    expect(removeDates.getAttribute('href')).toContain(`charter=${CH_A}`);
+    expect(removeDates.getAttribute('href')).not.toContain('range=');
+    expect(within(showing).getByRole('link', { name: 'Clear filters' })).toHaveAttribute(
+      'href',
+      '/dashboard/reports/book-order-totals?sort=title',
+    );
+  });
+});
+
+describe('Books ordered by charter', () => {
+  const rows = [
+    { id: CH_A, name: 'Charter Alder', code: 'CH-A', status: 'active', copies: '20', orders: 2 },
+    { id: CH_B, name: 'Charter Birch', code: null, status: 'active', copies: '10', orders: 1 },
+    { id: null, name: null, code: null, status: null, copies: '4', orders: 1 },
+  ];
+
+  it('with All charters: a collapsed list that adds up to the summary, No charter last, each row applying its charter on page 1', async () => {
+    svc.page.mockImplementation(async (_q: unknown, w: never) =>
+      totalsResponse({ byCharter: rows, page: 2, totalCount: 60 }, w),
+    );
+    render(await body({ page: '2', q: 'hobbit' }));
+    const box = document.querySelector('[data-by-charter]') as HTMLDetailsElement;
+    expect(box.tagName).toBe('DETAILS');
+    expect(box.open).toBe(false);
+    expect(within(box).getByText('Books ordered by charter')).toBeInTheDocument();
+    const links = within(box).getAllByRole('link', { hidden: true });
+    expect(links.map((a) => a.getAttribute('aria-label'))).toEqual([
+      'Show only Charter Alder · CH-A, 20 copies in 2 orders',
+      'Show only Charter Birch, 10 copies in 1 order',
+      'Show only No charter, 4 copies in 1 order',
+    ]);
+    // The rows partition the summary (34 copies in 3 orders + 1 = 4 orders
+    // here by construction of the fixture's buckets): the closing line
+    // states the summary itself.
+    expect(
+      within(box).getByText('All charters: 34 copies requested in 3 orders.'),
+    ).toBeInTheDocument();
+    const alder = links[0]!.getAttribute('href')!;
+    expect(alder).toContain(`charter=${CH_A}`);
+    expect(alder).toContain('q=hobbit');
+    expect(alder).not.toContain('page=');
+    expect(links[2]!.getAttribute('href')).toContain('charter=none');
+  });
+
+  it('is not shown with a charter chosen (the answer carries no breakdown)', async () => {
+    svc.page.mockImplementation(async (_q: unknown, w: never) =>
+      totalsResponse(
+        {
+          byCharter: null,
+          filters: {
+            warehouse: null,
+            category: null,
+            uncategorized: false,
+            charter: BIRCH,
+            noCharter: false,
+          },
+        },
+        w,
+      ),
+    );
+    render(await body({ charter: CH_B }));
+    expect(document.querySelector('[data-by-charter]')).toBeNull();
   });
 });
