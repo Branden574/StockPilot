@@ -1,5 +1,3 @@
-import Link from 'next/link';
-
 import {
   describeStagingItemFilter,
   STAGING_FILTER_EMPTY_COPY,
@@ -9,6 +7,7 @@ import {
 } from '@stockpilot/core';
 
 import { StagingTable } from '@/components/inventory/staging-table';
+import { IntentLink } from '@/components/ui/intent-link';
 import {
   toDestinationOption,
   type DestinationLocationRow,
@@ -52,6 +51,9 @@ type OrderLink = Awaited<ReturnType<OrderRequestsService['orderLinkLabel']>>;
  * READ-ONLY PARAMS (pattern #18). Nothing here or in StagingTable rewrites
  * `?item` or `?order`: the chip is server-rendered links, and the type tabs
  * copy every other param when they push `?type=`. "Show all" is a plain link.
+ * Both chip links are IntentLinks: they warm their route when the person
+ * reaches for them, never on sight (a default <Link> prefetched the order page
+ * and the whole list on every filtered view).
  */
 export async function StagingTableSection({
   itemType,
@@ -169,23 +171,23 @@ export async function StagingTableSection({
               {chip.headline}
             </span>
             <span aria-hidden>·</span>
-            <Link
+            <IntentLink
               href={showAllHref}
               className="font-medium underline-offset-2 hover:underline"
               data-testid="staging-item-filter-show-all"
             >
               {chip.showAllLabel}
-            </Link>
+            </IntentLink>
             {backHref && chip.backLabel && (
               <>
                 <span aria-hidden>·</span>
-                <Link
+                <IntentLink
                   href={backHref}
                   className="font-medium underline-offset-2 hover:underline"
                   data-testid="staging-item-filter-back"
                 >
                   {chip.backLabel}
-                </Link>
+                </IntentLink>
               </>
             )}
           </p>

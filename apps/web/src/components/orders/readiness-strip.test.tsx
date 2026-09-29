@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -23,7 +24,27 @@ import {
 
 const routerRefresh = vi.hoisted(() => vi.fn());
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ refresh: routerRefresh, push: vi.fn() }),
+  usePathname: () => '/dashboard/orders/11111111-1111-1111-1111-111111111111',
+  useRouter: () => ({ refresh: routerRefresh, push: vi.fn(), prefetch: vi.fn() }),
+}));
+
+// next/link as a recorder: what each link was asked to PREFETCH is the
+// assertion (perf finding 11b).
+const linkProps = vi.hoisted(() => [] as { href: string; prefetch: unknown }[]);
+vi.mock('next/link', () => ({
+  default: ({
+    href,
+    prefetch,
+    children,
+    ...rest
+  }: { href: string; prefetch?: unknown; children?: React.ReactNode } & Record<string, unknown>) => {
+    linkProps.push({ href: String(href), prefetch });
+    return (
+      <a href={String(href)} {...rest}>
+        {children}
+      </a>
+    );
+  },
 }));
 
 // "Hold available stock" (F2-2) calls this server action.
@@ -443,6 +464,15 @@ describe('ReadinessStrip — Put away (F2-3)', () => {
     expect(link).toHaveAttribute('href', href);
     expect(link.querySelector('svg')).not.toBeNull();
     expect(screen.queryByTestId('readiness-put-away-permission')).toBeNull();
+  });
+
+  // Perf finding 11b: a default <Link> prefetched the Staging list on every
+  // order view that offers Put away; it warms on intent instead.
+  it('"Put away N items" never prefetches the Staging list on sight', () => {
+    linkProps.length = 0;
+    const href = `/dashboard/inventory/staging?order=${ORDER}&item=a`;
+    render(<ReadinessStrip view={view()} putAway={{ kind: 'link', label: 'Put away 1 item', href }} />);
+    expect(linkProps.filter((l) => l.href === href)).toEqual([{ href, prefetch: false }]);
   });
 
   it('the permission sentence instead, for a viewer who may not move stock', () => {

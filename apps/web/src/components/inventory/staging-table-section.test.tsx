@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from '@testing-library/react';
+import type * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -64,6 +65,30 @@ vi.mock('@/components/inventory/staging-table', () => ({
   },
 }));
 
+// next/link as a recorder: what each link was asked to PREFETCH is the
+// assertion (perf finding 11b). IntentLink warms on intent through
+// next/navigation.
+const linkProps = vi.hoisted(() => [] as { href: string; prefetch: unknown }[]);
+vi.mock('next/link', () => ({
+  default: ({
+    href,
+    prefetch,
+    children,
+    ...rest
+  }: { href: string; prefetch?: unknown; children?: React.ReactNode } & Record<string, unknown>) => {
+    linkProps.push({ href: String(href), prefetch });
+    return (
+      <a href={String(href)} {...rest}>
+        {children}
+      </a>
+    );
+  },
+}));
+vi.mock('next/navigation', () => ({
+  usePathname: () => '/dashboard/inventory/staging',
+  useRouter: () => ({ prefetch: vi.fn(), push: vi.fn(), refresh: vi.fn(), replace: vi.fn() }),
+}));
+
 import { StagingTableSection } from './staging-table-section';
 
 const A = '00000000-0000-4000-8000-00000000000a';
@@ -98,6 +123,17 @@ describe('Staging page data path: ?item and ?order (F2-3)', () => {
     expect(screen.getByTestId('staging-item-filter')).toHaveTextContent(
       /Showing items from SO-000123\s*·\s*Show all\s*·\s*Back to the order/,
     );
+  });
+
+  // Perf finding 11b: default <Link>s here prefetched the order page and the
+  // whole Staging list on every filtered view; they warm on intent instead.
+  it('"Show all" and "Back to the order" never prefetch on sight', async () => {
+    linkProps.length = 0;
+    await renderSection(parseStagingItemFilter({ item: [A, B], order: ORDER }));
+    expect(linkProps).toEqual([
+      { href: '/dashboard/inventory/staging', prefetch: false },
+      { href: `/dashboard/orders/${ORDER}`, prefetch: false },
+    ]);
   });
 
   it("reads the order page's link, one comma list (?item=a,b), the same as a repeated ?item", async () => {

@@ -1,7 +1,6 @@
 'use client';
 
 import { ArrowUpFromLine, CalendarClock, Loader2, Lock, RefreshCw } from 'lucide-react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -9,6 +8,7 @@ import { toast } from 'sonner';
 import { describeHoldResult, holdLeftShort, HOLD_AVAILABLE_STOCK_LABEL } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
+import { IntentLink } from '@/components/ui/intent-link';
 import { cn } from '@/lib/utils';
 import { holdOrderStockAction } from '@/server/actions/order-requests';
 
@@ -39,7 +39,9 @@ import {
  * items, from this order (the page decides, readinessStripPutAway). A viewer
  * without the permission Place asserts gets core's sentence instead. A plain
  * link: nothing here writes, and the Staging page leaves its ?item / ?order
- * params as they came.
+ * params as they came. An IntentLink, like the lines' own: most order views
+ * never go to Staging, so the route is warmed when the person reaches for the
+ * link, not prefetched on sight.
  */
 export function ReadinessStrip({
   view,
@@ -92,10 +94,10 @@ export function ReadinessStrip({
         <div className="flex flex-wrap items-center gap-1.5">
           {putAway?.kind === 'link' && (
             <Button asChild variant="outline" size="sm" className="h-7 px-2 text-xs">
-              <Link href={putAway.href} data-testid="readiness-put-away">
+              <IntentLink href={putAway.href} data-testid="readiness-put-away">
                 <ArrowUpFromLine className="size-3.5" aria-hidden />
                 {putAway.label}
-              </Link>
+              </IntentLink>
             </Button>
           )}
           {holdOrderId && (

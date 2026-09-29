@@ -14,6 +14,7 @@ import {
 } from '@stockpilot/core';
 
 import { CountThisItemButton } from '@/components/exceptions/count-this-item-button';
+import { IntentLink } from '@/components/ui/intent-link';
 import { cn } from '@/lib/utils';
 
 import { READINESS_TONE_STYLES, ReadinessIcon } from './readiness-view';
@@ -42,7 +43,10 @@ export function itemPhysicalCountHref(itemId: string): string {
  * `putAwayHref` (F2-3) is the line's "Put away": the Staging list filtered to
  * the line's item, from this order (the page decides, readinessLinePutAwayHref:
  * the line has units in Staging and the viewer may put stock away). A plain
- * link, named for what it moves ("Put away 4 of Maus I from Staging").
+ * link, named for what it moves ("Put away 4 of Maus I from Staging"). One
+ * per line, so an IntentLink: it warms the Staging list when the person
+ * reaches for it, never on sight (a default <Link> prefetched the route for
+ * every line on every order view).
  */
 export function ReadinessLineCell({
   line,
@@ -117,14 +121,14 @@ export function ReadinessLineCell({
       )}
       {putAwayHref && (
         <div data-testid="readiness-put-away-line">
-          <Link
+          <IntentLink
             href={putAwayHref}
             aria-label={putAwayLineAccessibilityLabel(line)}
             className="inline-flex min-h-6 items-center gap-1 text-[11px] font-medium underline-offset-2 hover:underline"
           >
             <ArrowUpFromLine className="size-3 shrink-0" aria-hidden />
             {PUT_AWAY_LINE_LABEL}
-          </Link>
+          </IntentLink>
         </div>
       )}
       {showCount && item && (

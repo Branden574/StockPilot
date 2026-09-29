@@ -50,7 +50,9 @@ vi.mock('next/navigation', () => ({
     throw new Error('notFound');
   }),
   // The readiness strip's "Check again" (a client component, rendered for real).
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
+  // The Put away links are IntentLinks (they warm on intent, never on sight).
+  usePathname: () => '/dashboard/orders/x',
 }));
 
 vi.mock('next/link', async () => {
