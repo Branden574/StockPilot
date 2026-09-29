@@ -10,7 +10,7 @@ import { lookupIsbn, normalizeIsbn, type BookMetadata } from '@/lib/books/lookup
 import { safeFetch } from '@/lib/ssrf-guard';
 import { generateSku } from '@/lib/utils';
 
-import { PLANS, isUnlimited, type PlanId } from '@stockpilot/core';
+import { PLANS, bookCoverPath, isUnlimited, type PlanId } from '@stockpilot/core';
 
 import { assertPermission, ServiceError, type ServiceContext } from './context';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
@@ -144,7 +144,8 @@ async function rehostCover(
       remoteType.includes('png') ? 'png' :
       remoteType.includes('webp') ? 'webp' : 'jpg';
     const contentType = COVER_MIME_BY_EXT[ext];
-    const path = `${ctx.organizationId}/${itemId}/cover.${ext}`;
+    // The books-import shape the database (0381) accepts: {org}/{item}/cover.{ext}.
+    const path = bookCoverPath(ctx.organizationId, itemId, ext);
 
     const { error: upErr } = await ctx.supabase.storage
       .from('item-images')

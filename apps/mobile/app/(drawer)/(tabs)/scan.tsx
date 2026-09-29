@@ -27,6 +27,8 @@ import {
   formatPlacementLabel,
   getCrateColor,
   holdingsContradictRack,
+  itemPhotoPath,
+  randomPhotoFileBase,
   readDisplayStorage,
   resolvePlacement,
   type ItemElsewhere,
@@ -152,10 +154,6 @@ function looksLikeIsbn(raw: string): boolean {
 }
 
 /** Lightweight uuid for storage path uniqueness. */
-function cryptoRandom(): string {
-  return 'xxxxxxxxxxxx'.replace(/x/g, () => Math.floor(Math.random() * 16).toString(16));
-}
-
 function formatCurrency(n: number): string {
   return `$${n.toFixed(2)}`;
 }
@@ -816,7 +814,9 @@ export default function Scan() {
       // Resize on-device so the bucket only stores list-friendly sizes
       // (~400 KB JPEGs instead of multi-megapixel phone photos).
       const resized = await resizeForUpload(asset.uri);
-      const path = `${orgId}/items/${itemId}/${cryptoRandom()}.${resized.ext}`;
+      // The one path builder every writer uses; the database (0381) refuses
+      // any other shape (packages/core item-photo-path.test.ts pins it).
+      const path = itemPhotoPath(orgId, itemId, `${randomPhotoFileBase()}.${resized.ext}`);
 
       // ArrayBuffer upload — `fetch(uri).blob()` uploads a 0-byte object
       // in React Native/Expo, which is why captured photos never showed

@@ -653,6 +653,13 @@ MOBILE_TESTS=(
   # a refused or late file, and is never shared after the account changed.
   src/lib/book-order-totals-api.test.ts
   src/lib/report-export-download.test.ts
+
+  # Item photo uploads (0381): the database refuses any path that is not
+  # {org}/items/{item}/{file} or the books {org}/{item}/{file}, lowercase
+  # uuids. The phone's three uploaders (new item, replace photo, scan capture)
+  # build it with the one core builder, and the phone's outputs pass the
+  # parser read from the migrations. (packages/core carries the builder half.)
+  src/lib/item-photo-path.wiring.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -663,6 +670,10 @@ CORE_TESTS=(
   src/auth/account-status.test.ts
   src/schemas/inventory.test.ts
   src/signature/signature.test.ts
+  # The one item-images path builder (web presign and thumbnail, phone
+  # uploads, books cover) against 0381's database parser, read from the
+  # newest migration that defines public.item_image_path_item_id.
+  src/inventory/item-photo-path.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

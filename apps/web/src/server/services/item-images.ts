@@ -2,6 +2,8 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
+import { itemPhotoPath, itemPhotoThumbPath } from '@stockpilot/core';
+
 import { reportError } from '@/lib/error-reporter';
 import {
   isSniffedKindAllowedInBucket,
@@ -1128,12 +1130,13 @@ export class ItemImagesService {
 
     const safeExt = fileExt.replace(/[^a-z0-9]/gi, '').slice(0, 5).toLowerCase() || 'jpg';
     const uuid = crypto.randomUUID();
-    const fileName = `${uuid}.${safeExt}`;
-    const path = `${this.ctx.organizationId}/items/${itemId}/${fileName}`;
+    // The one path builder every writer uses; the database (0381) refuses
+    // any other shape (packages/core item-photo-path.test.ts pins it).
+    const path = itemPhotoPath(this.ctx.organizationId, itemId, `${uuid}.${safeExt}`);
     // Sister path for the 200px pre-resized thumbnail. Always WebP
     // because the uploader transcodes deterministically. Stored next
     // to the master so a future "rm by item folder" cleans both.
-    const thumbPath = `${this.ctx.organizationId}/items/${itemId}/${uuid}-thumb.webp`;
+    const thumbPath = itemPhotoThumbPath(this.ctx.organizationId, itemId, uuid);
 
     const [masterRes, thumbRes] = await Promise.all([
       this.ctx.supabase.storage.from('item-images').createSignedUploadUrl(path),

@@ -17,6 +17,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { itemPhotoPath, randomPhotoFileBase } from '@stockpilot/core';
+
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, FieldLabel, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
@@ -612,7 +614,9 @@ export default function NewItem() {
         // makes the Items list lag during scroll. Resize on the device
         // before upload so the bucket only stores list-friendly sizes.
         const resized = await resizeForUpload(p.uri);
-        const path = `${orgId}/items/${itemId}/${Math.random().toString(36).slice(2, 14)}.${resized.ext}`;
+        // The one path builder every writer uses; the database (0381) refuses
+        // any other shape (packages/core item-photo-path.test.ts pins it).
+        const path = itemPhotoPath(orgId, itemId, `${randomPhotoFileBase()}.${resized.ext}`);
         // IMPORTANT: read the local file as an ArrayBuffer, NOT a Blob.
         // `fetch(uri).blob()` in React Native/Expo uploads a 0-byte object
         // to Supabase Storage (the RN Blob can't be read by the storage

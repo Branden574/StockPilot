@@ -42,8 +42,10 @@ import {
   countStartAllowed,
   formatCycleCountNumber,
   isCountableItem,
+  itemPhotoPath,
   formatOrderNumber,
   legacyOrderRefId,
+  randomPhotoFileBase,
   readDisplayStorage,
   reasonWithoutRefLabel,
   resolveMovementRefReason,
@@ -1449,7 +1451,9 @@ export default function ItemDetail() {
       // Resize on-device so the bucket only stores list-friendly sizes
       // (~400 KB JPEGs instead of multi-megapixel phone photos).
       const resized = await resizeForUpload(uri);
-      const path = `${orgId}/items/${itemId}/${Math.random().toString(36).slice(2, 14)}.${resized.ext}`;
+      // The one path builder every writer uses; the database (0381) refuses
+      // any other shape (packages/core item-photo-path.test.ts pins it).
+      const path = itemPhotoPath(orgId, itemId, `${randomPhotoFileBase()}.${resized.ext}`);
       // ArrayBuffer upload — `fetch(uri).blob()` uploads a 0-byte object
       // to Supabase Storage in RN/Expo, so use arrayBuffer().
       const arrayBuffer = await (await fetch(resized.uri)).arrayBuffer();
