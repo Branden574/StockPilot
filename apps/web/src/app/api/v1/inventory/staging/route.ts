@@ -7,8 +7,9 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { reportError } from '@/lib/error-reporter';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
+import { OrderRequestsService } from '@/server/services/order-requests';
 
-import { can } from '@stockpilot/core';
+import { can, STAGING_FILTER_MAX_ITEMS } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,13 +28,36 @@ export const dynamic = 'force-dynamic';
  * Read-only. The Place action stays on POST /api/v1/items/[id]/transfer, which
  * asserts 'stock:transfer' server-side; `canPlace` is returned here only so the
  * app can hide a button that would always fail.
+ *
+ * PUT AWAY FROM AN ORDER (F2-3). `itemIds` narrows the list to those items (a
+ * comma list, at most 200 uuids; a bad id or more than 200 is a 400, never a
+ * silently different list), filtered in the service's query, and the
+ * warehouse filter is then ignored (the ids already narrow it). `orderId`
+ * names the order the items came from: the answer carries `order` (its
+ * number, for the chip "Showing items from SO-000123", and whether it exists
+ * to go back to), read beside the worklist, never after it. Both are
+ * additive: an older app never sends them and ignores `order`.
  */
+/** A comma list of item ids (the phone's `itemIds`), repeated params joined. */
+const itemIdsSchema = z
+  .string()
+  .transform((v) => v.split(',').map((s) => s.trim().toLowerCase()))
+  .pipe(
+    z
+      .array(z.string().uuid('Each item id must be a UUID'))
+      .max(STAGING_FILTER_MAX_ITEMS, `At most ${STAGING_FILTER_MAX_ITEMS} item ids`),
+  )
+  .transform((ids) => [...new Set(ids)]);
+
 const querySchema = z.object({
   // Mirrors the web page's ?type= param (Items / Books filter).
   type: z.enum(['book', 'non-book']).optional(),
   // The web page reads the active-warehouse cookie; mobile has no cookie, so it
   // passes the id explicitly. Omitted = all warehouses the caller can see.
+  // Ignored when itemIds is set.
   warehouseId: z.string().uuid().optional(),
+  itemIds: itemIdsSchema.optional(),
+  orderId: z.string().uuid().optional(),
 });
 
 export async function GET(req: NextRequest) {
@@ -60,9 +84,12 @@ export async function GET(req: NextRequest) {
     }
 
     const url = new URL(req.url);
+    const itemIdParams = url.searchParams.getAll('itemIds');
     const parsed = querySchema.safeParse({
       type: url.searchParams.get('type') ?? undefined,
       warehouseId: url.searchParams.get('warehouseId') ?? undefined,
+      itemIds: itemIdParams.length > 0 ? itemIdParams.join(',') : undefined,
+      orderId: url.searchParams.get('orderId') ?? undefined,
     });
     if (!parsed.success) {
       return NextResponse.json(
@@ -72,13 +99,34 @@ export async function GET(req: NextRequest) {
     }
 
     const svc = new InventoryService(ctx);
-    const rows = await svc.stagedWorklist({
-      itemType: parsed.data.type,
-      warehouseId: parsed.data.warehouseId ?? null,
-    });
+    const { itemIds, orderId } = parsed.data;
+    // The order's number is read BESIDE the worklist (no serial round trip),
+    // and never fails the list (orderLinkLabel does not throw).
+    const [rows, order] = await Promise.all([
+      svc.stagedWorklist({
+        itemType: parsed.data.type,
+        warehouseId: parsed.data.warehouseId ?? null,
+        ...(itemIds ? { itemIds } : {}),
+      }),
+      orderId ? new OrderRequestsService(ctx).orderLinkLabel(orderId) : Promise.resolve(null),
+    ]);
 
     return NextResponse.json(
-      { rows, canPlace: can(ctx, 'stock:transfer') },
+      {
+        rows,
+        canPlace: can(ctx, 'stock:transfer'),
+        // null without an orderId. `found` false: no such order to go back
+        // to; `orderNumber` null with `found` true: its number could not be
+        // read (the link still works).
+        order:
+          order === null
+            ? null
+            : order.state === 'ok'
+              ? { id: order.id, orderNumber: order.orderNumber, found: true }
+              : order.state === 'failed'
+                ? { id: orderId!, orderNumber: null, found: true }
+                : { id: orderId!, orderNumber: null, found: false },
+      },
       { headers: { 'Cache-Control': 'no-store' } },
     );
   } catch (e) {

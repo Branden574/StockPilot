@@ -28,6 +28,63 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'order-fix-holding-up-2026-10',
+    revision: 1,
+    // F2-3 (no migration). Held as a draft until the web order page's
+    // put-away links and approve-partial preview, the phone's (OTA), and the
+    // Demo Co production walk (SO-17 put-away, SO-21 approve partial) are
+    // done, as F2-1's and F2-2's were. The follow-up that publishes it sets the
+    // real publishedAt and re-reads these words against what shipped.
+    //
+    // Addressed where Orders is on. Put away is offered on the full readiness
+    // panel (core readinessAudience: approvers, pickers with items:update,
+    // buyers with purchase_orders:manage); its text says placing needs the
+    // Transfer stock permission, and the order says so to anyone without it.
+    // Approve partial and Resume fulfillment are for orders:approve, the
+    // permission both actions assert.
+    status: 'draft',
+    title: "Fix what's holding an order up",
+    summary:
+      "On the web and in the mobile app, an order's readiness now opens the Staging list for just the items that must be put away before picking can take them. Approve partial and Resume fulfillment now show what they will hold before you confirm, and afterwards say what was held, including when stock changed in between.",
+    publishedAt: '2026-10-05T17:00:00Z',
+    audience: { modules: ['orders'] },
+    entries: [
+      {
+        id: 'order-put-away-from-the-order',
+        category: 'new',
+        area: 'Orders',
+        title: 'Put away what an order is waiting for, from the order',
+        whatChanged:
+          "When items on an order are in Staging, where picking cannot take them, the order's readiness offers Put away on each of those lines, and above the lines one button for all of them, such as Put away 3 items. It opens the Staging list showing only those items, marked Showing items from SO-000123, with Show all and Back to the order. The mobile app opens its Staging list the same way from the order.",
+        whyItMatters:
+          "Stock received into Staging stops a pick until it is placed on a rack, and finding an order's items in a long Staging list meant searching for each one.",
+        howItAffectsYou:
+          "Placing stock works as it always has and needs the Transfer stock permission; without it the order says so instead of offering Put away. The list also shows the items' Unplaced stock, which picking can already take. Back on the order, choose Check again to see its readiness now.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: {
+          anyPermission: ['orders:approve', 'items:update', 'purchase_orders:manage'],
+          modules: ['orders'],
+        },
+      },
+      {
+        id: 'order-partial-preview',
+        category: 'improved',
+        area: 'Orders',
+        title: 'Approve partial and Resume fulfillment show what they will hold',
+        whatChanged:
+          'Approve partial, on an order waiting for approval, and Resume fulfillment, on a backordered order, now show for each item how many units they will hold now and how many ship when they arrive, before you confirm. Afterwards the order says what was held, for example Approved. Holding 36 of 40 units.',
+        whyItMatters:
+          'Both hold only what is free at the moment you confirm, and nothing showed how much that was until the order had been approved or resumed.',
+        howItAffectsYou:
+          'What was held is read from the order after it is approved or resumed, never copied from the preview. If stock changed in between, it says so, for example Holding 34 of 40 units, 2 fewer than shown because stock changed after you looked. An item on several lines of the order is shown once, with its lines combined.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: { anyPermission: ['orders:approve'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
     id: 'reports-caller-scope-2026-09',
     revision: 1,
     // Web only (the phone's Reports has only Book Order Totals, which already

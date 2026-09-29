@@ -79,6 +79,7 @@ import {
   RACK_WRITE_OFF_MOVEMENT_TYPE,
   RECEIPT_NOTE_SENTINEL_RE,
   RESERVED_CUSTOM_FIELD_KEYS,
+  STAGING_FILTER_MAX_ITEMS,
   trackingTypeForMode,
   validateCustomFields,
 } from '@stockpilot/core';
@@ -214,6 +215,36 @@ export function buildRackFilterClause(
  *  the same judgement the display surfaces make, so it uses the same regex:
  *  @stockpilot/core `movement-note-sentinel`, the one definition in the repo. */
 const UUID_RE = RECEIPT_NOTE_SENTINEL_RE;
+
+/**
+ * The Staging worklist's item filter (F2-3), checked before any read: each a
+ * uuid (one malformed value would fail the whole batch with 22P02), lower
+ * case, deduped, at most STAGING_FILTER_MAX_ITEMS. Too many or a bad id is a
+ * `validation_error`, never a silently shorter or wider list. The page and
+ * GET /api/v1/inventory/staging parse their params first (core
+ * parseStagingItemFilter / the route's zod), so this is the service's own
+ * floor for any other caller.
+ */
+export function stagingItemIdsOrThrow(ids: readonly string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of ids) {
+    const id = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+    if (!UUID_RE.test(id)) {
+      throw new ServiceError('validation_error', 'An item in the Staging filter is not a valid id.');
+    }
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  if (out.length > STAGING_FILTER_MAX_ITEMS) {
+    throw new ServiceError(
+      'validation_error',
+      `The Staging filter can name at most ${STAGING_FILTER_MAX_ITEMS} items.`,
+    );
+  }
+  return out;
+}
 
 /**
  * Maps an adjustStock movement_type to the closest existing AuditEvent so
@@ -8406,11 +8437,29 @@ export class InventoryService {
    * error/null (no staged stock to show). The source-movement and receipt/PO
    * sub-queries degrade gracefully — on error they log and continue with an empty
    * map, so staged items still surface (just without the source/age badge) rather
-   * than hiding staged stock. Never throws.
+   * than hiding staged stock. Never throws on a read; the one throw is a
+   * `validation_error` for bad `itemIds` (below), which the page and the route
+   * check before calling.
    * Belt-and-suspenders: .eq('organization_id', …) on every query on top of RLS.
+   *
+   * `itemIds` (F2-3, put away from an order): only these items' Staging and
+   * Unplaced holdings. At most 200 (STAGING_FILTER_MAX_ITEMS, the readiness
+   * line cap), each a uuid, else `validation_error`: never a silently shorter
+   * list, and never a 22P02 that would fail the whole read. Filtered IN THE
+   * QUERY (pattern #5), in batches of 100 ids (pattern #29: an unbounded
+   * `.in()` overflows the URL), each batch paged past the 1000-row cap. The
+   * org filter and the deleted-item filter stay. When `itemIds` is set,
+   * `warehouseId` (the web's active-warehouse cookie, the phone's switcher) is
+   * IGNORED: the ids already narrow the list, and the order that named them may
+   * belong to another warehouse than the one the viewer has selected. An empty
+   * list is "these items: none", so it answers [] without a request.
    */
   async stagedWorklist(
-    opts: { itemType?: 'book' | 'non-book'; warehouseId?: string | null } = {},
+    opts: {
+      itemType?: 'book' | 'non-book';
+      warehouseId?: string | null;
+      itemIds?: readonly string[];
+    } = {},
   ): Promise<Array<{
     itemId: string; name: string; sku: string; itemType: string; warehouseId: string | null;
     sourceLocationId: string; sourceKind: 'staging' | 'unplaced'; quantity: number;
@@ -8454,24 +8503,37 @@ export class InventoryService {
     // The query is BUILT PER PAGE rather than re-filtered: a supabase-js builder
     // is mutable, so calling `.order()` on one shared instance in a loop appends
     // `order=id,id,…` to the URL a page at a time.
-    const buildLevelsPage = (from: number, to: number) => {
+    //
+    // With `itemIds` the item filter is one more condition on the SAME query,
+    // per batch of ids; the warehouse filter is dropped (see the doc above).
+    const filterIds = opts.itemIds === undefined ? null : stagingItemIdsOrThrow(opts.itemIds);
+    if (filterIds !== null && filterIds.length === 0) return [];
+    const warehouseId = filterIds === null ? (opts.warehouseId ?? null) : null;
+    const levelsQuery = () => {
       let q = this.ctx.supabase
         .from('item_stock_levels')
         .select('item_id, location_id, quantity, locations!inner(id, kind, warehouse_id), inventory_items!inner(id, name, sku, item_type, deleted_at, custom_fields, barcode, model_number)')
         .eq('organization_id', this.ctx.organizationId)
         .in('locations.kind', ['staging', 'unplaced'])
         .gt('quantity', 0);
-      if (opts.warehouseId) q = q.eq('locations.warehouse_id', opts.warehouseId);
+      if (warehouseId) q = q.eq('locations.warehouse_id', warehouseId);
       if (opts.itemType === 'book') q = q.eq('inventory_items.item_type', 'book');
       if (opts.itemType === 'non-book') q = q.neq('inventory_items.item_type', 'book');
       // Exclude soft-deleted items at the DB (works with the inventory_items!inner
       // embed) so they're never fetched over the wire.
       q = q.is('inventory_items.deleted_at', null);
-      return q.order('id').range(from, to);
+      return q;
     };
     let levels: Array<Record<string, any>>;
     try {
-      levels = await fetchAllRows<Record<string, any>>(buildLevelsPage);
+      levels =
+        filterIds === null
+          ? await fetchAllRows<Record<string, any>>((from, to) =>
+              levelsQuery().order('id').range(from, to),
+            )
+          : await fetchAllRowsByIds<Record<string, any>>(filterIds, (batch) => (from, to) =>
+              levelsQuery().in('item_id', batch).order('id').range(from, to),
+            );
     } catch (e) {
       // Unchanged contract: this method NEVER throws — the screen degrades to
       // "nothing staged" rather than crashing. Logged so it is diagnosable.
