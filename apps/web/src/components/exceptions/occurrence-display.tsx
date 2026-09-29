@@ -44,6 +44,7 @@ export function stateOf(o: ExceptionOccurrence, syncState: ExceptionSyncState | 
     {
       resolvedAt: o.resolvedAt,
       resolvedReason: o.resolvedReason,
+      confirmedAs: o.confirmation?.as ?? null,
       acknowledgedAt: o.acknowledgedAt,
       acknowledgedBy: o.acknowledgedBy?.id ?? null,
       recount: o.recount,

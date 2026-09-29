@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { actOnExceptionAction } from '@/server/actions/exceptions';
 
-import { EXCEPTION_ACKNOWLEDGE_HELP } from '@stockpilot/core';
+import { EXCEPTION_ACKNOWLEDGE_HELP, type ExceptionRule } from '@stockpilot/core';
 
 const NOTE_MAX = 1000;
 
@@ -35,14 +35,26 @@ function newClientEventId(): string {
  * answer the id is dropped so the next press is a fresh request.
  *
  * Failures show inline with role="alert" (recurring pattern #20).
+ *
+ * A count difference (count_variance) has its own help, core
+ * countVarianceAcknowledgeHelp, which the page words: the counted numbers,
+ * that acknowledging does not clear it, and what does. There Acknowledge is an
+ * outline button, so it does not read as the way to close the exception
+ * (EX-000059 was acknowledged in the belief that it would close).
  */
 export function OccurrenceActions({
   occurrenceId,
   acknowledged,
+  rule,
+  ackHelp,
 }: {
   occurrenceId: string;
   acknowledged: boolean;
+  rule?: ExceptionRule;
+  /** The rule's own Acknowledge help (count_variance); the shared help otherwise. */
+  ackHelp?: string | null;
 }) {
+  const acknowledgeVariant = rule === 'count_variance' ? 'outline' : 'default';
   const router = useRouter();
   const [note, setNote] = React.useState('');
   const [error, setError] = React.useState<string | null>(null);
@@ -89,7 +101,7 @@ export function OccurrenceActions({
   return (
     <section aria-label="Acknowledge or add a note" className="space-y-3">
       {!acknowledged ? (
-        <p className="text-muted-foreground text-sm">{EXCEPTION_ACKNOWLEDGE_HELP}</p>
+        <p className="text-muted-foreground text-sm">{ackHelp ?? EXCEPTION_ACKNOWLEDGE_HELP}</p>
       ) : null}
       <div className="space-y-1">
         <label htmlFor="exception-note" className="text-sm font-medium">
@@ -120,6 +132,8 @@ export function OccurrenceActions({
           <Button
             type="button"
             size="sm"
+            variant={acknowledgeVariant}
+            data-variant={acknowledgeVariant}
             onClick={() => void submit('acknowledge')}
             disabled={pending !== null || tooLong}
           >

@@ -104,15 +104,30 @@ export function RecountButton({
   occurrenceId,
   reference,
   timeZone,
+  variant = 'outline',
+  size = 'sm',
+  className,
 }: {
   occurrenceId: string;
   reference: string | null;
   timeZone: string;
+  /** Filled where it is the one action that closes the exception (a count
+   *  difference's "What clears this" card with no Confirm offered). */
+  variant?: 'default' | 'outline';
+  size?: 'sm' | 'default';
+  className?: string;
 }) {
   const [open, setOpen] = React.useState(false);
   return (
     <>
-      <Button variant="outline" size="sm" onClick={() => setOpen(true)} data-testid="recount-button">
+      <Button
+        variant={variant}
+        size={size}
+        className={className}
+        onClick={() => setOpen(true)}
+        data-testid="recount-button"
+        data-variant={variant}
+      >
         Recount
       </Button>
       <RecountDialog
