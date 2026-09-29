@@ -40,7 +40,11 @@ import {
 
 import { bookReportPageHref, withBookReportFilter } from './hrefs';
 import { bookReportOptionsKey, cachedBookReportOptions, loadBookReportOptions } from './options';
-import { BookReportLink, useBookReportNavigation } from './report-navigation';
+import {
+  BookReportLink,
+  useBookReportNavigation,
+  useCurrentBookReportQuery,
+} from './report-navigation';
 
 /** Typing settles for this long before the report is asked for again. */
 export const BOOK_REPORT_SEARCH_DEBOUNCE_MS = 300;
@@ -79,8 +83,12 @@ export interface BookReportFilterBarProps {
  * vocabularies and always work.
  */
 export function BookReportFilterBar(props: BookReportFilterBarProps) {
-  const { query, organizationId, userId } = props;
-  const { navigate } = useBookReportNavigation();
+  const { organizationId, userId } = props;
+  const { go: goTo } = useBookReportNavigation();
+  // The query last asked for while its answer loads (else the server's):
+  // every control shows it and builds from it, so a second change made
+  // before the first answer lands keeps the first.
+  const query = useCurrentBookReportQuery(props.query);
   const key = bookReportOptionsKey(organizationId, userId);
   const [lists, setLists] = React.useState<{
     key: string;
@@ -104,7 +112,7 @@ export function BookReportFilterBar(props: BookReportFilterBarProps) {
   const failed = lists.key === key && lists.failed && !options;
   const listsId = React.useId();
 
-  const go = (next: BookReportQuery) => navigate(bookReportPageHref(next));
+  const go = (next: BookReportQuery) => goTo(next);
 
   return (
     <section aria-label={BOOK_REPORT_UI.filters} className="space-y-3">
@@ -188,6 +196,7 @@ function ViewChangedNotice({
         href={bookReportPageHref(
           withBookReportFilter(query, { warehouse: 'default', warehouseFromView: false }),
         )}
+        query={withBookReportFilter(query, { warehouse: 'default', warehouseFromView: false })}
       >
         {bookReportShowViewLabel(now)}
       </BookReportLink>
@@ -582,7 +591,7 @@ function SortControl({
  * link, another filter).
  */
 function SearchControl({ query }: { query: BookReportQuery }) {
-  const { navigate, pending } = useBookReportNavigation();
+  const { go, pending } = useBookReportNavigation();
   const [q, setQ] = React.useState(query.q);
   const applied = React.useRef(query.q.trim());
   const inputRef = React.useRef<HTMLInputElement>(null);
@@ -600,9 +609,9 @@ function SearchControl({ query }: { query: BookReportQuery }) {
       const next = value.trim().slice(0, BOOK_REPORT_SEARCH_MAX);
       if (next === applied.current) return;
       applied.current = next;
-      navigate(bookReportPageHref(withBookReportFilter(query, { q: next })), { replace: true });
+      go(withBookReportFilter(query, { q: next }), { replace: true });
     },
-    [navigate, query],
+    [go, query],
   );
 
   React.useEffect(() => {

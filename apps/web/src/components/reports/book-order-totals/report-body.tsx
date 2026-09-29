@@ -64,12 +64,12 @@ import {
 import { BookCover, type BookCoverSource } from './book-cover';
 import { BookReportExportMenu } from './export-menu';
 import { BookReportFilterBar } from './filter-bar';
-import { BOOK_REPORT_PATH, bookReportPageHref, withBookReportPage } from './hrefs';
+import { BOOK_REPORT_PATH } from './hrefs';
 import { BookOrdersDrawer, ViewOrdersButton } from './orders-drawer';
 import {
   BookReportBusyRegion,
-  BookReportLink,
   BookReportNavigationProvider,
+  BookReportPagerLink,
   BookReportRefreshButton,
 } from './report-navigation';
 
@@ -210,7 +210,7 @@ export async function BookOrderTotalsBody(props: BookOrderTotalsBodyProps) {
       : null;
 
   return (
-    <BookReportNavigationProvider>
+    <BookReportNavigationProvider query={rq}>
       <div className="space-y-6">
         <FiltersResetNote shown={filtersReset} />
 
@@ -269,17 +269,17 @@ export async function BookOrderTotalsBody(props: BookOrderTotalsBodyProps) {
               )}
             </p>
             <div className="flex gap-2">
-              <PagerLink query={rq} page={answer.page - 1} enabled={answer.page > 1} rel="prev">
+              <BookReportPagerLink query={rq} step={-1} enabled={answer.page > 1} rel="prev">
                 {BOOK_REPORT_UI.previous}
-              </PagerLink>
-              <PagerLink
+              </BookReportPagerLink>
+              <BookReportPagerLink
                 query={rq}
-                page={answer.page + 1}
+                step={1}
                 enabled={answer.page < totalPages}
                 rel="next"
               >
                 {BOOK_REPORT_UI.next}
-              </PagerLink>
+              </BookReportPagerLink>
             </div>
           </nav>
           <div className="space-y-1">
@@ -313,35 +313,6 @@ function FiltersResetNote({ shown }: { shown: boolean }) {
 
 function sameGroups(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((g, i) => g === b[i]);
-}
-
-function PagerLink({
-  query,
-  page,
-  enabled,
-  rel,
-  children,
-}: {
-  query: BookReportQuery;
-  page: number;
-  enabled: boolean;
-  rel: 'prev' | 'next';
-  children: React.ReactNode;
-}) {
-  if (!enabled) {
-    return (
-      <Button variant="outline" size="sm" disabled>
-        {children}
-      </Button>
-    );
-  }
-  return (
-    <Button asChild variant="outline" size="sm">
-      <BookReportLink href={bookReportPageHref(withBookReportPage(query, page))} rel={rel} scroll>
-        {children}
-      </BookReportLink>
-    </Button>
-  );
 }
 
 function UnresolvedNote({ answer }: { answer: BookOrderTotalsResponse }) {

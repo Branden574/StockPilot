@@ -23,7 +23,7 @@ import {
 import { ORG, USER, W1, W2, optionsResponse } from './__fixtures__/answers';
 import { BookReportFilterBar } from './filter-bar';
 import { __resetBookReportOptionsForTests } from './options';
-import { BookReportNavigationProvider } from './report-navigation';
+import { BookReportNavigationProvider, BookReportPagerLink } from './report-navigation';
 
 const fetchMock = vi.fn();
 const Q: BookReportQuery = {
@@ -35,7 +35,7 @@ const Q: BookReportQuery = {
 
 function bar(query: BookReportQuery = Q) {
   return (
-    <BookReportNavigationProvider>
+    <BookReportNavigationProvider query={query}>
       <BookReportFilterBar
         query={query}
         organizationId={ORG}
@@ -170,5 +170,76 @@ describe('Book Order Totals filter bar', () => {
     render(bar());
     await userEvent.selectOptions(screen.getByLabelText('Orders placed'), '30d');
     expect(nav.push.mock.calls[0]![0]).toContain('range=30d');
+  });
+});
+
+describe('changes made while an answer is still loading', () => {
+  // The router is mocked, so a pushed URL never lands: exactly the window in
+  // which a person makes a second change before the first answer arrives.
+  function page(query: BookReportQuery = Q) {
+    return (
+      <BookReportNavigationProvider query={query}>
+        <BookReportFilterBar
+          query={query}
+          organizationId={ORG}
+          userId={USER}
+          statusLabels={bookReportStatusLabels(null)}
+          warehouseEcho={{ id: W1, name: 'North', status: 'active' }}
+          categoryEcho={null}
+          viewNow={null}
+        />
+        <BookReportPagerLink query={query} step={1} enabled rel="next">
+          Next
+        </BookReportPagerLink>
+      </BookReportNavigationProvider>
+    );
+  }
+
+  it('a settled search, then Sort before the answer lands: the pushed URL keeps the search', async () => {
+    render(page());
+    await userEvent.type(screen.getByRole('searchbox', { name: 'Search books' }), 'odyssey');
+    await waitFor(() => expect(nav.replace).toHaveBeenCalled());
+    expect(nav.replace.mock.calls.at(-1)![0]).toContain('q=odyssey');
+    await userEvent.selectOptions(screen.getByLabelText('Sort'), 'title');
+    const href = nav.push.mock.calls.at(-1)![0] as string;
+    expect(href).toContain('q=odyssey');
+    expect(href).toContain('sort=title');
+    // The box was not cleared by the second change.
+    expect(screen.getByRole('searchbox', { name: 'Search books' })).toHaveValue('odyssey');
+  });
+
+  it('a chosen warehouse, then a status Apply: both are in the URL, and the select shows the choice while it loads', async () => {
+    render(page());
+    const select = screen.getByLabelText('Warehouse');
+    await waitFor(() => expect(select).toBeEnabled());
+    await userEvent.selectOptions(select, W2);
+    expect(select).toHaveValue(W2);
+    await userEvent.click(screen.getByRole('button', { name: /Status/ }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('checkbox', { name: 'Denied' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    const href = nav.push.mock.calls.at(-1)![0] as string;
+    expect(href).toContain(`warehouse=${W2}`);
+    expect(href).toContain('denied');
+  });
+
+  it('Next during a pending search pages the searched report, never the old one', async () => {
+    render(page({ ...Q, page: 1 }));
+    await userEvent.type(screen.getByRole('searchbox', { name: 'Search books' }), 'odyssey');
+    await waitFor(() => expect(nav.replace).toHaveBeenCalled());
+    await userEvent.click(screen.getByRole('link', { name: 'Next' }));
+    const href = nav.push.mock.calls.at(-1)![0] as string;
+    expect(href).toContain('q=odyssey');
+    expect(href).toContain('page=2');
+  });
+
+  it('once an answer lands (a new query from the server, or Back), the page shows it', async () => {
+    const { rerender } = render(page());
+    const select = screen.getByLabelText('Sort');
+    await userEvent.selectOptions(select, 'title');
+    expect(select).toHaveValue('title');
+    // Back to an earlier state: the server renders a different query.
+    rerender(page({ ...Q, sort: 'orders' }));
+    expect(screen.getByLabelText('Sort')).toHaveValue('orders');
   });
 });
