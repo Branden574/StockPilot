@@ -790,6 +790,15 @@ describe('a pending choice a select cannot name yet (Clear filters, a chip, a by
     expect(optionTexts('Warehouse')).not.toContain('North');
   });
 
+  it('another warehouse asked for while the lists load reads "Loading…", never the name of the one on screen', async () => {
+    fetchMock.mockImplementation(() => new Promise<Response>(() => undefined));
+    render(page(Q, bookReportWithFilter(Q, { warehouse: W3, warehouseFromView: false })));
+    expect(shown('Warehouse')).toBe('North');
+    await userEvent.click(screen.getByRole('button', { name: 'Go' }));
+    expect(shown('Warehouse')).toBe(BOOK_REPORT_UI.choiceLoading);
+    expect(optionTexts('Warehouse').join(' ')).not.toContain(W3);
+  });
+
   it('a charter chosen elsewhere while the lists load reads "Loading…", never its id', async () => {
     fetchMock.mockImplementation(() => new Promise<Response>(() => undefined));
     render(page(Q, bookReportWithFilter(Q, { charter: CH_B })));
