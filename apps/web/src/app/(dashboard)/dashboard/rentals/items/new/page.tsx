@@ -157,6 +157,10 @@ export default async function NewRentalItemPage() {
             // The sports columns too. Without them this form could not know a
             // category is Jerseys, showed no sports fields, and the server's
             // "Size is required" arrived as a toast with nothing to fill in.
+            // With `isRentalFixed` the form shows only the item's own variant
+            // fields (size, size system, number...): no product group, no size
+            // chips and no mode override, so a rental create stays the single
+            // create that carries isRental (see ItemForm's `sportsGrouping`).
             categories={categories.map((c) => ({
               id: c.id as string,
               name: c.name as string,
@@ -171,9 +175,6 @@ export default async function NewRentalItemPage() {
             sizeScales={sizeScales}
             sizeScaleSystems={sizeScaleSystems}
             sportsEnabled={sportsEnabled}
-            // Gates the tracking-mode override control only; the server
-            // re-checks `sports:manage` on every save.
-            canManageSports={can(ctx, 'sports:manage')}
             locations={locations.map((l) => ({ id: l.id as string, name: l.name as string }))}
             suppliers={suppliers.map((s) => ({ id: s.id as string, name: s.name as string }))}
             tags={tags.map((t) => ({ id: t.id, name: t.name, color: t.color }))}

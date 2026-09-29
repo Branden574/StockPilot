@@ -21,11 +21,14 @@ import {
 import {
   GROUP_KEY_COLOR_SUBCATEGORIES,
   SIZE_SYSTEM_LABELS,
+  asSizeSystem,
+  attributeInputRequired,
   isAttributeRequired,
   sizeSystemEnum,
 } from '@stockpilot/core';
 import type {
   CreateItemInput,
+  RequiredAttributeField,
   SizeSystem,
   SportsAttribute,
   SubcategoryTrackingProfile,
@@ -82,6 +85,29 @@ const SIZE_SYSTEM_OPTIONS = sizeSystemEnum.options.map((value) => ({
   label: SIZE_SYSTEM_LABELS[value],
 }));
 
+/**
+ * Whether the panel renders the input a required attribute is typed into.
+ * Shared with item-form.tsx, whose submit says in a toast what is missing
+ * when a required box is NOT on screen (a hand-made custom profile), instead
+ * of Create silently doing nothing.
+ *
+ * The jersey number box is gated on `supportsNumbers` as before, but a profile
+ * that REQUIRES a number always gets the box: the server refuses the create
+ * without one either way.
+ */
+export function sportsFieldShown(
+  profile: SubcategoryTrackingProfile,
+  field: RequiredAttributeField,
+): boolean {
+  const has = (attr: SportsAttribute) => profile.supportedAttributes.includes(attr);
+  if (field === 'variantSize') return has('size');
+  if (field === 'variantSizeSystem') return has('size_system');
+  return (
+    has('jersey_number') &&
+    (profile.supportsNumbers || isAttributeRequired(profile, 'jersey_number'))
+  );
+}
+
 export interface SportsFieldsProps {
   profile: SubcategoryTrackingProfile;
   register: UseFormRegister<CreateItemInput>;
@@ -103,13 +129,29 @@ export interface SportsFieldsProps {
   sizeRunAvailable?: boolean;
   /** Sizes are picked in the chips above, so the single Size box is not used. */
   sizeRunPicked?: boolean;
+  /**
+   * The system of the category's size scale (its own, else its parent's). The
+   * server fills an omitted size system from it, so "Size system" is required
+   * only when it is empty; when set, the panel says which system is used.
+   */
+  scaleSizeSystem?: string | null;
+  /** False when the page could not read the scale's system: the server decides. */
+  scaleSystemKnown?: boolean;
+  /**
+   * The product-group identity inputs (brand, model, team, season...). Off on
+   * the rentals New Item page, which never sends a product group: a rental
+   * item joining a retail group is an owner decision, not this form's.
+   */
+  groupFieldsShown?: boolean;
 }
 
 /**
- * A field label that says "(optional)" only when the subcategory does not
- * require the attribute. The requirement is read from the resolved profile —
- * the same `requiredAttributes` the server enforces — so a label can never
- * call a field optional that Save then refuses without (2026-09-29).
+ * A field label that says "(optional)" unless the person must fill the field.
+ * `required` comes from core `attributeInputRequired`: the same inputs the
+ * save check and the server use, so a label can never call a field optional
+ * that Save then refuses without (2026-09-29), nor call one required that the
+ * save goes through without (brand or team on a custom profile, or a size
+ * system the size scale supplies).
  */
 function FieldLabel({
   htmlFor,
@@ -163,15 +205,28 @@ export function SportsFields({
   sizeExample = 'M',
   sizeRunAvailable = false,
   sizeRunPicked = false,
+  scaleSizeSystem = null,
+  scaleSystemKnown = true,
+  groupFieldsShown = true,
 }: SportsFieldsProps) {
+  // A group-identity input is shown only where a product group is sent.
   const has = React.useCallback(
     (attr: SportsAttribute) => profile.supportedAttributes.includes(attr),
     [profile],
   );
+  const hasGroup = (attr: SportsAttribute) => groupFieldsShown && has(attr);
   const required = React.useCallback(
-    (attr: SportsAttribute) => isAttributeRequired(profile, attr),
-    [profile],
+    (attr: SportsAttribute) =>
+      attributeInputRequired(profile, attr, { scaleSizeSystem, scaleSystemKnown }),
+    [profile, scaleSizeSystem, scaleSystemKnown],
   );
+  const scaleSystemName =
+    scaleSystemKnown && scaleSizeSystem?.trim()
+      ? (() => {
+          const known = asSizeSystem(scaleSizeSystem);
+          return known ? SIZE_SYSTEM_LABELS[known] : scaleSizeSystem.trim();
+        })()
+      : null;
   const colorIsGroupLevel = GROUP_LEVEL_COLOR_SUBCATEGORIES.has(profile.key);
   const uid = React.useId();
   const idFor = (name: string) => `${uid}-${name}`;
@@ -183,7 +238,7 @@ export function SportsFields({
     >
       <p className="text-xs font-medium text-muted-foreground">{profile.label} details</p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {has('brand') && (
+        {hasGroup('brand') && (
           <div className="space-y-1.5">
             <FieldLabel htmlFor={idFor('brand')} required={required('brand')}>
               Brand
@@ -196,7 +251,7 @@ export function SportsFields({
             />
           </div>
         )}
-        {has('model') && (
+        {hasGroup('model') && (
           <div className="space-y-1.5">
             <FieldLabel htmlFor={idFor('model')} required={required('model')}>
               Model
@@ -209,7 +264,7 @@ export function SportsFields({
             />
           </div>
         )}
-        {has('style_number') && (
+        {hasGroup('style_number') && (
           <div className="space-y-1.5">
             <FieldLabel htmlFor={idFor('style-number')} required={required('style_number')}>
               Style number
@@ -222,7 +277,7 @@ export function SportsFields({
             />
           </div>
         )}
-        {has('colorway') && (
+        {hasGroup('colorway') && (
           <div className="space-y-1.5">
             <FieldLabel htmlFor={idFor('colorway')} required={required('colorway')}>
               Colorway
@@ -235,7 +290,7 @@ export function SportsFields({
             />
           </div>
         )}
-        {has('team') && (
+        {hasGroup('team') && (
           <div className="space-y-1.5">
             <FieldLabel htmlFor={idFor('team')} required={required('team')}>
               Team
@@ -248,7 +303,7 @@ export function SportsFields({
             />
           </div>
         )}
-        {has('league') && (
+        {hasGroup('league') && (
           <div className="space-y-1.5">
             <FieldLabel htmlFor={idFor('league')} required={required('league')}>
               League
@@ -261,7 +316,7 @@ export function SportsFields({
             />
           </div>
         )}
-        {has('season') && (
+        {hasGroup('season') && (
           <div className="space-y-1.5">
             <FieldLabel htmlFor={idFor('season')} required={required('season')}>
               Season
@@ -274,7 +329,7 @@ export function SportsFields({
             />
           </div>
         )}
-        {has('home_away') && (
+        {hasGroup('home_away') && (
           <div className="space-y-1.5">
             <FieldLabel htmlFor={idFor('home-away')} required={required('home_away')}>
               Home / away
@@ -302,17 +357,19 @@ export function SportsFields({
         )}
         {has('color') &&
           (colorIsGroupLevel ? (
-            <div className="space-y-1.5">
-              <FieldLabel htmlFor={idFor('color')} required={required('color')}>
-                Color
-              </FieldLabel>
-              <Input
-                id={idFor('color')}
-                placeholder="Navy"
-                value={groupFields.color}
-                onChange={(e) => onGroupFieldChange('color', e.target.value)}
-              />
-            </div>
+            groupFieldsShown && (
+              <div className="space-y-1.5">
+                <FieldLabel htmlFor={idFor('color')} required={required('color')}>
+                  Color
+                </FieldLabel>
+                <Input
+                  id={idFor('color')}
+                  placeholder="Navy"
+                  value={groupFields.color}
+                  onChange={(e) => onGroupFieldChange('color', e.target.value)}
+                />
+              </div>
+            )
           ) : (
             <div className="space-y-1.5">
               <FieldLabel htmlFor={idFor('color')} required={required('color')}>
@@ -321,7 +378,7 @@ export function SportsFields({
               <Input id={idFor('color')} placeholder="Navy" {...register('variantColor')} />
             </div>
           ))}
-        {has('size') && (
+        {sportsFieldShown(profile, 'variantSize') && (
           <div className="space-y-1.5">
             <FieldLabel htmlFor={idFor('size')} required={required('size')}>
               Size
@@ -353,7 +410,7 @@ export function SportsFields({
             <FieldError id={idFor('size-error')} message={errors.variantSize?.message} />
           </div>
         )}
-        {has('size_system') && (
+        {sportsFieldShown(profile, 'variantSizeSystem') && (
           <div className="space-y-1.5">
             <FieldLabel htmlFor={idFor('size-system')} required={required('size_system')}>
               Size system
@@ -372,7 +429,14 @@ export function SportsFields({
               <SelectTrigger
                 id={idFor('size-system')}
                 aria-invalid={errors.variantSizeSystem ? true : undefined}
-                aria-describedby={errors.variantSizeSystem ? idFor('size-system-error') : undefined}
+                aria-describedby={
+                  [
+                    errors.variantSizeSystem ? idFor('size-system-error') : null,
+                    scaleSystemName ? idFor('size-system-note') : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' ') || undefined
+                }
               >
                 <SelectValue placeholder="—" />
               </SelectTrigger>
@@ -385,6 +449,13 @@ export function SportsFields({
                 ))}
               </SelectContent>
             </Select>
+            {scaleSystemName && (
+              // Why the field is optional here: the server stores the scale's
+              // system when none is picked.
+              <p id={idFor('size-system-note')} className="text-muted-foreground text-[11px]">
+                {`Left empty, this category's size scale sets it: ${scaleSystemName}.`}
+              </p>
+            )}
             <FieldError
               id={idFor('size-system-error')}
               message={errors.variantSizeSystem?.message}
@@ -407,7 +478,7 @@ export function SportsFields({
             <Input id={idFor('fit')} placeholder="Regular" {...register('variantFit')} />
           </div>
         )}
-        {has('jersey_number') && profile.supportsNumbers && (
+        {sportsFieldShown(profile, 'jerseyNumber') && (
           <div className="space-y-1.5">
             {/*
               NEVER labeled "Serial Number" (requirement 4): a jersey number

@@ -80,12 +80,16 @@ function renderForm(opts: {
   defaults?: ItemFormDefaults;
   sizeScaleSystems?: Record<string, string | null>;
   sportsEnabled?: boolean;
+  isRentalFixed?: boolean;
+  canManageSports?: boolean;
 }) {
   return render(
     <ItemForm
       defaults={{ name: 'Wildcats home', warehouseId: WAREHOUSE_ID, ...opts.defaults }}
       categories={opts.categories}
       sportsEnabled={opts.sportsEnabled ?? true}
+      isRentalFixed={opts.isRentalFixed}
+      canManageSports={opts.canManageSports}
       sizeScales={SIZE_SCALES}
       sizeScaleSystems={opts.sizeScaleSystems ?? { [APPAREL_SCALE]: null, [SHOE_SCALE]: 'US_MENS' }}
       locations={[]}
@@ -123,17 +127,55 @@ describe('ItemForm — required sports attributes are labelled from the resolved
       'Sizes',
     );
     expect(
-      screen.getByText('Pick sizes to add one item per size, or enter one size in Jerseys details below.'),
+      screen.getByText(
+        'Pick sizes to add one item per size, or enter one size in Jerseys details below.',
+      ),
     ).toBeInTheDocument();
   });
 
-  it('labels both Shoes attributes as required', () => {
-    renderForm({ categories: [SHOES], defaults: { categoryId: SHOES_ID } });
-    const panel = screen.getByTestId('sports-fields');
+  it('labels a Shoes size system as required only when the size scale sets none', () => {
+    const { unmount } = renderForm({
+      categories: [SHOES],
+      defaults: { categoryId: SHOES_ID },
+      sizeScaleSystems: { [SHOE_SCALE]: null },
+    });
+    let panel = screen.getByTestId('sports-fields');
     expect(within(panel).getByLabelText('Size')).toBeInTheDocument();
     expect(within(panel).getByText('Size system', { selector: 'label' }).textContent).toBe(
       'Size system',
     );
+    unmount();
+
+    // Review 2026-09-29: both production Shoes categories sit on a US Men's
+    // scale, the save goes through without a pick (the scale fills it), so the
+    // label must not say the field is required.
+    renderForm({ categories: [SHOES], defaults: { categoryId: SHOES_ID } });
+    panel = screen.getByTestId('sports-fields');
+    expect(within(panel).getByLabelText('Size')).toBeInTheDocument();
+    expect(within(panel).getByText(/^Size system/, { selector: 'label' }).textContent).toBe(
+      'Size system(optional)',
+    );
+    expect(
+      within(panel).getByText("Left empty, this category's size scale sets it: US Men's."),
+    ).toBeInTheDocument();
+  });
+
+  it('keeps "(optional)" on attributes the server never enforces, even when a profile lists them', () => {
+    const custom: Category = {
+      id: CUSTOM_ID,
+      name: 'Warm-ups',
+      sports_subcategory_key: 'custom_warmups',
+      tracking_profile: {
+        ...DEFAULT_SUBCATEGORY_PROFILES.jerseys,
+        key: 'custom_warmups',
+        label: 'Warm-ups',
+        requiredAttributes: ['team', 'season'],
+      },
+    };
+    renderForm({ categories: [custom], defaults: { categoryId: CUSTOM_ID } });
+    const panel = screen.getByTestId('sports-fields');
+    expect(within(panel).getByLabelText(/^Team\s*\(optional\)$/)).toBeInTheDocument();
+    expect(within(panel).getByLabelText(/^Season\s*\(optional\)$/)).toBeInTheDocument();
   });
 
   it("fits the placeholder to the category's scale: a letter for Jerseys, 10.5 only for shoes", () => {
@@ -168,9 +210,8 @@ describe('ItemForm — required sports attributes are labelled from the resolved
 
 describe('ItemForm — a missing required attribute is caught inline, before any request', () => {
   it('refuses a Jersey with no size under the Size field, and sends nothing (the reported case)', async () => {
-    const { createItemAction, bulkCreateSizedVariantsAction } = await import(
-      '@/server/actions/inventory'
-    );
+    const { createItemAction, bulkCreateSizedVariantsAction } =
+      await import('@/server/actions/inventory');
     const { toast } = await import('sonner');
     renderForm({ categories: [JERSEYS], defaults: { categoryId: JERSEYS_ID } });
 
@@ -203,9 +244,8 @@ describe('ItemForm — a missing required attribute is caught inline, before any
   });
 
   it('accepts picked sizes instead of a typed one: one item per size', async () => {
-    const { bulkCreateSizedVariantsAction, createItemAction } = await import(
-      '@/server/actions/inventory'
-    );
+    const { bulkCreateSizedVariantsAction, createItemAction } =
+      await import('@/server/actions/inventory');
     vi.mocked(bulkCreateSizedVariantsAction).mockResolvedValue({
       ok: true,
       data: { created: 2, ids: ['a', 'b'] },
@@ -252,7 +292,7 @@ describe('ItemForm — a missing required attribute is caught inline, before any
     expect(createItemAction).not.toHaveBeenCalled();
   });
 
-  it("never asks for a size system the page could not tell about (the server reads the scale itself)", async () => {
+  it('never asks for a size system the page could not tell about (the server reads the scale itself)', async () => {
     const { createItemAction } = await import('@/server/actions/inventory');
     vi.mocked(createItemAction).mockResolvedValue({ ok: true, data: { id: 'item-1' } } as never);
     renderForm({
@@ -285,7 +325,8 @@ describe('ItemForm — a missing required attribute is caught inline, before any
 describe('ItemForm — a server refusal lands under the field it names', () => {
   it('shows the server sentence under Size when details.field says so', async () => {
     const { createItemAction } = await import('@/server/actions/inventory');
-    const message = 'Size is required for Jerseys: enter a size, or pick sizes to add one item per size.';
+    const message =
+      'Size is required for Jerseys: enter a size, or pick sizes to add one item per size.';
     vi.mocked(createItemAction).mockResolvedValue({
       ok: false,
       error: {
@@ -305,5 +346,139 @@ describe('ItemForm — a server refusal lands under the field it names', () => {
     const panel = screen.getByTestId('sports-fields');
     expect(await within(panel).findByText(message)).toBeInTheDocument();
     expect(within(panel).getByLabelText('Size')).toHaveAttribute('aria-invalid', 'true');
+  });
+});
+
+// Review 2026-09-29: a required field the panel did not render (a custom
+// profile requiring a jersey number with supportsNumbers off) blocked Create
+// with no message at all.
+describe('ItemForm — a required attribute always has a box, or a message', () => {
+  it('shows the Jersey number box when a profile requires it, even with numbers off', async () => {
+    const { createItemAction } = await import('@/server/actions/inventory');
+    const custom: Category = {
+      id: CUSTOM_ID,
+      name: 'Singlets',
+      sports_subcategory_key: 'custom_singlets',
+      tracking_profile: {
+        ...DEFAULT_SUBCATEGORY_PROFILES.jerseys,
+        key: 'custom_singlets',
+        label: 'Singlets',
+        requiredAttributes: ['jersey_number'],
+        supportsNumbers: false,
+      },
+    };
+    renderForm({ categories: [custom], defaults: { categoryId: CUSTOM_ID } });
+    const panel = screen.getByTestId('sports-fields');
+    expect(within(panel).getByLabelText('Jersey number')).toBeInTheDocument();
+
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole('button', { name: /create item/i }));
+    expect(
+      await within(panel).findByText('Enter a jersey number, 1 to 4 digits.'),
+    ).toBeInTheDocument();
+    expect(createItemAction).not.toHaveBeenCalled();
+  });
+
+  it('says why Create did nothing when the required box is not on the screen', async () => {
+    const { createItemAction } = await import('@/server/actions/inventory');
+    const { toast } = await import('sonner');
+    // Not a profile the category editor would save (required must be
+    // supported), but the form must still never fail silently.
+    const custom: Category = {
+      id: CUSTOM_ID,
+      name: 'Pads',
+      sports_subcategory_key: 'custom_pads',
+      tracking_profile: {
+        ...DEFAULT_SUBCATEGORY_PROFILES.protective_equipment,
+        key: 'custom_pads',
+        label: 'Pads',
+        supportedAttributes: ['brand'],
+        requiredAttributes: ['size'],
+      },
+    };
+    renderForm({ categories: [custom], defaults: { categoryId: CUSTOM_ID } });
+    expect(screen.queryByLabelText(/^Size/)).not.toBeInTheDocument();
+
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole('button', { name: /create item/i }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Size is required for Pads: enter a size.'),
+    );
+    expect(createItemAction).not.toHaveBeenCalled();
+  });
+});
+
+// Review 2026-09-29: the rentals New Item page now shows the sports panel so
+// a Jersey's size can be given, but it must not put a rental item into a
+// retail product group (the PO matcher could then receive into it), and its
+// size chips created ORDINARY items (the sized path carries no rental flag).
+describe('ItemForm — rentals take the single rental create, never a group or a size run', () => {
+  it('shows the required Size, but no size chips, no group fields, no preview and no mode override', () => {
+    renderForm({
+      categories: [JERSEYS],
+      defaults: { categoryId: JERSEYS_ID },
+      isRentalFixed: true,
+      canManageSports: true,
+    });
+    const panel = screen.getByTestId('sports-fields');
+    expect(within(panel).getByLabelText('Size')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'M' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Pick sizes to add one item per size/)).not.toBeInTheDocument();
+    expect(
+      within(panel).queryByText('Or pick sizes above to add one item per size.'),
+    ).not.toBeInTheDocument();
+    expect(within(panel).queryByLabelText(/^Team/)).not.toBeInTheDocument();
+    expect(screen.queryByText('This will be saved as')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Tracking mode')).not.toBeInTheDocument();
+  });
+
+  it('asks for the size without offering chips, and sends nothing', async () => {
+    const { createItemAction } = await import('@/server/actions/inventory');
+    renderForm({
+      categories: [JERSEYS],
+      defaults: { categoryId: JERSEYS_ID },
+      isRentalFixed: true,
+    });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole('button', { name: /create item/i }));
+    expect(await screen.findByText('Enter a size.')).toBeInTheDocument();
+    expect(createItemAction).not.toHaveBeenCalled();
+  });
+
+  it('creates one rental item with the size and no product group', async () => {
+    const { createItemAction, bulkCreateSizedVariantsAction } =
+      await import('@/server/actions/inventory');
+    vi.mocked(createItemAction).mockResolvedValue({ ok: true, data: { id: 'item-1' } } as never);
+    renderForm({
+      categories: [JERSEYS],
+      defaults: { categoryId: JERSEYS_ID },
+      isRentalFixed: true,
+    });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.type(screen.getByLabelText('Size'), 'M');
+    await user.click(screen.getByRole('button', { name: /create item/i }));
+
+    await waitFor(() => expect(createItemAction).toHaveBeenCalledTimes(1));
+    expect(bulkCreateSizedVariantsAction).not.toHaveBeenCalled();
+    const [payload] = vi.mocked(createItemAction).mock.calls[0] as [Record<string, unknown>];
+    expect(payload.isRental).toBe(true);
+    expect(payload.variantSize).toBe('M');
+    expect(payload.productGroup).toBeUndefined();
+    expect(payload.groupId ?? null).toBeNull();
+  });
+});
+
+describe('ItemForm — edit', () => {
+  it("fits the Size placeholder to the category's scale on edit too", () => {
+    renderForm({
+      categories: [JERSEYS],
+      defaults: {
+        id: '99999999-9999-9999-9999-999999999999',
+        categoryId: JERSEYS_ID,
+        variantSize: 'M',
+      },
+    });
+    expect(screen.getByDisplayValue('M')).toHaveAttribute('placeholder', 'e.g. M');
+    expect(screen.queryByPlaceholderText('10.5')).not.toBeInTheDocument();
   });
 });
