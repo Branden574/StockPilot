@@ -52,6 +52,7 @@ TMP="$(mktemp -d)"
 # bash runs it on INT, TERM and HUP), so an interrupted run never leaves one on
 # the shared local stack. SIGKILL cannot be trapped: the next run's cleanup
 # drops them first.
+# shellcheck disable=SC2329 # called from the EXIT trap below
 drop_probes() {
   "${PSQL[@]}" -c "drop function if exists public._probe_escalation_claim_nolock(uuid); drop function if exists public._probe_escalation_claim_nouserlock(uuid)" >/dev/null 2>&1
 }
