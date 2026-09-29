@@ -13,6 +13,7 @@ import {
   PARTIAL_PREVIEW_NOTE,
   PARTIAL_PREVIEW_NOTHING_TO_HOLD_COPY,
   PARTIAL_PREVIEW_READ_FAILED_COPY,
+  PARTIAL_RESULT_ORDER_CHANGED_COPY,
   previewPartialFulfilment,
   type PartialAction,
   type PartialPreview,
@@ -425,15 +426,117 @@ describe('describePartialResult: computed from the re-read, never from the previ
     );
   });
 
-  it('the total asked comes from the re-read too (a line changed in between)', () => {
+  it('the total asked comes from the re-read too (a line added in between says the order changed)', () => {
     const reread = result({
       status: 'approved',
       lines: [...lines, { id: 'L3', item: 'B', requested: 5 }],
       items: [item('A', { here: onRack(36), heldOwn: 36 }), item('B', { heldOwn: 0 })],
     });
     expect(describePartialResult({ action: 'approve_partial', preview, reread }).text).toBe(
-      'Approved. Holding 36 of 45 units.',
+      'Approved. Holding 36 of 45 units. The order changed after you looked, so this differs from what was shown.',
     );
+  });
+
+  // The order's own lines can change between the preview and the commit (the
+  // requester or an approver edits them at pending_approval), and stock never
+  // moved: the message must not blame stock for it.
+  describe('the order changed after the preview, not the stock', () => {
+    const one = [{ id: 'L1', item: 'A', requested: 40 }];
+    const p40 = okPreview(
+      previewPartialFulfilment(result({ status: 'pending_approval', lines: one, items: [item('A', { here: onRack(36) })] }), 'approve_partial'),
+    );
+
+    it('a line lowered to 30 and all 30 held: no "fewer than shown because stock changed", no warning', () => {
+      expect([p40.willHold, p40.asked]).toEqual([36, 40]);
+      const reread = result({
+        status: 'approved',
+        lines: [{ id: 'L1', item: 'A', requested: 30 }],
+        items: [item('A', { here: onRack(36), heldOwn: 30 })],
+      });
+      const r = describePartialResult({ action: 'approve_partial', preview: p40, reread });
+      expect(r.text).toBe(
+        'Approved. Holding 30 of 30 units. The order changed after you looked, so this differs from what was shown.',
+      );
+      expect(r.text).not.toMatch(/stock changed/);
+      expect(r).toMatchObject({ tone: 'neutral', held: 30, asked: 30, difference: 6 });
+    });
+
+    it('a line added for an item with free stock: never "more than shown because stock changed"', () => {
+      const reread = result({
+        status: 'approved',
+        lines: [...one, { id: 'L2', item: 'B', requested: 5 }],
+        items: [item('A', { here: onRack(36), heldOwn: 36 }), item('B', { here: onRack(5), heldOwn: 5 })],
+      });
+      const r = describePartialResult({ action: 'approve_partial', preview: p40, reread });
+      expect(r.text).toBe(
+        'Approved. Holding 41 of 45 units. The order changed after you looked, so this differs from what was shown.',
+      );
+      expect(r.text).not.toMatch(/stock changed/);
+      expect(r.tone).toBe('neutral');
+    });
+
+    it('a line removed: the item the preview showed is gone from the re-read', () => {
+      const two = [
+        { id: 'L1', item: 'A', requested: 40 },
+        { id: 'L2', item: 'B', requested: 10 },
+      ];
+      const p = okPreview(
+        previewPartialFulfilment(
+          result({ status: 'pending_approval', lines: two, items: [item('A', { here: onRack(36) }), item('B', { here: onRack(10) })] }),
+          'approve_partial',
+        ),
+      );
+      expect(p.willHold).toBe(46);
+      const reread = result({ status: 'approved', lines: one, items: [item('A', { here: onRack(36), heldOwn: 36 })] });
+      const r = describePartialResult({ action: 'approve_partial', preview: p, reread });
+      expect(r.text).toBe(
+        'Approved. Holding 36 of 40 units. The order changed after you looked, so this differs from what was shown.',
+      );
+      expect(r.tone).toBe('neutral');
+    });
+
+    it('resume: what is owed changed (a line lowered) is the order changing, too', () => {
+      const owed = [{ id: 'L1', item: 'A', requested: 10, fulfilled: 6 }];
+      const p = okPreview(
+        previewPartialFulfilment(result({ status: 'backordered', lines: owed, items: [item('A', { here: onRack(4) })] }), 'resume'),
+      );
+      const reread = result({
+        status: 'pick_slip_generated',
+        lines: [{ id: 'L1', item: 'A', requested: 8, fulfilled: 6 }],
+        items: [item('A', { here: onRack(4), heldOwn: 2 })],
+      });
+      expect(describePartialResult({ action: 'resume', preview: p, reread }).text).toBe(
+        'Resumed. A new pick slip is ready. Holding 2 of 2 units. The order changed after you looked, so this differs from what was shown.',
+      );
+    });
+
+    it('the order unchanged and stock moved still says stock changed (the lines match item by item)', () => {
+      const reread = result({ status: 'approved', lines: one, items: [item('A', { here: onRack(36), heldOwn: 34, heldOtherOrders: 2 })] });
+      expect(describePartialResult({ action: 'approve_partial', preview: p40, reread }).text).toBe(
+        'Approved. Holding 34 of 40 units, 2 fewer than shown because stock changed after you looked.',
+      );
+    });
+
+    it('duplicate lines re-split between themselves (same item total) are not a change', () => {
+      const dup = [
+        { id: 'L1', item: 'A', requested: 25 },
+        { id: 'L2', item: 'A', requested: 15 },
+      ];
+      const p = okPreview(
+        previewPartialFulfilment(result({ status: 'pending_approval', lines: dup, items: [item('A', { here: onRack(36) })] }), 'approve_partial'),
+      );
+      const reread = result({
+        status: 'approved',
+        lines: [
+          { id: 'L1', item: 'A', requested: 20 },
+          { id: 'L2', item: 'A', requested: 20 },
+        ],
+        items: [item('A', { here: onRack(36), heldOwn: 36 })],
+      });
+      expect(describePartialResult({ action: 'approve_partial', preview: p, reread }).text).toBe(
+        'Approved. Holding 36 of 40 units.',
+      );
+    });
   });
 
   it('the same total but a different split between items says so', () => {
@@ -520,6 +623,7 @@ describe('honest words (partial fulfilment)', () => {
     PARTIAL_PREVIEW_NO_LINES_COPY,
     PARTIAL_PREVIEW_NOTHING_TO_HOLD_COPY,
     PARTIAL_COMMIT_UNANSWERED_COPY,
+    PARTIAL_RESULT_ORDER_CHANGED_COPY,
     ...Object.values(PARTIAL_ACTION_TITLE),
     describePartialResult({ action: 'approve_partial', preview: p, reread: result({ status: 'approved', lines, items: [item('A', { here: onRack(36), heldOwn: 34 })] }) }).text,
     describePartialResult({ action: 'resume', preview: null, reread: null }).text,

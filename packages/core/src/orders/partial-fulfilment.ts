@@ -335,6 +335,23 @@ const RESULT_LEAD: Readonly<Record<PartialAction, string>> = {
   resume: 'Resumed. A new pick slip is ready.',
 };
 
+/** After the result, when the order's own lines changed since the preview. */
+export const PARTIAL_RESULT_ORDER_CHANGED_COPY =
+  'The order changed after you looked, so this differs from what was shown.';
+
+/** Whether what the order asks, item by item, differs from what the preview
+ *  was computed over (an item added, removed, or asking a different amount). */
+function orderAskChanged(
+  previewItems: readonly PartialPreviewItem[],
+  askedByItem: ReadonlyMap<string, number>,
+): boolean {
+  if (previewItems.length !== askedByItem.size) return true;
+  return previewItems.some((i) => {
+    const now = askedByItem.get(i.itemId.toLowerCase());
+    return now === undefined || Math.abs(now - i.asked) > EPS;
+  });
+}
+
 function uncheckable(action: PartialAction): PartialResultCopy {
   return {
     tone: 'neutral',
@@ -351,10 +368,22 @@ function uncheckable(action: PartialAction): PartialResultCopy {
  *   "Approved. Holding 36 of 40 units."
  *   "Approved. Holding 34 of 40 units, 2 fewer than shown because stock
  *    changed after you looked."
- * The preview only supplies the comparison. A re-read that failed, that is
+ * The preview only supplies the comparison. "Because stock changed" is said
+ * only when the order asks, item by item, what the preview was computed over;
+ * when its lines changed in between (lowered, added, removed), the message
+ * says the order changed instead ("Approved. Holding 30 of 30 units. The
+ * order changed after you looked, so this differs from what was shown."),
+ * because stock may not have moved at all. A re-read that failed, that is
  * about another order, or that cannot state the order's holds (past a hold
  * status, capped, an item the reader cannot see) says so: the commit
  * succeeded, but no number is claimed.
+ *
+ * Known limit (frozen RPCs, no new read): approve_partial and
+ * resume_fulfillment answer only the order row, so `heldOwn` in the re-read
+ * is the one measure of what they held. Anything else that changes this
+ * order's own holds between the commit and the re-read (another approver's
+ * "Hold available stock", a line edit releasing its share) is counted in the
+ * comparison too.
  */
 export function describePartialResult(input: {
   action: PartialAction;
@@ -376,11 +405,14 @@ export function describePartialResult(input: {
   let held = 0;
   let asked = 0;
   const heldByItem = new Map<string, number>();
+  const askedByItem = new Map<string, number>();
   for (const it of a.items) {
     const h = it.facts!.heldOwn;
+    const itemAsked = action === 'approve_partial' ? it.quantities!.requested : it.quantities!.demand;
     held += h;
+    asked += itemAsked;
     heldByItem.set(it.itemId.toLowerCase(), h);
-    asked += action === 'approve_partial' ? it.quantities!.requested : it.quantities!.demand;
+    if (itemAsked > EPS) askedByItem.set(it.itemId.toLowerCase(), itemAsked);
   }
   held = q4(held);
   asked = q4(asked);
@@ -390,6 +422,14 @@ export function describePartialResult(input: {
     return { tone: 'success', text: `${base}.`, held, asked, difference: null };
   }
   const difference = q4(preview.willHold - held);
+  // The ORDER changed between the preview and the commit (a line lowered,
+  // added or removed: lines can be edited at pending_approval), so the
+  // difference is not stock's doing and must not be blamed on it. Compared
+  // per item, as the preview is (two lines of one item re-split between
+  // themselves ask the same).
+  if (orderAskChanged(preview.items, askedByItem)) {
+    return { tone: 'neutral', text: `${base}. ${PARTIAL_RESULT_ORDER_CHANGED_COPY}`, held, asked, difference };
+  }
   if (difference > EPS) {
     return {
       tone: 'warning',
