@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { asSizeSystem } from '../schemas/sports';
 import {
+  attributeInputRequired,
   isAttributeRequired,
   requiredAttributeProblems,
   resolveSubcategoryProfile,
@@ -82,7 +83,8 @@ describe('requiredAttributeProblems — single item', () => {
       attribute: 'size',
       field: 'variantSize',
       code: 'SHOE_SIZE_REQUIRED',
-      message: 'Size is required for Jerseys: enter a size, or pick sizes to add one item per size.',
+      message:
+        'Size is required for Jerseys: enter a size, or pick sizes to add one item per size.',
     });
   });
 
@@ -143,7 +145,7 @@ describe('requiredAttributeProblems — a size run', () => {
     expect(requiredAttributeProblems(JERSEYS, {}, { sizeRun: true })).toEqual([]);
   });
 
-  it("takes the size system from the category scale only, because a run cannot carry one", () => {
+  it('takes the size system from the category scale only, because a run cannot carry one', () => {
     expect(
       requiredAttributeProblems(
         SHOES,
@@ -165,13 +167,85 @@ describe('requiredAttributeProblems — a size run', () => {
   it('still needs a required jersey number, which a run shares across its sizes', () => {
     expect(requiredAttributeProblems(CUSTOM, {}, { sizeRun: true })[0]?.field).toBe('jerseyNumber');
   });
+
+  // Review 2026-09-29: on the phone a sized category whose scale loads always
+  // takes the run path and offers no single Size box or system picker, so
+  // "add the sizes one at a time" was an instruction it could not follow.
+  it('does not tell a surface with no single-size path to add sizes one at a time', () => {
+    const [p] = requiredAttributeProblems(
+      SHOES,
+      {},
+      { sizeRun: true, scaleSizeSystem: null, singleSizeAvailable: false },
+    );
+    expect(p?.field).toBe('variantSizeSystem');
+    expect(p?.message).toBe(
+      "Size system is required for Shoes, and this category's size scale does not set one. Ask an admin to set a size system on the size scale, or add these items on the web.",
+    );
+    expect(p?.hint).toBe(
+      "This category's size scale sets no size system. Ask an admin to set one, or add these items on the web.",
+    );
+  });
+});
+
+// Review 2026-09-29: the labels used to drop "(optional)" for ANY attribute in
+// requiredAttributes, although the server only ever enforces size, size system
+// and jersey number, and a Shoes size system the scale supplies was labelled
+// required while the save went through without one.
+describe('attributeInputRequired — the label follows the check', () => {
+  it('is true for a required size and a required jersey number', () => {
+    expect(attributeInputRequired(JERSEYS, 'size')).toBe(true);
+    expect(attributeInputRequired(CUSTOM, 'jersey_number')).toBe(true);
+    expect(attributeInputRequired(JERSEYS, 'jersey_number')).toBe(false);
+    expect(attributeInputRequired(null, 'size')).toBe(false);
+  });
+
+  it("asks for a size system only when the category's size scale does not set one", () => {
+    expect(attributeInputRequired(SHOES, 'size_system', { scaleSizeSystem: 'US_MENS' })).toBe(
+      false,
+    );
+    expect(attributeInputRequired(SHOES, 'size_system', { scaleSizeSystem: null })).toBe(true);
+    expect(attributeInputRequired(SHOES, 'size_system', { scaleSizeSystem: '  ' })).toBe(true);
+    expect(attributeInputRequired(SHOES, 'size_system')).toBe(true);
+    // A scale the page could not read is left to the server, as the check is.
+    expect(
+      attributeInputRequired(SHOES, 'size_system', {
+        scaleSizeSystem: null,
+        scaleSystemKnown: false,
+      }),
+    ).toBe(false);
+  });
+
+  it('never calls an attribute required that the server does not enforce', () => {
+    const everything: SubcategoryTrackingProfile = {
+      ...CUSTOM,
+      supportedAttributes: ['brand', 'team', 'color', 'season', 'size', 'jersey_number'],
+      requiredAttributes: ['brand', 'team', 'color', 'season'],
+    };
+    for (const a of ['brand', 'team', 'color', 'season'] as const) {
+      expect(isAttributeRequired(everything, a)).toBe(true);
+      expect(attributeInputRequired(everything, a)).toBe(false);
+    }
+  });
+
+  it('agrees with requiredAttributeProblems on every attribute it can refuse for', () => {
+    for (const scaleSizeSystem of [null, 'US_MENS']) {
+      const refused = new Set(
+        requiredAttributeProblems(SHOES, { variantSize: '10' }, { scaleSizeSystem }).map(
+          (p) => p.attribute,
+        ),
+      );
+      expect(attributeInputRequired(SHOES, 'size_system', { scaleSizeSystem })).toBe(
+        refused.has('size_system'),
+      );
+    }
+  });
 });
 
 describe('sizePlaceholder', () => {
   it('uses a letter size for an apparel scale (Jerseys), never a shoe size', () => {
-    expect(
-      sizePlaceholder({ profile: JERSEYS, scaleValues: ['XS', 'S', 'M', 'L', 'XL'] }),
-    ).toBe('M');
+    expect(sizePlaceholder({ profile: JERSEYS, scaleValues: ['XS', 'S', 'M', 'L', 'XL'] })).toBe(
+      'M',
+    );
     expect(sizePlaceholder({ profile: JERSEYS })).toBe('M');
   });
 

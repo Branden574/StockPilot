@@ -67,6 +67,34 @@ export function isAttributeRequired(
   return profile?.requiredAttributes.includes(attribute) ?? false;
 }
 
+/**
+ * Whether the PERSON must give this attribute for a single-item create: the
+ * question a field label answers ("Size" versus "Size (optional)").
+ *
+ * The same inputs `requiredAttributeProblems` checks, so a label can never call
+ * a field required that the save goes through without, or the reverse:
+ *
+ *   - only size, size system and jersey number can be required. A custom
+ *     profile may list brand, team, color and others in requiredAttributes,
+ *     but the server enforces nothing else, so they stay optional;
+ *   - a size system is required only when the category's size scale does not
+ *     set one (the server fills an omitted system from the scale). A scale the
+ *     page could not read (`scaleSystemKnown: false`) is left to the server,
+ *     exactly as the check leaves it.
+ */
+export function attributeInputRequired(
+  profile: SubcategoryTrackingProfile | null | undefined,
+  attribute: SportsAttribute,
+  opts: { scaleSizeSystem?: string | null; scaleSystemKnown?: boolean } = {},
+): boolean {
+  if (!isAttributeRequired(profile, attribute)) return false;
+  if (attribute === 'size' || attribute === 'jersey_number') return true;
+  if (attribute === 'size_system') {
+    return opts.scaleSystemKnown !== false && text(opts.scaleSizeSystem).length === 0;
+  }
+  return false;
+}
+
 /** The three attributes a create can be refused for, and the form field each one is typed into. */
 export const REQUIRED_ATTRIBUTE_FIELDS = {
   size: 'variantSize',
@@ -111,6 +139,14 @@ export interface RequiredAttributeOptions {
    * `false` drops "or pick sizes" from the sentence, unset keeps it.
    */
   sizeRunAvailable?: boolean;
+  /**
+   * Whether this surface can add ONE item with a typed size and a picked size
+   * system. Wording only, for a size run whose scale sets no system: `false`
+   * (the phone, where a sized category always takes the run path) says to ask
+   * an admin or use the web instead of "add the sizes one at a time". Unset
+   * keeps the web wording.
+   */
+  singleSizeAvailable?: boolean;
 }
 
 function text(v: string | null | undefined): string {
@@ -165,16 +201,21 @@ export function requiredAttributeProblems(
             : 'Enter a size.',
       });
     } else if (attribute === 'size_system' && !system) {
+      const noSingle = opts.singleSizeAvailable === false;
       problems.push({
         attribute,
         field: 'variantSizeSystem',
         code: 'SHOE_SIZE_SYSTEM_REQUIRED',
-        message: sizeRun
-          ? `Size system is required for ${label}, and this category's size scale does not set one. Add the sizes one at a time and pick a size system for each.`
-          : `Size system is required for ${label}: pick the system the size is printed in, such as US Men's, UK or EU.`,
-        hint: sizeRun
-          ? "This category's size scale sets no size system. Add the sizes one at a time and pick a system for each."
-          : "Pick a size system, such as US Men's, UK or EU.",
+        message: !sizeRun
+          ? `Size system is required for ${label}: pick the system the size is printed in, such as US Men's, UK or EU.`
+          : noSingle
+            ? `Size system is required for ${label}, and this category's size scale does not set one. Ask an admin to set a size system on the size scale, or add these items on the web.`
+            : `Size system is required for ${label}, and this category's size scale does not set one. Add the sizes one at a time and pick a size system for each.`,
+        hint: !sizeRun
+          ? "Pick a size system, such as US Men's, UK or EU."
+          : noSingle
+            ? "This category's size scale sets no size system. Ask an admin to set one, or add these items on the web."
+            : "This category's size scale sets no size system. Add the sizes one at a time and pick a system for each.",
       });
     } else if (attribute === 'jersey_number' && !jerseyText(values.jerseyNumber)) {
       problems.push({

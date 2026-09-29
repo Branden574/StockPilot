@@ -2981,6 +2981,12 @@ export class InventoryService {
       await resolveTrackingProfile(this.ctx, input.categoryId ?? null, this.trackingProfiles),
       input.trackingModeOverride,
     );
+    // A sports category is the `sports` entitlement: refuse it FIRST, before
+    // the size scale is read or a required attribute is asked for, exactly as
+    // bulkCreateSizedVariants does. This gate used to sit below the required
+    // check, so an org without Sports was told "Size is required for Jerseys"
+    // (with no Size box on its screen) instead of being refused the category.
+    if (profile.isSports) assertModuleEnabled(this.ctx, 'sports');
 
     // ── Size normalization + the category's size scale ──────────────────────
     // IDENTICAL to what bulkCreateSizedVariants and the PO-import matcher have
@@ -3007,18 +3013,21 @@ export class InventoryService {
       normalizedVariantSize = normalizeSizeValue(rawVariantSize, resolvedSizeSystem);
       // inventory_items_variant_size_check (0298) caps this at 24 characters —
       // refuse it here so the caller gets a sentence, not a constraint name.
+      // Both refusals name the Size field (details.field), so the item form
+      // puts the sentence under the box that was typed into, not only in a
+      // toast. Same shape as assertVariantAttributesValid's refusals.
       if (!normalizedVariantSize || normalizedVariantSize.length > 24) {
         throw new ServiceError(
           'validation_error',
           `"${rawVariantSize}" is not a usable size. Sizes are 1 to 24 characters.`,
-          { code: 'SHOE_SIZE_REQUIRED' },
+          { code: 'SHOE_SIZE_REQUIRED', field: 'variantSize' },
         );
       }
       if (allowedSizes && !allowedSizes.has(normalizedVariantSize.toUpperCase())) {
         throw new ServiceError(
           'validation_error',
           `"${rawVariantSize}" is not a size in this category's size scale.`,
-          { code: 'SHOE_SIZE_REQUIRED' },
+          { code: 'SHOE_SIZE_REQUIRED', field: 'variantSize' },
         );
       }
     }
@@ -3044,7 +3053,8 @@ export class InventoryService {
     // but says nothing about the module, so gate it here too.
     if (resolvedGroupId) assertModuleEnabled(this.ctx, 'sports');
     if (profile.isSports) {
-      assertModuleEnabled(this.ctx, 'sports');
+      // (The `sports` gate for a sports category ran above, before the size
+      // scale was read.)
       if (!resolvedGroupId && input.productGroup) {
         const groups = new ProductGroupsService(this.ctx);
         const { group } = await groups.findOrCreate({
@@ -3847,27 +3857,6 @@ export class InventoryService {
       if (gErr) throw new ServiceError('internal_error', gErr.message);
       if (!g) throw new ServiceError('not_found', 'That product group no longer exists.');
     }
-    // Inline new-group creation, byte-for-byte the branch create() runs. Add
-    // Item shows a "this will be saved as / Product group" preview BEFORE the
-    // user picks sizes, and a sized sports category (shoes) leaves through this
-    // method — without this the preview promised a group that was never saved.
-    // Only for a SPORTS category, and only when no group was chosen already.
-    if (profile.isSports && !resolvedGroupId && input.productGroup) {
-      const groups = new ProductGroupsService(this.ctx);
-      const { group } = await groups.findOrCreate({
-        ...input.productGroup,
-        subcategoryKey: profile.subcategoryKey ?? 'other_sports_equipment',
-        categoryId: input.categoryId,
-        defaultCountingUnit: (input.productGroup.defaultCountingUnit ??
-          profile.countingUnit) as CountingUnit,
-        // Same inheritance create() applies — see the comment there. This is the
-        // path a SHOE run takes, which is exactly the group whose size count was
-        // rendering XS..5XL instead of 9 / 9.5 / 10.
-        sizeScaleId: input.productGroup.sizeScaleId ?? profile.sizeScaleId ?? null,
-      });
-      resolvedGroupId = group.id;
-    }
-
     const seenVariantKeys = new Set<string>();
     /**
      * `variant_key` is SERVER-COMPUTED identity, always — the key decides which
@@ -3930,6 +3919,30 @@ export class InventoryService {
         });
       }
       seenVariantKeys.add(key);
+    }
+
+    // Inline new-group creation, byte-for-byte the branch create() runs, and
+    // AFTER every size in the run has passed its checks (the scale, the
+    // required attributes, duplicates), as in create(). It used to run before
+    // them, so a refused run left an empty product group behind. Add
+    // Item shows a "this will be saved as / Product group" preview BEFORE the
+    // user picks sizes, and a sized sports category (shoes) leaves through this
+    // method — without this the preview promised a group that was never saved.
+    // Only for a SPORTS category, and only when no group was chosen already.
+    if (profile.isSports && !resolvedGroupId && input.productGroup) {
+      const groups = new ProductGroupsService(this.ctx);
+      const { group } = await groups.findOrCreate({
+        ...input.productGroup,
+        subcategoryKey: profile.subcategoryKey ?? 'other_sports_equipment',
+        categoryId: input.categoryId,
+        defaultCountingUnit: (input.productGroup.defaultCountingUnit ??
+          profile.countingUnit) as CountingUnit,
+        // Same inheritance create() applies — see the comment there. This is the
+        // path a SHOE run takes, which is exactly the group whose size count was
+        // rendering XS..5XL instead of 9 / 9.5 / 10.
+        sizeScaleId: input.productGroup.sizeScaleId ?? profile.sizeScaleId ?? null,
+      });
+      resolvedGroupId = group.id;
     }
 
     // Per-org custom fields shared by every variant. Strip any reserved key the

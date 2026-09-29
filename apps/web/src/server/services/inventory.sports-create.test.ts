@@ -264,6 +264,79 @@ describe('InventoryService.create — sports categories', () => {
     expect(stub.chains.has('inventory_items.insert')).toBe(false);
   });
 
+  // Review 2026-09-29: with the module off, the size check ran BEFORE the
+  // module gate, so an org without Sports was told "Size is required for
+  // Jerseys" (the reported shape, with no Size box on screen) instead of being
+  // refused the category. The sized path already gated first.
+  it('refuses a sports category with the module off before asking for a size', async () => {
+    const stub = buildStub({
+      'categories.select': {
+        data: categoryRow({ sports_subcategory_key: 'jerseys', size_scale_id: 'scale-1' }),
+        error: null,
+      },
+    });
+    const ctx = makeServiceContext(stub.client, {
+      enabledModules: new Set<ModuleId>(['inventory']),
+    });
+    await expect(
+      new InventoryService(ctx).create({ ...BASE, categoryId: 'cat-1' }),
+    ).rejects.toMatchObject({ code: 'module_disabled' });
+    // Nor does it read the size scale for a category it is about to refuse.
+    expect(stub.fromCalls).not.toContain('size_scales');
+    expect(stub.chains.has('inventory_items.insert')).toBe(false);
+  });
+
+  // Review 2026-09-29: the two size-scale refusals carried no field, so the
+  // form could not put them under the Size box. Typing "10.5" (the old
+  // placeholder) or "Medium" on Jerseys ended in a toast only.
+  it("points a size the category's scale does not know at the Size field", async () => {
+    const stub = buildStub({
+      'categories.select': {
+        data: categoryRow({ sports_subcategory_key: 'jerseys', size_scale_id: 'scale-1' }),
+        error: null,
+      },
+      'size_scales.select': { data: { id: 'scale-1', size_system: null }, error: null },
+      'size_scale_values.select': {
+        data: [
+          { value: 'S', normalized: 'S' },
+          { value: 'M', normalized: 'M' },
+        ],
+        error: null,
+      },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await expect(
+      new InventoryService(ctx).create({ ...BASE, categoryId: 'cat-1', variantSize: '10.5' }),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      message: '"10.5" is not a size in this category\'s size scale.',
+      details: { code: 'SHOE_SIZE_REQUIRED', field: 'variantSize' },
+    });
+    expect(stub.chains.has('inventory_items.insert')).toBe(false);
+  });
+
+  it('points an unusable size at the Size field', async () => {
+    const stub = buildStub({
+      'categories.select': {
+        data: categoryRow({ sports_subcategory_key: 'jerseys', size_scale_id: 'scale-1' }),
+        error: null,
+      },
+      'size_scales.select': { data: { id: 'scale-1', size_system: null }, error: null },
+      'size_scale_values.select': { data: [], error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await expect(
+      new InventoryService(ctx).create({
+        ...BASE,
+        categoryId: 'cat-1',
+        variantSize: 'X'.repeat(25),
+      }),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      details: { code: 'SHOE_SIZE_REQUIRED', field: 'variantSize' },
+    });
+  });
+
   it("takes a single shoe's size system from the category's size scale, as a size run does", async () => {
     // create() used to check the RAW input before the scale filled the
     // system, so "10.5" on a US Men's shoe category was refused "a size system
