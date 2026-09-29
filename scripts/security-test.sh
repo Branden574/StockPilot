@@ -358,6 +358,11 @@ WEB_TESTS=(
   src/server/services/item-images.test.ts
   src/server/services/public-items.test.ts
 
+  # Item photos are signed only for items the caller can read (2026-09-28):
+  # item_images_select is org-member wide, item visibility is scoped.
+  # (item-images.test.ts above carries the service half.)
+  'src/app/api/items/[id]/image-master/route.test.ts'
+
   # Declared-type spoofing: the bytes decide the type, never the caller's word.
   # The 2026-08-21 wave (see project_upload_security_hardening) — a sniffer, a
   # PDF/zip threat scanner, and the three write paths that must consult them.

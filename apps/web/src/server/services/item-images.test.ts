@@ -39,6 +39,15 @@ vi.mock('./context', () => ({
 // the changed_keys/image_added shape without a real audit_logs write.
 vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import {
+  itemReadScopeResults,
+  type ScopedCaller,
+  type WorldImage,
+  type WorldItem,
+} from '@/test/item-read-scope';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 import { audit } from './audit';
@@ -740,5 +749,186 @@ describe('ItemImagesService.remove — thumb sidecar cleanup (SP-135)', () => {
     await svc.remove('img-1');
 
     expect(remove).toHaveBeenCalledWith(['org-1/items/item-1/x.jpg']);
+  });
+});
+
+/**
+ * Security invariant (2026-09-28): ItemImagesService never signs, lists or
+ * deletes the image of an item the CALLER cannot read.
+ *
+ * item_images_select is org-member wide, inventory_items_select is scoped
+ * (warehouse, charter, viewer category). Every image read in the service used
+ * to trust the image rows alone and then sign their paths with the
+ * service-role client, so a scoped member's image-master request, PO page or
+ * report PDF carried working URLs for items outside their scope. Every
+ * item_images read now embeds `item:inventory_items!item_id!inner(id)`, which
+ * PostgREST evaluates under the caller's RLS. The stub below answers the way
+ * PostgREST does (test/item-read-scope.ts), so these tests fail on a read
+ * that drops the embed or makes it a LEFT join.
+ */
+describe('ItemImagesService — item-level authorization of every image read', () => {
+  const ORG_A = '0c0c0c0c-0000-4000-8000-00000000000a';
+  const WH_MAIN = '0c0c0c0c-0000-4000-8000-0000000000a1';
+  const WH_ANNEX = '0c0c0c0c-0000-4000-8000-0000000000a2';
+  const CAT_IN = '0c0c0c0c-0000-4000-8000-0000000000c1';
+  const CAT_OUT = '0c0c0c0c-0000-4000-8000-0000000000c2';
+  const VIEWER: ScopedCaller = { organizationId: ORG_A, warehouseIds: [WH_MAIN], categoryIds: [CAT_IN] };
+  const STAFF: ScopedCaller = { organizationId: ORG_A, warehouseIds: [WH_MAIN], categoryIds: 'all' };
+
+  // Fresh ids per world: the module memoizes signed paths across tests.
+  let seq = 0;
+  function world() {
+    seq += 1;
+    const n = String(seq).padStart(4, '0');
+    const id = (tag: string) => `${tag}-0000-4000-8000-00000000${n}`;
+    const items = {
+      inScope: { id: id('c1c1c1c1'), organization_id: ORG_A, warehouse_id: WH_MAIN, category_id: CAT_IN },
+      otherCategory: {
+        id: id('c2c2c2c2'),
+        organization_id: ORG_A,
+        warehouse_id: WH_MAIN,
+        category_id: CAT_OUT,
+        // An ISBN cover on the unreadable item must not leak through the
+        // custom_fields fallback either.
+        custom_fields: { thumbnail_url: 'https://covers.test/out-of-scope.jpg' },
+      },
+      otherWarehouse: { id: id('c3c3c3c3'), organization_id: ORG_A, warehouse_id: WH_ANNEX, category_id: CAT_IN },
+    } satisfies Record<string, WorldItem>;
+    const images: WorldImage[] = Object.values(items).map((item, i) => ({
+      id: id(`d${i}d${i}d${i}d${i}`),
+      organization_id: ORG_A,
+      item_id: item.id,
+      storage_path: `${ORG_A}/items/${item.id}/master.webp`,
+      thumb_path: `${ORG_A}/items/${item.id}/master-thumb.webp`,
+      lqip: null,
+      is_primary: true,
+      sort_order: 0,
+    }));
+    const outPaths = images
+      .filter((r) => r.item_id !== items.inScope.id)
+      .flatMap((r) => [r.storage_path, r.thumb_path as string]);
+    return { items, images, outPaths, ids: Object.values(items).map((i) => i.id) };
+  }
+
+  function serviceFor(caller: ScopedCaller, w: ReturnType<typeof world>, extra = {}) {
+    const stub = makeSupabaseStub({
+      ...itemReadScopeResults(caller, { items: Object.values(w.items), images: w.images }),
+      ...extra,
+    });
+    return {
+      stub,
+      service: new ItemImagesService(makeServiceContext(stub.client, { organizationId: ORG_A })),
+    };
+  }
+
+  function signedPaths(): string[] {
+    return [
+      ...createSignedUrlsMock.mock.calls.flatMap((c) => c[0] as string[]),
+      ...createSignedUrlMock.mock.calls.map((c) => c[0] as string),
+    ];
+  }
+
+  beforeEach(() => {
+    createSignedUrlsMock.mockImplementation(async (paths: string[]) => ({
+      data: paths.map((p) => ({ path: p, signedUrl: `https://signed.test/${p}`, error: null })),
+      error: null,
+    }));
+    createSignedUrlMock.mockImplementation(async (p: string) => ({
+      data: { signedUrl: `https://signed.test/${p}` },
+      error: null,
+    }));
+  });
+
+  const methods = [
+    ['primaryImagesForItems', (s: ItemImagesService, ids: string[]) => s.primaryImagesForItems(ids)],
+    ['primaryImagesWithThumbsForItems', (s: ItemImagesService, ids: string[]) => s.primaryImagesWithThumbsForItems(ids)],
+    ['primaryImagesForPdfRendering', (s: ItemImagesService, ids: string[]) => s.primaryImagesForPdfRendering(ids)],
+    ['primaryImagesForServerDecoding', (s: ItemImagesService, ids: string[]) => s.primaryImagesForServerDecoding(ids)],
+    ['primaryImagesForBrowserDisplay', (s: ItemImagesService, ids: string[]) => s.primaryImagesForBrowserDisplay(ids)],
+    ['primaryMasterUrlsForItems', (s: ItemImagesService, ids: string[]) => s.primaryMasterUrlsForItems(ids)],
+  ] as const;
+
+  for (const [name, call] of methods) {
+    it(`${name}: a category-scoped viewer gets only the in-scope item, and nothing out of scope is signed`, async () => {
+      const w = world();
+      const { service } = serviceFor(VIEWER, w);
+
+      const result = await call(service, w.ids);
+
+      expect([...result.keys()]).toEqual([w.items.inScope.id]);
+      const signed = signedPaths();
+      expect(signed.length).toBeGreaterThan(0);
+      for (const p of w.outPaths) expect(signed).not.toContain(p);
+      expect(signed.every((p) => p.includes(w.items.inScope.id))).toBe(true);
+    });
+
+    it(`${name}: a warehouse-scoped staff member gets their warehouse's items, never another warehouse's`, async () => {
+      const w = world();
+      const { service } = serviceFor(STAFF, w);
+
+      const result = await call(service, w.ids);
+
+      expect([...result.keys()].sort()).toEqual([w.items.inScope.id, w.items.otherCategory.id].sort());
+      expect(signedPaths().some((p) => p.includes(w.items.otherWarehouse.id))).toBe(false);
+    });
+  }
+
+  it('list(): a scoped caller gets no image rows for an item they cannot read', async () => {
+    const w = world();
+    const { service } = serviceFor(VIEWER, w);
+
+    expect(await service.list(w.items.otherCategory.id)).toEqual([]);
+    expect(await service.list(w.items.otherWarehouse.id)).toEqual([]);
+    expect((await service.list(w.items.inScope.id)).map((r) => r.storage_path)).toEqual([
+      `${ORG_A}/items/${w.items.inScope.id}/master.webp`,
+    ]);
+  });
+
+  it('remove(): the image of an item the caller cannot read is "not found", and nothing is deleted', async () => {
+    const w = world();
+    const { stub, service } = serviceFor(STAFF, w);
+    const remove = vi.fn(async () => ({ data: null, error: null }));
+    stub.client.storage.from = vi.fn(() => ({ remove }));
+    const outImage = w.images.find((r) => r.item_id === w.items.otherWarehouse.id)!;
+
+    await expect(service.remove(outImage.id)).rejects.toThrow('not_found');
+    expect(remove).not.toHaveBeenCalled();
+    expect(stub.chainsAll.get('item_images.delete')).toBeUndefined();
+  });
+
+  it('remove(): an in-scope image is still removed (master and thumb)', async () => {
+    const w = world();
+    const { stub, service } = serviceFor(STAFF, w, {
+      'item_images.delete': { data: null, error: null },
+    });
+    const remove = vi.fn(async () => ({ data: null, error: null }));
+    stub.client.storage.from = vi.fn(() => ({ remove }));
+    const inImage = w.images.find((r) => r.item_id === w.items.inScope.id)!;
+
+    await service.remove(inImage.id);
+
+    expect(remove).toHaveBeenCalledWith([inImage.storage_path, inImage.thumb_path]);
+  });
+
+  it('EVERY item_images read in the service carries the inner item embed (a new read cannot skip it)', () => {
+    const source = readFileSync(join(__dirname, 'item-images.ts'), 'utf8');
+    // Each `.from('item_images')` followed (past comments) by a `.select(...)`.
+    const reads = [
+      ...source.matchAll(
+        /\.from\('item_images'\)\s*(?:\/\/[^\n]*\n\s*)*\.select\(\s*'([^']*)'/g,
+      ),
+    ].map((m) => m[1]!);
+    const selectsTotal = [
+      ...source.matchAll(/\.from\('item_images'\)\s*(?:\/\/[^\n]*\n\s*)*\.select\(/g),
+    ].length;
+    // Six reads today: list, primaryImagesForItems,
+    // primaryImagesWithThumbsForItems, resolvePrimaryImageUrls,
+    // primaryMasterUrlsForItems, remove. A select written any other way (a
+    // template, a variable) is not captured and fails the count.
+    expect(reads).toHaveLength(6);
+    expect(reads).toHaveLength(selectsTotal);
+    for (const select of reads) {
+      expect(select).toContain('item:inventory_items!item_id!inner(id)');
+    }
   });
 });
