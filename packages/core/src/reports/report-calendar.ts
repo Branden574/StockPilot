@@ -73,6 +73,8 @@ export const CALENDAR_COPY = {
   endDate: 'End date',
   chooseStartDate: 'Choose a start date',
   chooseEndDate: 'Choose an end date',
+  /** A day strictly between the start and the end. */
+  inRange: 'In the chosen range',
 } as const;
 
 // ── Day arithmetic ──────────────────────────────────────────────────────────

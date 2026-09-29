@@ -38,8 +38,10 @@ import {
 
 export const BOOK_ORDER_TOTALS_VERSION = 1;
 
-/** In the brief's order. `today` and `week` (Sunday start) came with 0382;
- *  an older server answers them with 22023 invalid_range, which resets. */
+/** In the brief's order. `today` and `week` (Sunday start) came with 0382.
+ *  An older server (0379, e.g. after a SQL-only revert) refuses them with
+ *  22023 invalid_range; the web page and the phone then reset the dates to
+ *  All time and say the link's filters were reset (never an error page). */
 export const BOOK_REPORT_RANGES = [
   'all',
   'today',
@@ -1287,6 +1289,49 @@ export function bookReportCharterEchoMatches(
     echo.id.toLowerCase() === query.charter.toLowerCase() &&
     noCharter !== true
   );
+}
+
+/** The presets whose days move with the clock: each request resolves them
+ *  again in the organization's zone. */
+function isRollingRange(range: BookReportRange): boolean {
+  return range !== 'all' && range !== 'custom';
+}
+
+/**
+ * The query a row's orders (the drill-down) are read with (brief 13: the
+ * drill-down's total must equal the row's). A rolling preset (Today, This
+ * week, This month, Last 30 days, Last 90 days, This year) becomes the exact
+ * days the row's answer resolved, so a midnight (or a Sunday, or the first
+ * of a month) passing between the report and the drill-down cannot make
+ * them cover different days. All time and a custom range already name their
+ * days (or none), so they are returned as they are, as is a query whose
+ * answer is not for its preset or carries no valid days.
+ */
+export function bookReportDrillDownQuery(
+  query: BookReportQuery,
+  range: Pick<BookReportRangeEcho, 'key' | 'from' | 'to'> | null | undefined,
+): BookReportQuery {
+  if (!isRollingRange(query.range) || !range || range.key !== query.range) return query;
+  const { from, to } = range;
+  if (typeof from !== 'string' || typeof to !== 'string') return query;
+  if (!validateCustomDate(from) || !validateCustomDate(to) || from > to) return query;
+  return { ...query, statusGroups: [...query.statusGroups], range: 'custom', from, to };
+}
+
+/**
+ * Whether an answer is for the dates the query asked for: All time for
+ * All time; the same two days for a custom range; the same preset for a
+ * rolling one (its days are the server's to resolve). The web drawer and
+ * the phone's drill-down refuse an answer that fails this, as they do a
+ * charter mismatch.
+ */
+export function bookReportRangeEchoMatches(
+  query: Pick<BookReportQuery, 'range' | 'from' | 'to'>,
+  range: Pick<BookReportRangeEcho, 'key' | 'from' | 'to'> | null | undefined,
+): boolean {
+  if (!range || range.key !== query.range) return false;
+  if (query.range !== 'custom') return true;
+  return range.from === query.from && range.to === query.to;
 }
 
 /** Every status's label as this organization shows it on the Orders page. */

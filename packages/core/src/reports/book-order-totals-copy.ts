@@ -285,6 +285,26 @@ export const BOOK_REPORT_INVALID_CHARTER = 'That charter is not one you can see.
  *  the warehouse view) when nothing matched. */
 export const BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE =
   "This charter's orders may be at another warehouse. Choose All warehouses you can see to include them.";
+/** The same, when dates are chosen: the dates may be why nothing matched. */
+export const BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE_DATES =
+  "This charter's orders may be at another warehouse or outside these dates. Choose All warehouses you can see, or other dates, to include them.";
+
+/**
+ * The empty state's extra line for one charter at one warehouse (chosen, or
+ * the warehouse view): its orders may be elsewhere, or, when dates are
+ * chosen, outside them. Null for All charters, No charter or every
+ * warehouse. The web page and the phone both say it (call it only when
+ * nothing matched).
+ */
+export function bookReportEmptyCharterHint(answer: {
+  range: Pick<BookReportRangeEcho, 'key'>;
+  filters: { charter?: BookReportCharterEcho | null; warehouse: unknown };
+}): string | null {
+  if (!answer.filters.charter || !answer.filters.warehouse) return null;
+  return answer.range.key === 'all'
+    ? BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE
+    : BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE_DATES;
+}
 
 /** The order page's way back to the report it was opened from (plan D17). */
 export const BOOK_REPORT_BACK_TO_REPORT = 'Back to Book Order Totals';
@@ -368,15 +388,23 @@ export function bookReportCharterLine(
 }
 
 /** A drill-down order's charter: 'Marconi · MAR-01', 'No charter', or null
- *  when the answer does not carry it (a server before 0382). */
-export function bookReportOrderCharterText(row: {
-  charterId?: string | null;
-  charterName?: string | null;
-  charterCode?: string | null;
-}): string | null {
+ *  when the answer does not carry it (a server before 0382). `labels` (from
+ *  bookReportCharterOptionLabels) wins when it names the charter, so two
+ *  same-named charters read apart here as they do in the select. */
+export function bookReportOrderCharterText(
+  row: {
+    charterId?: string | null;
+    charterName?: string | null;
+    charterCode?: string | null;
+  },
+  labels?: ReadonlyMap<string, string> | null,
+): string | null {
   if (row.charterId === undefined) return null;
   if (row.charterId === null) return BOOK_REPORT_NO_CHARTER;
-  return bookReportCharterOptionLabel({ name: row.charterName ?? null, code: row.charterCode });
+  return (
+    labels?.get(row.charterId) ??
+    bookReportCharterOptionLabel({ name: row.charterName ?? null, code: row.charterCode })
+  );
 }
 
 // ── "Books ordered by charter" (page only, All charters) ───────────────────
@@ -743,6 +771,12 @@ export const BOOK_REPORT_UI = {
   searching: 'Searching Book Order Totals',
   clearSearch: 'Clear search',
   listsLoading: 'Loading the list',
+  /** The Warehouse select while Clear filters (or removing the warehouse)
+   *  waits for its answer: the report goes back to the warehouse view. */
+  warehouseView: 'Your warehouse view',
+  /** A select's pending choice it cannot name yet (its list is still
+   *  loading): never the raw id. */
+  choiceLoading: 'Loading…',
   retry: 'Retry',
   refresh: 'Refresh',
   columnCover: 'Cover',

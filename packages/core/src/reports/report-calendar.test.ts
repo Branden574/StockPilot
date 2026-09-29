@@ -361,6 +361,8 @@ describe('calendar words', () => {
       endDate: 'End date',
       chooseStartDate: 'Choose a start date',
       chooseEndDate: 'Choose an end date',
+      // A day between the start and the end (spoken on both platforms).
+      inRange: 'In the chosen range',
     });
   });
   it('today is the answer’s org-local day, never the device clock', () => {

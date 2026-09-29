@@ -18,6 +18,8 @@ import {
   DEFAULT_BOOK_REPORT_STATUS_GROUPS,
   bookReportCharterEchoMatches,
   bookReportClearedQuery,
+  bookReportDrillDownQuery,
+  bookReportRangeEchoMatches,
   bookReportFilterArgs,
   bookReportFilterIsSet,
   bookReportOrderLink,
@@ -1332,5 +1334,110 @@ describe('bookReportCharterEchoMatches (the phone and the web drawer refuse a mi
   ];
   it.each(cases)('%s', (_name, charter, filters, expected) => {
     expect(bookReportCharterEchoMatches({ charter }, filters as never)).toBe(expected);
+  });
+});
+
+describe("bookReportDrillDownQuery (a row's orders are read for the days the row was read for)", () => {
+  const base: BookReportQuery = {
+    ...DEFAULT_BOOK_REPORT_QUERY,
+    statusGroups: [...DEFAULT_BOOK_REPORT_STATUS_GROUPS],
+    charter: CH,
+    warehouse: 'all',
+  };
+  it.each(['today', 'week', 'month', '30d', '90d', 'year'] as const)(
+    'the rolling preset %s becomes the exact days its answer resolved, every other filter kept',
+    (range) => {
+      const q = { ...base, range, page: 3 };
+      const out = bookReportDrillDownQuery(q, { key: range, from: '2026-09-27', to: '2026-09-29' });
+      expect(out).toEqual({ ...q, range: 'custom', from: '2026-09-27', to: '2026-09-29' });
+      // The input is left alone.
+      expect(q.range).toBe(range);
+    },
+  );
+  it('after midnight the drill-down still asks for the day the row was read for', () => {
+    // The page read Today on Sep 29; the drill-down opens at 00:01 on Sep 30.
+    const q = { ...base, range: 'today' as const };
+    const out = bookReportDrillDownQuery(q, { key: 'today', from: '2026-09-29', to: '2026-09-29' });
+    expect(serializeBookReportQuery(out)).toContain('range=custom&from=2026-09-29&to=2026-09-29');
+  });
+  it('All time and a custom range are already exact: unchanged', () => {
+    const all = { ...base, range: 'all' as const };
+    expect(bookReportDrillDownQuery(all, { key: 'all', from: null, to: null })).toBe(all);
+    const custom = { ...base, range: 'custom' as const, from: '2026-09-01', to: '2026-09-30' };
+    expect(
+      bookReportDrillDownQuery(custom, { key: 'custom', from: '2026-09-01', to: '2026-09-30' }),
+    ).toBe(custom);
+  });
+  it('without an answer for that preset (none yet, another preset, or no days) the query is unchanged', () => {
+    const q = { ...base, range: 'month' as const };
+    expect(bookReportDrillDownQuery(q, null)).toBe(q);
+    expect(bookReportDrillDownQuery(q, { key: 'week', from: '2026-09-27', to: '2026-09-29' })).toBe(
+      q,
+    );
+    expect(bookReportDrillDownQuery(q, { key: 'month', from: null, to: '2026-09-29' })).toBe(q);
+    expect(
+      bookReportDrillDownQuery(q, { key: 'month', from: '2026-09-30', to: '2026-09-01' }),
+    ).toBe(q);
+    expect(
+      bookReportDrillDownQuery(q, { key: 'month', from: '2026-02-30', to: '2026-09-01' }),
+    ).toBe(q);
+  });
+});
+
+describe('bookReportRangeEchoMatches (the drill-down refuses orders read for other days)', () => {
+  const cases: Array<
+    [
+      string,
+      Pick<BookReportQuery, 'range' | 'from' | 'to'>,
+      { key: string; from: string | null; to: string | null } | null,
+      boolean,
+    ]
+  > = [
+    [
+      'all, answered for all',
+      { range: 'all', from: null, to: null },
+      { key: 'all', from: null, to: null },
+      true,
+    ],
+    [
+      'all, answered for a month',
+      { range: 'all', from: null, to: null },
+      { key: 'month', from: '2026-09-01', to: '2026-09-30' },
+      false,
+    ],
+    [
+      'custom, the same days',
+      { range: 'custom', from: '2026-09-01', to: '2026-09-30' },
+      { key: 'custom', from: '2026-09-01', to: '2026-09-30' },
+      true,
+    ],
+    [
+      'custom, another end',
+      { range: 'custom', from: '2026-09-01', to: '2026-09-30' },
+      { key: 'custom', from: '2026-09-01', to: '2026-09-29' },
+      false,
+    ],
+    [
+      'custom, answered as a preset',
+      { range: 'custom', from: '2026-09-29', to: '2026-09-29' },
+      { key: 'today', from: '2026-09-29', to: '2026-09-29' },
+      false,
+    ],
+    [
+      'a preset, answered for it',
+      { range: 'week', from: null, to: null },
+      { key: 'week', from: '2026-09-27', to: '2026-09-29' },
+      true,
+    ],
+    [
+      'a preset, answered for another',
+      { range: 'week', from: null, to: null },
+      { key: 'today', from: '2026-09-29', to: '2026-09-29' },
+      false,
+    ],
+    ['no range in the answer', { range: 'all', from: null, to: null }, null, false],
+  ];
+  it.each(cases)('%s', (_name, query, range, expected) => {
+    expect(bookReportRangeEchoMatches(query, range as never)).toBe(expected);
   });
 });

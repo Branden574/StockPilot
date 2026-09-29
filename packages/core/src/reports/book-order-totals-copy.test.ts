@@ -194,6 +194,16 @@ function rendered(): string[] {
       .bookReportActiveFilters(BUSY, BUSY_ECHOES, guardLabels)
       .flatMap((c) => [c.text, c.removeLabel]),
     ...Object.values(calendar.CALENDAR_COPY),
+    copy.bookReportEmptyCharterHint({
+      range: { key: 'all' },
+      filters: { charter: ALDER, warehouse: { id: W1, name: 'DC4', status: 'active' } },
+    }) ?? '',
+    copy.bookReportEmptyCharterHint({
+      range: { key: 'today' },
+      filters: { charter: ALDER, warehouse: { id: W1, name: 'DC4', status: 'active' } },
+    }) ?? '',
+    copy.BOOK_REPORT_UI.warehouseView,
+    copy.BOOK_REPORT_UI.choiceLoading,
     ...calendar.CALENDAR_WEEKDAYS_LONG,
     ...calendar.CALENDAR_MONTHS_LONG,
     calendar.calendarDayLabel('2026-09-01'),
@@ -451,6 +461,55 @@ describe('charter words (0382)', () => {
       'No charter',
     );
     expect(copy.bookReportOrderCharterText({})).toBeNull();
+  });
+  it('a drill-down order uses the tie-broken label when the lists are at hand', () => {
+    const labels = copy.bookReportCharterOptionLabels(TWINS);
+    expect(
+      copy.bookReportOrderCharterText(
+        { charterId: CH_A, charterName: 'Alder', charterCode: null },
+        labels,
+      ),
+    ).toBe(`Alder (id ${CH_A})`);
+    expect(
+      copy.bookReportOrderCharterText(
+        { charterId: CH_B, charterName: 'alder', charterCode: null },
+        labels,
+      ),
+    ).toBe(`alder (id ${CH_B})`);
+    // A charter the lists do not name, and a pickup, read as before.
+    expect(
+      copy.bookReportOrderCharterText(
+        { charterId: W1, charterName: 'Marconi', charterCode: 'MAR-01' },
+        labels,
+      ),
+    ).toBe('Marconi · MAR-01');
+    expect(copy.bookReportOrderCharterText({ charterId: null }, labels)).toBe('No charter');
+  });
+  it('the empty hint for one charter at one warehouse names the dates only when dates are chosen', () => {
+    const wh = { id: W1, name: 'DC4', status: 'active' };
+    const hint = (key: string, charter: object | null, warehouse: object | null) =>
+      copy.bookReportEmptyCharterHint({
+        range: { key: key as never },
+        filters: { charter: charter as never, warehouse: warehouse as never },
+      });
+    expect(hint('all', ALDER, wh)).toBe(copy.BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE);
+    expect(copy.BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE).toBe(
+      "This charter's orders may be at another warehouse. Choose All warehouses you can see to include them.",
+    );
+    for (const key of ['today', 'week', 'month', '30d', '90d', 'year', 'custom']) {
+      expect(hint(key, ALDER, wh), key).toBe(copy.BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE_DATES);
+    }
+    expect(copy.BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE_DATES).toBe(
+      "This charter's orders may be at another warehouse or outside these dates. Choose All warehouses you can see, or other dates, to include them.",
+    );
+    // All charters, No charter, or every warehouse: no hint.
+    expect(hint('all', null, wh)).toBeNull();
+    expect(hint('month', null, wh)).toBeNull();
+    expect(hint('all', ALDER, null)).toBeNull();
+  });
+  it('a pending choice the select cannot name yet reads plainly, never as an id or a token', () => {
+    expect(copy.BOOK_REPORT_UI.warehouseView).toBe('Your warehouse view');
+    expect(copy.BOOK_REPORT_UI.choiceLoading).toBe('Loading…');
   });
   it('Today and This week read with their resolved days', () => {
     expect(copy.bookReportRangeLine({ key: 'today', from: '2026-09-29', to: '2026-09-29' })).toBe(
