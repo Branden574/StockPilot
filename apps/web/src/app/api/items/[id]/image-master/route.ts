@@ -28,10 +28,11 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * and sign it with the service-role client.
  *
  * Until 2026-09-28 this route asked ItemImagesService directly, and the only
- * gate on that path was `item_images_select`, which is org-member wide: any
- * member, however scoped, got a working signed URL for any item of the org
- * by id (proven locally with a category-scoped viewer and a warehouse-scoped
- * staff member).
+ * gate on that path was `item_images_select`, which was then org-member wide
+ * (0381 later scoped it to readable items): any member, however scoped, got a
+ * working signed URL for any item of the org by id (proven locally with a
+ * category-scoped viewer and a warehouse-scoped staff member). The route
+ * keeps its own item read either way.
  *
  * Answers: 401 unauthenticated; 400 not a uuid; 404 not readable; 500 when
  * the authorization read itself failed (never a URL); 200 `{ url }`, where

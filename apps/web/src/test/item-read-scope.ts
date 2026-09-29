@@ -9,11 +9,15 @@
  *     reads whole, or, through a charter-scoped assignment, that warehouse's
  *     generic items (charter_id null) plus the assigned charter's; and (for a
  *     category-restricted viewer) one of the caller's categories.
- *   - `item_images`: EVERY row of the caller's org, because item_images_select
- *     (0003, 0140) is org-member wide. The one exception is what PostgREST does
- *     with an embed: `inventory_items!…!inner(…)` runs under the same RLS, and
- *     `!inner` drops each image row whose item the caller cannot read. A LEFT
- *     embed (no `!inner`) filters nothing, as in PostgREST.
+ *   - `item_images`: EVERY row of the caller's org, as item_images_select
+ *     (0003, 0140) answered until 0381. Since 0381 the policy shows a row only
+ *     when its item is readable; the stub deliberately keeps the old, wide
+ *     answer as the worst case, so the services' own `!inner` item embed is
+ *     still proven on its own (a policy regression cannot hide a missing
+ *     embed). The one exception is what PostgREST does with an embed:
+ *     `inventory_items!…!inner(…)` runs under the same RLS, and `!inner` drops
+ *     each image row whose item the caller cannot read. A LEFT embed (no
+ *     `!inner`) filters nothing, as in PostgREST.
  *
  * Both answers then apply the query's own filters, order and window through
  * `servedLikePostgrest`, so a missing `.eq('organization_id', …)` or `.in()`

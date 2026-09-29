@@ -407,7 +407,8 @@ WEB_TESTS=(
   src/server/services/public-items.test.ts
 
   # Item photos are signed only for items the caller can read (2026-09-28):
-  # item_images_select is org-member wide, item visibility is scoped.
+  # item_images_select was org-member wide until 0381 (item visibility is
+  # scoped); the route and the service still authorize the item themselves.
   # (item-images.test.ts above carries the service half.)
   'src/app/api/items/[id]/image-master/route.test.ts'
   # The New rental catalog reads its items with the caller's own client, so a
