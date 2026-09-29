@@ -294,7 +294,7 @@ export default function Home() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
             <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
             <Avatar
               size={38}
@@ -573,11 +573,11 @@ const styles = StyleSheet.create({
     height: 5,
     borderRadius: 3,
   },
-  // The chips' 44pt frames (IconChip minTap) are 3pt wider than the 38pt chip
-  // on every side, so the bar takes 3pt off its padding (12, 8), the gap
-  // between two chips 6pt (8 -> 2), the gap from the menu chip to the avatar
-  // 3pt (8 -> 5) and the head 3pt off its top: the chips, the avatar and the
-  // greeting sit where they did.
+  // The chips' 44pt frames (IconChip minTap) and the avatar's (Avatar with
+  // onPress) are 3pt wider than the 38pt chip or picture on every side, so
+  // the bar takes 3pt off its padding (12, 8), the gap between two frames 6pt
+  // (8 -> 2, the menu chip to the avatar too) and the head 3pt off its top:
+  // the chips, the avatar and the greeting sit where they did.
   topbar: {
     paddingHorizontal: 9,
     paddingTop: 5,

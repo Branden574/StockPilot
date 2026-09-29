@@ -147,11 +147,30 @@ describe('header icon chips: named, and a 44pt target', () => {
   });
 });
 
-describe('the Home avatar is named too', () => {
+describe('the Home avatar is named too, and a 44pt target', () => {
+  const home = readSource(path.join(MOBILE_ROOT, 'app/(drawer)/(tabs)/index.tsx'));
+  const avatar = readSource(path.join(MOBILE_ROOT, 'src/components/ui/avatar.tsx'));
+
   it('Account settings, announced as a button', () => {
-    const home = readSource(path.join(MOBILE_ROOT, 'app/(drawer)/(tabs)/index.tsx'));
     expect(home).toMatch(/<Avatar\s+size=\{38\}\s+onPress=\{\(\) => router\.push\('\/settings'\)\}\s+accessibilityLabel="Account settings"/);
-    const avatar = readSource(path.join(MOBILE_ROOT, 'src/components/ui/avatar.tsx'));
     expect(avatar).toMatch(/accessibilityRole="button"\s+accessibilityLabel=\{accessibilityLabel\}/);
   });
+
+  // Review of 2026-09-29: the 38pt avatar took hitSlop 8, so VoiceOver
+  // outlined 38pt, not the 44pt the chips beside it now have. Mutation
+  // caught: hitSlop back, or the frame dropped or sized to the picture.
+  it('a tappable avatar is a real 44pt frame around the same picture, never hitSlop', () => {
+    expect(avatar).not.toMatch(/hitSlop=/);
+    expect(avatar).toMatch(/const frame = Math\.max\(MIN_TAP, size\);/);
+    expect(avatar).toMatch(/const MIN_TAP = 44;/);
+    expect(avatar).toMatch(/width: frame,\s*height: frame,\s*alignItems: 'center',\s*justifyContent: 'center',/);
+  });
+
+  // The frame is 3pt wider than the 38pt picture on every side, so the gap
+  // from the menu chip's frame takes the 3pt: the picture stays where it was
+  // (12 + 38 + 8 from the left edge). Mutation caught: the gap left at 5.
+  it('Home gives the 3pt back, so the picture does not move', () => {
+    expect(home).toMatch(/<View style=\{\{ flexDirection: 'row', alignItems: 'center', gap: 2 \}\}>\s*<IconChip icon=\{Menu\}/);
+  });
 });
+
