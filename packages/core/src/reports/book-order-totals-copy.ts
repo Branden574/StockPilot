@@ -251,7 +251,7 @@ export function bookReportGeneratedLine(generatedAtLocal: string): string {
 export const BOOK_REPORT_AS_SAVED =
   "Quantities are each order's saved lines as of generation, including later edits to those orders.";
 export const BOOK_REPORT_RESTRICTED =
-  'You see orders only for books in your warehouses, charters and categories.';
+  'You see only orders placed in your warehouses, and only books in your warehouses, charters and categories.';
 
 type BookReportGrandTotalSummary = {
   copies: string;
@@ -411,7 +411,7 @@ export const BOOK_REPORT_HOW_COUNTED: readonly string[] = [
   BOOK_REPORT_AS_SAVED +
     " Removed lines are gone and do not count; the original request is only in the order's history.",
   'Whether an item is a book is its type now. An item retyped since it was ordered moves in or out of the report with all its history.',
-  "What you can see is decided by each book's current warehouse, charter and category.",
+  "What you can see is decided by each order's warehouse and by each book's current warehouse, charter and category.",
   "Units are each item's unit now. Only single copies are added to Total books ordered; anything in another unit is listed with its unit and left out of that total.",
   'Records that share a title or ISBN count separately, told apart by their SKU, warehouse and rack.',
   'Archived and deleted books keep their order history.',

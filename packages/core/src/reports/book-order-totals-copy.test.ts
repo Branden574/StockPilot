@@ -235,6 +235,18 @@ describe('Book Order Totals wording', () => {
     );
   });
 
+  it("a restricted reader is told BOTH limits: the order's warehouse and the book's scope", () => {
+    // book_order_report_lines joins the ORDER's warehouse under RLS as well as
+    // the item (pgTAP K7): an order placed at a warehouse the reader cannot
+    // see is left out even for a book in their own warehouse.
+    expect(copy.BOOK_REPORT_RESTRICTED).toBe(
+      'You see only orders placed in your warehouses, and only books in your warehouses, charters and categories.',
+    );
+    expect(copy.BOOK_REPORT_HOW_COUNTED).toContain(
+      "What you can see is decided by each order's warehouse and by each book's current warehouse, charter and category.",
+    );
+  });
+
   it('the warehouse view notice names the view it moved to, or says it changed', () => {
     expect(copy.bookReportViewChangedLine({ id: 'w5', name: 'DC5' }, 'DC4')).toBe(
       'Your warehouse view is now DC5. This report still shows DC4.',

@@ -316,7 +316,7 @@ describe('Book Order Totals CSV', () => {
     );
     expect(text).toContain("because the organization's time zone setting could not be used.");
     expect(text).toContain(
-      'You see orders only for books in your warehouses, charters and categories.',
+      'You see only orders placed in your warehouses, and only books in your warehouses, charters and categories.',
     );
   });
 });

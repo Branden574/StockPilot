@@ -68,7 +68,7 @@
 -- begin/rollback: nothing leaks. Namespace 03790000.
 
 begin;
-select plan(89);
+select plan(90);
 
 \set orgA     '\'03790000-0000-0000-0000-00000000000a\''
 \set orgB     '\'03790000-0000-0000-0000-00000000000b\''
@@ -824,6 +824,20 @@ select is(pg_temp.rs(r) || ' | ' || pg_temp.sm(r), 'BA 9/1 | 9/1/1',
   from (select pg_temp.bot(:mgrAB, :orgB) r) x;
 select is(pg_temp.sm(pg_temp.bot(:vwrCh, :orgA)), '34/2/3',
   'K6: a charter-scoped viewer with reports:read sees W1''s uncharted books');
+-- The ORDER's warehouse limits a restricted reader too (the warehouses join):
+-- an order placed at W2 carrying W1's Book A (possible once an order's
+-- warehouse is edited, owner question Q4) is left out for W1 staff although
+-- the book is in their warehouse. core BOOK_REPORT_RESTRICTED says so.
+savepoint k_order_wh;
+insert into public.order_requests (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type, created_at)
+values (:O9, :orgA, :W2, 'approved', 'internal', :mgr, 'pickup', '2026-05-12 18:00+00');
+insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values (:O9, :iA, 6);
+select is(
+  pg_temp.sm(pg_temp.bot(:stfW1, :orgA)) || ' ' || pg_temp.sm(pg_temp.bot(:stfW2, :orgA))
+  || ' ' || pg_temp.sm(pg_temp.bot(:mgr, :orgA)),
+  '34/2/3 0/0/0 40/2/4',
+  'K7: an order placed at W2 for W1''s Book A: W1 staff do not see it (the order''s warehouse), W2 staff do not see it (the book''s), a manager does');
+rollback to savepoint k_order_wh;
 select ok(
   (select count(distinct pg_temp.untimed(d))
      from unnest(array[
