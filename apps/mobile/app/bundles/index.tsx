@@ -40,11 +40,22 @@ export default function BundlesList() {
     <SafeAreaView style={styles.root} edges={['top']}>
       <Stack.Screen options={{ headerShown: false }} />
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn}>
+        <Pressable
+          onPress={() => router.back()}
+          style={styles.backBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+        >
           <Text style={styles.backText}>← Back</Text>
         </Pressable>
         <Text style={styles.title}>Bundles</Text>
-        <Pressable onPress={refresh} style={styles.refreshBtn}>
+        <Pressable
+          onPress={refresh}
+          style={styles.refreshBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Refresh"
+          accessibilityState={{ busy: refreshing }}
+        >
           <Text style={styles.refreshLabel}>{refreshing ? '⟳' : 'Refresh'}</Text>
         </Pressable>
       </View>
@@ -94,10 +105,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: space.md,
   },
-  backBtn: { paddingVertical: space.xs },
+  // "← Back" and Refresh are buttons in frames at least 44pt tall (they were
+  // the ~25pt text). -9 top and bottom leaves each a 26pt slot, the title's
+  // line, so the row keeps its height; the frames reach into the header's
+  // padding above and below.
+  backBtn: { minHeight: 44, minWidth: 44, justifyContent: 'center', marginVertical: -9 },
   backText: { color: theme.primary, fontSize: 14 },
   title: { color: theme.text, fontSize: 22, fontWeight: '700', flex: 1 },
-  refreshBtn: { paddingVertical: space.xs, paddingHorizontal: space.sm },
+  refreshBtn: {
+    minHeight: 44,
+    minWidth: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginVertical: -9,
+    paddingHorizontal: space.sm,
+  },
   refreshLabel: { color: theme.primary, fontSize: 13, fontWeight: '600' },
   empty: { color: theme.textMuted, textAlign: 'center', marginTop: space.xl },
   card: {

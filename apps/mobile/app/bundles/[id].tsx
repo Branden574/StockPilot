@@ -211,7 +211,12 @@ export default function BundleDetail() {
     <SafeAreaView style={styles.root} edges={['top']}>
       <Stack.Screen options={{ headerShown: false }} />
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn}>
+        <Pressable
+          onPress={() => router.back()}
+          style={styles.backBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+        >
           <Text style={styles.backText}>← Back</Text>
         </Pressable>
         <Text style={styles.title}>{bundle.name}</Text>
@@ -337,7 +342,17 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.border,
   },
-  backBtn: { paddingVertical: space.xs },
+  // "← Back" is a button in a frame at least 44pt tall (it was the 25pt
+  // text). The frame takes the header's 8pt top padding and the title's 4pt
+  // gap (marginBottom -4), so the title sits about 7pt lower, nothing overlaps.
+  backBtn: {
+    minHeight: 44,
+    minWidth: 44,
+    justifyContent: 'center',
+    alignSelf: 'flex-start',
+    marginTop: -space.sm,
+    marginBottom: -4,
+  },
   backText: { color: theme.primary, fontSize: 14 },
   title: { color: theme.text, fontSize: 22, fontWeight: '700', marginTop: 4 },
   sku: { color: theme.textMuted, fontFamily: 'Menlo', fontSize: 12, marginTop: 2 },

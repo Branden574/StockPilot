@@ -4,6 +4,7 @@ import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 import {
+  TOUCHABLE_TAG,
   attr,
   attrText,
   listTsx,
@@ -174,3 +175,91 @@ describe('the Home avatar is named too, and a 44pt target', () => {
   });
 });
 
+/**
+ * THE TEXT BACK LINKS AND THE COUNTING CAMERAS' DONE AND CANCEL (review of
+ * 2026-09-29). Not IconChips, so the sweep above did not see them: "← Back"
+ * on a cycle count (its three states), on Bundles and a bundle, and on the AI
+ * count's review; Done and Cancel over the counting cameras. VoiceOver read
+ * the arrow and the word with no button role, and each was about 25-28pt
+ * tall. Each is now a button named for what it does, in a frame at least
+ * 44pt tall (a real frame, not hitSlop), the frame's extra height taken from
+ * the padding around it where there is room.
+ */
+describe('text Back links and the cameras Done and Cancel: buttons, and a 44pt target', () => {
+  type Touch = { el: JsxNode; sf: ts.SourceFile; file: string; src: string; text: string };
+  const textOf = (el: JsxNode, sf: ts.SourceFile): string => {
+    const parts: string[] = [];
+    const visit = (n: ts.Node) => {
+      if (ts.isJsxText(n)) parts.push(n.getText(sf).trim());
+      ts.forEachChild(n, visit);
+    };
+    visit(el);
+    return parts.filter(Boolean).join(' ');
+  };
+  const touches: Touch[] = [];
+  for (const abs of listTsx(path.join(MOBILE_ROOT, 'app'), path.join(MOBILE_ROOT, 'src'))) {
+    const file = path.relative(MOBILE_ROOT, abs);
+    const src = readSource(abs);
+    const sf = parseTsx(src, file);
+    walkJsx(sf, (el) => {
+      if (TOUCHABLE_TAG.test(tagOf(el, sf))) touches.push({ el, sf, file, src, text: textOf(el, sf) });
+    });
+  }
+  const at = (t: Touch) => `${t.file}:${t.sf.getLineAndCharacterOfPosition(t.el.getStart(t.sf)).line + 1} (${t.text})`;
+  /** The StyleSheet entries the touchable's own style names, as source text. */
+  const styleBlocks = (t: Touch) =>
+    [...(attrText(t.el, 'style', t.sf) ?? '').matchAll(/styles\.(\w+)/g)].map(
+      ([, name]) => new RegExp(`\\n  ${name}: \\{([^}]*)\\}`).exec(t.src)?.[1] ?? '',
+    );
+  const has44Frame = (t: Touch) => styleBlocks(t).some((b) => /minHeight: (44|MIN_TAP)\b/.test(b));
+
+  const backLinks = touches.filter((t) => /^←\s*Back$/.test(t.text));
+
+  it('finds them (the sweep is not vacuous)', () => {
+    expect(backLinks.map((t) => t.file).sort()).toEqual([
+      'app/bundles/[id].tsx',
+      'app/bundles/index.tsx',
+      'app/cycle-count/[id].tsx',
+      'app/cycle-count/[id].tsx',
+      'app/cycle-count/[id].tsx',
+      'app/cycle-count/ai-scan/[id].tsx',
+    ]);
+  });
+
+  // Mutation caught: the role or the name dropped from any of them.
+  it('every "← Back" is a button named Back', () => {
+    const wrong = backLinks.filter(
+      (t) => attrText(t.el, 'accessibilityRole', t.sf) !== 'button' || attrText(t.el, 'accessibilityLabel', t.sf) !== 'Back',
+    );
+    expect(wrong.map(at)).toEqual([]);
+  });
+
+  // Mutation caught: the frame's minHeight dropped (25pt again), or hitSlop.
+  it('every "← Back" is a frame at least 44pt tall, never hitSlop', () => {
+    expect(backLinks.filter((t) => !has44Frame(t)).map(at)).toEqual([]);
+    expect(backLinks.filter((t) => attr(t.el, 'hitSlop', t.sf)).map(at)).toEqual([]);
+  });
+
+  it("Bundles' Refresh beside it is a button named Refresh, 44pt tall", () => {
+    const refresh = touches.filter((t) => t.file === 'app/bundles/index.tsx' && attrText(t.el, 'onPress', t.sf) === 'refresh');
+    expect(refresh).toHaveLength(1);
+    expect(attrText(refresh[0]!.el, 'accessibilityRole', refresh[0]!.sf)).toBe('button');
+    expect(attrText(refresh[0]!.el, 'accessibilityLabel', refresh[0]!.sf)).toBe('Refresh');
+    expect(has44Frame(refresh[0]!)).toBe(true);
+  });
+
+  // The counting cameras' way out: Done (scan) and Cancel (AI shelf scan).
+  it.each([
+    ['app/cycle-count/scan/[id].tsx', 'Done'],
+    ['app/cycle-count/ai-scan/[id].tsx', 'Cancel'],
+  ])('%s: %s is a button, in a 44pt frame around the same pill', (file, word) => {
+    const found = touches.filter((t) => t.file === file && t.text === word);
+    expect(found).toHaveLength(1);
+    const t = found[0]!;
+    expect(attrText(t.el, 'accessibilityRole', t.sf)).toBe('button');
+    expect(attrText(t.el, 'accessibilityLabel', t.sf)).toBe(word);
+    expect(has44Frame(t)).toBe(true);
+    expect(styleBlocks(t).some((b) => /minWidth: (44|MIN_TAP)\b/.test(b))).toBe(true);
+    expect(attr(t.el, 'hitSlop', t.sf)).toBeUndefined();
+  });
+});
