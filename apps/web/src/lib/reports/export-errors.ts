@@ -42,3 +42,12 @@ export function reportExportErrorResponse(
 export function reportExportUnauthenticated(): NextResponse {
   return NextResponse.json({ error: 'unauthenticated' }, { status: 401, headers: NO_STORE });
 }
+
+/** A report the dispatcher does not serve: 404, one shape for the CSV and
+ *  PDF dispatchers, never cached. */
+export function reportExportNotFound(): NextResponse {
+  return NextResponse.json(
+    { error: 'not_found', message: 'Unknown report' },
+    { status: 404, headers: NO_STORE },
+  );
+}

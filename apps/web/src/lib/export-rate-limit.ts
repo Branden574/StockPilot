@@ -81,7 +81,11 @@ export async function exportRateLimited(
     { error: 'rate_limited', message: 'Too many exports — please wait a few minutes.' },
     {
       status: 429,
-      headers: { 'retry-after': String(Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000))) },
+      headers: {
+        'retry-after': String(Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000))),
+        // Exports are never cached anywhere, answers or refusals.
+        'Cache-Control': 'no-store',
+      },
     },
   );
 }

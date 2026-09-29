@@ -53,7 +53,7 @@ async function get(slug: string, qs = '') {
   } catch {
     body = null;
   }
-  return { status: res.status, body };
+  return { status: res.status, body, cacheControl: res.headers.get('cache-control') };
 }
 
 beforeEach(() => {
@@ -101,6 +101,15 @@ describe('GET /api/reports/[slug]/pdf: checks before the export budget', () => {
     const r = await get('everything');
     expect(r.status).toBe(404);
     expect(exportRateLimited).not.toHaveBeenCalled();
+  });
+
+  // Review nit (2026-09-29): the PDF 404 had its own shape (unknown_report)
+  // and no no-store; both dispatchers now answer the same, never cached.
+  it('an unknown report: the same 404 as the CSV dispatcher, never cached', async () => {
+    signIn();
+    const r = await get('everything');
+    expect(r.body).toEqual({ error: 'not_found', message: 'Unknown report' });
+    expect(r.cacheControl).toBe('no-store');
   });
 
   it('item-cost-history with a malformed id: 400, budget untouched', async () => {

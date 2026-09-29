@@ -75,7 +75,7 @@ async function get(slug: string, qs = '') {
   } catch {
     body = null;
   }
-  return { status: res.status, body, text };
+  return { status: res.status, body, text, cacheControl: res.headers.get('cache-control') };
 }
 
 beforeEach(() => {
@@ -130,6 +130,13 @@ describe('GET /api/reports/[slug]/csv: the caller is checked before the export b
     const r = await get('everything', '');
     expect(r.status).toBe(404);
     expect(exportRateLimited).not.toHaveBeenCalled();
+  });
+
+  it('an unknown report: 404 in the shared shape, never cached', async () => {
+    signIn();
+    const r = await get('everything', '');
+    expect(r.body).toEqual({ error: 'not_found', message: 'Unknown report' });
+    expect(r.cacheControl).toBe('no-store');
   });
 
   it.each([

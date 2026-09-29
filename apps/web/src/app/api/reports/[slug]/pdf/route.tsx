@@ -16,7 +16,11 @@ import {
   formatDateForPdf,
   formatNumberForPdf,
 } from '@/lib/pdf/styles';
-import { reportExportErrorResponse, reportExportUnauthenticated } from '@/lib/reports/export-errors';
+import {
+  reportExportErrorResponse,
+  reportExportNotFound,
+  reportExportUnauthenticated,
+} from '@/lib/reports/export-errors';
 import { type ReportSlug } from '@/lib/reports/report-access';
 import { audit } from '@/server/services/audit';
 import { assertPermission, ServiceError, type ServiceContext } from '@/server/services/context';
@@ -89,7 +93,7 @@ export async function GET(
     if (!ctx) return reportExportUnauthenticated();
     assertPermission(ctx, 'reports:export');
     if (!PDF_REPORTS.has(slug)) {
-      return NextResponse.json({ error: 'unknown_report' }, { status: 404 });
+      return reportExportNotFound();
     }
     const reportsSvc = new ReportsService(ctx);
     reportsSvc.gate(slug as ReportSlug);
@@ -460,7 +464,7 @@ export async function GET(
       ];
       auditExtra = { item_id: itemId, point_count: data.pointCount, since, until };
     } else {
-      return NextResponse.json({ error: 'unknown_report' }, { status: 404 });
+      return reportExportNotFound();
     }
 
     // ── Render ──────────────────────────────────────────────────────

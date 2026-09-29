@@ -3,7 +3,11 @@ import { NextResponse } from 'next/server';
 import { withApiContext } from '@/lib/auth/api-context';
 import { csvFilename, toCsv } from '@/lib/csv';
 import { exportRateLimited } from '@/lib/export-rate-limit';
-import { reportExportErrorResponse, reportExportUnauthenticated } from '@/lib/reports/export-errors';
+import {
+  reportExportErrorResponse,
+  reportExportNotFound,
+  reportExportUnauthenticated,
+} from '@/lib/reports/export-errors';
 import { type ReportSlug } from '@/lib/reports/report-access';
 import { assertPermission, ServiceError, type ServiceContext } from '@/server/services/context';
 import { ReportsService } from '@/server/services/reports';
@@ -69,7 +73,7 @@ export async function GET(
     if (!ctx) return reportExportUnauthenticated();
     assertPermission(ctx, 'reports:export');
     if (!CSV_REPORTS.has(slug)) {
-      return NextResponse.json({ error: 'not_found', message: 'Unknown report' }, { status: 404 });
+      return reportExportNotFound();
     }
     const svc = new ReportsService(ctx);
     svc.gate(slug as ReportSlug);
@@ -344,7 +348,7 @@ export async function GET(
       return csvResponse(slug, csv);
     }
 
-    return NextResponse.json({ error: 'not_found', message: 'Unknown report' }, { status: 404 });
+    return reportExportNotFound();
   } catch (e) {
     return reportExportErrorResponse(e, 'reports.csv', ctx?.organizationId);
   }
