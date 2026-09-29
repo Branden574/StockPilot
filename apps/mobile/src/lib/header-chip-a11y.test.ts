@@ -262,4 +262,35 @@ describe('text Back links and the cameras Done and Cancel: buttons, and a 44pt t
     expect(styleBlocks(t).some((b) => /minWidth: (44|MIN_TAP)\b/.test(b))).toBe(true);
     expect(attr(t.el, 'hitSlop', t.sf)).toBeUndefined();
   });
+
+  // Walk P1 (found in passing on the F2-3 walk, the same on main): controls
+  // VoiceOver read as plain text with no button role. Mutation caught: the
+  // role or the name dropped from any of them.
+  it.each([
+    ['app/(drawer)/maintenance.tsx', 'New', 'New maintenance request'],
+    ['app/item/new.tsx', 'Scan instead', 'Scan instead'],
+  ])('%s: the top bar\'s "%s" is a button named %s (the visible words first)', (file, text, name) => {
+    const found = touches.filter((t) => t.file === file && t.text === text);
+    expect(found.map(at)).toHaveLength(1);
+    const t = found[0]!;
+    expect(attrText(t.el, 'accessibilityRole', t.sf)).toBe('button');
+    expect(attrText(t.el, 'accessibilityLabel', t.sf)).toBe(name);
+    expect(name.startsWith(text)).toBe(true);
+  });
+
+  // The AI shelf scan's shutter was a button with no name at all (a ring and
+  // a dot): VoiceOver found an unlabelled element.
+  it("the AI shelf scan's shutter is a button named Capture photo, disabled and busy while it works", () => {
+    const found = touches.filter(
+      (t) => t.file === 'app/cycle-count/ai-scan/[id].tsx' && attrText(t.el, 'onPress', t.sf) === 'onCapture',
+    );
+    expect(found.map(at)).toHaveLength(1);
+    const t = found[0]!;
+    expect(attrText(t.el, 'accessibilityRole', t.sf)).toBe('button');
+    expect(attrText(t.el, 'accessibilityLabel', t.sf)).toBe('Capture photo');
+    const state = (attrText(t.el, 'accessibilityState', t.sf) ?? '').replace(/\s+/g, ' ').replace(/,\s*\}/, ' }');
+    expect(state).toBe(
+      "{ disabled: phase.kind !== 'idle', busy: phase.kind === 'capturing' || phase.kind === 'uploading' }",
+    );
+  });
 });

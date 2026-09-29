@@ -846,6 +846,8 @@ export default function NewItem() {
           <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
           <Pressable
             onPress={() => router.push('/scan')}
+            accessibilityRole="button"
+            accessibilityLabel="Scan instead"
             hitSlop={8}
             style={({ pressed }) => [
               styles.scanShortcut,

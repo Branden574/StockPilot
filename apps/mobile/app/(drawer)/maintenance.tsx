@@ -151,6 +151,8 @@ export default function MaintenanceListScreen() {
           {enabled && canSubmit ? (
             <Pressable
               onPress={() => router.push('/maintenance/new' as Href)}
+              accessibilityRole="button"
+              accessibilityLabel="New maintenance request"
               hitSlop={8}
               style={({ pressed }) => [
                 styles.newBtn,

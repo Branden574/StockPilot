@@ -476,6 +476,12 @@ export default function AiScanScreen() {
             ]}
             onPress={onCapture}
             disabled={phase.kind !== 'idle'}
+            accessibilityRole="button"
+            accessibilityLabel="Capture photo"
+            accessibilityState={{
+              disabled: phase.kind !== 'idle',
+              busy: phase.kind === 'capturing' || phase.kind === 'uploading',
+            }}
           >
             {phase.kind === 'capturing' || phase.kind === 'uploading' ? (
               <ActivityIndicator color="#fff" />
