@@ -316,11 +316,11 @@ describe('Approve partial opens the preview (F2-3)', () => {
     );
   });
 
-  it('a refusal stays in the dialog as an alert (pattern #20), reads nothing again, and can be tried again', async () => {
+  it('a refusal stays in the dialog as an alert (pattern #20), announced once, reads nothing again, and refreshes the order behind', async () => {
     const user = userEvent.setup();
     approvePartial.mockResolvedValueOnce({
       ok: false,
-      error: { code: 'conflict', message: 'This order is no longer waiting for approval.' },
+      error: { code: 'validation_error', message: 'No stock is available yet.' },
     });
     render(<ManagerActionsPanel {...panelProps()} />);
 
@@ -330,14 +330,79 @@ describe('Approve partial opens the preview (F2-3)', () => {
 
     const alert = await within(dialog).findByTestId('approve-partial-error');
     expect(alert).toHaveAttribute('role', 'alert');
-    expect(alert).toHaveTextContent('This order is no longer waiting for approval.');
-    expect(toastMock.error).toHaveBeenCalledWith('This order is no longer waiting for approval.');
+    expect(alert).toHaveTextContent('No stock is available yet.');
+    // The inline alert is the one announcement: no toast beside it.
+    expect(toastMock.error).not.toHaveBeenCalled();
     expect(reread).not.toHaveBeenCalled();
-    expect(routerRefresh).not.toHaveBeenCalled();
+    // The order behind the dialog is read again, so it shows where it is now.
+    expect(routerRefresh).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId('approve-partial-result')).toBeNull();
-    // Still open, the preview still shown, Confirm available again.
+    // Still open, the preview still shown, and the order still pending:
+    // Confirm available again.
     expect(within(dialog).getByTestId('approve-partial-summary')).toBeInTheDocument();
     expect(within(dialog).getByTestId('approve-partial-confirm')).toBeEnabled();
+  });
+
+  it('refused because the order moved on: once the refresh shows it, Close replaces Confirm', async () => {
+    const user = userEvent.setup();
+    approvePartial.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'validation_error', message: 'This request is no longer pending approval' },
+    });
+    const { rerender } = render(<ManagerActionsPanel {...panelProps()} />);
+
+    await user.click(screen.getByRole('button', { name: 'Approve partial' }));
+    await user.click(within(screen.getByRole('dialog')).getByTestId('approve-partial-confirm'));
+    await screen.findByTestId('approve-partial-error');
+    expect(routerRefresh).toHaveBeenCalledTimes(1);
+
+    // The refresh lands: another approver had approved it.
+    rerender(
+      <ManagerActionsPanel
+        {...panelProps({
+          status: 'approved',
+          partialPreview: null,
+          stockGates: { approvePartial: 'hidden', resume: 'waiting', notice: null, canRetry: false },
+        })}
+      />,
+    );
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).queryByTestId('approve-partial-confirm')).toBeNull();
+    expect(within(dialog).getByTestId('approve-partial-close')).toBeEnabled();
+    // The server's sentence already says why; core's is not added to it.
+    expect(within(dialog).getByTestId('approve-partial-error')).toHaveTextContent('This request is no longer pending approval');
+    expect(within(dialog).queryByTestId('approve-partial-moved-on')).toBeNull();
+    await user.click(within(dialog).getByTestId('approve-partial-close'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(approvePartial).toHaveBeenCalledTimes(1);
+  });
+
+  it('the order moved on while the preview was open (no confirm yet): says so, and offers only Close', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<ManagerActionsPanel {...panelProps()} />);
+    await user.click(screen.getByRole('button', { name: 'Approve partial' }));
+    rerender(<ManagerActionsPanel {...panelProps({ status: 'approved', partialPreview: null })} />);
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByTestId('approve-partial-moved-on')).toHaveTextContent(
+      'This order is no longer waiting for approval.',
+    );
+    expect(within(dialog).queryByTestId('approve-partial-confirm')).toBeNull();
+    expect(within(dialog).getByTestId('approve-partial-close')).toBeInTheDocument();
+    expect(approvePartial).not.toHaveBeenCalled();
+  });
+
+  it("a server error shows core's sentence, never the database's text", async () => {
+    const user = userEvent.setup();
+    approvePartial.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'internal_error', message: 'canceling statement due to lock timeout' },
+    });
+    render(<ManagerActionsPanel {...panelProps()} />);
+    await user.click(screen.getByRole('button', { name: 'Approve partial' }));
+    await user.click(within(screen.getByRole('dialog')).getByTestId('approve-partial-confirm'));
+    const alert = await screen.findByTestId('approve-partial-error');
+    expect(alert).toHaveTextContent('The order could not be updated. Try again.');
+    expect(alert).not.toHaveTextContent(/lock timeout/);
   });
 
   it('an action that never answers says to check the order, and stays open', async () => {
@@ -352,6 +417,8 @@ describe('Approve partial opens the preview (F2-3)', () => {
       "The request didn't finish. Check the order before trying again.",
     );
     expect(reread).not.toHaveBeenCalled();
+    // Whether it went through is unknown: the order behind is read again.
+    expect(routerRefresh).toHaveBeenCalledTimes(1);
   });
 
   it('Cancel commits nothing', async () => {
@@ -482,7 +549,16 @@ describe('ApprovePartialDialog: a preview that cannot be shown', () => {
       reason: 'item_moved',
       message: PARTIAL_PREVIEW_ITEM_MOVED_COPY,
     };
-    render(<ApprovePartialDialog orderId={ORDER} preview={moved} timeZone={TZ} open onOpenChange={() => {}} />);
+    render(
+      <ApprovePartialDialog
+        orderId={ORDER}
+        orderStatus="pending_approval"
+        preview={moved}
+        timeZone={TZ}
+        open
+        onOpenChange={() => {}}
+      />,
+    );
 
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: 'Approve partial' })).toBeInTheDocument();

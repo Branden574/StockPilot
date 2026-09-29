@@ -1039,6 +1039,7 @@ export function ManagerActionsPanel({
         <ApprovePartialDialog
           key={partial.session}
           orderId={orderId}
+          orderStatus={status}
           preview={partial.preview}
           timeZone={orgTimeZone}
           open={partial.open}

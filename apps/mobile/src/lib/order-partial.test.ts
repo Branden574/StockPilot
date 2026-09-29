@@ -4,6 +4,8 @@ import * as path from 'node:path';
 import {
   PARTIAL_ACTION_TITLE,
   PARTIAL_CLOSE_LABEL,
+  PARTIAL_COMMIT_FAILED_COPY,
+  PARTIAL_COMMIT_RATE_LIMITED_COPY,
   PARTIAL_COMMIT_UNANSWERED_COPY,
   PARTIAL_PREVIEW_NOTE,
   PARTIAL_PREVIEW_NOTHING_TO_HOLD_COPY,
@@ -25,7 +27,6 @@ import {
 } from './__fixtures__/readiness-facts';
 import {
   describePartialCommitError,
-  PARTIAL_COMMIT_FAILED_COPY,
   partialSheetView,
   runPartialFulfilment,
   type PartialCommitDeps,
@@ -105,6 +106,7 @@ describe('partialSheetView: the preview, in core’s words', () => {
       confirmLabel: 'Approve partial',
       cancelLabel: 'Cancel',
       unavailable: null,
+      movedOn: null,
     });
   });
 
@@ -156,6 +158,7 @@ describe('partialSheetView: the preview, in core’s words', () => {
       confirmLabel: null,
       cancelLabel: PARTIAL_CLOSE_LABEL,
       unavailable: PARTIAL_PREVIEW_READ_FAILED_COPY,
+      movedOn: null,
     });
     const nothingFree = fxResult(
       fxFacts({
@@ -168,6 +171,16 @@ describe('partialSheetView: the preview, in core’s words', () => {
     expect(view.title).toBe('Resume fulfillment');
     expect(view.confirmLabel).toBeNull();
     expect(view.unavailable).toBe(PARTIAL_PREVIEW_NOTHING_TO_HOLD_COPY);
+  });
+
+  it('the order moved on under the sheet (the screen reloaded after a refusal, or another approver): says so', () => {
+    // Mutation caught: Confirm left on for an order the RPC will refuse again.
+    expect(partialSheetView(PREVIEW, { ...TZ, orderStatus: 'pending_approval' }).movedOn).toBeNull();
+    expect(partialSheetView(PREVIEW, { ...TZ, orderStatus: 'approved' }).movedOn).toBe(
+      'This order is no longer waiting for approval.',
+    );
+    // Not known yet (no status passed): nothing claimed.
+    expect(partialSheetView(PREVIEW, TZ).movedOn).toBeNull();
   });
 
   it('the titles are the order screen’s buttons (core’s words)', () => {
@@ -253,14 +266,28 @@ describe('runPartialFulfilment: the message comes from the RE-READ, never the pr
     expect(result.held).toBe(34);
   });
 
-  it('a refused commit rejects with the refusal; nothing is read or said', async () => {
-    // Mutation caught: reading (and reporting holds) after a refusal.
+  it('a refused commit rejects with the refusal; nothing is read for a message, and the screen reloads behind the sheet', async () => {
+    // Mutation caught: reading (and reporting holds) after a refusal; or
+    // leaving the order screen as it was (Approve partial still offered on
+    // an order another approver already approved).
     const { d } = deps(approvedHolding(36));
     const refusal = Object.assign(new Error('This order is no longer waiting for approval.'), { status: 409 });
     d.commit.mockRejectedValueOnce(refusal);
     await expect(runPartialFulfilment(d, FX_ORDER, 'approve_partial', PREVIEW)).rejects.toBe(refusal);
     expect(d.reread).not.toHaveBeenCalled();
-    expect(d.reload).not.toHaveBeenCalled();
+    expect(d.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('the reload after a refusal never holds the refusal back, and its own failure is not reported as the refusal', async () => {
+    const { d } = deps(approvedHolding(36));
+    const refusal = Object.assign(new Error('No stock is available yet.'), { status: 400 });
+    d.commit.mockRejectedValueOnce(refusal);
+    d.reload.mockImplementationOnce(() => new Promise<void>(() => {}));
+    await expect(runPartialFulfilment(d, FX_ORDER, 'approve_partial', PREVIEW)).rejects.toBe(refusal);
+    const { d: d2 } = deps(approvedHolding(36));
+    d2.commit.mockRejectedValueOnce(refusal);
+    d2.reload.mockRejectedValueOnce(new Error('offline'));
+    await expect(runPartialFulfilment(d2, FX_ORDER, 'approve_partial', PREVIEW)).rejects.toBe(refusal);
   });
 
   it('the re-read and the screen reload run side by side (no serial round trip)', async () => {
@@ -303,16 +330,29 @@ describe('describePartialCommitError: what the sheet says in place', () => {
     );
   });
 
-  it('a bare code, or too many requests', () => {
+  it("a bare code, a server error, or too many requests: core's sentences (the web dialog's)", () => {
     expect(describePartialCommitError(Object.assign(new Error('conflict'), { status: 409 }))).toBe(
       PARTIAL_COMMIT_FAILED_COPY,
     );
-    expect(describePartialCommitError(Object.assign(new Error(''), { status: 500 }))).toBe(
-      PARTIAL_COMMIT_FAILED_COPY,
+    // The route's internal_error carries the database's text: never shown.
+    expect(
+      describePartialCommitError(
+        Object.assign(new Error('canceling statement due to lock timeout'), { status: 500, code: 'internal_error' }),
+      ),
+    ).toBe(PARTIAL_COMMIT_FAILED_COPY);
+    expect(describePartialCommitError(Object.assign(new Error('x y'), { status: 429, code: 'rate_limited' }))).toBe(
+      PARTIAL_COMMIT_RATE_LIMITED_COPY,
     );
-    expect(describePartialCommitError(Object.assign(new Error('x y'), { status: 429 }))).toBe(
-      'Too many requests. Wait a moment and try again.',
-    );
+    expect(PARTIAL_COMMIT_FAILED_COPY).toBe('The order could not be updated. Try again.');
+    expect(PARTIAL_COMMIT_RATE_LIMITED_COPY).toBe('Too many requests. Wait a moment and try again.');
+  });
+
+  it('a gateway error the app never answered (a 5xx with no code): the outcome is unknown, look first', () => {
+    // Mutation caught: "could not be updated" when the approval may have
+    // gone through before the gateway gave up.
+    expect(
+      describePartialCommitError(Object.assign(new Error('The server had a problem. Try again in a moment.'), { status: 504 })),
+    ).toBe(PARTIAL_COMMIT_UNANSWERED_COPY);
   });
 });
 
@@ -335,7 +375,13 @@ describe('the phone sheet and the web dialog say the same (both read core)', () 
   const phoneScreen = readFileSync(path.resolve(__dirname, '../../app/order/[id].tsx'), 'utf8');
 
   it('both import the words from core', () => {
-    for (const name of ['PARTIAL_ACTION_TITLE', 'PARTIAL_CLOSE_LABEL', 'PARTIAL_COMMIT_UNANSWERED_COPY']) {
+    for (const name of [
+      'PARTIAL_ACTION_TITLE',
+      'PARTIAL_CLOSE_LABEL',
+      'describePartialCommitRefusal',
+      'partialActionApplies',
+      'partialActionMovedOnCopy',
+    ]) {
       expect(web).toContain(name);
       expect(phoneLib).toContain(name);
     }
@@ -346,9 +392,11 @@ describe('the phone sheet and the web dialog say the same (both read core)', () 
     for (const src of [web, phoneLib, phoneSheet]) {
       // String literals and JSX text (the doc comments may name the buttons).
       expect(src).not.toContain("didn't finish");
+      expect(src).not.toMatch(/could not be updated|Too many requests|no longer waiting/);
       expect(src).not.toMatch(/'(Approve partial|Resume fulfillment)'/);
       expect(src).not.toMatch(/>\s*(Approve partial|Resume fulfillment)\s*</);
     }
     expect(web).not.toMatch(/data-testid="approve-partial-close">\s*Close\s*</);
+    expect(web).not.toMatch(/toast\.error/);
   });
 });

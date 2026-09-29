@@ -3,14 +3,15 @@
 import { Loader2, PackageCheck, RotateCcw } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
-import { toast } from 'sonner';
 
 import {
+  describePartialCommitRefusal,
   describePartialPreview,
   describePartialResult,
   PARTIAL_ACTION_TITLE,
   PARTIAL_CLOSE_LABEL,
-  PARTIAL_COMMIT_UNANSWERED_COPY,
+  partialActionApplies,
+  partialActionMovedOnCopy,
   readinessCheckedAtCopy,
   type ActionResult,
   type OrderReadinessResult,
@@ -61,8 +62,14 @@ type Step =
  * looked." A re-read that fails claims no number.
  *
  * A refusal stays in the dialog as an inline alert (pattern #20: a toast
- * alone disappears outside the dialog) and nothing is re-read. The dialog
- * cannot be dismissed while the commit and the re-read are in flight.
+ * alone disappears outside the dialog; the alert is the one announcement, no
+ * toast beside it), in core's words (describePartialCommitRefusal: the
+ * server's sentence, never a database's raw text). Nothing is re-read for the
+ * message, but the page behind is refreshed, and when the order is no longer
+ * at the status the action starts from (another approver got there first, or
+ * the order moved on while the preview was open), Close replaces Confirm and,
+ * without a refusal to explain it, core says why. The dialog cannot be
+ * dismissed while the commit and the re-read are in flight.
  *
  * An unavailable preview (a failed read, an item the viewer cannot see, an
  * item that moved warehouse, nothing free to resume: the page's stock gates
@@ -71,12 +78,16 @@ type Step =
  */
 export function ApprovePartialDialog({
   orderId,
+  orderStatus,
   preview,
   timeZone,
   open,
   onOpenChange,
 }: {
   orderId: string;
+  /** The order's status NOW (the page's latest render): when it is no longer
+   *  the one the action starts from, there is nothing to confirm. */
+  orderStatus: string;
   /** The preview as it was when the dialog opened (core previewPartialFulfilment). */
   preview: PartialPreview;
   /** The org's zone, for "Checked at" (the strip's zone). */
@@ -89,11 +100,14 @@ export function ApprovePartialDialog({
   const copy = describePartialPreview(preview);
   const committing = state.step === 'committing';
   const ConfirmIcon = preview.action === 'resume' ? RotateCcw : PackageCheck;
+  // The order moved on under the preview: nothing to confirm any more.
+  const movedOn = state.step === 'preview' && !partialActionApplies(preview.action, orderStatus);
 
   async function confirm() {
     if (preview.state !== 'ok' || committing) return;
     setState({ step: 'committing' });
-    let res: ActionResult<void>;
+    // null: the action never answered.
+    let res: ActionResult<void> | null;
     try {
       res =
         preview.action === 'approve_partial'
@@ -103,11 +117,18 @@ export function ApprovePartialDialog({
       // A server action that never answered (the network dropped, the
       // deploy changed under the tab): whether it committed is unknown, so
       // core's sentence says to look before trying again.
-      res = { ok: false, error: { code: 'internal_error', message: PARTIAL_COMMIT_UNANSWERED_COPY } };
+      res = null;
     }
-    if (!res.ok) {
-      toast.error(res.error.message);
-      setState({ step: 'preview', error: res.error.message });
+    if (!res || !res.ok) {
+      setState({
+        step: 'preview',
+        error: describePartialCommitRefusal(
+          res ? { answered: true, code: res.error.code, message: res.error.message } : { answered: false },
+        ),
+      });
+      // Show the order as it is now behind the dialog (it may have moved on:
+      // then Close replaces Confirm).
+      router.refresh();
       return;
     }
     // Committed. What was held is READ, never echoed from the preview.
@@ -194,6 +215,12 @@ export function ApprovePartialDialog({
           </div>
         )}
 
+        {movedOn && !(state.step === 'preview' && state.error) && (
+          <p role="status" className="text-sm" data-testid="approve-partial-moved-on">
+            {partialActionMovedOnCopy(preview.action)}
+          </p>
+        )}
+
         {state.step === 'preview' && state.error && (
           <p
             role="alert"
@@ -205,7 +232,7 @@ export function ApprovePartialDialog({
         )}
 
         <DialogFooter>
-          {state.step === 'done' || !copy ? (
+          {state.step === 'done' || !copy || movedOn ? (
             <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="approve-partial-close">
               {PARTIAL_CLOSE_LABEL}
             </Button>

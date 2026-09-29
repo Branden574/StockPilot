@@ -135,6 +135,19 @@ function wrongStatusCopy(action: PartialAction): string {
     : 'Only a backordered order can be resumed.';
 }
 
+/** Whether the order is at the status the action starts from (the RPCs
+ *  refuse any other). A dialog opened on a pending order can outlive that:
+ *  another approver, or a refused confirm, moves the order on under it. */
+export function partialActionApplies(action: PartialAction, status: string | null | undefined): boolean {
+  return status === FROM_STATUS[action];
+}
+
+/** Why a dialog whose order moved on offers nothing to confirm (the words a
+ *  preview at the wrong status uses). */
+export function partialActionMovedOnCopy(action: PartialAction): string {
+  return wrongStatusCopy(action);
+}
+
 function unavailable(
   action: PartialAction,
   reason: PartialPreviewUnavailable,
@@ -263,6 +276,46 @@ export const PARTIAL_CLOSE_LABEL = 'Close';
  */
 export const PARTIAL_COMMIT_UNANSWERED_COPY =
   "The request didn't finish. Check the order before trying again.";
+
+/** The database refused inside the commit (it rolled back, nothing was
+ *  held), or the refusal carried no words a person can use. */
+export const PARTIAL_COMMIT_FAILED_COPY = 'The order could not be updated. Try again.';
+
+/** Too many requests in a short time (the phone's route rate limit). */
+export const PARTIAL_COMMIT_RATE_LIMITED_COPY = 'Too many requests. Wait a moment and try again.';
+
+/**
+ * What the dialog (web) or sheet (phone) says in place when the confirm did
+ * not go through, from what came back:
+ *   no answer at all, or a gateway error the app never answered (a 5xx with
+ *     no code of the app's): the outcome is unknown, PARTIAL_COMMIT_UNANSWERED_COPY;
+ *   too many requests: PARTIAL_COMMIT_RATE_LIMITED_COPY;
+ *   the app's internal_error (the RPC failed and rolled back; its raw text is
+ *     the database's, never shown): PARTIAL_COMMIT_FAILED_COPY;
+ *   a refusal the server worded (the order moved on, not allowed, nothing
+ *     free): its sentence;
+ *   a bare code or nothing: PARTIAL_COMMIT_FAILED_COPY.
+ */
+export function describePartialCommitRefusal(input: {
+  /** False when nothing came back (the request dropped or timed out). */
+  answered: boolean;
+  /** The HTTP status (the phone's API client); absent for a server action. */
+  status?: number | null;
+  /** The app's error code (`validation_error`, `internal_error`, ...). */
+  code?: string | null;
+  message?: string | null;
+}): string {
+  if (!input.answered) return PARTIAL_COMMIT_UNANSWERED_COPY;
+  const status = input.status ?? null;
+  const code = input.code ?? null;
+  if (status === 429 || code === 'rate_limited') return PARTIAL_COMMIT_RATE_LIMITED_COPY;
+  if (code === 'internal_error') return PARTIAL_COMMIT_FAILED_COPY;
+  if (status !== null && status >= 500 && code === null) return PARTIAL_COMMIT_UNANSWERED_COPY;
+  const message = input.message?.trim() ?? '';
+  // A lone snake_case token is a code, not a sentence.
+  if (message && !/^[a-z0-9_]+$/.test(message)) return message;
+  return PARTIAL_COMMIT_FAILED_COPY;
+}
 
 const ACTION_WORDS: Readonly<Record<PartialAction, { title: string; lead: string; confirm: string }>> = {
   approve_partial: {

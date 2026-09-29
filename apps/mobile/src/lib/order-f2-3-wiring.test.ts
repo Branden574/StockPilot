@@ -149,7 +149,7 @@ describe('Approve partial and Resume open the preview first', () => {
   it('the sheet shows core’s words for the frozen preview, knows when the phone is offline, and confirms through confirmPartial', () => {
     const code = codeOnly(screen);
     expect(code).toMatch(
-      /\{partial \? \(\s*<ApprovePartialSheet\s+visible\s+view=\{partialSheetView\(partial\.preview, \{\s*timeZone: order\?\.orgTimezone \?\? undefined,\s*\}\)\}\s+offline=\{offline\}\s+onClose=\{\(\) => setPartial\(null\)\}\s+onConfirm=\{confirmPartial\}\s*\/>\s*\) : null\}/,
+      /\{partial \? \(\s*<ApprovePartialSheet\s+visible\s+view=\{partialSheetView\(partial\.preview, \{\s*timeZone: order\?\.orgTimezone \?\? undefined,\s*orderStatus: order\?\.status \?\? null,\s*\}\)\}\s+offline=\{offline\}\s+onClose=\{\(\) => setPartial\(null\)\}\s+onConfirm=\{confirmPartial\}\s*\/>\s*\) : null\}/,
     );
   });
 
@@ -386,10 +386,23 @@ describe('the approve-partial sheet (sibling backdrop, VoiceOver, 44 pt, Dynamic
 
   it('nothing to confirm on an unavailable preview; offline Confirm is disabled and says why; no dismissing mid-commit', () => {
     const code = codeOnly(sheet);
-    expect(code).toContain('const canConfirm = view.confirmLabel !== null && !offline && !busy;');
-    expect(code).toMatch(/\{view\.confirmLabel !== null \? \(\s*<Pressable\s+onPress=\{\(\) => void confirm\(\)\}\s+disabled=\{!canConfirm\}/);
+    expect(code).toContain('const confirmLabel = movedOn ? null : view.confirmLabel;');
+    expect(code).toContain('const canConfirm = confirmLabel !== null && !offline && !busy;');
+    expect(code).toMatch(/\{confirmLabel !== null \? \(\s*<Pressable\s+onPress=\{\(\) => void confirm\(\)\}\s+disabled=\{!canConfirm\}/);
     expect(code).toContain('accessibilityHint={offline ? READINESS_NEEDS_CONNECTION_COPY : undefined}');
     expect(functionBody(sheet, SHEET_FILE, 'requestClose')).toBe('{ if (busy) return; onClose(); }');
+  });
+
+  // Mutation caught: Confirm left on after the screen reloaded and the order
+  // had moved on (the RPC would refuse it again), or taken away mid-commit
+  // (the commit's own reload lands before its result is said).
+  it('the order moved on under the sheet: Close instead of Confirm, never while a commit runs, and says why unless a refusal already did', () => {
+    const code = codeOnly(sheet);
+    expect(code).toContain('const movedOn = view.movedOn !== null && !busy;');
+    expect(code).toMatch(/\{movedOn && !error \? \(\s*<Body size=\{13\.5\} color=\{ACCENT\.warn\}>\s*\{view\.movedOn\}/);
+    expect(code).toContain('const closeLabel = movedOn ? PARTIAL_CLOSE_LABEL : view.cancelLabel;');
+    expect(code).toMatch(/accessibilityLabel=\{closeLabel\}/);
+    expect(code).toMatch(/maxFontSizeMultiplier=\{ACTION_CAP\}>\s*\{closeLabel\}/);
   });
 
   it('button labels stop growing at the control ceiling; the sentences grow', () => {

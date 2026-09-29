@@ -3470,6 +3470,9 @@ export default function OrderDetail() {
           visible
           view={partialSheetView(partial.preview, {
             timeZone: order?.orgTimezone ?? undefined,
+            // The order as the screen shows it now (it reloads after a
+            // refusal): when it moved on, the sheet offers Close.
+            orderStatus: order?.status ?? null,
           })}
           offline={offline}
           onClose={() => setPartial(null)}

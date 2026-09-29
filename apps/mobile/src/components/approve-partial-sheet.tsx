@@ -11,7 +11,7 @@ import {
   View,
 } from 'react-native';
 
-import { READINESS_NEEDS_CONNECTION_COPY } from '@stockpilot/core';
+import { PARTIAL_CLOSE_LABEL, READINESS_NEEDS_CONNECTION_COPY } from '@stockpilot/core';
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { Body, Mono } from '@/components/ui/text';
@@ -34,8 +34,12 @@ import { useTheme } from '@/lib/use-theme';
  * sheet cannot be dismissed, so its answer is never lost.
  *
  * An unavailable preview says why and offers only Close: nothing is
- * committed blind. Every word comes from `view` (core's, through
- * lib/order-partial.ts partialSheetView).
+ * committed blind. So does an order that moved on under the sheet (the screen
+ * reloads after a refusal, and another approver may have got there first):
+ * `view.movedOn` replaces Confirm with Close and, unless a refusal already
+ * said why, core's sentence says it; never while a commit runs, whose own
+ * reload lands before its result. Every word comes from `view` (core's,
+ * through lib/order-partial.ts partialSheetView).
  *
  * Built in the sibling-backdrop shape (sheet-backdrop-guard.test.ts): a scrim
  * Pressable BEHIND the card, the card a plain View, so VoiceOver reaches each
@@ -66,7 +70,11 @@ export function ApprovePartialSheet({
   // Fixed pixel height off the window: percentage sizing collapsed layouts
   // under Fabric (edit-order-line-sheet.tsx), so no sheet uses it.
   const bodyMaxHeight = Math.round(height * 0.45);
-  const canConfirm = view.confirmLabel !== null && !offline && !busy;
+  // The order moved on under the sheet: nothing to confirm (never mid-commit).
+  const movedOn = view.movedOn !== null && !busy;
+  const confirmLabel = movedOn ? null : view.confirmLabel;
+  const canConfirm = confirmLabel !== null && !offline && !busy;
+  const closeLabel = movedOn ? PARTIAL_CLOSE_LABEL : view.cancelLabel;
 
   function requestClose() {
     if (busy) return;
@@ -196,23 +204,28 @@ export function ApprovePartialSheet({
             ) : null}
           </ScrollView>
 
+          {movedOn && !error ? (
+            <Body size={13.5} color={ACCENT.warn}>
+              {view.movedOn}
+            </Body>
+          ) : null}
           {error ? (
             <Body size={13} color={ACCENT.crit} accessibilityRole="alert">
               {error}
             </Body>
           ) : null}
-          {offline && view.confirmLabel !== null ? (
+          {offline && confirmLabel !== null ? (
             <Body size={12.5} muted>
               {READINESS_NEEDS_CONNECTION_COPY}
             </Body>
           ) : null}
 
-          {view.confirmLabel !== null ? (
+          {confirmLabel !== null ? (
             <Pressable
               onPress={() => void confirm()}
               disabled={!canConfirm}
               accessibilityRole="button"
-              accessibilityLabel={view.confirmLabel}
+              accessibilityLabel={confirmLabel}
               accessibilityState={{ disabled: !canConfirm, busy }}
               accessibilityHint={offline ? READINESS_NEEDS_CONNECTION_COPY : undefined}
               style={[
@@ -224,7 +237,7 @@ export function ApprovePartialSheet({
                 <ActivityIndicator color={c.paper} />
               ) : (
                 <Mono size={13} color={c.paper} maxFontSizeMultiplier={ACTION_CAP}>
-                  {view.confirmLabel}
+                  {confirmLabel}
                 </Mono>
               )}
             </Pressable>
@@ -233,12 +246,12 @@ export function ApprovePartialSheet({
             onPress={requestClose}
             disabled={busy}
             accessibilityRole="button"
-            accessibilityLabel={view.cancelLabel}
+            accessibilityLabel={closeLabel}
             accessibilityState={{ disabled: busy }}
             style={[styles.action, { borderWidth: 1, borderColor: c.hair, opacity: busy ? 0.5 : 1 }]}
           >
             <Mono size={13} color={c.ink} maxFontSizeMultiplier={ACTION_CAP}>
-              {view.cancelLabel}
+              {closeLabel}
             </Mono>
           </Pressable>
         </View>

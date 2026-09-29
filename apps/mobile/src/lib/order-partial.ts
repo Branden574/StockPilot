@@ -25,11 +25,13 @@
  */
 
 import {
+  describePartialCommitRefusal,
   describePartialPreview,
   describePartialResult,
   PARTIAL_ACTION_TITLE,
   PARTIAL_CLOSE_LABEL,
-  PARTIAL_COMMIT_UNANSWERED_COPY,
+  partialActionApplies,
+  partialActionMovedOnCopy,
   readinessCheckedAtCopy,
   type OrderReadinessResult,
   type PartialAction,
@@ -55,14 +57,27 @@ export interface PartialSheetView {
   cancelLabel: string;
   /** Why no preview can be shown (core's sentence), or null. */
   unavailable: string | null;
+  /**
+   * The order is no longer at the status the action starts from (another
+   * approver got there first; the screen reloads after a refusal): core's
+   * sentence, and the sheet offers Close instead of Confirm. Null while it
+   * still applies, or before the screen knows the status.
+   */
+  movedOn: string | null;
 }
 
-/** The sheet's words for a preview, core's throughout. */
+/** The sheet's words for a preview, core's throughout. `orderStatus` is the
+ *  order's status as the screen shows it NOW (the preview is frozen). */
 export function partialSheetView(
   preview: PartialPreview,
-  opts: ReadinessCopyOptions = {},
+  opts: ReadinessCopyOptions & { orderStatus?: string | null } = {},
 ): PartialSheetView {
   const copy = describePartialPreview(preview);
+  const status = opts.orderStatus ?? null;
+  const movedOn =
+    status !== null && !partialActionApplies(preview.action, status)
+      ? partialActionMovedOnCopy(preview.action)
+      : null;
   if (preview.state !== 'ok' || !copy) {
     return {
       title: PARTIAL_ACTION_TITLE[preview.action],
@@ -73,6 +88,7 @@ export function partialSheetView(
       confirmLabel: null,
       cancelLabel: PARTIAL_CLOSE_LABEL,
       unavailable: preview.state === 'unavailable' ? preview.message : null,
+      movedOn: null,
     };
   }
   return {
@@ -84,6 +100,7 @@ export function partialSheetView(
     confirmLabel: copy.confirmLabel,
     cancelLabel: copy.cancelLabel,
     unavailable: null,
+    movedOn,
   };
 }
 
@@ -105,30 +122,28 @@ const REREAD_FAILED: OrderReadinessResult = {
   message: "Couldn't check readiness.",
 };
 
-/** A refusal the server did not word, or a request that failed oddly. */
-export const PARTIAL_COMMIT_FAILED_COPY = 'The order could not be updated. Try again.';
-
 /**
- * What the sheet says in place when the confirm was refused or failed: the
- * server's sentence (a stock refusal, "not allowed", the order moved on);
- * for no answer at all, that the outcome is unknown (never the network
- * layer's own text, and never "try again" as if nothing happened); a bare
- * code is never shown.
+ * What the sheet says in place when the confirm was refused or failed, in
+ * core's words, the web dialog's too (describePartialCommitRefusal): the
+ * server's sentence for a refusal it worded; for no answer at all, or a
+ * gateway error the app never answered, that the outcome is unknown (look
+ * before trying again); for a server error, core's sentence rather than the
+ * database's text; too many requests, core's; a bare code is never shown.
  */
 export function describePartialCommitError(e: unknown): string {
   const status =
     typeof e === 'object' && e !== null && typeof (e as { status?: unknown }).status === 'number'
       ? (e as { status: number }).status
       : null;
+  const code =
+    typeof e === 'object' && e !== null && typeof (e as { code?: unknown }).code === 'string'
+      ? (e as { code: string }).code
+      : null;
   const message = e instanceof Error && e.message ? e.message : null;
-  // No answer came back (the connection dropped, the request timed out):
-  // whether the approval went through is unknown, so core's sentence, the
-  // web dialog's too, says to look before trying again.
-  if (status === null) return PARTIAL_COMMIT_UNANSWERED_COPY;
-  if (status === 429) return 'Too many requests. Wait a moment and try again.';
-  // A lone snake_case token is a code, not a sentence.
-  if (message && !/^[a-z0-9_]+$/.test(message)) return message;
-  return PARTIAL_COMMIT_FAILED_COPY;
+  // No status: nothing came back (the connection dropped, the request timed
+  // out), never the network layer's own words.
+  if (status === null) return describePartialCommitRefusal({ answered: false });
+  return describePartialCommitRefusal({ answered: true, status, code, message });
 }
 
 /**
@@ -136,9 +151,11 @@ export function describePartialCommitError(e: unknown): string {
  * read again, and the message computed from THAT read (core
  * describePartialResult: the order's own holds now, compared with the
  * preview). A refused commit throws (the sheet shows the server's sentence
- * and stays open); nothing is read or said then. Once the commit went
- * through, nothing here throws: a failed re-read says the holds couldn't be
- * checked, never a number from the preview.
+ * and stays open); nothing is read for a message then, but the screen reloads
+ * behind the sheet (not awaited: the refusal is said at once), so an order
+ * that moved on shows where it is and the sheet offers Close. Once the commit
+ * went through, nothing here throws: a failed re-read says the holds couldn't
+ * be checked, never a number from the preview.
  */
 export async function runPartialFulfilment(
   deps: PartialCommitDeps,
@@ -146,7 +163,12 @@ export async function runPartialFulfilment(
   action: PartialAction,
   preview: PartialPreview,
 ): Promise<PartialResultCopy> {
-  await deps.commit(orderId, action);
+  try {
+    await deps.commit(orderId, action);
+  } catch (e) {
+    deps.reload().catch(() => undefined);
+    throw e;
+  }
   const [reread] = await Promise.all([
     deps.reread(orderId).catch((): OrderReadinessResult => REREAD_FAILED),
     deps.reload().catch(() => undefined),

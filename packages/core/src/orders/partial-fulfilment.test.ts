@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  describePartialCommitRefusal,
   describePartialPreview,
   describePartialResult,
   PARTIAL_ACTION_TITLE,
   PARTIAL_CLOSE_LABEL,
+  PARTIAL_COMMIT_FAILED_COPY,
+  PARTIAL_COMMIT_RATE_LIMITED_COPY,
   PARTIAL_COMMIT_UNANSWERED_COPY,
+  partialActionApplies,
+  partialActionMovedOnCopy,
   PARTIAL_PREVIEW_HIDDEN_ITEMS_COPY,
   PARTIAL_PREVIEW_ITEM_MOVED_COPY,
   PARTIAL_PREVIEW_LINES_CAPPED_COPY,
@@ -605,6 +610,69 @@ describe('describePartialResult: computed from the re-read, never from the previ
   });
 });
 
+// ── After a refusal ─────────────────────────────────────────────────────────
+
+describe('describePartialCommitRefusal: one set of words for a confirm that did not go through, web and phone', () => {
+  it('no answer at all: the outcome is unknown, so look before trying again', () => {
+    expect(describePartialCommitRefusal({ answered: false })).toBe(PARTIAL_COMMIT_UNANSWERED_COPY);
+  });
+
+  it("the server's own sentence for a refusal it worded (the order moved on, not allowed, nothing free)", () => {
+    expect(
+      describePartialCommitRefusal({ answered: true, status: 400, code: 'validation_error', message: 'This request is no longer pending approval' }),
+    ).toBe('This request is no longer pending approval');
+    expect(describePartialCommitRefusal({ answered: true, code: 'forbidden', message: 'Only managers can approve requests' })).toBe(
+      'Only managers can approve requests',
+    );
+  });
+
+  it('too many requests: core\'s sentence, not the route\'s', () => {
+    expect(describePartialCommitRefusal({ answered: true, status: 429, code: 'rate_limited', message: 'Too many requests — slow down.' })).toBe(
+      PARTIAL_COMMIT_RATE_LIMITED_COPY,
+    );
+    expect(describePartialCommitRefusal({ answered: true, code: 'rate_limited', message: null })).toBe(PARTIAL_COMMIT_RATE_LIMITED_COPY);
+    expect(PARTIAL_COMMIT_RATE_LIMITED_COPY).toBe('Too many requests. Wait a moment and try again.');
+  });
+
+  it('a server error (the database refused inside the commit, so nothing was held): never its raw text', () => {
+    expect(
+      describePartialCommitRefusal({ answered: true, status: 500, code: 'internal_error', message: 'canceling statement due to lock timeout' }),
+    ).toBe(PARTIAL_COMMIT_FAILED_COPY);
+    expect(PARTIAL_COMMIT_FAILED_COPY).toBe('The order could not be updated. Try again.');
+  });
+
+  it('a gateway error with no answer from the app (a 504): the outcome is unknown, never "could not be updated"', () => {
+    expect(describePartialCommitRefusal({ answered: true, status: 504, code: null, message: 'The server had a problem. Try again in a moment.' })).toBe(
+      PARTIAL_COMMIT_UNANSWERED_COPY,
+    );
+  });
+
+  it('a bare code or no words: core\'s sentence', () => {
+    expect(describePartialCommitRefusal({ answered: true, status: 409, code: 'conflict', message: 'conflict' })).toBe(PARTIAL_COMMIT_FAILED_COPY);
+    expect(describePartialCommitRefusal({ answered: true, status: 400, message: '' })).toBe(PARTIAL_COMMIT_FAILED_COPY);
+  });
+});
+
+describe('partialActionApplies / partialActionMovedOnCopy: the order moved on under the dialog', () => {
+  it('each action starts from one status (the RPCs refuse any other)', () => {
+    expect(partialActionApplies('approve_partial', 'pending_approval')).toBe(true);
+    expect(partialActionApplies('approve_partial', 'approved')).toBe(false);
+    expect(partialActionApplies('resume', 'backordered')).toBe(true);
+    expect(partialActionApplies('resume', 'pick_slip_generated')).toBe(false);
+    expect(partialActionApplies('resume', null)).toBe(false);
+  });
+
+  it('says why there is nothing to confirm, in the same words as a preview at the wrong status', () => {
+    expect(partialActionMovedOnCopy('approve_partial')).toBe('This order is no longer waiting for approval.');
+    expect(partialActionMovedOnCopy('resume')).toBe('Only a backordered order can be resumed.');
+    const moved = previewPartialFulfilment(
+      result({ status: 'approved', lines: [{ id: 'L1', item: 'A', requested: 1 }], items: [item('A', { here: onRack(1) })] }),
+      'approve_partial',
+    );
+    expect(moved.state === 'unavailable' && moved.message).toBe(partialActionMovedOnCopy('approve_partial'));
+  });
+});
+
 describe('honest words (partial fulfilment)', () => {
   const lines = [{ id: 'L1', item: 'A', requested: 40 }];
   const pending = result({ status: 'pending_approval', lines, items: [item('A', { here: onRack(36) })] });
@@ -623,7 +691,11 @@ describe('honest words (partial fulfilment)', () => {
     PARTIAL_PREVIEW_NO_LINES_COPY,
     PARTIAL_PREVIEW_NOTHING_TO_HOLD_COPY,
     PARTIAL_COMMIT_UNANSWERED_COPY,
+    PARTIAL_COMMIT_FAILED_COPY,
+    PARTIAL_COMMIT_RATE_LIMITED_COPY,
     PARTIAL_RESULT_ORDER_CHANGED_COPY,
+    partialActionMovedOnCopy('approve_partial'),
+    partialActionMovedOnCopy('resume'),
     ...Object.values(PARTIAL_ACTION_TITLE),
     describePartialResult({ action: 'approve_partial', preview: p, reread: result({ status: 'approved', lines, items: [item('A', { here: onRack(36), heldOwn: 34 })] }) }).text,
     describePartialResult({ action: 'resume', preview: null, reread: null }).text,
