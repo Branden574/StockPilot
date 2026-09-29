@@ -17,6 +17,7 @@ import {
 import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 import { formatCurrency, formatNumber } from '@/lib/utils';
+import { reportPageGate } from '@/lib/reports/report-page-gate';
 import { ReportsService } from '@/server/services/reports';
 
 export const dynamic = 'force-dynamic';
@@ -26,6 +27,8 @@ export default async function ItemCostHistoryPage({
 }: {
   searchParams: Promise<{ itemId?: string; since?: string; until?: string }>;
 }) {
+  const blocked = await reportPageGate('item-cost-history');
+  if (blocked) return blocked;
   const params = await searchParams;
   const { itemId, since, until } = params;
 
@@ -106,7 +109,7 @@ export default async function ItemCostHistoryPage({
 
   // ── Fetch cost history ───────────────────────────────────────────────────
   const svc = await ReportsService.forCurrentUser();
-  const data = await svc.itemCostHistory(itemId, {
+  const data = await svc.itemCostHistoryReport(itemId, {
     since: since || undefined,
     until: until || undefined,
   });

@@ -11,8 +11,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
  *      over a fixture that fits UNDER the old cap (so the old path did NOT
  *      truncate — the two paths must agree there).
  *   2. `simRpc*` — computes exactly what the new SQL RPC returns for the same
- *      fixture (a JS stand-in for the GROUP BY). Wired into the mocked
- *      service-role client.
+ *      fixture (a JS stand-in for the GROUP BY). Wired into the caller's
+ *      client (0380: never the service-role client, which now throws).
  *   3. Run the real service method (RPC mocked + detail-row stream stubbed)
  *      and assert its output deep-equals the old JS result → the mapping is
  *      equivalent.
@@ -22,8 +22,13 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const { rpcMock } = vi.hoisted(() => ({ rpcMock: vi.fn() }));
 
+// 0380: the report aggregates run on the CALLER'S client (RLS decides what
+// each answer holds). Anything that still reaches for the service-role
+// client fails loudly.
 vi.mock('@/lib/supabase/admin', () => ({
-  createAdminClient: () => ({ rpc: rpcMock }),
+  createAdminClient: () => {
+    throw new Error('ReportsService must not use the service-role client (0380)');
+  },
 }));
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
@@ -33,6 +38,12 @@ import { ReportsService } from './reports';
 beforeEach(() => {
   rpcMock.mockReset();
 });
+
+/** A service context whose (caller's) client answers rpc() through rpcMock. */
+function ctxOf(client: any) {
+  client.rpc = (name: string, args: Record<string, unknown>) => rpcMock(name, args);
+  return makeServiceContext(client);
+}
 
 /** Dispatch rpcMock by function name using a handler map. */
 function wireRpc(handlers: Record<string, (args: Record<string, unknown>) => unknown[]>) {
@@ -162,7 +173,7 @@ describe('ReportsService.movementSummary (scale parity)', () => {
       report_movement_type_summary: () => simTypeSummary(moves),
       report_top_movers: (args) => simTopMovers(moves, Number(args.p_limit)),
     });
-    const svc = new ReportsService(makeServiceContext(makeSupabaseStub().client));
+    const svc = new ReportsService(ctxOf(makeSupabaseStub().client));
     const result = await svc.movementSummary(30);
     expect(result).toEqual(oldMovementSummary(30, moves));
   });
@@ -178,7 +189,7 @@ describe('ReportsService.movementSummary (scale parity)', () => {
       ],
       report_top_movers: () => [],
     });
-    const svc = new ReportsService(makeServiceContext(makeSupabaseStub().client));
+    const svc = new ReportsService(ctxOf(makeSupabaseStub().client));
     const result = await svc.movementSummary(30);
     expect(result.totalMovements).toBe(75_000);
     expect(result.byType[0]).toEqual({ movementType: 'add', count: 50_000, totalQty: 123_456 });
@@ -245,7 +256,7 @@ describe('ReportsService.shrinkage (scale parity)', () => {
     const stub = makeSupabaseStub({
       'stock_movements.select': { data: moves, error: null },
     });
-    const svc = new ReportsService(makeServiceContext(stub.client));
+    const svc = new ReportsService(ctxOf(stub.client));
     const result = await svc.shrinkage(30);
     expect(result).toEqual(oldShrinkage(30, moves));
   });
@@ -259,7 +270,7 @@ describe('ReportsService.shrinkage (scale parity)', () => {
     const stub = makeSupabaseStub({
       'stock_movements.select': { data: [moves[0]], error: null },
     });
-    const svc = new ReportsService(makeServiceContext(stub.client));
+    const svc = new ReportsService(ctxOf(stub.client));
     const result = await svc.shrinkage(30);
     expect(result.totalUnits).toBe(99_999);
     expect(result.totalCost).toBe(424_242);
@@ -365,7 +376,7 @@ describe('ReportsService.velocityClass (scale parity)', () => {
   it('RPC out-movement aggregate + streamed items reproduce the pre-0225 classification/totalValueOut', async () => {
     wireRpc({ report_item_out_movements: () => simOutMovements(moves) });
     const stub = makeSupabaseStub({ 'inventory_items.select': { data: items, error: null } });
-    const svc = new ReportsService(makeServiceContext(stub.client));
+    const svc = new ReportsService(ctxOf(stub.client));
     const result = await svc.velocityClass(90);
     expect(result).toEqual(oldVelocity(90, moves, items));
   });
@@ -389,7 +400,7 @@ describe('ReportsService.deadStock (scale parity)', () => {
   it('streamed items + RPC out-movement set → dead items and carrying total match the pre-0225 logic', async () => {
     wireRpc({ report_item_out_movements: () => outSet });
     const stub = makeSupabaseStub({ 'inventory_items.select': { data: items, error: null } });
-    const svc = new ReportsService(makeServiceContext(stub.client));
+    const svc = new ReportsService(ctxOf(stub.client));
     const result = await svc.deadStock(90);
 
     // Dead = items NOT in the out-set: a (300) and c (14), sorted by carrying desc.
@@ -416,7 +427,7 @@ describe('ReportsService.bundleActivity (scale parity)', () => {
         { bundle_id: 'k2', component_value_out: 40 },
       ],
     });
-    const svc = new ReportsService(makeServiceContext(makeSupabaseStub().client));
+    const svc = new ReportsService(ctxOf(makeSupabaseStub().client));
     const result = await svc.bundleActivity(90);
 
     expect(result.rows).toEqual([
@@ -455,7 +466,7 @@ describe('ReportsService.inventoryValuation (view-sourced totals)', () => {
       'vw_inventory_valuation_by_category.select': { data: catView, error: null },
       'inventory_items.select': { data: detail, error: null },
     });
-    const svc = new ReportsService(makeServiceContext(stub.client));
+    const svc = new ReportsService(ctxOf(stub.client));
     const result = await svc.inventoryValuation();
 
     // Totals from the warehouse view (sum over its buckets).
@@ -526,7 +537,7 @@ describe('ReportsService.inventoryValuation (view-sourced totals)', () => {
       },
     };
 
-    const svc = new ReportsService(makeServiceContext(client));
+    const svc = new ReportsService(ctxOf(client));
     const result = await svc.inventoryValuation();
     expect(result.rows).toHaveLength(TOTAL);
     // Totals still from the view — unaffected by the row count.

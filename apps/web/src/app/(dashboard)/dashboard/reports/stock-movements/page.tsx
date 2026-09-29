@@ -16,14 +16,17 @@ import {
 } from '@/components/ui/table';
 import { ReportsService } from '@/server/services/reports';
 import { formatNumber } from '@/lib/utils';
+import { reportPageGate } from '@/lib/reports/report-page-gate';
 
 const RANGE_OPTIONS = [7, 30, 90] as const;
 
-export default function StockMovementsReportPage({
+export default async function StockMovementsReportPage({
   searchParams,
 }: {
   searchParams: Promise<{ days?: string }>;
 }) {
+  const blocked = await reportPageGate('stock-movements');
+  if (blocked) return blocked;
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
       <div className="mb-6">

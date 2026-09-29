@@ -17,8 +17,11 @@ import {
 } from '@/components/ui/table';
 import { ReportsService } from '@/server/services/reports';
 import { formatCurrency, formatNumber } from '@/lib/utils';
+import { reportPageGate } from '@/lib/reports/report-page-gate';
 
-export default function ReorderForecastPage() {
+export default async function ReorderForecastPage() {
+  const blocked = await reportPageGate('reorder-forecast');
+  if (blocked) return blocked;
   return (
     <div className="container mx-auto max-w-6xl px-4 py-8 sm:px-6">
       <div className="mb-6">

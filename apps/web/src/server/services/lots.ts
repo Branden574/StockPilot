@@ -130,6 +130,16 @@ export class LotsService {
     return totals;
   }
 
+  /**
+   * The Aging & expiry REPORT: reports:read (the MFA step-up first) and the
+   * lot module, then the aging scan. The report page's data path checks for
+   * itself; getAgingInventory stays ungated for picking's FEFO suggestions.
+   */
+  async agingReport(): Promise<AgingLotRow[]> {
+    assertPermission(this.ctx, 'reports:read');
+    return this.getAgingInventory();
+  }
+
   async getAgingInventory(): Promise<AgingLotRow[]> {
     assertModuleEnabled(this.ctx, 'lot_serial');
     // `!inner` on the embeds is REQUIRED for the nested org filter to actually
@@ -264,7 +274,11 @@ export class LotsService {
     return (await this.getFefoSuggestionsByItems([itemId]))[itemId] ?? [];
   }
 
+  /** The Recall / lot trace REPORT (its only caller): reports:read (the MFA
+   *  step-up first) and the lot module, checked here, not only by the reports
+   *  layout, because a server action is reachable without the page. */
   async traceLot(lotNumber: string): Promise<LotTraceResult> {
+    assertPermission(this.ctx, 'reports:read');
     assertModuleEnabled(this.ctx, 'lot_serial');
     const term = lotNumber.trim();
     if (!term) throw new ServiceError('validation_error', 'Enter a lot number to trace.');

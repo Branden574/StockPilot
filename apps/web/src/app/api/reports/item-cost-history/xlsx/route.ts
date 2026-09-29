@@ -6,11 +6,11 @@ import { NextResponse } from 'next/server';
 import { withApiContext } from '@/lib/auth/api-context';
 import { escapeForSpreadsheet } from '@/lib/csv';
 import { exportRateLimited } from '@/lib/export-rate-limit';
-import { reportError } from '@/lib/error-reporter';
-import { ServiceError } from '@/server/services/context';
+import { reportExportErrorResponse, reportExportUnauthenticated } from '@/lib/reports/export-errors';
+import { assertPermission, ServiceError, type ServiceContext } from '@/server/services/context';
 import { ReportsService } from '@/server/services/reports';
 
-import { can } from '@stockpilot/core';
+import { isUuid } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,33 +23,36 @@ export const dynamic = 'force-dynamic';
  *   since   — optional ISO date string (YYYY-MM-DD); filters to ordered_at/received_at ≥ since.
  *   until   — optional ISO date string (YYYY-MM-DD); filters to ordered_at/received_at ≤ until.
  *
- * Auth/permission gating mirrors the [slug]/csv dispatcher:
- *   - Must be authenticated (withApiContext).
- *   - Must hold reports:export permission.
- *   - Subject to the shared exportRateLimited guard.
+ * Auth/permission gating mirrors the [slug]/csv dispatcher, in the same
+ * order: a session (401), reports:export with the MFA step-up (403),
+ * reports:read and the purchase orders module (403), a valid itemId (400),
+ * the shared export limit (429), then an item the caller can read (404).
  */
 export async function GET(request: Request) {
   const url = new URL(request.url);
+  let ctx: ServiceContext | null = null;
   try {
-    const ctx = await withApiContext(request);
-    const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
-    if (limited) return limited;
-    if (!ctx) {
-      return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
-    }
-    if (!can(ctx, 'reports:export')) {
-      return NextResponse.json({ error: 'forbidden' }, { status: 403 });
-    }
+    // In order, so a refused caller never spends the shared export budget:
+    // a session (401); reports:export with the MFA step-up (403);
+    // reports:read and the purchase orders module (403); the item id (400);
+    // then the export limit (429); then the item, read with the caller's
+    // client (another warehouse's or category's item is 404).
+    ctx = await withApiContext(request);
+    if (!ctx) return reportExportUnauthenticated();
+    assertPermission(ctx, 'reports:export');
+    const svc = new ReportsService(ctx);
+    svc.gate('item-cost-history');
 
     const itemId = url.searchParams.get('itemId');
-    if (!itemId) {
-      return NextResponse.json({ error: 'itemId is required' }, { status: 400 });
-    }
+    if (!itemId) throw new ServiceError('validation_error', 'itemId is required');
+    if (!isUuid(itemId)) throw new ServiceError('validation_error', 'Choose an item.');
     const since = url.searchParams.get('since') ?? undefined;
     const until = url.searchParams.get('until') ?? undefined;
 
-    const svc = new ReportsService(ctx);
-    const data = await svc.itemCostHistory(itemId, { since, until });
+    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    if (limited) return limited;
+
+    const data = await svc.itemCostHistoryReport(itemId, { since, until });
 
     // Flatten series into chronological rows, same order as CSV export.
     const rows = data.series
@@ -112,10 +115,6 @@ export async function GET(request: Request) {
       },
     });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      return NextResponse.json({ error: e.code, message: e.message }, { status: 500 });
-    }
-    void reportError(e, { tag: 'reports.item-cost-history.xlsx' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return reportExportErrorResponse(e, 'reports.item-cost-history.xlsx', ctx?.organizationId);
   }
 }

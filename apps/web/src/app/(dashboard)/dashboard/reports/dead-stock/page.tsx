@@ -16,12 +16,15 @@ import {
 import { ReportsService } from '@/server/services/reports';
 import { formatCurrency, formatNumber } from '@/lib/utils';
 import { cn } from '@/lib/utils';
+import { reportPageGate } from '@/lib/reports/report-page-gate';
 
-export default function DeadStockPage({
+export default async function DeadStockPage({
   searchParams,
 }: {
   searchParams: Promise<{ days?: string }>;
 }) {
+  const blocked = await reportPageGate('dead-stock');
+  if (blocked) return blocked;
   const daysPromise = searchParams.then((params) => clampDays(params.days));
 
   return (

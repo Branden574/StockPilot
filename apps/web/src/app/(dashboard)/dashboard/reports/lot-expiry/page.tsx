@@ -1,5 +1,4 @@
-import { checkModuleAccess } from '@/lib/modules/module-gate';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { reportPageGate } from '@/lib/reports/report-page-gate';
 import { LotsService } from '@/server/services/lots';
 
 export const dynamic = 'force-dynamic';
@@ -15,11 +14,11 @@ const BUCKET_LABEL: Record<string, string> = {
 const BUCKET_ORDER = ['expired', 'le7', 'le30', 'le90', 'ok', 'unknown'] as const;
 
 export default async function LotExpiryReportPage() {
-  const access = await checkModuleAccess('lot_serial');
-  if (!access.enabled) return <ModuleNotEnabled moduleId="lot_serial" canManage={access.canManage} />;
+  const blocked = await reportPageGate('lot-expiry');
+  if (blocked) return blocked;
 
   const svc = await LotsService.forCurrentUser();
-  const rows = await svc.getAgingInventory();
+  const rows = await svc.agingReport();
   const counts = BUCKET_ORDER.map((b) => ({
     bucket: b,
     label: BUCKET_LABEL[b],

@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/table';
 import { ReportsService } from '@/server/services/reports';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
+import { reportPageGate } from '@/lib/reports/report-page-gate';
 
 const RANGE_OPTIONS = [30, 90, 180, 365] as const;
 
@@ -29,11 +30,13 @@ function daysOrDash(v: number | null): string {
   return `${v.toFixed(1)}d`;
 }
 
-export default function SupplierScorecardPage({
+export default async function SupplierScorecardPage({
   searchParams,
 }: {
   searchParams: Promise<{ days?: string }>;
 }) {
+  const blocked = await reportPageGate('supplier-scorecard');
+  if (blocked) return blocked;
   const paramsPromise = searchParams;
 
   return (

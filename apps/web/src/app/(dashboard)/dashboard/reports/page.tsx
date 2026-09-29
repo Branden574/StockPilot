@@ -22,11 +22,12 @@ import { BOOK_REPORT_CARD_DESCRIPTION, BOOK_REPORT_TITLE, can } from '@stockpilo
 import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { reportModules, type ReportSlug } from '@/lib/reports/report-access';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { REPORTS_TOUR } from '@/lib/onboarding/tours';
 
 interface Report {
-  slug: string;
+  slug: ReportSlug;
   name: string;
   desc: string;
   icon: typeof BarChart3;
@@ -103,41 +104,34 @@ export default async function ReportsPage() {
   if (!can(ctx, 'reports:read')) {
     redirect('/dashboard');
   }
-  const [{ enabled: lotSerialEnabled }, orders, books] = await Promise.all([
-    checkModuleAccess('lot_serial'),
-    checkModuleAccess('orders'),
-    checkModuleAccess('books'),
-  ]);
-  // Book Order Totals reads Orders AND Books; its page checks both again.
-  const bookReports: Report[] =
-    orders.enabled && books.enabled
-      ? [
-          {
-            slug: 'book-order-totals',
-            name: BOOK_REPORT_TITLE,
-            desc: BOOK_REPORT_CARD_DESCRIPTION,
-            icon: BookOpen,
-          },
-        ]
-      : [];
-  const reports: Report[] = lotSerialEnabled
-    ? [
-        ...REPORTS,
-        ...bookReports,
-        {
-          slug: 'lot-expiry',
-          name: 'Aging & expiry',
-          desc: 'Lots by days-to-expiry · near-expiry & expired flagged',
-          icon: CalendarClock,
-        },
-        {
-          slug: 'lot-trace',
-          name: 'Recall / lot trace',
-          desc: 'Trace a lot number across receipts + picks',
-          icon: Recycle,
-        },
-      ]
-    : [...REPORTS, ...bookReports];
+  // Each card is listed only where every module its report reads is on
+  // (lib/reports/report-access): the same list the report's page and its
+  // data path check again.
+  const optional = ['lot_serial', 'orders', 'books', 'bundles', 'purchase_orders'] as const;
+  const access = await Promise.all(optional.map((m) => checkModuleAccess(m)));
+  const enabled = new Set<string>(optional.filter((_, i) => access[i]!.enabled));
+  const all: Report[] = [
+    ...REPORTS,
+    {
+      slug: 'book-order-totals',
+      name: BOOK_REPORT_TITLE,
+      desc: BOOK_REPORT_CARD_DESCRIPTION,
+      icon: BookOpen,
+    },
+    {
+      slug: 'lot-expiry',
+      name: 'Aging & expiry',
+      desc: 'Lots by days-to-expiry · near-expiry & expired flagged',
+      icon: CalendarClock,
+    },
+    {
+      slug: 'lot-trace',
+      name: 'Recall / lot trace',
+      desc: 'Trace a lot number across receipts + picks',
+      icon: Recycle,
+    },
+  ];
+  const reports = all.filter((r) => reportModules(r.slug).every((m) => enabled.has(m)));
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">

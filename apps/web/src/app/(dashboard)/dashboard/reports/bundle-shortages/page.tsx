@@ -13,12 +13,15 @@ import {
 } from '@/components/ui/table';
 import { ReportsService } from '@/server/services/reports';
 import { cn, formatNumber, formatRelative } from '@/lib/utils';
+import { reportPageGate } from '@/lib/reports/report-page-gate';
 
 export default async function BundleShortagesPage({
   searchParams,
 }: {
   searchParams: Promise<{ days?: string }>;
 }) {
+  const blocked = await reportPageGate('bundle-shortages');
+  if (blocked) return blocked;
   const params = await searchParams;
   const days = clampDays(params.days);
   const svc = await ReportsService.forCurrentUser();

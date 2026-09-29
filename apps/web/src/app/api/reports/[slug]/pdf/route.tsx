@@ -4,7 +4,6 @@ import { renderToStream } from '@react-pdf/renderer';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
-import { reportError } from '@/lib/error-reporter';
 import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
 import { REPORT_PDF_SECTIONS } from '@/lib/pdf/report-configs';
 import {
@@ -17,12 +16,14 @@ import {
   formatDateForPdf,
   formatNumberForPdf,
 } from '@/lib/pdf/styles';
+import { reportExportErrorResponse, reportExportUnauthenticated } from '@/lib/reports/export-errors';
+import { type ReportSlug } from '@/lib/reports/report-access';
 import { audit } from '@/server/services/audit';
-import { ServiceError } from '@/server/services/context';
+import { assertPermission, ServiceError, type ServiceContext } from '@/server/services/context';
 import { ItemImagesService } from '@/server/services/item-images';
 import { ReportsService } from '@/server/services/reports';
 
-import { can } from '@stockpilot/core';
+import { isUuid } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -57,6 +58,20 @@ function pdfFilename(slug: string, suffix?: string): string {
  * Aggregate reports (supplier-scorecard, bundle-activity, by-type section
  * of stock-movements) omit the image column entirely.
  */
+/** The reports this dispatcher renders as PDF. */
+const PDF_REPORTS: ReadonlySet<string> = new Set<ReportSlug>([
+  'inventory-valuation',
+  'stock-movements',
+  'reorder-forecast',
+  'supplier-scorecard',
+  'velocity-class',
+  'dead-stock',
+  'bundle-activity',
+  'bundle-shortages',
+  'shrinkage',
+  'item-cost-history',
+]);
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ slug: string }> },
@@ -64,18 +79,28 @@ export async function GET(
   const { slug } = await params;
   const url = new URL(request.url);
 
+  let ctx: ServiceContext | null = null;
   try {
-    const ctx = await withApiContext(request);
-    const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
-    if (limited) return limited;
-    if (!ctx) {
-      return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+    // In order, so a refused caller never spends the shared export budget:
+    // a session (401); reports:export with the MFA step-up (403); a known
+    // report (404); reports:read and the report's modules (403); the request
+    // (400); then the export limit (429). Same order as the CSV dispatcher.
+    ctx = await withApiContext(request);
+    if (!ctx) return reportExportUnauthenticated();
+    assertPermission(ctx, 'reports:export');
+    if (!PDF_REPORTS.has(slug)) {
+      return NextResponse.json({ error: 'unknown_report' }, { status: 404 });
     }
-    if (!can(ctx, 'reports:export')) {
-      return NextResponse.json({ error: 'forbidden' }, { status: 403 });
-    }
-
     const reportsSvc = new ReportsService(ctx);
+    reportsSvc.gate(slug as ReportSlug);
+    if (slug === 'item-cost-history') {
+      const itemId = url.searchParams.get('itemId');
+      if (!itemId) throw new ServiceError('validation_error', 'itemId is required');
+      if (!isUuid(itemId)) throw new ServiceError('validation_error', 'Choose an item.');
+    }
+    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    if (limited) return limited;
+
     const imagesSvc = new ItemImagesService(ctx);
 
     // ?photos=0 (or =false / =no) skips the image phase entirely.
@@ -369,13 +394,13 @@ export async function GET(
       ];
       auditExtra = { days, events: data.rows.length, total_cost: data.totalCost };
     } else if (slug === 'item-cost-history') {
-      const itemId = url.searchParams.get('itemId');
-      if (!itemId) {
-        return NextResponse.json({ error: 'itemId is required' }, { status: 400 });
-      }
+      // Present and a uuid: checked above, before the export budget.
+      const itemId = url.searchParams.get('itemId')!;
       const since = url.searchParams.get('since') ?? undefined;
       const until = url.searchParams.get('until') ?? undefined;
-      const data = await reportsSvc.itemCostHistory(itemId, { since, until });
+      // The report form: the gate, then the item read with the caller's
+      // client (another warehouse's or category's item is not_found).
+      const data = await reportsSvc.itemCostHistoryReport(itemId, { since, until });
 
       // Resolve item name for the PDF title — org-scoped, fail-closed.
       const { data: itemRow } = await ctx.supabase
@@ -431,7 +456,6 @@ export async function GET(
 
     // ── Render ──────────────────────────────────────────────────────
     const stream = await renderToStream(
-      // eslint-disable-next-line react-hooks/error-boundaries -- RSC + react-pdf renderToStream; rule targets client error boundaries which don't apply here
       <ReportTablePdf
         orgName={orgName}
         orgLogoUrl={orgLogoUrl}
@@ -471,12 +495,7 @@ export async function GET(
       },
     });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      const status = e.code === 'not_found' ? 404 : e.code === 'forbidden' ? 403 : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
-    }
-    void reportError(e, { tag: `reports.pdf.${slug}` });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return reportExportErrorResponse(e, `reports.pdf.${slug}`, ctx?.organizationId);
   }
 }
 

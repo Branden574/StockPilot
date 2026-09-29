@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/table';
 import { ReportsService } from '@/server/services/reports';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
+import { reportPageGate } from '@/lib/reports/report-page-gate';
 
 const RANGE_OPTIONS = [7, 30, 90] as const;
 
@@ -22,6 +23,8 @@ export default async function ShrinkagePage({
 }: {
   searchParams: Promise<{ days?: string }>;
 }) {
+  const blocked = await reportPageGate('shrinkage');
+  if (blocked) return blocked;
   const params = await searchParams;
   const requested = Number(params.days);
   const days = (RANGE_OPTIONS as readonly number[]).includes(requested) ? requested : 30;
