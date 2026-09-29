@@ -5,6 +5,8 @@ import type { ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { escapeForSpreadsheet } from '@/lib/csv';
+import { exportRateLimited } from '@/lib/export-rate-limit';
+import { ServiceError } from '@/server/services/context';
 import { ReportsService } from '@/server/services/reports';
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
@@ -29,7 +31,7 @@ function buildCtx() {
   };
 }
 
-function request(itemId = 'item-1') {
+function request(itemId = '11111111-2222-4333-8444-555555555555') {
   return new Request(
     `https://test.local/api/reports/item-cost-history/xlsx?itemId=${itemId}`,
     { method: 'GET' },
@@ -72,7 +74,8 @@ describe('GET /api/reports/item-cost-history/xlsx — formula guard', () => {
       const hostile = `${lead}HYPERLINK("http://evil.test","click")`;
       vi.mocked(ReportsService).mockImplementation(function () {
         return {
-          itemCostHistory: async () => ({
+          gate: () => {},
+          itemCostHistoryReport: async () => ({
             series: [
               {
                 supplierName: hostile,
@@ -101,7 +104,8 @@ describe('GET /api/reports/item-cost-history/xlsx — formula guard', () => {
   it('leaves an ordinary supplier name untouched and keeps unit cost numeric', async () => {
     vi.mocked(ReportsService).mockImplementation(function () {
       return {
-        itemCostHistory: async () => ({
+        gate: () => {},
+        itemCostHistoryReport: async () => ({
           series: [
             {
               supplierName: 'Acme Supply',
@@ -116,5 +120,59 @@ describe('GET /api/reports/item-cost-history/xlsx — formula guard', () => {
     const cells = await firstDataRow(res);
     expect(cells[0]).toBe('Acme Supply');
     expect(cells[3]).toBe('12.5');
+  });
+});
+
+/**
+ * Security invariant (2026-09-28): reports:export (MFA step-up first), the
+ * report gate (reports:read and the purchase orders module) and the item id
+ * are checked BEFORE the shared export limit, and the item must be one the
+ * caller can read. Refusals keep their real status (they were all 500).
+ */
+describe('GET /api/reports/item-cost-history/xlsx — checks before the export budget', () => {
+  it('no reports:export: 403, budget untouched, service never built', async () => {
+    vi.mocked(withApiContext).mockResolvedValue({ ...buildCtx(), role: 'staff' } as never);
+    const res = await GET(request());
+    expect(res.status).toBe(403);
+    expect(exportRateLimited).not.toHaveBeenCalled();
+    expect(ReportsService).not.toHaveBeenCalled();
+  });
+
+  it('the report gate refuses (no reports:read, or purchase orders off): 403, budget untouched', async () => {
+    const itemCostHistoryReport = vi.fn();
+    vi.mocked(ReportsService).mockImplementation(function () {
+      return {
+        gate: () => {
+          throw new ServiceError('module_disabled', 'off');
+        },
+        itemCostHistoryReport,
+      } as never;
+    });
+    const res = await GET(request());
+    expect(res.status).toBe(403);
+    expect(exportRateLimited).not.toHaveBeenCalled();
+    expect(itemCostHistoryReport).not.toHaveBeenCalled();
+  });
+
+  it('a malformed item id: 400, budget untouched', async () => {
+    vi.mocked(ReportsService).mockImplementation(function () {
+      return { gate: () => {}, itemCostHistoryReport: vi.fn() } as never;
+    });
+    const res = await GET(request('item-1'));
+    expect(res.status).toBe(400);
+    expect(exportRateLimited).not.toHaveBeenCalled();
+  });
+
+  it('an item the caller cannot read: 404 (was 500, and before 0380 a workbook of its costs)', async () => {
+    vi.mocked(ReportsService).mockImplementation(function () {
+      return {
+        gate: () => {},
+        itemCostHistoryReport: async () => {
+          throw new ServiceError('not_found', 'Item not found.');
+        },
+      } as never;
+    });
+    const res = await GET(request());
+    expect(res.status).toBe(404);
   });
 });

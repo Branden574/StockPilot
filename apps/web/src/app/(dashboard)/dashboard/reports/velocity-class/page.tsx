@@ -14,6 +14,7 @@ import {
 import { ReportsService } from '@/server/services/reports';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 import { cn } from '@/lib/utils';
+import { reportPageGate } from '@/lib/reports/report-page-gate';
 
 const CLASS_COLORS: Record<'A' | 'B' | 'C' | 'D', string> = {
   A: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
@@ -34,6 +35,8 @@ export default async function VelocityClassPage({
 }: {
   searchParams: Promise<{ days?: string }>;
 }) {
+  const blocked = await reportPageGate('velocity-class');
+  if (blocked) return blocked;
   const params = await searchParams;
   const days = clampDays(params.days);
   const svc = await ReportsService.forCurrentUser();

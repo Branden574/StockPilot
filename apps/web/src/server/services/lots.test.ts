@@ -227,6 +227,8 @@ describe('LotsService.traceLot', () => {
           {
             order_request_id: 'o1', qty: 3, picked_at: '2026-07-01T00:00:00Z',
             picked_by: 'u1', lot_number: 'A', order_request: { order_number: 49 },
+            // The item embed (inner join): present when the reader can read the item.
+            item: { id: 'item-1' },
           },
         ],
         error: null,
@@ -249,6 +251,7 @@ describe('LotsService.traceLot', () => {
           {
             order_request_id: 'o1', qty: 3, picked_at: '2026-07-01T00:00:00Z',
             picked_by: null, lot_number: 'A', order_request: { order_number: null },
+            item: { id: 'item-1' },
           },
         ],
         error: null,

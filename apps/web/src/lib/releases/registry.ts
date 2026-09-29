@@ -28,6 +28,37 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'reports-caller-scope-2026-09',
+    revision: 1,
+    // Web only (the phone's Reports has only Book Order Totals, which already
+    // answered for the reader), so published with the web deploy of
+    // fix/reports-scope, after migration 0380. Addressed by reports:read, the
+    // permission every report page checks.
+    status: 'published',
+    title: 'Reports include only what you can see',
+    summary:
+      'On the web, Stock movements, Shrinkage, Aging & expiry, Recall / lot trace and Item cost history, on the page and in their files, now include only the items and warehouses you have access to, as the rest of StockPilot does. If you can see every warehouse and category, your figures are unchanged.',
+    publishedAt: '2026-09-29T07:30:00Z',
+    audience: { anyPermission: ['reports:read'] },
+    entries: [
+      {
+        id: 'reports-caller-scope',
+        category: 'fixed',
+        area: 'Reports',
+        title: 'Reports count only the items and warehouses you can see',
+        whatChanged:
+          'Stock movements, Shrinkage, Aging & expiry, Recall / lot trace and Item cost history now count and list only the items and warehouses you have access to, on the page and in their CSV and PDF files. Bundle activity shows component value and warehouse names for the warehouses you can see.',
+        whyItMatters:
+          'These reports used to include items and warehouses outside your access, so someone limited to some warehouses or categories could see names, SKUs and totals from the rest of the organization.',
+        howItAffectsYou:
+          'If you can see every warehouse and category, your figures are unchanged. If your access is limited, the totals are smaller and match what you can open elsewhere in StockPilot.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/reports', label: 'Reports' },
+        audience: { anyPermission: ['reports:read'] },
+      },
+    ],
+  },
+  {
     id: 'book-order-totals-2026-09',
     revision: 1,
     // Held as a draft until the phone update (OTA group 46e8f566, the phone's

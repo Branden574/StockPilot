@@ -31,8 +31,6 @@ export async function GET(
 ) {
   const { id } = await params;
   const ctx = await withApiContext(req);
-  const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
-  if (limited) return limited;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
@@ -60,6 +58,10 @@ export async function GET(
   if (!can(ctx, 'orders:approve') && !isAssignedDriver) {
     return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   }
+  // The throttle counts only reads the caller may make (a refused caller must
+  // not spend the shared export budget or trip the abuse alert).
+  const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+  if (limited) return limited;
 
   return NextResponse.json({
     signatureDataUrl: row?.signature_data_url ?? null,

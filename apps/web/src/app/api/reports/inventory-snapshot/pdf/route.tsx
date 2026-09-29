@@ -4,7 +4,6 @@ import { renderToStream } from '@react-pdf/renderer';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
-import { reportError } from '@/lib/error-reporter';
 import { prefetchImagesAsDataUris } from '@/lib/pdf/image-prefetch';
 import {
   InventorySnapshotPdf,
@@ -12,26 +11,28 @@ import {
   type SnapshotPdfWarehouseGroup,
 } from '@/lib/pdf/inventory-snapshot';
 import { audit } from '@/server/services/audit';
-import { ServiceError } from '@/server/services/context';
+import { reportExportErrorResponse, reportExportUnauthenticated } from '@/lib/reports/export-errors';
+import { assertPermission, type ServiceContext } from '@/server/services/context';
 import { ItemImagesService } from '@/server/services/item-images';
 import { ReportsService } from '@/server/services/reports';
-
-import { can } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
+  let ctx: ServiceContext | null = null;
   try {
-    const ctx = await withApiContext(req);
-    const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
+    // In order, so a refused caller never spends the shared export budget:
+    // a session (401); reports:export with the MFA step-up (403);
+    // reports:read (the valuation report's gate, 403); then the export limit
+    // (429). The service checks the same gate again before it reads.
+    ctx = await withApiContext(req);
+    if (!ctx) return reportExportUnauthenticated();
+    assertPermission(ctx, 'reports:export');
+    const reportsSvc = new ReportsService(ctx);
+    reportsSvc.gate('inventory-valuation');
+    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
     if (limited) return limited;
-    if (!ctx) {
-      return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
-    }
-    if (!can(ctx, 'reports:export')) {
-      return NextResponse.json({ error: 'forbidden' }, { status: 403 });
-    }
 
     // ?photos=0 (or =false / =no) skips the image phase entirely.
     // PDF renders ~2x faster and is smaller; useful for archival
@@ -51,7 +52,6 @@ export async function GET(req: NextRequest) {
     // `.in('id', <their locations>)`, errors ignored: past ~215 items the
     // local gateway refused it and past ~395 production failed after ~7 s of
     // retries, and either way every Location cell printed blank.
-    const reportsSvc = new ReportsService(ctx);
     const data = await reportsSvc.inventoryValuation({ withLocations: true });
 
     // `bin_location` is the human-readable label set by the rack picker on
@@ -145,7 +145,6 @@ export async function GET(req: NextRequest) {
     const now = new Date();
     const asOf = now.toISOString();
     const stream = await renderToStream(
-      // eslint-disable-next-line react-hooks/error-boundaries -- RSC + react-pdf renderToStream; rule targets client error boundaries which don't apply here
       <InventorySnapshotPdf
         org={{ name: orgName, logoUrl: orgLogoUrl }}
         groups={groups}
@@ -192,11 +191,6 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      const status = e.code === 'not_found' ? 404 : e.code === 'forbidden' ? 403 : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
-    }
-    void reportError(e, { tag: 'pdf.inventory_snapshot' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return reportExportErrorResponse(e, 'pdf.inventory_snapshot', ctx?.organizationId);
   }
 }

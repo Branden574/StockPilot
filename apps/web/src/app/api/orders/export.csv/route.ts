@@ -11,7 +11,7 @@ import {
   parseOrderExportIso,
   resolveOrderExportStatusFilter,
 } from '@/lib/orders/export';
-import { ServiceError } from '@/server/services/context';
+import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
 import { can } from '@stockpilot/core';
@@ -26,8 +26,6 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: Request) {
   try {
     const ctx = await withApiContext(request);
-    const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
-    if (limited) return limited;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
@@ -39,6 +37,10 @@ export async function GET(request: Request) {
     if (!can(ctx, 'orders:approve')) {
       return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }
+    // The export budget is spent only once the caller may have this export
+    // (a refused caller must not spend it or trip the abuse alert).
+    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    if (limited) return limited;
 
     const params = new URL(request.url).searchParams;
 
@@ -82,15 +84,16 @@ export async function GET(request: Request) {
     });
   } catch (e) {
     if (e instanceof ServiceError) {
-      // module_disabled / forbidden surface their own status; everything
-      // else is a clean 500 with a stable code.
-      const status =
-        e.code === 'module_disabled' || e.code === 'forbidden'
-          ? 403
-          : e.code === 'validation_error'
-            ? 400
-            : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
+      // Every ServiceError keeps its real status (serviceErrorStatus): a
+      // permanent refusal is not an outage. An internal_error's public
+      // message is already generic; its cause is reported.
+      if (e.code === 'internal_error') {
+        void reportError(e, { tag: 'orders.export-csv', extra: { detail: e.internalDetail ?? null } });
+      }
+      return NextResponse.json(
+        { error: e.code, message: e.message },
+        { status: serviceErrorStatus(e.code) },
+      );
     }
     void reportError(e, { tag: 'orders.export-csv' });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });

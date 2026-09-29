@@ -4,6 +4,8 @@ import { isPoTab, statusesForTab } from '@/lib/purchase-orders/tabs';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
+import { reportError } from '@/lib/error-reporter';
+import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { csvFilename, toCsv } from '@/lib/csv';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { SuppliersService } from '@/server/services/suppliers';
@@ -40,8 +42,6 @@ type PoRow = {
 export async function GET(request: Request) {
   try {
     const ctx = await withApiContext(request);
-    const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
-    if (limited) return limited;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
@@ -50,6 +50,10 @@ export async function GET(request: Request) {
     if (!can(ctx, 'purchase_orders:read')) {
       return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }
+    // The export budget is spent only once the caller may have this export
+    // (a refused caller must not spend it or trip the abuse alert).
+    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    if (limited) return limited;
 
     const params = new URL(request.url).searchParams;
     const tab = params.get('status') ?? 'all';
@@ -106,9 +110,21 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
-    console.error('[api/purchase-orders/export.csv] failed', {
-      message: error instanceof Error ? error.message : String(error),
-    });
+    // A ServiceError keeps its real status (it used to be a 500
+    // export_failed for every error, a refusal included).
+    if (error instanceof ServiceError) {
+      if (error.code === 'internal_error') {
+        void reportError(error, {
+          tag: 'purchase-orders.export-csv',
+          extra: { detail: error.internalDetail ?? null },
+        });
+      }
+      return NextResponse.json(
+        { error: error.code, message: error.message },
+        { status: serviceErrorStatus(error.code) },
+      );
+    }
+    void reportError(error, { tag: 'purchase-orders.export-csv' });
     return NextResponse.json({ error: 'export_failed' }, { status: 500 });
   }
 }

@@ -1,13 +1,18 @@
 import { NextResponse } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { exportRateLimited } from '@/lib/export-rate-limit';
-import { ServiceError } from '@/server/services/context';
-import { ReportsService } from '@/server/services/reports';
 import { csvFilename, toCsv } from '@/lib/csv';
-import { reportError } from '@/lib/error-reporter';
+import { exportRateLimited } from '@/lib/export-rate-limit';
+import {
+  reportExportErrorResponse,
+  reportExportNotFound,
+  reportExportUnauthenticated,
+} from '@/lib/reports/export-errors';
+import { type ReportSlug } from '@/lib/reports/report-access';
+import { assertPermission, ServiceError, type ServiceContext } from '@/server/services/context';
+import { ReportsService } from '@/server/services/reports';
 
-import { can } from '@stockpilot/core';
+import { isUuid } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -31,23 +36,62 @@ function csvResponse(slug: string, body: string, suffix?: string) {
   });
 }
 
+/** The reports this dispatcher serves as CSV. */
+const CSV_REPORTS: ReadonlySet<string> = new Set<ReportSlug>([
+  'inventory-valuation',
+  'stock-movements',
+  'reorder-forecast',
+  'supplier-scorecard',
+  'velocity-class',
+  'dead-stock',
+  'bundle-activity',
+  'bundle-shortages',
+  'shrinkage',
+  'item-cost-history',
+]);
+
+/**
+ * GET /api/reports/[slug]/csv
+ *
+ * In order, so a refused caller never spends the shared export budget (and
+ * never trips the export-abuse alert): a session (401); reports:export with
+ * the MFA step-up (403); a known report (404); reports:read and the modules
+ * the report reads, from ReportsService.gate (403); the request itself (400);
+ * then the shared export limit (429); then the data, whose service methods
+ * check the same gate again. Every refusal keeps its real status: a
+ * ServiceError is never answered 500 unless it is an internal error.
+ */
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ slug: string }> },
 ) {
   const { slug } = await params;
   const url = new URL(request.url);
+  let ctx: ServiceContext | null = null;
   try {
-    const ctx = await withApiContext(request);
-    const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
-    if (limited) return limited;
-    if (!ctx) {
-      return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
-    }
-    if (!can(ctx, 'reports:export')) {
-      return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+    ctx = await withApiContext(request);
+    if (!ctx) return reportExportUnauthenticated();
+    assertPermission(ctx, 'reports:export');
+    if (!CSV_REPORTS.has(slug)) {
+      return reportExportNotFound();
     }
     const svc = new ReportsService(ctx);
+    svc.gate(slug as ReportSlug);
+    if (slug === 'item-cost-history') {
+      const itemId = url.searchParams.get('itemId');
+      if (!itemId) throw new ServiceError('validation_error', 'itemId is required');
+      if (!isUuid(itemId)) throw new ServiceError('validation_error', 'Choose an item.');
+    }
+    if (slug === 'inventory-valuation') {
+      // Optional; when present it must be a charter id (a uuid). Checked here
+      // so a malformed request is a 400 that spends no export budget.
+      const charterId = url.searchParams.get('charterId')?.trim() || null;
+      if (charterId && !isUuid(charterId)) {
+        throw new ServiceError('validation_error', 'Choose a charter.');
+      }
+    }
+    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    if (limited) return limited;
 
     if (slug === 'inventory-valuation') {
       const charterId = url.searchParams.get('charterId');
@@ -282,13 +326,13 @@ export async function GET(
     }
 
     if (slug === 'item-cost-history') {
-      const itemId = url.searchParams.get('itemId');
-      if (!itemId) {
-        return NextResponse.json({ error: 'itemId is required' }, { status: 400 });
-      }
+      // Present and a uuid: checked above, before the export budget.
+      const itemId = url.searchParams.get('itemId')!;
       const since = url.searchParams.get('since') ?? undefined;
       const until = url.searchParams.get('until') ?? undefined;
-      const data = await svc.itemCostHistory(itemId, { since, until });
+      // The report form: the gate, then the item read with the caller's
+      // client (another warehouse's or category's item is not_found).
+      const data = await svc.itemCostHistoryReport(itemId, { since, until });
       // Flatten per-supplier series into a flat chronological list.
       const rows = data.series
         .flatMap((s) =>
@@ -304,12 +348,8 @@ export async function GET(
       return csvResponse(slug, csv);
     }
 
-    return NextResponse.json({ error: 'Unknown report' }, { status: 404 });
+    return reportExportNotFound();
   } catch (e) {
-    if (e instanceof ServiceError) {
-      return NextResponse.json({ error: e.code, message: e.message }, { status: 500 });
-    }
-    void reportError(e, { tag: 'reports.csv' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return reportExportErrorResponse(e, 'reports.csv', ctx?.organizationId);
   }
 }

@@ -546,7 +546,7 @@ describe('F1-5 (escalate an exception to maintenance) is published', () => {
     // The notice offers the newest unread release; the maintenance review
     // wording release was published after this one (and F2-1's, F2-2's, the
     // needed-by time's, the draft POs count's and Book Order Totals' after it).
-    expect(list.latestUnread?.id).toBe('book-order-totals-2026-09');
+    expect(list.latestUnread?.id).toBe('reports-caller-scope-2026-09');
     // An old phone build lists at most three unread releases, newest first;
     // F1-5 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -718,7 +718,7 @@ describe('F2-1 (order readiness) is published', () => {
     // The notice offers the newest unread release; the maintenance review
     // wording, F2-2's, the needed-by time's, the draft POs count's and Book
     // Order Totals' releases were published after this one.
-    expect(list.latestUnread?.id).toBe('book-order-totals-2026-09');
+    expect(list.latestUnread?.id).toBe('reports-caller-scope-2026-09');
     // An old phone build lists at most three unread releases, newest first;
     // F2-1 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -976,7 +976,7 @@ describe('F2-2 (held, and caught before it leaves) is published', () => {
     // The notice offers the newest unread release: the needed-by time's, the
     // draft POs count's and Book Order Totals' releases were published after
     // this one.
-    expect(list.latestUnread?.id).toBe('book-order-totals-2026-09');
+    expect(list.latestUnread?.id).toBe('reports-caller-scope-2026-09');
     // An old phone build lists at most three unread releases, newest first;
     // F2-2 comes into that list once the newer releases are read.
     const newer = Object.fromEntries(
@@ -1134,7 +1134,10 @@ describe('the needed-by time release is published', () => {
     }
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(ID);
+    // An old phone build lists at most three unread releases, newest first;
+    // this one comes into that list once the newer releases are read.
+    const newer = Object.fromEntries(RELEASES.slice(0, at).map((r) => [r.id, true]));
+    expect(legacyAnnouncementsFor(RELEASES, everyone, newer).map((a) => a.id)).toContain(ID);
     expect(registryFingerprint(RELEASES)).toContain(ID);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
   });
@@ -1232,18 +1235,22 @@ describe('Book Order Totals is published', () => {
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
     const list = buildReleaseList(RELEASES, everyone, [], null);
     expect(list.releases.map((r) => r.id)).toContain(ID);
-    expect(list.latestUnread?.id).toBe(ID);
+    // The notice offers the newest unread release; the report scope fix's
+    // release was published after this one.
+    expect(list.latestUnread?.id).toBe('reports-caller-scope-2026-09');
     expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(ID);
     expect(registryFingerprint(RELEASES)).toContain(ID);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-30T00:00:00Z'));
   });
 
-  it('sits above every published release (pinned by id), dated after every other release, so it is the newest', () => {
+  it('is dated after every release below it (pinned by id); releases above it were published later', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
-    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
-    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
+    for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -1299,5 +1306,60 @@ describe('Book Order Totals is published', () => {
     expect(text).toContain('a file is never cut short');
     expect(text).toContain('on an Android phone, export from the web for now');
     expect(text).not.toMatch(/\bunique titles?\b|\bdelivered\b|\bsnapshot\b|\bthe book\b|%/i);
+  });
+});
+
+/**
+ * The report scope fix (0380, fix/reports-scope): web only, so published with
+ * the web deploy after the migration. Addressed by reports:read, the
+ * permission every report page checks (reportPageGate).
+ */
+describe('the report scope release is published', () => {
+  const ID = 'reports-caller-scope-2026-09';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+
+  it('is published and the newest: every release above it is a draft, and it is dated after every release below it', () => {
+    expect(release().status).toBe('published');
+    expect(release().revision).toBe(1);
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.slice(at + 1)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.latestUnread?.id).toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(ID);
+    expect(registryFingerprint(RELEASES)).toContain(ID);
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-30T00:00:00Z'));
+  });
+
+  it('reaches only report readers, as every report page checks reports:read', () => {
+    expect(release().audience).toEqual({ anyPermission: ['reports:read'] });
+    expect(release().entries.map((e) => e.audience)).toEqual([{ anyPermission: ['reports:read'] }]);
+    expect(release().entries[0]!.link).toEqual({ href: '/dashboard/reports', label: 'Reports' });
+    const reader = (permissions: ReleaseViewer['permissions']) =>
+      visibleReleases([release()], { role: 'viewer', permissions, enabledModules: [] })[0]?.entries.map((e) => e.id) ?? [];
+    expect(reader(['reports:read'])).toEqual(['reports-caller-scope']);
+    expect(reader(['reports:export'])).toEqual([]);
+    expect(reader(['items:read'])).toEqual([]);
+  });
+
+  it('says it plainly: web only, unchanged for readers who see everything, no promise it cannot keep', () => {
+    const r = release();
+    // Old phone builds show only the summary: it names the platform.
+    expect(r.summary).toMatch(/^On the web, /);
+    const text = readerText(r).join(' ');
+    expect(text).toContain('your figures are unchanged');
+    expect(text).not.toMatch(/mobile app|phone|%|\bbook\b/i);
+    // Bundle runs and kits stay organization-wide (bundle_distributions is
+    // member-wide), so the text claims only value and warehouse names there.
+    expect(text).toContain('Bundle activity shows component value and warehouse names for the warehouses you can see.');
+    for (const e of r.entries) expect(e.whatToDo, e.id).toBe('No action needed.');
   });
 });

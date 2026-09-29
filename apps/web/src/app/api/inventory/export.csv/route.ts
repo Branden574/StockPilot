@@ -60,8 +60,6 @@ const VALID_TYPES = new Set(['product', 'book', 'asset', 'consumable', 'all']);
 export async function GET(request: Request) {
   try {
     const ctx = await withApiContext(request);
-    const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
-    if (limited) return limited;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
@@ -78,6 +76,10 @@ export async function GET(request: Request) {
     if (rawWarehouseId !== null && !warehouseIdSchema.safeParse(rawWarehouseId).success) {
       return NextResponse.json({ error: 'invalid_warehouse_id' }, { status: 400 });
     }
+    // The export budget is spent only once the caller may have this export
+    // (a refused caller must not spend it or trip the abuse alert).
+    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    if (limited) return limited;
 
     const scope = params.get('scope') === 'all' ? 'all' : 'filtered';
     const rawType = params.get('type') ?? '';

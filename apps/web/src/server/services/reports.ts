@@ -1,8 +1,16 @@
 import 'server-only';
 
-import { createAdminClient } from '@/lib/supabase/admin';
+import { reportModules, type ReportSlug } from '@/lib/reports/report-access';
 
-import { ServiceError, withContext, type ServiceContext } from './context';
+import { isUuid } from '@stockpilot/core';
+
+import {
+  assertModuleEnabled,
+  assertPermission,
+  ServiceError,
+  withContext,
+  type ServiceContext,
+} from './context';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { whereReorderCandidate } from './lib/orderable-items';
 import { fetchAllRows } from './lib/paginate';
@@ -187,11 +195,53 @@ export interface ItemCostHistory {
   pointCount: number;
 }
 
+/**
+ * A report aggregate's error, mapped. The six report_* functions (0380) gate
+ * themselves: 42501 with hint `unauthenticated` or `forbidden`, P0001 with
+ * hint `module_disabled`. Those become the matching ServiceError, so a route
+ * answers 401/403 and never 500. Anything else (a missing grant during a
+ * rollout, a timeout) is an internal error: its raw text stays server-side.
+ */
+function reportRpcError(error: {
+  message: string;
+  code?: string | null;
+  hint?: string | null;
+}): ServiceError {
+  if (error.code === '42501' && error.hint === 'unauthenticated') {
+    return new ServiceError('unauthenticated', 'Sign in to see this report.');
+  }
+  if (error.code === '42501' && error.hint === 'forbidden') {
+    return new ServiceError('forbidden', 'Missing permission: reports:read');
+  }
+  if (error.code === 'P0001' && error.hint === 'module_disabled') {
+    return new ServiceError('module_disabled', 'A module this report needs is not enabled.');
+  }
+  return new ServiceError('internal_error', error.message);
+}
+
 export class ReportsService {
   constructor(private readonly ctx: ServiceContext) {}
 
   static async forCurrentUser() {
     return new ReportsService(await withContext());
+  }
+
+  /**
+   * THE REPORT GATE. reports:read (the MFA step-up first, as every
+   * assertPermission) and the modules this report reads (lib/reports/
+   * report-access). Every report method below calls it before its first
+   * read, so a page, a CSV, a PDF, an XLSX or a server action that reaches
+   * the data is checked by the data path itself, never only by the reports
+   * layout. The export routes also call it BEFORE their rate limit, so a
+   * refused caller never spends the shared export budget.
+   *
+   * inventoryValuationSummary (the dashboard donut) and itemCostHistory (the
+   * item page's cost card) are not reports and are not gated here; the
+   * report form of the cost history is itemCostHistoryReport.
+   */
+  gate(report: ReportSlug): void {
+    assertPermission(this.ctx, 'reports:read');
+    for (const moduleId of reportModules(report)) assertModuleEnabled(this.ctx, moduleId);
   }
 
   /**
@@ -233,6 +283,7 @@ export class ReportsService {
      */
     withLocations?: boolean;
   }): Promise<ValuationReport> {
+    this.gate('inventory-valuation');
     const charterId = opts?.charterId?.trim() || null;
     const withLocations = opts?.withLocations === true;
     if (charterId) {
@@ -350,6 +401,12 @@ export class ReportsService {
    *      failure mode 0179/0227 fixed for whole-org sums.
    */
   private async inventoryValuationByCharter(charterId: string): Promise<ValuationReport> {
+    // A charter id is always a uuid, so anything else matches no charter: the
+    // same empty report as a foreign id, without a query. (Handed to
+    // PostgREST, it answered 22P02 and the report failed with a 500.)
+    if (!isUuid(charterId)) {
+      return { rows: [], totalValue: 0, totalUnits: 0, itemCount: 0, byWarehouse: [], byCategory: [] };
+    }
     const { data: charterRow, error: charterErr } = await this.ctx.supabase
       .from('charters')
       .select('id')
@@ -530,29 +587,34 @@ export class ReportsService {
    * movement_type and identifies the top items by gross qty moved.
    */
   async movementSummary(days = 30): Promise<MovementSummary> {
+    this.gate('stock-movements');
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-    // The by-type rollup and the top-mover ranking are computed DB-side by
-    // migration 0225's service-role RPCs. (Was: paged up to a 50k-row cap
-    // and aggregated in JS — past the cap the byType counts / totalMovements
-    // silently truncated, since the raw movements were an id-ordered SUBSET.)
-    // The raw movements are never displayed (only byType + top-N), so nothing
-    // streams here. `since` is passed as the exact instant the JS computed so
-    // the window boundary is identical to the old path.
-    const admin = createAdminClient();
+    // The by-type rollup and the top-mover ranking are computed DB-side
+    // (0225). (Was: paged up to a 50k-row cap and aggregated in JS — past the
+    // cap the byType counts / totalMovements silently truncated, since the
+    // raw movements were an id-ordered SUBSET.) The raw movements are never
+    // displayed (only byType + top-N), so nothing streams here. `since` is
+    // passed as the exact instant the JS computed so the window boundary is
+    // identical to the old path.
+    //
+    // THE CALLER'S CLIENT, never the service role (0380): the functions are
+    // SECURITY INVOKER, so the caller's RLS decides which movements and items
+    // count. The service role read the whole organization and handed a
+    // warehouse- or category-scoped reader other warehouses' SKUs and names.
     const orgId = this.ctx.organizationId;
     const [byTypeRes, topRes] = await Promise.all([
-      admin.rpc('report_movement_type_summary', {
+      this.ctx.supabase.rpc('report_movement_type_summary', {
         p_organization_id: orgId,
         p_since: since,
       }),
-      admin.rpc('report_top_movers', {
+      this.ctx.supabase.rpc('report_top_movers', {
         p_organization_id: orgId,
         p_since: since,
         p_limit: 50,
       }),
     ]);
-    if (byTypeRes.error) throw new ServiceError('internal_error', byTypeRes.error.message);
-    if (topRes.error) throw new ServiceError('internal_error', topRes.error.message);
+    if (byTypeRes.error) throw reportRpcError(byTypeRes.error);
+    if (topRes.error) throw reportRpcError(topRes.error);
 
     const byType = (
       (byTypeRes.data ?? []) as Array<{
@@ -610,6 +672,7 @@ export class ReportsService {
    * to do so.
    */
   async reorderForecast(): Promise<ReorderForecast> {
+    this.gate('reorder-forecast');
     // PostgREST caps responses at 1000 rows; page the full set so the
     // forecast covers every below-reorder-point item, not just the first
     // 1000. The final rows are re-sorted by deficit, so fetch order is
@@ -691,17 +754,19 @@ export class ReportsService {
    * the implied cost using the item's current unit_cost.
    */
   async shrinkage(days = 30): Promise<ShrinkageReport> {
+    this.gate('shrinkage');
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
-    // Totals (units + cost) computed DB-side by migration 0225's service-role
-    // RPC so they can NEVER truncate. (Was: summed over a 50k-capped rowset —
-    // past the cap totalUnits/totalCost silently understated the loss.)
-    const admin = createAdminClient();
-    const totalsRes = await admin.rpc('report_shrinkage_totals', {
+    // Totals (units + cost) computed DB-side (0225) so they can NEVER
+    // truncate. (Was: summed over a 50k-capped rowset — past the cap
+    // totalUnits/totalCost silently understated the loss.) With the CALLER'S
+    // client (0380), so the totals cover exactly the movements and items the
+    // caller can read, the same set as the detail rows below.
+    const totalsRes = await this.ctx.supabase.rpc('report_shrinkage_totals', {
       p_organization_id: this.ctx.organizationId,
       p_since: since,
     });
-    if (totalsRes.error) throw new ServiceError('internal_error', totalsRes.error.message);
+    if (totalsRes.error) throw reportRpcError(totalsRes.error);
     const totalsRow = (
       (totalsRes.data ?? []) as Array<{ total_units: number; total_cost: number }>
     )[0];
@@ -786,6 +851,7 @@ export class ReportsService {
    * Only includes suppliers that had at least one PO in the window.
    */
   async supplierScorecard(days = 90): Promise<SupplierScorecardReport> {
+    this.gate('supplier-scorecard');
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
     // PostgREST caps every response at 1000 rows; page the full PO set so
@@ -1211,6 +1277,34 @@ export class ReportsService {
   }
 
   /**
+   * Item cost history as a REPORT: the report page and its CSV, PDF and XLSX.
+   * The report gate, then the item itself, read with the caller's client.
+   * PO lines and receipt lines are readable by every member of the org, so
+   * without this read an export by id answered for an item outside the
+   * caller's warehouses or categories (its suppliers and unit costs). A
+   * malformed id is a validation error; an item the caller cannot read,
+   * another org's item and a missing id are the same not_found.
+   * (itemCostHistory itself stays ungated: the item page's cost card reads it
+   * after that page has already read the item.)
+   */
+  async itemCostHistoryReport(
+    itemId: string,
+    opts?: { since?: string; until?: string },
+  ): Promise<ItemCostHistory> {
+    this.gate('item-cost-history');
+    if (!isUuid(itemId)) throw new ServiceError('validation_error', 'Choose an item.');
+    const { data, error } = await this.ctx.supabase
+      .from('inventory_items')
+      .select('id')
+      .eq('id', itemId)
+      .eq('organization_id', this.ctx.organizationId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) throw new ServiceError('not_found', 'Item not found.');
+    return this.itemCostHistory(itemId, opts);
+  }
+
+  /**
    * ABC velocity classification — ranks items by total dollars-out
    * (sales + transfers + adjustments-down) over the last `days` days
    * and partitions them into A/B/C buckets:
@@ -1223,6 +1317,7 @@ export class ReportsService {
    * surface inventory you're carrying for nothing.
    */
   async velocityClass(days = 90): Promise<VelocityClassReport> {
+    this.gate('velocity-class');
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
     type ItemRow = {
@@ -1236,14 +1331,14 @@ export class ReportsService {
     };
 
     // Out-movement aggregate (units-out + last-out per item) computed DB-side
-    // by migration 0225's service-role RPC so it can NEVER truncate. (Was: a
-    // 100k-capped raw movement fetch summed in JS — past the cap unitsOut and
-    // thus valueOut / totalValueOut and the ABC classification were silently
-    // wrong.) The item list still streams (it IS the display) but now with NO
-    // cap. `since` is the exact instant the JS computed.
-    const admin = createAdminClient();
+    // (0225) so it can NEVER truncate. (Was: a 100k-capped raw movement fetch
+    // summed in JS — past the cap unitsOut and thus valueOut / totalValueOut
+    // and the ABC classification were silently wrong.) The item list still
+    // streams (it IS the display) but now with NO cap. `since` is the exact
+    // instant the JS computed. The CALLER'S client (0380): only movements the
+    // caller can read.
     const [outRes, itemRows] = await Promise.all([
-      admin.rpc('report_item_out_movements', {
+      this.ctx.supabase.rpc('report_item_out_movements', {
         p_organization_id: this.ctx.organizationId,
         p_since: since,
       }),
@@ -1267,7 +1362,7 @@ export class ReportsService {
         {},
       ),
     ]);
-    if (outRes.error) throw new ServiceError('internal_error', outRes.error.message);
+    if (outRes.error) throw reportRpcError(outRes.error);
 
     // Per-item units-out and last-out from the aggregate.
     const unitsOutById = new Map<string, number>();
@@ -1342,6 +1437,7 @@ export class ReportsService {
    * Cin7 expose as "stale inventory" / "dead stock."
    */
   async deadStock(days = 90): Promise<DeadStockReport> {
+    this.gate('dead-stock');
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
     type ItemRow = {
@@ -1355,10 +1451,25 @@ export class ReportsService {
       category: { name: string } | { name: string }[] | null;
     };
 
-    // First pass: every item with on-hand > 0 in the org. Stream the FULL set
-    // (no cap) — this IS the display, and an org with >1000 (or >50k) stocked
-    // items must not silently see only a prefix.
-    const itemList = await fetchAllRows<ItemRow>(
+    // Items that had ANY out-movement in the window — these are NOT dead.
+    // Computed DB-side (0225, shared with velocityClass) so the dedup set can
+    // NEVER truncate. (Was: a per-item-batch fetch under a 100k cap, which
+    // silently missed out-movements and wrongly flagged active items as
+    // dead.) With the CALLER'S client (0380) the set holds the movements the
+    // caller can read, which include every movement of every item in
+    // `itemList` (a readable item's movements are readable), so the
+    // intersection below is unchanged. `since` is the exact instant the JS
+    // computed. It does not depend on the item list, so it runs alongside
+    // the item stream (as in velocityClass), not after it.
+    const outRead = this.ctx.supabase.rpc('report_item_out_movements', {
+      p_organization_id: this.ctx.organizationId,
+      p_since: since,
+    });
+
+    // Every item with on-hand > 0 in the org. Stream the FULL set (no cap) —
+    // this IS the display, and an org with >1000 (or >50k) stocked items must
+    // not silently see only a prefix.
+    const itemListRead = fetchAllRows<ItemRow>(
       (from, to) =>
         this.ctx.supabase
           .from('inventory_items')
@@ -1379,20 +1490,8 @@ export class ReportsService {
       {},
     );
 
-    // Items that had ANY out-movement in the window — these are NOT dead.
-    // Computed DB-side by migration 0225's service-role RPC (shared with
-    // velocityClass) so the dedup set can NEVER truncate. (Was: a per-item-
-    // batch fetch under a 100k cap, which silently missed out-movements and
-    // wrongly flagged active items as dead.) The RPC returns the ORG-WIDE
-    // out-movement item set — a superset of the per-item-batch query, whose
-    // intersection with `itemList` below is identical. `since` is the exact
-    // instant the JS computed.
-    const admin = createAdminClient();
-    const outRes = await admin.rpc('report_item_out_movements', {
-      p_organization_id: this.ctx.organizationId,
-      p_since: since,
-    });
-    if (outRes.error) throw new ServiceError('internal_error', outRes.error.message);
+    const [itemList, outRes] = await Promise.all([itemListRead, outRead]);
+    if (outRes.error) throw reportRpcError(outRes.error);
     const recentOut = new Set<string>();
     for (const m of (outRes.data ?? []) as Array<{ item_id: string }>) {
       recentOut.add(m.item_id);
@@ -1445,30 +1544,32 @@ export class ReportsService {
    * cost (from the component side of the ledger).
    */
   async bundleActivity(days = 90): Promise<BundleActivityReport> {
+    this.gate('bundle-activity');
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
     // Both halves of the report — the per-bundle distribution rollup (runs,
     // kits out, last run, top warehouse) and the component-cost rollup — are
-    // computed DB-side by migration 0225's service-role RPCs so the totals
-    // (totalRuns / totalKits / totalValueOut) can NEVER truncate. (Was: paged
-    // distributions under a 10k cap and component-draw movements under a 50k
-    // cap, summed in JS — past those caps every total silently understated.)
-    // The report body is a per-bundle rollup (bounded by bundle count), so
-    // nothing streams. `since` is the exact instant the JS computed.
-    const admin = createAdminClient();
+    // computed DB-side (0225) so the totals (totalRuns / totalKits /
+    // totalValueOut) can NEVER truncate. (Was: paged distributions under a
+    // 10k cap and component-draw movements under a 50k cap, summed in JS —
+    // past those caps every total silently understated.) The report body is a
+    // per-bundle rollup (bounded by bundle count), so nothing streams.
+    // `since` is the exact instant the JS computed. The CALLER'S client
+    // (0380): component value counts only items the caller can read, and a
+    // top warehouse the caller cannot read comes back without a name.
     const orgId = this.ctx.organizationId;
     const [actRes, valRes] = await Promise.all([
-      admin.rpc('report_bundle_activity', {
+      this.ctx.supabase.rpc('report_bundle_activity', {
         p_organization_id: orgId,
         p_since: since,
       }),
-      admin.rpc('report_bundle_component_value', {
+      this.ctx.supabase.rpc('report_bundle_component_value', {
         p_organization_id: orgId,
         p_since: since,
       }),
     ]);
-    if (actRes.error) throw new ServiceError('internal_error', actRes.error.message);
-    if (valRes.error) throw new ServiceError('internal_error', valRes.error.message);
+    if (actRes.error) throw reportRpcError(actRes.error);
+    if (valRes.error) throw reportRpcError(valRes.error);
 
     // Component cost keyed by bundle id (RPC groups movements by reference_id,
     // which is the bundle id for bundle_distribution draws).
@@ -1520,6 +1621,7 @@ export class ReportsService {
    * "we keep running out of X during distributions" pattern.
    */
   async bundleShortages(days = 90): Promise<BundleShortagesReport> {
+    this.gate('bundle-shortages');
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
     type MoveRow = {

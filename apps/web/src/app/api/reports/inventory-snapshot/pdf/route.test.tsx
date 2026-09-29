@@ -99,3 +99,34 @@ describe('GET /api/reports/inventory-snapshot/pdf — locations', () => {
     expect(stub.fromCalls).not.toContain('locations');
   });
 });
+
+/**
+ * Security invariant (2026-09-28): reports:export and the valuation report's
+ * gate (reports:read) are checked BEFORE the shared export limit.
+ */
+describe('GET /api/reports/inventory-snapshot/pdf — checks before the export budget', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(exportRateLimited).mockResolvedValue(null as never);
+  });
+
+  it.each([
+    ['no reports:export', { role: 'staff' }],
+    ['reports:export without reports:read', { role: 'viewer', permissions: new Set(['reports:export']) }],
+  ] as const)('%s: 403, budget untouched, nothing read', async (_label, who) => {
+    const stub = makeSupabaseStub({});
+    vi.mocked(withApiContext).mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      supabase: stub.client,
+      mfaRequired: false,
+      mfaSatisfied: true,
+      enabledModules: new Set<ModuleId>([...DEFAULT_MODULE_IDS]),
+      ...who,
+    } as never);
+    const res = await GET(new NextRequest('https://test.local/api/reports/inventory-snapshot/pdf'));
+    expect(res.status).toBe(403);
+    expect(exportRateLimited).not.toHaveBeenCalled();
+    expect(stub.fromCalls).toEqual([]);
+  });
+});

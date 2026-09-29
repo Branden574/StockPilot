@@ -14,6 +14,13 @@
 -- Plus live 42501 probes on a representative function and a service_role
 -- lives_ok.
 --
+-- 0380 CHANGED THE CONTRACT: ReportsService now calls these with the
+-- CALLER'S client, so authenticated holds EXECUTE (each body gates: signed
+-- in, member with reports:read, bundles module for the bundle pair) and RLS
+-- decides what each answer contains. The behavioural checks below therefore
+-- run as each org's OWNER (who reads every row) instead of the superuser,
+-- which the gates now refuse. 0380's own file proves the gates and scoping.
+--
 -- now() = transaction_timestamp() is constant across this begin/rollback
 -- block, so p_since (= now() − 30 days) and the seeded created_at offsets are
 -- computed from the SAME instant — window membership below is exact, not racy.
@@ -37,6 +44,16 @@ insert into public.organizations (id, name, slug) values
   ('ac022500-0000-0000-0000-000000000001', 'Report Scale Org A', 'report-scale-a-0225'),
   ('ac022500-0000-0000-0000-000000000002', 'Report Scale Org B', 'report-scale-b-0225')
   on conflict (id) do nothing;
+
+-- 0380: an owner per org, so the behavioural checks run as a signed-in
+-- reader who can read every row (the functions refuse a caller with no user).
+insert into auth.users (id, email, raw_user_meta_data) values
+  ('ac022500-0000-0000-0000-0000000000a1', '0225-owner-a@test.local', '{}'::jsonb),
+  ('ac022500-0000-0000-0000-0000000000b1', '0225-owner-b@test.local', '{}'::jsonb)
+  on conflict (id) do nothing;
+insert into public.organization_members (organization_id, user_id, role, accepted_at) values
+  ('ac022500-0000-0000-0000-000000000001', 'ac022500-0000-0000-0000-0000000000a1', 'owner', now()),
+  ('ac022500-0000-0000-0000-000000000002', 'ac022500-0000-0000-0000-0000000000b1', 'owner', now());
 
 insert into public.warehouses (id, organization_id, name, code, status) values
   ('ac022500-0000-0000-0000-000000000003', 'ac022500-0000-0000-0000-000000000001', 'WH A',  'WH-A-0225',  'active'),
@@ -118,9 +135,9 @@ select ok((select proconfig @> array['search_path=public'] from pg_proc
 select ok(not has_function_privilege('anon',
   'public.report_movement_type_summary(uuid, timestamptz)', 'execute'),
   'report_movement_type_summary: anon has no EXECUTE');
-select ok(not has_function_privilege('authenticated',
+select ok(has_function_privilege('authenticated',
   'public.report_movement_type_summary(uuid, timestamptz)', 'execute'),
-  'report_movement_type_summary: authenticated has no EXECUTE');
+  'report_movement_type_summary: authenticated has EXECUTE (0380: gated in its body, RLS applies)');
 select ok(has_function_privilege('service_role',
   'public.report_movement_type_summary(uuid, timestamptz)', 'execute'),
   'report_movement_type_summary: service_role has EXECUTE');
@@ -137,9 +154,9 @@ select ok((select proconfig @> array['search_path=public'] from pg_proc
 select ok(not has_function_privilege('anon',
   'public.report_top_movers(uuid, timestamptz, integer)', 'execute'),
   'report_top_movers: anon has no EXECUTE');
-select ok(not has_function_privilege('authenticated',
+select ok(has_function_privilege('authenticated',
   'public.report_top_movers(uuid, timestamptz, integer)', 'execute'),
-  'report_top_movers: authenticated has no EXECUTE');
+  'report_top_movers: authenticated has EXECUTE (0380: gated in its body, RLS applies)');
 select ok(has_function_privilege('service_role',
   'public.report_top_movers(uuid, timestamptz, integer)', 'execute'),
   'report_top_movers: service_role has EXECUTE');
@@ -156,9 +173,9 @@ select ok((select proconfig @> array['search_path=public'] from pg_proc
 select ok(not has_function_privilege('anon',
   'public.report_shrinkage_totals(uuid, timestamptz)', 'execute'),
   'report_shrinkage_totals: anon has no EXECUTE');
-select ok(not has_function_privilege('authenticated',
+select ok(has_function_privilege('authenticated',
   'public.report_shrinkage_totals(uuid, timestamptz)', 'execute'),
-  'report_shrinkage_totals: authenticated has no EXECUTE');
+  'report_shrinkage_totals: authenticated has EXECUTE (0380: gated in its body, RLS applies)');
 select ok(has_function_privilege('service_role',
   'public.report_shrinkage_totals(uuid, timestamptz)', 'execute'),
   'report_shrinkage_totals: service_role has EXECUTE');
@@ -175,9 +192,9 @@ select ok((select proconfig @> array['search_path=public'] from pg_proc
 select ok(not has_function_privilege('anon',
   'public.report_item_out_movements(uuid, timestamptz)', 'execute'),
   'report_item_out_movements: anon has no EXECUTE');
-select ok(not has_function_privilege('authenticated',
+select ok(has_function_privilege('authenticated',
   'public.report_item_out_movements(uuid, timestamptz)', 'execute'),
-  'report_item_out_movements: authenticated has no EXECUTE');
+  'report_item_out_movements: authenticated has EXECUTE (0380: gated in its body, RLS applies)');
 select ok(has_function_privilege('service_role',
   'public.report_item_out_movements(uuid, timestamptz)', 'execute'),
   'report_item_out_movements: service_role has EXECUTE');
@@ -194,9 +211,9 @@ select ok((select proconfig @> array['search_path=public'] from pg_proc
 select ok(not has_function_privilege('anon',
   'public.report_bundle_activity(uuid, timestamptz)', 'execute'),
   'report_bundle_activity: anon has no EXECUTE');
-select ok(not has_function_privilege('authenticated',
+select ok(has_function_privilege('authenticated',
   'public.report_bundle_activity(uuid, timestamptz)', 'execute'),
-  'report_bundle_activity: authenticated has no EXECUTE');
+  'report_bundle_activity: authenticated has EXECUTE (0380: gated in its body, RLS applies)');
 select ok(has_function_privilege('service_role',
   'public.report_bundle_activity(uuid, timestamptz)', 'execute'),
   'report_bundle_activity: service_role has EXECUTE');
@@ -213,9 +230,9 @@ select ok((select proconfig @> array['search_path=public'] from pg_proc
 select ok(not has_function_privilege('anon',
   'public.report_bundle_component_value(uuid, timestamptz)', 'execute'),
   'report_bundle_component_value: anon has no EXECUTE');
-select ok(not has_function_privilege('authenticated',
+select ok(has_function_privilege('authenticated',
   'public.report_bundle_component_value(uuid, timestamptz)', 'execute'),
-  'report_bundle_component_value: authenticated has no EXECUTE');
+  'report_bundle_component_value: authenticated has EXECUTE (0380: gated in its body, RLS applies)');
 select ok(has_function_privilege('service_role',
   'public.report_bundle_component_value(uuid, timestamptz)', 'execute'),
   'report_bundle_component_value: service_role has EXECUTE');
@@ -249,7 +266,7 @@ select case
   when coalesce(current_setting('stockpilot.pgtap_live_denial_probes', true), '') = 'on' then
     throws_ok(
       $$ select * from public.report_movement_type_summary('ac022500-0000-0000-0000-000000000001'::uuid, now() - interval '30 days') $$,
-      '42501', null, 'authenticated cannot execute report_movement_type_summary (not even for its own org)')
+      '42501', null, 'authenticated with no user is refused report_movement_type_summary (0380 gate: unauthenticated)')
   else
     skip('prod-only: live fn-EXECUTE-denial probe (segfaults this local stack; EXECUTE grants asserted statically above)', 1)
 end;
@@ -264,6 +281,10 @@ reset role;
 -- ═════════════════════════════════════════════════════════════════════════════
 -- BEHAVIORAL (8) — hand-computed roll-ups; out-of-window excluded, org-scoped.
 -- ═════════════════════════════════════════════════════════════════════════════
+
+-- Org A's owner (0380: a signed-in reader who can read every row).
+set local "request.jwt.claim.sub" to 'ac022500-0000-0000-0000-0000000000a1';
+set local role to 'authenticated';
 
 -- 1. movement_type_summary: adjust(2,9), add(2,35), remove(1,10). The +999
 --    add (out of window) and all org-B rows are absent (full-set match).
@@ -310,6 +331,12 @@ select is(
   now() - interval '3 days',
   'item_out_movements: last_out_at = max(created_at) of the item''s out-movements');
 
+reset role;
+
+-- Org B's owner for the bundle fixtures.
+set local "request.jwt.claim.sub" to 'ac022500-0000-0000-0000-0000000000b1';
+set local role to 'authenticated';
+
 -- 6. bundle_activity: kit B runs 3, kits 35, top warehouse WH B (2 runs vs WH B2 1).
 select results_eq(
   $$ select bundle_id, bundle_name, bundle_sku, runs, kits_out, top_warehouse_name
@@ -319,10 +346,17 @@ select results_eq(
   'bundle_activity: runs/kits_out/top_warehouse per bundle, window + org scoped');
 
 -- 7. bundle_activity(orgA) is empty — org A has no distributions (isolation).
+--    Asked by org A's owner (org B's owner is not a member of org A).
+reset role;
+set local "request.jwt.claim.sub" to 'ac022500-0000-0000-0000-0000000000a1';
+set local role to 'authenticated';
 select is(
   (select count(*) from public.report_bundle_activity('ac022500-0000-0000-0000-000000000001'::uuid, now() - interval '30 days')),
   0::bigint,
   'bundle_activity: org with no distributions returns no rows (cross-org isolation)');
+reset role;
+set local "request.jwt.claim.sub" to 'ac022500-0000-0000-0000-0000000000b1';
+set local role to 'authenticated';
 
 -- 8. bundle_component_value: kit B = itemBX(3×100) + itemBY(5×10) = 350.
 select results_eq(
@@ -330,6 +364,7 @@ select results_eq(
        from public.report_bundle_component_value('ac022500-0000-0000-0000-000000000002'::uuid, now() - interval '30 days') $$,
   $$ values ('ac022500-0000-0000-0000-000000000020'::uuid, 350::numeric) $$,
   'bundle_component_value: sum(abs(qty)*unit_cost) of bundle_distribution draws per bundle');
+reset role;
 
 select * from finish();
 rollback;

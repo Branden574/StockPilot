@@ -17,6 +17,9 @@ import { ReportsService } from './reports';
  * vw_inventory_valuation_* views, untruncatable — see reports.
  * scaleAggregates.test.ts).
  */
+const CHARTER_X = 'c4a47e00-0000-4000-8000-00000000000a';
+const SOMEONE_ELSES_CHARTER = 'c4a47e00-0000-4000-8000-00000000000b';
+
 describe('ReportsService.inventoryValuation — optional charter filter', () => {
   const whView = [
     { warehouse_id: 'w1', warehouse_name: 'Main', value: 1_000, units: 100, item_count: 10 },
@@ -94,12 +97,12 @@ describe('ReportsService.inventoryValuation — optional charter filter', () => 
       },
     ];
     const stub = makeSupabaseStub({
-      'charters.select': { data: [{ id: 'charter-x' }], error: null },
+      'charters.select': { data: [{ id: CHARTER_X }], error: null },
       'inventory_items.select': { data: chartered, error: null },
     });
     const svc = new ReportsService(makeServiceContext(stub.client));
 
-    const result = await svc.inventoryValuation({ charterId: 'charter-x' });
+    const result = await svc.inventoryValuation({ charterId: CHARTER_X });
 
     expect(result.totalValue).toBe(56); // 5*10 + 2*3
     expect(result.totalUnits).toBe(7);
@@ -121,7 +124,7 @@ describe('ReportsService.inventoryValuation — optional charter filter', () => 
     const eqCalls = chain
       .map((m, i) => (m === 'eq' ? args[i] : null))
       .filter((a): a is unknown[] => a !== null);
-    expect(eqCalls).toContainEqual(['charter_id', 'charter-x']);
+    expect(eqCalls).toContainEqual(['charter_id', CHARTER_X]);
   });
 
   it('(c) charterId not in the org (foreign/nonexistent) → empty/zero, not a leak', async () => {
@@ -130,7 +133,7 @@ describe('ReportsService.inventoryValuation — optional charter filter', () => 
     });
     const svc = new ReportsService(makeServiceContext(stub.client, { organizationId: 'org-a' }));
 
-    const result = await svc.inventoryValuation({ charterId: 'someone-elses-charter' });
+    const result = await svc.inventoryValuation({ charterId: SOMEONE_ELSES_CHARTER });
 
     expect(result).toEqual({
       rows: [],
@@ -144,5 +147,34 @@ describe('ReportsService.inventoryValuation — optional charter filter', () => 
     // resolve to the caller's org — nothing about a foreign org's stock
     // is ever read.
     expect(stub.fromCalls).not.toContain('inventory_items');
+  });
+
+  // Review finding (2026-09-29): the raw ?charterId= went straight into
+  // `.eq('id', charterId)`, so a value that is not a uuid made PostgREST
+  // answer 22P02 (invalid input syntax for type uuid), which became
+  // internal_error: a 500 on the CSV and PDF exports (reported to the error
+  // tracker) and the error boundary on the page. A charter id is always a
+  // uuid, so anything else matches no charter: the same empty report a
+  // foreign id gets, and nothing is queried.
+  it('(d) a charterId that is not a uuid → the same empty report, never a query or an error', async () => {
+    const stub = makeSupabaseStub({
+      'charters.select': {
+        data: null,
+        error: { code: '22P02', message: 'invalid input syntax for type uuid: "not-a-uuid"' },
+      },
+    });
+    const svc = new ReportsService(makeServiceContext(stub.client));
+
+    const result = await svc.inventoryValuation({ charterId: 'not-a-uuid' });
+
+    expect(result).toEqual({
+      rows: [],
+      totalValue: 0,
+      totalUnits: 0,
+      itemCount: 0,
+      byWarehouse: [],
+      byCategory: [],
+    });
+    expect(stub.fromCalls).toEqual([]);
   });
 });

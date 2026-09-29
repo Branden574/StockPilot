@@ -17,7 +17,7 @@ import {
   type PoPdfReceiptLine,
 } from '@/lib/pdf/po';
 import { audit } from '@/server/services/audit';
-import { ServiceError } from '@/server/services/context';
+import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
@@ -41,8 +41,6 @@ export async function GET(
     // as cookie sessions — /api/* bypasses middleware so this is the only
     // place auth is resolved.
     const ctx = await withApiContext(req);
-    const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
-    if (limited) return limited;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
@@ -53,6 +51,10 @@ export async function GET(
     if (!can(ctx, 'purchase_orders:read')) {
       return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }
+    // The export budget is spent only once the caller may have this export
+    // (a refused caller must not spend it or trip the abuse alert).
+    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    if (limited) return limited;
 
     const poSvc = new PurchaseOrdersService(ctx);
     const inventorySvc = new InventoryService(ctx);
@@ -319,8 +321,16 @@ export async function GET(
     });
   } catch (e) {
     if (e instanceof ServiceError) {
-      const status = e.code === 'not_found' ? 404 : e.code === 'forbidden' ? 403 : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
+      // Every ServiceError keeps its real status (serviceErrorStatus): a
+      // permanent refusal is not an outage. An internal_error's public
+      // message is already generic; its cause is reported.
+      if (e.code === 'internal_error') {
+        void reportError(e, { tag: 'pdf.purchase_order', extra: { detail: e.internalDetail ?? null } });
+      }
+      return NextResponse.json(
+        { error: e.code, message: e.message },
+        { status: serviceErrorStatus(e.code) },
+      );
     }
     void reportError(e, { tag: 'pdf.purchase_order' });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });

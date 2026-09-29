@@ -130,8 +130,42 @@ export class LotsService {
     return totals;
   }
 
+  /**
+   * The Aging & expiry REPORT: reports:read (the MFA step-up first) and the
+   * lot module, then the aging scan over lots of items the READER can read.
+   * The report page's data path checks for itself; getAgingInventory stays
+   * ungated for picking's FEFO suggestions.
+   *
+   * Why the item scope is needed: receipt_line_lots, receipt_lines and
+   * receipts are readable by every member (their policies test org
+   * membership only), so for a warehouse- or category-scoped reader the scan
+   * returned another warehouse's lot with a null item, and the report listed
+   * its lot number, expiry and remaining quantity as item "—". The item is
+   * what carries scope, so the report inner-joins it (see agingScan).
+   */
+  async agingReport(): Promise<AgingLotRow[]> {
+    assertPermission(this.ctx, 'reports:read');
+    return this.agingScan({ readableItemsOnly: true });
+  }
+
+  /** The aging scan behind picking's FEFO suggestions: every lot of the org
+   *  (unchanged; picking is not a report). */
   async getAgingInventory(): Promise<AgingLotRow[]> {
+    return this.agingScan({ readableItemsOnly: false });
+  }
+
+  /**
+   * `readableItemsOnly` (the report): the item embed is an INNER join, so
+   * PostgREST drops a lot whose item row level security hides from the
+   * caller, before the page window; any row whose item still comes back null
+   * is dropped here as well. Recorded picks need no filter: they are only
+   * looked up by the (item, lot) keys of the lots that remain.
+   */
+  private async agingScan(opts: { readableItemsOnly: boolean }): Promise<AgingLotRow[]> {
     assertModuleEnabled(this.ctx, 'lot_serial');
+    const itemEmbed = opts.readableItemsOnly
+      ? 'inventory_items:item_id!inner ( name, sku, shelf_life_days )'
+      : 'inventory_items:item_id ( name, sku, shelf_life_days )';
     // `!inner` on the embeds is REQUIRED for the nested org filter to actually
     // constrain top-level rows (a PostgREST gotcha — without it the filter on an
     // embedded column is a no-op). The user-scoped client also enforces RLS on
@@ -153,7 +187,7 @@ export class LotsService {
              receipt_lines:receipt_line_id!inner (
                item_id,
                receipts:receipt_id!inner ( organization_id, receipt_number, status ),
-               inventory_items:item_id ( name, sku, shelf_life_days )
+               ${itemEmbed}
              )`,
           )
           .eq('receipt_lines.receipts.organization_id', this.ctx.organizationId)
@@ -183,6 +217,8 @@ export class LotsService {
     for (const raw of data) {
       const itemId = raw.receipt_lines?.item_id;
       if (!itemId) continue;
+      // The report shows only lots of items the reader can read.
+      if (opts.readableItemsOnly && !raw.receipt_lines?.inventory_items) continue;
       const key = `${itemId}::${raw.lot_number}`;
       const prev = agg.get(key);
       const received = Number(raw.qty_base);
@@ -264,7 +300,18 @@ export class LotsService {
     return (await this.getFefoSuggestionsByItems([itemId]))[itemId] ?? [];
   }
 
+  /** The Recall / lot trace REPORT (its only caller): reports:read (the MFA
+   *  step-up first) and the lot module, checked here, not only by the reports
+   *  layout, because a server action is reachable without the page.
+   *
+   *  Only lots of items the reader can read: receipts and lot_pick_events are
+   *  readable by every member, so both reads inner-join the item (PostgREST
+   *  drops the row when row level security hides the item) and drop any row
+   *  whose item still comes back null. Otherwise a scoped reader saw another
+   *  warehouse's receipt numbers and the SO numbers of the orders its lot
+   *  went into. */
   async traceLot(lotNumber: string): Promise<LotTraceResult> {
+    assertPermission(this.ctx, 'reports:read');
     assertModuleEnabled(this.ctx, 'lot_serial');
     const term = lotNumber.trim();
     if (!term) throw new ServiceError('validation_error', 'Enter a lot number to trace.');
@@ -278,7 +325,7 @@ export class LotsService {
          receipt_lines:receipt_line_id!inner (
            item_id,
            receipts:receipt_id!inner ( organization_id, receipt_number, status ),
-           inventory_items:item_id ( name )
+           inventory_items:item_id!inner ( name )
          )`,
       )
       .eq('receipt_lines.receipts.organization_id', this.ctx.organizationId)
@@ -296,7 +343,8 @@ export class LotsService {
       .from('lot_pick_events')
       .select(
         `order_request_id, qty, picked_at, picked_by, lot_number,
-         order_request:order_requests!order_request_id (order_number)`,
+         order_request:order_requests!order_request_id (order_number),
+         item:inventory_items!item_id!inner (id)`,
       )
       .eq('organization_id', this.ctx.organizationId)
       .ilike('lot_number', needle);
@@ -304,32 +352,37 @@ export class LotsService {
 
     return {
       lotNumber: term,
-      receipts: ((lotRows ?? []) as unknown as RawLotRow[]).map((r) => ({
-        receiptNumber: r.receipt_lines?.receipts?.receipt_number ?? null,
-        receivedAt: r.created_at,
-        itemId: r.receipt_lines?.item_id ?? '',
-        itemName: (r.receipt_lines?.inventory_items as { name?: string } | null)?.name ?? '—',
-        qty: Number(r.qty_base),
-        expirationDate: r.expiration_date,
-      })),
+      receipts: ((lotRows ?? []) as unknown as RawLotRow[])
+        .filter((r) => r.receipt_lines?.inventory_items != null)
+        .map((r) => ({
+          receiptNumber: r.receipt_lines?.receipts?.receipt_number ?? null,
+          receivedAt: r.created_at,
+          itemId: r.receipt_lines?.item_id ?? '',
+          itemName: (r.receipt_lines?.inventory_items as { name?: string } | null)?.name ?? '—',
+          qty: Number(r.qty_base),
+          expirationDate: r.expiration_date,
+        })),
       picks: ((pickRows ?? []) as unknown as Array<{
         order_request_id: string | null; qty: number; picked_at: string; picked_by: string | null;
         order_request:
           | { order_number: number | null }
           | { order_number: number | null }[]
           | null;
-      }>).map((p) => {
-        const order = Array.isArray(p.order_request)
-          ? (p.order_request[0] ?? null)
-          : (p.order_request ?? null);
-        return {
-          orderRequestId: p.order_request_id,
-          orderNumber: order?.order_number ?? null,
-          qty: Number(p.qty),
-          pickedAt: p.picked_at,
-          pickedBy: p.picked_by,
-        };
-      }),
+        item: { id: string } | { id: string }[] | null;
+      }>)
+        .filter((p) => (Array.isArray(p.item) ? p.item.length > 0 : p.item != null))
+        .map((p) => {
+          const order = Array.isArray(p.order_request)
+            ? (p.order_request[0] ?? null)
+            : (p.order_request ?? null);
+          return {
+            orderRequestId: p.order_request_id,
+            orderNumber: order?.order_number ?? null,
+            qty: Number(p.qty),
+            pickedAt: p.picked_at,
+            pickedBy: p.picked_by,
+          };
+        }),
     };
   }
 

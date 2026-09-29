@@ -18,12 +18,15 @@ import {
 import { ChartersService } from '@/server/services/charters';
 import { ReportsService } from '@/server/services/reports';
 import { formatCurrency, formatNumber } from '@/lib/utils';
+import { reportPageGate } from '@/lib/reports/report-page-gate';
 
-export default function InventoryValuationPage({
+export default async function InventoryValuationPage({
   searchParams,
 }: {
   searchParams: Promise<{ charterId?: string }>;
 }) {
+  const blocked = await reportPageGate('inventory-valuation');
+  if (blocked) return blocked;
   const charterIdPromise = searchParams.then((p) => p.charterId?.trim() || null);
 
   return <ValuationShell charterIdPromise={charterIdPromise} />;

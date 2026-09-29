@@ -344,6 +344,22 @@ PGTAP_TESTS=(
   # never raises 40001/40P01. The same file holds the brief's acceptance
   # numbers and the reconciliation of totals, pages, drill-downs and exports.
   supabase/tests/0379_book_order_totals.test.sql
+  # Report aggregates answer for the CALLER (0380): the six report_*
+  # functions ReportsService used to call through the service role (which
+  # handed warehouse- and category-scoped readers other warehouses' SKUs,
+  # names, losses and warehouse names) are SECURITY INVOKER plpgsql with
+  # their gates in their bodies (signed in: 42501 unauthenticated, the test
+  # superuser included; a member holding reports:read, else the SAME 42501
+  # forbidden for a non-member, a disabled member or a revoked permission;
+  # the bundles module for the bundle pair: P0001 module_disabled), EXECUTE
+  # for authenticated (never anon or PUBLIC; service_role kept for the
+  # rollout only). The owner, the manager, a two-org manager, an admin with
+  # no warehouse assignment and an all-warehouse auditor (each of the last
+  # two with and without activity_logs:read) get answers byte-identical to
+  # the service role's at 30, 90 and 365 days; staff and a
+  # category-scoped viewer get only their readable movements, items and
+  # warehouse names; no org B row in an org A answer.
+  supabase/tests/0380_report_rpcs_caller_scope.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
@@ -526,6 +542,40 @@ WEB_TESTS=(
   # openable, late or mismatched answers dropped.
   src/components/reports/book-order-totals/report-body.test.tsx
   src/components/reports/book-order-totals/orders-drawer.test.tsx
+
+  # Every other report (2026-09-28, 0380): ReportsService reads with the
+  # CALLER'S client (never the service role) and checks reports:read (MFA
+  # step-up first) and the report's modules before its first read; an
+  # aggregate's own gate maps to its real error; the cost-history report
+  # answers only for an item the caller can read. Each report page checks
+  # for itself (not only the layout): no reports:read redirects before any
+  # read, a module that is off shows its card, the MFA step-up is a state;
+  # the hub lists a card only where its modules are on. The lot reports'
+  # data path (traceLot, agingReport) needs reports:read too. The CSV, PDF,
+  # snapshot PDF and XLSX exports check reports:export (MFA first), the
+  # report gate and the request BEFORE the shared export limit, and answer
+  # each ServiceError with its real status (401/403/404/400), never 500.
+  src/server/services/reports.scope-gate.test.ts
+  src/server/services/lots.report-gate.test.ts
+  # The lot reports list only lots of items the reader can read: lots,
+  # receipts and lot picks are member-wide, so both report reads inner-join
+  # the item (row level security decides) and drop a null item; picking's
+  # FEFO suggestions are unchanged.
+  src/server/services/lots.report-scope.test.ts
+  'src/app/(dashboard)/dashboard/reports/report-pages.gate.test.tsx'
+  'src/app/(dashboard)/dashboard/reports/page.test.tsx'
+  'src/app/api/reports/[slug]/csv/route.test.ts'
+  'src/app/api/reports/[slug]/pdf/route.test.ts'
+  src/app/api/reports/inventory-snapshot/pdf/route.test.tsx
+  src/app/api/reports/item-cost-history/xlsx/route.test.ts
+
+  # Every export route (2026-09-29): the caller's session, permission and
+  # request are checked BEFORE the shared export budget, so a refused caller
+  # never spends it, never writes a security.export_rate_limited audit row and
+  # never trips the abuse alert; the order slips answer a ServiceError with
+  # its real status. Self-policing: a route that calls the limiter must be
+  # listed there, and the limiter-first idiom fails it.
+  src/app/api/export-routes.limit-order.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

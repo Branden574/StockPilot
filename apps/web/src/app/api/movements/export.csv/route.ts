@@ -10,7 +10,7 @@ import {
   parseToDateParam,
 } from '@/lib/movements-filters';
 import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
-import { ServiceError } from '@/server/services/context';
+import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { MovementsService } from '@/server/services/movements';
 
 import { can } from '@stockpilot/core';
@@ -43,8 +43,6 @@ const HEADERS = [
 export async function GET(request: Request) {
   try {
     const ctx = await withApiContext(request);
-    const limited = ctx && (await exportRateLimited(ctx.userId, ctx.organizationId));
-    if (limited) return limited;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
@@ -56,6 +54,10 @@ export async function GET(request: Request) {
     if (!can(ctx, 'activity_logs:read')) {
       return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }
+    // The export budget is spent only once the caller may have this export
+    // (a refused caller must not spend it or trip the abuse alert).
+    const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
+    if (limited) return limited;
 
     const params = new URL(request.url).searchParams;
     const search = params.get('q') ?? undefined;
@@ -112,13 +114,16 @@ export async function GET(request: Request) {
     });
   } catch (e) {
     if (e instanceof ServiceError) {
-      const status =
-        e.code === 'module_disabled' || e.code === 'forbidden'
-          ? 403
-          : e.code === 'validation_error'
-            ? 400
-            : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
+      // Every ServiceError keeps its real status (serviceErrorStatus): a
+      // permanent refusal is not an outage. An internal_error's public
+      // message is already generic; its cause is reported.
+      if (e.code === 'internal_error') {
+        void reportError(e, { tag: 'movements.export-csv', extra: { detail: e.internalDetail ?? null } });
+      }
+      return NextResponse.json(
+        { error: e.code, message: e.message },
+        { status: serviceErrorStatus(e.code) },
+      );
     }
     void reportError(e, { tag: 'movements.export-csv' });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });

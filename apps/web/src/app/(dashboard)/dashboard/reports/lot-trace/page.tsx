@@ -1,12 +1,11 @@
-import { checkModuleAccess } from '@/lib/modules/module-gate';
-import { ModuleNotEnabled } from '@/components/dashboard/module-not-enabled';
+import { reportPageGate } from '@/lib/reports/report-page-gate';
 import { LotTraceSearch } from '@/components/reports/lot-trace-search';
 
 export const dynamic = 'force-dynamic';
 
 export default async function LotTraceReportPage() {
-  const access = await checkModuleAccess('lot_serial');
-  if (!access.enabled) return <ModuleNotEnabled moduleId="lot_serial" canManage={access.canManage} />;
+  const blocked = await reportPageGate('lot-trace');
+  if (blocked) return blocked;
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6">
