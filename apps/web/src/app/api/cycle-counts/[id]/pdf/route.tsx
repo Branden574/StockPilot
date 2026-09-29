@@ -9,7 +9,7 @@ import { reportError } from '@/lib/error-reporter';
 import { countSheetLocationLabel } from '@/lib/pdf/count-sheet-location';
 import { CycleCountSheetPdf, type CycleCountPdfLine } from '@/lib/pdf/cycle-count';
 import { audit } from '@/server/services/audit';
-import { assertPermission, ServiceError } from '@/server/services/context';
+import { assertPermission, ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
 import { ProductGroupsService } from '@/server/services/product-groups';
@@ -251,13 +251,12 @@ export async function GET(
           extra: { detail: e.internalDetail ?? null },
         });
       }
-      const status =
-        e.code === 'not_found'
-          ? 404
-          : e.code === 'forbidden'
-            ? 403
-            : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
+      // Every ServiceError keeps its real status (a module that is off is
+      // 403, not an outage).
+      return NextResponse.json(
+        { error: e.code, message: e.message },
+        { status: serviceErrorStatus(e.code) },
+      );
     }
     void reportError(e, { tag: 'pdf.cycle_count' });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });

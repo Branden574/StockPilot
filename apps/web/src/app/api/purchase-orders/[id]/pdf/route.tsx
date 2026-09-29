@@ -17,7 +17,7 @@ import {
   type PoPdfReceiptLine,
 } from '@/lib/pdf/po';
 import { audit } from '@/server/services/audit';
-import { ServiceError } from '@/server/services/context';
+import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
@@ -321,8 +321,16 @@ export async function GET(
     });
   } catch (e) {
     if (e instanceof ServiceError) {
-      const status = e.code === 'not_found' ? 404 : e.code === 'forbidden' ? 403 : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
+      // Every ServiceError keeps its real status (serviceErrorStatus): a
+      // permanent refusal is not an outage. An internal_error's public
+      // message is already generic; its cause is reported.
+      if (e.code === 'internal_error') {
+        void reportError(e, { tag: 'pdf.purchase_order', extra: { detail: e.internalDetail ?? null } });
+      }
+      return NextResponse.json(
+        { error: e.code, message: e.message },
+        { status: serviceErrorStatus(e.code) },
+      );
     }
     void reportError(e, { tag: 'pdf.purchase_order' });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });

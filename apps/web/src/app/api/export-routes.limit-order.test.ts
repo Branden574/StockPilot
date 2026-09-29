@@ -25,6 +25,7 @@ import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
 vi.mock('@/lib/export-rate-limit', () => ({ exportRateLimited: vi.fn(async () => null) }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn() }));
+vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilterFor: vi.fn(async () => null) }));
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => {
     throw new Error('not expected on these paths');
@@ -35,7 +36,10 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { ServiceError } from '@/server/services/context';
+import { CycleCountsService } from '@/server/services/cycle-counts';
+import { MovementsService } from '@/server/services/movements';
 import { OrderRequestsService } from '@/server/services/order-requests';
+import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 type Handler = (req: NextRequest, ctx: { params: Promise<Record<string, string>> }) => Promise<Response>;
@@ -339,6 +343,59 @@ describe('order slip PDFs answer a ServiceError with its real status', () => {
     expect(res.status).toBe(500);
     expect(JSON.stringify(res.json)).not.toMatch(/secret detail|order_requests/);
     expect(reportError).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Review follow-up (2026-09-29): these routes flattened some ServiceErrors to
+// 500 (the PO CSV every error, as export_failed; the PO PDF and the cycle
+// count PDF module_disabled and validation_error; the movements and orders
+// exports not_found and conflict). A permanent refusal read as an outage and
+// fired 5xx alerting. Each now answers with serviceErrorStatus.
+describe('a ServiceError from the data keeps its real status', () => {
+  const DATA_CALLS: Array<[string, () => void]> = [
+    ['purchase orders CSV (purchase_orders:read)', () => void vi.spyOn(PurchaseOrdersService.prototype, 'list')],
+    ['purchase order PDF (purchase_orders:read)', () => void vi.spyOn(PurchaseOrdersService.prototype, 'get')],
+    ['movements CSV (activity_logs:read)', () => void vi.spyOn(MovementsService.prototype, 'exportRows')],
+    ['orders CSV (orders:approve)', () => void vi.spyOn(OrderRequestsService.prototype, 'exportRows')],
+    ['orders PDF (orders:approve)', () => void vi.spyOn(OrderRequestsService.prototype, 'exportRows')],
+    ['cycle count PDF (cycle_counts:read or stock:adjust)', () => void vi.spyOn(CycleCountsService.prototype, 'get')],
+  ];
+  const TARGET: Record<string, () => { mockRejectedValue: (e: unknown) => unknown }> = {
+    'purchase orders CSV (purchase_orders:read)': () => vi.mocked(PurchaseOrdersService.prototype.list),
+    'purchase order PDF (purchase_orders:read)': () => vi.mocked(PurchaseOrdersService.prototype.get),
+    'movements CSV (activity_logs:read)': () => vi.mocked(MovementsService.prototype.exportRows),
+    'orders CSV (orders:approve)': () => vi.mocked(OrderRequestsService.prototype.exportRows),
+    'orders PDF (orders:approve)': () => vi.mocked(OrderRequestsService.prototype.exportRows),
+    'cycle count PDF (cycle_counts:read or stock:adjust)': () => vi.mocked(CycleCountsService.prototype.get),
+  };
+  const cases = DATA_CALLS.flatMap(([name, spy]) =>
+    ([
+      ['not_found', 404],
+      ['module_disabled', 403],
+      ['validation_error', 400],
+      ['conflict', 409],
+    ] as const).map(([code, status]) => [name, code, status, spy] as const),
+  );
+
+  it.each(cases)('%s: %s -> %i', async (name, code, status, spy) => {
+    const r = ROUTES.find((x) => x.name === name)!;
+    signIn(OWNER);
+    spy();
+    TARGET[name]!().mockRejectedValue(new ServiceError(code, `refused: ${code}`));
+    const res = await call(r.load, r.method, r.path, r.params, r.body);
+    expect(res.status).toBe(status);
+    expect(res.json).toMatchObject({ error: code, message: `refused: ${code}` });
+  });
+
+  it.each(DATA_CALLS)('%s: an internal error is a generic 500, reported', async (name, spy) => {
+    const r = ROUTES.find((x) => x.name === name)!;
+    signIn(OWNER);
+    spy();
+    TARGET[name]!().mockRejectedValue(new Error('relation "secret_table" detail'));
+    const res = await call(r.load, r.method, r.path, r.params, r.body);
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(res.json)).not.toMatch(/secret_table/);
+    expect(reportError).toHaveBeenCalled();
   });
 });
 

@@ -4,6 +4,8 @@ import { isPoTab, statusesForTab } from '@/lib/purchase-orders/tabs';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
+import { reportError } from '@/lib/error-reporter';
+import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { csvFilename, toCsv } from '@/lib/csv';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { SuppliersService } from '@/server/services/suppliers';
@@ -108,9 +110,21 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
-    console.error('[api/purchase-orders/export.csv] failed', {
-      message: error instanceof Error ? error.message : String(error),
-    });
+    // A ServiceError keeps its real status (it used to be a 500
+    // export_failed for every error, a refusal included).
+    if (error instanceof ServiceError) {
+      if (error.code === 'internal_error') {
+        void reportError(error, {
+          tag: 'purchase-orders.export-csv',
+          extra: { detail: error.internalDetail ?? null },
+        });
+      }
+      return NextResponse.json(
+        { error: error.code, message: error.message },
+        { status: serviceErrorStatus(error.code) },
+      );
+    }
+    void reportError(error, { tag: 'purchase-orders.export-csv' });
     return NextResponse.json({ error: 'export_failed' }, { status: 500 });
   }
 }
