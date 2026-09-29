@@ -81,11 +81,17 @@ export function Topbar({
   // (shrink-0); what does not fit is left out, most expendable first. The
   // widths are the bar's inside width (a container query measures the
   // content box: the bar less its 16px or 20px padding each side):
+  //   under 400px  search (as before this change: the old bar had no search
+  //                under 768px, where a phone is; ⌘K still opens it);
   //   under 520px  the breadcrumb (the page's own heading names the page);
   //   under 680px  Keyboard shortcuts, Help & Learning, Support & feedback and
   //                the theme switch (the account menu carries Help, Support
   //                and the theme at every width; "?" still opens shortcuts);
   //   under 960px  the search bar is a search icon (same palette).
+  // Search starts at 400px so every window that showed it before still does:
+  // the narrowest was 768px beside the sidebar, a 484px bar (iPad portrait,
+  // 768-834px, is touch only, so ⌘K is no substitute). At 400px the icon fits
+  // beside the picker's whole "All warehouses" (measured: header-check).
   // The warehouse picker is the one control that yields: its name truncates.
   // Before (2026-09-28/29): the buttons shrank to 14px and the account avatar
   // was pushed past the right edge, 13px at 390px and entirely at 768px with
@@ -137,7 +143,7 @@ export function Topbar({
 
       <button
         type="button"
-        className={cn(ICON_BUTTON, 'hidden @min-[680px]:grid @min-[960px]:hidden')}
+        className={cn(ICON_BUTTON, 'hidden @min-[400px]:grid @min-[960px]:hidden')}
         aria-label="Open command palette"
         onClick={openCommandPalette}
       >
