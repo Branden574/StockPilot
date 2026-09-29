@@ -5,9 +5,10 @@
  * exactly in the gap between these two tables' policies.
  *
  *   - `inventory_items`: only the rows the caller can read. Mirrors
- *     inventory_items_select (0229): the caller's org, one of the caller's
- *     warehouses, and (for a category-restricted viewer) one of the caller's
- *     categories. Charter scoping is the same shape and is not modelled.
+ *     inventory_items_select (0229): the caller's org; a warehouse the caller
+ *     reads whole, or, through a charter-scoped assignment, that warehouse's
+ *     generic items (charter_id null) plus the assigned charter's; and (for a
+ *     category-restricted viewer) one of the caller's categories.
  *   - `item_images`: EVERY row of the caller's org, because item_images_select
  *     (0003, 0140) is org-member wide. The one exception is what PostgREST does
  *     with an embed: `inventory_items!…!inner(…)` runs under the same RLS, and
@@ -22,8 +23,19 @@ import { callArgs, servedLikePostgrest, type MockCall, type QueryResult } from '
 
 export interface ScopedCaller {
   organizationId: string;
-  /** 'all' = manager and above (every warehouse of the org). */
+  /**
+   * Warehouses the caller reads WHOLE (rls_inv_read_full_warehouse_ids: an
+   * assignment with no charter). 'all' = manager and above (every warehouse
+   * of the org).
+   */
   warehouseIds: readonly string[] | 'all';
+  /**
+   * Charter-scoped assignments (user_warehouse_assignments.charter_id set):
+   * in that warehouse the caller reads the generic items (charter_id null)
+   * and the items of that charter, no others (rls_inv_read_assigned_
+   * warehouse_ids + rls_inv_read_warehouse_charter_ids).
+   */
+  charterAssignments?: ReadonlyArray<{ warehouseId: string; charterId: string }>;
   /** 'all' = not category-restricted (every role but a restricted viewer). */
   categoryIds: readonly string[] | 'all';
 }
@@ -33,6 +45,7 @@ export interface WorldItem {
   organization_id: string;
   warehouse_id: string;
   category_id: string | null;
+  charter_id?: string | null;
   custom_fields?: Record<string, unknown> | null;
 }
 
@@ -50,9 +63,14 @@ export interface WorldImage {
 /** True when inventory_items_select would show `caller` this item. */
 export function callerCanReadItem(caller: ScopedCaller, item: WorldItem): boolean {
   if (item.organization_id !== caller.organizationId) return false;
-  if (caller.warehouseIds !== 'all' && !caller.warehouseIds.includes(item.warehouse_id)) {
-    return false;
-  }
+  const wholeWarehouse =
+    caller.warehouseIds === 'all' || caller.warehouseIds.includes(item.warehouse_id);
+  const throughCharter = (caller.charterAssignments ?? []).some(
+    (a) =>
+      a.warehouseId === item.warehouse_id &&
+      ((item.charter_id ?? null) === null || item.charter_id === a.charterId),
+  );
+  if (!wholeWarehouse && !throughCharter) return false;
   if (caller.categoryIds !== 'all') {
     return item.category_id !== null && caller.categoryIds.includes(item.category_id);
   }

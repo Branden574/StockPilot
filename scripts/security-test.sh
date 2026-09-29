@@ -362,6 +362,10 @@ WEB_TESTS=(
   # item_images_select is org-member wide, item visibility is scoped.
   # (item-images.test.ts above carries the service half.)
   'src/app/api/items/[id]/image-master/route.test.ts'
+  # The New rental catalog reads its items with the caller's own client, so a
+  # charter- or category-scoped member sees (and gets photos for) only the
+  # rental items they can read (2026-09-28).
+  'src/app/(dashboard)/dashboard/rentals/new/page.test.tsx'
 
   # Declared-type spoofing: the bytes decide the type, never the caller's word.
   # The 2026-08-21 wave (see project_upload_security_hardening) — a sniffer, a
