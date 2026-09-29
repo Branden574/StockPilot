@@ -28,6 +28,58 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'book-order-totals-charters-dates-2026-10',
+    revision: 1,
+    // Book Order Totals by charter and exact dates (0382). Held as a draft
+    // until 0382, the web deploy, the phone update (OTA) and the Demo Co
+    // production walk are done, and until the phone update has reached phones
+    // (plan R8b): an older phone ignores a charter in a link and shows every
+    // charter. The follow-up that publishes it sets the real publishedAt and
+    // re-reads these words against what shipped.
+    //
+    // Addressed as the report is reached: Orders on (the release), then Books
+    // on with reports:read, the permission the linked page checks (both
+    // entries).
+    status: 'draft',
+    title: 'Book Order Totals by charter and by exact dates',
+    summary:
+      'Book Order Totals on the web and in the mobile app can now show the books ordered for one charter, and orders placed between two dates you pick on a calendar. Today and This week are new date choices. The totals, the orders behind each book and the CSV and PDF files all follow the charter and dates you choose.',
+    publishedAt: '2026-10-06T17:00:00Z',
+    audience: { modules: ['orders'] },
+    entries: [
+      {
+        id: 'book-order-totals-charter-filter',
+        category: 'new',
+        area: 'Reports',
+        title: 'See the books ordered for one charter',
+        whatChanged:
+          "Book Order Totals has a Charter filter. Choose a charter to see only the copies requested on orders placed for it: the totals at the top, each book row, View orders and the files all change together. With All charters chosen, Books ordered by charter lists each charter's copies and orders, and choosing one applies it.",
+        whyItMatters:
+          'Answering how many copies of each book a charter asked for meant reading orders one by one.',
+        howItAffectsYou:
+          'The filter uses the charter each order was placed for, its delivery site, not the charter that owns the stock. Pickup orders have no charter and are listed under No charter. You can choose only charters you have access to. In the mobile app, update the app to open links that choose a charter.',
+        whatToDo: 'No action needed. Open Reports, then Book Order Totals, and choose a charter.',
+        link: { href: '/dashboard/reports/book-order-totals', label: 'Book Order Totals' },
+        audience: { anyPermission: ['reports:read'], modules: ['books'] },
+      },
+      {
+        id: 'book-order-totals-exact-dates',
+        category: 'improved',
+        area: 'Reports',
+        title: 'Pick exact dates on a calendar, and see what you are looking at',
+        whatChanged:
+          'Orders placed now opens a calendar for the first and last day, and adds Today and This week (starting Sunday) to the date choices. A Showing line above the totals names the charter and dates in view, and the warehouse when the report covers only one. Each filter you set appears as a chip you can remove, and Clear filters starts over.',
+        whyItMatters:
+          'Exact ranges such as September 1 through September 30 are quicker to set, and the figures always say which charter and dates they cover.',
+        howItAffectsYou:
+          "Dates are the day an order was placed, in your organization's time zone, and a range includes all of its last day. The page's web address keeps the charter, dates, search and page. When you open an order from View orders, Back to Book Order Totals on the order, or your browser's Back button, returns you to the same view.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/reports/book-order-totals', label: 'Book Order Totals' },
+        audience: { anyPermission: ['reports:read'], modules: ['books'] },
+      },
+    ],
+  },
+  {
     id: 'order-fix-holding-up-2026-10',
     revision: 1,
     // F2-3 (no migration). Held as a draft until the web order page's
