@@ -39,14 +39,16 @@ export const RELEASES: Release[] = [
     // against what shipped, the keyboard entry's in particular.
     //
     // Addressed to everyone: the top bar, the greeting and the VoiceOver and
-    // larger-target fixes are for every member. The two order entries link to
-    // Orders and are for whoever can pick (items:update, orders:approve, where
-    // Orders is on): the digital pick's quantity is the only field on an
-    // order's screen that takes typing, and only a picker is offered it.
+    // larger-target fixes are for every member. The pick and keyboard entries
+    // link to Orders and are for whoever can pick (items:update,
+    // orders:approve, where Orders is on): the digital pick's quantity is the
+    // only field on an order's screen that takes typing, and only a picker is
+    // offered it. The order title and unit count entry is for anyone who can
+    // open an order (every member, where Orders is on).
     status: 'draft',
     title: "The top bar fits small screens, and the mobile app's buttons and fields are easier to use",
     summary:
-      "On the web, the top bar now fits narrow screens, so your account button is never cut off, and your account menu has Help & Learning, Support & feedback and the theme. In the mobile app, Home greets you by the time of day, the top-bar buttons and the Add items steppers work with VoiceOver and are easier to tap, and the digital pick's quantity shows every digit at the largest text sizes and is no longer left under the keyboard.",
+      "On the web, the top bar now fits narrow screens, so your account button is never cut off, your account menu has Help & Learning, Support & feedback and the theme, and an order's title keeps its number. In the mobile app, Home greets you by the time of day, the top-bar buttons and the Add items steppers work with VoiceOver and are easier to tap, and the digital pick's quantity shows every digit at the largest text sizes and is no longer left under the keyboard.",
     publishedAt: '2026-10-02T17:00:00Z',
     entries: [
       {
@@ -55,9 +57,9 @@ export const RELEASES: Release[] = [
         area: 'Web app',
         title: 'The top bar fits narrow screens, with your account button always in view',
         whatChanged:
-          "On the web, the bar at the top of each page now fits its width. On a phone it shows the menu, the warehouse filter, notifications, What's new and your account button. With more room, such as beside the sidebar on a tablet, it adds search, and with more again Keyboard shortcuts, Help & Learning, Support & feedback and the theme switch. A long warehouse name is shortened to fit. Your account menu now also has Help & Learning, Support & feedback and the theme: Light, Dark or System, with the one in use marked.",
+          "On the web, the bar at the top of each page now fits its width. On a phone it shows the menu, the warehouse filter, notifications, What's new and your account button. With more room, such as beside the sidebar on a tablet, it adds search, and with more again Keyboard shortcuts, Help & Learning, Support & feedback and the theme switch. A long warehouse name is shortened to fit. Your account menu now also has Help & Learning, Support & feedback and the theme: Light, Dark or System, with the one in use marked. On Staging, the breadcrumb now reads Inventory / Staging.",
         whyItMatters:
-          'On a phone the account button was cut off at the right edge, and beside the sidebar on a tablet it was off the screen entirely, with the other buttons squeezed to half their size.',
+          "On a phone the account button was cut off at the right edge, and beside the sidebar on a tablet it was off the screen entirely, with the other buttons squeezed to half their size. The breadcrumb called Staging an item's page (Items / Detail), and did the same on Labels and Recurring purchase orders, which now have their own names.",
         howItAffectsYou:
           'Where the bar has room for everything, as on most laptop and desktop screens, it is unchanged. Search stays in the bar wherever it was before. Where the bar leaves the rest out, Help & Learning, Support & feedback and the theme are in your account menu, and the ? key still opens Keyboard shortcuts. On a short screen, such as a phone held sideways, the account menu scrolls.',
         whatToDo: 'No action needed.',
@@ -88,6 +90,18 @@ export const RELEASES: Release[] = [
         whatToDo: 'Update the app when it offers the new version.',
       },
       {
+        id: 'phone-more-voiceover-buttons',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: "More of the mobile app's controls work with VoiceOver",
+        whatChanged:
+          "In the mobile app, Maintenance's New, New item's Scan instead, the AI shelf scan's capture button (Capture photo) and the Staging list's All, Books and Items filters are now buttons to VoiceOver, and the X that closes What's New and a screen tour has a 44-point touch area.",
+        whyItMatters:
+          'VoiceOver read these as plain text, or found no name at all for the capture button, and the X could only be tapped within a small area around it.',
+        howItAffectsYou: 'They look the same and sit where they did.',
+        whatToDo: 'Update the app when it offers the new version.',
+      },
+      {
         id: 'phone-pick-quantity-large-text',
         category: 'fixed',
         area: 'Orders',
@@ -115,6 +129,20 @@ export const RELEASES: Release[] = [
         whatToDo: 'Update the app when it offers the new version.',
         link: { href: '/dashboard/orders', label: 'View orders' },
         audience: { anyPermission: ['items:update', 'orders:approve'], modules: ['orders'] },
+      },
+      {
+        id: 'order-title-and-units-small-screens',
+        category: 'fixed',
+        area: 'Orders',
+        title: "An order's number stays in view on a narrow screen",
+        whatChanged:
+          "On the web, an order's title now keeps its number on a phone, or beside the sidebar on a tablet: when the line is too narrow for the title and its buttons, the buttons, such as Cancel request and Report a problem, move under the title. In the mobile app, an order of one unit now says 1 UNIT above its items, not 1 UNITS.",
+        whyItMatters: "On a phone the web title was cut to Or..., so the order's number could not be seen.",
+        howItAffectsYou:
+          'On wider screens the title and its buttons sit where they did. Nothing else on the order changed.',
+        whatToDo: 'Update the app when it offers the new version.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: { modules: ['orders'] },
       },
     ],
   },

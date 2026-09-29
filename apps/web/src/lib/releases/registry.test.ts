@@ -1416,12 +1416,14 @@ describe('the small-fixes release is held as a draft', () => {
       'web-top-bar-fits',
       'phone-home-greeting',
       'phone-buttons-voiceover-targets',
+      'phone-more-voiceover-buttons',
       'phone-pick-quantity-large-text',
       'phone-order-screen-keyboard',
+      'order-title-and-units-small-screens',
     ]);
-    const [bar, greeting, buttons, pick, keyboard] = release().entries;
+    const [bar, greeting, buttons, more, pick, keyboard, order] = release().entries;
     // The top bar, the greeting and the accessibility fixes: every member.
-    for (const e of [bar!, greeting!, buttons!]) {
+    for (const e of [bar!, greeting!, buttons!, more!]) {
       expect(e.audience, e.id).toBeUndefined();
       expect(e.link, e.id).toBeUndefined();
     }
@@ -1438,29 +1440,45 @@ describe('the small-fixes release is held as a draft', () => {
     for (const e of [pick!, keyboard!]) {
       expect(e.link, e.id).toEqual({ href: '/dashboard/orders', label: 'View orders' });
     }
+    // An order's title (web) and its unit count (phone): anyone who can open
+    // an order, where Orders is on (order requests are visible to every member).
+    expect(order!.audience).toEqual({ modules: ['orders'] });
+    expect(order!.link).toEqual({ href: '/dashboard/orders', label: 'View orders' });
     const reader = (permissions: ReleaseViewer['permissions'], enabledModules: ModuleId[] = ['orders']) =>
       visibleReleases([published()], { role: 'viewer', permissions, enabledModules })[0]?.entries.map((e) => e.id) ?? [];
     expect(reader(['items:update'])).toEqual([
       'web-top-bar-fits',
       'phone-home-greeting',
       'phone-buttons-voiceover-targets',
+      'phone-more-voiceover-buttons',
       'phone-pick-quantity-large-text',
       'phone-order-screen-keyboard',
+      'order-title-and-units-small-screens',
     ]);
-    // A requester types nothing on an order's screen: neither order entry.
+    // A requester types nothing on an order's screen: neither picker entry,
+    // but they read an order's title and its unit count like anyone.
     expect(reader(['orders:request'])).toEqual([
       'web-top-bar-fits',
       'phone-home-greeting',
       'phone-buttons-voiceover-targets',
+      'phone-more-voiceover-buttons',
+      'order-title-and-units-small-screens',
     ]);
     expect(reader(['orders:approve'])).toEqual([
       'web-top-bar-fits',
       'phone-home-greeting',
       'phone-buttons-voiceover-targets',
+      'phone-more-voiceover-buttons',
       'phone-pick-quantity-large-text',
       'phone-order-screen-keyboard',
+      'order-title-and-units-small-screens',
     ]);
-    expect(reader([], [])).toEqual(['web-top-bar-fits', 'phone-home-greeting', 'phone-buttons-voiceover-targets']);
+    expect(reader([], [])).toEqual([
+      'web-top-bar-fits',
+      'phone-home-greeting',
+      'phone-buttons-voiceover-targets',
+      'phone-more-voiceover-buttons',
+    ]);
   });
 
   it('names the platform in every entry and says it plainly', () => {
@@ -1468,10 +1486,14 @@ describe('the small-fixes release is held as a draft', () => {
     // Old phone builds show only the summary: it names both platforms.
     expect(r.summary).toMatch(/^On the web, /);
     expect(r.summary).toContain('In the mobile app, ');
-    const [bar, greeting, buttons, pick, keyboard] = r.entries;
+    const [bar, greeting, buttons, more, pick, keyboard, order] = r.entries;
     expect(bar!.whatChanged).toMatch(/^On the web, /);
-    for (const e of [greeting!, buttons!, pick!, keyboard!]) expect(e.whatChanged, e.id).toContain('mobile app');
-    for (const e of [greeting!, buttons!, pick!, keyboard!]) {
+    // The order entry is both: the web's title, the phone's unit count.
+    expect(order!.whatChanged).toMatch(/^On the web, /);
+    expect(order!.whatChanged).toContain('In the mobile app, ');
+    expect(order!.whatToDo).toBe('Update the app when it offers the new version.');
+    for (const e of [greeting!, buttons!, more!, pick!, keyboard!]) expect(e.whatChanged, e.id).toContain('mobile app');
+    for (const e of [greeting!, buttons!, more!, pick!, keyboard!]) {
       expect(e.whatToDo, e.id).toBe('Update the app when it offers the new version.');
     }
     expect(bar!.whatToDo).toBe('No action needed.');
@@ -1489,6 +1511,19 @@ describe('the small-fixes release is held as a draft', () => {
     expect(buttons!.whatChanged).toContain('Done and Cancel on the counting cameras');
     expect(buttons!.howItAffectsYou).toContain('a few points lower');
     expect(buttons!.howItAffectsYou).toContain('moved into its place');
+    // Walk after F2-3 (found in passing, the same on main): the breadcrumb on
+    // fixed pages, more controls VoiceOver could not tell were buttons, two
+    // small X's, an order's title at 390 px, and "1 UNITS".
+    expect(bar!.whatChanged).toContain('Inventory / Staging');
+    expect(bar!.whyItMatters).toContain('Items / Detail');
+    expect(more!.whatChanged).toContain("Maintenance's New, New item's Scan instead");
+    expect(more!.whatChanged).toContain('Capture photo');
+    expect(more!.whatChanged).toContain('All, Books and Items');
+    expect(more!.whatChanged).toContain("the X that closes What's New and a screen tour");
+    expect(order!.whatChanged).toContain('such as Cancel request and Report a problem, move under the title');
+    expect(order!.whatChanged).toContain('1 UNIT');
+    expect(order!.whyItMatters).toContain('Or...');
+    expect(r.summary).toContain("an order's title keeps its number");
     // Nothing it cannot stand behind: the keyboard entry claims room, not a
     // scroll it has not been seen to do; no measured claims; no "book".
     expect(keyboard!.whatChanged).toContain('can be scrolled into view');
