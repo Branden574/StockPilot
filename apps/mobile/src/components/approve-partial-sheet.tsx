@@ -15,6 +15,7 @@ import { PARTIAL_CLOSE_LABEL, READINESS_NEEDS_CONNECTION_COPY } from '@stockpilo
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { Body, Mono } from '@/components/ui/text';
+import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { describePartialCommitError, type PartialSheetView } from '@/lib/order-partial';
 import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -46,7 +47,10 @@ import { useTheme } from '@/lib/use-theme';
  * Pressable BEHIND the card, the card a plain View, so VoiceOver reaches each
  * item, the summary and both buttons on their own. Buttons are at least 44pt;
  * their labels stop growing at the control ceiling; the sentences are content
- * and grow with Dynamic Type (the item list scrolls).
+ * and grow with Dynamic Type (the item list scrolls). At accessibility sizes
+ * each item's "Holds X of Y" goes under its name (shouldStackRow): side by side,
+ * the uncapped figure took the row's width and the name ran a letter or two a
+ * line on an iPhone at AX5.
  */
 export function ApprovePartialSheet({
   visible,
@@ -65,7 +69,10 @@ export function ApprovePartialSheet({
   onConfirm: () => Promise<void>;
 }) {
   const { c, mode } = useTheme();
-  const { height } = useWindowDimensions();
+  const { height, fontScale } = useWindowDimensions();
+  // Name over figure at accessibility text sizes (the live scale, never a
+  // module-level read: it changes while the app is in the background).
+  const stackItems = shouldStackRow(fontScale);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   // Fixed pixel height off the window: percentage sizing collapsed layouts
@@ -174,18 +181,22 @@ export function ApprovePartialSheet({
                   accessible
                   accessibilityLabel={item.accessibilityLabel}
                   style={{
-                    flexDirection: 'row',
-                    alignItems: 'flex-start',
-                    gap: 12,
+                    flexDirection: stackItems ? 'column' : 'row',
+                    alignItems: stackItems ? 'stretch' : 'flex-start',
+                    gap: stackItems ? 4 : 12,
                     paddingVertical: 8,
                     borderTopWidth: 1,
                     borderTopColor: c.hair,
                   }}
                 >
-                  <Body size={14} color={c.ink} style={{ flex: 1 }}>
+                  <Body size={14} color={c.ink} style={stackItems ? undefined : { flex: 1 }}>
                     {item.label}
                   </Body>
-                  <Mono size={12} color={c.ink2} style={{ flexShrink: 1, textAlign: 'right' }}>
+                  <Mono
+                    size={12}
+                    color={c.ink2}
+                    style={stackItems ? undefined : { flexShrink: 1, textAlign: 'right' }}
+                  >
                     {item.detail}
                   </Mono>
                 </View>

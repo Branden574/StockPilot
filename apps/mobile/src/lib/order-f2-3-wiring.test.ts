@@ -419,6 +419,29 @@ describe('the approve-partial sheet (sibling backdrop, VoiceOver, 44 pt, Dynamic
     expect(code).toMatch(/maxFontSizeMultiplier=\{ACTION_CAP\}>\s*\{closeLabel\}/);
   });
 
+  // Walk F11 (iPhone 17, AX5): the name was `flex: 1` (basis 0) beside an
+  // uncapped Mono detail with an auto basis, so the detail's width took the
+  // row and the name ran one or two letters a line (a 992 pt row) with
+  // "Holds 4 of 7" nowhere in sight. At accessibility sizes (the app's one
+  // threshold, shouldStackRow: past 1.4, so AX1 and up) the detail goes
+  // UNDER the name, each at the full width; default sizes keep the row.
+  // Mutation caught: the row left as a row at every size, or the name kept
+  // at flex 1 in the stacked column.
+  it('item rows stack name over "Holds X of Y" at accessibility text sizes, from the live font scale', () => {
+    const code = codeOnly(sheet);
+    expect(code).toMatch(/const \{ height, fontScale \} = useWindowDimensions\(\);/);
+    expect(code).toContain('const stackItems = shouldStackRow(fontScale);');
+    expect(code).toMatch(/import \{ shouldStackRow \} from '@\/lib\/dynamic-type-layout';/);
+    const row = code.match(/accessibilityLabel=\{item\.accessibilityLabel\}\s+style=\{([\s\S]*?)\}\s*>/);
+    expect(row, 'the item row').not.toBeNull();
+    expect(row![1]).toContain("flexDirection: stackItems ? 'column' : 'row'");
+    expect(row![1]).toContain("alignItems: stackItems ? 'stretch' : 'flex-start'");
+    expect(code).toMatch(/<Body size=\{14\} color=\{c\.ink\} style=\{stackItems \? undefined : \{ flex: 1 \}\}>\s*\{item\.label\}/);
+    expect(code).toMatch(
+      /<Mono\s+size=\{12\}\s+color=\{c\.ink2\}\s+style=\{stackItems \? undefined : \{ flexShrink: 1, textAlign: 'right' \}\}\s*>\s*\{item\.detail\}/,
+    );
+  });
+
   // Walk D2: after the order moved on, the preview ("holds 2 of 3 units now")
   // stayed above the sentence although someone else had approved the order.
   // Mutation caught: the preview kept once Close replaced Confirm.
