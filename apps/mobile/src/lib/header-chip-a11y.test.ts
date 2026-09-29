@@ -293,4 +293,27 @@ describe('text Back links and the cameras Done and Cancel: buttons, and a 44pt t
       "{ disabled: phase.kind !== 'idle', busy: phase.kind === 'capturing' || phase.kind === 'uploading' }",
     );
   });
+
+  // What's New's X and the tour card's X were labelled buttons, but 15pt
+  // outlines with hitSlop (a 35pt touch area), the pattern every chip above
+  // gave up: a real 44pt frame around the same 15pt X, its margins giving
+  // the space back so nothing around it moves.
+  it.each([
+    ['src/components/onboarding/whats-new.tsx', "Dismiss what's new"],
+    ['src/components/onboarding/mobile-tour.tsx', 'Exit tour'],
+  ])('%s: the X (%s) is a 44pt frame around the same icon, never hitSlop', (file, name) => {
+    const found = touches.filter((t) => t.file === file && t.el.getText(t.sf).includes('<X '));
+    expect(found.map(at)).toHaveLength(1);
+    const t = found[0]!;
+    expect(attrText(t.el, 'accessibilityRole', t.sf)).toBe('button');
+    expect(attrText(t.el, 'accessibilityLabel', t.sf)).toBe(name);
+    expect(attr(t.el, 'hitSlop', t.sf)).toBeUndefined();
+    expect(attrText(t.el, 'style', t.sf)).toBe('styles.closeFrame');
+    expect(t.el.getText(t.sf)).toMatch(/<X size=\{15\}/);
+    const frame = /\n {2}closeFrame: \{([^}]*)\}/.exec(t.src)?.[1] ?? '';
+    expect(frame).toMatch(/minWidth: 44\b/);
+    expect(frame).toMatch(/minHeight: 44\b/);
+    // (44 - 15) / 2: the frame takes up the X's 15pt, as before.
+    expect(frame).toMatch(/margin: -14\.5\b/);
+  });
 });
