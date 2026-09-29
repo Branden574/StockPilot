@@ -34,12 +34,11 @@ import {
 const MOBILE_ROOT = path.resolve(__dirname, '../..');
 
 /**
- * Files this sweep skips, each with the reason. The Staging tab's chips are
- * named and framed on feat/f2-3-put-away-partial (b80c904f), which edits the
- * same lines; this branch leaves the file alone so that merge stays clean.
- * Drop the entry once F2-3 is on main (the sweep then covers it too).
+ * Files this sweep skips, each with the reason. None now: the Staging tab's
+ * chips were named and framed by F2-3 (put away from the order), and the sweep
+ * covers that file too.
  */
-const PENDING_ELSEWHERE = new Set(['app/(drawer)/staging.tsx']);
+const PENDING_ELSEWHERE = new Set<string>([]);
 
 type Chip = { el: JsxNode; sf: ts.SourceFile; file: string };
 

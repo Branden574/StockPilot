@@ -686,3 +686,192 @@ describe('InventoryService.stagedWorklist — the 1000-row PostgREST cap', () =>
     expect(inArgs.map((a) => (a[1] as string[]).length)).toEqual([100, 100, 100, 100, 100, 1]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// F2-3: put away from an order. The worklist narrowed to the order's items,
+// IN THE QUERY (pattern #5), batched at 100 ids (pattern #29), with the org
+// and deleted-item filters kept and the active-warehouse filter ignored.
+// ---------------------------------------------------------------------------
+describe('InventoryService.stagedWorklist({ itemIds }) — put away from an order', () => {
+  const id = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+
+  /** Answers each levels batch with one Staging and one Unplaced row per id
+   *  it was asked for, as the database would, so the result proves which ids
+   *  each request carried. */
+  function levelsFor(call: { methods: string[]; args: unknown[][] }) {
+    const inArgs = call.methods
+      .map((m, k) => (m === 'in' ? call.args[k] : null))
+      .find((a) => a && a[0] === 'item_id') as [string, string[]] | undefined;
+    const ids = inArgs ? inArgs[1] : [];
+    return {
+      data: ids.flatMap((itemId) => [
+        {
+          id: `lvl-s-${itemId}`,
+          item_id: itemId,
+          location_id: 'stg-1',
+          quantity: 4,
+          locations: { id: 'stg-1', kind: 'staging', warehouse_id: 'wh-2' },
+          inventory_items: { id: itemId, name: `Item ${itemId}`, sku: 'SKU', item_type: 'product', deleted_at: null },
+        },
+        {
+          id: `lvl-u-${itemId}`,
+          item_id: itemId,
+          location_id: 'unp-1',
+          quantity: 2,
+          locations: { id: 'unp-1', kind: 'unplaced', warehouse_id: 'wh-2' },
+          inventory_items: { id: itemId, name: `Item ${itemId}`, sku: 'SKU', item_type: 'product', deleted_at: null },
+        },
+      ]),
+      error: null,
+    };
+  }
+
+  function levelChains(stub: ReturnType<typeof makeSupabaseStub>) {
+    const methods = stub.chainsAll.get('item_stock_levels.select') ?? [];
+    const args = stub.chainArgsAll.get('item_stock_levels.select') ?? [];
+    return methods.map((m, k) => ({ methods: m, args: args[k] ?? [] }));
+  }
+
+  function itemInLists(stub: ReturnType<typeof makeSupabaseStub>): string[][] {
+    return levelChains(stub).map((c) => {
+      const k = c.methods.findIndex((m, j) => m === 'in' && c.args[j]?.[0] === 'item_id');
+      return k === -1 ? [] : (c.args[k]![1] as string[]);
+    });
+  }
+
+  it('asks for 100 ids in ONE request, and 101 in two (100 + 1)', async () => {
+    for (const [n, want] of [
+      [100, [100]],
+      [101, [100, 1]],
+    ] as const) {
+      const stub = makeSupabaseStub({
+        'item_stock_levels.select': levelsFor,
+        'stock_movements.select': { data: [], error: null },
+      });
+      const svc = new InventoryService(makeServiceContext(stub.client));
+      const ids = Array.from({ length: n }, (_, i) => id(i + 1));
+      const rows = await svc.stagedWorklist({ itemIds: ids });
+      expect(itemInLists(stub).map((l) => l.length), `${n} ids`).toEqual(want);
+      // Every id asked for, once, across the batches; every row back.
+      expect(itemInLists(stub).flat().sort()).toEqual([...ids].sort());
+      expect(new Set(rows.map((r) => r.itemId)).size).toBe(n);
+    }
+  });
+
+  it('keeps the org filter and the deleted-item filter on every batch, and the Staging + Unplaced kinds', async () => {
+    const stub = makeSupabaseStub({
+      'item_stock_levels.select': levelsFor,
+      'stock_movements.select': { data: [], error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client, { organizationId: 'org-mine' }));
+    await svc.stagedWorklist({ itemIds: Array.from({ length: 150 }, (_, i) => id(i + 1)) });
+    const chains = levelChains(stub);
+    expect(chains).toHaveLength(2);
+    for (const c of chains) {
+      const pairs = c.methods.map((m, k) => [m, ...(c.args[k] ?? [])]);
+      expect(pairs).toContainEqual(['eq', 'organization_id', 'org-mine']);
+      expect(pairs).toContainEqual(['is', 'inventory_items.deleted_at', null]);
+      expect(pairs).toContainEqual(['in', 'locations.kind', ['staging', 'unplaced']]);
+      expect(pairs).toContainEqual(['gt', 'quantity', 0]);
+    }
+  });
+
+  it("lists the items' Unplaced rows too (only Staging blocks a pick; the chip says so)", async () => {
+    const stub = makeSupabaseStub({
+      'item_stock_levels.select': levelsFor,
+      'stock_movements.select': { data: [], error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    const rows = await svc.stagedWorklist({ itemIds: [id(7)] });
+    expect(rows.map((r) => [r.itemId, r.sourceKind, r.quantity])).toEqual([
+      [id(7), 'staging', 4],
+      [id(7), 'unplaced', 2],
+    ]);
+  });
+
+  it('ignores the active warehouse when itemIds is set (the ids already narrow it); keeps it otherwise', async () => {
+    const withIds = makeSupabaseStub({
+      'item_stock_levels.select': levelsFor,
+      'stock_movements.select': { data: [], error: null },
+    });
+    await new InventoryService(makeServiceContext(withIds.client)).stagedWorklist({
+      itemIds: [id(1)],
+      warehouseId: 'wh-cookie',
+    });
+    const filtered = levelChains(withIds)[0]!;
+    expect(filtered.methods.some((m, k) => m === 'eq' && filtered.args[k]?.[0] === 'locations.warehouse_id')).toBe(false);
+
+    const without = makeSupabaseStub({ 'item_stock_levels.select': { data: [], error: null } });
+    await new InventoryService(makeServiceContext(without.client)).stagedWorklist({ warehouseId: 'wh-cookie' });
+    const plain = levelChains(without)[0]!;
+    expect(plain.methods.map((m, k) => [m, ...(plain.args[k] ?? [])])).toContainEqual([
+      'eq',
+      'locations.warehouse_id',
+      'wh-cookie',
+    ]);
+    expect(itemInLists(without)).toEqual([[]]);
+  });
+
+  it('keeps the item-type tab with itemIds', async () => {
+    const stub = makeSupabaseStub({
+      'item_stock_levels.select': levelsFor,
+      'stock_movements.select': { data: [], error: null },
+    });
+    await new InventoryService(makeServiceContext(stub.client)).stagedWorklist({ itemIds: [id(1)], itemType: 'book' });
+    const c = levelChains(stub)[0]!;
+    expect(c.methods.map((m, k) => [m, ...(c.args[k] ?? [])])).toContainEqual(['eq', 'inventory_items.item_type', 'book']);
+  });
+
+  it('dedupes and lower-cases ids before asking', async () => {
+    const stub = makeSupabaseStub({
+      'item_stock_levels.select': levelsFor,
+      'stock_movements.select': { data: [], error: null },
+    });
+    await new InventoryService(makeServiceContext(stub.client)).stagedWorklist({
+      itemIds: [id(1).toUpperCase(), id(1), id(2)],
+    });
+    expect(itemInLists(stub)).toEqual([[id(1), id(2)]]);
+  });
+
+  it('an empty list is "these items: none": [] without a request', async () => {
+    const stub = makeSupabaseStub({ 'item_stock_levels.select': levelsFor });
+    expect(await new InventoryService(makeServiceContext(stub.client)).stagedWorklist({ itemIds: [] })).toEqual([]);
+    expect(stub.fromCalls).toEqual([]);
+  });
+
+  it('refuses 201 ids and a malformed id with validation_error, before any request', async () => {
+    const stub = makeSupabaseStub({ 'item_stock_levels.select': levelsFor });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+    await expect(
+      svc.stagedWorklist({ itemIds: Array.from({ length: 201 }, (_, i) => id(i + 1)) }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+    await expect(svc.stagedWorklist({ itemIds: [id(1), 'not-a-uuid'] })).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(stub.fromCalls).toEqual([]);
+    // 200 is fine.
+    const ok = makeSupabaseStub({
+      'item_stock_levels.select': levelsFor,
+      'stock_movements.select': { data: [], error: null },
+    });
+    await new InventoryService(makeServiceContext(ok.client)).stagedWorklist({
+      itemIds: Array.from({ length: 200 }, (_, i) => id(i + 1)),
+    });
+    expect(itemInLists(ok).map((l) => l.length)).toEqual([100, 100]);
+  });
+
+  it('a failed batch is still "nothing to show", never a throw (the unchanged read contract)', async () => {
+    let n = 0;
+    const stub = makeSupabaseStub({
+      'item_stock_levels.select': (call) => {
+        n += 1;
+        return n === 2 ? { data: null, error: { message: 'boom' } } : levelsFor(call);
+      },
+      'stock_movements.select': { data: [], error: null },
+    });
+    const rows = await new InventoryService(makeServiceContext(stub.client)).stagedWorklist({
+      itemIds: Array.from({ length: 101 }, (_, i) => id(i + 1)),
+    });
+    expect(rows).toEqual([]);
+  });
+});

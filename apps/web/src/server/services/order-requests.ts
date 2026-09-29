@@ -16,6 +16,7 @@ import {
   isManagerOrAbove,
   lineOwedUnits,
   parseHoldOrderStockResult,
+  partialActionMovedOnCopy,
   resolveOrgTimezone,
   resolveRequesterIdentity,
   shouldTopUpHolds,
@@ -41,6 +42,7 @@ import { dispatchEvent } from './integration-events';
 import {
   assertModuleEnabled,
   assertPermission,
+  isModuleEnabled,
   ServiceError,
   withContext,
   type ServiceContext,
@@ -879,6 +881,59 @@ export class OrderRequestsService {
       .in('status', ['staged_for_pickup', 'in_transit']);
     if (error) throw new ServiceError('internal_error', error.message);
     return count ?? 0;
+  }
+
+  /**
+   * An order's number, for a link back to it (F2-3: the chip over a Staging
+   * list filtered to an order's items, "Showing items from SO-000123 · Show
+   * all · Back to the order"). One narrow read as the viewer (every member can
+   * read the org's orders), org-filtered, run beside the worklist read so the
+   * page gains no serial round trip.
+   *
+   * Also answers the order's warehouse: the list is narrowed to it (core
+   * stagingRowsForOrderWarehouse), since only that warehouse's Staging (and
+   * warehouse-less locations) can unblock the order's pick.
+   *
+   * NEVER THROWS (pattern #1, a chip must not take the page down):
+   *   ok         the order, its number (null for an order without one) and
+   *              its warehouse;
+   *   not_found  no such order here, the orders module is off, or the id is
+   *              not a uuid: nothing to go back to, so no link;
+   *   failed     the read failed (reported): the order likely exists, so the
+   *              link stays and only its number is unknown.
+   */
+  async orderLinkLabel(
+    id: string,
+  ): Promise<
+    | { state: 'ok'; id: string; orderNumber: string | null; warehouseId: string | null }
+    | { state: 'not_found' }
+    | { state: 'failed' }
+  > {
+    if (!isModuleEnabled(this.ctx, 'orders')) return { state: 'not_found' };
+    const orderId = typeof id === 'string' ? id.trim().toLowerCase() : '';
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(orderId)) {
+      return { state: 'not_found' };
+    }
+    try {
+      const { data, error } = await this.ctx.supabase
+        .from('order_requests')
+        .select('id, order_number, warehouse_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', orderId)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      if (!data) return { state: 'not_found' };
+      const row = data as { id: string; order_number: number | null; warehouse_id: string | null };
+      return {
+        state: 'ok',
+        id: row.id,
+        orderNumber: formatOrderNumber(row.order_number),
+        warehouseId: row.warehouse_id ?? null,
+      };
+    } catch (e) {
+      void reportSrvError(e, { tag: 'orders.link_label_failed', level: 'warning' });
+      return { state: 'failed' };
+    }
   }
 
   async get(id: string): Promise<OrderRequestDetail> {
@@ -2525,8 +2580,11 @@ export class OrderRequestsService {
         throw new ServiceError('not_found', 'Order request not found');
       if (msg.includes('forbidden'))
         throw new ServiceError('forbidden', 'Only managers can approve requests');
+      // Core's words, the ones the approve-partial dialog (web) and sheet
+      // (phone) show when they see the order move on before Confirm: the same
+      // state reads the same whichever side notices it first (F2-3 walk D1).
       if (msg.includes('invalid_status_transition'))
-        throw new ServiceError('validation_error', 'This request is no longer pending approval');
+        throw new ServiceError('validation_error', partialActionMovedOnCopy('approve_partial'));
       // 0365: approve_partial refuses a line-less order too, as approve does.
       if (msg.includes('order_has_no_lines'))
         throw new ServiceError(
@@ -2746,8 +2804,10 @@ export class OrderRequestsService {
         );
       if (msg.includes('forbidden'))
         throw new ServiceError('forbidden', 'Only a manager can resume fulfillment.');
+      // Core's words, as approvePartial's (the resume sheet and dialog say
+      // them when the order moves on under the preview).
       if (msg.includes('invalid_status_transition'))
-        throw new ServiceError('validation_error', 'Only a backordered order can be resumed.');
+        throw new ServiceError('validation_error', partialActionMovedOnCopy('resume'));
       throw new ServiceError('internal_error', 'Could not resume fulfillment.');
     }
     const row = data as OrderRequestRow;

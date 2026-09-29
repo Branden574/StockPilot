@@ -1,9 +1,12 @@
+import { ArrowUpFromLine } from 'lucide-react';
 import Link from 'next/link';
 
 import {
   describeReadinessHold,
   describeReadinessLine,
   describeReadinessWhy,
+  PUT_AWAY_LINE_LABEL,
+  putAwayLineAccessibilityLabel,
   READINESS_STATES,
   readinessLineAccessibilityLabel,
   type ReadinessItemAssessment,
@@ -11,6 +14,7 @@ import {
 } from '@stockpilot/core';
 
 import { CountThisItemButton } from '@/components/exceptions/count-this-item-button';
+import { IntentLink } from '@/components/ui/intent-link';
 import { cn } from '@/lib/utils';
 
 import { READINESS_TONE_STYLES, ReadinessIcon } from './readiness-view';
@@ -35,6 +39,14 @@ export function itemPhysicalCountHref(itemId: string): string {
  * item (a manager who can start a count, an item a count can include); the
  * button shows only where on record and the locations disagree, the one state
  * a count settles.
+ *
+ * `putAwayHref` (F2-3) is the line's "Put away": the Staging list filtered to
+ * the line's item, from this order (the page decides, readinessLinePutAwayHref:
+ * the line has units in Staging and the viewer may put stock away). A plain
+ * link, named for what it moves ("Put away 4 of Maus I from Staging"). One
+ * per line, so an IntentLink: it warms the Staging list when the person
+ * reaches for it, never on sight (a default <Link> prefetched the route for
+ * every line on every order view).
  */
 export function ReadinessLineCell({
   line,
@@ -42,6 +54,7 @@ export function ReadinessLineCell({
   timeZone,
   canCountItem,
   position,
+  putAwayHref = null,
 }: {
   line: ReadinessLineAssessment | null;
   item: ReadinessItemAssessment | null;
@@ -51,6 +64,9 @@ export function ReadinessLineCell({
    *  row the reader is on, as the phone does. Core's own (createdAt, lineId)
    *  position when absent. */
   position?: number;
+  /** The line's "Put away" link, or null (nothing in Staging, or the viewer
+   *  may not put stock away). */
+  putAwayHref?: string | null;
 }) {
   if (!line) {
     return (
@@ -102,6 +118,18 @@ export function ReadinessLineCell({
         >
           {hold}
         </p>
+      )}
+      {putAwayHref && (
+        <div data-testid="readiness-put-away-line">
+          <IntentLink
+            href={putAwayHref}
+            aria-label={putAwayLineAccessibilityLabel(line)}
+            className="inline-flex min-h-6 items-center gap-1 text-[11px] font-medium underline-offset-2 hover:underline"
+          >
+            <ArrowUpFromLine className="size-3 shrink-0" aria-hidden />
+            {PUT_AWAY_LINE_LABEL}
+          </IntentLink>
+        </div>
       )}
       {showCount && item && (
         <div data-testid="readiness-count-this-item">

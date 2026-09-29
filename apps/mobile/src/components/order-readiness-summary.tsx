@@ -7,6 +7,7 @@ import {
   HOLD_AVAILABLE_STOCK_LABEL,
   READINESS_NEEDS_CONNECTION_COPY,
   type OrderReadinessResult,
+  type PutAwayOffer,
 } from '@stockpilot/core';
 
 import { MIN_TAP } from '@/components/item-verification-card';
@@ -47,7 +48,16 @@ import { useTheme } from '@/lib/use-theme';
  * (core shouldOfferHoldStock: approvers, hold statuses, some line not or
  * partly held), the web strip's button. 44 pt, disabled while anything runs
  * and offline (the card already says it needs a connection).
+ *
+ * PUT AWAY N ITEMS (F2-3): on the full panel, when some line has units in
+ * this warehouse's Staging (core putAwayStripOffer): "Put away 3 items" opens
+ * the Staging tab filtered to them; without stock:transfer, core's sentence
+ * instead ("Putting stock away needs the Transfer stock permission."). 44 pt,
+ * disabled while anything runs and offline.
  */
+/** What "Put away N items" does, for VoiceOver. */
+export const PUT_AWAY_STRIP_HINT = 'Opens Staging with these items, to put them away';
+
 export function OrderReadinessSummary({
   result,
   audience,
@@ -56,6 +66,7 @@ export function OrderReadinessSummary({
   checking,
   onCheckAgain,
   hold = null,
+  putAway = null,
 }: {
   result: OrderReadinessResult;
   audience: 'full' | 'requester';
@@ -69,6 +80,13 @@ export function OrderReadinessSummary({
   /** F2-2 "Hold available stock", when offered (full panel only); null: not
    *  offered. `busy`: the hold is running; `disabled`: another action is. */
   hold?: { busy: boolean; disabled: boolean; onPress: () => void } | null;
+  /** F2-3 "Put away N items" (full panel only), from lib/order-put-away.ts;
+   *  null: nothing in Staging. `disabled`: another action is running. */
+  putAway?: {
+    offer: PutAwayOffer;
+    disabled: boolean;
+    onPress: (itemIds: string[]) => void;
+  } | null;
 }) {
   const { c, mode } = useTheme();
   const opts = { timeZone: timeZone ?? undefined };
@@ -138,6 +156,7 @@ export function OrderReadinessSummary({
 
   const rollup = describeReadinessRollup(result, opts);
   if (!rollup) return null;
+  const putAwayOffer = putAway?.offer ?? null;
   const failed = result.state === 'failed';
   const color = readinessToneColor(rollup.tone, c, mode);
   // A failure's own reason, when core names one (the web strip shows the same).
@@ -178,6 +197,25 @@ export function OrderReadinessSummary({
         {rollup.checkedAt ? (
           <Body size={12.5} muted>
             {rollup.checkedAt}
+          </Body>
+        ) : null}
+        {putAway && putAwayOffer?.kind === 'link' ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={offline || putAway.disabled}
+            onPress={() => putAway.onPress(putAwayOffer.itemIds)}
+            accessibilityHint={
+              offline ? READINESS_NEEDS_CONNECTION_COPY : PUT_AWAY_STRIP_HINT
+            }
+            // 44 pt, not the small Button's 36.
+            style={{ alignSelf: 'flex-start', marginTop: 6, minHeight: MIN_TAP }}
+          >
+            {putAwayOffer.label}
+          </Button>
+        ) : putAwayOffer?.kind === 'needs_permission' ? (
+          <Body size={12.5} muted>
+            {putAwayOffer.message}
           </Body>
         ) : null}
         {hold ? (

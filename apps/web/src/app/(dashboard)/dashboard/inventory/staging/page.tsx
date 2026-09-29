@@ -2,20 +2,11 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { Suspense } from 'react';
 
-import { StagingTable } from '@/components/inventory/staging-table';
+import { StagingTableSection } from '@/components/inventory/staging-table-section';
 import { TableBodySkeleton } from '@/components/dashboard/skeletons';
-import { can } from '@stockpilot/core';
-import { InventoryService } from '@/server/services/inventory';
-import { LocationsService } from '@/server/services/locations';
-import { WarehousesService } from '@/server/services/warehouses';
+import { can, parseStagingItemFilter } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
 import { canMintPlacementDestination } from '@/lib/locations/placement-destination';
-import {
-  toDestinationOption,
-  type DestinationLocationRow,
-  type DestinationOption,
-} from '@/lib/locations/destination-option';
-import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { STAGING_TOUR } from '@/lib/onboarding/tours';
 
@@ -23,6 +14,10 @@ export const metadata: Metadata = { title: 'Staging' };
 
 type StagingSearchParams = {
   type?: string;
+  /** F2-3, put away from an order: the items to show (repeatable), and the
+   *  order they came from. Read only, never rewritten (pattern #18). */
+  item?: string | string[];
+  order?: string | string[];
 };
 
 export default async function StagingPage({
@@ -56,6 +51,13 @@ export default async function StagingPage({
   // failing on submit.
   const canMintDestination = canMintPlacementDestination(sessionCtx);
 
+  const itemTypeParam =
+    params.type === 'book' ? 'book' : params.type === 'non-book' ? 'non-book' : undefined;
+  // Put away from an order (F2-3): ?item= (repeatable) and ?order=, parsed by
+  // core (the phone reads its itemIds / orderId the same way). An unusable
+  // list shows every item and says why; it never narrows or widens silently.
+  const itemFilter = parseStagingItemFilter({ item: params.item, order: params.order });
+
   return (
     <div className="container mx-auto max-w-7xl px-4 py-8 sm:px-6">
       <div className="flex flex-wrap items-end justify-between gap-3 sm:gap-4">
@@ -72,91 +74,13 @@ export default async function StagingPage({
       <div className="mt-8">
         <Suspense fallback={<TableBodySkeleton rows={8} />}>
           <StagingTableSection
-            params={params}
+            itemType={itemTypeParam}
+            filter={itemFilter}
             canPlace={canPlace}
             canMintDestination={canMintDestination}
           />
         </Suspense>
       </div>
     </div>
-  );
-}
-
-/**
- * Inner async Server Component — streams behind <Suspense>. Fetches the
- * staged worklist and the rack/crate locations (grouped by warehouse_id),
- * then passes serializable props to the 'use client' <StagingTable>.
- */
-async function StagingTableSection({
-  params,
-  canPlace,
-  canMintDestination,
-}: {
-  params: StagingSearchParams;
-  canPlace: boolean;
-  canMintDestination: boolean;
-}) {
-  const itemTypeParam =
-    params.type === 'book' ? 'book' : params.type === 'non-book' ? 'non-book' : undefined;
-
-  const [inventorySvc, locationsSvc, warehousesSvc, warehouseFilter] = await Promise.all([
-    InventoryService.forCurrentUser(),
-    LocationsService.forCurrentUser(),
-    WarehousesService.forCurrentUser(),
-    getActiveWarehouseFilter(),
-  ]);
-
-  const [rows, allLocations, warehouses] = await Promise.all([
-    inventorySvc.stagedWorklist({
-      itemType: itemTypeParam,
-      warehouseId: warehouseFilter,
-    }),
-    locationsSvc.list(),
-    warehousesSvc.listNames(),
-  ]);
-
-  // warehouse id → display name for the Warehouse column. list() returns only
-  // active warehouses; any staged row pointing at an archived/inactive
-  // warehouse simply falls back to the truncated UUID in the table.
-  const warehouseNames: Record<string, string> = {};
-  for (const w of warehouses) {
-    warehouseNames[w.id] = w.name;
-  }
-
-  // Build a map of warehouseId → rack/crate destinations for that warehouse.
-  // The PlaceFromStagingDialog only needs rack and crate kinds.
-  //
-  // Each destination carries its rack/crate COLUMNS (migration 0188), not just
-  // {id, name, kind}: dropping them is why the put-away dialog could never show
-  // which crate an existing destination already is, and why a user had to
-  // re-type crate metadata that the location row already held. `name` alone is
-  // not a substitute — "Blue #42" is a dedupe key, and parsing a crate back out
-  // of it would break the moment someone renames a crate.
-  const destinationsByWarehouse = new Map<string, DestinationOption[]>();
-  for (const loc of allLocations) {
-    if (loc.kind !== 'rack' && loc.kind !== 'crate') continue;
-    const wid = (loc.warehouse_id as string | null) ?? '__none__';
-    if (!destinationsByWarehouse.has(wid)) {
-      destinationsByWarehouse.set(wid, []);
-    }
-    destinationsByWarehouse.get(wid)!.push(toDestinationOption(loc as DestinationLocationRow));
-  }
-
-  // Flatten the Map to a plain object so it crosses the RSC → client boundary
-  // as serializable JSON. Keys are warehouse IDs (or '__none__').
-  const destinationsMap: Record<string, DestinationOption[]> = {};
-  for (const [wid, dests] of destinationsByWarehouse) {
-    destinationsMap[wid] = dests;
-  }
-
-  return (
-    <StagingTable
-      rows={rows}
-      destinationsMap={destinationsMap}
-      warehouseNames={warehouseNames}
-      canPlace={canPlace}
-      canMintDestination={canMintDestination}
-      activeItemType={itemTypeParam ?? 'all'}
-    />
   );
 }

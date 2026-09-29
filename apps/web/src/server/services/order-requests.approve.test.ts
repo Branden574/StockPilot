@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ModuleId } from '@stockpilot/core';
+import { partialActionMovedOnCopy, type ModuleId } from '@stockpilot/core';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
@@ -181,6 +181,53 @@ describe('OrderRequestsService.approve — RPC refusals', () => {
     });
     expect(stub.rpcCalls.map((c) => c.name)).toEqual(['approve_partial']);
     expect(afterCalls).toHaveLength(0);
+  });
+
+  // F2-3 walk D1: the approve-partial dialog (web) and sheet (phone) say
+  // "This order is no longer waiting for approval." when they see the order
+  // move on before Confirm (core partialActionMovedOnCopy). The same state
+  // refused BY the server read "This request is no longer pending approval"
+  // (other words, no full stop): one state, two sentences, by timing alone.
+  it("approve_partial on an order that moved on: core's moved-on sentence, the one the dialog shows", async () => {
+    const { svc } = build({
+      'rpc:approve_partial': {
+        data: null,
+        error: { message: 'invalid_status_transition', code: 'P0001' },
+      },
+    });
+    const err = await svc.approvePartial('ord-1').catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      code: 'validation_error',
+      message: partialActionMovedOnCopy('approve_partial'),
+    });
+    expect(partialActionMovedOnCopy('approve_partial')).toBe('This order is no longer waiting for approval.');
+    expect(afterCalls).toHaveLength(0);
+  });
+
+  it("resume_fulfillment on an order that is not backordered: core's moved-on sentence too", async () => {
+    const { svc } = build({
+      'rpc:resume_fulfillment': {
+        data: null,
+        error: { message: 'invalid_status_transition', code: 'P0001' },
+      },
+    });
+    await expect(svc.resumeFulfillment('ord-1')).rejects.toMatchObject({
+      code: 'validation_error',
+      message: partialActionMovedOnCopy('resume'),
+    });
+  });
+
+  it('the strict approve keeps its own words (its button is not the partial dialog)', async () => {
+    const { svc } = build({
+      'rpc:approve_order_request': {
+        data: null,
+        error: { message: 'invalid_status_transition', code: 'P0001' },
+      },
+    });
+    await expect(svc.approve('ord-1')).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'This request is no longer pending approval',
+    });
   });
 
   it('still maps insufficient_stock (now totalled across duplicate lines) as before', async () => {

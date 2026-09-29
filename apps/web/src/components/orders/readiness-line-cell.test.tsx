@@ -1,4 +1,5 @@
 import { cleanup, render, screen, within } from '@testing-library/react';
+import type * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { OrderReadinessResult } from '@stockpilot/core';
@@ -24,6 +25,30 @@ vi.mock('@/components/exceptions/count-this-item-button', () => ({
   },
 }));
 
+// next/link as a recorder: what each link was asked to PREFETCH is the
+// assertion (a default <Link> prefetches its route the moment it is in view;
+// perf finding 11b). IntentLink warms on intent through next/navigation.
+const linkProps = vi.hoisted(() => [] as { href: string; prefetch: unknown }[]);
+vi.mock('next/link', () => ({
+  default: ({
+    href,
+    prefetch,
+    children,
+    ...rest
+  }: { href: string; prefetch?: unknown; children?: React.ReactNode } & Record<string, unknown>) => {
+    linkProps.push({ href: String(href), prefetch });
+    return (
+      <a href={String(href)} {...rest}>
+        {children}
+      </a>
+    );
+  },
+}));
+vi.mock('next/navigation', () => ({
+  usePathname: () => '/dashboard/orders/11111111-1111-1111-1111-111111111111',
+  useRouter: () => ({ prefetch: vi.fn(), push: vi.fn(), refresh: vi.fn(), replace: vi.fn() }),
+}));
+
 const TZ = 'America/Los_Angeles';
 const ORDER = '11111111-1111-1111-1111-111111111111';
 
@@ -45,7 +70,13 @@ function renderLine(
   status: string,
   lines: FactsLine[],
   items: Record<string, unknown>[],
-  opts: { at?: number; canCountItem?: boolean; neededBy?: string | null; position?: number } = {},
+  opts: {
+    at?: number;
+    canCountItem?: boolean;
+    neededBy?: string | null;
+    position?: number;
+    putAwayHref?: string | null;
+  } = {},
 ) {
   const a = assessed(status, lines, items, opts.neededBy ?? null);
   const line = a.lines[opts.at ?? 0]!;
@@ -57,6 +88,7 @@ function renderLine(
       timeZone={TZ}
       canCountItem={opts.canCountItem ?? false}
       position={opts.position}
+      putAwayHref={opts.putAwayHref}
     />,
   );
   return screen.getByTestId('readiness-line');
@@ -258,5 +290,49 @@ describe('ReadinessLineCell', () => {
     expect(screen.getByTestId('readiness-line-unchecked')).toHaveTextContent(
       'Not checked. Check again to see this line.',
     );
+  });
+});
+
+describe('ReadinessLineCell — Put away (F2-3)', () => {
+  const HREF = `/dashboard/inventory/staging?order=${ORDER}&item=b`;
+
+  it('a line with units in Staging: "Put away", spoken with what it moves, to the filtered Staging list', () => {
+    const cell = renderLine(
+      'pending_approval',
+      [{ lineId: 'L1', itemId: 'b', requested: 25 }],
+      [visibleItemFacts('b', { name: 'Maus I', here: { rack: 10, staging: 30 } })],
+      { putAwayHref: HREF },
+    );
+    const link = within(cell).getByRole('link', { name: 'Put away 15 of Maus I from Staging' });
+    expect(link).toHaveAttribute('href', HREF);
+    // The visible words begin the spoken name (label in name).
+    expect(link).toHaveTextContent('Put away');
+    cleanup();
+  });
+
+  // Perf finding 11b: one "Put away" per line is a link LIST; a default
+  // <Link> prefetched /dashboard/inventory/staging for every line on every
+  // order view. It warms on intent instead (IntentLink), never on sight.
+  it('the line link never prefetches the Staging list on sight', () => {
+    linkProps.length = 0;
+    renderLine(
+      'pending_approval',
+      [{ lineId: 'L1', itemId: 'b', requested: 25 }],
+      [visibleItemFacts('b', { name: 'Maus I', here: { rack: 10, staging: 30 } })],
+      { putAwayHref: HREF },
+    );
+    expect(linkProps.filter((l) => l.href === HREF)).toEqual([{ href: HREF, prefetch: false }]);
+    cleanup();
+  });
+
+  it('no link when the page passes none', () => {
+    const cell = renderLine(
+      'pending_approval',
+      [{ lineId: 'L1', itemId: 'b', requested: 25 }],
+      [visibleItemFacts('b', { here: { rack: 10, staging: 30 } })],
+    );
+    expect(within(cell).queryByTestId('readiness-put-away-line')).toBeNull();
+    expect(within(cell).queryByRole('link', { name: /Put away/ })).toBeNull();
+    cleanup();
   });
 });

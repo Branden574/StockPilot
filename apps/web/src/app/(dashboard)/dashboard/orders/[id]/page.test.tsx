@@ -50,7 +50,9 @@ vi.mock('next/navigation', () => ({
     throw new Error('notFound');
   }),
   // The readiness strip's "Check again" (a client component, rendered for real).
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
+  // The Put away links are IntentLinks (they warm on intent, never on sight).
+  usePathname: () => '/dashboard/orders/x',
 }));
 
 vi.mock('next/link', async () => {
@@ -1476,6 +1478,311 @@ describe('orders/[id]: held, and caught before it leaves (F2-2)', () => {
 
       expect(screen.getAllByTestId('readiness-line').map((c) => c.getAttribute('data-state'))).toContain('short');
       expect(shortLineFixesProps).not.toHaveBeenCalled();
+    });
+  });
+});
+
+/**
+ * F2-3: PUT AWAY AND PARTIAL FULFILMENT FROM THE ORDER. Everything here comes
+ * from the readiness read the page already makes (no read of its own): the
+ * put-away links on the lines and the strip, and the approve-partial / resume
+ * preview handed to the actions panel.
+ */
+describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', () => {
+  function orderLine(id: string, itemId: string, requested: number, over: Record<string, unknown> = {}) {
+    return {
+      id,
+      order_request_id: ORDER_ID,
+      item_id: itemId,
+      quantity_requested: requested,
+      quantity_fulfilled: 0,
+      quantity_picked: null,
+      returned_quantity: 0,
+      unit_cost_at_request: 0,
+      notes: null,
+      item: {
+        id: itemId,
+        name: `Item ${itemId}`,
+        sku: `SKU-${itemId}`,
+        quantity_on_hand: 40,
+        charter_name: null,
+        charter_code: null,
+      },
+      ...over,
+    };
+  }
+  function orderAt(status: string, lines: unknown[]) {
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ status }), lines }));
+  }
+  function as(role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer', perms: string[]) {
+    ctxHolder.current = { role, permissions: new Set(['orders:read', ...perms]) };
+  }
+  const lastPanelProps = () => managerActionsProps.mock.calls.at(-1)![0] as Record<string, unknown>;
+  const stagingHref = (...items: string[]) => `/dashboard/inventory/staging?order=${ORDER_ID}&item=${items.join(',')}`;
+  /** The line cells' put-away links, by row. */
+  const lineLinks = () =>
+    screen.getAllByTestId('readiness-line').map((cell) => within(cell).queryByTestId('readiness-put-away-line'));
+
+  /**
+   * A ready on a rack; B needs put-away (10 rack + 30 Staging, 25 asked); C
+   * short with 4 in Staging (2 rack + 4 Staging, 20 asked: its state is Short,
+   * the worst bucket it touches, but 4 units would still be freed).
+   */
+  const LINES = [orderLine('LA', 'iA', 20), orderLine('LB', 'iB', 25), orderLine('LC', 'iC', 20)];
+  const facts = (status: string) =>
+    orderReadinessFacts(
+      ORDER_ID,
+      status,
+      [
+        { lineId: 'LA', itemId: 'iA', requested: 20 },
+        { lineId: 'LB', itemId: 'iB', requested: 25 },
+        { lineId: 'LC', itemId: 'iC', requested: 20 },
+      ],
+      [
+        visibleItemFacts('iA', { here: { rack: 40 } }),
+        visibleItemFacts('iB', { here: { rack: 10, staging: 30 } }),
+        visibleItemFacts('iC', { here: { rack: 2, staging: 4 } }),
+      ],
+    );
+
+  describe('Put away', () => {
+    it('a viewer who may move stock: each line with units in Staging links to Staging for its item, and the strip for all of them', async () => {
+      as('manager', ['orders:approve', 'stock:transfer', 'items:read']);
+      orderAt('pending_approval', LINES);
+      readinessResult.mockResolvedValue(readinessOk(facts('pending_approval')));
+
+      await renderPage();
+
+      // One read, the page's own: nothing added for put-away.
+      expect(readinessForCurrentUser).toHaveBeenCalledTimes(1);
+      expect(screen.getAllByTestId('readiness-line').map((c) => c.getAttribute('data-state'))).toEqual([
+        'ready',
+        'needs_put_away',
+        'short',
+      ]);
+      const [a, b, c] = lineLinks();
+      expect(a).toBeNull();
+      expect(b!.querySelector('a')).toHaveAttribute('href', stagingHref('iB'));
+      expect(b).toHaveTextContent('Put away');
+      // A Short line with units in Staging still offers them (its sentence
+      // already says they must be put away).
+      expect(c!.querySelector('a')).toHaveAttribute('href', stagingHref('iC'));
+      const strip = screen.getByTestId('readiness-strip');
+      const all = within(strip).getByRole('link', { name: 'Put away 2 items' });
+      expect(all).toHaveAttribute('href', stagingHref('iB', 'iC'));
+      expect(within(strip).queryByTestId('readiness-put-away-permission')).toBeNull();
+    });
+
+    it('without Transfer stock: no links, and the strip says why once', async () => {
+      as('manager', ['orders:approve', 'items:read']);
+      orderAt('pending_approval', LINES);
+      readinessResult.mockResolvedValue(readinessOk(facts('pending_approval')));
+
+      await renderPage();
+
+      expect(lineLinks().every((l) => l === null)).toBe(true);
+      const strip = screen.getByTestId('readiness-strip');
+      expect(within(strip).queryByRole('link', { name: /Put away/ })).toBeNull();
+      expect(within(strip).getByTestId('readiness-put-away-permission')).toHaveTextContent(
+        'Putting stock away needs the Transfer stock permission.',
+      );
+    });
+
+    // The Staging page answers 404 (and the phone's route 403) without
+    // items:read: Transfer stock alone, by an override, must not get a link
+    // that opens a refusal, nor be told to get Transfer stock.
+    it('Transfer stock without View items: no links, and the strip names View items', async () => {
+      as('manager', ['orders:approve', 'stock:transfer']);
+      orderAt('pending_approval', LINES);
+      readinessResult.mockResolvedValue(readinessOk(facts('pending_approval')));
+
+      await renderPage();
+
+      expect(lineLinks().every((l) => l === null)).toBe(true);
+      const strip = screen.getByTestId('readiness-strip');
+      expect(within(strip).queryByRole('link', { name: /Put away/ })).toBeNull();
+      expect(within(strip).getByTestId('readiness-put-away-permission')).toHaveTextContent(
+        'Putting stock away needs the View items permission.',
+      );
+    });
+
+    it('a staff picker with Transfer stock gets it on a picking order too', async () => {
+      as('staff', ['items:update', 'stock:transfer', 'items:read']);
+      orderAt('picking_in_progress', LINES);
+      readinessResult.mockResolvedValue(readinessOk(facts('picking_in_progress')));
+
+      await renderPage();
+
+      expect(within(screen.getByTestId('readiness-strip')).getByRole('link', { name: 'Put away 2 items' })).toHaveAttribute(
+        'href',
+        stagingHref('iB', 'iC'),
+      );
+    });
+
+    it('two lines of one item name it once: "Put away 1 item"', async () => {
+      as('manager', ['orders:approve', 'stock:transfer', 'items:read']);
+      orderAt('pending_approval', [orderLine('L1', 'iB', 5), orderLine('L2', 'iB', 20)]);
+      readinessResult.mockResolvedValue(
+        readinessOk(
+          orderReadinessFacts(
+            ORDER_ID,
+            'pending_approval',
+            [
+              { lineId: 'L1', itemId: 'iB', requested: 5 },
+              { lineId: 'L2', itemId: 'iB', requested: 20 },
+            ],
+            [visibleItemFacts('iB', { here: { rack: 10, staging: 30 } })],
+          ),
+        ),
+      );
+
+      await renderPage();
+
+      expect(within(screen.getByTestId('readiness-strip')).getByRole('link', { name: 'Put away 1 item' })).toHaveAttribute(
+        'href',
+        stagingHref('iB'),
+      );
+    });
+
+    it('nothing when nothing is in Staging, on a failed read, or for the requester', async () => {
+      as('manager', ['orders:approve', 'stock:transfer', 'items:read']);
+      orderAt('pending_approval', [orderLine('LA', 'iA', 20)]);
+      readinessResult.mockResolvedValue(
+        readinessOk(
+          orderReadinessFacts(ORDER_ID, 'pending_approval', [{ lineId: 'LA', itemId: 'iA', requested: 20 }], [
+            visibleItemFacts('iA', { here: { rack: 40 } }),
+          ]),
+        ),
+      );
+      const ready = await renderPage();
+      expect(screen.queryByTestId('readiness-put-away')).toBeNull();
+      expect(screen.queryByTestId('readiness-put-away-permission')).toBeNull();
+      ready.unmount();
+
+      orderAt('pending_approval', LINES);
+      readinessResult.mockResolvedValue(READINESS_FAILED);
+      const failed = await renderPage();
+      expect(screen.getByTestId('readiness-strip')).toHaveAttribute('data-failed', 'true');
+      expect(screen.queryByTestId('readiness-put-away')).toBeNull();
+      expect(screen.queryByTestId('readiness-put-away-permission')).toBeNull();
+      failed.unmount();
+
+      // The requester's own order: one sentence, no actions (with Transfer stock too).
+      ctxHolder.current = { role: 'viewer', permissions: new Set(['orders:read', 'stock:transfer', 'items:read']) };
+      orderGet.mockResolvedValue(
+        detailFixture({ request: requestFixture({ status: 'pending_approval', requester_user_id: 'u1' }), lines: LINES }),
+      );
+      readinessResult.mockResolvedValue(readinessOk(facts('pending_approval')));
+      await renderPage();
+      expect(screen.getByTestId('readiness-strip')).toHaveAttribute('data-mode', 'requester');
+      expect(screen.queryByTestId('readiness-put-away')).toBeNull();
+      expect(screen.queryByTestId('readiness-put-away-permission')).toBeNull();
+      expect(screen.queryByTestId('readiness-put-away-line')).toBeNull();
+    });
+  });
+
+  describe('the approve-partial / resume preview', () => {
+    it("pending: the panel gets core's per-item preview from the page's own read, duplicate lines combined", async () => {
+      as('manager', ['orders:approve']);
+      orderAt('pending_approval', [orderLine('L1', 'iM', 25), orderLine('L2', 'iM', 15), orderLine('L3', 'iN', 10)]);
+      readinessResult.mockResolvedValue(
+        readinessOk(
+          orderReadinessFacts(
+            ORDER_ID,
+            'pending_approval',
+            [
+              { lineId: 'L1', itemId: 'iM', requested: 25 },
+              { lineId: 'L2', itemId: 'iM', requested: 15 },
+              { lineId: 'L3', itemId: 'iN', requested: 10 },
+            ],
+            [
+              visibleItemFacts('iM', { name: 'Maus I', here: { rack: 36 } }),
+              visibleItemFacts('iN', { name: 'Notebook', here: { rack: 10 } }),
+            ],
+          ),
+        ),
+      );
+
+      await renderPage();
+
+      expect(readinessForCurrentUser).toHaveBeenCalledTimes(1);
+      const props = lastPanelProps();
+      expect(props.stockGates).toMatchObject({ approvePartial: 'enabled' });
+      expect(props.partialPreview).toMatchObject({
+        state: 'ok',
+        action: 'approve_partial',
+        orderId: ORDER_ID,
+        asked: 50,
+        willHold: 46,
+        backorder: 4,
+        items: [
+          { itemId: 'iM', itemName: 'Maus I', lineCount: 2, asked: 40, willHold: 36, backorder: 4 },
+          { itemId: 'iN', itemName: 'Notebook', lineCount: 1, asked: 10, willHold: 10, backorder: 0 },
+        ],
+      });
+    });
+
+    it('backordered: the resume preview, on what is still owed', async () => {
+      as('manager', ['orders:approve']);
+      orderAt('backordered', [orderLine('L1', 'iM', 20, { quantity_fulfilled: 12 })]);
+      readinessResult.mockResolvedValue(
+        readinessOk(
+          orderReadinessFacts(
+            ORDER_ID,
+            'backordered',
+            [{ lineId: 'L1', itemId: 'iM', requested: 20, fulfilled: 12 }],
+            [visibleItemFacts('iM', { here: { rack: 5 } })],
+          ),
+        ),
+      );
+
+      await renderPage();
+
+      expect(lastPanelProps().partialPreview).toMatchObject({
+        state: 'ok',
+        action: 'resume',
+        asked: 8,
+        willHold: 5,
+        backorder: 3,
+      });
+    });
+
+    it('a failed read is an unavailable preview, never zeros', async () => {
+      as('manager', ['orders:approve']);
+      orderAt('pending_approval', LINES);
+      readinessResult.mockResolvedValue(READINESS_FAILED);
+
+      await renderPage();
+
+      expect(lastPanelProps().partialPreview).toMatchObject({
+        state: 'unavailable',
+        action: 'approve_partial',
+        reason: 'read_failed',
+      });
+    });
+
+    it('none for a viewer who may not approve, and none outside the two statuses', async () => {
+      // A pending order: someone who may not approve gets no actions panel at
+      // all (so the preview's canApprove guard is defence in depth there).
+      as('staff', ['items:update', 'stock:transfer', 'items:read']);
+      orderAt('pending_approval', LINES);
+      readinessResult.mockResolvedValue(readinessOk(facts('pending_approval')));
+      const pending = await renderPage();
+      expect(managerActionsProps).not.toHaveBeenCalled();
+      pending.unmount();
+
+      as('staff', ['items:update']);
+      orderAt('picking_in_progress', LINES);
+      readinessResult.mockResolvedValue(readinessOk(facts('picking_in_progress')));
+      const picker = await renderPage();
+      expect(lastPanelProps().partialPreview).toBeNull();
+      picker.unmount();
+
+      as('manager', ['orders:approve']);
+      orderAt('approved', LINES);
+      readinessResult.mockResolvedValue(readinessOk(facts('approved')));
+      await renderPage();
+      expect(lastPanelProps().partialPreview).toBeNull();
     });
   });
 });

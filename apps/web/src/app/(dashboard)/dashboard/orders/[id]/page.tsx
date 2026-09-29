@@ -18,7 +18,11 @@ import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh
 import { OrderTimeline } from '@/components/orders/order-timeline';
 import { ReadinessLineCell } from '@/components/orders/readiness-line-cell';
 import { ReadinessStrip } from '@/components/orders/readiness-strip';
-import { readinessStripView } from '@/components/orders/readiness-view';
+import {
+  readinessLinePutAwayHref,
+  readinessStripPutAway,
+  readinessStripView,
+} from '@/components/orders/readiness-view';
 import {
   SendDeliveryRequestButton,
   type DeliveryRequestLine,
@@ -56,7 +60,9 @@ import {
   orderReadinessPhase,
   orderReturnSummary,
   orderStockGates,
+  previewPartialFulfilment,
   projectCompletePicking,
+  putAwayTargets,
   readinessAudience,
   readinessStockFlags,
   reconcileReadiness,
@@ -72,6 +78,7 @@ import {
   type OrderReturnView,
   type OrderStockCheck,
   type OrgEmailRoutingReadState,
+  type PartialPreview,
   type Role,
   type ShortLineActions,
 } from '@stockpilot/core';
@@ -690,6 +697,20 @@ export default async function OrderDetailPage({
       : null;
   const readinessLineById = new Map(readinessAssessment?.lines.map((l) => [l.lineId, l] as const));
   const readinessItemById = new Map(readinessAssessment?.items.map((it) => [it.itemId, it] as const));
+  // ── F2-3: put away from the order. From the readiness result above, no
+  // read of its own. The lines with units in this warehouse's Staging (core
+  // putAwayTargets: whatever the line's state, since the state is the worst
+  // bucket a line touches) link to the Staging list filtered to their items,
+  // from this order; "Put away N items" on the strip links to all of them.
+  // The gate is stock:transfer (the permission Place asserts) and items:read
+  // (the Staging page's own gate: it answers 404 without it); anyone else is
+  // told once, on the strip, which one is missing. The order's own id (the
+  // database's lower-case form) names it in the link.
+  const putAwayLinkOpts = {
+    orderId: request.id,
+    access: { canTransfer: can(ctx, 'stock:transfer'), canReadItems: can(ctx, 'items:read') },
+  };
+  const readinessPutAway = readinessStripPutAway(putAwayTargets(readinessAssessment), putAwayLinkOpts);
   // "Count this item" on a line where on record and the locations disagree:
   // the item page's rule (a manager who can start a count; an item a count
   // can include). The service context is the one every read above already
@@ -709,6 +730,7 @@ export default async function OrderDetailPage({
       line,
       item,
       canCountItem: viewerCanStartCount && f !== null && !f.deleted && !f.archived && !f.isBundle,
+      putAwayHref: readinessLinePutAwayHref(line, putAwayLinkOpts),
     };
   };
   const stockCheck: OrderStockCheck = readinessNow
@@ -716,6 +738,21 @@ export default async function OrderDetailPage({
     : { state: 'not_needed' };
   const stockGates = orderStockGates(request.status, stockCheck);
   const approveNotice = approveShortNotice(stockCheck);
+  // F2-3: what "Approve partial" (pending) or "Resume fulfillment"
+  // (backordered) would hold now, per item (core previewPartialFulfilment,
+  // the frozen RPCs' twin), from the SAME readiness result as the strip and
+  // the gates above: no read of its own. The panel's buttons open it in a
+  // dialog; the confirm calls the existing action, and what was held is read
+  // again after it. Approvers only (the numbers are stock numbers). A missing
+  // read is `unavailable` (read_failed), never zeros.
+  const partialAction =
+    request.status === 'pending_approval'
+      ? ('approve_partial' as const)
+      : request.status === 'backordered'
+        ? ('resume' as const)
+        : null;
+  const partialPreview: PartialPreview | null =
+    canApprove && partialAction ? previewPartialFulfilment(readinessNow, partialAction) : null;
 
   // ── F2-2: held, and caught before it leaves. Everything below is computed
   // from what the page already read (the order, its lines, the readiness
@@ -1180,8 +1217,12 @@ export default async function OrderDetailPage({
             )}
             {/* Readiness (F2-1), directly above the lines it describes; with
                 "Hold available stock" for an approver when a line is not
-                held (F2-2). */}
-            {readinessStrip && <ReadinessStrip view={readinessStrip} holdOrderId={holdOrderId} />}
+                held (F2-2), and "Put away N items" when items are in Staging
+                (F2-3; the permission sentence instead without Transfer
+                stock). */}
+            {readinessStrip && (
+              <ReadinessStrip view={readinessStrip} holdOrderId={holdOrderId} putAway={readinessPutAway} />
+            )}
             <Table>
               <TableHeader>
                 <TableRow>
@@ -1467,6 +1508,7 @@ export default async function OrderDetailPage({
               canApprove={canApprove}
               stockGates={stockGates}
               approveNotice={approveNotice}
+              partialPreview={partialPreview}
               completionConfirm={completionConfirm}
               departureLines={departureLines}
               orderId={id}

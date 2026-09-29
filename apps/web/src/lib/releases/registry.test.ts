@@ -13,6 +13,7 @@ import {
   MODULE_REGISTRY,
   ORDER_LINE_HIDDEN_ITEM_NAME,
   PERMISSIONS,
+  PUT_AWAY_NEEDS_TRANSFER_COPY,
   releaseRegistrySchema,
   type ModuleId,
   type Release,
@@ -1361,6 +1362,94 @@ describe('the report scope release is published', () => {
     // member-wide), so the text claims only value and warehouse names there.
     expect(text).toContain('Bundle activity shows component value and warehouse names for the warehouses you can see.');
     for (const e of r.entries) expect(e.whatToDo, e.id).toBe('No action needed.');
+  });
+});
+
+/**
+ * F2-3's release (fix what's holding an order up: put away from the order, and
+ * the approve-partial / resume preview) is held as a DRAFT until the web
+ * screens, the phone update (OTA) and the Demo Co production walk, as F2-1's
+ * and F2-2's were. Pinned by id, never by index. The follow-up that publishes
+ * it sets 'published' and the real publishedAt, re-reads its words against
+ * what shipped, and flips the first pin here.
+ */
+describe("F2-3 (fix what's holding an order up) is held as a draft", () => {
+  const ID = 'order-fix-holding-up-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+  const published = (): Release => ({ ...release(), status: 'published' });
+
+  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).not.toContain(ID);
+    expect(list.latestUnread?.id).not.toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).not.toContain(ID);
+    // Preparing it changes nothing a client can observe.
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(ID);
+  });
+
+  it('sits at the top (pinned by id), dated after every other release, so publishing it makes it the newest', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('is addressed by what each entry offers: put-away to the readiness panel, the preview to approvers', () => {
+    expect(release().audience).toEqual({ modules: ['orders'] });
+    expect(release().entries.map((e) => e.id)).toEqual(['order-put-away-from-the-order', 'order-partial-preview']);
+    const [putAway, preview] = release().entries;
+    expect(putAway!.audience).toEqual({
+      anyPermission: ['orders:approve', 'items:update', 'purchase_orders:manage'],
+      modules: ['orders'],
+    });
+    expect(preview!.audience).toEqual({ anyPermission: ['orders:approve'], modules: ['orders'] });
+    for (const e of release().entries) {
+      expect(e.area, e.id).toBe('Orders');
+      expect(e.link, e.id).toEqual({ href: '/dashboard/orders', label: 'View orders' });
+    }
+    const reader = (permissions: ReleaseViewer['permissions'], enabledModules: ModuleId[] = ['orders']) =>
+      visibleReleases([published()], { role: 'viewer', permissions, enabledModules })[0]?.entries.map(
+        (e) => e.id,
+      ) ?? [];
+    expect(reader(['orders:approve'])).toEqual(['order-put-away-from-the-order', 'order-partial-preview']);
+    expect(reader(['items:update'])).toEqual(['order-put-away-from-the-order']);
+    expect(reader(['purchase_orders:manage'])).toEqual(['order-put-away-from-the-order']);
+    // A requester sees one sentence of readiness and no actions: nothing here.
+    expect(reader(['orders:request'])).toEqual([]);
+    expect(reader(['orders:approve'], [])).toEqual([]);
+  });
+
+  it('names both platforms, the permission by its matrix name, and says the result is read, never copied', () => {
+    const r = release();
+    expect(r.summary).toMatch(/^On the web and in the mobile app, /);
+    const text = readerText(r).join(' ');
+    expect(text).toContain('needs the Transfer stock permission');
+    // The same permission name the order itself shows (core), so the two
+    // cannot drift apart if the owner renames it.
+    expect(text).toContain(PUT_AWAY_NEEDS_TRANSFER_COPY.match(/the .+ permission/)![0]);
+    expect(text).toContain('Showing items from SO-000123');
+    // Only the order's own warehouse is listed, and the list says so.
+    expect(text).toContain("the stock at the order's own warehouse");
+    expect(text).toContain('says when stock at other warehouses was left out');
+    // Lines changed in between are not blamed on stock.
+    expect(text).toContain("If the order's own lines changed in between, it says the order changed instead.");
+    expect(text).toContain('Approved. Holding 36 of 40 units.');
+    expect(text).toContain('2 fewer than shown because stock changed after you looked');
+    expect(text).toContain('never copied from the preview');
+    expect(text).toContain('shown once, with its lines combined');
+    expect(text).not.toMatch(/\bbooks?\b|%|guarantee|verified|will arrive/i);
   });
 });
 
