@@ -45,7 +45,6 @@ import {
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
-  approveOrderPartialAction,
   approveOrderRequestAction,
   claimPickingAction,
   closePartialAction,
@@ -57,7 +56,6 @@ import {
   markInTransitAction,
   releasePickingAction,
   reopenPickingAction,
-  resumeFulfillmentAction,
   setOrderInternalNotesAction,
   setOrderNeededByAction,
   stageOrderAction,
@@ -67,14 +65,18 @@ import {
   availableOrderActions,
   derivePickingStatus,
   describeDepartureRisk,
+  previewPartialFulfilment,
   type CompletionConfirmCopy,
   type DepartureAction,
   type DepartureLine,
   type DepartureRisk,
   type OrderStockGates,
+  type PartialAction,
+  type PartialPreview,
   type Role,
 } from '@stockpilot/core';
 
+import { ApprovePartialDialog } from '@/components/orders/approve-partial-dialog';
 import { focusOrderLine } from '@/components/orders/focus-order-line';
 import { formatNeededBy } from '@/lib/orders/needed-by-format';
 import type { OrderRequestStatus } from '@/server/services/order-requests';
@@ -118,6 +120,16 @@ interface Props {
    *  Approve will be refused. Use Approve partial or change the lines." */
   approveNotice?: string | null;
   /**
+   * What "Approve partial" (pending_approval) or "Resume fulfillment"
+   * (backordered) would hold now, per item (F2-3, core
+   * previewPartialFulfilment), built by the page from the same readiness read
+   * as the strip and the stock gates. Both buttons open the approve-partial
+   * dialog with it instead of committing on the first click. Null (or for the
+   * other action): the dialog says stock could not be checked and offers no
+   * confirm.
+   */
+  partialPreview?: PartialPreview | null;
+  /**
    * The confirm before "Mark picking complete" (F2-2, the SO-000100 button):
    * core describeCompletionConfirm over projectCompletePicking, built by the
    * page from the same readiness read as the strip. Null only when nothing
@@ -157,7 +169,6 @@ interface Props {
 
 type BusyKey =
   | 'approve'
-  | 'approve-partial'
   | 'deny'
   | 'generate-pick-slip'
   | 'claim-picking'
@@ -167,7 +178,6 @@ type BusyKey =
   | 'stage-pickup'
   | 'stage-delivery'
   | 'mark-in-transit'
-  | 'resume-fulfillment'
   | 'close-partial'
   | 'physical-signature'
   | 'reopen-picking'
@@ -206,6 +216,7 @@ export function ManagerActionsPanel({
   canApprove,
   stockGates = NO_STOCK_GATES,
   approveNotice = null,
+  partialPreview = null,
   completionConfirm,
   departureLines,
   viewerRole,
@@ -300,6 +311,30 @@ export function ManagerActionsPanel({
   // hands focus back to the button that opened it unless told otherwise.
   const focusLineAfterClose = React.useRef<string | null>(null);
 
+  // F2-3: the approve-partial / resume dialog. The preview is SNAPSHOT when
+  // the dialog opens: the commit revalidates the page, and the fresh render's
+  // preview (another status by then) must not change what the result is
+  // compared with. `session` remounts the dialog per opening, so a new one
+  // never starts on the last one's result.
+  const [partial, setPartial] = React.useState<{
+    preview: PartialPreview;
+    open: boolean;
+    session: number;
+  } | null>(null);
+
+  /**
+   * "Approve partial" and "Resume fulfillment" open the preview instead of
+   * committing: what each item would hold now and what ships when it
+   * arrives. Only the dialog's Confirm calls the action.
+   */
+  function openPartial(action: PartialAction) {
+    const preview =
+      partialPreview && partialPreview.action === action
+        ? partialPreview
+        : previewPartialFulfilment(null, action);
+    setPartial((p) => ({ preview, open: true, session: (p?.session ?? 0) + 1 }));
+  }
+
   function landOnLineAfterClose(e: Event) {
     const lineId = focusLineAfterClose.current;
     focusLineAfterClose.current = null;
@@ -332,18 +367,6 @@ export function ManagerActionsPanel({
       return;
     }
     toast.success('Request approved. Stock reserved.');
-    router.refresh();
-  }
-
-  async function approvePartial() {
-    setBusy('approve-partial');
-    const res = await approveOrderPartialAction({ id: orderId });
-    setBusy(null);
-    if (!res.ok) {
-      toast.error(res.error.message);
-      return;
-    }
-    toast.success('Approved — available stock reserved, the rest will backorder.');
     router.refresh();
   }
 
@@ -487,18 +510,6 @@ export function ManagerActionsPanel({
     router.refresh();
   }
 
-  async function resumeFulfillment() {
-    setBusy('resume-fulfillment');
-    const res = await resumeFulfillmentAction({ id: orderId });
-    setBusy(null);
-    if (!res.ok) {
-      toast.error(res.error.message);
-      return;
-    }
-    toast.success('Fulfillment resumed — a new pick slip is ready for the remaining items.');
-    router.refresh();
-  }
-
   // Same single-close-point pattern as closeDenyDialog above: Cancel,
   // Escape/backdrop, and a successful submit all route here so the reason
   // is cleared on every dismissal-without-submit and on success, but never
@@ -632,15 +643,12 @@ export function ManagerActionsPanel({
               {actions.includes('approve_partial') && (
                 <Button
                   variant="outline"
-                  onClick={approvePartial}
+                  onClick={() => openPartial('approve_partial')}
                   disabled={busy !== null || stockGates.approvePartial === 'disabled'}
                   aria-describedby={stockNotice ? 'order-stock-notice' : undefined}
+                  aria-haspopup="dialog"
                 >
-                  {busy === 'approve-partial' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <PackageCheck className="h-3.5 w-3.5" />
-                  )}
+                  <PackageCheck className="h-3.5 w-3.5" />
                   Approve partial
                 </Button>
               )}
@@ -920,15 +928,12 @@ export function ManagerActionsPanel({
               {stockGates.resume !== 'waiting' ? (
                 <Button
                   variant="gradient"
-                  onClick={resumeFulfillment}
+                  onClick={() => openPartial('resume')}
                   disabled={busy !== null || stockGates.resume === 'disabled'}
                   aria-describedby={stockNotice ? 'order-stock-notice' : undefined}
+                  aria-haspopup="dialog"
                 >
-                  {busy === 'resume-fulfillment' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <RotateCcw className="h-3.5 w-3.5" />
-                  )}
+                  <RotateCcw className="h-3.5 w-3.5" />
                   Resume fulfillment
                 </Button>
               ) : (
@@ -1024,6 +1029,22 @@ export function ManagerActionsPanel({
           </div>
         )}
       </div>
+
+      {/* Approve partial and Resume fulfillment (F2-3): what each item would
+          hold now before the commit, and what was held after it, read again.
+          Outside the status branches above: the commit revalidates the page
+          (the order moves on to approved or pick_slip_generated) while the
+          dialog is still showing the result. */}
+      {partial && (
+        <ApprovePartialDialog
+          key={partial.session}
+          orderId={orderId}
+          preview={partial.preview}
+          timeZone={orgTimeZone}
+          open={partial.open}
+          onOpenChange={(v) => setPartial((p) => (p ? { ...p, open: v } : p))}
+        />
+      )}
 
       {/* Before "Mark picking complete" (F2-2): what will come up short, what
           would stop the pick, what could not be checked, in core's words.

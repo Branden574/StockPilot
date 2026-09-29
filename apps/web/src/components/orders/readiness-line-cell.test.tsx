@@ -45,7 +45,13 @@ function renderLine(
   status: string,
   lines: FactsLine[],
   items: Record<string, unknown>[],
-  opts: { at?: number; canCountItem?: boolean; neededBy?: string | null; position?: number } = {},
+  opts: {
+    at?: number;
+    canCountItem?: boolean;
+    neededBy?: string | null;
+    position?: number;
+    putAwayHref?: string | null;
+  } = {},
 ) {
   const a = assessed(status, lines, items, opts.neededBy ?? null);
   const line = a.lines[opts.at ?? 0]!;
@@ -57,6 +63,7 @@ function renderLine(
       timeZone={TZ}
       canCountItem={opts.canCountItem ?? false}
       position={opts.position}
+      putAwayHref={opts.putAwayHref}
     />,
   );
   return screen.getByTestId('readiness-line');
@@ -258,5 +265,34 @@ describe('ReadinessLineCell', () => {
     expect(screen.getByTestId('readiness-line-unchecked')).toHaveTextContent(
       'Not checked. Check again to see this line.',
     );
+  });
+});
+
+describe('ReadinessLineCell — Put away (F2-3)', () => {
+  const HREF = `/dashboard/inventory/staging?order=${ORDER}&item=b`;
+
+  it('a line with units in Staging: "Put away", spoken with what it moves, to the filtered Staging list', () => {
+    const cell = renderLine(
+      'pending_approval',
+      [{ lineId: 'L1', itemId: 'b', requested: 25 }],
+      [visibleItemFacts('b', { name: 'Maus I', here: { rack: 10, staging: 30 } })],
+      { putAwayHref: HREF },
+    );
+    const link = within(cell).getByRole('link', { name: 'Put away 15 of Maus I from Staging' });
+    expect(link).toHaveAttribute('href', HREF);
+    // The visible words begin the spoken name (label in name).
+    expect(link).toHaveTextContent('Put away');
+    cleanup();
+  });
+
+  it('no link when the page passes none', () => {
+    const cell = renderLine(
+      'pending_approval',
+      [{ lineId: 'L1', itemId: 'b', requested: 25 }],
+      [visibleItemFacts('b', { here: { rack: 10, staging: 30 } })],
+    );
+    expect(within(cell).queryByTestId('readiness-put-away-line')).toBeNull();
+    expect(within(cell).queryByRole('link', { name: /Put away/ })).toBeNull();
+    cleanup();
   });
 });

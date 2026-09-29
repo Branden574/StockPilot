@@ -11,8 +11,13 @@ import {
 import {
   describeReadinessForRequester,
   describeReadinessRollup,
+  putAwayLineOffer,
+  putAwayStripOffer,
+  stagingPutAwayHref,
   type OrderReadinessResult,
+  type PutAwayTargets,
   type ReadinessAudience,
+  type ReadinessLineAssessment,
   type ReadinessTone,
 } from '@stockpilot/core';
 
@@ -132,4 +137,47 @@ export function readinessStripView(
     detail: rollup.detail,
     failed,
   };
+}
+
+/**
+ * The strip's put-away offer (F2-3), as plain data for the client strip: a
+ * link to the Staging list filtered to the order's items that need putting
+ * away ("Put away 3 items"), or, for a viewer without `stock:transfer` (the
+ * permission Place asserts), core's sentence saying so. Null when nothing
+ * needs putting away, or readiness was not checked (core putAwayTargets gives
+ * null outside the to_pick phase and past the line cap).
+ */
+export type ReadinessStripPutAway =
+  | { kind: 'link'; label: string; href: string }
+  | { kind: 'needs_permission'; message: string };
+
+export function readinessStripPutAway(
+  targets: PutAwayTargets | null,
+  opts: { orderId: string; canTransfer: boolean },
+): ReadinessStripPutAway | null {
+  const offer = putAwayStripOffer(targets, opts.canTransfer);
+  if (offer.kind === 'link') {
+    return {
+      kind: 'link',
+      label: offer.label,
+      href: stagingPutAwayHref({ orderId: opts.orderId, itemIds: offer.itemIds }),
+    };
+  }
+  if (offer.kind === 'needs_permission') return { kind: 'needs_permission', message: offer.message };
+  return null;
+}
+
+/**
+ * A readiness line's "Put away" link (F2-3): the Staging list filtered to the
+ * line's item, from this order. Null when the line has nothing in Staging, or
+ * when the viewer may not put stock away: the strip above says why once
+ * (readinessStripPutAway), rather than every line repeating it.
+ */
+export function readinessLinePutAwayHref(
+  line: ReadinessLineAssessment | null,
+  opts: { orderId: string; canTransfer: boolean },
+): string | null {
+  if (!line) return null;
+  const offer = putAwayLineOffer(line, opts.canTransfer);
+  return offer.kind === 'link' ? stagingPutAwayHref({ orderId: opts.orderId, itemIds: offer.itemIds }) : null;
 }

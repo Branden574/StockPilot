@@ -1,6 +1,7 @@
 'use client';
 
-import { CalendarClock, Loader2, Lock, RefreshCw } from 'lucide-react';
+import { ArrowUpFromLine, CalendarClock, Loader2, Lock, RefreshCw } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -11,7 +12,12 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { holdOrderStockAction } from '@/server/actions/order-requests';
 
-import { READINESS_TONE_STYLES, ReadinessIcon, type ReadinessStripView } from './readiness-view';
+import {
+  READINESS_TONE_STYLES,
+  ReadinessIcon,
+  type ReadinessStripPutAway,
+  type ReadinessStripView,
+} from './readiness-view';
 
 /**
  * The order's readiness, above the lines table (F2-1). The words come from the
@@ -27,13 +33,22 @@ import { READINESS_TONE_STYLES, ReadinessIcon, type ReadinessStripView } from '.
  * the service's sentence (no write access to the warehouse, the order moved
  * on, someone else is changing it). The page is read again either way, so the
  * lines show their holds as they now are.
+ *
+ * "Put away N items" (F2-3): when items on the order sit in Staging, where
+ * picking cannot take them, a link to the Staging list filtered to just those
+ * items, from this order (the page decides, readinessStripPutAway). A viewer
+ * without the permission Place asserts gets core's sentence instead. A plain
+ * link: nothing here writes, and the Staging page leaves its ?item / ?order
+ * params as they came.
  */
 export function ReadinessStrip({
   view,
   holdOrderId = null,
+  putAway = null,
 }: {
   view: ReadinessStripView;
   holdOrderId?: string | null;
+  putAway?: ReadinessStripPutAway | null;
 }) {
   const router = useRouter();
   const [pending, startTransition] = React.useTransition();
@@ -75,6 +90,14 @@ export function ReadinessStrip({
           </span>
         </p>
         <div className="flex flex-wrap items-center gap-1.5">
+          {putAway?.kind === 'link' && (
+            <Button asChild variant="outline" size="sm" className="h-7 px-2 text-xs">
+              <Link href={putAway.href} data-testid="readiness-put-away">
+                <ArrowUpFromLine className="size-3.5" aria-hidden />
+                {putAway.label}
+              </Link>
+            </Button>
+          )}
           {holdOrderId && (
             <Button
               type="button"
@@ -119,6 +142,11 @@ export function ReadinessStrip({
       {view.mode === 'full' && view.details.length > 0 && (
         <p className="text-muted-foreground mt-1 tabular-nums" data-testid="readiness-details">
           {view.details.join(' · ')}
+        </p>
+      )}
+      {putAway?.kind === 'needs_permission' && (
+        <p className="text-muted-foreground mt-1" data-testid="readiness-put-away-permission">
+          {putAway.message}
         </p>
       )}
       {view.mode === 'full' && view.neededBy && (

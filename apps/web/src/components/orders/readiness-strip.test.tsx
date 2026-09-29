@@ -10,9 +10,13 @@ import {
   visibleItemFacts,
 } from '@/test/order-readiness-facts';
 
+import { putAwayTargets, type OrderReadinessAssessment } from '@stockpilot/core';
+
 import { ReadinessStrip } from './readiness-strip';
 import {
   READINESS_TONE_STYLES,
+  readinessLinePutAwayHref,
+  readinessStripPutAway,
   readinessStripView,
   type ReadinessStripView,
 } from './readiness-view';
@@ -352,5 +356,101 @@ describe('ReadinessStrip — Hold available stock (F2-2)', () => {
 
     expect(toastMock.error).toHaveBeenCalledWith('Holding stock for this order needs write access to its warehouse.');
     expect(routerRefresh).not.toHaveBeenCalled();
+  });
+});
+
+// ── F2-3: put away from the order ───────────────────────────────────────────
+
+describe('readinessStripPutAway / readinessLinePutAwayHref: where put away goes, from core', () => {
+  /** B: 10 rack + 30 Staging (25 asked); C: short with 4 in Staging; A: ready. */
+  const assessment = (): Extract<OrderReadinessAssessment, { phase: 'to_pick' }> => {
+    const r = readinessOk(
+      orderReadinessFacts(
+        ORDER,
+        'pending_approval',
+        [
+          { lineId: 'LA', itemId: 'a', requested: 20 },
+          { lineId: 'LB', itemId: 'b', requested: 25 },
+          { lineId: 'LC', itemId: 'c', requested: 20 },
+        ],
+        [
+          visibleItemFacts('a', { here: { rack: 40 } }),
+          visibleItemFacts('b', { here: { rack: 10, staging: 30 } }),
+          visibleItemFacts('c', { here: { rack: 2, staging: 4 } }),
+        ],
+      ),
+    );
+    if (r.state !== 'ok' || r.assessment.phase !== 'to_pick') throw new Error('to_pick expected');
+    return r.assessment;
+  };
+  const opts = { orderId: ORDER, canTransfer: true };
+
+  it('the strip links to Staging for every item with units there, from this order', () => {
+    expect(readinessStripPutAway(putAwayTargets(assessment()), opts)).toEqual({
+      kind: 'link',
+      label: 'Put away 2 items',
+      href: `/dashboard/inventory/staging?order=${ORDER}&item=b&item=c`,
+    });
+  });
+
+  it("without Transfer stock: core's sentence, never a link", () => {
+    expect(readinessStripPutAway(putAwayTargets(assessment()), { ...opts, canTransfer: false })).toEqual({
+      kind: 'needs_permission',
+      message: 'Putting stock away needs the Transfer stock permission.',
+    });
+  });
+
+  it('nothing when nothing needs putting away, or readiness was not checked', () => {
+    expect(readinessStripPutAway(null, opts)).toBeNull();
+    expect(readinessStripPutAway({ itemIds: [], lineIds: [], units: 0 }, opts)).toBeNull();
+    expect(readinessStripPutAway({ itemIds: [], lineIds: [], units: 0 }, { ...opts, canTransfer: false })).toBeNull();
+  });
+
+  it("a line links to Staging for its own item; nothing for a line with none there, or for a viewer who can't move stock", () => {
+    const a = assessment();
+    const [la, lb, lc] = a.lines;
+    expect(readinessLinePutAwayHref(la!, opts)).toBeNull();
+    expect(readinessLinePutAwayHref(lb!, opts)).toBe(`/dashboard/inventory/staging?order=${ORDER}&item=b`);
+    expect(readinessLinePutAwayHref(lc!, opts)).toBe(`/dashboard/inventory/staging?order=${ORDER}&item=c`);
+    // The strip says why once; the lines repeat nothing.
+    expect(readinessLinePutAwayHref(lb!, { ...opts, canTransfer: false })).toBeNull();
+    expect(readinessLinePutAwayHref(null, opts)).toBeNull();
+  });
+});
+
+describe('ReadinessStrip — Put away (F2-3)', () => {
+  const view = (): ReadinessStripView =>
+    readinessStripView(
+      readinessOk(facts('pending_approval', [visibleItemFacts('a', { here: { rack: 10, staging: 30 } })])),
+      'full',
+      { timeZone: TZ },
+    )!;
+
+  it('"Put away N items" is a plain link to the filtered Staging list', () => {
+    const href = `/dashboard/inventory/staging?order=${ORDER}&item=a`;
+    render(<ReadinessStrip view={view()} putAway={{ kind: 'link', label: 'Put away 1 item', href }} />);
+    const link = screen.getByRole('link', { name: 'Put away 1 item' });
+    expect(link).toHaveAttribute('href', href);
+    expect(link.querySelector('svg')).not.toBeNull();
+    expect(screen.queryByTestId('readiness-put-away-permission')).toBeNull();
+  });
+
+  it('the permission sentence instead, for a viewer who may not move stock', () => {
+    render(
+      <ReadinessStrip
+        view={view()}
+        putAway={{ kind: 'needs_permission', message: 'Putting stock away needs the Transfer stock permission.' }}
+      />,
+    );
+    expect(screen.queryByRole('link', { name: /Put away/ })).toBeNull();
+    expect(screen.getByTestId('readiness-put-away-permission')).toHaveTextContent(
+      'Putting stock away needs the Transfer stock permission.',
+    );
+  });
+
+  it('nothing when the page passes nothing', () => {
+    render(<ReadinessStrip view={view()} />);
+    expect(screen.queryByTestId('readiness-put-away')).toBeNull();
+    expect(screen.queryByTestId('readiness-put-away-permission')).toBeNull();
   });
 });
