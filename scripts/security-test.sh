@@ -378,6 +378,25 @@ PGTAP_TESTS=(
   # category-scoped viewer get only their readable movements, items and
   # warehouse names; no org B row in an org A answer.
   supabase/tests/0380_report_rpcs_caller_scope.test.sql
+  # Change an order's needed-by (F2-4, 0382): revise_order_needed_by writes
+  # the order's needed-by and moves its Schedule event past RLS
+  # (schedule_events_update is creator-or-manager, and an approver with an
+  # orders:approve override is neither), so it is SECURITY DEFINER with its
+  # gates in its body: signed in (42501); not a member of the order's org, a
+  # disabled member, a missing or foreign order: the SAME P0002; the orders
+  # module (P0001 module_disabled); the approve gate, manager or
+  # orders:approve (42501; staff WITH the override succeed, a viewer or staff
+  # without it never write); write access to the order's warehouse (42501);
+  # a closed order (P0001 order_closed); a past or null date and a missing
+  # reason (22023); a stale edit (P0001 needed_by_changed with the current
+  # value). EXECUTE to authenticated only. It refuses only with 42501, P0001,
+  # P0002 or 22023 (never 40001/40P01), writes only the order's needed-by and
+  # its scheduled or in-progress event (start, end, description, both
+  # reminder stamps cleared), never creates an event, never notifies, and
+  # locks the order row FOR UPDATE; an equal value writes nothing. The race
+  # of two approvers (exactly one wins) is
+  # scripts/db-concurrency/0382_needed_by_race.sh.
+  supabase/tests/0382_revise_order_needed_by.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
