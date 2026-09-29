@@ -2,10 +2,16 @@ import { useNetworkState } from 'expo-network';
 import { type Href, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { ArrowLeft } from 'lucide-react-native';
 import * as React from 'react';
-import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
+  CONFIRM_COUNT_LABEL,
+  confirmationFactsRow,
+  confirmCountButtonHint,
+  confirmCountSuccessCopy,
+  COUNT_VARIANCE_CLEARS_TITLE,
+  countConfirmationFor,
   ESCALATE_TO_MAINTENANCE_HELP,
   ESCALATE_TO_MAINTENANCE_LABEL,
   EXCEPTION_ACTION_LABELS,
@@ -17,13 +23,13 @@ import {
   describeTimelineEvent,
   exceptionActDisabledReason,
   isRecountableRule,
-  occurrenceState,
   occurrenceStateLabel,
   recountDisabledReason,
   recurrenceBadge,
-  OCCURRENCE_RESOLVED_REASON_COPY,
   RECOUNT_COUNTS_TOTAL_COPY,
+  RECOUNT_NONE_LINKED_COPY,
   recountUnavailableCopy,
+  resolvedReasonCopy,
   type OccurrenceState,
 } from '@stockpilot/core';
 
@@ -39,6 +45,7 @@ import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { showWriteCta } from '@/lib/cta-gating';
 import { useEnabledModules } from '@/lib/enabled-modules';
+import { countVarianceView, displayedStateOf, type CountVarianceView } from '@/lib/exception-confirm-view';
 import { escalateFormRoute, escalationSectionView } from '@/lib/exception-escalation';
 import { evidenceTick, evidenceTimelineLines } from '@/lib/exception-evidence';
 import {
@@ -111,6 +118,23 @@ import { canOpenCountScreen } from '@/lib/verification-api';
  * neither acknowledges nor resolves. Coming back from the form or the
  * request re-reads this screen, so the badge and the draft state are current.
  *
+ * COUNT DIFFERENCES (owner decision 2026-09-29, after EX-000059 was
+ * acknowledged in the belief that it would close): a count_variance exception
+ * opens with WHAT CLEARS THIS directly under the header, above the facts
+ * (lib/exception-confirm-view.ts, all words core's): the always-true lead,
+ * what clears it for this reader, the linked recount, Recount, and why not.
+ * The separate RECOUNT section and the bottom WHAT CLEARS THIS are not
+ * shown for the rule, and Acknowledge is an outline button whose sheet says
+ * acknowledging does not clear it. Confirm this count ships here DORMANT: it
+ * appears only when the server sends a countConfirm block saying this reader
+ * may confirm, and opens the note sheet in its confirm mode. Online only and
+ * never queued: offline it stays, disabled, with the reason as its VoiceOver
+ * hint. After a confirm the screen re-reads, the physical count card
+ * re-reads (its open-exception chips drop this one), and it says and
+ * announces "Count confirmed. EX-... is closed." A row resolved by a
+ * confirmation reads with who confirmed it; a reason this build cannot word
+ * reads "Resolved", never "Cleared".
+ *
  * NO WORKSPACE (a launch offline, or a failed first read after signing in):
  * the read never starts, so the screen says so with Try again, which loads
  * the workspace again (retryWorkspace), as the location screen does.
@@ -152,6 +176,12 @@ export default function ExceptionDetailScreen() {
   // Bumped whenever this screen re-reads, so the card re-reads with it.
   const [verificationNonce, setVerificationNonce] = React.useState(0);
   const [retryingWorkspace, setRetryingWorkspace] = React.useState(false);
+  // "Count confirmed. EX-... is closed.", said on screen and announced once a
+  // confirm succeeded (the sheet closes first, so the announcement is heard).
+  const [notice, setNotice] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (notice) AccessibilityInfo.announceForAccessibility(notice);
+  }, [notice]);
   const seqRef = React.useRef(0);
 
   const load = React.useCallback(async () => {
@@ -246,6 +276,10 @@ export default function ExceptionDetailScreen() {
     state = mine ?? { kind: 'loading' };
   }
 
+  // A count difference's view (null for any other exception), from the live
+  // network state: what the sheet needs as well as the screen.
+  const view = state.kind === 'ready' ? countVarianceView(state.detail, { online: !offline }) : null;
+
   async function refresh() {
     setRefreshing(true);
     setVerificationNonce((n) => n + 1);
@@ -313,6 +347,7 @@ export default function ExceptionDetailScreen() {
         <Detail
           detail={state.detail}
           banner={state.banner}
+          notice={notice}
           readTick={state.readTick}
           offline={offline}
           refreshing={refreshing}
@@ -340,10 +375,16 @@ export default function ExceptionDetailScreen() {
           visible={sheet !== null}
           mode={sheet ?? 'note'}
           occurrence={state.detail.occurrence}
+          acknowledgeHelp={view?.acknowledgeHelp ?? null}
+          confirm={view?.confirm ?? null}
           online={!offline}
           onClose={() => setSheet(null)}
-          onDone={() => {
+          onDone={(_updated, done) => {
             setSheet(null);
+            if (done.mode === 'confirm_count') {
+              setVerificationNonce((n) => n + 1);
+              setNotice(confirmCountSuccessCopy(state.detail.occurrence.reference));
+            }
             // Re-read, so the chip and the timeline show what was just saved.
             void load();
           }}
@@ -388,6 +429,7 @@ function statePillTone(state: OccurrenceState): 'default' | 'ok' | 'warn' {
 function Detail({
   detail,
   banner,
+  notice,
   readTick,
   offline,
   refreshing,
@@ -404,6 +446,8 @@ function Detail({
 }: {
   detail: MobileExceptionDetail;
   banner: string | null;
+  /** The result of a confirm just made, said at the top. */
+  notice: string | null;
   readTick: number;
   offline: boolean;
   refreshing: boolean;
@@ -440,18 +484,17 @@ function Detail({
     conditionSince: o.conditionSince,
     asOf: o.resolvedAt ?? new Date(),
   });
-  const state = occurrenceState(
-    {
-      resolvedAt: o.resolvedAt,
-      resolvedReason: o.resolvedReason,
-      acknowledgedAt: o.acknowledgedAt,
-      acknowledgedBy: o.acknowledgedBy?.id ?? null,
-      recount: o.recount,
-    },
-    detail.syncState?.lastEvaluatedAt ?? null,
-  );
+  const state = displayedStateOf(detail);
   const recurred = recurrenceBadge(o.recurrenceIndex);
   const resolved = o.resolvedAt !== null;
+  // A count difference: WHAT CLEARS THIS at the top, with Recount (and, when
+  // the server offers it, Confirm) inside it.
+  const countVariance = o.rule === 'count_variance';
+  const cv = countVarianceView(detail, { online: !offline });
+  const resolvedCopy = resolvedReasonCopy(o.resolvedReason, o.confirmation?.as ?? null);
+  const confirmedRow = o.confirmation
+    ? confirmationFactsRow(o.confirmation, exceptionTimeLabel(o.confirmation.at, detail.timeZone))
+    : null;
   // Resolved or not permitted: the reason, and no buttons. Offline: the
   // buttons stay, DISABLED, with the reason.
   const disabledReason = exceptionActDisabledReason({ resolved, canAct: o.canAct, online: !offline });
@@ -459,7 +502,7 @@ function Detail({
   // Recount (F1-2): only where a count can settle the condition. Permission
   // first (a reader who may not start one is told so, online or not), then
   // the connection.
-  const showRecount = isRecountableRule(o.rule) && !resolved;
+  const showRecount = isRecountableRule(o.rule) && !countVariance && !resolved;
   const recountReason = o.canRecount ? recountDisabledReason({ canRecount: true, online: !offline }) : null;
   // Escalate to maintenance (F1-5): the badge, the draft state, the button or
   // why not. Fed the live network state: offline the button is disabled.
@@ -479,6 +522,13 @@ function Detail({
         <Card padding={12}>
           <Body size={13.5} accessibilityRole="alert">
             {banner}
+          </Body>
+        </Card>
+      ) : null}
+      {notice ? (
+        <Card padding={12}>
+          <Body size={14} color={c.ink}>
+            {notice}
           </Body>
         </Card>
       ) : null}
@@ -518,6 +568,17 @@ function Detail({
         </View>
       </View>
 
+      {cv ? (
+        <CountVarianceClears
+          view={cv}
+          occurrence={o}
+          recountReason={recountReason}
+          onConfirm={() => onOpenSheet('confirm_count')}
+          onRecount={onRecount}
+          onNavigate={onNavigate}
+        />
+      ) : null}
+
       <Card padding={14}>
         <Fact label="ITEM" value={o.item ? `${o.item.name}${o.item.sku ? ` (${o.item.sku})` : ''}` : 'Not visible to you'} />
         {o.location && o.locationId ? (
@@ -548,9 +609,10 @@ function Detail({
         {o.resolvedAt ? (
           <Fact
             label="RESOLVED"
-            value={`${exceptionTimeLabel(o.resolvedAt, detail.timeZone)}: ${OCCURRENCE_RESOLVED_REASON_COPY[o.resolvedReason ?? 'cleared']}`}
+            value={`${exceptionTimeLabel(o.resolvedAt, detail.timeZone)}${resolvedCopy ? `: ${resolvedCopy}` : ''}`}
           />
         ) : null}
+        {confirmedRow ? <Fact label={confirmedRow.label.toUpperCase()} value={confirmedRow.value} /> : null}
       </Card>
 
       <View style={{ gap: 8 }}>
@@ -565,7 +627,14 @@ function Detail({
         {showActButtons ? (
           <View style={{ gap: 8 }}>
             {o.acknowledgedAt === null ? (
-              <Button block disabled={disabledReason !== null} onPress={() => onOpenSheet('acknowledge')}>
+              // Outline on a count difference: acknowledging does not close
+              // it, and it must not read as the way to.
+              <Button
+                block
+                variant={countVariance ? 'outline' : 'primary'}
+                disabled={disabledReason !== null}
+                onPress={() => onOpenSheet('acknowledge')}
+              >
                 Acknowledge
               </Button>
             ) : null}
@@ -611,7 +680,7 @@ function Detail({
             </Pressable>
           ) : (
             <Body size={14} muted>
-              No recount is linked to this exception.
+              {RECOUNT_NONE_LINKED_COPY}
             </Body>
           )}
           {o.canRecount ? (
@@ -714,9 +783,11 @@ function Detail({
         ))}
       </Section>
 
-      <Section title="WHAT CLEARS THIS">
-        <Body size={14}>{meta.clearedBy}</Body>
-      </Section>
+      {countVariance ? null : (
+        <Section title="WHAT CLEARS THIS">
+          <Body size={14}>{meta.clearedBy}</Body>
+        </Section>
+      )}
 
       <Section title="TIMELINE">
         {detail.timeline.length === 0 ? (
@@ -746,6 +817,10 @@ function Detail({
                     cycleCountNumber: e.cycleCount?.countNumber ?? null,
                     resolvedReason: o.resolvedReason,
                     recountOutcome: e.cycleCount?.outcome ?? null,
+                    confirmation:
+                      e.kind === 'count_confirmed'
+                        ? countConfirmationFor(o.facts, o.confirmation?.as ?? null, e.cycleCount?.countNumber ?? null)
+                        : null,
                     maintenanceRequestReference: e.maintenanceRequestReference,
                   })}
                 </Body>
@@ -778,7 +853,7 @@ function Detail({
               </Body>
               <Mono size={11} color={c.ink4}>
                 {h.resolvedAt
-                  ? `First seen ${exceptionTimeLabel(h.firstSeenAt, detail.timeZone)}, resolved ${exceptionTimeLabel(h.resolvedAt, detail.timeZone)}: ${OCCURRENCE_RESOLVED_REASON_COPY[h.resolvedReason ?? 'cleared']}`
+                  ? `First seen ${exceptionTimeLabel(h.firstSeenAt, detail.timeZone)}, resolved ${exceptionTimeLabel(h.resolvedAt, detail.timeZone)}${historyReason(resolvedReasonCopy(h.resolvedReason, h.confirmedAs))}`
                   : `First seen ${exceptionTimeLabel(h.firstSeenAt, detail.timeZone)}, still open`}
               </Mono>
             </Pressable>
@@ -797,6 +872,106 @@ function Detail({
           : EXCEPTION_FIRST_CHECK_PENDING_COPY}
       </Body>
     </ScrollView>
+  );
+}
+
+/** ": Confirmed by the counter" after a history row's time, or nothing for a
+ *  reason this build cannot word (never "Cleared", never "undefined"). */
+function historyReason(copy: string | null): string {
+  return copy ? `: ${copy}` : '';
+}
+
+/**
+ * WHAT CLEARS THIS for an open count difference, directly under the header:
+ * core's lead and what clears it for this reader, who counted and posted it,
+ * the linked recount (tap to open the count), then Confirm this count (only
+ * when the server offers it; filled) and Recount (outline beside Confirm,
+ * filled otherwise), what a count covers or why this reader cannot recount,
+ * and why Confirm is withheld. Both buttons are 52 pt blocks; offline each
+ * stays on screen, disabled, with the reason read by VoiceOver as its hint.
+ */
+function CountVarianceClears({
+  view,
+  occurrence,
+  recountReason,
+  onConfirm,
+  onRecount,
+  onNavigate,
+}: {
+  view: CountVarianceView;
+  occurrence: MobileExceptionDetail['occurrence'];
+  /** Recount's offline reason (null online, or when not offered). */
+  recountReason: string | null;
+  onConfirm: () => void;
+  onRecount: () => void;
+  onNavigate: (href: string) => void;
+}) {
+  const { c } = useTheme();
+  return (
+    <View style={{ gap: 8 }}>
+      <Eyebrow accessibilityRole="header">{COUNT_VARIANCE_CLEARS_TITLE.toUpperCase()}</Eyebrow>
+      <Body size={15} color={c.ink}>
+        {view.clear.lead}
+      </Body>
+      <Body size={14.5}>{view.clear.options}</Body>
+      {view.clear.who ? (
+        <Body size={13.5} muted>
+          {view.clear.who}
+        </Body>
+      ) : null}
+      {occurrence.recount ? (
+        <Pressable
+          accessibilityRole="link"
+          onPress={() => onNavigate(`/cycle-count/${occurrence.recount!.cycleCountId}`)}
+          style={({ pressed }) => ({ minHeight: MIN_TAP, justifyContent: 'center', opacity: pressed ? 0.7 : 1 })}
+        >
+          <Body size={14.5} color={c.ink} style={{ textDecorationLine: 'underline' }}>
+            {activeRecountCopy(occurrence.recount)}
+          </Body>
+        </Pressable>
+      ) : occurrence.canRecount ? (
+        <Body size={14} muted>
+          {RECOUNT_NONE_LINKED_COPY}
+        </Body>
+      ) : null}
+      {view.clear.offerConfirm ? (
+        <Button
+          block
+          disabled={view.clear.confirmDisabledReason !== null}
+          accessibilityLabel={CONFIRM_COUNT_LABEL}
+          accessibilityHint={view.clear.confirmDisabledReason ?? confirmCountButtonHint({ facts: occurrence.facts, reference: occurrence.reference })}
+          onPress={onConfirm}
+        >
+          {CONFIRM_COUNT_LABEL}
+        </Button>
+      ) : null}
+      {occurrence.canRecount ? (
+        <Button
+          block
+          variant={view.clear.offerConfirm ? 'outline' : 'primary'}
+          disabled={recountReason !== null}
+          accessibilityHint={recountReason ?? undefined}
+          onPress={onRecount}
+        >
+          Recount
+        </Button>
+      ) : null}
+      {view.clear.recountLine ? (
+        <Body size={13.5} muted>
+          {view.clear.recountLine}
+        </Body>
+      ) : null}
+      {recountReason ? (
+        <Body size={13} muted>
+          {recountReason}
+        </Body>
+      ) : null}
+      {view.clear.reason ? (
+        <Body size={13} muted>
+          {view.clear.reason}
+        </Body>
+      ) : null}
+    </View>
   );
 }
 

@@ -628,6 +628,21 @@ export interface ConfirmCountDialogCopy {
   success: string;
 }
 
+/** The Confirm button's spoken hint (the phone; VoiceOver reads it after the
+ *  label): "Opens a sheet to confirm that 2 is right and close EX-000059". */
+export function confirmCountButtonHint(input: { facts: unknown; reference: string | null }): string {
+  const n = countVarianceNumbers(input.facts);
+  const what = n.counted === null ? 'the counted number' : formatStockQuantity(n.counted);
+  const ex = input.reference?.trim() || 'this exception';
+  return `Opens a sheet to confirm that ${what} is right and close ${ex}`;
+}
+
+/** Said once a confirm succeeded: "Count confirmed. EX-000059 is closed." */
+export function confirmCountSuccessCopy(reference: string | null): string {
+  const ex = reference?.trim() || null;
+  return ex ? `Count confirmed. ${ex} is closed.` : 'Count confirmed. This exception is closed.';
+}
+
 /** Longest note a confirmation takes, in characters, after trimming. */
 export const CONFIRM_COUNT_NOTE_MAX = 1000;
 
@@ -660,7 +675,7 @@ export function confirmCountDialogCopy(input: {
     cancelLabel: 'Cancel',
     confirmLabel: 'Confirm and close',
     pendingLabel: 'Confirming...',
-    success: ex ? `Count confirmed. ${ex} is closed.` : 'Count confirmed. This exception is closed.',
+    success: confirmCountSuccessCopy(ex),
   };
 }
 

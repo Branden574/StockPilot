@@ -396,6 +396,7 @@ export default function ExceptionsScreen() {
                   {
                     resolvedAt: item.occurrence.resolvedAt,
                     resolvedReason: item.occurrence.resolvedReason,
+                    confirmedAs: item.occurrence.confirmation?.as ?? null,
                     acknowledgedAt: item.occurrence.acknowledgedAt,
                     acknowledgedBy: item.occurrence.acknowledgedBy?.id ?? null,
                     recount: item.occurrence.recount,

@@ -4,6 +4,9 @@ import {
   EXCEPTION_ACT_NOT_PERMITTED_COPY,
   EXCEPTION_ACT_OFFLINE_COPY,
   EXCEPTION_ACT_RESOLVED_COPY,
+  EXCEPTION_CONFIRM_OFFLINE_COPY,
+  occurrenceState,
+  occurrenceStateLabel,
   recountResultSummary,
   recountUnavailableCopy,
 } from '@stockpilot/core';
@@ -34,6 +37,9 @@ import {
   parseRecountResult,
   recountKeyFor,
   startRecount,
+  confirmExceptionCount,
+  describeConfirmCountError,
+  parseExceptionDetail,
 } from './exceptions-api';
 
 // ./api reaches for expo-constants, AsyncStorage and the Supabase client at
@@ -218,6 +224,223 @@ describe('getException', () => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Count confirmations (R1: the phone ships its Confirm code now, dormant until
+// the server sends a countConfirm block; it gets no second release)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const COUNT_CONFIRM = {
+  state: 'confirmable',
+  canConfirm: true,
+  unavailableReason: null,
+  cycleCountId: 'cc-35',
+  countNumber: 35,
+  counted: 2,
+  onRecordBefore: 100,
+  onRecordNow: 2,
+  countedBy: { id: 'u-dana', label: 'Dana Lee' },
+  postedBy: { id: 'u-dana', label: 'Dana Lee' },
+  readerIsCounter: true,
+  otherCount: null,
+};
+
+function detailBody(o: Record<string, unknown> = {}) {
+  return {
+    organizationId: 'org-1',
+    occurrence: occurrence({ rule: 'count_variance', facts: { cycleCountId: 'cc-35', countNumber: 35, expected: 100, counted: 2, variance: -98 } }),
+    timeline: [],
+    history: [],
+    historyTruncated: false,
+    syncState: SYNC,
+    ...o,
+  };
+}
+
+describe('reasons and event kinds (a confirmed row, and whatever comes later)', () => {
+  it('reads confirmed on the row and in the history; a reason it does not know is null, worded "Resolved"', () => {
+    const d = parseExceptionDetail(
+      detailBody({
+        occurrence: occurrence({ resolvedAt: '2026-09-29T17:41:00Z', resolvedReason: 'a_newer_reason' }),
+        history: [
+          { id: ID, number: 42, reference: 'EX-000042', firstSeenAt: 'x', resolvedAt: 'y', resolvedReason: 'a_newer_reason', isCurrent: true },
+          { id: 'h2', number: 7, reference: 'EX-000007', firstSeenAt: 'x', resolvedAt: 'y', resolvedReason: 'confirmed', confirmedAs: 'manager', isCurrent: false },
+          { id: 'h3', number: 6, reference: 'EX-000006', firstSeenAt: 'x', resolvedAt: 'y', resolvedReason: 'confirmed', confirmation: { as: 'counter' }, isCurrent: false },
+          { id: 'h4', number: 5, reference: 'EX-000005', firstSeenAt: 'x', resolvedAt: 'y', resolvedReason: 'cleared', confirmedAs: 'boss', isCurrent: false },
+        ],
+      }),
+    );
+    expect(d.occurrence.resolvedReason).toBeNull();
+    const s = occurrenceState({ ...d.occurrence, acknowledgedBy: null }, null);
+    expect(occurrenceStateLabel(s)).toBe('Resolved');
+    expect(d.history.map((h) => [h.resolvedReason, h.confirmedAs])).toEqual([
+      [null, null],
+      ['confirmed', 'manager'],
+      ['confirmed', 'counter'],
+      ['cleared', null],
+    ]);
+  });
+
+  it('keeps count_confirmed events and still drops a kind it does not know', () => {
+    const d = parseExceptionDetail(
+      detailBody({
+        timeline: [
+          { id: 'e1', kind: 'raised', at: 'x', actor: null },
+          { id: 'e2', kind: 'count_confirmed', at: 'y', actor: { id: 'u-dana', label: 'Dana Lee' }, note: 'counted twice', cycleCount: { id: 'cc-35', countNumber: 35 } },
+          { id: 'e3', kind: 'a_newer_kind', at: 'z', actor: null },
+        ],
+      }),
+    );
+    expect(d.timeline.map((e) => e.kind)).toEqual(['raised', 'count_confirmed']);
+    expect(d.timeline[1]).toMatchObject({ actor: { label: 'Dana Lee' }, note: 'counted twice', cycleCount: { countNumber: 35 } });
+  });
+
+  it('reads a confirmation on the row, with who confirmed it; anything malformed is no confirmation', () => {
+    const confirmation = {
+      at: '2026-09-29T17:41:00Z',
+      by: { id: 'u-dana', label: 'Dana Lee' },
+      cycleCountId: 'cc-35',
+      countNumber: 35,
+      quantity: 2,
+      as: 'counter',
+    };
+    const d = parseExceptionDetail(
+      detailBody({ occurrence: occurrence({ resolvedAt: confirmation.at, resolvedReason: 'confirmed', confirmation }) }),
+    );
+    expect(d.occurrence.confirmation).toEqual(confirmation);
+    const s = occurrenceState({ ...d.occurrence, confirmedAs: d.occurrence.confirmation?.as ?? null, acknowledgedBy: null }, null);
+    expect(occurrenceStateLabel(s)).toBe('Resolved: Confirmed by the counter');
+    // An unknown role is kept as unknown, never guessed.
+    expect(
+      parseExceptionDetail(detailBody({ occurrence: occurrence({ confirmation: { ...confirmation, as: 'boss', by: 'x' } }) }))
+        .occurrence.confirmation,
+    ).toMatchObject({ as: null, by: null });
+    for (const bad of [null, undefined, 'x', { at: 5 }]) {
+      expect(parseExceptionDetail(detailBody({ occurrence: occurrence({ confirmation: bad }) })).occurrence.confirmation).toBeNull();
+    }
+  });
+});
+
+describe('countConfirm on the detail (feature on only when the server sends it)', () => {
+  it('no block, or null, is feature off', () => {
+    expect(parseExceptionDetail(detailBody()).countConfirm).toBeNull();
+    expect(parseExceptionDetail(detailBody({ countConfirm: null })).countConfirm).toBeNull();
+  });
+
+  it('reads the block the server sends', () => {
+    expect(parseExceptionDetail(detailBody({ countConfirm: COUNT_CONFIRM })).countConfirm).toEqual(COUNT_CONFIRM);
+    const other = { ...COUNT_CONFIRM, state: 'count_in_progress', canConfirm: false, unavailableReason: 'count_in_progress', otherCount: { countNumber: 41, counted: 3 } };
+    expect(parseExceptionDetail(detailBody({ countConfirm: other })).countConfirm).toEqual(other);
+  });
+
+  // Mutation caught: a malformed block read as confirmable.
+  it('a malformed block is feature off: no Confirm and the recount-only words', () => {
+    for (const bad of [
+      'x',
+      [],
+      { ...COUNT_CONFIRM, cycleCountId: 42 },
+      { ...COUNT_CONFIRM, counted: 'two' },
+      { ...COUNT_CONFIRM, counted: Number.NaN },
+      { ...COUNT_CONFIRM, cycleCountId: undefined },
+    ]) {
+      expect(parseExceptionDetail(detailBody({ countConfirm: bad })).countConfirm).toBeNull();
+    }
+  });
+
+  it('Confirm is offered only on an explicit true for a confirmable state', () => {
+    const parsed = (o: Record<string, unknown>) =>
+      parseExceptionDetail(detailBody({ countConfirm: { ...COUNT_CONFIRM, ...o } })).countConfirm!;
+    expect(parsed({ canConfirm: 'true' }).canConfirm).toBe(false);
+    expect(parsed({ state: 'stock_moved' }).canConfirm).toBe(false);
+    // A state a later server adds: unavailable, never confirmable.
+    expect(parsed({ state: 'a_newer_state' })).toMatchObject({ state: 'unavailable', canConfirm: false });
+    // A reason it does not know is dropped (the words then use the state).
+    expect(parsed({ canConfirm: false, unavailableReason: 'a_newer_reason' }).unavailableReason).toBeNull();
+    // People and numbers it cannot read are left out.
+    expect(parsed({ countedBy: 'x', onRecordNow: 'y', otherCount: { counted: 'z' } })).toMatchObject({
+      countedBy: null,
+      onRecordNow: null,
+      otherCount: null,
+    });
+  });
+});
+
+describe('confirmExceptionCount', () => {
+  it('posts the count and the number the person was shown, and the note, to /confirm-count', async () => {
+    apiMock.api.mockResolvedValueOnce({ occurrence: occurrence({ resolvedAt: 'x', resolvedReason: 'confirmed' }), replay: false });
+    const res = await confirmExceptionCount(ID, { cycleCountId: 'cc-35', countedQuantity: 2, note: 'counted twice' });
+    expect(apiMock.api).toHaveBeenCalledWith(`/api/v1/exceptions/${ID}/confirm-count`, {
+      method: 'POST',
+      body: { cycleCountId: 'cc-35', countedQuantity: 2, note: 'counted twice' },
+    });
+    expect(res.occurrence.resolvedReason).toBe('confirmed');
+    expect(res.replay).toBe(false);
+  });
+
+  // A lost answer: the resend is the same payload, and the server answers it
+  // as a replay (its replay is judged from what it stored; no client id).
+  it('a resend sends exactly the same request, and a replay is a success', async () => {
+    apiMock.api.mockResolvedValue({ occurrence: occurrence({ resolvedAt: 'x', resolvedReason: 'confirmed' }), replay: true });
+    const input = { cycleCountId: 'cc-35', countedQuantity: 2, note: null };
+    await confirmExceptionCount(ID, input);
+    await confirmExceptionCount(ID, input);
+    expect(apiMock.api.mock.calls[0]).toEqual(apiMock.api.mock.calls[1]);
+    expect(JSON.stringify(apiMock.api.mock.calls[0])).not.toContain('clientEventId');
+    await expect(confirmExceptionCount(ID, input)).resolves.toMatchObject({ replay: true });
+  });
+
+  it('refuses a malformed id without asking, and an answer it cannot read is a failure', async () => {
+    await expect(confirmExceptionCount('nope', { cycleCountId: 'cc', countedQuantity: 1, note: null })).rejects.toBeInstanceOf(
+      ExceptionsResponseError,
+    );
+    expect(apiMock.api).not.toHaveBeenCalled();
+    apiMock.api.mockResolvedValueOnce({ nope: true });
+    await expect(confirmExceptionCount(ID, { cycleCountId: 'cc', countedQuantity: 1, note: null })).rejects.toBeInstanceOf(
+      ExceptionsResponseError,
+    );
+  });
+});
+
+describe('describeConfirmCountError', () => {
+  const ctx = { recount: 'can' as const, recountNumber: 40, counterLabel: 'Dana Lee' };
+
+  it('words each refusal by its reason, in the phone\'s words', () => {
+    expect(describeConfirmCountError(apiError(409, 'x', { reason: 'occurrence_resolved' }), ctx)).toBe(
+      'This exception has already been resolved. Pull down to refresh.',
+    );
+    expect(describeConfirmCountError(apiError(409, 'x', { reason: 'stock_moved' }), ctx)).toBe(
+      'The stock on record changed after this count, so it can no longer be confirmed. Count it once more with Recount.',
+    );
+    expect(describeConfirmCountError(apiError(409, 'x', { reason: 'recount_in_progress' }), ctx)).toBe(
+      'Confirm this count is not offered while recount CC-000040 is in progress. Its result will settle this, or a manager can cancel it.',
+    );
+    expect(describeConfirmCountError(apiError(409, 'x', { reason: 'busy' }), ctx)).toBe(
+      'A check is running. Try again in a moment.',
+    );
+    expect(describeConfirmCountError(apiError(403, 'x', { reason: 'not_counter' }), ctx)).toBe(
+      'Only Dana Lee, who counted it, or a manager can confirm this count.',
+    );
+  });
+
+  it('a reason it does not know reads the generic line; other failures read as every other action\'s', () => {
+    expect(describeConfirmCountError(apiError(409, 'x', { reason: 'a_newer_reason' }), ctx)).toBe(
+      'This count could not be confirmed. Pull down to refresh and try again.',
+    );
+    expect(describeConfirmCountError(apiError(409, 'x'), ctx)).toBe(
+      'This count could not be confirmed. Pull down to refresh and try again.',
+    );
+    expect(describeConfirmCountError(apiError(403, 'x', { reason: 'not_permitted' }), ctx)).toBe(
+      'You do not have permission to act on this exception.',
+    );
+    expect(describeConfirmCountError(apiError(404, 'x'), ctx)).toBe('This exception is no longer available to you.');
+    expect(describeConfirmCountError(apiError(429, 'x'), ctx)).toBe('Too many requests. Wait a moment and try again.');
+    expect(describeConfirmCountError(apiError(503, '<html>'), ctx)).toBe('The server had a problem. Try again in a moment.');
+    expect(describeConfirmCountError(apiError(400, 'x', { reason: 'note_too_long' }), ctx)).toBe(
+      'Notes can be at most 1,000 characters.',
+    );
+    expect(describeConfirmCountError(new Error('fetch failed: UnexpectedException'), ctx)).toBe(CONNECTION_FAILURE_COPY);
+  });
+});
+
 describe('actOnException', () => {
   it('posts the action, the note and the client event id', async () => {
     apiMock.api.mockResolvedValueOnce({ occurrence: occurrence({ acknowledgedAt: '2026-09-24T19:00:00Z' }) });
@@ -301,6 +524,33 @@ describe('exceptionSheetSubmit (the Acknowledge and Note sheets)', () => {
     expect(exceptionSheetSubmit({ ...base, note: 'x'.repeat(1001) }).enabled).toBe(false);
     expect(exceptionSheetSubmit({ ...base, note: 'x'.repeat(1000) }).enabled).toBe(true);
     expect(exceptionSheetSubmit({ ...base, submitting: true }).enabled).toBe(false);
+  });
+
+  describe('confirm_count', () => {
+    const confirm = { ...base, mode: 'confirm_count' as const, canConfirm: true, confirmUnavailable: null };
+
+    it('needs no note; the server\'s canConfirm, not canAct, decides', () => {
+      expect(exceptionSheetSubmit(confirm)).toEqual({ enabled: true, reason: null });
+      expect(exceptionSheetSubmit({ ...confirm, canAct: false })).toEqual({ enabled: true, reason: null });
+      expect(exceptionSheetSubmit({ ...confirm, canConfirm: false, confirmUnavailable: 'Why not.' })).toEqual({
+        enabled: false,
+        reason: 'Why not.',
+      });
+    });
+
+    // Mutation caught: the confirm sheet ignoring the live network state.
+    it('online only: offline it is disabled with its own reason, never queued', () => {
+      expect(exceptionSheetSubmit({ ...confirm, online: false })).toEqual({
+        enabled: false,
+        reason: EXCEPTION_CONFIRM_OFFLINE_COPY,
+      });
+    });
+
+    it('a resolved row, a note over 1,000 characters and a double submit are refused', () => {
+      expect(exceptionSheetSubmit({ ...confirm, resolved: true })).toEqual({ enabled: false, reason: EXCEPTION_ACT_RESOLVED_COPY });
+      expect(exceptionSheetSubmit({ ...confirm, note: 'x'.repeat(1001) }).enabled).toBe(false);
+      expect(exceptionSheetSubmit({ ...confirm, submitting: true }).enabled).toBe(false);
+    });
   });
 });
 

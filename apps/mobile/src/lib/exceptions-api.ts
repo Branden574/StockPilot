@@ -1,20 +1,32 @@
 import {
+  describeConfirmError,
+  EXCEPTION_ACT_RESOLVED_COPY,
+  EXCEPTION_CONFIRM_OFFLINE_COPY,
   EXCEPTION_RULES,
   exceptionActDisabledReason,
   formatOrgDateTime,
+  isCountConfirmedAs,
+  isCountConfirmReason,
+  isCountConfirmState,
   isExceptionRule,
+  isOccurrenceEventKind,
+  isOccurrenceResolvedReason,
   isRecountSkipReason,
   isRecountUnavailableReason,
   parseRecountOutcome,
   recountOutcome,
   recountOutcomeCopy,
   VARIANCE_DESTINATION_PENDING_COPY,
+  type CountConfirmBlock,
+  type CountConfirmedAs,
   type ExceptionActionKind,
   type ExceptionCheckNotScheduledReason,
   type ExceptionRule,
+  type OccurrenceConfirmation,
   type OccurrenceEventKind,
   type OccurrenceRecountRef,
   type OccurrenceResolvedReason,
+  type RecountAbility,
   type RecountOutcome,
   type RecountResultInput,
   type EscalateUnavailableReason,
@@ -86,7 +98,12 @@ export interface MobileExceptionOccurrence {
   /** The active recount (F1-2) and what it has come to so far. */
   recount: MobileRecountRef | null;
   resolvedAt: string | null;
+  /** Null when not resolved, or for a reason this build cannot word: core
+   *  then says only "Resolved", never "Cleared". */
   resolvedReason: OccurrenceResolvedReason | null;
+  /** How a count confirmation resolved it (who, when, which count, whether
+   *  they counted it); null otherwise, and from a server that sends none. */
+  confirmation: OccurrenceConfirmation | null;
   previousOccurrenceId: string | null;
   recurrenceIndex: number;
   /** The server's hint that this reader may acknowledge or add a note. The
@@ -182,6 +199,8 @@ export interface MobileExceptionHistoryEntry {
   firstSeenAt: string;
   resolvedAt: string | null;
   resolvedReason: OccurrenceResolvedReason | null;
+  /** For one resolved by a count confirmation: the counter or a manager. */
+  confirmedAs: CountConfirmedAs | null;
   recurrenceIndex: number;
   isCurrent: boolean;
 }
@@ -198,6 +217,12 @@ export interface MobileExceptionDetail {
   /** Photo evidence (F1-4): the live photos with 1-hour signed links, or
    *  `unavailable` (never an empty list for a failed read). */
   evidence: MobileEvidenceBlock;
+  /** Confirm this count (core CountConfirmBlock), sent for an open count
+   *  difference while the server offers confirming. Null means the feature
+   *  is off: no Confirm, and the recount-only words. The phone ships its
+   *  Confirm screens before the server offers it, so this is what wakes
+   *  them; a block it cannot read is treated as off. */
+  countConfirm: CountConfirmBlock | null;
 }
 
 export interface ExceptionCheckResult {
@@ -268,6 +293,69 @@ function person(v: unknown): ExceptionPerson | null {
   return { id: strOrNull(v.id), label: v.label };
 }
 
+function finiteOrNull(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/** A stored reason this build can word, else null (never guessed). */
+function reasonOf(v: unknown): OccurrenceResolvedReason | null {
+  return isOccurrenceResolvedReason(v) ? v : null;
+}
+
+function confirmedAsOf(v: unknown): CountConfirmedAs | null {
+  return isCountConfirmedAs(v) ? v : null;
+}
+
+/** An occurrence's confirmation, or null when absent or unreadable. A role or
+ *  a person it cannot read is left unknown, never guessed. */
+export function parseConfirmation(v: unknown): OccurrenceConfirmation | null {
+  if (!isObj(v) || typeof v.at !== 'string') return null;
+  return {
+    at: v.at,
+    by: person(v.by),
+    cycleCountId: strOrNull(v.cycleCountId),
+    countNumber: finiteOrNull(v.countNumber),
+    quantity: finiteOrNull(v.quantity),
+    as: confirmedAsOf(v.as),
+  };
+}
+
+function countPerson(v: unknown): { id: string | null; label: string | null } | null {
+  if (!isObj(v) || (typeof v.label !== 'string' && v.label !== null)) return null;
+  return { id: strOrNull(v.id), label: strOrNull(v.label) };
+}
+
+/**
+ * The detail's countConfirm block, or null: the feature is off. What the
+ * Confirm request sends back (the count and the counted number) must be
+ * readable, or the whole block is treated as off: the phone never offers a
+ * Confirm it cannot send. Confirm is offered only on an explicit true for a
+ * confirmable state; a state a later server adds reads as unavailable.
+ */
+export function parseCountConfirm(v: unknown): CountConfirmBlock | null {
+  if (!isObj(v) || typeof v.cycleCountId !== 'string' || v.cycleCountId === '') return null;
+  const counted = finiteOrNull(v.counted);
+  if (counted === null) return null;
+  const state = isCountConfirmState(v.state) ? v.state : 'unavailable';
+  const other = isObj(v.otherCount) ? v.otherCount : null;
+  const otherCounted = other ? finiteOrNull(other.counted) : null;
+  return {
+    state,
+    canConfirm: v.canConfirm === true && state === 'confirmable',
+    unavailableReason: isCountConfirmReason(v.unavailableReason) ? v.unavailableReason : null,
+    cycleCountId: v.cycleCountId,
+    countNumber: finiteOrNull(v.countNumber),
+    counted,
+    onRecordBefore: finiteOrNull(v.onRecordBefore),
+    onRecordNow: finiteOrNull(v.onRecordNow),
+    countedBy: countPerson(v.countedBy),
+    postedBy: countPerson(v.postedBy),
+    readerIsCounter: v.readerIsCounter === true,
+    otherCount:
+      other && otherCounted !== null ? { countNumber: finiteOrNull(other.countNumber), counted: otherCounted } : null,
+  };
+}
+
 /** One occurrence, or null when its rule is one this build does not know (a
  *  newer server's rule): such a row cannot be worded safely, so it is left
  *  out rather than rendered with the wrong words. */
@@ -319,8 +407,10 @@ function parseOccurrence(v: unknown): MobileExceptionOccurrence | null {
     acknowledgedBy: person(v.acknowledgedBy),
     recount: rc,
     resolvedAt: strOrNull(v.resolvedAt),
-    resolvedReason:
-      reason === 'cleared' || reason === 'reclassified' || reason === 'subject_gone' ? reason : null,
+    // A reason this build cannot word is null (core says "Resolved"), never
+    // guessed as "cleared", which would claim a later count matched.
+    resolvedReason: reasonOf(reason),
+    confirmation: parseConfirmation(v.confirmation),
     previousOccurrenceId: strOrNull(v.previousOccurrenceId),
     recurrenceIndex: typeof v.recurrenceIndex === 'number' ? v.recurrenceIndex : 0,
     // Anything but an explicit true is "no": the phone never offers an action
@@ -368,18 +458,6 @@ export function parseExceptionList(res: unknown): MobileExceptionList {
   };
 }
 
-const EVENT_KINDS: ReadonlySet<string> = new Set<OccurrenceEventKind>([
-  'raised',
-  'acknowledged',
-  'note',
-  'recount_linked',
-  'recount_closed',
-  'resolved',
-  'evidence_added',
-  'evidence_removed',
-  'escalated',
-]);
-
 export function parseExceptionDetail(res: unknown): MobileExceptionDetail {
   if (!isObj(res) || typeof res.organizationId !== 'string' || !Array.isArray(res.timeline)) {
     throw new ExceptionsResponseError();
@@ -392,10 +470,12 @@ export function parseExceptionDetail(res: unknown): MobileExceptionDetail {
     if (!isObj(e) || typeof e.id !== 'string' || typeof e.at !== 'string') {
       throw new ExceptionsResponseError();
     }
-    if (typeof e.kind !== 'string' || !EVENT_KINDS.has(e.kind)) continue;
+    // A kind this build cannot word (a newer server's) is left out. The list
+    // is core's, so it grows with the words (count_confirmed included).
+    if (!isOccurrenceEventKind(e.kind)) continue;
     timeline.push({
       id: e.id,
-      kind: e.kind as OccurrenceEventKind,
+      kind: e.kind,
       at: e.at,
       actor: person(e.actor),
       note: strOrNull(e.note),
@@ -425,12 +505,10 @@ export function parseExceptionDetail(res: unknown): MobileExceptionDetail {
                 reference: strOrNull(h.reference),
                 firstSeenAt: strOrNull(h.firstSeenAt) ?? '',
                 resolvedAt: strOrNull(h.resolvedAt),
-                resolvedReason:
-                  h.resolvedReason === 'cleared' ||
-                  h.resolvedReason === 'reclassified' ||
-                  h.resolvedReason === 'subject_gone'
-                    ? h.resolvedReason
-                    : null,
+                resolvedReason: reasonOf(h.resolvedReason),
+                // The role, as `confirmedAs` or inside a `confirmation`.
+                confirmedAs:
+                  confirmedAsOf(h.confirmedAs) ?? (isObj(h.confirmation) ? confirmedAsOf(h.confirmation.as) : null),
                 recurrenceIndex: typeof h.recurrenceIndex === 'number' ? h.recurrenceIndex : 0,
                 isCurrent: h.isCurrent === true,
               },
@@ -447,6 +525,10 @@ export function parseExceptionDetail(res: unknown): MobileExceptionDetail {
     syncState: parseSyncState(res.syncState),
     timeZone: strOrNull(res.timeZone),
     evidence: parseEvidenceBlock(res.evidence),
+    // Only an open count difference can be confirmed; anything else (or a
+    // block this build cannot read) is feature off.
+    countConfirm:
+      occurrence.rule === 'count_variance' && occurrence.resolvedAt === null ? parseCountConfirm(res.countConfirm) : null,
   };
 }
 
@@ -495,6 +577,32 @@ export async function actOnException(
   const occurrence = isObj(res) ? parseOccurrence(res.occurrence) : null;
   if (!occurrence) throw new ExceptionsResponseError();
   return occurrence;
+}
+
+/**
+ * Confirm a count difference's counted number (the counter or a manager),
+ * which closes it without a second count. ONLINE ONLY and never queued: the
+ * server must check, at that moment, that the count is still the item's
+ * latest and the row still open. The request carries the count and the
+ * number the person was shown, so a screen left open never confirms a newer
+ * count's numbers (the server answers count_changed).
+ *
+ * No client id: the server judges a replay from what it stored (the same
+ * person, count, number and note). A resend after a lost answer is exactly
+ * this request again, and comes back 200 with `replay: true`.
+ */
+export async function confirmExceptionCount(
+  id: string,
+  input: { cycleCountId: string; countedQuantity: number; note: string | null },
+): Promise<{ occurrence: MobileExceptionOccurrence; replay: boolean }> {
+  if (!UUID.test(id)) throw new ExceptionsResponseError();
+  const res = await api<unknown>(`/api/v1/exceptions/${id}/confirm-count`, {
+    method: 'POST',
+    body: { cycleCountId: input.cycleCountId, countedQuantity: input.countedQuantity, note: input.note },
+  });
+  const occurrence = isObj(res) ? parseOccurrence(res.occurrence) : null;
+  if (!occurrence || !isObj(res)) throw new ExceptionsResponseError();
+  return { occurrence, replay: res.replay === true };
 }
 
 /** A manager's "Check now". Returns at once; the check runs on the server
@@ -564,6 +672,33 @@ export function describeActError(e: unknown): string {
   if (status === 400 && reason === 'note_too_long') return 'Notes can be at most 1,000 characters.';
   if (status !== null && status >= 500) return 'The server had a problem. Try again in a moment.';
   return message ?? 'Could not save. Check your connection and try again.';
+}
+
+/**
+ * The sentence for a refused or failed confirm. A 409, or a 403 naming
+ * not_counter, is worded by core describeConfirmError from `details.reason`
+ * (a reason this build does not know reads its generic line, so a reason a
+ * later server adds still reads sensibly); every other failure reads as the
+ * act route's do (describeActError: permission, gone, rate limit, the server,
+ * the note, no answer).
+ */
+export function describeConfirmCountError(
+  e: unknown,
+  ctx: { recount: RecountAbility; recountNumber?: number | null; counterLabel?: string | null },
+): string {
+  const status = isObj(e) && typeof e.status === 'number' ? e.status : null;
+  const details = isObj(e) ? e.details : undefined;
+  const reason = isObj(details) && typeof details.reason === 'string' ? details.reason : null;
+  if (status === 409 || (status === 403 && reason === 'not_counter')) {
+    return describeConfirmError(reason, { surface: 'phone', ...ctx });
+  }
+  if (status === null) {
+    // No answer at all: the phone's one sentence for it, unless it is one of
+    // the app's own (the timeout, an answer it could not read).
+    if (e instanceof ExceptionsResponseError) return e.message;
+    return e instanceof Error && e.message === REQUEST_TIMED_OUT_COPY ? e.message : CONNECTION_FAILURE_COPY;
+  }
+  return describeActError(e);
 }
 
 /**
@@ -726,7 +861,7 @@ export function isOfflineState(state: { isConnected?: boolean | null; isInternet
 /** Longest note the server accepts, in characters, after trimming. */
 export const EXCEPTION_NOTE_MAX = 1000;
 
-export type ExceptionSheetMode = 'acknowledge' | 'note';
+export type ExceptionSheetMode = 'acknowledge' | 'note' | 'confirm_count';
 
 /**
  * Whether a sheet's submit button is enabled, and the reason shown when it is
@@ -734,6 +869,10 @@ export type ExceptionSheetMode = 'acknowledge' | 'note';
  * permitted, offline) so the sheet and the detail screen's buttons say the
  * same thing; the sheet adds only its own field rules. `online` is the LIVE
  * network state: turning on airplane mode with a sheet open disables it.
+ *
+ * confirm_count: the server's canConfirm decides (its gate includes the act
+ * gate, against the item's live warehouse), with `confirmUnavailable` as the
+ * reason when it is false; offline it says a confirm needs a connection.
  */
 export function exceptionSheetSubmit(input: {
   mode: ExceptionSheetMode;
@@ -742,13 +881,25 @@ export function exceptionSheetSubmit(input: {
   online: boolean;
   canAct: boolean;
   resolved: boolean;
+  /** confirm_count only: the server's canConfirm. */
+  canConfirm?: boolean;
+  /** confirm_count only: why Confirm is withheld, when canConfirm is false. */
+  confirmUnavailable?: string | null;
 }): { enabled: boolean; reason: string | null } {
-  const reason = exceptionActDisabledReason({
-    resolved: input.resolved,
-    canAct: input.canAct,
-    online: input.online,
-  });
-  if (reason) return { enabled: false, reason };
+  if (input.mode === 'confirm_count') {
+    if (input.resolved) return { enabled: false, reason: EXCEPTION_ACT_RESOLVED_COPY };
+    if (input.canConfirm !== true) {
+      return { enabled: false, reason: input.confirmUnavailable ?? 'This count cannot be confirmed right now.' };
+    }
+    if (!input.online) return { enabled: false, reason: EXCEPTION_CONFIRM_OFFLINE_COPY };
+  } else {
+    const reason = exceptionActDisabledReason({
+      resolved: input.resolved,
+      canAct: input.canAct,
+      online: input.online,
+    });
+    if (reason) return { enabled: false, reason };
+  }
   const trimmed = input.note.trim();
   if (Array.from(trimmed).length > EXCEPTION_NOTE_MAX) {
     return { enabled: false, reason: 'Notes can be at most 1,000 characters.' };
@@ -956,10 +1107,6 @@ export interface MobileCountLinkedExceptions {
   unrecognized: number;
 }
 
-function numOrNull(v: unknown): number | null {
-  return typeof v === 'number' && Number.isFinite(v) ? v : null;
-}
-
 export function parseCountLinkedExceptions(res: unknown): MobileCountLinkedExceptions {
   if (
     !isObj(res) ||
@@ -986,8 +1133,8 @@ export function parseCountLinkedExceptions(res: unknown): MobileCountLinkedExcep
         isObj(l) && typeof l.id === 'string'
           ? {
               id: l.id,
-              countedQuantity: numOrNull(l.countedQuantity),
-              expectedQuantity: numOrNull(l.expectedQuantity),
+              countedQuantity: finiteOrNull(l.countedQuantity),
+              expectedQuantity: finiteOrNull(l.expectedQuantity),
               countedLocationId: strOrNull(l.countedLocationId),
             }
           : null,

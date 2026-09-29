@@ -4,6 +4,7 @@ import {
   CONFIRM_COUNT_INSTEAD_LABEL,
   CONFIRM_COUNT_LABEL,
   confirmationFactsRow,
+  confirmCountButtonHint,
   confirmCountDialogCopy,
   COUNT_CONFIRM_REASONS,
   COUNT_CONFIRM_STATES,
@@ -695,6 +696,17 @@ describe('confirmCountDialogCopy', () => {
       'Confirming records that 2 is right. It closes this exception now, without a second count. If a later count does not match the stock on record, a new exception opens.',
     );
     expect(c.success).toBe('Count confirmed. This exception is closed.');
+  });
+});
+
+describe('confirmCountButtonHint', () => {
+  it('says what the button opens and what confirming does, for VoiceOver', () => {
+    expect(confirmCountButtonHint({ facts: FACTS, reference: 'EX-000059' })).toBe(
+      'Opens a sheet to confirm that 2 is right and close EX-000059',
+    );
+    expect(confirmCountButtonHint({ facts: {}, reference: null })).toBe(
+      'Opens a sheet to confirm that the counted number is right and close this exception',
+    );
   });
 });
 
