@@ -131,6 +131,14 @@ describe('staging screen wiring', () => {
     expect(screen).toContain('setFilter(opt.value)');
   });
 
+  // Walk P1 (found in passing): VoiceOver read the All / Books / Items pills
+  // as plain text, with no button trait and no sign of which one is on.
+  it('each Items / Books pill is a button that says whether it is the one selected', () => {
+    expect(screenCode).toMatch(
+      /<Pressable\s+key=\{opt\.value\}\s+onPress=\{\(\) => setFilter\(opt\.value\)\}\s+accessibilityRole="button"\s+accessibilityState=\{\{ selected: active \}\}/,
+    );
+  });
+
   it('narrows to the drawer switcher\'s active warehouse, like every other list screen', () => {
     // The web page narrows by the active-warehouse cookie. If the phone ignores
     // the switcher, the same user sees a different row set in each surface.
