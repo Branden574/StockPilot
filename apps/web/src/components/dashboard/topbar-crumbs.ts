@@ -51,6 +51,17 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
   [/^\/dashboard\/whats-new$/, [{ label: 'What’s new', href: '/dashboard/whats-new' }]],
   // /import must precede /[^/]+ so it isn't caught by the detail catch-all
   [/^\/dashboard\/inventory\/new$/, [SECTION_INVENTORY, ITEMS_LIST, { label: 'New', href: null }]],
+  // Staging is a sidebar item of its own (the canonical href, so an org's
+  // rename applies), and Labels a page of the Items list: both are fixed
+  // paths the detail catch-all below would take for an item id.
+  [
+    /^\/dashboard\/inventory\/staging$/,
+    [SECTION_INVENTORY, { label: 'Staging', href: '/dashboard/inventory/staging' }],
+  ],
+  [
+    /^\/dashboard\/inventory\/labels$/,
+    [SECTION_INVENTORY, ITEMS_LIST, { label: 'Labels', href: null }],
+  ],
   [
     /^\/dashboard\/inventory\/import$/,
     [SECTION_INVENTORY, ITEMS_LIST, { label: 'Import', href: null }],
@@ -132,6 +143,10 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
   [
     /^\/dashboard\/purchase-orders\/new$/,
     [SECTION_INVENTORY, POS_LIST, { label: 'New', href: null }],
+  ],
+  [
+    /^\/dashboard\/purchase-orders\/recurring$/,
+    [SECTION_INVENTORY, POS_LIST, { label: 'Recurring', href: null }],
   ],
   [
     /^\/dashboard\/purchase-orders\/imports\/new$/,
