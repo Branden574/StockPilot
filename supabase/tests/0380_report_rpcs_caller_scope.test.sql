@@ -20,7 +20,11 @@
 --    module off: P0001 module_disabled from the two bundle functions only.
 -- U. Unscoped readers: the owner, the manager and a manager of two orgs get
 --    answers byte-identical to the service role's (the pre-0380 answer), for
---    every function and window.
+--    every function and window. So do an admin with no warehouse assignment
+--    and an auditor (a viewer with all_warehouses, one assignment per
+--    warehouse, reports:read and activity_logs:read granted), each also with
+--    activity_logs:read revoked: all-warehouse access gives the org-wide
+--    answer whichever branch of the stock_movements policy lets it in.
 -- K. Scoped readers: staff assigned W1 and a viewer assigned W1 + category
 --    C1 get only what their own client can read: top movers, shrinkage
 --    totals and bundle component value limited to readable items; a
@@ -41,7 +45,7 @@
 -- begin/rollback: nothing leaks. Namespace 03800000.
 
 begin;
-select plan(39);
+select plan(44);
 
 \set orgA     '\'03800000-0000-0000-0000-00000000000a\''
 \set orgB     '\'03800000-0000-0000-0000-00000000000b\''
@@ -54,6 +58,10 @@ select plan(39);
 \set dis      '\'03800000-0000-0000-0000-0000000000a6\''
 \set mgrAB    '\'03800000-0000-0000-0000-0000000000a7\''
 \set mgrB     '\'03800000-0000-0000-0000-0000000000b1\''
+\set adm      '\'03800000-0000-0000-0000-0000000000a8\''
+\set admNoAct '\'03800000-0000-0000-0000-0000000000a9\''
+\set aud      '\'03800000-0000-0000-0000-0000000000aa\''
+\set audNoAct '\'03800000-0000-0000-0000-0000000000ab\''
 \set W1       '\'03800000-0000-0000-0000-0000000000d1\''
 \set W2       '\'03800000-0000-0000-0000-0000000000d2\''
 \set WB       '\'03800000-0000-0000-0000-0000000000d3\''
@@ -76,7 +84,11 @@ insert into auth.users (id, email, raw_user_meta_data) values
   (:mgrNoRep, '0380-mgrnorep@test.local', '{}'::jsonb),
   (:dis,      '0380-dis@test.local',      '{}'::jsonb),
   (:mgrAB,    '0380-mgrab@test.local',    '{}'::jsonb),
-  (:mgrB,     '0380-mgrb@test.local',     '{}'::jsonb)
+  (:mgrB,     '0380-mgrb@test.local',     '{}'::jsonb),
+  (:adm,      '0380-adm@test.local',      '{}'::jsonb),
+  (:admNoAct, '0380-admnoact@test.local', '{}'::jsonb),
+  (:aud,      '0380-aud@test.local',      '{}'::jsonb),
+  (:audNoAct, '0380-audnoact@test.local', '{}'::jsonb)
   on conflict (id) do nothing;
 
 -- An org insert enables the default modules (bundles among them).
@@ -94,7 +106,13 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgA, :dis,      'manager', now()),
   (:orgA, :mgrAB,    'manager', now()),
   (:orgB, :mgrAB,    'manager', now()),
-  (:orgB, :mgrB,     'manager', now());
+  (:orgB, :mgrB,     'manager', now()),
+  (:orgA, :adm,      'admin',   now()),
+  (:orgA, :admNoAct, 'admin',   now());
+-- Auditors: viewers with all-warehouse access (the Auditor preset's shape).
+insert into public.organization_members (organization_id, user_id, role, accepted_at, all_warehouses) values
+  (:orgA, :aud,      'viewer',  now(), true),
+  (:orgA, :audNoAct, 'viewer',  now(), true);
 
 insert into public.warehouses (id, organization_id, name, code, status) values
   (:W1, :orgA, '0380 North', 'WH-0380-1', 'active'),
@@ -107,11 +125,17 @@ insert into public.user_warehouse_assignments (organization_id, user_id, warehou
   (:orgA, :stf,      :W1, true),
   (:orgA, :vwr,      :W1, true),
   (:orgA, :vwrNoRep, :W1, true);
+-- (The auditors need no rows here: an all_warehouses member gets one
+-- assignment per warehouse from the warehouse insert above.)
 insert into public.user_category_assignments (organization_id, user_id, category_id) values
   (:orgA, :vwr, :C1);
 insert into public.user_permission_overrides (organization_id, user_id, permission, granted) values
   (:orgA, :vwr,      'reports:read', true),
-  (:orgA, :mgrNoRep, 'reports:read', false);
+  (:orgA, :mgrNoRep, 'reports:read', false),
+  (:orgA, :admNoAct, 'activity_logs:read', false),
+  (:orgA, :aud,      'reports:read', true),
+  (:orgA, :aud,      'activity_logs:read', true),
+  (:orgA, :audNoAct, 'reports:read', true);
 
 insert into public.inventory_items
   (id, organization_id, warehouse_id, category_id, sku, name, quantity_on_hand, unit_cost, status, tracking_type) values
@@ -382,7 +406,28 @@ select is(
   null::text[],
   'U3: a manager of two orgs asking about org A gets the service role''s org A answer, exactly');
 
--- The numbers themselves (the manager), so U1-U3 cannot pass on two empty answers.
+select is(
+  (select array_agg(fn || '@' || d order by fn, d) from fns, unnest(array[30, 90, 365]) d
+    where pg_temp.answer_as(:adm, fn, :orgA, d) is distinct from pg_temp.answer_svc(fn, :orgA, d)),
+  null::text[],
+  'U9: an admin with no warehouse assignment gets the service role''s answer for all six at 30, 90 and 365 days');
+select is(
+  (select array_agg(fn || '@' || d order by fn, d) from fns, unnest(array[30, 90, 365]) d
+    where pg_temp.answer_as(:admNoAct, fn, :orgA, d) is distinct from pg_temp.answer_svc(fn, :orgA, d)),
+  null::text[],
+  'U10: the same with activity_logs:read revoked (movements then come in through the item branch of the policy)');
+select is(
+  (select array_agg(fn || '@' || d order by fn, d) from fns, unnest(array[30, 90, 365]) d
+    where pg_temp.answer_as(:aud, fn, :orgA, d) is distinct from pg_temp.answer_svc(fn, :orgA, d)),
+  null::text[],
+  'U11: an auditor (a viewer with all_warehouses, one assignment per warehouse, reports:read and activity_logs:read) gets the service role''s answer');
+select is(
+  (select array_agg(fn || '@' || d order by fn, d) from fns, unnest(array[30, 90, 365]) d
+    where pg_temp.answer_as(:audNoAct, fn, :orgA, d) is distinct from pg_temp.answer_svc(fn, :orgA, d)),
+  null::text[],
+  'U12: the same auditor shape without activity_logs:read gets the service role''s answer too');
+
+-- The numbers themselves (the manager), so U1-U3 and U9-U12 cannot pass on empty answers.
 select is(pg_temp.answer_as(:mgr, 'report_top_movers', :orgA, 30),
   format('[{"sku": "R0380-2", "name": "South secret", "item_id": "%s", "total_in": 50.0000, "total_out": 17.0000, "movement_count": 4}, '
          '{"sku": "R0380-1", "name": "North visible", "item_id": "%s", "total_in": 20.0000, "total_out": 6.0000, "movement_count": 4}, '
@@ -521,6 +566,15 @@ select is(
   pg_temp.q(:stf, format($s$select count(*)::text from public.inventory_items where organization_id = %L$s$, :orgA)),
   '2',
   'CONTROL: the staff member''s own client reads exactly two org A items');
+
+select is(
+  (select string_agg(u::text || '=' || (select count(*) from public.user_warehouse_assignments a
+                                          where a.organization_id = :orgA and a.user_id = u)
+                     || '/' || pg_temp.q(u, format($s$select count(*)::text from public.inventory_items where organization_id = %L$s$, :orgA)),
+                     ',' order by u)
+     from unnest(array[:aud, :audNoAct]::uuid[]) u),
+  format('%s=2/3,%s=2/3', :aud, :audNoAct),
+  'CONTROL: each auditor holds one assignment per org A warehouse and its own client reads all three org A items (U11, U12 test the all-warehouse path)');
 
 -- 0225's contract that stays: anon never, search_path pinned.
 select is(

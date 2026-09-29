@@ -353,8 +353,10 @@ PGTAP_TESTS=(
   # forbidden for a non-member, a disabled member or a revoked permission;
   # the bundles module for the bundle pair: P0001 module_disabled), EXECUTE
   # for authenticated (never anon or PUBLIC; service_role kept for the
-  # rollout only). The owner, the manager and a two-org manager get answers
-  # byte-identical to the service role's at 30, 90 and 365 days; staff and a
+  # rollout only). The owner, the manager, a two-org manager, an admin with
+  # no warehouse assignment and an all-warehouse auditor (each of the last
+  # two with and without activity_logs:read) get answers byte-identical to
+  # the service role's at 30, 90 and 365 days; staff and a
   # category-scoped viewer get only their readable movements, items and
   # warehouse names; no org B row in an org A answer.
   supabase/tests/0380_report_rpcs_caller_scope.test.sql
