@@ -64,7 +64,16 @@ set -uo pipefail
 CONTAINER="${CONTAINER:-supabase_db_stockpilot}"
 PSQL=(docker exec -i "$CONTAINER" psql -U postgres -X -q -v ON_ERROR_STOP=1 -At)
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+# The race sections create throwaway SECURITY DEFINER copies of real functions
+# with a lock taken out, some executable by authenticated. The EXIT trap drops
+# them however the script ends (a failure, Ctrl-C, SIGTERM, a harness timeout;
+# bash runs it on INT, TERM and HUP), so an interrupted run never leaves one on
+# the shared local stack. SIGKILL cannot be trapped: the next run's cleanup
+# drops them first.
+drop_probes() {
+  "${PSQL[@]}" -c "drop function if exists public._probe_hold_nolock(uuid); drop function if exists public._probe_hold_paced(uuid, boolean); drop function if exists public._probe_hold_unlocked_status(uuid)" >/dev/null 2>&1
+}
+trap 'drop_probes; rm -rf "$TMP"' EXIT
 
 ORG='03781111-0000-0000-0000-00000000000a'
 MGR='03781111-0000-0000-0000-0000000000a1'

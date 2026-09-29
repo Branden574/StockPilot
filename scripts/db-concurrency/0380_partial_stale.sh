@@ -31,7 +31,7 @@
 #        a. The real approve_partial waits on it (its FOR UPDATE conflicts
 #           with the share lock), then reads the committed hold and holds 8.
 #        b. MUTATION: a copy with the items' FOR UPDATE removed (a throwaway
-#           public._probe_approve_partial_nolock, dropped at the end) does not
+#           public._probe_approve_partial_nolock, dropped right after) does not
 #           wait, reads no hold, and holds 10: 12 held against 10 on hand.
 #           This is what re-checking under the lock prevents, and why the
 #           preview can only ever be a preview.
@@ -61,7 +61,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONTAINER="${CONTAINER:-supabase_db_stockpilot}"
 PSQL=(docker exec -i "$CONTAINER" psql -U postgres -X -q -v ON_ERROR_STOP=1 -At)
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+# The race sections create throwaway SECURITY DEFINER copies of real functions
+# with a lock taken out, some executable by authenticated. The EXIT trap drops
+# them however the script ends (a failure, Ctrl-C, SIGTERM, a harness timeout;
+# bash runs it on INT, TERM and HUP), so an interrupted run never leaves one on
+# the shared local stack. SIGKILL cannot be trapped: the next run's cleanup
+# drops them first.
+drop_probes() {
+  "${PSQL[@]}" -c "drop function if exists public._probe_approve_partial_nolock(uuid)" >/dev/null 2>&1
+}
+trap 'drop_probes; rm -rf "$TMP"' EXIT
 
 ORG='03801111-0000-0000-0000-00000000000a'
 MGR='03801111-0000-0000-0000-0000000000a1'
@@ -312,6 +321,10 @@ WAITED="$(cat "$TMP/nolock.waited")"
 if [ "$WAITED" -lt 1000 ]; then ok "3b: the copy did not wait ($WAITED ms)"; else bad "3b: the copy waited ($WAITED ms)"; fi
 check "3b: it held all 10 (it read before the other hold committed)" "$(held_for "$A4" "$P4")" "10"
 check "3b: 12 held against 10 on hand: what the item lock and the re-check prevent" "$(held "$A4")" "12"
+# The copy has done its job: drop it now rather than only at the end, so it
+# is on the shared stack for the length of one race, not the whole run.
+drop_probes
+check "3b: the lock-less copy is gone" "$(q "select count(*) from pg_proc where proname = '_probe_approve_partial_nolock'")" "0"
 
 # ═══ 4. Resume, concurrent ════════════════════════════════════════════════
 echo "== 4. resume_fulfillment while another session's hold is open"
