@@ -49,6 +49,37 @@ function codeOnly(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 }
 
+/** A number in the file's StyleSheet.create({...}): `styles.<key>.<prop>`,
+ *  a literal or a `const NAME = <number>` in the same file. */
+function styleNumber(sf: ts.SourceFile, key: string, prop: string): number | undefined {
+  let out: number | undefined;
+  const consts = new Map<string, number>();
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      if (ts.isNumericLiteral(node.initializer)) consts.set(node.name.text, Number(node.initializer.text));
+    }
+    if (
+      ts.isCallExpression(node) &&
+      node.expression.getText(sf) === 'StyleSheet.create' &&
+      node.arguments[0] &&
+      ts.isObjectLiteralExpression(node.arguments[0])
+    ) {
+      for (const style of node.arguments[0].properties) {
+        if (!ts.isPropertyAssignment(style) || style.name.getText(sf) !== key) continue;
+        if (!ts.isObjectLiteralExpression(style.initializer)) continue;
+        for (const p of style.initializer.properties) {
+          if (!ts.isPropertyAssignment(p) || p.name.getText(sf) !== prop) continue;
+          const v = p.initializer;
+          out = ts.isNumericLiteral(v) ? Number(v.text) : ts.isIdentifier(v) ? consts.get(v.text) : undefined;
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
 const LIST = 'app/reports/book-order-totals/index.tsx';
 const ORDERS = 'app/reports/book-order-totals/[itemId].tsx';
 const list = codeOnly(read(LIST));
@@ -354,6 +385,19 @@ describe('8. accessibility', () => {
     expect(spoken({ failed: true, failedUri: null, uri: null })).toBe('Cover could not be loaded');
     expect(spoken({ failed: false, failedUri: url, uri: url })).toBe('Cover could not be loaded');
     expect(spoken({ failed: false, failedUri: url, uri: null })).toBe('No cover');
+  });
+
+  // Simulator walk L1: the search field's own frame was 40 pt inside a 44 pt
+  // box, so the box's edge did not focus it and VoiceOver outlined 40 pt.
+  it('the search field itself is at least 44 pt tall', () => {
+    const sf = parseTsx(read(LIST), LIST);
+    let input: JsxNode | undefined;
+    walkJsx(sf, (el) => {
+      if (tagOf(el, sf) === 'TextInput' && attrText(el, 'accessibilityLabel', sf) === 'Search books') input = el;
+    });
+    expect(input).toBeTruthy();
+    expect(attrText(input!, 'style', sf)).toMatch(/^\[styles\.searchInput,/);
+    expect(styleNumber(sf, 'searchInput', 'minHeight')).toBeGreaterThanOrEqual(44);
   });
 
   it("the list's cover and row are sibling buttons, never nested", () => {

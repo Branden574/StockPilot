@@ -1134,14 +1134,16 @@ const styles = StyleSheet.create({
   searchBox: {
     minHeight: MIN_TAP,
     paddingHorizontal: 14,
-    paddingVertical: 2,
     borderRadius: 10,
     borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
-  searchInput: { flex: 1, minWidth: 0, fontSize: 14.5, minHeight: 40 },
+  // The field itself is the full 44 pt (simulator walk L1: it was 40 pt
+  // inside the box, so the box's edge did not focus it). The box has no
+  // vertical padding, so it stays the height it was (44 + its border).
+  searchInput: { flex: 1, minWidth: 0, fontSize: 14.5, minHeight: MIN_TAP },
   clear: { minWidth: MIN_TAP, minHeight: MIN_TAP, alignItems: 'center', justifyContent: 'center' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: {
