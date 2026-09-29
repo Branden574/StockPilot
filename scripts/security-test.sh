@@ -368,6 +368,18 @@ PGTAP_TESTS=(
   supabase/tests/0323_storage_path_shape_constraints.test.sql
   supabase/tests/0324_validate_storage_path_and_nonneg_constraints.test.sql
   supabase/tests/0326_storage_path_floor_completion.test.sql
+  # Item photos follow the item (0381): item_images rows and item-images
+  # objects (both path shapes, {org}/items/{item}/{file} and the books import
+  # {org}/{item}/{file}) are readable only through an item the caller can
+  # read, per persona (owner, admin, manager, all-warehouse auditor, staff,
+  # charter-scoped staff, category and warehouse viewers, another org,
+  # disabled, pending, anon; the service role still reads all). A duplicated
+  # item's shared file reads through the duplicate's row. Rows and objects are
+  # writable only for an item the caller can read and change, at a path that
+  # names it (or, for a row, another readable item of the org); never another
+  # org's item or folder, an unreadable item's object, a third shape, or a
+  # non-uuid folder (a plain refusal, not a cast error).
+  supabase/tests/0381_item_images_item_scope.test.sql
 
   # Auth material and trusted writers.
   supabase/tests/0025_notification_writers.test.sql
