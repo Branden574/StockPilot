@@ -555,6 +555,11 @@ WEB_TESTS=(
   # each ServiceError with its real status (401/403/404/400), never 500.
   src/server/services/reports.scope-gate.test.ts
   src/server/services/lots.report-gate.test.ts
+  # The lot reports list only lots of items the reader can read: lots,
+  # receipts and lot picks are member-wide, so both report reads inner-join
+  # the item (row level security decides) and drop a null item; picking's
+  # FEFO suggestions are unchanged.
+  src/server/services/lots.report-scope.test.ts
   'src/app/(dashboard)/dashboard/reports/report-pages.gate.test.tsx'
   'src/app/(dashboard)/dashboard/reports/page.test.tsx'
   'src/app/api/reports/[slug]/csv/route.test.ts'
