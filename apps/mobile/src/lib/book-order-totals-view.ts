@@ -406,10 +406,19 @@ export function bookReportOrderRowPresentation(
 
 /**
  * Where a file can go from this phone. iOS shares the downloaded file
- * (React Native's Share passes `url` on iOS only). Android shares `message`
- * only, so a downloaded file could be neither shared nor saved, and there is
- * no expo-sharing in this binary: Android offers the web instead, until the
- * Play Store build can carry a real share path.
+ * (React Native's Share passes `url` on iOS only). Android's Share sends
+ * `message` only, so a downloaded file could be neither shared nor saved
+ * that way, and there is no expo-sharing in this binary: Android offers the
+ * web instead for now.
+ *
+ * THIS DEPARTS FROM THE BRIEF (section 9: "supported share/download
+ * behavior, not an external browser-only substitute"). An Android save does
+ * NOT need a new binary: expo-file-system 57's legacy API already carries
+ * StorageAccessFramework (requestDirectoryPermissionsAsync, createFileAsync,
+ * writeAsStringAsync with base64), JS and native, so a "Save to a folder"
+ * path ships by OTA. It waits only on Android verification on a device,
+ * which the owner has deferred to the Play Store launch (2026-09-23); SAF
+ * file naming and MIME handling differ by provider and must be tried there.
  */
 export type BookReportExportMode = 'share' | 'web_only';
 

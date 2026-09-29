@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -249,6 +252,21 @@ describe('export (plan 9.5, gaps 11 and 12)', () => {
     expect(bookReportExportMode('ios')).toBe('share');
     expect(bookReportExportMode('android')).toBe('web_only');
     expect(bookReportExportMode('web')).toBe('web_only');
+  });
+
+  it('an Android save would NOT need a new binary: the installed expo-file-system carries SAF in JS and native', () => {
+    // The web-only Android route departs from the brief and waits only on
+    // Android device verification (owner rule 2026-09-23), not on a binary.
+    const pkg = path.dirname(require.resolve('expo-file-system/package.json'));
+    const dts = readFileSync(path.join(pkg, 'build/legacy/FileSystem.d.ts'), 'utf8');
+    const kt = readFileSync(
+      path.join(pkg, 'android/src/main/java/expo/modules/filesystem/legacy/FileSystemLegacyModule.kt'),
+      'utf8',
+    );
+    for (const fn of ['requestDirectoryPermissionsAsync', 'createFileAsync']) {
+      expect(dts).toContain(fn);
+    }
+    expect(kt).toContain('requestDirectoryPermissionsAsync');
   });
 
   it('the cover limit is said BEFORE export when more books match than get covers', () => {
