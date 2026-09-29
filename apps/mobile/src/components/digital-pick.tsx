@@ -19,6 +19,12 @@ import {
 } from '@/lib/orders-api';
 import { completionConfirmButtons, completionConfirmMessage } from '@/lib/pick-completion';
 import { mergePickQuantities, seedSavedQuantities } from '@/lib/pick-quantities';
+import {
+  PICK_QTY_FIELD_MIN_WIDTH,
+  PICK_QTY_FONT_SIZE,
+  PICK_QTY_MAX_FONT_SIZE_MULTIPLIER,
+  PICK_QTY_PADDING_X,
+} from '@/lib/pick-qty-field';
 import { ACCENT, FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -336,7 +342,17 @@ export function DigitalPick({
                 </Mono>
               </View>
             ) : null}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            {/* Wraps at the largest text sizes, where the field, "of 30" and
+                Save no longer fit on one line of a phone, instead of pushing
+                Save past the card. One line at every other size. */}
+            <View
+              style={{
+                flexDirection: 'row',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                gap: 10,
+              }}
+            >
               <TextInput
                 ref={(el) => {
                   inputs.current[line.id] = el;
@@ -349,16 +365,22 @@ export function DigitalPick({
                 }
                 keyboardType="number-pad"
                 selectTextOnFocus
+                // The typed quantity stops growing at the input ceiling (24pt)
+                // and the box is wide enough for three digits at that size: it
+                // was a fixed 84pt box with uncapped text, so at AX5 "30" showed
+                // as "3" (lib/pick-qty-field.ts).
+                maxFontSizeMultiplier={PICK_QTY_MAX_FONT_SIZE_MULTIPLIER}
                 style={{
-                  width: 84,
+                  minWidth: PICK_QTY_FIELD_MIN_WIDTH,
+                  minHeight: MIN_TAP,
                   borderWidth: 1,
                   borderColor: c.hair,
                   borderRadius: 10,
                   paddingVertical: 8,
-                  paddingHorizontal: 12,
+                  paddingHorizontal: PICK_QTY_PADDING_X,
                   color: c.ink,
                   fontFamily: FONT.mono,
-                  fontSize: 16,
+                  fontSize: PICK_QTY_FONT_SIZE,
                   textAlign: 'center',
                 }}
               />
