@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   describePartialPreview,
   describePartialResult,
+  PARTIAL_ACTION_TITLE,
+  PARTIAL_CLOSE_LABEL,
+  PARTIAL_COMMIT_UNANSWERED_COPY,
   PARTIAL_PREVIEW_HIDDEN_ITEMS_COPY,
   PARTIAL_PREVIEW_ITEM_MOVED_COPY,
   PARTIAL_PREVIEW_LINES_CAPPED_COPY,
@@ -354,6 +357,30 @@ describe('describePartialPreview', () => {
   it('is null for an unavailable preview (its message is the words)', () => {
     expect(describePartialPreview(previewPartialFulfilment(null, 'resume'))).toBeNull();
   });
+
+  it("each action's name is one word set, the preview's title and confirm alike (web and phone read it here)", () => {
+    expect(PARTIAL_ACTION_TITLE).toEqual({ approve_partial: 'Approve partial', resume: 'Resume fulfillment' });
+    const resumeCopy = describePartialPreview(
+      okPreview(
+        previewPartialFulfilment(
+          result({
+            status: 'backordered',
+            lines: [{ id: 'L1', item: 'A', requested: 10 }],
+            items: [item('A', { here: onRack(4) })],
+          }),
+          'resume',
+        ),
+      ),
+    )!;
+    expect([resumeCopy.title, resumeCopy.confirmLabel]).toEqual([PARTIAL_ACTION_TITLE.resume, PARTIAL_ACTION_TITLE.resume]);
+    const approveCopy = describePartialPreview(preview(40, 36))!;
+    expect([approveCopy.title, approveCopy.confirmLabel]).toEqual([
+      PARTIAL_ACTION_TITLE.approve_partial,
+      PARTIAL_ACTION_TITLE.approve_partial,
+    ]);
+    expect(PARTIAL_CLOSE_LABEL).toBe('Close');
+    expect(PARTIAL_COMMIT_UNANSWERED_COPY).toBe("The request didn't finish. Check the order before trying again.");
+  });
 });
 
 // ── The result, from the re-read ────────────────────────────────────────────
@@ -492,6 +519,8 @@ describe('honest words (partial fulfilment)', () => {
     PARTIAL_PREVIEW_ITEM_MOVED_COPY,
     PARTIAL_PREVIEW_NO_LINES_COPY,
     PARTIAL_PREVIEW_NOTHING_TO_HOLD_COPY,
+    PARTIAL_COMMIT_UNANSWERED_COPY,
+    ...Object.values(PARTIAL_ACTION_TITLE),
     describePartialResult({ action: 'approve_partial', preview: p, reread: result({ status: 'approved', lines, items: [item('A', { here: onRack(36), heldOwn: 34 })] }) }).text,
     describePartialResult({ action: 'resume', preview: null, reread: null }).text,
   ];

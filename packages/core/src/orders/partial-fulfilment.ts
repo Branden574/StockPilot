@@ -242,9 +242,39 @@ export interface PartialPreviewCopy {
   cancelLabel: string;
 }
 
+/**
+ * Each action's name, web and phone alike: the order screen's button, the
+ * preview's title (also when no preview can be shown), its confirm, and the
+ * title over the result.
+ */
+export const PARTIAL_ACTION_TITLE: Readonly<Record<PartialAction, string>> = {
+  approve_partial: 'Approve partial',
+  resume: 'Resume fulfillment',
+};
+
+/** Dismisses the preview when there is nothing to confirm, and the result. */
+export const PARTIAL_CLOSE_LABEL = 'Close';
+
+/**
+ * The confirm got no answer at all (the connection dropped, the request timed
+ * out, the deploy changed under the page), so whether the approval went
+ * through is unknown: look before trying again. A second try on a committed
+ * order is refused by the RPC's own status check, never applied twice.
+ */
+export const PARTIAL_COMMIT_UNANSWERED_COPY =
+  "The request didn't finish. Check the order before trying again.";
+
 const ACTION_WORDS: Readonly<Record<PartialAction, { title: string; lead: string; confirm: string }>> = {
-  approve_partial: { title: 'Approve partial', lead: "Approve what's available", confirm: 'Approve partial' },
-  resume: { title: 'Resume fulfillment', lead: "Resume what's available", confirm: 'Resume fulfillment' },
+  approve_partial: {
+    title: PARTIAL_ACTION_TITLE.approve_partial,
+    lead: "Approve what's available",
+    confirm: PARTIAL_ACTION_TITLE.approve_partial,
+  },
+  resume: {
+    title: PARTIAL_ACTION_TITLE.resume,
+    lead: "Resume what's available",
+    confirm: PARTIAL_ACTION_TITLE.resume,
+  },
 };
 
 function restSentence(backorder: number, willHold: number): string | null {
