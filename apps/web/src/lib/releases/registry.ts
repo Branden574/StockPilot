@@ -79,7 +79,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Both hold only what is free at the moment you confirm, and nothing showed how much that was until the order had been approved or resumed.',
         howItAffectsYou:
-          "What was held is read from the order after it is approved or resumed, never copied from the preview. If stock changed in between, it says so, for example Holding 34 of 40 units, 2 fewer than shown because stock changed after you looked. If the order's own lines changed in between, it says The order changed after you looked instead. If the order moved on first, such as another approver approving it, the preview is cleared and it says This order is no longer waiting for approval.",
+          "What was held is read from the order after it is approved or resumed, never copied from the preview. If stock changed in between, it says so, for example Holding 34 of 40 units, 2 fewer than shown because stock changed after you looked. If the order's own lines changed in between, it says The order changed after you looked instead. If the order moved on first, such as when someone else approved or resumed it, the preview is cleared: Approve partial says This order is no longer waiting for approval, and Resume fulfillment says Only a backordered order can be resumed.",
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/orders', label: 'View orders' },
         audience: { anyPermission: ['orders:approve'], modules: ['orders'] },
@@ -116,11 +116,11 @@ export const RELEASES: Release[] = [
         area: 'Web app',
         title: 'The top bar fits narrow screens, with your account button always in view',
         whatChanged:
-          "On the web, the bar at the top of each page now fits its width. On a phone it shows the menu, the warehouse filter, notifications, What's new and your account button. With more room, such as beside the sidebar on a tablet, it adds search, and with more again Keyboard shortcuts, Help & Learning, Support & feedback and the theme switch. A long warehouse name is shortened to fit. Your account menu now also has Help & Learning, Support & feedback and the theme: Light, Dark or System, with the one in use marked. On Staging, the breadcrumb now reads Inventory / Staging.",
+          "On the web, the bar at the top of each page now fits its width. On a phone it shows the menu, the warehouse filter, notifications, What's new and your account button. With more room, such as beside the sidebar on a tablet, it adds search, then the breadcrumb, then Keyboard shortcuts, Help & Learning, Support & feedback and the theme switch. A long warehouse name is shortened to fit. Your account menu now also has Help & Learning, Support & feedback and the theme: Light, Dark or System, with the one in use marked. On Staging, the breadcrumb now reads Inventory / Staging.",
         whyItMatters:
           "On a phone the account button was cut off at the right edge, and beside the sidebar on a tablet it was off the screen entirely, with the other buttons squeezed to half their size. The breadcrumb called Staging and Labels an item's page (Items / Detail) and Recurring purchase orders a purchase order's page; each now has its own name.",
         howItAffectsYou:
-          'Where the bar has room for everything, as on most laptop and desktop screens, it is unchanged. Search stays in the bar wherever it was before. Where the bar leaves the rest out, Help & Learning, Support & feedback and the theme are in your account menu, and the ? key still opens Keyboard shortcuts. On a short screen, such as a phone held sideways, the account menu scrolls.',
+          'Where the bar has room for everything, as on most laptop and desktop screens, it is unchanged. Search stays in the bar wherever it was before. Where the bar leaves the rest out, Help & Learning, Support & feedback and the theme are in your account menu, and the ? key still opens Keyboard shortcuts. On a phone held upright the breadcrumb is left out; it had no room there before either. On a short screen, such as a phone held sideways, the account menu scrolls.',
         whatToDo: 'No action needed.',
       },
       {

@@ -1423,11 +1423,16 @@ describe("F2-3 (fix what's holding an order up) is published", () => {
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-09-30T00:00:00Z'));
   });
 
-  it('sits above every published release (pinned by id), dated after every other release, so it is the newest', () => {
+  it('is dated after every release below it (pinned by id); releases above it are published later', () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
+    // Newest published for now (the latestUnread pins say so too); a draft
+    // added at the top later does not break this.
     expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
-    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
+    }
+    for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -1481,8 +1486,10 @@ describe("F2-3 (fix what's holding an order up) is published", () => {
     );
     // An order that moved on (another approver first): the preview goes, and
     // the sentence is core's, the same whether the server or the page noticed.
+    // Each action's own words: Resume's is not Approve partial's.
     expect(text).toContain('the preview is cleared');
-    expect(text).toContain(`it says ${partialActionMovedOnCopy('approve_partial')}`);
+    expect(text).toContain(`Approve partial says ${partialActionMovedOnCopy('approve_partial').replace(/\.$/, '')},`);
+    expect(text).toContain(`Resume fulfillment says ${partialActionMovedOnCopy('resume')}`);
     // Where the result is said: the dialog on the web, an Alert on the phone.
     expect(text).toContain('in the same window on the web and in a message in the mobile app');
     expect(text).toContain('Approved. Holding 36 of 40 units.');
@@ -1536,7 +1543,9 @@ describe('the small-fixes release is published', () => {
   it("is dated after every release below it (pinned by id); F2-3's above it was published later", () => {
     const at = RELEASES.findIndex((r) => r.id === ID);
     expect(at).toBeGreaterThanOrEqual(0);
-    expect(RELEASES.slice(0, at).map((r) => r.id)).toEqual(['order-fix-holding-up-2026-10']);
+    // Directly under F2-3's (relative, so a draft added at the top later
+    // does not break it).
+    expect(at).toBe(RELEASES.findIndex((r) => r.id === 'order-fix-holding-up-2026-10') + 1);
     for (const r of RELEASES.slice(0, at)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(Date.parse(release().publishedAt));
     }
@@ -1645,6 +1654,12 @@ describe('the small-fixes release is published', () => {
     // the menu scrolls on a short screen.
     expect(bar!.howItAffectsYou).toContain('Search stays in the bar wherever it was before');
     expect(bar!.howItAffectsYou).toContain('scrolls');
+    // The bar adds its controls in the order the widths bring them (topbar.tsx:
+    // search icon from 400 px, the breadcrumb from 520, the rest from 680), and
+    // says the breadcrumb is left out on a phone, where before it was squeezed
+    // to a stray slash (header-check before shots at 320-430 px).
+    expect(bar!.whatChanged).toContain('it adds search, then the breadcrumb, then Keyboard shortcuts');
+    expect(bar!.howItAffectsYou).toContain('On a phone held upright the breadcrumb is left out; it had no room there before either.');
     // The text Back links and the cameras' Done and Cancel; and what moved.
     expect(buttons!.whatChanged).toContain('Done and Cancel on the counting cameras');
     expect(buttons!.howItAffectsYou).toContain('a few points lower');
@@ -1659,6 +1674,10 @@ describe('the small-fixes release is published', () => {
     expect(more!.whatChanged).toContain('All, Books and Items');
     expect(more!.whatChanged).toContain("the X that closes What's New and a screen tour");
     expect(titles!.whatChanged).toContain('an order, a bundle, a maintenance request and a procedure');
+    // Not a return: returns/[id] took basis-72 too (983e8bed), but nothing
+    // sits beside its title, so its title was never squeezed and nothing
+    // changed there for the reader.
+    expect(titles!.whatChanged).not.toMatch(/\breturn\b/i);
     expect(titles!.whatChanged).toContain('such as Cancel request and Report a problem on an order, move under');
     expect(titles!.whyItMatters).toContain('Or...');
     expect(unit!.whatChanged).toContain('1 UNIT');
