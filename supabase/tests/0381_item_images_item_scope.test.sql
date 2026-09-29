@@ -43,6 +43,10 @@
 --    (pkey-probe org correlation, starts_with, the shared-file set scoped to
 --    the caller's orgs with the read-scope sets inline, in step with
 --    caller_can_read_item).
+-- I. Soundness of the row rule: for every persona, every stored file a photo
+--    row they can read carries is a file they can read (so copying a carried
+--    path into a new row can never reveal one), including a foreign thumbnail
+--    on an own-folder row and a foreign name containing the row's item id.
 -- P. Cost: another org's shared-shape photo rows do not slow the caller's
 --    reads (20,000 planted in org B; the per-row check made that ~4 s).
 --
@@ -51,7 +55,7 @@
 
 begin;
 
-select plan(112);
+select plan(120);
 
 \set orgA    03810000-0000-0000-0000-00000000000a
 \set orgB    03810000-0000-0000-0000-00000000000b
@@ -681,6 +685,56 @@ select is(
      from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname = 'item-images authenticated read'),
   'true',
   'C14: the bucket read policy keeps starts_with for the org (a pkey probe) and gates the shared-file set on the caller''s orgs');
+
+-- ══ I: every path a readable row carries is readable ══════════════════════
+-- The row write rule accepts a path "already carried by a photo row the
+-- caller can read", which is sound only if every such path is readable to
+-- that caller; otherwise a reader could copy an unreadable path into a new
+-- row of their own item and read it through the shared-file branch. Two row
+-- shapes no app writer produces, planted as the superuser: a row whose master
+-- is in its own folder but whose THUMBNAIL is another item's, and a row whose
+-- foreign file's NAME contains the row's own item id. Then, for each persona,
+-- nothing a readable row carries may be unreadable. Rolled back afterwards.
+savepoint carried;
+insert into storage.objects (bucket_id, name) values
+  ('item-images', pg_temp.pa(:'orgA', :'iIn', 'x1.png')),
+  ('item-images', pg_temp.pa(:'orgA', :'iWh', :'iIn' || '.png'));
+insert into public.item_images (organization_id, item_id, storage_path, thumb_path, is_primary, sort_order) values
+  (:'orgA', :'iIn', pg_temp.pa(:'orgA', :'iIn', 'x1.png'), pg_temp.pa(:'orgA', :'iWh', 'm3-thumb.webp'), false, 5),
+  (:'orgA', :'iIn', pg_temp.pa(:'orgA', :'iWh', :'iIn' || '.png'), null, false, 6);
+create temp table sec_objs as
+  select name from storage.objects where bucket_id = 'item-images' and name like '0381%';
+grant select on sec_objs to authenticated;
+-- Carried by a row the caller can read, stored, and yet not readable.
+create function pg_temp.carried_unreadable() returns text language sql as $$
+  select coalesce(string_agg(distinct regexp_replace(v.p, '^.*/', ''), ' '), '(none)')
+    from public.item_images r
+    cross join lateral (values (r.storage_path), (r.thumb_path)) v(p)
+   where v.p is not null
+     and r.item_id::text like '03810000-%'
+     and v.p in (select name from pg_temp.sec_objs)
+     and not exists (select 1 from storage.objects o where o.bucket_id = 'item-images' and o.name = v.p) $$;
+set local role authenticated;
+set local "request.jwt.claim.sub" to :'stf';
+select is(pg_temp.carried_unreadable(), '(none)',
+  'I1: staff of Main can read every stored file a row they can read carries (a foreign thumbnail on an own-folder row; a foreign name containing their item''s id)');
+select is(pg_temp.q(format($$select count(*)::text from storage.objects where bucket_id = 'item-images' and name in (%L, %L)$$,
+                           pg_temp.pa(:'orgA', :'iWh', 'm3-thumb.webp'), pg_temp.pa(:'orgA', :'iWh', :'iIn' || '.png'))), '2',
+  'I2: ... so the phone can sign that row''s thumbnail and master');
+set local "request.jwt.claim.sub" to :'stfC';
+select is(pg_temp.carried_unreadable(), '(none)', 'I3: the same for charter-scoped staff');
+set local "request.jwt.claim.sub" to :'stfA2';
+select is(pg_temp.carried_unreadable(), '(none)', 'I4: the same for annex-only staff');
+set local "request.jwt.claim.sub" to :'vwrC';
+select is(pg_temp.carried_unreadable(), '(none)', 'I5: the same for a category viewer');
+set local "request.jwt.claim.sub" to :'vwrW';
+select is(pg_temp.carried_unreadable(), '(none)', 'I6: the same for a warehouse viewer');
+set local "request.jwt.claim.sub" to :'own';
+select is(pg_temp.carried_unreadable(), '(none)', 'I7: the same for the owner');
+set local "request.jwt.claim.sub" to :'mgrB';
+select is(pg_temp.carried_unreadable(), '(none)', 'I8: the same for another org''s manager');
+reset role;
+rollback to savepoint carried;
 
 -- ══ P: another org's photo rows do not slow the caller ═══════════════════
 -- 20,000 shared-shape rows (a path naming another item) planted in org B, as

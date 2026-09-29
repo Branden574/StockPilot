@@ -270,9 +270,9 @@ comment on function public.item_image_row_path_ok(uuid, uuid, text) is
 --   1. only the caller's orgs' rows (rls_member_org_ids, a tiny hashed set),
 --      so another tenant's photo rows cost a hash probe each, never a scope
 --      check: any signed-in user can create an org and file rows in it;
---   2. only rows whose master path does not contain their own item id
---      (duplicates' shared files), behind a MATERIALIZED fence so the
---      planner cannot push the scope check below it;
+--   2. only rows with a path outside their own item folder (duplicates'
+--      shared files), behind a MATERIALIZED fence so the planner cannot push
+--      the scope check below it;
 --   3. the caller's read scope on the row's item, written inline as
 --      inventory_items_select's predicate against 0229's hashed sets (built
 --      once per statement), the same predicate caller_can_read_item (0361)
@@ -290,15 +290,25 @@ security definer
 set search_path = public
 rows 50
 as $$
-  -- Only the master path is scanned: duplicate_inventory_item copies master
-  -- and thumb together, and a row whose master is in its own folder reads
-  -- its thumb through the policy's first branch like any other (no writer
-  -- produces anything else).
+  -- "In the row's own item folder" is "the row's item id first appears at
+  -- character 38 or 44": the item folder of {org}/{item}/{file} starts at
+  -- 38 and of {org}/items/{item}/{file} at 44 (a 36-character org id, then
+  -- "/" or "/items/"), and a uuid cannot start at the other offset of
+  -- either shape (it would have to contain "/" or start with "items").
+  -- Exact for both photo shapes, where a bare "contains the id" test missed
+  -- a foreign file whose NAME contains the row's item id; one strpos per
+  -- path, measured as cheap as that test ("/" || id || "/" cost ~1 us a row
+  -- more). Master AND thumbnail: every path a readable row carries must be
+  -- readable, because item_image_row_path_ok lets a writer copy any such
+  -- path into a new row (a carried path its readers could not read would be
+  -- revealed by the copy). pgTAP 0381 I1-I8 pin this per persona.
   with shared_rows as materialized (
     select ii.item_id, ii.organization_id, ii.storage_path, ii.thumb_path
       from public.item_images ii
      where ii.organization_id in (select public.rls_member_org_ids())
-       and strpos(ii.storage_path, ii.item_id::text) = 0
+       and (strpos(ii.storage_path, ii.item_id::text) not in (38, 44)
+            or (ii.thumb_path is not null
+                and strpos(ii.thumb_path, ii.item_id::text) not in (38, 44)))
   )
   select p.path
     from shared_rows s
@@ -308,7 +318,7 @@ as $$
    cross join lateral (values (s.storage_path), (s.thumb_path)) p(path)
    where (select auth.uid()) is not null
      and p.path is not null
-     and strpos(p.path, s.item_id::text) = 0
+     and strpos(p.path, s.item_id::text) not in (38, 44)
      and split_part(p.path, '/', 1) = s.organization_id::text
      and (it.warehouse_id in (select public.rls_inv_read_full_warehouse_ids())
           or (it.charter_id is null
