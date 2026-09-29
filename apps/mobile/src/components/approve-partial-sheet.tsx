@@ -38,8 +38,9 @@ import { useTheme } from '@/lib/use-theme';
  * reloads after a refusal, and another approver may have got there first):
  * `view.movedOn` replaces Confirm with Close and, unless a refusal already
  * said why, core's sentence says it; never while a commit runs, whose own
- * reload lands before its result. Every word comes from `view` (core's,
- * through lib/order-partial.ts partialSheetView).
+ * reload lands before its result. The preview goes then too: "holds 2 of 3
+ * units now" is no longer true of an order someone else moved on. Every word
+ * comes from `view` (core's, through lib/order-partial.ts partialSheetView).
  *
  * Built in the sibling-backdrop shape (sheet-backdrop-guard.test.ts): a scrim
  * Pressable BEHIND the card, the card a plain View, so VoiceOver reaches each
@@ -155,54 +156,59 @@ export function ApprovePartialSheet({
             </Pressable>
           </View>
 
-          <ScrollView style={{ maxHeight: bodyMaxHeight }} contentContainerStyle={{ gap: 10 }}>
-            {view.summary ? (
-              <Body size={14.5} color={c.ink}>
-                {view.summary}
-              </Body>
-            ) : null}
-            {view.items.map((item) => (
-              // One VoiceOver element per item: "Maus I (2 lines), holds 6 of
-              // 10, 4 to ship when they arrive" (core's words).
-              <View
-                key={item.itemId}
-                accessible
-                accessibilityLabel={item.accessibilityLabel}
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'flex-start',
-                  gap: 12,
-                  paddingVertical: 8,
-                  borderTopWidth: 1,
-                  borderTopColor: c.hair,
-                }}
-              >
-                <Body size={14} color={c.ink} style={{ flex: 1 }}>
-                  {item.label}
+          {/* The preview, only while it can still happen: once the order
+              moved on, the sentence below says why and nothing here is true
+              any more. */}
+          {movedOn ? null : (
+            <ScrollView style={{ maxHeight: bodyMaxHeight }} contentContainerStyle={{ gap: 10 }}>
+              {view.summary ? (
+                <Body size={14.5} color={c.ink}>
+                  {view.summary}
                 </Body>
-                <Mono size={12} color={c.ink2} style={{ flexShrink: 1, textAlign: 'right' }}>
-                  {item.detail}
-                </Mono>
-              </View>
-            ))}
-            {view.note ? (
-              <Body size={12.5} color={c.ink3}>
-                {view.note}
-              </Body>
-            ) : null}
-            {/* When the stock was checked (the web dialog's order: summary,
+              ) : null}
+              {view.items.map((item) => (
+                // One VoiceOver element per item: "Maus I (2 lines), holds 6 of
+                // 10, 4 to ship when they arrive" (core's words).
+                <View
+                  key={item.itemId}
+                  accessible
+                  accessibilityLabel={item.accessibilityLabel}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'flex-start',
+                    gap: 12,
+                    paddingVertical: 8,
+                    borderTopWidth: 1,
+                    borderTopColor: c.hair,
+                  }}
+                >
+                  <Body size={14} color={c.ink} style={{ flex: 1 }}>
+                    {item.label}
+                  </Body>
+                  <Mono size={12} color={c.ink2} style={{ flexShrink: 1, textAlign: 'right' }}>
+                    {item.detail}
+                  </Mono>
+                </View>
+              ))}
+              {view.note ? (
+                <Body size={12.5} color={c.ink3}>
+                  {view.note}
+                </Body>
+              ) : null}
+              {/* When the stock was checked (the web dialog's order: summary,
                 items, note, then this). */}
-            {view.checkedAt ? (
-              <Body size={12} muted>
-                {view.checkedAt}
-              </Body>
-            ) : null}
-            {view.unavailable ? (
-              <Body size={13.5} color={ACCENT.warn}>
-                {view.unavailable}
-              </Body>
-            ) : null}
-          </ScrollView>
+              {view.checkedAt ? (
+                <Body size={12} muted>
+                  {view.checkedAt}
+                </Body>
+              ) : null}
+              {view.unavailable ? (
+                <Body size={13.5} color={ACCENT.warn}>
+                  {view.unavailable}
+                </Body>
+              ) : null}
+            </ScrollView>
+          )}
 
           {movedOn && !error ? (
             <Body size={13.5} color={ACCENT.warn}>
@@ -248,7 +254,10 @@ export function ApprovePartialSheet({
             accessibilityRole="button"
             accessibilityLabel={closeLabel}
             accessibilityState={{ disabled: busy }}
-            style={[styles.action, { borderWidth: 1, borderColor: c.hair, opacity: busy ? 0.5 : 1 }]}
+            style={[
+              styles.action,
+              { borderWidth: 1, borderColor: c.hair, opacity: busy ? 0.5 : 1 },
+            ]}
           >
             <Mono size={13} color={c.ink} maxFontSizeMultiplier={ACTION_CAP}>
               {closeLabel}

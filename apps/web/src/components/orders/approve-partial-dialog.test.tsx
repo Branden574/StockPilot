@@ -377,6 +377,12 @@ describe('Approve partial opens the preview (F2-3)', () => {
       'This order is no longer waiting for approval.',
     );
     expect(within(dialog).queryByTestId('approve-partial-moved-on')).toBeNull();
+    // Walk D2: the preview ("holds 2 of 3 units now") is no longer true of an
+    // order someone else approved, so it is not left above the sentence.
+    expect(within(dialog).queryByTestId('approve-partial-summary')).toBeNull();
+    expect(within(dialog).queryByTestId('approve-partial-items')).toBeNull();
+    expect(within(dialog).queryByTestId('approve-partial-checked-at')).toBeNull();
+    expect(dialog).not.toHaveTextContent(/holds \d/i);
     await user.click(within(dialog).getByTestId('approve-partial-close'));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(approvePartial).toHaveBeenCalledTimes(1);
@@ -394,6 +400,13 @@ describe('Approve partial opens the preview (F2-3)', () => {
     expect(within(dialog).queryByTestId('approve-partial-confirm')).toBeNull();
     expect(within(dialog).getByTestId('approve-partial-close')).toBeInTheDocument();
     expect(approvePartial).not.toHaveBeenCalled();
+    // Walk D2: the stale preview goes; the sentence is what the dialog is
+    // about now (its description).
+    expect(within(dialog).queryByTestId('approve-partial-summary')).toBeNull();
+    expect(within(dialog).queryByTestId('approve-partial-items')).toBeNull();
+    expect(within(dialog).queryByTestId('approve-partial-note')).toBeNull();
+    expect(within(dialog).queryByTestId('approve-partial-checked-at')).toBeNull();
+    expect(dialog).toHaveAccessibleDescription('This order is no longer waiting for approval.');
   });
 
   it("a server error shows core's sentence, never the database's text", async () => {

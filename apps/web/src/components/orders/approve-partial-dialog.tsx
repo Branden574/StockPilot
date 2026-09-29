@@ -68,8 +68,10 @@ type Step =
  * message, but the page behind is refreshed, and when the order is no longer
  * at the status the action starts from (another approver got there first, or
  * the order moved on while the preview was open), Close replaces Confirm and,
- * without a refusal to explain it, core says why. The dialog cannot be
- * dismissed while the commit and the re-read are in flight.
+ * without a refusal to explain it, core says why. The preview goes then too:
+ * "holds 2 of 3 units now" is no longer true of an order someone else moved
+ * on. The dialog cannot be dismissed while the commit and the re-read are in
+ * flight.
  *
  * An unavailable preview (a failed read, an item the viewer cannot see, an
  * item that moved warehouse, nothing free to resume: the page's stock gates
@@ -102,6 +104,9 @@ export function ApprovePartialDialog({
   const ConfirmIcon = preview.action === 'resume' ? RotateCcw : PackageCheck;
   // The order moved on under the preview: nothing to confirm any more.
   const movedOn = state.step === 'preview' && !partialActionApplies(preview.action, orderStatus);
+  // What the preview says ("holds 2 of 3 units now") is shown only while it
+  // can still happen: not over the result, and not once the order moved on.
+  const showPreview = state.step !== 'done' && !movedOn;
 
   async function confirm() {
     if (preview.state !== 'ok' || committing) return;
@@ -153,7 +158,7 @@ export function ApprovePartialDialog({
       <DialogContent className="max-w-lg" data-testid="approve-partial-dialog" data-action={preview.action}>
         <DialogHeader>
           <DialogTitle>{copy?.title ?? PARTIAL_ACTION_TITLE[preview.action]}</DialogTitle>
-          {state.step === 'done' ? null : copy ? (
+          {!showPreview ? null : copy ? (
             <DialogDescription data-testid="approve-partial-summary">{copy.summary}</DialogDescription>
           ) : (
             <DialogDescription data-testid="approve-partial-unavailable">
@@ -184,7 +189,7 @@ export function ApprovePartialDialog({
           )}
         </div>
 
-        {state.step !== 'done' && copy && preview.state === 'ok' && (
+        {showPreview && copy && preview.state === 'ok' && (
           <div className="space-y-3">
             <ul
               className="border-border divide-border max-h-72 divide-y overflow-y-auto rounded-lg border text-sm"
@@ -215,10 +220,14 @@ export function ApprovePartialDialog({
           </div>
         )}
 
+        {/* With the preview gone, this is what the dialog is about now: its
+            description. */}
         {movedOn && !(state.step === 'preview' && state.error) && (
-          <p role="status" className="text-sm" data-testid="approve-partial-moved-on">
-            {partialActionMovedOnCopy(preview.action)}
-          </p>
+          <DialogDescription asChild>
+            <p role="status" className="text-sm" data-testid="approve-partial-moved-on">
+              {partialActionMovedOnCopy(preview.action)}
+            </p>
+          </DialogDescription>
         )}
 
         {state.step === 'preview' && state.error && (

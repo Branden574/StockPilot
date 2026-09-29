@@ -419,6 +419,19 @@ describe('the approve-partial sheet (sibling backdrop, VoiceOver, 44 pt, Dynamic
     expect(code).toMatch(/maxFontSizeMultiplier=\{ACTION_CAP\}>\s*\{closeLabel\}/);
   });
 
+  // Walk D2: after the order moved on, the preview ("holds 2 of 3 units now")
+  // stayed above the sentence although someone else had approved the order.
+  // Mutation caught: the preview kept once Close replaced Confirm.
+  it('once the order moved on, the stale preview goes and only the sentence and Close stay', () => {
+    const code = codeOnly(sheet);
+    expect(code).toMatch(/\{movedOn \? null : \(\s*<ScrollView style=\{\{ maxHeight: bodyMaxHeight \}\}/);
+    // Everything the preview says is inside that ScrollView.
+    const body = code.slice(code.indexOf('<ScrollView'), code.indexOf('</ScrollView>'));
+    for (const word of ['{view.summary}', 'view.items.map', '{view.note}', '{view.checkedAt}', '{view.unavailable}']) {
+      expect(body).toContain(word);
+    }
+  });
+
   it('button labels stop growing at the control ceiling; the sentences grow', () => {
     const code = codeOnly(sheet);
     expect(code).toContain('const ACTION_CAP = capTo(13, TYPE_CEILING.control);');
