@@ -839,8 +839,15 @@ export class ItemImagesService {
    * primaryImagesWithThumbsForItems instead. Falls back to
    * `custom_fields.thumbnail_url` (external ISBN covers) for items with no
    * `item_images` row, same as the PDF signer.
+   *
+   * `opts.imaged`, when given, receives every item that HAS an item_images
+   * row, whether or not its URL could be signed, so a caller can tell "this
+   * item's image could not be loaded" from "this item has no image".
    */
-  async primaryMasterUrlsForItems(itemIds: string[]): Promise<Map<string, string>> {
+  async primaryMasterUrlsForItems(
+    itemIds: string[],
+    opts: { imaged?: Set<string> } = {},
+  ): Promise<Map<string, string>> {
     if (itemIds.length === 0) return new Map();
 
     type Row = { item_id: string; storage_path: string };
@@ -864,6 +871,7 @@ export class ItemImagesService {
     for (const row of data) {
       if (!pickByItem.has(row.item_id)) pickByItem.set(row.item_id, row);
     }
+    if (opts.imaged) for (const id of pickByItem.keys()) opts.imaged.add(id);
 
     // Through signedUrls: a cold cache pays ONE batched createSignedUrls for
     // every path instead of one request per item started all at once (the

@@ -300,6 +300,20 @@ export function ImageHoverPreview({
     };
   }, [open, compute]);
 
+  // Escape dismisses the preview without moving focus (WCAG 1.4.13): a
+  // keyboard user who focused the thumbnail can hide what it covers.
+  function closeNow(e: React.KeyboardEvent) {
+    if (e.key !== 'Escape') return;
+    if (openTimerRef.current) {
+      clearTimeout(openTimerRef.current);
+      openTimerRef.current = null;
+    }
+    if (!open) return;
+    e.stopPropagation();
+    setOpen(false);
+    setCoords(null);
+  }
+
   const trigger = (
     <span
       ref={triggerRef}
@@ -308,6 +322,7 @@ export function ImageHoverPreview({
       onMouseLeave={scheduleClose}
       onFocus={scheduleOpen}
       onBlur={scheduleClose}
+      onKeyDown={closeNow}
     >
       {children}
     </span>

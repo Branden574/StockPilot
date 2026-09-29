@@ -1,7 +1,9 @@
-import { useNavigation } from 'expo-router';
+import { type Href, useNavigation, useRouter } from 'expo-router';
 import {
   ArrowUpRight,
   BarChart3,
+  BookOpen,
+  ChevronRight,
   Menu,
   Package,
   PackageX,
@@ -21,15 +23,24 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BottomTabBarHeightContext } from 'expo-router/js-tabs';
 
+import {
+  BOOK_REPORT_CARD_DESCRIPTION,
+  BOOK_REPORT_KPI_LOAD_ERROR,
+  BOOK_REPORT_TITLE,
+} from '@stockpilot/core';
+
 import { Card } from '@/components/ui/card';
 import { MintWash } from '@/components/ui/mint-wash';
 import { IconChip } from '@/components/ui/row';
 import { StatCard } from '@/components/ui/stat-card';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
-import { useOrg } from '@/lib/use-org';
+import { isRole, showBookReportEntry } from '@/lib/book-order-totals-view';
+import { useEnabledModules } from '@/lib/enabled-modules';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useTheme } from '@/lib/use-theme';
+import { retryWorkspace, useWorkspace } from '@/lib/use-workspace';
 
 interface ReportSummary {
   itemCount: number;
@@ -39,6 +50,12 @@ interface ReportSummary {
   thirtyDayMovements: number;
 }
 
+/** The figures for one workspace, or that they could not be read. A failed
+ *  read is never shown as zeros. */
+type KpiState =
+  | { orgId: string; kind: 'ready'; summary: ReportSummary }
+  | { orgId: string; kind: 'error' };
+
 /**
  * Reports & insights screen. Lives in src/screens so two thin routes can
  * render the same component: the drawer destination app/(drawer)/reports.tsx
@@ -46,22 +63,40 @@ interface ReportSummary {
  * Customize tab bar). BottomTabBarHeightContext is undefined outside a tabs
  * navigator, so the extra scroll inset applies only in the tab rendering —
  * the drawer rendering is byte-for-byte today's layout.
+ *
+ * REPORTS (Book Order Totals, plan 9.1): the entry sits OUTSIDE the figures'
+ * loading branch, so a slow or failed figure read never hides it. Both entry
+ * points render this component, so the drawer and the tab offer it alike.
+ *
+ * The figures: any failed read shows "Couldn't load these figures. Pull to
+ * refresh." instead of zeros, and a workspace that could not be loaded no
+ * longer leaves the spinner turning forever (pull to refresh asks for it
+ * again).
  */
 export default function ReportsScreen() {
   const { c } = useTheme();
-  const { orgId } = useOrg();
+  const { activeOrgId: orgId, activeRole, loading: workspaceLoading } = useWorkspace();
   const navigation = useNavigation();
+  const router = useRouter();
+  const modules = useEnabledModules();
+  const perms = useEffectivePermissions();
+  const showBookReport = showBookReportEntry({
+    modules,
+    perms,
+    role: isRole(activeRole) ? activeRole : null,
+  });
   // 0 in the drawer; the translucent bar height inside the tabs navigator.
   const tabBarInset = React.useContext(BottomTabBarHeightContext) ?? 0;
-  const [summary, setSummary] = React.useState<ReportSummary | null>(null);
-  const [loading, setLoading] = React.useState(true);
+  const [kpi, setKpi] = React.useState<KpiState | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
 
   const load = React.useCallback(async () => {
     if (!orgId) return;
+    const forOrg = orgId;
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-    const [{ count: itemCount }, { count: outCount }, valueRpc, lowRpc, flaggedLow, { count: moves }] =
-      await Promise.all([
+    let results;
+    try {
+      results = await Promise.all([
         supabase
           .from('inventory_items')
           .select('id', { count: 'exact', head: true })
@@ -102,17 +137,31 @@ export default function ReportsScreen() {
           .eq('organization_id', orgId)
           .gte('created_at', since),
       ]);
-    setSummary({
-      itemCount: itemCount ?? 0,
-      outOfStockCount: outCount ?? 0,
-      inventoryValue: typeof valueRpc.data === 'number' ? valueRpc.data : 0,
-      lowStockCount: Math.max(
-        0,
-        (typeof lowRpc.data === 'number' ? lowRpc.data : 0) - (flaggedLow.count ?? 0),
-      ),
-      thirtyDayMovements: moves ?? 0,
+    } catch {
+      setKpi({ orgId: forOrg, kind: 'error' });
+      return;
+    }
+    const [items, out, valueRpc, lowRpc, flaggedLow, moves] = results;
+    // Every read must have answered: one failure is "couldn't load", never a
+    // zero standing in for a number that was not read.
+    if (results.some((r) => r.error)) {
+      setKpi({ orgId: forOrg, kind: 'error' });
+      return;
+    }
+    setKpi({
+      orgId: forOrg,
+      kind: 'ready',
+      summary: {
+        itemCount: items.count ?? 0,
+        outOfStockCount: out.count ?? 0,
+        inventoryValue: typeof valueRpc.data === 'number' ? valueRpc.data : 0,
+        lowStockCount: Math.max(
+          0,
+          (typeof lowRpc.data === 'number' ? lowRpc.data : 0) - (flaggedLow.count ?? 0),
+        ),
+        thirtyDayMovements: moves.count ?? 0,
+      },
     });
-    setLoading(false);
   }, [orgId]);
 
   React.useEffect(() => {
@@ -122,9 +171,22 @@ export default function ReportsScreen() {
 
   async function refresh() {
     setRefreshing(true);
-    await load();
-    setRefreshing(false);
+    try {
+      // No workspace (a launch offline): ask for it again; its arrival loads.
+      if (orgId) await load();
+      else await retryWorkspace();
+    } finally {
+      setRefreshing(false);
+    }
   }
+
+  // Only this workspace's figures are shown (a switch shows the spinner until
+  // its own arrive). Without a workspace, the spinner stops once loading it
+  // has ended, and the failure is said.
+  const current = kpi && kpi.orgId === orgId ? kpi : null;
+  const summary = current?.kind === 'ready' ? current.summary : null;
+  const kpiFailed = orgId ? current?.kind === 'error' : !workspaceLoading;
+  const loading = !kpiFailed && summary === null;
 
   const fmt = (n: number): { value: string; unit: string } => {
     if (n >= 1_000_000) return { value: `$${(n / 1_000_000).toFixed(1)}`, unit: 'M' };
@@ -138,7 +200,7 @@ export default function ReportsScreen() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={Menu} onPress={openDrawer} />
+          <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
         </View>
         <View style={styles.head}>
           <Eyebrow>ANALYTICS</Eyebrow>
@@ -152,7 +214,43 @@ export default function ReportsScreen() {
         contentContainerStyle={{ padding: 20, paddingTop: 12, paddingBottom: 40 + tabBarInset }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
       >
-        {loading || !summary ? (
+        {showBookReport ? (
+          <View style={{ marginBottom: 20, gap: 10 }}>
+            <Eyebrow>REPORTS</Eyebrow>
+            <Pressable
+              onPress={() => router.push('/reports/book-order-totals' as Href)}
+              accessibilityRole="button"
+              accessibilityLabel={`${BOOK_REPORT_TITLE}. ${BOOK_REPORT_CARD_DESCRIPTION}`}
+              accessibilityHint="Opens the report"
+              style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1, minHeight: 44 })}
+            >
+              <Card padding={14}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+                  <View style={[styles.entryIcon, { borderColor: c.hair, backgroundColor: c.card }]}>
+                    <BookOpen size={16} color={c.ink} strokeWidth={1.5} />
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
+                      {BOOK_REPORT_TITLE}
+                    </Body>
+                    <Body size={13} muted>
+                      {BOOK_REPORT_CARD_DESCRIPTION}
+                    </Body>
+                  </View>
+                  <ChevronRight size={16} color={c.ink3} strokeWidth={1.6} />
+                </View>
+              </Card>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {kpiFailed ? (
+          <Card padding={16}>
+            <Body size={14.5} accessibilityRole="alert">
+              {BOOK_REPORT_KPI_LOAD_ERROR}
+            </Body>
+          </Card>
+        ) : loading || !summary ? (
           <ActivityIndicator color={c.ink} style={{ marginTop: 40 }} />
         ) : (
           <>
@@ -335,6 +433,14 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   col: { flexBasis: '48%', flexGrow: 1 },
+  entryIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   activityCard: {
     marginTop: 20,
     padding: 22,

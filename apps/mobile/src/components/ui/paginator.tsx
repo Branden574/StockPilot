@@ -12,11 +12,11 @@ import { useTheme } from '@/lib/use-theme';
  *   pageNumbers(5, 8)  → [1, '…', 4, 5, 6, '…', 8]
  *   pageNumbers(8, 8)  → [1, '…', 4, 5, 6, 7, 8]
  */
-function pageNumbers(current: number, total: number): Array<number | 'ellipsis'> {
+function pageNumbers(current: number, total: number): (number | 'ellipsis')[] {
   if (total <= 7) {
     return Array.from({ length: total }, (_, i) => i + 1);
   }
-  const result: Array<number | 'ellipsis'> = [1];
+  const result: (number | 'ellipsis')[] = [1];
   if (current <= 4) {
     for (let i = 2; i <= 5; i++) result.push(i);
     result.push('ellipsis');
@@ -52,6 +52,7 @@ export function Paginator({
   rangeEnd,
   total,
   onPageChange,
+  hideRange = false,
 }: {
   page: number;
   /** Pages available — derived from GROUPS by the caller, never from a row size. */
@@ -63,6 +64,9 @@ export function Paginator({
   /** Rows in the full filtered set the pages divide up. */
   total: number;
   onPageChange: (p: number) => void;
+  /** The caller prints its own range line (core formatListFooter), so the
+   *  SHOWING line here would say the same thing twice. */
+  hideRange?: boolean;
 }) {
   const { c } = useTheme();
   const totalPages = Math.max(1, pageCount);
@@ -73,15 +77,17 @@ export function Paginator({
 
   return (
     <View style={{ paddingVertical: 18, alignItems: 'center', gap: 12 }}>
-      <Mono
-        size={10.5}
-        tracking={0.12}
-        upper
-        color={c.ink4}
-        maxFontSizeMultiplier={capTo(10.5, TYPE_CEILING.chrome)}
-      >
-        SHOWING {start.toLocaleString()}–{end.toLocaleString()} OF {total.toLocaleString()}
-      </Mono>
+      {hideRange ? null : (
+        <Mono
+          size={10.5}
+          tracking={0.12}
+          upper
+          color={c.ink4}
+          maxFontSizeMultiplier={capTo(10.5, TYPE_CEILING.chrome)}
+        >
+          SHOWING {start.toLocaleString()}–{end.toLocaleString()} OF {total.toLocaleString()}
+        </Mono>
+      )}
       {/*
         flexWrap + centering is the box fix that pairs with the caps below.
         Nine 52pt buttons on a 353pt screen walked the Next arrow clean off the
@@ -105,8 +111,11 @@ export function Paginator({
         />
         {nums.map((n, i) =>
           n === 'ellipsis' ? (
+            // A gap marker, not a control: VoiceOver skips it.
             <View
               key={`e${i}`}
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
               style={{ width: 22, alignItems: 'center', justifyContent: 'center' }}
             >
               <Mono
@@ -150,6 +159,10 @@ function PageButton({
     <Pressable
       onPress={onPress}
       hitSlop={4}
+      // VoiceOver: "Page 2, button, selected" for the page on screen.
+      accessibilityRole="button"
+      accessibilityLabel={`Page ${num}`}
+      accessibilityState={{ selected: active }}
       style={({ pressed }) => ({
         minWidth: 36,
         // minHeight pairs with the chrome cap on the number below: the button
@@ -195,6 +208,10 @@ function PaginatorArrow({
       onPress={onPress}
       disabled={disabled}
       hitSlop={6}
+      // An icon-only arrow had no words at all for VoiceOver.
+      accessibilityRole="button"
+      accessibilityLabel={direction === 'prev' ? 'Previous page' : 'Next page'}
+      accessibilityState={{ disabled: Boolean(disabled) }}
       style={({ pressed }) => ({
         width: 36,
         height: 36,

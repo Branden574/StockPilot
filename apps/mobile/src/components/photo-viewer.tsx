@@ -38,6 +38,7 @@ export function PhotoViewer({
   onClose,
   label,
   onError,
+  cacheKey,
 }: {
   uri: string;
   visible: boolean;
@@ -46,6 +47,9 @@ export function PhotoViewer({
   /** The image could not be loaded (an expired signed link, a missing
    *  file). Without it a failed image stays blank, as before. */
   onError?: () => void;
+  /** The disk cache key, when the caller's rule differs from CachedImage's
+   *  default (an external cover whose query identifies the picture). */
+  cacheKey?: string;
 }) {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
@@ -94,6 +98,7 @@ export function PhotoViewer({
           >
             <CachedImage
               uri={uri}
+              cacheKey={cacheKey}
               style={{ width, height }}
               contentFit="contain"
               onError={onError}

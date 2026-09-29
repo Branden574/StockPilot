@@ -1193,3 +1193,100 @@ describe('the draft POs count release is held as a draft', () => {
     expect(text).not.toMatch(/\bbook\b/i);
   });
 });
+
+/**
+ * Book Order Totals' release is held as a DRAFT until its phone release
+ * (pnpm release:ota: the phone's Book Order Totals screens) and the Demo Co
+ * walk, as F1-3's, F1-4's, F1-5's and F2-1's were: published with the web
+ * page alone, it would tell phone users about a report their app does not
+ * have yet. Pinned by id, never by index. The follow-up that publishes it
+ * sets 'published' and the real publishedAt, re-reads its words against what
+ * shipped, and flips the first pin here.
+ */
+describe('Book Order Totals is held as a draft', () => {
+  const ID = 'book-order-totals-2026-09';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+  const published = (): Release => ({ ...release(), status: 'published' });
+
+  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+    expect(release().status).toBe('draft');
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).not.toContain(ID);
+    expect(list.latestUnread?.id).not.toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).not.toContain(ID);
+    // Preparing it changes nothing a client can observe.
+    expect(registryFingerprint(RELEASES)).toBe(
+      registryFingerprint(RELEASES.filter((r) => r.id !== ID)),
+    );
+    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(ID);
+  });
+
+  it('sits above every published release (pinned by id), dated after every other release, so publishing it makes it the newest', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('is addressed as the report is reached: Orders on, then Books on with reports:read, the permission the linked page checks (both entries)', () => {
+    expect(release().audience).toEqual({ modules: ['orders'] });
+    expect(release().entries.map((e) => e.id)).toEqual([
+      'book-order-totals-report',
+      'book-order-totals-files',
+    ]);
+    const [report, files] = release().entries;
+    expect(report!.audience).toEqual({ anyPermission: ['reports:read'], modules: ['books'] });
+    // The files entry links to the page, which redirects anyone without
+    // reports:read, so it is addressed by reports:read too (never by
+    // reports:export alone, which would tell an export-only override about a
+    // page that bounces them); its text says the buttons need export access.
+    expect(files!.audience).toEqual({ anyPermission: ['reports:read'], modules: ['books'] });
+    expect(files!.howItAffectsYou).toContain(
+      'Only people who can export reports see the download buttons.',
+    );
+    for (const e of release().entries) {
+      expect(e.area, e.id).toBe('Reports');
+      expect(e.link, e.id).toEqual({
+        href: '/dashboard/reports/book-order-totals',
+        label: 'Book Order Totals',
+      });
+    }
+    const reader = (permissions: ReleaseViewer['permissions'], enabledModules: ModuleId[]) =>
+      visibleReleases([published()], { role: 'viewer', permissions, enabledModules })[0]?.entries.map(
+        (e) => e.id,
+      ) ?? [];
+    expect(reader(['reports:read'], ['orders', 'books'])).toEqual([
+      'book-order-totals-report',
+      'book-order-totals-files',
+    ]);
+    expect(reader(['reports:read', 'reports:export'], ['orders', 'books'])).toEqual([
+      'book-order-totals-report',
+      'book-order-totals-files',
+    ]);
+    // An export-only override cannot open the page (it redirects without
+    // reports:read), so nothing is announced to it.
+    expect(reader(['reports:export'], ['orders', 'books'])).toEqual([]);
+    expect(reader(['reports:read', 'reports:export'], ['orders'])).toEqual([]);
+    expect(reader(['reports:read', 'reports:export'], ['books'])).toEqual([]);
+    expect(reader(['orders:request'], ['orders', 'books'])).toEqual([]);
+  });
+
+  it('says copies requested, never purchased, stock or delivered, and never "unique titles"', () => {
+    const text = readerText(release()).join(' ');
+    expect(text).toContain('Total books ordered (copies requested through Orders)');
+    expect(text).toContain('Distinct book entries');
+    expect(text).toContain('not copies purchased, handed over or in stock');
+    expect(text).toContain('a file is never cut short');
+    expect(text).toContain('on an Android phone, export from the web for now');
+    expect(text).not.toMatch(/\bunique titles?\b|\bdelivered\b|\bsnapshot\b|\bthe book\b|%/i);
+  });
+});

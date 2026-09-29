@@ -2,8 +2,15 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
+import { COVER_HOST_ALLOWLIST } from '@/lib/books/cover-hosts';
+import { safeFetch } from '@/lib/ssrf-guard';
+
 const PER_IMAGE_TIMEOUT_MS = 8_000;
 const DATA_URI_CACHE_TTL_SEC = 25 * 24 * 60 * 60; // 25 days
+/** Largest image this helper will read. Checked on Content-Length first,
+ *  then on the bytes actually streamed, so a host that omits or lies about
+ *  the length cannot make a function buffer an unbounded body. */
+export const PDF_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 
 /**
  * @react-pdf/image@3.x supports JPEG, PNG, and SVG ONLY — no WebP, no
@@ -50,6 +57,131 @@ async function ensurePdfCompatibleBytes(
 }
 
 /**
+ * Downscale for a small PDF cell (the Book Order Totals covers): the longest
+ * edge at most `maxEdgePx`, never enlarged, aspect kept (fit inside, so a
+ * portrait cover is never cropped), transparency flattened to white, JPEG
+ * q75. A 2048px master becomes a few KB instead of ~40-70 KB per row.
+ */
+async function downscaleForPdf(rawBytes: Buffer, maxEdgePx: number): Promise<Buffer | null> {
+  try {
+    const { default: sharp } = await import('sharp');
+    return await sharp(rawBytes)
+      .resize({ width: maxEdgePx, height: maxEdgePx, fit: 'inside', withoutEnlargement: true })
+      .flatten({ background: '#ffffff' })
+      .jpeg({ quality: 75, mozjpeg: true })
+      .toBuffer();
+  } catch (err) {
+    console.warn(
+      `[pdf-image] downscale failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
+}
+
+/** The project's storage origin (the signed item-images URLs). */
+function storageOrigin(): string | null {
+  const raw = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!raw) return null;
+  try {
+    return new URL(raw.trim()).origin;
+  } catch {
+    return null;
+  }
+}
+
+/** Where a URL may be fetched from, or null when it may not be fetched. */
+export function pdfImageFetchRoute(url: string): 'storage' | 'external' | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  const origin = storageOrigin();
+  if (origin && parsed.origin === origin) return 'storage';
+  if (parsed.protocol === 'https:' || parsed.protocol === 'http:') return 'external';
+  return null;
+}
+
+/**
+ * What a log line may say about a URL. A storage URL keeps its first 80
+ * characters (the path, never reaching the ?token= of a signed URL); any
+ * other URL is reduced to its host.
+ */
+export function pdfImageLogLabel(url: string): string {
+  const route = pdfImageFetchRoute(url);
+  if (route === 'storage') return url.split('?')[0]!.slice(0, 80);
+  try {
+    return `host ${new URL(url).hostname}`;
+  } catch {
+    return 'unparseable url';
+  }
+}
+
+async function readCappedBody(res: Response, maxBytes: number): Promise<Buffer> {
+  const advertised = Number(res.headers.get('content-length'));
+  if (Number.isFinite(advertised) && advertised > maxBytes) {
+    throw new Error('pdf-image over the byte cap');
+  }
+  const body = res.body;
+  if (!body) return Buffer.from(await res.arrayBuffer());
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new Error('pdf-image over the byte cap');
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength)));
+}
+
+/**
+ * One image's bytes as a data URI, or a throw (see the note on the cached
+ * functions). Storage URLs are fetched as before. Any other URL goes through
+ * the SSRF-hardened safeFetch with the book-cover host allowlist (pinned IP,
+ * every redirect hop re-validated): the legacy custom_fields.thumbnail_url
+ * this helper is fed is checked only for type and length where it is stored
+ * and is writable by staff, so a bare fetch() of it could reach internal
+ * hosts. A host off the allowlist throws, and the row gets its placeholder.
+ */
+async function fetchImageAsDataUri(url: string, maxEdgePx: number | null): Promise<string> {
+  const route = pdfImageFetchRoute(url);
+  if (!route) throw new Error('pdf-image url not fetchable');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PER_IMAGE_TIMEOUT_MS);
+  try {
+    const res =
+      route === 'storage'
+        ? await fetch(url, { signal: controller.signal })
+        : ((await safeFetch(url, {
+            signal: controller.signal,
+            hostAllowlist: COVER_HOST_ALLOWLIST,
+          })) as unknown as Response);
+    if (!res.ok) throw new Error(`pdf-image fetch ${res.status}`);
+    const rawBuf = await readCappedBody(res, PDF_IMAGE_MAX_BYTES);
+    if (maxEdgePx !== null) {
+      const small = await downscaleForPdf(rawBuf, maxEdgePx);
+      if (!small) throw new Error('pdf-image undecodable bytes');
+      return `data:image/jpeg;base64,${small.toString('base64')}`;
+    }
+    const declaredCt = res.headers.get('content-type') ?? 'image/webp';
+    const compat = await ensurePdfCompatibleBytes(rawBuf, declaredCt);
+    if (!compat) throw new Error('pdf-image undecodable bytes');
+    const b64 = compat.bytes.toString('base64');
+    return `data:${compat.contentType};base64,${b64}`;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Cached per-URL image fetch → base64 data URI. Same URL across
  * requests resolves to the same data URI (Vercel data cache, 25-day
  * TTL). For PDF rendering this means: first request pays the image
@@ -79,26 +211,20 @@ async function ensurePdfCompatibleBytes(
 // PDF until someone bumped the cache-key version (the recurring v2/v3/v4 saga).
 // The caller (prefetchImagesAsDataUris) catches the throw → placeholder.
 const getCachedImageDataUri = unstable_cache(
-  async (url: string): Promise<string> => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PER_IMAGE_TIMEOUT_MS);
-    try {
-      const res = await fetch(url, { signal: controller.signal });
-      if (!res.ok) throw new Error(`pdf-image fetch ${res.status}`);
-      const rawBuf = Buffer.from(await res.arrayBuffer());
-      const declaredCt = res.headers.get('content-type') ?? 'image/webp';
-      const compat = await ensurePdfCompatibleBytes(rawBuf, declaredCt);
-      if (!compat) throw new Error('pdf-image undecodable bytes');
-      const b64 = compat.bytes.toString('base64');
-      return `data:${compat.contentType};base64,${b64}`;
-    } finally {
-      clearTimeout(timer);
-    }
-  },
+  async (url: string): Promise<string> => fetchImageAsDataUri(url, null),
   // v5 (2026-06-02): bumped to evict 25-day-poisoned null entries from earlier
   // transient failures (the cause of "a lot of item images missing in PDFs"),
   // AND the fn now throws-instead-of-caching-null so this stops recurring.
+  // Kept at v5 for the unsized path so existing PDFs keep their warm cache.
   ['pdf-image-data-uri-v5'],
+  { revalidate: DATA_URI_CACHE_TTL_SEC, tags: ['pdf-image-data-uri'] },
+);
+
+/** The downscaled variant. Its own key (v6) and the size as an argument, so
+ *  a sized entry and an unsized one for the same URL never collide. */
+const getCachedSizedImageDataUri = unstable_cache(
+  async (url: string, maxEdgePx: number): Promise<string> => fetchImageAsDataUri(url, maxEdgePx),
+  ['pdf-image-data-uri-v6'],
   { revalidate: DATA_URI_CACHE_TTL_SEC, tags: ['pdf-image-data-uri'] },
 );
 
@@ -114,12 +240,14 @@ const getCachedImageDataUri = unstable_cache(
  * Each individual fetch goes through the Vercel data cache (25-day
  * TTL) so warm renders of the same item set skip image I/O entirely.
  *
- * Failures (per-image timeout, 404, network blip) are returned as
- * `null` so the consumer can render a placeholder instead of
- * erroring the whole document.
+ * Failures (per-image timeout, 404, network blip, a host off the cover
+ * allowlist, a body over the byte cap) are returned as `null` so the
+ * consumer can render a placeholder instead of erroring the whole document.
  *
  * Caller passes `[key, signedUrl]` pairs; the key round-trips so the
  * consumer can map the result back to its row / item / whatever.
+ * `opts.maxEdgePx` downscales every image (see downscaleForPdf); existing
+ * callers pass nothing and get the bytes as before.
  */
 // Bound concurrent image fetches. A long report (now up to 1000 photos) must
 // not fire 1000 simultaneous storage requests on a cold render — that floods
@@ -130,10 +258,15 @@ const PREFETCH_CONCURRENCY = 24;
 
 export async function prefetchImagesAsDataUris<K>(
   entries: Iterable<readonly [K, string]>,
+  opts: { maxEdgePx?: number } = {},
 ): Promise<Map<K, string | null>> {
   const out = new Map<K, string | null>();
   const list = Array.from(entries);
   if (list.length === 0) return out;
+  const maxEdgePx =
+    typeof opts.maxEdgePx === 'number' && Number.isFinite(opts.maxEdgePx) && opts.maxEdgePx > 0
+      ? Math.round(opts.maxEdgePx)
+      : null;
 
   let cursor = 0;
   async function worker(): Promise<void> {
@@ -141,14 +274,19 @@ export async function prefetchImagesAsDataUris<K>(
       const entry = list[cursor++];
       if (!entry) break;
       const [key, url] = entry;
-      // getCachedImageDataUri throws on failure (so failures aren't negatively
+      // The cached fns throw on failure (so failures aren't negatively
       // cached). Swallow here → null → consumer renders a placeholder, and the
       // NEXT render retries the fetch instead of serving a stuck null.
       try {
-        out.set(key, await getCachedImageDataUri(url));
+        out.set(
+          key,
+          maxEdgePx === null
+            ? await getCachedImageDataUri(url)
+            : await getCachedSizedImageDataUri(url, maxEdgePx),
+        );
       } catch (err) {
         console.warn(
-          `[pdf-image] prefetch failed for ${url.slice(0, 80)}: ${err instanceof Error ? err.message : String(err)}`,
+          `[pdf-image] prefetch failed for ${pdfImageLogLabel(url)}: ${err instanceof Error ? err.message : String(err)}`,
         );
         out.set(key, null);
       }

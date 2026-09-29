@@ -28,6 +28,63 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'book-order-totals-2026-09',
+    revision: 1,
+    // HELD AS A DRAFT until the phone update (pnpm release:ota: the phone's
+    // Book Order Totals screens) and the Demo Co walk, as F1-3's, F1-4's,
+    // F1-5's and F2-1's were: published with the web page alone, it would
+    // tell phone users about a report their app does not have yet. The
+    // follow-up that publishes it sets 'published' and the real
+    // publishedAt, re-reads every sentence against what shipped (the phone's
+    // export is iPhone only; Android shows "Export from the web on Android
+    // for now.", said in the files entry), and flips the draft pin in
+    // registry.test.ts.
+    //
+    // Addressed as the report is reached: Orders on (the release), then Books
+    // on with reports:read, the permission the linked page checks, for both
+    // entries. The files entry is not addressed by reports:export: an
+    // export-only override would be told about a page that redirects it. Its
+    // text says the buttons need export access.
+    status: 'draft',
+    title: 'See which books were ordered, with their covers',
+    summary:
+      'Reports has a new Book Order Totals report on the web and in the mobile app. It lists each book people asked for through Orders with its cover, the copies requested, how many orders asked for it and the latest order date, with the total across every matching book at the top. View orders shows the orders behind each total.',
+    publishedAt: '2026-09-30T17:00:00Z',
+    audience: { modules: ['orders'] },
+    entries: [
+      {
+        id: 'book-order-totals-report',
+        category: 'new',
+        area: 'Reports',
+        title: 'Book Order Totals: which books were ordered, and how many copies',
+        whatChanged:
+          'Reports has a Book Order Totals report. At the top are Total books ordered (copies requested through Orders), Distinct book entries and Orders containing books. Each book is listed with its cover, title, SKU and ISBN, the copies requested, the number of orders and the latest order date, 25 to a page, most copies first. View orders lists the orders behind a book. Filters narrow it by the date orders were placed, status, warehouse and category, and search finds a title, SKU or ISBN.',
+        whyItMatters:
+          'Finding how many copies of each book were requested meant adding up orders by hand. These totals come from the order lines themselves, so every page, search and file agrees with them.',
+        howItAffectsYou:
+          "The totals count copies requested, not copies purchased, handed over or in stock, from each order's saved lines and current status. By default they cover all time and every order awaiting approval, in progress, backordered or completed; denied and cancelled requests are left out unless you include them. You see only books and warehouses you have access to. How this is counted, on the report, says what the figures can and cannot show.",
+        whatToDo: 'No action needed. Open Reports, then Book Order Totals.',
+        link: { href: '/dashboard/reports/book-order-totals', label: 'Book Order Totals' },
+        audience: { anyPermission: ['reports:read'], modules: ['books'] },
+      },
+      {
+        id: 'book-order-totals-files',
+        category: 'new',
+        area: 'Reports',
+        title: 'Download Book Order Totals as a CSV or PDF',
+        whatChanged:
+          'Book Order Totals downloads as a CSV file (data only, no covers) or as a PDF with or without covers. A file holds every book that matches the filters on screen, not only the page you are looking at, and carries its own generation time. The PDF shows covers for the first 500 books and says so; every row and total is still included.',
+        whyItMatters:
+          'A list of the books requested can be shared or kept without copying figures from the screen.',
+        howItAffectsYou:
+          'Only people who can export reports see the download buttons. When a report has more books than one file can hold, the button says so and asks you to narrow the filters; a file is never cut short. In the mobile app the files download on an iPhone; on an Android phone, export from the web for now.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/reports/book-order-totals', label: 'Book Order Totals' },
+        audience: { anyPermission: ['reports:read'], modules: ['books'] },
+      },
+    ],
+  },
+  {
     id: 'order-readiness-draft-pos-2026-09',
     revision: 1,
     // The Why and the line sentence are core's words, shown by the web order

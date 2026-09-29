@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   ArrowLeftRight,
   BarChart3,
+  BookOpen,
   CalendarClock,
   ChevronRight,
   Clock,
@@ -16,7 +17,7 @@ import {
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
-import { can } from '@stockpilot/core';
+import { BOOK_REPORT_CARD_DESCRIPTION, BOOK_REPORT_TITLE, can } from '@stockpilot/core';
 
 import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -102,10 +103,27 @@ export default async function ReportsPage() {
   if (!can(ctx, 'reports:read')) {
     redirect('/dashboard');
   }
-  const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
+  const [{ enabled: lotSerialEnabled }, orders, books] = await Promise.all([
+    checkModuleAccess('lot_serial'),
+    checkModuleAccess('orders'),
+    checkModuleAccess('books'),
+  ]);
+  // Book Order Totals reads Orders AND Books; its page checks both again.
+  const bookReports: Report[] =
+    orders.enabled && books.enabled
+      ? [
+          {
+            slug: 'book-order-totals',
+            name: BOOK_REPORT_TITLE,
+            desc: BOOK_REPORT_CARD_DESCRIPTION,
+            icon: BookOpen,
+          },
+        ]
+      : [];
   const reports: Report[] = lotSerialEnabled
     ? [
         ...REPORTS,
+        ...bookReports,
         {
           slug: 'lot-expiry',
           name: 'Aging & expiry',
@@ -119,7 +137,7 @@ export default async function ReportsPage() {
           icon: Recycle,
         },
       ]
-    : REPORTS;
+    : [...REPORTS, ...bookReports];
 
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8 sm:px-6">
@@ -127,7 +145,7 @@ export default async function ReportsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Reports</h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            {reports.length} pre-baked reports — every one is exportable to CSV.
+            {reports.length} pre-baked reports.
           </p>
         </div>
         <div className="flex items-center gap-2">

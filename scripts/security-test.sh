@@ -328,6 +328,22 @@ PGTAP_TESTS=(
   # the last units and the lock order against approve and complete_picking,
   # in both start orders, are scripts/db-concurrency/0378_hold_race.sh.
   supabase/tests/0378_order_hold_stock.test.sql
+  # Book Order Totals (0379): five SECURITY INVOKER functions (so orders,
+  # lines, items and warehouses RLS all apply), each with its gates in its
+  # body (signed in: 42501 unauthenticated; a member holding reports:read,
+  # else the SAME 42501 forbidden for a non-member, a disabled member or a
+  # revoked permission; the orders and books modules: P0001
+  # module_disabled), EXECUTE to authenticated only (anon, service_role and
+  # PUBLIC revoked). Export mode (every row in one answer) also needs
+  # reports:export in the body, so a direct RPC call cannot pull the whole
+  # report past the export permission. Every total is limited to the books and warehouses the
+  # caller can read: warehouse-, charter- and category-scoped members, and a
+  # member of two orgs with a cross-org line planted each way. Filter ids
+  # are validated against rows the caller can read. No answer carries
+  # requester data; `mine` is a boolean about the caller. Writes nothing and
+  # never raises 40001/40P01. The same file holds the brief's acceptance
+  # numbers and the reconciliation of totals, pages, drill-downs and exports.
+  supabase/tests/0379_book_order_totals.test.sql
 
   # Storage and attachment exposure.
   supabase/tests/0026_avatar_logo_buckets.test.sql
@@ -485,6 +501,31 @@ WEB_TESTS=(
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
   src/lib/locations/scope.test.ts
+
+  # Book Order Totals (0379): the service gate (reports:read with the MFA
+  # step-up, orders and books modules) before any read, the verified
+  # organization only, fixed error words, not_found for a hidden book, order
+  # links only for orders:approve or the caller's own order, covers only for
+  # books the caller's RLS read returned and only from trusted URLs; the read
+  # routes (gate before query, warehouse required, never the view cookie);
+  # the export route (reports:export before the rate limit, one export-mode
+  # statement, refused above its ceiling before any byte or audit row, audit
+  # awaited, streamed, no-store); the CSV (formula guard, CR quoting,
+  # sanitized one-cell metadata lines, parsed back with exceljs and
+  # papaparse); the PDF image prefetch (SSRF: safeFetch with the cover
+  # allowlist for any non-storage host, byte cap) and the cover trust filter.
+  src/server/services/book-order-totals.test.ts
+  src/app/api/v1/reports/book-order-totals/route.test.ts
+  src/app/api/v1/reports/book-order-totals/export/route.test.ts
+  src/lib/reports/book-order-totals/export-content.test.ts
+  src/lib/reports/book-order-totals/trusted-cover-url.test.ts
+  src/lib/pdf/image-prefetch.test.ts
+  # The page: one awaited answer for every number, no figures on a failure,
+  # the MFA state, the concrete warehouse in every derived URL, export
+  # controls only for reports:export; the drill-down: order links only where
+  # openable, late or mismatched answers dropped.
+  src/components/reports/book-order-totals/report-body.test.tsx
+  src/components/reports/book-order-totals/orders-drawer.test.tsx
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -537,6 +578,15 @@ MOBILE_TESTS=(
   src/lib/session-scope.test.ts
   src/lib/workspace-keys.wiring.test.ts
   src/lib/cycle-count-sync.backoff.sqlite.test.ts
+
+  # Book Order Totals on the phone: an answer for another workspace, warehouse
+  # or account (a sign-out, a switch) is dropped, never shown; remembered
+  # answers are keyed by account, workspace, every filter and the page, and
+  # offline shows only the exact key with its time. The export download sends
+  # the Bearer token and the REPORT's workspace to the API origin only, deletes
+  # a refused or late file, and is never shared after the account changed.
+  src/lib/book-order-totals-api.test.ts
+  src/lib/report-export-download.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

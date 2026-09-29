@@ -241,6 +241,11 @@ function RootGate() {
         <Stack.Screen name="maintenance/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="exceptions/[id]" options={{ presentation: 'card' }} />
         <Stack.Screen name="location/[id]" options={{ presentation: 'card' }} />
+        {/* Book Order Totals: pushed over the drawer (or the Reports tab), so
+            the shared Reports screen stays underneath and Back returns to it;
+            the drill-down is pushed over the list, keeping its filters. */}
+        <Stack.Screen name="reports/book-order-totals/index" options={{ presentation: 'card' }} />
+        <Stack.Screen name="reports/book-order-totals/[itemId]" options={{ presentation: 'card' }} />
         <Stack.Screen name="schedule/new" options={{ presentation: 'card' }} />
         <Stack.Screen name="ai/chat" options={{ presentation: 'card' }} />
         <Stack.Screen name="zendesk/web" options={{ presentation: 'card' }} />

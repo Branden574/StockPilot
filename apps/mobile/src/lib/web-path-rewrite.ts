@@ -9,6 +9,8 @@
  * Rules: known pages → native twin; web-only pages → the inbox; any other
  * /dashboard/* → home. Non-/dashboard paths pass through untouched.
  */
+import { bookReportNativePath } from './book-order-totals-link';
+
 const UUID = '([0-9a-fA-F-]{36})';
 const UUID_ONLY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -137,6 +139,15 @@ const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
   // app/dashboard/ (see the cycle-count note above).
   { re: new RegExp(`/dashboard/locations/${UUID}`), to: (m) => `/location/${m[1]}` },
   { re: /\/dashboard\/locations(\?.*)?$/, to: () => '/locations' },
+  // Book Order Totals has a native twin (app/reports/book-order-totals).
+  // Its filters ride along, but only the keys core's parseBookReportQuery
+  // accepts (bookReportNativePath drops the rest, and the web's warehouse
+  // view label). Before the bare Reports rule, which the `$` keeps from
+  // swallowing it anyway. Other report pages (/dashboard/reports/<slug>) have
+  // no native twin and still fall through to home. The cold-start shim is
+  // app/dashboard/reports/book-order-totals.tsx.
+  { re: /\/dashboard\/reports\/book-order-totals(\?.*)?$/, to: (m) => bookReportNativePath(m[1]) },
+  { re: /\/dashboard\/reports(\?.*)?$/, to: () => '/reports' },
   { re: /^\/dashboard(\/.*)?$/, to: () => '/' },
 ];
 
