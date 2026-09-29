@@ -120,7 +120,15 @@ export function BookReportFilterBar(props: BookReportFilterBarProps) {
           }
         />
       ) : null}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-[repeat(5,minmax(0,1fr))]">
+      {/* Five controls on one row at desktop widths, the warehouse column
+          widest ("All warehouses you can see" is cut off in a fifth of
+          max-w-6xl). A custom range's two dates are their own full-width
+          row below it (lg:order-last), never a sixth cell that pushes Sort
+          onto a second row. */}
+      <div
+        data-filter-grid
+        className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)]"
+      >
         <DateRangeControl
           key={`${query.range}|${query.from ?? ''}|${query.to ?? ''}`}
           query={query}
@@ -201,30 +209,34 @@ function DateRangeControl({
   const id = React.useId();
 
   return (
-    <div className={cn('flex flex-col gap-1.5', choice === 'custom' && 'sm:col-span-2')}>
-      <label htmlFor={`${id}-range`} className={LABEL}>
-        {BOOK_REPORT_UI.dateRange}
-      </label>
-      <select
-        id={`${id}-range`}
-        className={CONTROL}
-        value={choice}
-        onChange={(e) => {
-          const next = e.target.value as BookReportRange;
-          setChoice(next);
-          setError(null);
-          if (next !== 'custom') onChange(withBookReportFilter(query, { range: next, from: null, to: null }));
-        }}
-      >
-        {BOOK_REPORT_RANGES.map((r) => (
-          <option key={r} value={r}>
-            {BOOK_REPORT_RANGE_LABELS[r]}
-          </option>
-        ))}
-      </select>
+    <>
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor={`${id}-range`} className={LABEL}>
+          {BOOK_REPORT_UI.dateRange}
+        </label>
+        <select
+          id={`${id}-range`}
+          className={CONTROL}
+          value={choice}
+          onChange={(e) => {
+            const next = e.target.value as BookReportRange;
+            setChoice(next);
+            setError(null);
+            if (next !== 'custom')
+              onChange(withBookReportFilter(query, { range: next, from: null, to: null }));
+          }}
+        >
+          {BOOK_REPORT_RANGES.map((r) => (
+            <option key={r} value={r}>
+              {BOOK_REPORT_RANGE_LABELS[r]}
+            </option>
+          ))}
+        </select>
+      </div>
       {choice === 'custom' ? (
         <form
-          className="flex flex-wrap items-end gap-2"
+          data-custom-range
+          className="flex flex-wrap items-end gap-2 sm:col-span-2 lg:order-last lg:col-span-5"
           onSubmit={(e) => {
             e.preventDefault();
             if (!validateCustomDate(from) || !validateCustomDate(to) || from > to) {
@@ -277,7 +289,7 @@ function DateRangeControl({
           ) : null}
         </form>
       ) : null}
-    </div>
+    </>
   );
 }
 

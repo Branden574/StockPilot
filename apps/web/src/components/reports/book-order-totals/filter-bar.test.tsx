@@ -139,6 +139,33 @@ describe('Book Order Totals filter bar', () => {
     expect(href).not.toContain('page=');
   });
 
+  it('desktop layout: the warehouse column is the widest, and a custom range takes its own row instead of pushing Sort onto a second one', async () => {
+    render(bar());
+    const grid = document.querySelector('[data-filter-grid]') as HTMLElement;
+    // "All warehouses you can see" needs about 230 px; five equal columns in
+    // max-w-6xl give each about 211 px, which cut it off.
+    expect(grid.className).toContain(
+      'lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)]',
+    );
+    await userEvent.selectOptions(screen.getByLabelText('Orders placed'), 'custom');
+    const items = [...grid.children] as HTMLElement[];
+    // No control widens itself at lg (a 2-column span made six cells for five
+    // columns, so Sort wrapped alone).
+    expect(
+      items.filter(
+        (el) =>
+          /(^|\s)(sm:)?col-span-2(\s|$)/.test(el.className) && !/lg:col-span-/.test(el.className),
+      ),
+    ).toEqual([]);
+    const custom = screen.getByLabelText('From').closest('[data-custom-range]') as HTMLElement;
+    expect(items).toContain(custom);
+    expect(custom.className).toContain('lg:col-span-5');
+    expect(custom.className).toContain('lg:order-last');
+    const controls = items.filter((el) => el !== custom);
+    expect(controls).toHaveLength(5);
+    for (const el of controls) expect(el.className).not.toMatch(/col-span/);
+  });
+
   it('a preset pushes at once', async () => {
     render(bar());
     await userEvent.selectOptions(screen.getByLabelText('Orders placed'), '30d');
