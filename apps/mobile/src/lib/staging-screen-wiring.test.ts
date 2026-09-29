@@ -58,7 +58,8 @@ const screenCode = codeOnly(screen);
 
 describe('staging screen wiring', () => {
   it('reads the ROWS from the shared endpoint, never a second stock query', () => {
-    expect(screen).toContain('stagingWorklistPath(filter, activeWarehouseId)');
+    // F2-3: the third argument is an order's items (put away from the order).
+    expect(screen).toContain('stagingWorklistPath(filter, activeWarehouseId, itemFilter)');
     expect(screen).toContain('parseStagingWorklist(res)');
     // The whole point: one query, in the service, behind the Bearer route.
     // (The screen does read `warehouses` directly for the id → name map, which
@@ -134,10 +135,11 @@ describe('staging screen wiring', () => {
   it('narrows to the drawer switcher\'s active warehouse, like every other list screen', () => {
     // The web page narrows by the active-warehouse cookie. If the phone ignores
     // the switcher, the same user sees a different row set in each surface.
-    expect(screen).toContain('stagingWorklistPath(filter, activeWarehouseId)');
+    expect(screen).toContain('stagingWorklistPath(filter, activeWarehouseId, itemFilter)');
     // …and switching warehouse has to re-fetch, or the list is a stale answer
-    // to a question the user has already changed.
-    expect(screen).toMatch(/\}, \[filter, activeWarehouseId, orgId\]\);/);
+    // to a question the user has already changed. (F2-3: so does a new
+    // Put away from an order, or Show all.)
+    expect(screen).toMatch(/\}, \[filter, activeWarehouseId, orgId, itemFilter\]\);/);
   });
 
   it('keeps the filter toolbar on screen while a filter change is loading', () => {

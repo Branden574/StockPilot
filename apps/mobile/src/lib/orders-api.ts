@@ -1,4 +1,8 @@
-import { parseHoldOrderStockResult, type HoldOrderStockResult } from '@stockpilot/core';
+import {
+  parseHoldOrderStockResult,
+  type HoldOrderStockResult,
+  type PartialAction,
+} from '@stockpilot/core';
 
 import { api } from './api';
 import type { CreateReturnBody } from './order-returns';
@@ -55,6 +59,29 @@ export type OrderAction =
 /** Advance an order. Throws (with the server's message) on a non-2xx. */
 export async function transitionOrder(orderId: string, body: OrderAction): Promise<void> {
   await api(`/api/v1/orders/${orderId}/transition`, { method: 'POST', body });
+}
+
+/**
+ * The transition behind the approve-partial sheet's confirm (F2-3), core's
+ * PartialAction to the route's action: 'approve_partial' as it is, 'resume'
+ * as 'resume_fulfillment'. The EXISTING actions, unchanged: no new write path.
+ */
+export function partialFulfilmentAction(action: PartialAction): OrderAction {
+  return action === 'approve_partial'
+    ? { action: 'approve_partial' }
+    : { action: 'resume_fulfillment' };
+}
+
+/**
+ * Approve partial or resume, from the sheet's confirm. Throws the server's
+ * refusal (403 not an approver, 409 the order moved on, stock refused), which
+ * the sheet shows in place.
+ */
+export async function commitPartialFulfilment(
+  orderId: string,
+  action: PartialAction,
+): Promise<void> {
+  await transitionOrder(orderId, partialFulfilmentAction(action));
 }
 
 /**

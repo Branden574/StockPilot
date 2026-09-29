@@ -20,7 +20,16 @@
  * web table shows for an unknown value.
  */
 
-import type { BookStorageInfo } from '@stockpilot/core';
+import {
+  describeStagingItemFilter,
+  parseStagingItemFilter,
+  STAGING_FILTER_EMPTY_COPY,
+  stagingFilterInvalidCopy,
+  type BookStorageInfo,
+  type StagingFilterChipCopy,
+  type StagingFilterParse,
+  type StagingItemFilter,
+} from '@stockpilot/core';
 
 // ── Row shape ──────────────────────────────────────────────────────────────
 
@@ -98,6 +107,7 @@ export const STAGING_TYPE_OPTIONS: readonly {
 export function stagingWorklistPath(
   filter: StagingTypeFilter,
   warehouseId?: string | null,
+  itemFilter?: StagingItemFilter | null,
 ): string {
   // Built by hand, NOT with URLSearchParams: React Native's polyfill
   // (Libraries/Blob/URLSearchParams.js) throws 'not implemented' from .set(),
@@ -106,11 +116,176 @@ export function stagingWorklistPath(
   // either.
   const params: string[] = [];
   if (filter !== 'all') params.push(`type=${filter}`);
-  const wh = warehouseId?.trim();
-  if (wh) params.push(`warehouseId=${encodeURIComponent(wh)}`);
+  if (itemFilter && itemFilter.itemIds.length > 0) {
+    // PUT AWAY FROM AN ORDER (F2-3): the order's items only. The route reads
+    // `itemIds` as a comma list (at most 200 uuids, core's cap) and IGNORES
+    // the warehouse when it is set (the ids already narrow the list, and the
+    // web page skips its cookie the same way), so no warehouse is sent: a
+    // switcher on another warehouse must not hide the order's own Staging.
+    params.push(`itemIds=${itemFilter.itemIds.map(encodeURIComponent).join(',')}`);
+    if (itemFilter.orderId) params.push(`orderId=${encodeURIComponent(itemFilter.orderId)}`);
+  } else {
+    const wh = warehouseId?.trim();
+    if (wh) params.push(`warehouseId=${encodeURIComponent(wh)}`);
+  }
   return params.length > 0
     ? `/api/v1/inventory/staging?${params.join('&')}`
     : '/api/v1/inventory/staging';
+}
+
+// ── Put away from an order (F2-3): the filter and its chip ─────────────────
+
+/** The route params the Staging tab is opened with from an order's "Put away"
+ *  (core stagingPutAwayParams): a comma list of item ids, and the order. */
+export interface StagingRouteParams {
+  itemIds?: string | string[];
+  orderId?: string | string[];
+}
+
+/**
+ * The route params as two plain strings (a repeated param joined with
+ * commas, the way the route reads it), so the screen can depend on values
+ * rather than on a params object that is new on every render.
+ */
+export function stagingRouteParamValues(params: StagingRouteParams): {
+  itemIds: string | undefined;
+  orderId: string | undefined;
+} {
+  const one = (v: string | string[] | undefined): string | undefined =>
+    Array.isArray(v) ? (v.length > 0 ? v.join(',') : undefined) : v;
+  const order = Array.isArray(params.orderId) ? params.orderId[0] : params.orderId;
+  return { itemIds: one(params.itemIds), orderId: order };
+}
+
+export interface StagingScreenFilter {
+  /** Core's reading of the params (none / ok / invalid). */
+  parse: StagingFilterParse;
+  /** The filter the list is read with, or null: none given, unusable, or the
+   *  reader chose Show all. */
+  active: StagingItemFilter | null;
+  /** Identifies these params, so Show all hides exactly this filter (a new
+   *  Put away opens filtered again). Null when there is no usable filter. */
+  key: string | null;
+  /** Why an unusable link shows every item (core's sentence), or null. */
+  invalidCopy: string | null;
+}
+
+/**
+ * What the Staging tab shows for the params it was opened with. PURE and
+ * READ-ONLY (pattern #18): nothing rewrites the params, ever. Show all is the
+ * reader's own choice, held by the screen as the `key` it hid
+ * (`shownAllFor`), so the list widens without touching the route, and a later
+ * Put away (new params, new key) is filtered again. An unusable link (a bad
+ * id, more than 200) shows every item and says why, as the web page does.
+ */
+export function stagingScreenFilter(
+  params: StagingRouteParams,
+  shownAllFor: string | null,
+): StagingScreenFilter {
+  const parse = parseStagingItemFilter({ item: params.itemIds, order: params.orderId });
+  if (parse.state === 'invalid') {
+    return { parse, active: null, key: null, invalidCopy: stagingFilterInvalidCopy(parse.reason) };
+  }
+  if (parse.state !== 'ok') return { parse, active: null, key: null, invalidCopy: null };
+  const key = `${parse.filter.orderId ?? ''}|${parse.filter.itemIds.join(',')}`;
+  return {
+    parse,
+    active: shownAllFor === key ? null : parse.filter,
+    key,
+    invalidCopy: null,
+  };
+}
+
+/** The order a filtered list came from, as GET /api/v1/inventory/staging
+ *  answers it (`order`): its formatted number for the chip, whether it is
+ *  there to go back to, and how many rows at other warehouses the route left
+ *  out (core stagingRowsForOrderWarehouse, the web page's narrowing). */
+export interface StagingOrderLink {
+  id: string;
+  /** "SO-000123"; null when it could not be read (the link still works). */
+  orderNumber: string | null;
+  /** False: no such order to go back to (or Orders is off). */
+  found: boolean;
+  /** Rows at other warehouses not listed (0 from a server that predates it). */
+  elsewhere: number;
+}
+
+/**
+ * The answer's `order`, read defensively: null when absent (no orderId was
+ * sent, or a server from before F2-3 answered) or malformed. Never throws.
+ */
+export function parseStagingOrderLink(raw: unknown): StagingOrderLink | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = (raw as Record<string, unknown>).order;
+  if (!o || typeof o !== 'object') return null;
+  const r = o as Record<string, unknown>;
+  const id = asNullableString(r.id);
+  if (!id || typeof r.found !== 'boolean') return null;
+  const elsewhere =
+    typeof r.elsewhere === 'number' && Number.isInteger(r.elsewhere) && r.elsewhere > 0 ? r.elsewhere : 0;
+  return { id, orderNumber: asNullableString(r.orderNumber), found: r.found, elsewhere };
+}
+
+export interface StagingFilterChip extends StagingFilterChipCopy {
+  /** The order "Back to the order" opens, or null (no such button). */
+  backOrderId: string | null;
+}
+
+/**
+ * The chip over a filtered list, in core's words (describeStagingItemFilter,
+ * the web page's chip): "Showing items from SO-000123", Show all, Back to the
+ * order, and the note that only Staging stops a pick. Null without an active
+ * filter. `order` is the last answer's `order` (null before the first answer,
+ * after a failed read, or from an older server): until an answer says the
+ * order is not there, the link the reader came by still goes back to it.
+ */
+export function stagingFilterChip(
+  active: StagingItemFilter | null,
+  order: StagingOrderLink | null,
+): StagingFilterChip | null {
+  if (!active) return null;
+  const orderId = active.orderId;
+  const sameOrder = order !== null && orderId !== null && order.id.toLowerCase() === orderId;
+  const hasOrder = orderId !== null && !(sameOrder && !order.found);
+  const copy = describeStagingItemFilter({
+    orderNumber: sameOrder && order.found ? order.orderNumber : null,
+    hasOrder,
+    itemCount: active.itemIds.length,
+    elsewhere: sameOrder ? order.elsewhere : 0,
+  });
+  return { ...copy, backOrderId: hasOrder ? orderId : null };
+}
+
+/** Under the chip, when a filtered list came back empty (core's words: it says
+ *  what is LISTED, since a failed read shows nothing either). Null otherwise:
+ *  unfiltered, still loading, or the read failed (the error says so). */
+export function stagingFilterEmptyCopy(input: {
+  active: StagingItemFilter | null;
+  loading: boolean;
+  error: string | null;
+  rowCount: number;
+}): string | null {
+  if (!input.active || input.loading || input.error !== null || input.rowCount > 0) return null;
+  return STAGING_FILTER_EMPTY_COPY;
+}
+
+/**
+ * What the list shows when it has no rows: the spinner while loading; after
+ * a failed read, the retry line (the error itself is above the list); for a
+ * filtered list that came back empty, NOTHING, because the chip already says
+ * "No Staging or Unplaced stock is listed for these items." (one empty
+ * message, not two, as on the web page); otherwise "Nothing to place."
+ */
+export function stagingListEmptyState(input: {
+  loading: boolean;
+  error: string | null;
+  /** stagingFilterEmptyCopy's answer. */
+  filterEmpty: string | null;
+}): 'loading' | 'error' | 'none' | 'nothing_to_place' {
+  if (input.loading) return 'loading';
+  if (input.error !== null) return 'error';
+  if (input.filterEmpty !== null) return 'none';
+  return 'nothing_to_place';
 }
 
 // ── Age / staleness ────────────────────────────────────────────────────────

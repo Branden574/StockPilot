@@ -15,14 +15,18 @@ import {
   describeReadinessHold,
   describeReadinessLine,
   describeReadinessWhy,
+  putAwayLineAccessibilityLabel,
+  READINESS_NEEDS_CONNECTION_COPY,
   READINESS_STATES,
   readinessLineAccessibilityLabel,
+  type PutAwayOffer,
   type ReadinessItemAssessment,
   type ReadinessLineAssessment,
   type ReadinessTone,
 } from '@stockpilot/core';
 
 import { MIN_TAP } from '@/components/item-verification-card';
+import { Button } from '@/components/ui/button';
 import { Body, Mono } from '@/components/ui/text';
 import { ACCENT, TYPE_CEILING, capTo, type ThemeMode } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -42,6 +46,13 @@ import { useTheme } from '@/lib/use-theme';
  * part of "Why" are their own elements (a label on a Pressable would silence
  * the text inside it). Targets are at least 44pt; the chip and "Why" are
  * chrome, capped for Dynamic Type; the sentences are content and grow.
+ *
+ * PUT AWAY (F2-3): a line with units in this warehouse's Staging (core
+ * putAwayLineOffer, whatever the line's state) offers "Put away", which opens
+ * the Staging tab filtered to its item; VoiceOver hears "Put away 4 of Maus I
+ * from Staging". Without stock:transfer the line offers nothing (the card
+ * says core's sentence once, as on the web page). The button is its own
+ * element, a sibling of the state row.
  */
 
 /** The platform icon for core's generic icon key (READINESS_STATES.icon).
@@ -146,6 +157,7 @@ export function OrderLineReadiness({
   position,
   timeZone,
   onOpenItem,
+  putAway = null,
 }: {
   line: ReadinessLineAssessment;
   /** The line's item assessment (null or not visible: nothing more to say). */
@@ -156,6 +168,15 @@ export function OrderLineReadiness({
   timeZone: string | null;
   /** Opens the item screen (stock, last physical count, Count). */
   onOpenItem?: (itemId: string) => void;
+  /** F2-3: the line's put-away offer (lib/order-put-away.ts), or null when it
+   *  has nothing in Staging. `disabled` offline or while an action runs;
+   *  `offline` says why. */
+  putAway?: {
+    offer: Extract<PutAwayOffer, { kind: 'link' }>;
+    disabled: boolean;
+    offline: boolean;
+    onPress: (itemIds: string[]) => void;
+  } | null;
 }) {
   const { c } = useTheme();
   const [open, setOpen] = React.useState(false);
@@ -209,6 +230,20 @@ export function OrderLineReadiness({
         <Body size={12.5} muted>
           {hold}
         </Body>
+      ) : null}
+      {putAway ? (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={putAway.disabled}
+          onPress={() => putAway.onPress(putAway.offer.itemIds)}
+          accessibilityLabel={putAwayLineAccessibilityLabel(line)}
+          accessibilityHint={putAway.offline ? READINESS_NEEDS_CONNECTION_COPY : undefined}
+          // 44 pt, not the small Button's 36.
+          style={{ alignSelf: 'flex-start', marginTop: 6, minHeight: MIN_TAP }}
+        >
+          {putAway.offer.label}
+        </Button>
       ) : null}
       {open && why ? (
         <View style={{ marginTop: 4, gap: 2 }}>

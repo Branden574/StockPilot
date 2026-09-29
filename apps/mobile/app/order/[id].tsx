@@ -28,6 +28,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { ApprovePartialSheet } from '@/components/approve-partial-sheet';
 import { DigitalPick } from '@/components/digital-pick';
 import { OrderLineReadiness } from '@/components/order-line-readiness';
 import { OrderReadinessSummary } from '@/components/order-readiness-summary';
@@ -65,6 +66,7 @@ import { resizeForUpload } from '@/lib/image-resize';
 import { profileFromEmbed, resolveRequesterLabel } from '@/lib/requester-label';
 import {
   claimPicking,
+  commitPartialFulfilment,
   createOrderReturn,
   holdOrderStock,
   listOrderDrivers,
@@ -110,6 +112,8 @@ import {
   rememberOrderView,
   shouldReadReadiness,
 } from '@/lib/order-readiness';
+import { partialSheetView, runPartialFulfilment } from '@/lib/order-partial';
+import { orderPutAwayView, putAwayAccessFor, stagingPutAwayRoute } from '@/lib/order-put-away';
 import { isOfflineState } from '@/lib/exceptions-api';
 import { departureConfirmButtons, orderDepartureRisk } from '@/lib/order-departure';
 import {
@@ -157,6 +161,8 @@ import {
   orderLineItemName,
   orderReadinessPhase,
   orderStockGates,
+  PARTIAL_ACTION_TITLE,
+  previewPartialFulfilment,
   READINESS_NEEDS_CONNECTION_COPY,
   readinessOfflineCopy,
   shouldOfferHoldStock,
@@ -164,6 +170,8 @@ import {
   type DepartureAction,
   type FulfillmentType,
   type OrderReadinessResult,
+  type PartialAction,
+  type PartialPreview,
   type OrderStatus,
   type OrgEmailRoutingReadState,
   type Role,
@@ -449,6 +457,14 @@ export default function OrderDetail() {
   const [reopenReason, setReopenReason] = React.useState('');
   const [driverOpen, setDriverOpen] = React.useState(false);
   const [drivers, setDrivers] = React.useState<OrderDriver[] | null>(null);
+  // F2-3: the approve-partial / resume sheet, with the preview it opened on.
+  // Frozen at open: the result is compared with what the reader looked at,
+  // and a reload under the open sheet (the commit reads the order again)
+  // never swaps the numbers in front of them.
+  const [partial, setPartial] = React.useState<{
+    action: PartialAction;
+    preview: PartialPreview;
+  } | null>(null);
   const [signatureModalVisible, setSignatureModalVisible] = React.useState(false);
 
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
@@ -811,6 +827,55 @@ export default function OrderDetail() {
       setActing(null);
     }
     await load();
+  }
+
+  /**
+   * F2-3: Approve partial and Resume fulfillment open a preview first (core
+   * previewPartialFulfilment over the readiness this screen shows: per item,
+   * never per line), frozen when the sheet opens.
+   */
+  function openPartialSheet(action: PartialAction) {
+    if (acting !== null || !order) return;
+    setPartial({ action, preview: previewPartialFulfilment(order.readiness, action) });
+  }
+
+  /**
+   * F2-3: the sheet's confirm. The existing transition, unchanged; then
+   * readiness read again beside the screen's own reload, and the message
+   * computed from THAT read (the order's own holds now), never from the
+   * preview (lib/order-partial.ts runPartialFulfilment). A refusal rejects:
+   * the sheet says it in place and stays open.
+   */
+  async function confirmPartial(): Promise<void> {
+    if (!id || !partial) return;
+    const { action, preview } = partial;
+    setActing(action === 'approve_partial' ? 'approve-partial' : 'resume');
+    try {
+      const result = await runPartialFulfilment(
+        {
+          commit: commitPartialFulfilment,
+          reread: (orderId) => readOrderReadiness(supabase, orderId),
+          reload: load,
+        },
+        id,
+        action,
+        preview,
+      );
+      setPartial(null);
+      Alert.alert(PARTIAL_ACTION_TITLE[action], result.text);
+    } finally {
+      setActing(null);
+    }
+  }
+
+  /**
+   * F2-3: "Put away" (a readiness line, or "Put away N items" on the card)
+   * opens the Staging tab filtered to those items, naming this order. The
+   * screen reads its readiness again when it is back in focus.
+   */
+  function openPutAway(itemIds: readonly string[]) {
+    if (!order || offline || itemIds.length === 0) return;
+    router.push(stagingPutAwayRoute(order.id, itemIds));
   }
 
   function handleLineRemoved(line: EditableOrderLine, res: LineRemovedResult) {
@@ -1492,6 +1557,23 @@ export default function OrderDetail() {
   }, [order]);
   const showLineReadiness = readinessShown && readinessAudienceNow === 'full';
 
+  // F2-3 "Put away" on the full panel: a line with units in this warehouse's
+  // Staging, and "Put away N items" on the card (core put-away.ts). The gate
+  // is stock:transfer (the permission Place asserts) and items:read (the
+  // Staging route's), read as the server reads them; without them, the card
+  // says core's sentence once, naming what is missing, and the lines offer
+  // nothing (the web page's layout).
+  const { canTransfer, canReadItems } = putAwayAccessFor(role, permissions);
+  const putAway = React.useMemo(
+    () =>
+      orderPutAwayView({
+        readiness: order?.readiness ?? null,
+        fullPanel: showLineReadiness,
+        access: { canTransfer, canReadItems },
+      }),
+    [order, showLineReadiness, canTransfer, canReadItems],
+  );
+
   // F2-2 "Hold available stock" on the readiness card: core's rule, the web
   // strip's own (approvers, hold statuses, some line not or partly held).
   const offerHold =
@@ -2031,6 +2113,11 @@ export default function OrderDetail() {
                     }
                   : null
               }
+              putAway={
+                putAway.strip.kind !== 'none'
+                  ? { offer: putAway.strip, disabled: acting !== null, onPress: openPutAway }
+                  : null
+              }
             />
           ) : null}
 
@@ -2118,6 +2205,13 @@ export default function OrderDetail() {
                     const lineReadiness =
                       showLineReadiness && l.orderRequestLineId
                         ? (readinessByLine?.get(l.orderRequestLineId) ?? null)
+                        : null;
+                    // F2-3: the line's "Put away" (units in Staging), for
+                    // stock:transfer only; none otherwise (the card says
+                    // core's permission sentence once, as the web page does).
+                    const lineOffer =
+                      lineReadiness && l.orderRequestLineId
+                        ? (putAway.lines.get(l.orderRequestLineId) ?? null)
                         : null;
                     return (
                       <View
@@ -2227,6 +2321,16 @@ export default function OrderDetail() {
                             position={i + 1}
                             timeZone={order.orgTimezone}
                             onOpenItem={(itemId) => router.push(`/item/${itemId}`)}
+                            putAway={
+                              lineOffer
+                                ? {
+                                    offer: lineOffer,
+                                    disabled: offline || acting !== null,
+                                    offline,
+                                    onPress: openPutAway,
+                                  }
+                                : null
+                            }
                           />
                         ) : null}
                       </View>
@@ -2351,7 +2455,7 @@ export default function OrderDetail() {
                     ? actionBtn(
                         'Approve partial',
                         'approve-partial',
-                        () => void act({ action: 'approve_partial' }, 'approve-partial'),
+                        () => openPartialSheet('approve_partial'),
                         'default',
                         stockGates.approvePartial === 'disabled',
                         stockGates.notice,
@@ -2429,7 +2533,7 @@ export default function OrderDetail() {
                     actionBtn(
                       'Resume fulfillment',
                       'resume',
-                      () => void act({ action: 'resume_fulfillment' }, 'resume'),
+                      () => openPartialSheet('resume'),
                       'primary',
                       stockGates.resume === 'disabled',
                       stockGates.notice,
@@ -3355,6 +3459,24 @@ export default function OrderDetail() {
           onChanged={handleLineChanged}
           onRemoved={handleLineRemoved}
           onRequestReload={() => void load()}
+        />
+      ) : null}
+
+      {/* F2-3: Approve partial / Resume fulfillment, with what would be held
+          (mounted per open, so every session starts clean). Confirm runs the
+          existing transition, then says what was actually held. */}
+      {partial ? (
+        <ApprovePartialSheet
+          visible
+          view={partialSheetView(partial.preview, {
+            timeZone: order?.orgTimezone ?? undefined,
+            // The order as the screen shows it now (it reloads after a
+            // refusal): when it moved on, the sheet offers Close.
+            orderStatus: order?.status ?? null,
+          })}
+          offline={offline}
+          onClose={() => setPartial(null)}
+          onConfirm={confirmPartial}
         />
       ) : null}
 

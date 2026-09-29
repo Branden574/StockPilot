@@ -92,6 +92,13 @@ export interface StagingTableProps {
   canMintDestination?: boolean;
   /** 'all' | 'book' | 'non-book' — synced from ?type= URL param. */
   activeItemType: 'all' | 'book' | 'non-book';
+  /**
+   * Leave out the table's own "Nothing to place" when there are no rows: the
+   * page already says it (F2-3, a list filtered to an order's items, whose
+   * chip says "No Staging or Unplaced stock is listed for these items.").
+   * The filters' own empty state is unaffected.
+   */
+  hideEmptyState?: boolean;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -212,6 +219,7 @@ export function StagingTable({
   canPlace,
   canMintDestination = true,
   activeItemType,
+  hideEmptyState = false,
 }: StagingTableProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -460,12 +468,15 @@ export function StagingTable({
       </div>
 
       {rows.length === 0 ? (
-        /* True empty: nothing staged or unplaced at all (for this type/warehouse). */
-        <div className="flex flex-col items-center justify-center gap-2 px-6 py-16 text-center">
-          <p className="text-muted-foreground text-sm">
-            Nothing to place — received (staged) or unplaced stock appears here.
-          </p>
-        </div>
+        /* True empty: nothing staged or unplaced at all (for this type/warehouse).
+           Left out when the page already says so (hideEmptyState). */
+        hideEmptyState ? null : (
+          <div className="flex flex-col items-center justify-center gap-2 px-6 py-16 text-center">
+            <p className="text-muted-foreground text-sm">
+              Nothing to place — received (staged) or unplaced stock appears here.
+            </p>
+          </div>
+        )
       ) : visibleRows.length === 0 ? (
         /* Filtered empty: rows exist, the active filters hide all of them. */
         <div

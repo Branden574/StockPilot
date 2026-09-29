@@ -846,6 +846,8 @@ describe('readiness source literals', () => {
     'order-hold.ts',
     'short-line-actions.ts',
     'pick-shortfall.ts',
+    'put-away.ts',
+    'partial-fulfilment.ts',
   ];
 
   function literals(file: string): string[] {
