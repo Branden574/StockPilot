@@ -345,9 +345,11 @@ describe('Approve partial opens the preview (F2-3)', () => {
 
   it('refused because the order moved on: once the refresh shows it, Close replaces Confirm', async () => {
     const user = userEvent.setup();
+    // The service's refusal for an order that moved on is core's moved-on
+    // sentence (walk D1), so it reads as when the page notices first.
     approvePartial.mockResolvedValueOnce({
       ok: false,
-      error: { code: 'validation_error', message: 'This request is no longer pending approval' },
+      error: { code: 'validation_error', message: 'This order is no longer waiting for approval.' },
     });
     const { rerender } = render(<ManagerActionsPanel {...panelProps()} />);
 
@@ -369,8 +371,11 @@ describe('Approve partial opens the preview (F2-3)', () => {
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).queryByTestId('approve-partial-confirm')).toBeNull();
     expect(within(dialog).getByTestId('approve-partial-close')).toBeEnabled();
-    // The server's sentence already says why; core's is not added to it.
-    expect(within(dialog).getByTestId('approve-partial-error')).toHaveTextContent('This request is no longer pending approval');
+    // The server's sentence already says why; core's is not added to it. It
+    // is word for word what the dialog says when it sees the move first.
+    expect(within(dialog).getByTestId('approve-partial-error').textContent).toBe(
+      'This order is no longer waiting for approval.',
+    );
     expect(within(dialog).queryByTestId('approve-partial-moved-on')).toBeNull();
     await user.click(within(dialog).getByTestId('approve-partial-close'));
     expect(screen.queryByRole('dialog')).toBeNull();

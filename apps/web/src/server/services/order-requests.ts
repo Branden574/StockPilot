@@ -16,6 +16,7 @@ import {
   isManagerOrAbove,
   lineOwedUnits,
   parseHoldOrderStockResult,
+  partialActionMovedOnCopy,
   resolveOrgTimezone,
   resolveRequesterIdentity,
   shouldTopUpHolds,
@@ -2579,8 +2580,11 @@ export class OrderRequestsService {
         throw new ServiceError('not_found', 'Order request not found');
       if (msg.includes('forbidden'))
         throw new ServiceError('forbidden', 'Only managers can approve requests');
+      // Core's words, the ones the approve-partial dialog (web) and sheet
+      // (phone) show when they see the order move on before Confirm: the same
+      // state reads the same whichever side notices it first (F2-3 walk D1).
       if (msg.includes('invalid_status_transition'))
-        throw new ServiceError('validation_error', 'This request is no longer pending approval');
+        throw new ServiceError('validation_error', partialActionMovedOnCopy('approve_partial'));
       // 0365: approve_partial refuses a line-less order too, as approve does.
       if (msg.includes('order_has_no_lines'))
         throw new ServiceError(
@@ -2800,8 +2804,10 @@ export class OrderRequestsService {
         );
       if (msg.includes('forbidden'))
         throw new ServiceError('forbidden', 'Only a manager can resume fulfillment.');
+      // Core's words, as approvePartial's (the resume sheet and dialog say
+      // them when the order moves on under the preview).
       if (msg.includes('invalid_status_transition'))
-        throw new ServiceError('validation_error', 'Only a backordered order can be resumed.');
+        throw new ServiceError('validation_error', partialActionMovedOnCopy('resume'));
       throw new ServiceError('internal_error', 'Could not resume fulfillment.');
     }
     const row = data as OrderRequestRow;

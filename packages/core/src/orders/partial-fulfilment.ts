@@ -293,7 +293,8 @@ export const PARTIAL_COMMIT_RATE_LIMITED_COPY = 'Too many requests. Wait a momen
  *   the app's internal_error (the RPC failed and rolled back; its raw text is
  *     the database's, never shown): PARTIAL_COMMIT_FAILED_COPY;
  *   a refusal the server worded (the order moved on, not allowed, nothing
- *     free): its sentence;
+ *     free): its sentence, ending with a full stop like every other sentence
+ *     around it (several of the server's refusals have none);
  *   a bare code or nothing: PARTIAL_COMMIT_FAILED_COPY.
  */
 export function describePartialCommitRefusal(input: {
@@ -313,7 +314,7 @@ export function describePartialCommitRefusal(input: {
   if (status !== null && status >= 500 && code === null) return PARTIAL_COMMIT_UNANSWERED_COPY;
   const message = input.message?.trim() ?? '';
   // A lone snake_case token is a code, not a sentence.
-  if (message && !/^[a-z0-9_]+$/.test(message)) return message;
+  if (message && !/^[a-z0-9_]+$/.test(message)) return /[.!?]$/.test(message) ? message : `${message}.`;
   return PARTIAL_COMMIT_FAILED_COPY;
 }
 

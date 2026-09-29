@@ -619,11 +619,31 @@ describe('describePartialCommitRefusal: one set of words for a confirm that did 
 
   it("the server's own sentence for a refusal it worded (the order moved on, not allowed, nothing free)", () => {
     expect(
-      describePartialCommitRefusal({ answered: true, status: 400, code: 'validation_error', message: 'This request is no longer pending approval' }),
-    ).toBe('This request is no longer pending approval');
+      describePartialCommitRefusal({
+        answered: true,
+        status: 400,
+        code: 'validation_error',
+        message: 'This order is no longer waiting for approval.',
+      }),
+    ).toBe('This order is no longer waiting for approval.');
+    expect(
+      describePartialCommitRefusal({ answered: true, code: 'validation_error', message: 'Only a backordered order can be resumed.' }),
+    ).toBe('Only a backordered order can be resumed.');
+  });
+
+  // F2-3 walk D1: every other sentence in the dialog and the sheet ends with a
+  // full stop; several of the server's refusals do not ("Only managers can
+  // approve requests", "Order request not found").
+  it('a worded refusal without closing punctuation gets a full stop; one that has it is left alone', () => {
     expect(describePartialCommitRefusal({ answered: true, code: 'forbidden', message: 'Only managers can approve requests' })).toBe(
-      'Only managers can approve requests',
+      'Only managers can approve requests.',
     );
+    expect(describePartialCommitRefusal({ answered: true, code: 'not_found', message: '  Order request not found  ' })).toBe(
+      'Order request not found.',
+    );
+    for (const done of ['Too late!', 'Is it still pending?', 'Held 2 (of 3).', 'This order is no longer waiting for approval.']) {
+      expect(describePartialCommitRefusal({ answered: true, code: 'validation_error', message: done })).toBe(done);
+    }
   });
 
   it('too many requests: core\'s sentence, not the route\'s', () => {
