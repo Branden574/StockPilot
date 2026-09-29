@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   COMPLETION_CONFIRM_LABEL,
+  describeOccurrence,
   COMPLETION_REVIEW_LABEL,
   describeShortPickLines,
   EXCEPTION_EVIDENCE_MAX_PHOTOS,
@@ -1819,5 +1820,95 @@ describe('Book Order Totals by charter and dates is held as a draft', () => {
     const text = readerText(r).join(' ');
     // Copies requested, never stock on record; no percentages, no promises.
     expect(text).not.toMatch(/\bdelivered\b|\bthe book\b|\bon hand\b|%|guarantee|faster/i);
+  });
+});
+
+/**
+ * Count differences, release 1 (no migration): the words for what clears a
+ * count difference, held as a DRAFT until the web deploy, the phone update and
+ * the walk are done. Pinned by id, never by index. The follow-up that
+ * publishes it sets 'published' and the real publishedAt, re-reads its words
+ * against what shipped, and flips the first pin here.
+ */
+describe('count differences say what clears them (release 1) is held as a draft', () => {
+  const ID = 'count-difference-words-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+  const published = (): Release => ({ ...release(), status: 'published' });
+
+  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).not.toContain(ID);
+    expect(list.latestUnread?.id).not.toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).not.toContain(ID);
+    // Preparing it changes nothing a client can observe.
+    expect(registryFingerprint(RELEASES)).toBe(registryFingerprint(RELEASES.filter((r) => r.id !== ID)));
+    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(ID);
+  });
+
+  // Two drafts wait at the top: Book Order Totals (0382, dated a day later)
+  // sits above this one, drafts newest first.
+  it('sits among the drafts at the top (pinned by id), dated after every published release, so publishing it makes it the newest published', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.filter((x) => x.id !== ID && x.status !== 'draft')) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+    for (const r of RELEASES.slice(0, at)) {
+      expect(Date.parse(r.publishedAt), r.id).toBeGreaterThanOrEqual(Date.parse(release().publishedAt));
+    }
+    const list = buildReleaseList(
+      [published(), ...RELEASES.filter((r) => r.id !== ID)],
+      everyone,
+      [],
+      null,
+    );
+    expect(list.latestUnread?.id).toBe(ID);
+  });
+
+  it('is for readers of exceptions where Cycle Counts is on, linking to Exceptions', () => {
+    expect(release().audience).toBeUndefined();
+    expect(release().entries.map((e) => e.id)).toEqual(['count-difference-what-clears-it']);
+    const [entry] = release().entries;
+    expect(entry!.category).toBe('improved');
+    expect(entry!.area).toBe('Inventory');
+    expect(entry!.link).toEqual({ href: '/dashboard/exceptions', label: 'Open Exceptions' });
+    expect(entry!.audience).toEqual({ anyPermission: ['items:read'], modules: ['cycle_counts'] });
+    const reader = (permissions: ReleaseViewer['permissions'], enabledModules: ModuleId[] = ['cycle_counts']) =>
+      visibleReleases([published()], { role: 'viewer', permissions, enabledModules })[0]?.entries.map((e) => e.id) ?? [];
+    expect(reader(['items:read'])).toEqual(['count-difference-what-clears-it']);
+    expect(reader(['items:read'], [])).toEqual([]);
+    expect(reader([])).toEqual([]);
+  });
+
+  it('says what clears it in the product\'s own words, and nothing about confirming a count yet', () => {
+    const r = release();
+    const text = readerText(r).join(' ');
+    // The example is core's row sentence, so the two cannot drift apart.
+    const example = describeOccurrence('count_variance', {
+      cycleCountId: 'cc-35',
+      countNumber: 35,
+      expected: 100,
+      counted: 2,
+      variance: -98,
+    }).detail;
+    expect(example).toBe('CC-000035 found 2 where 100 was on record (-98)');
+    expect(text).toContain(`for example, ${example}, and its page says at the top what clears it`);
+    expect(text).toContain('a later count that matches the stock on record, which you can start with Recount');
+    expect(text).toContain('the Acknowledge step says that acknowledging does not');
+    expect(text).toContain('Nothing changes in when these exceptions are raised or cleared.');
+    // Release 2 introduces confirming: nothing here may promise it.
+    expect(text).not.toMatch(/confirm/i);
+    expect(text).not.toMatch(/\bbooks?\b|%|guarantee|verified|accurate/i);
   });
 });
