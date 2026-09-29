@@ -98,6 +98,14 @@ export async function GET(
       if (!itemId) throw new ServiceError('validation_error', 'itemId is required');
       if (!isUuid(itemId)) throw new ServiceError('validation_error', 'Choose an item.');
     }
+    if (slug === 'inventory-valuation') {
+      // Optional; when present it must be a charter id (a uuid). Checked here
+      // so a malformed request is a 400 that spends no export budget.
+      const charterId = url.searchParams.get('charterId')?.trim() || null;
+      if (charterId && !isUuid(charterId)) {
+        throw new ServiceError('validation_error', 'Choose a charter.');
+      }
+    }
     const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
@@ -135,9 +143,10 @@ export async function GET(
       const data = await reportsSvc.inventoryValuation({ charterId });
       title = 'Inventory valuation';
       // Resolve a display name for the subtitle when charter-scoped. Best
-      // effort only — org-scoped lookup, so a foreign/invalid charterId
-      // (which inventoryValuation() already turned into an empty report)
-      // just falls back to showing the raw id rather than failing the PDF.
+      // effort only — org-scoped lookup, so a foreign charterId (which
+      // inventoryValuation() already turned into an empty report) just falls
+      // back to showing the raw id rather than failing the PDF. A charterId
+      // that is not a uuid was refused (400) before the export budget.
       let charterLabel: string | null = null;
       if (charterId) {
         const { data: charterRow } = await ctx.supabase

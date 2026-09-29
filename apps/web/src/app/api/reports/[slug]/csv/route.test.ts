@@ -144,6 +144,19 @@ describe('GET /api/reports/[slug]/csv: the caller is checked before the export b
     expect(exportRateLimited).not.toHaveBeenCalled();
   });
 
+  // Review finding (2026-09-29): a charterId that is not a uuid went to
+  // PostgREST, which answered 22P02, and the export answered 500 (reported
+  // to the error tracker) after spending the budget.
+  it('inventory-valuation with a charterId that is not a uuid: 400, budget untouched, nothing read', async () => {
+    const s = signIn();
+    const r = await get('inventory-valuation', '?charterId=not-a-uuid');
+    expect(r.status).toBe(400);
+    expect(r.body).toMatchObject({ error: 'validation_error', message: 'Choose a charter.' });
+    expect(exportRateLimited).not.toHaveBeenCalled();
+    expect(s.fromCalls).toEqual([]);
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
   it('a permitted caller over the limit: 429 from the limiter, after the checks', async () => {
     const s = signIn();
     vi.mocked(exportRateLimited).mockResolvedValue(

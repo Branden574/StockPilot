@@ -110,6 +110,14 @@ describe('GET /api/reports/[slug]/pdf: checks before the export budget', () => {
     expect(exportRateLimited).not.toHaveBeenCalled();
   });
 
+  it('inventory-valuation with a charterId that is not a uuid: 400 (was 500), budget untouched', async () => {
+    signIn();
+    const r = await get('inventory-valuation', '?charterId=not-a-uuid');
+    expect(r.status).toBe(400);
+    expect(r.body).toMatchObject({ error: 'validation_error', message: 'Choose a charter.' });
+    expect(exportRateLimited).not.toHaveBeenCalled();
+  });
+
   it('item-cost-history for an item the caller cannot read: 404', async () => {
     signIn();
     const r = await get('item-cost-history', '?itemId=11111111-2222-4333-8444-555555555555');

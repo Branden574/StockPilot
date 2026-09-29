@@ -401,6 +401,12 @@ export class ReportsService {
    *      failure mode 0179/0227 fixed for whole-org sums.
    */
   private async inventoryValuationByCharter(charterId: string): Promise<ValuationReport> {
+    // A charter id is always a uuid, so anything else matches no charter: the
+    // same empty report as a foreign id, without a query. (Handed to
+    // PostgREST, it answered 22P02 and the report failed with a 500.)
+    if (!isUuid(charterId)) {
+      return { rows: [], totalValue: 0, totalUnits: 0, itemCount: 0, byWarehouse: [], byCategory: [] };
+    }
     const { data: charterRow, error: charterErr } = await this.ctx.supabase
       .from('charters')
       .select('id')

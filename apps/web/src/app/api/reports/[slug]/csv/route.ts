@@ -78,6 +78,14 @@ export async function GET(
       if (!itemId) throw new ServiceError('validation_error', 'itemId is required');
       if (!isUuid(itemId)) throw new ServiceError('validation_error', 'Choose an item.');
     }
+    if (slug === 'inventory-valuation') {
+      // Optional; when present it must be a charter id (a uuid). Checked here
+      // so a malformed request is a 400 that spends no export budget.
+      const charterId = url.searchParams.get('charterId')?.trim() || null;
+      if (charterId && !isUuid(charterId)) {
+        throw new ServiceError('validation_error', 'Choose a charter.');
+      }
+    }
     const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
