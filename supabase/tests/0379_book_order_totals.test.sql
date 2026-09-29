@@ -68,7 +68,7 @@
 -- begin/rollback: nothing leaks. Namespace 03790000.
 
 begin;
-select plan(90);
+select plan(92);
 
 \set orgA     '\'03790000-0000-0000-0000-00000000000a\''
 \set orgB     '\'03790000-0000-0000-0000-00000000000b\''
@@ -1205,6 +1205,94 @@ select is(
                           (null, null, null, 'book')) f(s, w, c, q)) x),
   'ok,skipped',
   'R8: for every persona and filter (default, all statuses, W1, C1, a search): the rows over all pages sum to the summary, count to the entries, and their drill-downs (all pages) reconcile row by row and add up to the summary''s orders');
+-- The options are PROBED (EXISTS per warehouse and per category, stopping at
+-- the first eligible line), not read from every line. Pinned equal to the
+-- lists the lines helper gives, for every persona, with the edge cases a
+-- probe could get wrong planted: a warehouse whose only order holds a
+-- product and a kit; a category whose only ordered book is on an
+-- unconfirmed order; a category whose book was never ordered; a category
+-- whose only book (in W1) was ordered only at W2, which W1 staff cannot
+-- read; and an org B warehouse whose only order carries org A's Book A.
+savepoint r9;
+insert into public.warehouses (id, organization_id, name, code, status) values
+  ('03790000-0000-0000-0000-0000000000d6', :orgA, '0379 Supplies Only', 'WH-0379-4', 'active'),
+  ('03790000-0000-0000-0000-0000000000d7', :orgB, '0379 B Cross-org only', 'WH-0379-B2', 'active');
+insert into public.categories (id, organization_id, name) values
+  ('03790000-0000-0000-0000-000000000c14', :orgA, '0379 Unconfirmed only'),
+  ('03790000-0000-0000-0000-000000000c15', :orgA, '0379 Never ordered'),
+  ('03790000-0000-0000-0000-000000000c16', :orgA, '0379 Ordered at South only');
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, item_type, unit_of_measure, category_id, custom_fields, quantity_on_hand, status) values
+  ('03790000-0000-0000-0000-000000000f21', :orgA, :W1, 'BK-UNC', 'Book Unconfirmed', 'book', 'unit',
+   '03790000-0000-0000-0000-000000000c14', '{}'::jsonb, 0, 'active'),
+  ('03790000-0000-0000-0000-000000000f22', :orgA, :W1, 'BK-NEV', 'Book Never', 'book', 'unit',
+   '03790000-0000-0000-0000-000000000c15', '{}'::jsonb, 0, 'active'),
+  ('03790000-0000-0000-0000-000000000f23', :orgA, :W1, 'BK-SOUTH-ORD', 'Book Ordered South', 'book', 'unit',
+   '03790000-0000-0000-0000-000000000c16', '{}'::jsonb, 0, 'active');
+insert into public.order_requests
+  (id, organization_id, warehouse_id, status, source, requester_user_id, requester_email, fulfillment_type, created_at) values
+  ('03790000-0000-0000-0000-00000000016a', :orgA, '03790000-0000-0000-0000-0000000000d6', 'approved', 'internal', :mgr, null, 'pickup', '2026-05-20 18:00+00'),
+  ('03790000-0000-0000-0000-00000000016b', :orgA, :W1, 'pending_confirmation', 'public_link', null, 'public-0379@test.local', 'pickup', '2026-05-21 18:00+00'),
+  ('03790000-0000-0000-0000-00000000016c', :orgA, :W2, 'approved', 'internal', :mgr, null, 'pickup', '2026-05-22 18:00+00'),
+  ('03790000-0000-0000-0000-00000000016d', :orgB, '03790000-0000-0000-0000-0000000000d7', 'approved', 'internal', :mgrB, null, 'pickup', '2026-05-23 18:00+00');
+insert into public.order_request_lines (order_request_id, item_id, quantity_requested) values
+  ('03790000-0000-0000-0000-00000000016a', :iSup, 5),
+  ('03790000-0000-0000-0000-00000000016a', :iKit, 2),
+  ('03790000-0000-0000-0000-00000000016b', '03790000-0000-0000-0000-000000000f21', 3),
+  ('03790000-0000-0000-0000-00000000016c', '03790000-0000-0000-0000-000000000f23', 4),
+  ('03790000-0000-0000-0000-00000000016d', :iA, 1);
+-- The lists as the lines helper gives them, as a persona (the reference).
+create function pg_temp.opts_from_lines(p_user uuid, p_org uuid, p_statuses text[]) returns jsonb
+language plpgsql as $$
+declare v jsonb;
+begin
+  perform pg_temp.as_user(p_user);
+  begin
+    with lines as materialized (
+           select * from public.book_order_report_lines(p_org, 'all', null, null, p_statuses,
+                                                        null, null, false, null, null, null)),
+         wh as (select distinct w.id, w.name, w.status
+                  from lines l join public.warehouses w on w.id = l.order_warehouse_id),
+         cats as (select distinct i.category_id
+                    from lines l join public.inventory_items i on i.id = l.item_id)
+    select jsonb_build_object(
+      'warehouses', coalesce((select jsonb_agg(jsonb_build_object('id', wh.id, 'name', wh.name, 'status', wh.status)
+                               order by (wh.status <> 'active'), lower(wh.name), wh.id) from wh), '[]'::jsonb),
+      'categories', coalesce((select jsonb_agg(jsonb_build_object('id', c.id, 'name', c.name,
+                                                                  'deleted', c.deleted_at is not null)
+                               order by (c.deleted_at is not null), lower(c.name), c.id)
+                                from cats x join public.categories c on c.id = x.category_id), '[]'::jsonb),
+      'uncategorized', exists (select 1 from cats x where x.category_id is null))
+      into v;
+  exception when others then
+    perform pg_temp.as_owner();
+    raise;
+  end;
+  perform pg_temp.as_owner();
+  return v;
+end $$;
+select is(
+  (select string_agg(p.label || ':' || ((pg_temp.bopt(p.u, p.o) - 'v' - 'orderStatusConfig')
+                                        = pg_temp.opts_from_lines(p.u, p.o, :all13::text[]))::text, ',' order by p.label)
+     from (values ('mgr', :mgr::uuid, :orgA::uuid), ('mgrAB.A', :mgrAB::uuid, :orgA::uuid),
+                  ('mgrAB.B', :mgrAB::uuid, :orgB::uuid), ('mgrC', :mgrC::uuid, :orgC::uuid),
+                  ('own', :own::uuid, :orgA::uuid), ('stfW1', :stfW1::uuid, :orgA::uuid),
+                  ('stfW2', :stfW2::uuid, :orgA::uuid), ('vwrC1', :vwrC1::uuid, :orgA::uuid),
+                  ('vwrCh', :vwrCh::uuid, :orgA::uuid)) p(label, u, o)),
+  'mgr:true,mgrAB.A:true,mgrAB.B:true,mgrC:true,own:true,stfW1:true,stfW2:true,vwrC1:true,vwrCh:true',
+  'R9: for every persona the probed options equal the lists the lines helper gives (every planted non-option is left out)');
+select is(
+  (select jsonb_build_object('wh', jsonb_path_query_array(o->'warehouses', '$[*].name'),
+                             'cats', jsonb_path_query_array(o->'categories', '$[*].name'))
+     from (select pg_temp.bopt(:mgr, :orgA) o) x)
+  || jsonb_build_object('stfW1cats', (select jsonb_path_query_array(pg_temp.bopt(:stfW1, :orgA)->'categories', '$[*].name')),
+                        'mgrABwh.B', (select jsonb_path_query_array(pg_temp.bopt(:mgrAB, :orgB)->'warehouses', '$[*].name'))),
+  '{"wh":["0379 North","0379 South","0379 Old Annex"],
+    "cats":["0379 Fiction","0379 History","0379 Ordered at South only","0379 Retired"],
+    "stfW1cats":["0379 Fiction","0379 History","0379 Retired"],
+    "mgrABwh.B":["0379 B Main"]}'::jsonb,
+  'R10 (control): the planted non-options are absent: no supplies-only warehouse, no unconfirmed-only or never-ordered category, W1 staff are not offered the category ordered only at South, and org B is not offered the warehouse whose only line is org A''s book');
+rollback to savepoint r9;
 rollback to savepoint rich;
 
 -- ═══ X. More than max_rows; export mode ══════════════════════════════════

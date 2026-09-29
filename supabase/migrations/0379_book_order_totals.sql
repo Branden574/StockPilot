@@ -625,24 +625,60 @@ begin
   -- Every selectable status and all time, so an option exists wherever the
   -- caller can see demand, whatever the warehouse's status or whether the
   -- category was deleted since.
-  with lines as materialized (
-         select * from public.book_order_report_lines(p_organization_id, 'all', null, null,
-           c_allowed, null, null, false, null, null, null)),
+  --
+  -- Each option is PROBED, not read from every line of all time: per
+  -- warehouse, per category and for "no category", EXISTS stops at the first
+  -- eligible line. Each probe ends in OFFSET 0, the planner's fence: without
+  -- it an EXISTS is turned into a join over every line (LIMIT is dropped
+  -- from an EXISTS), which is what made the options cost grow with history.
+  -- The eligibility is book_order_report_lines' (E1-E5 over every
+  -- selectable status and all time, with the orders, lines, items and
+  -- warehouses RLS), restated for the probes; pgTAP holds the lists equal to
+  -- the ones the lines helper gives, for every persona.
+  with books as materialized (                              -- the caller's readable books (E1, E4, E5)
+         select i.id, i.category_id
+           from public.inventory_items i                                             -- items RLS
+          where i.organization_id = p_organization_id
+            and i.item_type = 'book' and not i.is_bundle),
+       ordered as not materialized (                        -- a book with an eligible line (E1-E3)
+         select b.id, b.category_id
+           from books b
+          where exists (select 1
+                          from public.order_request_lines l                         -- lines RLS
+                          join public.order_requests o on o.id = l.order_request_id  -- orders RLS
+                          join public.warehouses w on w.id = o.warehouse_id         -- warehouses RLS
+                         where l.item_id = b.id
+                           and o.organization_id = p_organization_id
+                           and o.status = any (c_allowed)
+                        offset 0)),
        wh as (
-         select distinct w.id, w.name, w.status
-           from lines l join public.warehouses w on w.id = l.order_warehouse_id),        -- RLS
+         select w.id, w.name, w.status
+           from public.warehouses w                                                  -- warehouses RLS
+          where w.organization_id = p_organization_id
+            and exists (select 1
+                          from public.order_requests o                              -- orders RLS
+                         where o.warehouse_id = w.id
+                           and o.organization_id = p_organization_id                -- E1
+                           and o.status = any (c_allowed)                             -- E3
+                           and exists (select 1
+                                         from public.order_request_lines l          -- lines RLS
+                                        where l.order_request_id = o.id
+                                          and l.item_id in (select b.id from books b)
+                                       offset 0)
+                        offset 0)),
        cats as (
-         select distinct i.category_id
-           from lines l join public.inventory_items i on i.id = l.item_id)                -- RLS
+         select c.id, c.name, c.deleted_at
+           from public.categories c                                                  -- categories RLS
+          where c.organization_id = p_organization_id
+            and exists (select 1 from ordered x where x.category_id = c.id offset 0))
   select jsonb_build_object(
     'v', 1,
     'warehouses', coalesce((select jsonb_agg(jsonb_build_object('id', wh.id, 'name', wh.name, 'status', wh.status)
                              order by (wh.status <> 'active'), lower(wh.name), wh.id) from wh), '[]'::jsonb),
     'categories', coalesce((select jsonb_agg(jsonb_build_object('id', c.id, 'name', c.name,
                                                                 'deleted', c.deleted_at is not null)
-                             order by (c.deleted_at is not null), lower(c.name), c.id)
-                              from cats x join public.categories c on c.id = x.category_id), '[]'::jsonb),  -- RLS
-    'uncategorized', exists (select 1 from cats x where x.category_id is null),
+                             order by (c.deleted_at is not null), lower(c.name), c.id) from cats c), '[]'::jsonb),
+    'uncategorized', exists (select 1 from ordered x where x.category_id is null offset 0),
     'orderStatusConfig', (select o.order_status_config from public.organizations o
                            where o.id = p_organization_id))
     into v_result;
@@ -689,7 +725,8 @@ comment on function public.book_order_totals_options(uuid) is
   'Book Order Totals filter options (0379): ONE jsonb listing the warehouses (any status) and categories '
   '(deleted ones included, plus whether uncategorized books appear) that occur in the caller''s eligible '
   'lines over every selectable status and all time, and the organization''s order_status_config for '
-  'labels. SECURITY INVOKER, gated in its body. Writes nothing.';
+  'labels. Each option is probed (EXISTS stops at the first eligible line), not read from every line. '
+  'SECURITY INVOKER, gated in its body. Writes nothing.';
 
 -- ═══ Grants: authenticated only ══════════════════════════════════════════
 revoke all on function public.book_order_report_range(uuid, text, date, date) from public, anon, service_role;
