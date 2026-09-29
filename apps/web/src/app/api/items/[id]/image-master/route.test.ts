@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * item the CALLER can read (2026-09-28).
  *
  * The route used to hand any id straight to ItemImagesService, whose only gate
- * was item_images_select, and that policy is org-member wide. So any member,
+ * was item_images_select, and that policy was org-member wide until 0381. So any member,
  * however narrowly scoped, got a working service-role signed URL for the photo
  * of any item in the org. Reproduced on the local stack through the real route:
  * a category-scoped viewer and a warehouse-scoped staff member both got 200 and

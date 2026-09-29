@@ -30,8 +30,8 @@ import type { Database } from '@stockpilot/core';
  *       404s.
  *
  * Nothing in the database stops this: item_images has no is_primary trigger or
- * unique constraint (0002), the write policy is `for all` to staff (0140) and
- * storage delete is granted to staff, so the client really can do the
+ * unique constraint (0002), and the row and storage write policies (0140;
+ * since 0381 scoped to items the caller can change) let the client do the
  * destructive half first.
  *
  * WHAT STOPS IT NOW. Two ordering rules, both pinned by tests:

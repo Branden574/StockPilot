@@ -2,6 +2,8 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
+import { itemPhotoPath, itemPhotoThumbPath } from '@stockpilot/core';
+
 import { reportError } from '@/lib/error-reporter';
 import {
   isSniffedKindAllowedInBucket,
@@ -309,7 +311,7 @@ function reportSignFailures(
  * class embeds `item:inventory_items!item_id!inner(id)`, and it must stay that
  * way.
  *
- * Why the embed. `item_images_select` (0003, 0140) lets ANY org member read
+ * Why the embed. `item_images_select` (0003, 0140) let ANY org member read
  * every image row of the org, while `inventory_items_select` (0229) is
  * narrower: a staff member or viewer sees only the items of their warehouses,
  * charters and (viewers) categories. The image rows alone therefore
@@ -332,11 +334,13 @@ function reportSignFailures(
  * `list()` after the item has cleared its own read (item-detail.tsx), or
  * through the manager-only cached inventory loader.
  *
- * The residual this does not close: a member's own client can still read
- * every `item_images` row of the org and sign any org object itself, because
- * the table policy and the bucket's read policy are org-member wide. That
- * needs a migration on those two policies, not a service change, and is
- * tracked as its own follow-up.
+ * The database now says the same thing (migration 0381, 2026-09-29): a photo
+ * row, and the stored object, is readable only through a readable item, and
+ * writable only for an item the caller can read and change, at a path that
+ * names it. That closed the residual a member's OWN client had (list every
+ * row of the org, sign any org object). The embed stays: it is this
+ * service's own check, it keeps a scoped read identical if a policy ever
+ * regresses, and the tests below hold it in place.
  */
 export class ItemImagesService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -973,9 +977,10 @@ export class ItemImagesService {
     // Gated on the BUCKET's allowlist rather than merely "is some image", so
     // this surface can never accept a format 0046 pins item-images against.
     // Uses the caller's own RLS-scoped client, not service-role — the
-    // "item-images authenticated read/staff delete" policies (0003/0140)
-    // already grant exactly this (the sign is an RLS-checked read), so there
-    // is no reason to reach for createAdminClient here.
+    // bucket's read and delete policies (0381) grant exactly this for an item
+    // the caller can read and change (the sign is an RLS-checked read, and
+    // the item was read above under the caller's RLS), so there is no reason
+    // to reach for createAdminClient here.
     const bucket = this.ctx.supabase.storage.from('item-images');
     const head = await fetchObjectPrefix(bucket, storagePath);
     if (!head) {
@@ -1104,7 +1109,8 @@ export class ItemImagesService {
   /**
    * Returns a presigned upload URL the client can PUT directly to.
    * Path scheme: {organization_id}/items/{item_id}/{uuid}.{ext}
-   * Storage RLS already restricts by organization id in the path.
+   * Storage RLS (0381) mints it only into the folder of an item the caller
+   * can read and change; the signed upload is checked when it is minted.
    */
   async createUploadUrl(itemId: string, fileExt: string) {
     assertPermission(this.ctx, 'items:update');
@@ -1124,12 +1130,13 @@ export class ItemImagesService {
 
     const safeExt = fileExt.replace(/[^a-z0-9]/gi, '').slice(0, 5).toLowerCase() || 'jpg';
     const uuid = crypto.randomUUID();
-    const fileName = `${uuid}.${safeExt}`;
-    const path = `${this.ctx.organizationId}/items/${itemId}/${fileName}`;
+    // The one path builder every writer uses; the database (0381) refuses
+    // any other shape (packages/core item-photo-path.test.ts pins it).
+    const path = itemPhotoPath(this.ctx.organizationId, itemId, `${uuid}.${safeExt}`);
     // Sister path for the 200px pre-resized thumbnail. Always WebP
     // because the uploader transcodes deterministically. Stored next
     // to the master so a future "rm by item folder" cleans both.
-    const thumbPath = `${this.ctx.organizationId}/items/${itemId}/${uuid}-thumb.webp`;
+    const thumbPath = itemPhotoThumbPath(this.ctx.organizationId, itemId, uuid);
 
     const [masterRes, thumbRes] = await Promise.all([
       this.ctx.supabase.storage.from('item-images').createSignedUploadUrl(path),

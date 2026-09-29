@@ -758,8 +758,8 @@ describe('ItemImagesService.remove — thumb sidecar cleanup (SP-135)', () => {
  * Security invariant (2026-09-28): ItemImagesService never signs, lists or
  * deletes the image of an item the CALLER cannot read.
  *
- * item_images_select is org-member wide, inventory_items_select is scoped
- * (warehouse, charter, viewer category). Every image read in the service used
+ * item_images_select was org-member wide until 0381, inventory_items_select
+ * is scoped (warehouse, charter, viewer category). Every image read in the service used
  * to trust the image rows alone and then sign their paths with the
  * service-role client, so a scoped member's image-master request, PO page or
  * report PDF carried working URLs for items outside their scope. Every
@@ -917,9 +917,10 @@ describe('ItemImagesService — item-level authorization of every image read', (
  * NO item_images READ WITHOUT THE ITEM EMBED, checked two ways.
  *
  * The item embed (`item:inventory_items!item_id!inner(id)`) is the whole of the
- * item-level authorization above: item_images_select is org-member wide, so a
- * read without it hands a scoped caller the image rows, and then signed URLs,
- * of items they cannot read. The first version of this guard was a regular
+ * item-level authorization above: item_images_select was org-member wide
+ * until 0381, so a read without it handed a scoped caller the image rows, and
+ * then signed URLs, of items they cannot read (the embed stays as the
+ * service's own check now that the policy agrees). The first version of this guard was a regular
  * expression over `.from('item_images')` in single quotes followed directly by
  * `.select('...')`: a read written with double quotes, a template string, a
  * table-name constant, a select list in a variable, or a builder split across

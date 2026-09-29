@@ -368,6 +368,24 @@ PGTAP_TESTS=(
   supabase/tests/0323_storage_path_shape_constraints.test.sql
   supabase/tests/0324_validate_storage_path_and_nonneg_constraints.test.sql
   supabase/tests/0326_storage_path_floor_completion.test.sql
+  # Item photos follow the item (0381): item_images rows and item-images
+  # objects (both path shapes, {org}/items/{item}/{file} and the books import
+  # {org}/{item}/{file}) are readable only through an item the caller can
+  # read, per persona (owner, admin, manager, all-warehouse auditor, staff,
+  # charter-scoped staff, category and warehouse viewers, another org,
+  # disabled, pending, anon; the service role still reads all). A duplicated
+  # item's shared file (master and thumbnail) reads through the duplicate's
+  # row, and the SECURITY DEFINER set behind that answers per caller, from the
+  # caller's own orgs only (another org's rows cannot slow it). Rows and
+  # objects are writable only for an item the caller can read and change, at a
+  # path that names it in its own org's folder (or, for a row, a path a
+  # readable row already carries: duplicates, duplicates of duplicates);
+  # never a new name in another item's folder, another org's item or folder,
+  # an unreadable item's object, a third shape, or a non-uuid folder (a plain
+  # refusal, not a cast error). The books cover upsert is pinned, and for
+  # every persona every stored file a readable row carries is readable (so
+  # copying a carried path into a new row can never reveal one).
+  supabase/tests/0381_item_images_item_scope.test.sql
 
   # Auth material and trusted writers.
   supabase/tests/0025_notification_writers.test.sql
@@ -391,7 +409,8 @@ WEB_TESTS=(
   src/server/services/public-items.test.ts
 
   # Item photos are signed only for items the caller can read (2026-09-28):
-  # item_images_select is org-member wide, item visibility is scoped.
+  # item_images_select was org-member wide until 0381 (item visibility is
+  # scoped); the route and the service still authorize the item themselves.
   # (item-images.test.ts above carries the service half.)
   'src/app/api/items/[id]/image-master/route.test.ts'
   # The New rental catalog reads its items with the caller's own client, so a
@@ -637,6 +656,13 @@ MOBILE_TESTS=(
   # a refused or late file, and is never shared after the account changed.
   src/lib/book-order-totals-api.test.ts
   src/lib/report-export-download.test.ts
+
+  # Item photo uploads (0381): the database refuses any path that is not
+  # {org}/items/{item}/{file} or the books {org}/{item}/{file}, lowercase
+  # uuids. The phone's three uploaders (new item, replace photo, scan capture)
+  # build it with the one core builder, and the phone's outputs pass the
+  # parser read from the migrations. (packages/core carries the builder half.)
+  src/lib/item-photo-path.wiring.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -647,6 +673,10 @@ CORE_TESTS=(
   src/auth/account-status.test.ts
   src/schemas/inventory.test.ts
   src/signature/signature.test.ts
+  # The one item-images path builder (web presign and thumbnail, phone
+  # uploads, books cover) against 0381's database parser, read from the
+  # newest migration that defines public.item_image_path_item_id.
+  src/inventory/item-photo-path.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
