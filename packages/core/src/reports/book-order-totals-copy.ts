@@ -490,6 +490,7 @@ export const BOOK_REPORT_UI = {
   columnCover: 'Cover',
   columnBook: 'Book',
   columnCopies: 'Copies requested',
+  columnQuantity: 'Quantity requested',
   columnOrders: 'Orders',
   columnLatest: 'Latest order',
   columnActions: 'Actions',
@@ -507,6 +508,13 @@ export const BOOK_REPORT_UI = {
   mfaEnrollAction: 'Set up two-step verification',
   mfaVerifyAction: 'Verify now',
 } as const;
+
+/** The quantity column's header: 'Copies requested' while every row is in
+ *  single copies, else 'Quantity requested' (a pack quantity is not copies;
+ *  each other-unit cell names its unit). */
+export function bookReportQuantityColumnLabel(anyOtherUnit: boolean): string {
+  return anyOtherUnit ? BOOK_REPORT_UI.columnQuantity : BOOK_REPORT_UI.columnCopies;
+}
 
 /** The pager's nouns: 'Showing 1–25 of 32 book entries · Page 1 of 2'. */
 export const BOOK_REPORT_LIST_NOUN = { one: 'book entry', other: 'book entries' } as const;

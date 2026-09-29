@@ -260,6 +260,41 @@ describe('Book Order Totals CSV', () => {
     expect(new Set(dataLines.map((l) => l.split(',')[0])).size).toBe(20_000);
   });
 
+  it('names quantity columns without "copies": a pack row is not copies', async () => {
+    // Brief section 3: quantities are called copies only when they are
+    // individual books. The unit and counts_as_copies columns say which.
+    for (const c of BOOK_REPORT_CSV_COLUMNS) expect(c).not.toMatch(/^copies_/);
+    expect(BOOK_REPORT_CSV_COLUMNS).toEqual(
+      expect.arrayContaining([
+        'quantity_requested',
+        'quantity_recorded_fulfilled',
+        'quantity_returned',
+        'unit',
+        'counts_as_copies',
+      ]),
+    );
+    const text = csvOf(
+      input(
+        answer([
+          row(1, { copies: '30', fulfilled: '8', returned: '2' }),
+          row(2, { countsAsCopies: false, unit: 'pack of 10', copies: '3' }),
+        ]),
+      ),
+    );
+    expect(text).toContain(
+      '"# Quantities are copies only where counts_as_copies is yes; other rows are in the unit shown."',
+    );
+    const parsed = parseWithPapa(text);
+    const header = parsed.find((r) => r[0] === 'item_id')!;
+    const pack = parsed.find((r) => r[1] === 'Book 2')!;
+    const at = (name: string) => pack[header.indexOf(name)];
+    expect([at('quantity_requested'), at('unit'), at('counts_as_copies')]).toEqual([
+      3,
+      'pack of 10',
+      'no',
+    ]);
+  });
+
   it('discloses other units, the zone fallback and a restricted scope', () => {
     const a = answer(
       [row(1), row(2, { countsAsCopies: false, unit: 'pack of 10', copies: '12' })],

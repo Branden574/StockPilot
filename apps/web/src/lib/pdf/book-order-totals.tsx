@@ -7,6 +7,7 @@ import {
   BOOK_REPORT_TITLE,
   bookReportRowBadges,
   bookReportPdfGrandTotalLine,
+  bookReportQuantityColumnLabel,
   copiesRequestedText,
   formatBookReportIdentityLine,
   formatReportDate,
@@ -64,10 +65,17 @@ export interface BookPdfColumn {
 }
 
 /** The table's columns for a document with or without covers. The Book
- *  column takes whatever the fixed columns leave. */
-export function bookPdfColumns(photos: boolean): BookPdfColumn[] {
+ *  column takes whatever the fixed columns leave. The quantity column says
+ *  "Copies requested" only when every row is in single copies. */
+export function bookPdfColumns(photos: boolean, anyOtherUnit = false): BookPdfColumn[] {
   const fixed: BookPdfColumn[] = [
-    { key: 'copies', label: 'Copies requested', widthPt: 104, align: 'right' },
+    {
+      key: 'copies',
+      label: bookReportQuantityColumnLabel(anyOtherUnit),
+      // Wide enough for the longer header ("QUANTITY REQUESTED").
+      widthPt: 110,
+      align: 'right',
+    },
     { key: 'orders', label: 'Orders', widthPt: 56, align: 'right' },
     { key: 'latest', label: 'Latest order', widthPt: 84, align: 'left' },
   ];
@@ -305,7 +313,7 @@ function BookRow({ item, columns }: { item: BookPdfRow; columns: BookPdfColumn[]
 }
 
 export function BookOrderTotalsPdf(props: BookOrderTotalsPdfProps) {
-  const columns = bookPdfColumns(props.photos);
+  const columns = bookPdfColumns(props.photos, props.summary.unresolved.entries > 0);
   const generated = formatReportDateTime(props.generatedAtLocal);
   const copies = formatReportQuantity(props.summary.copies);
   const metrics: {

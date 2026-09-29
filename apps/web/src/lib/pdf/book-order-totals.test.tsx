@@ -150,6 +150,19 @@ describe('BookOrderTotalsPdf structure', () => {
     expect(all.some((t) => t.includes('Archived'))).toBe(true);
     expect([...walk(tree)].filter((el) => el.props['data-placeholder'] === true)).toHaveLength(2);
   });
+  it('names the quantity column "Copies requested" only when every row is in copies', () => {
+    const header = (anyOtherUnit: boolean) =>
+      bookPdfColumns(true, anyOtherUnit).find((c) => c.key === 'copies')!.label;
+    expect(header(false)).toBe('Copies requested');
+    expect(header(true)).toBe('Quantity requested');
+    const all = texts(
+      BookOrderTotalsPdf(
+        props({ summary: { copies: '30', entries: 2, orders: 3, unresolved: { entries: 1 } } }),
+      ),
+    );
+    expect(all).toContain('Quantity requested');
+    expect(all).not.toContain('Copies requested');
+  });
   it('with an other-unit row, the grand total never ties the copies to the order count', () => {
     // 15 copies from 3 orders, and a 4th order holding only a pack book.
     const all = texts(
@@ -196,9 +209,14 @@ describe('Book Order Totals PDF headers fit', () => {
       shown.length * BOOK_PDF_HEADER_LETTER_SPACING_PT
     );
   };
-  for (const photos of [true, false]) {
-    it(`every header fits its content box (${photos ? 'with' : 'without'} covers)`, () => {
-      for (const col of bookPdfColumns(photos)) {
+  for (const [photos, otherUnits] of [
+    [true, false],
+    [false, false],
+    [true, true],
+    [false, true],
+  ] as const) {
+    it(`every header fits its content box (${photos ? 'with' : 'without'} covers${otherUnits ? ', other units' : ''})`, () => {
+      for (const col of bookPdfColumns(photos, otherUnits)) {
         const box = col.widthPt - REPORT_CELL_PADDING_PT * 2;
         expect(
           headerWidth(col.label) <= box,

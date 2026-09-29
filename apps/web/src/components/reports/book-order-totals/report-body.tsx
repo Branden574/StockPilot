@@ -32,6 +32,7 @@ import {
   bookReportCategoryLine,
   bookReportGeneratedLine,
   bookReportGrandTotalLine,
+  bookReportQuantityColumnLabel,
   bookReportRangeLine,
   bookReportRowBadges,
   bookReportSearchLine,
@@ -465,7 +466,7 @@ function BooksTable({
               {BOOK_REPORT_UI.columnBook}
             </TableHead>
             <TableHead scope="col" className="px-2 text-right sm:px-3">
-              {BOOK_REPORT_UI.columnCopies}
+              {bookReportQuantityColumnLabel(answer.summary.unresolved.entries > 0)}
             </TableHead>
             <TableHead scope="col" className="hidden text-right sm:table-cell">
               {BOOK_REPORT_UI.columnOrders}

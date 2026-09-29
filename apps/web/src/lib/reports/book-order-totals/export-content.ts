@@ -84,6 +84,11 @@ export function bookReportSummaryLines(input: BookReportExportInput): string[] {
   return lines;
 }
 
+/** The quantity columns are named for a quantity, not for copies: a row in
+ *  another unit (a pack) is not copies. */
+export const BOOK_REPORT_CSV_UNITS_NOTE =
+  'Quantities are copies only where counts_as_copies is yes; other rows are in the unit shown.';
+
 export const BOOK_REPORT_CSV_COLUMNS = [
   'item_id',
   'title',
@@ -96,12 +101,12 @@ export const BOOK_REPORT_CSV_COLUMNS = [
   'rack_or_bin',
   'unit',
   'counts_as_copies',
-  'copies_requested',
+  'quantity_requested',
   'orders',
   'latest_order_date',
   'latest_order_at',
-  'copies_recorded_fulfilled',
-  'copies_returned',
+  'quantity_recorded_fulfilled',
+  'quantity_returned',
   'item_status',
   'now_rental',
 ] as const;
@@ -128,12 +133,12 @@ function csvRecord(row: BookReportRow): Record<string, string> {
     unit: row.unit ?? '',
     counts_as_copies: row.countsAsCopies ? 'yes' : 'no',
     // Exact text from SQL: never reformatted, never rounded.
-    copies_requested: row.copies,
+    quantity_requested: row.copies,
     orders: String(row.orders),
     latest_order_date: row.latestOrderDate ?? '',
     latest_order_at: row.latestOrderAt ?? '',
-    copies_recorded_fulfilled: row.fulfilled,
-    copies_returned: row.returned,
+    quantity_recorded_fulfilled: row.fulfilled,
+    quantity_returned: row.returned,
     item_status: row.deleted ? 'deleted' : row.itemStatus,
     now_rental: row.nowRental ? 'yes' : 'no',
   };
@@ -153,6 +158,7 @@ export function* bookReportCsvChunks(input: BookReportExportInput): Generator<st
     csvMetaLine(
       'Recorded as fulfilled and returned quantities are shown separately and never subtracted.',
     ),
+    csvMetaLine(BOOK_REPORT_CSV_UNITS_NOTE),
     csvMetaLine(
       'sku and identifier are exact. A spreadsheet may turn long or zero-led numbers in those two columns into numbers when it opens the file; sku_label and identifier_label repeat them as text.',
     ),

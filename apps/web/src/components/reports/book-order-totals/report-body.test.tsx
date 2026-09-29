@@ -192,6 +192,17 @@ describe('Book Order Totals page body', () => {
     expect(within(rowA).getByRole('button', { name: 'View orders for Book A' })).toBeInTheDocument();
   });
 
+  it('heads the quantity column "Quantity requested" when any book is in another unit', async () => {
+    svc.page.mockImplementation(async () =>
+      totalsResponse({
+        summary: { ...totalsResponse().summary, unresolved: { entries: 1, quantity: '3' } },
+      }),
+    );
+    render(await body());
+    expect(screen.getByRole('columnheader', { name: 'Quantity requested' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Copies requested' })).toBeNull();
+  });
+
   it('with no warehouse in the URL, applies the warehouse view ONCE and carries it into every link and the drill-down fetch', async () => {
     view.current = W1;
     nav.params = new URLSearchParams(`view=${ITEM_A}`);
