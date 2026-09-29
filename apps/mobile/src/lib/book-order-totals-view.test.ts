@@ -13,7 +13,10 @@ import {
   BOOK_REPORT_UI,
   DEFAULT_BOOK_REPORT_QUERY,
   DEFAULT_BOOK_REPORT_STATUS_GROUPS,
+  BOOK_REPORT_BY_CHARTER_UNITS_NOTE,
+  BOOK_REPORT_NO_CHARTER_HINT,
   bookReportStatusLabels,
+  parseBookOrderOptionsResponse,
   parseBookOrderOrdersResponse,
   parseBookOrderTotalsResponse,
   type BookReportQuery,
@@ -21,33 +24,59 @@ import {
   type Permission,
 } from '@stockpilot/core';
 
-import { BOOK_A, ORDER_1, W1, W2, ordersAnswer, orderRow, totalsAnswer } from './__fixtures__/book-order-totals';
+import {
+  BOOK_A,
+  BOOK_B,
+  ORDER_1,
+  W1,
+  W2,
+  optionsAnswer,
+  ordersAnswer,
+  orderRow,
+  totalsAnswer,
+} from './__fixtures__/book-order-totals';
 import {
   applyBookReportDraft,
-  bookReportDateChip,
+  bookReportChipEchoes,
   bookReportDraftIsValid,
   bookReportDraftProblems,
   bookReportDrillDownHref,
   bookReportExportMode,
   bookReportExportOffer,
+  bookReportHasFiltersToClear,
   bookReportIdentifiersLine,
   bookReportOrderRowPresentation,
+  bookReportPhoneChips,
   bookReportPlaceLine,
   bookReportQueryFromListParams,
   bookReportQueryFromParams,
   bookReportRowAccessibilityLabel,
   bookReportRowFiguresLine,
-  bookReportStatusChip,
   bookReportUnreadableFilter,
-  bookReportWarehouseChip,
   bookReportWithoutUnreadableFilter,
   bookReportWebUrl,
   bookCoverCacheKey,
   bookCoverPlaceholderLabel,
+  bookReportByCharterView,
+  bookReportCharterChoices,
+  bookReportCharterLabelsFor,
+  bookReportCharterWarehouseEmpty,
+  bookReportCustomRangeQuery,
+  bookReportDateTile,
+  bookReportDatesSheetStart,
+  bookReportListHref,
+  bookReportOrdersShowCharter,
+  bookReportPresetQuery,
+  bookReportShowingView,
+  BOOK_REPORT_CHARTER_SEARCH_OVER,
+  BOOK_REPORT_DATE_CHOICES,
+  clearBookReportFilters,
   copiesMetric,
+  filterBookReportCharterChoices,
   isResolvedBookReportQuery,
   resetBookReportDraft,
   resolveBookReportRequest,
+  sameBookReportQuery,
   showBookReportEntry,
   toggleStatusGroup,
 } from './book-order-totals-view';
@@ -193,34 +222,161 @@ describe('the filters sheet', () => {
       to: null,
     });
   });
-  it('Reset returns every default, following the view again, and keeps the search', () => {
+  it('Reset returns its own four controls to their defaults (following the view again) and keeps the search', () => {
     const reset = resetBookReportDraft(q({ warehouse: W1, sort: 'title', q: 'hobbit', statusGroups: ['denied'] }));
     expect(reset).toMatchObject({ warehouse: 'default', sort: 'copies', q: 'hobbit', page: 1 });
     expect(reset.statusGroups).toEqual([...DEFAULT_BOOK_REPORT_STATUS_GROUPS]);
+  });
+  it('Reset leaves the charter and the dates alone: they have their own sheets', () => {
+    const reset = resetBookReportDraft(
+      q({ charter: W2, range: 'custom', from: '2026-09-01', to: '2026-09-30', category: 'none', page: 3 }),
+    );
+    expect(reset).toMatchObject({
+      charter: W2,
+      range: 'custom',
+      from: '2026-09-01',
+      to: '2026-09-30',
+      category: 'all',
+      page: 1,
+    });
   });
   it('status groups toggle in canonical order', () => {
     expect(toggleStatusGroup(['completed', 'awaiting'], 'denied')).toEqual(['awaiting', 'completed', 'denied']);
     expect(toggleStatusGroup(['awaiting', 'denied'], 'denied')).toEqual(['awaiting']);
   });
-  it('chips say what the next request will use', () => {
-    expect(bookReportDateChip(q())).toBe('Date: All time');
-    expect(bookReportDateChip(q({ range: 'custom', from: '2026-08-30', to: '2026-09-28' }))).toBe(
-      'Date: Aug 30 – Sep 28, 2026',
+});
+
+describe('the chip row (plan 5): Charter, Orders placed, Status, Warehouse, Category, Sort', () => {
+  const labels = bookReportStatusLabels(null);
+  const CH_A = '0a0a0a0a-0000-4000-8000-00000000000a';
+  const chipsFor = (
+    query: BookReportQuery,
+    answer: Record<string, unknown> | null = null,
+    options: Record<string, unknown> | null = null,
+    charterLabels: ReadonlyMap<string, string> = new Map(),
+  ) => {
+    const parsed = answer ? parseBookOrderTotalsResponse(totalsAnswer(answer)) : null;
+    const opts = options ? parseBookOrderOptionsResponse(optionsAnswer(options)) : null;
+    return bookReportPhoneChips({
+      query,
+      echoes: bookReportChipEchoes(query, parsed, opts),
+      statusLabels: labels,
+      charterLabels,
+      activeWarehouseId: W1,
+      activeWarehouseName: 'DC4',
+    });
+  };
+
+  it('defaults: six chips, in order, none removable, each opening its own sheet', () => {
+    const chips = chipsFor(q());
+    expect(chips.map((c) => [c.key, c.text, c.opens, c.remove])).toEqual([
+      ['charter', 'Charter: All charters', 'charter', null],
+      ['dates', 'Orders placed: All time', 'dates', null],
+      ['status', 'Status: Eligible orders', 'filters', null],
+      ['warehouse', 'Warehouse: DC4 (your warehouse view)', 'filters', null],
+      ['category', 'Category: All categories', 'filters', null],
+      ['sort', 'Sort: Most copies', 'filters', null],
+    ]);
+    expect(chips.map((c) => c.hint)).toEqual([
+      'Opens charter choices',
+      'Opens date choices',
+      'Opens the filters',
+      'Opens the filters',
+      'Opens the filters',
+      'Opens the filters',
+    ]);
+  });
+
+  it("a chosen filter reads core's chip, with a remove button that resets only it, on page 1", () => {
+    const query = q({
+      charter: CH_A,
+      range: 'custom',
+      from: '2026-09-01',
+      to: '2026-09-30',
+      warehouse: W2,
+      category: 'none',
+      statusGroups: ['awaiting'],
+      sort: 'title',
+      page: 4,
+    });
+    const chips = chipsFor(query, null, null, new Map([[CH_A, 'Charter Alder · CH-A']]));
+    expect(chips.map((c) => c.text)).toEqual([
+      'Charter: Charter Alder · CH-A',
+      'Orders placed: Sep 1 – Sep 30, 2026',
+      `Status: ${labels.pending_approval}`,
+      'Warehouse: Chosen warehouse',
+      'Category: No category',
+      'Sort: Title (A–Z)',
+    ]);
+    const byKey = Object.fromEntries(chips.map((c) => [c.key, c]));
+    expect(byKey.charter!.remove).toMatchObject({ key: 'charter', label: 'Remove charter filter' });
+    expect(byKey.charter!.remove!.cleared).toMatchObject({ charter: 'all', range: 'custom', page: 1 });
+    expect(byKey.dates!.remove!.cleared).toMatchObject({ charter: CH_A, range: 'all', from: null, to: null });
+    expect(byKey.warehouse!.remove!.cleared).toMatchObject({ warehouse: 'default', charter: CH_A });
+    expect(byKey.sort!.remove).toBeNull();
+  });
+
+  it("a chosen warehouse or category is named from the answer, else from the lists (never 'Chosen ...' when either knows it)", () => {
+    const query = q({ warehouse: W2, category: BOOK_B });
+    // Still loading: the lists name them.
+    expect(chipsFor(query, null, {}).map((c) => c.text).slice(3, 5)).toEqual([
+      'Warehouse: North (archived)',
+      'Category: Fiction (deleted)',
+    ]);
+    // The answer's echo wins when it is for the same warehouse.
+    const answered = chipsFor(query, {
+      filters: {
+        warehouse: { id: W2, name: 'North Annex', status: 'active' },
+        category: { id: BOOK_B, name: 'Fiction', deleted: false },
+        uncategorized: false,
+      },
+    });
+    expect(answered.map((c) => c.text).slice(3, 5)).toEqual(['Warehouse: North Annex', 'Category: Fiction']);
+  });
+
+  it('a preset reads its resolved days from the answer only when the answer is for that preset', () => {
+    const month = q({ range: 'month' });
+    const echo = { range: { key: 'month', from: '2026-09-01', to: '2026-09-29', timeZone: 'America/Los_Angeles', timeZoneFallback: false } };
+    expect(chipsFor(month, echo)[1]!.text).toBe('Orders placed: This month (Sep 1 – Sep 29, 2026)');
+    expect(chipsFor(q({ range: 'week' }), echo)[1]!.text).toBe('Orders placed: This week');
+  });
+
+  it('an explicit All warehouses is not a filter to remove; a warehouse-view warehouse is not either', () => {
+    expect(chipsFor(q({ warehouse: 'all' }))[3]).toMatchObject({
+      text: 'Warehouse: All warehouses you can see',
+      remove: null,
+    });
+    expect(chipsFor(q())[3]!.remove).toBeNull();
+  });
+
+  it('Clear filters shows for a charter, dates, status, chosen warehouse, category or search, never for the sort alone', () => {
+    expect(bookReportHasFiltersToClear(q())).toBe(false);
+    expect(bookReportHasFiltersToClear(q({ sort: 'title' }))).toBe(false);
+    expect(bookReportHasFiltersToClear(q({ warehouse: 'all' }))).toBe(false);
+    for (const over of [
+      { charter: 'none' },
+      { range: 'today' as const },
+      { statusGroups: ['denied' as const] },
+      { warehouse: W1 },
+      { category: 'none' },
+      { q: 'hobbit' },
+    ]) {
+      expect(bookReportHasFiltersToClear(q(over))).toBe(true);
+    }
+  });
+
+  it("Clear filters resets charter, dates, status, warehouse, category and search, keeps the sort, page 1", () => {
+    const cleared = clearBookReportFilters(
+      q({ charter: 'none', range: 'week', statusGroups: ['denied'], warehouse: W1, category: 'none', q: 'x', sort: 'latest', page: 5 }),
     );
-    expect(bookReportStatusChip(DEFAULT_BOOK_REPORT_STATUS_GROUPS)).toBe('Status: default');
-    expect(bookReportStatusChip(['awaiting'])).toBe('Status: 1 of 6');
-    const base = { activeWarehouseId: W1, activeWarehouseName: 'DC4', warehouses: [] };
-    expect(bookReportWarehouseChip({ ...base, query: q() })).toBe('Warehouse: DC4 (your warehouse view)');
-    expect(bookReportWarehouseChip({ ...base, activeWarehouseId: null, activeWarehouseName: null, query: q() })).toBe(
-      'Warehouse: All warehouses you can see',
-    );
-    expect(
-      bookReportWarehouseChip({
-        ...base,
-        query: q({ warehouse: W2 }),
-        warehouses: [{ id: W2, name: 'North', status: 'archived' }],
-      }),
-    ).toBe('Warehouse: North (archived)');
+    expect(cleared).toEqual({ ...q(), sort: 'latest' });
+  });
+
+  it('two queries are the same answer only when every filter and the page match', () => {
+    expect(sameBookReportQuery(q({ charter: W1 }), q({ charter: W1 }))).toBe(true);
+    expect(sameBookReportQuery(q(), q({ page: 2 }))).toBe(false);
+    expect(sameBookReportQuery(q(), q({ charter: 'none' }))).toBe(false);
+    expect(sameBookReportQuery(q({ warehouse: W1 }), q({ warehouse: W1, warehouseFromView: true }))).toBe(false);
   });
 });
 
@@ -281,6 +437,42 @@ describe('drill-down rows (plan gap 7): a link only when openable', () => {
     const p = bookReportOrderRowPresentation(answer.rows[0]!, { countsAsCopies: false, unit: 'pack of 10' }, labels);
     expect(p.quantity).toBe('10 (pack of 10)');
   });
+
+  it('with All charters each order names its charter (No charter for a pickup), and says it', () => {
+    const CH = '0a0a0a0a-0000-4000-8000-00000000000a';
+    const parsed = parseBookOrderOrdersResponse(
+      ordersAnswer({
+        filters: { warehouse: null, charter: null, noCharter: false },
+        rows: [
+          { ...orderRow, charterId: CH, charterName: 'Charter Alder', charterCode: 'CH-A' },
+          { ...orderRow, orderId: BOOK_B, charterId: null, charterName: null, charterCode: null },
+        ],
+      }),
+    );
+    const show = bookReportOrdersShowCharter(parsed.filters);
+    expect(show).toBe(true);
+    const [a, b] = parsed.rows.map((r) => bookReportOrderRowPresentation(r, book, labels, { showCharter: show }));
+    expect(a!.charter).toBe('Charter: Charter Alder · CH-A');
+    expect(a!.accessibilityLabel).toContain('Charter: Charter Alder · CH-A.');
+    expect(b!.charter).toBe('Charter: No charter');
+  });
+
+  it('with one charter chosen (or No charter) the rows do not repeat it; an older server names none', () => {
+    const one = parseBookOrderOrdersResponse(
+      ordersAnswer({
+        filters: { warehouse: null, charter: { id: W1, name: 'Alder', code: null, status: 'active' }, noCharter: false },
+        rows: [{ ...orderRow, charterId: W1, charterName: 'Alder', charterCode: null }],
+      }),
+    );
+    expect(bookReportOrdersShowCharter(one.filters)).toBe(false);
+    expect(bookReportOrdersShowCharter({ charter: null, noCharter: true })).toBe(false);
+    const p = bookReportOrderRowPresentation(one.rows[0]!, book, labels, { showCharter: false });
+    expect(p.charter).toBeNull();
+    expect(p.accessibilityLabel).not.toContain('Charter');
+    // Before 0382: no charter keys at all. All charters, but rows carry no charter.
+    expect(bookReportOrdersShowCharter(answer.filters)).toBe(true);
+    expect(bookReportOrderRowPresentation(answer.rows[0]!, book, labels, { showCharter: true }).charter).toBeNull();
+  });
 });
 
 describe('a warehouse or category the reader cannot see (400), as the web page handles it', () => {
@@ -292,6 +484,7 @@ describe('a warehouse or category the reader cannot see (400), as the web page h
       details: { reason },
     });
   it('names which filter the server refused', () => {
+    expect(bookReportUnreadableFilter(refusal('invalid_charter'))).toBe('charter');
     expect(bookReportUnreadableFilter(refusal('invalid_warehouse'))).toBe('warehouse');
     expect(bookReportUnreadableFilter(refusal('invalid_category'))).toBe('category');
     expect(bookReportUnreadableFilter(refusal('invalid_range'))).toBeNull();
@@ -324,6 +517,51 @@ describe('a warehouse or category the reader cannot see (400), as the web page h
       page: 1,
     });
     expect(bookReportWithoutUnreadableFilter({ ...base, category: 'all' }, 'category')).toBeNull();
+  });
+  it('a refused charter falls back to All charters on page 1, keeping every other filter; nothing left: null', () => {
+    const base = q({ charter: W2, range: 'custom', from: '2026-09-01', to: '2026-09-30', q: 'x', page: 3 });
+    expect(bookReportWithoutUnreadableFilter(base, 'charter')).toEqual({ ...base, charter: 'all', page: 1 });
+    expect(bookReportWithoutUnreadableFilter(q({ charter: 'none' }), 'charter')).toMatchObject({ charter: 'all' });
+    expect(bookReportWithoutUnreadableFilter(q(), 'charter')).toBeNull();
+  });
+  it('a link refused on every id resets at most four times, then stops (never a loop)', () => {
+    let cur: BookReportQuery | null = q({ charter: W1, warehouse: W2, category: BOOK_B });
+    const seen: string[] = [];
+    for (const key of ['charter', 'warehouse', 'warehouse', 'category', 'charter', 'warehouse', 'category'] as const) {
+      const next: BookReportQuery | null = cur ? bookReportWithoutUnreadableFilter(cur, key) : null;
+      if (!next) continue;
+      seen.push(key);
+      cur = next;
+    }
+    expect(seen).toEqual(['charter', 'warehouse', 'warehouse', 'category']);
+    expect(cur).toMatchObject({ charter: 'all', warehouse: 'all', category: 'all' });
+  });
+});
+
+describe('the drill-down with no list underneath (a cold link)', () => {
+  it("Back opens the list with the drill-down's filters after any reset, never a refused charter", () => {
+    const opened = q({ charter: W2, range: 'custom', from: '2026-09-01', to: '2026-09-30', warehouse: W1, warehouseFromView: true, page: 2 });
+    const reset = bookReportWithoutUnreadableFilter(opened, 'charter')!;
+    expect(bookReportListHref(reset)).toBe(
+      `/reports/book-order-totals?range=custom&from=2026-09-01&to=2026-09-30&warehouse=${W1}`,
+    );
+    expect(bookReportListHref(opened)).toContain(`charter=${W2}`);
+    expect(bookReportListHref(q())).toBe('/reports/book-order-totals');
+  });
+  it("Android's web link carries the charter and the dates (the web page reads them the same way)", () => {
+    expect(
+      bookReportWebUrl(
+        'https://stockpilotusa.com',
+        q({ charter: W2, range: 'custom', from: '2026-09-01', to: '2026-09-30', warehouse: W1, warehouseFromView: true }),
+      ),
+    ).toBe(
+      `https://stockpilotusa.com/dashboard/reports/book-order-totals?charter=${W2}&range=custom&from=2026-09-01&to=2026-09-30&warehouse=${W1}`,
+    );
+  });
+  it('the drill-down route carries the charter and the dates (never the list page)', () => {
+    expect(bookReportDrillDownHref(BOOK_A, q({ charter: 'none', range: 'today', page: 4 }))).toBe(
+      `/reports/book-order-totals/${BOOK_A}?charter=none&range=today`,
+    );
   });
 });
 
@@ -413,5 +651,270 @@ describe('cover cache keys', () => {
     const b = 'https://books.google.com/books/content?id=BBB&printsec=frontcover&img=1';
     expect(bookCoverCacheKey(a)).toBe(a);
     expect(bookCoverCacheKey(a)).not.toBe(bookCoverCacheKey(b));
+  });
+});
+
+describe('charter labels and the Charter sheet (plan 5)', () => {
+  const A = '0a0a0a0a-0000-4000-8000-00000000000a';
+  const B = '0b0b0b0b-0000-4000-8000-00000000000b';
+  const C = '0c0c0c0c-0000-4000-8000-00000000000c';
+  const options = {
+    charters: [
+      { id: A, name: 'Alder', code: 'CH-A', status: 'active' },
+      { id: B, name: 'Birch', code: null, status: 'active' },
+      { id: C, name: 'Birch', code: null, status: 'archived' },
+    ],
+    noCharter: true,
+  };
+
+  it("labels come from core: Name · CODE, a status suffix, and alike names told apart by the id's start", () => {
+    const labels = bookReportCharterLabelsFor(options);
+    expect(labels.get(A)).toBe('Alder · CH-A');
+    expect(labels.get(B)).toBe('Birch');
+    expect(labels.get(C)).toBe('Birch (archived)');
+    const twins = bookReportCharterLabelsFor({
+      charters: [
+        { id: A, name: 'Birch', code: null, status: 'active' },
+        { id: B, name: 'Birch', code: null, status: 'active' },
+      ],
+    });
+    expect(twins.get(A)).toBe('Birch (id 0a0a0a0a)');
+    expect(twins.get(B)).toBe('Birch (id 0b0b0b0b)');
+  });
+
+  it('a charter only a by-charter row names (the lists failed) still gets a label', () => {
+    const labels = bookReportCharterLabelsFor(null, [
+      { id: A, name: 'Alder', code: 'CH-A', status: 'active' },
+      { id: null, name: null, code: null, status: null },
+    ]);
+    expect([...labels.entries()]).toEqual([[A, 'Alder · CH-A']]);
+  });
+
+  it('rows: All charters, each charter, No charter last (with its hint) only when offered', () => {
+    const labels = bookReportCharterLabelsFor(options);
+    const rows = bookReportCharterChoices({ current: 'all', options, labels, echo: null });
+    expect(rows.map((r) => [r.value, r.label, r.detail])).toEqual([
+      ['all', 'All charters', null],
+      [A, 'Alder · CH-A', null],
+      [B, 'Birch', null],
+      [C, 'Birch (archived)', null],
+      ['none', 'No charter', BOOK_REPORT_NO_CHARTER_HINT],
+    ]);
+    const noPickups = bookReportCharterChoices({ current: 'all', options: { ...options, noCharter: false }, labels, echo: null });
+    expect(noPickups.map((r) => r.value)).not.toContain('none');
+    // Applied, it is always offered (to be chosen again after trying another).
+    const applied = bookReportCharterChoices({ current: 'none', options: { ...options, noCharter: false }, labels, echo: null });
+    expect(applied.at(-1)!.value).toBe('none');
+  });
+
+  it("an applied charter the lists do not carry is offered by the answer's name; failed lists keep All and the applied one", () => {
+    const echo = { id: 'd0d0d0d0-0000-4000-8000-00000000000d', name: 'Dogwood', code: 'CH-D', status: 'active' };
+    const failed = bookReportCharterChoices({ current: echo.id, options: null, labels: new Map(), echo });
+    expect(failed.map((r) => [r.value, r.label])).toEqual([
+      ['all', 'All charters'],
+      [echo.id, 'Dogwood · CH-D'],
+    ]);
+    const unnamed = bookReportCharterChoices({ current: echo.id, options: null, labels: new Map(), echo: null });
+    expect(unnamed[1]!.label).toBe('Chosen charter');
+  });
+
+  it('a search shows only past 12 rows, matches any part of a label in any case, and keeps the applied row', () => {
+    expect(BOOK_REPORT_CHARTER_SEARCH_OVER).toBe(12);
+    const labels = bookReportCharterLabelsFor(options);
+    const rows = bookReportCharterChoices({ current: A, options, labels, echo: null });
+    expect(filterBookReportCharterChoices(rows, 'birch', A).map((r) => r.value)).toEqual([A, B, C]);
+    expect(filterBookReportCharterChoices(rows, '  ', A)).toHaveLength(rows.length);
+  });
+});
+
+describe('Showing (brief 8, plan D20) and the empty state', () => {
+  const labels = bookReportStatusLabels(null);
+  const CH = '0a0a0a0a-0000-4000-8000-00000000000a';
+
+  it('All charters, the range with its days, then the statuses; no warehouse line for All warehouses', () => {
+    const answer = parseBookOrderTotalsResponse(totalsAnswer());
+    const v = bookReportShowingView(answer, DEFAULT_BOOK_REPORT_STATUS_GROUPS, new Map());
+    expect(v).toEqual({
+      eyebrow: 'Showing',
+      title: 'All charters',
+      lines: ['All time (May 12, 2026 – Sep 20, 2026)', 'Eligible orders'],
+      spoken: 'Showing: All charters. All time (May 12, 2026 – Sep 20, 2026). Eligible orders.',
+    });
+  });
+
+  it("names the phone's warehouse view, and an explicit warehouse, from the answer's echoes", () => {
+    const view = parseBookOrderTotalsResponse(
+      totalsAnswer({
+        filters: { warehouse: { id: W1, name: 'DC4', status: 'active' }, category: null, uncategorized: false },
+        warehouse: { id: W1, source: 'view' },
+      }),
+    );
+    expect(bookReportShowingView(view, ['awaiting'], new Map()).lines).toEqual([
+      'All time (May 12, 2026 – Sep 20, 2026)',
+      'Warehouse: DC4 (your warehouse view)',
+      '1 of 6 statuses',
+    ]);
+    const explicit = parseBookOrderTotalsResponse(
+      totalsAnswer({
+        filters: { warehouse: { id: W2, name: 'North', status: 'archived' }, category: null, uncategorized: false },
+        warehouse: { id: W2, source: 'explicit' },
+      }),
+    );
+    expect(bookReportShowingView(explicit, DEFAULT_BOOK_REPORT_STATUS_GROUPS, new Map()).lines[1]).toBe(
+      'Warehouse: North (archived)',
+    );
+  });
+
+  it("a charter reads its label (the sheet's tie-break included); No charter reads No charter", () => {
+    const one = parseBookOrderTotalsResponse(
+      totalsAnswer({
+        filters: {
+          warehouse: null,
+          category: null,
+          uncategorized: false,
+          charter: { id: CH, name: 'Alder', code: 'CH-A', status: 'active' },
+          noCharter: false,
+        },
+        byCharter: null,
+      }),
+    );
+    expect(bookReportShowingView(one, DEFAULT_BOOK_REPORT_STATUS_GROUPS, new Map()).title).toBe('Alder · CH-A');
+    expect(bookReportShowingView(one, DEFAULT_BOOK_REPORT_STATUS_GROUPS, new Map([[CH, 'Alder (id 0a0a0a0a)']])).title).toBe(
+      'Alder (id 0a0a0a0a)',
+    );
+    const none = parseBookOrderTotalsResponse(
+      totalsAnswer({ filters: { warehouse: null, category: null, uncategorized: false, charter: null, noCharter: true } }),
+    );
+    expect(bookReportShowingView(none, DEFAULT_BOOK_REPORT_STATUS_GROUPS, new Map()).title).toBe('No charter');
+  });
+
+  it("the charter-at-another-warehouse hint: a charter, one warehouse (chosen or the view's), nothing found", () => {
+    const base = {
+      totalCount: 0,
+      filters: {
+        warehouse: { id: W1, name: 'DC4', status: 'active' },
+        charter: { id: CH, name: 'Alder', code: null, status: 'active' },
+        noCharter: false,
+      },
+    };
+    expect(bookReportCharterWarehouseEmpty(base)).toBe(true);
+    expect(bookReportCharterWarehouseEmpty({ ...base, totalCount: 1 })).toBe(false);
+    expect(bookReportCharterWarehouseEmpty({ ...base, filters: { ...base.filters, warehouse: null } })).toBe(false);
+    expect(bookReportCharterWarehouseEmpty({ ...base, filters: { ...base.filters, charter: null, noCharter: true } })).toBe(
+      false,
+    );
+    void labels;
+  });
+});
+
+describe('"Books ordered by charter" (brief 14)', () => {
+  const CH = '0a0a0a0a-0000-4000-8000-00000000000a';
+  const answerWith = (byCharter: unknown, unresolvedEntries = 0) =>
+    parseBookOrderTotalsResponse(
+      totalsAnswer({
+        byCharter,
+        summary: {
+          ...(totalsAnswer().summary as object),
+          unresolved: { entries: unresolvedEntries, quantity: unresolvedEntries ? '12' : '0' },
+        },
+      }),
+    );
+
+  it("rows in the server's order (No charter last), the answer's figures, each applying its charter; the total equals the summary", () => {
+    const v = bookReportByCharterView(
+      answerWith([
+        { id: CH, name: 'Alder', code: 'CH-A', status: 'active', copies: '30', orders: 2 },
+        { id: null, name: null, code: null, status: null, copies: '4', orders: 1 },
+      ]),
+      new Map(),
+    )!;
+    expect(v.rows.map((r) => [r.charter, r.label, r.value, r.accessibilityHint])).toEqual([
+      [CH, 'Alder · CH-A', '30 copies in 2 orders', 'Show only Alder · CH-A'],
+      ['none', 'No charter', '4 copies in 1 order', 'Show only No charter'],
+    ]);
+    expect(v.rows[0]!.accessibilityLabel).toBe('Alder · CH-A: 30 copies in 2 orders.');
+    expect(v.total).toBe('All charters: 34 copies requested in 3 orders.');
+    expect(v.unitsNote).toBeNull();
+  });
+
+  it('with books in other units the copies and orders are said apart, with the note', () => {
+    const v = bookReportByCharterView(
+      answerWith([{ id: CH, name: 'Alder', code: null, status: 'active', copies: '34', orders: 3 }], 1),
+      new Map(),
+    )!;
+    expect(v.rows[0]!.value).toBe('34 copies · 3 orders');
+    expect(v.unitsNote).toBe(BOOK_REPORT_BY_CHARTER_UNITS_NOTE);
+  });
+
+  it('nothing to show: a charter chosen (null), an older server (absent), or no rows', () => {
+    expect(bookReportByCharterView(answerWith(null), new Map())).toBeNull();
+    expect(bookReportByCharterView(parseBookOrderTotalsResponse(totalsAnswer()), new Map())).toBeNull();
+    expect(bookReportByCharterView(answerWith([]), new Map())).toBeNull();
+  });
+});
+
+describe('the dates sheet (plan 5, D7)', () => {
+  const echoMonth = { key: 'month' as const, from: '2026-09-01', to: '2026-09-29' };
+
+  it("offers the presets in the brief's order, then Custom range", () => {
+    expect(BOOK_REPORT_DATE_CHOICES).toEqual(['all', 'today', 'week', 'month', '30d', '90d', 'year', 'custom']);
+  });
+
+  it("opens on the applied custom range, else a preset's resolved days from the answer, else the organization's today", () => {
+    expect(
+      bookReportDatesSheetStart({ query: q({ range: 'custom', from: '2026-08-03', to: '2026-08-09' }), echo: echoMonth, today: '2026-09-29' }),
+    ).toEqual({ draft: { start: '2026-08-03', end: '2026-08-09', editing: 'start' }, month: { y: 2026, m: 8 } });
+    expect(bookReportDatesSheetStart({ query: q({ range: 'month' }), echo: echoMonth, today: '2026-09-29' })).toEqual({
+      draft: { start: '2026-09-01', end: '2026-09-29', editing: 'start' },
+      month: { y: 2026, m: 9 },
+    });
+    // The answer is for another preset (still loading): nothing picked, today's month.
+    expect(bookReportDatesSheetStart({ query: q({ range: 'week' }), echo: echoMonth, today: '2026-09-29' })).toEqual({
+      draft: { start: null, end: null, editing: 'start' },
+      month: { y: 2026, m: 9 },
+    });
+    // All time has no days: today's month. No answer: no month (the screen picks).
+    expect(bookReportDatesSheetStart({ query: q(), echo: { key: 'all', from: null, to: null }, today: '2026-02-10' }).month).toEqual({
+      y: 2026,
+      m: 2,
+    });
+    expect(bookReportDatesSheetStart({ query: q(), echo: null, today: null }).month).toBeNull();
+  });
+
+  it('a preset applies that range with no dates, on page 1, keeping every other filter', () => {
+    const base = q({ charter: W1, range: 'custom', from: '2026-01-01', to: '2026-01-02', q: 'x', page: 3 });
+    expect(bookReportPresetQuery(base, 'week')).toEqual({ ...base, range: 'week', from: null, to: null, page: 1 });
+  });
+
+  it('Apply needs both ends, real days, the first on or before the last; it sends range=custom on page 1', () => {
+    const base = q({ charter: W1, page: 4 });
+    expect(bookReportCustomRangeQuery(base, '2026-09-01', '2026-09-30')).toEqual({
+      ...base,
+      range: 'custom',
+      from: '2026-09-01',
+      to: '2026-09-30',
+      page: 1,
+    });
+    expect(bookReportCustomRangeQuery(base, '2026-09-01', null)).toBeNull();
+    expect(bookReportCustomRangeQuery(base, null, '2026-09-30')).toBeNull();
+    expect(bookReportCustomRangeQuery(base, '2026-09-30', '2026-09-01')).toBeNull();
+    expect(bookReportCustomRangeQuery(base, '2026-02-30', '2026-03-01')).toBeNull();
+    expect(bookReportCustomRangeQuery(base, '2026-09-01', '2026-09-01')).toMatchObject({ from: '2026-09-01', to: '2026-09-01' });
+  });
+
+  it("the tiles show the day or core's prompt, and say which date they are", () => {
+    expect(bookReportDateTile('start', '2026-09-01')).toEqual({
+      title: 'Start date',
+      value: 'Sep 1, 2026',
+      chosen: true,
+      spoken: 'Start date: Tuesday, September 1, 2026',
+    });
+    expect(bookReportDateTile('end', null)).toEqual({
+      title: 'End date',
+      value: 'Choose an end date',
+      chosen: false,
+      spoken: 'End date: Choose an end date',
+    });
+    expect(bookReportDateTile('end', '2026-09-3')).toMatchObject({ chosen: false });
   });
 });

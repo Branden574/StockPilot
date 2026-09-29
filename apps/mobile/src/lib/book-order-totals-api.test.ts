@@ -194,6 +194,119 @@ describe('loaders parse strictly and refuse answers for another workspace', () =
     });
   });
 
+  describe('an answer must be for the charter asked (plan 5: never figures under the wrong charter)', () => {
+    const CH = '0a0a0a0a-0000-4000-8000-00000000000a';
+    const OTHER_CH = '0b0b0b0b-0000-4000-8000-00000000000b';
+    const echo = (id: string) => ({ id, name: 'Alder', code: 'CH-A', status: 'active' });
+    const filters = (extra: Record<string, unknown>) => ({
+      warehouse: null,
+      category: null,
+      uncategorized: false,
+      ...extra,
+    });
+
+    it('a charter request answered for that charter is shown, and the request carries charter=', async () => {
+      apiMock.api.mockResolvedValueOnce(
+        totalsAnswer({ filters: filters({ charter: echo(CH), noCharter: false }), byCharter: null }),
+      );
+      const res = await getBookOrderTotals(ORG, q({ warehouse: 'all', charter: CH }));
+      expect(apiMock.api.mock.calls[0]![0]).toBe(
+        `/api/v1/reports/book-order-totals?charter=${CH}&warehouse=all`,
+      );
+      expect(res.filters.charter?.id).toBe(CH);
+    });
+
+    it.each([
+      ['no charter echo at all (a server before the charter filter)', {}],
+      ['a charter echo of null', { charter: null, noCharter: false }],
+      ['another charter', { charter: echo(OTHER_CH), noCharter: false }],
+      ['No charter', { charter: null, noCharter: true }],
+    ])('a charter request answered with %s is refused as a mismatch', async (_label, extra) => {
+      apiMock.api.mockResolvedValueOnce(totalsAnswer({ filters: filters(extra) }));
+      await expect(getBookOrderTotals(ORG, q({ warehouse: 'all', charter: CH }))).rejects.toMatchObject({
+        problem: 'mismatch',
+      });
+    });
+
+    it('No charter needs noCharter: true in the answer', async () => {
+      apiMock.api.mockResolvedValueOnce(totalsAnswer({ filters: filters({ charter: null, noCharter: false }) }));
+      await expect(getBookOrderTotals(ORG, q({ warehouse: 'all', charter: 'none' }))).rejects.toMatchObject({
+        problem: 'mismatch',
+      });
+      apiMock.api.mockResolvedValueOnce(totalsAnswer({ filters: filters({}) }));
+      await expect(getBookOrderTotals(ORG, q({ warehouse: 'all', charter: 'none' }))).rejects.toMatchObject({
+        problem: 'mismatch',
+      });
+      apiMock.api.mockResolvedValueOnce(totalsAnswer({ filters: filters({ charter: null, noCharter: true }) }));
+      await expect(getBookOrderTotals(ORG, q({ warehouse: 'all', charter: 'none' }))).resolves.toBeTruthy();
+    });
+
+    it('All charters is shown from an older server (no keys), but never from an answer for one charter', async () => {
+      apiMock.api.mockResolvedValueOnce(totalsAnswer());
+      await expect(getBookOrderTotals(ORG, q({ warehouse: 'all' }))).resolves.toBeTruthy();
+      apiMock.api.mockResolvedValueOnce(totalsAnswer({ filters: filters({ charter: echo(CH), noCharter: false }) }));
+      await expect(getBookOrderTotals(ORG, q({ warehouse: 'all' }))).rejects.toMatchObject({ problem: 'mismatch' });
+    });
+
+    it("the drill-down checks the same: another charter's orders are refused", async () => {
+      apiMock.api.mockResolvedValueOnce(
+        ordersAnswer({ filters: { warehouse: null, charter: echo(OTHER_CH), noCharter: false } }),
+      );
+      await expect(getBookOrderOrders(ORG, BOOK_A, q({ warehouse: 'all', charter: CH }), 1)).rejects.toMatchObject({
+        problem: 'mismatch',
+      });
+      apiMock.api.mockResolvedValueOnce(ordersAnswer());
+      await expect(getBookOrderOrders(ORG, BOOK_A, q({ warehouse: 'all', charter: CH }), 1)).rejects.toMatchObject({
+        problem: 'mismatch',
+      });
+      apiMock.api.mockResolvedValueOnce(
+        ordersAnswer({ filters: { warehouse: null, charter: echo(CH), noCharter: false } }),
+      );
+      const ok = await getBookOrderOrders(ORG, BOOK_A, q({ warehouse: 'all', charter: CH }), 1);
+      expect(ok.filters.charter?.id).toBe(CH);
+      expect(apiMock.api.mock.calls.at(-1)![0]).toBe(
+        `/api/v1/reports/book-order-totals/items/${BOOK_A}/orders?charter=${CH}&warehouse=all`,
+      );
+    });
+
+    it('a refusal says the app cannot read the answer (try again, or update), never zeros', () => {
+      expect(describeBookReportError(new BookReportResponseError('mismatch'), 'report')).toMatchObject({
+        detail: BOOK_REPORT_UNREADABLE,
+        retry: true,
+      });
+    });
+  });
+
+  it('the options carry the charter list (none from an older server)', async () => {
+    const CH = '0a0a0a0a-0000-4000-8000-00000000000a';
+    apiMock.api.mockResolvedValueOnce(
+      optionsAnswer({ charters: [{ id: CH, name: 'Alder', code: 'CH-A', status: 'active' }], noCharter: true }),
+    );
+    const res = await getBookOrderOptions(ORG);
+    expect(res.charters.map((c) => c.id)).toEqual([CH]);
+    expect(res.noCharter).toBe(true);
+    apiMock.api.mockResolvedValueOnce(optionsAnswer());
+    expect(await getBookOrderOptions(ORG)).toMatchObject({ charters: [], noCharter: false });
+  });
+
+  it('paths carry the charter and the dates, in core order, never the page for the drill-down or the file', () => {
+    const CH = '0a0a0a0a-0000-4000-8000-00000000000a';
+    const withCharter = q({ warehouse: 'all', charter: CH, range: 'custom', from: '2026-09-01', to: '2026-09-30', page: 2 });
+    expect(bookReportListPath(withCharter)).toBe(
+      `/api/v1/reports/book-order-totals?charter=${CH}&range=custom&from=2026-09-01&to=2026-09-30&warehouse=all&page=2`,
+    );
+    expect(bookReportExportPath('csv', false, withCharter)).toBe(
+      `/api/v1/reports/book-order-totals/export?format=csv&charter=${CH}&range=custom&from=2026-09-01&to=2026-09-30&warehouse=all`,
+    );
+    expect(bookReportOrdersPath(BOOK_A, q({ warehouse: 'all', charter: 'none', range: 'week' }), 1)).toBe(
+      `/api/v1/reports/book-order-totals/items/${BOOK_A}/orders?charter=none&range=week&warehouse=all`,
+    );
+    // A different charter is a different remembered answer (offline honesty).
+    expect(bookReportAnswerKey(USER, ORG, withCharter)).not.toBe(
+      bookReportAnswerKey(USER, ORG, { ...withCharter, charter: 'none' }),
+    );
+  });
+
   it('a malformed answer is a failure, never an empty report', async () => {
     apiMock.api.mockResolvedValueOnce(totalsAnswer({ summary: undefined }));
     await expect(getBookOrderTotals(ORG, q({ warehouse: 'all' }))).rejects.toBeInstanceOf(
@@ -470,6 +583,15 @@ describe('describeBookReportError: every refusal in words, never as zeros', () =
     expect(describeBookReportError(e, 'export').detail).toBe(
       'Too many books for one file (21,340; the limit is 20,000). Narrow the filters.',
     );
+  });
+
+  it('a refused charter is one 400 whatever the cause: the route\'s sentence, no retry', () => {
+    const e = apiError(400, 'validation_error', { reason: 'invalid_charter' }, 'That charter is not one you can see.');
+    expect(describeBookReportError(e, 'report')).toMatchObject({
+      detail: 'That charter is not one you can see.',
+      retry: false,
+      keepShown: false,
+    });
   });
 
   it("a 400 otherwise reads the route's own sentence", () => {

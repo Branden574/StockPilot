@@ -1,6 +1,9 @@
 import { useNetworkState } from 'expo-network';
 import { type Href, useLocalSearchParams, useRouter } from 'expo-router';
 import {
+  Building2,
+  CalendarDays,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Download,
@@ -27,7 +30,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   BOOK_REPORT_AS_SAVED,
+  BOOK_REPORT_BY_CHARTER_TITLE,
   BOOK_REPORT_EMPTY,
+  BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE,
   BOOK_REPORT_EMPTY_DEFAULT_STATUS,
   BOOK_REPORT_EMPTY_SEARCH,
   BOOK_REPORT_EXPORT_ANDROID,
@@ -41,11 +46,13 @@ import {
   BOOK_REPORT_RESTRICTED,
   BOOK_REPORT_SEARCH_MAX,
   BOOK_REPORT_TITLE,
+  BOOK_REPORT_UI,
   BOOK_REPORT_VIEW_ORDERS,
   DEFAULT_BOOK_REPORT_QUERY,
   DEFAULT_BOOK_REPORT_STATUS_GROUPS,
   bookCoverAlt,
   bookReportCategoryLine,
+  bookReportCharterLine,
   bookReportGeneratedLine,
   bookReportGrandTotalLine,
   bookReportRangeLine,
@@ -54,7 +61,10 @@ import {
   bookReportStatusLabels,
   bookReportStatusLine,
   bookReportWarehouseLine,
+  bookReportWithFilter,
+  bookReportWithoutFilter,
   bookReportZoneLine,
+  calendarToday,
   formatListFooter,
   latestOrderText,
   ordersCountText,
@@ -63,12 +73,16 @@ import {
   unresolvedUnitsNote,
   type BookOrderOptionsResponse,
   type BookOrderTotalsResponse,
+  type BookReportFilterKey,
   type BookReportQuery,
   type BookReportRow,
+  type CalendarMonth,
   type OrderStatusKey,
 } from '@stockpilot/core';
 
 import { BookCover } from '@/components/book-cover';
+import { BookOrderCharterSheet } from '@/components/book-order-charter-sheet';
+import { BookOrderDatesSheet } from '@/components/book-order-dates-sheet';
 import { BookOrderExportSheet } from '@/components/book-order-export-sheet';
 import { BookOrderFiltersSheet } from '@/components/book-order-filters-sheet';
 import { PhotoViewer } from '@/components/photo-viewer';
@@ -101,25 +115,31 @@ import {
 import {
   BOOK_ENTRY_NOUN,
   bookCoverCacheKey,
-  bookReportCategoryChip,
-  bookReportDateChip,
+  bookReportByCharterView,
+  bookReportCharterLabelsFor,
+  bookReportCharterWarehouseEmpty,
+  bookReportChipEchoes,
   bookReportDrillDownHref,
   bookReportExportMode,
+  bookReportHasFiltersToClear,
   bookReportIdentifiersLine,
+  bookReportPhoneChips,
   bookReportPlaceLine,
   bookReportQueryFromParams,
   bookReportRowAccessibilityLabel,
-  bookReportSortChip,
-  bookReportStatusChip,
+  bookReportShowingView,
   bookReportUnreadableFilter,
-  bookReportWarehouseChip,
   bookReportWebUrl,
   bookReportWithoutUnreadableFilter,
+  clearBookReportFilters,
   copiesMetric,
   isRole,
   resolveBookReportRequest,
+  sameBookReportQuery,
   type BookReportExportChoice,
   type BookReportExportChoiceId,
+  type BookReportPhoneChip,
+  type BookReportSheetId,
 } from '@/lib/book-order-totals-view';
 import { showWriteCtaForRole } from '@/lib/cta-gating';
 import { createDebouncedScheduler } from '@/lib/debounced-list-load';
@@ -147,6 +167,17 @@ import { retryWorkspace, useWorkspace } from '@/lib/use-workspace';
  * the concrete warehouse, and a row's orders and the exported file use the
  * query of the answer on screen, so all three agree.
  *
+ * Charter and dates (plan 5): the chip row leads with Charter and Orders
+ * placed, each opening its own sheet (a JS month calendar for a custom
+ * range); a filter that differs from its default carries a remove button,
+ * and Clear filters resets them all but the sort. A "Showing" block at the
+ * top of the totals names the charter, the dates, the warehouse whenever the
+ * report covers one, and the statuses, from the answer's own echoes. With
+ * All charters, "Books ordered by charter" lists each charter's copies and
+ * orders; a row applies that charter. A charter, warehouse or category the
+ * server refuses is reset with the "filters were reset" notice. Every choice
+ * goes back to page 1; a choice that changes nothing sends no request.
+ *
  * Offline, only an answer for exactly these filters and page is shown, with
  * its time; otherwise the report says it needs a connection. A workspace
  * switch resets the filters and drops any answer still on its way.
@@ -159,6 +190,20 @@ const MIN_TAP = 44;
 
 function defaultQuery(): BookReportQuery {
   return { ...DEFAULT_BOOK_REPORT_QUERY, statusGroups: [...DEFAULT_BOOK_REPORT_STATUS_GROUPS] };
+}
+
+/** The next query, or the current one when nothing changed (the load
+ *  effect follows the query object, so an equal copy would ask again). */
+function keepIfSame(prev: BookReportQuery, next: BookReportQuery): BookReportQuery {
+  return sameBookReportQuery(prev, next) ? prev : next;
+}
+
+/** Where the dates sheet's calendar opens when no answer has named the
+ *  organization's today yet (a cold start offline): this month on the
+ *  phone. Only the first month shown; no day is marked today from it. */
+function deviceMonth(): CalendarMonth {
+  const d = new Date();
+  return { y: d.getFullYear(), m: d.getMonth() + 1 };
 }
 
 export default function BookOrderTotalsScreen() {
@@ -182,7 +227,12 @@ export default function BookOrderTotalsScreen() {
   const [draftQ, setDraftQ] = React.useState(initial.query.q);
   const [stored, setStored] = React.useState<StoredBookReport<ListData> | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
-  const [filtersOpen, setFiltersOpen] = React.useState(false);
+  const [sheet, setSheet] = React.useState<BookReportSheetId | null>(null);
+  const [byCharterOpen, setByCharterOpen] = React.useState(false);
+  // The organization's today and time zone line from the latest answer (any
+  // filters), for the dates sheet while a new answer loads.
+  const [orgDay, setOrgDay] = React.useState<{ today: string | null; zone: string } | null>(null);
+  const [fallbackMonth] = React.useState(deviceMonth);
   const [exportOpen, setExportOpen] = React.useState(false);
   const [exporting, setExporting] = React.useState<BookReportExportChoiceId | null>(null);
   const [exportError, setExportError] = React.useState<string | null>(null);
@@ -223,7 +273,8 @@ export default function BookOrderTotalsScreen() {
       setDraftQ('');
       setStored(null);
       setLinkWasReset(false);
-      setFiltersOpen(false);
+      setSheet(null);
+      setOrgDay(null);
       setExportOpen(false);
       setExportError(null);
       setViewer(null);
@@ -241,6 +292,15 @@ export default function BookOrderTotalsScreen() {
   const key = bookReportAnswerKey(userId, orgId, request);
   const view = bookReportView(stored, key, offline);
   const data = view.kind === 'ready' ? view.data : null;
+
+  // The organization's day and time zone from the answer on screen, kept for
+  // the dates sheet while the next answer loads (derived during render, as
+  // shownFor is). Never the phone's clock.
+  const seenToday = data ? calendarToday(data.answer.generatedAtLocal) : null;
+  const seenZone = data ? bookReportZoneLine(data.answer.range) : null;
+  if (seenZone !== null && (orgDay?.today !== seenToday || orgDay?.zone !== seenZone)) {
+    setOrgDay({ today: seenToday, zone: seenZone });
+  }
 
   const seq = React.useRef(0);
   const inFlight = React.useRef<AbortController | null>(null);
@@ -409,11 +469,67 @@ export default function BookOrderTotalsScreen() {
     }
   }
 
+  // Every choice below starts from the LATEST query (a functional update),
+  // goes back to page 1 (core's bookReportWithFilter), and keeps the current
+  // query when nothing changed, so no request goes out for it.
+
+  /** The filters sheet: its four controls only (status, warehouse, category,
+   *  sort); the charter, dates and search stay as they are. */
   function applyFilters(next: BookReportQuery) {
-    setFiltersOpen(false);
+    setSheet(null);
     setLinkWasReset(false);
-    setDraftQ(next.q);
-    setQuery(next);
+    setQuery((q) =>
+      keepIfSame(
+        q,
+        bookReportWithFilter(q, {
+          statusGroups: next.statusGroups,
+          warehouse: next.warehouse,
+          warehouseFromView: next.warehouseFromView,
+          category: next.category,
+          sort: next.sort,
+        }),
+      ),
+    );
+  }
+
+  /** The charter sheet, and a "Books ordered by charter" row. */
+  function applyCharter(charter: string) {
+    setSheet(null);
+    setLinkWasReset(false);
+    setQuery((q) => keepIfSame(q, bookReportWithFilter(q, { charter })));
+  }
+
+  /** The dates sheet: a preset, or a custom range on Apply. */
+  function applyDates(next: BookReportQuery) {
+    setSheet(null);
+    setLinkWasReset(false);
+    setQuery((q) =>
+      keepIfSame(q, bookReportWithFilter(q, { range: next.range, from: next.from, to: next.to })),
+    );
+  }
+
+  /** A chip's remove button: that filter back to its default, page 1. */
+  function removeFilter(key: BookReportFilterKey) {
+    setLinkWasReset(false);
+    if (key === 'q') {
+      debounce.current.cancel();
+      setDraftQ('');
+    }
+    setQuery((q) => keepIfSame(q, bookReportWithoutFilter(q, key)));
+  }
+
+  /** Clear filters: charter, dates, status, warehouse (back to the view),
+   *  category and the search; the sort is kept. */
+  function clearFilters() {
+    debounce.current.cancel();
+    setLinkWasReset(false);
+    setDraftQ('');
+    setQuery((q) => keepIfSame(q, clearBookReportFilters(q)));
+  }
+
+  function openSheet(id: BookReportSheetId) {
+    Keyboard.dismiss();
+    setSheet(id);
   }
 
   function searchNow() {
@@ -477,18 +593,18 @@ export default function BookOrderTotalsScreen() {
   const answer = data?.answer ?? null;
   const pageSize = answer?.pageSize ?? BOOK_REPORT_PAGE_SIZE;
   const totalPages = answer ? totalPagesFor(answer.totalCount, pageSize) : 1;
-  const warehouseChip = bookReportWarehouseChip({
+  // One label per charter for the sheet, the chips, the Showing block and
+  // the by-charter rows (two alike charters told apart the same way).
+  const charterLabels = bookReportCharterLabelsFor(optionsForOrg, answer?.byCharter ?? []);
+  const chips = bookReportPhoneChips({
     query,
+    echoes: bookReportChipEchoes(query, answer, optionsForOrg),
+    statusLabels,
+    charterLabels,
     activeWarehouseId: ws.activeWarehouseId,
     activeWarehouseName: ws.activeWarehouseName,
-    warehouses: optionsForOrg?.warehouses ?? [],
-    echoName: answer?.filters.warehouse?.name ?? null,
   });
-  const categoryChip = bookReportCategoryChip(
-    query,
-    optionsForOrg?.categories ?? [],
-    answer?.filters.category?.name ?? null,
-  );
+  const canClear = bookReportHasFiltersToClear(query);
 
   const header = (
     <View style={{ gap: 14 }}>
@@ -530,15 +646,33 @@ export default function BookOrderTotalsScreen() {
       </View>
 
       <View style={styles.chips}>
-        {[
-          bookReportDateChip(query),
-          bookReportStatusChip(query.statusGroups),
-          warehouseChip,
-          categoryChip,
-          bookReportSortChip(query),
-        ].map((label) => (
-          <FilterChip key={label} label={label} onPress={() => setFiltersOpen(true)} />
+        {chips.map((chip) => (
+          <FilterChip
+            key={chip.key}
+            chip={chip}
+            onOpen={() => openSheet(chip.opens)}
+            onRemove={removeFilter}
+          />
         ))}
+        {canClear ? (
+          <Pressable
+            onPress={clearFilters}
+            accessibilityRole="button"
+            accessibilityLabel={BOOK_REPORT_UI.clearFilters}
+            accessibilityHint="Resets the charter, dates, statuses, warehouse, category and search"
+            style={({ pressed }) => [styles.clearFilters, { opacity: pressed ? 0.6 : 1 }]}
+          >
+            <X size={14} color={c.ink} strokeWidth={1.6} />
+            <Mono
+              size={12.5}
+              tracking={0.01}
+              color={c.ink}
+              maxFontSizeMultiplier={capTo(12.5, TYPE_CEILING.chrome)}
+            >
+              {BOOK_REPORT_UI.clearFilters}
+            </Mono>
+          </Pressable>
+        ) : null}
       </View>
       {optionsFailed ? (
         <View style={{ gap: 8 }}>
@@ -572,8 +706,15 @@ export default function BookOrderTotalsScreen() {
           data={data}
           stacked={stacked}
           statusLabels={statusLabels}
+          charterLabels={charterLabels}
           howOpen={howOpen}
           onToggleHow={() => setHowOpen((v) => !v)}
+          byCharterOpen={byCharterOpen}
+          onToggleByCharter={() => setByCharterOpen((v) => !v)}
+          onApplyCharter={(charter) => {
+            listRef.current?.scrollToOffset({ offset: 0, animated: false });
+            applyCharter(charter);
+          }}
         />
       ) : null}
     </View>
@@ -634,6 +775,11 @@ export default function BookOrderTotalsScreen() {
         {data && sameGroups(data.query.statusGroups) ? (
           <Body size={13.5} muted style={{ marginTop: 6 }}>
             {BOOK_REPORT_EMPTY_DEFAULT_STATUS}
+          </Body>
+        ) : null}
+        {bookReportCharterWarehouseEmpty(answer) ? (
+          <Body size={13.5} muted style={{ marginTop: 6 }}>
+            {BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE}
           </Body>
         ) : null}
         {answer.scope.restricted ? (
@@ -762,10 +908,40 @@ export default function BookOrderTotalsScreen() {
         )}
       />
 
-      {filtersOpen ? (
+      {sheet === 'charter' ? (
+        <BookOrderCharterSheet
+          visible
+          onClose={() => setSheet(null)}
+          value={query.charter}
+          onChoose={applyCharter}
+          options={optionsForOrg}
+          optionsFailed={optionsFailed}
+          onRetryOptions={() => {
+            setOptionsFailedFor(null);
+            setOptionsAttempt((n) => n + 1);
+          }}
+          labels={charterLabels}
+          echo={answer?.filters.charter ?? null}
+        />
+      ) : null}
+
+      {sheet === 'dates' ? (
+        <BookOrderDatesSheet
+          visible
+          onClose={() => setSheet(null)}
+          value={query}
+          echo={answer?.range ?? null}
+          zoneLine={orgDay?.zone ?? null}
+          today={orgDay?.today ?? null}
+          fallbackMonth={fallbackMonth}
+          onApply={applyDates}
+        />
+      ) : null}
+
+      {sheet === 'filters' ? (
         <BookOrderFiltersSheet
           visible
-          onClose={() => setFiltersOpen(false)}
+          onClose={() => setSheet(null)}
           value={query}
           onApply={applyFilters}
           statusLabels={statusLabels}
@@ -839,30 +1015,66 @@ function TopBar({
   );
 }
 
-function FilterChip({ label, onPress }: { label: string; onPress: () => void }) {
+/**
+ * One chip: its body opens the chip's sheet; a filter that differs from its
+ * default also has a remove button. The two are SIBLING buttons in a plain
+ * View (a touchable inside a touchable is unreachable with VoiceOver), each
+ * a real 44 pt frame, so the outline VoiceOver draws is the target a finger
+ * hits.
+ */
+function FilterChip({
+  chip,
+  onOpen,
+  onRemove,
+}: {
+  chip: BookReportPhoneChip;
+  onOpen: () => void;
+  onRemove: (key: BookReportFilterKey) => void;
+}) {
   const { c } = useTheme();
+  const Icon =
+    chip.opens === 'charter' ? Building2 : chip.opens === 'dates' ? CalendarDays : SlidersHorizontal;
+  const set = chip.remove !== null;
+  const remove = chip.remove;
   return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityHint="Opens the filters"
-      style={({ pressed }) => [
+    <View
+      style={[
         styles.chip,
-        { borderColor: c.hair, backgroundColor: c.paper2, opacity: pressed ? 0.7 : 1 },
+        { borderColor: set ? c.ink3 : c.hair, backgroundColor: set ? c.card : c.paper2 },
       ]}
     >
-      <SlidersHorizontal size={13} color={c.ink3} strokeWidth={1.6} />
-      <Mono
-        size={12.5}
-        tracking={0.01}
-        color={c.ink}
-        maxFontSizeMultiplier={capTo(12.5, TYPE_CEILING.chrome)}
-        style={{ flexShrink: 1 }}
+      <Pressable
+        onPress={onOpen}
+        accessibilityRole="button"
+        accessibilityLabel={chip.text}
+        accessibilityHint={chip.hint}
+        style={({ pressed }) => [
+          styles.chipBody,
+          { paddingRight: set ? 2 : 12, opacity: pressed ? 0.7 : 1 },
+        ]}
       >
-        {label}
-      </Mono>
-    </Pressable>
+        <Icon size={13} color={c.ink3} strokeWidth={1.6} />
+        <Mono
+          size={12.5}
+          tracking={0.01}
+          color={c.ink}
+          maxFontSizeMultiplier={capTo(12.5, TYPE_CEILING.chrome)}
+          style={{ flexShrink: 1 }}
+        >
+          {chip.text}
+        </Mono>
+      </Pressable>
+      {remove ? (
+        <Pressable
+          onPress={() => onRemove(remove.key)}
+          accessibilityRole="button"
+          accessibilityLabel={remove.label}
+          style={({ pressed }) => [styles.chipRemove, { opacity: pressed ? 0.5 : 1 }]}
+        >
+          <X size={14} color={c.ink} strokeWidth={1.8} />
+        </Pressable>
+      ) : null}
+    </View>
   );
 }
 
@@ -870,14 +1082,22 @@ function Summary({
   data,
   stacked,
   statusLabels,
+  charterLabels,
   howOpen,
   onToggleHow,
+  byCharterOpen,
+  onToggleByCharter,
+  onApplyCharter,
 }: {
   data: ListData;
   stacked: boolean;
   statusLabels: Readonly<Record<OrderStatusKey, string>>;
+  charterLabels: ReadonlyMap<string, string>;
   howOpen: boolean;
   onToggleHow: () => void;
+  byCharterOpen: boolean;
+  onToggleByCharter: () => void;
+  onApplyCharter: (charter: string) => void;
 }) {
   const { c } = useTheme();
   const { answer, query } = data;
@@ -888,8 +1108,12 @@ function Summary({
     s.unresolved,
     s.unresolved.entries === 1 && otherUnit ? otherUnit.unit : undefined,
   );
+  // What these figures are for, from the answer's own echoes (brief 8).
+  const showing = bookReportShowingView(answer, query.statusGroups, charterLabels);
+  const byCharter = bookReportByCharterView(answer, charterLabels);
   const scope = [
     bookReportRangeLine(answer.range, s),
+    bookReportCharterLine(answer.filters.charter, answer.filters.noCharter, charterLabels),
     bookReportZoneLine(answer.range),
     bookReportStatusLine(query.statusGroups, statusLabels),
     bookReportWarehouseLine(answer.filters.warehouse, answer.warehouse.source),
@@ -902,6 +1126,22 @@ function Summary({
 
   return (
     <View style={{ gap: 10 }}>
+      <Card padding={14}>
+        {/* One VoiceOver element: "Showing: Alder · CH-A. Sep 1 – Sep 30,
+            2026. Eligible orders." (no control inside). */}
+        <View accessible accessibilityLabel={showing.spoken} style={{ gap: 4 }}>
+          <Eyebrow>{showing.eyebrow.toUpperCase()}</Eyebrow>
+          <Display size={22} style={{ marginTop: 6 }}>
+            {showing.title}
+          </Display>
+          {showing.lines.map((line) => (
+            <Body key={line} size={13.5} color={c.ink2}>
+              {line}
+            </Body>
+          ))}
+        </View>
+      </Card>
+
       <Metric
         label={BOOK_REPORT_METRICS.copies.label}
         value={copies.value}
@@ -924,6 +1164,70 @@ function Summary({
         definition={BOOK_REPORT_METRICS.orders.definition}
         stacked={stacked}
       />
+
+      {byCharter ? (
+        <Card padding={14} style={{ gap: 4 }}>
+          <Pressable
+            onPress={onToggleByCharter}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: byCharterOpen }}
+            accessibilityLabel={BOOK_REPORT_BY_CHARTER_TITLE}
+            style={({ pressed }) => [styles.disclosure, { opacity: pressed ? 0.6 : 1 }]}
+          >
+            <Mono
+              size={12}
+              tracking={0.04}
+              color={c.ink}
+              maxFontSizeMultiplier={capTo(12, TYPE_CEILING.chrome)}
+              style={{ flexShrink: 1 }}
+            >
+              {BOOK_REPORT_BY_CHARTER_TITLE}
+            </Mono>
+            {byCharterOpen ? (
+              <ChevronDown size={14} color={c.ink} strokeWidth={1.6} />
+            ) : (
+              <ChevronRight size={14} color={c.ink} strokeWidth={1.6} />
+            )}
+          </Pressable>
+          {byCharterOpen ? (
+            <View style={{ gap: 2 }}>
+              {byCharter.rows.map((row) => (
+                <Pressable
+                  key={row.key}
+                  onPress={() => onApplyCharter(row.charter)}
+                  accessibilityRole="button"
+                  accessibilityLabel={row.accessibilityLabel}
+                  accessibilityHint={row.accessibilityHint}
+                  style={({ pressed }) => [
+                    styles.byCharterRow,
+                    {
+                      flexDirection: stacked ? 'column' : 'row',
+                      alignItems: stacked ? 'flex-start' : 'center',
+                      borderColor: c.hair,
+                      opacity: pressed ? 0.6 : 1,
+                    },
+                  ]}
+                >
+                  <Body size={14} color={c.ink} style={{ flexShrink: 1, fontFamily: FONT.display }}>
+                    {row.label}
+                  </Body>
+                  <Mono size={12.5} color={c.ink3}>
+                    {row.value}
+                  </Mono>
+                </Pressable>
+              ))}
+              <Body size={13} style={{ marginTop: 6 }}>
+                {byCharter.total}
+              </Body>
+              {byCharter.unitsNote ? (
+                <Body size={12.5} muted>
+                  {byCharter.unitsNote}
+                </Body>
+              ) : null}
+            </View>
+          ) : null}
+        </Card>
+      ) : null}
 
       <Card padding={14} style={{ gap: 4 }}>
         {scope.map((line) => (
@@ -1148,16 +1452,51 @@ const styles = StyleSheet.create({
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: {
     minHeight: MIN_TAP,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
     borderRadius: 10,
     borderWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
     maxWidth: '100%',
   },
+  chipBody: {
+    minHeight: MIN_TAP,
+    paddingLeft: 12,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 1,
+  },
+  // A real 44 pt frame beside the body (not hitSlop): the target VoiceOver
+  // outlines is the one a finger can hit.
+  chipRemove: {
+    minWidth: MIN_TAP,
+    minHeight: MIN_TAP,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clearFilters: {
+    minHeight: MIN_TAP,
+    paddingHorizontal: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   howToggle: { minHeight: MIN_TAP, justifyContent: 'center', alignSelf: 'flex-start' },
+  disclosure: {
+    minHeight: MIN_TAP,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+  },
+  byCharterRow: {
+    minHeight: MIN_TAP,
+    paddingVertical: 8,
+    justifyContent: 'space-between',
+    gap: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
   viewOrders: {
     marginTop: 8,
     flexDirection: 'row',

@@ -6,8 +6,13 @@ import { parseBookReportQuery, serializeBookReportQuery } from '@stockpilot/core
  * /dashboard/reports/book-order-totals?<query> (a What's New CTA, a shared
  * link, a pasted URL, a cold-start deep link) opens the native report at
  * /reports/book-order-totals with ONLY the parameters core's
- * parseBookReportQuery accepts: range, from, to, status, warehouse,
- * category, q, sort and page. Anything else (the web drawer's view and
+ * parseBookReportQuery accepts: charter, range, from, to, status,
+ * warehouse, category, q, sort and page. A link with `from` and `to` and no
+ * `range` (the brief's `?charter=..&from=2026-09-01&to=2026-09-30`) is a
+ * custom range, rewritten with `range=custom`. A charter id in a link is
+ * never an authority: the server accepts it only if the reader may report
+ * on it, and the report resets it with the "filters were reset" notice
+ * otherwise. Anything else (the web drawer's view and
  * vpage, an unknown key, a malformed value) is dropped, and a malformed
  * value falls back to its default. `wview` is dropped too: it described the
  * WEB's warehouse view, so a warehouse the link names opens as an explicit
