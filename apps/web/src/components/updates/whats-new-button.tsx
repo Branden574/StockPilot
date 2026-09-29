@@ -29,7 +29,7 @@ export function WhatsNewButton() {
       aria-label={label}
       title={label}
       onClick={() => openWhatsNew(null, 'topbar')}
-      className="hover:bg-muted hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-background relative grid h-[30px] w-[30px] place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+      className="hover:bg-muted hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-background relative grid h-[30px] w-[30px] shrink-0 place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
     >
       <Gift className="h-3.5 w-3.5" aria-hidden />
       {unread > 0 ? (

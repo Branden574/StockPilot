@@ -1,8 +1,9 @@
 'use client';
 
-import { LogOut, Settings, ShieldAlert, User } from 'lucide-react';
+import { BookOpen, LifeBuoy, LogOut, Monitor, Moon, Settings, ShieldAlert, Sun, User } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useTheme } from 'next-themes';
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -35,6 +36,7 @@ export function UserMenu({
   isPlatformAdmin,
 }: UserMenuProps) {
   const router = useRouter();
+  const { setTheme } = useTheme();
   const initials = (fullName || email || 'U')
     .split(/\s+/)
     .map((s) => s[0])
@@ -50,7 +52,7 @@ export function UserMenu({
           variant="ghost"
           size="icon"
           aria-label={`Account menu for ${fullName ?? email}`}
-          className="rounded-full ring-offset-background hover:ring-2 hover:ring-border focus-visible:ring-2 focus-visible:ring-ring"
+          className="shrink-0 rounded-full ring-offset-background hover:ring-2 hover:ring-border focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Avatar className="h-8 w-8">
             {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
@@ -88,6 +90,36 @@ export function UserMenu({
               <Settings className="mr-2 h-4 w-4" />
               Settings
             </Link>
+          </DropdownMenuItem>
+          {/* Help, Support and the theme are also top-bar buttons, but a
+              narrow top bar leaves those out (topbar.tsx), so they are here
+              at every width. */}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem asChild>
+            <Link href="/dashboard/help">
+              <BookOpen className="mr-2 h-4 w-4" />
+              Help & Learning
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link href="/dashboard/support">
+              <LifeBuoy className="mr-2 h-4 w-4" />
+              Support & feedback
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel>Theme</DropdownMenuLabel>
+          <DropdownMenuItem onSelect={() => setTheme('light')}>
+            <Sun className="mr-2 h-4 w-4" />
+            Light
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setTheme('dark')}>
+            <Moon className="mr-2 h-4 w-4" />
+            Dark
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setTheme('system')}>
+            <Monitor className="mr-2 h-4 w-4" />
+            System
           </DropdownMenuItem>
           {isPlatformAdmin && (
             <>

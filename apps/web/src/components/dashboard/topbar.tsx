@@ -44,6 +44,14 @@ interface TopbarProps {
   navSections?: NavSection[];
 }
 
+/** Opens the command palette by synthesizing ⌘K (the palette toggles on this exact event). */
+function openCommandPalette() {
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+}
+
+const ICON_BUTTON =
+  'hover:bg-muted hover:text-foreground h-[30px] w-[30px] shrink-0 place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background';
+
 export function Topbar({
   email,
   fullName,
@@ -67,15 +75,34 @@ export function Topbar({
     [pathname, labelByHref],
   );
 
+  // WHAT FITS IS DECIDED BY THE BAR'S OWN WIDTH (a CSS container query on the
+  // header, `@container`), not the window's: beside the 244px desktop sidebar
+  // a 768px window leaves the bar 524px. Every button keeps its full size
+  // (shrink-0); what does not fit is left out, most expendable first. The
+  // widths are the bar's inside width (a container query measures the
+  // content box: the bar less its 16px or 20px padding each side):
+  //   under 520px  the breadcrumb (the page's own heading names the page);
+  //   under 680px  Keyboard shortcuts, Help & Learning, Support & feedback and
+  //                the theme switch (the account menu carries Help, Support
+  //                and the theme at every width; "?" still opens shortcuts);
+  //   under 960px  the search bar is a search icon (same palette).
+  // The warehouse picker is the one control that yields: its name truncates.
+  // Before (2026-09-28/29): the buttons shrank to 14px and the account avatar
+  // was pushed past the right edge, 13px at 390px and entirely at 768px with
+  // the sidebar, clipped by the shell's overflow-hidden (no page scroll).
   return (
     <header
-      className="border-border sticky top-0 z-20 flex items-center gap-3 border-b bg-[color-mix(in_oklab,hsl(var(--background))_92%,transparent)] px-4 backdrop-blur-md sm:gap-4 sm:px-5"
+      className="border-border @container sticky top-0 z-20 flex items-center gap-3 border-b bg-[color-mix(in_oklab,hsl(var(--background))_92%,transparent)] px-4 backdrop-blur-md sm:gap-4 sm:px-5"
       style={{ height: 56 }}
     >
-      <SidebarToggleButton hidden={sidebarHidden} onToggle={() => onToggleSidebar?.()} />
+      <SidebarToggleButton
+        className="shrink-0"
+        hidden={sidebarHidden}
+        onToggle={() => onToggleSidebar?.()}
+      />
 
       <nav
-        className="flex min-w-0 items-center gap-2 text-[13px] text-[var(--ed-ink-3)]"
+        className="hidden min-w-0 items-center gap-2 text-[13px] text-[var(--ed-ink-3)] @min-[520px]:flex"
         aria-label="Breadcrumb"
       >
         {crumbs.map((c, i) => {
@@ -98,7 +125,7 @@ export function Topbar({
         })}
       </nav>
 
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex min-w-0 items-center gap-2">
         {warehouseFilter && warehouseFilter.warehouses.length > 0 && (
           <WarehouseFilterPicker
             warehouses={warehouseFilter.warehouses}
@@ -110,15 +137,18 @@ export function Topbar({
 
       <button
         type="button"
-        className="border-border bg-card hidden h-8 min-w-[240px] max-w-[460px] flex-1 items-center gap-2 rounded-md border px-2.5 text-[12.5px] text-[var(--ed-ink-4)] shadow-[0_1px_0_rgba(14,15,13,0.03)] transition-colors hover:border-[var(--ed-line-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background md:flex"
+        className={cn(ICON_BUTTON, 'hidden @min-[680px]:grid @min-[960px]:hidden')}
         aria-label="Open command palette"
-        onClick={() => {
-          // Synthesize a ⌘K so we don't need a global store. The palette
-          // toggles on this exact event.
-          window.dispatchEvent(
-            new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }),
-          );
-        }}
+        onClick={openCommandPalette}
+      >
+        <Search className="h-3.5 w-3.5" aria-hidden />
+      </button>
+
+      <button
+        type="button"
+        className="border-border bg-card hidden h-8 min-w-[240px] max-w-[460px] flex-1 items-center gap-2 rounded-md border px-2.5 text-[12.5px] text-[var(--ed-ink-4)] shadow-[0_1px_0_rgba(14,15,13,0.03)] transition-colors hover:border-[var(--ed-line-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background @min-[960px]:flex"
+        aria-label="Open command palette"
+        onClick={openCommandPalette}
       >
         <Search className="h-3 w-3" aria-hidden />
         <span className="flex-1 text-left">Search items, POs, suppliers…</span>
@@ -133,7 +163,7 @@ export function Topbar({
 
       <button
         type="button"
-        className="hover:bg-muted hover:text-foreground grid h-[30px] w-[30px] place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        className={cn(ICON_BUTTON, 'hidden @min-[680px]:grid')}
         aria-label="Keyboard shortcuts (?)"
         title="Keyboard shortcuts (?)"
         onClick={() => openKeyboardShortcutsOverlay()}
@@ -143,7 +173,7 @@ export function Topbar({
 
       <Link
         href="/dashboard/help"
-        className="hover:bg-muted hover:text-foreground grid h-[30px] w-[30px] place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        className={cn(ICON_BUTTON, 'hidden @min-[680px]:grid')}
         aria-label="Help & Learning"
         title="Help & Learning"
       >
@@ -152,14 +182,16 @@ export function Topbar({
 
       <Link
         href="/dashboard/support"
-        className="hover:bg-muted hover:text-foreground grid h-[30px] w-[30px] place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        className={cn(ICON_BUTTON, 'hidden @min-[680px]:grid')}
         aria-label="Support & feedback"
         title="Support & feedback"
       >
         <LifeBuoy className="h-3.5 w-3.5" aria-hidden />
       </Link>
 
-      <ThemeToggle />
+      <div className="hidden shrink-0 @min-[680px]:flex">
+        <ThemeToggle />
+      </div>
 
       <UserMenu
         email={email}
