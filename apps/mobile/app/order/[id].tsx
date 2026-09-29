@@ -120,6 +120,7 @@ import {
   withHoldNotice,
 } from '@/lib/order-hold';
 import { readErrorMessage } from '@/lib/id-batches';
+import { orderItemsEyebrow } from '@/lib/order-items-eyebrow';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   BLOCKED_HEADLINE as DR_BLOCKED_HEADLINE,
@@ -2047,9 +2048,7 @@ export default function OrderDetail() {
 
           {order.lines.length > 0 || canAddItems ? (
             <View style={{ gap: 10 }}>
-              <Eyebrow>
-                {`ITEMS · ${order.lines.length} LINE${order.lines.length === 1 ? '' : 'S'} · ${totalRequested} UNITS`}
-              </Eyebrow>
+              <Eyebrow>{orderItemsEyebrow(order.lines.length, totalRequested)}</Eyebrow>
               {/* Visible to EVERY viewer, not just whoever can add items — the
                   picker holding a printed slip is the one who needs to know.
                   Suppressed once the order has shipped or died: a reprint is

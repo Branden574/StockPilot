@@ -222,7 +222,7 @@ describe('order screen: what readiness shows, and to whom', () => {
 
   it('the roll-up sits above the lines; each line readiness sits under its row, never inside it', () => {
     const summaryAt = screen.indexOf('<OrderReadinessSummary');
-    const itemsAt = screen.indexOf('`ITEMS · ${order.lines.length} LINE');
+    const itemsAt = screen.indexOf('<Eyebrow>{orderItemsEyebrow(order.lines.length');
     expect(summaryAt).toBeGreaterThan(-1);
     expect(summaryAt).toBeLessThan(itemsAt);
     const sf = parseTsx(screen, 'app/order/[id].tsx');
