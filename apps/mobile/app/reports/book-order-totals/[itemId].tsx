@@ -14,11 +14,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
+  BOOK_REPORT_FILTERS_RESET,
   BOOK_REPORT_FULFILLED_NOTE,
   BOOK_REPORT_ORDERS_LOAD_ERROR,
   BOOK_REPORT_ORDER_LINK_HINT,
   bookCoverAlt,
   bookReportAsOfNote,
+  bookReportCharterLine,
   bookReportDrawerHeader,
   bookReportRangeLine,
   bookReportRowBadges,
@@ -30,6 +32,7 @@ import {
   fulfilledReturnedLine,
   isUuid,
   totalPagesFor,
+  type BookOrderOptionsResponse,
   type BookOrderOrdersResponse,
   type BookReportStatusGroup,
   type OrderStatusKey,
@@ -63,10 +66,16 @@ import {
 import {
   ORDER_NOUN,
   bookCoverCacheKey,
+  bookReportCharterLabelsFor,
   bookReportIdentifiersLine,
+  bookReportLinkKey,
+  bookReportListHref,
   bookReportOrderRowPresentation,
+  bookReportOrdersShowCharter,
   bookReportPlaceLine,
   bookReportQueryFromListParams,
+  bookReportUnreadableFilter,
+  bookReportWithoutUnreadableFilter,
   resolveBookReportRequest,
 } from '@/lib/book-order-totals-view';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
@@ -87,8 +96,18 @@ import { useWorkspace } from '@/lib/use-workspace';
  *   - An order opens only when the server says `openable` (the caller
  *     approves orders or placed it). Otherwise the number is words, not a
  *     button, with the reason; no requester data is ever shown.
+ *   - It keeps the list's scope: the charter, the dates, the statuses and
+ *     the warehouse (the header says each). With All charters each order
+ *     names its charter.
+ *   - A charter, warehouse or category the server refuses (a link's), or
+ *     dates an older server does not know (Today, This week), is dropped,
+ *     the orders are read again, and the screen says the link's filters
+ *     were reset, as the list does.
+ *   - Opened from the list, a rolling preset arrives as the exact days the
+ *     row was read for, so the orders add up to the row (brief 13).
  *   - The list stays mounted underneath, so Back returns to the same
- *     filters and page.
+ *     filters and page. Opened from a link with no list underneath, Back
+ *     opens the list with the same (reset) filters.
  *   - Offline, only these exact orders (book, filters, page) are shown "as
  *     of" their time; otherwise the report needs a connection.
  */
@@ -108,8 +127,24 @@ export default function BookOrdersScreen() {
   const offline = isOfflineState(useNetworkState());
   const stacked = shouldStackRow(useWindowDimensions().fontScale);
 
-  // The list's own resolved filters (a concrete warehouse). Read once.
-  const [baseQuery] = React.useState(() => bookReportQueryFromListParams(params));
+  // The list's own resolved filters (a concrete warehouse), read when the
+  // screen opens (or a new link arrives), then changed only to drop a filter
+  // the server refused.
+  const [baseQuery, setBaseQuery] = React.useState(() => bookReportQueryFromListParams(params));
+  const [filtersReset, setFiltersReset] = React.useState(false);
+  // The page of orders shown (1 for a new book or new filters).
+  const [page, setPage] = React.useState(1);
+  // A drill-down link opened while this screen is on top (expo-router hands
+  // it the new parameters instead of a new screen): read its filters again,
+  // as the list does.
+  const linkKey = `${rawItemId}|${bookReportLinkKey(params)}`;
+  const [appliedLink, setAppliedLink] = React.useState(linkKey);
+  if (appliedLink !== linkKey) {
+    setAppliedLink(linkKey);
+    setBaseQuery(bookReportQueryFromListParams(params));
+    setFiltersReset(false);
+    setPage(1);
+  }
   const viewWarehouse = baseQuery.warehouse === 'default' ? ws.activeWarehouseId : null;
   const request = React.useMemo(
     () => resolveBookReportRequest(baseQuery, viewWarehouse),
@@ -126,7 +161,6 @@ export default function BookOrdersScreen() {
   const switched =
     (boundOrg !== null && orgId !== boundOrg) || (boundUser !== null && userId !== boundUser);
 
-  const [page, setPage] = React.useState(1);
   const [stored, setStored] = React.useState<StoredBookReport<OrdersData> | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
   const [viewer, setViewer] = React.useState<string | null>(null);
@@ -173,10 +207,21 @@ export default function BookOrdersScreen() {
         }
       } catch (e) {
         if (ctrl.signal.aborted || token !== seq.current || epoch !== accountEpoch()) return;
+        // A charter, warehouse or category this reader cannot see (a link's):
+        // drop it, say the link's filters were reset, and read again, as the
+        // list does. Nothing left to drop: the refusal is shown (so a link
+        // resets at most four times, never in a loop).
+        const unreadable = bookReportUnreadableFilter(e);
+        if (unreadable && bookReportWithoutUnreadableFilter(baseQuery, unreadable)) {
+          setFiltersReset(true);
+          setPage(1);
+          setBaseQuery((q) => bookReportWithoutUnreadableFilter(q, unreadable) ?? q);
+          return;
+        }
         setStored((prev) => bookReportFailure(prev, targetKey, e, 'orders'));
       }
     },
-    [request],
+    [request, baseQuery],
   );
 
   React.useEffect(() => {
@@ -194,24 +239,26 @@ export default function BookOrdersScreen() {
     return () => pending.current?.abort();
   }, []);
 
-  // The organization's status words (loaded once per session with the list).
-  const [labels, setLabels] = React.useState(
-    () => peekBookReportOptions(userId, orgId)?.statusLabels ?? null,
+  // The organization's status words and charter names (loaded once per
+  // session with the list).
+  const [lists, setLists] = React.useState<BookOrderOptionsResponse | null>(() =>
+    peekBookReportOptions(userId, orgId),
   );
   React.useEffect(() => {
-    if (labels || !orgId || !userId || offline || switched) return;
+    if (lists || !orgId || !userId || offline || switched) return;
     let live = true;
     loadBookReportOptions({ userId, orgId }).then(
       (o) => {
-        if (live) setLabels(o.statusLabels);
+        if (live) setLists(o);
       },
       () => undefined,
     );
     return () => {
       live = false;
     };
-  }, [labels, orgId, userId, offline, switched]);
-  const statusLabels = labels ?? bookReportStatusLabels(null);
+  }, [lists, orgId, userId, offline, switched]);
+  const statusLabels = lists?.statusLabels ?? bookReportStatusLabels(null);
+  const charterLabels = bookReportCharterLabelsFor(lists);
 
   // The cover, after the numbers.
   React.useEffect(() => {
@@ -235,9 +282,12 @@ export default function BookOrdersScreen() {
     return () => ctrl.abort();
   }, [orgId, itemId, offline, switched]);
 
+  // With no list underneath (opened from a link), Back opens the list with
+  // the same filters, after any reset: never the defaults, never a refused
+  // charter.
   function goBack() {
     if (router.canGoBack()) router.back();
-    else router.replace('/reports/book-order-totals' as Href);
+    else router.replace(bookReportListHref(baseQuery) as Href);
   }
 
   async function refresh() {
@@ -326,6 +376,7 @@ export default function BookOrdersScreen() {
       <OrdersBody
         answer={view.data.answer}
         banner={view.banner}
+        charterLabels={charterLabels}
         cover={coverUrl ?? recallBookReportCover(orgId, view.data.answer.book?.itemId ?? '')}
         coverFailed={coverFailed}
         statusGroups={baseQuery.statusGroups}
@@ -357,6 +408,13 @@ export default function BookOrdersScreen() {
         }
       >
         <Eyebrow>BOOK ORDER TOTALS · ORDERS</Eyebrow>
+        {filtersReset && itemId && !switched ? (
+          <Card padding={12}>
+            <Body size={13.5} accessibilityRole="alert">
+              {BOOK_REPORT_FILTERS_RESET}
+            </Body>
+          </Card>
+        ) : null}
         {body}
       </ScrollView>
       <PhotoViewer
@@ -377,6 +435,7 @@ export default function BookOrdersScreen() {
 function OrdersBody({
   answer,
   banner,
+  charterLabels,
   cover,
   coverFailed,
   statusGroups,
@@ -388,6 +447,7 @@ function OrdersBody({
 }: {
   answer: BookOrderOrdersResponse;
   banner: string | null;
+  charterLabels: ReadonlyMap<string, string>;
   cover: string | null;
   coverFailed: boolean;
   statusGroups: readonly BookReportStatusGroup[];
@@ -406,12 +466,17 @@ function OrdersBody({
   const secondary = fulfilledReturnedLine(answer.totals);
   const pageSize = answer.pageSize;
   const totalPages = totalPagesFor(answer.totalCount, pageSize);
+  // With All charters each order names its charter; with one charter (or
+  // No charter) the header's Charter line already says it.
+  const showCharter = bookReportOrdersShowCharter(answer.filters);
   const rows = answer.rows.map((row) => ({
     row,
-    p: bookReportOrderRowPresentation(row, book, statusLabels),
+    p: bookReportOrderRowPresentation(row, book, statusLabels, { showCharter, charterLabels }),
   }));
   const someClosed = rows.some(({ p }) => p.href === null);
+  // The brief's order: the charter, then the dates, then the rest.
   const scope = [
+    bookReportCharterLine(answer.filters.charter, answer.filters.noCharter, charterLabels),
     bookReportRangeLine(answer.range),
     bookReportZoneLine(answer.range),
     bookReportStatusLine(statusGroups, statusLabels),
@@ -567,6 +632,11 @@ function OrderRow({
       <Body size={13} muted style={{ marginTop: 4 }}>
         {p.details}
       </Body>
+      {p.charter ? (
+        <Body size={13} muted>
+          {p.charter}
+        </Body>
+      ) : null}
       {p.combined ? (
         <Body size={12.5} muted>
           {p.combined}

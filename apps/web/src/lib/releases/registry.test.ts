@@ -1701,3 +1701,123 @@ describe('the small-fixes release is published', () => {
     expect(text).not.toMatch(/\bbook\b|%|faster|always visible|guarantee/i);
   });
 });
+
+/**
+ * Book Order Totals by charter and exact dates (0382) is held as a DRAFT until
+ * 0382, the web deploy, the phone update (OTA), the Demo Co production walk and
+ * the phone adoption check (plan R8b: an older phone ignores a charter in a
+ * link) are done. Pinned by id, never by index. The follow-up that publishes it
+ * sets 'published' and the real publishedAt, re-reads its words against what
+ * shipped, and flips the first pin here.
+ */
+describe('Book Order Totals by charter and dates is held as a draft', () => {
+  const ID = 'book-order-totals-charters-dates-2026-10';
+  const release = () => RELEASES.find((r) => r.id === ID)!;
+  const everyone: ReleaseViewer = {
+    role: 'owner',
+    permissions: [...PERMISSIONS],
+    enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+  };
+  const published = (): Release => ({ ...release(), status: 'published' });
+
+  it('is a draft, so no feed carries it: not the list, the notice, the old phone list, /api/version or the announcements', () => {
+    expect(release()).toBeDefined();
+    expect(release().status).toBe('draft');
+    expect(release().revision).toBe(1);
+    expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).not.toContain(ID);
+    const list = buildReleaseList(RELEASES, everyone, [], null);
+    expect(list.releases.map((r) => r.id)).not.toContain(ID);
+    expect(list.latestUnread?.id).not.toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).not.toContain(ID);
+    expect(registryFingerprint(RELEASES)).not.toContain(ID);
+    // Preparing it changes nothing a client can observe.
+    expect(registryFingerprint(RELEASES)).toBe(
+      registryFingerprint(RELEASES.filter((r) => r.id !== ID)),
+    );
+    expect(ANNOUNCEMENTS.map((a) => a.id)).not.toContain(ID);
+  });
+
+  it('sits at the top (pinned by id), dated after every other release, so publishing it makes it the newest', () => {
+    const at = RELEASES.findIndex((r) => r.id === ID);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(RELEASES.slice(0, at).every((r) => r.status === 'draft')).toBe(true);
+    for (const r of RELEASES.filter((x) => x.id !== ID)) {
+      expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+    // Once published it is what the notice offers.
+    const list = buildReleaseList(
+      [published(), ...RELEASES.filter((r) => r.id !== ID)],
+      everyone,
+      [],
+      null,
+    );
+    expect(list.latestUnread?.id).toBe(ID);
+  });
+
+  it('is addressed as the report is reached: Orders on, then Books on with reports:read, the permission the linked page checks (both entries)', () => {
+    expect(release().audience).toEqual({ modules: ['orders'] });
+    expect(release().entries.map((e) => e.id)).toEqual([
+      'book-order-totals-charter-filter',
+      'book-order-totals-exact-dates',
+    ]);
+    for (const e of release().entries) {
+      expect(e.area, e.id).toBe('Reports');
+      expect(e.audience, e.id).toEqual({ anyPermission: ['reports:read'], modules: ['books'] });
+      expect(e.link, e.id).toEqual({
+        href: '/dashboard/reports/book-order-totals',
+        label: 'Book Order Totals',
+      });
+    }
+    const reader = (permissions: ReleaseViewer['permissions'], enabledModules: ModuleId[]) =>
+      visibleReleases([published()], {
+        role: 'viewer',
+        permissions,
+        enabledModules,
+      })[0]?.entries.map((e) => e.id) ?? [];
+    expect(reader(['reports:read'], ['orders', 'books'])).toEqual([
+      'book-order-totals-charter-filter',
+      'book-order-totals-exact-dates',
+    ]);
+    // The page redirects without reports:read, so an export-only override,
+    // a requester and a reader without either module are told nothing.
+    expect(reader(['reports:export'], ['orders', 'books'])).toEqual([]);
+    expect(reader(['orders:request'], ['orders', 'books'])).toEqual([]);
+    expect(reader(['reports:read'], ['orders'])).toEqual([]);
+    expect(reader(['reports:read'], ['books'])).toEqual([]);
+  });
+
+  it("names both platforms, the order's charter (never the owning one), and tells phones how to load the update for charter links", () => {
+    const r = release();
+    // Old phone builds show only the summary: it names both platforms.
+    expect(r.summary).toContain('on the web and in the mobile app');
+    const [charter, dates] = r.entries;
+    expect(charter!.howItAffectsYou).toContain(
+      'the charter each order was placed for, its delivery site, not the charter that owns the stock',
+    );
+    expect(charter!.howItAffectsYou).toContain(
+      'Pickup orders have no charter and are listed under No charter.',
+    );
+    expect(charter!.howItAffectsYou).toContain('You can choose only charters you have access to.');
+    // An older phone ignores a charter in a link (plan R8b). The phone part
+    // ships as an over-the-air update, not a store version, so it says how
+    // such an update is loaded (the house wording), never "update the app".
+    expect(charter!.howItAffectsYou).toContain(
+      'In the mobile app, close the app completely and open it again to load the latest update, which opens links that choose a charter.',
+    );
+    expect(readerText(r).join(' ')).not.toMatch(/update the app|App Store|new version/i);
+    expect(charter!.whatChanged).toContain('Books ordered by charter');
+    // The week the SQL computes (plan D5) and the words the screens use.
+    expect(dates!.whatChanged).toContain('Today and This week (starting Sunday)');
+    expect(dates!.whatChanged).toContain('Clear filters');
+    // True on both platforms: the phone's search has its own box, no chip.
+    expect(dates!.whatChanged).toContain(
+      'Each filter you set appears as a chip you can remove (in the mobile app, the search keeps its own box), and Clear filters resets them all.',
+    );
+    expect(dates!.whatChanged).not.toContain('Clear filters starts over');
+    expect(dates!.howItAffectsYou).toContain('a range includes all of its last day');
+    expect(dates!.howItAffectsYou).toContain('Back to Book Order Totals');
+    const text = readerText(r).join(' ');
+    // Copies requested, never stock on record; no percentages, no promises.
+    expect(text).not.toMatch(/\bdelivered\b|\bthe book\b|\bon hand\b|%|guarantee|faster/i);
+  });
+});

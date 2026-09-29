@@ -31,6 +31,7 @@ import {
   BOOK_REPORT_PDF_COVER_CAP,
   bookReportPdfCoverNote,
   bookReportStatusLabels,
+  type BookReportCharterFilters,
 } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
@@ -59,6 +60,21 @@ const PDF_COVER_EDGE_PX = 240;
  * truncated. The audit row is written before the body streams. The file
  * carries its own generation time (org-local), not the on-screen answer's.
  * Nothing is stored, public or emailed.
+ *
+ * The charter (0382) narrows the file exactly as it narrows the page: every
+ * row of that charter's orders, never the page. The ORDER of the checks is
+ * deliberate and pinned by the route test: a charter id the caller may not
+ * report on is judged by the database inside the export statement, so a
+ * hand-edited link with such an id spends one of the caller's OWN hourly
+ * exports and then gets the 400 invalid_charter (as an unknown warehouse or
+ * category id already does). No pre-check is added: it would put another
+ * serial round trip in front of every chartered export, the page never builds
+ * such a link, and the budget stays in front of the statement so it still
+ * accounts for every expensive statement. The filename never carries the
+ * charter's name. Beside the statement (never in front of it), a chosen
+ * charter's list is read for the file's labels, so the file names a charter
+ * as the page does (core's id tie-break for two same-named charters); if
+ * that read fails, the file names it from the answer's echo.
  */
 export async function GET(req: NextRequest) {
   const ctx = await withApiContext(req);
@@ -87,13 +103,19 @@ export async function GET(req: NextRequest) {
     const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
-    const answer = await svc.exportRows(query, warehouseFromResolvedQuery(query), format);
+    // The charter list (only for a chosen charter) is read beside the export
+    // statement, for the file's labels; it never fails or delays the file.
+    const [answer, charterLabels] = await Promise.all([
+      svc.exportRows(query, warehouseFromResolvedQuery(query), format),
+      svc.fileCharterLabels(query),
+    ]);
     const org = await readOrgForExport(ctx);
     const input: BookReportExportInput = {
       answer,
       statusGroups: query.statusGroups,
       statusLabels: bookReportStatusLabels(org.orderStatusConfig),
       q: query.q,
+      charterLabels,
     };
 
     const filename = `${sanitizeFilenameSegment('book-order-totals')}_${sanitizeFilenameSegment(
@@ -203,6 +225,12 @@ async function readOrgForExport(ctx: ServiceContext): Promise<ExportOrg> {
   };
 }
 
+/** The charter a file covers, for its audit row: the charter's id, 'none'
+ *  for No charter, else 'all'. */
+function auditCharter(filters: BookReportCharterFilters): string {
+  return filters.charter?.id ?? (filters.noCharter === true ? 'none' : 'all');
+}
+
 /** The audit row, awaited before the body streams (on Vercel the function
  *  may wind down once the body is consumed). The search text itself is not
  *  stored, only its length. */
@@ -234,6 +262,9 @@ async function auditExport(
         statuses: answer.statuses,
         warehouse: answer.warehouse.id,
         warehouseSource: answer.warehouse.source,
+        // The ORDER's charter the file covers, from the answer's echo (an id,
+        // 'none' or 'all'); never its name.
+        charter: auditCharter(answer.filters),
         category,
         searchLength: q.length,
         generatedAt: answer.generatedAt,

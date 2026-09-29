@@ -8,12 +8,15 @@ import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import {
   BOOK_REPORT_COVERS_MAX,
   BOOK_REPORT_CSV_MAX_ROWS,
+  BOOK_REPORT_INVALID_CHARTER,
   BOOK_REPORT_ORDERS_PAGE_SIZE,
   BOOK_REPORT_PAGE_SIZE,
   BOOK_REPORT_PDF_COVER_CAP,
   BOOK_REPORT_PDF_MAX_ROWS,
   BOOK_REPORT_NOT_IN_SCOPE,
   BOOK_REPORT_TIMEOUT,
+  bookReportCharterEchoMatches,
+  bookReportCharterOptionLabels,
   bookReportFilterArgs,
   bookReportStatusLabels,
   bookReportTooManyText,
@@ -26,6 +29,8 @@ import {
   type BookOrderOptionsResponse,
   type BookOrderOrdersResponse,
   type BookOrderTotalsResponse,
+  type BookReportCharterFilters,
+  type BookReportFilterArgs,
   type BookReportQuery,
   type ResolvedBookReportWarehouse,
 } from '@stockpilot/core';
@@ -45,8 +50,9 @@ import { ItemImagesService } from './item-images';
  * page, the /api/v1 routes the phone and the web drawer call, the covers,
  * and the CSV and PDF exports.
  *
- * SQL is the only calculator (migration 0379). Every read here goes through
- * the CALLER's client, so orders, lines, items and warehouses RLS apply on
+ * SQL is the only calculator (migrations 0379 and 0382: 0382 adds the
+ * ORDER's charter and the Today and This week presets). Every read here goes
+ * through the CALLER's client, so orders, lines, items and warehouses RLS apply on
  * top of the functions' own gates; the organization id is always the
  * verified context's, never the client's. The only privileged step is the
  * existing storage signing inside ItemImagesService, reached only for item
@@ -67,6 +73,7 @@ const VALIDATION_HINTS = new Set([
   'invalid_range',
   'invalid_sort',
   'invalid_item',
+  'invalid_charter',
 ]);
 
 const VALIDATION_MESSAGES: Record<string, string> = {
@@ -77,6 +84,10 @@ const VALIDATION_MESSAGES: Record<string, string> = {
   invalid_range: 'Choose a real date range between 2000 and 2100, first date first.',
   invalid_sort: 'That sort order is not available.',
   invalid_item: 'Choose a book.',
+  // One message for every cause (an unknown id, another organization's
+  // charter, one outside the caller's scope, or a charter sent with No
+  // charter): the refusal names nothing and teaches nothing (plan D3).
+  invalid_charter: BOOK_REPORT_INVALID_CHARTER,
 };
 
 /**
@@ -170,6 +181,22 @@ export const BOOK_REPORT_EXPORT_MAX_ROWS: Readonly<Record<BookReportExportFormat
   pdf: BOOK_REPORT_PDF_MAX_ROWS,
 };
 
+/**
+ * The ORDER charter's RPC arguments, sent ONLY when used (plan D18): a charter
+ * id as `p_charter_id`, No charter as `p_no_charter: true`, and neither key
+ * for All charters. All-charters calls therefore resolve against the 0379 and
+ * the 0382 functions alike, so a misordered deploy or a SQL-only revert
+ * degrades only charter-filtered requests. Never `null` / `false` explicitly.
+ */
+export function bookReportCharterArgs(f: Pick<BookReportFilterArgs, 'charterId' | 'noCharter'>): {
+  p_charter_id?: string;
+  p_no_charter?: true;
+} {
+  if (f.charterId) return { p_charter_id: f.charterId };
+  if (f.noCharter) return { p_no_charter: true };
+  return {};
+}
+
 export class BookOrderTotalsService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -198,6 +225,7 @@ export class BookOrderTotalsService {
       p_search: f.search,
       p_isbn_keys: f.isbnKeys,
       p_sort: f.sort,
+      ...bookReportCharterArgs(f),
     };
   }
 
@@ -218,6 +246,7 @@ export class BookOrderTotalsService {
     if (error)
       throw mapBookReportRpcError(error, 'reports.book_order_totals', this.ctx.organizationId);
     const answer = this.parse(() => parseBookOrderTotalsAnswer(data), 'reports.book_order_totals');
+    this.assertCharterEcho(query, answer.filters, 'reports.book_order_totals');
     return { ...answer, organizationId: this.ctx.organizationId, warehouse };
   }
 
@@ -249,6 +278,7 @@ export class BookOrderTotalsService {
       p_warehouse_id: warehouse.id,
       p_page: page,
       p_page_size: BOOK_REPORT_ORDERS_PAGE_SIZE,
+      ...bookReportCharterArgs(f),
     });
     if (error)
       throw mapBookReportRpcError(
@@ -261,6 +291,7 @@ export class BookOrderTotalsService {
       'reports.book_order_totals.orders',
     );
     if (!answer.found) throw new ServiceError('not_found', BOOK_REPORT_NOT_IN_SCOPE);
+    this.assertCharterEcho(query, answer.filters, 'reports.book_order_totals.orders');
     const approver = can(this.ctx, 'orders:approve');
     return {
       ...answer,
@@ -272,8 +303,12 @@ export class BookOrderTotalsService {
 
   /**
    * The filter lists: warehouses (any status) and categories (deleted ones
-   * included) that occur in the caller's eligible lines, and the
-   * organization's status labels.
+   * included) that occur in the caller's eligible lines; the charters the
+   * caller may report on (0382: every active one they can reach, and
+   * inactive or archived ones with visible book orders) and whether orders
+   * with no charter are visible; and the organization's status labels. From
+   * a server before 0382 the charter list is empty and noCharter false (the
+   * core parser's defaults), so the Charter select offers All charters only.
    */
   async options(): Promise<BookOrderOptionsResponse> {
     this.gate();
@@ -296,8 +331,28 @@ export class BookOrderTotalsService {
       warehouses: answer.warehouses,
       categories: answer.categories,
       uncategorized: answer.uncategorized,
+      charters: answer.charters,
+      noCharter: answer.noCharter,
       statusLabels: bookReportStatusLabels(answer.orderStatusConfig),
     };
+  }
+
+  /**
+   * The Charter select's labels for a file (the page's words, core's id
+   * tie-break for two same-named charters included), read from the caller's
+   * own charter list, or null when no charter is chosen. Cosmetic, so it
+   * never fails an export: a list that cannot be read gives null, and the
+   * file names the charter from the answer's echo, as the page does before
+   * its lists load. Run beside the export statement, never in front of it.
+   */
+  async fileCharterLabels(query: BookReportQuery): Promise<Map<string, string> | null> {
+    if (!isUuid(query.charter)) return null;
+    try {
+      const { charters } = await this.options();
+      return bookReportCharterOptionLabels(charters);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -443,6 +498,7 @@ export class BookOrderTotalsService {
     if (answer.mode !== 'all') {
       throw this.selfCheckFailure('mode');
     }
+    this.assertCharterEcho(query, answer.filters, 'reports.book_order_totals.export');
     if (answer.tooMany) {
       throw new ServiceError('validation_error', bookReportTooManyText(answer.totalCount, limit), {
         reason: 'too_many_rows',
@@ -469,6 +525,27 @@ export class BookOrderTotalsService {
       throw this.selfCheckFailure('other_unit_entries');
     }
     return { ...answer, organizationId: this.ctx.organizationId, warehouse };
+  }
+
+  /**
+   * An answer is used only if it says it is for the charter asked for (core
+   * bookReportCharterEchoMatches): figures are never shown or filed under a
+   * charter they are not for. It cannot fail against a 0382 database (the
+   * echo comes from the same statement) or for All charters against 0379 (no
+   * charter keys at all); anything else is an internal error, never a page.
+   */
+  private assertCharterEcho(
+    query: BookReportQuery,
+    filters: BookReportCharterFilters,
+    tag: string,
+  ): void {
+    if (bookReportCharterEchoMatches(query, filters)) return;
+    void reportError(new Error('book_order_totals answer is for another charter'), {
+      tag,
+      organizationId: this.ctx.organizationId,
+      extra: { check: 'charter_echo' },
+    });
+    throw new ServiceError('internal_error', 'answer is for another charter');
   }
 
   private selfCheckFailure(check: string): ServiceError {

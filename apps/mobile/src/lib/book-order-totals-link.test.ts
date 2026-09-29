@@ -54,6 +54,30 @@ describe('rewriteWebPath: Book Order Totals', () => {
     );
   });
 
+  it('a charter and date-only dates ride along: the brief\'s link opens that charter and custom range', () => {
+    const CH = '0A0A0A0A-0000-4000-8000-00000000000A';
+    expect(
+      rewriteWebPath(`/dashboard/reports/book-order-totals?charter=${CH}&from=2026-09-01&to=2026-09-30&page=1`),
+    ).toBe(`/reports/book-order-totals?charter=${CH.toLowerCase()}&range=custom&from=2026-09-01&to=2026-09-30`);
+    expect(rewriteWebPath('/dashboard/reports/book-order-totals?charter=none&range=week')).toBe(
+      '/reports/book-order-totals?charter=none&range=week',
+    );
+    const { query, invalid } = bookReportQueryFromParams(
+      queryStringRecord(`charter=${CH}&from=2026-09-01&to=2026-09-30`),
+    );
+    expect(invalid).toEqual([]);
+    expect(query).toMatchObject({ charter: CH.toLowerCase(), range: 'custom', from: '2026-09-01', to: '2026-09-30' });
+  });
+
+  it('a malformed charter or date-only range is dropped and the screen is told (reset=1)', () => {
+    expect(rewriteWebPath('/dashboard/reports/book-order-totals?charter=marconi&warehouse=all')).toBe(
+      '/reports/book-order-totals?warehouse=all&reset=1',
+    );
+    expect(rewriteWebPath('/dashboard/reports/book-order-totals?from=2026-09-30&to=2026-09-01')).toBe(
+      '/reports/book-order-totals?reset=1',
+    );
+  });
+
   it('the Reports hub opens the shared Reports screen', () => {
     expect(rewriteWebPath('/dashboard/reports')).toBe('/reports');
     expect(rewriteWebPath('/dashboard/reports?tab=x')).toBe('/reports');

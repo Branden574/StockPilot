@@ -1935,3 +1935,52 @@ describe('orders/[id]: the title is never squeezed out by the actions', () => {
     expect(row.className.split(/\s+/)).toEqual(expect.arrayContaining(['flex', 'flex-wrap']));
   });
 });
+
+describe('orders/[id]: the way back to Book Order Totals (plan D17)', () => {
+  // The report's drawer opens an order with ?return=<the report view>. The
+  // page offers "Back to Book Order Totals" to exactly that view, and only
+  // for the report's own path; anything else keeps "Back to orders".
+  const REPORT = '/dashboard/reports/book-order-totals';
+  const VIEW = `${REPORT}?charter=0e000000-0000-4000-8000-0000000000a1&range=custom&from=2026-09-01&to=2026-09-30&q=Outsiders&page=2&view=0e000000-0000-4000-8000-000000000f01`;
+
+  async function renderWithReturn(value?: string | string[]) {
+    return render(
+      await OrderDetailPage({
+        params: Promise.resolve({ id: ORDER_ID }),
+        searchParams: Promise.resolve(value === undefined ? {} : { return: value }),
+      }),
+    );
+  }
+
+  it('opened from the report: the link goes back to that exact view', async () => {
+    await renderWithReturn(VIEW);
+    const back = screen.getByRole('link', { name: '← Back to Book Order Totals' });
+    expect(back).toHaveAttribute('href', VIEW);
+    expect(screen.queryByRole('link', { name: '← Back to orders' })).toBeNull();
+  });
+
+  it.each([
+    ['no return at all', undefined],
+    ['another origin', `https://evil.com${REPORT}`],
+    ['a protocol-relative URL', '//evil.com'],
+    ['a look-alike path', `${REPORT}-evil`],
+    ['another dashboard page', '/dashboard/orders'],
+    ['javascript:', 'javascript:alert(1)'],
+    ['return given twice', [VIEW, '//evil.com']],
+  ])('%s: keeps "Back to orders"', async (_what, value) => {
+    await renderWithReturn(value);
+    expect(screen.getByRole('link', { name: '← Back to orders' })).toHaveAttribute(
+      'href',
+      '/dashboard/orders',
+    );
+    expect(screen.queryByText(/Back to Book Order Totals/)).toBeNull();
+  });
+
+  it('a caller that passes no searchParams at all (the Orders list link) keeps "Back to orders"', async () => {
+    await renderPage();
+    expect(screen.getByRole('link', { name: '← Back to orders' })).toHaveAttribute(
+      'href',
+      '/dashboard/orders',
+    );
+  });
+});

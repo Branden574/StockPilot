@@ -1,4 +1,4 @@
-// Security invariant: Book Order Totals (migration 0379). The one server
+// Security invariant: Book Order Totals (migrations 0379 and 0382). The one server
 // method behind the page, the /api/v1 routes and the exports: the gate
 // (reports:read with the MFA step-up, then the orders and books modules)
 // runs before any read; the organization is the verified context's, never
@@ -7,8 +7,12 @@
 // caller's own order and `mine` itself is never passed on; covers are
 // resolved only for books the caller's own RLS read returned and only from
 // trusted URLs; an export is ONE export-mode statement, refused above its
-// ceiling and checked against itself before any byte is written.
-import { readFileSync } from 'node:fs';
+// ceiling and checked against itself before any byte is written. The ORDER's
+// charter (0382) reaches the database only when used (p_charter_id for a
+// charter, p_no_charter for No charter, neither for All charters); a charter
+// the caller may not report on is ONE validation error with one message
+// whatever the cause; an answer is used only if it echoes the charter asked.
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -30,6 +34,7 @@ import { ItemImagesService } from './item-images';
 
 import {
   BOOK_REPORT_CSV_MAX_ROWS,
+  BOOK_REPORT_INVALID_CHARTER,
   BOOK_REPORT_PDF_MAX_ROWS,
   DEFAULT_BOOK_REPORT_QUERY,
   type BookReportQuery,
@@ -38,6 +43,7 @@ import {
 
 import {
   BookOrderTotalsService,
+  bookReportCharterArgs,
   mapBookReportRpcError,
   resolveBookReportWarehouse,
   warehouseFromResolvedQuery,
@@ -51,6 +57,12 @@ const ITEM_B = '0e000000-0000-4000-8000-000000000f02';
 const HIDDEN = '0e000000-0000-4000-8000-000000000f09';
 const O1 = '0e000000-0000-4000-8000-000000000101';
 const O3 = '0e000000-0000-4000-8000-000000000103';
+const CH_A = '0e000000-0000-4000-8000-0000000000a1';
+const CH_B = '0e000000-0000-4000-8000-0000000000a2';
+const ALDER = { id: CH_A, name: 'Charter Alder', code: 'CH-A', status: 'active' };
+/** The 0382 filters echo: All charters, one charter, or No charter. */
+const ECHO_ALL = { charter: null, noCharter: false };
+const echoOf = (charter: typeof ALDER | null, noCharter = false) => ({ charter, noCharter });
 
 const RANGE = {
   key: 'all',
@@ -562,15 +574,21 @@ describe('exportRows: one statement, never truncated', () => {
     await expect(svc.exportRows(ALL, ALL_W, 'csv')).rejects.toMatchObject({ code: 'forbidden' });
     expect(stub.rpcCalls).toEqual([]);
   });
-  it('the SQL clamp (0379) equals the largest per-format ceiling', () => {
-    const sql = readFileSync(
-      path.resolve(__dirname, '../../../../../supabase/migrations/0379_book_order_totals.sql'),
-      'utf8',
+  it('the SQL clamp (0382, the live book_order_totals) equals the largest per-format ceiling', () => {
+    // Found by its name, not its number, so a renumber of the charter-dates
+    // migration is followed (core's literal pins do the same).
+    const dir = path.resolve(__dirname, '../../../../../supabase/migrations');
+    const files = readdirSync(dir).filter((f) =>
+      /^\d+_book_order_totals_charter_dates\.sql$/.test(f),
     );
-    const m = /v_cap\s+integer := least\(greatest\(coalesce\(p_max_rows, (\d+)\), 1\), (\d+)\);/.exec(sql);
-    expect(m).not.toBeNull();
+    expect(files).toHaveLength(1);
+    const sql = readFileSync(path.join(dir, files[0]!), 'utf8');
+    const re = /v_cap\s+integer := least\(greatest\(coalesce\(p_max_rows, (\d+)\), 1\), (\d+)\);/g;
+    const all = [...sql.matchAll(re)];
+    // One clamp: book_order_totals is the only export-mode function.
+    expect(all).toHaveLength(1);
     const largest = Math.max(BOOK_REPORT_CSV_MAX_ROWS, BOOK_REPORT_PDF_MAX_ROWS);
-    expect([Number(m![1]), Number(m![2])]).toEqual([largest, largest]);
+    expect([Number(all[0]![1]), Number(all[0]![2])]).toEqual([largest, largest]);
   });
   it('above the ceiling: 400 too_many_rows with the counts, before any file', async () => {
     const { svc } = service({
@@ -606,5 +624,187 @@ describe('exportRows: one statement, never truncated', () => {
     await expect(svc.exportRows(ALL, ALL_W, 'csv')).rejects.toMatchObject({
       code: 'internal_error',
     });
+  });
+});
+
+describe('the ORDER charter (0382)', () => {
+  const CHARTER: BookReportQuery = { ...ALL, charter: CH_A };
+  const NONE: BookReportQuery = { ...ALL, charter: 'none' };
+  const charterKeys = (args: unknown) =>
+    Object.fromEntries(
+      Object.entries(args as Record<string, unknown>).filter(([k]) => /charter/.test(k)),
+    );
+
+  it('bookReportCharterArgs: a charter id, No charter, or nothing at all (D18)', () => {
+    expect(bookReportCharterArgs({ charterId: null, noCharter: false })).toEqual({});
+    expect(bookReportCharterArgs({ charterId: CH_A, noCharter: false })).toEqual({
+      p_charter_id: CH_A,
+    });
+    expect(bookReportCharterArgs({ charterId: null, noCharter: true })).toEqual({
+      p_no_charter: true,
+    });
+  });
+
+  describe.each([
+    [
+      'page',
+      'rpc:book_order_totals',
+      (answer: Record<string, unknown>) => totalsAnswer([row(ITEM_A, '30')], answer),
+      (svc: BookOrderTotalsService, q: BookReportQuery) => svc.page(q, ALL_W),
+    ],
+    [
+      'drill-down',
+      'rpc:book_order_totals_orders',
+      (answer: Record<string, unknown>) => ({
+        ...ordersAnswer(true, [orderRow(O1, false)]),
+        filters: { warehouse: null, ...(answer.filters as object) },
+      }),
+      (svc: BookOrderTotalsService, q: BookReportQuery) => svc.orders(ITEM_A, q, ALL_W, 1),
+    ],
+    [
+      'export',
+      'rpc:book_order_totals',
+      (answer: Record<string, unknown>) =>
+        totalsAnswer([row(ITEM_A, '34')], {
+          mode: 'all',
+          pageSize: null,
+          maxRows: 20000,
+          ...answer,
+        }),
+      (svc: BookOrderTotalsService, q: BookReportQuery) => svc.exportRows(q, ALL_W, 'csv'),
+    ],
+  ] as const)('%s', (_label, key, answerOf, call) => {
+    const filtersOf = (echo: Record<string, unknown> | null) => ({
+      filters: { warehouse: null, category: null, uncategorized: false, ...(echo ?? {}) },
+    });
+
+    it('All charters sends NEITHER charter key, so it runs on 0379 and 0382 alike', async () => {
+      // An answer with no charter keys at all is a server before 0382.
+      for (const echo of [null, ECHO_ALL]) {
+        const { stub, svc } = service({ [key]: { data: answerOf(filtersOf(echo)), error: null } });
+        await call(svc, ALL);
+        expect(stub.rpcCalls).toHaveLength(1);
+        expect(charterKeys(stub.rpcCalls[0]!.args)).toEqual({});
+        expect(stub.rpcCalls[0]!.args).not.toHaveProperty('p_charter_id');
+        expect(stub.rpcCalls[0]!.args).not.toHaveProperty('p_no_charter');
+      }
+    });
+
+    it('a charter sends exactly p_charter_id', async () => {
+      const { stub, svc } = service({
+        [key]: { data: answerOf(filtersOf(echoOf(ALDER))), error: null },
+      });
+      await call(svc, CHARTER);
+      expect(charterKeys(stub.rpcCalls[0]!.args)).toEqual({ p_charter_id: CH_A });
+    });
+
+    it('No charter sends exactly p_no_charter: true', async () => {
+      const { stub, svc } = service({
+        [key]: { data: answerOf(filtersOf(echoOf(null, true))), error: null },
+      });
+      await call(svc, NONE);
+      expect(charterKeys(stub.rpcCalls[0]!.args)).toEqual({ p_no_charter: true });
+    });
+
+    it.each([
+      ['a charter answered without a charter echo (a server before 0382)', CH_A, null],
+      ['a charter answered for another charter', CH_A, echoOf({ ...ALDER, id: CH_B })],
+      ['a charter answered as No charter', CH_A, echoOf(null, true)],
+      ['No charter answered as All charters', 'none', ECHO_ALL],
+      ['All charters answered for a charter', 'all', echoOf(ALDER)],
+    ] as const)('%s is an internal error, never figures', async (_l, charter, echo) => {
+      const { svc } = service({ [key]: { data: answerOf(filtersOf(echo)), error: null } });
+      await expect(call(svc, { ...ALL, charter })).rejects.toMatchObject({
+        code: 'internal_error',
+      });
+      expect(vi.mocked(reportError).mock.calls.at(-1)![1].extra).toEqual({
+        check: 'charter_echo',
+      });
+    });
+
+    it('a refused charter is one validation error, whatever the cause', async () => {
+      const refusal = { code: '22023', hint: 'invalid_charter', message: 'invalid charter' };
+      const { svc } = service({ [key]: { data: null, error: refusal } });
+      await expect(call(svc, CHARTER)).rejects.toMatchObject({
+        code: 'validation_error',
+        message: BOOK_REPORT_INVALID_CHARTER,
+        details: { reason: 'invalid_charter' },
+      });
+    });
+  });
+
+  it('invalid_charter maps to one message and names nothing, whatever the database said', () => {
+    const errs = [
+      { code: '22023', hint: 'invalid_charter', message: 'invalid charter' },
+      { code: '22023', hint: 'invalid_charter', message: 'invalid charter', details: 'x' },
+      { code: '22023', hint: 'invalid_charter', message: 'Charter Birch is not yours' },
+    ];
+    const mapped = errs.map((e) => mapBookReportRpcError(e, 'test'));
+    for (const e of mapped) {
+      expect(e.code).toBe('validation_error');
+      expect(e.message).toBe('That charter is not one you can see.');
+      expect(e.details).toEqual({ reason: 'invalid_charter' });
+      expect(e.message).not.toMatch(/Birch/);
+    }
+  });
+
+  it('options carry the charters and whether No charter applies', async () => {
+    const { svc } = service({
+      'rpc:book_order_totals_options': {
+        data: {
+          v: 1,
+          warehouses: [],
+          categories: [],
+          uncategorized: false,
+          charters: [ALDER, { id: CH_B, name: 'Charter Birch', code: null, status: 'archived' }],
+          noCharter: true,
+          orderStatusConfig: null,
+        },
+        error: null,
+      },
+    });
+    const res = await svc.options();
+    expect(res.charters).toEqual([
+      ALDER,
+      { id: CH_B, name: 'Charter Birch', code: null, status: 'archived' },
+    ]);
+    expect(res.noCharter).toBe(true);
+  });
+
+  it('options from a server before 0382: no charters, no No charter', async () => {
+    const { svc } = service({
+      'rpc:book_order_totals_options': {
+        data: {
+          v: 1,
+          warehouses: [],
+          categories: [],
+          uncategorized: false,
+          orderStatusConfig: null,
+        },
+        error: null,
+      },
+    });
+    const res = await svc.options();
+    expect(res.charters).toEqual([]);
+    expect(res.noCharter).toBe(false);
+  });
+
+  it('a charter answer keeps its echo and its by-charter value on the page', async () => {
+    const { svc } = service({
+      'rpc:book_order_totals': {
+        data: totalsAnswer([row(ITEM_A, '30')], {
+          filters: { warehouse: null, category: null, uncategorized: false, ...ECHO_ALL },
+          byCharter: [
+            { ...ALDER, copies: '30', orders: 2 },
+            { id: null, name: null, code: null, status: null, copies: '4', orders: 1 },
+          ],
+        }),
+        error: null,
+      },
+    });
+    const res = await svc.page(ALL, ALL_W);
+    expect(res.filters).toMatchObject(ECHO_ALL);
+    expect(res.byCharter).toHaveLength(2);
+    expect(res.byCharter![1]!.id).toBeNull();
   });
 });

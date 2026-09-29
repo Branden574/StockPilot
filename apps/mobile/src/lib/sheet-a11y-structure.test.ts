@@ -241,6 +241,12 @@ const CONVERTED: {
   // F2-2: the line sheet now carries a short line's fixes (the completion and
   // departure confirms open it), so VoiceOver must reach each of them.
   { file: 'src/components/edit-order-line-sheet.tsx', heading: 'Edit line', layout: 'bottom', close: 'requestClose', scrim: "'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)'" },
+  // Book Order Totals: the charter and dates sheets (plan 5) and the filters
+  // sheet they were split from, so every row, tile, field and button in
+  // them stays its own VoiceOver element.
+  { file: 'src/components/book-order-charter-sheet.tsx', heading: 'CHARTER', layout: 'bottom', close: 'onClose', scrim: "'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)'" },
+  { file: 'src/components/book-order-dates-sheet.tsx', heading: 'ORDERS PLACED', layout: 'bottom', close: 'onClose', scrim: "'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)'" },
+  { file: 'src/components/book-order-filters-sheet.tsx', heading: 'FILTERS', layout: 'bottom', close: 'onClose', scrim: "'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)'" },
 ];
 
 describe.each(CONVERTED)('$file — "$heading"', ({ file, heading, layout, close, scrim }) => {

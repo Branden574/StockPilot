@@ -10,11 +10,13 @@ import { cn } from '@/lib/utils';
 
 import {
   BOOK_REPORT_ALL_CATEGORIES,
+  BOOK_REPORT_ALL_CHARTERS,
   BOOK_REPORT_ALL_WAREHOUSES,
+  BOOK_REPORT_CHARTER_HINT,
   BOOK_REPORT_NO_CATEGORY,
+  BOOK_REPORT_NO_CHARTER,
+  BOOK_REPORT_NO_CHARTER_HINT,
   BOOK_REPORT_OPTIONS_ERROR,
-  BOOK_REPORT_RANGE_LABELS,
-  BOOK_REPORT_RANGES,
   BOOK_REPORT_SEARCH_MAX,
   BOOK_REPORT_SORT_LABELS,
   BOOK_REPORT_SORTS,
@@ -27,31 +29,35 @@ import {
   bookReportStatusGroupLabel,
   bookReportViewChangedLine,
   bookReportWarehouseOptionLabel,
-  validateCustomDate,
   type BookOrderOptionsResponse,
   type BookReportCategoryEcho,
+  type BookReportCharterEcho,
   type BookReportQuery,
-  type BookReportRange,
+  type BookReportRangeEcho,
   type BookReportSort,
   type BookReportStatusGroup,
   type BookReportWarehouseEcho,
   type OrderStatusKey,
 } from '@stockpilot/core';
 
+import { FILTER_CONTROL as CONTROL, FILTER_LABEL as LABEL } from './filter-classes';
 import { bookReportPageHref, withBookReportFilter } from './hrefs';
-import { bookReportOptionsKey, cachedBookReportOptions, loadBookReportOptions } from './options';
+import {
+  bookReportCharterLabelsFor,
+  bookReportOptionsKey,
+  cachedBookReportOptions,
+  loadBookReportOptions,
+} from './options';
+import { OrdersPlacedControl } from './orders-placed-control';
 import {
   BookReportLink,
   useBookReportNavigation,
   useCurrentBookReportQuery,
 } from './report-navigation';
+import { useCommittedSelect } from './use-committed-select';
 
 /** Typing settles for this long before the report is asked for again. */
 export const BOOK_REPORT_SEARCH_DEBOUNCE_MS = 300;
-
-const CONTROL =
-  'border-input bg-background focus-visible:ring-ring focus-visible:ring-offset-background h-9 w-full rounded-md border px-2.5 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60';
-const LABEL = 'text-muted-foreground text-xs font-medium';
 
 export interface BookReportFilterBarProps {
   /** The RESOLVED query (a concrete warehouse or all, never 'default'). */
@@ -63,6 +69,14 @@ export interface BookReportFilterBarProps {
    *  choice while the lists load (or if they fail). */
   warehouseEcho: BookReportWarehouseEcho | null;
   categoryEcho: BookReportCategoryEcho | null;
+  /** The ORDER charter the answer is for (null: all charters or No
+   *  charter), so the Charter select can name it while the lists load. */
+  charterEcho: BookReportCharterEcho | null;
+  /** The answer's range (its resolved days and zone), for the date fields;
+   *  null without an answer (a timeout). */
+  rangeEcho: BookReportRangeEcho | null;
+  /** The organization's today from the answer, for the calendar. */
+  today: string | null;
   /** Set when this report came from the person's warehouse view and the
    *  view has changed since (id null: the view now covers all). */
   viewNow: { id: string | null } | null;
@@ -76,11 +90,14 @@ export interface BookReportFilterBarProps {
  * concrete warehouse. The server applies each filter before it adds or
  * pages anything.
  *
- * The warehouse and category lists are loaded here, once per session and
- * never with the numbers (./options.ts): while they load, those two selects
- * show the current choice by name and wait; if they fail, only those two are
- * disabled, with Retry. Dates, statuses, search and sort are fixed
- * vocabularies and always work.
+ * The charter, warehouse and category lists are loaded here, once per
+ * session and never with the numbers (./options.ts): while they load, those
+ * three selects show the current choice by name and wait; if they fail, only
+ * those three are disabled, with Retry. Dates, statuses, search and sort are
+ * fixed vocabularies and always work.
+ *
+ * Every select commits once per CHOICE, never once per arrow key
+ * (use-committed-select.ts, plan D16).
  */
 export function BookReportFilterBar(props: BookReportFilterBarProps) {
   const { organizationId, userId } = props;
@@ -128,20 +145,30 @@ export function BookReportFilterBar(props: BookReportFilterBarProps) {
           }
         />
       ) : null}
-      {/* Five controls on one row at desktop widths, the warehouse column
-          widest ("All warehouses you can see" is cut off in a fifth of
-          max-w-6xl). A custom range's two dates are their own full-width
-          row below it (lg:order-last), never a sixth cell that pushes Sort
-          onto a second row. */}
+      {/* Two rows at desktop widths. The first holds what the report is
+          ABOUT: the charter, and when the orders were placed (the preset and
+          its two date fields, which never wrap apart). The second holds the
+          four refinements, Sort always among them, never on a line of its
+          own. Below lg the rows fold to two columns, below sm to one. */}
       <div
-        data-filter-grid
-        className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)]"
+        data-filter-grid-primary
+        className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]"
       >
-        <DateRangeControl
-          key={`${query.range}|${query.from ?? ''}|${query.to ?? ''}`}
+        <CharterControl
           query={query}
+          options={options}
+          echo={props.charterEcho}
+          describedBy={listsId}
           onChange={go}
         />
+        <OrdersPlacedControl
+          query={query}
+          rangeEcho={props.rangeEcho}
+          today={props.today}
+          onChange={go}
+        />
+      </div>
+      <div data-filter-grid className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatusControl query={query} statusLabels={props.statusLabels} onChange={go} />
         <WarehouseControl
           query={query}
@@ -201,104 +228,6 @@ function ViewChangedNotice({
         {bookReportShowViewLabel(now)}
       </BookReportLink>
     </p>
-  );
-}
-
-function DateRangeControl({
-  query,
-  onChange,
-}: {
-  query: BookReportQuery;
-  onChange: (next: BookReportQuery) => void;
-}) {
-  const [choice, setChoice] = React.useState<BookReportRange>(query.range);
-  const [from, setFrom] = React.useState(query.from ?? '');
-  const [to, setTo] = React.useState(query.to ?? '');
-  const [error, setError] = React.useState<string | null>(null);
-  const id = React.useId();
-
-  return (
-    <>
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor={`${id}-range`} className={LABEL}>
-          {BOOK_REPORT_UI.dateRange}
-        </label>
-        <select
-          id={`${id}-range`}
-          className={CONTROL}
-          value={choice}
-          onChange={(e) => {
-            const next = e.target.value as BookReportRange;
-            setChoice(next);
-            setError(null);
-            if (next !== 'custom')
-              onChange(withBookReportFilter(query, { range: next, from: null, to: null }));
-          }}
-        >
-          {BOOK_REPORT_RANGES.map((r) => (
-            <option key={r} value={r}>
-              {BOOK_REPORT_RANGE_LABELS[r]}
-            </option>
-          ))}
-        </select>
-      </div>
-      {choice === 'custom' ? (
-        <form
-          data-custom-range
-          className="flex flex-wrap items-end gap-2 sm:col-span-2 lg:order-last lg:col-span-5"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!validateCustomDate(from) || !validateCustomDate(to) || from > to) {
-              setError(BOOK_REPORT_UI.customRangeInvalid);
-              return;
-            }
-            setError(null);
-            onChange(withBookReportFilter(query, { range: 'custom', from, to }));
-          }}
-        >
-          <div className="flex flex-col gap-1">
-            <label htmlFor={`${id}-from`} className={LABEL}>
-              {BOOK_REPORT_UI.from}
-            </label>
-            <input
-              id={`${id}-from`}
-              type="date"
-              min="2000-01-01"
-              max="2100-12-31"
-              className={cn(CONTROL, 'w-[10.5rem]')}
-              value={from}
-              aria-invalid={error ? true : undefined}
-              aria-describedby={error ? `${id}-error` : undefined}
-              onChange={(e) => setFrom(e.target.value)}
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label htmlFor={`${id}-to`} className={LABEL}>
-              {BOOK_REPORT_UI.to}
-            </label>
-            <input
-              id={`${id}-to`}
-              type="date"
-              min="2000-01-01"
-              max="2100-12-31"
-              className={cn(CONTROL, 'w-[10.5rem]')}
-              value={to}
-              aria-invalid={error ? true : undefined}
-              aria-describedby={error ? `${id}-error` : undefined}
-              onChange={(e) => setTo(e.target.value)}
-            />
-          </div>
-          <Button type="submit" size="sm" className="h-9">
-            {BOOK_REPORT_UI.apply}
-          </Button>
-          {error ? (
-            <p id={`${id}-error`} role="alert" className="text-destructive w-full text-xs">
-              {error}
-            </p>
-          ) : null}
-        </form>
-      ) : null}
-    </>
   );
 }
 
@@ -444,6 +373,84 @@ function ListsProblem({
   return null;
 }
 
+/**
+ * The ORDER's charter (plan 4.3): the charter each order was placed for, its
+ * delivery site. Not the item-ownership charter of the other reports
+ * (charter-filter-select.tsx, `charterId`): a different question, a
+ * different key. The list holds every charter the caller may report on (the
+ * database decides), labelled Name · CODE, with No charter last when such
+ * orders exist (or it is the current choice). A charter the lists do not
+ * carry is still offered by the answer's own echo, never a bare id.
+ */
+function CharterControl({
+  query,
+  options,
+  echo,
+  describedBy,
+  onChange,
+}: {
+  query: BookReportQuery;
+  options: BookOrderOptionsResponse | null;
+  echo: BookReportCharterEcho | null;
+  describedBy: string;
+  onChange: (next: BookReportQuery) => void;
+}) {
+  const id = React.useId();
+  const value = query.charter;
+  const echoForValue = echo && echo.id.toLowerCase() === value.toLowerCase() ? echo : null;
+  const labels = bookReportCharterLabelsFor(options, [echoForValue]);
+  const choices: { value: string; label: string }[] = [
+    { value: 'all', label: BOOK_REPORT_ALL_CHARTERS },
+  ];
+  for (const c of options?.charters ?? []) {
+    choices.push({ value: c.id, label: labels.get(c.id) ?? c.name });
+  }
+  if (value !== 'all' && value !== 'none' && !choices.some((c) => c.value === value)) {
+    // Named by the answer's echo when it is for this charter; a charter
+    // chosen elsewhere (a by-charter row) while the lists load is only
+    // "Loading…" until its answer lands, never a bare id.
+    choices.push({
+      value,
+      label: echoForValue
+        ? (labels.get(echoForValue.id) ?? echoForValue.name)
+        : BOOK_REPORT_UI.choiceLoading,
+    });
+  }
+  if (options?.noCharter || value === 'none') {
+    choices.push({ value: 'none', label: BOOK_REPORT_NO_CHARTER });
+  }
+  const select = useCommittedSelect(value, (next) =>
+    onChange(withBookReportFilter(query, { charter: next })),
+  );
+  const disabled = !options;
+  const hintId = `${id}-hint`;
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <label htmlFor={`${id}-charter`} className={LABEL}>
+        {BOOK_REPORT_UI.charter}
+      </label>
+      <select
+        id={`${id}-charter`}
+        className={CONTROL}
+        disabled={disabled}
+        aria-describedby={disabled ? `${hintId} ${describedBy}` : hintId}
+        {...select.props}
+      >
+        {choices.map((c) => (
+          <option key={c.value} value={c.value}>
+            {c.label}
+          </option>
+        ))}
+      </select>
+      <p id={hintId} className="text-muted-foreground sr-only text-xs sm:not-sr-only">
+        {value === 'none'
+          ? `${BOOK_REPORT_CHARTER_HINT} ${BOOK_REPORT_NO_CHARTER}: ${BOOK_REPORT_NO_CHARTER_HINT}`
+          : BOOK_REPORT_CHARTER_HINT}
+      </p>
+    </div>
+  );
+}
+
 function WarehouseControl({
   query,
   options,
@@ -466,8 +473,29 @@ function WarehouseControl({
     choices.push({ value: w.id, label: bookReportWarehouseOptionLabel(w) });
   }
   if (value !== 'all' && !choices.some((c) => c.value === value)) {
-    choices.push({ value, label: echo ? bookReportWarehouseOptionLabel(echo) : value });
+    // A pending 'default' (Clear filters, or the warehouse chip removed) is
+    // the person's warehouse view, which the server resolves; any other
+    // value the lists do not carry is named by the answer's echo only when
+    // the echo is for it. Never the raw token or id, and never the name of
+    // the warehouse that was just removed.
+    choices.push({
+      value,
+      label:
+        value === 'default'
+          ? BOOK_REPORT_UI.warehouseView
+          : echo && echo.id.toLowerCase() === value.toLowerCase()
+            ? bookReportWarehouseOptionLabel(echo)
+            : BOOK_REPORT_UI.choiceLoading,
+    });
   }
+  const select = useCommittedSelect(value, (next) =>
+    onChange(
+      withBookReportFilter(query, {
+        warehouse: next === 'all' ? 'all' : next,
+        warehouseFromView: false,
+      }),
+    ),
+  );
   const disabled = !options;
   return (
     <div className="flex flex-col gap-1.5">
@@ -477,18 +505,9 @@ function WarehouseControl({
       <select
         id={`${id}-warehouse`}
         className={CONTROL}
-        value={value}
         disabled={disabled}
         aria-describedby={disabled ? describedBy : undefined}
-        onChange={(e) => {
-          const next = e.target.value;
-          onChange(
-            withBookReportFilter(query, {
-              warehouse: next === 'all' ? 'all' : next,
-              warehouseFromView: false,
-            }),
-          );
-        }}
+        {...select.props}
       >
         {choices.map((c) => (
           <option key={c.value} value={c.value}>
@@ -525,8 +544,17 @@ function CategoryControl({
     choices.push({ value: 'none', label: BOOK_REPORT_NO_CATEGORY });
   }
   if (value !== 'all' && !choices.some((c) => c.value === value)) {
-    choices.push({ value, label: echo ? bookReportCategoryOptionLabel(echo) : value });
+    choices.push({
+      value,
+      label:
+        echo && echo.id.toLowerCase() === value.toLowerCase()
+          ? bookReportCategoryOptionLabel(echo)
+          : BOOK_REPORT_UI.choiceLoading,
+    });
   }
+  const select = useCommittedSelect(value, (next) =>
+    onChange(withBookReportFilter(query, { category: next })),
+  );
   const disabled = !options;
   return (
     <div className="flex flex-col gap-1.5">
@@ -536,10 +564,9 @@ function CategoryControl({
       <select
         id={`${id}-category`}
         className={CONTROL}
-        value={value}
         disabled={disabled}
         aria-describedby={disabled ? describedBy : undefined}
-        onChange={(e) => onChange(withBookReportFilter(query, { category: e.target.value }))}
+        {...select.props}
       >
         {choices.map((c) => (
           <option key={c.value} value={c.value}>
@@ -559,19 +586,15 @@ function SortControl({
   onChange: (next: BookReportQuery) => void;
 }) {
   const id = React.useId();
+  const select = useCommittedSelect<BookReportSort>(query.sort, (next) =>
+    onChange(withBookReportFilter(query, { sort: next })),
+  );
   return (
     <div className="flex flex-col gap-1.5">
       <label htmlFor={`${id}-sort`} className={LABEL}>
         {BOOK_REPORT_UI.sort}
       </label>
-      <select
-        id={`${id}-sort`}
-        className={CONTROL}
-        value={query.sort}
-        onChange={(e) =>
-          onChange(withBookReportFilter(query, { sort: e.target.value as BookReportSort }))
-        }
-      >
+      <select id={`${id}-sort`} className={CONTROL} {...select.props}>
         {BOOK_REPORT_SORTS.map((s) => (
           <option key={s} value={s}>
             {BOOK_REPORT_SORT_LABELS[s]}

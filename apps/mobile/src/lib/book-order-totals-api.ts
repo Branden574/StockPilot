@@ -9,7 +9,9 @@ import {
   BOOK_REPORT_SERVER_PROBLEM,
   BOOK_REPORT_TIMEOUT,
   VERIFICATION_SESSION_ENDED_COPY,
+  bookReportCharterEchoMatches,
   bookReportExportRetryText,
+  bookReportRangeEchoMatches,
   bookReportOfflineAsOf,
   bookReportQueryKey,
   bookReportTooManyText,
@@ -44,7 +46,11 @@ import { CONNECTION_FAILURE_COPY, REQUEST_TIMED_OUT_COPY } from './connection-co
  *      number; the phone's SQLite cache holds no orders at all.
  *   2. Every request names a CONCRETE warehouse (all or a uuid), never the
  *      default, and the workspace it is for (X-Organization-Id). An answer for
- *      another workspace, another warehouse or another book is refused.
+ *      another workspace, another warehouse, another charter or another book
+ *      (or, for a book's orders, other days) is refused. The charter check (core bookReportCharterEchoMatches) also
+ *      covers a server that predates the charter filter (a web rollback): it
+ *      answers a charter request with organization-wide figures and no
+ *      charter echo, and the phone never shows those under a charter's name.
  *   3. A failed read THROWS and is shown as a failure, never as an empty or
  *      zero report; a malformed answer is a failure too (core's strict
  *      parsers).
@@ -118,8 +124,8 @@ export function bookReportExportPath(
 
 // ── Loaders ─────────────────────────────────────────────────────────────────
 
-/** An answer the phone will not show: for another workspace, warehouse or
- *  book, or one this version cannot read. */
+/** An answer the phone will not show: for another workspace, warehouse,
+ *  charter or book, or one this version cannot read. */
 export class BookReportResponseError extends Error {
   constructor(public readonly problem: 'shape' | 'workspace' | 'mismatch') {
     super(
@@ -156,6 +162,9 @@ export async function getBookOrderTotals(
   if (!sameId(parsed.warehouse.id, requestedWarehouseId(query))) {
     throw new BookReportResponseError('mismatch');
   }
+  if (!bookReportCharterEchoMatches(query, parsed.filters)) {
+    throw new BookReportResponseError('mismatch');
+  }
   return parsed;
 }
 
@@ -182,10 +191,21 @@ export async function getBookOrderOrders(
   if (!sameId(parsed.warehouse.id, requestedWarehouseId(query))) {
     throw new BookReportResponseError('mismatch');
   }
+  if (!bookReportCharterEchoMatches(query, parsed.filters)) {
+    throw new BookReportResponseError('mismatch');
+  }
+  // The row's days (the list pins a rolling preset to them): orders read
+  // for other days would not add up to the row (brief 13).
+  if (!bookReportRangeEchoMatches(query, parsed.range)) {
+    throw new BookReportResponseError('mismatch');
+  }
   return parsed;
 }
 
-/** The filter lists and status labels for workspace `orgId`. */
+/** The filter lists (charters, warehouses, categories) and status labels
+ *  for workspace `orgId`. A server before the charter filter sends no
+ *  charter list: core reads that as none (`charters: []`, `noCharter:
+ *  false`), so the Charter sheet offers only All charters. */
 export async function getBookOrderOptions(
   orgId: string,
   signal?: AbortSignal,

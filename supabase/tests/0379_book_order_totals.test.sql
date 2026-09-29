@@ -622,9 +622,11 @@ select is(
                      || (p.proconfig @> array['search_path=public', 'plan_cache_mode=force_custom_plan'])::text,
                      ',' order by p.proname)
      from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname like 'book_order%'),
+  -- 0382 adds book_order_report_charters (the sixth function).
+  'book_order_report_charters:false:s:true,'
   'book_order_report_lines:false:s:true,book_order_report_range:false:s:true,book_order_totals:false:s:true,'
   'book_order_totals_options:false:s:true,book_order_totals_orders:false:s:true',
-  'G1: five functions, each SECURITY INVOKER, STABLE, with search_path=public and plan_cache_mode=force_custom_plan pinned');
+  'G1: six functions, each SECURITY INVOKER, STABLE, with search_path=public and plan_cache_mode=force_custom_plan pinned');
 
 select is(
   (select string_agg(p.proname || ':' || has_function_privilege('authenticated', p.oid, 'EXECUTE')
@@ -633,6 +635,7 @@ select is(
                      || ':' || exists (select 1 from unnest(p.proacl) a where a::text like '=%'),
                      ',' order by p.proname)
      from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname like 'book_order%'),
+  'book_order_report_charters:true:false:false:false,'
   'book_order_report_lines:true:false:false:false,book_order_report_range:true:false:false:false,'
   'book_order_totals:true:false:false:false,book_order_totals_options:true:false:false:false,'
   'book_order_totals_orders:true:false:false:false',
@@ -745,7 +748,8 @@ select is(
                      'restricted', r#>'{scope,restricted}', 'filters', r->'filters'),
   jsonb_build_object('v', 1, 'statuses', to_jsonb(:def11::text[]), 'mode', 'page', 'page', 1, 'pageSize', 25,
                      'sort', 'copies', 'tooMany', false, 'maxRows', null, 'restricted', false,
-                     'filters', '{"warehouse":null,"category":null,"uncategorized":false}'::jsonb),
+                     -- 0382: the default answer also echoes no charter chosen.
+                     'filters', '{"warehouse":null,"category":null,"uncategorized":false,"charter":null,"noCharter":false}'::jsonb),
   'A6: the default answer echoes the 11 default statuses (the literal core holds), page 1 of 25, most copies, unrestricted for a manager')
   from res where k = 'base.mgr';
 select is(
@@ -1272,7 +1276,9 @@ begin
   return v;
 end $$;
 select is(
-  (select string_agg(p.label || ':' || ((pg_temp.bopt(p.u, p.o) - 'v' - 'orderStatusConfig')
+  -- 0382 adds charters and noCharter to the options; their parity with the
+  -- lines is pinned in 0382_book_order_totals_charter_dates.test.sql.
+  (select string_agg(p.label || ':' || ((pg_temp.bopt(p.u, p.o) - 'v' - 'orderStatusConfig' - 'charters' - 'noCharter')
                                         = pg_temp.opts_from_lines(p.u, p.o, :all13::text[]))::text, ',' order by p.label)
      from (values ('mgr', :mgr::uuid, :orgA::uuid), ('mgrAB.A', :mgrAB::uuid, :orgA::uuid),
                   ('mgrAB.B', :mgrAB::uuid, :orgB::uuid), ('mgrC', :mgrC::uuid, :orgC::uuid),

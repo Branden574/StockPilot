@@ -16,10 +16,12 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 
 import {
+  BOOK_REPORT_DRAWER_TERMS,
   BOOK_REPORT_EMPTY,
   BOOK_REPORT_FULFILLED_NOTE,
   BOOK_REPORT_MFA_ENROLL,
   BOOK_REPORT_MFA_VERIFY,
+  BOOK_REPORT_NO_CHARTER_HINT,
   BOOK_REPORT_NOT_IN_SCOPE,
   BOOK_REPORT_ORDER_COLUMNS,
   BOOK_REPORT_ORDER_LINK_HINT,
@@ -29,10 +31,15 @@ import {
   BOOK_REPORT_UI,
   BOOK_REPORT_VIEW_ORDERS,
   bookReportAsOfNote,
+  bookReportCharterEchoMatches,
+  bookReportCharterLabel,
   bookReportDrawerHeader,
+  bookReportDrillDownQuery,
+  bookReportOrderCharterText,
   bookReportOrderLink,
   bookReportQuantityWording,
-  bookReportRangeLine,
+  bookReportRangeEchoMatches,
+  bookReportRangeLabel,
   bookReportStatusLine,
   bookReportViewOrdersLabel,
   bookReportWarehouseLine,
@@ -46,11 +53,18 @@ import {
   totalPagesFor,
   type BookOrderOrdersResponse,
   type BookReportQuery,
+  type BookReportRangeEcho,
   type OrderStatusKey,
 } from '@stockpilot/core';
 
-import { bookReportOrdersApiUrl, readBookReportDrawer, withBookReportDrawer } from './hrefs';
+import {
+  bookReportDrawerReturnHref,
+  bookReportOrdersApiUrl,
+  readBookReportDrawer,
+  withBookReportDrawer,
+} from './hrefs';
 import { BookIdentityLine } from './identity-line';
+import { bookReportCharterLabelsFor, useLoadedBookReportOptions } from './options';
 
 /**
  * VIEW ORDERS: the orders behind one book's total, in a side sheet.
@@ -61,12 +75,27 @@ import { BookIdentityLine } from './identity-line';
  * a shared link opens it, and returning from an order reopens it on the
  * same page with every report filter intact.
  *
- * The fetch carries the SAME resolved range, statuses and concrete
+ * The fetch carries the SAME charter, resolved range, statuses and concrete
  * warehouse as the row it was opened from (hrefs.ts), so the sheet's header
- * (the book's FULL totals, never the visible page's) equals the row. Every
+ * (the book's FULL totals, never the visible page's) equals the row. A
+ * rolling preset (Today, This week, This month ...) is asked for as the
+ * exact days the page's answer covered (core bookReportDrillDownQuery), so
+ * the organization's midnight passing between the page and View orders
+ * cannot make the two cover different days (brief 13). Every
  * load has its own AbortController and sequence number, and an answer for
- * another organization, warehouse or book is dropped: a late answer can
- * never fill the sheet for a different book or filter.
+ * another organization, warehouse, charter, book or other days is dropped:
+ * a late answer
+ * can never fill the sheet for a different book or filter, and figures are
+ * never shown under a charter they are not for.
+ *
+ * The header states the scope (brief 13): Book, Charter, Orders placed and
+ * Total requested. The Charter column shows only with All charters chosen;
+ * with one charter it would repeat the header on every row.
+ *
+ * Each order link carries the way back (plan D17): `?return=` this page's
+ * URL with the sheet open on the same book and page, so the order page's
+ * "Back to Book Order Totals" restores this view (the browser's Back does
+ * too).
  *
  * An order number is a link only when the API says the order is `openable`
  * (the caller can approve orders, or placed it). Anyone else sees the number
@@ -125,18 +154,34 @@ export function ViewOrdersButton({ itemId, title }: { itemId: string; title: str
 
 export interface BookOrdersDrawerProps {
   organizationId: string;
+  /** For the charter labels the filter bar loaded (never loaded here). */
+  userId: string;
   /** The RESOLVED report query the page rendered. */
   query: BookReportQuery;
+  /** The rendered answer's range: the days a rolling preset covered. */
+  rangeEcho: Pick<BookReportRangeEcho, 'key' | 'from' | 'to'> | null;
   statusLabels: Readonly<Record<OrderStatusKey, string>>;
   /** Titles of the books on this page, for the sheet's title while it loads. */
   titles: Readonly<Record<string, string>>;
 }
 
-export function BookOrdersDrawer({ organizationId, query, statusLabels, titles }: BookOrdersDrawerProps) {
+export function BookOrdersDrawer({
+  organizationId,
+  userId,
+  query,
+  rangeEcho,
+  statusLabels,
+  titles,
+}: BookOrdersDrawerProps) {
   const searchParams = useSearchParams();
   const { itemId, page } = readBookReportDrawer(searchParams);
   const warehouseId = query.warehouse === 'all' ? null : query.warehouse;
-  const url = itemId ? bookReportOrdersApiUrl(itemId, query, page) : null;
+  const charter = query.charter;
+  // The row's days, not the preset again (brief 13).
+  const drill = bookReportDrillDownQuery(query, rangeEcho);
+  const { range, from, to } = drill;
+  const url = itemId ? bookReportOrdersApiUrl(itemId, drill, page) : null;
+  const options = useLoadedBookReportOptions(organizationId, userId);
   const [nonce, setNonce] = React.useState(0);
   const [result, setResult] = React.useState<DrawerResult | null>(null);
   const seq = React.useRef(0);
@@ -177,6 +222,8 @@ export function BookOrdersDrawer({ organizationId, query, statusLabels, titles }
           answer.organizationId === organizationId &&
           answer.warehouse.id === warehouseId &&
           (answer.filters.warehouse?.id ?? null) === warehouseId &&
+          bookReportCharterEchoMatches({ charter }, answer.filters) &&
+          bookReportRangeEchoMatches({ range, from, to }, answer.range) &&
           answer.book?.itemId.toLowerCase() === itemId;
         if (!sameScope) {
           setResult({ key, kind: 'error', message: BOOK_REPORT_ORDERS_LOAD_ERROR, retry: true });
@@ -189,7 +236,7 @@ export function BookOrdersDrawer({ organizationId, query, statusLabels, titles }
         setResult({ key, kind: 'error', message: BOOK_REPORT_ORDERS_LOAD_ERROR, retry: true });
       });
     return () => ctrl.abort();
-  }, [url, nonce, itemId, organizationId, warehouseId]);
+  }, [url, nonce, itemId, organizationId, warehouseId, charter, range, from, to]);
 
   const current = result && result.key === requestKey ? result : null;
   const answer = current?.kind === 'ready' ? current.answer : null;
@@ -228,8 +275,15 @@ export function BookOrdersDrawer({ organizationId, query, statusLabels, titles }
           </SheetDescription>
         </SheetHeader>
         <SheetBody>
-          {answer ? (
-            <OrdersBody answer={answer} query={query} statusLabels={statusLabels} onPage={goToPage} />
+          {answer && itemId ? (
+            <OrdersBody
+              answer={answer}
+              query={query}
+              charterLabels={bookReportCharterLabelsFor(options, [answer.filters.charter])}
+              statusLabels={statusLabels}
+              returnTo={bookReportDrawerReturnHref(query, itemId, page)}
+              onPage={goToPage}
+            />
           ) : current?.kind === 'error' ? (
             <div role="alert" className="space-y-3">
               <p className="text-sm">{current.message}</p>
@@ -256,12 +310,19 @@ export function BookOrdersDrawer({ organizationId, query, statusLabels, titles }
 function OrdersBody({
   answer,
   query,
+  charterLabels,
   statusLabels,
+  returnTo,
   onPage,
 }: {
   answer: BookOrderOrdersResponse;
   query: BookReportQuery;
+  /** The Charter select's labels (core's id tie-break for same-named
+   *  charters), so the header and the column read as the page does. */
+  charterLabels: ReadonlyMap<string, string>;
   statusLabels: Readonly<Record<OrderStatusKey, string>>;
+  /** This view's URL, for each order link's way back. */
+  returnTo: string;
   onPage: (page: number) => void;
 }) {
   const book = answer.book!;
@@ -279,11 +340,37 @@ function OrdersBody({
     BOOK_REPORT_ORDERS_NOUN,
   );
 
+  // With All charters chosen each order's charter differs, so it is a
+  // column; with one charter (or No charter) it is the header's line.
+  const charterColumn = query.charter === 'all';
+  const noCharter = answer.filters.noCharter === true;
+
   return (
     <div className="space-y-4">
+      <dl
+        data-drawer-scope
+        className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-sm"
+      >
+        <dt className="text-muted-foreground">{BOOK_REPORT_DRAWER_TERMS.book}</dt>
+        <dd className="min-w-0">
+          <span className="block font-medium [overflow-wrap:anywhere]">{book.name}</span>
+          <BookIdentityLine row={book} className="text-muted-foreground block text-xs" />
+        </dd>
+        <dt className="text-muted-foreground">{BOOK_REPORT_DRAWER_TERMS.charter}</dt>
+        <dd className="min-w-0 [overflow-wrap:anywhere]">
+          {bookReportCharterLabel(answer.filters.charter, answer.filters.noCharter, charterLabels)}
+          {noCharter ? (
+            <span className="text-muted-foreground block text-xs">
+              {BOOK_REPORT_NO_CHARTER_HINT}
+            </span>
+          ) : null}
+        </dd>
+        <dt className="text-muted-foreground">{BOOK_REPORT_DRAWER_TERMS.ordersPlaced}</dt>
+        <dd className="min-w-0">{bookReportRangeLabel(answer.range)}</dd>
+        <dt className="text-muted-foreground">{BOOK_REPORT_DRAWER_TERMS.totalRequested}</dt>
+        <dd className="min-w-0 font-medium">{bookReportDrawerHeader(book, answer.totals)}</dd>
+      </dl>
       <div className="text-muted-foreground space-y-1 text-xs">
-        <BookIdentityLine row={book} className="block" />
-        <p>{bookReportRangeLine(answer.range)}</p>
         <p>{bookReportStatusLine(query.statusGroups, statusLabels)}</p>
         <p>{bookReportWarehouseLine(answer.filters.warehouse, answer.warehouse.source)}</p>
       </div>
@@ -309,6 +396,11 @@ function OrdersBody({
                 <th scope="col" className="whitespace-nowrap px-3 py-2 text-left font-semibold">
                   {BOOK_REPORT_ORDER_COLUMNS.orderDate}
                 </th>
+                {charterColumn ? (
+                  <th scope="col" className="px-3 py-2 text-left font-semibold">
+                    {BOOK_REPORT_ORDER_COLUMNS.charter}
+                  </th>
+                ) : null}
                 <th scope="col" className="px-3 py-2 text-left font-semibold">
                   {BOOK_REPORT_ORDER_COLUMNS.warehouse}
                 </th>
@@ -323,7 +415,7 @@ function OrdersBody({
             <tbody>
               {answer.rows.map((row) => {
                 const number = formatOrderNumber(row.orderNumber) ?? BOOK_REPORT_UI.noOrderNumber;
-                const href = bookReportOrderLink(row, 'web');
+                const href = bookReportOrderLink(row, 'web', returnTo);
                 const combined = combinedLinesText(row.lines);
                 return (
                   <tr key={row.orderId} className="border-t">
@@ -346,6 +438,11 @@ function OrdersBody({
                       )}
                     </th>
                     <td className="whitespace-nowrap px-3 py-2">{formatReportDate(row.orderDate)}</td>
+                    {charterColumn ? (
+                      <td className="px-3 py-2 [overflow-wrap:anywhere]">
+                        {bookReportOrderCharterText(row, charterLabels) ?? ''}
+                      </td>
+                    ) : null}
                     <td className="px-3 py-2">{row.warehouseName ?? ''}</td>
                     <td className="px-3 py-2">{statusLabels[row.status as OrderStatusKey] ?? row.status}</td>
                     <td className="px-3 py-2 text-right tabular-nums">

@@ -344,6 +344,24 @@ PGTAP_TESTS=(
   # never raises 40001/40P01. The same file holds the brief's acceptance
   # numbers and the reconciliation of totals, pages, drill-downs and exports.
   supabase/tests/0379_book_order_totals.test.sql
+  # Book Order Totals by the ORDER's charter (0382): the charter filter is
+  # never authorization. Visibility comes first (the four RLS joins, plus
+  # E2b: a reader limited to some charters at a warehouse sees there only
+  # those charters' orders and orders with no charter), then the chosen
+  # charter, which must be one book_order_report_charters lists for the
+  # caller (gate 6b, over all statuses and all time). An out-of-scope,
+  # another org's or an unknown charter id is ONE refusal (22023
+  # invalid_charter, same hint, message and detail) from the page, the
+  # export, the drill-down and the lines helper, and the charters block
+  # returns no row for it; its own gates are the report's (signed in, the
+  # same 42501 forbidden, module_disabled). Charter-, warehouse- and
+  # category-limited readers, a two-org manager, "no charter" (never
+  # refused), ownership and bill-to charters that must not act as the
+  # filter, the by-charter breakdown reconciled to the summary, charter-list
+  # parity per persona, the same answers with the leakproof E2b prefilter
+  # and the A3 guard removed, Today and This week (Sunday start) in four
+  # zones, and the day boundaries.
+  supabase/tests/0382_book_order_totals_charter_dates.test.sql
   # Report aggregates answer for the CALLER (0380): the six report_*
   # functions ReportsService used to call through the service role (which
   # handed warehouse- and category-scoped readers other warehouses' SKUs,
@@ -558,9 +576,15 @@ WEB_TESTS=(
   # The page: one awaited answer for every number, no figures on a failure,
   # the MFA state, the concrete warehouse in every derived URL, export
   # controls only for reports:export; the drill-down: order links only where
-  # openable, late or mismatched answers dropped.
+  # openable, late or mismatched answers dropped. 0382: a charter in the link
+  # the caller may not use is dropped on the server (never named, never
+  # zeros), and the drawer drops an answer for another charter.
   src/components/reports/book-order-totals/report-body.test.tsx
   src/components/reports/book-order-totals/orders-drawer.test.tsx
+  # 0382 (plan D17): the order page's "Back to Book Order Totals" renders a
+  # user-controlled ?return= only when it passes safeReturnPath AND is the
+  # report's own path; every open-redirect shape falls back.
+  src/components/reports/book-order-totals/return-path.test.ts
 
   # Every other report (2026-09-28, 0380): ReportsService reads with the
   # CALLER'S client (never the service role) and checks reports:read (MFA

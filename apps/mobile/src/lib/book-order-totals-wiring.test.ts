@@ -37,7 +37,13 @@ import { bookCoverPlaceholderLabel } from './book-order-totals-view';
  *   6. an order opens only when the server says so;
  *   7. the Reports entry sits outside the figures' loading branch, and a
  *      failed figure read never shows zeros;
- *   8. every touchable has a role and words.
+ *   8. every touchable has a role and words;
+ *   9. the dates sheet refuses in core copy;
+ *  10. charter and dates (plan 5): each chip opens its own sheet and carries
+ *      a sibling remove button, Clear filters, the Showing block and the
+ *      by-charter rows read the answer, every choice goes to page 1 and an
+ *      unchanged choice sends nothing, and the drill-down resets a refused
+ *      filter and goes back to the list with the same (reset) filters.
  */
 
 const MOBILE_ROOT = path.resolve(__dirname, '../..');
@@ -82,6 +88,11 @@ function styleNumber(sf: ts.SourceFile, key: string, prop: string): number | und
 
 const LIST = 'app/reports/book-order-totals/index.tsx';
 const ORDERS = 'app/reports/book-order-totals/[itemId].tsx';
+const FILTERS_SHEET = 'src/components/book-order-filters-sheet.tsx';
+const CHARTER_SHEET = 'src/components/book-order-charter-sheet.tsx';
+const DATES_SHEET = 'src/components/book-order-dates-sheet.tsx';
+const SHEET_PARTS = 'src/components/book-order-sheet-parts.tsx';
+const CALENDAR = 'src/components/ui/month-calendar.tsx';
 const list = codeOnly(read(LIST));
 const orders = codeOnly(read(ORDERS));
 const reports = codeOnly(read('src/screens/reports.tsx'));
@@ -168,7 +179,11 @@ describe('4. one concrete warehouse for the row, its orders and the file', () =>
   });
 
   it("the drill-down and the export use the answer's own query", () => {
-    expect(list).toContain('router.push(bookReportDrillDownHref(item.itemId, data.query) as Href)');
+    // The answer's own query, with a rolling preset pinned to the answer's
+    // days (brief 13).
+    expect(list).toMatch(
+      /router\.push\(\s*bookReportDrillDownHref\(item\.itemId, data\.query, data\.answer\.range\) as Href,?\s*\)/,
+    );
     expect(list).toContain('path: bookReportExportPath(choice.format, choice.photos, source.query),');
     expect(list).toContain('onChoose={(choice) => void runExport(choice, data)}');
     expect(orders).toContain('bookReportQueryFromListParams(params)');
@@ -207,7 +222,9 @@ describe('6. drill-down order links (plan gap 7)', () => {
   it('a row is a button only when the presentation has a link', () => {
     const src = fn.getText(sf);
     expect(src).toMatch(/if \(p\.href\) \{[\s\S]*<Pressable[\s\S]*onPress=\{\(\) => onOpen\(href\)\}/);
-    expect(orders).toContain('p: bookReportOrderRowPresentation(row, book, statusLabels),');
+    expect(orders).toContain(
+      'p: bookReportOrderRowPresentation(row, book, statusLabels, { showCharter, charterLabels }),',
+    );
   });
 
   it('otherwise it is words with role text and the reason, with no onPress anywhere', () => {
@@ -282,7 +299,17 @@ describe('8. accessibility', () => {
     expect((paginator.match(/accessibilityRole="button"/g) ?? []).length).toBe(2);
   });
 
-  it.each([LIST, ORDERS, 'src/components/book-order-filters-sheet.tsx', 'src/components/book-order-export-sheet.tsx', 'src/components/book-cover.tsx'])(
+  it.each([
+    LIST,
+    ORDERS,
+    FILTERS_SHEET,
+    CHARTER_SHEET,
+    DATES_SHEET,
+    SHEET_PARTS,
+    CALENDAR,
+    'src/components/book-order-export-sheet.tsx',
+    'src/components/book-cover.tsx',
+  ])(
     'every touchable in %s has a role and words',
     (file) => {
       const sf = parseTsx(read(file), file);
@@ -298,7 +325,7 @@ describe('8. accessibility', () => {
     },
   );
 
-  it.each(['src/components/book-order-filters-sheet.tsx', 'src/components/book-order-export-sheet.tsx'])(
+  it.each([FILTERS_SHEET, CHARTER_SHEET, DATES_SHEET, 'src/components/book-order-export-sheet.tsx'])(
     '%s is a sibling-backdrop sheet VoiceOver can use',
     (file) => {
       const sf = parseTsx(read(file), file);
@@ -400,22 +427,25 @@ describe('8. accessibility', () => {
     expect(styleNumber(sf, 'searchInput', 'minHeight')).toBeGreaterThanOrEqual(44);
   });
 
-  it("the list's cover and row are sibling buttons, never nested", () => {
-    const sf = parseTsx(read(LIST), LIST);
-    const nested: string[] = [];
-    walkJsx(sf, (el, ancestors) => {
-      if (!TOUCHABLE_TAG.test(tagOf(el, sf)) && tagOf(el, sf) !== 'BookCover') return;
-      if (ancestors.some((a) => TOUCHABLE_TAG.test(tagOf(a, sf)))) {
-        nested.push(`${tagOf(el, sf)}@${sf.getLineAndCharacterOfPosition(el.getStart(sf)).line + 1}`);
-      }
-    });
-    expect(nested).toEqual([]);
-  });
+  it.each([LIST, ORDERS, CHARTER_SHEET, DATES_SHEET, FILTERS_SHEET, SHEET_PARTS, CALENDAR])(
+    "%s never nests a button in a button (the list's cover and row, a chip's body and its remove button are siblings)",
+    (file) => {
+      const sf = parseTsx(read(file), file);
+      const nested: string[] = [];
+      walkJsx(sf, (el, ancestors) => {
+        if (!TOUCHABLE_TAG.test(tagOf(el, sf)) && tagOf(el, sf) !== 'BookCover') return;
+        if (ancestors.some((a) => TOUCHABLE_TAG.test(tagOf(a, sf)))) {
+          nested.push(`${tagOf(el, sf)}@${sf.getLineAndCharacterOfPosition(el.getStart(sf)).line + 1}`);
+        }
+      });
+      expect(nested).toEqual([]);
+    },
+  );
 });
 
-describe('9. the filters sheet refuses in core copy (plan 13.7 step 3)', () => {
+describe('9. the dates sheet refuses in core copy (plan 13.7 step 3; the typed dates moved there in plan 5)', () => {
   const view = codeOnly(read('src/lib/book-order-totals-view.ts'));
-  const sheetFile = 'src/components/book-order-filters-sheet.tsx';
+  const sheetFile = DATES_SHEET;
   const sheet = codeOnly(read(sheetFile));
 
   it('the phone writes no refusal sentence of its own; it uses the web page\'s core sentences', () => {
@@ -438,5 +468,179 @@ describe('9. the filters sheet refuses in core copy (plan 13.7 step 3)', () => {
     expect(sheet).toContain('{touchedDates && problems.dates ? (');
     expect(sheet).toContain('invalid={touchedDates && problems.fromInvalid}');
     expect(sheet).toContain('invalid={touchedDates && problems.toInvalid}');
+  });
+
+  it('the filters sheet no longer edits the dates (its own sheet does), and its Reset keeps them', () => {
+    const filters = codeOnly(read(FILTERS_SHEET));
+    expect(filters).not.toMatch(/BOOK_REPORT_RANGES|DateField|TextInput|from:|to:/);
+    expect(filters).toContain('onPress={() => setDraft(resetBookReportDraft(draft))}');
+  });
+});
+
+describe('10. charter and dates (plan 5)', () => {
+  const view = codeOnly(read('src/lib/book-order-totals-view.ts'));
+  const charterSheet = codeOnly(read(CHARTER_SHEET));
+  const datesSheet = codeOnly(read(DATES_SHEET));
+  const calendar = codeOnly(read(CALENDAR));
+
+  it('the chip row is core\'s, each chip opening its own sheet, with Clear filters after it', () => {
+    expect(list).toMatch(/const chips = bookReportPhoneChips\(\{\s+query,\s+echoes: bookReportChipEchoes\(query, answer, optionsForOrg\),/);
+    expect(list).toContain('onOpen={() => openSheet(chip.opens)}');
+    expect(list).toContain("{sheet === 'charter' ? (");
+    expect(list).toContain("{sheet === 'dates' ? (");
+    expect(list).toContain("{sheet === 'filters' ? (");
+    expect(list).toContain('const canClear = bookReportHasFiltersToClear(query);');
+    expect(list).toContain('accessibilityLabel={BOOK_REPORT_UI.clearFilters}');
+  });
+
+  it("a chip's remove button is a sibling of its body, named by core, with a real 44 pt frame", () => {
+    const sf = parseTsx(read(LIST), LIST);
+    const fn = sf.statements.find(
+      (st): st is ts.FunctionDeclaration => ts.isFunctionDeclaration(st) && st.name?.text === 'FilterChip',
+    )!;
+    const buttons: JsxNode[] = [];
+    walkJsx(fn, (el) => {
+      if (TOUCHABLE_TAG.test(tagOf(el, sf))) buttons.push(el);
+    });
+    expect(buttons.map((b) => attrText(b, 'accessibilityLabel', sf))).toEqual(['chip.text', 'remove.label']);
+    expect(attrText(buttons[0]!, 'accessibilityHint', sf)).toBe('chip.hint');
+    expect(attrText(buttons[1]!, 'onPress', sf)).toBe('() => onRemove(remove.key)');
+    expect(styleNumber(sf, 'chipRemove', 'minWidth')).toBeGreaterThanOrEqual(44);
+    expect(styleNumber(sf, 'chipRemove', 'minHeight')).toBeGreaterThanOrEqual(44);
+    expect(styleNumber(sf, 'chipBody', 'minHeight')).toBeGreaterThanOrEqual(44);
+    expect(styleNumber(sf, 'clearFilters', 'minHeight')).toBeGreaterThanOrEqual(44);
+    expect(styleNumber(sf, 'byCharterRow', 'minHeight')).toBeGreaterThanOrEqual(44);
+  });
+
+  it('every choice starts from the latest query, goes to page 1, and an unchanged one sends nothing', () => {
+    expect(list).toContain('setQuery((q) => keepIfSame(q, bookReportWithFilter(q, { charter })));');
+    expect(list).toMatch(
+      /setQuery\(\(q\) =>\s+keepIfSame\(q, bookReportWithFilter\(q, \{ range: next\.range, from: next\.from, to: next\.to \}\)\),\s+\);/,
+    );
+    expect(list).toContain('setQuery((q) => keepIfSame(q, bookReportWithoutFilter(q, key)));');
+    expect(list).toContain('setQuery((q) => keepIfSame(q, clearBookReportFilters(q)));');
+    expect(list).toContain('return sameBookReportQuery(prev, next) ? prev : next;');
+  });
+
+  it('Clear filters also empties the search box and stops a pending search', () => {
+    const fn = list.slice(list.indexOf('function clearFilters()'), list.indexOf('function openSheet('));
+    expect(fn).toContain('debounce.current.cancel();');
+    expect(fn).toContain("setDraftQ('');");
+  });
+
+  it('the Showing block, the charter line, the empty hint and the by-charter rows read the answer', () => {
+    expect(list).toContain('const showing = bookReportShowingView(answer, query.statusGroups, charterLabels);');
+    expect(list).toContain('<View accessible accessibilityLabel={showing.spoken} style={{ gap: 4 }}>');
+    expect(list).toContain(
+      'bookReportCharterLine(answer.filters.charter, answer.filters.noCharter, charterLabels),',
+    );
+    // Core's words, the web page's: the dates are named only when chosen.
+    expect(list).toContain(
+      'const charterEmptyHint = answer ? bookReportCharterEmptyHint(answer) : null;',
+    );
+    expect(list).toContain('{charterEmptyHint}');
+    expect(list).not.toContain('BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE');
+    expect(list).toContain('const byCharter = bookReportByCharterView(answer, charterLabels);');
+    expect(list).toContain('onPress={() => onApplyCharter(row.charter)}');
+    expect(list).toContain('accessibilityState={{ expanded: byCharterOpen }}');
+  });
+
+  it('the charter sheet applies on tap and offers a search only past 12 rows', () => {
+    expect(charterSheet).toContain('onPress={() => onChoose(choice.value)}');
+    expect(charterSheet).toContain('const searchable = choices.length > BOOK_REPORT_CHARTER_SEARCH_OVER;');
+    expect(charterSheet).toContain('{optionsFailed ? <OptionsProblem onRetry={onRetryOptions} /> : null}');
+    expect(list).toContain('echo={answer?.filters.charter ?? null}');
+  });
+
+  it('the dates sheet requests nothing while picking; Apply needs both ends; a preset applies at once', () => {
+    expect(datesSheet).not.toMatch(/getBookOrder|from '@\/lib\/api'|fetch\(/);
+    expect(datesSheet).toContain('const next = bookReportCustomRangeQuery(value, from, to);');
+    expect(datesSheet).toContain('disabled={!complete}');
+    expect(datesSheet).toContain('onApply(bookReportPresetQuery(value, r));');
+    expect(datesSheet).toContain('const next = rangePick(draft, ymd);');
+    expect(list).toContain('today={orgDay?.today ?? null}');
+    expect(list).toContain('const seenToday = data ? calendarToday(data.answer.generatedAtLocal) : null;');
+  });
+
+  it('the month calendar: 44 pt days and month buttons, capped day numbers, no swipe, weekday letters hidden', () => {
+    expect(calendar).toMatch(/cell: \{[^}]*minHeight: CALENDAR_CELL_MIN/);
+    expect(calendar).toMatch(/nav: \{[^}]*minWidth: CALENDAR_CELL_MIN,\s+minHeight: CALENDAR_CELL_MIN/);
+    expect(calendar).toContain('maxFontSizeMultiplier={capTo(15, TYPE_CEILING.control)}');
+    expect(calendar).toContain('accessibilityLabel={day.label}');
+    expect(calendar).toContain('accessibilityState={{ selected: day.selected }}');
+    expect(calendar).toContain('accessibilityRole="header"');
+    expect(calendar).toMatch(/accessibilityElementsHidden\s+importantForAccessibility="no-hide-descendants"/);
+    expect(calendar).not.toMatch(/PanResponder|Gesture|onSwipe|react-native-gesture-handler/);
+  });
+
+  it('the drill-down resets a refused charter, warehouse or category, reads again, and says so', () => {
+    expect(orders).toContain(
+      'const [baseQuery, setBaseQuery] = React.useState(() => bookReportQueryFromListParams(params));',
+    );
+    expect(orders).toContain('const unreadable = bookReportUnreadableFilter(e);');
+    expect(orders).toContain('if (unreadable && bookReportWithoutUnreadableFilter(baseQuery, unreadable)) {');
+    expect(orders).toContain('setBaseQuery((q) => bookReportWithoutUnreadableFilter(q, unreadable) ?? q);');
+    expect(orders).toContain('setFiltersReset(true);');
+    expect(orders).toContain('{BOOK_REPORT_FILTERS_RESET}');
+    expect(orders).toContain('[request, baseQuery],');
+  });
+
+  it('a drill-down link opened while a drill-down is on screen reads its filters again (as the list does)', () => {
+    // The book is part of it: a link to another book is a new drill-down.
+    expect(orders).toContain('const linkKey = `${rawItemId}|${bookReportLinkKey(params)}`;');
+    const block = orders.slice(
+      orders.indexOf('if (appliedLink !== linkKey) {'),
+      orders.indexOf('const viewWarehouse ='),
+    );
+    expect(block).toContain('setAppliedLink(linkKey);');
+    expect(block).toContain('setBaseQuery(bookReportQueryFromListParams(params));');
+    expect(block).toContain('setFiltersReset(false);');
+    expect(block).toContain('setPage(1);');
+    expect(block).not.toMatch(/useEffect/);
+  });
+
+  it("the drill-down's cold Back opens the list with the same (reset) filters, never the defaults", () => {
+    expect(orders).toContain('else router.replace(bookReportListHref(baseQuery) as Href);');
+    expect(orders).not.toContain("router.replace('/reports/book-order-totals' as Href)");
+  });
+
+  it('the drill-down says the charter first and names each order\'s charter only with All charters', () => {
+    expect(orders).toMatch(
+      /const scope = \[\s+bookReportCharterLine\(answer\.filters\.charter, answer\.filters\.noCharter, charterLabels\),\s+bookReportRangeLine\(answer\.range\),/,
+    );
+    expect(orders).toContain('const showCharter = bookReportOrdersShowCharter(answer.filters);');
+    // With the charter sheet's labels, so two same-named charters read apart.
+    expect(orders).toContain(
+      'p: bookReportOrderRowPresentation(row, book, statusLabels, { showCharter, charterLabels }),',
+    );
+  });
+
+  it("a row's orders are read for the days the row was read for (brief 13), never the preset again", () => {
+    expect(list).toMatch(
+      /router\.push\(\s*bookReportDrillDownHref\(item\.itemId, data\.query, data\.answer\.range\) as Href,?\s*\);/,
+    );
+    expect(list).not.toMatch(/bookReportDrillDownHref\(item\.itemId, data\.query\)/);
+  });
+
+  it('a link opened while the list is on screen applies its filters (P7b), and says when it reset one', () => {
+    // Read on mount, then again whenever the link's parameters change.
+    expect(list).toContain('const linkKey = bookReportLinkKey(params);');
+    expect(list).toContain('const [appliedLink, setAppliedLink] = React.useState(linkKey);');
+    const block = list.slice(
+      list.indexOf('if (appliedLink !== linkKey) {'),
+      list.indexOf('const viewWarehouse ='),
+    );
+    expect(block).toContain('setAppliedLink(linkKey);');
+    expect(block).toContain('const link = bookReportQueryFromParams(params);');
+    expect(block).toContain('setQuery((q) => keepIfSame(q, link.query));');
+    expect(block).toContain('setDraftQ(link.query.q);');
+    expect(block).toContain('setLinkWasReset(link.invalid.length > 0);');
+    expect(block).toContain('setSheet(null);');
+    // During render, like the workspace switch (no effect, no extra frame).
+    expect(block).not.toMatch(/useEffect/);
+  });
+
+  it('the old one-sheet chip builders are gone (the chips are core\'s)', () => {
+    expect(view).not.toMatch(/export function bookReport(Date|Status|Warehouse|Category|Sort)Chip\b/);
   });
 });

@@ -1,5 +1,7 @@
 /**
- * BOOK ORDER TOTALS — the portable half of the report (migration 0379).
+ * BOOK ORDER TOTALS — the portable half of the report (migrations 0379 and
+ * 0382: 0382 adds the ORDER's charter, order_requests.delivery_charter_id,
+ * and the Today and This week presets).
  *
  * SQL is the only calculator: public.book_order_totals, _orders and _options
  * return ONE jsonb value each, and nothing on the web server or the phone
@@ -10,6 +12,10 @@
  *   - the query model: URL / query-string parsing with named invalid keys,
  *     one canonical serialization, and the "resolved" query every follow-up
  *     request carries (a concrete warehouse or all, never "default");
+ *   - the page-reset rules (a filter change starts at page 1, a page change
+ *     keeps every filter) and the query Clear filters and each chip lead to;
+ *   - the charter echo check: an answer is shown under a charter only when
+ *     it says it is for that charter;
  *   - strict parsers for the three answers (a wrong shape throws; unknown
  *     keys are ignored so the database may be a release ahead);
  *   - formatting that never converts time zones: SQL returns every date a
@@ -32,7 +38,20 @@ import {
 
 export const BOOK_ORDER_TOTALS_VERSION = 1;
 
-export const BOOK_REPORT_RANGES = ['all', 'month', '30d', '90d', 'year', 'custom'] as const;
+/** In the brief's order. `today` and `week` (Sunday start) came with 0382.
+ *  An older server (0379, e.g. after a SQL-only revert) refuses them with
+ *  22023 invalid_range; the web page and the phone then reset the dates to
+ *  All time and say the link's filters were reset (never an error page). */
+export const BOOK_REPORT_RANGES = [
+  'all',
+  'today',
+  'week',
+  'month',
+  '30d',
+  '90d',
+  'year',
+  'custom',
+] as const;
 export type BookReportRange = (typeof BOOK_REPORT_RANGES)[number];
 
 export const BOOK_REPORT_SORTS = ['copies', 'title', 'orders', 'latest'] as const;
@@ -121,8 +140,9 @@ export const BOOK_REPORT_PDF_MAX_ROWS = 900;
 export const BOOK_REPORT_PDF_COVER_CAP = 500;
 
 /** A single copy per unit: a quantity in one of these units is copies. The
- *  SQL (0379) holds the same list; any other unit, blank included, is shown
- *  with its unit and left out of the copy total. */
+ *  SQL (0379, and 0382's lines helper and drill-down) holds the same list;
+ *  any other unit, blank included, is shown with its unit and left out of the
+ *  copy total. */
 export const BOOK_REPORT_COPY_UNITS = [
   'unit',
   'units',
@@ -139,6 +159,14 @@ export const BOOK_REPORT_COPY_UNITS = [
 // ── Query model ─────────────────────────────────────────────────────────────
 
 /**
+ * `charter`: the charter the ORDER was placed for (its delivery site,
+ *   order_requests.delivery_charter_id), never the charter that owns a book:
+ *   - 'all': every charter the caller may report on, and orders with none;
+ *   - 'none': orders placed with no charter (pickups, and a few early
+ *     delivery orders saved without one);
+ *   - a uuid (lower case): that charter. SQL accepts it only if the caller
+ *     may report on it (22023 invalid_charter otherwise); the id in a URL is
+ *     never an authority.
  * `warehouse`:
  *   - 'default': the URL carried no warehouse; the web page resolves it ONCE
  *     (the manager's warehouse view, else all). Never sent to an API route.
@@ -149,6 +177,7 @@ export const BOOK_REPORT_COPY_UNITS = [
  * `category`: 'all', 'none' (books with no category) or a uuid.
  */
 export interface BookReportQuery {
+  charter: 'all' | 'none' | string;
   range: BookReportRange;
   from: string | null;
   to: string | null;
@@ -162,6 +191,7 @@ export interface BookReportQuery {
 }
 
 export const DEFAULT_BOOK_REPORT_QUERY: Readonly<BookReportQuery> = Object.freeze({
+  charter: 'all',
   range: 'all',
   from: null,
   to: null,
@@ -223,9 +253,16 @@ function readParam(input: QueryInput, key: string): string | undefined {
  * defaults and are NAMED in `invalid`, so a page can say "Some filters in
  * this link were not valid and were reset." and an API route can answer 400.
  *
- * Keys: range, from, to (custom only), status (comma list of group keys),
- * warehouse (all or a uuid; absent = default), wview=1, category (all, none
- * or a uuid), q, sort, page.
+ * Keys: charter (all, none or a uuid; absent = all), range, from, to
+ * (custom only), status (comma list of group keys), warehouse (all or a uuid;
+ * absent = default), wview=1, category (all, none or a uuid), q, sort, page.
+ *
+ * Dates: `from` and `to` are read only for a custom range. A link that
+ * carries `from` or `to` and no `range` at all (the brief's
+ * `?charter=..&from=2026-09-01&to=2026-09-30`) is a custom range. A range
+ * that is named (`range=month&from=..`) keeps its own days and the dates are
+ * ignored, not named invalid. An impossible or reversed pair names the key at
+ * fault and falls back to All time.
  */
 export function parseBookReportQuery(input: QueryInput): {
   query: BookReportQuery;
@@ -237,11 +274,22 @@ export function parseBookReportQuery(input: QueryInput): {
     statusGroups: [...DEFAULT_BOOK_REPORT_STATUS_GROUPS],
   };
 
+  const charter = readParam(input, 'charter');
+  if (charter !== undefined) {
+    if (charter === 'all' || charter === 'none') query.charter = charter;
+    else if (isUuid(charter)) query.charter = charter.toLowerCase();
+    else invalid.push('charter');
+  }
+
   const range = readParam(input, 'range');
   if (range !== undefined) {
     if ((BOOK_REPORT_RANGES as readonly string[]).includes(range))
       query.range = range as BookReportRange;
     else invalid.push('range');
+  } else if (readParam(input, 'from') || readParam(input, 'to')) {
+    // Date-only link: the dates ARE the range. An empty `from=` / `to=` (a
+    // form sent with blank fields) implies nothing.
+    query.range = 'custom';
   }
   if (query.range === 'custom') {
     const from = readParam(input, 'from');
@@ -317,12 +365,24 @@ function sameGroups(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((g, i) => g === b[i]);
 }
 
+/** The default status groups, in any order (a draft may hold them unsorted). */
+export function isDefaultStatusGroups(groups: readonly BookReportStatusGroup[]): boolean {
+  const set = new Set(groups);
+  return (
+    set.size === DEFAULT_BOOK_REPORT_STATUS_GROUPS.length &&
+    DEFAULT_BOOK_REPORT_STATUS_GROUPS.every((g) => set.has(g))
+  );
+}
+
 /**
  * The canonical query string (no leading '?'), keys in a fixed order and
  * defaults left out: two equal queries always serialize the same way. Hand
- * built (the phone's convention), values percent-encoded. `warehouse` is
+ * built (the phone's convention), values percent-encoded. `charter` comes
+ * first (the brief's example order; parsing is order-free). `warehouse` is
  * written whenever it is not 'default', so a resolved query always carries
- * its concrete warehouse.
+ * its concrete warehouse. Dates are written only with `range=custom`, and
+ * `range=custom` always with them, so a phone that predates date-only links
+ * still reads the dates.
  */
 export function serializeBookReportQuery(
   query: BookReportQuery,
@@ -330,6 +390,7 @@ export function serializeBookReportQuery(
 ): string {
   const parts: string[] = [];
   const put = (k: string, v: string) => parts.push(`${k}=${encodeURIComponent(v)}`);
+  if (query.charter !== 'all') put('charter', query.charter);
   if (query.range !== 'all') put('range', query.range);
   if (query.range === 'custom' && query.from && query.to) {
     put('from', query.from);
@@ -387,9 +448,111 @@ export function bookReportQueryKey(query: BookReportQuery): string {
   return `${base}${base ? '&' : ''}page=${query.page}`;
 }
 
+// ── Page-reset rules, Clear filters and chip removal ───────────────────────
+
+/** A filter change: the new values and page 1 (a new filter always starts at
+ *  the first page; brief 9: charter, dates, search and status all reset the
+ *  page). The status list is copied, never shared. */
+export function bookReportWithFilter(
+  query: BookReportQuery,
+  patch: Partial<Omit<BookReportQuery, 'page'>>,
+): BookReportQuery {
+  return {
+    ...query,
+    ...patch,
+    statusGroups: [...(patch.statusGroups ?? query.statusGroups)],
+    page: 1,
+  };
+}
+
+/** The same report on another page: every filter kept. */
+export function bookReportWithPage(query: BookReportQuery, page: number): BookReportQuery {
+  const p = Number.isFinite(page) ? Math.max(1, Math.trunc(page)) : 1;
+  return { ...query, statusGroups: [...query.statusGroups], page: p };
+}
+
+/** The filters a chip stands for (sort is not a filter and has no chip). */
+export type BookReportFilterKey = 'charter' | 'dates' | 'status' | 'warehouse' | 'category' | 'q';
+
+export const BOOK_REPORT_FILTER_KEYS: readonly BookReportFilterKey[] = [
+  'charter',
+  'dates',
+  'status',
+  'warehouse',
+  'category',
+  'q',
+];
+
+/**
+ * The query with ONE filter back at its default, on page 1. Every value is
+ * written out (never left to a spread), so removing the dates also clears
+ * `from` and `to`, and removing the warehouse also drops the view label.
+ * The warehouse goes back to 'default': the person's warehouse view on the
+ * web, as when the page opened.
+ */
+export function bookReportWithoutFilter(
+  query: BookReportQuery,
+  key: BookReportFilterKey,
+): BookReportQuery {
+  switch (key) {
+    case 'charter':
+      return bookReportWithFilter(query, { charter: 'all' });
+    case 'dates':
+      return bookReportWithFilter(query, { range: 'all', from: null, to: null });
+    case 'status':
+      return bookReportWithFilter(query, { statusGroups: [...DEFAULT_BOOK_REPORT_STATUS_GROUPS] });
+    case 'warehouse':
+      return bookReportWithFilter(query, { warehouse: 'default', warehouseFromView: false });
+    case 'category':
+      return bookReportWithFilter(query, { category: 'all' });
+    case 'q':
+      return bookReportWithFilter(query, { q: '' });
+  }
+}
+
+/**
+ * Clear filters (plan D14): charter, dates, status, warehouse (back to the
+ * warehouse view), category and search go back to their defaults, page 1.
+ * Sort is kept: it is not a filter.
+ */
+export function bookReportClearedQuery(query: BookReportQuery): BookReportQuery {
+  return {
+    ...DEFAULT_BOOK_REPORT_QUERY,
+    statusGroups: [...DEFAULT_BOOK_REPORT_STATUS_GROUPS],
+    sort: query.sort,
+    page: 1,
+  };
+}
+
+/**
+ * Whether a filter differs from its default, judged on the query alone. The
+ * warehouse counts only when it was CHOSEN (a uuid that did not come from the
+ * warehouse view): 'all' and a view warehouse are not something to remove.
+ */
+export function bookReportFilterIsSet(query: BookReportQuery, key: BookReportFilterKey): boolean {
+  switch (key) {
+    case 'charter':
+      return query.charter !== 'all';
+    case 'dates':
+      return query.range !== 'all';
+    case 'status':
+      return !isDefaultStatusGroups(query.statusGroups);
+    case 'warehouse':
+      return isUuid(query.warehouse) && !query.warehouseFromView;
+    case 'category':
+      return query.category !== 'all';
+    case 'q':
+      return query.q.trim() !== '';
+  }
+}
+
 /** The filter half of the query as the database takes it (the web service
- *  adds the organization and the resolved warehouse). */
+ *  adds the organization and the resolved warehouse). `charterId` and
+ *  `noCharter` are the ORDER's charter; the service sends p_charter_id and
+ *  p_no_charter only when they are used (plan D18). */
 export interface BookReportFilterArgs {
+  charterId: string | null;
+  noCharter: boolean;
   range: BookReportRange;
   from: string | null;
   to: string | null;
@@ -405,6 +568,8 @@ export interface BookReportFilterArgs {
 export function bookReportFilterArgs(query: BookReportQuery): BookReportFilterArgs {
   const q = query.q.trim();
   return {
+    charterId: isUuid(query.charter) ? query.charter.toLowerCase() : null,
+    noCharter: query.charter === 'none',
     range: query.range,
     from: query.range === 'custom' ? query.from : null,
     to: query.range === 'custom' ? query.to : null,
@@ -508,6 +673,39 @@ export interface BookReportCategoryEcho {
   deleted: boolean;
 }
 
+/** The ORDER charter an answer is for (0382). Only id, name, code and status
+ *  ever leave the database: never an address or a contact. */
+export interface BookReportCharterEcho {
+  id: string;
+  name: string;
+  code: string | null;
+  status: string;
+}
+
+/**
+ * The charter half of an answer's `filters` (0382). Each key is `undefined`
+ * when the answer does not carry it at all (a server before 0382), which is
+ * different from `charter: null` (all charters, or No charter) and
+ * `noCharter: false`.
+ */
+export interface BookReportCharterFilters {
+  charter?: BookReportCharterEcho | null;
+  noCharter?: boolean;
+}
+
+/** One line of "Books ordered by charter": a charter (id null: No charter),
+ *  its copies in single-copy units (exact text, as summary.copies) and its
+ *  distinct orders. The rows partition the summary: copies add up to
+ *  summary.copies and orders to summary.orders. */
+export interface BookReportCharterTotal {
+  id: string | null;
+  name: string | null;
+  code: string | null;
+  status: string | null;
+  copies: string;
+  orders: number;
+}
+
 export interface BookReportSummary {
   /** Copies requested on eligible lines in single-copy units (exact text). */
   copies: string;
@@ -552,7 +750,7 @@ export interface BookOrderTotalsAnswer {
   generatedAtLocal: string;
   range: BookReportRangeEcho;
   statuses: string[];
-  filters: {
+  filters: BookReportCharterFilters & {
     warehouse: BookReportWarehouseEcho | null;
     category: BookReportCategoryEcho | null;
     uncategorized: boolean;
@@ -567,6 +765,10 @@ export interface BookOrderTotalsAnswer {
   pageSize: number | null;
   sort: BookReportSort;
   rows: BookReportRow[];
+  /** "Books ordered by charter" (0382): present only in page mode with All
+   *  charters chosen; null when not computed; `undefined` from a server
+   *  before 0382. */
+  byCharter?: BookReportCharterTotal[] | null;
 }
 
 /** The API answer: the SQL answer plus the organization it is for and where
@@ -609,6 +811,46 @@ function parseCategoryEcho(v: unknown, path: string): BookReportCategoryEcho | n
     name: str(o.name, `${path}.name`),
     deleted: bool(o.deleted, `${path}.deleted`),
   };
+}
+
+function parseCharterEcho(v: unknown, path: string): BookReportCharterEcho | null {
+  if (v === null) return null;
+  const o = rec(v, path);
+  return {
+    id: str(o.id, `${path}.id`),
+    name: str(o.name, `${path}.name`),
+    code: strOrNull(o.code, `${path}.code`),
+    status: str(o.status, `${path}.status`),
+  };
+}
+
+/** The charter keys of `filters`, strictly when present, left out when
+ *  absent (an older server), so the echo check can tell the two apart. */
+function parseCharterFilters(filters: Rec, path: string): BookReportCharterFilters {
+  const out: BookReportCharterFilters = {};
+  if (filters.charter !== undefined) {
+    out.charter = parseCharterEcho(filters.charter, `${path}.charter`);
+  }
+  if (filters.noCharter !== undefined) {
+    out.noCharter = bool(filters.noCharter, `${path}.noCharter`);
+  }
+  return out;
+}
+
+function parseByCharter(v: unknown, path: string): BookReportCharterTotal[] | null {
+  if (v === null) return null;
+  return arr(v, path).map((x, i) => {
+    const p = `${path}[${i}]`;
+    const o = rec(x, p);
+    return {
+      id: strOrNull(o.id, `${p}.id`),
+      name: strOrNull(o.name, `${p}.name`),
+      code: strOrNull(o.code, `${p}.code`),
+      status: strOrNull(o.status, `${p}.status`),
+      copies: qty(o.copies, `${p}.copies`),
+      orders: int(o.orders, `${p}.orders`),
+    };
+  });
 }
 
 function parseLocalDateTime(v: unknown, path: string): string {
@@ -681,6 +923,7 @@ export function parseBookOrderTotalsAnswer(raw: unknown): BookOrderTotalsAnswer 
       warehouse: parseWarehouseEcho(filters.warehouse, 'totals.filters.warehouse'),
       category: parseCategoryEcho(filters.category, 'totals.filters.category'),
       uncategorized: bool(filters.uncategorized, 'totals.filters.uncategorized'),
+      ...parseCharterFilters(filters, 'totals.filters'),
     },
     scope: { restricted: bool(scope.restricted, 'totals.scope.restricted') },
     summary: {
@@ -706,6 +949,7 @@ export function parseBookOrderTotalsAnswer(raw: unknown): BookOrderTotalsAnswer 
     sort: sort as BookReportSort,
     rows,
   };
+  if (o.byCharter !== undefined) answer.byCharter = parseByCharter(o.byCharter, 'totals.byCharter');
   if (answer.page < 1) throw new BookReportShapeError('totals.page', 'is below 1');
   return answer;
 }
@@ -751,6 +995,11 @@ export interface BookReportOrderRowBase {
   lines: number;
   /** Their line ids, kept for audit. */
   lineIds: string[];
+  /** The order's charter (0382; null for a pickup or an order saved without
+   *  one). `undefined` from a server before 0382. */
+  charterId?: string | null;
+  charterName?: string | null;
+  charterCode?: string | null;
 }
 
 /** SQL's drill-down row: `mine` says whether the caller placed the order. */
@@ -772,7 +1021,7 @@ export interface BookReportOrdersAnswerBase {
   book: BookReportBook | null;
   range: BookReportRangeEcho;
   statuses: string[];
-  filters: { warehouse: BookReportWarehouseEcho | null };
+  filters: BookReportCharterFilters & { warehouse: BookReportWarehouseEcho | null };
   totals: { copies: string; orders: number; lines: number; fulfilled: string; returned: string };
   totalCount: number;
   page: number;
@@ -813,6 +1062,14 @@ function parseOrderRowBase(o: Rec, path: string): BookReportOrderRowBase {
   if (orderDate === null) throw new BookReportShapeError(`${path}.orderDate`, 'is missing');
   const createdAt = instantOrNull(o.createdAt, `${path}.createdAt`);
   if (createdAt === null) throw new BookReportShapeError(`${path}.createdAt`, 'is missing');
+  const charter: Pick<BookReportOrderRowBase, 'charterId' | 'charterName' | 'charterCode'> = {};
+  if (o.charterId !== undefined) charter.charterId = strOrNull(o.charterId, `${path}.charterId`);
+  if (o.charterName !== undefined) {
+    charter.charterName = strOrNull(o.charterName, `${path}.charterName`);
+  }
+  if (o.charterCode !== undefined) {
+    charter.charterCode = strOrNull(o.charterCode, `${path}.charterCode`);
+  }
   return {
     orderId: str(o.orderId, `${path}.orderId`),
     orderNumber: intOrNull(o.orderNumber, `${path}.orderNumber`),
@@ -826,6 +1083,7 @@ function parseOrderRowBase(o: Rec, path: string): BookReportOrderRowBase {
     returned: qty(o.returned, `${path}.returned`),
     lines: int(o.lines, `${path}.lines`),
     lineIds: arr(o.lineIds, `${path}.lineIds`).map((x, i) => str(x, `${path}.lineIds[${i}]`)),
+    ...charter,
   };
 }
 
@@ -844,7 +1102,10 @@ function parseOrdersBase(o: Rec, path: string): BookReportOrdersAnswerBase {
     book,
     range: parseRangeEcho(o.range, `${path}.range`),
     statuses: parseStatuses(o.statuses, `${path}.statuses`),
-    filters: { warehouse: parseWarehouseEcho(filters.warehouse, `${path}.filters.warehouse`) },
+    filters: {
+      warehouse: parseWarehouseEcho(filters.warehouse, `${path}.filters.warehouse`),
+      ...parseCharterFilters(filters, `${path}.filters`),
+    },
     totals: {
       copies: qty(t.copies, `${path}.totals.copies`),
       orders: int(t.orders, `${path}.totals.orders`),
@@ -900,11 +1161,25 @@ export interface BookReportOptionCategory {
   deleted: boolean;
 }
 
+/** A charter the caller may report on (0382): active ones first, then by
+ *  name. Inactive and archived ones are listed only when they have visible
+ *  book orders. */
+export interface BookReportOptionCharter {
+  id: string;
+  name: string;
+  code: string | null;
+  status: string;
+}
+
 export interface BookOrderOptionsAnswer {
   v: 1;
   warehouses: BookReportOptionWarehouse[];
   categories: BookReportOptionCategory[];
   uncategorized: boolean;
+  /** Absent from a server before 0382: then []. */
+  charters: BookReportOptionCharter[];
+  /** Visible book orders with no charter exist. Absent before 0382: false. */
+  noCharter: boolean;
   orderStatusConfig: unknown;
 }
 
@@ -916,6 +1191,8 @@ export interface BookOrderOptionsResponse {
   warehouses: BookReportOptionWarehouse[];
   categories: BookReportOptionCategory[];
   uncategorized: boolean;
+  charters: BookReportOptionCharter[];
+  noCharter: boolean;
   statusLabels: Record<OrderStatusKey, string>;
 }
 
@@ -940,6 +1217,20 @@ function parseOptionLists(o: Rec, path: string) {
       };
     }),
     uncategorized: bool(o.uncategorized, `${path}.uncategorized`),
+    charters:
+      o.charters === undefined
+        ? []
+        : arr(o.charters, `${path}.charters`).map((c, i) => {
+            const p = `${path}.charters[${i}]`;
+            const x = rec(c, p);
+            return {
+              id: str(x.id, `${p}.id`),
+              name: str(x.name, `${p}.name`),
+              code: strOrNull(x.code, `${p}.code`),
+              status: str(x.status, `${p}.status`),
+            };
+          }),
+    noCharter: o.noCharter === undefined ? false : bool(o.noCharter, `${path}.noCharter`),
   };
 }
 
@@ -968,6 +1259,79 @@ export function parseBookOrderOptionsResponse(raw: unknown): BookOrderOptionsRes
     ...parseOptionLists(o, 'options'),
     statusLabels,
   };
+}
+
+/**
+ * Whether an answer is for the charter the query asked for (plan 3.2). The
+ * phone and the web drawer refuse an answer that fails this, so figures are
+ * never shown under a charter they are not for:
+ *   - 'all'  needs no charter echo (`charter` null or absent) and `noCharter`
+ *     not true;
+ *   - 'none' needs `noCharter === true` and no charter echo;
+ *   - a uuid needs `charter.id` equal to it (case aside) and `noCharter` not
+ *     true.
+ * An answer that carries NEITHER key (a server before 0382) is accepted only
+ * for 'all': a charter request answered by such a server would be
+ * organization-wide figures.
+ */
+export function bookReportCharterEchoMatches(
+  query: Pick<BookReportQuery, 'charter'>,
+  filters: BookReportCharterFilters | null | undefined,
+): boolean {
+  const echo = filters?.charter;
+  const noCharter = filters?.noCharter;
+  if (query.charter === 'all') return (echo === null || echo === undefined) && noCharter !== true;
+  if (query.charter === 'none') return noCharter === true && (echo === null || echo === undefined);
+  if (!isUuid(query.charter)) return false;
+  return (
+    echo !== null &&
+    echo !== undefined &&
+    echo.id.toLowerCase() === query.charter.toLowerCase() &&
+    noCharter !== true
+  );
+}
+
+/** The presets whose days move with the clock: each request resolves them
+ *  again in the organization's zone. */
+function isRollingRange(range: BookReportRange): boolean {
+  return range !== 'all' && range !== 'custom';
+}
+
+/**
+ * The query a row's orders (the drill-down) are read with (brief 13: the
+ * drill-down's total must equal the row's). A rolling preset (Today, This
+ * week, This month, Last 30 days, Last 90 days, This year) becomes the exact
+ * days the row's answer resolved, so a midnight (or a Sunday, or the first
+ * of a month) passing between the report and the drill-down cannot make
+ * them cover different days. All time and a custom range already name their
+ * days (or none), so they are returned as they are, as is a query whose
+ * answer is not for its preset or carries no valid days.
+ */
+export function bookReportDrillDownQuery(
+  query: BookReportQuery,
+  range: Pick<BookReportRangeEcho, 'key' | 'from' | 'to'> | null | undefined,
+): BookReportQuery {
+  if (!isRollingRange(query.range) || !range || range.key !== query.range) return query;
+  const { from, to } = range;
+  if (typeof from !== 'string' || typeof to !== 'string') return query;
+  if (!validateCustomDate(from) || !validateCustomDate(to) || from > to) return query;
+  return { ...query, statusGroups: [...query.statusGroups], range: 'custom', from, to };
+}
+
+/**
+ * Whether an answer is for the dates the query asked for: All time for
+ * All time; the same two days for a custom range; the same preset for a
+ * rolling one (its days are the server's to resolve). The web drawer and
+ * the phone's drill-down refuse an answer that fails this, as they do a
+ * charter mismatch.
+ */
+export function bookReportRangeEchoMatches(
+  query: Pick<BookReportQuery, 'range' | 'from' | 'to'>,
+  range: Pick<BookReportRangeEcho, 'key' | 'from' | 'to'> | null | undefined,
+): boolean {
+  if (!range || range.key !== query.range) return false;
+  if (query.range !== 'custom') return true;
+  return range.from === query.from && range.to === query.to;
 }
 
 /** Every status's label as this organization shows it on the Orders page. */
@@ -1231,11 +1595,24 @@ export function bookReportQuantityWording(row: {
  * One rule for web and phone: a link only when `openable` (the caller holds
  * orders:approve, or placed the order). Anyone else sees the number without
  * a link, as the Orders list would show them only their own requests.
+ *
+ * `returnTo` (web only, plan D17): the report page to come back to, carried
+ * as `?return=` so the order page can offer "Back to Book Order Totals". Only
+ * a same-site path is carried (one leading slash, never `//` or `/\`); the
+ * order page checks it again (safeReturnPath, then the report's own path)
+ * before it renders anything from it. The phone's list stays mounted under
+ * the order screen, so its link needs no way back.
  */
 export function bookReportOrderLink(
   row: { openable: boolean; orderId: string },
   platform: 'web' | 'phone',
+  returnTo?: string | null,
 ): string | null {
   if (!row.openable || !isUuid(row.orderId)) return null;
-  return platform === 'web' ? `/dashboard/orders/${row.orderId}` : `/order/${row.orderId}`;
+  if (platform === 'phone') return `/order/${row.orderId}`;
+  const href = `/dashboard/orders/${row.orderId}`;
+  if (typeof returnTo === 'string' && /^\/(?![/\\])/.test(returnTo)) {
+    return `${href}?return=${encodeURIComponent(returnTo)}`;
+  }
+  return href;
 }

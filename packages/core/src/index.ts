@@ -52,6 +52,7 @@ export * from './orders/order-number';
 export * from './books/isbn';
 export * from './reports/book-order-totals';
 export * from './reports/book-order-totals-copy';
+export * from './reports/report-calendar';
 export * from './cycle-counts/cycle-count-number';
 export * from './cycle-counts/cycle-count-list';
 export * from './cycle-counts/capture-label';

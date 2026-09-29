@@ -102,7 +102,10 @@ export interface BookOrderTotalsPdfProps {
   orgLogo: string | null;
   generatedAtLocal: string;
   timeZone: string;
-  /** Scope lines, already worded (range, status, warehouse, ...). */
+  /** Scope lines, already worded, printed at the top in this order: the
+   *  charter, the range ("Orders placed during: ..."), status, warehouse,
+   *  category, search, then "Generated: ..." (export-content's
+   *  bookReportScopeLines). */
   scopeLines: string[];
   summary: { copies: string; entries: number; orders: number; unresolved: { entries: number } };
   /** Extra summary lines (the other-unit disclosure). */

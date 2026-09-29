@@ -18,15 +18,18 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * GET /api/v1/reports/book-order-totals/items/[itemId]/orders?warehouse=all|<uuid>&range&from&to&status&page
+ * GET /api/v1/reports/book-order-totals/items/[itemId]/orders?warehouse=all|<uuid>&charter=all|none|<uuid>&range&from&to&status&page
  *
  * The orders behind one book's total, 25 per page, newest first, with the
  * book's FULL totals (never the page's). Duplicate lines of one order are
  * combined into one row with their line ids. `openable` says whether the
  * caller may open the order (orders:approve, or their own request); no
  * requester data is returned. Search and category do not apply (they are
- * item filters). 404 for a book the caller cannot see, a product or a
- * missing id alike; 400 for a malformed id, page or query.
+ * item filters). The charter does (0382): the totals and rows are that
+ * charter's orders only, and each row names its order's charter. 404 for a
+ * book the caller cannot see, a product or a missing id alike; 400 for a
+ * malformed id, page or query, and the one 400 `invalid_charter` for a
+ * charter the caller may not report on.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ itemId: string }> }) {
   const ctx = await withApiContext(req);

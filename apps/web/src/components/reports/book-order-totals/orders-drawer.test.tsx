@@ -4,7 +4,10 @@
 // gets a one-click route to other requesters' orders; no requester data is
 // shown. A late or mismatched answer (another book, organization or
 // warehouse) is dropped, never shown; the header is the book's FULL total;
-// a refusal is worded, never an empty list.
+// a refusal is worded, never an empty list. An answer for another CHARTER
+// than the one asked for (0382) is dropped too, so figures never appear under
+// a charter they are not for; order links carry only the report's own URL as
+// the way back.
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -27,7 +30,25 @@ import {
   type BookReportQuery,
 } from '@stockpilot/core';
 
-import { ITEM_A, ITEM_B, O1, O2, O3, ORG, OTHER_ORG, W1, ordersJson, orderRow } from './__fixtures__/answers';
+import {
+  ALDER,
+  BIRCH,
+  CH_A,
+  CH_B,
+  ITEM_A,
+  ITEM_B,
+  O1,
+  O2,
+  O3,
+  ORG,
+  OTHER_ORG,
+  USER,
+  W1,
+  optionsResponse,
+  ordersJson,
+  orderRow,
+} from './__fixtures__/answers';
+import { __resetBookReportOptionsForTests, loadBookReportOptions } from './options';
 import { BookOrdersDrawer, ViewOrdersButton, bookOrdersErrorFor } from './orders-drawer';
 
 const ALL: BookReportQuery = { ...DEFAULT_BOOK_REPORT_QUERY, warehouse: 'all', q: 'hobbit' };
@@ -38,15 +59,30 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-function drawer(query: BookReportQuery = ALL) {
+type RangeEcho = { key: BookReportQuery['range']; from: string | null; to: string | null };
+
+/** The page's answer's range for a query: its own days for a custom range,
+ *  none for All time (the drawer's tests set the days of a preset). */
+function echoFor(query: BookReportQuery): RangeEcho {
+  return { key: query.range, from: query.from, to: query.to };
+}
+
+function drawer(query: BookReportQuery = ALL, rangeEcho: RangeEcho = echoFor(query)) {
   return (
     <BookOrdersDrawer
       organizationId={ORG}
+      userId={USER}
       query={query}
+      rangeEcho={rangeEcho}
       statusLabels={labels}
       titles={{ [ITEM_A]: 'Book A', [ITEM_B]: 'Book B' }}
     />
   );
+}
+
+/** A drill-down answer echoing a range. */
+function rangeJson(key: string, from: string | null, to: string | null) {
+  return { key, from, to, timeZone: 'America/Los_Angeles', timeZoneFallback: false };
 }
 
 beforeEach(() => {
@@ -58,6 +94,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  __resetBookReportOptionsForTests();
 });
 
 describe('View orders drawer', () => {
@@ -116,9 +153,10 @@ describe('View orders drawer', () => {
     const links = within(dialog)
       .queryAllByRole('link')
       .map((a) => a.getAttribute('href'));
-    expect(links).toEqual([`/dashboard/orders/${O3}`]);
-    expect(document.querySelector(`a[href="/dashboard/orders/${O1}"]`)).toBeNull();
-    expect(document.querySelector(`a[href="/dashboard/orders/${O2}"]`)).toBeNull();
+    expect(links).toHaveLength(1);
+    expect(links[0]!.startsWith(`/dashboard/orders/${O3}?return=`)).toBe(true);
+    expect(document.querySelector(`a[href^="/dashboard/orders/${O1}"]`)).toBeNull();
+    expect(document.querySelector(`a[href^="/dashboard/orders/${O2}"]`)).toBeNull();
     const plain = within(dialog).getByText('SO-000001');
     expect(plain.closest('a')).toBeNull();
     expect(plain).toHaveAttribute('title', BOOK_REPORT_ORDER_LINK_HINT);
@@ -220,5 +258,268 @@ describe('View orders drawer', () => {
       `/dashboard/reports/book-order-totals?warehouse=all&q=x&view=${ITEM_A}`,
     );
     push.mockRestore();
+  });
+
+  it("each order link carries the way back: this report's URL with the sheet open on the same book and page", async () => {
+    nav.params = new URLSearchParams(`view=${ITEM_A}&vpage=2`);
+    const query: BookReportQuery = {
+      ...ALL,
+      charter: CH_A,
+      range: 'custom',
+      from: '2026-09-01',
+      to: '2026-09-30',
+      page: 2,
+    };
+    fetchMock.mockImplementation(async () =>
+      json(
+        ordersJson({
+          range: rangeJson('custom', '2026-09-01', '2026-09-30'),
+          filters: { warehouse: null, charter: ALDER, noCharter: false },
+        }),
+      ),
+    );
+    render(drawer(query));
+    const dialog = await screen.findByRole('dialog');
+    const link = await within(dialog).findByRole('link', { name: 'SO-000003' });
+    const href = link.getAttribute('href')!;
+    const back = `/dashboard/reports/book-order-totals?charter=${CH_A}&range=custom&from=2026-09-01&to=2026-09-30&warehouse=all&q=hobbit&page=2&view=${ITEM_A}&vpage=2`;
+    expect(href).toBe(`/dashboard/orders/${O3}?return=${encodeURIComponent(back)}`);
+    // Read back as the order page will read it.
+    expect(new URL(href, 'https://x.test').searchParams.get('return')).toBe(back);
+  });
+
+  it('asks for the drill-down with the charter and the dates, still not the search', async () => {
+    render(
+      drawer({ ...ALL, charter: CH_A, range: 'custom', from: '2026-09-01', to: '2026-09-30' }),
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const url = String(fetchMock.mock.calls[0]![0]);
+    expect(url).toContain(`charter=${CH_A}`);
+    expect(url).toContain('range=custom&from=2026-09-01&to=2026-09-30');
+    expect(url).not.toContain('q=');
+  });
+
+  it('states the scope in the header: Book, Charter, Orders placed and Total requested', async () => {
+    fetchMock.mockImplementation(async () =>
+      json(
+        ordersJson({
+          range: {
+            key: 'custom',
+            from: '2026-09-01',
+            to: '2026-09-30',
+            timeZone: 'America/Los_Angeles',
+            timeZoneFallback: false,
+          },
+          filters: { warehouse: null, charter: ALDER, noCharter: false },
+        }),
+      ),
+    );
+    render(
+      drawer({ ...ALL, charter: CH_A, range: 'custom', from: '2026-09-01', to: '2026-09-30' }),
+    );
+    const dialog = await screen.findByRole('dialog');
+    const scope = await waitFor(() => {
+      const dl = dialog.querySelector('[data-drawer-scope]');
+      if (!dl) throw new Error('no scope yet');
+      return dl as HTMLElement;
+    });
+    const terms = [...scope.querySelectorAll('dt')].map((d) => d.textContent);
+    const values = [...scope.querySelectorAll('dd')].map((d) => d.textContent);
+    expect(terms).toEqual(['Book', 'Charter', 'Orders placed', 'Total requested']);
+    expect(values[0]).toContain('Book A');
+    expect(values[1]).toBe('Charter Alder · CH-A');
+    expect(values[2]).toBe('Sep 1 – Sep 30, 2026');
+    expect(values[3]).toBe('Copies of this book requested: 30 in 3 orders');
+    // One charter chosen: no Charter column repeating the header.
+    expect(within(dialog).queryByRole('columnheader', { name: 'Charter' })).toBeNull();
+  });
+
+  it('with All charters, each order shows its charter in its own column (No charter for a pickup)', async () => {
+    fetchMock.mockImplementation(async () =>
+      json(
+        ordersJson({}, [
+          orderRow(O3, 3, { charterId: CH_A, charterName: 'Charter Alder', charterCode: 'CH-A' }),
+          orderRow(O2, 2, { charterId: CH_B, charterName: 'Charter Birch', charterCode: null }),
+          orderRow(O1, 1, { charterId: null, charterName: null, charterCode: null }),
+        ]),
+      ),
+    );
+    render(drawer());
+    const dialog = await screen.findByRole('dialog');
+    expect(
+      await within(dialog).findByRole('columnheader', { name: 'Charter' }),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole('row', { name: /SO-000003/ })).toHaveTextContent(
+      'Charter Alder · CH-A',
+    );
+    expect(within(dialog).getByRole('row', { name: /SO-000002/ })).toHaveTextContent(
+      'Charter Birch',
+    );
+    expect(within(dialog).getByRole('row', { name: /SO-000001/ })).toHaveTextContent('No charter');
+    const values = [...dialog.querySelectorAll('[data-drawer-scope] dd')].map((d) => d.textContent);
+    expect(values[1]).toBe('All charters');
+  });
+
+  it('No charter is named with what it holds', async () => {
+    fetchMock.mockImplementation(async () =>
+      json(ordersJson({ filters: { warehouse: null, charter: null, noCharter: true } })),
+    );
+    render(drawer({ ...ALL, charter: 'none' }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('SO-000003');
+    const values = [...dialog.querySelectorAll('[data-drawer-scope] dd')].map((d) => d.textContent);
+    expect(values[1]).toBe('No charterPickup orders and orders placed without a charter.');
+  });
+
+  it.each([
+    ['another charter', { warehouse: null, charter: BIRCH, noCharter: false }],
+    ['no charter echo at all (a server before 0382)', { warehouse: null }],
+    ['No charter', { warehouse: null, charter: null, noCharter: true }],
+  ])('drops an answer for %s when one charter was asked for', async (_what, filters) => {
+    fetchMock.mockImplementation(async () => json(ordersJson({ filters })));
+    render(drawer({ ...ALL, charter: CH_A }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      BOOK_REPORT_ORDERS_LOAD_ERROR,
+    );
+    expect(within(dialog).queryByText('SO-000003')).not.toBeInTheDocument();
+  });
+
+  it('drops a charter-filtered answer when All charters was asked for', async () => {
+    fetchMock.mockImplementation(async () =>
+      json(ordersJson({ filters: { warehouse: null, charter: ALDER, noCharter: false } })),
+    );
+    render(drawer());
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      BOOK_REPORT_ORDERS_LOAD_ERROR,
+    );
+  });
+});
+
+describe("a row's orders cover the days the row was read for (brief 13)", () => {
+  it.each(['today', 'week', 'month', '30d', '90d', 'year'] as const)(
+    'with %s, the drill-down asks for the exact days the page answer covered, never the preset again',
+    async (range) => {
+      fetchMock.mockImplementation(async () =>
+        json(ordersJson({ range: rangeJson('custom', '2026-09-27', '2026-09-29') })),
+      );
+      render(drawer({ ...ALL, range }, { key: range, from: '2026-09-27', to: '2026-09-29' }));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      const url = String(fetchMock.mock.calls[0]![0]);
+      expect(url).toContain('range=custom&from=2026-09-27&to=2026-09-29');
+      expect(url).not.toContain(`range=${range}`);
+      const dialog = await screen.findByRole('dialog');
+      await within(dialog).findByText('SO-000003');
+      const values = [...dialog.querySelectorAll('[data-drawer-scope] dd')].map(
+        (d) => d.textContent,
+      );
+      expect(values[2]).toBe('Sep 27 – Sep 29, 2026');
+    },
+  );
+
+  it("after the organization's midnight it still lists the page's day, so the total equals the row", async () => {
+    // The page read Today on Sep 29 (Book A: 30 in 3 orders); View orders at
+    // 00:01 on Sep 30 must not ask for Today again.
+    fetchMock.mockImplementation(async () =>
+      json(ordersJson({ range: rangeJson('custom', '2026-09-29', '2026-09-29') })),
+    );
+    render(
+      drawer({ ...ALL, range: 'today' }, { key: 'today', from: '2026-09-29', to: '2026-09-29' }),
+    );
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() =>
+      expect(dialog).toHaveAccessibleDescription('Copies of this book requested: 30 in 3 orders'),
+    );
+    expect(String(fetchMock.mock.calls[0]![0])).toContain(
+      'range=custom&from=2026-09-29&to=2026-09-29',
+    );
+    // The way back is the page itself (Today), not the pinned days.
+    const link = within(dialog).getByRole('link', { name: 'SO-000003' });
+    const back = new URL(link.getAttribute('href')!, 'https://x.test').searchParams.get('return')!;
+    expect(back).toContain('range=today');
+    expect(back).not.toContain('from=');
+  });
+
+  it('drops an answer for other days than the ones asked for', async () => {
+    fetchMock.mockImplementation(async () =>
+      json(ordersJson({ range: rangeJson('custom', '2026-09-30', '2026-09-30') })),
+    );
+    render(
+      drawer({ ...ALL, range: 'today' }, { key: 'today', from: '2026-09-29', to: '2026-09-29' }),
+    );
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      BOOK_REPORT_ORDERS_LOAD_ERROR,
+    );
+    expect(within(dialog).queryByText('SO-000003')).not.toBeInTheDocument();
+  });
+
+  it('All time is asked as All time, and an answer for a month instead is dropped', async () => {
+    fetchMock.mockImplementation(async () =>
+      json(ordersJson({ range: rangeJson('month', '2026-09-01', '2026-09-30') })),
+    );
+    render(drawer());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(String(fetchMock.mock.calls[0]![0])).not.toContain('range=');
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      BOOK_REPORT_ORDERS_LOAD_ERROR,
+    );
+  });
+});
+
+describe('two charters with the same name read apart in the drawer, as in the Charter select', () => {
+  const twin = {
+    id: '0e000000-0000-4000-8000-0000000000b9',
+    name: 'Charter Alder',
+    code: null,
+    status: 'active',
+  };
+  const alder = { ...ALDER, code: null };
+
+  async function withTwinLists() {
+    fetchMock.mockImplementation(async (url: unknown) =>
+      String(url).endsWith('/options')
+        ? json(optionsResponse({ charters: [alder, twin] }))
+        : json(
+            ordersJson({}, [
+              orderRow(O3, 3, { charterId: CH_A, charterName: 'Charter Alder', charterCode: null }),
+              orderRow(O2, 2, {
+                charterId: twin.id,
+                charterName: 'Charter Alder',
+                charterCode: null,
+              }),
+            ]),
+          ),
+    );
+    await loadBookReportOptions(ORG, USER);
+  }
+
+  it('in the Charter column (All charters)', async () => {
+    await withTwinLists();
+    render(drawer());
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('SO-000003');
+    // (These fixture ids share their first 8 characters, so core writes the
+    // whole id.)
+    expect(within(dialog).getByRole('row', { name: /SO-000003/ })).toHaveTextContent(
+      `Charter Alder (id ${CH_A})`,
+    );
+    expect(within(dialog).getByRole('row', { name: /SO-000002/ })).toHaveTextContent(
+      `Charter Alder (id ${twin.id})`,
+    );
+  });
+
+  it("in the header's Charter line (one charter chosen)", async () => {
+    await withTwinLists();
+    fetchMock.mockImplementation(async () =>
+      json(ordersJson({ filters: { warehouse: null, charter: alder, noCharter: false } })),
+    );
+    render(drawer({ ...ALL, charter: CH_A }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('SO-000003');
+    const values = [...dialog.querySelectorAll('[data-drawer-scope] dd')].map((d) => d.textContent);
+    expect(values[1]).toBe(`Charter Alder (id ${CH_A})`);
   });
 });
