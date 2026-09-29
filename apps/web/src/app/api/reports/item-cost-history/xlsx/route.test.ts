@@ -123,6 +123,65 @@ describe('GET /api/reports/item-cost-history/xlsx — formula guard', () => {
   });
 });
 
+/** Every data row's cell texts (row 1 is the header). */
+async function dataRows(res: Response): Promise<string[][]> {
+  const buf = await res.arrayBuffer();
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf);
+  const out: string[][] = [];
+  wb.worksheets[0]!.eachRow((row, n) => {
+    if (n === 1) return;
+    const cells: string[] = [];
+    row.eachCell({ includeEmpty: true }, (cell) => cells.push(String(cell.value ?? '')));
+    out.push(cells);
+  });
+  return out;
+}
+
+/**
+ * 2026-09-29: the workbook lists the rows in the page's order. It sorted by
+ * the calendar day alone and kept the series order within a day, so two
+ * prices on one day could come out in the other order from the page, and in
+ * another order again if the suppliers' series came back the other way round.
+ */
+describe('GET /api/reports/item-cost-history/xlsx — row order', () => {
+  const acme = {
+    supplierId: 's-acme',
+    supplierName: 'Acme',
+    points: [
+      { date: '2026-05-01T15:00:00+00:00', source: 'purchase_order', unitCost: 10 },
+      { date: '2026-05-02T12:00:00+00:00', source: 'receipt', unitCost: 11 },
+    ],
+  };
+  const zed = {
+    supplierId: 's-zed',
+    supplierName: 'Zed Supply',
+    points: [
+      { date: '2026-05-01T09:00:00+00:00', source: 'receipt', unitCost: 12 },
+      { date: '2026-05-02T12:00:00+00:00', source: 'purchase_order', unitCost: 9 },
+    ],
+  };
+
+  async function exportWith(series: unknown[]) {
+    vi.mocked(ReportsService).mockImplementation(function () {
+      return { gate: () => {}, itemCostHistoryReport: async () => ({ series }) } as never;
+    });
+    return dataRows(await GET(request()));
+  }
+
+  it('the same rows in the same order whichever way the series come back', async () => {
+    const forward = await exportWith([acme, zed]);
+    const reversed = await exportWith([zed, acme]);
+    expect(reversed).toEqual(forward);
+    expect(forward.map((r) => `${r[0]} ${r[1]} ${r[2]}`)).toEqual([
+      'Zed Supply 2026-05-01 Receipt',
+      'Acme 2026-05-01 PO',
+      'Acme 2026-05-02 Receipt',
+      'Zed Supply 2026-05-02 PO',
+    ]);
+  });
+});
+
 /**
  * Security invariant (2026-09-28): reports:export (MFA step-up first), the
  * report gate (reports:read and the purchase orders module) and the item id

@@ -18,6 +18,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 import { formatCurrency, formatNumber } from '@/lib/utils';
 import { reportPageGate } from '@/lib/reports/report-page-gate';
+import { costHistoryRows } from '@/lib/reports/row-order';
 import { ReportsService } from '@/server/services/reports';
 
 export const dynamic = 'force-dynamic';
@@ -123,17 +124,9 @@ export default async function ItemCostHistoryPage({
   const pdfBaseUrl = `/api/reports/item-cost-history/pdf?${exportQs}`;
   const xlsxUrl = `/api/reports/item-cost-history/xlsx?${exportQs}`;
 
-  // Flatten all series points for the table (chronological across all suppliers).
-  const allPoints = data.series
-    .flatMap((s) =>
-      s.points.map((p) => ({
-        supplier: s.supplierName,
-        date: p.date,
-        source: p.source,
-        unitCost: p.unitCost,
-      })),
-    )
-    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  // Every supplier's points in one chronological list. The CSV, PDF and
+  // XLSX exports read the same helper, so they list the rows in this order.
+  const allPoints = costHistoryRows(data.series);
 
   const supplierCount = data.series.length;
 

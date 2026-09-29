@@ -7,6 +7,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { escapeForSpreadsheet } from '@/lib/csv';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportExportErrorResponse, reportExportUnauthenticated } from '@/lib/reports/export-errors';
+import { costHistoryRows } from '@/lib/reports/row-order';
 import { assertPermission, ServiceError, type ServiceContext } from '@/server/services/context';
 import { ReportsService } from '@/server/services/reports';
 
@@ -54,17 +55,15 @@ export async function GET(request: Request) {
 
     const data = await svc.itemCostHistoryReport(itemId, { since, until });
 
-    // Flatten series into chronological rows, same order as CSV export.
-    const rows = data.series
-      .flatMap((s) =>
-        s.points.map((p) => ({
-          Supplier: s.supplierName,
-          Date: p.date.slice(0, 10),
-          Source: p.source === 'receipt' ? 'Receipt' : 'PO',
-          'Unit cost': p.unitCost,
-        })),
-      )
-      .sort((a, b) => (a.Date < b.Date ? -1 : a.Date > b.Date ? 1 : 0));
+    // Chronological rows in the page's order (costHistoryRows), as the CSV
+    // and PDF. This used to sort by the calendar day alone, so two prices on
+    // one day could come out in the other order.
+    const rows = costHistoryRows(data.series).map((p) => ({
+      Supplier: p.supplier,
+      Date: p.date.slice(0, 10),
+      Source: p.source === 'receipt' ? 'Receipt' : 'PO',
+      'Unit cost': p.unitCost,
+    }));
 
     const headers = ['Supplier', 'Date', 'Source', 'Unit cost'] as const;
 

@@ -31,6 +31,7 @@ vi.mock('@/lib/supabase/admin', () => ({
   },
 }));
 
+import { compareMovementTypes } from '@/lib/reports/row-order';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 import { ReportsService } from './reports';
@@ -109,7 +110,10 @@ function oldMovementSummary(days: number, moves: Move[]) {
     rangeDays: days,
     byType: [...byType.entries()]
       .map(([movementType, v]) => ({ movementType, count: v.count, totalQty: v.totalQty }))
-      .sort((a, b) => b.count - a.count),
+      // The math is the pre-0225 path's; the tie order is today's. Ties on
+      // count kept the movement stream's order, which a GROUP BY does not
+      // fix; since 2026-09-29 they break by the type (reports.rowOrder.test).
+      .sort(compareMovementTypes),
     topMovers,
     totalMovements: moves.length,
   };
