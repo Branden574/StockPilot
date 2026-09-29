@@ -41,7 +41,9 @@ import {
  *     it with the item's URL instead of opening a tab), so a refusal can be
  *     said on the page. The items keep their real hrefs, so a new tab or a
  *     copied link still works.
- *   • `busy`: a file is being prepared; the button says so and is disabled.
+ *   • `busy`: a file is being prepared; the button says so and does not
+ *     open. It stays focusable (aria-disabled, not disabled), so focus can
+ *     return to it when the menu closes.
  */
 export function PdfDownloadDropdown({
   baseUrl,
@@ -61,12 +63,21 @@ export function PdfDownloadDropdown({
   const sep = baseUrl.includes('?') ? '&' : '?';
   const noPhotosUrl = `${baseUrl}${sep}photos=0`;
   const reasonId = React.useId();
+  // The menu's open state is held here so a plain click that the page takes
+  // over can still close it. Radix closes a menu from the item's own click
+  // handler, which it SKIPS when the click was default-prevented (its
+  // composeEventHandlers), and preventDefault is what stops the link opening
+  // a tab. Without the explicit close the menu stayed open after the file
+  // arrived, with the page behind it locked (Radix's modal pointer lock and
+  // aria-hidden) until Escape.
+  const [open, setOpen] = React.useState(false);
   const intercept = (href: string) => (e: React.MouseEvent<HTMLAnchorElement>) => {
     if (!onDownload) return;
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
       return;
     }
     e.preventDefault();
+    setOpen(false);
     onDownload(href);
   };
   if (disabledReason) {
@@ -82,9 +93,18 @@ export function PdfDownloadDropdown({
     );
   }
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open} onOpenChange={(next) => setOpen(next && !busy)}>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" disabled={busy} aria-busy={busy || undefined}>
+        {/* While busy the button is aria-disabled rather than disabled: the
+            menu hands focus back to it on close, and a disabled button
+            cannot take focus, so a keyboard user would land on the page
+            body. onOpenChange above keeps it from opening meanwhile. */}
+        <Button
+          variant="outline"
+          aria-disabled={busy || undefined}
+          aria-busy={busy || undefined}
+          className={busy ? 'pointer-events-none opacity-50' : undefined}
+        >
           <FileText className="h-4 w-4" /> PDF
         </Button>
       </DropdownMenuTrigger>
