@@ -108,6 +108,19 @@ describe('RangeCalendar', () => {
     expect(day('Wednesday, September 16, 2026')).not.toHaveAttribute('data-state');
   });
 
+  it('a day inside the chosen range says so to a screen reader (the tint is not enough); the ends and the rest do not', async () => {
+    render(<Harness />);
+    await userEvent.click(day('Thursday, September 10, 2026'));
+    // Before the end is chosen, nothing is in a range yet (a hover preview is not a range).
+    fireEvent.pointerEnter(day('Monday, September 14, 2026'), { pointerType: 'mouse' });
+    expect(day('Saturday, September 12, 2026')).not.toHaveAccessibleDescription();
+    await userEvent.click(day('Tuesday, September 15, 2026'));
+    expect(day('Saturday, September 12, 2026')).toHaveAccessibleDescription('In the chosen range');
+    expect(day('Thursday, September 10, 2026')).not.toHaveAccessibleDescription();
+    expect(day('Tuesday, September 15, 2026')).not.toHaveAccessibleDescription();
+    expect(day('Wednesday, September 16, 2026')).not.toHaveAccessibleDescription();
+  });
+
   it('previews the band under the mouse while the end is picked', async () => {
     render(<Harness />);
     await userEvent.click(day('Thursday, September 10, 2026'));

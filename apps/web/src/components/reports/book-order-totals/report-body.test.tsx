@@ -59,6 +59,7 @@ import {
   BOOK_REPORT_CSV_MAX_ROWS,
   BOOK_REPORT_EMPTY,
   BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE,
+  BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE_DATES,
   BOOK_REPORT_EMPTY_DEFAULT_STATUS,
   BOOK_REPORT_EMPTY_SEARCH,
   BOOK_REPORT_FILTERS_RESET,
@@ -88,7 +89,7 @@ import {
   ordersJson,
   totalsResponse,
 } from './__fixtures__/answers';
-import { __resetBookReportOptionsForTests } from './options';
+import { __resetBookReportOptionsForTests, loadBookReportOptions } from './options';
 import { BookOrderTotalsBody, type BookOrderTotalsBodyProps } from './report-body';
 
 const fetchMock = vi.fn();
@@ -579,6 +580,50 @@ describe('the charter in the link (0382)', () => {
     expect(screen.getByRole('group', { name: 'Total books ordered' })).toHaveTextContent('34');
   });
 
+  it('Today or This week refused by an older server (a SQL-only revert) resets the dates to All time and says so', async () => {
+    svc.page
+      .mockRejectedValueOnce(refusal('invalid_range'))
+      .mockImplementationOnce(async (_q: unknown, w: never) => totalsResponse({}, w));
+    render(await body({ charter: CH_A, range: 'today', page: '2' }));
+    expect(svc.page).toHaveBeenCalledTimes(2);
+    expect(queryOf(0).range).toBe('today');
+    const again = queryOf(1);
+    expect(again).toMatchObject({ range: 'all', from: null, to: null, charter: CH_A, page: 1 });
+    expect(screen.getByText(BOOK_REPORT_FILTERS_RESET)).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Total books ordered' })).toHaveTextContent('34');
+  });
+
+  it('a link refused on every id AND its dates still renders after five reads', async () => {
+    svc.page
+      .mockRejectedValueOnce(refusal('invalid_range'))
+      .mockRejectedValueOnce(refusal('invalid_warehouse'))
+      .mockRejectedValueOnce(refusal('invalid_category'))
+      .mockRejectedValueOnce(refusal('invalid_charter'))
+      .mockImplementationOnce(async (_q: unknown, w: never) => totalsResponse({}, w));
+    render(
+      await body({
+        range: 'week',
+        warehouse: W2,
+        category: '0e000000-0000-4000-8000-0000000000c9',
+        charter: CH_B,
+      }),
+    );
+    expect(svc.page).toHaveBeenCalledTimes(5);
+    expect(queryOf(4)).toMatchObject({
+      range: 'all',
+      warehouse: 'default',
+      category: 'all',
+      charter: 'all',
+    });
+    expect(screen.getByText(BOOK_REPORT_FILTERS_RESET)).toBeInTheDocument();
+  });
+
+  it('refused All time cannot be cured by a reset: it goes to the error boundary, never a loop', async () => {
+    svc.page.mockRejectedValue(refusal('invalid_range'));
+    await expect(body()).rejects.toBeInstanceOf(ServiceError);
+    expect(svc.page).toHaveBeenCalledTimes(1);
+  });
+
   it('a refusal that dropping the key cannot cure is not retried: it goes to the error boundary', async () => {
     svc.page.mockRejectedValue(refusal('invalid_charter'));
     await expect(body({ charter: CH_B })).rejects.toBeInstanceOf(ServiceError);
@@ -700,6 +745,73 @@ describe('Showing, the chips and the scope lines', () => {
     );
   });
 
+  it('with dates chosen, the empty hint also names the dates (the zero may come from them)', async () => {
+    svc.page.mockImplementation(async (_q: unknown, w: never) =>
+      totalsResponse(
+        {
+          rows: [],
+          totalCount: 0,
+          summary: { ...totalsResponse().summary, copies: '0', entries: 0, orders: 0 },
+          range: {
+            key: 'today',
+            from: '2026-09-29',
+            to: '2026-09-29',
+            timeZone: 'America/Los_Angeles',
+            timeZoneFallback: false,
+          },
+          filters: {
+            warehouse: { id: W1, name: 'North', status: 'active' },
+            category: null,
+            uncategorized: false,
+            charter: ALDER,
+            noCharter: false,
+          },
+        },
+        w,
+      ),
+    );
+    render(await body({ charter: CH_A, warehouse: W1, range: 'today' }));
+    expect(document.body.textContent).toContain(BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE_DATES);
+    expect(document.body.textContent).not.toContain(`${BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE} `);
+  });
+
+  it("the scope line names a charter with the Charter select's label once the lists are loaded", async () => {
+    const twin = {
+      id: '0e000000-0000-4000-8000-0000000000b9',
+      name: 'Charter Alder',
+      code: null,
+      status: 'active',
+    };
+    const alder = { ...ALDER, code: null };
+    fetchMock.mockImplementation(async (url: string) =>
+      url.endsWith('/options')
+        ? jsonResponse(optionsResponse({ charters: [alder, twin] }))
+        : jsonResponse(ordersJson()),
+    );
+    svc.page.mockImplementation(async (_q: unknown, w: never) =>
+      totalsResponse(
+        {
+          filters: {
+            warehouse: null,
+            category: null,
+            uncategorized: false,
+            charter: alder,
+            noCharter: false,
+          },
+        },
+        w,
+      ),
+    );
+    render(await body({ charter: CH_A, warehouse: 'all' }));
+    const scope = screen.getByRole('region', { name: BOOK_REPORT_UI.scopeRegion });
+    // Before the lists: the answer's echo.
+    expect(within(scope).getByText('Charter: Charter Alder')).toBeInTheDocument();
+    await act(async () => {
+      await loadBookReportOptions(ORG, USER);
+    });
+    expect(within(scope).getByText(`Charter: Charter Alder (id ${CH_A})`)).toBeInTheDocument();
+  });
+
   it('with all warehouses, an empty charter does not blame the warehouse', async () => {
     svc.page.mockImplementation(async (_q: unknown, w: never) =>
       totalsResponse(
@@ -779,6 +891,35 @@ describe('Showing, the chips and the scope lines', () => {
       'href',
       '/dashboard/reports/book-order-totals?sort=title',
     );
+  });
+});
+
+describe("View orders reads a rolling preset for the page's own days (brief 13)", () => {
+  it("the drill-down fetch carries the answer's days, not This month again", async () => {
+    svc.page.mockImplementation(async (_q: unknown, w: never) =>
+      totalsResponse(
+        {
+          range: {
+            key: 'month',
+            from: '2026-09-01',
+            to: '2026-09-30',
+            timeZone: 'America/Los_Angeles',
+            timeZoneFallback: false,
+          },
+        },
+        w,
+      ),
+    );
+    nav.params = new URLSearchParams(`range=month&warehouse=all&view=${ITEM_A}`);
+    render(await body({ range: 'month', warehouse: 'all' }));
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([u]) => String(u).includes(`/items/${ITEM_A}/orders?`)),
+      ).toBe(true),
+    );
+    const url = String(fetchMock.mock.calls.find(([u]) => String(u).includes('/orders?'))![0]);
+    expect(url).toContain('range=custom&from=2026-09-01&to=2026-09-30');
+    expect(url).not.toContain('range=month');
   });
 });
 

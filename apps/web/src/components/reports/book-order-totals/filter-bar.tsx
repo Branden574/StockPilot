@@ -406,9 +406,14 @@ function CharterControl({
     choices.push({ value: c.id, label: labels.get(c.id) ?? c.name });
   }
   if (value !== 'all' && value !== 'none' && !choices.some((c) => c.value === value)) {
+    // Named by the answer's echo when it is for this charter; a charter
+    // chosen elsewhere (a by-charter row) while the lists load is only
+    // "Loading…" until its answer lands, never a bare id.
     choices.push({
       value,
-      label: echoForValue ? (labels.get(echoForValue.id) ?? echoForValue.name) : value,
+      label: echoForValue
+        ? (labels.get(echoForValue.id) ?? echoForValue.name)
+        : BOOK_REPORT_UI.choiceLoading,
     });
   }
   if (options?.noCharter || value === 'none') {
@@ -468,7 +473,20 @@ function WarehouseControl({
     choices.push({ value: w.id, label: bookReportWarehouseOptionLabel(w) });
   }
   if (value !== 'all' && !choices.some((c) => c.value === value)) {
-    choices.push({ value, label: echo ? bookReportWarehouseOptionLabel(echo) : value });
+    // A pending 'default' (Clear filters, or the warehouse chip removed) is
+    // the person's warehouse view, which the server resolves; any other
+    // value the lists do not carry is named by the answer's echo only when
+    // the echo is for it. Never the raw token or id, and never the name of
+    // the warehouse that was just removed.
+    choices.push({
+      value,
+      label:
+        value === 'default'
+          ? BOOK_REPORT_UI.warehouseView
+          : echo && echo.id.toLowerCase() === value.toLowerCase()
+            ? bookReportWarehouseOptionLabel(echo)
+            : BOOK_REPORT_UI.choiceLoading,
+    });
   }
   const select = useCommittedSelect(value, (next) =>
     onChange(
@@ -526,7 +544,13 @@ function CategoryControl({
     choices.push({ value: 'none', label: BOOK_REPORT_NO_CATEGORY });
   }
   if (value !== 'all' && !choices.some((c) => c.value === value)) {
-    choices.push({ value, label: echo ? bookReportCategoryOptionLabel(echo) : value });
+    choices.push({
+      value,
+      label:
+        echo && echo.id.toLowerCase() === value.toLowerCase()
+          ? bookReportCategoryOptionLabel(echo)
+          : BOOK_REPORT_UI.choiceLoading,
+    });
   }
   const select = useCommittedSelect(value, (next) =>
     onChange(withBookReportFilter(query, { category: next })),

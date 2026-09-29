@@ -4,7 +4,9 @@ import * as React from 'react';
 
 import {
   BOOK_REPORT_SHOWING,
+  bookReportCharterLine,
   bookReportShowingParts,
+  type BookReportCharterEcho,
   type BookReportCharterFilters,
   type BookReportCategoryEcho,
   type BookReportQuery,
@@ -109,4 +111,27 @@ export function BookReportShowingBlock({
       />
     </section>
   );
+}
+
+/**
+ * The scope lines' Charter line ("Charter: Charter Alder · CH-A"), named
+ * with the same label as the Charter select, the chips and the Showing
+ * block once the lists have loaded (core's id tie-break for two same-named
+ * charters); until then from the answer's echo. A client piece of the
+ * server-rendered scope lines, for that reason only.
+ */
+export function BookReportCharterScopeLine({
+  charter,
+  noCharter,
+  organizationId,
+  userId,
+}: {
+  charter: BookReportCharterEcho | null;
+  noCharter: boolean;
+  organizationId: string;
+  userId: string;
+}) {
+  const options = useLoadedBookReportOptions(organizationId, userId);
+  const labels = bookReportCharterLabelsFor(options, [charter]);
+  return <p>{bookReportCharterLine(charter, noCharter, labels)}</p>;
 }

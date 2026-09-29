@@ -356,8 +356,13 @@ describe('GET /api/v1/reports/book-order-totals/export', () => {
       url(`format=csv&warehouse=all&charter=${CH_A}&from=2026-09-01&to=2026-09-30`),
     );
     expect(res.status).toBe(200);
-    expect(stub.rpcCalls).toHaveLength(1);
-    const args = stub.rpcCalls[0]!.args as Record<string, unknown>;
+    // ONE export-mode statement (and, beside it, the charter list for the
+    // file's labels).
+    expect(stub.rpcCalls.filter((c) => c.name === 'book_order_totals')).toHaveLength(1);
+    const args = stub.rpcCalls.find((c) => c.name === 'book_order_totals')!.args as Record<
+      string,
+      unknown
+    >;
     expect(args).toMatchObject({
       p_charter_id: CH_A,
       p_range: 'custom',
@@ -385,6 +390,102 @@ describe('GET /api/v1/reports/book-order-totals/export', () => {
     expect(header.endsWith(',charter_scope,date_range')).toBe(true);
     const data = lines.find((l) => l.startsWith(ITEM))!;
     expect(data.endsWith(',Charter Alder · CH-A,2026-09-01 to 2026-09-30')).toBe(true);
+  });
+
+  it("two same-named charters: the file names the charter with the page's tie-broken label, read beside the statement", async () => {
+    const plain = { ...ALDER, code: null };
+    const twin = { ...plain, id: OUT_OF_SCOPE };
+    const stub = makeSupabaseStub({
+      'rpc:book_order_totals': {
+        data: exportAnswer({
+          filters: {
+            warehouse: null,
+            category: null,
+            uncategorized: false,
+            charter: plain,
+            noCharter: false,
+          },
+        }),
+        error: null,
+      },
+      'rpc:book_order_totals_options': {
+        data: {
+          v: 1,
+          warehouses: [],
+          categories: [],
+          uncategorized: false,
+          charters: [plain, twin],
+          noCharter: false,
+          orderStatusConfig: null,
+        },
+        error: null,
+      },
+      'organizations.select': {
+        data: [{ name: 'Demo Co', logo_url: null, order_status_config: null }],
+        error: null,
+      },
+    });
+    const ctx = makeServiceContext(stub.client, { organizationId: 'org-1', role: 'manager' });
+    vi.mocked(withApiContext).mockResolvedValue(ctx as never);
+    const res = await GET(url(`format=csv&warehouse=all&charter=${CH_A}`));
+    expect(res.status).toBe(200);
+    expect(stub.rpcCalls.map((c) => c.name).sort()).toEqual([
+      'book_order_totals',
+      'book_order_totals_options',
+    ]);
+    const text = await res.text();
+    expect(text.split('\n')[1]).toBe(`"# Charter: Charter Alder (id ${CH_A})"`);
+    expect(text.split('\n').find((l) => l.startsWith(ITEM))).toContain(
+      `,Charter Alder (id ${CH_A}),`,
+    );
+    // Never the name in the audit row or the filename.
+    expect(JSON.stringify(vi.mocked(audit).mock.calls[0]![0])).not.toContain('Alder');
+  });
+
+  it('the charter list is read only for a chosen charter, and a failed read leaves the plain label', async () => {
+    const stub = setup();
+    expect((await GET(url('format=csv&warehouse=all'))).status).toBe(200);
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['book_order_totals']);
+    const none = setup(
+      {},
+      exportAnswer({
+        filters: {
+          warehouse: null,
+          category: null,
+          uncategorized: false,
+          charter: null,
+          noCharter: true,
+        },
+      }),
+    );
+    expect((await GET(url('format=csv&warehouse=all&charter=none'))).status).toBe(200);
+    expect(none.rpcCalls.map((c) => c.name)).toEqual(['book_order_totals']);
+    // The list cannot be read: the file still comes, named from the echo.
+    const failing = makeSupabaseStub({
+      'rpc:book_order_totals': {
+        data: exportAnswer({
+          filters: {
+            warehouse: null,
+            category: null,
+            uncategorized: false,
+            charter: ALDER,
+            noCharter: false,
+          },
+        }),
+        error: null,
+      },
+      'rpc:book_order_totals_options': { data: null, error: { code: '57014', message: 'timeout' } },
+      'organizations.select': {
+        data: [{ name: 'Demo Co', logo_url: null, order_status_config: null }],
+        error: null,
+      },
+    });
+    vi.mocked(withApiContext).mockResolvedValue(
+      makeServiceContext(failing.client, { organizationId: 'org-1', role: 'manager' }) as never,
+    );
+    const res = await GET(url(`format=csv&warehouse=all&charter=${CH_A}`));
+    expect(res.status).toBe(200);
+    expect((await res.text()).split('\n')[1]).toBe('"# Charter: Charter Alder · CH-A"');
   });
 
   it('No charter: audited as "none", the file says No charter', async () => {

@@ -42,10 +42,13 @@ import {
   O3,
   ORG,
   OTHER_ORG,
+  USER,
   W1,
+  optionsResponse,
   ordersJson,
   orderRow,
 } from './__fixtures__/answers';
+import { __resetBookReportOptionsForTests, loadBookReportOptions } from './options';
 import { BookOrdersDrawer, ViewOrdersButton, bookOrdersErrorFor } from './orders-drawer';
 
 const ALL: BookReportQuery = { ...DEFAULT_BOOK_REPORT_QUERY, warehouse: 'all', q: 'hobbit' };
@@ -56,15 +59,30 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
-function drawer(query: BookReportQuery = ALL) {
+type RangeEcho = { key: BookReportQuery['range']; from: string | null; to: string | null };
+
+/** The page's answer's range for a query: its own days for a custom range,
+ *  none for All time (the drawer's tests set the days of a preset). */
+function echoFor(query: BookReportQuery): RangeEcho {
+  return { key: query.range, from: query.from, to: query.to };
+}
+
+function drawer(query: BookReportQuery = ALL, rangeEcho: RangeEcho = echoFor(query)) {
   return (
     <BookOrdersDrawer
       organizationId={ORG}
+      userId={USER}
       query={query}
+      rangeEcho={rangeEcho}
       statusLabels={labels}
       titles={{ [ITEM_A]: 'Book A', [ITEM_B]: 'Book B' }}
     />
   );
+}
+
+/** A drill-down answer echoing a range. */
+function rangeJson(key: string, from: string | null, to: string | null) {
+  return { key, from, to, timeZone: 'America/Los_Angeles', timeZoneFallback: false };
 }
 
 beforeEach(() => {
@@ -76,6 +94,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  __resetBookReportOptionsForTests();
 });
 
 describe('View orders drawer', () => {
@@ -252,7 +271,12 @@ describe('View orders drawer', () => {
       page: 2,
     };
     fetchMock.mockImplementation(async () =>
-      json(ordersJson({ filters: { warehouse: null, charter: ALDER, noCharter: false } })),
+      json(
+        ordersJson({
+          range: rangeJson('custom', '2026-09-01', '2026-09-30'),
+          filters: { warehouse: null, charter: ALDER, noCharter: false },
+        }),
+      ),
     );
     render(drawer(query));
     const dialog = await screen.findByRole('dialog');
@@ -370,5 +394,132 @@ describe('View orders drawer', () => {
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
       BOOK_REPORT_ORDERS_LOAD_ERROR,
     );
+  });
+});
+
+describe("a row's orders cover the days the row was read for (brief 13)", () => {
+  it.each(['today', 'week', 'month', '30d', '90d', 'year'] as const)(
+    'with %s, the drill-down asks for the exact days the page answer covered, never the preset again',
+    async (range) => {
+      fetchMock.mockImplementation(async () =>
+        json(ordersJson({ range: rangeJson('custom', '2026-09-27', '2026-09-29') })),
+      );
+      render(drawer({ ...ALL, range }, { key: range, from: '2026-09-27', to: '2026-09-29' }));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      const url = String(fetchMock.mock.calls[0]![0]);
+      expect(url).toContain('range=custom&from=2026-09-27&to=2026-09-29');
+      expect(url).not.toContain(`range=${range}`);
+      const dialog = await screen.findByRole('dialog');
+      await within(dialog).findByText('SO-000003');
+      const values = [...dialog.querySelectorAll('[data-drawer-scope] dd')].map(
+        (d) => d.textContent,
+      );
+      expect(values[2]).toBe('Sep 27 – Sep 29, 2026');
+    },
+  );
+
+  it("after the organization's midnight it still lists the page's day, so the total equals the row", async () => {
+    // The page read Today on Sep 29 (Book A: 30 in 3 orders); View orders at
+    // 00:01 on Sep 30 must not ask for Today again.
+    fetchMock.mockImplementation(async () =>
+      json(ordersJson({ range: rangeJson('custom', '2026-09-29', '2026-09-29') })),
+    );
+    render(
+      drawer({ ...ALL, range: 'today' }, { key: 'today', from: '2026-09-29', to: '2026-09-29' }),
+    );
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() =>
+      expect(dialog).toHaveAccessibleDescription('Copies of this book requested: 30 in 3 orders'),
+    );
+    expect(String(fetchMock.mock.calls[0]![0])).toContain(
+      'range=custom&from=2026-09-29&to=2026-09-29',
+    );
+    // The way back is the page itself (Today), not the pinned days.
+    const link = within(dialog).getByRole('link', { name: 'SO-000003' });
+    const back = new URL(link.getAttribute('href')!, 'https://x.test').searchParams.get('return')!;
+    expect(back).toContain('range=today');
+    expect(back).not.toContain('from=');
+  });
+
+  it('drops an answer for other days than the ones asked for', async () => {
+    fetchMock.mockImplementation(async () =>
+      json(ordersJson({ range: rangeJson('custom', '2026-09-30', '2026-09-30') })),
+    );
+    render(
+      drawer({ ...ALL, range: 'today' }, { key: 'today', from: '2026-09-29', to: '2026-09-29' }),
+    );
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      BOOK_REPORT_ORDERS_LOAD_ERROR,
+    );
+    expect(within(dialog).queryByText('SO-000003')).not.toBeInTheDocument();
+  });
+
+  it('All time is asked as All time, and an answer for a month instead is dropped', async () => {
+    fetchMock.mockImplementation(async () =>
+      json(ordersJson({ range: rangeJson('month', '2026-09-01', '2026-09-30') })),
+    );
+    render(drawer());
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(String(fetchMock.mock.calls[0]![0])).not.toContain('range=');
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      BOOK_REPORT_ORDERS_LOAD_ERROR,
+    );
+  });
+});
+
+describe('two charters with the same name read apart in the drawer, as in the Charter select', () => {
+  const twin = {
+    id: '0e000000-0000-4000-8000-0000000000b9',
+    name: 'Charter Alder',
+    code: null,
+    status: 'active',
+  };
+  const alder = { ...ALDER, code: null };
+
+  async function withTwinLists() {
+    fetchMock.mockImplementation(async (url: unknown) =>
+      String(url).endsWith('/options')
+        ? json(optionsResponse({ charters: [alder, twin] }))
+        : json(
+            ordersJson({}, [
+              orderRow(O3, 3, { charterId: CH_A, charterName: 'Charter Alder', charterCode: null }),
+              orderRow(O2, 2, {
+                charterId: twin.id,
+                charterName: 'Charter Alder',
+                charterCode: null,
+              }),
+            ]),
+          ),
+    );
+    await loadBookReportOptions(ORG, USER);
+  }
+
+  it('in the Charter column (All charters)', async () => {
+    await withTwinLists();
+    render(drawer());
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('SO-000003');
+    // (These fixture ids share their first 8 characters, so core writes the
+    // whole id.)
+    expect(within(dialog).getByRole('row', { name: /SO-000003/ })).toHaveTextContent(
+      `Charter Alder (id ${CH_A})`,
+    );
+    expect(within(dialog).getByRole('row', { name: /SO-000002/ })).toHaveTextContent(
+      `Charter Alder (id ${twin.id})`,
+    );
+  });
+
+  it("in the header's Charter line (one charter chosen)", async () => {
+    await withTwinLists();
+    fetchMock.mockImplementation(async () =>
+      json(ordersJson({ filters: { warehouse: null, charter: alder, noCharter: false } })),
+    );
+    render(drawer({ ...ALL, charter: CH_A }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('SO-000003');
+    const values = [...dialog.querySelectorAll('[data-drawer-scope] dd')].map((d) => d.textContent);
+    expect(values[1]).toBe(`Charter Alder (id ${CH_A})`);
   });
 });

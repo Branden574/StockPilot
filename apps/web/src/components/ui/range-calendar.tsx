@@ -56,7 +56,8 @@ export interface RangeCalendarProps {
  * `tabIndex=0`, the arrow keys move a day or a week, PageUp and PageDown a
  * month (with Shift a year), Home and End the start and end of the week.
  * Each day is a button named like "Tuesday, September 1, 2026"; its cell
- * carries `aria-selected` on the start and the end, and today's button
+ * carries `aria-selected` on the start and the end, a day between them is
+ * described as "In the chosen range", and today's button
  * `aria-current="date"`. A mouse hover previews the band while the end is
  * being picked; hover, keys and month paging never request anything.
  */
@@ -80,6 +81,7 @@ export function RangeCalendar({
   const focusNext = React.useRef(autoFocus);
   const gridRef = React.useRef<HTMLDivElement>(null);
   const baseId = React.useId();
+  const inRangeId = `${baseId}-in-range`;
 
   // A typed field can hold any string a date input allows (a six-digit
   // year, a day outside 2000-2100): such a day is simply not shown.
@@ -128,6 +130,11 @@ export function RangeCalendar({
       className={cn('flex flex-col gap-4 sm:flex-row sm:gap-6', className)}
       onPointerLeave={() => setHover(null)}
     >
+      {/* Said after a day inside the chosen range (the tint alone is not
+          seen by a screen reader); the phone's calendar says the same. */}
+      <span id={inRangeId} hidden>
+        {CALENDAR_COPY.inRange}
+      </span>
       {months.map((m, index) => {
         const titleId = `${baseId}-title-${index}`;
         return (
@@ -210,6 +217,7 @@ export function RangeCalendar({
                             data-state={s.selected ? 'selected' : band ? 'band' : undefined}
                             tabIndex={cell.ymd === activeDay ? 0 : -1}
                             aria-label={calendarDayLabel(cell.ymd)}
+                            aria-describedby={s.inRange ? inRangeId : undefined}
                             aria-current={s.isToday ? 'date' : undefined}
                             onClick={() => {
                               setActive(cell.ymd);

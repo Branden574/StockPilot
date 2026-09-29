@@ -16,7 +16,6 @@ import { ServiceError } from '@/server/services/context';
 import {
   BOOK_REPORT_AS_SAVED,
   BOOK_REPORT_EMPTY,
-  BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE,
   BOOK_REPORT_EMPTY_DEFAULT_STATUS,
   BOOK_REPORT_EMPTY_SEARCH,
   BOOK_REPORT_FILTERS_RESET,
@@ -31,7 +30,7 @@ import {
   BOOK_REPORT_UI,
   DEFAULT_BOOK_REPORT_STATUS_GROUPS,
   bookReportCategoryLine,
-  bookReportCharterLine,
+  bookReportEmptyCharterHint,
   bookReportWithoutFilter,
   calendarToday,
   bookReportGeneratedLine,
@@ -77,7 +76,11 @@ import {
   BookReportPagerLink,
   BookReportRefreshButton,
 } from './report-navigation';
-import { BookReportShowingBlock, type BookReportShowingEchoes } from './showing-block';
+import {
+  BookReportCharterScopeLine,
+  BookReportShowingBlock,
+  type BookReportShowingEchoes,
+} from './showing-block';
 
 export type BookReportSearchParams = Record<string, string | string[] | undefined>;
 
@@ -92,14 +95,15 @@ export interface BookOrderTotalsBodyProps {
   hasWarehouseView: boolean;
 }
 
-type RefusedFilter = 'invalid_warehouse' | 'invalid_category' | 'invalid_charter';
+type RefusedFilter = 'invalid_warehouse' | 'invalid_category' | 'invalid_charter' | 'invalid_range';
 
 function filterIdReason(e: unknown): RefusedFilter | null {
   if (!(e instanceof ServiceError) || e.code !== 'validation_error') return null;
   const reason = e.details?.reason;
   return reason === 'invalid_warehouse' ||
     reason === 'invalid_category' ||
-    reason === 'invalid_charter'
+    reason === 'invalid_charter' ||
+    reason === 'invalid_range'
     ? reason
     : null;
 }
@@ -109,7 +113,9 @@ function filterIdReason(e: unknown): RefusedFilter | null {
  * when that key is already at its default, so nothing could change and the
  * refusal is not retried. A charter the caller may not report on (unknown,
  * another organization's, or outside their scope: one refusal for all
- * three, plan D3) goes back to All charters.
+ * three, plan D3) goes back to All charters. Dates the server refuses go
+ * back to All time: an older server (0379, e.g. after a SQL-only revert)
+ * does not know Today or This week (plan D18).
  */
 function withoutRefused(query: BookReportQuery, reason: RefusedFilter): BookReportQuery | null {
   switch (reason) {
@@ -119,12 +125,14 @@ function withoutRefused(query: BookReportQuery, reason: RefusedFilter): BookRepo
       return query.category === 'all' ? null : bookReportWithoutFilter(query, 'category');
     case 'invalid_charter':
       return query.charter === 'all' ? null : bookReportWithoutFilter(query, 'charter');
+    case 'invalid_range':
+      return query.range === 'all' ? null : bookReportWithoutFilter(query, 'dates');
   }
 }
 
-/** Refused ids one link can carry (warehouse, category, charter), plus the
- *  read that finally answers. */
-const READ_ATTEMPTS = 4;
+/** Refusals one link can carry (warehouse, category, charter, dates), plus
+ *  the read that finally answers. */
+const READ_ATTEMPTS = 5;
 
 function mfaReason(e: unknown): 'mfa_required' | 'aal2_required' | null {
   if (!(e instanceof ServiceError) || e.code !== 'forbidden') return null;
@@ -152,10 +160,10 @@ function isTimeout(e: unknown): boolean {
  * warehouse view, else all) and every link the page renders carries the
  * resolved value, never "default".
  *
- * A warehouse, category or charter in the link that the caller may not use
- * is dropped here, on the server, and the page says so ("Some filters in
- * this link were not valid and were reset."): up to three refusals in one
- * link, so four reads at most. Nothing on the client ever rewrites the
+ * A warehouse, category or charter in the link that the caller may not use,
+ * or dates the server does not know, is dropped here, on the server, and the
+ * page says so ("Some filters in this link were not valid and were reset."):
+ * up to four refusals in one link, so five reads at most. Nothing on the client ever rewrites the
  * address bar (recurring pattern 18); every link on the page is built from
  * the reset query. A refused charter is never shown by name and never as
  * "0 results".
@@ -309,7 +317,13 @@ export async function BookOrderTotalsBody(props: BookOrderTotalsBodyProps) {
               userId={props.userId}
             />
           ) : null}
-          <ScopeLines answer={answer} query={rq} statusLabels={statusLabels} />
+          <ScopeLines
+            answer={answer}
+            query={rq}
+            statusLabels={statusLabels}
+            organizationId={props.organizationId}
+            userId={props.userId}
+          />
 
           {rows.length === 0 ? (
             <EmptyState
@@ -318,10 +332,10 @@ export async function BookOrderTotalsBody(props: BookOrderTotalsBodyProps) {
               title={BOOK_REPORT_EMPTY}
               description={[
                 // A charter with one warehouse in effect (chosen, or the
-                // warehouse view): its orders may be at another warehouse.
-                answer.filters.charter && answer.filters.warehouse
-                  ? BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE
-                  : null,
+                // warehouse view): its orders may be at another warehouse,
+                // or, with dates chosen, outside them (core's words, the
+                // phone's).
+                bookReportEmptyCharterHint(answer),
                 sameGroups(rq.statusGroups, DEFAULT_BOOK_REPORT_STATUS_GROUPS)
                   ? BOOK_REPORT_EMPTY_DEFAULT_STATUS
                   : null,
@@ -374,7 +388,9 @@ export async function BookOrderTotalsBody(props: BookOrderTotalsBodyProps) {
 
       <BookOrdersDrawer
         organizationId={props.organizationId}
+        userId={props.userId}
         query={rq}
+        rangeEcho={answer.range}
         statusLabels={statusLabels}
         titles={Object.fromEntries(rows.map((r) => [r.itemId, r.name]))}
       />
@@ -470,17 +486,26 @@ function ScopeLines({
   answer,
   query,
   statusLabels,
+  organizationId,
+  userId,
 }: {
   answer: BookOrderTotalsResponse;
   query: BookReportQuery;
   statusLabels: Readonly<Record<OrderStatusKey, string>>;
+  organizationId: string;
+  userId: string;
 }) {
   const category = bookReportCategoryLine(answer.filters.category, answer.filters.uncategorized);
   const search = bookReportSearchLine(query.q);
   return (
     <section aria-label={BOOK_REPORT_UI.scopeRegion} className="text-muted-foreground space-y-1 text-sm">
       <p>{bookReportRangeLine(answer.range, answer.summary)}</p>
-      <p>{bookReportCharterLine(answer.filters.charter, answer.filters.noCharter)}</p>
+      <BookReportCharterScopeLine
+        charter={answer.filters.charter ?? null}
+        noCharter={answer.filters.noCharter === true}
+        organizationId={organizationId}
+        userId={userId}
+      />
       <p>{bookReportStatusLine(query.statusGroups, statusLabels)}</p>
       <p>{bookReportWarehouseLine(answer.filters.warehouse, answer.warehouse.source)}</p>
       {category ? <p>{category}</p> : null}

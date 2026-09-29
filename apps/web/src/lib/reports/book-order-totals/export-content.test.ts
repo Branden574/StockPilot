@@ -333,7 +333,7 @@ describe('the ORDER charter and the date range in the files (0382)', () => {
     status: 'active',
   };
   const chartered = (
-    charter: typeof ALDER | null,
+    charter: (Omit<typeof ALDER, 'code'> & { code: string | null }) | null,
     noCharter: boolean,
     over: Partial<BookOrderTotalsResponse> = {},
   ) =>
@@ -434,6 +434,36 @@ describe('the ORDER charter and the date range in the files (0382)', () => {
     );
     // Never re-zoned, never invented: a preset without its days says its name.
     expect(bookReportExportDateRange({ key: 'month', from: null, to: null })).toBe('This month');
+  });
+
+  it("two same-named charters without a code: the file uses the page's tie-broken label in the line and the column", () => {
+    const plain = { ...ALDER, code: null };
+    const withLabels = {
+      ...input(chartered(plain, false)),
+      charterLabels: new Map([[ALDER.id, 'Charter Alder (id 0e000000)']]),
+    };
+    expect(bookReportScopeLines(withLabels)[0]).toBe('Charter: Charter Alder (id 0e000000)');
+    const parsed = parseWithPapa(csvOf(withLabels));
+    const header = parsed.find((r) => r[0] === 'item_id')!;
+    const rows = parsed.filter(
+      (r) => typeof r[0] === 'string' && /^0e0/.test(r[0] as string) && r !== header,
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows)
+      expect(r[header.indexOf('charter_scope')]).toBe('Charter Alder (id 0e000000)');
+    // Without the lists (they could not be read): the echo, as before.
+    expect(bookReportScopeLines(input(chartered(plain, false)))[0]).toBe('Charter: Charter Alder');
+  });
+
+  it('a tie-broken label is neutralized like the name it carries', () => {
+    const plain = { ...ALDER, code: null, name: '=cmd' };
+    const withLabels = {
+      ...input(chartered(plain, false)),
+      charterLabels: new Map([[ALDER.id, '=cmd\n(id 0e000000)']]),
+    };
+    const text = csvOf(withLabels);
+    for (const line of text.split(/\r\n|\n|\r/)) expect(line).not.toMatch(FORMULA_START);
+    expect(bookReportScopeLines(withLabels)[0]).not.toContain('\n');
   });
 
   it('a charter name that starts a formula or holds a newline is neutralized in the line and the column', async () => {

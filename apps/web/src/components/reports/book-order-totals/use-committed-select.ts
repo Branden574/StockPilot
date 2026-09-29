@@ -2,9 +2,16 @@
 
 import * as React from 'react';
 
-/** A keyboard choice settles for this long after the last key before it
- *  counts (unless Enter or leaving the select commits it sooner). */
-export const COMMITTED_SELECT_IDLE_MS = 400;
+/** A `change` this soon after a key is that key's doing: Chrome and Edge on
+ *  Windows move a CLOSED select's value on an arrow or a letter and fire
+ *  `change` in the same task. A change later than this came from a list the
+ *  browser drew (macOS, a screen reader, a phone), where the choice is made. */
+export const KEY_CHANGE_WINDOW_MS = 100;
+
+/** How a choice was committed: picked in a list, by pointer or touch
+ *  ('choice'), by Enter, or by leaving the select with a keyboard draft
+ *  ('blur'). */
+export type CommitHow = 'choice' | 'enter' | 'blur';
 
 export interface CommittedSelectProps {
   value: string;
@@ -22,15 +29,21 @@ export interface CommittedSelectProps {
  * On Windows, Chrome and Edge fire `change` on a CLOSED select for every
  * arrow key, so arrowing past fifteen charters would be fifteen server
  * renders and fifteen reads, and the page would change under someone who is
- * still browsing (WCAG 3.2.2). So:
- *   - a pointer or touch choice commits at once (as before; so does a bare
- *     `change` with no key before it);
- *   - a keyboard change only moves the select's own draft, and commits on
- *     Enter, when focus leaves the select, or COMMITTED_SELECT_IDLE_MS after
- *     the last key: once, with the last value;
+ * still browsing (WCAG 3.2.2: no change of context on input). So:
+ *   - a keyboard change (a `change` right after an arrow or a letter) only
+ *     moves the select's own draft. Nothing is committed while the person,
+ *     or a screen reader reading the options aloud, stays on the select,
+ *     however long they pause (there is no timer);
+ *   - Enter commits the draft, and so does leaving the select: once, with
+ *     the last value;
+ *   - a choice made in the browser's own list (macOS, where the keyboard
+ *     opens the list; a screen reader's list; a phone's picker), a pointer
+ *     or touch choice, and a bare `change` commit at once;
  *   - a draft equal to the committed value commits nothing.
- * On macOS the keyboard opens the menu and Enter there fires one `change`,
- * so that is one commit either way (at most the idle time later).
+ * `onCommit` is told how ('choice', 'enter' or 'blur'), so a choice that
+ * opens something (the date preset's Custom range opens the calendar) can
+ * refuse to do so merely because focus left the select: returning `false`
+ * refuses the choice, and the select goes back to the committed value.
  *
  * The select shows the draft. When the committed value changes from outside
  * (an answer lands, Back, a chip), the draft follows it (derived state, reset
@@ -41,7 +54,7 @@ export interface CommittedSelectProps {
  */
 export function useCommittedSelect<T extends string>(
   committed: T,
-  onCommit: (value: T) => void,
+  onCommit: (value: T, how: CommitHow) => boolean | void,
 ): { props: CommittedSelectProps; reset: () => void } {
   const [draft, setDraft] = React.useState<string>(committed);
   const [seen, setSeen] = React.useState<string>(committed);
@@ -57,80 +70,59 @@ export function useCommittedSelect<T extends string>(
     latest.current = { committed, onCommit, draft };
   });
 
-  const source = React.useRef<'pointer' | 'keyboard' | null>(null);
+  // The last key pressed on the select, and when; cleared by a pointer.
+  const lastKey = React.useRef<{ key: string; at: number } | null>(null);
   const pending = React.useRef(false);
-  const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const clearTimer = React.useCallback(() => {
-    if (timer.current !== null) {
-      clearTimeout(timer.current);
-      timer.current = null;
+  const commit = React.useCallback((value: string, how: CommitHow) => {
+    pending.current = false;
+    const { committed: current } = latest.current;
+    if (value === current) return;
+    if (latest.current.onCommit(value as T, how) === false) {
+      // Refused: the select shows the committed value again.
+      setDraft(current);
+      latest.current = { ...latest.current, draft: current };
     }
   }, []);
-
-  React.useEffect(() => clearTimer, [clearTimer]);
-
-  const commit = React.useCallback(
-    (value: string) => {
-      clearTimer();
-      pending.current = false;
-      if (value === latest.current.committed) return;
-      latest.current.onCommit(value as T);
-    },
-    [clearTimer],
-  );
-
-  const arm = React.useCallback(() => {
-    clearTimer();
-    timer.current = setTimeout(() => {
-      timer.current = null;
-      if (pending.current) commit(latest.current.draft);
-    }, COMMITTED_SELECT_IDLE_MS);
-  }, [clearTimer, commit]);
 
   const onChange = React.useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
       const value = e.target.value;
       setDraft(value);
       latest.current = { ...latest.current, draft: value };
-      if (source.current === 'keyboard') {
+      const key = lastKey.current;
+      const byKey = key !== null && performance.now() - key.at < KEY_CHANGE_WINDOW_MS;
+      if (byKey && key.key !== 'Enter') {
+        // Browsing a closed select: a draft, never a request.
         pending.current = true;
-        arm();
         return;
       }
-      commit(value);
+      commit(value, byKey ? 'enter' : 'choice');
     },
-    [arm, commit],
+    [commit],
   );
 
   const onKeyDown = React.useCallback(
     (e: React.KeyboardEvent<HTMLSelectElement>) => {
-      source.current = 'keyboard';
-      if (e.key === 'Enter') {
-        if (pending.current) commit(latest.current.draft);
-        return;
-      }
-      // "After the last key": a key that moves nothing still restarts the
-      // wait for a draft that is already pending.
-      if (pending.current) arm();
+      lastKey.current = { key: e.key, at: performance.now() };
+      if (e.key === 'Enter' && pending.current) commit(latest.current.draft, 'enter');
     },
-    [arm, commit],
+    [commit],
   );
 
   const onPointerDown = React.useCallback(() => {
-    source.current = 'pointer';
+    lastKey.current = null;
   }, []);
 
   const onBlur = React.useCallback(() => {
-    if (pending.current) commit(latest.current.draft);
+    if (pending.current) commit(latest.current.draft, 'blur');
   }, [commit]);
 
   const reset = React.useCallback(() => {
-    clearTimer();
     pending.current = false;
     setDraft(latest.current.committed);
     latest.current = { ...latest.current, draft: latest.current.committed };
-  }, [clearTimer]);
+  }, []);
 
   return { props: { value: draft, onChange, onKeyDown, onPointerDown, onBlur }, reset };
 }

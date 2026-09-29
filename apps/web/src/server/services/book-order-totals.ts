@@ -16,6 +16,7 @@ import {
   BOOK_REPORT_NOT_IN_SCOPE,
   BOOK_REPORT_TIMEOUT,
   bookReportCharterEchoMatches,
+  bookReportCharterOptionLabels,
   bookReportFilterArgs,
   bookReportStatusLabels,
   bookReportTooManyText,
@@ -334,6 +335,24 @@ export class BookOrderTotalsService {
       noCharter: answer.noCharter,
       statusLabels: bookReportStatusLabels(answer.orderStatusConfig),
     };
+  }
+
+  /**
+   * The Charter select's labels for a file (the page's words, core's id
+   * tie-break for two same-named charters included), read from the caller's
+   * own charter list, or null when no charter is chosen. Cosmetic, so it
+   * never fails an export: a list that cannot be read gives null, and the
+   * file names the charter from the answer's echo, as the page does before
+   * its lists load. Run beside the export statement, never in front of it.
+   */
+  async fileCharterLabels(query: BookReportQuery): Promise<Map<string, string> | null> {
+    if (!isUuid(query.charter)) return null;
+    try {
+      const { charters } = await this.options();
+      return bookReportCharterOptionLabels(charters);
+    } catch {
+      return null;
+    }
   }
 
   /**

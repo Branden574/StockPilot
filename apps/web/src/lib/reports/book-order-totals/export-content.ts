@@ -37,6 +37,12 @@ export interface BookReportExportInput {
   statusGroups: readonly BookReportStatusGroup[];
   statusLabels: Readonly<Record<OrderStatusKey, string>>;
   q: string;
+  /** The Charter select's labels (core bookReportCharterOptionLabels over the
+   *  caller's charter list), so a file names a charter exactly as the page
+   *  does, including the id tie-break for two same-named charters. Null or
+   *  absent (All charters, No charter, or the list could not be read): the
+   *  answer's echo. */
+  charterLabels?: ReadonlyMap<string, string> | null;
 }
 
 const clean = (v: string) => sanitizeCsvText(v);
@@ -55,10 +61,25 @@ function cleanCharterEcho(
   };
 }
 
+/** The labels, each flattened and capped like the names they carry. */
+function cleanLabels(
+  labels: ReadonlyMap<string, string> | null | undefined,
+): Map<string, string> | null {
+  if (!labels) return null;
+  return new Map([...labels].map(([id, label]) => [id, clean(label)]));
+}
+
 /** The file's charter scope as a value: 'All charters', 'No charter' or
- *  'Marconi · MAR-01' (sanitized). */
-export function bookReportExportCharterScope(answer: BookOrderTotalsResponse): string {
-  return bookReportCharterLabel(cleanCharterEcho(answer.filters.charter), answer.filters.noCharter);
+ *  'Marconi · MAR-01' (sanitized), with the page's label when given. */
+export function bookReportExportCharterScope(
+  answer: BookOrderTotalsResponse,
+  charterLabels?: ReadonlyMap<string, string> | null,
+): string {
+  return bookReportCharterLabel(
+    cleanCharterEcho(answer.filters.charter),
+    answer.filters.noCharter,
+    cleanLabels(charterLabels),
+  );
 }
 
 /** The file's date range as a value: 'All time', or the resolved org-local
@@ -91,7 +112,11 @@ export function bookReportScopeLines(input: BookReportExportInput): string[] {
     ? { ...answer.filters.category, name: clean(answer.filters.category.name) }
     : null;
   const lines = [
-    bookReportCharterLine(cleanCharterEcho(answer.filters.charter), answer.filters.noCharter),
+    bookReportCharterLine(
+      cleanCharterEcho(answer.filters.charter),
+      answer.filters.noCharter,
+      cleanLabels(input.charterLabels),
+    ),
     bookReportRangeLine(answer.range, answer.summary),
     bookReportStatusLine(input.statusGroups, labels),
     bookReportWarehouseLine(warehouse, answer.warehouse.source),
@@ -222,7 +247,7 @@ export function* bookReportCsvChunks(input: BookReportExportInput): Generator<st
   ];
   yield `${meta.join('\n')}\n\n${BOOK_REPORT_CSV_COLUMNS.join(',')}\n`;
   const scope: CsvScope = {
-    charter_scope: bookReportExportCharterScope(input.answer),
+    charter_scope: bookReportExportCharterScope(input.answer, input.charterLabels),
     date_range: bookReportExportDateRange(input.answer.range),
   };
   const rows = input.answer.rows;

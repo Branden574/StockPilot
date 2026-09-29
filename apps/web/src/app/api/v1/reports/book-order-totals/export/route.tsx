@@ -71,7 +71,10 @@ const PDF_COVER_EDGE_PX = 240;
  * serial round trip in front of every chartered export, the page never builds
  * such a link, and the budget stays in front of the statement so it still
  * accounts for every expensive statement. The filename never carries the
- * charter's name.
+ * charter's name. Beside the statement (never in front of it), a chosen
+ * charter's list is read for the file's labels, so the file names a charter
+ * as the page does (core's id tie-break for two same-named charters); if
+ * that read fails, the file names it from the answer's echo.
  */
 export async function GET(req: NextRequest) {
   const ctx = await withApiContext(req);
@@ -100,13 +103,19 @@ export async function GET(req: NextRequest) {
     const limited = await exportRateLimited(ctx.userId, ctx.organizationId);
     if (limited) return limited;
 
-    const answer = await svc.exportRows(query, warehouseFromResolvedQuery(query), format);
+    // The charter list (only for a chosen charter) is read beside the export
+    // statement, for the file's labels; it never fails or delays the file.
+    const [answer, charterLabels] = await Promise.all([
+      svc.exportRows(query, warehouseFromResolvedQuery(query), format),
+      svc.fileCharterLabels(query),
+    ]);
     const org = await readOrgForExport(ctx);
     const input: BookReportExportInput = {
       answer,
       statusGroups: query.statusGroups,
       statusLabels: bookReportStatusLabels(org.orderStatusConfig),
       q: query.q,
+      charterLabels,
     };
 
     const filename = `${sanitizeFilenameSegment('book-order-totals')}_${sanitizeFilenameSegment(

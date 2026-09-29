@@ -82,8 +82,9 @@ function useTwoMonths(): boolean {
  *
  *   - A preset other than Custom range requests at once (one request per
  *     committed choice: keyboard browsing of the select is not a choice,
- *     use-committed-select.ts). Choosing Custom range opens the calendar and
- *     requests nothing.
+ *     use-committed-select.ts). Choosing Custom range (a pick, a click or
+ *     Enter) opens the calendar and requests nothing; leaving the select
+ *     while it rests on Custom range opens nothing.
  *   - The two fields show the RESOLVED days of the range on screen (This
  *     month reads Sep 1, 2026 to Sep 29, 2026), muted "Start date" and "End
  *     date" for All time. Either field opens the calendar editing that end.
@@ -130,8 +131,12 @@ export function OrdersPlacedControl({
     setOpen(true);
   };
 
-  const preset = useCommittedSelect<BookReportRange>(query.range, (next) => {
+  const preset = useCommittedSelect<BookReportRange>(query.range, (next, how) => {
     if (next === 'custom') {
+      // Only a real choice (a pick in the list, a click, Enter) opens the
+      // calendar and moves focus into it; leaving the select while it rests
+      // on Custom range opens nothing and puts the select back.
+      if (how === 'blur') return false;
       openCalendar('start', selectRef.current);
       return;
     }

@@ -20,7 +20,10 @@ import {
   BOOK_REPORT_CHARTER_HINT,
   BOOK_REPORT_UI,
   DEFAULT_BOOK_REPORT_QUERY,
+  bookReportClearedQuery,
   bookReportStatusLabels,
+  bookReportWithFilter,
+  bookReportWithoutFilter,
   type BookReportCharterEcho,
   type BookReportQuery,
   type BookReportRangeEcho,
@@ -40,8 +43,11 @@ import {
 } from './__fixtures__/answers';
 import { BookReportFilterBar } from './filter-bar';
 import { __resetBookReportOptionsForTests } from './options';
-import { BookReportNavigationProvider, BookReportPagerLink } from './report-navigation';
-import { COMMITTED_SELECT_IDLE_MS } from './use-committed-select';
+import {
+  BookReportNavigationProvider,
+  BookReportPagerLink,
+  useBookReportNavigation,
+} from './report-navigation';
 
 const W3 = '0e000000-0000-4000-8000-0000000000d3';
 const C1 = '0e000000-0000-4000-8000-0000000000c1';
@@ -554,16 +560,17 @@ describe('one request per choice: every select in the bar (plan D16)', () => {
       expect(nav.push).toHaveBeenCalledTimes(1);
     });
 
-    it(`three arrow keys then ${COMMITTED_SELECT_IDLE_MS} ms without a key: one push`, async () => {
+    it('three arrow keys then a long pause: nothing is pushed while the person (or screen reader) is still on the select', async () => {
       await ready();
       const select = screen.getByLabelText(label);
       arrow(select, values);
+      await new Promise((r) => setTimeout(r, 1000));
       expect(nav.push).not.toHaveBeenCalled();
-      await waitFor(() => expect(nav.push).toHaveBeenCalledTimes(1), { timeout: 3000 });
-      expect(reportPushes()[0]).toContain(`${key}=${encodeURIComponent(last)}`);
-      // Nothing more arrives later.
-      await new Promise((r) => setTimeout(r, COMMITTED_SELECT_IDLE_MS + 100));
+      expect(screen.queryByRole('dialog')).toBeNull();
+      // Leaving it is the choice.
+      fireEvent.blur(select);
       expect(nav.push).toHaveBeenCalledTimes(1);
+      expect(reportPushes()[0]).toContain(`${key}=${encodeURIComponent(last)}`);
     }, 15000);
 
     it('arrowing away and back to the committed value pushes nothing', async () => {
@@ -595,6 +602,18 @@ describe('one request per choice: every select in the bar (plan D16)', () => {
     expect(reportPushes()).toHaveLength(1);
     expect(reportPushes()[0]).toContain('range=year');
   });
+
+  it('stopping on Custom range and leaving the select opens nothing, pushes nothing, and puts the select back', async () => {
+    await ready();
+    const select = screen.getByLabelText('Orders placed');
+    arrow(select, ['custom']);
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.blur(select);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(nav.push).not.toHaveBeenCalled();
+    expect(select).toHaveValue('all');
+  }, 15000);
 
   it('Custom range chosen from the keyboard (Enter) opens the calendar and pushes nothing', async () => {
     await ready();
@@ -693,5 +712,104 @@ describe('changes made while an answer is still loading', () => {
     // Back to an earlier state: the server renders a different query.
     rerender(page({ ...Q, sort: 'orders' }));
     expect(screen.getByLabelText('Sort')).toHaveValue('orders');
+  });
+});
+
+describe('a pending choice a select cannot name yet (Clear filters, a chip, a by-charter row)', () => {
+  // go() is called but the mocked router never lands the answer: the window
+  // (1 to 8 s in production) in which the selects show the requested query.
+  function Go({ next, label }: { next: BookReportQuery; label: string }) {
+    const { go } = useBookReportNavigation();
+    return (
+      <button type="button" onClick={() => go(next)}>
+        {label}
+      </button>
+    );
+  }
+
+  function page(
+    query: BookReportQuery,
+    next: BookReportQuery,
+    echoes: {
+      warehouse?: { id: string; name: string; status: string } | null;
+      category?: { id: string; name: string; deleted: boolean } | null;
+    } = {},
+  ) {
+    return (
+      <BookReportNavigationProvider query={query}>
+        <Go next={next} label="Go" />
+        <BookReportFilterBar
+          query={query}
+          organizationId={ORG}
+          userId={USER}
+          statusLabels={bookReportStatusLabels(null)}
+          warehouseEcho={
+            echoes.warehouse === undefined
+              ? { id: W1, name: 'North', status: 'active' }
+              : echoes.warehouse
+          }
+          categoryEcho={echoes.category ?? null}
+          charterEcho={null}
+          rangeEcho={ALL_TIME}
+          today="2026-09-29"
+          viewNow={null}
+        />
+      </BookReportNavigationProvider>
+    );
+  }
+
+  const shown = (label: string) => {
+    const select = screen.getByLabelText(label) as HTMLSelectElement;
+    return select.selectedOptions[0]?.textContent ?? '';
+  };
+  const optionTexts = (label: string) =>
+    [...(screen.getByLabelText(label) as HTMLSelectElement).options].map((o) => o.textContent);
+
+  it('Clear filters from a chosen warehouse: Warehouse reads "Your warehouse view", never the removed warehouse or a token', async () => {
+    render(page(Q, bookReportClearedQuery(Q)));
+    await waitFor(() => expect(screen.getByLabelText('Warehouse')).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: 'Go' }));
+    expect(shown('Warehouse')).toBe(BOOK_REPORT_UI.warehouseView);
+    expect(optionTexts('Warehouse')).not.toContain('default');
+  });
+
+  it('an All-warehouses reader clears filters: the same words, never "default"', async () => {
+    const all = { ...Q, warehouse: 'all' as const };
+    render(page(all, bookReportClearedQuery(all), { warehouse: null }));
+    await waitFor(() => expect(screen.getByLabelText('Warehouse')).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: 'Go' }));
+    expect(shown('Warehouse')).toBe(BOOK_REPORT_UI.warehouseView);
+    expect(optionTexts('Warehouse')).not.toContain('default');
+  });
+
+  it('removing the warehouse chip while the lists are still loading does not keep naming the removed warehouse', async () => {
+    fetchMock.mockImplementation(() => new Promise<Response>(() => undefined));
+    render(page(Q, bookReportWithoutFilter(Q, 'warehouse')));
+    await userEvent.click(screen.getByRole('button', { name: 'Go' }));
+    expect(shown('Warehouse')).toBe(BOOK_REPORT_UI.warehouseView);
+    expect(optionTexts('Warehouse')).not.toContain('North');
+  });
+
+  it('a charter chosen elsewhere while the lists load reads "Loading…", never its id', async () => {
+    fetchMock.mockImplementation(() => new Promise<Response>(() => undefined));
+    render(page(Q, bookReportWithFilter(Q, { charter: CH_B })));
+    await userEvent.click(screen.getByRole('button', { name: 'Go' }));
+    expect(shown('Charter')).toBe(BOOK_REPORT_UI.choiceLoading);
+    expect(optionTexts('Charter').join(' ')).not.toContain(CH_B);
+  });
+
+  it('a category the lists do not name yet reads "Loading…", never its id or another echo', async () => {
+    fetchMock.mockImplementation(() => new Promise<Response>(() => undefined));
+    const withC1 = { ...Q, category: C1 };
+    render(
+      page(withC1, bookReportWithFilter(withC1, { category: C2 }), {
+        category: { id: C1, name: 'Fiction', deleted: false },
+      }),
+    );
+    // While the answer for C1 is on screen, its echo names it.
+    expect(shown('Category')).toBe('Fiction');
+    await userEvent.click(screen.getByRole('button', { name: 'Go' }));
+    expect(shown('Category')).toBe(BOOK_REPORT_UI.choiceLoading);
+    expect(optionTexts('Category').join(' ')).not.toContain(C2);
   });
 });
