@@ -889,8 +889,13 @@ export class OrderRequestsService {
    * read the org's orders), org-filtered, run beside the worklist read so the
    * page gains no serial round trip.
    *
+   * Also answers the order's warehouse: the list is narrowed to it (core
+   * stagingRowsForOrderWarehouse), since only that warehouse's Staging (and
+   * warehouse-less locations) can unblock the order's pick.
+   *
    * NEVER THROWS (pattern #1, a chip must not take the page down):
-   *   ok         the order, and its number (null for an order without one);
+   *   ok         the order, its number (null for an order without one) and
+   *              its warehouse;
    *   not_found  no such order here, the orders module is off, or the id is
    *              not a uuid: nothing to go back to, so no link;
    *   failed     the read failed (reported): the order likely exists, so the
@@ -898,7 +903,11 @@ export class OrderRequestsService {
    */
   async orderLinkLabel(
     id: string,
-  ): Promise<{ state: 'ok'; id: string; orderNumber: string | null } | { state: 'not_found' } | { state: 'failed' }> {
+  ): Promise<
+    | { state: 'ok'; id: string; orderNumber: string | null; warehouseId: string | null }
+    | { state: 'not_found' }
+    | { state: 'failed' }
+  > {
     if (!isModuleEnabled(this.ctx, 'orders')) return { state: 'not_found' };
     const orderId = typeof id === 'string' ? id.trim().toLowerCase() : '';
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(orderId)) {
@@ -907,14 +916,19 @@ export class OrderRequestsService {
     try {
       const { data, error } = await this.ctx.supabase
         .from('order_requests')
-        .select('id, order_number')
+        .select('id, order_number, warehouse_id')
         .eq('organization_id', this.ctx.organizationId)
         .eq('id', orderId)
         .maybeSingle();
       if (error) throw new Error(error.message);
       if (!data) return { state: 'not_found' };
-      const row = data as { id: string; order_number: number | null };
-      return { state: 'ok', id: row.id, orderNumber: formatOrderNumber(row.order_number) };
+      const row = data as { id: string; order_number: number | null; warehouse_id: string | null };
+      return {
+        state: 'ok',
+        id: row.id,
+        orderNumber: formatOrderNumber(row.order_number),
+        warehouseId: row.warehouse_id ?? null,
+      };
     } catch (e) {
       void reportSrvError(e, { tag: 'orders.link_label_failed', level: 'warning' });
       return { state: 'failed' };

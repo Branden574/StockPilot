@@ -8451,8 +8451,20 @@ export class InventoryService {
    * org filter and the deleted-item filter stay. When `itemIds` is set,
    * `warehouseId` (the web's active-warehouse cookie, the phone's switcher) is
    * IGNORED: the ids already narrow the list, and the order that named them may
-   * belong to another warehouse than the one the viewer has selected. An empty
-   * list is "these items: none", so it answers [] without a request.
+   * belong to another warehouse than the one the viewer has selected (the page
+   * and the route then narrow the rows to that order's warehouse, core
+   * stagingRowsForOrderWarehouse). An empty list is "these items: none", so it
+   * answers [] without a request.
+   *
+   * THE ACCESS BOUNDARY is RLS, not the warehouse filter. Dropping it is safe
+   * because the rows are scoped by item_stock_levels_select (0331: manager and
+   * above see every warehouse; everyone else only locations in
+   * my_warehouse_ids() or with no warehouse; 0371 split the FOR ALL write
+   * policy so staff no longer read every warehouse through it) and by
+   * inventory_items' own policy through the !inner embed, plus
+   * .eq('organization_id') here. A warehouse-scoped member already read the
+   * unfiltered list this way (their warehouse filter is null,
+   * lib/warehouse-filter.ts), so `itemIds` widens nothing.
    */
   async stagedWorklist(
     opts: {

@@ -197,14 +197,17 @@ export function stagingScreenFilter(
 }
 
 /** The order a filtered list came from, as GET /api/v1/inventory/staging
- *  answers it (`order`): its formatted number for the chip, and whether it is
- *  there to go back to. */
+ *  answers it (`order`): its formatted number for the chip, whether it is
+ *  there to go back to, and how many rows at other warehouses the route left
+ *  out (core stagingRowsForOrderWarehouse, the web page's narrowing). */
 export interface StagingOrderLink {
   id: string;
   /** "SO-000123"; null when it could not be read (the link still works). */
   orderNumber: string | null;
   /** False: no such order to go back to (or Orders is off). */
   found: boolean;
+  /** Rows at other warehouses not listed (0 from a server that predates it). */
+  elsewhere: number;
 }
 
 /**
@@ -218,7 +221,9 @@ export function parseStagingOrderLink(raw: unknown): StagingOrderLink | null {
   const r = o as Record<string, unknown>;
   const id = asNullableString(r.id);
   if (!id || typeof r.found !== 'boolean') return null;
-  return { id, orderNumber: asNullableString(r.orderNumber), found: r.found };
+  const elsewhere =
+    typeof r.elsewhere === 'number' && Number.isInteger(r.elsewhere) && r.elsewhere > 0 ? r.elsewhere : 0;
+  return { id, orderNumber: asNullableString(r.orderNumber), found: r.found, elsewhere };
 }
 
 export interface StagingFilterChip extends StagingFilterChipCopy {
@@ -246,6 +251,7 @@ export function stagingFilterChip(
     orderNumber: sameOrder && order.found ? order.orderNumber : null,
     hasOrder,
     itemCount: active.itemIds.length,
+    elsewhere: sameOrder ? order.elsewhere : 0,
   });
   return { ...copy, backOrderId: hasOrder ? orderId : null };
 }
@@ -261,6 +267,25 @@ export function stagingFilterEmptyCopy(input: {
 }): string | null {
   if (!input.active || input.loading || input.error !== null || input.rowCount > 0) return null;
   return STAGING_FILTER_EMPTY_COPY;
+}
+
+/**
+ * What the list shows when it has no rows: the spinner while loading; after
+ * a failed read, the retry line (the error itself is above the list); for a
+ * filtered list that came back empty, NOTHING, because the chip already says
+ * "No Staging or Unplaced stock is listed for these items." (one empty
+ * message, not two, as on the web page); otherwise "Nothing to place."
+ */
+export function stagingListEmptyState(input: {
+  loading: boolean;
+  error: string | null;
+  /** stagingFilterEmptyCopy's answer. */
+  filterEmpty: string | null;
+}): 'loading' | 'error' | 'none' | 'nothing_to_place' {
+  if (input.loading) return 'loading';
+  if (input.error !== null) return 'error';
+  if (input.filterEmpty !== null) return 'none';
+  return 'nothing_to_place';
 }
 
 // ── Age / staleness ────────────────────────────────────────────────────────

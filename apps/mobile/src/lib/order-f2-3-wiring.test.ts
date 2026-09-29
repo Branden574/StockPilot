@@ -277,6 +277,20 @@ describe('the Staging tab, opened from the order', () => {
     expect(code).toMatch(/\{screenFilter\.invalidCopy \? \(\s*<Body size=\{13\} muted>\s*\{screenFilter\.invalidCopy\}/);
   });
 
+  // Mutation caught: the generic "Nothing to place." under a chip that
+  // already says the filtered list is empty (two empty messages).
+  it('one empty message: a filtered list that came back empty shows only the chip’s sentence', () => {
+    expect(code).toMatch(/const listEmpty = stagingListEmptyState\(\{ loading, error, filterEmpty \}\);/);
+    expect(code).toMatch(
+      /ListEmptyComponent=\{\s*listEmpty === 'loading' \? \([\s\S]*?\) : listEmpty === 'none' \? null : listEmpty === 'error' \? \(/,
+    );
+  });
+
+  it('the chip says when stock at other warehouses was left out (core’s note, the web page’s)', () => {
+    const fn = code.slice(code.indexOf('function StagingFilterChipCard('));
+    expect(fn).toMatch(/\{chip\.elsewhereNote \? \(\s*<Body size=\{12\.5\} muted>\s*\{chip\.elsewhereNote\}/);
+  });
+
   // Mutation caught: router.back() (the drawer the order pushed goes to its
   // first screen, Home, before it pops to the order).
   it('Back (the chip’s and the arrow) returns to the order it came from', () => {

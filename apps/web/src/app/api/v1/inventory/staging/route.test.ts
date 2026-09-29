@@ -148,16 +148,70 @@ describe('GET /api/v1/inventory/staging: itemIds and orderId (F2-3)', () => {
   });
 
   it('orderId answers the order number for the chip, read beside the worklist', async () => {
-    const s = stub({ 'order_requests.select': { data: { id: ORDER, order_number: 123 }, error: null } });
+    const s = stub({ 'order_requests.select': { data: { id: ORDER, order_number: 123, warehouse_id: 'wh-1' }, error: null } });
     vi.mocked(withApiContext).mockResolvedValueOnce(ctx(s.client));
     const res = await get(`?itemIds=${id(1)}&orderId=${ORDER}`);
     expect(res.status).toBe(200);
-    expect((await res.json()).order).toEqual({ id: ORDER, orderNumber: 'SO-000123', found: true });
+    expect((await res.json()).order).toEqual({ id: ORDER, orderNumber: 'SO-000123', found: true, elsewhere: 0 });
     const [methods] = s.chainsAll.get('order_requests.select')!;
     const [args] = s.chainArgsAll.get('order_requests.select')!;
     const pairs = methods!.map((m, k) => [m, ...(args![k] ?? [])]);
     expect(pairs).toContainEqual(['eq', 'organization_id', 'org-1']);
     expect(pairs).toContainEqual(['eq', 'id', ORDER]);
+  });
+
+  // Readiness counts Staging at the order's warehouse and at locations with no
+  // warehouse (0377); the phone gets the same narrowed list as the web page.
+  it("with the order read: only its warehouse's rows and warehouse-less ones, and how many were left out", async () => {
+    const mixed = (call: MockCall) => ({
+      data: inItemIds(call).flatMap((itemId, k) => [
+        {
+          id: `lvl-h-${k}`,
+          item_id: itemId,
+          location_id: 'stg-home',
+          quantity: 3,
+          locations: { id: 'stg-home', kind: 'staging', warehouse_id: 'wh-1' },
+          inventory_items: { id: itemId, name: 'Thing', sku: 'SKU', item_type: 'product', deleted_at: null },
+        },
+        {
+          id: `lvl-o-${k}`,
+          item_id: itemId,
+          location_id: 'stg-other',
+          quantity: 5,
+          locations: { id: 'stg-other', kind: 'staging', warehouse_id: 'wh-2' },
+          inventory_items: { id: itemId, name: 'Thing', sku: 'SKU', item_type: 'product', deleted_at: null },
+        },
+        {
+          id: `lvl-n-${k}`,
+          item_id: itemId,
+          location_id: 'stg-org',
+          quantity: 1,
+          locations: { id: 'stg-org', kind: 'staging', warehouse_id: null },
+          inventory_items: { id: itemId, name: 'Thing', sku: 'SKU', item_type: 'product', deleted_at: null },
+        },
+      ]),
+      error: null,
+    });
+    const s = makeSupabaseStub({
+      'item_stock_levels.select': mixed,
+      'stock_movements.select': { data: [], error: null },
+      'order_requests.select': { data: { id: ORDER, order_number: 123, warehouse_id: 'wh-1' }, error: null },
+    } as never);
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctx(s.client));
+    const body = await (await get(`?itemIds=${id(1)},${id(2)}&orderId=${ORDER}`)).json();
+    expect(body.rows.map((r: { warehouseId: string | null }) => r.warehouseId).sort()).toEqual(['wh-1', 'wh-1', null, null].sort());
+    expect(body.order).toEqual({ id: ORDER, orderNumber: 'SO-000123', found: true, elsewhere: 2 });
+
+    // The order not read (failed): nothing narrowed, nothing claimed.
+    const f = makeSupabaseStub({
+      'item_stock_levels.select': mixed,
+      'stock_movements.select': { data: [], error: null },
+      'order_requests.select': { data: null, error: { message: 'boom' } },
+    } as never);
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctx(f.client));
+    const failed = await (await get(`?itemIds=${id(1)}&orderId=${ORDER}`)).json();
+    expect(failed.rows).toHaveLength(3);
+    expect(failed.order).toEqual({ id: ORDER, orderNumber: null, found: true, elsewhere: 0 });
   });
 
   it('an order that is not there: found false (no link back); a failed read: found true, no number, and the list still loads', async () => {
@@ -167,6 +221,7 @@ describe('GET /api/v1/inventory/staging: itemIds and orderId (F2-3)', () => {
       id: ORDER,
       orderNumber: null,
       found: false,
+      elsewhere: 0,
     });
 
     const failed = stub({ 'order_requests.select': { data: null, error: { message: 'boom' } } });
@@ -174,7 +229,7 @@ describe('GET /api/v1/inventory/staging: itemIds and orderId (F2-3)', () => {
     const res = await get(`?itemIds=${id(1)}&orderId=${ORDER}`);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.order).toEqual({ id: ORDER, orderNumber: null, found: true });
+    expect(body.order).toEqual({ id: ORDER, orderNumber: null, found: true, elsewhere: 0 });
     expect(body.rows).toHaveLength(1);
   });
 
@@ -184,7 +239,7 @@ describe('GET /api/v1/inventory/staging: itemIds and orderId (F2-3)', () => {
     modules.delete('orders');
     vi.mocked(withApiContext).mockResolvedValueOnce(ctx(s.client, 'admin', modules));
     const body = await (await get(`?itemIds=${id(1)}&orderId=${ORDER}`)).json();
-    expect(body.order).toEqual({ id: ORDER, orderNumber: null, found: false });
+    expect(body.order).toEqual({ id: ORDER, orderNumber: null, found: false, elsewhere: 0 });
     expect(s.fromCalls).not.toContain('order_requests');
   });
 

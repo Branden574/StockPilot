@@ -4,6 +4,7 @@ import {
   describeStagingItemFilter,
   STAGING_FILTER_EMPTY_COPY,
   stagingFilterInvalidCopy,
+  stagingRowsForOrderWarehouse,
   type StagingFilterParse,
 } from '@stockpilot/core';
 
@@ -32,9 +33,21 @@ type OrderLink = Awaited<ReturnType<OrderRequestsService['orderLinkLabel']>>;
  * the worklist is read for those items only (in the service's query, batched,
  * the active-warehouse cookie ignored), and a chip says so: "Showing items from
  * SO-000123 · Show all · Back to the order", with the note that only Staging
- * stops a pick (the items' Unplaced rows are listed too). The order's number is
- * read BESIDE the worklist, never after it, and never fails the page. An
- * unusable filter shows every item and says why.
+ * stops a pick (the items' Unplaced rows are listed too). The order's number
+ * and warehouse are read BESIDE the worklist, never after it, and never fail
+ * the page. The rows are then narrowed to the order's warehouse and to
+ * locations with no warehouse (core stagingRowsForOrderWarehouse: what
+ * readiness counts as "here"), since another warehouse's Staging never
+ * unblocks this order's pick; the chip says when some were left out. A
+ * filtered list with nothing in it says so once, in the chip (the table's own
+ * "Nothing to place" is for the whole worklist). An unusable filter shows
+ * every item and says why.
+ *
+ * ACCESS is not decided here: with a filter the warehouse cookie is not
+ * applied, and the rows are bounded by RLS alone (item_stock_levels_select,
+ * 0331 and 0371, and inventory_items' own policy), exactly as the unfiltered
+ * list already is for a warehouse-scoped member (their cookie filter is null,
+ * lib/warehouse-filter.ts). The narrowing above is a view of those rows.
  *
  * READ-ONLY PARAMS (pattern #18). Nothing here or in StagingTable rewrites
  * `?item` or `?order`: the chip is server-rendered links, and the type tabs
@@ -63,7 +76,7 @@ export async function StagingTableSection({
     itemFilter ? Promise.resolve<string | null>(null) : getActiveWarehouseFilter(),
   ]);
 
-  const [rows, allLocations, warehouses, orderLink] = await Promise.all([
+  const [worklist, allLocations, warehouses, orderLink] = await Promise.all([
     inventorySvc.stagedWorklist(
       itemFilter
         ? { itemType, itemIds: itemFilter.itemIds }
@@ -77,6 +90,13 @@ export async function StagingTableSection({
           .catch((): OrderLink => ({ state: 'failed' }))
       : Promise.resolve<OrderLink | null>(null),
   ]);
+
+  // The order's warehouse, when the order was read: the rows its pick can use.
+  const narrowed =
+    itemFilter && orderLink?.state === 'ok'
+      ? stagingRowsForOrderWarehouse(worklist, orderLink.warehouseId)
+      : { rows: worklist, elsewhere: 0 };
+  const rows = narrowed.rows;
 
   // warehouse id → display name for the Warehouse column. list() returns only
   // active warehouses; any staged row pointing at an archived/inactive
@@ -120,6 +140,7 @@ export async function StagingTableSection({
         orderNumber: orderLink?.state === 'ok' ? orderLink.orderNumber : null,
         hasOrder,
         itemCount: itemFilter.itemIds.length,
+        elsewhere: narrowed.elsewhere,
       })
     : null;
   const showAllHref = itemType
@@ -171,6 +192,11 @@ export async function StagingTableSection({
           <p className="text-muted-foreground mt-1 text-xs" data-testid="staging-item-filter-note">
             {chip.note}
           </p>
+          {chip.elsewhereNote && (
+            <p className="text-muted-foreground mt-1 text-xs" data-testid="staging-item-filter-elsewhere">
+              {chip.elsewhereNote}
+            </p>
+          )}
           {rows.length === 0 && (
             <p className="mt-1 text-xs" role="status" data-testid="staging-item-filter-empty">
               {STAGING_FILTER_EMPTY_COPY}
@@ -185,6 +211,8 @@ export async function StagingTableSection({
         canPlace={canPlace}
         canMintDestination={canMintDestination}
         activeItemType={itemType ?? 'all'}
+        // A filtered list says it is empty once, in the chip above.
+        hideEmptyState={chip !== null}
       />
     </>
   );

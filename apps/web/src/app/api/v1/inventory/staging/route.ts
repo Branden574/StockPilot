@@ -9,7 +9,7 @@ import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
-import { can, STAGING_FILTER_MAX_ITEMS } from '@stockpilot/core';
+import { can, STAGING_FILTER_MAX_ITEMS, stagingRowsForOrderWarehouse } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,8 +35,16 @@ export const dynamic = 'force-dynamic';
  * warehouse filter is then ignored (the ids already narrow it). `orderId`
  * names the order the items came from: the answer carries `order` (its
  * number, for the chip "Showing items from SO-000123", and whether it exists
- * to go back to), read beside the worklist, never after it. Both are
- * additive: an older app never sends them and ignores `order`.
+ * to go back to), read beside the worklist, never after it. With the order
+ * read, the rows are narrowed to its warehouse and to locations with no
+ * warehouse (core stagingRowsForOrderWarehouse, the web page's own narrowing:
+ * what readiness counts as "here"), and `order.elsewhere` says how many rows
+ * at other warehouses were left out. Both params are additive: an older app
+ * never sends them and ignores `order`.
+ *
+ * Access: with itemIds the warehouse filter is not applied, and the rows are
+ * bounded by RLS alone (item_stock_levels_select 0331/0371, inventory_items'
+ * policy), as they already were for a warehouse-scoped member without it.
  */
 /** A comma list of item ids (the phone's `itemIds`), repeated params joined.
  *  Duplicates are removed BEFORE the 200 cap, as core parseStagingItemFilter
@@ -103,7 +111,7 @@ export async function GET(req: NextRequest) {
     const { itemIds, orderId } = parsed.data;
     // The order's number is read BESIDE the worklist (no serial round trip),
     // and never fails the list (orderLinkLabel does not throw).
-    const [rows, order] = await Promise.all([
+    const [worklist, order] = await Promise.all([
       svc.stagedWorklist({
         itemType: parsed.data.type,
         warehouseId: parsed.data.warehouseId ?? null,
@@ -111,22 +119,28 @@ export async function GET(req: NextRequest) {
       }),
       orderId ? new OrderRequestsService(ctx).orderLinkLabel(orderId) : Promise.resolve(null),
     ]);
+    // The order's warehouse, when the order was read: the rows its pick can use.
+    const narrowed =
+      itemIds && order?.state === 'ok'
+        ? stagingRowsForOrderWarehouse(worklist, order.warehouseId)
+        : { rows: worklist, elsewhere: 0 };
 
     return NextResponse.json(
       {
-        rows,
+        rows: narrowed.rows,
         canPlace: can(ctx, 'stock:transfer'),
         // null without an orderId. `found` false: no such order to go back
         // to; `orderNumber` null with `found` true: its number could not be
-        // read (the link still works).
+        // read (the link still works). `elsewhere`: rows at other warehouses
+        // left out of `rows` (0 when the order's warehouse is not known).
         order:
           order === null
             ? null
             : order.state === 'ok'
-              ? { id: order.id, orderNumber: order.orderNumber, found: true }
+              ? { id: order.id, orderNumber: order.orderNumber, found: true, elsewhere: narrowed.elsewhere }
               : order.state === 'failed'
-                ? { id: orderId!, orderNumber: null, found: true }
-                : { id: orderId!, orderNumber: null, found: false },
+                ? { id: orderId!, orderNumber: null, found: true, elsewhere: 0 }
+                : { id: orderId!, orderNumber: null, found: false, elsewhere: 0 },
       },
       { headers: { 'Cache-Control': 'no-store' } },
     );

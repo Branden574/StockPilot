@@ -34,6 +34,7 @@ import {
   stagingCountLabel,
   stagingFilterChip,
   stagingFilterEmptyCopy,
+  stagingListEmptyState,
   stagingPlaceDisabledReason,
   stagingReceivedLabel,
   stagingRouteParamValues,
@@ -94,7 +95,9 @@ import { useWorkspace } from '@/lib/use-workspace';
  * line, or "Put away 3 items" on the readiness card) opens this tab with the
  * order's items (`itemIds`) and the order (`orderId`). The list is then read
  * for those items only (the route filters in the service's query, and the
- * warehouse switcher is not applied), and the web page's chip says so:
+ * warehouse switcher is not applied), narrowed by the route to the order's
+ * warehouse and warehouse-less locations (what readiness counts; the chip
+ * says when others were left out), and the web page's chip says so:
  * "Showing items from SO-000123 · Show all · Back to the order", with the note
  * that only Staging stops a pick. Place is unchanged: MoveStockModal in
  * put-away mode, crates included. Back (the chip's, and the top-left arrow)
@@ -267,6 +270,7 @@ export default function StagingScreen() {
     error,
     rowCount: rows.length,
   });
+  const listEmpty = stagingListEmptyState({ loading, error, filterEmpty });
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
@@ -343,10 +347,13 @@ export default function StagingScreen() {
             ) : null}
           </View>
         }
+        // A filtered list that came back empty shows nothing here ('none'):
+        // the chip above already says "No Staging or Unplaced stock is listed
+        // for these items.", and a generic "Nothing to place." would repeat it.
         ListEmptyComponent={
-          loading ? (
+          listEmpty === 'loading' ? (
             <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
-          ) : error ? (
+          ) : listEmpty === 'none' ? null : listEmpty === 'error' ? (
             // The failure itself is already spelled out above the list. Do NOT
             // also claim "Nothing to place" here — an unread request is not an
             // empty worklist, and conflating the two is the same category of
@@ -610,6 +617,11 @@ function StagingFilterChipCard({
       <Body size={12.5} muted>
         {chip.note}
       </Body>
+      {chip.elsewhereNote ? (
+        <Body size={12.5} muted>
+          {chip.elsewhereNote}
+        </Body>
+      ) : null}
       {emptyCopy ? (
         <Body size={13} color={c.ink2}>
           {emptyCopy}

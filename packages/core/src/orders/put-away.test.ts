@@ -28,6 +28,7 @@ import {
   putAwayStripOffer,
   putAwayTargets,
   STAGING_FILTER_BACK_LABEL,
+  STAGING_FILTER_ELSEWHERE_NOTE,
   STAGING_FILTER_EMPTY_COPY,
   STAGING_FILTER_MAX_ITEMS,
   STAGING_FILTER_SHOW_ALL_LABEL,
@@ -35,6 +36,7 @@ import {
   stagingFilterInvalidCopy,
   stagingPutAwayHref,
   stagingPutAwayParams,
+  stagingRowsForOrderWarehouse,
 } from './put-away';
 import { PERMISSION_META } from '../constants/permissions';
 
@@ -371,9 +373,49 @@ describe('the filtered Staging chip (web and phone alike)', () => {
     });
   });
 
+  it('says when stock at other warehouses was left out, and nothing when none was', () => {
+    expect(describeStagingItemFilter({ orderNumber: 'SO-000123', hasOrder: true, itemCount: 3, elsewhere: 2 }).elsewhereNote).toBe(
+      STAGING_FILTER_ELSEWHERE_NOTE,
+    );
+    expect(STAGING_FILTER_ELSEWHERE_NOTE).toBe(
+      "Stock waiting at other warehouses is not listed: this order is picked from its own warehouse.",
+    );
+    expect(describeStagingItemFilter({ orderNumber: 'SO-000123', hasOrder: true, itemCount: 3, elsewhere: 0 }).elsewhereNote).toBeNull();
+    expect(describeStagingItemFilter({ orderNumber: 'SO-000123', hasOrder: true, itemCount: 3 }).elsewhereNote).toBeNull();
+  });
+
   it('says why a link was not used', () => {
     expect(stagingFilterInvalidCopy('too_many')).toBe('This link names more than 200 items, so every item is shown.');
     expect(stagingFilterInvalidCopy('bad_id')).toBe("This link's item list couldn't be read, so every item is shown.");
+  });
+});
+
+// ── The order's warehouse ───────────────────────────────────────────────────
+
+describe("stagingRowsForOrderWarehouse: what readiness counts as here (0377), nothing else", () => {
+  const rows = [
+    { itemId: 'A', warehouseId: 'wh-home', sourceKind: 'staging' },
+    { itemId: 'A', warehouseId: 'wh-other', sourceKind: 'staging' },
+    { itemId: 'B', warehouseId: null, sourceKind: 'staging' },
+    { itemId: 'B', warehouseId: 'WH-HOME', sourceKind: 'unplaced' },
+    { itemId: 'C', warehouseId: 'wh-other', sourceKind: 'unplaced' },
+  ];
+
+  it("keeps the order's warehouse and the locations with no warehouse; counts what it left out", () => {
+    // order_readiness_facts: here = l.warehouse_id is null or = the order's
+    // warehouse. Another warehouse's Staging never unblocks this order's pick.
+    expect(stagingRowsForOrderWarehouse(rows, 'wh-home')).toEqual({
+      rows: [rows[0], rows[2], rows[3]],
+      elsewhere: 2,
+    });
+  });
+
+  it("an order whose warehouse is not known narrows nothing (never a list emptied by a failed read)", () => {
+    expect(stagingRowsForOrderWarehouse(rows, null)).toEqual({ rows, elsewhere: 0 });
+  });
+
+  it('keeps the order of the rows it keeps', () => {
+    expect(stagingRowsForOrderWarehouse(rows, 'wh-other').rows.map((r) => r.itemId)).toEqual(['A', 'B', 'C']);
   });
 });
 
@@ -389,6 +431,7 @@ describe('honest words (put-away)', () => {
     putAwayLineAccessibilityLabel(lineOf(a, 'L1')),
     STAGING_FILTER_UNPLACED_NOTE,
     STAGING_FILTER_EMPTY_COPY,
+    STAGING_FILTER_ELSEWHERE_NOTE,
     stagingFilterInvalidCopy('bad_id'),
     stagingFilterInvalidCopy('too_many'),
     ...Object.values(describeStagingItemFilter({ orderNumber: 'SO-000001', hasOrder: true, itemCount: 2 })),

@@ -263,6 +263,11 @@ export const STAGING_FILTER_BACK_LABEL = 'Back to the order';
 export const STAGING_FILTER_UNPLACED_NOTE =
   "Only stock in Staging stops a pick. These items' Unplaced stock is listed too; picking can already take it, and you can still place it on a rack.";
 
+/** Under the chip, when the list left out stock waiting at another warehouse
+ *  (stagingRowsForOrderWarehouse): it never unblocks this order's pick. */
+export const STAGING_FILTER_ELSEWHERE_NOTE =
+  'Stock waiting at other warehouses is not listed: this order is picked from its own warehouse.';
+
 /** A filtered list with nothing in it. It says what is LISTED, not what is
  *  in stock: the worklist read shows nothing when it fails, too. */
 export const STAGING_FILTER_EMPTY_COPY =
@@ -282,6 +287,9 @@ export interface StagingFilterChipCopy {
   /** Null when the link names no order. */
   backLabel: string | null;
   note: string;
+  /** STAGING_FILTER_ELSEWHERE_NOTE when rows at other warehouses were left
+   *  out, else null. */
+  elsewhereNote: string | null;
 }
 
 /**
@@ -290,12 +298,15 @@ export interface StagingFilterChipCopy {
  * that only Staging stops a pick. `orderNumber` is the formatted number
  * (formatOrderNumber), null when it could not be read; `hasOrder` whether the
  * link named an order there is to go back to (it decides "Back to the order":
- * false when none was named, or the named one is not there).
+ * false when none was named, or the named one is not there). `elsewhere`
+ * counts the rows left out because they sit at another warehouse
+ * (stagingRowsForOrderWarehouse); above zero, the chip says so.
  */
 export function describeStagingItemFilter(input: {
   orderNumber: string | null;
   hasOrder: boolean;
   itemCount: number;
+  elsewhere?: number;
 }): StagingFilterChipCopy {
   const headline = input.orderNumber
     ? `Showing items from ${input.orderNumber}`
@@ -307,5 +318,30 @@ export function describeStagingItemFilter(input: {
     showAllLabel: STAGING_FILTER_SHOW_ALL_LABEL,
     backLabel: input.hasOrder ? STAGING_FILTER_BACK_LABEL : null,
     note: STAGING_FILTER_UNPLACED_NOTE,
+    elsewhereNote: (input.elsewhere ?? 0) > 0 ? STAGING_FILTER_ELSEWHERE_NOTE : null,
   };
+}
+
+/**
+ * A filtered list's rows narrowed to what the order's pick can use: holdings
+ * at the order's own warehouse and at locations with no warehouse, exactly
+ * what readiness counts as "here" (order_readiness_facts, 0377: `l.warehouse_id
+ * is null or l.warehouse_id = the order's`). The worklist read for an order's
+ * items ignores the viewer's warehouse filter (the order may be in another
+ * warehouse than the one selected), so without this it would also list the
+ * items' Staging at OTHER warehouses: placing that changes nothing about this
+ * order. `elsewhere` counts what was left out, for the chip's note.
+ *
+ * Not an access boundary (RLS already scoped the rows to what the viewer may
+ * see): a view of them. An order whose warehouse is not known (its read
+ * failed) narrows nothing, so a failed read never empties the list.
+ */
+export function stagingRowsForOrderWarehouse<T extends { warehouseId: string | null }>(
+  rows: readonly T[],
+  orderWarehouseId: string | null,
+): { rows: T[]; elsewhere: number } {
+  if (!orderWarehouseId) return { rows: [...rows], elsewhere: 0 };
+  const wh = orderWarehouseId.toLowerCase();
+  const kept = rows.filter((r) => r.warehouseId === null || r.warehouseId.toLowerCase() === wh);
+  return { rows: kept, elsewhere: rows.length - kept.length };
 }

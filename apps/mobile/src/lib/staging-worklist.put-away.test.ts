@@ -1,5 +1,6 @@
 import {
   STAGING_FILTER_BACK_LABEL,
+  STAGING_FILTER_ELSEWHERE_NOTE,
   STAGING_FILTER_EMPTY_COPY,
   STAGING_FILTER_MAX_ITEMS,
   STAGING_FILTER_SHOW_ALL_LABEL,
@@ -14,6 +15,7 @@ import {
   parseStagingWorklist,
   stagingFilterChip,
   stagingFilterEmptyCopy,
+  stagingListEmptyState,
   stagingRouteParamValues,
   stagingScreenFilter,
   stagingWorklistPath,
@@ -140,11 +142,26 @@ describe('stagingScreenFilter: the params are read, never rewritten', () => {
 describe('parseStagingOrderLink (the answer’s `order`)', () => {
   it('reads the order, its number and whether it is there', () => {
     expect(
-      parseStagingOrderLink({ rows: [], canPlace: true, order: { id: ORDER, orderNumber: 'SO-000017', found: true } }),
-    ).toEqual({ id: ORDER, orderNumber: 'SO-000017', found: true });
+      parseStagingOrderLink({
+        rows: [],
+        canPlace: true,
+        order: { id: ORDER, orderNumber: 'SO-000017', found: true, elsewhere: 2 },
+      }),
+    ).toEqual({ id: ORDER, orderNumber: 'SO-000017', found: true, elsewhere: 2 });
     expect(
-      parseStagingOrderLink({ order: { id: ORDER, orderNumber: null, found: false } }),
-    ).toEqual({ id: ORDER, orderNumber: null, found: false });
+      parseStagingOrderLink({ order: { id: ORDER, orderNumber: null, found: false, elsewhere: 0 } }),
+    ).toEqual({ id: ORDER, orderNumber: null, found: false, elsewhere: 0 });
+  });
+
+  it('an answer without `elsewhere` (a server before the narrowing) or a bad one: 0, never a guess', () => {
+    for (const elsewhere of [undefined, null, 'two', -1, Number.NaN, 1.5]) {
+      expect(parseStagingOrderLink({ order: { id: ORDER, orderNumber: 'SO-1', found: true, elsewhere } })).toEqual({
+        id: ORDER,
+        orderNumber: 'SO-1',
+        found: true,
+        elsewhere: 0,
+      });
+    }
   });
 
   it('absent (no orderId sent, an older server) or malformed: null, never a guess', () => {
@@ -174,13 +191,22 @@ describe('stagingFilterChip (the web page’s chip, core’s words)', () => {
   const active = { itemIds: [ITEM_A, ITEM_B], orderId: ORDER };
 
   it('names the order once the answer does, with Show all, Back to the order and the note', () => {
-    expect(stagingFilterChip(active, { id: ORDER, orderNumber: 'SO-000017', found: true })).toEqual({
+    expect(stagingFilterChip(active, { id: ORDER, orderNumber: 'SO-000017', found: true, elsewhere: 0 })).toEqual({
       headline: 'Showing items from SO-000017',
       showAllLabel: STAGING_FILTER_SHOW_ALL_LABEL,
       backLabel: STAGING_FILTER_BACK_LABEL,
       note: STAGING_FILTER_UNPLACED_NOTE,
+      elsewhereNote: null,
       backOrderId: ORDER,
     });
+  });
+
+  it('says so when the route left out rows at other warehouses (the web page’s note)', () => {
+    expect(stagingFilterChip(active, { id: ORDER, orderNumber: 'SO-000017', found: true, elsewhere: 3 })?.elsewhereNote).toBe(
+      STAGING_FILTER_ELSEWHERE_NOTE,
+    );
+    // Another order's answer is not about this list.
+    expect(stagingFilterChip(active, { id: uuid(5), orderNumber: 'SO-000099', found: true, elsewhere: 3 })?.elsewhereNote).toBeNull();
   });
 
   it('before the answer (or after a failed read) the reader can still go back to the order', () => {
@@ -190,21 +216,21 @@ describe('stagingFilterChip (the web page’s chip, core’s words)', () => {
   });
 
   it('a number that could not be read keeps the link', () => {
-    const chip = stagingFilterChip(active, { id: ORDER, orderNumber: null, found: true });
+    const chip = stagingFilterChip(active, { id: ORDER, orderNumber: null, found: true, elsewhere: 0 });
     expect(chip?.headline).toBe('Showing items from an order');
     expect(chip?.backOrderId).toBe(ORDER);
   });
 
   it('an order that is not there has nothing to go back to', () => {
     // Mutation caught: offering Back to an order the answer said is gone.
-    const chip = stagingFilterChip(active, { id: ORDER, orderNumber: null, found: false });
+    const chip = stagingFilterChip(active, { id: ORDER, orderNumber: null, found: false, elsewhere: 0 });
     expect(chip?.backLabel).toBeNull();
     expect(chip?.backOrderId).toBeNull();
     expect(chip?.headline).toBe('Showing only 2 items');
   });
 
   it('an answer about another order is not this order’s number', () => {
-    const chip = stagingFilterChip(active, { id: uuid(5), orderNumber: 'SO-000099', found: true });
+    const chip = stagingFilterChip(active, { id: uuid(5), orderNumber: 'SO-000099', found: true, elsewhere: 0 });
     expect(chip?.headline).toBe('Showing items from an order');
     expect(chip?.backOrderId).toBe(ORDER);
   });
@@ -218,7 +244,7 @@ describe('stagingFilterChip (the web page’s chip, core’s words)', () => {
   });
 
   it('no filter: no chip', () => {
-    expect(stagingFilterChip(null, { id: ORDER, orderNumber: 'SO-000017', found: true })).toBeNull();
+    expect(stagingFilterChip(null, { id: ORDER, orderNumber: 'SO-000017', found: true, elsewhere: 0 })).toBeNull();
   });
 });
 
@@ -235,5 +261,16 @@ describe('stagingFilterEmptyCopy', () => {
     expect(stagingFilterEmptyCopy({ active, loading: false, error: 'x', rowCount: 0 })).toBeNull();
     expect(stagingFilterEmptyCopy({ active, loading: false, error: null, rowCount: 2 })).toBeNull();
     expect(stagingFilterEmptyCopy({ active: null, loading: false, error: null, rowCount: 0 })).toBeNull();
+  });
+});
+
+describe('stagingListEmptyState (what the list shows with no rows)', () => {
+  it('a filtered list that came back empty: nothing, the chip already says it (one empty message, not two)', () => {
+    expect(stagingListEmptyState({ loading: false, error: null, filterEmpty: STAGING_FILTER_EMPTY_COPY })).toBe('none');
+  });
+  it('otherwise as before: the spinner, the retry line after a failed read, or "Nothing to place."', () => {
+    expect(stagingListEmptyState({ loading: true, error: null, filterEmpty: null })).toBe('loading');
+    expect(stagingListEmptyState({ loading: false, error: 'x', filterEmpty: null })).toBe('error');
+    expect(stagingListEmptyState({ loading: false, error: null, filterEmpty: null })).toBe('nothing_to_place');
   });
 });

@@ -1,7 +1,12 @@
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { parseStagingItemFilter, STAGING_FILTER_UNPLACED_NOTE, type StagingFilterParse } from '@stockpilot/core';
+import {
+  parseStagingItemFilter,
+  STAGING_FILTER_ELSEWHERE_NOTE,
+  STAGING_FILTER_UNPLACED_NOTE,
+  type StagingFilterParse,
+} from '@stockpilot/core';
 
 // The Staging page's data path (F2-3): ?item / ?order -> the worklist read for
 // those items (the cookie ignored), the order's number read BESIDE it, and the
@@ -12,7 +17,7 @@ const calls = vi.hoisted(() => ({
   orderLink: [] as string[],
   cookieReads: 0,
   order: { state: 'ok', id: '', orderNumber: 'SO-000123' } as Record<string, unknown>,
-  rows: [{ itemId: 'x' }] as unknown[],
+  rows: [{ itemId: 'x', warehouseId: 'wh-home' }] as unknown[],
   tableProps: null as Record<string, unknown> | null,
   orderFactoryFails: false,
 }));
@@ -73,8 +78,8 @@ beforeEach(() => {
   calls.worklist = [];
   calls.orderLink = [];
   calls.cookieReads = 0;
-  calls.order = { state: 'ok', id: ORDER, orderNumber: 'SO-000123' };
-  calls.rows = [{ itemId: 'x' }];
+  calls.order = { state: 'ok', id: ORDER, orderNumber: 'SO-000123', warehouseId: 'wh-home' };
+  calls.rows = [{ itemId: 'x', warehouseId: 'wh-home' }];
   calls.tableProps = null;
   calls.orderFactoryFails = false;
 });
@@ -140,11 +145,59 @@ describe('Staging page data path: ?item and ?order (F2-3)', () => {
     expect(screen.queryByTestId('staging-item-filter')).toBeNull();
   });
 
-  it('a filtered list with nothing in it says what is listed, not what is in stock', async () => {
+  it('a filtered list with nothing in it says what is listed, not what is in stock, ONCE (the table keeps its own empty state to itself)', async () => {
     calls.rows = [];
     await renderSection(parseStagingItemFilter({ item: A, order: ORDER }));
     expect(screen.getByTestId('staging-item-filter-empty')).toHaveTextContent(
       'No Staging or Unplaced stock is listed for these items.',
     );
+    expect(calls.tableProps).toMatchObject({ rows: [], hideEmptyState: true });
+  });
+
+  it('unfiltered, an empty worklist keeps the table\'s own empty state', async () => {
+    calls.rows = [];
+    await renderSection(parseStagingItemFilter({}));
+    expect(calls.tableProps).toMatchObject({ rows: [], hideEmptyState: false });
+  });
+
+  // Readiness counts Staging at the order's warehouse and at locations with no
+  // warehouse (0377); another warehouse's Staging never unblocks its pick.
+  it("lists only the order's warehouse and warehouse-less locations, and says other warehouses were left out", async () => {
+    calls.rows = [
+      { itemId: A, warehouseId: 'wh-home', sourceKind: 'staging' },
+      { itemId: A, warehouseId: 'wh-other', sourceKind: 'staging' },
+      { itemId: B, warehouseId: null, sourceKind: 'staging' },
+    ];
+    await renderSection(parseStagingItemFilter({ item: [A, B], order: ORDER }));
+    expect((calls.tableProps!.rows as { warehouseId: string | null }[]).map((r) => r.warehouseId)).toEqual([
+      'wh-home',
+      null,
+    ]);
+    expect(screen.getByTestId('staging-item-filter-elsewhere')).toHaveTextContent(STAGING_FILTER_ELSEWHERE_NOTE);
+  });
+
+  it('nothing left out: no note; every row elsewhere: the empty sentence and the note, one empty message', async () => {
+    await renderSection(parseStagingItemFilter({ item: A, order: ORDER }));
+    expect(screen.queryByTestId('staging-item-filter-elsewhere')).toBeNull();
+    cleanup();
+    calls.rows = [{ itemId: A, warehouseId: 'wh-other', sourceKind: 'staging' }];
+    await renderSection(parseStagingItemFilter({ item: A, order: ORDER }));
+    expect(calls.tableProps).toMatchObject({ rows: [], hideEmptyState: true });
+    expect(screen.getByTestId('staging-item-filter-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('staging-item-filter-elsewhere')).toBeInTheDocument();
+  });
+
+  it("the order's warehouse unknown (its read failed, or no order named): nothing is narrowed", async () => {
+    calls.rows = [
+      { itemId: A, warehouseId: 'wh-home', sourceKind: 'staging' },
+      { itemId: A, warehouseId: 'wh-other', sourceKind: 'staging' },
+    ];
+    calls.order = { state: 'failed' };
+    await renderSection(parseStagingItemFilter({ item: A, order: ORDER }));
+    expect(calls.tableProps!.rows).toHaveLength(2);
+    expect(screen.queryByTestId('staging-item-filter-elsewhere')).toBeNull();
+    cleanup();
+    await renderSection(parseStagingItemFilter({ item: A }));
+    expect(calls.tableProps!.rows).toHaveLength(2);
   });
 });

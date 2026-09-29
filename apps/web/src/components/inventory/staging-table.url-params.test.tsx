@@ -93,3 +93,29 @@ describe('the Staging table leaves ?item and ?order alone (pattern #18)', () => 
     expect(router.replace).not.toHaveBeenCalled();
   });
 });
+
+// F2-3: a list filtered to an order's items says it is empty once, in the
+// page's chip; the table's own empty state is for the whole worklist.
+describe('the table empty state', () => {
+  const empty = (hideEmptyState?: boolean) =>
+    render(
+      <StagingTable
+        rows={[]}
+        destinationsMap={{}}
+        warehouseNames={{}}
+        canPlace
+        activeItemType="all"
+        {...(hideEmptyState === undefined ? {} : { hideEmptyState })}
+      />,
+    );
+
+  it('shows "Nothing to place" by default', () => {
+    empty();
+    expect(screen.getByText(/Nothing to place/)).toBeInTheDocument();
+  });
+
+  it('leaves it out when the page already says the list is empty', () => {
+    empty(true);
+    expect(screen.queryByText(/Nothing to place/)).toBeNull();
+  });
+});
