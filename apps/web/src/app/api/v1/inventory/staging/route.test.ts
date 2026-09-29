@@ -97,6 +97,23 @@ describe('GET /api/v1/inventory/staging: itemIds and orderId (F2-3)', () => {
     expect((await ok.json()).rows).toHaveLength(200);
   });
 
+  it('removes duplicates BEFORE the 200 cap, as core and the service do (201 ids, 200 distinct: 200)', async () => {
+    const many = Array.from({ length: 200 }, (_, i) => id(i + 1));
+    const s = stub();
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctx(s.client));
+    // The same list the web page accepts (core parseStagingItemFilter), with
+    // one id repeated in another case: 201 values, 200 items.
+    const res = await get(`?itemIds=${[...many, id(7).toUpperCase()].join(',')}`);
+    expect(res.status).toBe(200);
+    expect((await res.json()).rows).toHaveLength(200);
+    // And 201 DISTINCT ids are still refused, before any read.
+    const s201 = stub();
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctx(s201.client));
+    const over = await get(`?itemIds=${[...many, id(201)].join(',')}`);
+    expect(over.status).toBe(400);
+    expect(s201.fromCalls).toEqual([]);
+  });
+
   it('400 for an orderId that is not a uuid', async () => {
     const s = stub();
     vi.mocked(withApiContext).mockResolvedValueOnce(ctx(s.client));

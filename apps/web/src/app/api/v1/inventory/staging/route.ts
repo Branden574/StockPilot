@@ -38,16 +38,17 @@ export const dynamic = 'force-dynamic';
  * to go back to), read beside the worklist, never after it. Both are
  * additive: an older app never sends them and ignores `order`.
  */
-/** A comma list of item ids (the phone's `itemIds`), repeated params joined. */
+/** A comma list of item ids (the phone's `itemIds`), repeated params joined.
+ *  Duplicates are removed BEFORE the 200 cap, as core parseStagingItemFilter
+ *  and the service do, so the three layers accept the same lists. */
 const itemIdsSchema = z
   .string()
-  .transform((v) => v.split(',').map((s) => s.trim().toLowerCase()))
+  .transform((v) => [...new Set(v.split(',').map((s) => s.trim().toLowerCase()))])
   .pipe(
     z
       .array(z.string().uuid('Each item id must be a UUID'))
       .max(STAGING_FILTER_MAX_ITEMS, `At most ${STAGING_FILTER_MAX_ITEMS} item ids`),
-  )
-  .transform((ids) => [...new Set(ids)]);
+  );
 
 const querySchema = z.object({
   // Mirrors the web page's ?type= param (Items / Books filter).
