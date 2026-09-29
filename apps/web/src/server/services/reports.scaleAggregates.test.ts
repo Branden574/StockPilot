@@ -409,6 +409,26 @@ describe('ReportsService.deadStock (scale parity)', () => {
     expect(result.itemCount).toBe(2);
     expect(result.totalCarryingValue).toBe(314);
   });
+
+  // 2026-09-29: the out-movement aggregate does not depend on the item list,
+  // so it starts with the item stream instead of after it (Velocity class
+  // already did). Since 0380 the aggregate runs under the caller's row level
+  // security, a few ms more; the old serial chain put that on top of the item
+  // stream's round trips.
+  it('starts the out-movement aggregate without waiting for the item stream', async () => {
+    let rpcStartedBeforeItemsServed: boolean | null = null;
+    wireRpc({ report_item_out_movements: () => outSet });
+    const stub = makeSupabaseStub({
+      'inventory_items.select': () => {
+        rpcStartedBeforeItemsServed = rpcMock.mock.calls.length > 0;
+        return { data: items, error: null };
+      },
+    });
+    const svc = new ReportsService(ctxOf(stub.client));
+    const result = await svc.deadStock(90);
+    expect(rpcStartedBeforeItemsServed).toBe(true);
+    expect(result.rows.map((r) => r.itemId)).toEqual(['a', 'c']);
+  });
 });
 
 // ───────────────────────────────────────────────────────────────────────────

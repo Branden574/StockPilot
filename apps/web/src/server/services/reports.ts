@@ -1451,10 +1451,25 @@ export class ReportsService {
       category: { name: string } | { name: string }[] | null;
     };
 
-    // First pass: every item with on-hand > 0 in the org. Stream the FULL set
-    // (no cap) — this IS the display, and an org with >1000 (or >50k) stocked
-    // items must not silently see only a prefix.
-    const itemList = await fetchAllRows<ItemRow>(
+    // Items that had ANY out-movement in the window — these are NOT dead.
+    // Computed DB-side (0225, shared with velocityClass) so the dedup set can
+    // NEVER truncate. (Was: a per-item-batch fetch under a 100k cap, which
+    // silently missed out-movements and wrongly flagged active items as
+    // dead.) With the CALLER'S client (0380) the set holds the movements the
+    // caller can read, which include every movement of every item in
+    // `itemList` (a readable item's movements are readable), so the
+    // intersection below is unchanged. `since` is the exact instant the JS
+    // computed. It does not depend on the item list, so it runs alongside
+    // the item stream (as in velocityClass), not after it.
+    const outRead = this.ctx.supabase.rpc('report_item_out_movements', {
+      p_organization_id: this.ctx.organizationId,
+      p_since: since,
+    });
+
+    // Every item with on-hand > 0 in the org. Stream the FULL set (no cap) —
+    // this IS the display, and an org with >1000 (or >50k) stocked items must
+    // not silently see only a prefix.
+    const itemListRead = fetchAllRows<ItemRow>(
       (from, to) =>
         this.ctx.supabase
           .from('inventory_items')
@@ -1475,19 +1490,7 @@ export class ReportsService {
       {},
     );
 
-    // Items that had ANY out-movement in the window — these are NOT dead.
-    // Computed DB-side (0225, shared with velocityClass) so the dedup set can
-    // NEVER truncate. (Was: a per-item-batch fetch under a 100k cap, which
-    // silently missed out-movements and wrongly flagged active items as
-    // dead.) With the CALLER'S client (0380) the set holds the movements the
-    // caller can read, which include every movement of every item in
-    // `itemList` (a readable item's movements are readable), so the
-    // intersection below is unchanged. `since` is the exact instant the JS
-    // computed.
-    const outRes = await this.ctx.supabase.rpc('report_item_out_movements', {
-      p_organization_id: this.ctx.organizationId,
-      p_since: since,
-    });
+    const [itemList, outRes] = await Promise.all([itemListRead, outRead]);
     if (outRes.error) throw reportRpcError(outRes.error);
     const recentOut = new Set<string>();
     for (const m of (outRes.data ?? []) as Array<{ item_id: string }>) {
