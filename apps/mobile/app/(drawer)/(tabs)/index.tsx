@@ -12,6 +12,7 @@ import {
 import * as React from 'react';
 import {
   ActivityIndicator,
+  AppState,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -38,6 +39,7 @@ import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
 import { useAuth } from '@/lib/auth-context';
 import { HOME_BUNDLES_SUBTITLE } from '@/lib/cta-gating';
+import { homeGreeting } from '@/lib/greeting';
 import { useProfile } from '@/lib/use-profile';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
@@ -98,6 +100,22 @@ export default function Home() {
   const [refreshing, setRefreshing] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [unread, setUnread] = React.useState(0);
+  // The phone's clock, for the greeting and the date line. Home stays mounted
+  // behind the other tabs, so a clock read once would keep greeting by the
+  // morning all day: it is read again whenever Home comes back into
+  // focus and whenever the app comes back to the foreground.
+  const [now, setNow] = React.useState(() => new Date());
+  useFocusEffect(
+    React.useCallback(() => {
+      setNow(new Date());
+    }, []),
+  );
+  React.useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') setNow(new Date());
+    });
+    return () => sub.remove();
+  }, []);
 
   // Unread-notification count for the header bell badge. A cheap head-count
   // query (partial index notifications_user_unread_idx). Kept separate from the
@@ -247,7 +265,6 @@ export default function Home() {
     setRefreshing(false);
   }
 
-  const now = new Date();
   const dateLabel = `TODAY · ${SHORT_DAY[now.getDay()].toUpperCase()} ${SHORT_MONTH[now.getMonth()].toUpperCase()} ${now.getDate()}`;
   const firstName = (profile.fullName ?? '').split(/\s+/)[0]
     || (user?.email ? user.email.split('@')[0] : 'there');
@@ -276,7 +293,7 @@ export default function Home() {
         <View style={styles.head}>
           <Eyebrow>{dateLabel}</Eyebrow>
           <Display size={32} style={{ marginTop: 12 }}>
-            Good morning,{'\n'}
+            {homeGreeting(now)}{'\n'}
             <Em>{firstName}.</Em>
           </Display>
           <Mono size={13.5} tracking={0.02} color={c.ink3} style={{ marginTop: 10 }}>
