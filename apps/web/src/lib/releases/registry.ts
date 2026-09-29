@@ -43,12 +43,12 @@ export const RELEASES: Release[] = [
     // link to Orders and are for whoever can pick (items:update,
     // orders:approve, where Orders is on): the digital pick's quantity is the
     // only field on an order's screen that takes typing, and only a picker is
-    // offered it. The order title and unit count entry is for anyone who can
-    // open an order (every member, where Orders is on).
+    // offered it. The page titles entry is for every member; the unit count
+    // entry for anyone who can open an order (every member, where Orders is on).
     status: 'draft',
     title: "The top bar fits small screens, and the mobile app's buttons and fields are easier to use",
     summary:
-      "On the web, the top bar now fits narrow screens, so your account button is never cut off, your account menu has Help & Learning, Support & feedback and the theme, and an order's title keeps its number. In the mobile app, Home greets you by the time of day, the top-bar buttons and the Add items steppers work with VoiceOver and are easier to tap, and the digital pick's quantity shows every digit at the largest text sizes and is no longer left under the keyboard.",
+      "On the web, the top bar now fits narrow screens, so your account button is never cut off, your account menu has Help & Learning, Support & feedback and the theme, and a page's title keeps its name or number beside its buttons. In the mobile app, Home greets you by the time of day, the top-bar buttons and the Add items steppers work with VoiceOver and are easier to tap, and the digital pick's quantity shows every digit at the largest text sizes and is no longer left under the keyboard.",
     publishedAt: '2026-10-02T17:00:00Z',
     entries: [
       {
@@ -62,6 +62,18 @@ export const RELEASES: Release[] = [
           "On a phone the account button was cut off at the right edge, and beside the sidebar on a tablet it was off the screen entirely, with the other buttons squeezed to half their size. The breadcrumb called Staging an item's page (Items / Detail), and did the same on Labels and Recurring purchase orders, which now have their own names.",
         howItAffectsYou:
           'Where the bar has room for everything, as on most laptop and desktop screens, it is unchanged. Search stays in the bar wherever it was before. Where the bar leaves the rest out, Help & Learning, Support & feedback and the theme are in your account menu, and the ? key still opens Keyboard shortcuts. On a short screen, such as a phone held sideways, the account menu scrolls.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'web-titles-narrow-screens',
+        category: 'fixed',
+        area: 'Web app',
+        title: "A page's title stays in view on a narrow screen",
+        whatChanged:
+          "On the web, the title of an order, a bundle, a maintenance request and a procedure now keeps its name or number on a phone, or beside the sidebar on a tablet. When the line is too narrow for the title and its buttons, the buttons, such as Cancel request and Report a problem on an order, move under the title.",
+        whyItMatters:
+          "The buttons kept their width and the title got what was left: on a phone an order's title read Or..., hiding its number, and a bundle's name did not show at all.",
+        howItAffectsYou: 'On wider screens the titles and their buttons sit where they did.',
         whatToDo: 'No action needed.',
       },
       {
@@ -131,15 +143,13 @@ export const RELEASES: Release[] = [
         audience: { anyPermission: ['items:update', 'orders:approve'], modules: ['orders'] },
       },
       {
-        id: 'order-title-and-units-small-screens',
+        id: 'phone-order-one-unit',
         category: 'fixed',
         area: 'Orders',
-        title: "An order's number stays in view on a narrow screen",
-        whatChanged:
-          "On the web, an order's title now keeps its number on a phone, or beside the sidebar on a tablet: when the line is too narrow for the title and its buttons, the buttons, such as Cancel request and Report a problem, move under the title. In the mobile app, an order of one unit now says 1 UNIT above its items, not 1 UNITS.",
-        whyItMatters: "On a phone the web title was cut to Or..., so the order's number could not be seen.",
-        howItAffectsYou:
-          'On wider screens the title and its buttons sit where they did. Nothing else on the order changed.',
+        title: 'An order of one unit says 1 UNIT',
+        whatChanged: 'In the mobile app, an order of one unit now says 1 UNIT above its items, not 1 UNITS.',
+        whyItMatters: 'The count of units was always written in the plural.',
+        howItAffectsYou: 'Only the word changed.',
         whatToDo: 'Update the app when it offers the new version.',
         link: { href: '/dashboard/orders', label: 'View orders' },
         audience: { modules: ['orders'] },

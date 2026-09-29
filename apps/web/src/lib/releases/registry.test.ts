@@ -1414,16 +1414,17 @@ describe('the small-fixes release is held as a draft', () => {
     expect(release().audience).toBeUndefined();
     expect(release().entries.map((e) => e.id)).toEqual([
       'web-top-bar-fits',
+      'web-titles-narrow-screens',
       'phone-home-greeting',
       'phone-buttons-voiceover-targets',
       'phone-more-voiceover-buttons',
       'phone-pick-quantity-large-text',
       'phone-order-screen-keyboard',
-      'order-title-and-units-small-screens',
+      'phone-order-one-unit',
     ]);
-    const [bar, greeting, buttons, more, pick, keyboard, order] = release().entries;
-    // The top bar, the greeting and the accessibility fixes: every member.
-    for (const e of [bar!, greeting!, buttons!, more!]) {
+    const [bar, titles, greeting, buttons, more, pick, keyboard, unit] = release().entries;
+    // The top bar, the titles, the greeting and the accessibility fixes: every member.
+    for (const e of [bar!, titles!, greeting!, buttons!, more!]) {
       expect(e.audience, e.id).toBeUndefined();
       expect(e.link, e.id).toBeUndefined();
     }
@@ -1440,41 +1441,45 @@ describe('the small-fixes release is held as a draft', () => {
     for (const e of [pick!, keyboard!]) {
       expect(e.link, e.id).toEqual({ href: '/dashboard/orders', label: 'View orders' });
     }
-    // An order's title (web) and its unit count (phone): anyone who can open
-    // an order, where Orders is on (order requests are visible to every member).
-    expect(order!.audience).toEqual({ modules: ['orders'] });
-    expect(order!.link).toEqual({ href: '/dashboard/orders', label: 'View orders' });
+    // An order's unit count (phone): anyone who can open an order, where
+    // Orders is on (order requests are visible to every member).
+    expect(unit!.audience).toEqual({ modules: ['orders'] });
+    expect(unit!.link).toEqual({ href: '/dashboard/orders', label: 'View orders' });
     const reader = (permissions: ReleaseViewer['permissions'], enabledModules: ModuleId[] = ['orders']) =>
       visibleReleases([published()], { role: 'viewer', permissions, enabledModules })[0]?.entries.map((e) => e.id) ?? [];
     expect(reader(['items:update'])).toEqual([
       'web-top-bar-fits',
+      'web-titles-narrow-screens',
       'phone-home-greeting',
       'phone-buttons-voiceover-targets',
       'phone-more-voiceover-buttons',
       'phone-pick-quantity-large-text',
       'phone-order-screen-keyboard',
-      'order-title-and-units-small-screens',
+      'phone-order-one-unit',
     ]);
     // A requester types nothing on an order's screen: neither picker entry,
     // but they read an order's title and its unit count like anyone.
     expect(reader(['orders:request'])).toEqual([
       'web-top-bar-fits',
+      'web-titles-narrow-screens',
       'phone-home-greeting',
       'phone-buttons-voiceover-targets',
       'phone-more-voiceover-buttons',
-      'order-title-and-units-small-screens',
+      'phone-order-one-unit',
     ]);
     expect(reader(['orders:approve'])).toEqual([
       'web-top-bar-fits',
+      'web-titles-narrow-screens',
       'phone-home-greeting',
       'phone-buttons-voiceover-targets',
       'phone-more-voiceover-buttons',
       'phone-pick-quantity-large-text',
       'phone-order-screen-keyboard',
-      'order-title-and-units-small-screens',
+      'phone-order-one-unit',
     ]);
     expect(reader([], [])).toEqual([
       'web-top-bar-fits',
+      'web-titles-narrow-screens',
       'phone-home-greeting',
       'phone-buttons-voiceover-targets',
       'phone-more-voiceover-buttons',
@@ -1486,14 +1491,12 @@ describe('the small-fixes release is held as a draft', () => {
     // Old phone builds show only the summary: it names both platforms.
     expect(r.summary).toMatch(/^On the web, /);
     expect(r.summary).toContain('In the mobile app, ');
-    const [bar, greeting, buttons, more, pick, keyboard, order] = r.entries;
+    const [bar, titles, greeting, buttons, more, pick, keyboard, unit] = r.entries;
     expect(bar!.whatChanged).toMatch(/^On the web, /);
-    // The order entry is both: the web's title, the phone's unit count.
-    expect(order!.whatChanged).toMatch(/^On the web, /);
-    expect(order!.whatChanged).toContain('In the mobile app, ');
-    expect(order!.whatToDo).toBe('Update the app when it offers the new version.');
-    for (const e of [greeting!, buttons!, more!, pick!, keyboard!]) expect(e.whatChanged, e.id).toContain('mobile app');
-    for (const e of [greeting!, buttons!, more!, pick!, keyboard!]) {
+    expect(titles!.whatChanged).toMatch(/^On the web, /);
+    expect(titles!.whatToDo).toBe('No action needed.');
+    for (const e of [greeting!, buttons!, more!, pick!, keyboard!, unit!]) expect(e.whatChanged, e.id).toContain('mobile app');
+    for (const e of [greeting!, buttons!, more!, pick!, keyboard!, unit!]) {
       expect(e.whatToDo, e.id).toBe('Update the app when it offers the new version.');
     }
     expect(bar!.whatToDo).toBe('No action needed.');
@@ -1520,10 +1523,11 @@ describe('the small-fixes release is held as a draft', () => {
     expect(more!.whatChanged).toContain('Capture photo');
     expect(more!.whatChanged).toContain('All, Books and Items');
     expect(more!.whatChanged).toContain("the X that closes What's New and a screen tour");
-    expect(order!.whatChanged).toContain('such as Cancel request and Report a problem, move under the title');
-    expect(order!.whatChanged).toContain('1 UNIT');
-    expect(order!.whyItMatters).toContain('Or...');
-    expect(r.summary).toContain("an order's title keeps its number");
+    expect(titles!.whatChanged).toContain('an order, a bundle, a maintenance request and a procedure');
+    expect(titles!.whatChanged).toContain('such as Cancel request and Report a problem on an order, move under');
+    expect(titles!.whyItMatters).toContain('Or...');
+    expect(unit!.whatChanged).toContain('1 UNIT');
+    expect(r.summary).toContain("a page's title keeps its name or number");
     // Nothing it cannot stand behind: the keyboard entry claims room, not a
     // scroll it has not been seen to do; no measured claims; no "book".
     expect(keyboard!.whatChanged).toContain('can be scrolled into view');
