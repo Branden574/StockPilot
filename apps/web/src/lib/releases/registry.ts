@@ -44,7 +44,7 @@ export const RELEASES: Release[] = [
     title: 'See which books were ordered, with their covers',
     summary:
       'Reports has a new Book Order Totals report on the web and in the mobile app. It lists each book people asked for through Orders with its cover, the copies requested, how many orders asked for it and the latest order date, with the total across every matching book at the top. View orders shows the orders behind each total.',
-    publishedAt: '2026-09-29T05:51:00Z',
+    publishedAt: '2026-09-29T05:41:00Z',
     audience: { modules: ['orders'] },
     entries: [
       {
@@ -92,7 +92,7 @@ export const RELEASES: Release[] = [
     title: 'An item on several draft POs says how many',
     summary:
       "On the web and in the mobile app, when an item on an order is on more than one draft purchase order, its readiness now says how many draft POs hold it beside their total, for example On 4 draft POs 100 (not ordered). It used to name only the first draft beside the total of all of them, so that one PO read as holding every unit.",
-    publishedAt: '2026-09-29T05:50:00Z',
+    publishedAt: '2026-09-29T05:40:00Z',
     audience: { modules: ['orders'] },
     entries: [
       {
