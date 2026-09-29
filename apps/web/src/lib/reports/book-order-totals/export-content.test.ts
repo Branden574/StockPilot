@@ -6,7 +6,9 @@
 // never start a new row or cell. Parsed back with the repo's own spreadsheet
 // parsers (exceljs csv.read, papaparse with dynamicTyping), no cell anywhere
 // begins with = + - or @, and the text-safe identifier columns survive as
-// text. The file carries no URL of any kind and exact quantity text.
+// text. The file carries no URL of any kind and exact quantity text. The
+// ORDER charter's name (0382, free text) is neutralized the same way in the
+// Charter line and in the constant charter_scope column.
 import { Readable } from 'node:stream';
 
 import ExcelJS from 'exceljs';
@@ -16,6 +18,7 @@ import { describe, expect, it } from 'vitest';
 import { csvCell, csvMetaLine, sanitizeCsvText, toCsv } from '@/lib/csv';
 
 import {
+  BOOK_REPORT_RESTRICTED,
   bookReportStatusLabels,
   DEFAULT_BOOK_REPORT_STATUS_GROUPS,
   type BookOrderTotalsResponse,
@@ -26,6 +29,7 @@ import {
   BOOK_REPORT_CSV_CHUNK_ROWS,
   BOOK_REPORT_CSV_COLUMNS,
   bookReportCsvChunks,
+  bookReportExportDateRange,
   bookReportScopeLines,
   type BookReportExportInput,
 } from './export-content';
@@ -315,8 +319,154 @@ describe('Book Order Totals CSV', () => {
       '"# Not counted as copies: Leaves out 1 book entry ordered in another unit (12 pack of 10)."',
     );
     expect(text).toContain("because the organization's time zone setting could not be used.");
-    expect(text).toContain(
-      'You see only orders placed in your warehouses, and only books in your warehouses, charters and categories.',
+    expect(text).toContain(BOOK_REPORT_RESTRICTED);
+    expect(text).toContain('orders for those charters and orders with no charter');
+  });
+});
+
+describe('the ORDER charter and the date range in the files (0382)', () => {
+  const W = '0e000000-0000-4000-8000-0000000000d1';
+  const ALDER = {
+    id: '0e000000-0000-4000-8000-0000000000a1',
+    name: 'Charter Alder',
+    code: 'CH-A',
+    status: 'active',
+  };
+  const chartered = (
+    charter: typeof ALDER | null,
+    noCharter: boolean,
+    over: Partial<BookOrderTotalsResponse> = {},
+  ) =>
+    answer([row(1), row(2)], {
+      filters: {
+        warehouse: { id: W, name: 'North', status: 'active' },
+        category: null,
+        uncategorized: false,
+        charter,
+        noCharter,
+      },
+      warehouse: { id: W, source: 'explicit' },
+      range: {
+        key: 'custom',
+        from: '2026-09-01',
+        to: '2026-09-30',
+        timeZone: 'America/Los_Angeles',
+        timeZoneFallback: false,
+      },
+      ...over,
+    });
+
+  it('scope lines read charter, dates, status, warehouse, category, search, then generated', () => {
+    const lines = bookReportScopeLines(input(chartered(ALDER, false), 'outsiders'));
+    expect(lines.map((l) => l.split(':')[0])).toEqual([
+      'Charter',
+      'Orders placed during',
+      'Status',
+      'Warehouse',
+      'Category',
+      'Search',
+      'Generated',
+    ]);
+    expect(lines[0]).toBe('Charter: Charter Alder · CH-A');
+    expect(lines[1]).toBe('Orders placed during: Sep 1 – Sep 30, 2026');
+  });
+
+  it('All charters, No charter, and an answer from before 0382 (no charter keys)', () => {
+    expect(bookReportScopeLines(input(chartered(null, false)))[0]).toBe('Charter: All charters');
+    expect(bookReportScopeLines(input(chartered(null, true)))[0]).toBe(
+      'Charter: No charter (pickup orders and orders placed without a charter)',
     );
+    // A 0379 answer carries neither key: it can only be All charters.
+    expect(bookReportScopeLines(input(answer([row(1)])))[0]).toBe('Charter: All charters');
+  });
+
+  it('an archived charter says so; a code equal to the name is not repeated', () => {
+    const archived = { ...ALDER, name: 'Old', code: 'old', status: 'archived' };
+    expect(bookReportScopeLines(input(chartered(archived, false)))[0]).toBe(
+      'Charter: Old (archived)',
+    );
+  });
+
+  it('two constant trailing columns; every earlier column keeps its position', () => {
+    expect(BOOK_REPORT_CSV_COLUMNS.slice(0, 19)).toEqual([
+      'item_id',
+      'title',
+      'sku',
+      'sku_label',
+      'identifier_type',
+      'identifier',
+      'identifier_label',
+      'item_warehouse',
+      'rack_or_bin',
+      'unit',
+      'counts_as_copies',
+      'quantity_requested',
+      'orders',
+      'latest_order_date',
+      'latest_order_at',
+      'quantity_recorded_fulfilled',
+      'quantity_returned',
+      'item_status',
+      'now_rental',
+    ]);
+    expect(BOOK_REPORT_CSV_COLUMNS.slice(19)).toEqual(['charter_scope', 'date_range']);
+    const parsed = parseWithPapa(csvOf(input(chartered(ALDER, false))));
+    const header = parsed.find((r) => r[0] === 'item_id')!;
+    const data = parsed.filter((r) => typeof r[0] === 'string' && r[0].startsWith('0e000000'));
+    expect(data).toHaveLength(2);
+    for (const r of data) {
+      expect(r).toHaveLength(header.length);
+      expect(r[header.indexOf('charter_scope')]).toBe('Charter Alder · CH-A');
+      expect(r[header.indexOf('date_range')]).toBe('2026-09-01 to 2026-09-30');
+    }
+    expect(csvOf(input(chartered(ALDER, false)))).toContain(
+      '"# charter_scope and date_range repeat the Charter and Orders placed lines above on every row."',
+    );
+  });
+
+  it('date_range: All time, or the resolved org-local days of any other range', () => {
+    expect(bookReportExportDateRange({ key: 'all', from: null, to: null })).toBe('All time');
+    expect(bookReportExportDateRange({ key: 'week', from: '2026-09-27', to: '2026-09-29' })).toBe(
+      '2026-09-27 to 2026-09-29',
+    );
+    expect(bookReportExportDateRange({ key: 'today', from: '2026-09-29', to: '2026-09-29' })).toBe(
+      '2026-09-29 to 2026-09-29',
+    );
+    // Never re-zoned, never invented: a preset without its days says its name.
+    expect(bookReportExportDateRange({ key: 'month', from: null, to: null })).toBe('This month');
+  });
+
+  it('a charter name that starts a formula or holds a newline is neutralized in the line and the column', async () => {
+    const evil = {
+      ...ALDER,
+      name: '=HYPERLINK("http://e","c")\n@SUM(1)',
+      code: '+1\r-2',
+    };
+    const text = csvOf(input(chartered(evil, false)));
+    for (const line of text.split(/\r\n|\n|\r/)) expect(line).not.toMatch(FORMULA_START);
+    // One physical line per record: the newline inside the name never splits a row.
+    const physical = text.split('\n').filter(Boolean);
+    const header = physical.findIndex((l) => l.startsWith('item_id,'));
+    expect(physical.length - header - 1).toBe(2);
+    expect(physical.some((l) => l.startsWith('"# Charter: =HYPERLINK'))).toBe(true);
+    for (const parsed of [await parseWithExcel(text), parseWithPapa(text)]) {
+      for (const r of parsed) {
+        for (const cell of r) {
+          if (typeof cell === 'string') expect(cell).not.toMatch(FORMULA_START);
+        }
+        if (typeof r[0] === 'string' && (r[0] as string).startsWith('#')) {
+          expect(r.filter((c) => c !== null && c !== undefined && c !== '')).toHaveLength(1);
+        }
+      }
+      const headerRow = parsed.find((r) => r[0] === 'item_id')!;
+      const scopeCells = parsed
+        .filter((r) => typeof r[0] === 'string' && (r[0] as string).startsWith('0e000000'))
+        .map((r) => String(r[headerRow.indexOf('charter_scope')]));
+      expect(scopeCells).toHaveLength(2);
+      for (const c of scopeCells) {
+        expect(c).not.toMatch(/[\r\n]/);
+        expect(c).toContain('HYPERLINK');
+      }
+    }
   });
 });

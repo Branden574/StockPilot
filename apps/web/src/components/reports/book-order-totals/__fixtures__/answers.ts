@@ -118,6 +118,8 @@ export function optionsResponse(over: Partial<BookOrderOptionsResponse> = {}): B
     ],
     categories: [{ id: '0e000000-0000-4000-8000-0000000000c1', name: 'Fiction', deleted: true }],
     uncategorized: true,
+    charters: [],
+    noCharter: false,
     statusLabels,
     ...over,
   };

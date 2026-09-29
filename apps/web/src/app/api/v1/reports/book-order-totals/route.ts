@@ -16,10 +16,10 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * GET /api/v1/reports/book-order-totals?warehouse=all|<uuid>&range&from&to&status&wview&category&q&sort&page
+ * GET /api/v1/reports/book-order-totals?warehouse=all|<uuid>&charter=all|none|<uuid>&range&from&to&status&wview&category&q&sort&page
  *
  * One page (25) of Book Order Totals with the summary and total count for the
- * WHOLE filtered result, from one statement (migration 0379). Cookie or
+ * WHOLE filtered result, from one statement (migrations 0379 and 0382). Cookie or
  * Bearer (withApiContext); the phone calls it with Bearer and
  * X-Organization-Id. Gates first: reports:read with the MFA step-up, then the
  * orders and books modules (403), before the query is judged (400: an
@@ -27,6 +27,13 @@ export const dynamic = 'force-dynamic';
  * view cookie). The organization is the verified context's, never the
  * client's. `organizationId` is echoed so a client can drop an answer for
  * another workspace. Never cached; a failure is an error, never zeros.
+ *
+ * `charter` is the charter each ORDER was placed for (0382). It narrows only
+ * what the caller may already see; a charter id the caller may not report on
+ * (unknown, another organization's, outside their scope) is one 400
+ * `invalid_charter` with the same body for every cause, never an empty
+ * answer. With All charters (and only then) the answer carries `byCharter`.
+ * The answer stays `v: 1` and only gains keys.
  */
 export async function GET(req: NextRequest) {
   const ctx = await withApiContext(req);

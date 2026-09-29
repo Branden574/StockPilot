@@ -5,6 +5,12 @@
 // too_many_rows) above its ceiling before any byte or audit row; the audit
 // row is awaited before the body streams; the body is streamed (no
 // Content-Length) and never cached; the filename carries the org-local date.
+// The ORDER's charter (0382): the file covers that charter's orders (every
+// row, never the page), its audit row names the charter by id ('none' / 'all'
+// otherwise), the filename never names it, and the budget order is pinned: a
+// charter the caller may not report on is refused by the database INSIDE the
+// export statement, after one of the caller's own export slots was taken,
+// with the same 400 body the page route gives.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
@@ -25,10 +31,15 @@ import { exportRateLimited } from '@/lib/export-rate-limit';
 import { audit } from '@/server/services/audit';
 import { BookOrderTotalsService } from '@/server/services/book-order-totals';
 
+import { GET as pageGET } from '../route';
 import { GET } from './route';
 
 const W1 = '0e000000-0000-4000-8000-0000000000d1';
 const ITEM = '0e000000-0000-4000-8000-000000000f01';
+const CH_A = '0e000000-0000-4000-8000-0000000000a1';
+const OUT_OF_SCOPE = '0e000000-0000-4000-8000-0000000000a2';
+const ALDER = { id: CH_A, name: 'Charter Alder', code: 'CH-A', status: 'active' };
+const INVALID_CHARTER = { code: '22023', hint: 'invalid_charter', message: 'invalid charter' };
 
 function exportAnswer(over: Record<string, unknown> = {}) {
   return {
@@ -256,5 +267,181 @@ describe('GET /api/v1/reports/book-order-totals/export', () => {
     });
     const bytes = new Uint8Array(await res.arrayBuffer());
     expect(new TextDecoder().decode(bytes.subarray(0, 5))).toBe('%PDF-');
+  });
+
+  it("budget order: a refused charter takes one of the caller's own export slots, then the same 400 as the page", async () => {
+    const order: string[] = [];
+    vi.mocked(exportRateLimited).mockImplementation(async () => {
+      order.push('budget');
+      return null;
+    });
+    // The export-mode statement is where the database judges the charter.
+    const refused = () => {
+      order.push('statement');
+      return { data: null, error: INVALID_CHARTER };
+    };
+    const ctx = makeServiceContext(makeSupabaseStub({ 'rpc:book_order_totals': refused }).client, {
+      organizationId: 'org-1',
+      role: 'manager',
+    });
+    vi.mocked(withApiContext).mockResolvedValue(ctx as never);
+    const res = await GET(url(`format=csv&warehouse=all&charter=${OUT_OF_SCOPE}`));
+    expect(res.status).toBe(400);
+    expect(order).toEqual(['budget', 'statement']);
+    expect(exportRateLimited).toHaveBeenCalledTimes(1);
+    expect(audit).not.toHaveBeenCalled();
+    const exportBody = await res.json();
+    expect(exportBody).toEqual({
+      error: 'validation_error',
+      message: 'That charter is not one you can see.',
+      details: { reason: 'invalid_charter' },
+    });
+    expect(JSON.stringify(exportBody)).not.toContain(OUT_OF_SCOPE);
+    // The page route's refusal for the same id reads the same.
+    vi.mocked(withApiContext).mockResolvedValue(
+      makeServiceContext(
+        makeSupabaseStub({ 'rpc:book_order_totals': { data: null, error: INVALID_CHARTER } })
+          .client,
+        { organizationId: 'org-1', role: 'manager' },
+      ) as never,
+    );
+    const page = await pageGET(
+      new Request(
+        `http://localhost/api/v1/reports/book-order-totals?warehouse=all&charter=${OUT_OF_SCOPE}`,
+      ) as never,
+    );
+    expect(page.status).toBe(400);
+    expect(await page.json()).toEqual(exportBody);
+  });
+
+  it('a malformed charter is a 400 naming charter before the limiter', async () => {
+    const stub = setup();
+    const res = await GET(url('format=csv&warehouse=all&charter=alder'));
+    expect(res.status).toBe(400);
+    expect((await res.json()).details).toEqual({ reason: 'invalid_query', keys: ['charter'] });
+    expect(exportRateLimited).not.toHaveBeenCalled();
+    expect(stub.rpcCalls).toEqual([]);
+  });
+
+  it('All charters: no charter key on the wire, audited as charter "all"', async () => {
+    const stub = setup();
+    expect((await GET(url('format=csv&warehouse=all'))).status).toBe(200);
+    const args = stub.rpcCalls[0]!.args as Record<string, unknown>;
+    expect(Object.keys(args).filter((k) => /charter/.test(k))).toEqual([]);
+    expect(vi.mocked(audit).mock.calls[0]![0]).toMatchObject({ extra: { charter: 'all' } });
+  });
+
+  it('a charter and exact dates: every row of that charter, its scope in the file, its id in the audit row, never its name in the filename', async () => {
+    const stub = setup(
+      {},
+      exportAnswer({
+        range: {
+          key: 'custom',
+          from: '2026-09-01',
+          to: '2026-09-30',
+          timeZone: 'America/Los_Angeles',
+          timeZoneFallback: false,
+        },
+        filters: {
+          warehouse: null,
+          category: null,
+          uncategorized: false,
+          charter: ALDER,
+          noCharter: false,
+        },
+        byCharter: null,
+      }),
+    );
+    const res = await GET(
+      url(`format=csv&warehouse=all&charter=${CH_A}&from=2026-09-01&to=2026-09-30`),
+    );
+    expect(res.status).toBe(200);
+    expect(stub.rpcCalls).toHaveLength(1);
+    const args = stub.rpcCalls[0]!.args as Record<string, unknown>;
+    expect(args).toMatchObject({
+      p_charter_id: CH_A,
+      p_range: 'custom',
+      p_from_date: '2026-09-01',
+      p_to_date: '2026-09-30',
+      p_all_rows: true,
+      p_page: 1,
+      p_page_size: null,
+    });
+    expect(args).not.toHaveProperty('p_no_charter');
+    expect(res.headers.get('content-disposition')).toBe(
+      'attachment; filename="book-order-totals_2026-09-28.csv"',
+    );
+    expect(vi.mocked(audit).mock.calls[0]![0]).toMatchObject({
+      event: 'report.exported',
+      extra: { charter: CH_A, range: 'custom', from: '2026-09-01', to: '2026-09-30' },
+    });
+    expect(JSON.stringify(vi.mocked(audit).mock.calls[0]![0])).not.toContain('Alder');
+    const text = await res.text();
+    const lines = text.split('\n');
+    // The charter line comes first in the scope, before the dates.
+    expect(lines[1]).toBe('"# Charter: Charter Alder · CH-A"');
+    expect(lines[2]).toBe('"# Orders placed during: Sep 1 – Sep 30, 2026"');
+    const header = lines.find((l) => l.startsWith('item_id,'))!;
+    expect(header.endsWith(',charter_scope,date_range')).toBe(true);
+    const data = lines.find((l) => l.startsWith(ITEM))!;
+    expect(data.endsWith(',Charter Alder · CH-A,2026-09-01 to 2026-09-30')).toBe(true);
+  });
+
+  it('No charter: audited as "none", the file says No charter', async () => {
+    const stub = setup(
+      {},
+      exportAnswer({
+        filters: {
+          warehouse: null,
+          category: null,
+          uncategorized: false,
+          charter: null,
+          noCharter: true,
+        },
+      }),
+    );
+    const res = await GET(url('format=csv&warehouse=all&charter=none'));
+    expect(res.status).toBe(200);
+    expect(stub.rpcCalls[0]!.args).toMatchObject({ p_no_charter: true });
+    expect(vi.mocked(audit).mock.calls[0]![0]).toMatchObject({ extra: { charter: 'none' } });
+    const text = await res.text();
+    expect(text).toContain(
+      '"# Charter: No charter (pickup orders and orders placed without a charter)"',
+    );
+    expect(
+      text
+        .split('\n')
+        .find((l) => l.startsWith(ITEM))!
+        .endsWith(',No charter,All time'),
+    ).toBe(true);
+  });
+
+  it('PDF with a charter: audited with the charter, covers cap unchanged', async () => {
+    setup(
+      {},
+      exportAnswer({
+        filters: {
+          warehouse: null,
+          category: null,
+          uncategorized: false,
+          charter: ALDER,
+          noCharter: false,
+        },
+      }),
+    );
+    const spy = vi
+      .spyOn(BookOrderTotalsService.prototype, 'pdfCovers')
+      .mockResolvedValue({ urls: {}, unresolved: [] });
+    const res = await GET(url(`format=pdf&photos=1&warehouse=all&charter=${CH_A}`));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-disposition')).toBe(
+      'inline; filename="book-order-totals_2026-09-28.pdf"',
+    );
+    expect(spy).toHaveBeenCalledWith([ITEM]);
+    expect(vi.mocked(audit).mock.calls[0]![0]).toMatchObject({
+      event: 'pdf.exported',
+      extra: { charter: CH_A, coversPastCap: 0 },
+    });
+    spy.mockRestore();
   });
 });

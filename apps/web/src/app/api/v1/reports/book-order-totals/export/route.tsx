@@ -31,6 +31,7 @@ import {
   BOOK_REPORT_PDF_COVER_CAP,
   bookReportPdfCoverNote,
   bookReportStatusLabels,
+  type BookReportCharterFilters,
 } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
@@ -59,6 +60,18 @@ const PDF_COVER_EDGE_PX = 240;
  * truncated. The audit row is written before the body streams. The file
  * carries its own generation time (org-local), not the on-screen answer's.
  * Nothing is stored, public or emailed.
+ *
+ * The charter (0382) narrows the file exactly as it narrows the page: every
+ * row of that charter's orders, never the page. The ORDER of the checks is
+ * deliberate and pinned by the route test: a charter id the caller may not
+ * report on is judged by the database inside the export statement, so a
+ * hand-edited link with such an id spends one of the caller's OWN hourly
+ * exports and then gets the 400 invalid_charter (as an unknown warehouse or
+ * category id already does). No pre-check is added: it would put another
+ * serial round trip in front of every chartered export, the page never builds
+ * such a link, and the budget stays in front of the statement so it still
+ * accounts for every expensive statement. The filename never carries the
+ * charter's name.
  */
 export async function GET(req: NextRequest) {
   const ctx = await withApiContext(req);
@@ -203,6 +216,12 @@ async function readOrgForExport(ctx: ServiceContext): Promise<ExportOrg> {
   };
 }
 
+/** The charter a file covers, for its audit row: the charter's id, 'none'
+ *  for No charter, else 'all'. */
+function auditCharter(filters: BookReportCharterFilters): string {
+  return filters.charter?.id ?? (filters.noCharter === true ? 'none' : 'all');
+}
+
 /** The audit row, awaited before the body streams (on Vercel the function
  *  may wind down once the body is consumed). The search text itself is not
  *  stored, only its length. */
@@ -234,6 +253,9 @@ async function auditExport(
         statuses: answer.statuses,
         warehouse: answer.warehouse.id,
         warehouseSource: answer.warehouse.source,
+        // The ORDER's charter the file covers, from the answer's echo (an id,
+        // 'none' or 'all'); never its name.
+        charter: auditCharter(answer.filters),
         category,
         searchLength: q.length,
         generatedAt: answer.generatedAt,

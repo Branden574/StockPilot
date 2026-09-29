@@ -4,7 +4,15 @@ import { describe, expect, it } from 'vitest';
 
 import { width } from '@/test/pdf-font-metrics';
 
-import { bookReportPdfCoverNote, type BookReportRow } from '@stockpilot/core';
+import { bookReportScopeLines } from '@/lib/reports/book-order-totals/export-content';
+
+import {
+  bookReportPdfCoverNote,
+  bookReportStatusLabels,
+  DEFAULT_BOOK_REPORT_STATUS_GROUPS,
+  type BookOrderTotalsResponse,
+  type BookReportRow,
+} from '@stockpilot/core';
 
 import {
   BOOK_PDF_CONTENT_WIDTH_PT,
@@ -196,6 +204,102 @@ describe('BookOrderTotalsPdf structure', () => {
   it('cuts a very long title with an ellipsis', () => {
     expect(pdfTitle('x'.repeat(400))).toHaveLength(BOOK_PDF_TITLE_MAX_CHARS);
     expect(pdfTitle('Short')).toBe('Short');
+  });
+});
+
+describe('Book Order Totals PDF scope (0382)', () => {
+  function chartered(): BookOrderTotalsResponse {
+    return {
+      v: 1,
+      generatedAt: '2026-09-29T15:45:00+00:00',
+      generatedAtLocal: '2026-09-29 08:45',
+      range: {
+        key: 'custom',
+        from: '2026-09-01',
+        to: '2026-09-30',
+        timeZone: 'America/Los_Angeles',
+        timeZoneFallback: false,
+      },
+      statuses: [],
+      filters: {
+        warehouse: null,
+        category: null,
+        uncategorized: false,
+        charter: {
+          id: '0e000000-0000-4000-8000-0000000000a1',
+          name: 'Marconi',
+          code: 'MAR-01',
+          status: 'active',
+        },
+        noCharter: false,
+      },
+      scope: { restricted: false },
+      summary: {
+        copies: '34',
+        entries: 2,
+        orders: 3,
+        lines: 4,
+        firstOrderAt: null,
+        lastOrderAt: null,
+        firstOrderDate: null,
+        lastOrderDate: null,
+        unresolved: { entries: 0, quantity: '0' },
+      },
+      totalCount: 2,
+      mode: 'all',
+      tooMany: false,
+      maxRows: 900,
+      page: 1,
+      pageSize: null,
+      sort: 'copies',
+      rows: [row(1), row(2)],
+      byCharter: null,
+      organizationId: 'org',
+      warehouse: { id: null, source: 'all' },
+    };
+  }
+
+  it('prints the scope at the top: Charter, Orders placed, the other filters, Generated, then the totals', () => {
+    const a = chartered();
+    const scopeLines = bookReportScopeLines({
+      answer: a,
+      statusGroups: [...DEFAULT_BOOK_REPORT_STATUS_GROUPS],
+      statusLabels: bookReportStatusLabels(null),
+      q: '',
+    });
+    const all = texts(
+      BookOrderTotalsPdf(props({ scopeLines, generatedAtLocal: a.generatedAtLocal })),
+    );
+    const at = (t: string) => all.findIndex((x) => x.startsWith(t));
+    // The house header first (title, then Generated and the zone at top right).
+    expect(at('Book Order Totals')).toBeLessThan(at('Charter: '));
+    expect(all).toContain('Charter: Marconi · MAR-01');
+    expect(all).toContain('Orders placed during: Sep 1 – Sep 30, 2026');
+    expect(at('Charter: ')).toBeLessThan(at('Orders placed during: '));
+    expect(at('Orders placed during: ')).toBeLessThan(at('Status: '));
+    expect(at('Status: ')).toBeLessThan(at('Warehouse: '));
+    expect(at('Category: ')).toBeLessThan(at('Generated: '));
+    // Then the three metrics and every row.
+    expect(at('Generated: ')).toBeLessThan(at('Total books ordered'));
+    expect(all.filter((t) => t === 'Book 1' || t === 'Book 2')).toHaveLength(2);
+  });
+
+  it('the cover cap is unchanged and disclosed; every row is still printed', () => {
+    const note = bookReportPdfCoverNote({
+      photos: true,
+      rows: 612,
+      shown: 500,
+      failed: 0,
+      pastCap: 112,
+    });
+    // The shipped disclosure (0379), unchanged by the charter.
+    expect(note).toBe(
+      'Covers shown for 500 of 612 books. 112 are past the 500-cover limit; each shows a placeholder. Every row and total is included.',
+    );
+    const rows = Array.from({ length: 612 }, (_, i) => ({ row: row(i + 1), cover: null }));
+    const tree = BookOrderTotalsPdf(props({ rows, coverNote: note }));
+    expect([...walk(tree)].filter((el) => el.props['data-row'] === true)).toHaveLength(612);
+    expect(texts(tree)).toContain(note);
   });
 });
 

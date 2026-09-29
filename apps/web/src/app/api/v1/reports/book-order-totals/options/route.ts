@@ -16,9 +16,11 @@ export const dynamic = 'force-dynamic';
  *
  * The filter lists for Book Order Totals: the warehouses (any status) and
  * categories (deleted ones included, and whether "No category" applies) that
- * occur in the caller's own eligible order lines, plus the organization's
- * status labels. Same gates as the report. Loaded once per session by the
- * web filter bar and the phone, never awaited with the numbers.
+ * occur in the caller's own eligible order lines; the charters the caller may
+ * report on (`charters`: id, name, code and status only) and whether orders
+ * with no charter are visible (`noCharter`); plus the organization's status
+ * labels. Same gates as the report. Loaded once per session by the web filter
+ * bar and the phone, never awaited with the numbers.
  */
 export async function GET(req: NextRequest) {
   const ctx = await withApiContext(req);

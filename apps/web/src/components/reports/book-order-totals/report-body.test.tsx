@@ -326,7 +326,7 @@ describe('Book Order Totals page body', () => {
     expect(screen.getByRole('group', { name: 'Total books ordered' })).toHaveTextContent('34');
     expect(screen.getByRole('row', { name: /Book A/ })).toBeInTheDocument();
     expect(
-      await screen.findByText(/Couldn't load the warehouse and category lists\./),
+      await screen.findByText(/Couldn't load the charter, warehouse and category lists\./),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     expect(screen.getByLabelText('Warehouse')).toBeDisabled();
