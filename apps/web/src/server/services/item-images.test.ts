@@ -42,6 +42,8 @@ vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import ts from 'typescript';
+
 import {
   itemReadScopeResults,
   type ScopedCaller,
@@ -909,26 +911,211 @@ describe('ItemImagesService — item-level authorization of every image read', (
 
     expect(remove).toHaveBeenCalledWith([inImage.storage_path, inImage.thumb_path]);
   });
+});
 
-  it('EVERY item_images read in the service carries the inner item embed (a new read cannot skip it)', () => {
-    const source = readFileSync(join(__dirname, 'item-images.ts'), 'utf8');
-    // Each `.from('item_images')` followed (past comments) by a `.select(...)`.
-    const reads = [
-      ...source.matchAll(
-        /\.from\('item_images'\)\s*(?:\/\/[^\n]*\n\s*)*\.select\(\s*'([^']*)'/g,
-      ),
-    ].map((m) => m[1]!);
-    const selectsTotal = [
-      ...source.matchAll(/\.from\('item_images'\)\s*(?:\/\/[^\n]*\n\s*)*\.select\(/g),
-    ].length;
+/**
+ * NO item_images READ WITHOUT THE ITEM EMBED, checked two ways.
+ *
+ * The item embed (`item:inventory_items!item_id!inner(id)`) is the whole of the
+ * item-level authorization above: item_images_select is org-member wide, so a
+ * read without it hands a scoped caller the image rows, and then signed URLs,
+ * of items they cannot read. The first version of this guard was a regular
+ * expression over `.from('item_images')` in single quotes followed directly by
+ * `.select('...')`: a read written with double quotes, a template string, a
+ * table-name constant, a select list in a variable, or a builder split across
+ * statements was not seen at all, and the count it checked did not see it
+ * either. These replace it:
+ *
+ *   1. BEHAVIOUR: every method of the service (whatever it is called, new ones
+ *      included) is run against a stub that records each PostgREST request as
+ *      it is really issued, and every item_images read must carry the embed.
+ *   2. SOURCE, through the TypeScript AST (quotes, comments and line breaks do
+ *      not matter): every item_images read must be one chain,
+ *      `.from(<literal>)...select(<literal with the embed>)`, and anything the
+ *      check cannot read (a computed table name, the table named outside
+ *      `.from()`, a select list that is not a literal, a builder whose select
+ *      is elsewhere) fails as unprovable, not as fine. This catches a read the
+ *      behaviour check does not reach (one behind an early return).
+ */
+const ITEM_EMBED = 'item:inventory_items!item_id!inner(id)';
+/** A chain with one of these is a write; its `.select()` only reads back its own row. */
+const WRITE_METHODS = new Set(['insert', 'update', 'upsert', 'delete']);
+
+function literalText(node: ts.Node | undefined): string | null {
+  return node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+    ? node.text
+    : null;
+}
+
+/** Each item_images read in `source` that does not provably carry the embed, as "line N: why". */
+function itemImagesReadProblems(source: string): { problems: string[]; embeddedReads: number } {
+  const sf = ts.createSourceFile('source.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const problems: string[] = [];
+  let embeddedReads = 0;
+  const line = (n: ts.Node) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+  const isFromCall = (n: ts.Node | undefined): n is ts.CallExpression =>
+    !!n &&
+    ts.isCallExpression(n) &&
+    ts.isPropertyAccessExpression(n.expression) &&
+    n.expression.name.text === 'from';
+
+  const visit = (node: ts.Node): void => {
+    // The table named anywhere but inline in .from(): a constant, an alias, a
+    // map of table names. Its read cannot be followed, so it is refused.
+    if (literalText(node) === 'item_images' && !(isFromCall(node.parent) && node.parent.arguments[0] === node)) {
+      problems.push(`line ${line(node)}: 'item_images' named outside .from(); name the table inline`);
+    }
+    if (ts.isTemplateExpression(node) && node.getText(sf).includes('item_images')) {
+      problems.push(`line ${line(node)}: 'item_images' in a template with substitutions`);
+    }
+    if (isFromCall(node)) {
+      const table = literalText(node.arguments[0]);
+      if (table === null) {
+        problems.push(`line ${line(node)}: .from() with a computed table name`);
+      } else if (table === 'item_images') {
+        // Up the builder chain: .from(...).select(...).eq(...).order(...)...
+        const chain: Array<{ name: string; call: ts.CallExpression }> = [];
+        let cur: ts.Node = node;
+        while (
+          ts.isPropertyAccessExpression(cur.parent) &&
+          cur.parent.expression === cur &&
+          ts.isCallExpression(cur.parent.parent) &&
+          cur.parent.parent.expression === cur.parent
+        ) {
+          chain.push({ name: cur.parent.name.text, call: cur.parent.parent });
+          cur = cur.parent.parent;
+        }
+        if (!chain.some((m) => WRITE_METHODS.has(m.name))) {
+          const select = chain.find((m) => m.name === 'select');
+          const cols = select ? literalText(select.call.arguments[0]) : null;
+          if (!select) {
+            problems.push(`line ${line(node)}: an item_images read whose .select() is not in the same chain`);
+          } else if (cols === null) {
+            problems.push(`line ${line(select.call)}: an item_images .select() whose column list is not a literal`);
+          } else if (!cols.includes(ITEM_EMBED)) {
+            problems.push(`line ${line(select.call)}: an item_images read without ${ITEM_EMBED}`);
+          } else {
+            embeddedReads += 1;
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return { problems, embeddedReads };
+}
+
+describe('ItemImagesService — no item_images read without the item embed', () => {
+  it('BEHAVIOUR: every item_images read any method issues carries the inner item embed', async () => {
+    createSignedUrlsMock.mockImplementation(async (paths: string[]) => ({
+      data: paths.map((p) => ({ path: p, signedUrl: `https://signed.test/${p}`, error: null })),
+      error: null,
+    }));
+    createSignedUrlMock.mockImplementation(async (p: string) => ({
+      data: { signedUrl: `https://signed.test/${p}` },
+      error: null,
+    }));
+    const ids = [B1, B2];
+    // The shapes the service's methods take today: (itemIds), (itemId or
+    // imageId), the shared resolver's (method, itemIds, resolveRow), and
+    // record's (itemId, path, isFirst). A method that rejects one shape (a
+    // TypeError, a validation error) is simply tried with the next.
+    const argShapes: unknown[][] = [
+      [ids],
+      [B1],
+      ['guard', ids, async () => null],
+      [B1, `${ORG}/items/${B1}/guard.png`, true],
+    ];
+    const methods = Object.getOwnPropertyNames(ItemImagesService.prototype).filter(
+      (name) => name !== 'constructor',
+    );
+    const selectsByMethod = new Map<string, string[]>();
+    for (const name of methods) {
+      for (const args of argShapes) {
+        const image = { id: B1, item_id: B1, storage_path: `${ORG}/items/${B1}/m.png`, thumb_path: null, is_primary: true, sort_order: 0 };
+        const stub = makeSupabaseStub({
+          'item_images.select': { data: [image], error: null },
+          'inventory_items.select': { data: [{ id: B1, custom_fields: null }], error: null },
+        });
+        const service = new ItemImagesService(makeServiceContext(stub.client, { organizationId: ORG }));
+        try {
+          await (service as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[name]!(...args);
+        } catch {
+          // Only the requests matter here.
+        }
+        // Every chain on item_images that is a read: its first method is
+        // .select() (a write's read-back is recorded under its write).
+        const selects = (stub.chainArgsAll.get('item_images.select') ?? []).map((a) =>
+          String(a[0]?.[0]),
+        );
+        selectsByMethod.set(name, [...(selectsByMethod.get(name) ?? []), ...selects]);
+      }
+    }
+
+    const all = [...selectsByMethod.entries()].flatMap(([name, list]) =>
+      list.map((select) => ({ name, select })),
+    );
+    for (const { name, select } of all) {
+      expect(select, `${name}() read item_images without the embed`).toContain(ITEM_EMBED);
+    }
+    // Not vacuous: every read the service has today was reached.
+    const reached = [...selectsByMethod.entries()].filter(([, l]) => l.length > 0).map(([n]) => n);
+    expect(reached).toEqual(
+      expect.arrayContaining([
+        'list',
+        'primaryImagesForItems',
+        'primaryImagesWithThumbsForItems',
+        'resolvePrimaryImageUrls',
+        'primaryImagesForPdfRendering',
+        'primaryImagesForServerDecoding',
+        'primaryImagesForBrowserDisplay',
+        'primaryMasterUrlsForItems',
+        'remove',
+      ]),
+    );
+  });
+
+  it('SOURCE: every item_images read in item-images.ts is one chain whose literal select carries the embed', () => {
+    const { problems, embeddedReads } = itemImagesReadProblems(
+      readFileSync(join(__dirname, 'item-images.ts'), 'utf8'),
+    );
+    expect(problems).toEqual([]);
     // Six reads today: list, primaryImagesForItems,
     // primaryImagesWithThumbsForItems, resolvePrimaryImageUrls,
-    // primaryMasterUrlsForItems, remove. A select written any other way (a
-    // template, a variable) is not captured and fails the count.
-    expect(reads).toHaveLength(6);
-    expect(reads).toHaveLength(selectsTotal);
-    for (const select of reads) {
-      expect(select).toContain('item:inventory_items!item_id!inner(id)');
+    // primaryMasterUrlsForItems, remove.
+    expect(embeddedReads).toBe(6);
+  });
+
+  it('SOURCE: the check refuses every other way of writing a read, and passes the embedded ones', () => {
+    const refused: Record<string, string> = {
+      'double quotes': `x.from("item_images").select("item_id, storage_path").eq('a', 1);`,
+      'a template string': 'x.from(`item_images`).select(`item_id, storage_path`);',
+      'a comment between from and select': `x.from('item_images') // why\n  // more\n  .select('item_id');`,
+      'a table-name constant': `const T = 'item_images';\nx.from(T).select('id, ${ITEM_EMBED}');`,
+      'a computed table name': 'x.from(`item_${kind}`).select(`id`);',
+      'a select list in a variable': `const COLS = 'id, ${ITEM_EMBED}';\nx.from('item_images').select(COLS);`,
+      'a select list built by a template': `x.from('item_images').select(\`id, \${extra}\`);`,
+      'select() with no list': `x.from('item_images').select().eq('id', 1);`,
+      'a builder split across statements': `const q = x.from('item_images');\nawait q.select('id, ${ITEM_EMBED}');`,
+      'a cast inside the chain': `(x.from('item_images') as any).select('id, ${ITEM_EMBED}');`,
+      'a LEFT embed (no !inner)': `x.from('item_images').select('id, item:inventory_items!item_id(id)');`,
+    };
+    for (const [how, code] of Object.entries(refused)) {
+      expect(itemImagesReadProblems(code).problems, how).not.toEqual([]);
+    }
+
+    const accepted: Record<string, string> = {
+      'single quotes': `x.from('item_images').select('id, ${ITEM_EMBED}').eq('a', 1);`,
+      'double quotes': `x.from("item_images")\n  // comment\n  .select("id, ${ITEM_EMBED}");`,
+      'a template string': 'x.from(`item_images`).select(`id, ' + ITEM_EMBED + '`);',
+      'a write with a read-back': `x.from('item_images').insert({ a: 1 }).select('id').single();`,
+      'a delete': `x.from('item_images').delete().eq('id', 1);`,
+      'another table, and the storage bucket': `x.from('inventory_items').select('id'); s.storage.from('item-images').remove([p]);`,
+      'the table named in a log tag': `report({ tag: 'item_images.sign_failed' });`,
+    };
+    for (const [how, code] of Object.entries(accepted)) {
+      expect(itemImagesReadProblems(code).problems, how).toEqual([]);
     }
   });
 });
