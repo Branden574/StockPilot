@@ -1786,7 +1786,7 @@ describe('Book Order Totals by charter and dates is held as a draft', () => {
     expect(reader(['reports:read'], ['books'])).toEqual([]);
   });
 
-  it("names both platforms, the order's charter (never the owning one), and tells phones to update for charter links", () => {
+  it("names both platforms, the order's charter (never the owning one), and tells phones how to load the update for charter links", () => {
     const r = release();
     // Old phone builds show only the summary: it names both platforms.
     expect(r.summary).toContain('on the web and in the mobile app');
@@ -1798,14 +1798,22 @@ describe('Book Order Totals by charter and dates is held as a draft', () => {
       'Pickup orders have no charter and are listed under No charter.',
     );
     expect(charter!.howItAffectsYou).toContain('You can choose only charters you have access to.');
-    // An older phone ignores a charter in a link (plan R8b).
+    // An older phone ignores a charter in a link (plan R8b). The phone part
+    // ships as an over-the-air update, not a store version, so it says how
+    // such an update is loaded (the house wording), never "update the app".
     expect(charter!.howItAffectsYou).toContain(
-      'In the mobile app, update the app to open links that choose a charter.',
+      'In the mobile app, close the app completely and open it again to load the latest update, which opens links that choose a charter.',
     );
+    expect(readerText(r).join(' ')).not.toMatch(/update the app|App Store|new version/i);
     expect(charter!.whatChanged).toContain('Books ordered by charter');
     // The week the SQL computes (plan D5) and the words the screens use.
     expect(dates!.whatChanged).toContain('Today and This week (starting Sunday)');
     expect(dates!.whatChanged).toContain('Clear filters');
+    // True on both platforms: the phone's search has its own box, no chip.
+    expect(dates!.whatChanged).toContain(
+      'Each filter you set appears as a chip you can remove (in the mobile app, the search keeps its own box), and Clear filters resets them all.',
+    );
+    expect(dates!.whatChanged).not.toContain('Clear filters starts over');
     expect(dates!.howItAffectsYou).toContain('a range includes all of its last day');
     expect(dates!.howItAffectsYou).toContain('Back to Book Order Totals');
     const text = readerText(r).join(' ');

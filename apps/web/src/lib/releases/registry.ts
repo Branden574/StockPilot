@@ -57,7 +57,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Answering how many copies of each book a charter asked for meant reading orders one by one.',
         howItAffectsYou:
-          'The filter uses the charter each order was placed for, its delivery site, not the charter that owns the stock. Pickup orders have no charter and are listed under No charter. You can choose only charters you have access to. In the mobile app, update the app to open links that choose a charter.',
+          'The filter uses the charter each order was placed for, its delivery site, not the charter that owns the stock. Pickup orders have no charter and are listed under No charter. You can choose only charters you have access to. In the mobile app, close the app completely and open it again to load the latest update, which opens links that choose a charter.',
         whatToDo: 'No action needed. Open Reports, then Book Order Totals, and choose a charter.',
         link: { href: '/dashboard/reports/book-order-totals', label: 'Book Order Totals' },
         audience: { anyPermission: ['reports:read'], modules: ['books'] },
@@ -68,7 +68,7 @@ export const RELEASES: Release[] = [
         area: 'Reports',
         title: 'Pick exact dates on a calendar, and see what you are looking at',
         whatChanged:
-          'Orders placed now opens a calendar for the first and last day, and adds Today and This week (starting Sunday) to the date choices. A Showing line above the totals names the charter and dates in view, and the warehouse when the report covers only one. Each filter you set appears as a chip you can remove, and Clear filters starts over.',
+          'Orders placed now opens a calendar for the first and last day, and adds Today and This week (starting Sunday) to the date choices. A Showing line above the totals names the charter and dates in view, and the warehouse when the report covers only one. Each filter you set appears as a chip you can remove (in the mobile app, the search keeps its own box), and Clear filters resets them all.',
         whyItMatters:
           'Exact ranges such as September 1 through September 30 are quicker to set, and the figures always say which charter and dates they cover.',
         howItAffectsYou:
