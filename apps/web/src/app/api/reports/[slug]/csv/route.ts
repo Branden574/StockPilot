@@ -9,6 +9,7 @@ import {
   reportExportUnauthenticated,
 } from '@/lib/reports/export-errors';
 import { type ReportSlug } from '@/lib/reports/report-access';
+import { costHistoryRows } from '@/lib/reports/row-order';
 import { assertPermission, ServiceError, type ServiceContext } from '@/server/services/context';
 import { ReportsService } from '@/server/services/reports';
 
@@ -333,17 +334,15 @@ export async function GET(
       // The report form: the gate, then the item read with the caller's
       // client (another warehouse's or category's item is not_found).
       const data = await svc.itemCostHistoryReport(itemId, { since, until });
-      // Flatten per-supplier series into a flat chronological list.
-      const rows = data.series
-        .flatMap((s) =>
-          s.points.map((p) => ({
-            Supplier: s.supplierName,
-            Date: p.date.slice(0, 10),
-            Source: p.source === 'receipt' ? 'Receipt' : 'PO',
-            'Unit cost': p.unitCost.toFixed(4),
-          })),
-        )
-        .sort((a, b) => (a.Date < b.Date ? -1 : a.Date > b.Date ? 1 : 0));
+      // Every supplier's points in one chronological list, in the page's
+      // order (costHistoryRows). This used to sort by the calendar day alone,
+      // so two prices on one day could come out in the other order.
+      const rows = costHistoryRows(data.series).map((p) => ({
+        Supplier: p.supplier,
+        Date: p.date.slice(0, 10),
+        Source: p.source === 'receipt' ? 'Receipt' : 'PO',
+        'Unit cost': p.unitCost.toFixed(4),
+      }));
       const csv = toCsv(['Supplier', 'Date', 'Source', 'Unit cost'], rows);
       return csvResponse(slug, csv);
     }

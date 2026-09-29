@@ -1,6 +1,12 @@
 import 'server-only';
 
 import { reportModules, type ReportSlug } from '@/lib/reports/report-access';
+import {
+  compareBundleActivity,
+  compareCategoryRollups,
+  compareMovementTypes,
+  compareWarehouseRollups,
+} from '@/lib/reports/row-order';
 
 import { isUuid } from '@stockpilot/core';
 
@@ -508,8 +514,10 @@ export class ReportsService {
       totalValue: rows.reduce((s, r) => s + r.value, 0),
       totalUnits: rows.reduce((s, r) => s + r.quantityOnHand, 0),
       itemCount: rows.length,
-      byWarehouse: [...byWarehouse.values()].sort((a, b) => b.value - a.value),
-      byCategory: [...byCategory.values()].sort((a, b) => b.value - a.value),
+      // The same order as the whole-org rollups (value, then name, then id),
+      // so the two paths list tied rows alike on the same page.
+      byWarehouse: [...byWarehouse.values()].sort(compareWarehouseRollups),
+      byCategory: [...byCategory.values()].sort(compareCategoryRollups),
     };
   }
 
@@ -553,7 +561,9 @@ export class ReportsService {
         value: Number(r.value) || 0,
         units: Number(r.units) || 0,
       }))
-      .sort((a, b) => b.value - a.value);
+      // A view has no row order: ties on value break by name, then id, so
+      // tied warehouses keep their places from one load to the next.
+      .sort(compareWarehouseRollups);
 
     const byCategory = (
       (catRes.data ?? []) as Array<{
@@ -569,7 +579,7 @@ export class ReportsService {
         value: Number(r.value) || 0,
         units: Number(r.units) || 0,
       }))
-      .sort((a, b) => b.value - a.value);
+      .sort(compareCategoryRollups);
 
     // Every active item has exactly one warehouse bucket (null → Unassigned),
     // so the warehouse rollup sums to the grand total.
@@ -628,7 +638,11 @@ export class ReportsService {
         count: Number(r.movement_count) || 0,
         totalQty: Number(r.total_qty) || 0,
       }))
-      .sort((a, b) => b.count - a.count);
+      // The function groups with no ORDER BY, so its rows come back in
+      // whatever order the plan produces. Ties on count break by the type's
+      // code: two types at 3 (initial, bundle_distribution) swapped places
+      // between two CSVs of the same data.
+      .sort(compareMovementTypes);
 
     // totalMovements = every movement in the window = the sum of the by-type
     // counts (movement_type is NOT NULL, so every row lands in exactly one
@@ -1604,7 +1618,9 @@ export class ReportsService {
           lastRunAt: b.last_run_at ?? null,
         }),
       )
-      .sort((a, b) => b.kitsOut - a.kitsOut);
+      // Grouped with no ORDER BY in the function: ties on kits out break by
+      // bundle name, then SKU, then id, not by the plan's row order.
+      .sort(compareBundleActivity);
 
     return {
       rangeDays: days,

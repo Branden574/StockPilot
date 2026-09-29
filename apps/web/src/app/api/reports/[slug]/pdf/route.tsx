@@ -22,6 +22,7 @@ import {
   reportExportUnauthenticated,
 } from '@/lib/reports/export-errors';
 import { type ReportSlug } from '@/lib/reports/report-access';
+import { costHistoryRows } from '@/lib/reports/row-order';
 import { audit } from '@/server/services/audit';
 import { assertPermission, ServiceError, type ServiceContext } from '@/server/services/context';
 import { ItemImagesService } from '@/server/services/item-images';
@@ -437,17 +438,9 @@ export async function GET(
         .filter(Boolean)
         .join(' · ') || undefined;
 
-      // Flatten and sort by date across all suppliers.
-      const allPoints = data.series
-        .flatMap((s) =>
-          s.points.map((p) => ({
-            supplier: s.supplierName,
-            date: p.date,
-            source: p.source,
-            unitCost: p.unitCost,
-          })),
-        )
-        .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+      // Every supplier's points in one chronological list, in the page's
+      // order (costHistoryRows).
+      const allPoints = costHistoryRows(data.series);
 
       sections = [
         {
