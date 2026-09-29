@@ -253,13 +253,39 @@ export const BOOK_REPORT_AS_SAVED =
 export const BOOK_REPORT_RESTRICTED =
   'You see orders only for books in your warehouses, charters and categories.';
 
-/** 'Grand total for all 2 pages: 642 copies requested in 26 orders.' */
+type BookReportGrandTotalSummary = {
+  copies: string;
+  orders: number;
+  unresolved: { entries: number };
+};
+
+/** 'Grand total for all 2 pages: 642 copies requested in 26 orders.'
+ *  The order count covers every order containing books, other units
+ *  included, while the copy total leaves other units out. So when any row is
+ *  in another unit the two figures are stated apart, never as "N copies in
+ *  M orders": 'Grand total: 15 copies requested. Orders containing books: 4.' */
 export function bookReportGrandTotalLine(
-  summary: { copies: string; orders: number },
+  summary: BookReportGrandTotalSummary,
   totalPages: number,
 ): string {
   const lead = totalPages > 1 ? `Grand total for all ${n(totalPages)} pages` : 'Grand total';
+  if (summary.unresolved.entries > 0) {
+    return `${lead}: ${copiesRequestedText(summary.copies)}. ${BOOK_REPORT_METRICS.orders.label}: ${n(summary.orders)}.`;
+  }
   return `${lead}: ${copiesRequestedText(summary.copies)} in ${ordersCountText(summary.orders)}.`;
+}
+
+/** The PDF's closing line, with the entry count:
+ *  'Grand total: 34 copies requested in 3 orders · 2 book entries.', or with
+ *  other units present 'Grand total: 15 copies requested. Orders containing
+ *  books: 4. Distinct book entries: 4.' */
+export function bookReportPdfGrandTotalLine(
+  summary: BookReportGrandTotalSummary & { entries: number },
+): string {
+  if (summary.unresolved.entries > 0) {
+    return `${bookReportGrandTotalLine(summary, 1)} ${BOOK_REPORT_METRICS.entries.label}: ${n(summary.entries)}.`;
+  }
+  return `Grand total: ${copiesRequestedText(summary.copies)} in ${ordersCountText(summary.orders)} · ${entriesCountText(summary.entries)}.`;
 }
 
 /** 'Latest order Sep 20, 2026'. */

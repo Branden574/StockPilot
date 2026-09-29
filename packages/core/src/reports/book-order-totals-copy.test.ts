@@ -71,7 +71,20 @@ function rendered(): string[] {
     copy.bookReportCategoryLine(null, true) ?? '',
     copy.bookReportSearchLine('hobbit') ?? '',
     copy.bookReportGeneratedLine('2026-09-28 10:42'),
-    copy.bookReportGrandTotalLine({ copies: '642', orders: 26 }, 2),
+    copy.bookReportGrandTotalLine({ copies: '642', orders: 26, unresolved: { entries: 0 } }, 2),
+    copy.bookReportGrandTotalLine({ copies: '15', orders: 4, unresolved: { entries: 1 } }, 1),
+    copy.bookReportPdfGrandTotalLine({
+      copies: '34',
+      orders: 3,
+      entries: 2,
+      unresolved: { entries: 0 },
+    }),
+    copy.bookReportPdfGrandTotalLine({
+      copies: '15',
+      orders: 4,
+      entries: 4,
+      unresolved: { entries: 1 },
+    }),
     copy.latestOrderText('2026-09-20'),
     ...copy.bookReportRowBadges({
       itemStatus: 'archived',
@@ -169,9 +182,17 @@ describe('Book Order Totals wording', () => {
   });
 
   it('the grand total and drawer header read as in the plan', () => {
-    expect(copy.bookReportGrandTotalLine({ copies: '642', orders: 26 }, 2)).toBe(
-      'Grand total for all 2 pages: 642 copies requested in 26 orders.',
-    );
+    expect(
+      copy.bookReportGrandTotalLine({ copies: '642', orders: 26, unresolved: { entries: 0 } }, 2),
+    ).toBe('Grand total for all 2 pages: 642 copies requested in 26 orders.');
+    expect(
+      copy.bookReportPdfGrandTotalLine({
+        copies: '34',
+        orders: 3,
+        entries: 2,
+        unresolved: { entries: 0 },
+      }),
+    ).toBe('Grand total: 34 copies requested in 3 orders · 2 book entries.');
     expect(
       copy.bookReportDrawerHeader(
         { countsAsCopies: true, unit: 'unit' },
@@ -191,6 +212,26 @@ describe('Book Order Totals wording', () => {
     ).toBe('Orders placed during: All time (May 12, 2026 – Sep 25, 2026)');
     expect(copy.bookReportRangeLine({ key: '30d', from: '2026-08-30', to: '2026-09-28' })).toBe(
       'Orders placed during: Last 30 days (Aug 30 – Sep 28, 2026)',
+    );
+  });
+
+  it('never ties the copies to an order count that includes other-unit orders', () => {
+    // 15 copies came from 3 orders; a 4th order holds only a 'pack of 10'
+    // book, so it is an order containing books but holds none of the 15.
+    const summary = { copies: '15', orders: 4, entries: 4, unresolved: { entries: 1 } };
+    const page = copy.bookReportGrandTotalLine(summary, 1);
+    const pages = copy.bookReportGrandTotalLine(summary, 2);
+    const pdf = copy.bookReportPdfGrandTotalLine(summary);
+    for (const line of [page, pages, pdf]) {
+      expect(line).not.toMatch(/copies requested in /);
+      expect(line).toContain('Orders containing books: 4.');
+    }
+    expect(page).toBe('Grand total: 15 copies requested. Orders containing books: 4.');
+    expect(pages).toBe(
+      'Grand total for all 2 pages: 15 copies requested. Orders containing books: 4.',
+    );
+    expect(pdf).toBe(
+      'Grand total: 15 copies requested. Orders containing books: 4. Distinct book entries: 4.',
     );
   });
 

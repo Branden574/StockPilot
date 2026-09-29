@@ -6,13 +6,12 @@ import {
   BOOK_REPORT_METRICS,
   BOOK_REPORT_TITLE,
   bookReportRowBadges,
+  bookReportPdfGrandTotalLine,
   copiesRequestedText,
-  entriesCountText,
   formatBookReportIdentityLine,
   formatReportDate,
   formatReportDateTime,
   formatReportQuantity,
-  ordersCountText,
   bookReportUnitLabel,
   type BookReportRow,
 } from '@stockpilot/core';
@@ -97,7 +96,7 @@ export interface BookOrderTotalsPdfProps {
   timeZone: string;
   /** Scope lines, already worded (range, status, warehouse, ...). */
   scopeLines: string[];
-  summary: { copies: string; entries: number; orders: number };
+  summary: { copies: string; entries: number; orders: number; unresolved: { entries: number } };
   /** Extra summary lines (the other-unit disclosure). */
   summaryNotes: string[];
   /** The cover disclosure ("Covers shown for ..." / "Exported without covers."). */
@@ -397,7 +396,7 @@ export function BookOrderTotalsPdf(props: BookOrderTotalsPdfProps) {
         </View>
 
         <Text style={styles.grandTotal} wrap={false}>
-          {`Grand total: ${copiesRequestedText(props.summary.copies)} in ${ordersCountText(props.summary.orders)} · ${entriesCountText(props.summary.entries)}.`}
+          {bookReportPdfGrandTotalLine(props.summary)}
         </Text>
 
         <Text style={styles.howTitle}>How this is counted</Text>

@@ -82,7 +82,7 @@ function props(over: Partial<BookOrderTotalsPdfProps> = {}): BookOrderTotalsPdfP
     generatedAtLocal: '2026-09-28 10:42',
     timeZone: 'America/Los_Angeles',
     scopeLines: ['Orders placed during: All time', 'Status: Pending, In progress.'],
-    summary: { copies: '34', entries: 2, orders: 3 },
+    summary: { copies: '34', entries: 2, orders: 3, unresolved: { entries: 0 } },
     summaryNotes: [],
     coverNote: 'Covers shown for 2 of 2 books.',
     photos: true,
@@ -149,6 +149,18 @@ describe('BookOrderTotalsPdf structure', () => {
     expect(all).toContain('pack of 10');
     expect(all.some((t) => t.includes('Archived'))).toBe(true);
     expect([...walk(tree)].filter((el) => el.props['data-placeholder'] === true)).toHaveLength(2);
+  });
+  it('with an other-unit row, the grand total never ties the copies to the order count', () => {
+    // 15 copies from 3 orders, and a 4th order holding only a pack book.
+    const all = texts(
+      BookOrderTotalsPdf(
+        props({ summary: { copies: '15', entries: 4, orders: 4, unresolved: { entries: 1 } } }),
+      ),
+    );
+    expect(all).toContain(
+      'Grand total: 15 copies requested. Orders containing books: 4. Distinct book entries: 4.',
+    );
+    expect(all.some((t) => /copies requested in \d/.test(t))).toBe(false);
   });
   it('without covers the cover column is dropped and the Book column takes its width', () => {
     const tree = BookOrderTotalsPdf(
@@ -218,7 +230,9 @@ describe('Book Order Totals PDF summary box', () => {
   });
   it('prints the figure and its words as separate lines, never one long value', () => {
     const tree = BookOrderTotalsPdf(
-      props({ summary: { copies: '18790', entries: 1151, orders: 1500 } }),
+      props({
+        summary: { copies: '18790', entries: 1151, orders: 1500, unresolved: { entries: 0 } },
+      }),
     );
     const all = texts(tree);
     expect(all).toContain('18,790');
@@ -232,7 +246,7 @@ describe('Book Order Totals PDF summary box', () => {
   });
   it('one copy reads "copy requested"', () => {
     expect(
-      texts(BookOrderTotalsPdf(props({ summary: { copies: '1', entries: 1, orders: 1 } }))),
+      texts(BookOrderTotalsPdf(props({ summary: { copies: '1', entries: 1, orders: 1, unresolved: { entries: 0 } } }))),
     ).toContain('copy requested');
   });
 });
@@ -250,7 +264,7 @@ describe('Book Order Totals PDF render', () => {
       cover: i === 0 ? cover : null,
     }));
     const buf = await renderToBuffer(
-      BookOrderTotalsPdf(props({ rows, summary: { copies: '3600', entries: 120, orders: 360 } })),
+      BookOrderTotalsPdf(props({ rows, summary: { copies: '3600', entries: 120, orders: 360, unresolved: { entries: 0 } } })),
     );
     expect(buf.subarray(0, 5).toString()).toBe('%PDF-');
     const pages = buf.toString('latin1').match(/\/Type \/Page\b/g) ?? [];
