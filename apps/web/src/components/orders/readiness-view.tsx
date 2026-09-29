@@ -15,6 +15,7 @@ import {
   putAwayStripOffer,
   stagingPutAwayHref,
   type OrderReadinessResult,
+  type PutAwayAccess,
   type PutAwayTargets,
   type ReadinessAudience,
   type ReadinessLineAssessment,
@@ -143,7 +144,8 @@ export function readinessStripView(
  * The strip's put-away offer (F2-3), as plain data for the client strip: a
  * link to the Staging list filtered to the order's items that need putting
  * away ("Put away 3 items"), or, for a viewer without `stock:transfer` (the
- * permission Place asserts), core's sentence saying so. Null when nothing
+ * permission Place asserts) or `items:read` (the Staging page's own gate),
+ * core's sentence naming what is missing. Null when nothing
  * needs putting away, or readiness was not checked (core putAwayTargets gives
  * null outside the to_pick phase and past the line cap).
  */
@@ -153,9 +155,9 @@ export type ReadinessStripPutAway =
 
 export function readinessStripPutAway(
   targets: PutAwayTargets | null,
-  opts: { orderId: string; canTransfer: boolean },
+  opts: { orderId: string; access: PutAwayAccess },
 ): ReadinessStripPutAway | null {
-  const offer = putAwayStripOffer(targets, opts.canTransfer);
+  const offer = putAwayStripOffer(targets, opts.access);
   if (offer.kind === 'link') {
     return {
       kind: 'link',
@@ -175,9 +177,9 @@ export function readinessStripPutAway(
  */
 export function readinessLinePutAwayHref(
   line: ReadinessLineAssessment | null,
-  opts: { orderId: string; canTransfer: boolean },
+  opts: { orderId: string; access: PutAwayAccess },
 ): string | null {
   if (!line) return null;
-  const offer = putAwayLineOffer(line, opts.canTransfer);
+  const offer = putAwayLineOffer(line, opts.access);
   return offer.kind === 'link' ? stagingPutAwayHref({ orderId: opts.orderId, itemIds: offer.itemIds }) : null;
 }

@@ -1,5 +1,6 @@
 import {
   PUT_AWAY_NEEDS_TRANSFER_COPY,
+  PUT_AWAY_NEEDS_VIEW_ITEMS_COPY,
   putAwayLineAccessibilityLabel,
   type OrderReadinessResult,
   type Permission,
@@ -15,7 +16,7 @@ import {
   fxLine,
   fxResult,
 } from './__fixtures__/readiness-facts';
-import { canPutAwayStock, orderPutAwayView, stagingPutAwayRoute } from './order-put-away';
+import { orderPutAwayView, putAwayAccessFor, stagingPutAwayRoute } from './order-put-away';
 
 /**
  * PUT AWAY FROM THE ORDER, ON THE PHONE (F2-3): which lines offer "Put away",
@@ -35,35 +36,49 @@ const MAUS_IN_STAGING = fxResult(
   }),
 );
 
+const ALLOWED = { canTransfer: true, canReadItems: true };
+const NO_TRANSFER = { canTransfer: false, canReadItems: true };
+
 function lineOf(result: OrderReadinessResult, lineId: string) {
   if (result.state !== 'ok' || result.assessment.phase !== 'to_pick') throw new Error('not to_pick');
   return result.assessment.lines.find((l) => l.lineId === lineId)!;
 }
 
-describe('canPutAwayStock (the gate Place asserts: stock:transfer)', () => {
+describe('putAwayAccessFor (stock:transfer, which Place asserts, and items:read, which the Staging route asserts)', () => {
+  const ALL = { canTransfer: true, canReadItems: true };
   it('by the role default while the effective set loads', () => {
-    expect(canPutAwayStock('staff', undefined)).toBe(true);
-    expect(canPutAwayStock('viewer', undefined)).toBe(false);
+    expect(putAwayAccessFor('staff', undefined)).toEqual(ALL);
+    expect(putAwayAccessFor('viewer', undefined)).toEqual({ canTransfer: false, canReadItems: true });
   });
 
   it('by the effective set once it has loaded: overrides apply, and no manager shortcut (the server has none)', () => {
     // Mutation caught: a manager bypass the staging route does not make
     // (canPlace = can(ctx, 'stock:transfer')), offering a list whose Place
     // is then missing.
-    expect(canPutAwayStock('manager', new Set<Permission>(['orders:approve']))).toBe(false);
-    expect(canPutAwayStock('viewer', new Set<Permission>(['stock:transfer']))).toBe(true);
+    expect(putAwayAccessFor('manager', new Set<Permission>(['orders:approve', 'items:read']))).toEqual({
+      canTransfer: false,
+      canReadItems: true,
+    });
+    expect(putAwayAccessFor('viewer', new Set<Permission>(['stock:transfer', 'items:read']))).toEqual(ALL);
+    // Transfer stock by an override, View items revoked: the Staging route
+    // answers 403, so this viewer may not be sent there.
+    expect(putAwayAccessFor('manager', new Set<Permission>(['stock:transfer']))).toEqual({
+      canTransfer: true,
+      canReadItems: false,
+    });
   });
 
-  it('no role, or one this build does not know: no', () => {
-    expect(canPutAwayStock(null, undefined)).toBe(false);
-    expect(canPutAwayStock('', undefined)).toBe(false);
-    expect(canPutAwayStock('robot', undefined)).toBe(false);
+  it('no role, or one this build does not know: nothing', () => {
+    const NONE_ACCESS = { canTransfer: false, canReadItems: false };
+    expect(putAwayAccessFor(null, undefined)).toEqual(NONE_ACCESS);
+    expect(putAwayAccessFor('', undefined)).toEqual(NONE_ACCESS);
+    expect(putAwayAccessFor('robot', undefined)).toEqual(NONE_ACCESS);
   });
 });
 
 describe('orderPutAwayView', () => {
   it('the line with units in Staging offers "Put away" (its item only); the card offers "Put away 1 item"', () => {
-    const view = orderPutAwayView({ readiness: MAUS_IN_STAGING, fullPanel: true, canTransfer: true });
+    const view = orderPutAwayView({ readiness: MAUS_IN_STAGING, fullPanel: true, access: ALLOWED });
     expect(view.lines.get('line-1')).toEqual({ kind: 'link', label: 'Put away', itemIds: [FX_ITEM_A] });
     expect(view.lines.has('line-2')).toBe(false);
     expect(view.strip).toEqual({ kind: 'link', label: 'Put away 1 item', itemIds: [FX_ITEM_A] });
@@ -83,7 +98,7 @@ describe('orderPutAwayView', () => {
       }),
     );
     expect(lineOf(short, 'line-1').state).toBe('short');
-    const view = orderPutAwayView({ readiness: short, fullPanel: true, canTransfer: true });
+    const view = orderPutAwayView({ readiness: short, fullPanel: true, access: ALLOWED });
     expect(view.lines.get('line-1')?.kind).toBe('link');
     expect(view.strip).toMatchObject({ kind: 'link', itemIds: [FX_ITEM_A] });
   });
@@ -97,7 +112,7 @@ describe('orderPutAwayView', () => {
         items: [fxItem(FX_ITEM_A, { here: { rack: 0, site: 0, unplaced: 0, staging: 10 } })],
       }),
     );
-    const view = orderPutAwayView({ readiness: dup, fullPanel: true, canTransfer: true });
+    const view = orderPutAwayView({ readiness: dup, fullPanel: true, access: ALLOWED });
     expect(view.strip).toEqual({ kind: 'link', label: 'Put away 1 item', itemIds: [FX_ITEM_A] });
     expect([...view.lines.keys()]).toEqual(['line-1', 'line-2']);
   });
@@ -105,30 +120,40 @@ describe('orderPutAwayView', () => {
   it('without stock:transfer: core’s sentence once, on the card; no line offers a link (the web page’s layout)', () => {
     // Mutation caught: dropping the gate (a link to a list whose Place is
     // missing).
-    const view = orderPutAwayView({ readiness: MAUS_IN_STAGING, fullPanel: true, canTransfer: false });
+    const view = orderPutAwayView({ readiness: MAUS_IN_STAGING, fullPanel: true, access: NO_TRANSFER });
     expect(view.strip).toEqual({ kind: 'needs_permission', message: PUT_AWAY_NEEDS_TRANSFER_COPY });
     expect(view.lines.size).toBe(0);
     expect(PUT_AWAY_NEEDS_TRANSFER_COPY).toBe('Putting stock away needs the Transfer stock permission.');
+  });
+
+  it('Transfer stock without View items: core’s View items sentence once, no line links (never a tab that answers 403)', () => {
+    const view = orderPutAwayView({
+      readiness: MAUS_IN_STAGING,
+      fullPanel: true,
+      access: { canTransfer: true, canReadItems: false },
+    });
+    expect(view.strip).toEqual({ kind: 'needs_permission', message: PUT_AWAY_NEEDS_VIEW_ITEMS_COPY });
+    expect(view.lines.size).toBe(0);
   });
 
   it('nothing in Staging: nothing offered', () => {
     const ready = fxResult(
       fxFacts({ lines: [fxLine('line-1', FX_ITEM_A, 5)], items: [fxItem(FX_ITEM_A)] }),
     );
-    const view = orderPutAwayView({ readiness: ready, fullPanel: true, canTransfer: true });
+    const view = orderPutAwayView({ readiness: ready, fullPanel: true, access: ALLOWED });
     expect(view.strip).toEqual({ kind: 'none' });
     expect(view.lines.size).toBe(0);
   });
 
   it('the requester’s sentence, a failed or missing check, a capped order, or a picked order: nothing', () => {
     const none = { strip: { kind: 'none' }, lines: new Map() };
-    expect(orderPutAwayView({ readiness: MAUS_IN_STAGING, fullPanel: false, canTransfer: true })).toEqual(none);
+    expect(orderPutAwayView({ readiness: MAUS_IN_STAGING, fullPanel: false, access: ALLOWED })).toEqual(none);
     expect(
-      orderPutAwayView({ readiness: { state: 'failed', message: 'x' }, fullPanel: true, canTransfer: true }),
+      orderPutAwayView({ readiness: { state: 'failed', message: 'x' }, fullPanel: true, access: ALLOWED }),
     ).toEqual(none);
-    expect(orderPutAwayView({ readiness: null, fullPanel: true, canTransfer: true })).toEqual(none);
+    expect(orderPutAwayView({ readiness: null, fullPanel: true, access: ALLOWED })).toEqual(none);
     const capped = fxResult(fxFacts({ linesCapped: true, lines: [], items: [] }));
-    expect(orderPutAwayView({ readiness: capped, fullPanel: true, canTransfer: true })).toEqual(none);
+    expect(orderPutAwayView({ readiness: capped, fullPanel: true, access: ALLOWED })).toEqual(none);
     const picked = fxResult(
       fxFacts({
         status: 'picking_complete',
@@ -137,7 +162,7 @@ describe('orderPutAwayView', () => {
         items: [],
       }),
     );
-    expect(orderPutAwayView({ readiness: picked, fullPanel: true, canTransfer: true })).toEqual(none);
+    expect(orderPutAwayView({ readiness: picked, fullPanel: true, access: ALLOWED })).toEqual(none);
   });
 });
 

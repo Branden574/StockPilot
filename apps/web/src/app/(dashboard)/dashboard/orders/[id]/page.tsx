@@ -702,11 +702,14 @@ export default async function OrderDetailPage({
   // putAwayTargets: whatever the line's state, since the state is the worst
   // bucket a line touches) link to the Staging list filtered to their items,
   // from this order; "Put away N items" on the strip links to all of them.
-  // The gate is stock:transfer, the permission Place asserts; anyone else is
-  // told so once, on the strip. The order's own id (the database's lower-case
-  // form) names it in the link.
-  const canTransferStock = can(ctx, 'stock:transfer');
-  const putAwayLinkOpts = { orderId: request.id, canTransfer: canTransferStock };
+  // The gate is stock:transfer (the permission Place asserts) and items:read
+  // (the Staging page's own gate: it answers 404 without it); anyone else is
+  // told once, on the strip, which one is missing. The order's own id (the
+  // database's lower-case form) names it in the link.
+  const putAwayLinkOpts = {
+    orderId: request.id,
+    access: { canTransfer: can(ctx, 'stock:transfer'), canReadItems: can(ctx, 'items:read') },
+  };
   const readinessPutAway = readinessStripPutAway(putAwayTargets(readinessAssessment), putAwayLinkOpts);
   // "Count this item" on a line where on record and the locations disagree:
   // the item page's rule (a manager who can start a count; an item a count

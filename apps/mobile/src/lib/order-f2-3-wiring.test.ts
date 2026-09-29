@@ -165,12 +165,13 @@ describe('Approve partial and Resume open the preview first', () => {
 describe('Put away from the order', () => {
   // Mutation caught: a gate other than the one Place asserts, or offering
   // put-away to the requester's one-sentence card.
-  it('the gate is stock:transfer, and only the full panel offers it', () => {
+  it('the gate is stock:transfer and items:read (Place and the Staging route), and only the full panel offers it', () => {
     const code = codeOnly(screen);
-    expect(code).toContain('const canTransfer = canPutAwayStock(role, permissions);');
+    expect(code).toContain('const { canTransfer, canReadItems } = putAwayAccessFor(role, permissions);');
     expect(code).toMatch(
-      /orderPutAwayView\(\{\s*readiness: order\?\.readiness \?\? null,\s*fullPanel: showLineReadiness,\s*canTransfer,\s*\}\)/,
+      /orderPutAwayView\(\{\s*readiness: order\?\.readiness \?\? null,\s*fullPanel: showLineReadiness,\s*access: \{ canTransfer, canReadItems \},\s*\}\)/,
     );
+    expect(code).toMatch(/\[order, showLineReadiness, canTransfer, canReadItems\]/);
   });
 
   it('"Put away N items" on the card, and "Put away" on each line, open the same filtered Staging tab', () => {

@@ -1546,7 +1546,7 @@ describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', (
 
   describe('Put away', () => {
     it('a viewer who may move stock: each line with units in Staging links to Staging for its item, and the strip for all of them', async () => {
-      as('manager', ['orders:approve', 'stock:transfer']);
+      as('manager', ['orders:approve', 'stock:transfer', 'items:read']);
       orderAt('pending_approval', LINES);
       readinessResult.mockResolvedValue(readinessOk(facts('pending_approval')));
 
@@ -1573,7 +1573,7 @@ describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', (
     });
 
     it('without Transfer stock: no links, and the strip says why once', async () => {
-      as('manager', ['orders:approve']);
+      as('manager', ['orders:approve', 'items:read']);
       orderAt('pending_approval', LINES);
       readinessResult.mockResolvedValue(readinessOk(facts('pending_approval')));
 
@@ -1587,8 +1587,26 @@ describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', (
       );
     });
 
+    // The Staging page answers 404 (and the phone's route 403) without
+    // items:read: Transfer stock alone, by an override, must not get a link
+    // that opens a refusal, nor be told to get Transfer stock.
+    it('Transfer stock without View items: no links, and the strip names View items', async () => {
+      as('manager', ['orders:approve', 'stock:transfer']);
+      orderAt('pending_approval', LINES);
+      readinessResult.mockResolvedValue(readinessOk(facts('pending_approval')));
+
+      await renderPage();
+
+      expect(lineLinks().every((l) => l === null)).toBe(true);
+      const strip = screen.getByTestId('readiness-strip');
+      expect(within(strip).queryByRole('link', { name: /Put away/ })).toBeNull();
+      expect(within(strip).getByTestId('readiness-put-away-permission')).toHaveTextContent(
+        'Putting stock away needs the View items permission.',
+      );
+    });
+
     it('a staff picker with Transfer stock gets it on a picking order too', async () => {
-      as('staff', ['items:update', 'stock:transfer']);
+      as('staff', ['items:update', 'stock:transfer', 'items:read']);
       orderAt('picking_in_progress', LINES);
       readinessResult.mockResolvedValue(readinessOk(facts('picking_in_progress')));
 
@@ -1601,7 +1619,7 @@ describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', (
     });
 
     it('two lines of one item name it once: "Put away 1 item"', async () => {
-      as('manager', ['orders:approve', 'stock:transfer']);
+      as('manager', ['orders:approve', 'stock:transfer', 'items:read']);
       orderAt('pending_approval', [orderLine('L1', 'iB', 5), orderLine('L2', 'iB', 20)]);
       readinessResult.mockResolvedValue(
         readinessOk(
@@ -1626,7 +1644,7 @@ describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', (
     });
 
     it('nothing when nothing is in Staging, on a failed read, or for the requester', async () => {
-      as('manager', ['orders:approve', 'stock:transfer']);
+      as('manager', ['orders:approve', 'stock:transfer', 'items:read']);
       orderAt('pending_approval', [orderLine('LA', 'iA', 20)]);
       readinessResult.mockResolvedValue(
         readinessOk(
@@ -1649,7 +1667,7 @@ describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', (
       failed.unmount();
 
       // The requester's own order: one sentence, no actions (with Transfer stock too).
-      ctxHolder.current = { role: 'viewer', permissions: new Set(['orders:read', 'stock:transfer']) };
+      ctxHolder.current = { role: 'viewer', permissions: new Set(['orders:read', 'stock:transfer', 'items:read']) };
       orderGet.mockResolvedValue(
         detailFixture({ request: requestFixture({ status: 'pending_approval', requester_user_id: 'u1' }), lines: LINES }),
       );
@@ -1745,7 +1763,7 @@ describe('orders/[id]: put away and partial fulfilment from the order (F2-3)', (
     it('none for a viewer who may not approve, and none outside the two statuses', async () => {
       // A pending order: someone who may not approve gets no actions panel at
       // all (so the preview's canApprove guard is defence in depth there).
-      as('staff', ['items:update', 'stock:transfer']);
+      as('staff', ['items:update', 'stock:transfer', 'items:read']);
       orderAt('pending_approval', LINES);
       readinessResult.mockResolvedValue(readinessOk(facts('pending_approval')));
       const pending = await renderPage();

@@ -113,7 +113,7 @@ import {
   shouldReadReadiness,
 } from '@/lib/order-readiness';
 import { partialSheetView, runPartialFulfilment } from '@/lib/order-partial';
-import { canPutAwayStock, orderPutAwayView, stagingPutAwayRoute } from '@/lib/order-put-away';
+import { orderPutAwayView, putAwayAccessFor, stagingPutAwayRoute } from '@/lib/order-put-away';
 import { isOfflineState } from '@/lib/exceptions-api';
 import { departureConfirmButtons, orderDepartureRisk } from '@/lib/order-departure';
 import {
@@ -1559,18 +1559,19 @@ export default function OrderDetail() {
 
   // F2-3 "Put away" on the full panel: a line with units in this warehouse's
   // Staging, and "Put away N items" on the card (core put-away.ts). The gate
-  // is stock:transfer, the permission Place asserts, read as the server reads
-  // it; without it, the card says core's sentence once and the lines offer
+  // is stock:transfer (the permission Place asserts) and items:read (the
+  // Staging route's), read as the server reads them; without them, the card
+  // says core's sentence once, naming what is missing, and the lines offer
   // nothing (the web page's layout).
-  const canTransfer = canPutAwayStock(role, permissions);
+  const { canTransfer, canReadItems } = putAwayAccessFor(role, permissions);
   const putAway = React.useMemo(
     () =>
       orderPutAwayView({
         readiness: order?.readiness ?? null,
         fullPanel: showLineReadiness,
-        canTransfer,
+        access: { canTransfer, canReadItems },
       }),
-    [order, showLineReadiness, canTransfer],
+    [order, showLineReadiness, canTransfer, canReadItems],
   );
 
   // F2-2 "Hold available stock" on the readiness card: core's rule, the web

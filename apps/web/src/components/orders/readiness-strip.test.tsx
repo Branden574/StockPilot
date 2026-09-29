@@ -383,7 +383,9 @@ describe('readinessStripPutAway / readinessLinePutAwayHref: where put away goes,
     if (r.state !== 'ok' || r.assessment.phase !== 'to_pick') throw new Error('to_pick expected');
     return r.assessment;
   };
-  const opts = { orderId: ORDER, canTransfer: true };
+  const opts = { orderId: ORDER, access: { canTransfer: true, canReadItems: true } };
+  const noTransfer = { orderId: ORDER, access: { canTransfer: false, canReadItems: true } };
+  const noItems = { orderId: ORDER, access: { canTransfer: true, canReadItems: false } };
 
   it('the strip links to Staging for every item with units there, from this order', () => {
     expect(readinessStripPutAway(putAwayTargets(assessment()), opts)).toEqual({
@@ -394,16 +396,24 @@ describe('readinessStripPutAway / readinessLinePutAwayHref: where put away goes,
   });
 
   it("without Transfer stock: core's sentence, never a link", () => {
-    expect(readinessStripPutAway(putAwayTargets(assessment()), { ...opts, canTransfer: false })).toEqual({
+    expect(readinessStripPutAway(putAwayTargets(assessment()), noTransfer)).toEqual({
       kind: 'needs_permission',
       message: 'Putting stock away needs the Transfer stock permission.',
     });
   });
 
+  it("without View items (Staging's own gate): core's sentence naming it, never a link to a 404", () => {
+    expect(readinessStripPutAway(putAwayTargets(assessment()), noItems)).toEqual({
+      kind: 'needs_permission',
+      message: 'Putting stock away needs the View items permission.',
+    });
+    expect(readinessLinePutAwayHref(assessment().lines[1]!, noItems)).toBeNull();
+  });
+
   it('nothing when nothing needs putting away, or readiness was not checked', () => {
     expect(readinessStripPutAway(null, opts)).toBeNull();
     expect(readinessStripPutAway({ itemIds: [], lineIds: [], units: 0 }, opts)).toBeNull();
-    expect(readinessStripPutAway({ itemIds: [], lineIds: [], units: 0 }, { ...opts, canTransfer: false })).toBeNull();
+    expect(readinessStripPutAway({ itemIds: [], lineIds: [], units: 0 }, noTransfer)).toBeNull();
   });
 
   it("a line links to Staging for its own item; nothing for a line with none there, or for a viewer who can't move stock", () => {
@@ -413,7 +423,7 @@ describe('readinessStripPutAway / readinessLinePutAwayHref: where put away goes,
     expect(readinessLinePutAwayHref(lb!, opts)).toBe(`/dashboard/inventory/staging?order=${ORDER}&item=b`);
     expect(readinessLinePutAwayHref(lc!, opts)).toBe(`/dashboard/inventory/staging?order=${ORDER}&item=c`);
     // The strip says why once; the lines repeat nothing.
-    expect(readinessLinePutAwayHref(lb!, { ...opts, canTransfer: false })).toBeNull();
+    expect(readinessLinePutAwayHref(lb!, noTransfer)).toBeNull();
     expect(readinessLinePutAwayHref(null, opts)).toBeNull();
   });
 });

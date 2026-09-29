@@ -176,12 +176,39 @@ export function stagingPutAwayParams(filter: {
 export const PUT_AWAY_LINE_LABEL = 'Put away';
 
 /**
- * Who may not put away: the gate is `stock:transfer`, the permission the
- * Place action asserts (web and phone). Named as the permissions matrix names
- * it ("Transfer stock", core PERMISSION_META), as every other sentence that
- * asks for it does, so an admin can find it.
+ * The permissions, named as the permissions matrix names them (core
+ * PERMISSION_META: "Transfer stock", "View items"), as every other sentence
+ * that asks for them does, so an admin can find them. put-away.test.ts pins
+ * the names to the matrix.
  */
-export const PUT_AWAY_NEEDS_TRANSFER_COPY = 'Putting stock away needs the Transfer stock permission.';
+const TRANSFER_STOCK = 'Transfer stock';
+const VIEW_ITEMS = 'View items';
+
+/**
+ * Who may not put away. The gate is `stock:transfer` (the permission the Place
+ * action asserts, web and phone) AND `items:read` (the Staging page answers
+ * 404 and GET /api/v1/inventory/staging 403 without it), so a link is offered
+ * only to a viewer who can both open the list and place from it. Anyone else
+ * reads which permission is missing.
+ */
+export const PUT_AWAY_NEEDS_TRANSFER_COPY = `Putting stock away needs the ${TRANSFER_STOCK} permission.`;
+export const PUT_AWAY_NEEDS_VIEW_ITEMS_COPY = `Putting stock away needs the ${VIEW_ITEMS} permission.`;
+export const PUT_AWAY_NEEDS_TRANSFER_AND_VIEW_ITEMS_COPY = `Putting stock away needs the ${TRANSFER_STOCK} and ${VIEW_ITEMS} permissions.`;
+
+/** What the viewer may do about putting away, both platforms alike. */
+export interface PutAwayAccess {
+  /** `stock:transfer`: Place asserts it. */
+  canTransfer: boolean;
+  /** `items:read`: the Staging page and the phone's Staging route require it. */
+  canReadItems: boolean;
+}
+
+/** The sentence for a viewer who may not put away, or null when they may. */
+export function putAwayNeedsPermissionCopy(access: PutAwayAccess): string | null {
+  if (access.canTransfer && access.canReadItems) return null;
+  if (!access.canTransfer && !access.canReadItems) return PUT_AWAY_NEEDS_TRANSFER_AND_VIEW_ITEMS_COPY;
+  return access.canTransfer ? PUT_AWAY_NEEDS_VIEW_ITEMS_COPY : PUT_AWAY_NEEDS_TRANSFER_COPY;
+}
 
 function items(n: number): string {
   return `${n} ${n === 1 ? 'item' : 'items'}`;
@@ -208,19 +235,22 @@ export type PutAwayOffer =
   | { kind: 'needs_permission'; message: string };
 
 /**
- * The strip's put-away offer. `canTransfer` is the viewer's `stock:transfer`.
+ * The strip's put-away offer: a link for a viewer who can open Staging and
+ * place (`access`), else the sentence saying which permission is missing.
  * Nothing when nothing needs putting away (or readiness was not checked).
  */
-export function putAwayStripOffer(targets: PutAwayTargets | null, canTransfer: boolean): PutAwayOffer {
+export function putAwayStripOffer(targets: PutAwayTargets | null, access: PutAwayAccess): PutAwayOffer {
   if (!targets || targets.itemIds.length === 0) return { kind: 'none' };
-  if (!canTransfer) return { kind: 'needs_permission', message: PUT_AWAY_NEEDS_TRANSFER_COPY };
+  const missing = putAwayNeedsPermissionCopy(access);
+  if (missing) return { kind: 'needs_permission', message: missing };
   return { kind: 'link', label: putAwayStripLabel(targets.itemIds.length), itemIds: targets.itemIds };
 }
 
 /** One line's put-away offer (the line's own item only). */
-export function putAwayLineOffer(line: ReadinessLineAssessment, canTransfer: boolean): PutAwayOffer {
+export function putAwayLineOffer(line: ReadinessLineAssessment, access: PutAwayAccess): PutAwayOffer {
   if (!lineNeedsPutAway(line)) return { kind: 'none' };
-  if (!canTransfer) return { kind: 'needs_permission', message: PUT_AWAY_NEEDS_TRANSFER_COPY };
+  const missing = putAwayNeedsPermissionCopy(access);
+  if (missing) return { kind: 'needs_permission', message: missing };
   return { kind: 'link', label: PUT_AWAY_LINE_LABEL, itemIds: [line.itemId] };
 }
 

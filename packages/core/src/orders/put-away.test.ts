@@ -19,7 +19,9 @@ import {
   linePutAwayUnits,
   parseStagingItemFilter,
   PUT_AWAY_LINE_LABEL,
+  PUT_AWAY_NEEDS_TRANSFER_AND_VIEW_ITEMS_COPY,
   PUT_AWAY_NEEDS_TRANSFER_COPY,
+  PUT_AWAY_NEEDS_VIEW_ITEMS_COPY,
   putAwayLineAccessibilityLabel,
   putAwayLineOffer,
   putAwayStripLabel,
@@ -34,6 +36,7 @@ import {
   stagingPutAwayHref,
   stagingPutAwayParams,
 } from './put-away';
+import { PERMISSION_META } from '../constants/permissions';
 
 // ── Builders (the shapes order_readiness_facts returns) ─────────────────────
 
@@ -214,7 +217,7 @@ describe('which lines offer "Put away" (units in this warehouse\'s Staging, what
 
 // ── The offers and their words ──────────────────────────────────────────────
 
-describe('put-away offers (stock:transfer, the Place action\'s own permission)', () => {
+describe('put-away offers (stock:transfer, the Place action\'s own permission, and items:read, Staging\'s)', () => {
   const a = assess({
     lines: [
       { id: 'L1', item: 'A', requested: 10 },
@@ -227,24 +230,59 @@ describe('put-away offers (stock:transfer, the Place action\'s own permission)',
       item('C', { here: { rack: 5, site: 0, unplaced: 0, staging: 0 } }),
     ],
   });
+  const both = { canTransfer: true, canReadItems: true };
+  const noTransfer = { canTransfer: false, canReadItems: true };
+  const noItems = { canTransfer: true, canReadItems: false };
+  const neither = { canTransfer: false, canReadItems: false };
 
-  it('the strip links "Put away 2 items" for someone who can transfer stock', () => {
-    expect(putAwayStripOffer(putAwayTargets(a), true)).toEqual({ kind: 'link', label: 'Put away 2 items', itemIds: ['A', 'B'] });
+  it('the strip links "Put away 2 items" for someone who can transfer stock and view items', () => {
+    expect(putAwayStripOffer(putAwayTargets(a), both)).toEqual({ kind: 'link', label: 'Put away 2 items', itemIds: ['A', 'B'] });
     expect(putAwayStripLabel(1)).toBe('Put away 1 item');
   });
 
-  it('everyone else sees the permission sentence, never a link that bounces', () => {
-    expect(putAwayStripOffer(putAwayTargets(a), false)).toEqual({ kind: 'needs_permission', message: PUT_AWAY_NEEDS_TRANSFER_COPY });
-    expect(putAwayLineOffer(lineOf(a, 'L1'), false)).toEqual({ kind: 'needs_permission', message: PUT_AWAY_NEEDS_TRANSFER_COPY });
+  it('without Transfer stock: the permission sentence, never a link that bounces', () => {
+    expect(putAwayStripOffer(putAwayTargets(a), noTransfer)).toEqual({ kind: 'needs_permission', message: PUT_AWAY_NEEDS_TRANSFER_COPY });
+    expect(putAwayLineOffer(lineOf(a, 'L1'), noTransfer)).toEqual({ kind: 'needs_permission', message: PUT_AWAY_NEEDS_TRANSFER_COPY });
     expect(PUT_AWAY_NEEDS_TRANSFER_COPY).toBe('Putting stock away needs the Transfer stock permission.');
   });
 
+  // The Staging page answers 404 and GET /api/v1/inventory/staging 403 without
+  // items:read, so Transfer stock alone (an override) must not get a link that
+  // opens a refusal; nor may the sentence tell them to get Transfer stock,
+  // which they have.
+  it('Transfer stock without View items: no link, and the sentence names View items', () => {
+    expect(putAwayStripOffer(putAwayTargets(a), noItems)).toEqual({ kind: 'needs_permission', message: PUT_AWAY_NEEDS_VIEW_ITEMS_COPY });
+    expect(putAwayLineOffer(lineOf(a, 'L1'), noItems)).toEqual({ kind: 'needs_permission', message: PUT_AWAY_NEEDS_VIEW_ITEMS_COPY });
+    expect(PUT_AWAY_NEEDS_VIEW_ITEMS_COPY).toBe('Putting stock away needs the View items permission.');
+  });
+
+  it('neither: one sentence naming both', () => {
+    expect(putAwayStripOffer(putAwayTargets(a), neither)).toEqual({
+      kind: 'needs_permission',
+      message: PUT_AWAY_NEEDS_TRANSFER_AND_VIEW_ITEMS_COPY,
+    });
+    expect(PUT_AWAY_NEEDS_TRANSFER_AND_VIEW_ITEMS_COPY).toBe(
+      'Putting stock away needs the Transfer stock and View items permissions.',
+    );
+  });
+
+  it('the sentences name the permissions as the permissions matrix does, so an admin can find them', () => {
+    expect(PUT_AWAY_NEEDS_TRANSFER_COPY).toContain(`the ${PERMISSION_META['stock:transfer'].label} permission`);
+    expect(PUT_AWAY_NEEDS_VIEW_ITEMS_COPY).toContain(`the ${PERMISSION_META['items:read'].label} permission`);
+    expect(PUT_AWAY_NEEDS_TRANSFER_AND_VIEW_ITEMS_COPY).toContain(
+      `the ${PERMISSION_META['stock:transfer'].label} and ${PERMISSION_META['items:read'].label} permissions`,
+    );
+  });
+
   it('a line links its own item only; a line with nothing to put away offers nothing', () => {
-    expect(putAwayLineOffer(lineOf(a, 'L1'), true)).toEqual({ kind: 'link', label: PUT_AWAY_LINE_LABEL, itemIds: ['A'] });
-    expect(putAwayLineOffer(lineOf(a, 'L3'), true)).toEqual({ kind: 'none' });
-    expect(putAwayLineOffer(lineOf(a, 'L3'), false)).toEqual({ kind: 'none' });
-    expect(putAwayStripOffer({ itemIds: [], lineIds: [], units: 0 }, true)).toEqual({ kind: 'none' });
-    expect(putAwayStripOffer(null, true)).toEqual({ kind: 'none' });
+    expect(putAwayLineOffer(lineOf(a, 'L1'), both)).toEqual({ kind: 'link', label: PUT_AWAY_LINE_LABEL, itemIds: ['A'] });
+    expect(putAwayLineOffer(lineOf(a, 'L3'), both)).toEqual({ kind: 'none' });
+    for (const access of [noTransfer, noItems, neither]) {
+      expect(putAwayLineOffer(lineOf(a, 'L3'), access)).toEqual({ kind: 'none' });
+      expect(putAwayStripOffer(null, access)).toEqual({ kind: 'none' });
+    }
+    expect(putAwayStripOffer({ itemIds: [], lineIds: [], units: 0 }, both)).toEqual({ kind: 'none' });
+    expect(putAwayStripOffer(null, both)).toEqual({ kind: 'none' });
   });
 
   it('speaks the line action: "Put away 4 of Maus I from Staging"', () => {
@@ -344,6 +382,8 @@ describe('honest words (put-away)', () => {
   const all = [
     PUT_AWAY_LINE_LABEL,
     PUT_AWAY_NEEDS_TRANSFER_COPY,
+    PUT_AWAY_NEEDS_VIEW_ITEMS_COPY,
+    PUT_AWAY_NEEDS_TRANSFER_AND_VIEW_ITEMS_COPY,
     putAwayStripLabel(1),
     putAwayStripLabel(3),
     putAwayLineAccessibilityLabel(lineOf(a, 'L1')),

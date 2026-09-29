@@ -11,10 +11,11 @@
  * included). No new write path: Place is POST /api/v1/items/[id]/transfer,
  * which asserts stock:transfer.
  *
- * THE GATE is `stock:transfer`, the permission Place asserts, read the way
- * the server reads it (core `can` over the effective set: overrides apply,
- * no manager shortcut, exactly the web order page's `can(ctx,
- * 'stock:transfer')`). Without it the card says core's sentence once
+ * THE GATE is `stock:transfer` (the permission Place asserts) AND
+ * `items:read` (GET /api/v1/inventory/staging answers 403 without it), read
+ * the way the server reads them (core `can` over the effective set: overrides
+ * apply, no manager shortcut, exactly the web order page's `can(ctx, ...)`).
+ * Without them the card says core's sentence once, naming what is missing
  * ("Putting stock away needs the Transfer stock permission.") and the lines
  * offer nothing, as the web page does: never a button that ends in a refusal.
  *
@@ -33,24 +34,29 @@ import {
   stagingPutAwayParams,
   type OrderReadinessResult,
   type Permission,
+  type PutAwayAccess,
   type PutAwayOffer,
   type Role,
 } from '@stockpilot/core';
 
 /**
- * Whether this viewer may put stock away: the effective `stock:transfer`
- * (the static role default while the set loads). No role: no.
+ * What this viewer may do about putting stock away: the effective
+ * `stock:transfer` and `items:read` (the static role default while the set
+ * loads). No role, or one this build does not know: neither.
  */
-export function canPutAwayStock(
+export function putAwayAccessFor(
   role: Role | string | null | undefined,
   permissions: ReadonlySet<Permission> | undefined,
-): boolean {
-  if (typeof role !== 'string' || role === '') return false;
-  try {
-    return can({ role: role as Role, permissions }, 'stock:transfer');
-  } catch {
-    return false;
-  }
+): PutAwayAccess {
+  const has = (p: Permission): boolean => {
+    if (typeof role !== 'string' || role === '') return false;
+    try {
+      return can({ role: role as Role, permissions }, p);
+    } catch {
+      return false;
+    }
+  };
+  return { canTransfer: has('stock:transfer'), canReadItems: has('items:read') };
 }
 
 const NONE: PutAwayOffer = { kind: 'none' };
@@ -58,8 +64,8 @@ const NONE: PutAwayOffer = { kind: 'none' };
 export interface OrderPutAwayView {
   /** The readiness card's offer ("Put away 3 items", the sentence, or none). */
   strip: PutAwayOffer;
-  /** Each line's "Put away" link, by line id. Only links: a viewer without
-   *  stock:transfer reads core's sentence once, on the card, as on the web
+  /** Each line's "Put away" link, by line id. Only links: a viewer who may
+   *  not put away reads core's sentence once, on the card, as on the web
    *  page (its line cells show no link and no sentence). */
   lines: ReadonlyMap<string, Extract<PutAwayOffer, { kind: 'link' }>>;
 }
@@ -74,7 +80,7 @@ const EMPTY_VIEW: OrderPutAwayView = { strip: NONE, lines: new Map() };
 export function orderPutAwayView(input: {
   readiness: OrderReadinessResult | null;
   fullPanel: boolean;
-  canTransfer: boolean;
+  access: PutAwayAccess;
 }): OrderPutAwayView {
   if (!input.fullPanel || !input.readiness || input.readiness.state !== 'ok') return EMPTY_VIEW;
   const assessment = input.readiness.assessment;
@@ -83,10 +89,10 @@ export function orderPutAwayView(input: {
   if (!targets) return EMPTY_VIEW;
   const lines = new Map<string, Extract<PutAwayOffer, { kind: 'link' }>>();
   for (const line of assessment.lines) {
-    const offer = putAwayLineOffer(line, input.canTransfer);
+    const offer = putAwayLineOffer(line, input.access);
     if (offer.kind === 'link') lines.set(line.lineId, offer);
   }
-  return { strip: putAwayStripOffer(targets, input.canTransfer), lines };
+  return { strip: putAwayStripOffer(targets, input.access), lines };
 }
 
 /**
