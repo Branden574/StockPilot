@@ -973,6 +973,37 @@ describe('app/item/new.tsx is wired to the shared create path', () => {
     // rather than silently dropped.
     expect(src).toMatch(/variantsEnabled \? null : \(/);
   });
+
+  // Review 2026-09-29: while the size scale loaded, the required Size box was
+  // hidden (the run path was not decided yet) but Save stayed enabled and took
+  // the single-item path, refusing "Size required" with no box on screen.
+  it('does not save while the size scale is still loading', () => {
+    const save = src.slice(src.indexOf('async function save()'));
+    const guard = save.indexOf('if (sizesLoading)');
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(save.indexOf('if (variantsEnabled)'));
+    expect(save.slice(guard, guard + 200)).toContain("'Sizes are still loading'");
+  });
+
+  // ...and switching to an unsized category mid-load left the flag stuck on:
+  // the cancelled request's finally skips its reset.
+  it('clears the loading flag when the new category has no sizes', () => {
+    expect(src).toMatch(
+      /if \(!sizesEnabled\) \{\s*setSizeOptions\(\[\]\);[^}]*?setSizesLoading\(false\);\s*return;\s*\}/,
+    );
+  });
+
+  it('names what the size-system chips choose for VoiceOver, on a 44 pt target', () => {
+    expect(src).toContain('accessibilityLabel={`Size system: ${SIZE_SYSTEM_LABELS[sys]}`}');
+    expect(src).toMatch(/styles\.chip,\s*styles\.chipTall/);
+    expect(src).toMatch(/chipTall: \{\s*minHeight: 44,/);
+  });
+
+  it("shows the size-system chips only when the category's scale does not supply one", () => {
+    expect(src).toMatch(
+      /sportsRequiredInputs\(sportsProfile, \{[^}]*scaleSystem: scaleSystemState/,
+    );
+  });
 });
 
 /**
@@ -1129,6 +1160,30 @@ describe('sportsRequiredInputs — which variant inputs a phone create must show
     });
   });
 
+  // Review 2026-09-29: the chips showed under "Required for Shoes." even when
+  // the scale read returned US_MENS, and the save went through without a pick.
+  it("asks for a size system only when the category's scale does not set one", () => {
+    expect(
+      sportsRequiredInputs(shoes, { sizeRun: false, scaleSizeSystem: 'US_MENS' }).sizeSystem,
+    ).toBe(false);
+    expect(sportsRequiredInputs(shoes, { sizeRun: false, scaleSizeSystem: null }).sizeSystem).toBe(
+      true,
+    );
+    // Still reading: nothing flashes on screen.
+    expect(
+      sportsRequiredInputs(shoes, { sizeRun: false, scaleSizeSystem: null, scaleSystem: 'pending' })
+        .sizeSystem,
+    ).toBe(false);
+    // The read failed: offer the chips, since the server may still need one.
+    expect(
+      sportsRequiredInputs(shoes, { sizeRun: false, scaleSizeSystem: null, scaleSystem: 'unknown' })
+        .sizeSystem,
+    ).toBe(true);
+    expect(
+      sportsRequiredInputs(jerseys, { sizeRun: false, scaleSizeSystem: null }).sizeSystem,
+    ).toBe(false);
+  });
+
   it('shows a required jersey number on either path', () => {
     const custom = sportsProfileFor('custom_singlets', CUSTOM_PROFILE);
     expect(sportsRequiredInputs(custom, { sizeRun: true }).jerseyNumber).toBe(true);
@@ -1169,6 +1224,16 @@ describe('sportsRequirementAlert — refused before the request, naming the fiel
     expect(
       sportsRequirementAlert(shoes, { variantSize: '10' }, { sizeRun: false, ...known(null) }),
     ).toMatchObject({ title: 'Size system required', field: 'variantSizeSystem' });
+  });
+
+  // Review 2026-09-29: "add the sizes one at a time" is not something the
+  // phone can do: a sized category whose scale loads always takes the run.
+  it('does not tell the phone to add sizes one at a time', () => {
+    expect(sportsRequirementAlert(shoes, {}, { sizeRun: true, ...known(null) })).toEqual({
+      title: 'Size system required',
+      body: "Size system is required for Shoes, and this category's size scale does not set one. Ask an admin to set a size system on the size scale, or add these items on the web.",
+      field: 'variantSizeSystem',
+    });
   });
 
   it('leaves the size-system question to the server when the scale could not be read', () => {

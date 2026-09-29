@@ -478,10 +478,21 @@ export default function NewItem() {
   const scaleRead = scaleSystemRead?.scaleId === requirementScaleId ? scaleSystemRead : null;
   const scaleSizeSystem = scaleRead?.system ?? null;
   const scaleSystemKnown = !requirementScaleId || (scaleRead?.known ?? false);
+  const scaleSystemState: 'known' | 'pending' | 'unknown' = !requirementScaleId
+    ? 'known'
+    : scaleRead
+      ? scaleRead.known
+        ? 'known'
+        : 'unknown'
+      : 'pending';
   // Which variant inputs this create must show. While the size scale is still
-  // loading the path is not decided yet, so nothing extra flashes on screen.
+  // loading the path is not decided yet, so nothing extra flashes on screen
+  // (and save() waits for it). A size system is asked for only when the scale
+  // does not set one.
   const requiredInputs = sportsRequiredInputs(sportsProfile, {
     sizeRun: variantsEnabled || sizesLoading,
+    scaleSizeSystem,
+    scaleSystem: scaleSystemState,
   });
   const sizeExample = sizePlaceholder({ profile: sportsProfile, sizeSystem: scaleSizeSystem });
 
@@ -629,6 +640,10 @@ export default function NewItem() {
     setSizeQty({});
     if (!sizesEnabled) {
       setSizeOptions([]);
+      // A request for the PREVIOUS category may still be in flight; its
+      // cleanup cancels it, and a cancelled request skips its own reset, so
+      // the flag would stay on and keep the required Size box hidden.
+      setSizesLoading(false);
       return;
     }
     let cancelled = false;
@@ -825,6 +840,15 @@ export default function NewItem() {
     if (busy) return;
     if (!user || !orgId) {
       Alert.alert('Not signed in', 'Sign in again to add inventory.');
+      return;
+    }
+
+    // Which path this save takes (a size run or one item) is decided by the
+    // category's size scale. While it loads, the required inputs are hidden and
+    // `variantsEnabled` is still false, so a save now would take the one-item
+    // path and be refused for a Size box that is not on screen.
+    if (sizesLoading) {
+      Alert.alert('Sizes are still loading', "Wait for this category's sizes, then save again.");
       return;
     }
 
@@ -1348,9 +1372,12 @@ export default function NewItem() {
                           key={sys}
                           onPress={() => setVariantSizeSystem(selected ? null : sys)}
                           accessibilityRole="button"
+                          // "US Men's, button" alone did not say what it picks.
+                          accessibilityLabel={`Size system: ${SIZE_SYSTEM_LABELS[sys]}`}
                           accessibilityState={{ selected }}
                           style={({ pressed }) => [
                             styles.chip,
+                            styles.chipTall,
                             {
                               borderColor: selected ? c.ink : c.hair,
                               backgroundColor: selected ? c.card : 'transparent',
@@ -1678,6 +1705,11 @@ const styles = StyleSheet.create({
   // whose own label outgrows the screen — that one runs off the right edge and
   // its tap target with it. maxWidth + flexShrink keep it inside the gutter and
   // let the label wrap within the pill.
+  // The size-system chips sit in a row of their own, so they take the 44 pt
+  // minimum without changing the shared chip everywhere else on this screen.
+  chipTall: {
+    minHeight: 44,
+  },
   chip: {
     flexDirection: 'row',
     alignItems: 'center',

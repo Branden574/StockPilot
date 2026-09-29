@@ -31,6 +31,7 @@ import {
   isApparelAlphaSize,
   normalizeRackFields,
   groupKeyUsesColor,
+  attributeInputRequired,
   isAttributeRequired,
   isRequiredAttributeField,
   placementWarningMessage,
@@ -328,14 +329,36 @@ export function sportsProfileFor(
  * box on screen). A size run answers the size itself (one row per size) and
  * cannot carry a size system (the category's scale supplies it, server-side),
  * so only a required jersey number is asked for on that path.
+ *
+ * The size system follows core `attributeInputRequired`, the rule the web
+ * labels use: asked for only when the category's size scale sets none (the
+ * server fills an omitted system from the scale). `scaleSystem` says where the
+ * screen's read of the scale stands:
+ *   - 'known' (default): `scaleSizeSystem` is the scale's system, or null;
+ *   - 'pending': still reading, so nothing flashes on screen;
+ *   - 'unknown': the read failed. The chips are offered, since the server may
+ *     still need a system, but the save is not blocked (sportsRequirementAlert).
  */
 export function sportsRequiredInputs(
   profile: SubcategoryTrackingProfile | null,
-  opts: { sizeRun: boolean },
+  opts: {
+    sizeRun: boolean;
+    scaleSizeSystem?: string | null;
+    scaleSystem?: 'known' | 'pending' | 'unknown';
+  },
 ): { size: boolean; sizeSystem: boolean; jerseyNumber: boolean } {
+  const scaleSystem = opts.scaleSystem ?? 'known';
+  const sizeSystemAsked =
+    scaleSystem === 'pending'
+      ? false
+      : scaleSystem === 'unknown'
+        ? isAttributeRequired(profile, 'size_system')
+        : attributeInputRequired(profile, 'size_system', {
+            scaleSizeSystem: opts.scaleSizeSystem ?? null,
+          });
   return {
     size: !opts.sizeRun && isAttributeRequired(profile, 'size'),
-    sizeSystem: !opts.sizeRun && isAttributeRequired(profile, 'size_system'),
+    sizeSystem: !opts.sizeRun && sizeSystemAsked,
     jerseyNumber: isAttributeRequired(profile, 'jersey_number'),
   };
 }
@@ -367,6 +390,9 @@ export function sportsRequirementAlert(
     // A single-item create on the phone has no size chips to offer: the
     // screen only takes that path when the category has no size run.
     sizeRunAvailable: opts.sizeRun,
+    // Nor can a size run fall back to single items: a sized category whose
+    // scale loads always takes the run here, with no Size box or system picker.
+    singleSizeAvailable: false,
   }).find((p) => opts.scaleSystemKnown || p.attribute !== 'size_system');
   if (!problem) return null;
   return {
