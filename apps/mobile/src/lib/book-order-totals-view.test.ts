@@ -264,7 +264,7 @@ describe('export (plan 9.5, gaps 11 and 12)', () => {
     const atPdf = bookReportExportOffer(BOOK_REPORT_PDF_MAX_ROWS + 1);
     expect(atPdf.choices.find((c) => c.id === 'csv')!.disabledReason).toBeNull();
     expect(atPdf.choices.find((c) => c.id === 'pdf')!.disabledReason).toBe(
-      'Too many books for one file (3,001; the limit is 3,000). Narrow the filters.',
+      'Too many books for one file (901; the limit is 900). Narrow the filters.',
     );
     expect(atPdf.choices.find((c) => c.id === 'pdf_plain')!.disabledReason).not.toBeNull();
     const atCsv = bookReportExportOffer(BOOK_REPORT_CSV_MAX_ROWS + 1);

@@ -102,11 +102,20 @@ export const BOOK_REPORT_ORDERS_PAGE_SIZE = 25;
 export const BOOK_REPORT_COVERS_MAX = 25;
 /** Longest search accepted from a person (SQL itself matches at most 200). */
 export const BOOK_REPORT_SEARCH_MAX = 100;
-/** Export ceilings, checked in SQL before any row is serialized. Provisional
- *  (plan 8.1): fixed from the local end-to-end export measurement, never
- *  raised past it. A file above its ceiling is refused, never truncated. */
+/** Export ceilings, checked in SQL before any row is serialized. Each is the
+ *  largest row count whose end-to-end export stays within 20 s locally (plan
+ *  8.1 and 12: a third of the route's 60 s, for slower function CPUs and the
+ *  Vercel-to-Supabase stalls), never raised past what was measured. A file
+ *  above its ceiling is refused, never truncated.
+ *
+ *  Measured 2026-09-28 (production build, local stack, 500 covers):
+ *  - CSV: 20,000 rows in 1.3-1.5 s.
+ *  - PDF: react-pdf lays out one long page run in time that grows with the
+ *    SQUARE of the rows. Without covers 500 rows 4.5 s, 900 13.5 s, 1,000
+ *    16.8 s, 2,000 64 s, 3,000 145 s; with 500 covers 800 rows 14.3 s, 900
+ *    17.5 s, 1,000 21.4 s. So 900. */
 export const BOOK_REPORT_CSV_MAX_ROWS = 20_000;
-export const BOOK_REPORT_PDF_MAX_ROWS = 3_000;
+export const BOOK_REPORT_PDF_MAX_ROWS = 900;
 /** Covers embedded in one PDF (one signing call stays under 1,000 paths).
  *  Rows past it print a placeholder; every row and total is still printed. */
 export const BOOK_REPORT_PDF_COVER_CAP = 500;
