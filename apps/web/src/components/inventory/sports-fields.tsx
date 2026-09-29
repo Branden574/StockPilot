@@ -18,7 +18,12 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
-import { GROUP_KEY_COLOR_SUBCATEGORIES, sizeSystemEnum } from '@stockpilot/core';
+import {
+  GROUP_KEY_COLOR_SUBCATEGORIES,
+  SIZE_SYSTEM_LABELS,
+  isAttributeRequired,
+  sizeSystemEnum,
+} from '@stockpilot/core';
 import type {
   CreateItemInput,
   SizeSystem,
@@ -69,23 +74,9 @@ export const EMPTY_SPORTS_GROUP_FIELDS: SportsGroupFieldValues = {
  */
 export const GROUP_LEVEL_COLOR_SUBCATEGORIES = GROUP_KEY_COLOR_SUBCATEGORIES;
 
-/**
- * Display copy only. The VOCABULARY comes from `sizeSystemEnum.options` below,
- * so this Record is exhaustive by type: adding a system to the shared zod enum
- * fails typecheck here until it is given a label, instead of silently shipping
- * a picker that is missing a value the schema accepts.
- */
-const SIZE_SYSTEM_LABELS: Record<SizeSystem, string> = {
-  US_MENS: "US Men's",
-  US_WOMENS: "US Women's",
-  US_YOUTH: 'US Youth',
-  UK: 'UK',
-  EU: 'EU',
-  CM: 'CM',
-  ALPHA: 'Alpha (S/M/L)',
-  CUSTOM: 'Custom',
-};
-
+// Display names live in @stockpilot/core (SIZE_SYSTEM_LABELS, exhaustive by
+// type) so the phone's picker offers the same words; the VOCABULARY comes from
+// `sizeSystemEnum.options`.
 const SIZE_SYSTEM_OPTIONS = sizeSystemEnum.options.map((value) => ({
   value,
   label: SIZE_SYSTEM_LABELS[value],
@@ -102,14 +93,47 @@ export interface SportsFieldsProps {
     key: K,
     value: SportsGroupFieldValues[K],
   ) => void;
+  /**
+   * An example size that fits this category (core `sizePlaceholder`): a letter
+   * on an apparel scale, 10.5 only for shoes. The field used to say "10.5" for
+   * every subcategory, which is not even a size on the Jerseys letter scale.
+   */
+  sizeExample?: string;
+  /** The form offers size chips for this category (a size RUN can be picked). */
+  sizeRunAvailable?: boolean;
+  /** Sizes are picked in the chips above, so the single Size box is not used. */
+  sizeRunPicked?: boolean;
 }
 
-function OptionalLabel({ children }: { children: React.ReactNode }) {
+/**
+ * A field label that says "(optional)" only when the subcategory does not
+ * require the attribute. The requirement is read from the resolved profile —
+ * the same `requiredAttributes` the server enforces — so a label can never
+ * call a field optional that Save then refuses without (2026-09-29).
+ */
+function FieldLabel({
+  htmlFor,
+  required,
+  children,
+}: {
+  htmlFor: string;
+  required: boolean;
+  children: React.ReactNode;
+}) {
   return (
-    <Label>
+    <Label htmlFor={htmlFor}>
       {children}
-      <span className="ml-1 font-normal text-muted-foreground">(optional)</span>
+      {!required && <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}
     </Label>
+  );
+}
+
+function FieldError({ id, message }: { id: string; message: unknown }) {
+  if (!message) return null;
+  return (
+    <p id={id} className="text-xs text-destructive">
+      {String(message)}
+    </p>
   );
 }
 
@@ -136,12 +160,21 @@ export function SportsFields({
   errors,
   groupFields,
   onGroupFieldChange,
+  sizeExample = 'M',
+  sizeRunAvailable = false,
+  sizeRunPicked = false,
 }: SportsFieldsProps) {
   const has = React.useCallback(
     (attr: SportsAttribute) => profile.supportedAttributes.includes(attr),
     [profile],
   );
+  const required = React.useCallback(
+    (attr: SportsAttribute) => isAttributeRequired(profile, attr),
+    [profile],
+  );
   const colorIsGroupLevel = GROUP_LEVEL_COLOR_SUBCATEGORIES.has(profile.key);
+  const uid = React.useId();
+  const idFor = (name: string) => `${uid}-${name}`;
 
   return (
     <div
@@ -152,8 +185,11 @@ export function SportsFields({
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {has('brand') && (
           <div className="space-y-1.5">
-            <OptionalLabel>Brand</OptionalLabel>
+            <FieldLabel htmlFor={idFor('brand')} required={required('brand')}>
+              Brand
+            </FieldLabel>
             <Input
+              id={idFor('brand')}
               placeholder="Nike"
               value={groupFields.brand}
               onChange={(e) => onGroupFieldChange('brand', e.target.value)}
@@ -162,8 +198,11 @@ export function SportsFields({
         )}
         {has('model') && (
           <div className="space-y-1.5">
-            <OptionalLabel>Model</OptionalLabel>
+            <FieldLabel htmlFor={idFor('model')} required={required('model')}>
+              Model
+            </FieldLabel>
             <Input
+              id={idFor('model')}
               placeholder="Pegasus 41"
               value={groupFields.model}
               onChange={(e) => onGroupFieldChange('model', e.target.value)}
@@ -172,8 +211,11 @@ export function SportsFields({
         )}
         {has('style_number') && (
           <div className="space-y-1.5">
-            <OptionalLabel>Style number</OptionalLabel>
+            <FieldLabel htmlFor={idFor('style-number')} required={required('style_number')}>
+              Style number
+            </FieldLabel>
             <Input
+              id={idFor('style-number')}
               placeholder="e.g. DZ4494-001"
               value={groupFields.styleNumber}
               onChange={(e) => onGroupFieldChange('styleNumber', e.target.value)}
@@ -182,8 +224,11 @@ export function SportsFields({
         )}
         {has('colorway') && (
           <div className="space-y-1.5">
-            <OptionalLabel>Colorway</OptionalLabel>
+            <FieldLabel htmlFor={idFor('colorway')} required={required('colorway')}>
+              Colorway
+            </FieldLabel>
             <Input
+              id={idFor('colorway')}
               placeholder="Black/White"
               value={groupFields.colorway}
               onChange={(e) => onGroupFieldChange('colorway', e.target.value)}
@@ -192,8 +237,11 @@ export function SportsFields({
         )}
         {has('team') && (
           <div className="space-y-1.5">
-            <OptionalLabel>Team</OptionalLabel>
+            <FieldLabel htmlFor={idFor('team')} required={required('team')}>
+              Team
+            </FieldLabel>
             <Input
+              id={idFor('team')}
               placeholder="Wildcats"
               value={groupFields.team}
               onChange={(e) => onGroupFieldChange('team', e.target.value)}
@@ -202,8 +250,11 @@ export function SportsFields({
         )}
         {has('league') && (
           <div className="space-y-1.5">
-            <OptionalLabel>League</OptionalLabel>
+            <FieldLabel htmlFor={idFor('league')} required={required('league')}>
+              League
+            </FieldLabel>
             <Input
+              id={idFor('league')}
               placeholder="Varsity"
               value={groupFields.league}
               onChange={(e) => onGroupFieldChange('league', e.target.value)}
@@ -212,8 +263,11 @@ export function SportsFields({
         )}
         {has('season') && (
           <div className="space-y-1.5">
-            <OptionalLabel>Season</OptionalLabel>
+            <FieldLabel htmlFor={idFor('season')} required={required('season')}>
+              Season
+            </FieldLabel>
             <Input
+              id={idFor('season')}
               placeholder="2026-27"
               value={groupFields.season}
               onChange={(e) => onGroupFieldChange('season', e.target.value)}
@@ -222,7 +276,9 @@ export function SportsFields({
         )}
         {has('home_away') && (
           <div className="space-y-1.5">
-            <OptionalLabel>Home / away</OptionalLabel>
+            <FieldLabel htmlFor={idFor('home-away')} required={required('home_away')}>
+              Home / away
+            </FieldLabel>
             <Select
               value={groupFields.homeAway || '__none'}
               onValueChange={(v) =>
@@ -232,7 +288,7 @@ export function SportsFields({
                 )
               }
             >
-              <SelectTrigger>
+              <SelectTrigger id={idFor('home-away')}>
                 <SelectValue placeholder="—" />
               </SelectTrigger>
               <SelectContent>
@@ -247,8 +303,11 @@ export function SportsFields({
         {has('color') &&
           (colorIsGroupLevel ? (
             <div className="space-y-1.5">
-              <OptionalLabel>Color</OptionalLabel>
+              <FieldLabel htmlFor={idFor('color')} required={required('color')}>
+                Color
+              </FieldLabel>
               <Input
+                id={idFor('color')}
                 placeholder="Navy"
                 value={groupFields.color}
                 onChange={(e) => onGroupFieldChange('color', e.target.value)}
@@ -256,31 +315,65 @@ export function SportsFields({
             </div>
           ) : (
             <div className="space-y-1.5">
-              <OptionalLabel>Color</OptionalLabel>
-              <Input placeholder="Navy" {...register('variantColor')} />
+              <FieldLabel htmlFor={idFor('color')} required={required('color')}>
+                Color
+              </FieldLabel>
+              <Input id={idFor('color')} placeholder="Navy" {...register('variantColor')} />
             </div>
           ))}
         {has('size') && (
           <div className="space-y-1.5">
-            <OptionalLabel>Size</OptionalLabel>
-            <Input placeholder="10.5" {...register('variantSize')} />
-            {errors.variantSize?.message && (
-              <p className="text-xs text-destructive">{String(errors.variantSize.message)}</p>
+            <FieldLabel htmlFor={idFor('size')} required={required('size')}>
+              Size
+            </FieldLabel>
+            <Input
+              id={idFor('size')}
+              placeholder={`e.g. ${sizeExample}`}
+              aria-invalid={errors.variantSize ? true : undefined}
+              aria-describedby={
+                [
+                  errors.variantSize ? idFor('size-error') : null,
+                  sizeRunAvailable ? idFor('size-note') : null,
+                ]
+                  .filter(Boolean)
+                  .join(' ') || undefined
+              }
+              {...register('variantSize')}
+            />
+            {sizeRunAvailable && (
+              // The single box and the chips above are two ways to answer the
+              // same question, and a picked run ignores the box entirely (the
+              // sized save sends variants[], never variantSize) — say which.
+              <p id={idFor('size-note')} className="text-muted-foreground text-[11px]">
+                {sizeRunPicked
+                  ? 'Sizes are picked above, so this box is not used: one item is added per size.'
+                  : 'Or pick sizes above to add one item per size.'}
+              </p>
             )}
+            <FieldError id={idFor('size-error')} message={errors.variantSize?.message} />
           </div>
         )}
         {has('size_system') && (
           <div className="space-y-1.5">
-            <OptionalLabel>Size system</OptionalLabel>
+            <FieldLabel htmlFor={idFor('size-system')} required={required('size_system')}>
+              Size system
+            </FieldLabel>
             <Select
               value={watch('variantSizeSystem') ?? '__none'}
               onValueChange={(v) =>
                 setValue('variantSizeSystem', v === '__none' ? null : (v as SizeSystem), {
                   shouldDirty: true,
+                  // Re-run the check so a "pick a size system" error clears the
+                  // moment one is picked, like a typed field does.
+                  shouldValidate: true,
                 })
               }
             >
-              <SelectTrigger>
+              <SelectTrigger
+                id={idFor('size-system')}
+                aria-invalid={errors.variantSizeSystem ? true : undefined}
+                aria-describedby={errors.variantSizeSystem ? idFor('size-system-error') : undefined}
+              >
                 <SelectValue placeholder="—" />
               </SelectTrigger>
               <SelectContent>
@@ -292,23 +385,26 @@ export function SportsFields({
                 ))}
               </SelectContent>
             </Select>
-            {errors.variantSizeSystem?.message && (
-              <p className="text-xs text-destructive">
-                {String(errors.variantSizeSystem.message)}
-              </p>
-            )}
+            <FieldError
+              id={idFor('size-system-error')}
+              message={errors.variantSizeSystem?.message}
+            />
           </div>
         )}
         {has('width') && (
           <div className="space-y-1.5">
-            <OptionalLabel>Width</OptionalLabel>
-            <Input placeholder="D" {...register('variantWidth')} />
+            <FieldLabel htmlFor={idFor('width')} required={required('width')}>
+              Width
+            </FieldLabel>
+            <Input id={idFor('width')} placeholder="D" {...register('variantWidth')} />
           </div>
         )}
         {has('fit') && (
           <div className="space-y-1.5">
-            <OptionalLabel>Fit</OptionalLabel>
-            <Input placeholder="Regular" {...register('variantFit')} />
+            <FieldLabel htmlFor={idFor('fit')} required={required('fit')}>
+              Fit
+            </FieldLabel>
+            <Input id={idFor('fit')} placeholder="Regular" {...register('variantFit')} />
           </div>
         )}
         {has('jersey_number') && profile.supportsNumbers && (
@@ -322,20 +418,29 @@ export function SportsFields({
               serial_registry), never at item creation — so "hidden for
               quantity-mode subcategories" holds trivially for every mode.
             */}
-            <OptionalLabel>Jersey number</OptionalLabel>
-            <Input placeholder="e.g. 07" inputMode="numeric" {...register('jerseyNumber')} />
+            <FieldLabel htmlFor={idFor('jersey-number')} required={required('jersey_number')}>
+              Jersey number
+            </FieldLabel>
+            <Input
+              id={idFor('jersey-number')}
+              placeholder="e.g. 07"
+              inputMode="numeric"
+              aria-invalid={errors.jerseyNumber ? true : undefined}
+              aria-describedby={errors.jerseyNumber ? idFor('jersey-number-error') : undefined}
+              {...register('jerseyNumber')}
+            />
             <p className="text-muted-foreground text-[11px]">
               Numbers repeat across sizes and teams. Leading zeroes are kept.
             </p>
-            {errors.jerseyNumber?.message && (
-              <p className="text-xs text-destructive">{String(errors.jerseyNumber.message)}</p>
-            )}
+            <FieldError id={idFor('jersey-number-error')} message={errors.jerseyNumber?.message} />
           </div>
         )}
         {has('player_name') && (
           <div className="space-y-1.5">
-            <OptionalLabel>Player</OptionalLabel>
-            <Input placeholder="e.g. Vega" {...register('playerName')} />
+            <FieldLabel htmlFor={idFor('player')} required={required('player_name')}>
+              Player
+            </FieldLabel>
+            <Input id={idFor('player')} placeholder="e.g. Vega" {...register('playerName')} />
           </div>
         )}
       </div>
