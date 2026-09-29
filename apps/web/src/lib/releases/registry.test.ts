@@ -1237,7 +1237,7 @@ describe('Book Order Totals is held as a draft', () => {
     }
   });
 
-  it('is addressed as the report is reached: Orders on, then Books on with reports:read (the report) or reports:export (the files)', () => {
+  it('is addressed as the report is reached: Orders on, then Books on with reports:read, the permission the linked page checks (both entries)', () => {
     expect(release().audience).toEqual({ modules: ['orders'] });
     expect(release().entries.map((e) => e.id)).toEqual([
       'book-order-totals-report',
@@ -1245,7 +1245,14 @@ describe('Book Order Totals is held as a draft', () => {
     ]);
     const [report, files] = release().entries;
     expect(report!.audience).toEqual({ anyPermission: ['reports:read'], modules: ['books'] });
-    expect(files!.audience).toEqual({ anyPermission: ['reports:export'], modules: ['books'] });
+    // The files entry links to the page, which redirects anyone without
+    // reports:read, so it is addressed by reports:read too (never by
+    // reports:export alone, which would tell an export-only override about a
+    // page that bounces them); its text says the buttons need export access.
+    expect(files!.audience).toEqual({ anyPermission: ['reports:read'], modules: ['books'] });
+    expect(files!.howItAffectsYou).toContain(
+      'Only people who can export reports see the download buttons.',
+    );
     for (const e of release().entries) {
       expect(e.area, e.id).toBe('Reports');
       expect(e.link, e.id).toEqual({
@@ -1257,11 +1264,17 @@ describe('Book Order Totals is held as a draft', () => {
       visibleReleases([published()], { role: 'viewer', permissions, enabledModules })[0]?.entries.map(
         (e) => e.id,
       ) ?? [];
-    expect(reader(['reports:read'], ['orders', 'books'])).toEqual(['book-order-totals-report']);
+    expect(reader(['reports:read'], ['orders', 'books'])).toEqual([
+      'book-order-totals-report',
+      'book-order-totals-files',
+    ]);
     expect(reader(['reports:read', 'reports:export'], ['orders', 'books'])).toEqual([
       'book-order-totals-report',
       'book-order-totals-files',
     ]);
+    // An export-only override cannot open the page (it redirects without
+    // reports:read), so nothing is announced to it.
+    expect(reader(['reports:export'], ['orders', 'books'])).toEqual([]);
     expect(reader(['reports:read', 'reports:export'], ['orders'])).toEqual([]);
     expect(reader(['reports:read', 'reports:export'], ['books'])).toEqual([]);
     expect(reader(['orders:request'], ['orders', 'books'])).toEqual([]);
@@ -1273,6 +1286,7 @@ describe('Book Order Totals is held as a draft', () => {
     expect(text).toContain('Distinct book entries');
     expect(text).toContain('not copies purchased, handed over or in stock');
     expect(text).toContain('a file is never cut short');
+    expect(text).toContain('on an Android phone, export from the web for now');
     expect(text).not.toMatch(/\bunique titles?\b|\bdelivered\b|\bsnapshot\b|\bthe book\b|%/i);
   });
 });

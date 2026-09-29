@@ -37,10 +37,14 @@ export const RELEASES: Release[] = [
     // follow-up that publishes it sets 'published' and the real
     // publishedAt, re-reads every sentence against what shipped (the phone's
     // export is iPhone only; Android shows "Export from the web on Android
-    // for now."), and flips the draft pin in registry.test.ts.
+    // for now.", said in the files entry), and flips the draft pin in
+    // registry.test.ts.
     //
-    // Addressed as the report is reached: Orders on (the release) and Books
-    // on with reports:read (the report) or reports:export (the files).
+    // Addressed as the report is reached: Orders on (the release), then Books
+    // on with reports:read, the permission the linked page checks, for both
+    // entries. The files entry is not addressed by reports:export: an
+    // export-only override would be told about a page that redirects it. Its
+    // text says the buttons need export access.
     status: 'draft',
     title: 'See which books were ordered, with their covers',
     summary:
@@ -73,10 +77,10 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'A list of the books requested can be shared or kept without copying figures from the screen.',
         howItAffectsYou:
-          'Only people who can export reports see the download buttons. When a report has more books than one file can hold, the button says so and asks you to narrow the filters; a file is never cut short.',
+          'Only people who can export reports see the download buttons. When a report has more books than one file can hold, the button says so and asks you to narrow the filters; a file is never cut short. In the mobile app the files download on an iPhone; on an Android phone, export from the web for now.',
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/reports/book-order-totals', label: 'Book Order Totals' },
-        audience: { anyPermission: ['reports:export'], modules: ['books'] },
+        audience: { anyPermission: ['reports:read'], modules: ['books'] },
       },
     ],
   },
