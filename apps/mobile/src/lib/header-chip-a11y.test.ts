@@ -4,6 +4,7 @@ import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 import {
+  attr,
   attrText,
   listTsx,
   parseTsx,
@@ -88,10 +89,18 @@ describe('header icon chips: named, and a 44pt target', () => {
     expect(chips.filter((c) => !attrText(c.el, 'onPress', c.sf)).map(where)).toEqual([]);
   });
 
+  // A written label starts with "Back" ("Back", "Back to the order"); a
+  // computed one (the Staging tab's, on F2-3: `fromOrderId ?
+  // STAGING_FILTER_BACK_LABEL : 'Back'`) must at least be one of those.
   it('back arrows say Back and the drawer chip says Open menu', () => {
     const back = chips.filter((c) => /^(ArrowLeft|ChevronLeft)$/.test(attrText(c.el, 'icon', c.sf) ?? ''));
     expect(back.length).toBeGreaterThanOrEqual(30);
-    expect(back.filter((c) => !/^Back\b/.test(label(c) ?? '')).map(where)).toEqual([]);
+    const saysBack = (c: Chip) => {
+      const init = attr(c.el, 'accessibilityLabel', c.sf)?.initializer;
+      const written = init !== undefined && ts.isStringLiteral(init);
+      return written ? /^Back\b/.test(label(c) ?? '') : /back/i.test(label(c) ?? '');
+    };
+    expect(back.filter((c) => !saysBack(c)).map(where)).toEqual([]);
     const menu = chips.filter((c) => attrText(c.el, 'icon', c.sf) === 'Menu');
     expect(menu.length).toBeGreaterThanOrEqual(12);
     expect(menu.filter((c) => label(c) !== 'Open menu').map(where)).toEqual([]);
