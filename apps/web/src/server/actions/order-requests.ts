@@ -3,18 +3,25 @@
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
+import { reportError } from '@/lib/error-reporter';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError, withContext } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
 import {
   err,
+  formatWallClock,
   HOLD_FAILED_COPY,
   isManagerOrAbove,
+  NEEDED_BY_FAILED_COPY,
+  NEEDED_BY_SUGGESTION_REASON,
   ok,
+  parseWallClock,
+  wallClockToInstant,
   type ActionResult,
   type HoldOrderStockResult,
   type HoldOutcome,
+  type NeededByRevisionOutcome,
 } from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
@@ -152,6 +159,71 @@ export async function createOrderRequestAction(
   }
 }
 
+// A timestamp as PostgREST prints it (offset, any fractional precision): the
+// needed-by a screen started from, passed to the function exactly as read.
+const expectedNeededBySchema = z.string().datetime({ offset: true }).nullable();
+
+/**
+ * A needed-by revision's refusal as an ActionResult: the service's code,
+ * core's sentence and its `details` (reason, and for needed_by_changed the
+ * current value), so the dialog can load the current date and say so. A fault
+ * is core's "couldn't be changed" sentence (the service reported its cause).
+ */
+function neededByActionError(e: unknown): ActionResult<never> {
+  if (e instanceof ServiceError && e.code !== 'internal_error') {
+    return err(e.code, e.message, e.details);
+  }
+  if (!(e instanceof ServiceError)) void reportError(e, { tag: 'actions.orders.needed_by' });
+  return err('internal_error', NEEDED_BY_FAILED_COPY, { reason: 'failed' });
+}
+
+function revalidateAfterNeededBy(id: string, outcome: NeededByRevisionOutcome) {
+  if (!outcome.changed) return;
+  revalidatePath('/dashboard/orders');
+  revalidatePath(`/dashboard/orders/${id}`);
+  // The order's Schedule entry moved or was created with it.
+  if (outcome.schedule === 'moved' || outcome.schedule === 'created') {
+    revalidatePath('/dashboard/schedule');
+  }
+}
+
+const reviseNeededBySchema = z.object({
+  id: z.string().uuid(),
+  // "YYYY-MM-DDTHH:mm" in the ORG's zone (the dialog's datetime-local). The
+  // service reads it strictly, in the org zone, and words any refusal.
+  neededByLocal: z.string().trim().min(1).max(40),
+  expectedNeededBy: expectedNeededBySchema,
+  // Checked by the service (1 to 500 characters after trimming, core's words);
+  // this bound only stops an absurd payload.
+  reason: z.string().max(5000),
+});
+
+/**
+ * Approver: change an open order's needed-by date, with a reason (F2-4). The
+ * order's Schedule entry moves with it and its reminders are armed again; no
+ * email is sent. A stale edit (someone saved another date first) is refused
+ * as `conflict` with `details: { reason: 'needed_by_changed', current }`.
+ */
+export async function reviseOrderNeededByAction(
+  input: z.input<typeof reviseNeededBySchema>,
+): Promise<ActionResult<NeededByRevisionOutcome>> {
+  const parsed = reviseNeededBySchema.safeParse(input);
+  if (!parsed.success) return err('validation_error', 'Invalid input', { reason: 'failed' });
+  try {
+    const svc = await OrderRequestsService.forCurrentUser();
+    const outcome = await svc.reviseNeededBy({
+      id: parsed.data.id,
+      neededByLocal: parsed.data.neededByLocal,
+      expectedNeededBy: parsed.data.expectedNeededBy,
+      reason: parsed.data.reason,
+    });
+    revalidateAfterNeededBy(parsed.data.id, outcome);
+    return ok(outcome);
+  } catch (e) {
+    return neededByActionError(e);
+  }
+}
+
 const setNeededBySchema = z.object({
   id: z.string().uuid(),
   neededBy: z
@@ -160,12 +232,18 @@ const setNeededBySchema = z.object({
     .refine((v) => new Date(v).getTime() > Date.now(), {
       message: 'Needed-by must be in the future.',
     }),
+  // The needed-by the manager saw. The suggestion is offered only on an order
+  // with none, so an older tab that does not send it means null: a date
+  // someone set in the meantime is never overwritten by the AI's reading.
+  expectedNeededBy: expectedNeededBySchema.optional(),
 });
 
 /**
- * Manager: set/replace a pending order's needed-by deadline (typically from
- * the AI note-parse suggestion). Pending-only — after approval the schedule
- * event already exists and edits belong on the event itself.
+ * Manager: apply the AI suggestion's needed-by to a PENDING order (the
+ * requester's note, read by suggestNeededByAction). Through the same service
+ * as every revision (F2-4): the same gates, the stale-version check, an audit
+ * entry with the reason "Set from the requester's note". Still pending-only,
+ * as it has always been; a later change is the order page's Change.
  */
 export async function setOrderNeededByAction(
   input: z.input<typeof setNeededBySchema>,
@@ -174,107 +252,51 @@ export async function setOrderNeededByAction(
   if (!parsed.success)
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   try {
-    const ctx = await withContext();
-    const { assertPermission } = await import('@/server/services/context');
-    assertPermission(ctx, 'orders:approve');
-    const { data: row, error } = await ctx.supabase
-      .from('order_requests')
-      .update({ needed_by: parsed.data.neededBy })
-      .eq('id', parsed.data.id)
-      .eq('organization_id', ctx.organizationId)
-      .eq('status', 'pending_approval')
-      .select('id')
-      .maybeSingle();
-    if (error) return err('internal_error', error.message);
-    if (!row) return err('conflict', 'Order not found or no longer pending.');
-    revalidatePath(`/dashboard/orders/${parsed.data.id}`);
+    const svc = await OrderRequestsService.forCurrentUser();
+    const outcome = await svc.reviseNeededBy({
+      id: parsed.data.id,
+      neededByAt: parsed.data.neededBy,
+      expectedNeededBy: parsed.data.expectedNeededBy ?? null,
+      reason: NEEDED_BY_SUGGESTION_REASON,
+      onlyWhenPending: true,
+    });
+    revalidateAfterNeededBy(parsed.data.id, outcome);
     return ok(undefined);
   } catch (e) {
-    return toResult(e);
+    return neededByActionError(e);
   }
 }
 
 /**
- * Wall-clock <-> UTC for a named IANA zone, without pulling in a date library.
+ * The AI needed-by suggestion's wall clock, read in the ORG's zone.
  *
- * WHY THIS EXISTS (2026-09, SP-047). `suggestNeededByAction` used to tell the
- * model to emit "a full ISO-8601 datetime with -07:00 offset
- * (America/Los_Angeles)". That is wrong twice over: -07:00 is Pacific DAYLIGHT
- * time, so any winter deadline came back an hour early (a January "1pm" landed
- * at 12:00 PST), and every org that is not in California got Pacific
- * wall-clock times outright (3-4 hours off for America/New_York). The suggested
- * value is applied verbatim by setOrderNeededByAction, and approve() then
- * builds the schedule event + reminder cron from `needed_by`, so the drift
- * propagates into the ping the requester actually receives.
+ * WHY (2026-09, SP-047). `suggestNeededByAction` used to tell the model to
+ * emit "a full ISO-8601 datetime with -07:00 offset (America/Los_Angeles)".
+ * That is wrong twice over: -07:00 is Pacific DAYLIGHT time, so any winter
+ * deadline came back an hour early (a January "1pm" landed at 12:00 PST), and
+ * every org that is not in California got Pacific wall-clock times outright
+ * (3-4 hours off for America/New_York). The applied value becomes the order's
+ * needed-by, and the schedule event and reminders follow it, so the drift
+ * reached the ping the requester actually receives.
  *
  * The model now returns a ZONE-LESS wall clock ("2027-01-15T13:00") and the
  * server converts it in the ORG's timezone (resolveOrgTimezone, the one
- * expression of that decision — never re-defaulted here).
- *
- * Intl is the whole implementation: format an instant in the target zone, read
- * the parts back as if they were UTC, and the difference IS that zone's offset
- * at that instant. Two passes because the offset we need is the one in effect
- * at the ANSWER, not at the guess — they differ across a DST boundary.
- *
- * This runs on the Node server (full ICU), so named zones always resolve; the
- * Hermes/reduced-ICU caveat in core's org-timezone.ts is a mobile concern and
- * does not apply to this file.
+ * expression of that decision; never re-defaulted here). The zone arithmetic
+ * (zonedParts, zoneOffsetMs, wallClockToInstant, formatWallClock) moved to
+ * core in F2-4 (packages/core/src/time/zoned-wall-clock.ts), where the
+ * needed-by revision uses the same copy; SP-047's cases moved with it.
  */
-interface ZonedParts {
-  year: number;
-  month: number;
-  day: number;
-  hour: number;
-  minute: number;
-}
 
-function zonedParts(utcMs: number, zone: string): ZonedParts {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: zone,
-    hour12: false,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).formatToParts(new Date(utcMs));
-  const get = (type: string) => Number(parts.find((x) => x.type === type)?.value ?? '0');
-  // `hour12: false` yields hour "24" for midnight on some ICU builds (the h24
-  // cycle); normalise it or Date.UTC rolls the day forward by one.
-  const hour = get('hour') % 24;
-  return {
-    year: get('year'),
-    month: get('month'),
-    day: get('day'),
-    hour,
-    minute: get('minute'),
-  };
-}
-
-/** Milliseconds the given zone is ahead of UTC at that instant. */
-function zoneOffsetMs(utcMs: number, zone: string): number {
-  const p = zonedParts(utcMs, zone);
-  return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) - Math.floor(utcMs / 60000) * 60000;
-}
-
-/** "YYYY-MM-DDTHH:mm" as rendered in `zone` — the exact shape the model is asked for. */
-function formatWallClock(utcMs: number, zone: string): string {
-  const p = zonedParts(utcMs, zone);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${p.year}-${pad(p.month)}-${pad(p.day)}T${pad(p.hour)}:${pad(p.minute)}`;
-}
-
-// Zone-less wall clock. Seconds/fractions tolerated (and ignored); a bare date
-// is allowed so a date-only answer does not fall through to `new Date('2027-01-15')`,
-// which JS parses as UTC MIDNIGHT — the exact off-by-a-timezone this fix removes.
-const WALL_CLOCK_RE = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?)?$/;
 // Anything the model returns carrying its own zone (…Z or …±HH:MM) is already
 // an absolute instant — accept it as-is rather than re-interpreting it.
 const HAS_OFFSET_RE = /(?:Z|[+-]\d{2}:?\d{2})$/i;
 
 /**
  * Resolve the model's answer to an absolute epoch-ms, interpreting a zone-less
- * value in `zone`. Returns null when it is not a datetime we recognise.
+ * value in `zone`. Returns null when it is not a datetime we recognise. A
+ * date-only answer means 09:00 local (what the prompt asks for). SP-047's
+ * lenient conversion is kept (strict: false): the suggestion is only shown,
+ * and the manager applies it explicitly.
  */
 function resolveSuggestedInstant(raw: string, zone: string): number | null {
   const value = raw.trim();
@@ -283,24 +305,9 @@ function resolveSuggestedInstant(raw: string, zone: string): number | null {
     const t = new Date(value).getTime();
     return Number.isFinite(t) ? t : null;
   }
-  const m = WALL_CLOCK_RE.exec(value);
-  if (!m) return null;
-  const [, y, mo, d, h, mi] = m;
-  // Date-only answers default to 09:00 local, matching what the prompt asks for.
-  const wallAsUtc = Date.UTC(
-    Number(y),
-    Number(mo) - 1,
-    Number(d),
-    h === undefined ? 9 : Number(h),
-    mi === undefined ? 0 : Number(mi),
-  );
-  if (!Number.isFinite(wallAsUtc)) return null;
-  // Pass 1 guesses with the offset in effect at the wall time read as UTC;
-  // pass 2 re-resolves with the offset in effect at that guess, which is what
-  // makes a spring-forward / fall-back deadline land on the right instant.
-  const firstGuess = wallAsUtc - zoneOffsetMs(wallAsUtc, zone);
-  const t = wallAsUtc - zoneOffsetMs(firstGuess, zone);
-  return Number.isFinite(t) ? t : null;
+  const wall = parseWallClock(value, { dateOnlyHour: 9 });
+  if (!wall) return null;
+  return wallClockToInstant(wall, zone, { strict: false });
 }
 
 /**

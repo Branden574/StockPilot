@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { partialActionMovedOnCopy, type ModuleId } from '@stockpilot/core';
+import { orderScheduleEventDetails, partialActionMovedOnCopy, type ModuleId } from '@stockpilot/core';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
@@ -146,6 +146,26 @@ describe('OrderRequestsService.approve — auto-created schedule event', () => {
     expect(payload.details).toContain('Sep 10, 2026');
     expect(payload.details).toContain('7:00 PM');
     expect(payload.details).not.toContain('9/11/2026');
+  });
+
+  // F2-4: the approval and a needed-by revision write the SAME description
+  // (core orderScheduleEventDetails), so the date in an event's text always
+  // matches its start after either (a copies guard, pattern #26; the
+  // revision's side is in order-requests.revise-needed-by.test.ts).
+  it('writes core orderScheduleEventDetails, the text a needed-by revision writes', async () => {
+    const { admin, svc } = build();
+    await svc.approve('ord-1');
+    await flushAfter();
+    const payload = (admin.chainArgs.get('schedule_events.insert') ?? [])[0]?.[0] as {
+      details: string;
+    };
+    expect(payload.details).toBe(
+      orderScheduleEventDetails(
+        { id: 'ord-1', orderNumber: 21, neededBy: '2026-09-11T02:00:00.000Z' },
+        'America/Los_Angeles',
+      ),
+    );
+    expect(payload.details).toBe('Auto-created from order SO-000021. Needed by Sep 10, 2026, 7:00 PM.');
   });
 });
 
