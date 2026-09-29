@@ -4,6 +4,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  BOOK_COVER_PLACEHOLDER,
+  BOOK_COVER_UNAVAILABLE,
   BOOK_REPORT_CSV_MAX_ROWS,
   BOOK_REPORT_EXPORT_COVER_CAP_NOTE,
   BOOK_REPORT_ORDER_LINK_HINT,
@@ -43,6 +45,7 @@ import {
   bookReportWithoutUnreadableFilter,
   bookReportWebUrl,
   bookCoverCacheKey,
+  bookCoverPlaceholderLabel,
   copiesMetric,
   isResolvedBookReportQuery,
   resetBookReportDraft,
@@ -342,6 +345,29 @@ describe('export (plan 9.5, gaps 11 and 12)', () => {
       ['PDF with covers', 'pdf', true],
       ['PDF without covers', 'pdf', false],
     ]);
+  });
+});
+
+describe("a cover placeholder's spoken words (simulator walk D1)", () => {
+  // The walk heard every book WITHOUT a cover announced as "Cover could not
+  // be loaded": the component compared failedUri (null until a load fails)
+  // with uri (null for a book with no cover), and null === null read as a
+  // failure. "Cover could not be loaded" is for a real failure only.
+  it('a book with no cover URL, nothing having failed, is "No cover"', () => {
+    expect(bookCoverPlaceholderLabel({ uri: null, failedUri: null, failed: false })).toBe(BOOK_COVER_PLACEHOLDER);
+    expect(BOOK_COVER_PLACEHOLDER).toBe('No cover');
+  });
+  it('a cover whose lookup failed is "Cover could not be loaded"', () => {
+    expect(bookCoverPlaceholderLabel({ uri: null, failedUri: null, failed: true })).toBe(BOOK_COVER_UNAVAILABLE);
+  });
+  it('a URL that failed to load is "Cover could not be loaded"', () => {
+    const uri = 'https://example.test/cover.jpg';
+    expect(bookCoverPlaceholderLabel({ uri, failedUri: uri, failed: false })).toBe(BOOK_COVER_UNAVAILABLE);
+  });
+  it('an earlier URL failing does not make a book with no cover read as a failure', () => {
+    expect(
+      bookCoverPlaceholderLabel({ uri: null, failedUri: 'https://example.test/old.jpg', failed: false }),
+    ).toBe(BOOK_COVER_PLACEHOLDER);
   });
 });
 

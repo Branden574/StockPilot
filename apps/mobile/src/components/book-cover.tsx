@@ -2,10 +2,10 @@ import { BookOpen } from 'lucide-react-native';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
 
-import { BOOK_COVER_PLACEHOLDER, BOOK_COVER_UNAVAILABLE, bookCoverAlt } from '@stockpilot/core';
+import { bookCoverAlt } from '@stockpilot/core';
 
 import { CachedImage } from '@/components/ui/cached-image';
-import { bookCoverCacheKey } from '@/lib/book-order-totals-view';
+import { bookCoverCacheKey, bookCoverPlaceholderLabel } from '@/lib/book-order-totals-view';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -17,10 +17,11 @@ import { useTheme } from '@/lib/use-theme';
  *     rotated URL is still the same picture; an external cover keeps its
  *     whole URL as the key (bookCoverCacheKey).
  *   - No URL yet or no cover: a neutral book glyph read as "No cover". A
- *     cover that could not be loaded (`failed`: the lookup failed, or the
- *     picture failed to load) is the same glyph read as "Cover could not be
- *     loaded". A missing picture never removes or changes a number; the row
- *     around it is drawn from the API's figures either way.
+ *     cover that could not be loaded (`failed`: the lookup failed, or this
+ *     URL failed to load) is the same glyph read as "Cover could not be
+ *     loaded" (bookCoverPlaceholderLabel, simulator walk D1). A missing
+ *     picture never removes or changes a number; the row around it is drawn
+ *     from the API's figures either way.
  *   - With `onPress` and a picture, the cover is its own button ("Cover of
  *     <title>", opens it larger). It is a sibling of the row's button, never
  *     inside it: a touchable inside a touchable is unreachable with
@@ -64,9 +65,7 @@ export function BookCover({
         style={frame}
         accessible
         accessibilityRole="image"
-        accessibilityLabel={
-          failed || failedUri === uri ? BOOK_COVER_UNAVAILABLE : BOOK_COVER_PLACEHOLDER
-        }
+        accessibilityLabel={bookCoverPlaceholderLabel({ uri, failedUri, failed })}
       >
         <BookOpen size={Math.round(width * 0.42)} color={c.ink4} strokeWidth={1.4} />
       </View>

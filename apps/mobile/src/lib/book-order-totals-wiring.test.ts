@@ -4,6 +4,8 @@ import * as path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { BOOK_COVER_PLACEHOLDER, BOOK_COVER_UNAVAILABLE } from '@stockpilot/core';
+
 import {
   TOUCHABLE_TAG,
   attrText,
@@ -13,6 +15,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { bookCoverPlaceholderLabel } from './book-order-totals-view';
 
 /**
  * BOOK ORDER TOTALS on the phone: WIRING PINS (plan 13.4).
@@ -309,12 +312,48 @@ describe('8. accessibility', () => {
     expect(cover).toContain('contentFit="contain"');
     expect(cover).toContain('accessibilityLabel={bookCoverAlt(title)}');
     expect(cover).toContain('onError={() => setFailedUri(uri)}');
-    // A cover that exists but failed (a failed load or lookup) is never "No cover".
-    expect(cover).toContain(
-      'failed || failedUri === uri ? BOOK_COVER_UNAVAILABLE : BOOK_COVER_PLACEHOLDER',
-    );
     expect(codeOnly(read(LIST))).toContain('failed={coverFailed}');
     expect(codeOnly(read(ORDERS))).toContain('failed={coverFailed}');
+  });
+
+  // Simulator walk D1: every book WITHOUT a cover was announced "Cover could
+  // not be loaded" (failedUri null === uri null). The placeholder's label is
+  // read from the component itself and evaluated for each state the
+  // placeholder is drawn in, so a rewrite of the expression is still held to
+  // what VoiceOver says.
+  it("the placeholder says 'No cover' for a book without one, and 'Cover could not be loaded' only after a real failure", () => {
+    const file = 'src/components/book-cover.tsx';
+    const sf = parseTsx(read(file), file);
+    const placeholders: string[] = [];
+    walkJsx(sf, (el) => {
+      if (tagOf(el, sf) !== 'View' || attrText(el, 'accessibilityRole', sf) !== 'image') return;
+      const label = attrText(el, 'accessibilityLabel', sf);
+      if (label && label !== 'bookCoverAlt(title)') placeholders.push(label);
+    });
+    expect(placeholders).toHaveLength(1);
+    const say = new Function(
+      'failed',
+      'failedUri',
+      'uri',
+      'BOOK_COVER_UNAVAILABLE',
+      'BOOK_COVER_PLACEHOLDER',
+      'bookCoverPlaceholderLabel',
+      `return (${placeholders[0]});`,
+    ) as (...args: unknown[]) => string;
+    const spoken = (state: { failed: boolean; failedUri: string | null; uri: string | null }) =>
+      say(
+        state.failed,
+        state.failedUri,
+        state.uri,
+        BOOK_COVER_UNAVAILABLE,
+        BOOK_COVER_PLACEHOLDER,
+        bookCoverPlaceholderLabel,
+      );
+    const url = 'https://example.test/cover.jpg';
+    expect(spoken({ failed: false, failedUri: null, uri: null })).toBe('No cover');
+    expect(spoken({ failed: true, failedUri: null, uri: null })).toBe('Cover could not be loaded');
+    expect(spoken({ failed: false, failedUri: url, uri: url })).toBe('Cover could not be loaded');
+    expect(spoken({ failed: false, failedUri: url, uri: null })).toBe('No cover');
   });
 
   it("the list's cover and row are sibling buttons, never nested", () => {

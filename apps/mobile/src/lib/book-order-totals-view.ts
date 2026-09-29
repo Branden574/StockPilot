@@ -1,4 +1,6 @@
 import {
+  BOOK_COVER_PLACEHOLDER,
+  BOOK_COVER_UNAVAILABLE,
   BOOK_REPORT_ALL_CATEGORIES,
   BOOK_REPORT_ALL_WAREHOUSES,
   BOOK_REPORT_CSV_MAX_ROWS,
@@ -550,6 +552,23 @@ export function copiesMetric(copies: string): { value: string; unit: string } {
     value: formatReportQuantity(copies),
     unit: copies === '1' ? 'copy requested' : 'copies requested',
   };
+}
+
+/**
+ * What a cover placeholder says to VoiceOver (simulator walk D1). "Cover
+ * could not be loaded" only after a real failure: the lookup failed
+ * (`failed`), or THIS URL failed to load (`failedUri === uri`, with a URL).
+ * A book with no cover URL is "No cover", whatever an earlier URL did; the
+ * component's `failedUri` starts null, and a bare `failedUri === uri` read
+ * every book without a cover (null === null) as a failure.
+ */
+export function bookCoverPlaceholderLabel(state: {
+  uri: string | null;
+  failedUri: string | null;
+  failed: boolean;
+}): string {
+  const loadFailed = state.uri !== null && state.failedUri === state.uri;
+  return state.failed || loadFailed ? BOOK_COVER_UNAVAILABLE : BOOK_COVER_PLACEHOLDER;
 }
 
 /**
