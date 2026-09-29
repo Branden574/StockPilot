@@ -385,6 +385,9 @@ export class BookOrderTotalsService {
     format: BookReportExportFormat,
   ): Promise<BookOrderTotalsResponse> {
     this.gate();
+    // The file path: reports:export as well (the route checks it first; the
+    // database refuses export mode without it too).
+    assertPermission(this.ctx, 'reports:export');
     const limit = BOOK_REPORT_EXPORT_MAX_ROWS[format];
     const { data, error } = await this.ctx.supabase.rpc('book_order_totals', {
       ...this.totalsArgs(query, warehouse),

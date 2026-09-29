@@ -8,6 +8,9 @@
 // resolved only for books the caller's own RLS read returned and only from
 // trusted URLs; an export is ONE export-mode statement, refused above its
 // ceiling and checked against itself before any byte is written.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
@@ -520,6 +523,24 @@ describe('exportRows: one statement, never truncated', () => {
       p_page_size: null,
     });
     expect(res.rows).toHaveLength(2);
+  });
+  it('without reports:export: forbidden before the export-mode RPC (the database refuses it too)', async () => {
+    const { stub, svc } = service(
+      {},
+      { permissions: new Set(['reports:read', 'orders:read', 'items:read']) },
+    );
+    await expect(svc.exportRows(ALL, ALL_W, 'csv')).rejects.toMatchObject({ code: 'forbidden' });
+    expect(stub.rpcCalls).toEqual([]);
+  });
+  it('the SQL clamp (0379) equals the largest per-format ceiling', () => {
+    const sql = readFileSync(
+      path.resolve(__dirname, '../../../../../supabase/migrations/0379_book_order_totals.sql'),
+      'utf8',
+    );
+    const m = /v_cap\s+integer := least\(greatest\(coalesce\(p_max_rows, (\d+)\), 1\), (\d+)\);/.exec(sql);
+    expect(m).not.toBeNull();
+    const largest = Math.max(BOOK_REPORT_CSV_MAX_ROWS, BOOK_REPORT_PDF_MAX_ROWS);
+    expect([Number(m![1]), Number(m![2])]).toEqual([largest, largest]);
   });
   it('above the ceiling: 400 too_many_rows with the counts, before any file', async () => {
     const { svc } = service({

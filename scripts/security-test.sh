@@ -334,7 +334,9 @@ PGTAP_TESTS=(
   # else the SAME 42501 forbidden for a non-member, a disabled member or a
   # revoked permission; the orders and books modules: P0001
   # module_disabled), EXECUTE to authenticated only (anon, service_role and
-  # PUBLIC revoked). Every total is limited to the books and warehouses the
+  # PUBLIC revoked). Export mode (every row in one answer) also needs
+  # reports:export in the body, so a direct RPC call cannot pull the whole
+  # report past the export permission. Every total is limited to the books and warehouses the
   # caller can read: warehouse-, charter- and category-scoped members, and a
   # member of two orgs with a cross-org line planted each way. Filter ids
   # are validated against rows the caller can read. No answer carries

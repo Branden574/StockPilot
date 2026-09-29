@@ -8,7 +8,9 @@
 --    out (claims cleared): 42501 unauthenticated from every function. A
 --    member of another org, a disabled member, a viewer without reports:read
 --    and a manager whose reports:read is revoked: the SAME 42501 forbidden.
---    Orders or books module off: P0001 module_disabled.
+--    Orders or books module off: P0001 module_disabled. Export mode (every
+--    row at once) also needs reports:export: staff, a reports:read-only viewer
+--    and a manager with reports:export revoked get the same 42501 forbidden.
 -- A. The brief's acceptance fixture, exactly: Order 1 Book A x10 + Book B x4
 --    + supplies, Order 2 Book A x15, Order 3 Book A x5 awaiting approval, a
 --    cancelled Book A x20, a denied Book B x7 (and an unconfirmed Book A x100
@@ -42,7 +44,7 @@
 --    clamp, identical summary on every page, union of pages = the set.
 -- X. More than max_rows: 1,100 grouped rows and a book on 1,200 orders, as
 --    one jsonb; export mode equals the concatenated pages; tooMany above the
---    ceiling with no rows; the ceiling clamped to 50,000.
+--    ceiling with no rows; the ceiling clamped to 20,000.
 -- R. Options and filter ids (an archived warehouse, a deleted category, no
 --    category) from eligible lines under RLS; invalid ids 22023; for every
 --    persona the per-warehouse and per-category copies partition the total;
@@ -66,7 +68,7 @@
 -- begin/rollback: nothing leaks. Namespace 03790000.
 
 begin;
-select plan(88);
+select plan(89);
 
 \set orgA     '\'03790000-0000-0000-0000-00000000000a\''
 \set orgB     '\'03790000-0000-0000-0000-00000000000b\''
@@ -688,6 +690,23 @@ select is(
   array['P0001:module_disabled'],
   'G7: the orders module off, or the books module off: P0001 module_disabled');
 
+-- Export mode (every row in one answer) is the file path: it needs
+-- reports:export as well, in the body, so a direct RPC call cannot pull the
+-- whole report past the export permission.
+savepoint g8;
+insert into public.user_permission_overrides (organization_id, user_id, permission, granted)
+values (:orgA, :mgrAB, 'reports:export', false);
+select is(
+  array[pg_temp.err_as(:stfW1, format('select public.book_order_totals(%L, p_all_rows => true)', :orgA)),
+        pg_temp.err_as(:vwrC1, format('select public.book_order_totals(%L, p_all_rows => true, p_max_rows => 50000)', :orgA)),
+        pg_temp.err_as(:mgrAB, format('select public.book_order_totals(%L, p_all_rows => true)', :orgA)),
+        pg_temp.err_as(:stfW1, format('select public.book_order_totals(%L)', :orgA)),
+        pg_temp.err_as(:vwrC1, format('select public.book_order_totals(%L, p_all_rows => false)', :orgA)),
+        pg_temp.err_as(:mgr,   format('select public.book_order_totals(%L, p_all_rows => true)', :orgA))],
+  array['42501:forbidden', '42501:forbidden', '42501:forbidden', 'no error', 'no error', 'no error'],
+  'G8: export mode needs reports:export too: staff, a viewer holding only reports:read and a manager with reports:export revoked get 42501 forbidden; their pages and a manager''s export still answer');
+rollback to savepoint g8;
+
 -- ═══ A. The brief's acceptance fixture ═══════════════════════════════════
 insert into res values ('base.mgr', pg_temp.bot(:mgr, :orgA));
 select is(pg_temp.rs(r), 'A 30/3, B 4/1',
@@ -1198,8 +1217,8 @@ select is(
 select is(
   jsonb_build_object('mode', r->'mode', 'pageSize', r->'pageSize', 'maxRows', r->'maxRows', 'tooMany', r->'tooMany',
                      'summarySame', r->'summary' = (select r2.r->'summary' from res r2 where r2.k = 'c.p1')),
-  '{"mode":"all","pageSize":null,"maxRows":50000,"tooMany":false,"summarySame":true}'::jsonb,
-  'X4: export mode carries the same summary, no page size, and the 50,000 ceiling')
+  '{"mode":"all","pageSize":null,"maxRows":20000,"tooMany":false,"summarySame":true}'::jsonb,
+  'X4: export mode carries the same summary, no page size, and the 20,000 ceiling (the largest per-format ceiling)')
   from res where k = 'c.all';
 select is(
   (select string_agg((p->>'tooMany') || '/' || jsonb_array_length(p->'rows') || '/' || (p->>'maxRows') || '/' || (p->>'totalCount')
@@ -1207,9 +1226,9 @@ select is(
      from (select 1 n, pg_temp.bot(:mgrC, :orgC, p_all => true, p_max => 1000) p
            union all select 2, pg_temp.bot(:mgrC, :orgC, p_all => true, p_max => 1099)
            union all select 3, pg_temp.bot(:mgrC, :orgC, p_all => true, p_max => 1100)
-           union all select 4, pg_temp.bot(:mgrC, :orgC, p_all => true, p_max => 99999)) x),
-  'true/0/1000/1100/1100 true/0/1099/1100/1100 false/1100/1100/1100/1100 false/1100/50000/1100/1100',
-  'X5: above the ceiling: tooMany with the summary and no rows (never truncated); at the ceiling: every row; the ceiling is clamped to 50,000');
+           union all select 4, pg_temp.bot(:mgrC, :orgC, p_all => true, p_max => 50000)) x),
+  'true/0/1000/1100/1100 true/0/1099/1100/1100 false/1100/1100/1100/1100 false/1100/20000/1100/1100',
+  'X5: above the ceiling: tooMany with the summary and no rows (never truncated); at the ceiling: every row; the ceiling is clamped to 20,000 (core BOOK_REPORT_CSV_MAX_ROWS)');
 insert into res values ('c.dd1', pg_temp.bdd(:mgrC, :orgC, :cBook1, p_page => 1, p_size => 100));
 select is(
   (r->>'totalCount') || '|' || (r#>>'{totals,copies}') || '|' || (pg_temp.rowof((select r2.r from res r2 where r2.k = 'c.p1'), :cBook1)->>'copies'),

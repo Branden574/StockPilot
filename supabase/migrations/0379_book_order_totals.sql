@@ -50,7 +50,8 @@
 -- gates are in each function body as well: signed in (42501
 -- unauthenticated), a member holding reports:read (42501 forbidden, one
 -- error for both so existence does not leak), and the orders and books
--- modules (P0001 module_disabled). Nothing raises 40001 or 40P01.
+-- modules (P0001 module_disabled). Export mode (every row at once) also
+-- needs reports:export. Nothing raises 40001 or 40P01.
 --
 -- plpgsql caches statement plans per session and may switch to a generic
 -- plan after five calls on a pooled connection; a generic plan cannot fold
@@ -334,7 +335,8 @@ declare
     'staged_for_delivery','in_transit','backordered','completed'];
   v_sort   text := coalesce(nullif(btrim(p_sort), ''), 'copies');
   v_all    boolean := coalesce(p_all_rows, false);
-  v_cap    integer := least(greatest(coalesce(p_max_rows, 50000), 1), 50000);
+  -- 20,000 = core BOOK_REPORT_CSV_MAX_ROWS, the largest per-format ceiling.
+  v_cap    integer := least(greatest(coalesce(p_max_rows, 20000), 1), 20000);
   v_size   integer := least(greatest(coalesce(p_page_size, 25), 1), 100);
   v_rng    record;
   v_result jsonb;
@@ -349,6 +351,12 @@ begin
   if not (public.module_enabled(p_organization_id, 'orders')
           and public.module_enabled(p_organization_id, 'books')) then
     raise exception 'module disabled' using errcode = 'P0001', hint = 'module_disabled';
+  end if;
+  -- Export mode hands over every row at once: it is the file path, so it
+  -- needs reports:export as well (the same 42501 forbidden). The app route
+  -- checks it first and adds MFA, the hourly budget and the audit row.
+  if v_all and not public.has_permission(p_organization_id, 'reports:export') then
+    raise exception 'forbidden' using errcode = '42501', hint = 'forbidden';
   end if;
   if v_sort not in ('copies', 'title', 'orders', 'latest') then
     raise exception 'invalid sort' using errcode = '22023', hint = 'invalid_sort';
@@ -666,9 +674,9 @@ comment on function public.book_order_totals(uuid, text, date, date, text[], uui
   'summary, count and rows share one snapshot): summary (copies requested on eligible lines, distinct '
   'book entries, distinct orders), totalCount, the effective page and its grouped rows (25 by default, '
   '1..100), sorted by copies (copy units first), title, orders or latest order, ties by item id. Export '
-  'mode (p_all_rows) returns every grouped row in sort order, or tooMany with no rows above '
-  'least(p_max_rows, 50000). SECURITY INVOKER over book_order_report_lines, gated in its body. Writes '
-  'nothing.';
+  'mode (p_all_rows) needs reports:export as well and returns every grouped row in sort order, or '
+  'tooMany with no rows above least(p_max_rows, 20000). SECURITY INVOKER over book_order_report_lines, '
+  'gated in its body. Writes nothing.';
 
 comment on function public.book_order_totals_orders(uuid, uuid, text, date, date, text[], uuid, integer, integer) is
   'Book Order Totals drill-down (0379): ONE jsonb for one book: its totals over the same range, statuses '
