@@ -1,8 +1,9 @@
 import 'server-only';
 
 import {
-  DEFAULT_SUBCATEGORY_PROFILES,
-  type SportsSubcategoryKey,
+  requiredAttributeProblems,
+  resolveSubcategoryProfile,
+  type RequiredAttributeOptions,
   type SubcategoryTrackingProfile,
   type TrackingMode,
   type TrackingTypeValue,
@@ -139,13 +140,12 @@ export async function resolveTrackingProfile(
   }
 
   const subcategoryKey = (data.sports_subcategory_key as string | null) ?? null;
-  const builtIn = subcategoryKey
-    ? DEFAULT_SUBCATEGORY_PROFILES[subcategoryKey as SportsSubcategoryKey]
-    : undefined;
-  // A CUSTOM subcategory must carry a full profile in the jsonb column
-  // (requirements). If it carries neither, it is not a sports subcategory.
-  const custom = (data.tracking_profile as SubcategoryTrackingProfile | null) ?? null;
-  const profile = builtIn ?? custom ?? null;
+  // The built-in profile for the key, else the category's own jsonb profile (a
+  // CUSTOM subcategory must carry a full one), else none. SHARED with every
+  // client through @stockpilot/core, so the item form and the phone label and
+  // check exactly the attributes this server enforces. It reads own keys only:
+  // a bare index resolved a key such as "constructor" to Object itself.
+  const profile = resolveSubcategoryProfile(subcategoryKey, data.tracking_profile);
 
   // `categories.sports_subcategory_key` carries NO check constraint (0294), so
   // a typo — or a key written by an older build — used to resolve to
@@ -231,7 +231,23 @@ export function resolveModeOverride(
   };
 }
 
-/** Enforce the subcategory's required attributes. Codes match SPORTS_ERROR_CODES. */
+/**
+ * Enforce the subcategory's required attributes. Codes match SPORTS_ERROR_CODES.
+ *
+ * The rule itself is `requiredAttributeProblems` in @stockpilot/core — the SAME
+ * function the web item form, the phone's New Item screen and the PO-import
+ * review call before they submit, so a client can never label a field optional
+ * that this refuses without. The first problem is thrown, and its `details`
+ * carry the FIELD (`variantSize` / `variantSizeSystem` / `jerseyNumber`) so
+ * web and phone can put the sentence under the right input rather than in a
+ * toast (2026-09-29: "A size is required for this product." on an L4L Jersey
+ * whose form said "Size (optional)").
+ *
+ * `opts.scaleSizeSystem` is the category size scale's system, which fills an
+ * omitted system exactly as the row is stored; `opts.sizeRun` marks the
+ * sized-variant fan-out, whose rows each carry a size and whose system can only
+ * come from the scale.
+ */
 export function assertVariantAttributesValid(
   profile: SubcategoryTrackingProfile | null,
   input: {
@@ -239,28 +255,20 @@ export function assertVariantAttributesValid(
     variantSizeSystem?: string | null;
     jerseyNumber?: string | null;
   },
+  opts: RequiredAttributeOptions = {},
 ): void {
   if (!profile) return;
-  for (const attr of profile.requiredAttributes) {
-    if (attr === 'size' && !input.variantSize) {
-      throw new ServiceError('validation_error', 'A size is required for this product.', {
-        code: 'SHOE_SIZE_REQUIRED',
-      });
-    }
-    if (attr === 'size_system' && !input.variantSizeSystem) {
-      throw new ServiceError('validation_error', 'A size system is required for this product.', {
-        code: 'SHOE_SIZE_SYSTEM_REQUIRED',
-      });
-    }
-    if (attr === 'jersey_number' && !input.jerseyNumber) {
-      throw new ServiceError('validation_error', 'A number is required for this product.', {
-        code: 'JERSEY_NUMBER_INVALID',
-      });
-    }
+  const [problem] = requiredAttributeProblems(profile, input, opts);
+  if (problem) {
+    throw new ServiceError('validation_error', problem.message, {
+      code: problem.code,
+      field: problem.field,
+    });
   }
   if (input.jerseyNumber && !profile.supportsNumbers) {
     throw new ServiceError('validation_error', 'This product type does not use numbers.', {
       code: 'JERSEY_NUMBER_INVALID',
+      field: 'jerseyNumber',
     });
   }
 }

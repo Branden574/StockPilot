@@ -237,6 +237,72 @@ describe('InventoryService.create — sports categories', () => {
     expect(stub.chains.has('inventory_items.insert')).toBe(false);
   });
 
+  // 2026-09-29, L4L: three creates in "Jerseys" refused with "A size is
+  // required for this product." while the form said "Size (optional)". The
+  // refusal now names the field and carries it, and still happens before any
+  // group or item is written.
+  it('refuses a Jersey with no size, naming the field, before any group or item write', async () => {
+    const stub = buildStub({
+      'categories.select': {
+        data: categoryRow({ sports_subcategory_key: 'jerseys', tracking_mode: 'NUMBERED_VARIANT' }),
+        error: null,
+      },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await expect(
+      new InventoryService(ctx).create({
+        ...BASE,
+        categoryId: 'cat-1',
+        productGroup: { name: 'Wildcats home', defaultCountingUnit: 'each' },
+      }),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'Size is required for Jerseys: enter a size, or pick sizes to add one item per size.',
+      details: { code: 'SHOE_SIZE_REQUIRED', field: 'variantSize' },
+    });
+    expect(stub.fromCalls).not.toContain('product_groups');
+    expect(stub.chains.has('inventory_items.insert')).toBe(false);
+  });
+
+  it("takes a single shoe's size system from the category's size scale, as a size run does", async () => {
+    // create() used to check the RAW input before the scale filled the
+    // system, so "10.5" on a US Men's shoe category was refused "a size system
+    // is required" although the row would have been stored as US_MENS — and
+    // the same size picked as a run was accepted.
+    const stub = buildStub({
+      'categories.select': {
+        data: { ...shoesCategory(), size_scale_id: 'scale-1' },
+        error: null,
+      },
+      'size_scales.select': { data: { id: 'scale-1', size_system: 'US_MENS' }, error: null },
+      'size_scale_values.select': { data: [], error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await new InventoryService(ctx).create({ ...BASE, categoryId: 'cat-1', variantSize: '10.5' });
+
+    const row = insertedRow(stub);
+    expect(row.variant_size).toBe('10.5');
+    expect(row.variant_size_system).toBe('US_MENS');
+    expect(row.variant_key).toBe('size=10.5|system=us_mens');
+  });
+
+  it('still refuses a shoe whose size system is neither typed nor set by a scale, before any group write', async () => {
+    const stub = buildStub({ 'categories.select': { data: shoesCategory(), error: null } });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+    await expect(
+      new InventoryService(ctx).create({
+        ...BASE,
+        categoryId: 'cat-1',
+        variantSize: '10',
+        productGroup: { name: 'Nike Pegasus 41', brand: 'Nike', defaultCountingUnit: 'pair' },
+      }),
+    ).rejects.toMatchObject({
+      details: { code: 'SHOE_SIZE_SYSTEM_REQUIRED', field: 'variantSizeSystem' },
+    });
+    expect(stub.fromCalls).not.toContain('product_groups');
+    expect(stub.chains.has('inventory_items.insert')).toBe(false);
+  });
+
   it('finds-or-creates the group and stamps its id on the item', async () => {
     const stub = buildStub({
       'categories.select': { data: shoesCategory(), error: null },

@@ -298,4 +298,22 @@ describe('InventoryService.bulkCreateSizedVariants — sports parity with create
     ).rejects.toMatchObject({ code: 'validation_error' });
     expect(stub.chains.has('inventory_items.insert')).toBe(false);
   });
+
+  it("says a shoe run needs the category's scale to set a size system, and points at the field", async () => {
+    // A run carries no size system of its own (the schema has none), so the
+    // refusal must not ask for one the size chips never offered.
+    const stub = buildStub({
+      'categories.select': { data: shoesCategory(), error: null },
+      'size_scales.select': { data: { id: 'scale-1', size_system: null }, error: null },
+    });
+    const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
+
+    await expect(new InventoryService(ctx).bulkCreateSizedVariants({ ...BASE })).rejects.toMatchObject({
+      code: 'validation_error',
+      message:
+        "Size system is required for Shoes, and this category's size scale does not set one. Add the sizes one at a time and pick a size system for each.",
+      details: { code: 'SHOE_SIZE_SYSTEM_REQUIRED', field: 'variantSizeSystem' },
+    });
+    expect(stub.chains.has('inventory_items.insert')).toBe(false);
+  });
 });

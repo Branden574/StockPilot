@@ -54,6 +54,44 @@ export const SIZE_SYSTEMS = [
 export type SizeSystem = (typeof SIZE_SYSTEMS)[number];
 
 export const sizeSystemEnum = z.enum(SIZE_SYSTEMS);
+
+/**
+ * Display names for the size systems. Display copy only, and exhaustive by
+ * type: a system added to SIZE_SYSTEMS fails typecheck here until it has a
+ * name, instead of shipping a picker missing a value the schema accepts.
+ * Shared by the web item form and the phone's New Item screen.
+ */
+export const SIZE_SYSTEM_LABELS: Record<SizeSystem, string> = {
+  US_MENS: "US Men's",
+  US_WOMENS: "US Women's",
+  US_YOUTH: 'US Youth',
+  UK: 'UK',
+  EU: 'EU',
+  CM: 'CM',
+  ALPHA: 'Alpha (S/M/L)',
+  CUSTOM: 'Custom',
+};
+
+/**
+ * Narrow a free-text size system to the shared vocabulary, or to NULL.
+ *
+ * `po_import_lines.variant_size_system` and `inventory_items
+ * .variant_size_system` are plain TEXT, and the scan extractor writes whatever
+ * the document said — deliberately, because the requirements demand the source
+ * value be preserved. Normalizing on READ rather than on write is what lets
+ * both be true at once: the row keeps "us mens", and an unrecognized system
+ * reads as MISSING, so the size-system gate fires instead of a junk value
+ * riding into a permanent identity key.
+ *
+ * Shared (it lived in the server's po-imports-variants.ts) so the PO-import
+ * review can judge "does this line have a size system" exactly as the server
+ * resolver will.
+ */
+export function asSizeSystem(v: string | null | undefined): SizeSystem | null {
+  if (v == null) return null;
+  const up = v.trim().toUpperCase().replace(/[\s-]+/g, '_');
+  return (SIZE_SYSTEMS as readonly string[]).includes(up) ? (up as SizeSystem) : null;
+}
 export const sizeSystemSchema = z.preprocess(
   emptyToUndefined,
   sizeSystemEnum.nullable().optional(),

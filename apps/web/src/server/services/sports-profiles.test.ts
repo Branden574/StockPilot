@@ -235,6 +235,24 @@ describe('resolveTrackingProfile', () => {
     }
   });
 
+  it('REFUSES a key that only names an inherited object property ("constructor")', async () => {
+    // A bare index into the built-in table resolved "constructor" to
+    // Object itself: isSports true with no requiredAttributes at all. The
+    // shared resolver (core resolveSubcategoryProfile) only reads own keys.
+    const stub = makeSupabaseStub({
+      'categories.select': {
+        data: [categoryRow({ sports_subcategory_key: 'constructor' })],
+        error: null,
+      },
+    });
+    await expect(
+      resolveTrackingProfile(makeServiceContext(stub.client), 'cat-1'),
+    ).rejects.toMatchObject({
+      code: 'validation_error',
+      details: { code: 'SPORTS_SUBCATEGORY_REQUIRED' },
+    });
+  });
+
   it('accepts an unknown key when the category carries the full jsonb profile', async () => {
     // A CUSTOM subcategory is legal — it just has to define itself.
     const stub = makeSupabaseStub({
@@ -451,6 +469,77 @@ describe('assertVariantAttributesValid', () => {
       throw new Error('expected a throw');
     } catch (e) {
       expect((e as { details?: { code?: string } }).details?.code).toBe('SHOE_SIZE_REQUIRED');
+    }
+  });
+
+  // 2026-09-29, L4L: "A size is required for this product." on a Jersey, with
+  // the form saying "Size (optional)". The refusal now names the field and the
+  // product type, and carries the FIELD so web and phone can point at it.
+  it('names the field and the product type, and says which field to fix', () => {
+    try {
+      assertVariantAttributesValid(DEFAULT_SUBCATEGORY_PROFILES.jerseys, {});
+      throw new Error('expected a throw');
+    } catch (e) {
+      expect((e as Error).message).toBe(
+        'Size is required for Jerseys: enter a size, or pick sizes to add one item per size.',
+      );
+      expect((e as { details?: unknown }).details).toEqual({
+        code: 'SHOE_SIZE_REQUIRED',
+        field: 'variantSize',
+      });
+    }
+  });
+
+  it('points a missing size system at its own field', () => {
+    try {
+      assertVariantAttributesValid(DEFAULT_SUBCATEGORY_PROFILES.shoes, { variantSize: '10' });
+      throw new Error('expected a throw');
+    } catch (e) {
+      expect((e as { details?: unknown }).details).toEqual({
+        code: 'SHOE_SIZE_SYSTEM_REQUIRED',
+        field: 'variantSizeSystem',
+      });
+    }
+  });
+
+  it("accepts the size system the category's size scale supplies", () => {
+    expect(() =>
+      assertVariantAttributesValid(
+        DEFAULT_SUBCATEGORY_PROFILES.shoes,
+        { variantSize: '10' },
+        { scaleSizeSystem: 'US_MENS' },
+      ),
+    ).not.toThrow();
+  });
+
+  it('says why a size run cannot supply a size system itself', () => {
+    expect(() =>
+      assertVariantAttributesValid(
+        DEFAULT_SUBCATEGORY_PROFILES.shoes,
+        { variantSize: '10' },
+        { sizeRun: true, scaleSizeSystem: null },
+      ),
+    ).toThrow("this category's size scale does not set one");
+  });
+
+  it('names a required jersey number as a jersey number, not "a number"', () => {
+    const custom = {
+      ...DEFAULT_SUBCATEGORY_PROFILES.jerseys,
+      key: 'custom_singlets',
+      label: 'Singlets',
+      requiredAttributes: ['jersey_number' as const],
+    };
+    try {
+      assertVariantAttributesValid(custom, {});
+      throw new Error('expected a throw');
+    } catch (e) {
+      expect((e as Error).message).toBe(
+        'Jersey number is required for Singlets: enter the number, 1 to 4 digits.',
+      );
+      expect((e as { details?: unknown }).details).toEqual({
+        code: 'JERSEY_NUMBER_INVALID',
+        field: 'jerseyNumber',
+      });
     }
   });
 });
