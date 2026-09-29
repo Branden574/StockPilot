@@ -85,6 +85,135 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'small-fixes-2026-09',
+    revision: 1,
+    // Fixes from the 2026-09-28/29 walks (fix/small-walk-fixes, no migration).
+    // Held as a DRAFT until the phone update (OTA) carries the phone fixes and
+    // they are walked on the simulator: published with the web deploy alone,
+    // it would tell phone users about a greeting, buttons and fields their
+    // app does not have yet. The follow-up that publishes it sets the real
+    // publishedAt (after every release below it) and re-reads these words
+    // against what shipped, the keyboard entry's in particular.
+    //
+    // Addressed to everyone: the top bar, the greeting and the VoiceOver and
+    // larger-target fixes are for every member. The pick and keyboard entries
+    // link to Orders and are for whoever can pick (items:update,
+    // orders:approve, where Orders is on): the digital pick's quantity is the
+    // only field on an order's screen that takes typing, and only a picker is
+    // offered it. The page titles entry is for every member; the unit count
+    // entry for anyone who can open an order (every member, where Orders is on).
+    status: 'draft',
+    title: "The top bar fits small screens, and the mobile app's buttons and fields are easier to use",
+    summary:
+      "On the web, the top bar now fits narrow screens, so your account button is never cut off, your account menu has Help & Learning, Support & feedback and the theme, and a page's title keeps its name or number beside its buttons. In the mobile app, Home greets you by the time of day, the top-bar buttons and the Add items steppers work with VoiceOver and are easier to tap, and the digital pick's quantity shows every digit at the largest text sizes and is no longer left under the keyboard.",
+    publishedAt: '2026-10-02T17:00:00Z',
+    entries: [
+      {
+        id: 'web-top-bar-fits',
+        category: 'fixed',
+        area: 'Web app',
+        title: 'The top bar fits narrow screens, with your account button always in view',
+        whatChanged:
+          "On the web, the bar at the top of each page now fits its width. On a phone it shows the menu, the warehouse filter, notifications, What's new and your account button. With more room, such as beside the sidebar on a tablet, it adds search, and with more again Keyboard shortcuts, Help & Learning, Support & feedback and the theme switch. A long warehouse name is shortened to fit. Your account menu now also has Help & Learning, Support & feedback and the theme: Light, Dark or System, with the one in use marked. On Staging, the breadcrumb now reads Inventory / Staging.",
+        whyItMatters:
+          "On a phone the account button was cut off at the right edge, and beside the sidebar on a tablet it was off the screen entirely, with the other buttons squeezed to half their size. The breadcrumb called Staging an item's page (Items / Detail), and did the same on Labels and Recurring purchase orders, which now have their own names.",
+        howItAffectsYou:
+          'Where the bar has room for everything, as on most laptop and desktop screens, it is unchanged. Search stays in the bar wherever it was before. Where the bar leaves the rest out, Help & Learning, Support & feedback and the theme are in your account menu, and the ? key still opens Keyboard shortcuts. On a short screen, such as a phone held sideways, the account menu scrolls.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'web-titles-narrow-screens',
+        category: 'fixed',
+        area: 'Web app',
+        title: "A page's title stays in view on a narrow screen",
+        whatChanged:
+          "On the web, the title of an order, a bundle, a maintenance request and a procedure now keeps its name or number on a phone, or beside the sidebar on a tablet. When the line is too narrow for the title and its buttons, the buttons, such as Cancel request and Report a problem on an order, move under the title.",
+        whyItMatters:
+          "The buttons kept their width and the title got what was left: on a phone an order's title read Or..., hiding its number, and a bundle's name did not show at all.",
+        howItAffectsYou: 'On wider screens the titles and their buttons sit where they did.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'phone-home-greeting',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'The mobile app greets you by the time of day',
+        whatChanged:
+          'Home in the mobile app now says Good morning before noon, Good afternoon until 5 PM and Good evening after that, by the clock on your phone. It said Good morning at every hour.',
+        whyItMatters: 'The greeting was fixed text, so it was wrong for most of the day.',
+        howItAffectsYou:
+          'Only the greeting changed. It follows the time on your phone, and it is checked again whenever you come back to Home.',
+        whatToDo: 'Update the app when it offers the new version.',
+      },
+      {
+        id: 'phone-buttons-voiceover-targets',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'Buttons in the mobile app work with VoiceOver and are easier to tap',
+        whatChanged:
+          "In the mobile app, the icon buttons at the top of each screen, such as Back, Open menu, Notifications, Refresh, New item and Edit item, now say what they do to VoiceOver and have a 44-point touch area around the same icon. So do Home's profile picture (Account settings), the Back links on a cycle count, the AI count review and Bundles, and Done and Cancel on the counting cameras. On an order's Add items sheet, the plus and minus buttons name their item, for example Increase quantity of Blue Pens, and have 44-point touch areas.",
+        whyItMatters:
+          "Most of these buttons had no name, so VoiceOver could not say what they did, and every item's plus and minus buttons were read the same way. Most were also smaller than the 44 points Apple recommends.",
+        howItAffectsYou:
+          "The buttons look the same and the icon buttons sit where they did; only the area you can tap is larger. On a cycle count, a bundle and the AI count review, the heading sits a few points lower to make room for the larger Back button. A help button that did nothing when tapped was removed from one screen, and the menu button beside it moved into its place.",
+        whatToDo: 'Update the app when it offers the new version.',
+      },
+      {
+        id: 'phone-more-voiceover-buttons',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: "More of the mobile app's controls work with VoiceOver",
+        whatChanged:
+          "In the mobile app, Maintenance's New, New item's Scan instead, the AI shelf scan's capture button (Capture photo) and the Staging list's All, Books and Items filters are now buttons to VoiceOver, and the X that closes What's New and a screen tour has a 44-point touch area.",
+        whyItMatters:
+          'VoiceOver read these as plain text, or found no name at all for the capture button, and the X could only be tapped within a small area around it.',
+        howItAffectsYou: 'They look the same and sit where they did.',
+        whatToDo: 'Update the app when it offers the new version.',
+      },
+      {
+        id: 'phone-pick-quantity-large-text',
+        category: 'fixed',
+        area: 'Orders',
+        title: "The digital pick's quantity shows every digit at the largest text sizes",
+        whatChanged:
+          "In the mobile app's digital pick, the quantity you type now stays inside its field at every text size. At the largest accessibility text sizes a typed 30 showed as 3. The field is also a 44-point touch area, and at those sizes Save moves under the field when the line is too narrow for both.",
+        whyItMatters:
+          'At the largest text sizes the number outgrew its field, so a quantity could not be checked before it was saved.',
+        howItAffectsYou:
+          'At the usual text sizes the field looks the same, a little taller. The quantity you enter and save is unchanged.',
+        whatToDo: 'Update the app when it offers the new version.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: { anyPermission: ['items:update', 'orders:approve'], modules: ['orders'] },
+      },
+      {
+        id: 'phone-order-screen-keyboard',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Fields on an order in the mobile app are no longer left under the keyboard',
+        whatChanged:
+          'On an order in the mobile app, the screen now ends where the keyboard begins, so no field is left underneath it. A field near the bottom, such as a pick quantity, can be scrolled into view while you type.',
+        whyItMatters:
+          'On an iPad with the keyboard docked, a pick quantity near the bottom of an order could sit under the keyboard while you typed in it, and could not be scrolled above it.',
+        howItAffectsYou: 'Nothing changes until the keyboard opens.',
+        whatToDo: 'Update the app when it offers the new version.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: { anyPermission: ['items:update', 'orders:approve'], modules: ['orders'] },
+      },
+      {
+        id: 'phone-order-one-unit',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'An order of one unit says 1 UNIT',
+        whatChanged: 'In the mobile app, an order of one unit now says 1 UNIT above its items, not 1 UNITS.',
+        whyItMatters: 'The count of units was always written in the plural.',
+        howItAffectsYou: 'Only the word changed.',
+        whatToDo: 'Update the app when it offers the new version.',
+        link: { href: '/dashboard/orders', label: 'View orders' },
+        audience: { modules: ['orders'] },
+      },
+    ],
+  },
+  {
     id: 'reports-caller-scope-2026-09',
     revision: 1,
     // Web only (the phone's Reports has only Book Order Totals, which already

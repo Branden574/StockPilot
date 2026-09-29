@@ -17,10 +17,16 @@ export function Avatar({
   size = 38,
   bordered = true,
   onPress,
+  accessibilityLabel,
 }: {
   size?: number;
   bordered?: boolean;
   onPress?: () => void;
+  /**
+   * What VoiceOver says for a tappable avatar ("Account settings"). Without
+   * one it read the initials ("SD"), or nothing over a photo.
+   */
+  accessibilityLabel?: string;
 }) {
   const { c } = useTheme();
   const profile = useProfile();
@@ -86,16 +92,32 @@ export function Avatar({
     : content;
 
   if (!onPress) return wrapper;
+  // A tappable avatar is a transparent frame at least 44pt square with the
+  // picture centred in it, as IconChip's minTap: a real frame, not hitSlop,
+  // so the target VoiceOver outlines is the one a finger can hit. At the 38pt
+  // Home size the frame is 3pt wider on every side, and Home takes that off
+  // the gap beside it so the picture does not move.
+  const frame = Math.max(MIN_TAP, size);
   return (
     <Pressable
       onPress={onPress}
-      style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
-      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      style={({ pressed }) => ({
+        width: frame,
+        height: frame,
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: pressed ? 0.7 : 1,
+      })}
     >
       {wrapper}
     </Pressable>
   );
 }
+
+/** The iOS minimum tap target, in points. */
+const MIN_TAP = 44;
 
 const styles = StyleSheet.create({
   fallback: {

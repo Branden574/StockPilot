@@ -47,7 +47,7 @@ export default async function ProcedureDetailPage({
               <ArrowLeft className="mr-1 h-3.5 w-3.5" /> Back to procedures
             </Link>
           </Button>
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 basis-72">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="truncate text-lg font-semibold tracking-tight sm:text-xl">
                 {procedure.title}

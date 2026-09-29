@@ -679,10 +679,6 @@ export default function ItemDetail() {
     // Crate info (color + number) and grade are book-only — products
     // are just on a rack.
     const cf = (r.custom_fields as Record<string, unknown> | null) ?? null;
-    const cfStr = (key: string): string | null => {
-      const v = cf?.[key];
-      return typeof v === 'string' && v.trim() !== '' ? v : null;
-    };
     const itemTypeStr = (r.item_type as string | null) ?? 'product';
     // ONE reader, shared with the scan sheet and owned by @stockpilot/core.
     // This screen used to hand-roll the canonical/legacy/cross-family fallback
@@ -1532,8 +1528,8 @@ export default function ItemDetail() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={ChevronLeft} onPress={() => router.back()} />
-          <IconChip icon={Edit3} onPress={openEdit} />
+          <IconChip icon={ChevronLeft} onPress={() => router.back()} accessibilityLabel="Back" minTap />
+          <IconChip icon={Edit3} onPress={openEdit} accessibilityLabel="Edit item" minTap />
         </View>
       </SafeAreaView>
 
@@ -3865,15 +3861,18 @@ function AddSerialsModalContent({
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  // The chips' 44pt frames (IconChip minTap) are 3pt wider than the 38pt chip
+  // on every side, so the bar takes 3pt off its padding (12, 8) and the hero
+  // 3pt off its top: the chips and the item's name sit where they did.
   topbar: {
-    paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingHorizontal: 9,
+    paddingTop: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
   hero: {
     paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingTop: 9,
     paddingBottom: 8,
   },
   tabsRow: {

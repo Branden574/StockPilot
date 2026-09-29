@@ -68,7 +68,7 @@ export default async function BundleDetailPage({
           ← Back to bundles
         </Link>
         <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 basis-72">
             <div className="flex items-center gap-2">
               <h1 className="truncate text-2xl font-semibold tracking-tight">
                 {detail.bundle.name}

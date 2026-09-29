@@ -195,13 +195,13 @@ export default function AiScanScreen() {
       const payload = (await res.json()) as {
         scanId: string;
         photoSignedUrl: string;
-        results: Array<{
+        results: {
           lineId: string;
           sku: string;
           count: number;
           confidence: number;
           notes?: string;
-        }>;
+        }[];
       };
 
       // Build the review-line list — every cached line, with its AI
@@ -249,7 +249,7 @@ export default function AiScanScreen() {
     //   • Else high-confidence AI result auto-applies.
     //   • Low-confidence AI without override → SKIP (user didn't approve).
     //   • No AI result + no override → SKIP (user didn't touch the line).
-    const toWrite: Array<{ lineId: string; count: number }> = [];
+    const toWrite: { lineId: string; count: number }[] = [];
     for (const rl of phase.reviewLines) {
       if (rl.override !== null) {
         const n = Number(rl.override);
@@ -440,10 +440,17 @@ export default function AiScanScreen() {
             line, and the title column keeps a real width floor so that wrap
             can actually happen. */}
         <View style={styles.topBar} pointerEvents="auto">
-          <Pressable style={styles.closeBtn} onPress={() => router.back()}>
-            <Text style={styles.closeText} numberOfLines={1} maxFontSizeMultiplier={CLOSE_CAP}>
-              Cancel
-            </Text>
+          <Pressable
+            style={styles.closeFrame}
+            onPress={() => router.back()}
+            accessibilityRole="button"
+            accessibilityLabel="Cancel"
+          >
+            <View style={styles.closeBtn}>
+              <Text style={styles.closeText} numberOfLines={1} maxFontSizeMultiplier={CLOSE_CAP}>
+                Cancel
+              </Text>
+            </View>
           </Pressable>
           <View style={styles.titleCol}>
             <Text style={styles.headerLabel} maxFontSizeMultiplier={TITLE_CAP}>
@@ -469,6 +476,12 @@ export default function AiScanScreen() {
             ]}
             onPress={onCapture}
             disabled={phase.kind !== 'idle'}
+            accessibilityRole="button"
+            accessibilityLabel="Capture photo"
+            accessibilityState={{
+              disabled: phase.kind !== 'idle',
+              busy: phase.kind === 'capturing' || phase.kind === 'uploading',
+            }}
           >
             {phase.kind === 'capturing' || phase.kind === 'uploading' ? (
               <ActivityIndicator color="#fff" />
@@ -521,7 +534,13 @@ function ReviewView({
     <SafeAreaView style={styles.reviewRoot} edges={['top', 'bottom']}>
       <Stack.Screen options={{ headerShown: false }} />
       <View style={styles.reviewHeader}>
-        <Pressable onPress={onCancel} disabled={saving}>
+        <Pressable
+          onPress={onCancel}
+          disabled={saving}
+          style={styles.reviewBackBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+        >
           <Text style={[styles.reviewBack, saving && { opacity: 0.4 }]}>← Back</Text>
         </Pressable>
         <Text style={styles.reviewTitle}>Review AI counts</Text>
@@ -678,6 +697,11 @@ const styles = StyleSheet.create({
   },
   /** See the scan twin: a FLOOR, so `flexWrap` has something to wrap against. */
   titleCol: { flex: 1, minWidth: 120 },
+  // Cancel is a button in a frame at least 44pt tall around the same pill
+  // (it was the ~25pt pill). -8 top and bottom leaves a 28pt slot, under the
+  // title column's height, so the bar keeps its height; the frame reaches
+  // into the bar's 12pt padding.
+  closeFrame: { minHeight: 44, minWidth: 44, justifyContent: 'center', marginVertical: -8, flexShrink: 0 },
   closeBtn: {
     paddingHorizontal: space.sm,
     paddingVertical: space.xs,
@@ -766,6 +790,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.border,
   },
+  // "← Back" is a button in a frame at least 44pt tall (it was the ~17pt
+  // text). The frame takes the header's 8pt padding above and below, so the
+  // header is about 9pt taller, and nothing overlaps.
+  reviewBackBtn: { minHeight: 44, minWidth: 44, justifyContent: 'center', marginVertical: -space.sm },
   reviewBack: { color: theme.primary, fontWeight: '600' },
   reviewTitle: { color: theme.text, fontWeight: '700', fontSize: 16 },
   reviewPhoto: {

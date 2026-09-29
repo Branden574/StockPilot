@@ -307,7 +307,7 @@ export function NotificationBell({ userId, organizationId }: Props) {
   return (
     <Link
       href="/dashboard/notifications"
-      className="hover:bg-muted hover:text-foreground relative grid h-[30px] w-[30px] place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors"
+      className="hover:bg-muted hover:text-foreground relative grid h-[30px] w-[30px] shrink-0 place-items-center rounded-md text-[var(--ed-ink-3)] transition-colors"
       aria-label={
         showBadge
           ? `Notifications (${count} unread)`

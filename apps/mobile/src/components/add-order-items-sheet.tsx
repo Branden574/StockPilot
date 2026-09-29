@@ -14,18 +14,20 @@ import {
   View,
 } from 'react-native';
 
+import { MIN_TAP } from '@/components/item-verification-card';
 import { Card, Hair } from '@/components/ui/card';
 import { Body, Eyebrow, Mono } from '@/components/ui/text';
 import { api } from '@/lib/api';
 import { parseHoldOutcome } from '@/lib/order-hold';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT } from '@/lib/theme';
+import { ACCENT, FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 import {
   ADD_LINES_INDETERMINATE_COPY,
   ADD_LINES_INDETERMINATE_TITLE,
   addItemsPickerPlan,
+  addItemsStepperLabel,
   addLinesErrorIsIndeterminate,
   addLinesErrorIsTerminal,
   buildAddLinesPayload,
@@ -267,27 +269,47 @@ export function AddOrderItemsSheet({
   const selectedCount = Object.values(draft).filter((n) => n > 0).length;
   const remaining = Math.max(0, total - rows.length);
 
-  const stepBtn = (label: string, itemId: string, delta: number, disabled: boolean) => (
+  // A 44pt frame around the same 32pt box: a real frame, not hitSlop, so the
+  // element VoiceOver outlines is the target a finger can hit. The label names
+  // the item ("Increase quantity of Hold Base Item"); every row's steppers
+  // used to read the same two words. The glyph is a control label, capped at
+  // the control ceiling so it stays inside its 32pt box.
+  const stepBtn = (
+    label: string,
+    itemId: string,
+    name: string,
+    delta: number,
+    disabled: boolean,
+  ) => (
     <Pressable
       onPress={() => step(itemId, delta)}
       disabled={disabled}
-      hitSlop={6}
       accessibilityRole="button"
-      accessibilityLabel={delta > 0 ? 'Increase quantity' : 'Decrease quantity'}
+      accessibilityLabel={addItemsStepperLabel(delta, name)}
+      accessibilityState={{ disabled }}
       style={{
-        width: 32,
-        height: 32,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: c.hair,
+        width: MIN_TAP,
+        height: MIN_TAP,
         alignItems: 'center',
         justifyContent: 'center',
         opacity: disabled ? 0.35 : 1,
       }}
     >
-      <Mono size={15} color={c.ink}>
-        {label}
-      </Mono>
+      <View
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: 8,
+          borderWidth: 1,
+          borderColor: c.hair,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Mono size={15} color={c.ink} maxFontSizeMultiplier={capTo(15, TYPE_CEILING.control)}>
+          {label}
+        </Mono>
+      </View>
     </Pressable>
   );
 
@@ -457,8 +479,13 @@ export function AddOrderItemsSheet({
                                   </Mono>
                                 ) : null}
                               </View>
-                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                                {stepBtn('−', row.id, -1, qty <= 0 || submitting)}
+                              {/* The steppers' 44pt frames are 6pt wider than
+                                  their 32pt boxes on every side; the group
+                                  gives that back (gap 8 -> 2, margin -6), so
+                                  the boxes, the count and the row's height
+                                  stay where they were. */}
+                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2, margin: -6 }}>
+                                {stepBtn('−', row.id, row.name, -1, qty <= 0 || submitting)}
                                 <Mono
                                   size={15}
                                   color={qty > 0 ? c.ink : c.ink4}
@@ -466,7 +493,7 @@ export function AddOrderItemsSheet({
                                 >
                                   {qty}
                                 </Mono>
-                                {stepBtn('+', row.id, 1, submitting)}
+                                {stepBtn('+', row.id, row.name, 1, submitting)}
                               </View>
                             </View>
                           );

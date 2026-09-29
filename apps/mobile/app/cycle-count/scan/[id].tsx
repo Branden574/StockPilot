@@ -108,6 +108,10 @@ function CycleCountScanScreenInner() {
     if (!user || !id) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
     void loadLines();
+    // loadLines is a plain function, new on every render (it reads only id
+    // and the router): listing it would load the lines on every render. The
+    // lines load once per signed-in user and count.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, id]);
 
 
@@ -235,10 +239,17 @@ function CycleCountScanScreenInner() {
             and the live count (the reason the bar exists) disappears. Cap the
             two buttons at the chrome ceiling; the tally itself keeps scaling. */}
         <View style={styles.topBar} pointerEvents="auto">
-          <Pressable style={styles.closeBtn} onPress={() => router.back()}>
-            <Text style={styles.closeText} numberOfLines={1} maxFontSizeMultiplier={CLOSE_CAP}>
-              Done
-            </Text>
+          <Pressable
+            style={styles.closeFrame}
+            onPress={() => router.back()}
+            accessibilityRole="button"
+            accessibilityLabel="Done"
+          >
+            <View style={styles.closeBtn}>
+              <Text style={styles.closeText} numberOfLines={1} maxFontSizeMultiplier={CLOSE_CAP}>
+                Done
+              </Text>
+            </View>
           </Pressable>
           <View style={styles.titleCol}>
             <Text style={styles.headerLabel} maxFontSizeMultiplier={TITLE_CAP}>
@@ -356,6 +367,11 @@ const styles = StyleSheet.create({
    * content is wider than this, so nothing about the bar changes.
    */
   titleCol: { flex: 1, minWidth: 120 },
+  // Done is a button in a frame at least 44pt tall around the same pill (it
+  // was the ~28pt pill). -8 top and bottom leaves a 28pt slot, under the
+  // title column's height, so the bar keeps its height; the frame reaches
+  // into the bar's 12pt padding.
+  closeFrame: { minHeight: 44, minWidth: 44, justifyContent: 'center', marginVertical: -8, flexShrink: 0 },
   closeBtn: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: radius.sm, backgroundColor: 'rgba(255,255,255,0.12)', flexShrink: 0 },
   closeText: { color: '#fff', fontWeight: '600', fontSize: 13 },
   headerLabel: { color: '#fff', fontSize: 12, opacity: 0.7 },

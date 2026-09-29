@@ -44,15 +44,17 @@ export function WarehouseFilterPicker({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        className="border-border bg-card flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12.5px] text-[var(--ed-ink-3)] shadow-[0_1px_0_rgba(14,15,13,0.03)] transition-colors hover:border-[var(--ed-line-strong)] disabled:opacity-60"
+        className="border-border bg-card flex h-8 min-w-0 max-w-full items-center gap-1.5 rounded-md border px-2.5 text-[12.5px] text-[var(--ed-ink-3)] shadow-[0_1px_0_rgba(14,15,13,0.03)] transition-colors hover:border-[var(--ed-line-strong)] disabled:opacity-60"
         disabled={pending}
         aria-label={`Filter by ${warehouseLabel.toLowerCase()}`}
       >
-        <Warehouse className="h-3 w-3" />
-        <span className="max-w-[160px] truncate">
+        <Warehouse className="h-3 w-3 shrink-0" />
+        {/* min-w-0: in a narrow top bar the name truncates rather than
+            pushing the buttons after it past the edge. */}
+        <span className="min-w-0 max-w-[160px] truncate">
           {active ? active.name : `All ${warehouseLabel.toLowerCase()}s`}
         </span>
-        <ChevronsUpDown className="h-3 w-3 opacity-60" />
+        <ChevronsUpDown className="h-3 w-3 shrink-0 opacity-60" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[220px]">
         <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">

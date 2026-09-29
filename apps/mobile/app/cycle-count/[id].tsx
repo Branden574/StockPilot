@@ -338,7 +338,7 @@ export default function CycleCountDetail() {
       notes: (ccRow.notes as string | null | undefined) ?? null,
     };
 
-    const fetchedLines = ((lineRows ?? []) as Array<Record<string, unknown>>).map((r) => {
+    const fetchedLines = ((lineRows ?? []) as Record<string, unknown>[]).map((r) => {
       const itm = r.item as
         | VariantItemRow
         | VariantItemRow[]
@@ -587,7 +587,12 @@ export default function CycleCountDetail() {
       <SafeAreaView style={styles.root} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
         <View style={styles.header}>
-          <Pressable onPress={leave} style={styles.backBtn}>
+          <Pressable
+            onPress={leave}
+            style={styles.backBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+          >
             <Text style={styles.backText}>← Back</Text>
           </Pressable>
         </View>
@@ -618,7 +623,12 @@ export default function CycleCountDetail() {
       <SafeAreaView style={styles.root} edges={['top']}>
         <Stack.Screen options={{ headerShown: false }} />
         <View style={styles.header}>
-          <Pressable onPress={leave} style={styles.backBtn}>
+          <Pressable
+            onPress={leave}
+            style={styles.backBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+          >
             <Text style={styles.backText}>← Back</Text>
           </Pressable>
         </View>
@@ -646,7 +656,12 @@ export default function CycleCountDetail() {
     <SafeAreaView style={styles.root} edges={['top']}>
       <Stack.Screen options={{ headerShown: false }} />
       <View style={styles.header}>
-        <Pressable onPress={leave} style={styles.backBtn}>
+        <Pressable
+          onPress={leave}
+          style={styles.backBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+        >
           <Text style={styles.backText}>← Back</Text>
         </Pressable>
         <View style={styles.headerRow}>
@@ -990,7 +1005,19 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.border,
   },
-  backBtn: { paddingVertical: space.xs },
+  // "← Back" is a button in a frame at least 44pt tall (it was the 25pt
+  // text), read "Back" by VoiceOver (it read the arrow too, with no button
+  // role). The frame takes the header's 8pt top padding and the 4pt gap to
+  // the title (marginBottom -4 cancels headerRow's marginTop), so the title
+  // row sits about 7pt lower than it did, and nothing overlaps.
+  backBtn: {
+    minHeight: 44,
+    minWidth: 44,
+    justifyContent: 'center',
+    alignSelf: 'flex-start',
+    marginTop: -space.sm,
+    marginBottom: -4,
+  },
   backText: { color: theme.primary, fontSize: 14 },
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, marginTop: 4 },
   title: { color: theme.text, fontSize: 22, fontWeight: '700' },

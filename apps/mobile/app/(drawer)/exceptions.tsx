@@ -266,9 +266,9 @@ export default function ExceptionsScreen() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <IconChip icon={ArrowLeft} onPress={goBack} />
-            <IconChip icon={Menu} onPress={openDrawer} />
+          <View style={styles.chips}>
+            <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
+            <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             {canSelect ? (
@@ -610,14 +610,20 @@ function OccurrenceRow({
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  // The chips' 44pt frames (IconChip minTap) are 3pt wider than the 38pt chip
+  // on every side: the chip group takes 3pt off the bar's left padding
+  // (marginLeft; the right padding stays 12 for Select and Check now), the gap
+  // between the chips 6pt (8 -> 2), the bar and the head 3pt off their tops,
+  // so the chips, the buttons and the title sit where they did.
   topbar: {
     paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingTop: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  head: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 4 },
+  chips: { flexDirection: 'row', alignItems: 'center', gap: 2, marginLeft: -3 },
+  head: { paddingHorizontal: 20, paddingTop: 9, paddingBottom: 4 },
   tabs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 20, paddingTop: 14 },
   list: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 32, gap: 10 },
   empty: { paddingTop: 36, paddingHorizontal: 24, alignItems: 'center' },

@@ -98,7 +98,16 @@ export default function ScheduleScreen() {
       onRefresh={refresh}
       trailing={
         canManageSchedule ? (
-          <IconChip icon={Plus} onPress={() => router.push('/schedule/new')} />
+          // marginRight -3: the chip's 44pt frame is 3pt wider each side, so
+          // the chip stays at the bar's right padding.
+          <View style={{ marginRight: -3 }}>
+            <IconChip
+              icon={Plus}
+              onPress={() => router.push('/schedule/new')}
+              accessibilityLabel="New event"
+              minTap
+            />
+          </View>
         ) : undefined
       }
       keyExtractor={(e) => e.id}

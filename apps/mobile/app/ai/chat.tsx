@@ -23,19 +23,19 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
-import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { Body, Display, Em, Mono } from '@/components/ui/text';
 import { API_BASE, orgHeader } from '@/lib/api';
 import { resizeForUpload } from '@/lib/image-resize';
 import { postMultipart } from '@/lib/multipart-upload';
 import { supabase } from '@/lib/supabase';
-import { ACCENT, FONT, RADIUS } from '@/lib/theme';
+import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 interface Turn {
   role: 'user' | 'assistant';
   content: string;
   /** Tool calls fired during this assistant turn. */
-  tools?: Array<{ name: string; ok: boolean }>;
+  tools?: { name: string; ok: boolean }[];
   /** True while tokens are still streaming in. */
   streaming?: boolean;
 }
@@ -113,7 +113,7 @@ export default function AIChat() {
       const lines = fullText.split('\n').map((l) => l.trim()).filter(Boolean);
 
       let assistantText = '';
-      const tools: Array<{ name: string; ok: boolean }> = [];
+      const tools: { name: string; ok: boolean }[] = [];
       let errorMessage: string | null = null;
 
       for (const line of lines) {
@@ -265,14 +265,15 @@ export default function AIChat() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={ChevronLeft} onPress={() => router.back()} />
+          <IconChip icon={ChevronLeft} onPress={() => router.back()} accessibilityLabel="Back" minTap />
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <Sparkles size={14} color={c.ink4} strokeWidth={1.4} />
             <Mono size={11} tracking={0.12} upper color={c.ink4}>
               AI · BETA
             </Mono>
           </View>
-          <View style={{ width: 38 }} />
+          {/* Balances the back chip's 44pt frame so the label stays centred. */}
+          <View style={{ width: 44 }} />
         </View>
       </SafeAreaView>
 
@@ -429,9 +430,14 @@ function Bubble({ turn }: { turn: Turn }) {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  // The back chip's 44pt frame (IconChip minTap) is 3pt wider than the 38pt
+  // chip on every side, so the bar takes 3pt off its padding (12, 8) and the
+  // spacer opposite is 44: the chip and the centred label sit where they did.
+  // (The conversation under the bar starts 3pt lower: it has no top padding
+  // to take the 3pt from.)
   topbar: {
-    paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingHorizontal: 9,
+    paddingTop: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',

@@ -110,7 +110,7 @@ function PhotosSection({
   onAdd,
   onRemove,
 }: {
-  photos: Array<{ uri: string; ext: string }>;
+  photos: { uri: string; ext: string }[];
   onAdd: (p: { uri: string; ext: string }) => void;
   onRemove: (idx: number) => void;
 }) {
@@ -302,7 +302,7 @@ export default function NewItem() {
 
   // Classification + location lookups
   const [categories, setCategories] = React.useState<
-    Array<{
+    {
       id: string;
       name: string;
       supports_sizes: boolean;
@@ -311,11 +311,11 @@ export default function NewItem() {
       /** 0294. Non-null is what makes a create SPORTS-shaped; null everywhere else. */
       sports_subcategory_key: string | null;
       default_unit_of_measure: string | null;
-    }>
+    }[]
   >([]);
-  const [suppliers, setSuppliers] = React.useState<Array<{ id: string; name: string }>>([]);
-  const [locations, setLocations] = React.useState<Array<{ id: string; name: string }>>([]);
-  const [charters, setCharters] = React.useState<Array<{ id: string; name: string }>>([]);
+  const [suppliers, setSuppliers] = React.useState<{ id: string; name: string }[]>([]);
+  const [locations, setLocations] = React.useState<{ id: string; name: string }[]>([]);
+  const [charters, setCharters] = React.useState<{ id: string; name: string }[]>([]);
   const [warehouses, setWarehouses] = React.useState<CachedWarehouse[]>([]);
 
   const [categoryId, setCategoryId] = React.useState<string | null>(null);
@@ -368,7 +368,7 @@ export default function NewItem() {
   // Photos staged in-memory. Each entry holds the local URI + extension;
   // they upload after the inventory_items row is created (the storage
   // path needs the new item id).
-  const [photos, setPhotos] = React.useState<Array<{ uri: string; ext: string }>>([]);
+  const [photos, setPhotos] = React.useState<{ uri: string; ext: string }[]>([]);
 
   const [busy, setBusy] = React.useState(false);
   // Measured height of the pinned Save footer. It grows with Dynamic Type
@@ -485,9 +485,9 @@ export default function NewItem() {
       setWarehouses(whs);
       if (whs.length > 0) setWarehouseId(whs[0]?.id ?? null);
       setCategories(cats);
-      setSuppliers((supsResp.data ?? []) as Array<{ id: string; name: string }>);
-      setLocations((locsResp.data ?? []) as Array<{ id: string; name: string }>);
-      setCharters((chtsResp.data ?? []) as Array<{ id: string; name: string }>);
+      setSuppliers((supsResp.data ?? []) as { id: string; name: string }[]);
+      setLocations((locsResp.data ?? []) as { id: string; name: string }[]);
+      setCharters((chtsResp.data ?? []) as { id: string; name: string }[]);
     })();
     return () => {
       cancelled = true;
@@ -575,7 +575,7 @@ export default function NewItem() {
           .eq('size_scale_id', scaleId)
           .order('sort_order', { ascending: true });
         if (cancelled) return;
-        const rows = (data ?? []) as Array<{ value: string; sort_order: number }>;
+        const rows = (data ?? []) as { value: string; sort_order: number }[];
         setSizeOptions(
           isFallback ? apparelFallbackSizeOptions(rows) : sizeOptionsFromScale(rows),
         );
@@ -843,9 +843,11 @@ export default function NewItem() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <IconChip icon={ArrowLeft} onPress={goBack} />
+          <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
           <Pressable
             onPress={() => router.push('/scan')}
+            accessibilityRole="button"
+            accessibilityLabel="Scan instead"
             hitSlop={8}
             style={({ pressed }) => [
               styles.scanShortcut,
@@ -1371,7 +1373,7 @@ function ChipPickerField({
   clearLabel,
 }: {
   label: string;
-  options: Array<{ id: string; name: string }>;
+  options: { id: string; name: string }[];
   valueId: string | null;
   onChange: (id: string | null) => void;
   emptyText?: string;
@@ -1439,9 +1441,14 @@ function ChipPickerField({
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  // The back chip's 44pt frame (IconChip minTap) is 3pt wider than the 38pt
+  // chip on every side, so the bar takes 3pt off its left and top padding
+  // (12, 8; the right stays 12 for Scan instead) and the head 3pt off its
+  // top: the chip, the pill and the title sit where they did.
   topbar: {
-    paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingLeft: 9,
+    paddingRight: 12,
+    paddingTop: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -1457,7 +1464,7 @@ const styles = StyleSheet.create({
   },
   head: {
     paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingTop: 9,
     paddingBottom: 4,
   },
   fieldHead: {

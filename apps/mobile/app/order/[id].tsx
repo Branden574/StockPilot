@@ -17,6 +17,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
@@ -123,6 +124,7 @@ import {
   withHoldNotice,
 } from '@/lib/order-hold';
 import { readErrorMessage } from '@/lib/id-batches';
+import { orderItemsEyebrow } from '@/lib/order-items-eyebrow';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   BLOCKED_HEADLINE as DR_BLOCKED_HEADLINE,
@@ -1968,6 +1970,8 @@ export default function OrderDetail() {
               if (router.canGoBack()) router.back();
               else router.replace('/');
             }}
+            accessibilityLabel="Back"
+            minTap
           />
         </View>
       </SafeAreaView>
@@ -1998,11 +2002,19 @@ export default function OrderDetail() {
           <Display size={18}>Order not <Em>found.</Em></Display>
         </View>
       ) : (
+        // A focused field low on the screen (a pick quantity) sat under the
+        // iPad's docked keyboard: the same wrapper as the form screens keeps
+        // the list above it. (The list inside keeps its indentation, so this
+        // file's other open branches merge cleanly.)
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={{ flex: 1 }}
+        >
         <ScrollView
           contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 60, gap: 16 }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
         >
-          <View style={{ paddingTop: 4 }}>
+          <View style={{ paddingTop: 1 }}>
             <Eyebrow>{`ORDER${order.orderNumber ? ` ${formatOrderNumber(order.orderNumber)}` : ''} · ${order.status.replace(/_/g, ' ').toUpperCase()}`}</Eyebrow>
             <Display size={30} style={{ marginTop: 10 }}>
               {order.requester ?? 'Order'}
@@ -2123,9 +2135,7 @@ export default function OrderDetail() {
 
           {order.lines.length > 0 || canAddItems ? (
             <View style={{ gap: 10 }}>
-              <Eyebrow>
-                {`ITEMS · ${order.lines.length} LINE${order.lines.length === 1 ? '' : 'S'} · ${totalRequested} UNITS`}
-              </Eyebrow>
+              <Eyebrow>{orderItemsEyebrow(order.lines.length, totalRequested)}</Eyebrow>
               {/* Visible to EVERY viewer, not just whoever can add items — the
                   picker holding a printed slip is the one who needs to know.
                   Suppressed once the order has shipped or died: a reprint is
@@ -2943,6 +2953,7 @@ export default function OrderDetail() {
             )}
           </View>
         </ScrollView>
+        </KeyboardAvoidingView>
       )}
 
       <Modal visible={sigOpen} transparent animationType="fade" onRequestClose={() => setSigOpen(false)}>
@@ -3555,7 +3566,10 @@ export default function OrderDetail() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  topbar: { paddingHorizontal: 12, paddingTop: 8, flexDirection: 'row' },
+  // The back chip's 44pt frame (IconChip minTap) is 3pt wider than the 38pt
+  // chip on every side: the bar takes 3pt off its padding (12, 8) and the
+  // order's heading 3pt off its top (4 -> 1), so both sit where they did.
+  topbar: { paddingHorizontal: 9, paddingTop: 5, flexDirection: 'row' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
   addBtn: {
     flexDirection: 'row',

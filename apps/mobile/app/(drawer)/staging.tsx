@@ -333,6 +333,8 @@ export default function StagingScreen() {
                   <Pressable
                     key={opt.value}
                     onPress={() => setFilter(opt.value)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
                     style={{
                       paddingHorizontal: 14,
                       paddingVertical: 8,

@@ -420,13 +420,17 @@ function ReportRow({
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  // The menu chip's 44pt frame (IconChip minTap) is 3pt wider than the 38pt
+  // chip on every side, so the bar takes 3pt off its padding (12, 8) and the
+  // head 3pt off its top: the chip and the title sit where every other
+  // screen's do (the frame was added without the offset, 2026-09-28).
   topbar: {
-    paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingHorizontal: 9,
+    paddingTop: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  head: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 4 },
+  head: { paddingHorizontal: 20, paddingTop: 9, paddingBottom: 4 },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',

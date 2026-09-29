@@ -985,7 +985,11 @@ export default async function OrderDetailPage({
           ← Back to orders
         </Link>
         <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
-          <div className="min-w-0 flex-1">
+          {/* basis-72: the title column asks for 18rem before the actions may
+              share its line. With flex-1 alone (a 0 basis) the actions never
+              wrapped and the title got what they left: "Or..." at 390 px,
+              the order's number hidden. Now they wrap under it instead. */}
+          <div className="min-w-0 flex-1 basis-72" data-testid="order-title-column">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="truncate text-2xl font-semibold tracking-tight">
                 Order request{' '}

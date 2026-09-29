@@ -336,7 +336,11 @@ export default function RentalsScreen() {
       onRefresh={refresh}
       trailing={
         canCreate ? (
-          <IconChip icon={Plus} onPress={() => router.push('/rentals/new')} accessibilityLabel="New rental" />
+          // marginRight -3: the chip's 44pt frame is 3pt wider each side, so
+          // the chip stays at the bar's right padding.
+          <View style={{ marginRight: -3 }}>
+            <IconChip icon={Plus} onPress={() => router.push('/rentals/new')} accessibilityLabel="New rental" minTap />
+          </View>
         ) : undefined
       }
       keyExtractor={(r) => r.id}

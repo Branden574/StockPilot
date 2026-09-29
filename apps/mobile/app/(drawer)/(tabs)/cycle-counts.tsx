@@ -540,19 +540,23 @@ export default function CycleCounts() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
             <IconChip
               icon={ArrowLeft}
               onPress={() => {
                 if (router.canGoBack()) router.back();
                 else router.replace('/');
               }}
+              accessibilityLabel="Back"
+              minTap
             />
-            <IconChip icon={Menu} onPress={openDrawer} />
+            <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
           </View>
           {canStartCount ? (
             <IconChip
               icon={Plus}
+              accessibilityLabel="Start a cycle count"
+              minTap
               onPress={() =>
                 Alert.alert('Start a cycle count', 'Pick what you want to count, then tap Select.', [
                   { text: 'Pick items', onPress: () => router.push('/inventory') },
@@ -796,15 +800,18 @@ function CountCard({
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  // The chips' 44pt frames (IconChip minTap) are 3pt wider than the 38pt chip
+  // on every side, so the bar takes 3pt off its padding (12, 8) and what sits
+  // under it 3pt off its top: the chips and the title sit where they did (gap between chips 8 -> 2).
   topbar: {
-    paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingHorizontal: 9,
+    paddingTop: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
   head: {
     paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingTop: 9,
     paddingBottom: 4,
   },
   offlineBanner: {

@@ -344,7 +344,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                       accessibilityRole="button"
                       accessibilityLabel="Exit tour"
                       onPress={() => finish('dismissed')}
-                      hitSlop={10}
+                      style={styles.closeFrame}
                     >
                       <X size={15} color={c.ink4} />
                     </Pressable>
@@ -454,6 +454,16 @@ const styles = StyleSheet.create({
   // Head and actions are PINNED (flexShrink: 0) either side of the scroll
   // region, so the X and Next/Done stay on screen at every text size.
   head: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
+  // The X's 44pt frame (a real target and VoiceOver outline, not hitSlop
+  // around a 15pt glyph). The negative margin, (44 - 15) / 2, hands the
+  // frame's extra size back, so the head lays out around a 15pt X as before.
+  closeFrame: {
+    minWidth: 44,
+    minHeight: 44,
+    margin: -14.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   title: { flex: 1, paddingRight: 8 },
   // The only child that yields when the card hits its maxHeight.
   scroll: { flexShrink: 1 },

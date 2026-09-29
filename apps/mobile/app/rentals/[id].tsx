@@ -157,7 +157,7 @@ export default function RentalDetailScreen() {
     return (
       <View style={[styles.root, { backgroundColor: c.paper }]}>
         <TopBar onBack={goBack} />
-        <ActivityIndicator color={c.ink4} style={{ marginTop: 40 }} />
+        <ActivityIndicator color={c.ink4} style={{ marginTop: 37 }} />
       </View>
     );
   }
@@ -342,7 +342,7 @@ function TopBar({ onBack }: { onBack: () => void }) {
   return (
     <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
       <View style={styles.topbar}>
-        <IconChip icon={ChevronLeft} onPress={onBack} accessibilityLabel="Back" />
+        <IconChip icon={ChevronLeft} onPress={onBack} accessibilityLabel="Back" minTap />
       </View>
     </SafeAreaView>
   );
@@ -377,7 +377,7 @@ function Gate({
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <TopBar onBack={onBack} />
-      <View style={{ paddingHorizontal: 20, marginTop: 24 }}>
+      <View style={{ paddingHorizontal: 20, marginTop: 21 }}>
         <Card padding={16}>
           <Body size={14.5}>{children}</Body>
           {onRetry ? (
@@ -410,14 +410,18 @@ function Gate({
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  // The back chip's 44pt frame (IconChip minTap) is 3pt wider than the 38pt
+  // chip on every side, so the bar takes 3pt off its padding (12, 8) and what
+  // sits under it 3pt off its top (the body 8 -> 5, the loading spinner
+  // 40 -> 37, the gate card 24 -> 21): everything sits where it did.
   topbar: {
-    paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingHorizontal: 9,
+    paddingTop: 5,
     flexDirection: 'row',
     alignItems: 'center',
   },
   head: { paddingTop: 4, paddingBottom: 16 },
-  body: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 40 },
+  body: { paddingHorizontal: 20, paddingTop: 5, paddingBottom: 40 },
   emailRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',

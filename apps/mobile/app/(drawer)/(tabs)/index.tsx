@@ -12,6 +12,7 @@ import {
 import * as React from 'react';
 import {
   ActivityIndicator,
+  AppState,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -38,6 +39,7 @@ import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
 import { useAuth } from '@/lib/auth-context';
 import { HOME_BUNDLES_SUBTITLE } from '@/lib/cta-gating';
+import { homeGreeting, nextDayPartChange } from '@/lib/greeting';
 import { useProfile } from '@/lib/use-profile';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
@@ -98,6 +100,34 @@ export default function Home() {
   const [refreshing, setRefreshing] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [unread, setUnread] = React.useState(0);
+  // The phone's clock, for the greeting and the date line. Home stays mounted
+  // behind the other tabs, so a clock read once would keep greeting by the
+  // morning all day: it is read again whenever Home comes back into
+  // focus, whenever the app comes back to the foreground, on Refresh, and,
+  // while Home is open, at noon, 5 PM and midnight (a Home screen left open,
+  // such as a shared tablet that never sleeps, keeps up). The timer stops
+  // when Home loses focus; in the background iOS pauses it, and coming back
+  // reads the clock anyway.
+  const [now, setNow] = React.useState(() => new Date());
+  useFocusEffect(
+    React.useCallback(() => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const readClock = () => {
+        const current = new Date();
+        setNow(current);
+        // A second past the change, so the clock read is on the far side of it.
+        timer = setTimeout(readClock, nextDayPartChange(current).getTime() - current.getTime() + 1000);
+      };
+      readClock();
+      return () => clearTimeout(timer);
+    }, []),
+  );
+  React.useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') setNow(new Date());
+    });
+    return () => sub.remove();
+  }, []);
 
   // Unread-notification count for the header bell badge. A cheap head-count
   // query (partial index notifications_user_unread_idx). Kept separate from the
@@ -242,12 +272,12 @@ export default function Home() {
   }, [load]);
 
   async function onRefresh() {
+    setNow(new Date());
     setRefreshing(true);
     await Promise.all([load(), refreshUnread()]);
     setRefreshing(false);
   }
 
-  const now = new Date();
   const dateLabel = `TODAY · ${SHORT_DAY[now.getDay()].toUpperCase()} ${SHORT_MONTH[now.getMonth()].toUpperCase()} ${now.getDate()}`;
   const firstName = (profile.fullName ?? '').split(/\s+/)[0]
     || (user?.email ? user.email.split('@')[0] : 'there');
@@ -264,19 +294,29 @@ export default function Home() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <IconChip icon={Menu} onPress={openDrawer} />
-            <Avatar size={38} onPress={() => router.push('/settings')} />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+            <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
+            <Avatar
+              size={38}
+              onPress={() => router.push('/settings')}
+              accessibilityLabel="Account settings"
+            />
           </View>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <IconChip icon={Bell} badge={unread} onPress={() => router.push('/notifications')} />
-            <IconChip icon={RefreshCcw} onPress={onRefresh} />
+          <View style={{ flexDirection: 'row', gap: 2 }}>
+            <IconChip
+              icon={Bell}
+              badge={unread}
+              onPress={() => router.push('/notifications')}
+              accessibilityLabel={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'}
+              minTap
+            />
+            <IconChip icon={RefreshCcw} onPress={onRefresh} accessibilityLabel="Refresh" minTap />
           </View>
         </View>
         <View style={styles.head}>
           <Eyebrow>{dateLabel}</Eyebrow>
           <Display size={32} style={{ marginTop: 12 }}>
-            Good morning,{'\n'}
+            {homeGreeting(now)}{'\n'}
             <Em>{firstName}.</Em>
           </Display>
           <Mono size={13.5} tracking={0.02} color={c.ink3} style={{ marginTop: 10 }}>
@@ -533,16 +573,21 @@ const styles = StyleSheet.create({
     height: 5,
     borderRadius: 3,
   },
+  // The chips' 44pt frames (IconChip minTap) and the avatar's (Avatar with
+  // onPress) are 3pt wider than the 38pt chip or picture on every side, so
+  // the bar takes 3pt off its padding (12, 8), the gap between two frames 6pt
+  // (8 -> 2, the menu chip to the avatar too) and the head 3pt off its top:
+  // the chips, the avatar and the greeting sit where they did.
   topbar: {
-    paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingHorizontal: 9,
+    paddingTop: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
   head: {
     paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingTop: 9,
     paddingBottom: 16,
   },
   statGrid: {

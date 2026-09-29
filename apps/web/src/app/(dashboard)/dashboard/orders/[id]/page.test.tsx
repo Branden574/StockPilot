@@ -1914,3 +1914,24 @@ describe('orders/[id]: the Dates card prints the needed-by in the org zone', () 
     expect(getCachedOrgTimezoneMock).not.toHaveBeenCalled();
   });
 });
+
+// Walk D3 (found on the F2-3 walk, the same on main): at 390 px the title read
+// "Or..." (the h1 was 58 px wide and needed 284), and "Order reques..." at 768
+// with the sidebar, so the order's number was hidden. The title column was
+// flex-1 with a 0 basis, so the actions never wrapped: they kept their width
+// and the title took what was left. jsdom has no layout; the browser walk
+// measures the widths, this pins the rule that gives them.
+describe('orders/[id]: the title is never squeezed out by the actions', () => {
+  it('the title column asks for 18rem before the actions share its line, so on a narrow screen they wrap under it', async () => {
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ order_number: 18 }) }));
+    await renderPage();
+    const h1 = screen.getByRole('heading', { level: 1 });
+    expect(h1).toHaveTextContent('Order request SO-000018');
+    const column = h1.closest('[data-testid="order-title-column"]');
+    expect(column).not.toBeNull();
+    expect(column!.className.split(/\s+/)).toEqual(expect.arrayContaining(['min-w-0', 'flex-1', 'basis-72']));
+    // The actions are the column's sibling on the same wrapping row.
+    const row = column!.parentElement!;
+    expect(row.className.split(/\s+/)).toEqual(expect.arrayContaining(['flex', 'flex-wrap']));
+  });
+});

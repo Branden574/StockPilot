@@ -87,12 +87,12 @@ export function DataListScreen<T>({
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View style={styles.chips}>
             {/* Icon-only: without a label VoiceOver read each as an unnamed
                 element (re-walk 2026-09-26, on every list screen that uses
                 this header). A label also makes IconChip a button. */}
-            <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" />
-            <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Menu" />
+            <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
+            <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
           </View>
           {trailing}
         </View>
@@ -155,16 +155,23 @@ export function DataListScreen<T>({
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  // The chips' 44pt frames (IconChip minTap) are 3pt wider than the 38pt chip
+  // on every side: the chip group takes 3pt off the bar's left padding
+  // (marginLeft), the gap between the chips 6pt (8 -> 2), the bar 3pt off its
+  // top and the head 3pt off its top, so the chips and the title sit where
+  // they did. The bar's right padding stays 12 for the callers' `trailing`
+  // (a pill, a tour button, or an IconChip, which takes its own 3pt).
   topbar: {
     paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingTop: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
+  chips: { flexDirection: 'row', alignItems: 'center', gap: 2, marginLeft: -3 },
   head: {
     paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingTop: 9,
     paddingBottom: 4,
   },
   list: {

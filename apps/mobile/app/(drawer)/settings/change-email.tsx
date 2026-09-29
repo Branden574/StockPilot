@@ -214,6 +214,8 @@ export default function ChangeEmailScreen() {
           <IconChip
             icon={ArrowLeft}
             onPress={() => (router.canGoBack() ? router.back() : router.replace('/settings' as never))}
+            accessibilityLabel="Back"
+            minTap
           />
         </View>
         <View style={styles.head}>
@@ -355,13 +357,16 @@ export default function ChangeEmailScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  // The chip's 44pt frame (IconChip minTap) is 3pt wider than the 38pt chip on
+  // every side, so the bar takes 3pt off its padding (20, 8) and the head 3pt
+  // off its top (18): the chip and the title sit where they did.
   topbar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 8,
+    paddingHorizontal: 17,
+    paddingTop: 5,
   },
-  head: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 18 },
+  head: { paddingHorizontal: 20, paddingTop: 15, paddingBottom: 18 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
 });

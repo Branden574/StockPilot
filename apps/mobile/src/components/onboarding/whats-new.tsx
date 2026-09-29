@@ -206,7 +206,7 @@ export function WhatsNew() {
                 accessibilityRole="button"
                 accessibilityLabel="Dismiss what's new"
                 onPress={() => close('dismissed')}
-                hitSlop={10}
+                style={styles.closeFrame}
               >
                 <X size={15} color={c.ink4} />
               </Pressable>
@@ -285,6 +285,16 @@ const styles = StyleSheet.create({
   // Head and actions are PINNED either side of the scroll region, so the X and
   // Done/Next stay reachable however long the announcement is.
   head: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0 },
+  // The X's 44pt frame (a real target and VoiceOver outline, not hitSlop
+  // around a 15pt glyph). The negative margin, (44 - 15) / 2, hands the
+  // frame's extra size back, so the head lays out around a 15pt X as before.
+  closeFrame: {
+    minWidth: 44,
+    minHeight: 44,
+    margin: -14.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   eyebrow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 },
   eyebrowLabel: { flexShrink: 1, minWidth: 0 },
   scroll: { flexShrink: 1 },
