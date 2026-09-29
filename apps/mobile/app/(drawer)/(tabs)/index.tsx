@@ -39,7 +39,7 @@ import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
 import { useAuth } from '@/lib/auth-context';
 import { HOME_BUNDLES_SUBTITLE } from '@/lib/cta-gating';
-import { homeGreeting } from '@/lib/greeting';
+import { homeGreeting, nextDayPartChange } from '@/lib/greeting';
 import { useProfile } from '@/lib/use-profile';
 import { supabase } from '@/lib/supabase';
 import { ACCENT, FONT } from '@/lib/theme';
@@ -103,11 +103,23 @@ export default function Home() {
   // The phone's clock, for the greeting and the date line. Home stays mounted
   // behind the other tabs, so a clock read once would keep greeting by the
   // morning all day: it is read again whenever Home comes back into
-  // focus and whenever the app comes back to the foreground.
+  // focus, whenever the app comes back to the foreground, on Refresh, and,
+  // while Home is open, at noon, 5 PM and midnight (a Home screen left open,
+  // such as a shared tablet that never sleeps, keeps up). The timer stops
+  // when Home loses focus; in the background iOS pauses it, and coming back
+  // reads the clock anyway.
   const [now, setNow] = React.useState(() => new Date());
   useFocusEffect(
     React.useCallback(() => {
-      setNow(new Date());
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const readClock = () => {
+        const current = new Date();
+        setNow(current);
+        // A second past the change, so the clock read is on the far side of it.
+        timer = setTimeout(readClock, nextDayPartChange(current).getTime() - current.getTime() + 1000);
+      };
+      readClock();
+      return () => clearTimeout(timer);
     }, []),
   );
   React.useEffect(() => {
@@ -260,6 +272,7 @@ export default function Home() {
   }, [load]);
 
   async function onRefresh() {
+    setNow(new Date());
     setRefreshing(true);
     await Promise.all([load(), refreshUnread()]);
     setRefreshing(false);

@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { dayPartAt, homeGreeting } from './greeting';
+import { dayPartAt, homeGreeting, nextDayPartChange } from './greeting';
 
 /**
  * THE HOME SCREEN'S GREETING (walk 2026-09-28/29).
@@ -45,6 +45,38 @@ describe('homeGreeting: the words Home shows', () => {
   });
 });
 
+describe('nextDayPartChange: when the greeting or the date line next changes', () => {
+  // Noon, 5 PM and midnight (the greeting at the first two, the date line at
+  // midnight, when the greeting also turns to morning).
+  it.each([
+    [[0, 0, 0], [2026, 8, 29, 12]],
+    [[9, 30, 0], [2026, 8, 29, 12]],
+    [[11, 59, 59], [2026, 8, 29, 12]],
+    [[12, 0, 0], [2026, 8, 29, 17]],
+    [[16, 59, 59], [2026, 8, 29, 17]],
+    [[17, 0, 0], [2026, 8, 30, 0]],
+    [[23, 59, 59], [2026, 8, 30, 0]],
+  ] as const)('from %j the next change is %j', ([h, m, sec], [y, mo, d, nh]) => {
+    const from = new Date(2026, 8, 29, h, m, sec, 0);
+    expect(nextDayPartChange(from).getTime()).toBe(new Date(y, mo, d, nh, 0, 0, 0).getTime());
+    expect(nextDayPartChange(from).getTime()).toBeGreaterThan(from.getTime());
+  });
+
+  it('crosses the end of a month and a year', () => {
+    expect(nextDayPartChange(new Date(2026, 11, 31, 20, 0)).getTime()).toBe(new Date(2027, 0, 1, 0, 0).getTime());
+  });
+
+  it('the part of the day at the change is the next one', () => {
+    for (const from of [at(8, 0), at(13, 0), at(21, 0)]) {
+      const next = nextDayPartChange(from);
+      const after = new Date(next.getTime() + 1);
+      const before = new Date(next.getTime() - 1);
+      const changed = dayPartAt(after) !== dayPartAt(before) || after.getDate() !== before.getDate();
+      expect(changed).toBe(true);
+    }
+  });
+});
+
 describe('Home reads the clock, and reads it again when it comes back', () => {
   const src = readFileSync(
     path.resolve(__dirname, '../../app/(drawer)/(tabs)/index.tsx'),
@@ -62,9 +94,20 @@ describe('Home reads the clock, and reads it again when it comes back', () => {
   // refresh removed.
   it('the clock is read again on focus and when the app comes back to the foreground', () => {
     expect(src).toContain('const [now, setNow] = React.useState(() => new Date());');
-    expect(src).toMatch(/useFocusEffect\(\s*React\.useCallback\(\(\) => \{\s*setNow\(new Date\(\)\);/);
+    expect(src).toMatch(/useFocusEffect\(\s*React\.useCallback\(\(\) => \{[\s\S]{0,200}?const readClock = \(\) => \{\s*const current = new Date\(\);\s*setNow\(current\);/);
     expect(src).toMatch(/AppState\.addEventListener\('change', \(state\) => \{\s*if \(state === 'active'\) setNow\(new Date\(\)\);/);
     // The date line reads the same clock as the greeting.
     expect(src).not.toMatch(/const now = new Date\(\);/);
+  });
+
+  // Review of 2026-09-29: a Home screen left open (a shared tablet that never
+  // goes to the background) kept "Good morning" and yesterday's date, even
+  // after a pull to refresh. Mutation caught: the timer or its clean-up
+  // dropped, or Refresh not reading the clock.
+  it('while Home is open the clock is read again at noon, 5 PM and midnight, and on Refresh', () => {
+    const focus = /useFocusEffect\(\s*React\.useCallback\(\(\) => \{([\s\S]*?)\}, \[\]\),\s*\);/.exec(src)?.[1] ?? '';
+    expect(focus).toMatch(/timer = setTimeout\(readClock, nextDayPartChange\(current\)\.getTime\(\) - current\.getTime\(\) \+ \d+\);/);
+    expect(focus).toMatch(/readClock\(\);\s*return \(\) => clearTimeout\(timer\);/);
+    expect(src).toMatch(/async function onRefresh\(\) \{\s*setNow\(new Date\(\)\);/);
   });
 });

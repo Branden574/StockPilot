@@ -26,3 +26,21 @@ export function dayPartAt(date: Date): DayPart {
 export function homeGreeting(date: Date): string {
   return `Good ${dayPartAt(date)},`;
 }
+
+/**
+ * The next moment Home's words change: noon and 5 PM (the greeting) and
+ * midnight (the date line, and the greeting back to morning). Home reads the
+ * clock again then, so a Home screen left open all day, such as a shared
+ * tablet that never goes to the background, keeps up.
+ */
+export function nextDayPartChange(date: Date): Date {
+  const next = new Date(date);
+  const hour = date.getHours();
+  if (hour < 12) next.setHours(12, 0, 0, 0);
+  else if (hour < 17) next.setHours(17, 0, 0, 0);
+  else {
+    next.setDate(next.getDate() + 1);
+    next.setHours(0, 0, 0, 0);
+  }
+  return next;
+}
