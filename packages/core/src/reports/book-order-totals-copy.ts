@@ -15,16 +15,24 @@ import type { OrderStatusKey } from '../customization/order-status';
 import { VERIFICATION_SESSION_ENDED_COPY } from '../warehouse/verification';
 
 import {
+  BOOK_REPORT_FILTER_KEYS,
   BOOK_REPORT_PDF_COVER_CAP,
   BOOK_REPORT_STATUS_GROUP_KEYS,
   BOOK_REPORT_STATUS_GROUPS,
+  bookReportFilterIsSet,
   bookReportUnitLabel,
+  bookReportWithoutFilter,
   formatReportDate,
   formatReportDateRange,
   formatReportDateTime,
   formatReportQuantity,
   formatReportTime,
+  isDefaultStatusGroups,
   type BookReportCategoryEcho,
+  type BookReportCharterEcho,
+  type BookReportCharterFilters,
+  type BookReportFilterKey,
+  type BookReportQuery,
   type BookReportRange,
   type BookReportRangeEcho,
   type BookReportSort,
@@ -32,6 +40,7 @@ import {
   type BookReportWarehouseEcho,
   type BookReportWarehouseSource,
 } from './book-order-totals';
+import { CALENDAR_COPY } from './report-calendar';
 
 export const BOOK_REPORT_TITLE = 'Book Order Totals';
 export const BOOK_REPORT_CARD_DESCRIPTION =
@@ -99,6 +108,8 @@ export function unresolvedUnitsNote(
 
 export const BOOK_REPORT_RANGE_LABELS: Readonly<Record<BookReportRange, string>> = {
   all: 'All time',
+  today: 'Today',
+  week: 'This week',
   month: 'This month',
   '30d': 'Last 30 days',
   '90d': 'Last 90 days',
@@ -113,25 +124,39 @@ export const BOOK_REPORT_SORT_LABELS: Readonly<Record<BookReportSort, string>> =
   latest: 'Latest order',
 };
 
+/** The range as a label, without a lead: 'All time (May 12, 2026 – Sep 25,
+ *  2026)', 'Today (Sep 29, 2026)', 'This week (Sep 27 – Sep 29, 2026)',
+ *  'Sep 1 – Sep 30, 2026' (custom). Every date is the org-local string SQL
+ *  returned (the resolved days of a preset), never the device's clock. Used
+ *  by the Showing block and the chips. */
+export function bookReportRangeLabel(
+  range: Pick<BookReportRangeEcho, 'key' | 'from' | 'to'>,
+  summary?: { firstOrderDate: string | null; lastOrderDate: string | null } | null,
+): string {
+  if (range.key === 'all') {
+    const first = summary?.firstOrderDate ?? null;
+    const last = summary?.lastOrderDate ?? null;
+    if (first && last) {
+      return `${BOOK_REPORT_RANGE_LABELS.all} (${formatReportDate(first)} – ${formatReportDate(last)})`;
+    }
+    return BOOK_REPORT_RANGE_LABELS.all;
+  }
+  const dates = formatReportDateRange(range.from, range.to);
+  if (range.key === 'custom') return dates || BOOK_REPORT_RANGE_LABELS.custom;
+  return dates
+    ? `${BOOK_REPORT_RANGE_LABELS[range.key]} (${dates})`
+    : BOOK_REPORT_RANGE_LABELS[range.key];
+}
+
 /** 'Orders placed during: All time (May 12, 2026 – Sep 25, 2026)',
  *  'Orders placed during: Last 30 days (Aug 30 – Sep 28, 2026)',
  *  'Orders placed during: Sep 1 – Sep 28, 2026' (custom). Every date is the
  *  org-local string SQL returned. */
 export function bookReportRangeLine(
   range: Pick<BookReportRangeEcho, 'key' | 'from' | 'to'>,
-  summary?: { firstOrderDate: string | null; lastOrderDate: string | null },
+  summary?: { firstOrderDate: string | null; lastOrderDate: string | null } | null,
 ): string {
-  if (range.key === 'all') {
-    const first = summary?.firstOrderDate ?? null;
-    const last = summary?.lastOrderDate ?? null;
-    if (first && last) {
-      return `Orders placed during: All time (${formatReportDate(first)} – ${formatReportDate(last)})`;
-    }
-    return 'Orders placed during: All time';
-  }
-  const dates = formatReportDateRange(range.from, range.to);
-  if (range.key === 'custom') return `Orders placed during: ${dates}`;
-  return `Orders placed during: ${BOOK_REPORT_RANGE_LABELS[range.key]} (${dates})`;
+  return `Orders placed during: ${bookReportRangeLabel(range, summary)}`;
 }
 
 /** 'Times are in America/Los_Angeles.' plus, when the organization's zone
@@ -244,6 +269,155 @@ export function bookReportSearchLine(q: string | null | undefined): string | nul
   return s ? `Search: "${s}"` : null;
 }
 
+// ── The ORDER's charter (0382) ──────────────────────────────────────────────
+
+export const BOOK_REPORT_ALL_CHARTERS = 'All charters';
+export const BOOK_REPORT_NO_CHARTER = 'No charter';
+/** Under "No charter" in the Charter select and sheet. */
+export const BOOK_REPORT_NO_CHARTER_HINT = 'Pickup orders and orders placed without a charter.';
+/** Under the Charter select: which charter this is. */
+export const BOOK_REPORT_CHARTER_HINT = 'The charter each order was placed for.';
+/** The one refusal for a charter id the caller may not use, whatever the
+ *  cause (unknown, another organization's, outside their scope; plan D3). */
+export const BOOK_REPORT_INVALID_CHARTER = 'That charter is not one you can see.';
+
+/** Shown for a charter chosen with one warehouse in effect (chosen or from
+ *  the warehouse view) when nothing matched. */
+export const BOOK_REPORT_EMPTY_CHARTER_WAREHOUSE =
+  "This charter's orders may be at another warehouse. Choose All warehouses you can see to include them.";
+
+/** The order page's way back to the report it was opened from (plan D17). */
+export const BOOK_REPORT_BACK_TO_REPORT = 'Back to Book Order Totals';
+
+/** A charter as a filter option: 'Marconi · MAR-01', 'Marconi' (no code, or
+ *  a code that only repeats the name), 'Marconi · MAR-01 (archived)'. */
+export function bookReportCharterOptionLabel(c: {
+  name: string | null;
+  code?: string | null;
+  status?: string | null;
+}): string {
+  const name = (c.name ?? '').trim() || 'Unnamed charter';
+  const code = (c.code ?? '').trim();
+  const withCode = code && code.toLowerCase() !== name.toLowerCase() ? `${name} · ${code}` : name;
+  return `${withCode}${warehouseStatusSuffix(c.status)}`;
+}
+
+/**
+ * Labels for a whole list of charters, by id (the web select, the phone
+ * sheet, the by-charter list). Labels that would read the same (the same
+ * name with no code; codes are unique within an organization) each get the
+ * start of their id: 'Alder (id 1a2b3c4d)', so two choices never look alike.
+ */
+export function bookReportCharterOptionLabels(
+  charters: readonly {
+    id: string;
+    name: string | null;
+    code?: string | null;
+    status?: string | null;
+  }[],
+): Map<string, string> {
+  const base = charters.map((c) => ({ id: c.id, label: bookReportCharterOptionLabel(c) }));
+  const byLabel = new Map<string, string[]>();
+  for (const b of base) {
+    const k = b.label.toLowerCase();
+    const ids = byLabel.get(k) ?? [];
+    if (!ids.includes(b.id)) ids.push(b.id);
+    byLabel.set(k, ids);
+  }
+  const out = new Map<string, string>();
+  for (const b of base) {
+    const ids = byLabel.get(b.label.toLowerCase())!;
+    if (ids.length < 2) {
+      out.set(b.id, b.label);
+      continue;
+    }
+    // The first 8 characters, or the whole id if two of them share those.
+    const short = b.id.slice(0, 8);
+    const clash = ids.some((other) => other !== b.id && other.slice(0, 8) === short);
+    out.set(b.id, `${b.label} (id ${clash ? b.id : short})`);
+  }
+  return out;
+}
+
+/** The charter an answer is for, as a value: 'All charters', 'Marconi ·
+ *  MAR-01' or 'No charter'. `labels` (from bookReportCharterOptionLabels)
+ *  wins when it names the charter, so a tie-broken label reads the same
+ *  everywhere. */
+export function bookReportCharterLabel(
+  echo: BookReportCharterEcho | null | undefined,
+  noCharter: boolean | null | undefined,
+  labels?: ReadonlyMap<string, string> | null,
+): string {
+  if (echo) return labels?.get(echo.id) ?? bookReportCharterOptionLabel(echo);
+  if (noCharter === true) return BOOK_REPORT_NO_CHARTER;
+  return BOOK_REPORT_ALL_CHARTERS;
+}
+
+/** The scope line: 'Charter: All charters', 'Charter: Marconi · MAR-01',
+ *  'Charter: No charter (pickup orders and orders placed without a
+ *  charter)'. */
+export function bookReportCharterLine(
+  echo: BookReportCharterEcho | null | undefined,
+  noCharter: boolean | null | undefined,
+  labels?: ReadonlyMap<string, string> | null,
+): string {
+  if (!echo && noCharter === true) {
+    return `Charter: ${BOOK_REPORT_NO_CHARTER} (pickup orders and orders placed without a charter)`;
+  }
+  return `Charter: ${bookReportCharterLabel(echo, noCharter, labels)}`;
+}
+
+/** A drill-down order's charter: 'Marconi · MAR-01', 'No charter', or null
+ *  when the answer does not carry it (a server before 0382). */
+export function bookReportOrderCharterText(row: {
+  charterId?: string | null;
+  charterName?: string | null;
+  charterCode?: string | null;
+}): string | null {
+  if (row.charterId === undefined) return null;
+  if (row.charterId === null) return BOOK_REPORT_NO_CHARTER;
+  return bookReportCharterOptionLabel({ name: row.charterName ?? null, code: row.charterCode });
+}
+
+// ── "Books ordered by charter" (page only, All charters) ───────────────────
+
+export const BOOK_REPORT_BY_CHARTER_TITLE = 'Books ordered by charter';
+/** Under the list when some books are in another unit. */
+export const BOOK_REPORT_BY_CHARTER_UNITS_NOTE =
+  'Copies in single-copy units only, as in Total books ordered.';
+
+/** A charter's figures: '1,284 copies in 12 orders', '1 copy in 1 order'.
+ *  With books in other units in the report, the orders include some that
+ *  hold none of the copies, so the two are stated apart: '12 copies · 4
+ *  orders'. */
+export function bookReportByCharterValue(
+  copies: string,
+  orders: number,
+  otherUnits = false,
+): string {
+  const c = `${formatReportQuantity(copies)} ${copies === '1' ? 'copy' : 'copies'}`;
+  return otherUnits ? `${c} · ${ordersCountText(orders)}` : `${c} in ${ordersCountText(orders)}`;
+}
+
+/** The list's last line, equal to the summary: 'All charters: 642 copies
+ *  requested in 26 orders.', or with other units 'All charters: 15 copies
+ *  requested. Orders containing books: 4.' */
+export function bookReportByCharterTotalLine(summary: {
+  copies: string;
+  orders: number;
+  unresolved: { entries: number };
+}): string {
+  if (summary.unresolved.entries > 0) {
+    return `${BOOK_REPORT_ALL_CHARTERS}: ${copiesRequestedText(summary.copies)}. ${BOOK_REPORT_METRICS.orders.label}: ${n(summary.orders)}.`;
+  }
+  return `${BOOK_REPORT_ALL_CHARTERS}: ${copiesRequestedText(summary.copies)} in ${ordersCountText(summary.orders)}.`;
+}
+
+/** A by-charter row's action name: 'Show only Marconi · MAR-01'. */
+export function bookReportByCharterApplyLabel(label: string): string {
+  return `Show only ${label}`;
+}
+
 /** 'Generated Sep 28, 2026, 10:42 AM. Orders can change after this time.' */
 export function bookReportGeneratedLine(generatedAtLocal: string): string {
   return `Generated ${formatReportDateTime(generatedAtLocal)}. Orders can change after this time.`;
@@ -251,8 +425,11 @@ export function bookReportGeneratedLine(generatedAtLocal: string): string {
 
 export const BOOK_REPORT_AS_SAVED =
   "Quantities are each order's saved lines as of generation, including later edits to those orders.";
+/** "charter" here is the book-OWNING charter and, for readers limited to
+ *  some charters, the ORDER's charter (0382 E2b); worded so neither can be
+ *  read as the Charter filter. */
 export const BOOK_REPORT_RESTRICTED =
-  'You see only orders placed in your warehouses, and only books in your warehouses, charters and categories.';
+  'You see only orders placed in your warehouses (and, where your access is limited to some charters, orders for those charters and orders with no charter), and only books whose warehouse, owning charter and category you can see.';
 
 type BookReportGrandTotalSummary = {
   copies: string;
@@ -337,8 +514,19 @@ export function bookReportDrawerHeader(
 export const BOOK_REPORT_ORDER_COLUMNS = {
   orderNumber: 'Order #',
   orderDate: 'Order date',
+  /** Shown only with All charters chosen (one charter would repeat it). */
+  charter: 'Charter',
   warehouse: 'Warehouse',
   status: 'Status',
+} as const;
+
+/** The drill-down header's terms (brief 13): Book, Charter, Orders placed,
+ *  Total requested. */
+export const BOOK_REPORT_DRAWER_TERMS = {
+  book: 'Book',
+  charter: 'Charter',
+  ordersPlaced: 'Orders placed',
+  totalRequested: 'Total requested',
 } as const;
 
 export const BOOK_REPORT_ORDER_LINK_HINT = "Opening other people's orders needs approval access.";
@@ -384,7 +572,8 @@ export const BOOK_REPORT_LOAD_ERROR = "Couldn't load Book Order Totals. Try agai
 export const BOOK_REPORT_ORDERS_LOAD_ERROR = "Couldn't load these orders. Try again.";
 export const BOOK_REPORT_TIMEOUT = 'The report took too long. Narrow the filters and try again.';
 export const BOOK_REPORT_FILTERS_RESET = 'Some filters in this link were not valid and were reset.';
-export const BOOK_REPORT_OPTIONS_ERROR = "Couldn't load the warehouse and category lists. Retry";
+export const BOOK_REPORT_OPTIONS_ERROR =
+  "Couldn't load the charter, warehouse and category lists. Retry";
 export const BOOK_REPORT_FORBIDDEN = "You don't have access to reports.";
 export const BOOK_REPORT_MODULE_OFF = 'Book Order Totals needs the Orders and Books modules.';
 
@@ -471,15 +660,16 @@ export const BOOK_REPORT_HOW_COUNTED: readonly string[] = [
   BOOK_REPORT_AS_SAVED +
     " Removed lines are gone and do not count; the original request is only in the order's history.",
   'Whether an item is a book is its type now. An item retyped since it was ordered moves in or out of the report with all its history.',
-  "What you can see is decided by each order's warehouse and by each book's current warehouse, charter and category.",
+  "What you can see is decided by each order's warehouse and, where your access is limited to some charters, its charter, and by each book's current warehouse, owning charter and category.",
   "Units are each item's unit now. Only single copies are added to Total books ordered; anything in another unit is listed with its unit and left out of that total.",
   'Records that share a title or ISBN count separately, told apart by their SKU, warehouse and rack.',
   'Archived and deleted books keep their order history.',
   'Books added through a kit count as the lines the kit added. Present-day kit recipes are never expanded.',
-  'Order dates and warehouses can be edited after an order is placed; the report uses the saved values.',
+  'Order dates, warehouses and charters can be edited after an order is placed; the report uses the saved values.',
   "A backorder closed by lowering its quantity shows the lowered quantity; the original is in the order's history.",
   'Bundle distributions and rentals are not Orders and are not counted.',
   "The warehouse filter uses each order's warehouse.",
+  "The Charter filter uses the charter each order was placed for (its delivery site), not the charter that owns a book. Pickup orders have no charter and appear under No charter, as do a few early delivery orders saved without one, so a charter's total counts only orders placed for delivery to it.",
   'Books turned into rental items keep their order history.',
   'Public-link orders are dated when their form was submitted, not when they were confirmed.',
   '"All time" means since your organization began placing orders in StockPilot. Demand from before that is not in the system.',
@@ -528,10 +718,18 @@ export const BOOK_REPORT_KPI_LOAD_ERROR = "Couldn't load these figures. Pull to 
  *  and the phone so both name each control the same way. */
 export const BOOK_REPORT_UI = {
   filters: 'Filters',
+  charter: 'Charter',
   dateRange: 'Orders placed',
   from: 'From',
   to: 'To',
+  startDate: CALENDAR_COPY.startDate,
+  endDate: CALENDAR_COPY.endDate,
   apply: 'Apply',
+  cancel: 'Cancel',
+  clearFilters: 'Clear filters',
+  typeDates: 'Type dates instead',
+  /** A chip's remove button: 'Remove charter filter'. */
+  removeFilter: (noun: string) => `Remove ${noun} filter`,
   customRangeInvalid:
     'Choose two real dates between 2000 and 2100, the first on or before the second.',
   status: 'Status',
@@ -621,4 +819,192 @@ export function bookReportViewChangedLine(
 export function bookReportShowViewLabel(now: { id: string | null; name: string | null }): string {
   if (now.id === null) return 'Show all warehouses';
   return now.name ? `Show ${now.name}` : 'Show your warehouse view';
+}
+
+// ── "Showing" and the filter chips (web and phone render the same lists) ────
+
+export const BOOK_REPORT_SHOWING = 'Showing';
+
+/** The Showing block's status part: 'Eligible orders' for the default
+ *  statuses, else '3 of 6 statuses'. The full sentence is bookReportStatusLine. */
+export function bookReportShowingStatus(groups: readonly BookReportStatusGroup[]): string {
+  if (isDefaultStatusGroups(groups)) return 'Eligible orders';
+  const chosen = BOOK_REPORT_STATUS_GROUP_KEYS.filter((g) => groups.includes(g)).length;
+  return `${n(chosen)} of ${n(BOOK_REPORT_STATUS_GROUP_KEYS.length)} statuses`;
+}
+
+export type BookReportShowingKey = 'charter' | 'range' | 'warehouse' | 'status';
+
+export interface BookReportShowingPart {
+  key: BookReportShowingKey;
+  text: string;
+}
+
+/** What the Showing block reads from: an answer's echoes (never the URL). */
+export interface BookReportShowingAnswer {
+  range: Pick<BookReportRangeEcho, 'key' | 'from' | 'to'>;
+  summary?: { firstOrderDate: string | null; lastOrderDate: string | null } | null;
+  filters: BookReportCharterFilters & { warehouse: BookReportWarehouseEcho | null };
+  /** Where the warehouse came from (the API answer); without it a named
+   *  warehouse reads as chosen. */
+  warehouse?: { source: BookReportWarehouseSource } | null;
+}
+
+/**
+ * The Showing block (brief 8), in order: the charter ('All charters',
+ * 'Marconi · MAR-01', 'No charter'), the range ('This month (Sep 1 – Sep 29,
+ * 2026)'), the warehouse WHENEVER the report covers one warehouse, the
+ * warehouse view included ('Warehouse: DC4 (your warehouse view)'; plan
+ * D20), then the status part. Built from the answer's echoes, so it always
+ * describes the figures under it.
+ */
+export function bookReportShowingParts(
+  answer: BookReportShowingAnswer,
+  statusGroups: readonly BookReportStatusGroup[],
+  opts: { charterLabels?: ReadonlyMap<string, string> | null } = {},
+): BookReportShowingPart[] {
+  const parts: BookReportShowingPart[] = [
+    {
+      key: 'charter',
+      text: bookReportCharterLabel(
+        answer.filters.charter,
+        answer.filters.noCharter,
+        opts.charterLabels,
+      ),
+    },
+    { key: 'range', text: bookReportRangeLabel(answer.range, answer.summary) },
+  ];
+  if (answer.filters.warehouse) {
+    parts.push({
+      key: 'warehouse',
+      text: bookReportWarehouseLine(
+        answer.filters.warehouse,
+        answer.warehouse?.source === 'view' ? 'view' : 'explicit',
+      ),
+    });
+  }
+  parts.push({ key: 'status', text: bookReportShowingStatus(statusGroups) });
+  return parts;
+}
+
+/** The nouns of the chips' remove buttons ('Remove date filter'). */
+const FILTER_NOUNS: Readonly<Record<BookReportFilterKey, string>> = {
+  charter: 'charter',
+  dates: 'date',
+  status: 'status',
+  warehouse: 'warehouse',
+  category: 'category',
+  q: 'search',
+};
+
+export interface BookReportActiveFilter {
+  key: BookReportFilterKey;
+  /** 'Charter: Marconi · MAR-01', 'Orders placed: Sep 1 – Sep 30, 2026'. */
+  text: string;
+  /** The remove button's name: 'Remove charter filter'. */
+  removeLabel: string;
+  /** The query with only this filter back at its default, on page 1. */
+  cleared: BookReportQuery;
+}
+
+/** The echoes the chips' words come from: a totals answer fits. */
+export interface BookReportFilterEchoes {
+  range?: Pick<BookReportRangeEcho, 'key' | 'from' | 'to'> | null;
+  summary?: { firstOrderDate: string | null; lastOrderDate: string | null } | null;
+  filters?:
+    | (BookReportCharterFilters & {
+        warehouse?: BookReportWarehouseEcho | null;
+        category?: BookReportCategoryEcho | null;
+        uncategorized?: boolean;
+      })
+    | null;
+}
+
+function chipDates(query: BookReportQuery, echoes: BookReportFilterEchoes | null): string {
+  const r = echoes?.range;
+  const echoFits =
+    r &&
+    r.key === query.range &&
+    (query.range !== 'custom' || (r.from === query.from && r.to === query.to));
+  if (echoFits) return bookReportRangeLabel(r, echoes?.summary);
+  if (query.range === 'custom' && query.from && query.to) {
+    return formatReportDateRange(query.from, query.to);
+  }
+  return BOOK_REPORT_RANGE_LABELS[query.range];
+}
+
+function chipText(
+  key: BookReportFilterKey,
+  query: BookReportQuery,
+  echoes: BookReportFilterEchoes | null,
+  statusLabels: Readonly<Record<OrderStatusKey, string>>,
+  charterLabels: ReadonlyMap<string, string> | null | undefined,
+): string {
+  const f = echoes?.filters ?? null;
+  switch (key) {
+    case 'charter': {
+      if (query.charter === 'none') return `${BOOK_REPORT_UI.charter}: ${BOOK_REPORT_NO_CHARTER}`;
+      const id = query.charter.toLowerCase();
+      const echo = f?.charter && f.charter.id.toLowerCase() === id ? f.charter : null;
+      const label =
+        charterLabels?.get(id) ?? (echo ? bookReportCharterOptionLabel(echo) : 'Chosen charter');
+      return `${BOOK_REPORT_UI.charter}: ${label}`;
+    }
+    case 'dates':
+      return `${BOOK_REPORT_UI.dateRange}: ${chipDates(query, echoes)}`;
+    case 'status': {
+      const chosen = BOOK_REPORT_STATUS_GROUP_KEYS.filter((g) => query.statusGroups.includes(g));
+      return `${BOOK_REPORT_UI.status}: ${chosen.map((g) => bookReportStatusGroupLabel(g, statusLabels)).join(', ')}`;
+    }
+    case 'warehouse': {
+      const w = f?.warehouse;
+      if (w && w.id.toLowerCase() === query.warehouse.toLowerCase()) {
+        return bookReportWarehouseLine(w, 'explicit');
+      }
+      return `${BOOK_REPORT_UI.warehouse}: Chosen warehouse`;
+    }
+    case 'category': {
+      if (query.category === 'none')
+        return `${BOOK_REPORT_UI.category}: ${BOOK_REPORT_NO_CATEGORY}`;
+      const c = f?.category;
+      if (c && c.id.toLowerCase() === query.category.toLowerCase()) {
+        return `${BOOK_REPORT_UI.category}: ${bookReportCategoryOptionLabel(c)}`;
+      }
+      return `${BOOK_REPORT_UI.category}: Chosen category`;
+    }
+    case 'q':
+      return bookReportSearchLine(query.q) ?? '';
+  }
+}
+
+/**
+ * The active-filter chips (brief 8), one per filter that differs from its
+ * default, in the order charter, dates, status, warehouse, category, search.
+ * A warehouse is a chip only when it was chosen: a warehouse-view warehouse
+ * is part of the Showing block, and Clear filters goes back to it. Sort is
+ * not a filter and has no chip.
+ *
+ * `query` is the query the answer on screen was read for: it decides which
+ * chips exist, and the words come from `echoes` (the answer), falling back
+ * to plain words only when an echo is missing. `opts.base` is the query a
+ * removal starts from: on the web the LATEST requested query (plan trap
+ * 23), so removing the dates while a charter change is still loading keeps
+ * the new charter. It defaults to `query`.
+ */
+export function bookReportActiveFilters(
+  query: BookReportQuery,
+  echoes: BookReportFilterEchoes | null,
+  statusLabels: Readonly<Record<OrderStatusKey, string>>,
+  opts: {
+    base?: BookReportQuery | null;
+    charterLabels?: ReadonlyMap<string, string> | null;
+  } = {},
+): BookReportActiveFilter[] {
+  const base = opts.base ?? query;
+  return BOOK_REPORT_FILTER_KEYS.filter((key) => bookReportFilterIsSet(query, key)).map((key) => ({
+    key,
+    text: chipText(key, query, echoes, statusLabels, opts.charterLabels),
+    removeLabel: BOOK_REPORT_UI.removeFilter(FILTER_NOUNS[key]),
+    cleared: bookReportWithoutFilter(base, key),
+  }));
 }
