@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { type Role } from '@stockpilot/core';
+import { STAGING_FILTER_BACK_LABEL, type Role } from '@stockpilot/core';
 
 import { ItemHistorySheet } from '@/components/item-history-sheet';
 import { MIN_TAP } from '@/components/item-verification-card';
@@ -276,9 +276,18 @@ export default function StagingScreen() {
     <View style={[styles.root, { backgroundColor: c.paper }]}>
       <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
         <View style={styles.topbar}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <IconChip icon={ArrowLeft} onPress={goBack} />
-            <IconChip icon={Menu} onPress={openDrawer} />
+          {/* 44 pt frames (minTap), named for VoiceOver: opened from an
+              order, the arrow is the way back to it ("Back to the order",
+              the chip's own words), the only one left once Show all hides
+              the chip. */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+            <IconChip
+              icon={ArrowLeft}
+              onPress={goBack}
+              minTap
+              accessibilityLabel={fromOrderId ? STAGING_FILTER_BACK_LABEL : 'Back'}
+            />
+            <IconChip icon={Menu} onPress={openDrawer} minTap accessibilityLabel="Open menu" />
           </View>
         </View>
         <View style={styles.head}>
@@ -655,16 +664,20 @@ function CardField({ label, value }: { label: string; value: string }) {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  // The chips' 44pt frames (IconChip minTap) are 3pt wider than the 38pt chip
+  // on every side, so the bar takes 3pt off its padding (12, 8), the gap
+  // between the chips 6pt (8 -> 2) and the head 3pt off its top: the chips
+  // and the title sit exactly where they did.
   topbar: {
-    paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingHorizontal: 9,
+    paddingTop: 5,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
   head: {
     paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingTop: 9,
     paddingBottom: 4,
   },
   list: {

@@ -305,6 +305,20 @@ describe('the Staging tab, opened from the order', () => {
     );
   });
 
+  // After Show all hides the chip, the top-left arrow is the one way back to
+  // the order on screen. Mutation caught: an unnamed or 38 pt chip.
+  it('the top-left arrow and the menu chip are named for VoiceOver and 44 pt, the bar keeping its place', () => {
+    expect(code).toMatch(
+      /<IconChip\s+icon=\{ArrowLeft\}\s+onPress=\{goBack\}\s+minTap\s+accessibilityLabel=\{fromOrderId \? STAGING_FILTER_BACK_LABEL : 'Back'\}\s*\/>/,
+    );
+    expect(code).toContain('<IconChip icon={Menu} onPress={openDrawer} minTap accessibilityLabel="Open menu" />');
+    // The 44 pt frame is 3 pt wider than the 38 pt chip on every side: the bar,
+    // the gap between the chips and the head each give those 3 pt back.
+    expect(code).toMatch(/topbar: \{\s*paddingHorizontal: 9,\s*paddingTop: 5,/);
+    expect(code).toMatch(/<View style=\{\{ flexDirection: 'row', alignItems: 'center', gap: 2 \}\}>\s*<IconChip\s+icon=\{ArrowLeft\}/);
+    expect(code).toMatch(/head: \{\s*paddingHorizontal: 20,\s*paddingTop: 9,/);
+  });
+
   it('Place is unchanged: the put-away sheet with its source fixed, crates seeded from the book’s storage', () => {
     expect(code).toContain('putAwaySourceLocationId={placing.sourceLocationId}');
     expect(code).toContain('bookStorage={placing.bookStorage}');
