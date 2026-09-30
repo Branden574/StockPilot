@@ -60,7 +60,8 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Buying for a short order meant working out by hand what was already on order or on a draft, then building the purchase order item by item.',
         howItAffectsYou:
-          "Drafting needs a manager role with permission to manage purchase orders. Drafts are not sent to anyone: check each draft's supplier, set its destination and order it on Purchase orders. An item an open PO or a draft already covers shows what covers it and is not drafted again. If stock or POs changed after the order was checked, nothing is drafted, your choices are kept and the most that can be drafted now is shown. Pressing Draft twice drafts once. Kits are not drafted; order their components.",
+          "Drafting needs a manager role with permission to manage purchase orders. Drafts are not sent to anyone: check each draft's supplier, set its destination and order it on Purchase orders. An item an open PO or a draft covers says so and is not drafted again; if other approved orders already need that supply, it says that too. If stock or POs change so that less can be drafted than you chose, nothing is drafted: your choices are kept and the most that can be drafted now is shown. Pressing Draft twice drafts once. Kits are not drafted; order their components.",
+
         whatToDo: 'No action needed. On a short order, choose Draft PO for what is short.',
         link: { href: '/dashboard/orders', label: 'View orders' },
         audience: {

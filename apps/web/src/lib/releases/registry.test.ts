@@ -1585,6 +1585,13 @@ describe('F2-5 (draft a PO for what an order is short) is held as a draft', () =
     expect(text).toContain('one draft purchase order is made per supplier, plus one for items with no supplier');
     expect(text).toContain('is not drafted again');
     expect(text).toContain('your choices are kept and the most that can be drafted now is shown');
+    // Review: the function refuses only when LESS can be drafted than was
+    // chosen; a change that leaves the choice possible drafts normally.
+    expect(text).toContain('If stock or POs change so that less can be drafted than you chose, nothing is drafted');
+    expect(text).not.toContain('If stock or POs changed after the order was checked, nothing is drafted');
+    // Review: "not drafted again" holds only while no other approved order
+    // needs what is on order; the row says so when one does.
+    expect(text).toContain('if other approved orders already need that supply, it says that too');
     expect(text).toContain('Pressing Draft twice drafts once.');
     // The phone opens a draft read-only; it is ordered on the web.
     expect(text).toContain('there a new draft opens read-only, to review and order on the web');
